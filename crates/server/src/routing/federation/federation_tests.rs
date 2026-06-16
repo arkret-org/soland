@@ -20,6 +20,7 @@ fn config_with_policy(policy: FederationPolicy, peers: Vec<String>) -> AppConfig
         livekit: crate::config::LiveKitConfig::default(),
         cors_allow_origin: None,
         auth_server_url: None,
+        oidc_client_id: None,
         development_mode: true,
         oauth_introspection_url: None,
         oauth_introspection_bearer: None,

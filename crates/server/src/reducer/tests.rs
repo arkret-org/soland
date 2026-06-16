@@ -461,7 +461,9 @@ fn call_state_removed_participants_ban_set_is_monotonic() {
         ProjectionEffect::CallStateProjected { .. }
     ));
     let after = state.cell_value(&cell_id).unwrap();
-    let rows = after["removed_participants"].as_array().expect("ban set preserved");
+    let rows = after["removed_participants"]
+        .as_array()
+        .expect("ban set preserved");
     assert_eq!(rows.len(), 1, "ban set must survive an event that omits it");
     assert_eq!(rows[0]["actor_id"], "did:web:bob.example");
 }

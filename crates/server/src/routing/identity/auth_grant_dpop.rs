@@ -296,9 +296,10 @@ pub(crate) fn session_grant_introspection_proof(
         header("x-cokret-session-grant-challenge"),
         header("x-cokret-session-grant-proof"),
     ) {
-        (Some(challenge), Some(proof_jwt)) => {
-            Some(SessionGrantIntrospectionProof { challenge, proof_jwt })
-        }
+        (Some(challenge), Some(proof_jwt)) => Some(SessionGrantIntrospectionProof {
+            challenge,
+            proof_jwt,
+        }),
         _ => None,
     }
 }
@@ -607,7 +608,10 @@ fn request_authority(req: &Request) -> Option<&str> {
         .headers()
         .get("x-forwarded-host")
         .and_then(|value| value.to_str().ok());
-    let host = req.headers().get("host").and_then(|value| value.to_str().ok());
+    let host = req
+        .headers()
+        .get("host")
+        .and_then(|value| value.to_str().ok());
     select_authority(forwarded, host)
 }
 
@@ -700,9 +704,15 @@ mod tests {
             Some("account.example")
         );
         // No forwarded header: fall back to Host.
-        assert_eq!(select_authority(None, Some("account.example")), Some("account.example"));
+        assert_eq!(
+            select_authority(None, Some("account.example")),
+            Some("account.example")
+        );
         // Empty/whitespace forwarded value is ignored, not treated as authority.
-        assert_eq!(select_authority(Some("  "), Some("account.example")), Some("account.example"));
+        assert_eq!(
+            select_authority(Some("  "), Some("account.example")),
+            Some("account.example")
+        );
         assert_eq!(select_authority(None, None), None);
     }
 

@@ -18,6 +18,7 @@ pub(super) fn make_state(development_mode: bool) -> AppState {
         livekit: LiveKitConfig::default(),
         cors_allow_origin: None,
         auth_server_url: None,
+        oidc_client_id: None,
         development_mode,
         oauth_introspection_url: None,
         oauth_introspection_bearer: None,
@@ -974,4 +975,227 @@ fn soland_dev_proof_gate_matches_sdk_production_verifier() {
     verifier
         .assert_production_proof(&prod)
         .expect("SDK ProductionVerifier must accept detached_jws kind");
+}
+
+// ----------------------------------------------------------------------------
+// Device-identity B-model (device-lifecycle.md §5.4): service_attested
+// ck.device.authorize enrollment-authority binding admission.
+// ----------------------------------------------------------------------------
+
+/// Ingest a principal DID document that designates `authority_did` as the
+/// CokretDeviceEnrollmentAuthority via a `service` entry whose `id` is
+/// `service_id`.
+async fn ingest_principal_with_enrollment_authority(
+    state: &AppState,
+    principal_did: &str,
+    service_id: &str,
+    authority_did: &str,
+) {
+    let now = chrono::Utc::now();
+    state
+        .persistence
+        .webvh()
+        .put_document(crate::state::WebvhDocumentRecord {
+            did: principal_did.to_owned(),
+            did_document: json!({
+                "id": principal_did,
+                "verificationMethod": [],
+                "service": [{
+                    "id": service_id,
+                    "type": cokret_sdk::service::DID_SERVICE_DEVICE_ENROLLMENT_AUTHORITY,
+                    "serviceEndpoint": authority_did,
+                }],
+            }),
+            key_log_head: Some("sha256:head".to_owned()),
+            seq: 1,
+            method_evidence: json!({ "mode": "test" }),
+            fetched_at: now,
+            expires_at: now,
+            updated_at: now,
+        })
+        .await
+        .expect("ingest principal webvh document");
+}
+
+/// Build a `service_attested` ck.device.authorize envelope object for
+/// `principal_did`, authorized by `authority_did`, with a self-certifying
+/// `device_id` derived from `device_pubkey`.
+fn service_attested_device_authorize_object(
+    principal_did: &str,
+    authority_did: &str,
+    authorization_ref: &str,
+    device_pubkey: &[u8; 32],
+) -> serde_json::Map<String, Value> {
+    let device_pubkey_mb = cokret_sdk::ed25519_pubkey_to_did_key_multibase(device_pubkey);
+    let device_id = cokret_sdk::DeviceId::from_device_public_key(device_pubkey);
+    let envelope = json!({
+        "kind": "ck.device.authorize",
+        "actor_id": principal_did,
+        "executed_by": authority_did,
+        "authorization_ref": authorization_ref,
+        "payload": {
+            "principal_id": principal_did,
+            "device_id": device_id.as_str(),
+            "device_public_key": device_pubkey_mb,
+            "authorized_by": authority_did,
+            "not_before": "2026-06-17T00:00:00Z",
+            "enrollment_authority_binding": {
+                "kind": "service_attested",
+                "authority_did": authority_did,
+                "authorization_ref": authorization_ref,
+            }
+        }
+    });
+    envelope.as_object().unwrap().clone()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn service_attested_device_authorize_accepts_designated_authority() {
+    let state = make_state(true);
+    let principal_did = "did:webvh:scid:users.soland.local:alice";
+    let authority_key = ed25519_dalek::SigningKey::from_bytes(&[11u8; 32]);
+    let authority_did = did_key_for(&authority_key);
+    let authorization_ref = format!("{principal_did}#enrollment-authority");
+    ingest_principal_with_enrollment_authority(
+        &state,
+        principal_did,
+        &authorization_ref,
+        &authority_did,
+    )
+    .await;
+    let device_pubkey = ed25519_dalek::SigningKey::from_bytes(&[22u8; 32])
+        .verifying_key()
+        .to_bytes();
+    let object = service_attested_device_authorize_object(
+        principal_did,
+        &authority_did,
+        &authorization_ref,
+        &device_pubkey,
+    );
+
+    validate_device_enrollment_authority_binding(&state, &object, principal_did)
+        .await
+        .expect("designated service_attested device.authorize must be accepted");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn service_attested_device_authorize_rejects_non_self_certifying_device_id() {
+    let state = make_state(true);
+    let principal_did = "did:webvh:scid:users.soland.local:alice";
+    let authority_key = ed25519_dalek::SigningKey::from_bytes(&[11u8; 32]);
+    let authority_did = did_key_for(&authority_key);
+    let authorization_ref = format!("{principal_did}#enrollment-authority");
+    ingest_principal_with_enrollment_authority(
+        &state,
+        principal_did,
+        &authorization_ref,
+        &authority_did,
+    )
+    .await;
+    let device_pubkey = ed25519_dalek::SigningKey::from_bytes(&[22u8; 32])
+        .verifying_key()
+        .to_bytes();
+    let mut object = service_attested_device_authorize_object(
+        principal_did,
+        &authority_did,
+        &authorization_ref,
+        &device_pubkey,
+    );
+    // Tamper device_id so it no longer equals derive(device_public_key).
+    object["payload"]["device_id"] = json!("ck:device:01904100-0000-8000-8000-000000000099");
+
+    let err = validate_device_enrollment_authority_binding(&state, &object, principal_did)
+        .await
+        .expect_err("non-self-certifying device_id must reject");
+    assert_eq!(err.code, "device_id_not_self_certifying");
+    assert_eq!(err.status, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn service_attested_device_authorize_rejects_undesignated_authority() {
+    let state = make_state(true);
+    let principal_did = "did:webvh:scid:users.soland.local:alice";
+    let designated_key = ed25519_dalek::SigningKey::from_bytes(&[11u8; 32]);
+    let designated_did = did_key_for(&designated_key);
+    let authorization_ref = format!("{principal_did}#enrollment-authority");
+    ingest_principal_with_enrollment_authority(
+        &state,
+        principal_did,
+        &authorization_ref,
+        &designated_did,
+    )
+    .await;
+    // The event names a DIFFERENT authority than the one the DID document
+    // designates.
+    let imposter_key = ed25519_dalek::SigningKey::from_bytes(&[99u8; 32]);
+    let imposter_did = did_key_for(&imposter_key);
+    let device_pubkey = ed25519_dalek::SigningKey::from_bytes(&[22u8; 32])
+        .verifying_key()
+        .to_bytes();
+    let object = service_attested_device_authorize_object(
+        principal_did,
+        &imposter_did,
+        &authorization_ref,
+        &device_pubkey,
+    );
+
+    let err = validate_device_enrollment_authority_binding(&state, &object, principal_did)
+        .await
+        .expect_err("undesignated authority must reject");
+    assert_eq!(err.code, "device_enrollment_authority_not_designated");
+    assert_eq!(err.status, StatusCode::FORBIDDEN);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn service_attested_device_authorize_rejects_authorization_ref_mismatch() {
+    let state = make_state(true);
+    let principal_did = "did:webvh:scid:users.soland.local:alice";
+    let authority_key = ed25519_dalek::SigningKey::from_bytes(&[11u8; 32]);
+    let authority_did = did_key_for(&authority_key);
+    let service_id = format!("{principal_did}#enrollment-authority");
+    ingest_principal_with_enrollment_authority(&state, principal_did, &service_id, &authority_did)
+        .await;
+    let device_pubkey = ed25519_dalek::SigningKey::from_bytes(&[22u8; 32])
+        .verifying_key()
+        .to_bytes();
+    // authorization_ref points at a different (non-existent) service entry id.
+    let wrong_ref = format!("{principal_did}#some-other-delegation");
+    let object = service_attested_device_authorize_object(
+        principal_did,
+        &authority_did,
+        &wrong_ref,
+        &device_pubkey,
+    );
+
+    let err = validate_device_enrollment_authority_binding(&state, &object, principal_did)
+        .await
+        .expect_err("authorization_ref not matching the service entry id must reject");
+    assert_eq!(err.code, "device_enrollment_authority_not_designated");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn non_enrollment_device_authorize_passes_through_gate() {
+    // A device.authorize that carries no enrollment_authority_binding (e.g. a
+    // cross_signing / bootstrap device) is not this gate's concern and must pass
+    // through untouched (validated elsewhere).
+    let state = make_state(true);
+    let principal_did = "did:webvh:scid:users.soland.local:alice";
+    let object = json!({
+        "kind": "ck.device.authorize",
+        "actor_id": principal_did,
+        "payload": {
+            "principal_id": principal_did,
+            "device_id": "ck:device:01904100-0000-8000-8000-000000000001",
+            "device_public_key": "z6Mk...",
+            "bootstrap_binding": {
+                "kind": "inception_self_authorized",
+                "did_method_evidence_ref": "did:webvh:.../entry-0"
+            }
+        }
+    });
+    let object = object.as_object().unwrap().clone();
+
+    validate_device_enrollment_authority_binding(&state, &object, principal_did)
+        .await
+        .expect("non-enrollment device.authorize must pass through this gate");
 }

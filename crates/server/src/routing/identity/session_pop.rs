@@ -12,8 +12,8 @@
 //! - On a high-security deployment (`sovereign_enclave_enabled`), writes and sensitive reads MUST
 //!   be PoP-presented; bare bearer is rejected. On the default profile, bare bearer remains an
 //!   accepted downgrade for low-sensitivity clients.
-//! - The session key the signature verifies against is sourced per inbound credential: for the
-//!   ② grant+DPoP path it is the grant's `session_public_key` (read via introspection, since that
+//! - The session key the signature verifies against is sourced per inbound credential: for the ②
+//!   grant+DPoP path it is the grant's `session_public_key` (read via introspection, since that
 //!   session is request-scoped and never persisted); for a dev-login bearer it is the persisted
 //!   `SessionRecord`'s key. Under ② the same Ed25519 device key backs both the DPoP `cnf.jkt`
 //!   sender-constraint and this 9421 body-integrity layer.
@@ -180,12 +180,11 @@ async fn enforce_session_pop(state: &AppState, req: &mut Request) -> Result<(), 
 /// verify against, for whichever inbound credential is being presented
 /// (account-lifecycle.md §4.1 D6):
 ///
-/// - **② grant + DPoP** (`DPoP` header present): the session is request-scoped
-///   and is NEVER persisted as a local bearer, so the bound signing key is read
-///   from the grant's `session_public_key` via session-grant introspection
-///   (cached ≤120s). The grant binds the same Ed25519 device key as both the
-///   DPoP `cnf.jkt` and the 9421 `session_public_key`, so DPoP supplies the
-///   per-request sender-constraint while this 9421 layer adds body integrity.
+/// - **② grant + DPoP** (`DPoP` header present): the session is request-scoped and is NEVER
+///   persisted as a local bearer, so the bound signing key is read from the grant's
+///   `session_public_key` via session-grant introspection (cached ≤120s). The grant binds the same
+///   Ed25519 device key as both the DPoP `cnf.jkt` and the 9421 `session_public_key`, so DPoP
+///   supplies the per-request sender-constraint while this 9421 layer adds body integrity.
 /// - **dev-login bearer**: the key comes from the persisted `SessionRecord`.
 async fn session_signing_key_jwk(
     state: &AppState,

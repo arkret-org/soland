@@ -312,6 +312,9 @@ pub(crate) async fn validate_event_envelope(
     if kind == kinds::CK_MEMBER_IDENTITY_UPDATE {
         validate_member_identity_proof(state, object.get("payload").unwrap_or(&Value::Null))?;
     }
+    if kind == "ck.device.authorize" {
+        validate_device_enrollment_authority_binding(state, object, &actor_id).await?;
+    }
     validate_audit_accessed_payload(&kind, object)?;
     // Round R2/R3 (T08) — cross_domain replay defence MUST run BEFORE the
     // signature check (verified below in `validate_event_proofs`). Aggressive
@@ -1563,6 +1566,162 @@ fn validate_event_audience_fields(
     Ok(())
 }
 
+/// Device-identity B-model (device-lifecycle.md §5.4 / key-management.md §5.0.6):
+/// admit a `service_attested` `ck.device.authorize` whose trust root is the
+/// enrollment authority designated by the principal DID document, rather than a
+/// client-held SSK (§5.2) or DID inception key (§5.3).
+///
+/// Only the `enrollment_authority_binding` branch is validated here; payloads
+/// carrying `cross_signing_binding` or `bootstrap_binding` instead are validated
+/// by `cross_signing::validate_device_authorize_binding` (operation policy) and
+/// the bootstrap path, and pass through this gate untouched.
+///
+/// MUST check (device-lifecycle.md §5.4 receiver rules):
+/// `executed_by` (== `binding.authority_did`) is the DID that the principal (`actor_id`) DID
+/// document designates via its `CokretDeviceEnrollmentAuthority` service `serviceEndpoint`, and
+/// `authorization_ref` matches that service entry id (else
+/// `device_enrollment_authority_not_designated`).
+///
+/// The cryptographic proof (signed by the authority, rooted in `executed_by`)
+/// is verified by `validate_event_proofs`; the envelope `executed_by`/`proofs`
+/// vm-DID alignment ran earlier in `validate_event_envelope`.
+pub(super) async fn validate_device_enrollment_authority_binding(
+    state: &AppState,
+    object: &serde_json::Map<String, Value>,
+    actor_id: &str,
+) -> Result<(), EventValidationError> {
+    let payload = object.get("payload").and_then(Value::as_object);
+    let Some(binding) = payload
+        .and_then(|payload| payload.get("enrollment_authority_binding"))
+        .and_then(Value::as_object)
+    else {
+        // Not a service_attested enrollment; cross_signing / bootstrap branch.
+        return Ok(());
+    };
+
+    let invalid = |code: &'static str, message: &'static str, status: StatusCode| {
+        event_validation_error(status, code, message)
+    };
+
+    // executed_by must be the DID-document-designated enrollment authority.
+    let authority_did = event_string_field(binding, &["authority_did"]).ok_or_else(|| {
+        invalid(
+            "device_enrollment_authority_not_designated",
+            "enrollment_authority_binding requires authority_did",
+            StatusCode::FORBIDDEN,
+        )
+    })?;
+    let executed_by = event_string_field(object, &["executed_by"]).ok_or_else(|| {
+        invalid(
+            "device_enrollment_authority_not_designated",
+            "service_attested ck.device.authorize requires envelope executed_by",
+            StatusCode::FORBIDDEN,
+        )
+    })?;
+    if executed_by != authority_did {
+        return Err(invalid(
+            "device_enrollment_authority_not_designated",
+            "envelope executed_by must equal enrollment_authority_binding.authority_did",
+            StatusCode::FORBIDDEN,
+        ));
+    }
+    let authorization_ref =
+        event_string_field(object, &["authorization_ref"]).ok_or_else(|| {
+            invalid(
+                "device_enrollment_authority_not_designated",
+                "service_attested ck.device.authorize requires envelope authorization_ref",
+                StatusCode::FORBIDDEN,
+            )
+        })?;
+    // The binding echoes the envelope authorization_ref; reject divergence so the
+    // designation evidence is unambiguous.
+    if event_string_field(binding, &["authorization_ref"]).as_deref()
+        != Some(authorization_ref.as_str())
+    {
+        return Err(invalid(
+            "device_enrollment_authority_not_designated",
+            "enrollment_authority_binding.authorization_ref must equal envelope authorization_ref",
+            StatusCode::FORBIDDEN,
+        ));
+    }
+
+    // Resolve the principal (actor_id) DID document and read the
+    // CokretDeviceEnrollmentAuthority service entry. The persisted raw webvh
+    // document carries `service` (the SDK DidDocument projection drops it), so
+    // read the raw record. Point-in-time replay resolves by accepted-at; at
+    // admission we evaluate against the currently ingested document.
+    let designated = resolve_enrollment_authority_designation(state, actor_id)
+        .await
+        .ok_or_else(|| {
+            invalid(
+                "device_enrollment_authority_not_designated",
+                "principal DID document does not designate a CokretDeviceEnrollmentAuthority",
+                StatusCode::FORBIDDEN,
+            )
+        })?;
+    if designated.service_endpoint != authority_did {
+        return Err(invalid(
+            "device_enrollment_authority_not_designated",
+            "executed_by is not the enrollment authority designated by the principal DID document",
+            StatusCode::FORBIDDEN,
+        ));
+    }
+    if designated.service_id != authorization_ref {
+        return Err(invalid(
+            "device_enrollment_authority_not_designated",
+            "authorization_ref does not match the CokretDeviceEnrollmentAuthority service entry id",
+            StatusCode::FORBIDDEN,
+        ));
+    }
+    Ok(())
+}
+
+/// The `CokretDeviceEnrollmentAuthority` designation read from a principal DID
+/// document's `service` array: the entry `id` (matched against
+/// `authorization_ref`) and its `serviceEndpoint` DID (matched against
+/// `executed_by` / `authority_did`).
+struct EnrollmentAuthorityDesignation {
+    service_id: String,
+    service_endpoint: String,
+}
+
+/// Read the principal DID document `service` entry of type
+/// `CokretDeviceEnrollmentAuthority` (identity-did.md §3.2). Returns `None` when
+/// the document is not ingested or carries no such designation. The persisted
+/// raw `did_document` value retains the full `service` array (the SDK
+/// `DidDocument` projection only keeps verificationMethod/alsoKnownAs), so the
+/// designation is read from the raw record.
+async fn resolve_enrollment_authority_designation(
+    state: &AppState,
+    principal_did: &str,
+) -> Option<EnrollmentAuthorityDesignation> {
+    let record = state
+        .persistence
+        .webvh()
+        .get_document(principal_did)
+        .await
+        .ok()
+        .flatten()?;
+    let services = record.did_document.get("service")?.as_array()?;
+    for service in services {
+        let service_type = service.get("type").and_then(Value::as_str);
+        if service_type != Some(cokret_sdk::service::DID_SERVICE_DEVICE_ENROLLMENT_AUTHORITY) {
+            continue;
+        }
+        let service_id = service.get("id").and_then(Value::as_str)?;
+        let service_endpoint = service
+            .get("serviceEndpoint")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())?;
+        return Some(EnrollmentAuthorityDesignation {
+            service_id: service_id.to_owned(),
+            service_endpoint: service_endpoint.to_owned(),
+        });
+    }
+    None
+}
+
 pub(super) async fn validate_event_proofs(
     object: &serde_json::Map<String, Value>,
     state: &AppState,
@@ -1597,6 +1756,18 @@ pub(super) async fn validate_event_proofs(
     //   `verification_method`, `payload_digest`-of-payload) is also accepted so integration
     //   fixtures round-trip without keying.
     let is_production = !state.config.development_mode;
+    // Device-identity B-model (device-lifecycle.md §5.4): a delegated-execution
+    // envelope (`executed_by` present) is signed by the executing authority's
+    // key, NOT by a key rooted in `actor_id`. When `executed_by` is set the
+    // proof `verification_method` MUST be rooted in `executed_by` and the JWS
+    // is verified against the authority DID; the signed proof-binding transcript
+    // still names `actor_id` (the record subject) per encoding.md §6. Absent
+    // `executed_by`, the original actor_id rooting applies. The envelope-level
+    // schema already requires `authorization_ref` whenever `executed_by` is
+    // present, and the actor/executed_by DID validity + vm-DID==executed_by
+    // checks ran earlier in this function.
+    let proof_root =
+        event_string_field(object, &["executed_by"]).unwrap_or_else(|| actor_id.to_owned());
     for proof in proofs {
         let Some(proof_object) = proof.as_object() else {
             return Err(event_validation_error(
@@ -1689,13 +1860,13 @@ pub(super) async fn validate_event_proofs(
                     "proof verification_method is required",
                 )
             })?;
-        if verification_method != actor_id
-            && !verification_method.starts_with(&format!("{actor_id}#"))
+        if verification_method != proof_root
+            && !verification_method.starts_with(&format!("{proof_root}#"))
         {
             return Err(event_validation_error(
                 StatusCode::FORBIDDEN,
                 "invalid_proof",
-                "proof verification method must be rooted in actor_id",
+                "proof verification method must be rooted in the proof signer (executed_by when present, else actor_id)",
             ));
         }
         if is_production {
@@ -1714,6 +1885,10 @@ pub(super) async fn validate_event_proofs(
                         "proof created_at is required",
                     )
                 })?;
+            // The signed proof-binding transcript names `actor_id` (record
+            // subject) regardless of who signed it (encoding.md §6); only the
+            // resolved signer DID (`proof_root`) switches to `executed_by` for
+            // delegated execution.
             let proof_binding_bytes = event_proof_binding_bytes(
                 &proof_event_digest,
                 actor_id,
@@ -1723,29 +1898,37 @@ pub(super) async fn validate_event_proofs(
             )?;
             // High-risk path: enforce DID document freshness before event
             // proof verification (fail-closed-on-stale). Stale or missing
-            // evidence must not be used for signature verification.
-            let actor_id = cokret_sdk::Did::new(actor_id.to_owned()).map_err(|error| {
+            // evidence must not be used for signature verification. The signer
+            // DID is `proof_root` (the enrollment authority for service_attested
+            // device.authorize, else actor_id); freshness + key resolution both
+            // target it. did:key signers have no persisted webvh record and are
+            // resolved purely cryptographically by the SDK verifier below, so
+            // the freshness gate (which only covers cached webvh documents)
+            // only applies to webvh signers.
+            let signer_did = cokret_sdk::Did::new(proof_root.clone()).map_err(|error| {
                 event_validation_error(
                     StatusCode::BAD_REQUEST,
                     "invalid_proof",
-                    format!("event proof actor_id is not a valid DID: {error}"),
+                    format!("event proof signer DID is not a valid DID: {error}"),
                 )
             })?;
-            crate::jws_verify::enforce_high_risk_did_freshness(state, &actor_id)
-                .await
-                .map_err(|reason| {
-                    tracing::debug!(%reason, "event proof DID freshness gate failed");
-                    event_validation_error(
-                        StatusCode::BAD_REQUEST,
-                        "stale_did_document",
-                        "event proof DID document is stale or unavailable for verification",
-                    )
-                })?;
+            if signer_did.method() != "key" {
+                crate::jws_verify::enforce_high_risk_did_freshness(state, &signer_did)
+                    .await
+                    .map_err(|reason| {
+                        tracing::debug!(%reason, "event proof DID freshness gate failed");
+                        event_validation_error(
+                            StatusCode::BAD_REQUEST,
+                            "stale_did_document",
+                            "event proof DID document is stale or unavailable for verification",
+                        )
+                    })?;
+            }
             crate::jws_verify::verify_jws_ed25519(
                 &proof_binding_bytes,
                 &jws,
                 &verification_method,
-                actor_id.as_str(),
+                signer_did.as_str(),
                 state,
             )
             .map_err(|reason| {
