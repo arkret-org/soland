@@ -392,3 +392,116 @@ fn canonical_value_from_wire(binding: &Value) -> Value {
         &pick("expires_at"),
     )
 }
+
+#[cfg(test)]
+mod cross_impl_tests {
+    //! Cross-implementation byte lock for the `participant_binding` signing
+    //! input. `media-service-binding.md` §3 fixes one normative `signing_input`
+    //! that the issuer signs and the verifier reconstructs. soland issues the
+    //! binding here (`binding_signing_input`) and the SDK
+    //! ([`cokret_sdk::participant_binding_signing_input`]) reconstructs it on the
+    //! verify side. Each side has its own self-consistent unit tests, but until
+    //! this lock there was no test asserting the two produce **identical bytes**
+    //! for the same logical seven-tuple — so a drift on either side could go
+    //! unnoticed (unlike the `ck.call.signal` envelope proof, which has a real
+    //! yougen round-trip). This test fails the moment either construction drifts.
+
+    use chrono::{DateTime, Utc};
+    use cokret_sdk::{
+        CallId, CallMediaParticipantBinding, DeviceId, Did, RealmId,
+        participant_binding_signing_input,
+    };
+    use serde_json::json;
+
+    use super::{binding_canonical_bytes, binding_canonical_value, binding_signing_input};
+
+    /// Fixed, realistic seven-tuple shared by both constructions.
+    const REALM_ID: &str = "ck:realm:01904100-0000-7000-8000-9b64700c6ee8";
+    const CALL_ID: &str = "ck:call:0196441c-0000-7000-8000-000000000000";
+    const FOCUS_ID: &str = "fra-1";
+    const ACTOR_ID: &str = "did:web:alice.example";
+    const DEVICE_ID: &str = "ck:device:01904100-0000-7000-8000-000000000005";
+    const PARTICIPANT_IDENTITY: &str = "ck:rtc_participant:0198c2f4-0000-7000-8000-000000000000";
+    const EXPIRES_AT: &str = "2026-05-27T12:34:56Z";
+
+    /// SDK-side signing input for the fixed tuple (`expires_at` overridable so
+    /// the field-sensitivity assertion can perturb a single field).
+    fn sdk_signing_input(expires_at: &str) -> Vec<u8> {
+        let expires_at: DateTime<Utc> = expires_at.parse().unwrap();
+        let binding = CallMediaParticipantBinding {
+            // Unsigned metadata — MUST NOT enter the signing input.
+            scheme: cokret_sdk::PARTICIPANT_BINDING_SCHEMA.to_owned(),
+            sig: String::new(),
+            issuer_kid: "did:web:media.example#media-token".to_owned(),
+            issued_at: "2026-05-27T12:30:00Z".parse().unwrap(),
+            // The seven authoritative fields.
+            realm_id: RealmId::new(REALM_ID).unwrap(),
+            call_id: CallId::new(CALL_ID).unwrap(),
+            focus_id: FOCUS_ID.to_owned(),
+            actor_id: Did::new(ACTOR_ID).unwrap(),
+            device_id: DeviceId::new(DEVICE_ID).unwrap(),
+            participant_identity: PARTICIPANT_IDENTITY.to_owned(),
+            expires_at,
+        };
+        participant_binding_signing_input(&binding).unwrap()
+    }
+
+    /// soland-side signing input for the same logical tuple, built from the
+    /// `&Value` wire form exactly as the issuer / verifier do.
+    fn soland_signing_input(expires_at: &str) -> Vec<u8> {
+        let canonical = binding_canonical_value(
+            &json!(REALM_ID),
+            &json!(CALL_ID),
+            &json!(FOCUS_ID),
+            &json!(ACTOR_ID),
+            &json!(DEVICE_ID),
+            &json!(PARTICIPANT_IDENTITY),
+            &json!(expires_at),
+        );
+        binding_signing_input(&binding_canonical_bytes(&canonical))
+    }
+
+    #[test]
+    fn soland_and_sdk_signing_input_are_byte_identical() {
+        let soland = soland_signing_input(EXPIRES_AT);
+        let sdk = sdk_signing_input(EXPIRES_AT);
+
+        // The lock: the two implementations agree on every byte.
+        assert_eq!(
+            soland, sdk,
+            "soland and SDK participant_binding signing_input diverged",
+        );
+
+        // Both carry the normative label + 0x00 prefix (`media-service-binding.md` §3).
+        let prefix = b"ck.media.participant_binding.v1\x00";
+        assert!(soland.starts_with(prefix), "soland missing label prefix");
+        assert!(sdk.starts_with(prefix), "SDK missing label prefix");
+    }
+
+    #[test]
+    fn signing_input_is_not_degenerate_when_a_field_changes() {
+        // Perturbing a single authoritative field MUST change the bytes on both
+        // sides (guards against a construction collapsing to a constant), and
+        // the two sides MUST still agree on the perturbed bytes.
+        let other_expires = "2026-05-27T12:34:57Z";
+
+        let soland_base = soland_signing_input(EXPIRES_AT);
+        let soland_other = soland_signing_input(other_expires);
+        assert_ne!(
+            soland_base, soland_other,
+            "soland signing_input did not change when expires_at changed",
+        );
+
+        let sdk_base = sdk_signing_input(EXPIRES_AT);
+        let sdk_other = sdk_signing_input(other_expires);
+        assert_ne!(
+            sdk_base, sdk_other,
+            "SDK signing_input did not change when expires_at changed",
+        );
+
+        assert_eq!(
+            soland_other, sdk_other,
+            "soland and SDK diverged on the perturbed expires_at",
+        );
+    }
+}
