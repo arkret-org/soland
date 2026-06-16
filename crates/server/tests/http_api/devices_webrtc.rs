@@ -272,344 +272,15 @@ async fn protocol_device_surface_excludes_pairing_request_scaffold() {
 }
 
 #[tokio::test]
-async fn webrtc_signaling_contracts_work() {
-    let state = AppState::new(test_config(), Db { pool: None });
-    let token = dev_token(state.clone()).await;
-
-    let unauthenticated = TestClient::post("http://server/_soland/self/webrtc/sessions")
-        .json(&serde_json::json!({
-            "realm_id": DEMO_REALM_ID
-        }))
-        .send(&app_from_state(state.clone()))
-        .await;
-    assert_eq!(unauthenticated.status_code, Some(StatusCode::UNAUTHORIZED));
-
-    let session: Value = TestClient::post("http://server/_soland/self/webrtc/sessions")
-        .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&serde_json::json!({
-            "realm_id": DEMO_REALM_ID,
-            "participants": ["did:web:alice.example"],
-            "mode": "p2p",
-            "recording_policy": "none",
-            "ttl_ms": 60000
-        }))
-        .send(&app_from_state(state.clone()))
-        .await
-        .take_json()
-        .await
-        .unwrap();
-    let session_id = session["session_id"].as_str().unwrap().to_owned();
-    assert!(session_id.starts_with("ck:call:"));
-    assert_eq!(session["participants"].as_array().unwrap().len(), 1);
-    assert_eq!(session["mode"], "p2p");
-    assert_eq!(session["recording_policy"], "none");
-    assert_eq!(session["call_state"], "ringing");
-
-    let ice: Value = TestClient::post("http://server/_soland/self/calls/ice-config")
-        .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&serde_json::json!({
-            "realm_id": DEMO_REALM_ID,
-            "call_id": session_id,
-            "actor_id": "did:web:alice.example",
-            "device_id": "ck:device:01904100-0000-7000-8000-a11ce0000001"
-        }))
-        .send(&app_from_state(state.clone()))
-        .await
-        .take_json()
-        .await
-        .unwrap();
-    assert_eq!(ice["realm_id"], DEMO_REALM_ID);
-    assert_eq!(ice["call_id"], session_id);
-    assert_eq!(ice["turn_servers"].as_array().unwrap().len(), 1);
-    let turn_username = ice["turn_servers"][0]["username"].as_str().unwrap();
-    // `webrtc-signaling.md` §4.1 — REST-style (draft-uberti) username
-    // `<expiry-unix>:<pairwise-pseudonym>`. The `<unix>` prefix equals the
-    // credential expiry; the pseudonym keeps the private-key-derived
-    // `ck_pseudonym_call_<hex>` form and leaks no principal DID / handle.
-    let (expiry_part, pseudonym_part) = turn_username
-        .split_once(':')
-        .expect("REST-style TURN username must be <expiry-unix>:<pseudonym>");
-    let expiry_unix: i64 = expiry_part
-        .parse()
-        .expect("TURN username expiry prefix must be a unix timestamp");
-    let turn_expires_at = chrono::DateTime::parse_from_rfc3339(
-        ice["turn_servers"][0]["expires_at"].as_str().unwrap(),
-    )
-    .unwrap()
-    .timestamp();
-    assert_eq!(
-        expiry_unix, turn_expires_at,
-        "TURN username expiry prefix must equal the credential expires_at unix seconds"
-    );
-    assert!(pseudonym_part.starts_with("ck_pseudonym_call_"));
-    assert!(!turn_username.contains("alice"));
-    assert!(!turn_username.contains("did:web"));
-    let turn_credential = ice["turn_servers"][0]["credential"].as_str().unwrap();
-    // credential = base64( HMAC-SHA256(turn_shared_secret, username) ). With the
-    // test deployment's configured shared secret, the credential MUST be exactly
-    // the standard-base64 HMAC over the REST-style username.
-    assert!(!turn_credential.is_empty());
-    assert_eq!(
-        turn_credential,
-        turn_rest_credential_for(SOLAND_TEST_TURN_SHARED_SECRET, turn_username),
-        "credential must be base64(HMAC-SHA256(turn_shared_secret, username)) over the full username"
-    );
-
-    // §4.1 — bucket fields are present, well-formed, and feed the signature.
-    assert_eq!(ice["bucket_seconds"], 300);
-    let issued_at = chrono::DateTime::parse_from_rfc3339(ice["issued_at"].as_str().unwrap())
-        .unwrap()
-        .timestamp();
-    let issued_at_bucket =
-        chrono::DateTime::parse_from_rfc3339(ice["issued_at_bucket"].as_str().unwrap())
-            .unwrap()
-            .timestamp();
-    assert_eq!(
-        issued_at_bucket,
-        (issued_at.div_euclid(300)) * 300,
-        "issued_at_bucket must equal floor(issued_at / bucket_seconds) * bucket_seconds"
-    );
-    assert!(
-        ice["signature"]["sig"]
-            .as_str()
-            .is_some_and(|s| !s.is_empty()),
-        "ICE config must be signed over canonical bytes including the bucket fields"
-    );
-
-    let refreshed: Value = TestClient::post(format!(
-        "http://server/_soland/self/calls/{session_id}/ice-config/refresh"
-    ))
-    .add_header("authorization", format!("Bearer {token}"), true)
-    .json(&serde_json::json!({
-        "realm_id": DEMO_REALM_ID,
-        "actor_id": "did:web:alice.example",
-        "device_id": "ck:device:01904100-0000-7000-8000-a11ce0000001"
-    }))
-    .send(&app_from_state(state.clone()))
-    .await
-    .take_json()
-    .await
-    .unwrap();
-    assert_eq!(refreshed["refreshed"], true);
-    // §4.2 active-leg reuse — the pseudonym is bucket-stable across refresh, but
-    // the REST-style username carries a fresh `<expiry-unix>:` prefix (the new
-    // credential expiry), so username + credential both rotate.
-    let refreshed_username = refreshed["turn_servers"][0]["username"].as_str().unwrap();
-    let (_, refreshed_pseudonym) = refreshed_username.split_once(':').unwrap();
-    assert_eq!(
-        refreshed_pseudonym, pseudonym_part,
-        "pseudonym must stay stable within the same bucket"
-    );
-    assert_eq!(
-        refreshed["turn_servers"][0]["credential"].as_str().unwrap(),
-        turn_rest_credential_for(SOLAND_TEST_TURN_SHARED_SECRET, refreshed_username),
-        "refreshed credential must be HMAC over the refreshed username"
-    );
-    // The refreshed username/credential are a deterministic function of the
-    // (bucket-stable) pseudonym + the credential expiry; when the expiry second
-    // advances they rotate, otherwise an identical credential within the same
-    // second is equally valid REST-style output. Either way the credential MUST
-    // remain a correct HMAC over its own username (asserted above).
-    let _ = turn_credential;
-
-    let unsigned_signal = TestClient::post(format!(
-        "http://server/_soland/self/webrtc/sessions/{session_id}/signals"
-    ))
-    .add_header("authorization", format!("Bearer {token}"), true)
-    .json(&serde_json::json!({
-        "message_type": "offer",
-        "payload": {"description_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
-    }))
-    .send(&app_from_state(state.clone()))
-    .await;
-    assert_eq!(unsigned_signal.status_code.unwrap().as_u16(), 400);
-
-    let signal: Value = TestClient::post(format!(
-        "http://server/_soland/self/webrtc/sessions/{session_id}/signals"
-    ))
-    .add_header("authorization", format!("Bearer {token}"), true)
-    .json(&serde_json::json!({
-        "message_type": "offer",
-        "payload": {
-            "description_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-            "encrypted_description_ref": "ck:blob:sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-        },
-        "proofs": [{"kid": "did:web:alice.example#device", "sig": "dev"}]
-    }))
-    .send(&app_from_state(state.clone()))
-    .await
-    .take_json()
-    .await
-    .unwrap();
-    assert_eq!(signal["seq"], 1);
-    assert_eq!(signal["next_cursor"], "1");
-    assert_eq!(signal["call_state"], "connecting");
-
-    let events: Value = TestClient::get(format!(
-        "http://server/_soland/self/webrtc/sessions/{session_id}/signals?since=0"
-    ))
-    .add_header("authorization", format!("Bearer {token}"), true)
-    .send(&app_from_state(state.clone()))
-    .await
-    .take_json()
-    .await
-    .unwrap();
-    assert_eq!(events["events"].as_array().unwrap().len(), 1);
-    assert_eq!(events["events"][0]["type"], "offer");
-    assert_eq!(events["events"][0]["sender"], "did:web:alice.example");
-    assert_eq!(events["events"][0]["call_state_after"], "connecting");
-    assert_eq!(events["call_state"], "connecting");
-
-    let answer: Value = TestClient::post(format!(
-        "http://server/_soland/self/webrtc/sessions/{session_id}/signals"
-    ))
-    .add_header("authorization", format!("Bearer {token}"), true)
-    .json(&serde_json::json!({
-        "message_type": "answer",
-        "payload": {
-            "description_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-        },
-        "proofs": [{"kid": "did:web:alice.example#device", "sig": "dev"}]
-    }))
-    .send(&app_from_state(state.clone()))
-    .await
-    .take_json()
-    .await
-    .unwrap();
-    assert_eq!(answer["seq"], 2);
-    assert_eq!(answer["call_state"], "active");
-
-    let hangup: Value = TestClient::post(format!(
-        "http://server/_soland/self/webrtc/sessions/{session_id}/signals"
-    ))
-    .add_header("authorization", format!("Bearer {token}"), true)
-    .json(&serde_json::json!({
-        "message_type": "hangup",
-        "payload": {"reason": "test-end"},
-        "proofs": [{"kid": "did:web:alice.example#device", "sig": "dev"}]
-    }))
-    .send(&app_from_state(state.clone()))
-    .await
-    .take_json()
-    .await
-    .unwrap();
-    assert_eq!(hangup["seq"], 3);
-    assert_eq!(hangup["call_state"], "ended");
-
-    let mut denied_recording = TestClient::post(format!(
-        "http://server/_soland/self/calls/{session_id}/recording/start"
-    ))
-    .add_header("authorization", format!("Bearer {token}"), true)
-    .json(&serde_json::json!({"realm_id": DEMO_REALM_ID}))
-    .send(&app_from_state(state.clone()))
-    .await;
-    assert_eq!(
-        denied_recording.status_code.unwrap(),
-        StatusCode::PRECONDITION_FAILED
-    );
-    let denied_body: Value = denied_recording.take_json().await.unwrap();
-    assert_eq!(denied_body["error"]["code"], "recording_policy_violation");
-
-    let empty_events: Value = TestClient::get(format!(
-        "http://server/_soland/self/webrtc/sessions/{session_id}/signals?since=3"
-    ))
-    .add_header("authorization", format!("Bearer {token}"), true)
-    .send(&app_from_state(state.clone()))
-    .await
-    .take_json()
-    .await
-    .unwrap();
-    assert!(empty_events["events"].as_array().unwrap().is_empty());
-
-    let recording_session: Value = TestClient::post("http://server/_soland/self/webrtc/sessions")
-        .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&serde_json::json!({
-            "realm_id": DEMO_REALM_ID,
-            "participants": ["did:web:alice.example"],
-            "mode": "sfu",
-            "recording_policy": "allow",
-            "ttl_ms": 60000
-        }))
-        .send(&app_from_state(state.clone()))
-        .await
-        .take_json()
-        .await
-        .unwrap();
-    assert_eq!(recording_session["mode"], "sfu");
-    assert_eq!(recording_session["recording_policy"], "allow");
-    let recording_session_id = recording_session["session_id"].as_str().unwrap();
-    // `webrtc-signaling.md` §3 — recording requires `ck.call.record`; the
-    // realm-member creator does not implicitly hold it.
-    grant_call_capability(
-        &state,
-        DEMO_REALM_ID,
-        "did:web:alice.example",
-        "ck.call.record",
-    );
-    let recording: Value = TestClient::post(format!(
-        "http://server/_soland/self/calls/{recording_session_id}/recording/start"
-    ))
-    .add_header("authorization", format!("Bearer {token}"), true)
-    .json(&serde_json::json!({"realm_id": DEMO_REALM_ID}))
-    .send(&app_from_state(state.clone()))
-    .await
-    .take_json()
-    .await
-    .unwrap();
-    assert_eq!(recording["ok"], true);
-    assert_eq!(recording["recording_policy"], "allow");
-    assert_eq!(recording["recording_started_by"], "did:web:alice.example");
-    assert!(
-        recording["recording_blob_ref"]
-            .as_str()
-            .unwrap()
-            .starts_with("ck:blob:sha256:")
-    );
-
-    let closed: Value = TestClient::delete(format!(
-        "http://server/_soland/self/webrtc/sessions/{session_id}"
-    ))
-    .add_header("authorization", format!("Bearer {token}"), true)
-    .send(&app_from_state(state.clone()))
-    .await
-    .take_json()
-    .await
-    .unwrap();
-    assert_eq!(closed["ok"], true);
-
-    let after_close = TestClient::get(format!(
-        "http://server/_soland/self/webrtc/sessions/{session_id}/signals"
-    ))
-    .add_header("authorization", format!("Bearer {token}"), true)
-    .send(&app_from_state(state))
-    .await;
-    assert_eq!(after_close.status_code.unwrap().as_u16(), 404);
-}
-
-#[tokio::test]
 async fn rtc_media_token_uses_projected_media_service_epoch() {
     let state = AppState::new(test_config(), Db { pool: None });
     install_media_service_epoch(&state, good_media_service_epoch());
     let token = dev_token(state.clone()).await;
-    let session_id = create_webrtc_session_for_alice(state.clone(), &token).await;
-
-    let focus_signal: Value = TestClient::post(format!(
-        "http://server/_soland/self/webrtc/sessions/{session_id}/signals"
-    ))
-    .add_header("authorization", format!("Bearer {token}"), true)
-    .json(&serde_json::json!({
-        "message_type": "focus_join",
-        "payload": {
-            "foci_preferred": ["ck:focus:mediasoup:blue", "ck:focus:livekit:green"]
-        },
-        "proofs": [{"kid": "did:web:alice.example#device", "sig": "dev"}]
-    }))
-    .send(&app_from_state(state.clone()))
-    .await
-    .take_json()
-    .await
-    .unwrap();
-    assert_eq!(focus_signal["seq"], 1);
+    // Brand-new call: no `ck.call.state` cell yet (the initiator redeems a
+    // media token before writing its first `ck.call.state` event). With no
+    // committed `session_focus`, the issuer admits the requested focus as long
+    // as it is a legal focus within the realm media_service epoch.
+    let session_id = new_prefixed_uuid7("ck:call:");
 
     // `media-service-binding.md` §6 — token exchange requires `ck.call.join`;
     // realm membership alone is insufficient.
@@ -762,12 +433,84 @@ async fn rtc_media_token_uses_projected_media_service_epoch() {
     );
 }
 
+/// Keystone acceptance for T4': the yougen flow obtains a media token WITHOUT
+/// ever touching any ephemeral signaling session. There is no `ck.call.state`
+/// cell yet (the initiator redeems the token before writing its first
+/// `ck.call.state` event); authorization is purely realm membership +
+/// `ck.call.join`. This is the case the old `participants.contains` /
+/// session-not-found gate broke (it 404'd every real yougen call).
+#[tokio::test]
+async fn rtc_media_token_yougen_flow_no_session_issues_token() {
+    let state = AppState::new(livekit_test_config(), Db { pool: None });
+    install_media_service_epoch(&state, good_media_service_epoch());
+    let token = dev_token(state.clone()).await;
+    // A fresh call id with NO `ck.call.state` cell and NO ephemeral session.
+    let call_id = new_prefixed_uuid7("ck:call:");
+
+    // Without ck.call.join, even a realm member is denied (§6).
+    let mut denied = TestClient::post("http://server/_cokret/self/rtc/token")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&serde_json::json!({
+            "realm_id": DEMO_REALM_ID,
+            "call_id": call_id,
+            "actor_id": "did:web:alice.example",
+            "device_id": "ck:device:01904100-0000-7000-8000-a11ce0000001",
+            "focus_id": "ck:focus:livekit:green"
+        }))
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(denied.status_code, Some(StatusCode::FORBIDDEN));
+    assert_eq!(
+        denied.take_json::<Value>().await.unwrap()["error"]["code"],
+        "capability_denied"
+    );
+
+    // Grant ck.call.join → the token is issued against the brand-new call even
+    // though no signaling session and no `ck.call.state` cell exist.
+    grant_call_capability(
+        &state,
+        DEMO_REALM_ID,
+        "did:web:alice.example",
+        "ck.call.join",
+    );
+    let issued: Value = TestClient::post("http://server/_cokret/self/rtc/token")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&serde_json::json!({
+            "realm_id": DEMO_REALM_ID,
+            "call_id": call_id,
+            "actor_id": "did:web:alice.example",
+            "device_id": "ck:device:01904100-0000-7000-8000-a11ce0000001",
+            "focus_id": "ck:focus:livekit:green"
+        }))
+        .send(&app_from_state(state))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(issued["focus_id"], "ck:focus:livekit:green");
+    assert_eq!(issued["connect_url"], "wss://media.example/livekit");
+    assert!(
+        issued["participant_identity"]
+            .as_str()
+            .unwrap()
+            .starts_with("ck:rtc_participant:"),
+        "a token MUST be minted with a fresh participant_identity"
+    );
+    assert_eq!(issued["participant_binding"]["call_id"], call_id);
+    assert!(
+        issued["service_signature"]["sig"]
+            .as_str()
+            .is_some_and(|sig| !sig.is_empty()),
+        "the issued token MUST carry a detached service signature"
+    );
+}
+
 #[tokio::test]
 async fn rtc_media_token_rejects_epoch_and_focus_mismatches() {
     let state = AppState::new(test_config(), Db { pool: None });
     install_media_service_epoch(&state, good_media_service_epoch());
     let token = dev_token(state.clone()).await;
-    let session_id = create_webrtc_session_for_alice(state.clone(), &token).await;
+    let session_id = new_prefixed_uuid7("ck:call:");
     // §6 — grant ck.call.join so the join gate passes and the focus/issuer
     // mismatch errors (not capability_denied) are what surfaces.
     grant_call_capability(
@@ -777,20 +520,10 @@ async fn rtc_media_token_rejects_epoch_and_focus_mismatches() {
         "ck.call.join",
     );
 
-    let _: Value = TestClient::post(format!(
-        "http://server/_soland/self/webrtc/sessions/{session_id}/signals"
-    ))
-    .add_header("authorization", format!("Bearer {token}"), true)
-    .json(&serde_json::json!({
-        "message_type": "focus_join",
-        "payload": {"foci_preferred": ["ck:focus:mediasoup:blue"]},
-        "proofs": [{"kid": "did:web:alice.example#device", "sig": "dev"}]
-    }))
-    .send(&app_from_state(state.clone()))
-    .await
-    .take_json()
-    .await
-    .unwrap();
+    // Commit `session_focus = mediasoup:blue` into the durable `ck.call.state`
+    // cell (§4.1 write-once). A token request naming a different focus MUST be
+    // rejected with `focus_mismatch`.
+    seed_call_state(&state, &session_id, Some("ck:focus:mediasoup:blue"), vec![]);
 
     let mut focus_mismatch = TestClient::post("http://server/_cokret/self/rtc/token")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -841,8 +574,8 @@ async fn rtc_media_token_rejects_epoch_and_focus_mismatches() {
 async fn rtc_media_token_rejects_non_member_actor() {
     let state = AppState::new(test_config(), Db { pool: None });
     install_media_service_epoch(&state, good_media_service_epoch());
-    let token = dev_token(state.clone()).await;
-    let session_id = create_webrtc_session_for_alice(state.clone(), &token).await;
+    let _token = dev_token(state.clone()).await;
+    let session_id = new_prefixed_uuid7("ck:call:");
     let bob_token = dev_token_for_device(
         state.clone(),
         "did:web:bob.example",
@@ -876,12 +609,15 @@ async fn rtc_media_token_requires_call_join_capability() {
     // focus (`ck:focus:livekit:green`) can mint a real token once join is held.
     let state = AppState::new(livekit_test_config(), Db { pool: None });
     install_media_service_epoch(&state, good_media_service_epoch());
-    let token = dev_token(state.clone()).await;
+    // Bootstrap alice (realm owner) so DEMO_REALM exists, then add bob as a
+    // member.
+    let _alice_token = dev_token(state.clone()).await;
     let bob = "did:web:bob.example";
     let bob_device = "ck:device:01904100-0000-7000-8000-b0b000000001";
     let bob_token = dev_token_for_device(state.clone(), bob, bob_device, "Bob Phone").await;
-    // alice (creator) + bob are participants; bob is also a realm member.
-    let session_id = create_session_with_bob(&state, &token, bob).await;
+    // bob is a realm member; no `ck.call.state` cell exists yet (the new model
+    // does not require an ephemeral session to exist before token exchange).
+    let session_id = add_member_and_fresh_call(&state, bob);
     let exchange_body = serde_json::json!({
         "realm_id": DEMO_REALM_ID,
         "call_id": session_id,
@@ -972,7 +708,7 @@ async fn rtc_media_token_livekit_backend_token_carries_livekit_claims() {
     let state = AppState::new(livekit_test_config(), Db { pool: None });
     install_media_service_epoch(&state, good_media_service_epoch());
     let token = dev_token(state.clone()).await;
-    let session_id = create_webrtc_session_for_alice(state.clone(), &token).await;
+    let session_id = new_prefixed_uuid7("ck:call:");
     // §6 — token exchange requires ck.call.join.
     grant_call_capability(
         &state,
@@ -981,22 +717,8 @@ async fn rtc_media_token_livekit_backend_token_carries_livekit_claims() {
         "ck.call.join",
     );
 
-    // Steer focus selection to the livekit focus via foci_preferred[].
-    let _: Value = TestClient::post(format!(
-        "http://server/_soland/self/webrtc/sessions/{session_id}/signals"
-    ))
-    .add_header("authorization", format!("Bearer {token}"), true)
-    .json(&serde_json::json!({
-        "message_type": "focus_join",
-        "payload": {"foci_preferred": ["ck:focus:livekit:green"]},
-        "proofs": [{"kid": "did:web:alice.example#device", "sig": "dev"}]
-    }))
-    .send(&app_from_state(state.clone()))
-    .await
-    .take_json()
-    .await
-    .unwrap();
-
+    // No committed session_focus: the request directly names the livekit focus,
+    // which is admitted because it is a legal focus in the epoch.
     let issued_before = chrono::Utc::now();
     let token_response: Value = TestClient::post("http://server/_cokret/self/rtc/token")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -1107,138 +829,21 @@ async fn admin_realm_media_service_renders_projected_cell() {
 }
 
 #[tokio::test]
-async fn webrtc_moderation_signal_projects_removed_participants_and_end_for_all() {
-    let state = AppState::new(test_config(), Db { pool: None });
-    let token = dev_token(state.clone()).await;
-    // §3a — the moderator (alice) MUST hold `ck.call.moderate`.
-    grant_call_capability(
-        &state,
-        DEMO_REALM_ID,
-        "did:web:alice.example",
-        "ck.call.moderate",
-    );
-    let bob = "did:web:bob.example";
-    let bob_device = "ck:device:01904100-0000-7000-8000-b0b000000001";
-
-    // Session with bob as an extra participant so the moderation targets a
-    // real call leg.
-    let session: Value = TestClient::post("http://server/_soland/self/webrtc/sessions")
-        .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&serde_json::json!({
-            "realm_id": DEMO_REALM_ID,
-            "participants": ["did:web:alice.example", bob],
-            "mode": "sfu",
-            "recording_policy": "none",
-            "ttl_ms": 60000
-        }))
-        .send(&app_from_state(state.clone()))
-        .await
-        .take_json()
-        .await
-        .unwrap();
-    let session_id = session["session_id"].as_str().unwrap().to_owned();
-
-    // `moderation{action=kick}` is accepted and projected into
-    // `removed_participants[]` with the pinned device id.
-    let kick: Value = TestClient::post(format!(
-        "http://server/_soland/self/webrtc/sessions/{session_id}/signals"
-    ))
-    .add_header("authorization", format!("Bearer {token}"), true)
-    .json(&serde_json::json!({
-        "message_type": "moderation",
-        "payload": {
-            "signal_type": "moderation",
-            "data": {
-                "action": "kick",
-                "target_actor_id": bob,
-                "target_device_id": bob_device,
-                "reason": "policy_violation"
-            }
-        },
-        "proofs": [{"kid": "did:web:alice.example#device", "sig": "dev"}]
-    }))
-    .send(&app_from_state(state.clone()))
-    .await
-    .take_json()
-    .await
-    .unwrap();
-    assert_eq!(kick["seq"], 1);
-    // kick leaves the call lifecycle running (active is not required, but the
-    // call MUST NOT be terminal).
-    assert_ne!(kick["call_state"], "ended");
-
-    // The removed-participants projection is materialized on the stored record.
-    let record = state
-        .persistence
-        .webrtc()
-        .get(&session_id)
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(record.removed_participants.len(), 1);
-    assert_eq!(record.removed_participants[0].actor_id, bob);
-    assert_eq!(
-        record.removed_participants[0].device_id.as_deref(),
-        Some(bob_device)
-    );
-    assert_eq!(record.removed_participants[0].action, "kick");
-
-    // `moderation{action=end_for_all}` drives the call to the terminal `ended`
-    // state (webrtc-signaling.md §3a).
-    let end: Value = TestClient::post(format!(
-        "http://server/_soland/self/webrtc/sessions/{session_id}/signals"
-    ))
-    .add_header("authorization", format!("Bearer {token}"), true)
-    .json(&serde_json::json!({
-        "message_type": "moderation",
-        "payload": { "data": { "action": "end_for_all" } },
-        "proofs": [{"kid": "did:web:alice.example#device", "sig": "dev"}]
-    }))
-    .send(&app_from_state(state.clone()))
-    .await
-    .take_json()
-    .await
-    .unwrap();
-    assert_eq!(end["seq"], 2);
-    assert_eq!(end["call_state"], "ended");
-}
-
-#[tokio::test]
 async fn webrtc_ban_blocks_removed_participant_token_reissue() {
     let state = AppState::new(livekit_test_config(), Db { pool: None });
     install_media_service_epoch(&state, good_media_service_epoch());
-    let alice_token = dev_token(state.clone()).await;
-    // §3a — the moderator (alice) MUST hold `ck.call.moderate` to ban.
-    grant_call_capability(
-        &state,
-        DEMO_REALM_ID,
-        "did:web:alice.example",
-        "ck.call.moderate",
-    );
+    let _alice_token = dev_token(state.clone()).await;
     let bob = "did:web:bob.example";
     let bob_device = "ck:device:01904100-0000-7000-8000-b0b000000001";
     let bob_token = dev_token_for_device(state.clone(), bob, bob_device, "Bob Phone").await;
     add_test_realm_member(&state, DEMO_REALM_ID, bob);
 
-    let session: Value = TestClient::post("http://server/_soland/self/webrtc/sessions")
-        .add_header("authorization", format!("Bearer {alice_token}"), true)
-        .json(&serde_json::json!({
-            "realm_id": DEMO_REALM_ID,
-            "participants": ["did:web:alice.example", bob],
-            "mode": "sfu",
-            "recording_policy": "none",
-            "ttl_ms": 60000
-        }))
-        .send(&app_from_state(state.clone()))
-        .await
-        .take_json()
-        .await
-        .unwrap();
-    let session_id = session["session_id"].as_str().unwrap().to_owned();
+    let session_id = new_prefixed_uuid7("ck:call:");
     // §6 — bob needs ck.call.join to exchange a token before the ban.
     grant_call_capability(&state, DEMO_REALM_ID, bob, "ck.call.join");
 
-    // Before the ban, bob can exchange a media token.
+    // Before the ban, bob can exchange a media token (no committed focus, so
+    // the requested epoch-legal focus is admitted).
     let pre_ban: Value = TestClient::post("http://server/_cokret/self/rtc/token")
         .add_header("authorization", format!("Bearer {bob_token}"), true)
         .json(&serde_json::json!({
@@ -1255,34 +860,20 @@ async fn webrtc_ban_blocks_removed_participant_token_reissue() {
         .unwrap();
     assert_eq!(pre_ban["focus_id"], "ck:focus:livekit:green");
 
-    // Alice bans bob (actor-wide; no device id).
-    let ban: Value = TestClient::post(format!(
-        "http://server/_soland/self/webrtc/sessions/{session_id}/signals"
-    ))
-    .add_header("authorization", format!("Bearer {alice_token}"), true)
-    .json(&serde_json::json!({
-        "message_type": "moderation",
-        "payload": { "data": { "action": "ban", "target_actor_id": bob } },
-        "proofs": [{"kid": "did:web:alice.example#device", "sig": "dev"}]
-    }))
-    .send(&app_from_state(state.clone()))
-    .await
-    .take_json()
-    .await
-    .unwrap();
-    assert_eq!(ban["seq"], 1);
-
-    let record = state
-        .persistence
-        .webrtc()
-        .get(&session_id)
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(record.removed_participants.len(), 1);
-    assert_eq!(record.removed_participants[0].action, "ban");
-    // Actor-wide ban omits device_id.
-    assert!(record.removed_participants[0].device_id.is_none());
+    // A moderator actor-wide-bans bob: the durable `ck.call.state.removed_participants[]`
+    // projection (`webrtc-signaling.md` §3a) carries a `ban` row with no
+    // `device_id`. Seed that cell directly (the reducer writes the same shape
+    // from a committed `ck.call.state` event).
+    seed_call_state(
+        &state,
+        &session_id,
+        None,
+        vec![serde_json::json!({
+            "actor_id": bob,
+            "action": "ban",
+            "removed_at": chrono::Utc::now().to_rfc3339(),
+        })],
+    );
 
     // After the ban, bob's token re-issue is refused with
     // `call_participant_removed` (webrtc-signaling.md §3a).
@@ -1315,187 +906,45 @@ fn grant_call_capability(state: &AppState, realm_id: &str, subject: &str, action
     );
 }
 
-/// Create an sfu session in DEMO_REALM with alice (owner) + bob as
-/// participants and bob registered as a realm member. Returns the session id.
-async fn create_session_with_bob(state: &AppState, alice_token: &str, bob: &str) -> String {
-    add_test_realm_member(state, DEMO_REALM_ID, bob);
-    let session: Value = TestClient::post("http://server/_soland/self/webrtc/sessions")
-        .add_header("authorization", format!("Bearer {alice_token}"), true)
-        .json(&serde_json::json!({
-            "realm_id": DEMO_REALM_ID,
-            "participants": ["did:web:alice.example", bob],
-            "mode": "sfu",
-            "recording_policy": "allow",
-            "ttl_ms": 60000
-        }))
-        .send(&app_from_state(state.clone()))
-        .await
-        .take_json()
-        .await
-        .unwrap();
-    session["session_id"].as_str().unwrap().to_owned()
+/// Register `bob` as a realm member and return a fresh `ck:call:<uuidv7>` id.
+/// The media token issuer is decoupled from any ephemeral signaling session
+/// (`media-service-binding.md` 落账时序): a brand-new call has no
+/// `ck.call.state` cell yet, and the issuer authorizes on realm membership +
+/// `ck.call.join` + the durable ban set. This mirrors the yougen flow, which
+/// redeems a media token before writing its first `ck.call.state` event.
+fn add_member_and_fresh_call(state: &AppState, member: &str) -> String {
+    add_test_realm_member(state, DEMO_REALM_ID, member);
+    new_prefixed_uuid7("ck:call:")
 }
 
-fn dev_proof() -> Value {
-    serde_json::json!([{"kid": "did:web:bob.example#device", "sig": "dev"}])
-}
 
-#[tokio::test]
-async fn webrtc_moderation_requires_moderate_capability() {
-    let state = AppState::new(test_config(), Db { pool: None });
-    let alice_token = dev_token(state.clone()).await;
-    let bob = "did:web:bob.example";
-    let bob_device = "ck:device:01904100-0000-7000-8000-b0b000000001";
-    let bob_token = dev_token_for_device(state.clone(), bob, bob_device, "Bob Phone").await;
-    let session_id = create_session_with_bob(&state, &alice_token, bob).await;
-
-    // Bob (realm member + participant, but no `ck.call.moderate`) cannot kick.
-    let mut denied = TestClient::post(format!(
-        "http://server/_soland/self/webrtc/sessions/{session_id}/signals"
-    ))
-    .add_header("authorization", format!("Bearer {bob_token}"), true)
-    .json(&serde_json::json!({
-        "message_type": "moderation",
-        "payload": { "data": { "action": "kick", "target_actor_id": "did:web:alice.example" } },
-        "proofs": dev_proof()
-    }))
-    .send(&app_from_state(state.clone()))
-    .await;
-    assert_eq!(denied.status_code, Some(StatusCode::FORBIDDEN));
-    let body: Value = denied.take_json().await.unwrap();
-    assert_eq!(body["error"]["code"], "call_moderation_unauthorised");
-
-    // After granting `ck.call.moderate`, the same moderation frame is accepted.
-    grant_call_capability(&state, DEMO_REALM_ID, bob, "ck.call.moderate");
-    let accepted: Value = TestClient::post(format!(
-        "http://server/_soland/self/webrtc/sessions/{session_id}/signals"
-    ))
-    .add_header("authorization", format!("Bearer {bob_token}"), true)
-    .json(&serde_json::json!({
-        "message_type": "moderation",
-        "payload": { "data": { "action": "kick", "target_actor_id": "did:web:alice.example" } },
-        "proofs": dev_proof()
-    }))
-    .send(&app_from_state(state))
-    .await
-    .take_json()
-    .await
-    .unwrap();
-    assert_eq!(accepted["seq"], 1);
-}
-
-#[tokio::test]
-async fn webrtc_screen_share_requires_screen_share_capability() {
-    let state = AppState::new(test_config(), Db { pool: None });
-    let alice_token = dev_token(state.clone()).await;
-    let bob = "did:web:bob.example";
-    let bob_device = "ck:device:01904100-0000-7000-8000-b0b000000001";
-    let bob_token = dev_token_for_device(state.clone(), bob, bob_device, "Bob Phone").await;
-    let session_id = create_session_with_bob(&state, &alice_token, bob).await;
-
-    let screen_on = serde_json::json!({
-        "message_type": "media_state",
-        "payload": { "data": { "screen": { "enabled": true, "source_id": "screen_01" } } },
-        "proofs": dev_proof()
+/// Seed the durable `ck.call.state` cell (`ck.component.call.state.v1:{call_id}`)
+/// the media token issuer reads, mirroring what the `apply_call_state` reducer
+/// writes from a committed `ck.call.state` event. `session_focus` pins the
+/// committed focus (write-once §4.1); `removed_participants` carries the §3a ban
+/// / kick rows (`{ actor_id, device_id?, action, removed_at }`).
+fn seed_call_state(
+    state: &AppState,
+    call_id: &str,
+    session_focus: Option<&str>,
+    removed_participants: Vec<Value>,
+) {
+    let mut value = serde_json::json!({
+        "call_id": call_id,
+        "state": "active",
+        "removed_participants": removed_participants,
     });
-
-    // No `ck.call.screen_share` → media_permission_denied.
-    let mut denied = TestClient::post(format!(
-        "http://server/_soland/self/webrtc/sessions/{session_id}/signals"
-    ))
-    .add_header("authorization", format!("Bearer {bob_token}"), true)
-    .json(&screen_on)
-    .send(&app_from_state(state.clone()))
-    .await;
-    assert_eq!(denied.status_code, Some(StatusCode::FORBIDDEN));
-    let body: Value = denied.take_json().await.unwrap();
-    assert_eq!(body["error"]["code"], "media_permission_denied");
-
-    // A `media_state` that does NOT enable screen share is not gated.
-    let no_screen: Value = TestClient::post(format!(
-        "http://server/_soland/self/webrtc/sessions/{session_id}/signals"
-    ))
-    .add_header("authorization", format!("Bearer {bob_token}"), true)
-    .json(&serde_json::json!({
-        "message_type": "media_state",
-        "payload": { "data": { "screen": { "enabled": false } } },
-        "proofs": dev_proof()
-    }))
-    .send(&app_from_state(state.clone()))
-    .await
-    .take_json()
-    .await
-    .unwrap();
-    assert_eq!(no_screen["seq"], 1);
-
-    // After granting `ck.call.screen_share`, screen-on is accepted.
-    grant_call_capability(&state, DEMO_REALM_ID, bob, "ck.call.screen_share");
-    let accepted: Value = TestClient::post(format!(
-        "http://server/_soland/self/webrtc/sessions/{session_id}/signals"
-    ))
-    .add_header("authorization", format!("Bearer {bob_token}"), true)
-    .json(&screen_on)
-    .send(&app_from_state(state))
-    .await
-    .take_json()
-    .await
-    .unwrap();
-    assert_eq!(accepted["seq"], 2);
-}
-
-#[tokio::test]
-async fn webrtc_recording_requires_record_capability() {
-    let state = AppState::new(test_config(), Db { pool: None });
-    let alice_token = dev_token(state.clone()).await;
-    let bob = "did:web:bob.example";
-    let bob_device = "ck:device:01904100-0000-7000-8000-b0b000000001";
-    let bob_token = dev_token_for_device(state.clone(), bob, bob_device, "Bob Phone").await;
-    let session_id = create_session_with_bob(&state, &alice_token, bob).await;
-
-    // recording_policy=allow but bob lacks `ck.call.record` → recording_denied.
-    let mut denied = TestClient::post(format!(
-        "http://server/_soland/self/calls/{session_id}/recording/start"
-    ))
-    .add_header("authorization", format!("Bearer {bob_token}"), true)
-    .json(&serde_json::json!({"realm_id": DEMO_REALM_ID}))
-    .send(&app_from_state(state.clone()))
-    .await;
-    assert_eq!(denied.status_code, Some(StatusCode::FORBIDDEN));
-    let body: Value = denied.take_json().await.unwrap();
-    assert_eq!(body["error"]["code"], "recording_denied");
-
-    // After granting `ck.call.record`, the recording starts.
-    grant_call_capability(&state, DEMO_REALM_ID, bob, "ck.call.record");
-    let recording: Value = TestClient::post(format!(
-        "http://server/_soland/self/calls/{session_id}/recording/start"
-    ))
-    .add_header("authorization", format!("Bearer {bob_token}"), true)
-    .json(&serde_json::json!({"realm_id": DEMO_REALM_ID}))
-    .send(&app_from_state(state))
-    .await
-    .take_json()
-    .await
-    .unwrap();
-    assert_eq!(recording["ok"], true);
-    assert_eq!(recording["recording_started_by"], bob);
-}
-
-async fn create_webrtc_session_for_alice(state: AppState, token: &str) -> String {
-    let session: Value = TestClient::post("http://server/_soland/self/webrtc/sessions")
-        .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&serde_json::json!({
-            "realm_id": DEMO_REALM_ID,
-            "participants": ["did:web:alice.example"],
-            "mode": "sfu",
-            "recording_policy": "none",
-            "ttl_ms": 60000
-        }))
-        .send(&app_from_state(state))
-        .await
-        .take_json()
-        .await
-        .unwrap();
-    session["session_id"].as_str().unwrap().to_owned()
+    if let Some(focus) = session_focus {
+        value["session_focus"] = Value::String(focus.to_owned());
+    }
+    let cell_id =
+        CellRef::new(format!("ck:cell:ck.component.call.state.v1:{call_id}")).unwrap();
+    state
+        .projection
+        .lock()
+        .unwrap()
+        .cells
+        .insert(cell_id, CellState::Value(value));
 }
 
 fn install_media_service_epoch(state: &AppState, media_service: Value) {
@@ -1536,17 +985,6 @@ fn good_media_service_epoch() -> Value {
     })
 }
 
-/// Recompute the REST-style TURN credential the server emits:
-/// `base64( HMAC-SHA256(turn_shared_secret, username) )` over the full
-/// `<expiry-unix>:<pseudonym>` username (`webrtc-signaling.md` §4.1).
-fn turn_rest_credential_for(secret: &str, username: &str) -> String {
-    use hmac::{Hmac, Mac};
-    use sha2::Sha256;
-    let mut mac = <Hmac<Sha256> as hmac::digest::KeyInit>::new_from_slice(secret.as_bytes())
-        .expect("hmac key");
-    mac.update(username.as_bytes());
-    STANDARD.encode(mac.finalize().into_bytes())
-}
 
 /// Build a signed `ck.call.signal` ephemeral envelope (verbatim wire shape
 /// per `ck.schema.ephemeral_envelope.v1` + `webrtc-signaling.md` §5). `proof`

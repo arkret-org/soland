@@ -48,7 +48,6 @@ mod realm_invites;
 mod recovery;
 mod sessions;
 mod sync_cursor;
-mod webrtc;
 mod webvh;
 pub use accounts::*;
 pub use agents::*;
@@ -72,7 +71,6 @@ pub use realm_invites::*;
 pub use recovery::*;
 pub use sessions::*;
 pub use sync_cursor::*;
-pub use webrtc::*;
 pub use webvh::*;
 
 /// Error type for persistence operations.
@@ -196,7 +194,6 @@ pub trait PersistenceStore: Send + Sync {
     fn typing(&self) -> &dyn TypingStore;
     fn call_signal_relay(&self) -> &dyn CallSignalRelayStore;
     fn push_bridge_cache(&self) -> &dyn PushBridgeCacheStore;
-    fn webrtc(&self) -> &dyn WebRtcSessionStore;
     fn policy_documents(&self) -> &dyn PolicyDocumentStore;
     fn recovery_policies(&self) -> &dyn RecoveryPolicyStore;
     fn recovery_receipts(&self) -> &dyn RecoveryReceiptStore;
@@ -251,7 +248,6 @@ pub struct SolandMemoryPersistenceStore {
     typing: MemoryTypingStore,
     call_signal_relay: MemoryCallSignalRelayStore,
     push_bridge_cache: MemoryPushBridgeCacheStore,
-    webrtc: MemoryWebRtcSessionStore,
     policy_documents: MemoryPolicyDocumentStore,
     recovery_policies: MemoryRecoveryPolicyStore,
     recovery_receipts: MemoryRecoveryReceiptStore,
@@ -304,7 +300,6 @@ impl SolandMemoryPersistenceStore {
             typing: MemoryTypingStore::new(),
             call_signal_relay: MemoryCallSignalRelayStore::new(),
             push_bridge_cache: MemoryPushBridgeCacheStore::new(),
-            webrtc: MemoryWebRtcSessionStore::new(),
             policy_documents: MemoryPolicyDocumentStore::new(),
             recovery_policies: MemoryRecoveryPolicyStore::new(),
             recovery_receipts: MemoryRecoveryReceiptStore::new(),
@@ -429,9 +424,6 @@ impl PersistenceStore for SolandMemoryPersistenceStore {
         &self.push_bridge_cache
     }
 
-    fn webrtc(&self) -> &dyn WebRtcSessionStore {
-        &self.webrtc
-    }
 
     fn policy_documents(&self) -> &dyn PolicyDocumentStore {
         &self.policy_documents
@@ -555,10 +547,10 @@ pub struct PgPersistenceStore {
     federation_operations: PgFederationOperationsStore,
     moderation: PgModerationStore,
     presence: PgPresenceStore,
+    call_signal_relay: PgCallSignalRelayStore,
     webvh: PgWebvhStore,
     realm_invites: PgRealmInviteStore,
     key_backups: PgKeyBackupStore,
-    webrtc: PgWebRtcSessionStore,
     policy_documents: PgPolicyDocumentStore,
     recovery_policies: PgRecoveryPolicyStore,
     recovery_receipts: PgRecoveryReceiptStore,
@@ -601,10 +593,10 @@ impl PgPersistenceStore {
             federation_operations: PgFederationOperationsStore { pool: pool.clone() },
             moderation: PgModerationStore { pool: pool.clone() },
             presence: PgPresenceStore { pool: pool.clone() },
+            call_signal_relay: PgCallSignalRelayStore { pool: pool.clone() },
             webvh: PgWebvhStore { pool: pool.clone() },
             realm_invites: PgRealmInviteStore { pool: pool.clone() },
             key_backups: PgKeyBackupStore { pool: pool.clone() },
-            webrtc: PgWebRtcSessionStore { pool: pool.clone() },
             policy_documents: PgPolicyDocumentStore { pool: pool.clone() },
             recovery_policies: PgRecoveryPolicyStore { pool: pool.clone() },
             recovery_receipts: PgRecoveryReceiptStore { pool: pool.clone() },
@@ -709,16 +701,13 @@ impl PersistenceStore for PgPersistenceStore {
     }
 
     fn call_signal_relay(&self) -> &dyn CallSignalRelayStore {
-        self.fallback.call_signal_relay()
+        &self.call_signal_relay
     }
 
     fn push_bridge_cache(&self) -> &dyn PushBridgeCacheStore {
         &self.push_bridge_cache
     }
 
-    fn webrtc(&self) -> &dyn WebRtcSessionStore {
-        &self.webrtc
-    }
 
     fn policy_documents(&self) -> &dyn PolicyDocumentStore {
         &self.policy_documents
@@ -1813,9 +1802,9 @@ mod tests {
     }
 
     // ── Memory parity tests for the recovery / realtime sub-stores
-    // (key_backup / webrtc / policy / restore). Pg parity is enforced by
-    // the shared trait surface; the integration tests in
-    // `tests/http_api.rs` exercise the Pg path when `DATABASE_URL` is set.
+    // (key_backup / policy / restore). Pg parity is enforced by the shared
+    // trait surface; the integration tests in `tests/http_api.rs` exercise the
+    // Pg path when `DATABASE_URL` is set.
 
     #[tokio::test]
     async fn memory_key_backup_store_put_get_snapshot_matches_trait() {
@@ -1843,82 +1832,6 @@ mod tests {
         assert!(store.delete("ck:backup:01").await.unwrap());
         assert!(!store.delete("ck:backup:01").await.unwrap());
         assert!(store.get("ck:backup:01").await.unwrap().is_none());
-    }
-
-    #[tokio::test]
-    async fn memory_webrtc_store_put_get_append_signal_matches_trait() {
-        let store = MemoryWebRtcSessionStore::new();
-        let now = Utc::now();
-        let mut participants = BTreeSet::new();
-        participants.insert("did:web:alice.example".to_owned());
-        participants.insert("did:web:bob.example".to_owned());
-        let record = WebRtcSessionRecord {
-            session_id: "ck:call:01".to_owned(),
-            realm_id: "ck:realm:0196419b-0000-7000-8000-000000000001".to_owned(),
-            created_by: "did:web:alice.example".to_owned(),
-            participants,
-            mode: "p2p".to_owned(),
-            recording_policy: "none".to_owned(),
-            recording_started_by: None,
-            recording_blob_ref: None,
-            removed_participants: Vec::new(),
-            expires_at: now + chrono::Duration::minutes(30),
-            created_at: now,
-            next_seq: 0,
-            signals: Vec::new(),
-        };
-        store.put(record).await.unwrap();
-
-        let fetched = store.get("ck:call:01").await.unwrap().unwrap();
-        assert_eq!(fetched.session_id, "ck:call:01");
-        assert_eq!(fetched.participants.len(), 2);
-        assert_eq!(fetched.next_seq, 0);
-
-        // Participant appends a signal — seq is assigned by the store.
-        let appended = store
-            .append_signal(
-                "ck:call:01",
-                "did:web:alice.example",
-                Box::new(move |seq| WebRtcSignalRecord {
-                    seq,
-                    sender: "did:web:alice.example".to_owned(),
-                    message_type: "offer".to_owned(),
-                    payload: serde_json::json!({"sdp": "v=0..."}),
-                    proofs: Vec::new(),
-                    created_at: now,
-                }),
-            )
-            .await
-            .unwrap();
-        assert_eq!(appended.seq, 0);
-
-        let after = store.get("ck:call:01").await.unwrap().unwrap();
-        assert_eq!(after.next_seq, 1);
-        assert_eq!(after.signals.len(), 1);
-        assert_eq!(after.signals[0].message_type, "offer");
-
-        // Non-participant gets rejected.
-        assert!(
-            store
-                .append_signal(
-                    "ck:call:01",
-                    "did:web:carol.example",
-                    Box::new(move |seq| WebRtcSignalRecord {
-                        seq,
-                        sender: "did:web:carol.example".to_owned(),
-                        message_type: "answer".to_owned(),
-                        payload: Value::Null,
-                        proofs: Vec::new(),
-                        created_at: now,
-                    }),
-                )
-                .await
-                .is_err()
-        );
-
-        // Delete clears the row.
-        assert!(store.delete("ck:call:01").await.unwrap());
-        assert!(store.get("ck:call:01").await.unwrap().is_none());
     }
 
     #[tokio::test]

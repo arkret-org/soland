@@ -277,12 +277,12 @@ fn soland_local_router() -> Router {
                 .hoop(identity::session_pop::verify_session_pop)
                 .push(spaces::local_router())
                 .push(admin::audit_router())
-                // Soland-internal WebRTC compatibility / test surface
-                // (`/_soland/self/webrtc/*`, `/_soland/self/calls/*`). These are
-                // NOT spec-registered (only `/_cokret/self/rtc/*` is); they back
-                // cotest e2e and soland's own webrtc tests. See
-                // `interop::webrtc::local_router`.
-                .push(interop::webrtc::local_router())
+                // The old soland-internal WebRTC session stack
+                // (`/_soland/self/webrtc/*`, `/_soland/self/calls/*`) is retired:
+                // media token / ICE config are served only from the spec
+                // `/_cokret/self/rtc/*` surface, and call lifecycle / signaling
+                // live on durable `ck.call.state` + the `/_cokret/self/ephemeral`
+                // `ck.call.signal` channel.
                 .push(mls::local_router()),
         )
         // `/_soland/find/directory/*` mirror retired — directory

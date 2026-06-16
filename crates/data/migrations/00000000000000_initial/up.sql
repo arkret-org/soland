@@ -164,6 +164,48 @@ CREATE TABLE public.blobs (
     created_at timestamp with time zone DEFAULT now() NOT NULL
 );
 
+-- Realm-broadcast relay for `ck.call.signal` ephemeral envelopes
+-- (`webrtc-signaling.md` §5). One row per relayed signed envelope, retained
+-- until `expires_at`; receivers pick it up off the subscribe
+-- `ephemeral.call_signals` segment and verify the carried `proof`. `position`
+-- is a monotonic per-Realm deliver-once cursor sourced from
+-- `call_signal_relay_position`.
+CREATE TABLE public.call_signal_relay (
+    id uuid NOT NULL,
+    realm_id text NOT NULL,
+    position bigint NOT NULL,
+    sender_actor text NOT NULL,
+    sender_device text NOT NULL,
+    call_id text NOT NULL,
+    envelope jsonb NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    expires_at timestamp with time zone NOT NULL
+);
+
+-- Per-Realm monotonic position counter for `call_signal_relay`. Held in a
+-- dedicated table (not `MAX(position)` of live rows) so positions keep
+-- increasing even after the relay log is pruned, and a deliver-once watermark
+-- can never be re-crossed by a recycled position.
+CREATE TABLE public.call_signal_relay_position (
+    realm_id text NOT NULL,
+    next_position bigint DEFAULT 0 NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+-- Per-subscriber-device deliver-once watermark for `call_signal_relay`
+-- (`webrtc-signaling.md` §5). Records the highest per-Realm `position` already
+-- delivered to a `(actor, device, realm)` triple so an incremental
+-- re-subscribe inside the TTL window does not re-emit a signal the device
+-- already saw, while a full sync still recovers all non-expired pending
+-- signals. Durable so a restart / replica failover preserves the cursor.
+CREATE TABLE public.call_signal_relay_watermark (
+    actor_id text NOT NULL,
+    device_id text NOT NULL,
+    realm_id text NOT NULL,
+    delivered_through bigint DEFAULT 0 NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
 CREATE TABLE public.canonical_events (
     id uuid NOT NULL,
     actor_id text NOT NULL,
@@ -834,6 +876,18 @@ ALTER TABLE ONLY public.backup_series
 ALTER TABLE ONLY public.blobs
     ADD CONSTRAINT blobs_pkey PRIMARY KEY (id);
 
+ALTER TABLE ONLY public.call_signal_relay
+    ADD CONSTRAINT call_signal_relay_pkey PRIMARY KEY (id);
+
+ALTER TABLE ONLY public.call_signal_relay
+    ADD CONSTRAINT call_signal_relay_realm_position_key UNIQUE (realm_id, position);
+
+ALTER TABLE ONLY public.call_signal_relay_position
+    ADD CONSTRAINT call_signal_relay_position_pkey PRIMARY KEY (realm_id);
+
+ALTER TABLE ONLY public.call_signal_relay_watermark
+    ADD CONSTRAINT call_signal_relay_watermark_pkey PRIMARY KEY (actor_id, device_id, realm_id);
+
 ALTER TABLE ONLY public.canonical_events
     ADD CONSTRAINT canonical_events_pkey PRIMARY KEY (id);
 
@@ -1058,6 +1112,10 @@ CREATE INDEX backup_series_class_idx ON public.backup_series USING btree (backup
 CREATE INDEX blobs_sha256_idx ON public.blobs USING btree (sha256);
 
 CREATE INDEX blobs_space_created_idx ON public.blobs USING btree (realm_id, created_at);
+
+CREATE INDEX call_signal_relay_realm_position_idx ON public.call_signal_relay USING btree (realm_id, position);
+
+CREATE INDEX call_signal_relay_expires_idx ON public.call_signal_relay USING btree (expires_at);
 
 CREATE INDEX canonical_events_actor_idx ON public.canonical_events USING btree (actor_id, actor_seq DESC);
 

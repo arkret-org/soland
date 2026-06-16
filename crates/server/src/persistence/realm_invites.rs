@@ -164,11 +164,6 @@ impl RealmInviteStore for PgRealmInviteStore {
 // `PgKeyBackupStore` persists the encrypted-key-backup envelopes
 // (`key_backups`, one row per `backup_id`).
 //
-// `PgWebRtcSessionStore` persists `WebRtcSessionRecord` (participants set
-// + signals vec + next_seq) into one row keyed by `call_id`. The full
-// participants/signals/seq accumulator lives in the `signaling_state`
-// JSONB so concurrent appends rebuild from the round-trip envelope.
-//
 // `PgPolicyDocumentStore` mirrors the round-26 schema-store pattern:
 // typed `policy_id / owner / scope / subject_ref / policy_type` columns
 // for query predicates plus the canonical `document` JSONB.

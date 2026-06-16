@@ -4,10 +4,13 @@
 //! - `POST /_cokret/self/rtc/ice-config` (TURN / STUN list)
 //! - `POST /_cokret/self/rtc/token` (media token exchange, CKP-0010)
 //!
-//! Sessions are persisted through `state.persistence.webrtc()`. STUN/TURN
-//! URLs, credential TTLs, and the optional TURN shared secret are
-//! operator-configurable via `AppConfig::ice`. Durable Pg backing and the
-//! spec rule (no DID in TURN username / push payload) are future work.
+//! These are the only spec-registered media surfaces. Both are stateless with
+//! respect to any ephemeral signaling session: the media token issuer reads the
+//! durable `ck.call.state` cell (`ck.component.call.state.v1`) for the committed
+//! `session_focus` and the `removed_participants[]` ban set, and ICE config is a
+//! transport-layer discovery surface bound to the authenticated `(actor,
+//! device)`. STUN/TURN URLs, credential TTLs, and the optional TURN shared
+//! secret are operator-configurable via `AppConfig::ice`.
 
 use std::collections::BTreeSet;
 
@@ -22,13 +25,11 @@ use serde::Serialize;
 use serde_json::{Value, json};
 
 use super::{now, realm_has_member, sha256_hex, validate_device_id, validate_did};
-use crate::error::{AppError, ErrorCode, reasons};
+use crate::error::{AppError, ErrorCode};
 use crate::ids;
 use crate::result::{JsonResult, json_ok};
 use crate::routing::system::extract::AuthArgs;
-use crate::state::{
-    AppState, SessionRecord, WebRtcRemovedParticipant, WebRtcSessionRecord, WebRtcSignalRecord,
-};
+use crate::state::{AppState, SessionRecord};
 use crate::wire::{
     CallMediaParticipantBinding, CallMediaServiceSignature, CallMediaTokenExchangeOutcome,
     CallMediaTokenExchangeRequestBody,
@@ -46,52 +47,6 @@ pub(super) fn protocol_router() -> Router {
         .push(Router::with_path("rtc/ice-config").post(cokret_ice_config))
         // CKP-0010 — media token exchange (`/_cokret/self/rtc/token`).
         .push(Router::with_path("rtc/token").post(cokret_rtc_token))
-}
-
-/// Soland-internal WebRTC compatibility / test surface. These routes are NOT
-/// registered in the spec contract-catalog / OpenAPI binding, so they MUST NOT
-/// live on the `/_cokret/self` spec-conformance face. They are mounted under
-/// the deployment-local `/_soland/self/*` namespace instead. The canonical
-/// clients (yougen) drive media through the registered `/_cokret/self/rtc/*`
-/// surface above; only cotest e2e and soland's own webrtc tests exercise these.
-///
-/// Resolves at:
-/// - `POST   /_soland/self/webrtc/sessions`
-/// - `DELETE /_soland/self/webrtc/sessions/{session_id}`
-/// - `GET    /_soland/self/webrtc/sessions/{session_id}/signals`
-/// - `POST   /_soland/self/webrtc/sessions/{session_id}/signals`
-/// - `POST   /_soland/self/calls/ice-config`
-/// - `POST   /_soland/self/calls/{call_id}/ice-config/refresh`
-/// - `POST   /_soland/self/calls/{call_id}/recording/start`
-pub(crate) fn local_router() -> Router {
-    Router::new()
-        // Ephemeral WebRTC signaling face (`webrtc-signaling.md`): session
-        // create / close, append+list signals. Soland-internal, non-spec.
-        .push(
-            Router::with_path("webrtc/sessions")
-                .post(create_webrtc_session)
-                .push(
-                    Router::with_path("{session_id}")
-                        .delete(delete_webrtc_session)
-                        .push(
-                            Router::with_path("signals")
-                                .get(list_webrtc_signals)
-                                .post(append_webrtc_signal),
-                        ),
-                ),
-        )
-        // Call-scoped ICE config + recording control
-        // (`webrtc-signaling.md` §4, `call-state.md` §5). Soland-internal,
-        // non-spec.
-        .push(
-            Router::with_path("calls")
-                .push(Router::with_path("ice-config").post(calls_ice_config))
-                .push(
-                    Router::with_path("{call_id}/ice-config/refresh")
-                        .post(calls_ice_config_refresh),
-                )
-                .push(Router::with_path("{call_id}/recording/start").post(calls_recording_start)),
-        )
 }
 
 #[derive(Clone, Debug)]
@@ -192,7 +147,7 @@ impl SolandIceConfigOutcome {
                 kid: format!("{}#media-ice", state.config.service_did),
                 payload_digest,
                 sig,
-                signature_input: "soland-media-ice-config-v1".to_owned(),
+                signature_input: ICE_CONFIG_SIGNING_LABEL.to_owned(),
             },
         })
     }
@@ -223,8 +178,6 @@ async fn cokret_ice_config(
             device_id: body.device_id,
             force_turn: matches!(body.mode, MediaIceMode::Turn),
         },
-        None,
-        false,
     )
     .await
 }
@@ -233,15 +186,12 @@ async fn issue_ice_config(
     state: &AppState,
     session: &SessionRecord,
     body: IceConfigRequestContext,
-    path_call_id: Option<String>,
-    refresh: bool,
 ) -> JsonResult<SolandIceConfigOutcome> {
     let realm_id = body.realm_id.as_str();
-    let call_id = path_call_id
-        .as_deref()
-        .or(Some(body.call_id.as_str()))
-        .filter(|call_id| !call_id.is_empty())
-        .ok_or_else(|| AppError::missing_param("call_id is required"))?;
+    let call_id = body.call_id.as_str();
+    if call_id.is_empty() {
+        return Err(AppError::missing_param("call_id is required"));
+    }
     let actor_id = body.actor_id.as_str();
     let device_id = body.device_id.as_str();
 
@@ -258,24 +208,17 @@ async fn issue_ice_config(
             "device_id must match the authenticated device",
         ));
     }
+    // `webrtc-signaling.md` §4 — ICE config is a transport-layer discovery
+    // surface bound to the authenticated `(actor, device)`. It precedes the
+    // `ck.call.state` roster (a caller fetches TURN/STUN before it has
+    // committed its participant row, and the callee fetches it while the call
+    // is still ringing), so call existence MUST NOT be enforced here. The only
+    // authorization gate is realm membership; the per-call ban gate lives on
+    // the media token issuer, not on ICE discovery.
     if !realm_has_member(state, realm_id, actor_id).await {
         return Err(AppError::capability_denied(
             "actor is not a joined member of the realm",
         ));
-    }
-    if let Some(record) = state.persistence.webrtc().get(call_id).await.ok().flatten() {
-        if record.realm_id != realm_id {
-            return Err(AppError::invalid_param(
-                "call_id does not belong to the requested realm",
-            ));
-        }
-        if !record.participants.contains(actor_id) {
-            return Err(AppError::capability_denied(
-                "actor is not a participant of the call",
-            ));
-        }
-    } else if refresh {
-        return Err(AppError::not_found("call session not found"));
     }
 
     let issued_at = now();
@@ -347,7 +290,7 @@ async fn issue_ice_config(
         expires_at,
         force_turn,
         pairwise_pseudonym: pseudonym,
-        refreshed: refresh,
+        refreshed: false,
     };
     json_ok(SolandIceConfigOutcome::signed(state, response)?)
 }
@@ -459,17 +402,31 @@ fn ice_config_payload_digest<T: Serialize>(payload: &T) -> String {
     cokret_sdk::canonical::sha256_digest(&bytes)
 }
 
-fn ice_config_signature<T: Serialize>(state: &AppState, payload: &T) -> String {
+/// `media-service-binding.md` §3.1 / `webrtc-signaling.md` §4.1 — the ICE config
+/// response signature domain-separation label. MUST be byte-for-byte
+/// `ck.media.ice_config.v1` and MUST differ from
+/// `ck.media.participant_binding.v1` so an issuer key's ICE-config signature can
+/// never be re-interpreted under the participant_binding verify path (or vice
+/// versa).
+const ICE_CONFIG_SIGNING_LABEL: &str = "ck.media.ice_config.v1";
+
+/// `webrtc-signaling.md` §4.1 (normative) — construct the ICE config signing
+/// input as `label || 0x00 || canonical_json(<response minus signature>)`. The
+/// `payload` is the unsigned outcome (the response object before the
+/// `signature` field is attached), serialized as RFC 8785 JCS canonical JSON.
+fn ice_config_signing_input<T: Serialize>(payload: &T) -> Vec<u8> {
     let payload = cokret_sdk::canonical::canonical_json_bytes(payload)
         .unwrap_or_else(|_| serde_json::to_vec(payload).unwrap_or_default());
-    let mut signing_input = Vec::with_capacity(
-        b"soland-media-ice-config-v1".len() + state.config.service_did.len() + payload.len() + 2,
-    );
-    signing_input.extend_from_slice(b"soland-media-ice-config-v1");
-    signing_input.push(0);
-    signing_input.extend_from_slice(state.config.service_did.as_bytes());
+    let mut signing_input =
+        Vec::with_capacity(ICE_CONFIG_SIGNING_LABEL.len() + payload.len() + 1);
+    signing_input.extend_from_slice(ICE_CONFIG_SIGNING_LABEL.as_bytes());
     signing_input.push(0);
     signing_input.extend_from_slice(&payload);
+    signing_input
+}
+
+fn ice_config_signature<T: Serialize>(state: &AppState, payload: &T) -> String {
+    let signing_input = ice_config_signing_input(payload);
     let signature = state.notary_signing_key().sign(&signing_input);
     format!(
         "eddsa-ed25519:{}",
@@ -675,47 +632,24 @@ async fn handle_rtc_token(
     if body.focus_id.trim().is_empty() {
         return Err(AppError::invalid_param("focus_id is required"));
     }
+    // Authz (`media-service-binding.md` §6 落账时序) — the token issuer does NOT
+    // depend on any ephemeral signaling session. Per `media-service-binding.md`
+    // the client redeems the media token BEFORE it writes its own row into
+    // `ck.call.state.participants[]` (the initiator may exchange a token when
+    // the `ck.call.state` cell does not exist yet), so a `participants.contains`
+    // / session-not-found gate would be wrong. Authorization is the conjunction
+    // of: (1) realm membership, (2) the `ck.call.join` capability, (3) not under
+    // an actor-wide `ban` in the durable `ck.call.state.removed_participants[]`.
+    //
+    // (1) realm member.
     if !realm_has_member(state, body.realm_id.as_str(), body.actor_id.as_str()).await {
         return Err(AppError::capability_denied(
             "actor is not a joined member of the realm",
         ));
     }
-
-    let webrtc = state
-        .persistence
-        .webrtc()
-        .get(body.call_id.as_str())
-        .await
-        .map_err(|error| AppError::internal(error.to_string()))?
-        .ok_or_else(|| AppError::not_found("call session not found"))?;
-    if webrtc.realm_id != body.realm_id.as_str() {
-        return Err(AppError::invalid_param(
-            "call_id does not belong to the requested realm",
-        ));
-    }
-    if !webrtc.participants.contains(body.actor_id.as_str()) {
-        return Err(
-            AppError::capability_denied("actor is not a participant of the call")
-                .with_wire_code(crate::error::reasons::PARTICIPANT_IDENTITY_UNRECOGNISED),
-        );
-    }
-    // `webrtc-signaling.md` §3a — a banned actor MUST NOT re-issue a join token
-    // for this call's lifetime. The token issuer gates on the actor-wide ban set
-    // projected into `removed_participants[]`.
-    if actor_is_banned(&webrtc.removed_participants, body.actor_id.as_str()) {
-        return Err(AppError::new(
-            ErrorCode::FailedPrecondition,
-            "actor was removed from the call (ban) and cannot re-issue a join token",
-        )
-        .with_status(StatusCode::FORBIDDEN)
-        .with_wire_code(crate::error::reasons::CALL_PARTICIPANT_REMOVED));
-    }
-    // `media-service-binding.md` §6 — token exchange is gated on the
-    // `ck.call.join` capability, not merely realm membership. Membership stays a
-    // precondition (checked above); join authority is an explicit capability so
-    // a realm member without join rights cannot mint a backend media token.
-    // §6 defines no dedicated error code, so we surface the generic
-    // `capability_denied` (403).
+    // (2) `media-service-binding.md` §6 — token exchange is gated on the
+    // `ck.call.join` capability, not merely realm membership. §6 defines no
+    // dedicated error code, so we surface the generic `capability_denied` (403).
     if !actor_has_call_capability(
         state,
         body.realm_id.as_str(),
@@ -728,13 +662,35 @@ async fn handle_rtc_token(
             "actor does not hold the ck.call.join capability for this realm",
         ));
     }
+
+    // Read the durable `ck.call.state` cell once. It MAY be absent (a brand-new
+    // call whose initiator is redeeming a token before writing the first
+    // `ck.call.state` event). Absent cell ⇒ no committed focus and no bans.
+    let call_state = CallStateCell::load(state, body.call_id.as_str())?;
+
+    // (3) `webrtc-signaling.md` §3a — a banned actor MUST NOT re-issue a join
+    // token for this call's lifetime. The ban set is the durable
+    // `ck.call.state.removed_participants[]` projection; an absent cell carries
+    // no bans (everyone passes).
+    if call_state.actor_is_banned(body.actor_id.as_str()) {
+        return Err(AppError::new(
+            ErrorCode::FailedPrecondition,
+            "actor was removed from the call (ban) and cannot re-issue a join token",
+        )
+        .with_status(StatusCode::FORBIDDEN)
+        .with_wire_code(crate::error::reasons::CALL_PARTICIPANT_REMOVED));
+    }
     let media_epoch = media_service_epoch_for_realm(state, body.realm_id.as_str())?;
 
-    // MEDIA-2 — focus selection (oldest-membership-wins). A committed
-    // `ck.call.state.session_focus` projection wins when present; otherwise we
-    // derive from call members ordered by realm membership age and the latest
-    // per-member `foci_preferred[]` signal in the call.
-    let session_focus = session_focus_for_call(state, &webrtc, &media_epoch)?;
+    // MEDIA-2 — focus selection. A committed `ck.call.state.session_focus`
+    // (read from the durable cell) wins when present and the request `focus_id`
+    // MUST match it (`focus_mismatch`). Absent a committed focus, the issuer
+    // admits the requested `focus_id` as long as it is a legal focus within the
+    // realm media_service epoch (oldest-membership-wins reduces to "any epoch
+    // focus" once the ephemeral foci_preferred[] session is gone; the durable
+    // committed focus remains the binding decision).
+    let session_focus =
+        session_focus_for_call(&call_state, &media_epoch, body.focus_id.as_str())?;
     if body.focus_id != session_focus {
         return Err(AppError::new(
             ErrorCode::FocusMismatch,
@@ -898,71 +854,108 @@ async fn handle_rtc_token(
     })
 }
 
-/// MEDIA-2 oldest-membership-wins focus selection.
+/// MEDIA-2 focus selection against the durable `ck.call.state` cell.
+///
+/// - A committed `ck.call.state.session_focus` (read from the cell) is the
+///   binding decision: it is returned verbatim provided it is still a legal
+///   focus within the current realm media_service epoch (the caller compares it
+///   against the request `focus_id` and surfaces `focus_mismatch` on a
+///   disagreement).
+/// - Absent a committed focus (a brand-new call, or a `ck.call.state` head that
+///   has not yet committed `session_focus`), the issuer admits the
+///   `requested_focus_id` as long as it names a legal focus in the epoch. This
+///   replaces the old ephemeral oldest-membership-wins derivation that read
+///   `foci_preferred[]` off a signaling session: the durable committed focus is
+///   the source of truth, and until it is committed any epoch-legal focus the
+///   caller asks for is acceptable (the first committer's focus then pins it for
+///   everyone via the cell's write-once `session_focus`).
 fn session_focus_for_call(
-    state: &AppState,
-    webrtc: &WebRtcSessionRecord,
+    call_state: &CallStateCell,
     media_epoch: &MediaServiceEpoch,
+    requested_focus_id: &str,
 ) -> Result<String, AppError> {
-    let (committed_focus, mut member_order) = {
-        let projection = state
-            .projection
-            .lock()
-            .map_err(|error| AppError::internal(format!("projection lock: {error}")))?;
-        let committed_focus = projection
-            .call_session_focus
-            .get(&webrtc.session_id)
-            .cloned();
-        let member_order = webrtc
-            .participants
-            .iter()
-            .map(|actor| {
-                let joined_at = projection
-                    .member(&webrtc.realm_id, actor)
-                    .map(|member| member.joined_at)
-                    .unwrap_or_else(|| {
-                        if actor == &webrtc.created_by {
-                            webrtc.created_at
-                        } else {
-                            webrtc.created_at + Duration::milliseconds(1)
-                        }
-                    });
-                (actor.clone(), joined_at)
-            })
-            .collect::<Vec<_>>();
-        (committed_focus, member_order)
-    };
-    if let Some(focus) = committed_focus {
-        if media_epoch.focus(&focus).is_some() {
-            return Ok(focus);
+    if let Some(focus) = call_state.session_focus() {
+        if media_epoch.focus(focus).is_some() {
+            return Ok(focus.to_owned());
         }
         return Err(focus_unavailable_error(
             "committed session_focus is not present in current media_service epoch",
         ));
     }
 
-    member_order.sort_by(|left, right| left.1.cmp(&right.1).then_with(|| left.0.cmp(&right.0)));
-    let default_focus_ids = media_epoch.focus_ids();
-    if let Some((actor, _)) = member_order.into_iter().next() {
-        let preferences = focus_preferences_for_member(webrtc, &actor);
-        if preferences.is_empty() {
-            if let Some(focus_id) = default_focus_ids.first() {
-                return Ok(focus_id.clone());
-            }
-        } else {
-            for focus_id in preferences {
-                if media_epoch.focus(&focus_id).is_some() {
-                    return Ok(focus_id);
-                }
-            }
-            return Err(focus_unavailable_error(format!(
-                "no media_service focus intersects foci_preferred[] for {actor}"
-            )));
-        }
+    let requested = requested_focus_id.trim();
+    if !requested.is_empty() && media_epoch.focus(requested).is_some() {
+        return Ok(requested.to_owned());
+    }
+    // No committed focus and the request did not name a legal epoch focus: fall
+    // back to a deterministic default so the issuer can still mint a token for a
+    // well-formed epoch (the mismatch against `requested_focus_id` is then
+    // surfaced as `focus_mismatch` by the caller).
+    if let Some(focus_id) = media_epoch.focus_ids().into_iter().next() {
+        return Ok(focus_id);
     }
     Err(focus_unavailable_error(
         "realm media_service epoch has no available foci",
     ))
+}
+
+/// Read-only view of the durable `ck.call.state` cell
+/// (`ck.component.call.state.v1:{call_id}`) consumed by the media token issuer.
+/// An absent cell (a brand-new call whose initiator redeems a token before
+/// writing the first `ck.call.state` event) is represented by `value: None`:
+/// no committed `session_focus` and an empty ban set.
+struct CallStateCell {
+    value: Option<Value>,
+}
+
+impl CallStateCell {
+    /// Load the `ck.component.call.state.v1` cell for `call_id`. The cell id is
+    /// `ck:cell:ck.component.call.state.v1:{call_id}` — the same form the
+    /// `apply_call_state` reducer writes (see `apply_realm_policy.rs`).
+    fn load(state: &AppState, call_id: &str) -> Result<Self, AppError> {
+        let cell_id =
+            cokret_sdk::CellRef::new(format!("ck:cell:ck.component.call.state.v1:{call_id}"))
+                .map_err(|error| {
+                    AppError::internal(format!("invalid call.state cell id: {error}"))
+                })?;
+        let value = {
+            let projection = state
+                .projection
+                .lock()
+                .map_err(|error| AppError::internal(format!("projection lock: {error}")))?;
+            projection.cell_value(&cell_id).cloned()
+        };
+        Ok(Self { value })
+    }
+
+    /// The committed `ck.call.state.session_focus` (§4.1 write-once), if any.
+    fn session_focus(&self) -> Option<&str> {
+        self.value
+            .as_ref()?
+            .get("session_focus")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|focus| !focus.is_empty())
+    }
+
+    /// Whether `actor_id` is under an actor-wide `ban` in the cell's
+    /// `removed_participants[]` (`webrtc-signaling.md` §3a — each row is
+    /// `{ actor_id, device_id?, action, removed_at }`; `ban` omits `device_id`).
+    /// An absent cell carries no bans.
+    fn actor_is_banned(&self, actor_id: &str) -> bool {
+        let Some(rows) = self
+            .value
+            .as_ref()
+            .and_then(|value| value.get("removed_participants"))
+            .and_then(Value::as_array)
+        else {
+            return false;
+        };
+        rows.iter().any(|row| {
+            row.get("action").and_then(Value::as_str) == Some("ban")
+                && row.get("actor_id").and_then(Value::as_str) == Some(actor_id)
+        })
+    }
 }
 
 fn media_service_epoch_for_realm(
@@ -1102,40 +1095,6 @@ fn normalized_media_foci(realm_id: &str, config: &Value) -> Result<Vec<Value>, A
     Err(focus_unavailable_error(
         "realm media_service epoch must contain foci[]",
     ))
-}
-
-fn focus_preferences_for_member(webrtc: &WebRtcSessionRecord, actor: &str) -> Vec<String> {
-    for signal in webrtc.signals.iter().rev() {
-        if signal.sender != actor {
-            continue;
-        }
-        if let Some(preferences) = signal
-            .payload
-            .get("foci_preferred")
-            .and_then(Value::as_array)
-        {
-            let values = preferences
-                .iter()
-                .filter_map(Value::as_str)
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(ToOwned::to_owned)
-                .collect::<Vec<_>>();
-            if !values.is_empty() {
-                return values;
-            }
-        }
-        if let Some(focus_id) = signal
-            .payload
-            .get("focus_id")
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-        {
-            return vec![focus_id.to_owned()];
-        }
-    }
-    Vec::new()
 }
 
 fn media_token_issuer_for(provider: MediaProviderKind) -> Box<dyn MediaTokenIssuer> {
@@ -1346,594 +1305,11 @@ async fn cokret_rtc_token(
     handle_rtc_token(state, &session, body.into_inner()).await
 }
 
-// ── Ephemeral WebRTC signaling face (`webrtc-signaling.md`) ──────────────
-//
-// These surfaces back the `ck.call.signal` ephemeral channel and the
-// `ck.call.state` lifecycle for one-to-one / SFU calls. Sessions and their
-// signal log live in `state.persistence.webrtc()`; the call lifecycle state
-// (`ringing` → `connecting` → `active` → `ended`) is derived from the most
-// recent meaningful signal so `GET .../signals` and the append response can
-// surface a `call_state` consistent with `call-state.md` §4.2.
-
-#[derive(Clone, Debug, serde::Deserialize, salvo::oapi::ToSchema)]
-struct CreateWebRtcSessionRequestBody {
-    realm_id: RealmId,
-    #[serde(default)]
-    participants: Vec<Did>,
-    #[serde(default)]
-    mode: Option<String>,
-    #[serde(default)]
-    recording_policy: Option<String>,
-    #[serde(default)]
-    ttl_ms: Option<u64>,
-}
-
-#[derive(Clone, Debug, Serialize, salvo::oapi::ToSchema)]
-struct WebRtcSessionOutcome {
-    session_id: String,
-    realm_id: String,
-    created_by: String,
-    participants: Vec<String>,
-    mode: String,
-    recording_policy: String,
-    call_state: String,
-    next_cursor: String,
-    created_at: DateTime<Utc>,
-    expires_at: DateTime<Utc>,
-}
-
-#[derive(Clone, Debug, serde::Deserialize, salvo::oapi::ToSchema)]
-struct AppendSignalRequestBody {
-    message_type: String,
-    #[serde(default)]
-    payload: Value,
-    #[serde(default)]
-    proofs: Vec<Value>,
-}
-
-#[derive(Clone, Debug, Serialize, salvo::oapi::ToSchema)]
-struct AppendSignalOutcome {
-    seq: u64,
-    next_cursor: String,
-    call_state: String,
-}
-
-#[derive(Clone, Debug, Serialize, salvo::oapi::ToSchema)]
-struct SignalEventView {
-    seq: u64,
-    #[serde(rename = "type")]
-    message_type: String,
-    sender: String,
-    payload: Value,
-    proofs: Vec<Value>,
-    created_at: DateTime<Utc>,
-    call_state_after: String,
-}
-
-#[derive(Clone, Debug, Serialize, salvo::oapi::ToSchema)]
-struct ListSignalsOutcome {
-    events: Vec<SignalEventView>,
-    next_cursor: String,
-    call_state: String,
-}
-
-#[derive(Clone, Debug, Serialize, salvo::oapi::ToSchema)]
-struct RecordingStartOutcome {
-    ok: bool,
-    call_id: String,
-    recording_policy: String,
-    recording_started_by: String,
-    recording_blob_ref: String,
-    recording_id: String,
-    recording_start_event_id: String,
-    recording_state: String,
-}
-
-#[derive(Clone, Debug, serde::Deserialize, salvo::oapi::ToSchema)]
-struct RecordingStartRequestBody {
-    realm_id: RealmId,
-    #[serde(default)]
-    recording_agent: Option<String>,
-    #[serde(default)]
-    recording_artifact_url: Option<String>,
-}
-
-#[derive(Clone, Debug, Serialize, salvo::oapi::ToSchema)]
-struct DeleteSessionOutcome {
-    ok: bool,
-    session_id: String,
-}
-
-const CALL_STATE_RINGING: &str = "ringing";
-const CALL_STATE_CONNECTING: &str = "connecting";
-const CALL_STATE_ACTIVE: &str = "active";
-const CALL_STATE_ENDED: &str = "ended";
-const CALL_STATE_MISSED: &str = "missed";
-const CALL_STATE_CANCELLED: &str = "cancelled";
-
-/// Valid `payload.signal_type` values per `webrtc-signaling.md` §5.
-fn is_known_signal_type(message_type: &str) -> bool {
-    matches!(
-        message_type,
-        "invite"
-            | "offer"
-            | "answer"
-            | "candidate"
-            | "reject"
-            | "hangup"
-            | "renegotiate"
-            | "mute_state"
-            | "media_state"
-            | "speaking"
-            | "focus_join"
-            | "focus_leave"
-            | "moderation"
-            | "error"
-            | "ack"
-    )
-}
-
-/// Derive the call lifecycle `state` (`call-state.md` §4.2) from the ordered
-/// signal log. Lifecycle-bearing signals advance the FSM; ephemeral status
-/// signals (candidate / speaking / mute_state / focus_*) leave it untouched.
-fn derive_call_state(signals: &[WebRtcSignalRecord]) -> String {
-    let mut state = CALL_STATE_RINGING;
-    for signal in signals {
-        state = call_state_after_signal(state, &signal.message_type, &signal.payload);
-    }
-    state.to_owned()
-}
-
-fn call_state_after_signal(current: &str, message_type: &str, payload: &Value) -> &'static str {
-    // Terminal states absorb everything (`call-state.md` §4.2 终态吸收).
-    if matches!(
-        current,
-        CALL_STATE_ENDED | CALL_STATE_MISSED | CALL_STATE_CANCELLED | "failed"
-    ) {
-        return match current {
-            CALL_STATE_MISSED => CALL_STATE_MISSED,
-            CALL_STATE_CANCELLED => CALL_STATE_CANCELLED,
-            "failed" => "failed",
-            _ => CALL_STATE_ENDED,
-        };
-    }
-    match message_type {
-        "invite" | "offer" | "renegotiate" => CALL_STATE_CONNECTING,
-        "answer" => CALL_STATE_ACTIVE,
-        "hangup" => CALL_STATE_ENDED,
-        // `webrtc-signaling.md` §3a — `moderation{action=end_for_all}` MUST be
-        // immediately followed by writing `ck.call.state.state = ended`; the
-        // signal append path projects that terminal transition here. kick / ban
-        // remove a participant but leave the call lifecycle running.
-        "moderation" => {
-            if moderation_action(payload) == Some("end_for_all") {
-                CALL_STATE_ENDED
-            } else {
-                current_non_terminal(current)
-            }
-        }
-        "reject" => {
-            if current == CALL_STATE_RINGING {
-                CALL_STATE_MISSED
-            } else {
-                CALL_STATE_ENDED
-            }
-        }
-        "error" => "failed",
-        _ => current_non_terminal(current),
-    }
-}
-
-fn current_non_terminal(current: &str) -> &'static str {
-    match current {
-        CALL_STATE_RINGING => CALL_STATE_RINGING,
-        CALL_STATE_CONNECTING => CALL_STATE_CONNECTING,
-        _ => CALL_STATE_ACTIVE,
-    }
-}
-
-/// Structural (non-cryptographic) check that a signal `proof` entry is a
-/// well-formed device proof: a non-empty object naming a `kid` and a `sig`.
-/// See the boundary note in `append_webrtc_signal` — the server does not
-/// verify the signature; the receiver does (§5).
-fn is_structural_device_proof(proof: &Value) -> bool {
-    let Some(object) = proof.as_object() else {
-        return false;
-    };
-    let has_kid = object
-        .get("kid")
-        .and_then(Value::as_str)
-        .is_some_and(|kid| !kid.trim().is_empty());
-    let has_sig = object
-        .get("sig")
-        .and_then(Value::as_str)
-        .is_some_and(|sig| !sig.trim().is_empty());
-    has_kid && has_sig
-}
-
-/// Whether a `media_state` payload turns screen share on
-/// (`webrtc-signaling.md` §8 — `data.screen.enabled = true`). Accepts both the
-/// `{data:{screen:{…}}}` envelope shape and a flat `{screen:{…}}` payload.
-fn media_state_enables_screen_share(payload: &Value) -> bool {
-    let data = payload.get("data").unwrap_or(payload);
-    data.get("screen")
-        .and_then(|screen| screen.get("enabled"))
-        .and_then(Value::as_bool)
-        .unwrap_or(false)
-}
-
-/// Extract `data.action` (or top-level `action`) from a `moderation` payload.
-fn moderation_action(payload: &Value) -> Option<&str> {
-    payload
-        .get("data")
-        .and_then(|data| data.get("action"))
-        .or_else(|| payload.get("action"))
-        .and_then(Value::as_str)
-}
-
-/// Project `ck.call.state.removed_participants[]` from the ordered signal log
-/// (`webrtc-signaling.md` §3a). Each `moderation{action=kick|ban}` frame
-/// contributes a `{ actor_id, device_id?, action, removed_at }` row; `ban`
-/// omits `device_id` to mark an actor-wide removal.
-fn derive_removed_participants(signals: &[WebRtcSignalRecord]) -> Vec<WebRtcRemovedParticipant> {
-    let mut removed = Vec::new();
-    for signal in signals {
-        if signal.message_type != "moderation" {
-            continue;
-        }
-        let data = signal.payload.get("data").unwrap_or(&signal.payload);
-        let action = moderation_action(&signal.payload).unwrap_or("");
-        if action != "kick" && action != "ban" {
-            continue;
-        }
-        let Some(actor_id) = data
-            .get("target_actor_id")
-            .and_then(Value::as_str)
-            .filter(|value| !value.is_empty())
-        else {
-            continue;
-        };
-        // `ban` is actor-wide (drop device_id); `kick` pins a single leg.
-        let device_id = if action == "ban" {
-            None
-        } else {
-            data.get("target_device_id")
-                .and_then(Value::as_str)
-                .filter(|value| !value.is_empty())
-                .map(ToOwned::to_owned)
-        };
-        removed.push(WebRtcRemovedParticipant {
-            actor_id: actor_id.to_owned(),
-            device_id,
-            action: action.to_owned(),
-            removed_at: signal.created_at,
-        });
-    }
-    removed
-}
-
-/// Whether `actor_id` is under an actor-wide `ban` in the removed set
-/// (`webrtc-signaling.md` §3a). Token issuance MUST refuse banned actors.
-fn actor_is_banned(removed: &[WebRtcRemovedParticipant], actor_id: &str) -> bool {
-    removed
-        .iter()
-        .any(|row| row.action == "ban" && row.actor_id == actor_id)
-}
-
-fn session_outcome(record: &WebRtcSessionRecord) -> WebRtcSessionOutcome {
-    WebRtcSessionOutcome {
-        session_id: record.session_id.clone(),
-        realm_id: record.realm_id.clone(),
-        created_by: record.created_by.clone(),
-        participants: record.participants.iter().cloned().collect(),
-        mode: record.mode.clone(),
-        recording_policy: record.recording_policy.clone(),
-        call_state: derive_call_state(&record.signals),
-        next_cursor: record.next_seq.saturating_sub(1).to_string(),
-        created_at: record.created_at,
-        expires_at: record.expires_at,
-    }
-}
-
-#[endpoint(
-    operation_id = "ck.self.webrtc.session.create",
-    tags("media", "calls"),
-    summary = "Create an ephemeral WebRTC signaling session",
-    status_codes(200, 400, 401, 403, 500)
-)]
-#[tracing::instrument(skip_all, fields(op = "ck.self.webrtc.session.create"))]
-async fn create_webrtc_session(
-    aa: AuthArgs,
-    body: JsonBody<CreateWebRtcSessionRequestBody>,
-    depot: &mut Depot,
-    req: &mut Request,
-) -> JsonResult<WebRtcSessionOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req).await?;
-    let body = body.into_inner();
-    let realm_id = body.realm_id.as_str().to_owned();
-    if !realm_has_member(state, &realm_id, &session.actor).await {
-        return Err(AppError::capability_denied(
-            "actor is not a joined member of the realm",
-        ));
-    }
-
-    let mode = match body.mode.as_deref() {
-        None => "p2p".to_owned(),
-        Some(value @ ("p2p" | "mesh" | "sfu" | "mcu")) => value.to_owned(),
-        Some(_) => return Err(AppError::invalid_param("mode must be p2p/mesh/sfu/mcu")),
-    };
-    let recording_policy = match body.recording_policy.as_deref() {
-        None => "none".to_owned(),
-        Some(value @ ("none" | "allow" | "required")) => value.to_owned(),
-        Some(_) => {
-            return Err(AppError::invalid_param(
-                "recording_policy must be none/allow/required",
-            ));
-        }
-    };
-
-    // The creator is always a participant; explicit `participants` extend the
-    // set so 1:1 callers can pre-register the callee.
-    let mut participants = BTreeSet::new();
-    participants.insert(session.actor.clone());
-    for participant in &body.participants {
-        participants.insert(participant.as_str().to_owned());
-    }
-
-    let issued_at = now();
-    let ttl_ms = body.ttl_ms.unwrap_or(60_000).clamp(1_000, 86_400_000);
-    let expires_at = issued_at + Duration::milliseconds(ttl_ms as i64);
-    let record = WebRtcSessionRecord {
-        session_id: ids::generate("call"),
-        realm_id,
-        created_by: session.actor.clone(),
-        participants,
-        mode,
-        recording_policy,
-        recording_started_by: None,
-        recording_blob_ref: None,
-        removed_participants: Vec::new(),
-        expires_at,
-        created_at: issued_at,
-        next_seq: 1,
-        signals: Vec::new(),
-    };
-    state
-        .persistence
-        .webrtc()
-        .put(record.clone())
-        .await
-        .map_err(|error| AppError::internal(error.to_string()))?;
-    json_ok(session_outcome(&record))
-}
-
-#[endpoint(
-    operation_id = "ck.self.webrtc.session.close",
-    tags("media", "calls"),
-    summary = "Close an ephemeral WebRTC signaling session",
-    status_codes(200, 401, 403, 404, 500)
-)]
-#[tracing::instrument(skip_all, fields(op = "ck.self.webrtc.session.close"))]
-async fn delete_webrtc_session(
-    aa: AuthArgs,
-    session_id: salvo::oapi::extract::PathParam<String>,
-    depot: &mut Depot,
-    req: &mut Request,
-) -> JsonResult<DeleteSessionOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
-    let auth = aa.authenticated_session(state, req).await?;
-    let session_id = session_id.into_inner();
-    let record = load_session_for_participant(state, &session_id, &auth.actor).await?;
-    state
-        .persistence
-        .webrtc()
-        .delete(&record.session_id)
-        .await
-        .map_err(|error| AppError::internal(error.to_string()))?;
-    json_ok(DeleteSessionOutcome {
-        ok: true,
-        session_id,
-    })
-}
-
-#[endpoint(
-    operation_id = "ck.self.webrtc.signal.append",
-    tags("media", "calls"),
-    summary = "Append a signaling frame to a WebRTC session",
-    status_codes(200, 400, 401, 403, 404, 500)
-)]
-#[tracing::instrument(skip_all, fields(op = "ck.self.webrtc.signal.append"))]
-async fn append_webrtc_signal(
-    aa: AuthArgs,
-    session_id: salvo::oapi::extract::PathParam<String>,
-    body: JsonBody<AppendSignalRequestBody>,
-    depot: &mut Depot,
-    req: &mut Request,
-) -> JsonResult<AppendSignalOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
-    let auth = aa.authenticated_session(state, req).await?;
-    let session_id = session_id.into_inner();
-    let body = body.into_inner();
-    if !is_known_signal_type(&body.message_type) {
-        return Err(AppError::invalid_param(format!(
-            "unknown signal message_type `{}`",
-            body.message_type
-        )));
-    }
-    // §5 — every `ck.call.signal` MUST carry a device `proof`. We enforce the
-    // *presence* and structural shape of a proof here (a non-empty object that
-    // names a `kid` and a `sig`), but DO NOT cryptographically verify it.
-    //
-    // Decision (FIN-F task 5): server-side signature verification is NOT done,
-    // and this is the spec-correct boundary, not a shortcut:
-    //   1. §5 assigns verification to the *receiver* ("Receiver MUST verify `proof` over the
-    //      canonical envelope bytes excluding `proof`"). This surface is the ephemeral
-    //      relay/fan-out, not the receiving device.
-    //   2. The relay cannot reconstruct the exact canonical envelope bytes the sender signed: the
-    //      spec envelope (`kind` / `realm_id` / `actor_id` / `device_id` / `sent_at` / `expires_at`
-    //      / `payload`) is not carried on this append body — it only receives `message_type` /
-    //      `payload` / `proofs[]`, and `device_id` is taken from the authenticated session, not the
-    //      wire envelope. Verifying over a re-synthesised byte string would assert a signature the
-    //      sender never produced.
-    //   3. The transport into this surface is already an authenticated `/_cokret/self/*` session
-    //      bound to `(actor, device)`, so frame provenance at the relay is established by the
-    //      session, while end-to-end device-proof verification remains the receiver's duty.
-    // The weak presence check is retained (a frame with no/empty proof is
-    // rejected) so malformed frames never enter the ephemeral log.
-    if !body.proofs.iter().any(is_structural_device_proof) {
-        return Err(AppError::invalid_param(
-            "signaling frame requires at least one device proof (kid + sig)",
-        ));
-    }
-    let record = load_session_for_participant(state, &session_id, &auth.actor).await?;
-
-    // `webrtc-signaling.md` §3a — moderation signals (kick / ban / end_for_all)
-    // MUST be authored by an actor holding `ck.call.moderate`. Any participant
-    // could otherwise kick / ban call legs. Gate before the frame enters the
-    // log; reject with `call_moderation_unauthorised`.
-    if body.message_type == "moderation"
-        && !actor_has_call_capability(state, &record.realm_id, &auth.actor, CAP_CALL_MODERATE).await
-    {
-        return Err(AppError::new(
-            ErrorCode::CallModerationUnauthorised,
-            "moderation signal requires the ck.call.moderate capability",
-        )
-        .with_wire_code(reasons::CALL_MODERATION_UNAUTHORISED));
-    }
-
-    // `webrtc-signaling.md` §3 / §8 — enabling screen share (`media_state`
-    // carrying `screen.enabled = true`) requires `ck.call.screen_share`. Realm
-    // membership does not imply it; reject with `media_permission_denied`.
-    if body.message_type == "media_state"
-        && media_state_enables_screen_share(&body.payload)
-        && !actor_has_call_capability(state, &record.realm_id, &auth.actor, CAP_CALL_SCREEN_SHARE)
-            .await
-    {
-        return Err(AppError::new(
-            ErrorCode::MediaPermissionDenied,
-            "screen share requires the ck.call.screen_share capability",
-        )
-        .with_wire_code(reasons::MEDIA_PERMISSION_DENIED));
-    }
-
-    if matches!(
-        derive_call_state(&record.signals).as_str(),
-        CALL_STATE_ENDED | CALL_STATE_MISSED | CALL_STATE_CANCELLED | "failed"
-    ) {
-        return Err(AppError::new(
-            ErrorCode::FailedPrecondition,
-            "call is in a terminal state and cannot accept further signals",
-        )
-        .with_wire_code("call_state_terminal"));
-    }
-
-    let sender = auth.actor.clone();
-    let message_type = body.message_type.clone();
-    let payload = body.payload.clone();
-    let proofs = body.proofs.clone();
-    let created_at = now();
-    let appended = state
-        .persistence
-        .webrtc()
-        .append_signal(
-            &record.session_id,
-            &auth.actor,
-            Box::new(move |seq| WebRtcSignalRecord {
-                seq,
-                sender,
-                message_type,
-                payload,
-                proofs,
-                created_at,
-            }),
-        )
-        .await
-        .map_err(|error| AppError::internal(error.to_string()))?;
-
-    // Re-read so the derived call_state reflects the freshly appended frame.
-    let mut refreshed = state
-        .persistence
-        .webrtc()
-        .get(&record.session_id)
-        .await
-        .ok()
-        .flatten()
-        .unwrap_or(record);
-
-    // `webrtc-signaling.md` §3a — project the kick / ban moderation log into the
-    // durable `ck.call.state.removed_participants[]` materialization so the
-    // token issuer can gate re-issue on the ban set. Re-derive from the full
-    // signal log and persist when the projection changed.
-    let projected_removed = derive_removed_participants(&refreshed.signals);
-    if projected_removed.len() != refreshed.removed_participants.len() {
-        refreshed.removed_participants = projected_removed;
-        let _ = state.persistence.webrtc().put(refreshed.clone()).await;
-    }
-
-    json_ok(AppendSignalOutcome {
-        seq: appended.seq,
-        // Cursor is the highest committed seq; clients pass it back as
-        // `?since=` to fetch only newer frames.
-        next_cursor: appended.seq.to_string(),
-        call_state: derive_call_state(&refreshed.signals),
-    })
-}
-
-#[endpoint(
-    operation_id = "ck.self.webrtc.signal.list",
-    tags("media", "calls"),
-    summary = "List signaling frames since a cursor",
-    status_codes(200, 401, 403, 404, 500)
-)]
-#[tracing::instrument(skip_all, fields(op = "ck.self.webrtc.signal.list"))]
-async fn list_webrtc_signals(
-    aa: AuthArgs,
-    session_id: salvo::oapi::extract::PathParam<String>,
-    depot: &mut Depot,
-    req: &mut Request,
-) -> JsonResult<ListSignalsOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
-    let auth = aa.authenticated_session(state, req).await?;
-    let session_id = session_id.into_inner();
-    let since = crate::routing::system::util::query_param(req, "since")
-        .and_then(|value| value.parse::<u64>().ok())
-        .unwrap_or(0);
-    let record = load_session_for_participant(state, &session_id, &auth.actor).await?;
-
-    let mut events = Vec::new();
-    let mut running_state = CALL_STATE_RINGING;
-    for signal in &record.signals {
-        running_state =
-            call_state_after_signal(running_state, &signal.message_type, &signal.payload);
-        if signal.seq <= since {
-            continue;
-        }
-        events.push(SignalEventView {
-            seq: signal.seq,
-            message_type: signal.message_type.clone(),
-            sender: signal.sender.clone(),
-            payload: signal.payload.clone(),
-            proofs: signal.proofs.clone(),
-            created_at: signal.created_at,
-            call_state_after: running_state.to_owned(),
-        });
-    }
-    json_ok(ListSignalsOutcome {
-        events,
-        // Highest committed seq (0 when the log is empty).
-        next_cursor: record.next_seq.saturating_sub(1).to_string(),
-        call_state: derive_call_state(&record.signals),
-    })
-}
-
 // `webrtc-signaling.md` §3 — canonical capability actions. The registry is
 // the truth source; the spec body and this server MUST use the `ck.`-prefixed
 // forms and MUST NOT accept the bare `call.*` names.
 const CAP_CALL_JOIN: &str = "ck.call.join";
-const CAP_CALL_MODERATE: &str = "ck.call.moderate";
 const CAP_CALL_SCREEN_SHARE: &str = "ck.call.screen_share";
-const CAP_CALL_RECORD: &str = "ck.call.record";
 
 /// Resolve the (owner, members) authorization principals for a realm so the
 /// shared [`SolandAuthzEngine`] default rules (owner ⇒ all actions; explicit
@@ -1986,233 +1362,6 @@ pub(crate) async fn actor_has_call_capability(
             &[],
         )
         .allowed
-}
-
-/// Load a session and assert the caller is one of its participants.
-async fn load_session_for_participant(
-    state: &AppState,
-    session_id: &str,
-    actor: &str,
-) -> Result<WebRtcSessionRecord, AppError> {
-    if !is_valid_webrtc_session_id(session_id) {
-        return Err(AppError::not_found("call session not found"));
-    }
-    let record = state
-        .persistence
-        .webrtc()
-        .get(session_id)
-        .await
-        .map_err(|error| AppError::internal(error.to_string()))?
-        .ok_or_else(|| AppError::not_found("call session not found"))?;
-    if !record.participants.contains(actor) {
-        return Err(AppError::capability_denied(
-            "actor is not a participant of the call",
-        ));
-    }
-    Ok(record)
-}
-
-#[derive(Clone, Debug, serde::Deserialize, salvo::oapi::ToSchema)]
-struct CallIceConfigRequestBody {
-    realm_id: RealmId,
-    call_id: String,
-    actor_id: Did,
-    device_id: DeviceId,
-    #[serde(default)]
-    mode: Option<MediaIceMode>,
-}
-
-#[derive(Clone, Debug, serde::Deserialize, salvo::oapi::ToSchema)]
-struct CallIceConfigRefreshRequestBody {
-    realm_id: RealmId,
-    actor_id: Did,
-    device_id: DeviceId,
-    #[serde(default)]
-    mode: Option<MediaIceMode>,
-}
-
-#[endpoint(
-    operation_id = "ck.self.call.ice_config.issue",
-    tags("media", "calls"),
-    summary = "Issue a signed ICE config for a call",
-    status_codes(200, 400, 401, 403, 404, 500)
-)]
-#[tracing::instrument(skip_all, fields(op = "ck.self.call.ice_config.issue"))]
-async fn calls_ice_config(
-    aa: AuthArgs,
-    body: JsonBody<CallIceConfigRequestBody>,
-    depot: &mut Depot,
-    req: &mut Request,
-) -> JsonResult<SolandIceConfigOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req).await?;
-    let body = body.into_inner();
-    issue_ice_config(
-        state,
-        &session,
-        IceConfigRequestContext {
-            realm_id: body.realm_id,
-            call_id: body.call_id,
-            actor_id: body.actor_id,
-            device_id: body.device_id,
-            force_turn: matches!(body.mode, Some(MediaIceMode::Turn)),
-        },
-        None,
-        false,
-    )
-    .await
-}
-
-#[endpoint(
-    operation_id = "ck.self.call.ice_config.refresh",
-    tags("media", "calls"),
-    summary = "Refresh in-call ICE/TURN credentials",
-    status_codes(200, 400, 401, 403, 404, 500)
-)]
-#[tracing::instrument(skip_all, fields(op = "ck.self.call.ice_config.refresh"))]
-async fn calls_ice_config_refresh(
-    aa: AuthArgs,
-    call_id: salvo::oapi::extract::PathParam<String>,
-    body: JsonBody<CallIceConfigRefreshRequestBody>,
-    depot: &mut Depot,
-    req: &mut Request,
-) -> JsonResult<SolandIceConfigOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req).await?;
-    let body = body.into_inner();
-    let call_id = call_id.into_inner();
-    issue_ice_config(
-        state,
-        &session,
-        IceConfigRequestContext {
-            realm_id: body.realm_id,
-            call_id: call_id.clone(),
-            actor_id: body.actor_id,
-            device_id: body.device_id,
-            force_turn: matches!(body.mode, Some(MediaIceMode::Turn)),
-        },
-        Some(call_id),
-        true,
-    )
-    .await
-}
-
-#[endpoint(
-    operation_id = "ck.self.call.recording.start",
-    tags("media", "calls"),
-    summary = "Start a call recording (gated by recording_policy)",
-    status_codes(200, 400, 401, 403, 404, 412, 500)
-)]
-#[tracing::instrument(skip_all, fields(op = "ck.self.call.recording.start"))]
-async fn calls_recording_start(
-    aa: AuthArgs,
-    call_id: salvo::oapi::extract::PathParam<String>,
-    body: JsonBody<RecordingStartRequestBody>,
-    depot: &mut Depot,
-    req: &mut Request,
-) -> JsonResult<RecordingStartOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
-    let auth = aa.authenticated_session(state, req).await?;
-    let call_id = call_id.into_inner();
-    let body = body.into_inner();
-    let mut record = load_session_for_participant(state, &call_id, &auth.actor).await?;
-    if record.realm_id != body.realm_id.as_str() {
-        return Err(AppError::invalid_param(
-            "call_id does not belong to the requested realm",
-        ));
-    }
-
-    // `webrtc-signaling.md` §3 / `call-state.md` §5 — Realm members do not
-    // implicitly hold `ck.call.record`; the per-call `recording_policy` gates
-    // whether a recording may start at all.
-    if record.recording_policy == "none" {
-        return Err(AppError::new(
-            ErrorCode::FailedPrecondition,
-            "call recording_policy forbids recording",
-        )
-        .with_status(StatusCode::PRECONDITION_FAILED)
-        .with_wire_code("recording_policy_violation"));
-    }
-
-    // `webrtc-signaling.md` §3 — beyond the per-call `recording_policy` gate,
-    // the acting actor MUST hold `ck.call.record`. Realm membership does not
-    // imply it; reject with `recording_denied`.
-    if !actor_has_call_capability(state, &record.realm_id, &auth.actor, CAP_CALL_RECORD).await {
-        return Err(AppError::new(
-            ErrorCode::RecordingDenied,
-            "starting a recording requires the ck.call.record capability",
-        )
-        .with_wire_code(reasons::RECORDING_DENIED));
-    }
-
-    // `call-state.md` §5 — backend-generated recording artifacts MUST flow
-    // through the Cokret blob pipeline. A caller that hands us a raw backend
-    // recording URL is bypassing that pipeline and MUST be rejected.
-    if body.recording_artifact_url.is_some() {
-        return Err(AppError::new(
-            ErrorCode::FailedPrecondition,
-            "recording artifact must be uploaded via the Cokret blob pipeline, not a backend URL",
-        )
-        .with_wire_code("recording_artifact_pipeline_bypassed"));
-    }
-
-    // Mint the recording artifact reference inside the Cokret blob namespace.
-    // `recording_id` is the stable opaque lifecycle handle (§5) and the
-    // artifact lands as an encrypted blob keyed by its content digest.
-    let recording_id = ids::generate("recording");
-    let recording_start_event_id = ids::generate_event_id();
-    let digest_material = format!(
-        "soland-rtc-recording-artifact-v1\0{}\0{}\0{}\0{}",
-        record.realm_id, record.session_id, recording_id, recording_start_event_id
-    );
-    let recording_blob_ref = format!("ck:blob:sha256:{}", sha256_hex(digest_material.as_bytes()));
-    let recording_sha = recording_blob_ref
-        .trim_start_matches("ck:blob:sha256:")
-        .to_owned();
-    let now_ts = now();
-    let blob_record = crate::state::BlobRecord {
-        sha256: recording_sha.clone(),
-        size_bytes: 0,
-        storage_backend: "cokret-recording-pipeline".to_owned(),
-        storage_key: format!("recordings/{}/{recording_id}", record.session_id),
-        media_type: "application/vnd.cokret.rtc-recording".to_owned(),
-        filename: None,
-        realm_id: Some(record.realm_id.clone()),
-        encryption: Some(json!({
-            "scheme": "ck-rtc-recording-key/v1",
-            "recording_id": recording_id.clone(),
-            "recording_start_event_id": recording_start_event_id.clone(),
-            "recording_agent": body.recording_agent.clone(),
-        })),
-        uploaded_by: auth.actor.clone(),
-        created_at: now_ts,
-    };
-    state
-        .persistence
-        .blobs()
-        .put(&recording_blob_ref, &blob_record)
-        .await
-        .map_err(|error| AppError::internal(error.to_string()))?;
-
-    record.recording_started_by = Some(auth.actor.clone());
-    record.recording_blob_ref = Some(recording_blob_ref.clone());
-    state
-        .persistence
-        .webrtc()
-        .put(record.clone())
-        .await
-        .map_err(|error| AppError::internal(error.to_string()))?;
-
-    json_ok(RecordingStartOutcome {
-        ok: true,
-        call_id,
-        recording_policy: record.recording_policy.clone(),
-        recording_started_by: auth.actor,
-        recording_blob_ref,
-        recording_id,
-        recording_start_event_id,
-        recording_state: "recording".to_owned(),
-    })
 }
 
 fn is_valid_webrtc_session_id(value: &str) -> bool {
