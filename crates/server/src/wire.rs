@@ -990,11 +990,20 @@ pub fn describe(
         supported_auth_methods.push("oauth2_bearer_introspection".to_owned());
     }
     // Account Authority discovery (service-surface §2.5.1): the client-visible
-    // single owner of all `/_cokret/gate/account/*`. For this deployment the
-    // Account Authority is fronted at the principal server's public origin; a
-    // gateway in front routes the Auth-side vs Principal-side operations
-    // internally (that split is not a client routing rule).
-    let account_origin = public_base_url.trim_end_matches('/').to_owned();
+    // owner of the auth-side `/_cokret/gate/account/*` ops the client posts to
+    // (session-grant issuance + hard logout). Those are served by the Auth
+    // Server (coauth), which DPoP-binds holder proofs to its OWN origin. So when
+    // an Auth Server is configured, advertise the Account Authority at the Auth
+    // Server origin: the client posts session-grants there directly (matching
+    // how session-grant refresh/logout already target the Auth Server) and the
+    // DPoP `htu` aligns with coauth's `public_base`. Fall back to the principal
+    // origin only for co-located personal deployments without a separate Auth
+    // Server.
+    let account_origin = auth_server_url
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or(public_base_url)
+        .trim_end_matches('/')
+        .to_owned();
     let gate_account_base = format!("{account_origin}/_cokret/gate/account");
 
     // Authentication methods are pure provider discovery; they do not decide
