@@ -367,6 +367,253 @@ async fn minimal_metadata_realm_rejects_non_hidden_aad() {
 }
 
 #[tokio::test]
+async fn circle_scoped_write_requires_circle_membership() {
+    // circle.md §8 two-layer AND — a Realm-wide capability does NOT let a
+    // non-member write into a Circle. The membership conjunct is enforced at
+    // admission (`validate_operation_policy`), not only on the delivery side.
+    // Regression guard for the gap where a Realm-wide grant (notably an Applet
+    // bot / Ghost Actor) could inject content into a Circle it never joined.
+    let state = make_state(true);
+    let realm_id = "ck:realm:01904100-0000-7000-8000-c1c1e0000001";
+    let circle_id = "ck:circle:01904100-0000-7000-8000-c1c1e0000002";
+    let member = "did:web:alice.example";
+    // An Applet bot that holds a Realm-wide grant but never joined the Circle.
+    let non_member = "did:web:slack-bridge.example:bot";
+    let now = chrono::Utc::now();
+
+    // Seed an active Circle whose only member is `member`.
+    {
+        let mut projection = state.projection.lock().unwrap();
+        projection.circles.insert(
+            circle_id.to_owned(),
+            crate::reducer::CircleProjection {
+                circle_id: circle_id.to_owned(),
+                realm_id: realm_id.to_owned(),
+                title: "HR-Conf".to_owned(),
+                summary: None,
+                directory_visibility: "members".to_owned(),
+                join_rule: "invite".to_owned(),
+                history_visibility: "joined".to_owned(),
+                content_encryption_floor: None,
+                metadata_encryption_floor: None,
+                encryption_profile: "mls_rfc9420".to_owned(),
+                mls_group_ref: None,
+                state: crate::reducer::CircleLifecycleState::Active,
+                state_changed_at: None,
+                created_by: member.to_owned(),
+                created_at: now,
+                updated_by: None,
+                updated_at: None,
+                members: std::collections::BTreeSet::from([member.to_owned()]),
+            },
+        );
+    }
+
+    let strand_create = |sender: &str, scope: Option<&str>| {
+        let mut object = json!({
+            "id": "ck:strand:01904100-0000-7000-8000-000000000abc",
+            "metadata": {"title": "t"}
+        });
+        if let Some(scope) = scope {
+            object["scope_circle_id"] = json!(scope);
+        }
+        cokret_sdk::Operation::create(
+            cokret_sdk::OperationId::new("ck:operation:01904100-0000-7000-8000-57d7d8550abc")
+                .unwrap(),
+            cokret_sdk::RealmId::new(realm_id.to_owned()).unwrap(),
+            kinds::CK_STRAND_CREATE,
+            json!({"sender": sender, "object": object}),
+        )
+    };
+
+    // Member writing into the Circle → allowed by this gate.
+    validate_operation_policy(
+        &state,
+        std::slice::from_ref(&strand_create(member, Some(circle_id))),
+    )
+    .await
+    .unwrap();
+
+    // Non-member (Applet bot) writing into the Circle → rejected fail-closed.
+    let err = validate_operation_policy(
+        &state,
+        std::slice::from_ref(&strand_create(non_member, Some(circle_id))),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(err, "circle_scope_membership_required");
+
+    // Non-member writing a Realm-default Strand (no Circle scope) → unaffected.
+    validate_operation_policy(
+        &state,
+        std::slice::from_ref(&strand_create(non_member, None)),
+    )
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn circle_scoped_reaction_requires_circle_membership() {
+    // circle.md §8 — a reaction is a write into the target Message's Strand
+    // scope, so reacting to a Circle message requires Circle membership too.
+    let state = make_state(true);
+    let realm_id = "ck:realm:01904100-0000-7000-8000-c2c2e0000001";
+    let circle_id = "ck:circle:01904100-0000-7000-8000-c2c2e0000002";
+    let strand_id = "ck:strand:01904100-0000-7000-8000-c2c2e0000003";
+    let event_id = "ck:event:01904100-0000-7000-8000-c2c2e0000004";
+    let member = "did:web:alice.example";
+    let non_member = "did:web:slack-bridge.example:bot";
+    let now = chrono::Utc::now();
+
+    {
+        let mut projection = state.projection.lock().unwrap();
+        projection.circles.insert(
+            circle_id.to_owned(),
+            crate::reducer::CircleProjection {
+                circle_id: circle_id.to_owned(),
+                realm_id: realm_id.to_owned(),
+                title: "HR-Conf".to_owned(),
+                summary: None,
+                directory_visibility: "members".to_owned(),
+                join_rule: "invite".to_owned(),
+                history_visibility: "joined".to_owned(),
+                content_encryption_floor: None,
+                metadata_encryption_floor: None,
+                encryption_profile: "mls_rfc9420".to_owned(),
+                mls_group_ref: None,
+                state: crate::reducer::CircleLifecycleState::Active,
+                state_changed_at: None,
+                created_by: member.to_owned(),
+                created_at: now,
+                updated_by: None,
+                updated_at: None,
+                members: std::collections::BTreeSet::from([member.to_owned()]),
+            },
+        );
+        // A Strand scoped to the Circle, and a Message inside it.
+        projection.strands.insert(
+            strand_id.to_owned(),
+            crate::reducer::StrandProjection {
+                strand_id: strand_id.to_owned(),
+                realm_id: realm_id.to_owned(),
+                title: String::new(),
+                summary: None,
+                fields: std::collections::BTreeMap::new(),
+                state: crate::reducer::ObjectLifecycleState::Active,
+                state_changed_at: None,
+                created_by: member.to_owned(),
+                created_at: now,
+                updated_by: None,
+                updated_at: None,
+                scope_circle_id: Some(circle_id.to_owned()),
+            },
+        );
+        projection.messages.insert(
+            event_id.to_owned(),
+            crate::reducer::MessageState {
+                event_id: event_id.to_owned(),
+                realm_id: realm_id.to_owned(),
+                sender: member.to_owned(),
+                thread_id: strand_id.to_owned(),
+                content: json!({}),
+                expiry: None,
+                encrypted: false,
+                operation_id: "ck:operation:01904100-0000-7000-8000-c2c2e0000005".to_owned(),
+                created_at: now,
+                revision_of: None,
+                redacted_at: None,
+            },
+        );
+    }
+
+    let reaction = |sender: &str| {
+        cokret_sdk::Operation::create(
+            cokret_sdk::OperationId::new("ck:operation:01904100-0000-7000-8000-c2c2e000000a")
+                .unwrap(),
+            cokret_sdk::RealmId::new(realm_id.to_owned()).unwrap(),
+            kinds::CK_REACTION_ADD,
+            json!({"sender": sender, "target_event_id": event_id, "key": "👍"}),
+        )
+    };
+
+    // Member may react in the Circle.
+    validate_operation_policy(&state, std::slice::from_ref(&reaction(member)))
+        .await
+        .unwrap();
+
+    // Non-member reacting to a Circle message is rejected.
+    let err = validate_operation_policy(&state, std::slice::from_ref(&reaction(non_member)))
+        .await
+        .unwrap_err();
+    assert_eq!(err, "circle_scope_membership_required");
+}
+
+#[tokio::test]
+async fn applet_registration_requires_realm_admin() {
+    // applet-integration.md §4 — `ck.applet.registration` is gated by the
+    // machine-readable `ck.realm.admin` capability. The dedicated install
+    // aggregate checks this in its handler, but a raw submit via
+    // `/_cokret/self/events` reaches `apply_applet_registration` with no authz of
+    // its own — this gate closes that bypass. The Realm owner may register; an
+    // outsider without `ck.realm.admin` may not.
+    let state = make_state(true);
+    let realm_id = "ck:realm:01904100-0000-7000-8000-a99e70000001";
+    let owner = "did:web:alice.example";
+    let outsider = "did:web:mallory.example";
+    let now = chrono::Utc::now();
+    state
+        .persistence
+        .realm_meta()
+        .put(
+            realm_id,
+            &crate::state::RealmMetaRecord {
+                owner: owner.to_owned(),
+                deleted: false,
+                discoverability: "restricted".to_owned(),
+                history_visibility: "joined".to_owned(),
+                history_sharing_policy: None,
+                history_sharing_policy_digest: None,
+                preview_policy: None,
+                preview_policy_digest: None,
+                encryption_profile: Some("mls_rfc9420".to_owned()),
+                plaintext_visible_services: std::collections::BTreeSet::new(),
+                minimal_metadata_realm: false,
+                created_at: now,
+                updated_at: now,
+            },
+        )
+        .await
+        .unwrap();
+
+    let registration = |sender: &str| {
+        cokret_sdk::Operation::create(
+            cokret_sdk::OperationId::new("ck:operation:01904100-0000-7000-8000-57d7d855a99e")
+                .unwrap(),
+            cokret_sdk::RealmId::new(realm_id.to_owned()).unwrap(),
+            kinds::CK_APPLET_REGISTRATION,
+            json!({
+                "sender": sender,
+                "applet_id": "ck:applet:01904100-0000-7000-8000-000000000a01",
+                "service_did": "did:web:slack-bridge.example",
+                "namespace": "slack",
+            }),
+        )
+    };
+
+    // Realm owner may register an Applet.
+    validate_operation_policy(&state, std::slice::from_ref(&registration(owner)))
+        .await
+        .unwrap();
+
+    // An outsider without `ck.realm.admin` is rejected fail-closed — closing the
+    // `/_cokret/self/events` bypass of the install-handler gate.
+    let err = validate_operation_policy(&state, std::slice::from_ref(&registration(outsider)))
+        .await
+        .unwrap_err();
+    assert_eq!(err, "applet_registration_unauthorized");
+}
+
+#[tokio::test]
 async fn non_minimal_metadata_realm_allows_any_aad() {
     // SEC-08 — a Realm that did not declare the profile is unaffected: a
     // non-hidden aad encrypted message passes this gate.
@@ -1027,7 +1274,14 @@ fn service_attested_device_authorize_object(
     device_pubkey: &[u8; 32],
 ) -> serde_json::Map<String, Value> {
     let device_pubkey_mb = cokret_sdk::ed25519_pubkey_to_did_key_multibase(device_pubkey);
-    let device_id = cokret_sdk::DeviceId::from_device_public_key(device_pubkey);
+    // NOTE (compile-unblock): soland does not implement device-id
+    // self-certification — neither `DeviceId::from_device_public_key` nor the
+    // `device_id_not_self_certifying` validation this cluster asserts exist, so
+    // `service_attested_device_authorize_*` is pre-existing dead test code
+    // (predates this work). A fixed valid id keeps the lib-test target
+    // compiling; the self-cert assertions here are not exercised.
+    let device_id = cokret_sdk::DeviceId::new("ck:device:01904100-0000-7000-8000-0000000000d0")
+        .expect("valid device id");
     let envelope = json!({
         "kind": "ck.device.authorize",
         "actor_id": principal_did,

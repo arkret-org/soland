@@ -11,6 +11,14 @@ pub fn operation_policy_reason_code(message: &str) -> (salvo::http::StatusCode, 
             salvo::http::StatusCode::PRECONDITION_FAILED,
             "failed_precondition",
         )
+    } else if message == "applet_registration_unauthorized" {
+        // applet-integration.md §4 — surface the spec reason verbatim (matches
+        // the dedicated install aggregate's `with_wire_code`), not the generic
+        // `capability_denied`.
+        (
+            salvo::http::StatusCode::FORBIDDEN,
+            "applet_registration_unauthorized",
+        )
     } else {
         (salvo::http::StatusCode::FORBIDDEN, "capability_denied")
     }
@@ -57,6 +65,8 @@ pub async fn validate_operation_policy(
         }
         validate_direct_conversation_realm_policy(state, operation)?;
         validate_member_state_policy(state, operation).await?;
+        validate_circle_scope_membership(state, operation)?;
+        validate_applet_registration_authz(state, operation).await?;
         validate_moderation_event_policy(state, operation).await?;
         validate_set_default_strand_policy(state, operation).await?;
         validate_history_visibility_policy(state, operation).await?;
@@ -258,6 +268,164 @@ fn validate_reaction_scope_policy(
     } else {
         Err(cokret_sdk::error::REASON_REACTION_SCOPE_MISMATCH)
     }
+}
+
+/// circle.md §8 — resolve the Circle a write operation lands content into, if
+/// any. Returns the `ck:circle:…` id when the operation introduces or mutates a
+/// Circle-scoped object, else `None` (Realm-default scope). Object-carrying
+/// creates declare scope inline (`payload.object` / `payload.relation`);
+/// `ck.message.create` and Strand update / lifecycle derive scope from the
+/// projected Strand — a Message never self-declares its scope.
+fn operation_target_scope_circle_id(
+    projection: &crate::reducer::ProjectionState,
+    operation: &Operation,
+) -> Option<String> {
+    let inline_scope = |field: &str| -> Option<String> {
+        operation
+            .payload
+            .get(field)
+            .and_then(Value::as_object)
+            .and_then(|object| object.get("scope_circle_id"))
+            .and_then(Value::as_str)
+            .filter(|value| value.starts_with("ck:circle:"))
+            .map(ToOwned::to_owned)
+    };
+    let strand_scope = |field: &str| -> Option<String> {
+        operation
+            .payload
+            .get(field)
+            .and_then(Value::as_str)
+            .and_then(|strand_id| projection.strand_scope_circle_id(strand_id))
+    };
+    match kinds::canonical_kind_for_operation(operation)? {
+        kinds::CK_STRAND_CREATE | kinds::CK_MORPH_CREATE | kinds::CK_SPACE_CONTAINER_CREATE => {
+            inline_scope("object")
+        }
+        kinds::CK_RELATION_CREATE => inline_scope("relation").or_else(|| inline_scope("object")),
+        kinds::CK_MESSAGE_CREATE | kinds::CK_STRAND_UPDATE => strand_scope("strand_id"),
+        kinds::CK_STRAND_ARCHIVE
+        | kinds::CK_STRAND_RESTORE
+        | kinds::CK_STRAND_MOVE
+        | kinds::CK_STRAND_REORDER => {
+            strand_scope("target_ref").or_else(|| strand_scope("strand_id"))
+        }
+        kinds::CK_REACTION_ADD | kinds::CK_REACTION_REMOVE => {
+            // A reaction's scope is the target Message's Strand scope — reacting
+            // into a Circle is a write into that scope and requires Circle
+            // membership just like authoring there. Unknown target (not yet
+            // observed) → None: the reducer keeps the reaction pending and a
+            // non-member cannot name a Circle message id it never received.
+            let target = REACTION_TARGET_FIELDS.iter().find_map(|field| {
+                operation
+                    .payload
+                    .get(*field)
+                    .and_then(Value::as_str)
+                    .filter(|value| !value.trim().is_empty())
+            })?;
+            let (_, _, thread_id) = projection.message_origin(target)?;
+            projection.strand_scope_circle_id(&thread_id)
+        }
+        _ => None,
+    }
+}
+
+/// circle.md §8 — the membership half of the two-layer authorization AND for
+/// Circle-scoped writes:
+///
+/// ```text
+/// authorized ⇔ capability_grant(actor, action)
+///              ∧ (effective_scope.kind == "realm" ∨ actor ∈ Circle.members)
+/// ```
+///
+/// Holding a Realm-wide capability does **not** authorize writing into a Circle:
+/// the author MUST also be a member of that Circle. Without this gate any holder
+/// of a Realm-wide grant — notably an Applet bot / Ghost Actor
+/// (`extensions/applet-integration.md` §3.4.1, which requires a deployment to be
+/// able to keep Realm-level automation out of Circles) — could inject Strands /
+/// Morphs / Messages into a Circle it never joined. The Sync-side scope filter
+/// (`circle_scope_visible_to_actor` in delivery) only hides reads from
+/// non-members; it does not stop the write, so membership MUST be enforced at
+/// admission too.
+///
+/// Coverage: object-carrying creates (Strand / Morph / Space / Relation),
+/// `ck.message.create`, Strand update / lifecycle, and `ck.reaction.add` /
+/// `ck.reaction.remove` (scope derived from the target Message's Strand). Morph
+/// update is not gated here because `MorphProjection` does not yet persist
+/// `scope_circle_id` (tracked separately); Morph *create* — the injection
+/// vector — is gated.
+///
+/// Membership is evaluated against the current Circle projection (soland's
+/// convergence frontier), matching the delivery-side check. Peer / service-
+/// originated federation operations without a typed actor stay accepted
+/// (convergence / backfill), mirroring the ban / moderation gates; direct client
+/// and Applet submits always carry an actor and are gated.
+fn validate_circle_scope_membership(
+    state: &AppState,
+    operation: &Operation,
+) -> Result<(), &'static str> {
+    let Ok(projection) = state.projection.lock() else {
+        // A poisoned projection lock is a server fault, not an authorization
+        // grant — fail closed rather than silently admitting the write.
+        return Err("circle_scope_membership_unavailable");
+    };
+    let Some(scope_circle_id) = operation_target_scope_circle_id(&projection, operation) else {
+        return Ok(());
+    };
+    let Some(actor) = operation_actor(operation) else {
+        return Ok(());
+    };
+    if projection.circle_scope_visible_to_actor(&scope_circle_id, actor) {
+        Ok(())
+    } else {
+        Err("circle_scope_membership_required")
+    }
+}
+
+/// applet-integration.md §4 / §4b — installing an Applet into a Realm is gated
+/// by the machine-readable `ck.realm.admin` capability: the actor submitting a
+/// `ck.applet.registration` MUST own the target Realm or hold an active
+/// `ck.realm.admin` grant covering it, else reject `applet_registration_unauthorized`.
+///
+/// The dedicated install aggregate (`POST /_cokret/self/applets/install`) checks
+/// this in its own handler and persists the registration projection directly —
+/// it does NOT flow through this admission path. This gate closes the *bypass*:
+/// a raw `ck.applet.registration` submitted via `/_cokret/self/events` otherwise
+/// reaches `apply_applet_registration` with no authorization of its own.
+/// Registration staying `service_attested` (carrier authenticity) is orthogonal
+/// to "who may install" (§4) — both must hold. Mirrors the ban gate
+/// (`validate_member_state_policy`); peer / service-originated federation ops
+/// without a typed actor stay accepted for convergence.
+async fn validate_applet_registration_authz(
+    state: &AppState,
+    operation: &Operation,
+) -> Result<(), &'static str> {
+    if kinds::canonical_kind_for_operation(operation) != Some(kinds::CK_APPLET_REGISTRATION) {
+        return Ok(());
+    }
+    let Some(actor) = operation_actor(operation) else {
+        return Ok(());
+    };
+    let realm_id = operation.realm_id.as_str();
+    if realm_owner_matches(state, realm_id, actor).await {
+        return Ok(());
+    }
+    let (owner, members) = realm_owner_and_members(state, realm_id).await;
+    if state
+        .authz
+        .check(
+            actor,
+            "ck.realm.admin",
+            realm_id,
+            realm_id,
+            owner.as_deref(),
+            &members,
+            &[],
+        )
+        .allowed
+    {
+        return Ok(());
+    }
+    Err("applet_registration_unauthorized")
 }
 
 /// Control-stream events carry their owning principal in `payload.principal_id`.

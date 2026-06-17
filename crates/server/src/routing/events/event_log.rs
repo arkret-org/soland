@@ -1253,24 +1253,40 @@ pub(in crate::routing) async fn submit_event_value(
         .await;
     }
 
-    // CKP-0007: a message's effective circle-scope is derived from its Strand
-    // (spec: `scope_circle_id` is a Strand field, never carried on the message).
-    // Stamp the authoritative top-level `effective_scope` onto the stored
-    // envelope so read-path visibility gating hides circle-scoped messages
-    // from realm members outside the Circle. The Strand scope is durable
-    // (projection_strands.scope_circle_id), so this survives restart.
-    if parsed.kind == kinds::CK_MESSAGE_CREATE
-        && let Some(strand_id) = envelope
-            .get("payload")
-            .and_then(|payload| payload.get("strand_id"))
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned)
-    {
+    // CKP-0007: stamp the authoritative top-level `effective_scope` onto the
+    // stored envelope so read-path visibility gating
+    // (`effective_scope_for_envelope` → `circle_event_visible_to_session`)
+    // hides circle-scoped activity from realm members outside the Circle.
+    //
+    // Create events carry `scope_circle_id` in `payload.object` and the reader
+    // extracts it directly, so they need no stamp. But events whose payload
+    // does NOT carry the scope — a message (scope is a Strand field, never on
+    // the message) and Strand update / lifecycle (scope is create-locked, not
+    // re-sent) — would otherwise resolve to no scope and leak to non-members.
+    // Resolve the authoritative Strand scope from the durable projection
+    // (projection_strands.scope_circle_id survives restart) and stamp it.
+    let scope_strand_id: Option<String> = envelope
+        .get("payload")
+        .and_then(|payload| match parsed.kind.as_str() {
+            kinds::CK_MESSAGE_CREATE | kinds::CK_STRAND_UPDATE => {
+                payload.get("strand_id").and_then(Value::as_str)
+            }
+            kinds::CK_STRAND_ARCHIVE
+            | kinds::CK_STRAND_RESTORE
+            | kinds::CK_STRAND_MOVE
+            | kinds::CK_STRAND_REORDER => payload
+                .get("target_ref")
+                .or_else(|| payload.get("strand_id"))
+                .and_then(Value::as_str),
+            _ => None,
+        })
+        .map(ToOwned::to_owned);
+    if let Some(scope_strand_id) = scope_strand_id {
         let scope = state
             .projection
             .lock()
             .ok()
-            .and_then(|proj| proj.strand_scope_circle_id(&strand_id));
+            .and_then(|proj| proj.strand_scope_circle_id(&scope_strand_id));
         if let Some(scope) = scope
             && let Some(object) = envelope.as_object_mut()
         {
