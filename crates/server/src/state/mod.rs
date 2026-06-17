@@ -1,0 +1,40 @@
+// `did_resolver_chain.rs` lives at `src/did_resolver_chain.rs`; declare it as
+// a submodule of `state` so `AppState::new` can construct the resolver chain
+// locally and re-export it as `crate::state::did_resolver_chain`.
+#[path = "../did_resolver_chain.rs"]
+pub mod did_resolver_chain;
+
+mod app_state;
+mod member_identity;
+mod notification;
+mod realm_directory;
+mod records;
+
+pub use app_state::AppState;
+pub(crate) use app_state::getrandom_seed;
+pub(crate) use member_identity::display_state_digest;
+pub use member_identity::{
+    EffectiveIdentityEntry, HandleClaimDigestInput, HandleClaimEvidenceRecord,
+    MemberIdentityEventRecord, MemberIdentityRegistry, MemberIdentityReplacementEdge,
+    MemberIdentitySnapshot, MemberIdentitySubjectKey,
+};
+pub use notification::{EventNotification, EventNotificationKind, Mutex, SubscribeReconnectGate};
+pub use realm_directory::{RealmDirectoryEntry, RealmDirectoryIndex, RealmDirectoryQuery};
+pub use records::{
+    ACCOUNT_LOCKOUT_DURATION, ACCOUNT_LOCKOUT_THRESHOLD, ACCOUNT_LOCKOUT_WINDOW, AccountDataRecord,
+    AccountLifecycleRecord, AccountRecord, BlobRecord, CallSignalRelayRecord, CanonicalEventRecord,
+    ConsentCellKey, ConsentCellRecord, ConsentGrantDot, ContactRecord, CursorRevocation,
+    DeviceInventoryRecord, DeviceMessageRecord, DirectConversationBindingRecord, FailedLoginRecord,
+    FederationOutboxDeadLetterRecord, FederationOutboxRecord, FederationTransactionRecord,
+    KEY_BACKUP_DAILY_DOWNLOAD_LIMIT_DEFAULT, KEY_BACKUP_DAILY_DOWNLOAD_LIMIT_MAX,
+    KEY_BACKUP_DAILY_DOWNLOAD_LIMIT_MIN, KEY_BACKUP_DOWNLOAD_WINDOW, KeyBackupDownloadOutcome,
+    KeyBackupDownloadRecord, MessageRecord, MultisigPendingRecord, OrganizationPolicyRecord,
+    OrganizationRecord, OutboundPushBridgeCacheRecord, PSI_HIT_BUCKET_SECS,
+    PSI_PROBE_MAX_PER_WINDOW, PSI_PROBE_WINDOW, PolicyDocumentRecord, PresenceRecord,
+    ProjectionEventRecord, PsiProbeOutcome, PsiProbeRecord, PushRuleRecord, RealmInviteRecord,
+    RealmMetaRecord, RealmModerationPolicyRecord, RecoveryPolicyRecord, RecoveryReceiptRecord,
+    RecoverySessionRecord, RetentionPolicyRecord, RetentionTombstoneRecord, SessionRecord,
+    SovereignAuditRecord, SovereignDeploymentState, SovereignEnclaveRecord,
+    SovereignExternalAccountRecord, SovereignExternalInviteRecord, SovereignRealmRecord,
+    SovereignStoreForwardRecord, TypingRecord, WebvhDocumentRecord, WebvhLogRecord,
+};

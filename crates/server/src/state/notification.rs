@@ -1,0 +1,202 @@
+use std::collections::BTreeMap;
+
+use chrono::{DateTime, Duration as ChronoDuration, Utc};
+use serde_json::Value;
+
+pub(crate) const MAX_SUBSCRIBE_RECONNECT_WINDOW_MS: u64 = 86_400_000;
+
+/// Poison-free mutex for every [`crate::state::AppState`] shared surface.
+///
+/// `std::sync::Mutex` poisons itself when the holding thread panics: every
+/// later `lock()` returns `Err` forever, which turned a single in-critical-
+/// section panic into either a process-wide 500 storm (`.expect("...lock")`
+/// paths) or a silent fail-open (`.lock().ok()` admission paths) until
+/// restart. This wrapper recovers the inner data via
+/// [`std::sync::PoisonError::into_inner`], so `lock()` never fails.
+///
+/// The `LockResult` return shape is kept identical to `std::sync::Mutex` so
+/// existing call sites (`.expect(...)`, `if let Ok(...)`, `.map(...)`)
+/// compile unchanged — their `Err` arms are now structurally unreachable,
+/// i.e. admission checks guarded by `if let Ok(guard)` always run
+/// (fail-closed instead of fail-open).
+#[derive(Debug)]
+pub struct Mutex<T: ?Sized>(std::sync::Mutex<T>);
+
+impl<T: Default> Default for Mutex<T> {
+    fn default() -> Self {
+        Self::new(T::default())
+    }
+}
+
+impl<T> Mutex<T> {
+    pub const fn new(value: T) -> Self {
+        Self(std::sync::Mutex::new(value))
+    }
+}
+
+impl<T: ?Sized> Mutex<T> {
+    /// Acquire the lock. Always returns `Ok`: a poisoned inner mutex is
+    /// recovered instead of propagating the poison flag. Callers may keep
+    /// using `.expect("...lock")` — it can no longer panic.
+    pub fn lock(&self) -> std::sync::LockResult<std::sync::MutexGuard<'_, T>> {
+        Ok(self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner))
+    }
+}
+
+/// broadcast payload for the
+/// [`crate::state::AppState::event_broadcast`] channel. Subscribers filter by
+/// `realm_id` first, then dispatch on `kind` to produce the right
+/// NDJSON frame.
+///
+/// added control-frame variants alongside the original `Event`
+/// (mid-stream control frames per spec):
+///   - `EpochRotation` — emitted when `ck.component.mls.epoch.v1` cell changes (E2EE epoch shift;
+///     clients MUST re-fetch keys)
+///   - `Frontier` — seal frontier advanced (Snapshot of cursor / state_root after `apply_seal`);
+///     clients use this as a resync waypoint
+///   - `ResyncRequired` — server detected per-subscriber drift; client MUST drop local cache and
+///     re-subscribe with `from=null`
+///   - `Unauthorized` — subscriber's session token revoked / expired mid-stream; client MUST close
+///     + re-auth
+#[derive(Clone, Debug)]
+pub struct EventNotification {
+    pub realm_id: String,
+    pub kind: EventNotificationKind,
+}
+
+#[derive(Clone, Debug)]
+pub enum EventNotificationKind {
+    /// Ordinary projection event (one `ck.message.create` etc.).
+    Event {
+        /// Stable cursor for the event — typically the canonical
+        /// `event_id`. Clients use as resume position.
+        cursor: String,
+        /// Projection-event JSON (same shape as `projection_event_json`).
+        event_payload: Value,
+    },
+    /// MLS epoch shift detected on `ck.component.mls.epoch.v1` cell.
+    EpochRotation {
+        /// Old epoch value (the previous CellState::Value if known).
+        previous_epoch: Option<Value>,
+        /// New epoch value (current CellState::Value after the
+        /// triggering apply_seal).
+        new_epoch: Value,
+    },
+    /// Seal frontier advanced. Emitted post-`apply_seal` so clients
+    /// can update their resume cursor without waiting for the next event.
+    Frontier {
+        /// `apply_seal`'s `post_state_root` (canonical Merkle).
+        state_root: String,
+        /// The Seal's id, useful for clients tracking Seal DAG.
+        seal_id: String,
+    },
+    /// Per-subscriber drift / corrupted-cursor signal. Clients SHOULD
+    /// drop local cache + restart subscription with no `from`.
+    ResyncRequired {
+        reason: String,
+        reconnect_after_ms: Option<u64>,
+    },
+    /// Session token invalidated mid-stream — client MUST close.
+    Unauthorized { reason: String },
+}
+
+impl EventNotification {
+    pub fn event(realm_id: String, cursor: String, event_payload: Value) -> Self {
+        Self {
+            realm_id,
+            kind: EventNotificationKind::Event {
+                cursor,
+                event_payload,
+            },
+        }
+    }
+
+    pub fn epoch_rotation(
+        realm_id: String,
+        previous_epoch: Option<Value>,
+        new_epoch: Value,
+    ) -> Self {
+        Self {
+            realm_id,
+            kind: EventNotificationKind::EpochRotation {
+                previous_epoch,
+                new_epoch,
+            },
+        }
+    }
+
+    pub fn frontier(realm_id: String, seal_id: String, state_root: String) -> Self {
+        Self {
+            realm_id,
+            kind: EventNotificationKind::Frontier {
+                state_root,
+                seal_id,
+            },
+        }
+    }
+}
+
+/// In-process reconnect gate for `ck.self.events.stream.subscribe` and
+/// `ck.self.account.stream.subscribe`. Keys are operation + caller identity + selector
+/// scope, and values are the earliest accepted reconnect time.
+#[derive(Clone, Debug, Default)]
+pub struct SubscribeReconnectGate {
+    deadlines: BTreeMap<String, DateTime<Utc>>,
+}
+
+impl SubscribeReconnectGate {
+    pub fn retry_after_ms(&mut self, key: &str, now: DateTime<Utc>) -> Option<u64> {
+        self.prune_expired(now);
+        let deadline = self.deadlines.get(key)?;
+        if *deadline <= now {
+            self.deadlines.remove(key);
+            return None;
+        }
+        Some((*deadline - now).num_milliseconds().max(1) as u64)
+    }
+
+    pub fn arm(&mut self, key: impl Into<String>, now: DateTime<Utc>, delay_ms: u64) {
+        if delay_ms == 0 {
+            return;
+        }
+        let clamped_ms = delay_ms.min(MAX_SUBSCRIBE_RECONNECT_WINDOW_MS) as i64;
+        self.deadlines
+            .insert(key.into(), now + ChronoDuration::milliseconds(clamped_ms));
+        self.prune_expired(now);
+    }
+
+    fn prune_expired(&mut self, now: DateTime<Utc>) {
+        self.deadlines.retain(|_, deadline| *deadline > now);
+    }
+}
+
+#[cfg(test)]
+mod subscribe_reconnect_gate_tests {
+    use super::*;
+
+    #[test]
+    fn reports_remaining_window_and_expires() {
+        let mut gate = SubscribeReconnectGate::default();
+        let now = Utc::now();
+        gate.arm("ck.self.events.stream.subscribe|alice|realm-a", now, 10_000);
+
+        let retry_after = gate
+            .retry_after_ms(
+                "ck.self.events.stream.subscribe|alice|realm-a",
+                now + ChronoDuration::milliseconds(2_500),
+            )
+            .expect("cooldown active");
+        assert!((7_400..=7_500).contains(&retry_after));
+
+        assert!(
+            gate.retry_after_ms(
+                "ck.self.events.stream.subscribe|alice|realm-a",
+                now + ChronoDuration::milliseconds(10_000),
+            )
+            .is_none()
+        );
+    }
+}

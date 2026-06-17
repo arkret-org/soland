@@ -1,0 +1,181 @@
+use serde_json::{Value, json};
+use soland_core::admin::seal::{
+    BottomCandidateHead, BottomRepairRequestBody, BottomRepairStrategy, NotaryReconfigRequestBody,
+    SubmitControlMoveOutcome,
+};
+
+use super::bottom::bottom_entry_from;
+use super::notary::{notary_value_from_cell, notary_value_object_from_body};
+use super::notary_cell_for;
+
+#[test]
+fn notary_value_from_cell_defaults_to_service_did_when_absent() {
+    let resp = notary_value_from_cell(None, "did:web:soland.local").unwrap();
+    assert_eq!(resp.kind_raw, "single_did");
+    assert_eq!(resp.single_did.as_deref(), Some("did:web:soland.local"));
+    assert!(!resp.paused);
+}
+
+#[test]
+fn notary_value_from_cell_reads_authoritative_single_did_form() {
+    let v = json!({
+        "kind": "single_did",
+        "did": "did:web:alice.example",
+        "revocation_freshness_window_ms": 60000,
+        "paused": false,
+    });
+    let resp = notary_value_from_cell(Some(&v), "did:web:server").unwrap();
+    assert_eq!(resp.kind_raw, "single_did");
+    assert_eq!(resp.single_did.as_deref(), Some("did:web:alice.example"));
+    assert_eq!(resp.revocation_freshness_window_ms, Some(60000));
+    assert!(!resp.paused);
+    // Serialized admin shape carries the shared DTO field names.
+    let j = serde_json::to_value(&resp).unwrap();
+    assert_eq!(j["kind_raw"], "single_did");
+    assert_eq!(j["single_did"], "did:web:alice.example");
+    assert_eq!(j["revocation_freshness_window_ms"], 60000);
+}
+
+#[test]
+fn notary_value_from_cell_reads_authoritative_threshold_form() {
+    let v = json!({
+        "kind": "threshold",
+        "k": 2,
+        "n": 3,
+        "members": ["did:ck:a", "did:ck:b", "did:ck:c"],
+    });
+    let resp = notary_value_from_cell(Some(&v), "did:web:s").unwrap();
+    assert_eq!(resp.kind_raw, "threshold");
+    assert_eq!(resp.threshold_k, Some(2));
+    assert_eq!(resp.threshold_n, Some(3));
+    assert_eq!(resp.threshold_dids.len(), 3);
+}
+
+#[test]
+fn bottom_entry_from_camel_case_kind_normalises_to_snake_case() {
+    // SDK serializes the Bottom variant as PascalCase via serde
+    // default; the wire shape sodmin expects is snake_case. Our
+    // shaping helper bridges the two.
+    let bottom = json!({
+        "kind": "Conflict",
+        "event_ids": ["ck:event:a", "ck:event:b"],
+        "details": "two heads"
+    });
+    let entry = bottom_entry_from(
+        "ck:space:01904100-0000-7000-8000-2dd3431bd65a",
+        "ck:cell:ck.component.space.title.v1:ck:space:01904100-0000-7000-8000-2dd3431bd65a",
+        &bottom,
+    );
+    assert_eq!(entry.kind, "conflict");
+    assert_eq!(entry.event_ids.len(), 2);
+    assert_eq!(entry.candidate_heads.len(), 2);
+    assert_eq!(entry.candidate_heads[0].event_id, "ck:event:a");
+    assert_eq!(entry.details.as_deref(), Some("two heads"));
+}
+
+#[test]
+fn bottom_entry_from_non_conflict_kind_has_no_candidate_heads() {
+    let bottom = json!({
+        "kind": "InvalidTransition",
+        "event_ids": ["ck:event:x"],
+        "details": "fsm rejected from invited→ban"
+    });
+    let entry = bottom_entry_from(
+        "ck:space:01904100-0000-7000-8000-2dd3431bd65a",
+        "ck:cell:ck.component.member.state.v1:did.web.alice",
+        &bottom,
+    );
+    assert_eq!(entry.kind, "invalid_transition");
+    assert!(entry.candidate_heads.is_empty());
+}
+
+#[test]
+fn bottom_repair_request_body_round_trips_through_serde() {
+    let head_in = BottomRepairRequestBody {
+        strategy: BottomRepairStrategy::HeadInWinner {
+            head: BottomCandidateHead {
+                event_id: "ck:event:abc".to_owned(),
+                issuer: Some("did:ck:alice".to_owned()),
+                hlc: None,
+                summary: None,
+            },
+        },
+    };
+    let j = serde_json::to_value(&head_in).unwrap();
+    assert_eq!(
+        j.get("strategy").and_then(Value::as_str),
+        Some("head_in_winner")
+    );
+    let back: BottomRepairRequestBody = serde_json::from_value(j).unwrap();
+    match back.strategy {
+        BottomRepairStrategy::HeadInWinner { head } => {
+            assert_eq!(head.event_id, "ck:event:abc");
+        }
+        other => panic!("expected HeadInWinner, got {other:?}"),
+    }
+
+    let manual = BottomRepairRequestBody {
+        strategy: BottomRepairStrategy::Manual {
+            note: Some("schema-error rewrite".to_owned()),
+            effects: vec![json!({"cell": "x", "op": {"type": "set", "value": 1}})],
+        },
+    };
+    let j = serde_json::to_value(&manual).unwrap();
+    assert_eq!(j.get("strategy").and_then(Value::as_str), Some("manual"));
+}
+
+#[test]
+fn notary_reconfig_body_converts_to_sdk_authoritative_cell_value() {
+    // The admin request is the shared DTO field shape; the cell value
+    // written by soland is the SDK `NotaryValue` shape.
+    let body: NotaryReconfigRequestBody = serde_json::from_value(json!({
+        "kind": "threshold",
+        "threshold_k": 2,
+        "threshold_n": 3,
+        "threshold_dids": ["did:ck:a", "did:ck:b", "did:ck:c"],
+    }))
+    .unwrap();
+    let cell_value = notary_value_object_from_body(&body).unwrap();
+    assert_eq!(cell_value["kind"], "threshold");
+    assert_eq!(cell_value["k"], 2);
+    assert_eq!(cell_value["n"], 3);
+    assert_eq!(cell_value["members"].as_array().unwrap().len(), 3);
+    assert!(cell_value.get("threshold_k").is_none());
+    assert!(cell_value.get("threshold_dids").is_none());
+
+    // Structural violations are rejected by the SDK validator
+    // (members.len() != n).
+    let invalid: NotaryReconfigRequestBody = serde_json::from_value(json!({
+        "kind": "threshold",
+        "threshold_k": 2,
+        "threshold_n": 3,
+        "threshold_dids": ["did:ck:a"],
+    }))
+    .unwrap();
+    assert!(notary_value_object_from_body(&invalid).is_err());
+}
+
+#[test]
+fn notary_cell_for_builds_canonical_cell_ref() {
+    let cell = notary_cell_for("ck:space:01904100-0000-7000-8000-2dd3431bd65a").unwrap();
+    assert_eq!(
+        cell.as_str(),
+        "ck:cell:ck.component.notary.v1:ck:space:01904100-0000-7000-8000-2dd3431bd65a"
+    );
+}
+
+#[test]
+fn admin_submit_move_response_serializes_status() {
+    let r = SubmitControlMoveOutcome {
+        control_move_id: "sha256:00".to_owned(),
+        accepted: false,
+        reason: Some("placeholder".to_owned()),
+        seal_id: None,
+        status: "placeholder".to_owned(),
+        ..Default::default()
+    };
+    let s = serde_json::to_string(&r).unwrap();
+    assert!(s.contains("\"status\":\"placeholder\""));
+    assert!(s.contains("\"reason\":\"placeholder\""));
+    assert!(!s.contains("seal_id"));
+}

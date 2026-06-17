@@ -1,0 +1,178 @@
+//! Wire and storage types for the applet bridge surface.
+
+use cokret_sdk::{AppletPackage, AppletWireNamespaces, InstallCommitOutcome};
+use salvo::oapi::ToSchema;
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+
+use super::super::applet_manifest::AppletManifest;
+use crate::state::{CanonicalEventRecord, ProjectionEventRecord};
+
+pub(super) const EVENT_SCHEMA_ID: &str = "ck.schema.event.v1";
+pub(super) const SOLAND_EDGE_APPLET_ID: &str = "ck:applet:00000000-0000-7000-8000-000000000000";
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AppletRecord {
+    pub applet_id: String,
+    pub namespace: String,
+    pub owner_actor_id: String,
+    pub registry_did: String,
+    pub bot_actor_id: String,
+    pub portal_realm_id: String,
+    pub capabilities: Vec<String>,
+    pub manifest: AppletManifest,
+    #[serde(default)]
+    pub package: Option<AppletPackage>,
+    #[serde(default)]
+    pub namespaces: Option<AppletWireNamespaces>,
+    #[serde(default)]
+    pub allow_ghost_actors: bool,
+    pub status: String,
+    pub registered_at: chrono::DateTime<chrono::Utc>,
+    #[serde(default)]
+    pub revoked_at: Option<chrono::DateTime<chrono::Utc>>,
+    #[serde(default)]
+    pub idempotency_key: Option<String>,
+    #[serde(default)]
+    pub install_body_digest: Option<String>,
+    #[serde(default)]
+    pub install_id: Option<String>,
+    #[serde(default)]
+    pub install_response: Option<InstallCommitOutcome>,
+    #[serde(default)]
+    pub ghosts: Vec<GhostActorRecord>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct GhostActorRecord {
+    pub ghost_actor_id: String,
+    pub external_id: String,
+    #[serde(default)]
+    pub display_name: Option<String>,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    #[serde(default)]
+    pub revoked_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
+pub struct AppletRevokeRecordOutcome {
+    pub applet_id: String,
+    pub status: String,
+    pub revoked_at: chrono::DateTime<chrono::Utc>,
+    pub bot_actor_id: String,
+    pub ghost_actor_ids: Vec<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
+pub struct AppletInstallPaths {
+    pub preview_path: String,
+    pub commit_path: String,
+    pub revoke_path: String,
+    pub ghost_actor_provision_path: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
+pub struct AppletProtocolDescribeOutcome {
+    pub contract: String,
+    pub install: AppletInstallPaths,
+    pub transaction_path: String,
+    pub package_schema: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
+pub struct AppletManifestRegisterRequestBody {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub manifest: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub manifest_json: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signature: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub manifest_signature: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trusted_registry_did: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
+pub struct AppletView {
+    pub applet_id: String,
+    pub namespace: String,
+    pub owner_actor_id: String,
+    pub registry_did: String,
+    pub bot_actor_id: String,
+    pub portal_realm_id: String,
+    pub capabilities: Vec<String>,
+    pub status: String,
+    pub registered_at: chrono::DateTime<chrono::Utc>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revoked_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub ghost_actor_ids: Vec<String>,
+    pub manifest: AppletManifest,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, ToSchema)]
+pub struct AppletExternalUserInput {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub external_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
+pub struct AppletGhostIngressRequestBody {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub external_user: Option<AppletExternalUserInput>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub external_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+    #[serde(default)]
+    pub payload: Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub realm_id: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
+pub struct AppletPortalMessageRequestBody {
+    pub realm_id: String,
+    #[serde(default)]
+    pub payload: Value,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
+pub struct AppletPortalMessageOutcome {
+    pub message_id: String,
+    pub event_id: String,
+    pub operation_id: String,
+    pub realm_id: String,
+    pub portal_realm_id: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
+pub struct AppletGhostIngressOutcome {
+    pub applet_id: String,
+    pub ghost_actor_id: String,
+    pub external_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+    pub accountability: Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub event_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operation_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub realm_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub portal_realm_id: Option<String>,
+}
+
+#[derive(Clone)]
+pub(super) struct FormalAppletEvent {
+    pub(super) event_id: String,
+    pub(super) canonical: CanonicalEventRecord,
+    pub(super) projection: ProjectionEventRecord,
+}

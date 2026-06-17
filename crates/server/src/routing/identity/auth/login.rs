@@ -1,0 +1,249 @@
+use super::*;
+
+fn account_new_session_error(state: &AppState, actor: &str) -> Option<AppError> {
+    account_new_session_tuple(state, actor).map(|(status, code, reason_detail, message)| {
+        AppError::capability_denied(message)
+            .with_status(status)
+            .with_wire_code(code)
+            .with_reason_detail(reason_detail)
+    })
+}
+
+/// Lifecycle gate for new session issuance. Wire codes come from the spec
+/// error-code-registry: `locked` / `suspended` deny by account policy →
+/// `policy_denied` (403); `deactivated` / `erased` hit the
+/// account-lifecycle.md §7.1 write barrier → `failed_precondition` with
+/// reason `principal_deactivated`. The pre-rename lifecycle word is kept in
+/// `error.details.reason_detail` for operators.
+pub(crate) fn account_new_session_tuple(
+    state: &AppState,
+    actor: &str,
+) -> Option<(StatusCode, &'static str, &'static str, &'static str)> {
+    match state.account_lifecycle_state(actor).as_str() {
+        "locked" => Some((
+            StatusCode::FORBIDDEN,
+            "policy_denied",
+            "account_status=locked",
+            "account is locked",
+        )),
+        "suspended" => Some((
+            StatusCode::FORBIDDEN,
+            "policy_denied",
+            "account_status=suspended",
+            "account is suspended",
+        )),
+        "deactivated" => Some((
+            StatusCode::CONFLICT,
+            "failed_precondition",
+            "principal_deactivated (account_status=deactivated)",
+            "account has been deactivated",
+        )),
+        "erased" => Some((
+            StatusCode::CONFLICT,
+            "failed_precondition",
+            "principal_deactivated (account_status=erased)",
+            "account has been erased",
+        )),
+        _ => None,
+    }
+}
+
+/// Spec: A.3 — auth handlers consult the in-memory failed-login counter
+/// before doing any other work. The lockout response is 403
+/// `policy_denied` (registry code; lifecycle detail travels in
+/// `error.details.reason_detail`) with a wire body that doesn't reveal
+/// which credential failed, only that the actor is currently locked.
+pub(super) fn account_lockout_error(state: &AppState, actor: &str) -> Option<AppError> {
+    let until = state.account_lockout_active_until(actor)?;
+    let until_wire = until.to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+    Some(
+        AppError::capability_denied(format!(
+            "account temporarily locked due to repeated failed auth attempts; \
+             retry after {until_wire}"
+        ))
+        .with_status(StatusCode::FORBIDDEN)
+        .with_wire_code("policy_denied")
+        .with_reason_detail("account_status=locked (failed-login lockout)"),
+    )
+}
+
+pub(crate) fn account_existing_session_error(
+    state: &AppState,
+    actor: &str,
+) -> Option<(StatusCode, &'static str, &'static str)> {
+    // Spec: C.3.8 — 401 means "not authenticated"; 403 means
+    // "authenticated, policy denies". A session-bearing request whose
+    // backing account is `locked` / `deactivated` carries a valid
+    // bearer (so the request IS authenticated); the lifecycle gate is
+    // a policy denial and MUST surface as 403 with the registry code
+    // `policy_denied`.
+    //
+    // `erased` is the exception kept at 401: erasure invalidates the
+    // bearer itself, so re-auth is the right signal — registry code
+    // `unauthenticated` ("authentication material is missing or invalid").
+    match state.account_lifecycle_state(actor).as_str() {
+        "locked" => Some((StatusCode::FORBIDDEN, "policy_denied", "account is locked")),
+        "deactivated" => Some((
+            StatusCode::FORBIDDEN,
+            "policy_denied",
+            "account has been deactivated",
+        )),
+        "erased" => Some((
+            StatusCode::UNAUTHORIZED,
+            "unauthenticated",
+            "account has been erased",
+        )),
+        _ => None,
+    }
+}
+
+#[endpoint(
+    operation_id = "org.cokret.soland.auth.dev_login",
+    tags("auth"),
+    summary = "Development bearer-token login"
+)]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.auth.dev_login"))]
+pub(super) async fn dev_login(
+    depot: &mut Depot,
+    body: JsonBody<DevLoginRequestBody>,
+) -> JsonResult<SessionLoginOutcome> {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    if !state.config.development_mode {
+        return Err(AppError::not_found("endpoint not available"));
+    }
+    let body = body.into_inner();
+    let actor = validate_did(&body.actor);
+    let device_id = validate_device_id(&body.device_id);
+    let (actor, device_id) = match (actor, device_id) {
+        (Ok(actor), Ok(device_id)) => (actor, device_id),
+        _ => {
+            return Err(AppError::invalid_param(
+                "actor must be a DID and device_id is required",
+            ));
+        }
+    };
+    let actor_str = actor.as_str();
+    let device_id_str = device_id.as_str();
+    if device_id_str.trim().is_empty() {
+        return Err(AppError::invalid_param(
+            "actor must be a DID and device_id is required",
+        ));
+    }
+    crate::routing::extensions::sovereign::validate_sovereign_did_registration(state, actor_str)?;
+    // Spec: A.3 — auth handlers consult the in-memory failed-login
+    // counter before doing anything else. An actor that crossed the
+    // threshold gets a 403 `policy_denied` (lockout) until the lockout window
+    // expires, without revealing whether the credential would otherwise
+    // have been valid.
+    if let Some(error) = account_lockout_error(state, actor_str) {
+        return Err(error);
+    }
+    let account = state
+        .persistence
+        .accounts()
+        .get(actor_str)
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    if let Some(error) = account_new_session_error(state, actor_str) {
+        return Err(error);
+    }
+    if account.is_none() {
+        let synthetic_handle = handle_for_did(actor_str);
+        let synthetic_display = body
+            .display_name
+            .clone()
+            .unwrap_or_else(|| synthetic_handle.trim_start_matches('@').to_owned());
+        let record = AccountRecord {
+            id: crate::ids::generate_account_id(),
+            did: actor_str.to_owned(),
+            localpart: normalize_localpart(&synthetic_handle),
+            display_name: Some(synthetic_display),
+            bio: None,
+            avatar_url: None,
+            created_at: now(),
+        };
+        state
+            .persistence
+            .accounts()
+            .put(&record)
+            .await
+            .map_err(|error| AppError::internal(error.to_string()))?;
+        append_audit_log(
+            state,
+            Some(actor_str),
+            "account.register",
+            json!({"handle": record.handle(), "via": "dev_login"}),
+            "accepted",
+        )
+        .await;
+    }
+
+    let expires_at = now() + Duration::hours(12);
+    let token = token_for(actor_str, device_id_str, expires_at.timestamp_millis());
+    let token_hash = session_token_hash(&token, &state.config.service_did);
+    let session = SessionRecord {
+        token_hash,
+        actor: actor_str.to_owned(),
+        device_id: device_id_str.to_owned(),
+        audience: state.config.service_did.clone(),
+        // dev-login does not carry a ck.session.grant signing key; bearer-only.
+        session_public_key: None,
+        expires_at,
+        created_at: now(),
+        revoked_at: None,
+    };
+    state
+        .persistence
+        .sessions()
+        .put(&session)
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    let seen_at = now();
+    let existing_devices = state
+        .persistence
+        .devices()
+        .list_for_actor(actor_str)
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    let verification_state =
+        initial_session_device_verification_state(&existing_devices, device_id_str);
+    let device_payload = json!({
+        "device_id": device_id_str,
+        "display_name": body.display_name.clone(),
+        "verification": verification_state,
+        "last_seen_at": seen_at
+    });
+    let device = DeviceInventoryRecord {
+        actor: actor_str.to_owned(),
+        device_id: device_id_str.to_owned(),
+        display_name: body.display_name.clone(),
+        verification_state: verification_state.to_owned(),
+        payload: device_payload,
+        created_at: seen_at,
+        updated_at: seen_at,
+        revoked_at: None,
+    };
+    state
+        .persistence
+        .devices()
+        .put(&device)
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    append_audit_log(
+        state,
+        Some(actor_str),
+        "auth.dev_login",
+        json!({"device_id": device_id_str}),
+        "accepted",
+    )
+    .await;
+    state.clear_failed_login(actor_str);
+
+    json_ok(SessionLoginOutcome {
+        access_token: token,
+        token_type: "Bearer".to_owned(),
+        actor: actor.clone(),
+        device_id: device_id.clone(),
+        expires_at,
+    })
+}
