@@ -832,6 +832,19 @@ pub fn operation_schema_for_kind(kind: &str) -> Option<OperationPayloadSchema> {
             requirements: CROSS_SIGNING_RESET_REQUIREMENTS,
             validate: Some(validate_cross_signing_reset_payload),
         },
+        // Device-identity — `ck.device.authorize` maps to the
+        // `ck.component.device.authorization.v1` lattice cell. Registering an
+        // Operation here is what lets `project_accepted_operations` run
+        // `project_device_authorize`, which persists the authoritative
+        // `device_public_key` + verified state into the devices inventory
+        // (without it the device row stays `unverified` with no key and the
+        // client falsely shows the "existing device approval" gate). The binding
+        // itself is already verified at ingest
+        // (`validate_device_authorize_binding`), so no extra payload validator.
+        "ck.device.authorize" => OperationPayloadSchema {
+            requirements: DEVICE_AUTHORIZE_REQUIREMENTS,
+            validate: None,
+        },
         _ => return None,
     };
     Some(schema)

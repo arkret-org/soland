@@ -526,6 +526,11 @@ pub(crate) const CROSS_SIGNING_RESET_REQUIREMENTS: &[PayloadRequirement] = &[
     ),
 ];
 
+pub(crate) const DEVICE_AUTHORIZE_REQUIREMENTS: &[PayloadRequirement] = &[
+    PayloadRequirement::Required("principal_id", "ck.device.authorize requires principal_id"),
+    PayloadRequirement::Required("device_id", "ck.device.authorize requires device_id"),
+];
+
 pub(crate) const READ_MARKER_REQUIREMENTS: &[PayloadRequirement] = &[
     PayloadRequirement::AnyOf(
         READ_MARKER_ACTOR_FIELDS,
