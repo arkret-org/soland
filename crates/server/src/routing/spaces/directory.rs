@@ -1846,10 +1846,28 @@ async fn list_handles_for_subject(
     let as_of = requested_as_of.unwrap_or_else(now);
     let mut claims = Vec::new();
     let mut seen = BTreeSet::new();
-    if let Some(claim) = generated_claim {
-        let claim = serde_json::to_value(claim).map_err(|err| {
+    // No demo actor matched — surface a registered local account's primary
+    // handle claim so the directory listing stays consistent with the account
+    // viewer's `primary_handle_claim` (an account's own handle then resolves
+    // through both read paths instead of only the viewer).
+    let generated_claim_value = match generated_claim {
+        Some(claim) => Some(serde_json::to_value(claim).map_err(|err| {
             AppError::internal(format!("handle claim serialization failed: {err}"))
-        })?;
+        })?),
+        None => {
+            let audience = body
+                .realm_id
+                .as_ref()
+                .map(RealmId::as_str)
+                .or_else(|| body.requester.as_ref().map(Did::as_str))
+                .unwrap_or(state.config.service_did.as_str());
+            crate::routing::identity::account::local_account_primary_handle_claim(
+                state, &subject, audience,
+            )
+            .await
+        }
+    };
+    if let Some(claim) = generated_claim_value {
         push_visible_subject_handle_claim(
             state,
             &body,

@@ -115,16 +115,27 @@ async fn resolve_registration_localpart(
 /// the account still carries the synthetic DID-derived bootstrap localpart
 /// (no real handle registered), so the client renders "not published".
 fn account_primary_handle_claim(state: &AppState, account: &AccountRecord) -> Option<Value> {
+    account_primary_handle_claim_for(state, account, state.config.service_did.as_str())
+}
+
+/// Re-derive `account`'s Principal-Server-signed primary handle claim
+/// (identity-handles.md §3.7.1) bound to `audience`. `None` when the account
+/// still carries the synthetic DID-derived bootstrap localpart (no real handle
+/// registered), so the client renders "not published".
+pub(crate) fn account_primary_handle_claim_for(
+    state: &AppState,
+    account: &AccountRecord,
+    audience: &str,
+) -> Option<Value> {
     let synthetic = normalize_localpart(&handle_for_did(&account.did));
     if account.localpart == synthetic {
         return None;
     }
-    let audience = state.config.service_did.as_str().to_owned();
     match crate::routing::spaces::directory::signed_handle_claim_value(
         state,
         &account.handle(),
         &account.did,
-        &audience,
+        audience,
     ) {
         Ok(value) => Some(value),
         Err(error) => {
@@ -132,6 +143,27 @@ fn account_primary_handle_claim(state: &AppState, account: &AccountRecord) -> Op
             None
         }
     }
+}
+
+/// Re-derive the registered local account's primary handle claim for
+/// `subject`, bound to `audience`. `None` when `subject` is not a known local
+/// account or still carries its synthetic bootstrap localpart. Lets the
+/// directory `list_handles_for_subject` surface stay consistent with the
+/// account viewer's `primary_handle_claim` so an account's own handle resolves
+/// through both read paths.
+pub(crate) async fn local_account_primary_handle_claim(
+    state: &AppState,
+    subject: &str,
+    audience: &str,
+) -> Option<Value> {
+    let account = state
+        .persistence
+        .accounts()
+        .get(subject)
+        .await
+        .ok()
+        .flatten()?;
+    account_primary_handle_claim_for(state, &account, audience)
 }
 use crate::{JsonResult, json_ok};
 
