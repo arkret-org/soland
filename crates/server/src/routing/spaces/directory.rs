@@ -31,24 +31,26 @@ use cokret_sdk::models::{
     Handle as SdkHandle, HandleBindingState, HandleClaim as SdkHandleClaim, HandleVisibility,
 };
 use cokret_sdk::{
-    AGENT_SELECTOR_CLAIM_SCHEMA, ActorPreview, AgentSelectorClaim, DeliveryBindingHint, Did,
-    DirectoryActorSearchOutcome, DirectoryAgentSelectorResolutionOutcome, DirectoryAnnounceOutcome,
-    DirectoryAnnounceRequestBody, DirectoryDescription, DirectoryHandleResolutionOutcome,
-    DirectoryListHandlesForSubjectRequestBody, DirectoryOrganizationResolutionOutcome,
-    DirectoryOrganizationSearchOutcome, DirectoryPrivateContactDiscoveryOutcome,
-    DirectoryPrivateContactDiscoveryRequestBody, DirectoryPushRegisterOutcome,
-    DirectoryPushRegisterRequestBody, DirectoryRealmResolutionOutcome, DirectoryRealmSearchOutcome,
+    AGENT_SELECTOR_CLAIM_SCHEMA, ActorPreview, AgentSelectorClaim, Audience, DeliveryBindingHint,
+    DeliveryMode, Did, DirectoryActorSearchOutcome, DirectoryAgentSelectorResolutionOutcome,
+    DirectoryAnnounceOutcome, DirectoryAnnounceRequestBody, DirectoryDescription,
+    DirectoryHandleResolutionOutcome, DirectoryListHandlesForSubjectRequestBody,
+    DirectoryOrganizationResolutionOutcome, DirectoryOrganizationSearchOutcome,
+    DirectoryPrivateContactDiscoveryOutcome, DirectoryPrivateContactDiscoveryRequestBody,
+    DirectoryPushRegisterOutcome, DirectoryPushRegisterRequestBody,
+    DirectoryRealmResolutionOutcome, DirectoryRealmSearchOutcome,
     DirectoryResolveAgentSelectorRequestBody, DirectoryResolveHandleRequestBody,
     DirectoryResolveOrganizationRequestBody, DirectoryResolveRealmRequestBody,
     DirectoryResolveTargetRequestBody, DirectoryResourceKind, DirectorySearchActorsRequestBody,
     DirectorySearchOrganizationsRequestBody, DirectorySearchRealmsRequestBody,
     DirectorySearchUsersRequestBody, DirectorySubjectHandleList, DirectoryTargetResolutionOutcome,
     DirectoryUserSearchOutcome, DirectoryWithdrawOutcome, DirectoryWithdrawRequestBody,
-    Ed25519MoveSigner, JoinRule, LinkType, MoveSigner, OrganizationPreview, RealmId,
-    RealmJoinCandidate, RealmJoinCandidateRole, RealmJoinCandidateServiceType,
-    RealmJoinCandidateSource, RealmJoinMethod, RealmMemberCountBucket, RealmMemberCountBucketLabel,
-    RealmPreview, RealmRef, TargetDescriptor, TargetKind, UserSearchOutcome, canonical,
-    parse_address, target_digest, validate_agent_slug,
+    Ed25519MoveSigner, HandleClaimKind, HandleHintBindingSource, JoinRule, LinkType, MoveSigner,
+    OrganizationPreview, PayloadProof, RealmId, RealmJoinCandidate, RealmJoinCandidateRole,
+    RealmJoinCandidateServiceType, RealmJoinCandidateSource, RealmJoinMethod,
+    RealmMemberCountBucket, RealmMemberCountBucketLabel, RealmPreview, RealmRef,
+    RecipientServiceType, TargetDescriptor, TargetKind, UserSearchOutcome, canonical,
+    parse_address, proof_kind, target_digest, validate_agent_slug,
 };
 use ed25519_dalek::{Signature, Verifier};
 use salvo::oapi::extract::JsonBody;
@@ -66,7 +68,6 @@ use crate::result::{JsonResult, json_ok};
 use crate::routing::admin::audit::append_audit_log;
 use crate::routing::organizations;
 use crate::state::{AppState, RealmDirectoryEntry, RealmDirectoryQuery, SessionRecord};
-use crate::wire::{SolandHandleClaim, SolandHandleClaimDeliveryBinding, SolandHandleClaimProof};
 
 /// Snapshot the in-memory realm directory (under a short lock) and return the
 /// owned entries that are not tombstoned. The deleted check is async (it reads
@@ -1287,17 +1288,21 @@ fn remote_handle_resolution(
     Did::new(subject.clone()).map_err(|err| {
         AppError::invalid_param(format!("resolved handle subject DID is invalid: {err}"))
     })?;
-    let binding = SolandHandleClaimDeliveryBinding {
-        recipient_service_did: recipient_service_did.clone(),
-        recipient_service_type: Some("principal_server".to_owned()),
-        binding_source: "explicit".to_owned(),
-        delivery_modes: vec![
-            "events".to_owned(),
-            "sync".to_owned(),
-            "to_device".to_owned(),
-            "push".to_owned(),
-            "key_packages".to_owned(),
-        ],
+    let binding = DeliveryBindingHint {
+        recipient_service_did: Did::new(recipient_service_did.clone()).map_err(|err| {
+            AppError::invalid_param(format!(
+                "resolved handle recipient service DID is invalid: {err}"
+            ))
+        })?,
+        recipient_service_type: RecipientServiceType::PrincipalServer,
+        binding_source: HandleHintBindingSource::Explicit,
+        delivery_modes: BTreeSet::from([
+            DeliveryMode::Events,
+            DeliveryMode::Sync,
+            DeliveryMode::ToDevice,
+            DeliveryMode::Push,
+            DeliveryMode::KeyPackages,
+        ]),
         service_acceptance_ref: None,
         policy_event_ref: None,
     };
@@ -1318,7 +1323,7 @@ fn remote_handle_resolution(
         }),
         audience: Some(audience),
         handle_claim: None,
-        member_delivery_binding: Some(sdk_delivery_binding_from_soland(&binding)?),
+        member_delivery_binding: Some(binding),
         as_of: Some(now()),
         source_refs: Vec::new(),
         policy_revision: None,
@@ -1326,26 +1331,6 @@ fn remote_handle_resolution(
         divergent: false,
         via_services: vec![recipient_service_did],
     })
-}
-
-fn sdk_delivery_binding_from_soland(
-    binding: &SolandHandleClaimDeliveryBinding,
-) -> Result<DeliveryBindingHint, AppError> {
-    serde_json::from_value::<DeliveryBindingHint>(serde_json::to_value(binding).map_err(|err| {
-        AppError::internal(format!("delivery binding serialization failed: {err}"))
-    })?)
-    .map_err(|err| AppError::internal(format!("delivery binding is not SDK-compatible: {err}")))
-}
-
-fn sdk_handle_claim_from_soland(claim: &SolandHandleClaim) -> Result<SdkHandleClaim, AppError> {
-    let value = serde_json::to_value(claim)
-        .map_err(|err| AppError::internal(format!("handle claim serialization failed: {err}")))?;
-    let claim = serde_json::from_value::<SdkHandleClaim>(value)
-        .map_err(|err| AppError::internal(format!("handle claim is not SDK-compatible: {err}")))?;
-    claim
-        .validate()
-        .map_err(|err| AppError::internal(format!("handle claim validation failed: {err}")))?;
-    Ok(claim)
 }
 
 /// Issue a Principal-Server-signed, SDK-validated handle claim for
@@ -1359,8 +1344,10 @@ pub(crate) fn signed_handle_claim_value(
     audience: &str,
 ) -> Result<Value, AppError> {
     let claim = signed_handle_claim(state, handle, did, audience, false)?;
-    let sdk = sdk_handle_claim_from_soland(&claim)?;
-    serde_json::to_value(sdk)
+    claim
+        .validate()
+        .map_err(|err| AppError::internal(format!("handle claim validation failed: {err}")))?;
+    serde_json::to_value(claim)
         .map_err(|err| AppError::internal(format!("handle claim serialization failed: {err}")))
 }
 
@@ -1384,13 +1371,12 @@ fn local_handle_resolution_outcome(
     did: String,
     canonical_handle: String,
     audience: String,
-    handle_claim: SolandHandleClaim,
+    handle_claim: SdkHandleClaim,
 ) -> Result<DirectoryHandleResolutionOutcome, AppError> {
-    let member_delivery_binding = handle_claim
-        .member_delivery_binding
-        .as_ref()
-        .map(sdk_delivery_binding_from_soland)
-        .transpose()?;
+    let member_delivery_binding = handle_claim.member_delivery_binding.clone();
+    handle_claim
+        .validate()
+        .map_err(|err| AppError::internal(format!("handle claim validation failed: {err}")))?;
     Ok(DirectoryHandleResolutionOutcome {
         did: Did::new(did.clone())
             .map_err(|err| AppError::invalid_param(format!("invalid resolved actor DID: {err}")))?,
@@ -1401,7 +1387,7 @@ fn local_handle_resolution_outcome(
             "subject": did,
         }),
         audience: Some(audience),
-        handle_claim: Some(sdk_handle_claim_from_soland(&handle_claim)?),
+        handle_claim: Some(handle_claim),
         member_delivery_binding,
         as_of: Some(now()),
         source_refs: Vec::new(),
@@ -1459,7 +1445,11 @@ async fn resolve_handle(
             // from the freshly signed claim so the top-level response field
             // matches handle-claim.schema.json (cokret-spec @ 7157ee8). The
             // request's `@alice` UI form is normalized away here.
-            let canonical_handle = handle_claim.handle.clone();
+            let canonical_handle = handle_claim
+                .handle
+                .as_ref()
+                .map(|handle| handle.canonical().to_owned())
+                .ok_or_else(|| AppError::internal("signed handle claim is missing handle"))?;
             json_ok(local_handle_resolution_outcome(
                 actor,
                 did,
@@ -1690,10 +1680,7 @@ fn signed_handle_claim(
     did: &str,
     audience: &str,
     cache: bool,
-) -> Result<SolandHandleClaim, AppError> {
-    // HC-SOL-2 (R3.2) — never issue a claim whose `subject` is not a
-    // holder/principal DID (e.g. a `ck:actor:` / `ck:account:` typed id).
-    // Delegates to the SDK rejection rule via the shared wire validator.
+) -> Result<SdkHandleClaim, AppError> {
     if let Err(rejection) =
         crate::wire_validators::handle_claim_subject::validate_subject(&json!({ "subject": did }))
     {
@@ -1713,42 +1700,55 @@ fn signed_handle_claim(
         .next()
         .unwrap_or(handle)
         .to_ascii_lowercase();
-    // HDLREN-1 (cokret-spec @ 7157ee8) — canonical handle wire form is
-    // `<localpart>:<domain>`. The retired `cokret://<domain>/users/<localpart>`
-    // URI is dropped from R3.1 wire; `acct:<local>@<domain>` survives as an
-    // interop alias only.
     let canonical_handle = format!("{localpart}:{service_domain}");
-    let created_at = now();
-    let expires_at = created_at + chrono::Duration::hours(24);
-    let unsigned = json!({
-        "schema": "ck.schema.handle_claim.v1",
-        "handle": canonical_handle,
-        "handle_aliases": [format!("acct:{localpart}@{service_domain}")],
-        "subject": did,
-        "issuer": service_did,
-        "issuer_service_did": service_did,
-        "binding_state": "verified",
-        // HC-SOL-1 (R3.2, cokret-spec @ b56cab1) — `claim_type=service_handle`
-        // is removed from `ck.schema.handle_claim.v1`. The demo directory
-        // issues a user/principal handle claim, so `user_handle` is the
-        // correct class here.
-        "claim_kind": "handle_binding",
-        "visibility": "public",
-        "audience": audience,
-        "member_delivery_binding": {
-            "recipient_service_did": service_did,
-            "recipient_service_type": "principal_server",
-            "binding_source": "explicit",
-            "delivery_modes": ["events", "sync", "to_device", "push", "key_packages"],
-        },
-        "created_at": created_at.to_rfc3339(),
-        "expires_at": expires_at.to_rfc3339(),
-    });
-    let canonical_bytes = canonical::canonical_json_bytes(&unsigned).map_err(|err| {
-        AppError::internal(format!("handle claim canonicalization failed: {err}"))
+    let handle = SdkHandle::parse(&canonical_handle).map_err(|err| {
+        AppError::internal(format!("handle claim handle construction failed: {err}"))
+    })?;
+    let subject = Did::new(did.to_owned()).map_err(|err| {
+        AppError::internal(format!("invalid subject DID for handle claim: {err}"))
     })?;
     let signer_did = Did::new(service_did.clone()).map_err(|err| {
         AppError::internal(format!("invalid service DID for handle claim: {err}"))
+    })?;
+    let created_at = now();
+    let expires_at = created_at + chrono::Duration::hours(24);
+    let member_delivery_binding = DeliveryBindingHint {
+        recipient_service_did: signer_did.clone(),
+        recipient_service_type: RecipientServiceType::PrincipalServer,
+        binding_source: HandleHintBindingSource::Explicit,
+        delivery_modes: BTreeSet::from([
+            DeliveryMode::Events,
+            DeliveryMode::Sync,
+            DeliveryMode::ToDevice,
+            DeliveryMode::Push,
+            DeliveryMode::KeyPackages,
+        ]),
+        service_acceptance_ref: None,
+        policy_event_ref: None,
+    };
+    let mut claim = SdkHandleClaim {
+        schema: cokret_sdk::HANDLE_CLAIM_SCHEMA.to_owned(),
+        handle: Some(handle),
+        handle_aliases: vec![format!("acct:{localpart}@{service_domain}")],
+        subject: Some(subject),
+        issuer: Some(service_did.clone()),
+        issuer_service_did: Some(signer_did.clone()),
+        binding_state: Some(HandleBindingState::Verified),
+        claim_kind: Some(HandleClaimKind::HandleBinding),
+        visibility: Some(HandleVisibility::Public),
+        audience: Some(audience.to_owned()),
+        challenge: None,
+        claim_scope: BTreeMap::new(),
+        member_delivery_binding: Some(member_delivery_binding),
+        claims: Vec::new(),
+        created_at: Some(created_at),
+        expires_at: Some(expires_at),
+        verified_at: None,
+        source_refs: Vec::new(),
+        proofs: Vec::new(),
+    };
+    let canonical_bytes = canonical::canonical_json_bytes(&claim).map_err(|err| {
+        AppError::internal(format!("handle claim canonicalization failed: {err}"))
     })?;
     let signer = Ed25519MoveSigner::new(
         (*state.notary_signing_key()).clone(),
@@ -1757,50 +1757,19 @@ fn signed_handle_claim(
     );
     let signature = MoveSigner::sign_payload(&signer, &canonical_bytes)
         .map_err(|err| AppError::internal(format!("handle claim signing failed: {err}")))?;
-
-    let claim = SolandHandleClaim {
-        schema: "ck.schema.handle_claim.v1".to_owned(),
-        handle: canonical_handle,
-        handle_aliases: vec![format!("acct:{localpart}@{service_domain}")],
-        subject: did.to_owned(),
-        issuer: service_did.clone(),
-        issuer_service_did: Some(service_did.clone()),
-        binding_state: "verified".to_owned(),
-        // HC-SOL-1 — see the unsigned-projection comment above; v1 dropped
-        // `service_handle`.
-        claim_kind: Some("handle_binding".to_owned()),
-        visibility: Some("public".to_owned()),
-        audience: Some(audience.to_owned()),
-        challenge: None,
-        claim_scope: BTreeMap::new(),
-        member_delivery_binding: Some(SolandHandleClaimDeliveryBinding {
-            recipient_service_did: service_did,
-            recipient_service_type: Some("principal_server".to_owned()),
-            binding_source: "explicit".to_owned(),
-            delivery_modes: vec![
-                "events".to_owned(),
-                "sync".to_owned(),
-                "to_device".to_owned(),
-                "push".to_owned(),
-                "key_packages".to_owned(),
-            ],
-            service_acceptance_ref: None,
-            policy_event_ref: None,
-        }),
-        claims: Vec::new(),
-        created_at: created_at.to_rfc3339(),
-        expires_at: Some(expires_at.to_rfc3339()),
-        verified_at: None,
-        source_refs: Vec::new(),
-        proofs: vec![SolandHandleClaimProof {
-            kind: "detached_jws".to_owned(),
-            alg: Some(signature.alg),
-            verification_method: Some(signature.verification_method),
-            payload_digest: Some(signature.payload_digest.as_str().to_owned()),
-            created_at: Some(signature.created_at.to_rfc3339()),
-            jws: Some(signature.jws),
-        }],
-    };
+    claim.proofs.push(PayloadProof {
+        kind: proof_kind::DETACHED_JWS.to_owned(),
+        alg: signature.alg,
+        verification_method: signature.verification_method,
+        payload_digest: signature.payload_digest,
+        created_at: signature.created_at,
+        domain: None,
+        audience: Some(Audience::Single(audience.to_owned())),
+        jws: signature.jws,
+    });
+    claim
+        .validate()
+        .map_err(|err| AppError::internal(format!("handle claim validation failed: {err}")))?;
     if cache && let Ok(envelope) = serde_json::to_value(&claim) {
         let _ = state
             .member_identity

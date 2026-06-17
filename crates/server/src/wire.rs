@@ -1,5 +1,3 @@
-use std::collections::BTreeMap;
-
 use chrono::{DateTime, Utc};
 pub use cokret_sdk::ops_api::HardeningStatus;
 use cokret_sdk::{
@@ -352,80 +350,6 @@ pub struct OutboundPushBridgeCacheInvalidateOutcome {
 pub use cokret_sdk::SyncRequestBody;
 pub use cokret_sdk::models::SyncDescription;
 
-#[derive(Debug, Clone, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub struct SolandHandleClaim {
-    pub schema: String,
-    /// Canonical handle in the spec form `<localpart>:<domain>(:<port>)?`
-    /// (handle-claim.schema.json#/properties/handle, cokret-spec @ 7157ee8).
-    /// The retired `cokret://<domain>/users/<localpart>` URI form is gone
-    /// from R3.1 wire — any `acct:<local>@<domain>` interop form is carried
-    /// separately in [`Self::handle_aliases`], NEVER in this field.
-    pub handle: String,
-    /// Interop aliases normalized to the canonical [`Self::handle`] above.
-    /// Includes `acct:<local>@<domain>` cross-publication. The retired
-    /// `cokret://` URI form MUST NOT appear here.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub handle_aliases: Vec<String>,
-    pub subject: String,
-    pub issuer: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub issuer_service_did: Option<String>,
-    pub binding_state: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub claim_kind: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub visibility: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub audience: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub challenge: Option<String>,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub claim_scope: BTreeMap<String, Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub member_delivery_binding: Option<SolandHandleClaimDeliveryBinding>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub claims: Vec<Value>,
-    // SOL-04-003: field order matches handle-claim.schema.json
-    // (expires_at before created_at).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub expires_at: Option<String>,
-    pub created_at: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub verified_at: Option<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub source_refs: Vec<String>,
-    pub proofs: Vec<SolandHandleClaimProof>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub struct SolandHandleClaimDeliveryBinding {
-    pub recipient_service_did: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub recipient_service_type: Option<String>,
-    pub binding_source: String,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub delivery_modes: Vec<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub service_acceptance_ref: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub policy_event_ref: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub struct SolandHandleClaimProof {
-    pub kind: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub alg: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub verification_method: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub payload_digest: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub created_at: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub jws: Option<String>,
-}
-
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct IndexDescribeOutcome {
     pub service_did: String,
@@ -486,20 +410,6 @@ pub struct IndexSpaceHierarchyOutcome {
     pub spaces: Vec<Value>,
     pub edges: Vec<Value>,
     pub frontier: Value,
-}
-
-/// Spec-shape `ck.self.events.query.frontier` account-client response
-/// (`service-operation-dtos.schema.json#/$defs/EventsFrontierAccountClientState`).
-/// `frontier` is a single object whose shape follows the selector: actor
-/// (`{actor_id, actor_seq, event_id}`) or Realm Seal view (`{realm_id,
-/// seal_id, control_event_set_root, state_root, hlc?}`). The Realm shape is
-/// the registered account-client source for minting a single-leaf Control
-/// Move `seal_basis` / DataEvent `seal_ref` (SPEC-SOL-003 resolution).
-#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct EventsFrontierAccountClientState {
-    pub frontier: Value,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub receipts: Option<Vec<Value>>,
 }
 
 // Snapshot head operations return the full signed `ck.schema.snapshot.v1`
@@ -658,37 +568,6 @@ pub struct SolandAccountRegisterOutcome {
 }
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct SolandAccountUpdateProfileRequestBody {
-    /// Each field updates the corresponding `AccountRecord` slot.
-    /// Send `null` / omit to leave the field unchanged; send `""` to
-    /// explicitly clear it (server stores `None`).
-    #[serde(default)]
-    pub display_name: Option<String>,
-    #[serde(default)]
-    pub bio: Option<String>,
-    #[serde(default)]
-    pub avatar_url: Option<String>,
-}
-
-#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct SolandAccountUpdateProfileOutcome {
-    pub did: String,
-    pub handle: String,
-    pub display_name: Option<String>,
-    pub bio: Option<String>,
-    pub avatar_url: Option<String>,
-}
-
-#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct RealmLifecycleOutcome {
-    pub ok: bool,
-    pub realm_id: String,
-    pub owner: String,
-    pub members: Vec<String>,
-    pub deleted: bool,
-}
-
-#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 pub struct SendMessageRequestBody {
     pub realm_id: String,
     #[serde(default)]
@@ -743,15 +622,6 @@ pub use cokret_sdk::{
 // be verified before being projected into typed outcomes. The SDK carries the
 // authoritative typed forms (`cokret_sdk::models::{RecoveryPolicy,
 // RecoveryReceipt}`) for clients; no soland-private mirror exists.
-
-#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct SolandBlobUploadOutcome {
-    pub blob_ref: String,
-    pub size_bytes: usize,
-    pub media_type: String,
-    pub content_digest: String,
-    pub upload_receipt: Value,
-}
 
 const SUPPORTED_OPERATION_SURFACES: &[&str] = &[
     "service_discovery",
@@ -1404,56 +1274,5 @@ mod tests {
             value["limits"]["resumable_upload_max_bytes"],
             json!(10 * 1024 * 1024)
         );
-    }
-
-    #[test]
-    fn handle_claim_serializes_spec_shape() {
-        let claim = SolandHandleClaim {
-            schema: "ck.schema.handle_claim.v1".to_owned(),
-            handle: "alice:acme.example".to_owned(),
-            handle_aliases: vec!["acct:alice@acme.example".to_owned()],
-            subject: "did:web:alice.example".to_owned(),
-            issuer: "did:web:acme.example".to_owned(),
-            issuer_service_did: Some("did:web:principal.acme.example".to_owned()),
-            binding_state: "verified".to_owned(),
-            claim_kind: Some("organization_handle".to_owned()),
-            visibility: Some("restricted".to_owned()),
-            audience: Some("ck:realm:0196419b-0000-7000-8000-000000000000".to_owned()),
-            challenge: None,
-            claim_scope: BTreeMap::new(),
-            member_delivery_binding: Some(SolandHandleClaimDeliveryBinding {
-                recipient_service_did: "did:web:principal.acme.example".to_owned(),
-                recipient_service_type: Some("principal_server".to_owned()),
-                binding_source: "organization_policy".to_owned(),
-                delivery_modes: vec!["events".to_owned(), "sync".to_owned()],
-                service_acceptance_ref: None,
-                policy_event_ref: None,
-            }),
-            claims: Vec::new(),
-            created_at: "2026-05-19T00:00:00Z".to_owned(),
-            expires_at: Some("2026-08-19T00:00:00Z".to_owned()),
-            verified_at: None,
-            source_refs: Vec::new(),
-            proofs: vec![SolandHandleClaimProof {
-                kind: "detached_jws".to_owned(),
-                alg: Some("EdDSA".to_owned()),
-                verification_method: Some("did:web:acme.example#key-1".to_owned()),
-                payload_digest: Some(
-                    "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-                        .to_owned(),
-                ),
-                created_at: Some("2026-05-19T00:00:00Z".to_owned()),
-                jws: Some("aaa.bbb.ccc".to_owned()),
-            }],
-        };
-
-        let value = serde_json::to_value(claim).expect("handle claim serializes");
-        assert_eq!(value["schema"], "ck.schema.handle_claim.v1");
-        assert_eq!(
-            value["member_delivery_binding"]["recipient_service_did"],
-            "did:web:principal.acme.example"
-        );
-        assert!(value.get("claim_scope").is_none());
-        assert!(value.get("challenge").is_none());
     }
 }

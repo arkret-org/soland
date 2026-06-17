@@ -23,8 +23,9 @@ use cokret_sdk::http::{
     EventsSubmitOutcome, EventsSubmitStatus,
 };
 use cokret_sdk::{
-    Audience, Event, EventId, EventRef, EventsSubmitFederationRequestBody, Hash, Hlc, Operation,
-    OperationId, Proof, RealmId, TypedTrustDomainId, canonical, proof_kind,
+    ActorFrontierView, Audience, Did, Event, EventId, EventRef, EventsFrontierAccountClientState,
+    EventsFrontierView, EventsSubmitFederationRequestBody, Hash, Hlc, Operation, OperationId,
+    Proof, RealmId, RealmSealFrontierView, TypedTrustDomainId, canonical, proof_kind,
 };
 use ed25519_dalek::Verifier as _;
 use salvo::http::StatusCode;
@@ -46,7 +47,7 @@ use crate::routing::organizations;
 use crate::routing::policy_gate::{self, PolicyGateSurface};
 use crate::routing::system::extract::AuthArgs;
 use crate::state::{AppState, CanonicalEventRecord, SessionRecord};
-use crate::wire::{EventsFrontierAccountClientState, describe};
+use crate::wire::describe;
 use crate::{artifacts, kinds};
 
 pub(super) fn router() -> Router {
@@ -480,14 +481,14 @@ async fn events_frontier(
             ));
         };
         return crate::result::json_ok(EventsFrontierAccountClientState {
-            frontier: json!({
-                "realm_id": realm_id.as_str(),
-                "seal_id": seal.id.as_str(),
-                "control_event_set_root": seal.control_event_set_root.as_str(),
-                "state_root": seal.state_root.as_str(),
-                "hlc": seal.hlc.as_str(),
+            frontier: EventsFrontierView::RealmSealView(RealmSealFrontierView {
+                realm_id,
+                seal_id: seal.id,
+                control_event_set_root: seal.control_event_set_root,
+                state_root: seal.state_root,
+                hlc: Some(seal.hlc),
             }),
-            receipts: None,
+            receipts: Vec::new(),
         });
     }
 
@@ -517,13 +518,17 @@ async fn events_frontier(
         // private DIDs must not leak through the frontier surface.
         return Err(AppError::not_found("no visible events for actor"));
     };
+    let actor_id =
+        Did::new(actor).map_err(|_| AppError::invalid_param("actor_id must be a valid DID"))?;
+    let event_id =
+        EventId::new(event_id).map_err(|_| AppError::internal("stored event_id is invalid"))?;
     crate::result::json_ok(EventsFrontierAccountClientState {
-        frontier: json!({
-            "actor_id": actor,
-            "actor_seq": actor_seq,
-            "event_id": event_id,
+        frontier: EventsFrontierView::Actor(ActorFrontierView {
+            actor_id,
+            actor_seq,
+            event_id,
         }),
-        receipts: None,
+        receipts: Vec::new(),
     })
 }
 

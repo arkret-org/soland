@@ -26,8 +26,9 @@ use cokret_sdk::http::{
 // `model` path to avoid binding the wrong same-named re-export.
 use cokret_sdk::models::InviteReceivePolicy;
 use cokret_sdk::{
-    AccountDeviceSummary, AccountRegisterOutcome, AccountRegisterRequestBody, AccountView,
-    DeviceId, Did, ErrorCode, EventId, RealmId, StrandId,
+    ACTOR_PROFILE_SCHEMA, AccountDeviceSummary, AccountRegisterOutcome, AccountRegisterRequestBody,
+    AccountUpdateProfileOutcome, AccountUpdateProfileRequestBody, AccountView, ActorKind,
+    ActorProfile, ActorProfileId, BlobRef, DeviceId, Did, ErrorCode, EventId, RealmId, StrandId,
 };
 use ed25519_dalek::Signer as _;
 use salvo::http::StatusCode;
@@ -49,10 +50,7 @@ use crate::state::{
     AccountLifecycleRecord, AccountRecord, AppState, ContactRecord, DeviceInventoryRecord,
     DirectConversationBindingRecord,
 };
-use crate::wire::{
-    SolandAccountRegisterOutcome, SolandAccountUpdateProfileOutcome,
-    SolandAccountUpdateProfileRequestBody,
-};
+use crate::wire::SolandAccountRegisterOutcome;
 
 pub(crate) fn record_handle_release(state: &AppState, localpart: &str) {
     let mut releases = state.handle_releases.lock().expect("handle_releases lock");
@@ -339,18 +337,18 @@ async fn gate_account_register(
 }
 
 #[endpoint(
-    operation_id = "org.cokret.soland.account.update_profile",
+    operation_id = "ck.self.account.command.update_profile",
     tags("account"),
-    summary = "Update the authenticated principal's profile fields (display_name, bio, avatar_url)",
+    summary = "Update the authenticated principal's actor profile fields",
     status_codes(200, 400, 401, 404, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.account.update_profile"))]
+#[tracing::instrument(skip_all, fields(op = "ck.self.account.command.update_profile"))]
 async fn update_profile(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
-    body: JsonBody<SolandAccountUpdateProfileRequestBody>,
-) -> JsonResult<SolandAccountUpdateProfileOutcome> {
+    body: JsonBody<AccountUpdateProfileRequestBody>,
+) -> JsonResult<AccountUpdateProfileOutcome> {
     // Spec: discovery/profiles-presence.md §2 — actor profile updates
     // fan out through the directory's actor projection. We store the
     // updates on the `AccountRecord` directly; `demo_actors()` reads
@@ -364,14 +362,18 @@ async fn update_profile(
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
         .ok_or_else(|| AppError::not_found("account not found"))?;
-    if let Some(value) = body.display_name {
-        current.display_name = empty_to_none(value);
+    let patch = body.patch;
+    if !patch.is_object() {
+        return Err(AppError::invalid_param("profile patch must be an object"));
     }
-    if let Some(value) = body.bio {
-        current.bio = empty_to_none(value);
+    if let Some(value) = patch_string(&patch, "display_name")? {
+        current.display_name = value.and_then(empty_to_none);
     }
-    if let Some(value) = body.avatar_url {
-        let normalized = empty_to_none(value);
+    if let Some(value) = patch_string(&patch, "profile_fields.bio")? {
+        current.bio = value.and_then(empty_to_none);
+    }
+    if let Some(value) = patch_string(&patch, "profile_fields.avatar_url")? {
+        let normalized = value.and_then(empty_to_none);
         if let Some(url) = &normalized
             && !(url.starts_with("https://") || url.starts_with("http://"))
         {
@@ -382,6 +384,7 @@ async fn update_profile(
         }
         current.avatar_url = normalized;
     }
+    let avatar_blob_ref = patch_blob_ref(&patch, "avatar_blob_ref")?;
     accounts_store
         .put(&current)
         .await
@@ -398,12 +401,8 @@ async fn update_profile(
         "accepted",
     )
     .await;
-    json_ok(SolandAccountUpdateProfileOutcome {
-        did: current.did.clone(),
-        handle: current.handle(),
-        display_name: current.display_name,
-        bio: current.bio,
-        avatar_url: current.avatar_url,
+    json_ok(AccountUpdateProfileOutcome {
+        profile: actor_profile_from_account(&current, avatar_blob_ref.flatten(), Some(now()))?,
     })
 }
 
@@ -414,6 +413,96 @@ fn empty_to_none(value: String) -> Option<String> {
     } else {
         Some(trimmed.to_owned())
     }
+}
+
+fn patch_value<'a>(patch: &'a Value, field: &str) -> Result<Option<Option<&'a Value>>, AppError> {
+    let Some(value) = patch.get(field) else {
+        return Ok(None);
+    };
+    let Some(object) = value.as_object() else {
+        return Ok(Some(Some(value)));
+    };
+    let Some(op) = object.get("$op").and_then(Value::as_str) else {
+        return Ok(Some(Some(value)));
+    };
+    match op {
+        "set" => Ok(Some(Some(object.get("value").ok_or_else(|| {
+            AppError::invalid_param(format!(
+                "profile patch {field} set operation requires value"
+            ))
+        })?))),
+        "unset" => Ok(Some(None)),
+        "add" | "remove" => Err(AppError::invalid_param(format!(
+            "profile patch {field} does not support {op}"
+        ))),
+        _ => Err(AppError::invalid_param(format!(
+            "profile patch {field} has unsupported operation"
+        ))),
+    }
+}
+
+fn patch_string(patch: &Value, field: &str) -> Result<Option<Option<String>>, AppError> {
+    patch_value(patch, field)?
+        .map(|value| match value {
+            None | Some(Value::Null) => Ok(None),
+            Some(Value::String(value)) => Ok(Some(value.clone())),
+            Some(_) => Err(AppError::invalid_param(format!(
+                "profile patch {field} must be a string"
+            ))),
+        })
+        .transpose()
+}
+
+fn patch_blob_ref(patch: &Value, field: &str) -> Result<Option<Option<BlobRef>>, AppError> {
+    patch_value(patch, field)?
+        .map(|value| match value {
+            None | Some(Value::Null) => Ok(None),
+            Some(Value::String(value)) => BlobRef::new(value.clone())
+                .map(Some)
+                .map_err(|_| AppError::invalid_param(format!("profile patch {field} is invalid"))),
+            Some(_) => Err(AppError::invalid_param(format!(
+                "profile patch {field} must be a blob ref string"
+            ))),
+        })
+        .transpose()
+}
+
+fn actor_profile_from_account(
+    account: &AccountRecord,
+    avatar_blob_ref: Option<BlobRef>,
+    updated_at: Option<chrono::DateTime<chrono::Utc>>,
+) -> Result<ActorProfile, AppError> {
+    let principal_id = Did::new(account.did.clone())
+        .map_err(|error| AppError::internal(format!("stored account DID is invalid: {error}")))?;
+    let mut profile_fields = BTreeMap::new();
+    if let Some(bio) = account.bio.clone() {
+        profile_fields.insert("bio".to_owned(), Value::String(bio));
+    }
+    if let Some(avatar_url) = account.avatar_url.clone() {
+        profile_fields.insert("avatar_url".to_owned(), Value::String(avatar_url));
+    }
+    let id = ActorProfileId::new(cokret_sdk::new_prefixed_uuid7("ck:actor_profile:")).map_err(
+        |error| AppError::internal(format!("actor profile id construction failed: {error}")),
+    )?;
+    Ok(ActorProfile {
+        id,
+        schema: ACTOR_PROFILE_SCHEMA.to_owned(),
+        realm_id: None,
+        principal_id: principal_id.clone(),
+        actor_kind: ActorKind::User,
+        display_name: account
+            .display_name
+            .clone()
+            .unwrap_or_else(|| account.localpart.clone()),
+        handle: Some(account.handle()),
+        avatar_blob_ref,
+        status: None,
+        accountable_principal_ids: Vec::new(),
+        profile_fields,
+        created_at: account.created_at,
+        updated_by: Some(principal_id),
+        updated_at,
+    })
 }
 
 #[endpoint(

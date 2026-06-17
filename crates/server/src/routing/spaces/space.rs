@@ -12,7 +12,9 @@
 //! write in this Realm?".
 
 use chrono::{DateTime, Utc};
-use cokret_sdk::{Did, RealmId, RealmModerationPolicyReplaceRequestBody, SpaceId};
+use cokret_sdk::{
+    Did, RealmId, RealmLifecycleView, RealmModerationPolicyReplaceRequestBody, SpaceId,
+};
 use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
 use serde::Serialize;
@@ -23,7 +25,7 @@ use crate::error::AppError;
 use crate::reducer::CHILD_ORDER_CELL_FAMILY;
 use crate::routing::organizations;
 use crate::state::{AppState, RealmDirectoryEntry, SessionRecord};
-use crate::wire::{RealmLifecycleOutcome, now};
+use crate::wire::now;
 use crate::{JsonResult, json_ok};
 
 /// Spec `realm_read` operation group (`ck.self.realm.*`): Realm lifecycle read,
@@ -105,7 +107,7 @@ async fn get_realm(
     depot: &mut Depot,
     req: &mut Request,
     realm_id: PathParam<String>,
-) -> JsonResult<RealmLifecycleOutcome> {
+) -> JsonResult<RealmLifecycleView> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let _session = aa.authenticated_session(state, req).await?;
     let realm_id = realm_id.into_inner();
@@ -315,16 +317,16 @@ fn validate_child_order_subject(space_id: &str) -> Result<(), AppError> {
 pub async fn realm_lifecycle_response(
     state: &AppState,
     realm_id: &str,
-) -> Result<RealmLifecycleOutcome, AppError> {
+) -> Result<RealmLifecycleView, AppError> {
     let realm_id_value = RealmId::new(realm_id.to_owned())
         .map_err(|_| AppError::invalid_param("invalid realm_id"))?;
     // Snapshot the member list off the realms lock before the async meta read
     // (the guard is not Send and must not cross the `.await`).
-    let members: Vec<String> = {
+    let members: Vec<Did> = {
         let realms = state.realms.lock().expect("realms lock");
         realms
             .get(&realm_id_value)
-            .map(|realm| realm.members.iter().map(ToString::to_string).collect())
+            .map(|realm| realm.members.iter().cloned().collect())
             .unwrap_or_default()
     };
     let record = state
@@ -334,10 +336,13 @@ pub async fn realm_lifecycle_response(
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
         .ok_or_else(|| AppError::not_found("not found"))?;
-    Ok(RealmLifecycleOutcome {
+    let owner = Did::new(record.owner.clone()).map_err(|error| {
+        AppError::internal(format!("stored realm owner DID is invalid: {error}"))
+    })?;
+    Ok(RealmLifecycleView {
         ok: true,
-        realm_id: realm_id.to_owned(),
-        owner: record.owner.clone(),
+        realm_id: realm_id_value,
+        owner,
         members,
         deleted: record.deleted,
     })

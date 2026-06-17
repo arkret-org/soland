@@ -13,7 +13,10 @@
 
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use cokret_sdk::{BlobPresignOutcome, BlobPresignRequestBody, RealmId};
+use cokret_sdk::{
+    BlobPresignOutcome, BlobPresignRequestBody, BlobRef, BlobUploadOutcome, Did, Hash, RealmId,
+    SignatureValue, UploadReceipt, canonical,
+};
 use ed25519_dalek::Signer;
 use salvo::http::{Method, StatusCode};
 use salvo::oapi::extract::JsonBody;
@@ -35,6 +38,53 @@ pub(super) fn router() -> Router {
         .push(Router::with_path("blob/upload").post(blob_upload))
         .push(Router::with_path("blob/presign").post(blob_presign))
         .push(Router::with_path("blob/get").get(blob_get).head(blob_get))
+}
+
+pub(super) fn blob_upload_outcome(
+    state: &AppState,
+    blob_ref: String,
+    size_bytes: u64,
+    media_type: String,
+    content_digest: String,
+    received_at: chrono::DateTime<chrono::Utc>,
+) -> Result<BlobUploadOutcome, AppError> {
+    let blob_ref = BlobRef::new(blob_ref)
+        .map_err(|error| AppError::internal(format!("blob_ref construction failed: {error}")))?;
+    let content_digest = Hash::new(content_digest).map_err(|error| {
+        AppError::internal(format!("content_digest construction failed: {error}"))
+    })?;
+    let issuer_service_did = Did::new(state.config.service_did.clone())
+        .map_err(|error| AppError::internal(format!("service DID is invalid: {error}")))?;
+    let signing_payload = json!({
+        "blob_ref": blob_ref.as_str(),
+        "content_digest": content_digest.as_str(),
+        "size_bytes": size_bytes,
+        "received_at": received_at,
+        "issuer_service_did": issuer_service_did.as_str(),
+    });
+    let canonical_bytes = canonical::canonical_json_bytes(&signing_payload).map_err(|error| {
+        AppError::internal(format!("upload receipt canonicalization failed: {error}"))
+    })?;
+    let signature = state.notary_signing_key().sign(&canonical_bytes);
+    let upload_receipt = UploadReceipt {
+        blob_ref: blob_ref.clone(),
+        content_digest: content_digest.clone(),
+        size_bytes,
+        received_at,
+        issuer_service_did: issuer_service_did.clone(),
+        signature: SignatureValue {
+            kid: issuer_service_did,
+            alg: "EdDSA".to_owned(),
+            sig: URL_SAFE_NO_PAD.encode(signature.to_bytes()),
+        },
+    };
+    Ok(BlobUploadOutcome {
+        blob_ref,
+        size_bytes,
+        media_type: Some(media_type),
+        content_digest,
+        upload_receipt: Some(upload_receipt),
+    })
 }
 
 #[endpoint]
@@ -233,6 +283,7 @@ async fn blob_upload(depot: &mut Depot, req: &mut Request, res: &mut Response) {
         );
         return;
     }
+    let received_at = now();
     let record = BlobRecord {
         sha256: sha256.clone(),
         size_bytes: size as i64,
@@ -243,7 +294,7 @@ async fn blob_upload(depot: &mut Depot, req: &mut Request, res: &mut Response) {
         realm_id: realm_id.clone(),
         encryption: encryption.clone(),
         uploaded_by: session.actor,
-        created_at: now(),
+        created_at: received_at,
     };
     if let Err(error) = state.persistence.blobs().put(&blob_ref, &record).await {
         tracing::error!(%error, "failed to persist blob");
@@ -258,27 +309,26 @@ async fn blob_upload(depot: &mut Depot, req: &mut Request, res: &mut Response) {
         );
         return;
     }
-    let mut upload_receipt = json!({
-        "service_did": state.config.service_did.clone(),
-        "created_at": now(),
-        "encrypted_attachment": encryption,
-        "encrypted": encrypted,
-        "realm_id": realm_id,
-        "content_digest": content_digest.clone(),
-    });
-    if let Some(purpose) = upload_purpose {
-        upload_receipt["purpose"] = json!(purpose);
-    }
-    if !encrypted && let Some(filename) = filename {
-        upload_receipt["filename"] = json!(filename);
-    }
-    res.render(Json(crate::wire::SolandBlobUploadOutcome {
+    let outcome = match blob_upload_outcome(
+        state,
         blob_ref,
-        size_bytes: size,
+        size as u64,
         media_type,
         content_digest,
-        upload_receipt,
-    }));
+        received_at,
+    ) {
+        Ok(outcome) => outcome,
+        Err(error) => {
+            render_error(
+                res,
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                &error.to_string(),
+            );
+            return;
+        }
+    };
+    res.render(Json(outcome));
 }
 
 #[endpoint]

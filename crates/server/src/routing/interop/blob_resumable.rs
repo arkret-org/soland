@@ -23,7 +23,7 @@
 //! - `PATCH   /{id}`          — append a chunk at `Upload-Offset`
 //! - `DELETE  /{id}`          — terminate an in-progress upload
 //! - `POST    /{id}/finalize` — cokret extension: validate + ingest the completed bytes into the
-//!   blob store, returns `SolandBlobUploadOutcome`
+//!   blob store, returns `BlobUploadOutcome`
 //!
 //! Upload-Metadata keys understood at finalize time: `purpose`, `encrypted`
 //! (`"true"`/`"false"`), `realm_id`, `content_digest` (`sha256:<hex>`
@@ -41,11 +41,11 @@ use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use salvo::http::{HeaderValue, StatusCode};
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use super::blob::{
-    MAX_BLOB_UPLOAD_BYTES, enforce_blob_quota, file_transfer_blob_encryption_metadata,
-    is_valid_blob_purpose,
+    MAX_BLOB_UPLOAD_BYTES, blob_upload_outcome, enforce_blob_quota,
+    file_transfer_blob_encryption_metadata, is_valid_blob_purpose,
 };
 use super::{
     auth_or_render, is_valid_sha256_digest, now, realm_allows_plaintext_service, realm_has_member,
@@ -858,6 +858,7 @@ async fn resumable_finalize(depot: &mut Depot, req: &mut Request, res: &mut Resp
         );
         return;
     }
+    let received_at = now();
     let record = BlobRecord {
         sha256: sha256.clone(),
         size_bytes: size_bytes as i64,
@@ -868,7 +869,7 @@ async fn resumable_finalize(depot: &mut Depot, req: &mut Request, res: &mut Resp
         realm_id: realm_id.clone(),
         encryption: encryption.clone(),
         uploaded_by: session.actor.clone(),
-        created_at: now(),
+        created_at: received_at,
     };
     if let Err(error) = state.persistence.blobs().put(&blob_ref, &record).await {
         tracing::error!(%error, "failed to persist blob");
@@ -888,25 +889,26 @@ async fn resumable_finalize(depot: &mut Depot, req: &mut Request, res: &mut Resp
     // collects leftovers).
     remove_staged(dir, &id).await;
     release_upload_lock(&id);
-    let mut upload_receipt = json!({
-        "service_did": state.config.service_did.clone(),
-        "created_at": now(),
-        "encrypted_attachment": encryption,
-        "encrypted": encrypted,
-        "realm_id": realm_id,
-        "content_digest": content_digest.clone(),
-        "upload_binding": "tus",
-    });
-    if let Some(purpose) = purpose {
-        upload_receipt["purpose"] = json!(purpose);
-    }
-    res.render(Json(crate::wire::SolandBlobUploadOutcome {
+    let outcome = match blob_upload_outcome(
+        state,
         blob_ref,
-        size_bytes,
+        size_bytes as u64,
         media_type,
         content_digest,
-        upload_receipt,
-    }));
+        received_at,
+    ) {
+        Ok(outcome) => outcome,
+        Err(error) => {
+            render_error(
+                res,
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                &error.to_string(),
+            );
+            return;
+        }
+    };
+    res.render(Json(outcome));
 }
 
 /// Background sweeper for expired incomplete resumable upload parts.
