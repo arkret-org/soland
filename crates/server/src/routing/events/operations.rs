@@ -33,7 +33,6 @@ use crate::kinds;
 use crate::routing::interop::participant_binding;
 use crate::state::AppState;
 
-const CK_CROSS_SIGNING_RESET: &str = "ck.cross_signing.reset";
 const CROSS_SIGNING_RESET_MAX_CLOCK_SKEW_SECONDS: i64 = 300;
 const CONTENT_ENCRYPTION_FLOOR_VIOLATION: &str = "content_encryption_floor_violation";
 const REALM_ENCRYPTION_PROFILE_CREATE_LOCKED: &str = "realm_encryption_profile_create_locked";
@@ -175,7 +174,7 @@ fn validate_typed_payload_shapes(kind: &str, operation: &Operation) -> Result<()
         // by returning Ok when the payload doesn't even resemble a
         // consent revoke (missing consent_id) — the per-kind schema
         // dispatcher will catch totally-empty payloads separately.
-        "ck.consent.revoke" => {
+        kinds::CK_CONSENT_REVOKE => {
             if operation.payload.get("consent_id").is_none()
                 && operation.payload.get("observed_dots").is_none()
             {
@@ -192,7 +191,7 @@ fn validate_typed_payload_shapes(kind: &str, operation: &Operation) -> Result<()
         // and new_generation == current_generation + 1. We enforce
         // schema shape here; the actual CAS comparison happens during
         // reducer apply once the cell row is read.
-        "ck.cross_signing.publish" => {
+        kinds::CK_CROSS_SIGNING_PUBLISH => {
             if operation
                 .payload
                 .get("expected_previous_generation")
@@ -585,11 +584,11 @@ pub fn operation_schema_for_kind(kind: &str) -> Option<OperationPayloadSchema> {
             requirements: PIN_REORDER_REQUIREMENTS,
             validate: Some(validate_operation_payload_against_sdk_artifact),
         },
-        "ck.consent.grant" => OperationPayloadSchema {
+        kinds::CK_CONSENT_GRANT => OperationPayloadSchema {
             requirements: CONSENT_GRANT_REQUIREMENTS,
             validate: None,
         },
-        "ck.consent.revoke" => OperationPayloadSchema {
+        kinds::CK_CONSENT_REVOKE => OperationPayloadSchema {
             requirements: CONSENT_REVOKE_REQUIREMENTS,
             validate: Some(validate_observed_dots_payload),
         },
@@ -828,7 +827,7 @@ pub fn operation_schema_for_kind(kind: &str) -> Option<OperationPayloadSchema> {
             requirements: AGENT_ACTION_REJECT_REQUIREMENTS,
             validate: None,
         },
-        CK_CROSS_SIGNING_RESET => OperationPayloadSchema {
+        kinds::CK_CROSS_SIGNING_RESET => OperationPayloadSchema {
             requirements: CROSS_SIGNING_RESET_REQUIREMENTS,
             validate: Some(validate_cross_signing_reset_payload),
         },
@@ -841,7 +840,7 @@ pub fn operation_schema_for_kind(kind: &str) -> Option<OperationPayloadSchema> {
         // client falsely shows the "existing device approval" gate). The binding
         // itself is already verified at ingest
         // (`validate_device_authorize_binding`), so no extra payload validator.
-        "ck.device.authorize" => OperationPayloadSchema {
+        kinds::CK_DEVICE_AUTHORIZE => OperationPayloadSchema {
             requirements: DEVICE_AUTHORIZE_REQUIREMENTS,
             validate: None,
         },
@@ -1360,7 +1359,7 @@ fn validate_cross_signing_reset_payload(operation: &Operation) -> Result<(), &'s
 fn validate_cross_signing_reset_replay_batch(operations: &[Operation]) -> Result<(), &'static str> {
     let mut seen = std::collections::BTreeSet::new();
     for operation in operations {
-        if kinds::canonical_kind_for_operation(operation) != Some(CK_CROSS_SIGNING_RESET) {
+        if kinds::canonical_kind_for_operation(operation) != Some(kinds::CK_CROSS_SIGNING_RESET) {
             continue;
         }
         let Some(principal_id) = operation

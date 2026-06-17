@@ -1517,7 +1517,7 @@ async fn project_accepted_operations_inner(
         // `keys/query` signing-key directory resolves devices that were
         // authorized but never opened a session (previously the key only
         // landed via the session-grant exchange path).
-        if kinds::canonical_kind_string(operation) == "ck.device.authorize" {
+        if kinds::canonical_kind_string(operation) == kinds::CK_DEVICE_AUTHORIZE {
             project_device_authorize(state, &operation.payload).await;
         }
         // Also apply to the deterministic reducer.
