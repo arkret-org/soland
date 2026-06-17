@@ -58,6 +58,83 @@ pub(crate) fn record_handle_release(state: &AppState, localpart: &str) {
     let mut releases = state.handle_releases.lock().expect("handle_releases lock");
     releases.insert(localpart.to_owned(), chrono::Utc::now());
 }
+
+/// This Principal Server's handle domain, derived from its `did:web:` service
+/// DID (`did:web:local.host` -> `local.host`). Mirrors the derivation used by
+/// `directory::signed_handle_claim`.
+fn principal_handle_domain(state: &AppState) -> String {
+    state
+        .config
+        .service_did
+        .strip_prefix("did:web:")
+        .map(|value| value.replace(':', "."))
+        .unwrap_or_else(|| "soland.local".to_owned())
+}
+
+/// Resolve the durable account localpart from a canonical registration handle
+/// (`<localpart>:<domain>`). The Principal Server only issues handle bindings
+/// for its own domain (identity-handles.md §3.7.1); a foreign domain or an
+/// already-taken localpart is rejected. The signed handle claim itself is
+/// re-derived on demand from this localpart, so nothing else is persisted.
+async fn resolve_registration_localpart(
+    state: &AppState,
+    handle: &str,
+) -> Result<String, AppError> {
+    let (localpart, domain) = handle
+        .split_once(':')
+        .ok_or_else(|| AppError::invalid_param("handle must be canonical <localpart>:<domain>"))?;
+    let service_domain = principal_handle_domain(state);
+    if domain != service_domain {
+        return Err(AppError::invalid_param(format!(
+            "handle domain `{domain}` is not served by this principal server (`{service_domain}`)"
+        )));
+    }
+    let localpart = normalize_localpart(localpart);
+    if localpart.is_empty() {
+        return Err(AppError::invalid_param(
+            "handle localpart must not be empty",
+        ));
+    }
+    let taken = state
+        .persistence
+        .accounts()
+        .list()
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?
+        .into_iter()
+        .any(|account| account.localpart == localpart);
+    if taken {
+        return Err(AppError::new(
+            crate::error::ErrorCode::DuplicateConflict,
+            format!("handle localpart `{localpart}` is already taken"),
+        ));
+    }
+    Ok(localpart)
+}
+
+/// The account's Principal-Server-signed primary handle claim, re-derived on
+/// demand from the durable localpart (identity-handles.md §3.7.1). `None` when
+/// the account still carries the synthetic DID-derived bootstrap localpart
+/// (no real handle registered), so the client renders "not published".
+fn account_primary_handle_claim(state: &AppState, account: &AccountRecord) -> Option<Value> {
+    let synthetic = normalize_localpart(&handle_for_did(&account.did));
+    if account.localpart == synthetic {
+        return None;
+    }
+    let audience = state.config.service_did.as_str().to_owned();
+    match crate::routing::spaces::directory::signed_handle_claim_value(
+        state,
+        &account.handle(),
+        &account.did,
+        &audience,
+    ) {
+        Ok(value) => Some(value),
+        Err(error) => {
+            tracing::warn!(%error, did = %account.did, "failed to derive primary handle claim");
+            None
+        }
+    }
+}
 use crate::{JsonResult, json_ok};
 
 mod social;
@@ -132,11 +209,12 @@ async fn account_viewer(
     let principal_id = Did::new(account.did.clone())
         .map_err(|error| AppError::internal(format!("stored account DID is invalid: {error}")))?;
 
+    let primary_handle_claim = account_primary_handle_claim(state, &account);
     json_ok(AccountView {
         principal_id,
         state: state.account_lifecycle_state(&account.did),
         devices,
-        primary_handle_claim: None,
+        primary_handle_claim,
         primary_handle_claim_ref: None,
         handle_claim_digests: Vec::new(),
         profile: None,
@@ -182,11 +260,14 @@ async fn gate_account_register(
             "account already exists",
         ));
     }
-    let synthetic_handle = handle_for_did(&did);
+    let localpart = match body.handle.as_deref() {
+        Some(handle) => resolve_registration_localpart(state, handle).await?,
+        None => normalize_localpart(&handle_for_did(&did)),
+    };
     let account = AccountRecord {
         id: crate::ids::generate_account_id(),
         did: did.clone(),
-        localpart: normalize_localpart(&synthetic_handle),
+        localpart,
         display_name: body.display_name.clone(),
         bio: None,
         avatar_url: None,
@@ -245,11 +326,12 @@ async fn gate_account_register(
     )
     .await;
     let devices = account_device_summaries(state, &did).await?;
+    let primary_handle_claim = account_primary_handle_claim(state, &account);
     json_ok(AccountRegisterOutcome {
         principal_id: body.principal_id,
         state: state.account_lifecycle_state(&did),
         devices,
-        primary_handle_claim: None,
+        primary_handle_claim,
         primary_handle_claim_ref: None,
         handle_claim_digests: Vec::new(),
         profile: None,

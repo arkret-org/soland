@@ -1348,6 +1348,22 @@ fn sdk_handle_claim_from_soland(claim: &SolandHandleClaim) -> Result<SdkHandleCl
     Ok(claim)
 }
 
+/// Issue a Principal-Server-signed, SDK-validated handle claim for
+/// `handle` → `did` as a JSON value. Used by the account viewer / register
+/// outcome to expose the primary handle claim re-derived on demand from the
+/// account's durable localpart (the claim itself is never persisted).
+pub(crate) fn signed_handle_claim_value(
+    state: &AppState,
+    handle: &str,
+    did: &str,
+    audience: &str,
+) -> Result<Value, AppError> {
+    let claim = signed_handle_claim(state, handle, did, audience, false)?;
+    let sdk = sdk_handle_claim_from_soland(&claim)?;
+    serde_json::to_value(sdk)
+        .map_err(|err| AppError::internal(format!("handle claim serialization failed: {err}")))
+}
+
 fn resolve_handle_audience(
     body: &DirectoryResolveHandleRequestBody,
     default_audience: &str,
