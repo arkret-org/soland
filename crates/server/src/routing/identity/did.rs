@@ -176,6 +176,13 @@ pub struct EmbeddedWebvhRegisterRequestBody {
     pub version_time: Option<String>,
     #[serde(default)]
     pub proof: Option<Value>,
+    /// DID (`did:key:z…`) of the device enrollment authority the registering
+    /// client designates in the inception document via a
+    /// `CokretDeviceEnrollmentAuthority` service entry (decision 0002 / D1).
+    /// When present it MUST be reflected in the reconstructed document so the
+    /// SCID + log proof verify; absent for callers that designate no authority.
+    #[serde(default)]
+    pub device_enrollment_authority_did: Option<String>,
 }
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
@@ -300,6 +307,7 @@ pub(super) async fn embedded_webvh_register(
         body.did_public_key_multibase.as_str(),
         &body.also_known_as,
         service_endpoint.as_str(),
+        body.device_enrollment_authority_did.as_deref(),
     );
     let entry_skeleton = json!({
         "versionId": format!("0-{WEBVH_SCID_PLACEHOLDER}"),
@@ -1122,7 +1130,26 @@ fn embedded_webvh_document_value(
     did_public_key_multibase: &str,
     also_known_as: &[String],
     service_endpoint: &str,
+    enrollment_authority_did: Option<&str>,
 ) -> Value {
+    // The service array order + entry shape MUST match the registering client's
+    // document byte-for-byte (canonical JSON does not sort array elements), or
+    // the SCID / entry hash / log proof recomputed here will not verify. coauth's
+    // embedded_webvh provider (coauth services/soland_webvh.rs) appends the
+    // CokretDeviceEnrollmentAuthority service after CokretPrincipalServer when it
+    // designates an enrollment authority; mirror that exactly.
+    let mut service = vec![json!({
+        "id": format!("{did}#soland"),
+        "type": "CokretPrincipalServer",
+        "serviceEndpoint": service_endpoint,
+    })];
+    if let Some(authority_did) = enrollment_authority_did {
+        service.push(json!({
+            "id": format!("{did}#enrollment-authority"),
+            "type": "CokretDeviceEnrollmentAuthority",
+            "serviceEndpoint": authority_did,
+        }));
+    }
     json!({
         "@context": ["https://www.w3.org/ns/did/v1"],
         "id": did,
@@ -1135,11 +1162,7 @@ fn embedded_webvh_document_value(
         "authentication": [did_key_id],
         "assertionMethod": [did_key_id],
         "alsoKnownAs": also_known_as,
-        "service": [{
-            "id": format!("{did}#soland"),
-            "type": "CokretPrincipalServer",
-            "serviceEndpoint": service_endpoint,
-        }],
+        "service": service,
     })
 }
 
