@@ -411,6 +411,7 @@ fn events_submit_status_label(status: EventsSubmitStatus) -> &'static str {
         EventsSubmitStatus::Accepted => "accepted",
         EventsSubmitStatus::Duplicate => "duplicate",
         EventsSubmitStatus::Partial => "partial",
+        EventsSubmitStatus::HistoricalOnly => "historical_only",
     }
 }
 

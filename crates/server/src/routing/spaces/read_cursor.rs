@@ -134,6 +134,15 @@ pub(super) async fn get_read_cursors(
 }
 
 fn validate_read_scope(scope: &ReadScope) -> Result<(), AppError> {
+    // A read cursor supports only the realm/circle/space/strand/thread subset of
+    // the shared read-scope discriminator family (read-cursor.schema.json §2.2).
+    // view/message/morph are receipt-only and MUST be rejected here so Circle and
+    // Space read isolation can be expressed without admitting receipt-only kinds.
+    if !scope.kind.valid_for_read_cursor() {
+        return Err(AppError::invalid_param(
+            "read_scope.kind must be one of realm/circle/space/strand/thread for a read cursor",
+        ));
+    }
     match &scope.kind {
         ReadScopeKind::Realm => {
             if scope.object_ref.is_some() || scope.track.is_some() || scope.track_scope.is_some() {
@@ -142,11 +151,7 @@ fn validate_read_scope(scope: &ReadScope) -> Result<(), AppError> {
                 ));
             }
         }
-        ReadScopeKind::Strand
-        | ReadScopeKind::Thread
-        | ReadScopeKind::View
-        | ReadScopeKind::Message
-        | ReadScopeKind::Morph => {
+        _ => {
             if scope.object_ref.as_deref().unwrap_or("").trim().is_empty() {
                 return Err(AppError::invalid_param(
                     "read_scope.ref is required when kind is not realm",

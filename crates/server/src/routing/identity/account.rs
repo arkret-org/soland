@@ -527,6 +527,7 @@ fn actor_profile_from_account(
             .clone()
             .unwrap_or_else(|| account.localpart.clone()),
         handle: Some(account.handle()),
+        agent_slug: None,
         avatar_blob_ref,
         status: None,
         accountable_principal_ids: Vec::new(),
