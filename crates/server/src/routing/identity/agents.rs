@@ -404,6 +404,10 @@ fn participation_scope_resource(scope: &AgentParticipationScope) -> Value {
     }
 }
 
+fn is_capability_grant_id(grant_id: &str) -> bool {
+    grant_id.starts_with("ck:grant:")
+}
+
 #[endpoint(
     operation_id = "ck.self.agent.participation.resource.get",
     tags("agents"),
@@ -1180,8 +1184,15 @@ async fn detach_agent_grant(
         "accepted",
     )
     .await;
-    // spec `agent_grant_detach_outcome` = `{ok, revoked_at}`. P2-impl: emit the
-    // real ck.capability.revoke event + cache invalidation.
+    // CKP-0008 §4.11 (dev option B): detach of a capability grant MUST emit
+    // the real revoke event so the authz projection and cache converge. An
+    // accountability-grant detach is a separate governance object, so it stays
+    // audit-only here until that cell family is introduced.
+    if state.config.development_mode && is_capability_grant_id(&grant_id) {
+        let realm = ensure_self_realm(state, &session).await?;
+        revoke_capability_grant(state, &session, &realm, &grant_id).await?;
+    }
+    // spec `agent_grant_detach_outcome` = `{ok, revoked_at}`.
     json_ok(AgentGrantDetachOutcome {
         ok: true,
         revoked_at,
@@ -1265,6 +1276,16 @@ mod tests {
             verification_method_principal("did:web:agent.example?versionId=1#key-1"),
             "did:web:agent.example"
         );
+    }
+
+    #[test]
+    fn detach_revoke_only_targets_capability_grants() {
+        assert!(is_capability_grant_id(
+            "ck:grant:01999999-0000-7000-8000-000000000001"
+        ));
+        assert!(!is_capability_grant_id(
+            "ck:accountability_grant:01999999-0000-7000-8000-000000000001"
+        ));
     }
 
     #[test]
