@@ -248,9 +248,14 @@ async fn auth_keys_device_messages_and_blobs_work() {
         .add_header(
             "x-cokret-attachment-envelope",
             serde_json::json!({
-                "alg": "mls-rfc9420",
-                "nonce": "nonce",
-                "key_ref": {"kid": "did:web:alice.example#device"},
+                "scheme": "ck.blob.whole_file_aead.v1",
+                "alg": "mls_exporter_aead_xchacha20poly1305",
+                "nonce": "nonce0123456789ab",
+                "key_ref": {
+                    "algorithm": "MLS",
+                    "group_state_ref": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+                },
+                "epoch": 1,
                 "ciphertext_digest": ciphertext_digest
             })
             .to_string(),
@@ -274,10 +279,24 @@ async fn auth_keys_device_messages_and_blobs_work() {
             .unwrap()
             .starts_with("ck:blob:sha256:")
     );
+    assert_eq!(blob["upload_receipt"]["content_digest"], ciphertext_digest);
+    assert!(blob["upload_receipt"].get("encrypted_attachment").is_none());
+    let stored_blob = state
+        .persistence
+        .blobs()
+        .get(blob["blob_ref"].as_str().unwrap())
+        .await
+        .unwrap()
+        .expect("uploaded blob metadata is stored");
+    let encrypted_attachment = stored_blob
+        .encryption
+        .as_ref()
+        .expect("encrypted attachment metadata is persisted");
     assert_eq!(
-        blob["upload_receipt"]["encrypted_attachment"]["alg"],
-        "mls-rfc9420"
+        encrypted_attachment["alg"],
+        "mls_exporter_aead_xchacha20poly1305"
     );
+    assert_eq!(encrypted_attachment["ciphertext_digest"], ciphertext_digest);
     let ObjectStorageConfig::Local { root, .. } = test_config().object_storage else {
         panic!("test config uses local object storage");
     };
@@ -362,13 +381,22 @@ async fn auth_keys_device_messages_and_blobs_work() {
         .take_json()
         .await
         .unwrap();
+    assert!(plaintext_blob["upload_receipt"].get("realm_id").is_none());
+    assert!(plaintext_blob["upload_receipt"].get("filename").is_none());
+    let stored_plaintext_blob = state
+        .persistence
+        .blobs()
+        .get(plaintext_blob["blob_ref"].as_str().unwrap())
+        .await
+        .unwrap()
+        .expect("plaintext blob metadata is stored");
     assert_eq!(
-        plaintext_blob["upload_receipt"]["realm_id"],
-        shared_plaintext_realm["realm_id"]
+        stored_plaintext_blob.realm_id.as_deref(),
+        shared_plaintext_realm["realm_id"].as_str()
     );
     assert_eq!(
-        plaintext_blob["upload_receipt"]["filename"],
-        "report_final.txt"
+        stored_plaintext_blob.filename.as_deref(),
+        Some("report_final.txt")
     );
 
     let mut bob_plaintext = TestClient::get(format!(
@@ -435,9 +463,7 @@ async fn auth_keys_device_messages_and_blobs_work() {
             "sha256:{}",
             hex::encode(Sha256::digest(bob_body.as_bytes()))
         ),
-        blob["upload_receipt"]["encrypted_attachment"]["ciphertext_digest"]
-            .as_str()
-            .unwrap()
+        encrypted_attachment["ciphertext_digest"].as_str().unwrap()
     );
 
     let mut range = TestClient::get(format!(
@@ -516,7 +542,8 @@ async fn auth_keys_device_messages_and_blobs_work() {
     let plaintext_push = TestClient::post("http://server/_cokret/edge/push/notify")
         .json(&serde_json::json!({
             "notification": {
-                "type": "message",
+                "push_target_id": "ck:push_target:01904100-0000-7000-8000-000000000101",
+                "wakeup_kind": "message",
                 "devices": [{"device_id": "ck:device:01904100-0000-7000-8000-a11ce0000001"}],
                 "preview": "plaintext should not be sent to push gateway"
             }
@@ -528,7 +555,8 @@ async fn auth_keys_device_messages_and_blobs_work() {
     let notify: Value = TestClient::post("http://server/_cokret/edge/push/notify")
         .json(&serde_json::json!({
             "notification": {
-                "type": "blind_wakeup",
+                "push_target_id": "ck:push_target:01904100-0000-7000-8000-000000000102",
+                "wakeup_kind": "message",
                 "devices": [{"device_id": "ck:device:01904100-0000-7000-8000-a11ce0000001"}, {"device_id": "ck:device:01904100-0000-7000-8000-71551c000004"}]
             }
         }))

@@ -111,7 +111,11 @@ fn presence_sync_event_marks_stale_online_offline() {
     assert_eq!(event["user_id"], "did:web:alice.example");
     assert_eq!(event["presence"], "offline");
     assert_eq!(event["status"], "offline");
-    assert!(event.get("last_active").is_some());
+    assert!(event.get("last_active").is_none());
+    let last_active_at = event["last_active_at"]
+        .as_str()
+        .expect("stale online presence emits bucketed last_active_at");
+    assert!(last_active_at.ends_with("/PT1H"));
 }
 
 fn test_config() -> crate::config::AppConfig {

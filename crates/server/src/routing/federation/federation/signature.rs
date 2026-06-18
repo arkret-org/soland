@@ -214,34 +214,48 @@ pub(in crate::routing) fn verify_inbound_peer_http_signature(
     req: &Request,
     body: Option<&Value>,
 ) -> Result<(), AppError> {
-    let body_bytes = match body {
-        Some(value) => cokret_sdk::canonical::canonical_json_bytes(value).map_err(|error| {
-            AppError::new(
-                crate::error::ErrorCode::SchemaViolation,
-                format!("peer request body is not canonical JSON: {error}"),
-            )
-            .with_status(StatusCode::BAD_REQUEST)
-        })?,
-        None => Vec::new(),
+    let body_digests = match body {
+        Some(value) => {
+            let body_bytes =
+                cokret_sdk::canonical::canonical_json_bytes(value).map_err(|error| {
+                    AppError::new(
+                        crate::error::ErrorCode::SchemaViolation,
+                        format!("peer request body is not canonical JSON: {error}"),
+                    )
+                    .with_status(StatusCode::BAD_REQUEST)
+                })?;
+            let expected_content_digest = content_digest_header(&body_bytes);
+            let expected_request_digest = cokret_sdk::canonical::sha256_digest(&body_bytes);
+            validate_federation_request_binding(
+                &state.config.trust_domain,
+                req,
+                &expected_request_digest,
+            )?;
+            Some((expected_content_digest, expected_request_digest))
+        }
+        None => None,
     };
-    let expected_content_digest = content_digest_header(&body_bytes);
-    let expected_request_digest = cokret_sdk::canonical::sha256_digest(&body_bytes);
-    validate_federation_request_binding(&state.config.trust_domain, req, &expected_request_digest)?;
 
-    let content_digest = required_header(req, "content-digest")?;
-    if content_digest != expected_content_digest {
-        crate::metrics::record_digest_mismatch("peer_request_content_digest");
-        return Err(signature_error(
-            "Content-Digest does not match peer canonical request body",
-        ));
-    }
-    let request_digest = required_header(req, "request-canonical-digest")?;
-    if request_digest != expected_request_digest {
-        crate::metrics::record_digest_mismatch("peer_request_request_digest");
-        return Err(signature_error(
-            "Request-Canonical-Digest does not match peer canonical request body",
-        ));
-    }
+    let (content_digest, request_digest) =
+        if let Some((expected_content_digest, expected_request_digest)) = body_digests {
+            let content_digest = required_header(req, "content-digest")?;
+            if content_digest != expected_content_digest {
+                crate::metrics::record_digest_mismatch("peer_request_content_digest");
+                return Err(signature_error(
+                    "Content-Digest does not match peer canonical request body",
+                ));
+            }
+            let request_digest = required_header(req, "request-canonical-digest")?;
+            if request_digest != expected_request_digest {
+                crate::metrics::record_digest_mismatch("peer_request_request_digest");
+                return Err(signature_error(
+                    "Request-Canonical-Digest does not match peer canonical request body",
+                ));
+            }
+            (Some(content_digest), Some(request_digest))
+        } else {
+            (None, None)
+        };
 
     let source_service_did = required_header(req, "source-service-did")?;
     let destination_service_did = required_header(req, "destination-service-did")?;
@@ -284,16 +298,16 @@ pub(in crate::routing) fn verify_inbound_peer_http_signature(
     let method = req.method().as_str().to_ascii_uppercase();
     let outer_params = signature_params(req, "signature-input")?;
     validate_signature_params(&outer_params, &source_service_did, "outer")?;
-    let outer_base = federation_http_signature_base(
+    let outer_base = peer_http_signature_base(
         &method,
         &target_uri,
         &authority,
-        &content_digest,
+        content_digest.as_deref(),
         &source_service_did,
         &destination_service_did,
         &source_trust_domain,
         &destination_trust_domain,
-        &request_digest,
+        request_digest.as_deref(),
         endpoint_digest.as_deref(),
         &outer_params,
     );
@@ -373,6 +387,44 @@ fn federation_http_signature_base(
          \"source-trust-domain\": {source_trust_domain}\n\
          \"destination-trust-domain\": {destination_trust_domain}\n\
          \"request-canonical-digest\": {request_digest}\n\
+         {endpoint_component}\
+         \"@signature-params\": {signature_params}",
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn peer_http_signature_base(
+    method: &str,
+    target_uri: &str,
+    authority: &str,
+    content_digest: Option<&str>,
+    source_service_did: &str,
+    destination_service_did: &str,
+    source_trust_domain: &str,
+    destination_trust_domain: &str,
+    request_digest: Option<&str>,
+    destination_service_endpoint_digest: Option<&str>,
+    signature_params: &str,
+) -> String {
+    let content_component = content_digest
+        .map(|digest| format!("\"content-digest\": {digest}\n"))
+        .unwrap_or_default();
+    let request_digest_component = request_digest
+        .map(|digest| format!("\"request-canonical-digest\": {digest}\n"))
+        .unwrap_or_default();
+    let endpoint_component = destination_service_endpoint_digest
+        .map(|digest| format!("\"destination-service-endpoint-digest\": {digest}\n"))
+        .unwrap_or_default();
+    format!(
+        "\"@method\": {method}\n\
+         \"@target-uri\": {target_uri}\n\
+         \"@authority\": {authority}\n\
+         {content_component}\
+         \"source-service-did\": {source_service_did}\n\
+         \"destination-service-did\": {destination_service_did}\n\
+         \"source-trust-domain\": {source_trust_domain}\n\
+         \"destination-trust-domain\": {destination_trust_domain}\n\
+         {request_digest_component}\
          {endpoint_component}\
          \"@signature-params\": {signature_params}",
     )

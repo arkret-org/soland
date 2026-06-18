@@ -42,6 +42,10 @@ pub fn project_read_receipt_policy(state: &AppState, operation: &Operation) {
         .get("scope_overrides_allowed")
         .and_then(|v| v.as_bool())
         .unwrap_or(true);
+    let allow_public_receipts_on_world_readable = payload
+        .get("allow_public_receipts_on_world_readable")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
 
     // Synthesize a CellState::Value at the canonical cell ref. This lets
     // the cells-map fast-path serve reads without scanning the durable
@@ -57,6 +61,7 @@ pub fn project_read_receipt_policy(state: &AppState, operation: &Operation) {
         "disclosure": disclosure,
         "visibility": visibility,
         "scope_overrides_allowed": scope_overrides_allowed,
+        "allow_public_receipts_on_world_readable": allow_public_receipts_on_world_readable,
     });
     if let Ok(mut proj) = state.projection.lock() {
         proj.cells

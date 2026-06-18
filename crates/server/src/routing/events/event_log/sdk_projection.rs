@@ -759,15 +759,15 @@ fn circle_event_visible_to_session(
 
 /// Scan the durable Event store for the most
 /// recent `ck.realm.read_receipt_policy` event in `realm_id` and return
-/// `(disclosure, visibility, scope_overrides_allowed)` from its payload.
+/// `(disclosure, visibility, scope_overrides_allowed,
+/// allow_public_receipts_on_world_readable)` from its payload.
 /// Returns `None` when no policy event has been written for this Realm —
 /// caller treats that as the spec default `Optional` / `Members` /
-/// `scope_overrides_allowed=true`.
+/// `scope_overrides_allowed=true` /
+/// `allow_public_receipts_on_world_readable=false`.
 ///
-/// Used by future ephemeral `ck.receipt.read` fanout handlers to enforce
-/// the policy: when `disclosure="disabled"`, drop the receipt and return
-/// HTTP 403 with `error.code` `policy_violation`. When `visibility="private"`,
-/// fanout only to the original sender of the referenced event.
+/// Used by ephemeral `ck.receipt.read` admission and future receipt fanout
+/// handlers to enforce the Realm policy.
 ///
 /// **Note**: this is a linear scan of the durable event store. For the
 /// production fanout path it should be projected into `AppState` once the
@@ -775,7 +775,7 @@ fn circle_event_visible_to_session(
 pub async fn effective_read_receipt_policy_for_realm(
     state: &AppState,
     realm_id: &str,
-) -> Option<(String, String, bool)> {
+) -> Option<(String, String, bool, bool)> {
     // Cell-keyed fast path. The Move/Seal pipeline writes the
     // `ck.component.realm.read_receipt_policy.v1` resolved CasRegister
     // value into `ProjectionState::cells` after every apply_seal; we
@@ -801,8 +801,17 @@ pub async fn effective_read_receipt_policy_for_realm(
             let scope_overrides_allowed = value
                 .get("scope_overrides_allowed")
                 .and_then(Value::as_bool)
+                .unwrap_or(true);
+            let allow_public_receipts_on_world_readable = value
+                .get("allow_public_receipts_on_world_readable")
+                .and_then(Value::as_bool)
                 .unwrap_or(false);
-            return Some((disclosure, visibility, scope_overrides_allowed));
+            return Some((
+                disclosure,
+                visibility,
+                scope_overrides_allowed,
+                allow_public_receipts_on_world_readable,
+            ));
         }
     }
     // Cold-path fallback: linear scan of the durable Event store. Used at
@@ -842,7 +851,16 @@ pub async fn effective_read_receipt_policy_for_realm(
         .get("scope_overrides_allowed")
         .and_then(Value::as_bool)
         .unwrap_or(true);
-    Some((disclosure, visibility, scope_overrides_allowed))
+    let allow_public_receipts_on_world_readable = payload
+        .get("allow_public_receipts_on_world_readable")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    Some((
+        disclosure,
+        visibility,
+        scope_overrides_allowed,
+        allow_public_receipts_on_world_readable,
+    ))
 }
 
 #[cfg(test)]

@@ -8,7 +8,9 @@ use salvo::http::StatusCode;
 use salvo::prelude::*;
 use serde_json::Value;
 
-use crate::routing::spaces::space::realm_has_member;
+use crate::routing::spaces::space::{
+    realm_has_member, realm_history_visibility_for_id, typing_scope_allows_actor,
+};
 use crate::state::{AppState, PresenceRecord, TypingRecord};
 
 #[endpoint(
@@ -46,7 +48,7 @@ pub(super) async fn submit_ephemeral(
     let mut dispatched_to: Option<u64> = None;
     match envelope.kind.as_str() {
         "ck.typing" => {
-            persist_ephemeral_typing(state, &session.actor, realm_id_str, &envelope).await
+            persist_ephemeral_typing(state, &session.actor, realm_id_str, &envelope).await?
         }
         "ck.presence" => persist_ephemeral_presence(state, &session.actor, &envelope).await,
         "ck.receipt.read" => admit_ephemeral_read_receipt(state, realm_id_str, &envelope).await?,
@@ -168,7 +170,7 @@ async fn persist_ephemeral_typing(
     actor: &str,
     realm_id: &str,
     envelope: &cokret_sdk::EphemeralEnvelope,
-) {
+) -> Result<(), crate::error::AppError> {
     let typing = envelope
         .payload
         .get("typing")
@@ -182,6 +184,7 @@ async fn persist_ephemeral_typing(
             .and_then(Value::as_str)
             .filter(|value| !value.trim().is_empty())
             .map(ToOwned::to_owned);
+        typing_scope_allows_actor(state, realm_id, actor, scope_id.as_deref()).await?;
         if let Err(error) = state
             .persistence
             .typing()
@@ -199,6 +202,7 @@ async fn persist_ephemeral_typing(
     } else {
         let _ = state.persistence.typing().remove(actor, realm_id).await;
     }
+    Ok(())
 }
 
 async fn persist_ephemeral_presence(
@@ -244,10 +248,10 @@ async fn admit_ephemeral_read_receipt(
         ));
     }
 
-    let (disclosure, _visibility, _scope_overrides_allowed) =
+    let (disclosure, visibility, _scope_overrides_allowed, allow_public_world_readable) =
         crate::routing::events::event_log::effective_read_receipt_policy_for_realm(state, realm_id)
             .await
-            .unwrap_or_else(|| ("optional".to_owned(), "members".to_owned(), true));
+            .unwrap_or_else(|| ("optional".to_owned(), "members".to_owned(), true, false));
     if disclosure == "disabled" {
         return Err(crate::error::AppError::new(
             crate::error::ErrorCode::PolicyViolation,
@@ -256,6 +260,27 @@ async fn admit_ephemeral_read_receipt(
             ),
         )
         .with_status(StatusCode::FORBIDDEN));
+    }
+    match visibility.as_str() {
+        "private" | "members" => {}
+        "public" => {
+            if realm_history_visibility_for_id(state, realm_id).await == "world_readable"
+                && !allow_public_world_readable
+            {
+                return Err(crate::error::AppError::new(
+                    crate::error::ErrorCode::PolicyViolation,
+                    "read_receipt_policy.visibility=public is rejected for world_readable history unless allow_public_receipts_on_world_readable=true",
+                )
+                .with_status(StatusCode::FORBIDDEN));
+            }
+        }
+        _ => {
+            return Err(crate::error::AppError::new(
+                crate::error::ErrorCode::PolicyViolation,
+                "read_receipt_policy.visibility is unsupported",
+            )
+            .with_status(StatusCode::FORBIDDEN));
+        }
     }
     Ok(())
 }

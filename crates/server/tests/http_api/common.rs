@@ -25,7 +25,7 @@ pub(crate) use soland::state::{
     RealmInviteRecord, RealmMetaRecord,
 };
 pub(crate) use soland::{
-    artifacts, kinds, service, service_with_rate_limiter_config, service_with_request_size_limit,
+    artifacts, service, service_with_rate_limiter_config, service_with_request_size_limit,
 };
 
 pub(crate) const DEMO_REALM_ID: &str = "ck:realm:0196419b-0000-7000-8000-000000000000";
@@ -165,6 +165,44 @@ pub(crate) fn signed_federation_transaction_headers(
     body: &Value,
 ) -> Vec<(&'static str, String)> {
     signed_federation_request_headers("PUT", origin, destination, target_uri, body)
+}
+
+pub(crate) fn signed_federation_get_headers(
+    origin: &str,
+    destination: &str,
+    target_uri: &str,
+) -> Vec<(&'static str, String)> {
+    let source_trust_domain = trust_domain_from_service_did(origin);
+    let destination_trust_domain = trust_domain_from_service_did(destination);
+    let created = chrono::Utc::now().timestamp();
+    let expires = created + 300;
+    let keyid = format!("{origin}#federation-fanout-key");
+    let signature_params = format!(
+        "(\"@method\" \"@target-uri\" \"@authority\" \"source-service-did\" \"destination-service-did\" \"source-trust-domain\" \"destination-trust-domain\");created={created};expires={expires};keyid=\"{keyid}\";alg=\"ed25519\"",
+    );
+    let authority = authority_from_target_uri(target_uri);
+    let signature_base = format!(
+        "\"@method\": GET\n\
+         \"@target-uri\": {target_uri}\n\
+         \"@authority\": {authority}\n\
+         \"source-service-did\": {origin}\n\
+         \"destination-service-did\": {destination}\n\
+         \"source-trust-domain\": {source_trust_domain}\n\
+         \"destination-trust-domain\": {destination_trust_domain}\n\
+         \"@signature-params\": {signature_params}",
+    );
+    let signature = development_service_signing_key(origin).sign(signature_base.as_bytes());
+    vec![
+        ("source-service-did", origin.to_owned()),
+        ("destination-service-did", destination.to_owned()),
+        ("source-trust-domain", source_trust_domain),
+        ("destination-trust-domain", destination_trust_domain),
+        ("signature-input", format!("sig1={signature_params}")),
+        (
+            "signature",
+            format!("sig1=:{}:", STANDARD.encode(signature.to_bytes())),
+        ),
+    ]
 }
 
 fn signed_federation_request_headers(

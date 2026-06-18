@@ -69,6 +69,11 @@ pub struct SpaceContainerProjectionRecord {
     pub realm_id: String,
     pub kind: String,
     pub title: String,
+    pub scope_circle_id: Option<String>,
+    pub default_scope_circle_id: Option<String>,
+    pub child_scope_policy: Option<String>,
+    pub child_scope_policy_scope_circle_id: Option<String>,
+    pub child_scope_policy_metadata_encryption_floor: Option<String>,
     pub parent_ref: Option<String>,
     pub rank: Option<String>,
     /// One of `active` / `archived` / `tombstoned` per spec.
@@ -349,6 +354,16 @@ struct SpaceContainerProjectionRow {
     container_space_id: Uuid,
     #[diesel(sql_type = SqlUuid)]
     realm_id: Uuid,
+    #[diesel(sql_type = Nullable<SqlUuid>)]
+    scope_circle_id: Option<Uuid>,
+    #[diesel(sql_type = Nullable<SqlUuid>)]
+    default_scope_circle_id: Option<Uuid>,
+    #[diesel(sql_type = Nullable<Text>)]
+    child_scope_policy: Option<String>,
+    #[diesel(sql_type = Nullable<SqlUuid>)]
+    child_scope_policy_scope_circle_id: Option<Uuid>,
+    #[diesel(sql_type = Nullable<Text>)]
+    child_scope_policy_metadata_encryption_floor: Option<String>,
     #[diesel(sql_type = Text)]
     kind: String,
     #[diesel(sql_type = Text)]
@@ -378,6 +393,18 @@ impl From<SpaceContainerProjectionRow> for SpaceContainerProjectionRecord {
             realm_id: ids::format_typed_uuid("realm", &row.realm_id),
             kind: row.kind,
             title: row.title,
+            scope_circle_id: row
+                .scope_circle_id
+                .map(|u| ids::format_typed_uuid("circle", &u)),
+            default_scope_circle_id: row
+                .default_scope_circle_id
+                .map(|u| ids::format_typed_uuid("circle", &u)),
+            child_scope_policy: row.child_scope_policy,
+            child_scope_policy_scope_circle_id: row
+                .child_scope_policy_scope_circle_id
+                .map(|u| ids::format_typed_uuid("circle", &u)),
+            child_scope_policy_metadata_encryption_floor: row
+                .child_scope_policy_metadata_encryption_floor,
             parent_ref: row.parent_ref.map(|u| ids::format_typed_uuid("space", &u)),
             rank: row.rank,
             state: row.state,
@@ -390,7 +417,9 @@ impl From<SpaceContainerProjectionRow> for SpaceContainerProjectionRecord {
     }
 }
 
-const SPACE_CONTAINER_PROJECTION_COLUMNS: &str = "id AS container_space_id, realm_id, kind, title, parent_ref, rank, state, \
+const SPACE_CONTAINER_PROJECTION_COLUMNS: &str = "id AS container_space_id, realm_id, scope_circle_id, \
+     default_scope_circle_id, child_scope_policy, child_scope_policy_scope_circle_id, \
+     child_scope_policy_metadata_encryption_floor, kind, title, parent_ref, rank, state, \
      state_changed_at, created_by_id AS created_by, created_at, updated_by_id AS updated_by, updated_at";
 
 #[async_trait]
@@ -415,11 +444,18 @@ impl SpaceContainerProjectionStore for PgSpaceContainerProjectionStore {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(
             "INSERT INTO projection_spaces \
-             (id, realm_id, kind, title, parent_ref, rank, state, \
-              state_changed_at, created_by_id, created_at, updated_by_id, updated_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) \
+             (id, realm_id, scope_circle_id, default_scope_circle_id, child_scope_policy, \
+              child_scope_policy_scope_circle_id, child_scope_policy_metadata_encryption_floor, \
+              kind, title, parent_ref, rank, state, state_changed_at, created_by_id, created_at, \
+              updated_by_id, updated_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17) \
              ON CONFLICT (id) DO UPDATE SET \
                 realm_id = EXCLUDED.realm_id, \
+                scope_circle_id = EXCLUDED.scope_circle_id, \
+                default_scope_circle_id = EXCLUDED.default_scope_circle_id, \
+                child_scope_policy = EXCLUDED.child_scope_policy, \
+                child_scope_policy_scope_circle_id = EXCLUDED.child_scope_policy_scope_circle_id, \
+                child_scope_policy_metadata_encryption_floor = EXCLUDED.child_scope_policy_metadata_encryption_floor, \
                 kind = EXCLUDED.kind, \
                 title = EXCLUDED.title, \
                 parent_ref = EXCLUDED.parent_ref, \
@@ -431,6 +467,26 @@ impl SpaceContainerProjectionStore for PgSpaceContainerProjectionStore {
         )
         .bind::<SqlUuid, _>(ids::typed_uuid_part_or_panic(&record.container_space_id))
         .bind::<SqlUuid, _>(ids::typed_uuid_part_or_panic(&record.realm_id))
+        .bind::<Nullable<SqlUuid>, _>(
+            record
+                .scope_circle_id
+                .as_deref()
+                .map(ids::typed_uuid_part_or_panic),
+        )
+        .bind::<Nullable<SqlUuid>, _>(
+            record
+                .default_scope_circle_id
+                .as_deref()
+                .map(ids::typed_uuid_part_or_panic),
+        )
+        .bind::<Nullable<Text>, _>(&record.child_scope_policy)
+        .bind::<Nullable<SqlUuid>, _>(
+            record
+                .child_scope_policy_scope_circle_id
+                .as_deref()
+                .map(ids::typed_uuid_part_or_panic),
+        )
+        .bind::<Nullable<Text>, _>(&record.child_scope_policy_metadata_encryption_floor)
         .bind::<Text, _>(&record.kind)
         .bind::<Text, _>(&record.title)
         .bind::<Nullable<SqlUuid>, _>(

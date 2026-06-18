@@ -176,7 +176,11 @@ async fn push_profile_and_moderation_contracts_work() {
     let stale_sync = account_subscribe_frame(state.clone(), Some(&token), "catchup=true").await;
     let stale_profile = presence_event(&stale_sync, "did:web:alice.example");
     assert_eq!(stale_profile["status"], "offline");
-    assert!(stale_profile["last_active"].is_string());
+    let last_active_at = stale_profile["last_active_at"]
+        .as_str()
+        .expect("stale presence emits bucketed last_active_at");
+    assert!(last_active_at.ends_with("/PT1H"));
+    assert!(stale_profile.get("last_active").is_none());
 
     let unauth_typing = TestClient::post("http://server/_cokret/self/ephemeral")
         .json(&serde_json::json!({
@@ -202,7 +206,6 @@ async fn push_profile_and_moderation_contracts_work() {
             "sent_at": sent_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
             "expires_at": expires_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
             "payload": {
-                "scope_id": "ck:strand:demo",
                 "typing": true
             }
         }))
@@ -222,7 +225,7 @@ async fn push_profile_and_moderation_contracts_work() {
         .unwrap();
     assert_eq!(active_typing.len(), 1);
     assert_eq!(active_typing[0].actor, "did:web:alice.example");
-    assert_eq!(active_typing[0].scope_id.as_deref(), Some("ck:strand:demo"));
+    assert_eq!(active_typing[0].scope_id.as_deref(), None);
 
     let stop_sent_at = chrono::Utc::now();
     let stop_expires_at = stop_sent_at + chrono::Duration::seconds(30);
@@ -292,7 +295,7 @@ async fn push_profile_and_moderation_contracts_work() {
                     "actions": ["dont_notify"],
                     "conditions": {
                         "device_id": "ck:device:01904100-0000-7000-8000-a11ce0000001",
-                        "type": "blind_wakeup"
+                        "wakeup_kind": "message"
                     }
                 }]
             },
@@ -314,7 +317,8 @@ async fn push_profile_and_moderation_contracts_work() {
     let muted_notify: Value = TestClient::post("http://server/_cokret/edge/push/notify")
         .json(&serde_json::json!({
             "notification": {
-                "type": "blind_wakeup",
+                "push_target_id": "ck:push_target:01904100-0000-7000-8000-000000000001",
+                "wakeup_kind": "message",
                 "devices": [{"device_id": "ck:device:01904100-0000-7000-8000-a11ce0000001"}, {"device_id": "ck:device:01904100-0000-7000-8000-71551c000004"}]
             }
         }))
@@ -358,7 +362,8 @@ async fn push_profile_and_moderation_contracts_work() {
     let unmuted_notify: Value = TestClient::post("http://server/_cokret/edge/push/notify")
         .json(&serde_json::json!({
             "notification": {
-                "type": "blind_wakeup",
+                "push_target_id": "ck:push_target:01904100-0000-7000-8000-000000000002",
+                "wakeup_kind": "message",
                 "devices": [{"device_id": "ck:device:01904100-0000-7000-8000-a11ce0000001"}]
             }
         }))
@@ -416,6 +421,184 @@ async fn push_profile_and_moderation_contracts_work() {
         .send(&app_from_state(state.clone()))
         .await;
     assert_eq!(unauthenticated_report.status_code.unwrap().as_u16(), 401);
+}
+
+#[tokio::test]
+async fn typing_submit_rejects_unknown_strand_scope() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let token = dev_token(state.clone()).await;
+    let sent_at = chrono::Utc::now();
+    let expires_at = sent_at + chrono::Duration::seconds(30);
+
+    let rejected_typing = TestClient::post("http://server/_cokret/self/ephemeral")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&serde_json::json!({
+            "kind": "ck.typing",
+            "realm_id": DEMO_REALM_ID,
+            "actor_id": "did:web:alice.example",
+            "sent_at": sent_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+            "expires_at": expires_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+            "payload": {
+                "scope_id": new_prefixed_uuid7("ck:strand:"),
+                "typing": true
+            }
+        }))
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(rejected_typing.status_code, Some(StatusCode::FORBIDDEN));
+    let typing_after_reject = state
+        .persistence
+        .typing()
+        .list_for_realm(DEMO_REALM_ID)
+        .await
+        .unwrap();
+    assert!(typing_after_reject.is_empty());
+}
+
+#[tokio::test]
+async fn public_read_receipt_rejected_for_world_readable_realm_without_opt_in() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let token = dev_token(state.clone()).await;
+    let now = chrono::Utc::now();
+    state
+        .persistence
+        .realm_meta()
+        .put(
+            DEMO_REALM_ID,
+            &RealmMetaRecord {
+                owner: "did:web:alice.example".to_owned(),
+                deleted: false,
+                discoverability: "public".to_owned(),
+                history_visibility: "world_readable".to_owned(),
+                history_sharing_policy: None,
+                history_sharing_policy_digest: None,
+                preview_policy: None,
+                preview_policy_digest: None,
+                encryption_profile: Some("none".to_owned()),
+                plaintext_visible_services: Default::default(),
+                minimal_metadata_realm: false,
+                created_at: now,
+                updated_at: now,
+            },
+        )
+        .await
+        .unwrap();
+
+    let policy = submit_actor_private_event(
+        state.clone(),
+        &token,
+        "did:web:alice.example",
+        "ck:device:01904100-0000-7000-8000-a11ce0000001",
+        DEMO_REALM_ID,
+        "ck.realm.read_receipt_policy",
+        serde_json::json!({
+            "disclosure": "optional",
+            "visibility": "public",
+            "scope_overrides_allowed": true
+        }),
+    )
+    .await;
+    assert!(
+        policy["status"] == "accepted"
+            || policy["accepted"]
+                .as_array()
+                .is_some_and(|events| !events.is_empty()),
+        "read receipt policy event: {policy}"
+    );
+
+    let sent_at = chrono::Utc::now();
+    let expires_at = sent_at + chrono::Duration::seconds(30);
+    let receipt = TestClient::post("http://server/_cokret/self/ephemeral")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&serde_json::json!({
+            "kind": "ck.receipt.read",
+            "realm_id": DEMO_REALM_ID,
+            "actor_id": "did:web:alice.example",
+            "sent_at": sent_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+            "expires_at": expires_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+            "payload": {
+                "event_id": new_prefixed_uuid7("ck:event:")
+            }
+        }))
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(receipt.status_code, Some(StatusCode::FORBIDDEN));
+}
+
+#[tokio::test]
+async fn typing_fanout_respects_receiver_blocklist() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let alice_token = dev_token(state.clone()).await;
+    add_test_realm_member(&state, DEMO_REALM_ID, "did:web:bob.example");
+    let bob_token = dev_token_for_device(
+        state.clone(),
+        "did:web:bob.example",
+        "ck:device:01904100-0000-7000-8000-b0b000000001",
+        "Bob Desktop",
+    )
+    .await;
+    let bob_blocklist = submit_actor_private_event(
+        state.clone(),
+        &bob_token,
+        "did:web:bob.example",
+        "ck:device:01904100-0000-7000-8000-b0b000000001",
+        DEMO_REALM_ID,
+        "ck.account_data.set",
+        serde_json::json!({
+            "key": "ck.account.blocklist.v1",
+            "owner": "did:web:bob.example",
+            "body": {
+                "version": 1,
+                "entries": [{
+                    "target": {"kind": "actor", "did": "did:web:alice.example"},
+                    "mode": "block"
+                }]
+            },
+            "updated_at": "2026-05-21T00:00:00Z",
+        }),
+    )
+    .await;
+    assert_eq!(
+        bob_blocklist["status"], "accepted",
+        "blocklist event: {bob_blocklist}"
+    );
+
+    let sent_at = chrono::Utc::now();
+    let expires_at = sent_at + chrono::Duration::seconds(30);
+    let typing: Value = TestClient::post("http://server/_cokret/self/ephemeral")
+        .add_header("authorization", format!("Bearer {alice_token}"), true)
+        .json(&serde_json::json!({
+            "kind": "ck.typing",
+            "realm_id": DEMO_REALM_ID,
+            "actor_id": "did:web:alice.example",
+            "sent_at": sent_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+            "expires_at": expires_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+            "payload": {
+                "typing": true
+            }
+        }))
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(typing["accepted"], true);
+
+    let bob_sync = account_subscribe_frame(state.clone(), Some(&bob_token), "catchup=true").await;
+    let bob_ephemeral = bob_sync["realms"][DEMO_REALM_ID]["ephemeral"]
+        .as_array()
+        .expect("demo realm ephemeral segment");
+    assert!(
+        bob_ephemeral.iter().all(|entry| {
+            entry["type"] != "ck.typing"
+                || entry["actors"].as_array().is_none_or(|actors| {
+                    actors
+                        .iter()
+                        .all(|actor| actor["actor"] != "did:web:alice.example")
+                })
+        }),
+        "Bob's blocklist must suppress Alice typing fanout: {bob_ephemeral:?}"
+    );
 }
 
 #[tokio::test]
@@ -580,7 +763,8 @@ async fn push_unregister_mutates_registration_and_gateway_snapshot_gates_notify(
     let stale_notify: Value = TestClient::post("http://server/_cokret/edge/push/notify")
         .json(&serde_json::json!({
             "notification": {
-                "type": "blind_wakeup",
+                "push_target_id": "ck:push_target:01904100-0000-7000-8000-000000000003",
+                "wakeup_kind": "message",
                 "devices": [{"device_id": device_id}]
             }
         }))
@@ -626,7 +810,8 @@ async fn push_unregister_mutates_registration_and_gateway_snapshot_gates_notify(
     let fresh_notify: Value = TestClient::post("http://server/_cokret/edge/push/notify")
         .json(&serde_json::json!({
             "notification": {
-                "type": "blind_wakeup",
+                "push_target_id": "ck:push_target:01904100-0000-7000-8000-000000000004",
+                "wakeup_kind": "message",
                 "devices": [{"device_id": device_id}]
             }
         }))
@@ -654,7 +839,8 @@ async fn push_unregister_mutates_registration_and_gateway_snapshot_gates_notify(
     let after_unregister: Value = TestClient::post("http://server/_cokret/edge/push/notify")
         .json(&serde_json::json!({
             "notification": {
-                "type": "blind_wakeup",
+                "push_target_id": "ck:push_target:01904100-0000-7000-8000-000000000005",
+                "wakeup_kind": "message",
                 "devices": [{"device_id": device_id}]
             }
         }))

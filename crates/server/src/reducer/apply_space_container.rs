@@ -98,6 +98,24 @@ impl ProjectionState {
                 };
             }
         }
+        let child_scope_policy = match child_scope_policy_from_object(object) {
+            Ok(policy) => policy,
+            Err(reason) => {
+                return ProjectionEffect::Rejected {
+                    reason: reason.to_owned(),
+                };
+            }
+        };
+        if let Some(policy_scope) = child_scope_policy
+            .as_ref()
+            .and_then(|policy| policy.scope_circle_id.as_deref())
+            && let Err(reason) =
+                self.validate_scope_circle_id(policy_scope, operation.realm_id.as_ref())
+        {
+            return ProjectionEffect::Rejected {
+                reason: reason.to_owned(),
+            };
+        }
         let kind = object
             .get("kind")
             .and_then(|v| v.as_str())
@@ -141,6 +159,17 @@ impl ProjectionState {
             realm_id,
             kind,
             title,
+            scope_circle_id: object
+                .get("scope_circle_id")
+                .and_then(Value::as_str)
+                .filter(|value| !value.trim().is_empty())
+                .map(ToOwned::to_owned),
+            default_scope_circle_id: object
+                .get("default_scope_circle_id")
+                .and_then(Value::as_str)
+                .filter(|value| !value.trim().is_empty())
+                .map(ToOwned::to_owned),
+            child_scope_policy,
             parent_ref,
             rank,
             state: SpaceContainerLifecycleState::Active,
@@ -231,6 +260,21 @@ impl ProjectionState {
                 .and_then(|v| v.as_str())
                 .map(ToOwned::to_owned)
         };
+        if let Some(parent_space_id) = parent_ref.as_deref() {
+            let Some(space_container) = self.space_containers.get(&container_space_id) else {
+                return ProjectionEffect::Ignored;
+            };
+            if let Err(reason) = self.check_space_child_scope_policy(
+                parent_space_id,
+                space_container.scope_circle_id.as_deref(),
+                &space_container.realm_id,
+                false,
+            ) {
+                return ProjectionEffect::Rejected {
+                    reason: reason.to_owned(),
+                };
+            }
+        }
         let Some(space_container) = self.space_containers.get_mut(&container_space_id) else {
             return ProjectionEffect::Ignored;
         };
@@ -445,4 +489,249 @@ impl ProjectionState {
             }
         }
     }
+
+    pub fn check_child_scope_policy_transition(
+        &self,
+        operation: &Operation,
+    ) -> Result<(), &'static str> {
+        let kind = match crate::kinds::canonical_kind_for_operation(operation) {
+            Some(kind) => kind,
+            None => return Ok(()),
+        };
+        match kind {
+            crate::kinds::CK_STRAND_CREATE => {
+                let Some(object) = operation.payload.get("object").and_then(Value::as_object)
+                else {
+                    return Ok(());
+                };
+                let child_scope = object
+                    .get("scope_circle_id")
+                    .and_then(Value::as_str)
+                    .filter(|value| !value.trim().is_empty());
+                let child_realm_id = object
+                    .get("realm_id")
+                    .and_then(Value::as_str)
+                    .unwrap_or(operation.realm_id.as_ref());
+                let child_has_plaintext_metadata =
+                    object.get("metadata").is_some() && object.get("encrypted_metadata").is_none();
+                if let Some((_, list_space_id, _)) =
+                    strand_position_from_create_payload(&operation.payload, object)
+                {
+                    self.check_space_child_scope_policy(
+                        &list_space_id,
+                        child_scope,
+                        child_realm_id,
+                        child_has_plaintext_metadata,
+                    )?;
+                }
+                Ok(())
+            }
+            crate::kinds::CK_STRAND_MOVE | crate::kinds::CK_STRAND_REORDER => {
+                let Some((_, list_space_id, _)) =
+                    strand_position_from_lifecycle_payload(&operation.payload)
+                else {
+                    return Ok(());
+                };
+                let Some(strand_id) = operation
+                    .payload
+                    .get("strand_id")
+                    .and_then(Value::as_str)
+                    .or_else(|| operation.payload.get("target_ref").and_then(Value::as_str))
+                else {
+                    return Ok(());
+                };
+                let Some(strand) = self.strands.get(strand_id) else {
+                    return Ok(());
+                };
+                self.check_space_child_scope_policy(
+                    &list_space_id,
+                    strand.scope_circle_id.as_deref(),
+                    &strand.realm_id,
+                    false,
+                )
+            }
+            crate::kinds::CK_SPACE_CONTAINER_PARENT => {
+                let Some(container_space_id) = space_container_id_from_payload(&operation.payload)
+                else {
+                    return Ok(());
+                };
+                let Some(parent_space_id) = operation
+                    .payload
+                    .get("parent_space_id")
+                    .or_else(|| operation.payload.get("parent_ref"))
+                    .and_then(Value::as_str)
+                    .filter(|value| !value.trim().is_empty())
+                else {
+                    return Ok(());
+                };
+                let Some(space_container) = self.space_containers.get(&container_space_id) else {
+                    return Ok(());
+                };
+                self.check_space_child_scope_policy(
+                    parent_space_id,
+                    space_container.scope_circle_id.as_deref(),
+                    &space_container.realm_id,
+                    false,
+                )
+            }
+            crate::kinds::CK_CONTAINER_MOVE_ITEM | crate::kinds::CK_CONTAINER_REBALANCE => {
+                let Some(container_space_id) = operation
+                    .payload
+                    .get("to_container_id")
+                    .or_else(|| operation.payload.get("container_id"))
+                    .and_then(Value::as_str)
+                    .filter(|value| !value.trim().is_empty())
+                else {
+                    return Ok(());
+                };
+                let Some(object_ref) = operation
+                    .payload
+                    .get("object_ref")
+                    .and_then(Value::as_str)
+                    .filter(|value| !value.trim().is_empty())
+                else {
+                    return Ok(());
+                };
+                let (child_scope, child_realm_id) =
+                    match self.projected_object_scope_and_realm(object_ref) {
+                        Some(value) => value,
+                        None => return Ok(()),
+                    };
+                self.check_space_child_scope_policy(
+                    container_space_id,
+                    child_scope.as_deref(),
+                    &child_realm_id,
+                    false,
+                )
+            }
+            _ => Ok(()),
+        }
+    }
+
+    pub(crate) fn check_space_child_scope_policy(
+        &self,
+        parent_space_id: &str,
+        child_scope_circle_id: Option<&str>,
+        child_realm_id: &str,
+        child_has_plaintext_metadata: bool,
+    ) -> Result<(), &'static str> {
+        let Some(parent) = self.space_containers.get(parent_space_id) else {
+            return Ok(());
+        };
+        if parent.state != SpaceContainerLifecycleState::Active {
+            return Err("space_not_active");
+        }
+        let Some(policy) = parent.child_scope_policy.as_ref() else {
+            return Ok(());
+        };
+        if policy.metadata_encryption_floor.as_deref() == Some("e2ee_required")
+            && child_has_plaintext_metadata
+        {
+            return Err(crate::error::reasons::METADATA_ENCRYPTION_FLOOR_VIOLATION);
+        }
+        match policy.kind.as_str() {
+            "allow_any" => Ok(()),
+            "require_same_scope" => {
+                if parent.scope_circle_id.as_deref() == child_scope_circle_id {
+                    Ok(())
+                } else {
+                    Err(cokret_sdk::ERROR_CODE_POLICY_VIOLATION)
+                }
+            }
+            "require_scope_circle_id" => {
+                if policy.scope_circle_id.as_deref() == child_scope_circle_id {
+                    Ok(())
+                } else {
+                    Err(cokret_sdk::ERROR_CODE_POLICY_VIOLATION)
+                }
+            }
+            "require_e2ee" => {
+                if self.child_scope_is_e2ee(child_scope_circle_id, child_realm_id) {
+                    Ok(())
+                } else {
+                    Err(cokret_sdk::ERROR_CODE_POLICY_VIOLATION)
+                }
+            }
+            _ => Err(cokret_sdk::ERROR_CODE_POLICY_VIOLATION),
+        }
+    }
+
+    fn child_scope_is_e2ee(
+        &self,
+        child_scope_circle_id: Option<&str>,
+        child_realm_id: &str,
+    ) -> bool {
+        match child_scope_circle_id {
+            Some(circle_id) => self.circles.get(circle_id).is_some_and(|circle| {
+                circle.state == CircleLifecycleState::Active
+                    && (encryption_profile_requires_content_encryption(Some(
+                        circle.encryption_profile.as_str(),
+                    )) || content_floor_rank(circle.content_encryption_floor.as_deref()) >= 1)
+            }),
+            None => {
+                self.realm_requires_content_encryption(child_realm_id)
+                    || content_floor_rank(
+                        self.realm_content_encryption_floor(child_realm_id)
+                            .as_deref(),
+                    ) >= 1
+            }
+        }
+    }
+
+    fn projected_object_scope_and_realm(
+        &self,
+        object_ref: &str,
+    ) -> Option<(Option<String>, String)> {
+        if let Some(strand) = self.strands.get(object_ref) {
+            return Some((strand.scope_circle_id.clone(), strand.realm_id.clone()));
+        }
+        if let Some(space) = self.space_containers.get(object_ref) {
+            return Some((space.scope_circle_id.clone(), space.realm_id.clone()));
+        }
+        if let Some(morph) = self.morphs.get(object_ref) {
+            return Some((None, morph.realm_id.clone()));
+        }
+        None
+    }
+}
+
+fn child_scope_policy_from_object(
+    object: &serde_json::Map<String, Value>,
+) -> Result<Option<ChildScopePolicy>, &'static str> {
+    let Some(policy) = object.get("child_scope_policy") else {
+        return Ok(None);
+    };
+    let Some(policy) = policy.as_object() else {
+        return Err(cokret_sdk::ERROR_CODE_SCHEMA_VIOLATION);
+    };
+    let Some(kind) = policy.get("kind").and_then(Value::as_str) else {
+        return Err(cokret_sdk::ERROR_CODE_SCHEMA_VIOLATION);
+    };
+    if !matches!(
+        kind,
+        "allow_any" | "require_e2ee" | "require_same_scope" | "require_scope_circle_id"
+    ) {
+        return Err(cokret_sdk::ERROR_CODE_SCHEMA_VIOLATION);
+    }
+    let scope_circle_id = policy
+        .get("scope_circle_id")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .map(ToOwned::to_owned);
+    if kind == "require_scope_circle_id" && scope_circle_id.is_none() {
+        return Err(cokret_sdk::ERROR_CODE_SCHEMA_VIOLATION);
+    }
+    let metadata_encryption_floor = match policy.get("metadata_encryption_floor").map(Value::as_str)
+    {
+        Some(Some(value)) if matches!(value, "allow_plaintext" | "e2ee_required") => {
+            Some(value.to_owned())
+        }
+        Some(_) => return Err(cokret_sdk::ERROR_CODE_SCHEMA_VIOLATION),
+        None => None,
+    };
+    Ok(Some(ChildScopePolicy {
+        kind: kind.to_owned(),
+        scope_circle_id,
+        metadata_encryption_floor,
+    }))
 }

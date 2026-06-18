@@ -665,6 +665,13 @@ pub(in crate::routing) async fn submit_event_value(
                     reason,
                 ));
             }
+            if let Err(reason) = proj.check_child_scope_policy_transition(operation) {
+                return Err(SubmitOneError::new(
+                    StatusCode::PRECONDITION_FAILED,
+                    reason,
+                    reason,
+                ));
+            }
             // capabilities.md §10.2 — a ck.capability.delegate that closes a
             // delegation cycle MUST be rejected before it projects.
             if let Err(reason) = proj.check_delegation_cycle(operation) {

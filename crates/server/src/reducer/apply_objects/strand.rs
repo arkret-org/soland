@@ -60,6 +60,30 @@ impl ProjectionState {
                 reason: reason.to_owned(),
             };
         }
+        if let Some((_, list_space_id, _)) =
+            strand_position_from_create_payload(&operation.payload, object)
+        {
+            let child_scope = object
+                .get("scope_circle_id")
+                .and_then(Value::as_str)
+                .filter(|value| !value.trim().is_empty());
+            let child_realm_id = object
+                .get("realm_id")
+                .and_then(Value::as_str)
+                .unwrap_or(operation.realm_id.as_ref());
+            let child_has_plaintext_metadata =
+                object.get("metadata").is_some() && object.get("encrypted_metadata").is_none();
+            if let Err(reason) = self.check_space_child_scope_policy(
+                &list_space_id,
+                child_scope,
+                child_realm_id,
+                child_has_plaintext_metadata,
+            ) {
+                return ProjectionEffect::Rejected {
+                    reason: reason.to_owned(),
+                };
+            }
+        }
         let realm_id = projection_object_realm_id(object, operation);
         let created_by = object
             .get("created_by")
@@ -277,6 +301,22 @@ impl ProjectionState {
                 reason: "missing_strand_id".to_owned(),
             };
         };
+        let position = strand_position_from_lifecycle_payload(&operation.payload);
+        let Some(strand) = self.strands.get(&strand_id) else {
+            return ProjectionEffect::Ignored;
+        };
+        if let Some((_, list_space_id, _)) = position.as_ref()
+            && let Err(reason) = self.check_space_child_scope_policy(
+                list_space_id,
+                strand.scope_circle_id.as_deref(),
+                &strand.realm_id,
+                false,
+            )
+        {
+            return ProjectionEffect::Rejected {
+                reason: reason.to_owned(),
+            };
+        }
         let Some(strand) = self.strands.get_mut(&strand_id) else {
             return ProjectionEffect::Ignored;
         };
@@ -287,9 +327,7 @@ impl ProjectionState {
             .map(ToOwned::to_owned);
         strand.updated_at = Some(now);
         let projected_state = strand.state;
-        if let Some((board_space_id, list_space_id, rank)) =
-            strand_position_from_lifecycle_payload(&operation.payload)
-        {
+        if let Some((board_space_id, list_space_id, rank)) = position {
             self.store_strand_position_relation(
                 &strand_id,
                 operation.realm_id.as_ref(),

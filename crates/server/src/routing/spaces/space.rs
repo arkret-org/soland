@@ -22,9 +22,9 @@ use serde_json::{Value, json};
 
 use super::AuthArgs;
 use crate::error::AppError;
-use crate::reducer::CHILD_ORDER_CELL_FAMILY;
+use crate::reducer::{CHILD_ORDER_CELL_FAMILY, ObjectLifecycleState};
 use crate::routing::organizations;
-use crate::state::{AppState, RealmDirectoryEntry, SessionRecord};
+use crate::state::{AppState, RealmDirectoryEntry, SessionRecord, TypingRecord};
 use crate::wire::now;
 use crate::{JsonResult, json_ok};
 
@@ -946,6 +946,57 @@ pub async fn prune_expired_typing(state: &AppState) {
     }
 }
 
+pub async fn typing_scope_allows_actor(
+    state: &AppState,
+    realm_id: &str,
+    actor: &str,
+    scope_id: Option<&str>,
+) -> Result<(), AppError> {
+    let Some(scope_id) = scope_id.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(());
+    };
+    if scope_id == realm_id {
+        return Ok(());
+    }
+    if scope_id.starts_with("ck:realm:") {
+        return Err(AppError::capability_denied(
+            "ck.typing scope_id names a different realm",
+        ));
+    }
+    if !scope_id.starts_with("ck:strand:") {
+        return Err(AppError::invalid_param(
+            "ck.typing scope_id must be the realm_id or a visible ck:strand",
+        ));
+    }
+    let projection = state
+        .projection
+        .lock()
+        .map_err(|_| AppError::internal("projection state unavailable"))?;
+    let Some(strand) = projection.strands.get(scope_id) else {
+        return Err(AppError::capability_denied(
+            "ck.typing scope strand is not visible",
+        ));
+    };
+    if strand.realm_id != realm_id {
+        return Err(AppError::capability_denied(
+            "ck.typing scope strand belongs to another realm",
+        ));
+    }
+    if strand.state != ObjectLifecycleState::Active {
+        return Err(AppError::capability_denied(
+            "ck.typing scope strand is not active",
+        ));
+    }
+    if let Some(scope_circle_id) = strand.scope_circle_id.as_deref()
+        && !projection.circle_scope_visible_to_actor(scope_circle_id, actor)
+    {
+        return Err(AppError::capability_denied(
+            "ck.typing scope circle is not visible",
+        ));
+    }
+    Ok(())
+}
+
 pub async fn typing_ephemeral_for_realm(
     state: &AppState,
     realm_id: &str,
@@ -955,6 +1006,9 @@ pub async fn typing_ephemeral_for_realm(
     let Some(session) = session else {
         return Vec::new();
     };
+    if !realm_has_member(state, realm_id, &session.actor).await {
+        return Vec::new();
+    }
     let mut by_scope = std::collections::BTreeMap::<String, Vec<serde_json::Value>>::new();
     let typing_records = state
         .persistence
@@ -963,6 +1017,9 @@ pub async fn typing_ephemeral_for_realm(
         .await
         .unwrap_or_default();
     for record in &typing_records {
+        if !typing_record_visible_to_session(state, record, session).await {
+            continue;
+        }
         let scope_id = record
             .scope_id
             .clone()
@@ -1000,6 +1057,102 @@ pub async fn typing_ephemeral_for_realm(
         }));
     }
     ephemeral
+}
+
+async fn typing_record_visible_to_session(
+    state: &AppState,
+    record: &TypingRecord,
+    session: &SessionRecord,
+) -> bool {
+    if personal_blocklist_blocks_actor(state, session, &record.actor).await {
+        return false;
+    }
+    typing_scope_allows_actor(
+        state,
+        &record.realm_id,
+        &session.actor,
+        record.scope_id.as_deref(),
+    )
+    .await
+    .is_ok()
+}
+
+async fn personal_blocklist_blocks_actor(
+    state: &AppState,
+    session: &SessionRecord,
+    sender: &str,
+) -> bool {
+    if sender == session.actor {
+        return false;
+    }
+    for data_type in ["ck.account.blocklist", "ck.account.blocklist.v1"] {
+        let blocked = state
+            .persistence
+            .account_data()
+            .get(&session.actor, data_type)
+            .await
+            .ok()
+            .flatten()
+            .is_some_and(|record| blocklist_payload_blocks_sender(&record.payload, sender));
+        if blocked {
+            return true;
+        }
+    }
+    false
+}
+
+fn blocklist_payload_blocks_sender(payload: &Value, sender: &str) -> bool {
+    if let Some(entries) = payload.get("entries").and_then(Value::as_array) {
+        return entries
+            .iter()
+            .any(|entry| blocklist_entry_blocks_sender(entry, sender));
+    }
+    if let Some(entries) = payload.get("blocked").and_then(Value::as_array) {
+        return entries
+            .iter()
+            .any(|entry| blocklist_entry_blocks_sender(entry, sender));
+    }
+    blocklist_entry_blocks_sender(payload, sender)
+}
+
+fn blocklist_entry_blocks_sender(entry: &Value, sender: &str) -> bool {
+    match entry {
+        Value::String(_) => blocklist_value_is_sender(entry, sender),
+        Value::Object(object) => {
+            let mode = object
+                .get("mode")
+                .or_else(|| object.get("kind"))
+                .or_else(|| object.get("action"))
+                .or_else(|| object.get("status"))
+                .and_then(Value::as_str)
+                .unwrap_or("block");
+            if matches!(mode, "allow" | "unblock" | "removed" | "deleted") {
+                return false;
+            }
+            object
+                .get("target")
+                .or_else(|| object.get("did"))
+                .or_else(|| object.get("actor"))
+                .is_some_and(|target| blocklist_entry_target_matches_sender(target, sender))
+        }
+        _ => false,
+    }
+}
+
+fn blocklist_entry_target_matches_sender(target: &Value, sender: &str) -> bool {
+    match target {
+        Value::String(_) => blocklist_value_is_sender(target, sender),
+        Value::Object(object) => object
+            .get("did")
+            .or_else(|| object.get("actor"))
+            .or_else(|| object.get("id"))
+            .is_some_and(|value| blocklist_value_is_sender(value, sender)),
+        _ => false,
+    }
+}
+
+fn blocklist_value_is_sender(value: &Value, sender: &str) -> bool {
+    value.as_str().is_some_and(|value| value == sender)
 }
 
 /// `webrtc-signaling.md` §5 / §7 — relayed `ck.call.signal` records a given

@@ -389,6 +389,11 @@ diesel::table! {
     projection_spaces (id) {
         id -> Uuid,
         realm_id -> Uuid,
+        scope_circle_id -> Nullable<Uuid>,
+        default_scope_circle_id -> Nullable<Uuid>,
+        child_scope_policy -> Nullable<Text>,
+        child_scope_policy_scope_circle_id -> Nullable<Uuid>,
+        child_scope_policy_metadata_encryption_floor -> Nullable<Text>,
         kind -> Text,
         title -> Text,
         parent_ref -> Nullable<Uuid>,

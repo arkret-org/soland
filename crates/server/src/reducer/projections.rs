@@ -297,6 +297,9 @@ pub struct SpaceContainerProjection {
     pub realm_id: String,
     pub kind: String,
     pub title: String,
+    pub scope_circle_id: Option<String>,
+    pub default_scope_circle_id: Option<String>,
+    pub child_scope_policy: Option<ChildScopePolicy>,
     pub parent_ref: Option<String>,
     pub rank: Option<String>,
     pub state: SpaceContainerLifecycleState,
@@ -323,6 +326,28 @@ pub struct SpaceContainerProjection {
     /// strand inside the policy window. Spec `realm-and-space.md`
     /// §2.5.1 ¶6. Defaults to `false`.
     pub parent_ref_locked: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ChildScopePolicy {
+    pub kind: String,
+    pub scope_circle_id: Option<String>,
+    pub metadata_encryption_floor: Option<String>,
+}
+
+impl ChildScopePolicy {
+    pub fn from_parts(
+        kind: Option<String>,
+        scope_circle_id: Option<String>,
+        metadata_encryption_floor: Option<String>,
+    ) -> Option<Self> {
+        let kind = kind?;
+        Some(Self {
+            kind,
+            scope_circle_id,
+            metadata_encryption_floor,
+        })
+    }
 }
 
 pub(crate) fn space_container_id_from_payload(payload: &Value) -> Option<String> {

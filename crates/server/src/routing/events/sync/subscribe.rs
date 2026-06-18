@@ -492,7 +492,24 @@ pub(crate) fn presence_sync_event_json(record: PresenceRecord) -> Value {
         "updated_at": record.updated_at,
     });
     if is_stale_online && let Some(object) = event.as_object_mut() {
-        object.insert("last_active".to_owned(), json!(record.updated_at));
+        object.insert(
+            "last_active_at".to_owned(),
+            json!(presence_last_active_bucket_interval(record.updated_at)),
+        );
     }
     event
+}
+
+fn presence_last_active_bucket_interval(updated_at: DateTime<Utc>) -> String {
+    const LAST_ACTIVE_BUCKET_SECONDS: i64 = 60 * 60;
+    let bucket_start_seconds = updated_at
+        .timestamp()
+        .div_euclid(LAST_ACTIVE_BUCKET_SECONDS)
+        * LAST_ACTIVE_BUCKET_SECONDS;
+    let bucket_start =
+        DateTime::<Utc>::from_timestamp(bucket_start_seconds, 0).unwrap_or(updated_at);
+    format!(
+        "{}/PT1H",
+        bucket_start.to_rfc3339_opts(SecondsFormat::Secs, true)
+    )
 }

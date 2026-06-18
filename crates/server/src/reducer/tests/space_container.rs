@@ -700,3 +700,237 @@ fn board_archive_cascades_child_lists_and_cards() {
         Some("r007")
     );
 }
+
+#[test]
+fn child_scope_policy_requires_specific_circle_for_strand_placement() {
+    let mut state = ProjectionState::new();
+    let hlc = ServerHlc::new("test");
+    let realm_id = "ck:realm:01904100-0000-7000-8000-cfc039892036";
+    let circle_id = "ck:circle:01904100-0000-7000-8000-00000000c001";
+    let list_id = "ck:space:01904100-0000-7000-8000-0000000000a1";
+    let public_strand_id = "ck:strand:01904100-0000-7000-8000-0000000000f1";
+    let scoped_strand_id = "ck:strand:01904100-0000-7000-8000-0000000000f2";
+
+    state.apply(
+        &make_operation(
+            crate::kinds::CK_REALM_CREATE,
+            realm_id,
+            serde_json::json!({
+                "owner": "did:web:alice.example",
+                "title": "Product",
+                "encryption_profile": "mls_rfc9420"
+            }),
+        ),
+        &hlc,
+    );
+    state.apply(
+        &make_operation(
+            crate::kinds::CK_CIRCLE_CREATE,
+            realm_id,
+            serde_json::json!({
+                "object": {
+                    "id": circle_id,
+                    "realm_id": realm_id,
+                    "title": "Private",
+                    "created_by": "did:web:alice.example",
+                    "encryption_profile": "mls_rfc9420"
+                }
+            }),
+        ),
+        &hlc,
+    );
+    state.apply(
+        &make_operation(
+            crate::kinds::CK_SPACE_CONTAINER_CREATE,
+            realm_id,
+            serde_json::json!({
+                "object": {
+                    "id": list_id,
+                    "realm_id": realm_id,
+                    "kind": "list",
+                    "title": "Private list",
+                    "created_by": "did:web:alice.example",
+                    "child_scope_policy": {
+                        "kind": "require_scope_circle_id",
+                        "scope_circle_id": circle_id
+                    }
+                }
+            }),
+        ),
+        &hlc,
+    );
+
+    let public_create = make_operation(
+        crate::kinds::CK_STRAND_CREATE,
+        realm_id,
+        serde_json::json!({
+            "object": {
+                "id": public_strand_id,
+                "realm_id": realm_id,
+                "metadata": {
+                    "title": "Public task",
+                    "fields": {
+                        "board_space_id": list_id,
+                        "list_space_id": list_id,
+                        "rank": "r001"
+                    }
+                },
+                "created_by": "did:web:alice.example"
+            }
+        }),
+    );
+    assert!(matches!(
+        state.apply(&public_create, &hlc),
+        ProjectionEffect::Rejected { reason } if reason == cokret_sdk::ERROR_CODE_POLICY_VIOLATION
+    ));
+    assert_eq!(
+        state.check_child_scope_policy_transition(&public_create),
+        Err(cokret_sdk::ERROR_CODE_POLICY_VIOLATION)
+    );
+    assert!(!state.strands.contains_key(public_strand_id));
+
+    let scoped_create = make_operation(
+        crate::kinds::CK_STRAND_CREATE,
+        realm_id,
+        serde_json::json!({
+            "object": {
+                "id": scoped_strand_id,
+                "realm_id": realm_id,
+                "scope_circle_id": circle_id,
+                "metadata": {
+                    "title": "Private task",
+                    "fields": {
+                        "board_space_id": list_id,
+                        "list_space_id": list_id,
+                        "rank": "r002"
+                    }
+                },
+                "created_by": "did:web:alice.example"
+            }
+        }),
+    );
+    assert!(matches!(
+        state.apply(&scoped_create, &hlc),
+        ProjectionEffect::StrandLifecycle { .. }
+    ));
+    assert_eq!(
+        state.strands[scoped_strand_id].scope_circle_id.as_deref(),
+        Some(circle_id)
+    );
+}
+
+#[test]
+fn child_scope_policy_gates_space_parent_edges() {
+    let mut state = ProjectionState::new();
+    let hlc = ServerHlc::new("test");
+    let realm_id = "ck:realm:01904100-0000-7000-8000-cfc039892036";
+    let circle_id = "ck:circle:01904100-0000-7000-8000-00000000c002";
+    let parent_id = "ck:space:01904100-0000-7000-8000-0000000000b1";
+    let child_id = "ck:space:01904100-0000-7000-8000-0000000000b2";
+    let scoped_child_id = "ck:space:01904100-0000-7000-8000-0000000000b3";
+
+    state.apply(
+        &make_operation(
+            crate::kinds::CK_REALM_CREATE,
+            realm_id,
+            serde_json::json!({
+                "owner": "did:web:alice.example",
+                "title": "Product",
+                "encryption_profile": "mls_rfc9420"
+            }),
+        ),
+        &hlc,
+    );
+    state.apply(
+        &make_operation(
+            crate::kinds::CK_CIRCLE_CREATE,
+            realm_id,
+            serde_json::json!({
+                "object": {
+                    "id": circle_id,
+                    "realm_id": realm_id,
+                    "title": "Private",
+                    "created_by": "did:web:alice.example",
+                    "encryption_profile": "mls_rfc9420"
+                }
+            }),
+        ),
+        &hlc,
+    );
+    state.apply(
+        &make_operation(
+            crate::kinds::CK_SPACE_CONTAINER_CREATE,
+            realm_id,
+            serde_json::json!({
+                "object": {
+                    "id": parent_id,
+                    "realm_id": realm_id,
+                    "kind": "folder",
+                    "title": "Private parent",
+                    "created_by": "did:web:alice.example",
+                    "child_scope_policy": {
+                        "kind": "require_same_scope"
+                    },
+                    "scope_circle_id": circle_id
+                }
+            }),
+        ),
+        &hlc,
+    );
+    for (space_id, title, scope) in [
+        (child_id, "Public child", None),
+        (scoped_child_id, "Scoped child", Some(circle_id)),
+    ] {
+        let mut object = serde_json::json!({
+            "id": space_id,
+            "realm_id": realm_id,
+            "kind": "folder",
+            "title": title,
+            "created_by": "did:web:alice.example"
+        });
+        if let Some(scope) = scope {
+            object["scope_circle_id"] = serde_json::json!(scope);
+        }
+        state.apply(
+            &make_operation(
+                crate::kinds::CK_SPACE_CONTAINER_CREATE,
+                realm_id,
+                serde_json::json!({ "object": object }),
+            ),
+            &hlc,
+        );
+    }
+
+    let public_parent = make_operation(
+        crate::kinds::CK_SPACE_CONTAINER_PARENT,
+        realm_id,
+        serde_json::json!({
+            "space_id": child_id,
+            "parent_space_id": parent_id
+        }),
+    );
+    assert!(matches!(
+        state.apply(&public_parent, &hlc),
+        ProjectionEffect::Rejected { reason } if reason == cokret_sdk::ERROR_CODE_POLICY_VIOLATION
+    ));
+    assert_eq!(state.space_containers[child_id].parent_ref.as_deref(), None);
+
+    let scoped_parent = make_operation(
+        crate::kinds::CK_SPACE_CONTAINER_PARENT,
+        realm_id,
+        serde_json::json!({
+            "space_id": scoped_child_id,
+            "parent_space_id": parent_id
+        }),
+    );
+    assert!(matches!(
+        state.apply(&scoped_parent, &hlc),
+        ProjectionEffect::SpaceContainerLifecycle { .. }
+    ));
+    assert_eq!(
+        state.space_containers[scoped_child_id]
+            .parent_ref
+            .as_deref(),
+        Some(parent_id)
+    );
+}

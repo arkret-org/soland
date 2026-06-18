@@ -94,14 +94,15 @@ pub use projection_state::ProjectionState;
 // sibling `apply_*` modules via `super::*`.
 pub(crate) use projections::space_container_id_from_payload;
 pub use projections::{
-    AppletProjection, CapabilityDerivedState, CircleLifecycleState, CircleProjection,
-    DocumentVersionProjection, ErasureReceiptRecord, FanoutPeerStatus, KeyPackageLifetime,
-    MessageState, MlsCommitEpoch, MlsCommitEpochKey, MlsKeyPackage, MlsWelcome, MlsWelcomeQueueKey,
-    MorphProjection, ObjectLifecycleState, PinProjection, PollOptionState, PollState,
-    ProjectedMessageView, PushRouteCellValue, PushRouteSubject, ReactionState, ReadMarkerState,
-    RealmInheritancePolicyState, RealmLinkState, RealmPolicyServerConfig, RedactionCellValue,
-    RsvpProjection, SolandAgentProjection, SolandMembershipState, SolandRealmState,
-    SolandRelationState, SpaceContainerLifecycleState, SpaceContainerProjection, StrandProjection,
+    AppletProjection, CapabilityDerivedState, ChildScopePolicy, CircleLifecycleState,
+    CircleProjection, DocumentVersionProjection, ErasureReceiptRecord, FanoutPeerStatus,
+    KeyPackageLifetime, MessageState, MlsCommitEpoch, MlsCommitEpochKey, MlsKeyPackage, MlsWelcome,
+    MlsWelcomeQueueKey, MorphProjection, ObjectLifecycleState, PinProjection, PollOptionState,
+    PollState, ProjectedMessageView, PushRouteCellValue, PushRouteSubject, ReactionState,
+    ReadMarkerState, RealmInheritancePolicyState, RealmLinkState, RealmPolicyServerConfig,
+    RedactionCellValue, RsvpProjection, SolandAgentProjection, SolandMembershipState,
+    SolandRealmState, SolandRelationState, SpaceContainerLifecycleState, SpaceContainerProjection,
+    StrandProjection,
 };
 
 #[cfg(test)]
