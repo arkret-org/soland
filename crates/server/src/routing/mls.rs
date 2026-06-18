@@ -41,9 +41,10 @@ use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::{DateTime, TimeZone, Utc};
 use cokret_sdk::{
-    KeyPackagesClaimOutcome, KeyPackagesClaimRequestBody, KeyPackagesConsumeOutcome,
-    KeyPackagesConsumeRequestBody, KeyPackagesRevokeOutcome, KeyPackagesRevokeRequestBody,
-    KeyPackagesUploadOutcome, KeyPackagesUploadRequestBody, Operation, OperationId, RealmId,
+    Did, Failure as KeypackageFailure, Hash, KeyPackagesClaimOutcome, KeyPackagesClaimRequestBody,
+    KeyPackagesConsumeOutcome, KeyPackagesConsumeRequestBody, KeyPackagesRevokeOutcome,
+    KeyPackagesRevokeRequestBody, KeyPackagesUploadOutcome, KeyPackagesUploadRequestBody,
+    KeypackageClaimRecord, Operation, OperationId, RealmId, Signature2,
 };
 use salvo::oapi::extract::{JsonBody, QueryParam};
 use salvo::prelude::*;
@@ -293,6 +294,7 @@ async fn upload_keypackage(
         accepted,
         rejected,
         key_package_refs,
+        available_count: Some(available_keypackage_count(state, &actor_id, None)),
     })
 }
 
@@ -369,10 +371,12 @@ async fn claim_keypackage(
         };
         return json_ok(KeyPackagesClaimOutcome {
             claims: Vec::new(),
-            failures: vec![json!({
-                "device_id": target_device_ids.iter().next().cloned().unwrap_or_default(),
-                "reason_code": reason_code,
-            })],
+            failures: vec![KeypackageFailure {
+                keypackage_ref: None,
+                device_id: target_device_ids.iter().next().cloned(),
+                reason_code: reason_code.to_owned(),
+                retry_after_ms: None,
+            }],
             available_count: Some(available_before),
         });
     };
@@ -515,10 +519,7 @@ async fn consume_keypackages(
             }
         }
     }
-    json_ok(KeyPackagesConsumeOutcome {
-        consumed,
-        failures: json!(failures),
-    })
+    json_ok(KeyPackagesConsumeOutcome { consumed, failures })
 }
 
 #[endpoint(
@@ -586,10 +587,7 @@ async fn revoke_keypackages(
             }
         }
     }
-    json_ok(KeyPackagesRevokeOutcome {
-        revoked,
-        failures: json!(failures),
-    })
+    json_ok(KeyPackagesRevokeOutcome { revoked, failures })
 }
 
 // ── welcomes/pending ──────────────────────────────────────────────────
@@ -796,22 +794,33 @@ fn current_accepted_ssk_generation(
         })
 }
 
-fn keypackage_failure(entry: &Value, device_id: &str, reason_code: impl Into<String>) -> Value {
-    json!({
-        "keypackage_ref": entry
+fn keypackage_failure(
+    entry: &Value,
+    device_id: &str,
+    reason_code: impl Into<String>,
+) -> KeypackageFailure {
+    KeypackageFailure {
+        keypackage_ref: entry
             .get("keypackage_ref")
             .or_else(|| entry.get("keypackage_id"))
-            .and_then(Value::as_str),
-        "device_id": device_id,
-        "reason_code": reason_code.into(),
-    })
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+        device_id: Some(device_id.to_owned()),
+        reason_code: reason_code.into(),
+        retry_after_ms: None,
+    }
 }
 
-fn keypackage_ref_failure(keypackage_ref: String, reason_code: impl Into<String>) -> Value {
-    json!({
-        "keypackage_ref": keypackage_ref,
-        "reason_code": reason_code.into(),
-    })
+fn keypackage_ref_failure(
+    keypackage_ref: String,
+    reason_code: impl Into<String>,
+) -> KeypackageFailure {
+    KeypackageFailure {
+        keypackage_ref: Some(keypackage_ref),
+        device_id: None,
+        reason_code: reason_code.into(),
+        retry_after_ms: None,
+    }
 }
 
 fn non_empty_keypackage_refs(refs: &[String]) -> Result<Vec<String>, AppError> {
@@ -846,7 +855,7 @@ fn available_keypackage_count(state: &AppState, actor_id: &str, device_id: Optio
 fn keypackage_claim_record(
     record: &MlsKeyPackageRow,
     claim_nonce: &str,
-) -> Result<Value, AppError> {
+) -> Result<KeypackageClaimRecord, AppError> {
     let Some(ssk_generation) = record.ssk_generation else {
         return Err(AppError::new(
             ErrorCode::FailedPrecondition,
@@ -855,27 +864,31 @@ fn keypackage_claim_record(
         .with_wire_code("claim_generation_mismatch"));
     };
     let key_package = URL_SAFE_NO_PAD.encode(&record.key_package_bytes);
-    Ok(json!({
-        "claim_id": format!("{}:{claim_nonce}", record.id),
-        "keypackage_ref": record.keypackage_ref.clone(),
-        "keypackage_digest": record.keypackage_digest.clone(),
-        "principal_id": record.actor_id.clone(),
-        "device_id": record.device_id.clone(),
-        "key_package": key_package,
-        "capabilities": record.capabilities.clone(),
-        "capabilities_digest": record.capabilities_digest.clone(),
-        "ssk_generation": ssk_generation,
-        "expires_at": unix_timestamp_rfc3339(record.lifetime_not_after),
-        "device_signature": record.device_signature.clone(),
-        "revocation_status": "active",
-    }))
+    Ok(KeypackageClaimRecord {
+        claim_id: format!("{}:{claim_nonce}", record.id),
+        keypackage_ref: record.keypackage_ref.clone(),
+        keypackage_digest: Hash::new(record.keypackage_digest.clone())
+            .map_err(|error| AppError::internal(format!("invalid keypackage_digest: {error}")))?,
+        principal_id: Did::new(record.actor_id.clone())
+            .map_err(|error| AppError::internal(format!("invalid principal_id: {error}")))?,
+        device_id: record.device_id.clone(),
+        key_package,
+        capabilities: record.capabilities.clone(),
+        capabilities_digest: Hash::new(record.capabilities_digest.clone())
+            .map_err(|error| AppError::internal(format!("invalid capabilities_digest: {error}")))?,
+        ssk_generation,
+        expires_at: unix_timestamp_datetime(record.lifetime_not_after)?,
+        device_signature: serde_json::from_value::<Signature2>(record.device_signature.clone())
+            .map_err(|error| AppError::internal(format!("invalid device_signature: {error}")))?,
+        revocation_status: Some("active".to_owned()),
+        last_resort: None,
+    })
 }
 
-fn unix_timestamp_rfc3339(timestamp: i64) -> String {
+fn unix_timestamp_datetime(timestamp: i64) -> Result<DateTime<Utc>, AppError> {
     Utc.timestamp_opt(timestamp, 0)
         .single()
-        .unwrap_or_else(Utc::now)
-        .to_rfc3339()
+        .ok_or_else(|| AppError::internal(format!("invalid unix timestamp: {timestamp}")))
 }
 
 /// Build a minimal in-process `Operation` carrying the MLS payload so
