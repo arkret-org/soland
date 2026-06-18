@@ -44,6 +44,14 @@ pub trait DeviceMessageStore: Send + Sync {
         device_id: &str,
         queue_position: i64,
     ) -> PersistenceResult<Vec<DeviceMessageRecord>>;
+    /// Prune expired unacked messages and record the highest lost queue position per device.
+    async fn prune_expired(&self, now: chrono::DateTime<Utc>) -> PersistenceResult<usize>;
+    /// Highest queue position known lost for this device due to TTL/capacity eviction.
+    async fn lost_watermark(
+        &self,
+        recipient: &str,
+        device_id: &str,
+    ) -> PersistenceResult<Option<i64>>;
     /// Drop everything queued for the recipient+device (used on session revoke).
     async fn purge(&self, recipient: &str, device_id: &str) -> PersistenceResult<usize>;
 }
@@ -124,6 +132,7 @@ pub(crate) struct MemoryDeviceMessageStore {
     queue: Mutex<VecDeque<DeviceMessageRecord>>,
     txns: Mutex<BTreeSet<String>>,
     ack_tokens: Mutex<BTreeMap<String, DeviceMessageAckTokenRecord>>,
+    lost_watermarks: Mutex<BTreeMap<(String, String), i64>>,
 }
 
 impl MemoryDeviceMessageStore {
@@ -146,6 +155,14 @@ fn fresh_device_message_ack_token() -> String {
     bytes.extend_from_slice(Uuid::new_v4().as_bytes());
     bytes.extend_from_slice(Uuid::new_v4().as_bytes());
     URL_SAFE_NO_PAD.encode(bytes)
+}
+
+fn device_message_expires_at(message: &DeviceMessageRecord) -> chrono::DateTime<Utc> {
+    message
+        .content
+        .get("expires_at")
+        .and_then(|value| serde_json::from_value(value.clone()).ok())
+        .unwrap_or_else(|| message.created_at + chrono::Duration::hours(1))
 }
 
 #[async_trait]
@@ -240,6 +257,37 @@ impl DeviceMessageStore for MemoryDeviceMessageStore {
             })
             .cloned()
             .collect())
+    }
+
+    async fn prune_expired(&self, now: chrono::DateTime<Utc>) -> PersistenceResult<usize> {
+        let mut queue = self.queue.lock().expect("device message lock");
+        let before = queue.len();
+        let mut watermarks = self
+            .lost_watermarks
+            .lock()
+            .expect("device message lost watermark lock");
+        for message in queue.iter() {
+            if device_message_expires_at(message) <= now {
+                let key = (message.recipient.clone(), message.device_id.clone());
+                let entry = watermarks.entry(key).or_default();
+                *entry = (*entry).max(message.position);
+            }
+        }
+        queue.retain(|message| device_message_expires_at(message) > now);
+        Ok(before - queue.len())
+    }
+
+    async fn lost_watermark(
+        &self,
+        recipient: &str,
+        device_id: &str,
+    ) -> PersistenceResult<Option<i64>> {
+        Ok(self
+            .lost_watermarks
+            .lock()
+            .expect("device message lost watermark lock")
+            .get(&(recipient.to_owned(), device_id.to_owned()))
+            .copied())
     }
 
     async fn purge(&self, recipient: &str, device_id: &str) -> PersistenceResult<usize> {
@@ -447,6 +495,52 @@ impl DeviceMessageStore for PgDeviceMessageStore {
         .load::<DeviceMessageRow>(&mut *conn)
         .await
         .map(|rows| rows.into_iter().map(DeviceMessageRecord::from).collect())
+        .map_err(PersistenceError::from)
+    }
+
+    async fn prune_expired(&self, now: chrono::DateTime<Utc>) -> PersistenceResult<usize> {
+        let mut conn = pg_conn(&self.pool).await?;
+        sql_query(
+            "WITH expired AS ( \
+                 SELECT recipient, device_id, MAX(position) AS lost_through \
+                 FROM device_messages \
+                 WHERE COALESCE(NULLIF(content->>'expires_at', '')::timestamptz, created_at + interval '1 hour') <= $1 \
+                 GROUP BY recipient, device_id \
+             ), upserted AS ( \
+                 INSERT INTO device_message_lost_watermarks \
+                     (recipient, device_id, lost_through, updated_at) \
+                 SELECT recipient, device_id, lost_through, $1 FROM expired \
+                 ON CONFLICT (recipient, device_id) DO UPDATE \
+                 SET lost_through = GREATEST(device_message_lost_watermarks.lost_through, EXCLUDED.lost_through), \
+                     updated_at = EXCLUDED.updated_at \
+                 RETURNING 1 \
+             ) \
+             DELETE FROM device_messages \
+             WHERE COALESCE(NULLIF(content->>'expires_at', '')::timestamptz, created_at + interval '1 hour') <= $1",
+        )
+        .bind::<Timestamptz, _>(now)
+        .execute(&mut *conn)
+        .await
+        .map_err(PersistenceError::from)
+    }
+
+    async fn lost_watermark(
+        &self,
+        recipient: &str,
+        device_id: &str,
+    ) -> PersistenceResult<Option<i64>> {
+        let mut conn = pg_conn(&self.pool).await?;
+        sql_query(
+            "SELECT lost_through AS max_seq \
+             FROM device_message_lost_watermarks \
+             WHERE recipient = $1 AND device_id = $2",
+        )
+        .bind::<Text, _>(recipient)
+        .bind::<Text, _>(device_id)
+        .get_result::<MaxSeqRow>(&mut *conn)
+        .await
+        .optional()
+        .map(|row| row.and_then(|row| row.max_seq))
         .map_err(PersistenceError::from)
     }
 

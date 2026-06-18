@@ -21,6 +21,7 @@ DROP TABLE IF EXISTS canonical_events CASCADE;
 DROP TABLE IF EXISTS consent_cells CASCADE;
 DROP TABLE IF EXISTS contacts CASCADE;
 DROP TABLE IF EXISTS device_message_ack_tokens CASCADE;
+DROP TABLE IF EXISTS device_message_lost_watermarks CASCADE;
 DROP TABLE IF EXISTS device_message_txns CASCADE;
 DROP TABLE IF EXISTS device_messages CASCADE;
 DROP TABLE IF EXISTS devices CASCADE;

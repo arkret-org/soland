@@ -210,10 +210,29 @@ pub(crate) async fn build_sync_snapshot(
     let mut to_device_ack_token = None;
     let mut to_device_limited = false;
     let mut to_device_next_cursor = None;
+    let mut to_device_lost = None;
     let to_device = if let Some(session) = session {
-        let queued = state
-            .persistence
-            .device_messages()
+        let device_messages = state.persistence.device_messages();
+        if let Err(error) = device_messages.prune_expired(now()).await {
+            tracing::error!(%error, "failed to prune expired to-device messages during sync snapshot");
+        }
+        let lost_watermark = match device_messages
+            .lost_watermark(&session.actor, &session.device_id)
+            .await
+        {
+            Ok(watermark) => watermark,
+            Err(error) => {
+                tracing::error!(%error, "failed to read to-device lost watermark during sync snapshot");
+                None
+            }
+        };
+        if lost_watermark.is_some_and(|position| position > after_cursor.to_device_position) {
+            to_device_lost = Some(true);
+            if let Some(lost_watermark) = lost_watermark {
+                to_device_position = to_device_position.max(lost_watermark);
+            }
+        }
+        let queued = device_messages
             .list_after(&session.actor, &session.device_id, 0)
             .await
             .unwrap_or_default();
@@ -227,11 +246,11 @@ pub(crate) async fn build_sync_snapshot(
             .filter_map(|message| serde_json::to_value(message).ok())
             .collect::<Vec<_>>();
         if let Some(max_position) = page.iter().map(|message| message.position).max() {
-            to_device_position = max_position;
+            to_device_position = to_device_position.max(max_position);
             to_device_ack_token = state
                 .persistence
                 .device_messages()
-                .issue_ack_token(&session.actor, &session.device_id, to_device_position)
+                .issue_ack_token(&session.actor, &session.device_id, max_position)
                 .await
                 .ok()
                 .flatten();
@@ -295,7 +314,7 @@ pub(crate) async fn build_sync_snapshot(
         to_device_ack_token,
         to_device_limited,
         to_device_next_cursor,
-        to_device_lost: None,
+        to_device_lost,
         device_lists: json!({"changed": [], "left": []}),
         account_data,
         presence,

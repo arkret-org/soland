@@ -319,6 +319,14 @@ CREATE TABLE public.device_message_ack_tokens (
     consumed_at timestamp with time zone
 );
 
+CREATE TABLE public.device_message_lost_watermarks (
+    recipient text NOT NULL,
+    device_id text NOT NULL,
+    lost_through bigint NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    PRIMARY KEY (recipient, device_id)
+);
+
 CREATE TABLE public.direct_conversation_bindings (
     participants_key text NOT NULL,
     participants_unordered text[] NOT NULL,

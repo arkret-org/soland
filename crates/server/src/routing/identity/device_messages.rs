@@ -294,31 +294,43 @@ async fn get_device_messages(
         Some(limit) => (limit as usize).min(TO_DEVICE_PAGE_LIMIT),
         None => TO_DEVICE_PAGE_LIMIT,
     };
-    let queued = state
-        .persistence
-        .device_messages()
+    let device_messages = state.persistence.device_messages();
+    device_messages
+        .prune_expired(now())
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    let lost_watermark = device_messages
+        .lost_watermark(&session.actor, &session.device_id)
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    let lost = lost_watermark.is_some_and(|position| position > cursor_position);
+    let queued = device_messages
         .list_after(&session.actor, &session.device_id, cursor_position)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
     let has_more = queued.len() > page_limit;
     let page = queued.into_iter().take(page_limit).collect::<Vec<_>>();
     let messages = device_message_envelopes_after(&page);
-    let to_device_position = page
+    let delivered_position = page
         .iter()
         .map(|message| message.position)
         .max()
         .unwrap_or(cursor_position);
+    let mut to_device_position = delivered_position;
+    if lost {
+        if let Some(lost_watermark) = lost_watermark {
+            to_device_position = to_device_position.max(lost_watermark);
+        }
+    }
     let ack_token = if page.is_empty() {
         None
     } else {
-        state
-            .persistence
-            .device_messages()
-            .issue_ack_token(&session.actor, &session.device_id, to_device_position)
+        device_messages
+            .issue_ack_token(&session.actor, &session.device_id, delivered_position)
             .await
             .map_err(|error| AppError::internal(error.to_string()))?
     };
-    let next_cursor = if page.is_empty() {
+    let next_cursor = if page.is_empty() && !lost {
         None
     } else {
         Some(
@@ -339,7 +351,7 @@ async fn get_device_messages(
         next_cursor,
         has_more,
         limited: has_more,
-        lost: false,
+        lost,
     })
 }
 
