@@ -210,6 +210,41 @@ diesel::table! {
 }
 
 diesel::table! {
+    read_receipt_relay (id) {
+        id -> Uuid,
+        realm_id -> Text,
+        position -> Int8,
+        actor_id -> Text,
+        sender_device -> Nullable<Text>,
+        event_id -> Text,
+        read_scope -> Jsonb,
+        target_actor -> Nullable<Text>,
+        visibility -> Text,
+        receipt -> Jsonb,
+        created_at -> Timestamptz,
+        expires_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
+    read_receipt_relay_position (realm_id) {
+        realm_id -> Text,
+        next_position -> Int8,
+        updated_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
+    read_receipt_relay_watermark (actor_id, device_id, realm_id) {
+        actor_id -> Text,
+        device_id -> Text,
+        realm_id -> Text,
+        delivered_through -> Int8,
+        updated_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
     webvh_documents (id) {
         id -> Text,
         did_document -> Jsonb,
@@ -535,6 +570,9 @@ diesel::allow_tables_to_appear_in_same_query!(
     call_signal_relay,
     call_signal_relay_position,
     call_signal_relay_watermark,
+    read_receipt_relay,
+    read_receipt_relay_position,
+    read_receipt_relay_watermark,
     webvh_documents,
     webvh_log_events,
     realm_invites,

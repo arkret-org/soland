@@ -27,4 +27,5 @@ mod mimi;
 mod policy_snapshot;
 mod projection;
 mod push_keys;
+mod read_receipts;
 mod recovery;

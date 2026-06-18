@@ -60,6 +60,7 @@ impl<T: ?Sized> Mutex<T> {
 ///   - `ResyncRequired` — server detected per-subscriber drift; client MUST drop local cache and
 ///     re-subscribe with `from=null`
 ///   - `Unauthorized` — subscriber's session token revoked / expired mid-stream; client MUST close
+///   - `Ephemeral` — short-TTL account-sync relay wakeup; events.subscribe ignores it
 ///     + re-auth
 #[derive(Clone, Debug)]
 pub struct EventNotification {
@@ -101,6 +102,8 @@ pub enum EventNotificationKind {
     },
     /// Session token invalidated mid-stream — client MUST close.
     Unauthorized { reason: String },
+    /// Short-TTL account sync wakeup for relayed ephemeral state.
+    Ephemeral { kind: String },
 }
 
 impl EventNotification {
@@ -135,6 +138,13 @@ impl EventNotification {
                 state_root,
                 seal_id,
             },
+        }
+    }
+
+    pub fn ephemeral(realm_id: String, kind: impl Into<String>) -> Self {
+        Self {
+            realm_id,
+            kind: EventNotificationKind::Ephemeral { kind: kind.into() },
         }
     }
 }

@@ -27,6 +27,7 @@ pub struct PgPersistenceStore {
     moderation: PgModerationStore,
     presence: PgPresenceStore,
     call_signal_relay: PgCallSignalRelayStore,
+    read_receipt_relay: PgReadReceiptRelayStore,
     webvh: PgWebvhStore,
     realm_invites: PgRealmInviteStore,
     key_backups: PgKeyBackupStore,
@@ -73,6 +74,7 @@ impl PgPersistenceStore {
             moderation: PgModerationStore { pool: pool.clone() },
             presence: PgPresenceStore { pool: pool.clone() },
             call_signal_relay: PgCallSignalRelayStore { pool: pool.clone() },
+            read_receipt_relay: PgReadReceiptRelayStore { pool: pool.clone() },
             webvh: PgWebvhStore { pool: pool.clone() },
             realm_invites: PgRealmInviteStore { pool: pool.clone() },
             key_backups: PgKeyBackupStore { pool: pool.clone() },
@@ -181,6 +183,10 @@ impl PersistenceStore for PgPersistenceStore {
 
     fn call_signal_relay(&self) -> &dyn CallSignalRelayStore {
         &self.call_signal_relay
+    }
+
+    fn read_receipt_relay(&self) -> &dyn ReadReceiptRelayStore {
+        &self.read_receipt_relay
     }
 
     fn push_bridge_cache(&self) -> &dyn PushBridgeCacheStore {

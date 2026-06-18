@@ -169,7 +169,7 @@ async fn get_event(
     if !event_visible_to_session(state, &record, &session).await {
         return Err(AppError::not_found("event not found"));
     }
-    event_view_for_state(state, &record)
+    event_view_for_state(state, &record, &session).await
 }
 
 #[endpoint(

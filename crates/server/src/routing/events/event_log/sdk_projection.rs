@@ -328,12 +328,25 @@ fn event_operation_id(envelope: &Value, event_id: &str) -> Option<OperationId> {
 /// Envelope on read. Returns `Some(circle_id)` when the envelope (or its
 /// payload) names a Circle scope, `Some("realm:<realm_id>")` when the
 /// scope is the Realm default, or `None` when neither can be derived.
-fn effective_scope_for_envelope(envelope: &Value) -> Option<String> {
+pub(crate) fn effective_scope_for_envelope(envelope: &Value) -> Option<String> {
     let object = envelope.as_object()?;
     // Server-stamped authoritative scope. For messages this is set at ingest
     // from the message's Strand (see submit_event_value); it always wins.
     if let Some(scope) = object.get("effective_scope").and_then(Value::as_str) {
         return Some(scope.to_owned());
+    }
+    if let Some(scope) = object.get("effective_scope").and_then(Value::as_object) {
+        return match scope.get("kind").and_then(Value::as_str) {
+            Some("circle") => scope
+                .get("circle_id")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned),
+            Some("realm") => scope
+                .get("realm_id")
+                .and_then(Value::as_str)
+                .map(|realm_id| format!("realm:{realm_id}")),
+            _ => None,
+        };
     }
     // Messages NEVER carry their own scope (spec: `scope_circle_id` is a Strand
     // field, not a message field). A message's effective circle-scope is the
@@ -359,14 +372,18 @@ fn effective_scope_for_envelope(envelope: &Value) -> Option<String> {
     None
 }
 
-pub(crate) fn event_view_for_state(
+pub(crate) async fn event_view_for_state(
     state: &AppState,
     record: &CanonicalEventRecord,
+    session: &SessionRecord,
 ) -> JsonResult<EventView> {
     json_ok(EventView {
         event: sdk_event_for_state(state, record)?,
         visibility: event_visibility_metadata(state, record),
-        receipts: Vec::new(),
+        receipts: crate::routing::events::read_receipts::visible_read_receipts_for_event(
+            state, record, session,
+        )
+        .await,
     })
 }
 

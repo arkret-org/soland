@@ -12,6 +12,7 @@ pub(super) mod notify;
 pub(super) mod operations;
 pub(crate) mod projection;
 pub(super) mod projection_query;
+pub(crate) mod read_receipts;
 pub(crate) mod strand;
 pub(super) mod sync;
 

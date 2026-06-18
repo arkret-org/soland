@@ -43,6 +43,9 @@ pub(crate) use super::projection::{
     actor_erased_in_realm, retention_tombstone_for_event, tombstone_timeline_event_for_retention,
     tombstone_timeline_event_value,
 };
+use super::read_receipts::{
+    has_pending_read_receipts_for_subscriber, read_receipt_ephemeral_for_realm,
+};
 use super::{
     TO_DEVICE_PAGE_LIMIT, augment_timeline_message_json, authenticated_session,
     default_discussion_track, device_message_envelopes_after,

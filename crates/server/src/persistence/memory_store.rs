@@ -25,6 +25,7 @@ pub struct SolandMemoryPersistenceStore {
     presence: MemoryPresenceStore,
     typing: MemoryTypingStore,
     call_signal_relay: MemoryCallSignalRelayStore,
+    read_receipt_relay: MemoryReadReceiptRelayStore,
     push_bridge_cache: MemoryPushBridgeCacheStore,
     policy_documents: MemoryPolicyDocumentStore,
     recovery_policies: MemoryRecoveryPolicyStore,
@@ -77,6 +78,7 @@ impl SolandMemoryPersistenceStore {
             presence: MemoryPresenceStore::new(),
             typing: MemoryTypingStore::new(),
             call_signal_relay: MemoryCallSignalRelayStore::new(),
+            read_receipt_relay: MemoryReadReceiptRelayStore::new(),
             push_bridge_cache: MemoryPushBridgeCacheStore::new(),
             policy_documents: MemoryPolicyDocumentStore::new(),
             recovery_policies: MemoryRecoveryPolicyStore::new(),
@@ -196,6 +198,10 @@ impl PersistenceStore for SolandMemoryPersistenceStore {
 
     fn call_signal_relay(&self) -> &dyn CallSignalRelayStore {
         &self.call_signal_relay
+    }
+
+    fn read_receipt_relay(&self) -> &dyn ReadReceiptRelayStore {
+        &self.read_receipt_relay
     }
 
     fn push_bridge_cache(&self) -> &dyn PushBridgeCacheStore {

@@ -12,7 +12,7 @@ use crate::routing::spaces::space::{
     PresenceVisibilityPolicy, presence_visibility_for_actor, realm_has_member,
     realm_history_visibility_for_id, typing_scope_allows_actor,
 };
-use crate::state::{AppState, PresenceRecord, TypingRecord};
+use crate::state::{AppState, PresenceRecord, SessionRecord, TypingRecord};
 
 #[endpoint(
     operation_id = "ck.self.ephemeral.command.send",
@@ -52,7 +52,9 @@ pub(super) async fn submit_ephemeral(
             persist_ephemeral_typing(state, &session.actor, realm_id_str, &envelope).await?
         }
         "ck.presence" => persist_ephemeral_presence(state, &session.actor, &envelope).await,
-        "ck.receipt.read" => admit_ephemeral_read_receipt(state, realm_id_str, &envelope).await?,
+        "ck.receipt.read" => {
+            admit_ephemeral_read_receipt(state, &session, realm_id_str, &envelope).await?
+        }
         "ck.call.signal" => {
             // `service-http-binding.md` §162 — sending a `ck.call.signal`
             // envelope on `/_cokret/self/ephemeral` requires the realm-scoped
@@ -244,6 +246,7 @@ async fn persist_ephemeral_presence(
 
 async fn admit_ephemeral_read_receipt(
     state: &AppState,
+    session: &SessionRecord,
     realm_id: &str,
     envelope: &cokret_sdk::EphemeralEnvelope,
 ) -> Result<(), crate::error::AppError> {
@@ -293,6 +296,14 @@ async fn admit_ephemeral_read_receipt(
             .with_status(StatusCode::FORBIDDEN));
         }
     }
+    crate::routing::events::read_receipts::relay_ephemeral_read_receipt(
+        state,
+        session,
+        realm_id,
+        &visibility,
+        envelope,
+    )
+    .await?;
     Ok(())
 }
 

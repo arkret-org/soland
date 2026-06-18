@@ -247,6 +247,9 @@ pub(crate) async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: 
                                         "reason": reason,
                                     })
                                 }
+                                EventNotificationKind::Ephemeral { .. } => {
+                                    continue;
+                                }
                             };
                             yield Ok(ndjson_line(&frame));
                             if terminal {

@@ -206,6 +206,43 @@ CREATE TABLE public.call_signal_relay_watermark (
     updated_at timestamp with time zone DEFAULT now() NOT NULL
 );
 
+-- Realm-scoped relay for `ck.receipt.read` ephemeral receipt objects. The
+-- normalized `receipt` follows `ck.schema.read_receipt.v1`; relay metadata
+-- (`position`, `visibility`, `target_actor`, `expires_at`) gates short-TTL
+-- fanout through account sync and is not durable Event history.
+CREATE TABLE public.read_receipt_relay (
+    id uuid NOT NULL,
+    realm_id text NOT NULL,
+    position bigint NOT NULL,
+    actor_id text NOT NULL,
+    sender_device text,
+    event_id text NOT NULL,
+    read_scope jsonb NOT NULL,
+    target_actor text,
+    visibility text NOT NULL,
+    receipt jsonb NOT NULL,
+    created_at timestamp with time zone NOT NULL,
+    expires_at timestamp with time zone NOT NULL
+);
+
+-- Per-Realm monotonic position counter for `read_receipt_relay`. Kept
+-- separate from live rows so pruned positions are never recycled across a
+-- deliver-once watermark.
+CREATE TABLE public.read_receipt_relay_position (
+    realm_id text NOT NULL,
+    next_position bigint DEFAULT 0 NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+-- Per-subscriber-device deliver-once watermark for read receipt relay rows.
+CREATE TABLE public.read_receipt_relay_watermark (
+    actor_id text NOT NULL,
+    device_id text NOT NULL,
+    realm_id text NOT NULL,
+    delivered_through bigint DEFAULT 0 NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
 CREATE TABLE public.canonical_events (
     id uuid NOT NULL,
     actor_id text NOT NULL,
@@ -899,6 +936,18 @@ ALTER TABLE ONLY public.call_signal_relay_position
 ALTER TABLE ONLY public.call_signal_relay_watermark
     ADD CONSTRAINT call_signal_relay_watermark_pkey PRIMARY KEY (actor_id, device_id, realm_id);
 
+ALTER TABLE ONLY public.read_receipt_relay
+    ADD CONSTRAINT read_receipt_relay_pkey PRIMARY KEY (id);
+
+ALTER TABLE ONLY public.read_receipt_relay
+    ADD CONSTRAINT read_receipt_relay_realm_position_key UNIQUE (realm_id, position);
+
+ALTER TABLE ONLY public.read_receipt_relay_position
+    ADD CONSTRAINT read_receipt_relay_position_pkey PRIMARY KEY (realm_id);
+
+ALTER TABLE ONLY public.read_receipt_relay_watermark
+    ADD CONSTRAINT read_receipt_relay_watermark_pkey PRIMARY KEY (actor_id, device_id, realm_id);
+
 ALTER TABLE ONLY public.canonical_events
     ADD CONSTRAINT canonical_events_pkey PRIMARY KEY (id);
 
@@ -1127,6 +1176,12 @@ CREATE INDEX blobs_space_created_idx ON public.blobs USING btree (realm_id, crea
 CREATE INDEX call_signal_relay_realm_position_idx ON public.call_signal_relay USING btree (realm_id, position);
 
 CREATE INDEX call_signal_relay_expires_idx ON public.call_signal_relay USING btree (expires_at);
+
+CREATE INDEX read_receipt_relay_realm_position_idx ON public.read_receipt_relay USING btree (realm_id, position);
+
+CREATE INDEX read_receipt_relay_event_idx ON public.read_receipt_relay USING btree (event_id);
+
+CREATE INDEX read_receipt_relay_expires_idx ON public.read_receipt_relay USING btree (expires_at);
 
 CREATE INDEX canonical_events_actor_idx ON public.canonical_events USING btree (actor_id, actor_seq DESC);
 

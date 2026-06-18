@@ -626,6 +626,25 @@ pub struct CallSignalRelayRecord {
     pub position: u64,
 }
 
+/// Relayed `ck.receipt.read` payload for short-TTL read receipt delivery.
+/// The normalized `receipt` value is the wire object emitted to subscribers;
+/// relay metadata drives visibility and deliver-once behavior.
+#[derive(Clone, Debug, Default)]
+pub struct ReadReceiptRelayRecord {
+    pub realm_id: String,
+    pub actor_id: String,
+    pub sender_device: Option<String>,
+    pub event_id: String,
+    pub read_scope: serde_json::Value,
+    pub target_actor: Option<String>,
+    pub visibility: String,
+    pub receipt: serde_json::Value,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub expires_at: chrono::DateTime<chrono::Utc>,
+    /// Monotonic per-Realm position assigned by `ReadReceiptRelayStore::append`.
+    pub position: u64,
+}
+
 #[derive(Clone, Debug)]
 pub struct PushRuleRecord {
     pub actor: String,
