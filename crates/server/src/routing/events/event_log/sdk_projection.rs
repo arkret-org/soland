@@ -192,6 +192,27 @@ pub(crate) fn projection_operation_from_event(
     }
     if matches!(
         parsed.kind.as_str(),
+        kinds::CK_MESSAGE_CREATE | kinds::CK_REACTION_ADD
+    ) {
+        payload_object.remove("executed_by");
+        payload_object.remove("authorization_ref");
+        if let Some(executed_by) = envelope.get("executed_by").and_then(Value::as_str) {
+            payload_object.insert(
+                "executed_by".to_owned(),
+                Value::String(executed_by.to_owned()),
+            );
+            if let Some(authorization_ref) =
+                envelope.get("authorization_ref").and_then(Value::as_str)
+            {
+                payload_object.insert(
+                    "authorization_ref".to_owned(),
+                    Value::String(authorization_ref.to_owned()),
+                );
+            }
+        }
+    }
+    if matches!(
+        parsed.kind.as_str(),
         "ck.consent.grant" | "ck.consent.revoke"
     ) {
         payload_object
@@ -826,8 +847,9 @@ pub async fn effective_read_receipt_policy_for_realm(
 
 #[cfg(test)]
 mod refs_limit_tests {
-    use super::*;
     use serde_json::json;
+
+    use super::*;
 
     fn refs_object(refs: serde_json::Value) -> serde_json::Map<String, Value> {
         json!({ "refs": refs }).as_object().unwrap().clone()

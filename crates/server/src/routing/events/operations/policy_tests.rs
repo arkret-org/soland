@@ -105,6 +105,74 @@ fn op(
     )
 }
 
+fn test_state() -> AppState {
+    AppState::new(test_config(), Db { pool: None })
+}
+
+async fn register_agent_selection(
+    state: &AppState,
+    realm_id: &cokret_sdk::RealmId,
+    agent_principal_id: &str,
+    reply: bool,
+    act_on_behalf: bool,
+) {
+    let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+    state
+        .persistence
+        .agents()
+        .put(json!({
+            "agent_principal_id": agent_principal_id,
+            "controller_did": "did:web:alice.example",
+            "agent_id": "summary",
+            "display_name": "Summary",
+            "agent_slug": "summary",
+            "state": "active",
+            "created_at": now,
+            "updated_at": now,
+        }))
+        .await
+        .expect("agent record");
+    let realm_uuid = realm_id
+        .as_str()
+        .strip_prefix("ck:realm:")
+        .expect("realm id prefix");
+    state
+        .persistence
+        .agent_participation()
+        .put_selection(json!({
+            "agent_principal_id": agent_principal_id,
+            "scope_kind": "realm",
+            "scope_key": format!("realm:{realm_uuid}"),
+            "realm_id": realm_id.as_str(),
+            "scope": { "kind": "realm", "realm_id": realm_id.as_str() },
+            "reply": reply,
+            "accept_third_party_mention": false,
+            "act_on_behalf": act_on_behalf,
+        }))
+        .await
+        .expect("agent participation selection");
+}
+
+fn act_on_behalf_message(
+    realm_id: cokret_sdk::RealmId,
+    seed: &str,
+    agent_principal_id: &str,
+    authorization_ref: Option<&str>,
+) -> Operation {
+    let mut payload = json!({
+        "sender": "did:web:alice.example",
+        "executed_by": agent_principal_id,
+        "content": [{"type": "text", "text": "approved"}],
+    });
+    if let Some(authorization_ref) = authorization_ref {
+        payload
+            .as_object_mut()
+            .expect("payload object")
+            .insert("authorization_ref".to_owned(), json!(authorization_ref));
+    }
+    op(realm_id, seed, kinds::CK_MESSAGE_CREATE, payload)
+}
+
 #[tokio::test]
 async fn active_direct_conversation_rejects_invite_space_and_third_party_member() {
     let (state, realm_id) = state_with_direct_binding();
@@ -163,4 +231,94 @@ async fn active_direct_conversation_rejects_invite_space_and_third_party_member(
             .unwrap_err(),
         "direct_conversation_third_party_member_forbidden"
     );
+}
+
+#[tokio::test]
+async fn act_on_behalf_agent_requires_participation_bit() {
+    let state = test_state();
+    let realm_id =
+        cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-000000000701".to_owned())
+            .unwrap();
+    let agent = "did:web:agent.example";
+    register_agent_selection(&state, &realm_id, agent, true, false).await;
+    let grant = state.authz.create_grant(
+        realm_id.to_string(),
+        "did:web:alice.example".to_owned(),
+        agent.to_owned(),
+        realm_id.to_string(),
+        vec![kinds::CK_MESSAGE_CREATE.to_owned()],
+        Vec::new(),
+    );
+    let message = act_on_behalf_message(
+        realm_id,
+        "000000000701",
+        agent,
+        Some(grant.grant_id.as_str()),
+    );
+
+    assert_eq!(
+        validate_agent_reply_participation(&state, &[message])
+            .await
+            .unwrap_err(),
+        "agent_act_on_behalf_not_permitted"
+    );
+}
+
+#[tokio::test]
+async fn act_on_behalf_agent_requires_authorization_ref_covering_action() {
+    let state = test_state();
+    let realm_id =
+        cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-000000000702".to_owned())
+            .unwrap();
+    let agent = "did:web:agent.example";
+    register_agent_selection(&state, &realm_id, agent, true, true).await;
+    let grant = state.authz.create_grant(
+        realm_id.to_string(),
+        "did:web:alice.example".to_owned(),
+        agent.to_owned(),
+        realm_id.to_string(),
+        vec![kinds::CK_REACTION_ADD.to_owned()],
+        Vec::new(),
+    );
+    let message = act_on_behalf_message(
+        realm_id,
+        "000000000702",
+        agent,
+        Some(grant.grant_id.as_str()),
+    );
+
+    assert_eq!(
+        validate_agent_reply_participation(&state, &[message])
+            .await
+            .unwrap_err(),
+        "agent_act_on_behalf_authorization_ref_scope"
+    );
+}
+
+#[tokio::test]
+async fn act_on_behalf_agent_allows_effective_selection_and_active_grant() {
+    let state = test_state();
+    let realm_id =
+        cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-000000000703".to_owned())
+            .unwrap();
+    let agent = "did:web:agent.example";
+    register_agent_selection(&state, &realm_id, agent, true, true).await;
+    let grant = state.authz.create_grant(
+        realm_id.to_string(),
+        "did:web:alice.example".to_owned(),
+        agent.to_owned(),
+        realm_id.to_string(),
+        vec![kinds::CK_MESSAGE_CREATE.to_owned()],
+        Vec::new(),
+    );
+    let message = act_on_behalf_message(
+        realm_id,
+        "000000000703",
+        agent,
+        Some(grant.grant_id.as_str()),
+    );
+
+    validate_agent_reply_participation(&state, &[message])
+        .await
+        .expect("effective act-on-behalf grant should pass");
 }

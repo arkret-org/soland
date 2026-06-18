@@ -36,9 +36,9 @@ use cokret_sdk::models::{
     AgentParticipationOutcome as AgentParticipationResBody, AgentParticipationScope,
     AgentParticipationSetRequestBody as AgentParticipationSetReqBody, AgentPauseRequestBody,
     AgentProvisionOutcome, AgentProvisionRequestBody, AgentResumeRequestBody,
-    AgentRotateKeyOutcome, AgentRotateKeyRequestBody, AgentSidecarThreadEnsureOutcome,
-    AgentSidecarThreadEnsureRequestBody, AgentView, effective_participation, validate_agent_slug,
-    validate_selection_within_ceiling,
+    AgentRotateKeyOutcome, AgentRotateKeyRequestBody, AgentSidecarExposureAck,
+    AgentSidecarThreadEnsureOutcome, AgentSidecarThreadEnsureRequestBody, AgentView,
+    effective_participation, validate_agent_slug, validate_selection_within_ceiling,
 };
 use cokret_sdk::{EventId, GrantId};
 use salvo::http::StatusCode;
@@ -406,6 +406,51 @@ fn participation_scope_resource(scope: &AgentParticipationScope) -> Value {
 
 fn is_capability_grant_id(grant_id: &str) -> bool {
     grant_id.starts_with("ck:grant:")
+}
+
+fn normalize_sidecar_exposure_ack(
+    value: Option<Value>,
+    controller_did: &str,
+) -> Result<Option<Value>, AppError> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    if value.is_null() {
+        return Ok(None);
+    }
+    let ack: AgentSidecarExposureAck = serde_json::from_value(value)
+        .map_err(|err| AppError::invalid_param(format!("sidecar_exposure_ack invalid: {err}")))?;
+    if ack.acknowledged_by.as_str() != controller_did {
+        return Err(AppError::capability_denied(
+            "sidecar_exposure_ack.acknowledged_by must match the controller session",
+        ));
+    }
+    if ack.sidecar_refs.is_empty() {
+        return Err(AppError::invalid_param(
+            "sidecar_exposure_ack.sidecar_refs must be non-empty when present",
+        ));
+    }
+    if ack.sidecar_refs.len() > 128 {
+        return Err(AppError::invalid_param(
+            "sidecar_exposure_ack.sidecar_refs exceeds the 128 item limit",
+        ));
+    }
+    let mut refs = std::collections::BTreeSet::new();
+    for sidecar_ref in &ack.sidecar_refs {
+        if sidecar_ref.trim().is_empty() {
+            return Err(AppError::invalid_param(
+                "sidecar_exposure_ack.sidecar_refs must not contain empty refs",
+            ));
+        }
+        if !refs.insert(sidecar_ref.as_str()) {
+            return Err(AppError::invalid_param(
+                "sidecar_exposure_ack.sidecar_refs must be unique",
+            ));
+        }
+    }
+    serde_json::to_value(ack)
+        .map(Some)
+        .map_err(|err| AppError::internal(format!("sidecar_exposure_ack serialize failed: {err}")))
 }
 
 #[endpoint(
@@ -848,9 +893,12 @@ async fn lifecycle_transition(
     new_state: AgentLifecycleState,
     event_kind: &str,
     reason: Option<String>,
+    sidecar_exposure_ack: Option<Value>,
 ) -> Result<AgentLifecycleOutcome, AppError> {
     let session = aa.authenticated_session(state, req).await?;
     validate_agent_principal_id(&agent_id)?;
+    let sidecar_exposure_ack =
+        normalize_sidecar_exposure_ack(sidecar_exposure_ack, &session.actor)?;
     let status_changed_at = chrono::Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
     // Read the current persisted state so the durable transition carries the
     // accurate `previous_status` (resume comes from `paused`, etc.).
@@ -883,6 +931,7 @@ async fn lifecycle_transition(
             event_kind,
             &previous_status,
             reason.as_deref(),
+            sidecar_exposure_ack.as_ref(),
         )
         .await?;
         if event_kind == "ck.self.agent.deactivate" {
@@ -927,6 +976,14 @@ async fn lifecycle_transition(
                 .expect("payload object")
                 .insert("reason".to_owned(), Value::String(reason.clone()));
         }
+        if event_kind == "ck.self.agent.resume"
+            && let Some(ack) = sidecar_exposure_ack
+        {
+            payload
+                .as_object_mut()
+                .expect("payload object")
+                .insert("sidecar_exposure_ack".to_owned(), ack);
+        }
         append_audit_log(state, Some(&session.actor), event_kind, payload, "accepted").await;
     }
     // Persist the lifecycle state transition on the agent_principal row so
@@ -970,6 +1027,7 @@ async fn pause_agent(
             AgentLifecycleState::Paused,
             "ck.self.agent.pause",
             body.reason,
+            None,
         )
         .await?,
     )
@@ -990,10 +1048,7 @@ async fn resume_agent(
     req: &mut Request,
 ) -> JsonResult<AgentLifecycleOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    // spec `agent_resume_request_body` carries an optional
-    // `sidecar_exposure_ack`, not a `reason`. P2-impl: thread the ack into the
-    // sidecar exposure consent ledger before re-activating the agent.
-    let _body = body.into_inner();
+    let body = body.into_inner();
     json_ok(
         lifecycle_transition(
             state,
@@ -1003,6 +1058,7 @@ async fn resume_agent(
             AgentLifecycleState::Active,
             "ck.self.agent.resume",
             None,
+            body.sidecar_exposure_ack,
         )
         .await?,
     )
@@ -1033,6 +1089,7 @@ async fn deactivate_agent(
             AgentLifecycleState::Deactivated,
             "ck.self.agent.deactivate",
             body.reason,
+            None,
         )
         .await?,
     )
@@ -1312,5 +1369,40 @@ mod tests {
         // soland-internal columns MUST NOT leak into the protocol projection.
         assert!(agent["agent"].get("controller_did").is_none());
         assert!(agent["agent"].get("agent_id").is_none());
+    }
+
+    #[test]
+    fn resume_sidecar_exposure_ack_is_validated_and_normalized() {
+        let ack = normalize_sidecar_exposure_ack(
+            Some(json!({
+                "acknowledged_at": "2026-06-18T12:00:00Z",
+                "acknowledged_by": "did:web:controller.example",
+                "sidecar_refs": [
+                    "ck:circle:01964137-0000-7000-8000-000000000020",
+                    "ck:strand:01964137-0000-7000-8000-000000000021"
+                ]
+            })),
+            "did:web:controller.example",
+        )
+        .expect("valid sidecar exposure ack should normalize")
+        .expect("ack should be present");
+
+        assert_eq!(ack["acknowledged_by"], "did:web:controller.example");
+        assert_eq!(ack["sidecar_refs"].as_array().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn resume_sidecar_exposure_ack_rejects_wrong_controller() {
+        let err = normalize_sidecar_exposure_ack(
+            Some(json!({
+                "acknowledged_at": "2026-06-18T12:00:00Z",
+                "acknowledged_by": "did:web:other.example",
+                "sidecar_refs": ["ck:circle:01964137-0000-7000-8000-000000000020"]
+            })),
+            "did:web:controller.example",
+        )
+        .expect_err("ack by another controller must reject");
+
+        assert_eq!(err.wire_code(), "capability_denied");
     }
 }

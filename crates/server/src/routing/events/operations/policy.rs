@@ -835,13 +835,99 @@ fn ap_effective_reply(selection: &Value, ceiling: cokret_sdk::models::AgentParti
     ap_bool(selection, "reply") && ceiling.reply
 }
 
-/// CKP-0016 §5.2 enforcement (soland-native): a native personal agent may
-/// only author `ck.message.create` / `ck.reaction.add` in a scope where
-/// its effective participation `reply` bit is true (selection ∩ ceiling).
-/// Non-agent actors are unaffected — they fall through to standard authz.
-/// The agent's most-specific selection (strand over realm) governs; an agent
-/// with no reply-enabled selection covering the scope is rejected
-/// (least-privilege, CKP-0008 §4.9).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum AgentParticipationMode {
+    Reply,
+    ActOnBehalf,
+}
+
+impl AgentParticipationMode {
+    fn rejection_reason(self) -> &'static str {
+        match self {
+            Self::Reply => "agent_reply_not_permitted",
+            Self::ActOnBehalf => "agent_act_on_behalf_not_permitted",
+        }
+    }
+}
+
+fn ap_effective_for_mode(
+    mode: AgentParticipationMode,
+    selection: &Value,
+    ceiling: cokret_sdk::models::AgentParticipation,
+) -> bool {
+    match mode {
+        AgentParticipationMode::Reply => ap_effective_reply(selection, ceiling),
+        AgentParticipationMode::ActOnBehalf => {
+            ap_bool(selection, "act_on_behalf") && ceiling.act_on_behalf
+        }
+    }
+}
+
+async fn native_agent_exists(state: &AppState, principal_id: &str) -> bool {
+    state
+        .persistence
+        .agents()
+        .get(principal_id)
+        .await
+        .ok()
+        .flatten()
+        .is_some()
+}
+
+fn agent_participation_action(operation: &Operation) -> Option<&'static str> {
+    match kinds::canonical_kind_for_operation(operation) {
+        Some(kinds::CK_MESSAGE_CREATE) => Some(kinds::CK_MESSAGE_CREATE),
+        Some(kinds::CK_REACTION_ADD) => Some(kinds::CK_REACTION_ADD),
+        _ => None,
+    }
+}
+
+fn validate_agent_act_on_behalf_authorization_ref(
+    state: &AppState,
+    operation: &Operation,
+    agent_principal_id: &str,
+) -> Result<(), &'static str> {
+    let authorization_ref = operation
+        .payload
+        .get("authorization_ref")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .ok_or("agent_act_on_behalf_authorization_ref_missing")?;
+    if !authorization_ref.starts_with("ck:grant:") {
+        return Err("agent_act_on_behalf_authorization_ref_invalid");
+    }
+    let Some(action) = agent_participation_action(operation) else {
+        return Ok(());
+    };
+    let resource = operation
+        .object_id
+        .as_deref()
+        .unwrap_or_else(|| operation.realm_id.as_str());
+    let grants = state
+        .authz
+        .grants_for_subject(agent_principal_id, operation.realm_id.as_str());
+    let Some(grant) = grants
+        .iter()
+        .find(|grant| grant.grant_id == authorization_ref)
+    else {
+        return Err("agent_act_on_behalf_authorization_ref_inactive");
+    };
+    let action_allowed = grant
+        .actions
+        .iter()
+        .any(|candidate| candidate == action || candidate == "*");
+    if !action_allowed || !crate::authz::resource_matches(&grant.resource, resource) {
+        return Err("agent_act_on_behalf_authorization_ref_scope");
+    }
+    Ok(())
+}
+
+/// CKP-0016 §5.2 / CKP-0008 §4.10 enforcement (soland-native): a native
+/// personal agent may only author `ck.message.create` / `ck.reaction.add`
+/// where its effective participation bit is true. Reply-as-agent uses the
+/// `reply` bit; act-on-behalf uses envelope-derived `executed_by`, requires a
+/// referenced active grant, and uses the `act_on_behalf` bit. Non-agent actors
+/// fall through to standard authz.
 pub async fn validate_agent_reply_participation(
     state: &AppState,
     operations: &[Operation],
@@ -852,20 +938,23 @@ pub async fn validate_agent_reply_participation(
             Some(kinds::CK_MESSAGE_CREATE) | Some(kinds::CK_REACTION_ADD) => {}
             _ => continue,
         }
-        let Some(actor) = operation.payload.get("sender").and_then(Value::as_str) else {
+        let mut agent_context: Option<(String, AgentParticipationMode)> = None;
+        if let Some(executed_by) = operation.payload.get("executed_by").and_then(Value::as_str)
+            && native_agent_exists(state, executed_by).await
+        {
+            agent_context = Some((executed_by.to_owned(), AgentParticipationMode::ActOnBehalf));
+        }
+        if agent_context.is_none()
+            && let Some(sender) = operation.payload.get("sender").and_then(Value::as_str)
+            && native_agent_exists(state, sender).await
+        {
+            agent_context = Some((sender.to_owned(), AgentParticipationMode::Reply));
+        }
+        let Some((agent_principal_id, mode)) = agent_context else {
             continue;
         };
-        // Only native personal agents are gated.
-        let is_agent = state
-            .persistence
-            .agents()
-            .get(actor)
-            .await
-            .ok()
-            .flatten()
-            .is_some();
-        if !is_agent {
-            continue;
+        if mode == AgentParticipationMode::ActOnBehalf {
+            validate_agent_act_on_behalf_authorization_ref(state, operation, &agent_principal_id)?;
         }
         let realm_uuid = ap_uuid_part(operation.realm_id.as_str()).to_owned();
         let realm_key = format!("realm:{realm_uuid}");
@@ -878,7 +967,7 @@ pub async fn validate_agent_reply_participation(
         let selections = state
             .persistence
             .agent_participation()
-            .list_selections(actor)
+            .list_selections(&agent_principal_id)
             .await
             .unwrap_or_default();
         let find = |key: &str| {
@@ -892,7 +981,7 @@ pub async fn validate_agent_reply_participation(
             .and_then(find)
             .or_else(|| find(&realm_key));
         let Some(selection) = selection else {
-            return Err("agent_reply_not_permitted");
+            return Err(mode.rejection_reason());
         };
         let selection_scope_key = selection
             .get("scope_key")
@@ -913,8 +1002,8 @@ pub async fn validate_agent_reply_participation(
                 act_on_behalf: ap_bool(row, "act_on_behalf"),
             });
         }
-        if !ap_effective_reply(&selection, ceiling) {
-            return Err("agent_reply_not_permitted");
+        if !ap_effective_for_mode(mode, &selection, ceiling) {
+            return Err(mode.rejection_reason());
         }
     }
     Ok(())

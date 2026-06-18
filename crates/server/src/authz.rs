@@ -451,7 +451,7 @@ impl Default for SolandAuthzEngine {
 /// realm forms, plus a `circle` keyword selector that resolves to
 /// "any ck:circle:<uuid>" so policy-authoring tools can express
 /// circle-wide grants without enumerating each circle.
-fn resource_matches(pattern: &str, resource: &str) -> bool {
+pub(crate) fn resource_matches(pattern: &str, resource: &str) -> bool {
     if pattern == "*" {
         return true;
     }

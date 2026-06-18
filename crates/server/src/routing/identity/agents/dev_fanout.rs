@@ -429,7 +429,13 @@ pub(super) async fn revoke_capability_grant(
     grant_id: &str,
 ) -> Result<String, AppError> {
     let payload = json!({ "grant_id": grant_id });
-    dev_submit_event(state, session, realm_id, "ck.capability.revoke", payload).await
+    let event_id =
+        dev_submit_event(state, session, realm_id, "ck.capability.revoke", payload).await?;
+    // The durable reducer event is the source of truth; this mirrors the
+    // same revoke into the in-memory authz read index before the HTTP command
+    // returns so subsequent resource checks fail closed immediately.
+    state.authz.mark_projected_grant_revoked(grant_id);
+    Ok(event_id)
 }
 
 /// CKP-0008 §4.11 — submit a durable lifecycle transition event
@@ -442,6 +448,7 @@ pub(super) async fn submit_durable_agent_lifecycle(
     event_kind: &str,
     previous_status: &str,
     reason: Option<&str>,
+    sidecar_exposure_ack: Option<&Value>,
 ) -> Result<String, AppError> {
     let status_changed_at = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
     let transition = match event_kind {
@@ -468,6 +475,14 @@ pub(super) async fn submit_durable_agent_lifecycle(
             .as_object_mut()
             .expect("payload object")
             .insert("reason".to_owned(), Value::String(reason.to_owned()));
+    }
+    if event_kind == "ck.self.agent.resume"
+        && let Some(ack) = sidecar_exposure_ack
+    {
+        payload
+            .as_object_mut()
+            .expect("payload object")
+            .insert("sidecar_exposure_ack".to_owned(), ack.clone());
     }
     dev_submit_event(state, session, realm_id, event_kind, payload).await
 }
