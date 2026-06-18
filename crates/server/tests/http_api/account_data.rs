@@ -82,7 +82,7 @@ async fn account_data_accepts_fresh_principal_control_realm() {
 }
 
 #[tokio::test]
-async fn account_data_realm_remark_round_trip() {
+async fn encrypted_account_data_realm_remark_round_trip() {
     const ALICE_DEVICE: &str = "ck:device:01904100-0000-7000-8000-a11ce0000001";
     const BOB_DEVICE: &str = "ck:device:01904100-0000-7000-8000-b0b000000001";
 
@@ -98,16 +98,7 @@ async fn account_data_realm_remark_round_trip() {
 
     let realm_id = "ck:realm:0196419b-0000-7000-8000-000000000000";
     let key = format!("ck.contacts.realm.{realm_id}");
-    let remark = serde_json::json!({
-        "version": 1,
-        "subject": {"kind": "realm", "id": realm_id},
-        "local_name": "Acme 内部 · 工程",
-        "note": "和外包侧 Engineering Realm 同名",
-        "tags": ["work"],
-        "pinned": true,
-        "verified_title_at_save": "Engineering",
-        "saved_at": "2026-05-08T10:00:00Z"
-    });
+    let remark = account_data_client_side_marker("44", "opaque-realm-remark-v1");
 
     let first = submit_actor_private_event(
         state.clone(),
@@ -119,7 +110,7 @@ async fn account_data_realm_remark_round_trip() {
         serde_json::json!({
             "key": key.as_str(),
             "owner": "did:web:alice.example",
-            "body": remark.clone(),
+            "encrypted_payload": remark.clone(),
             "updated_at": "2026-05-08T10:00:00Z"
         }),
     )
@@ -136,18 +127,10 @@ async fn account_data_realm_remark_round_trip() {
     )
     .await;
     let initial_entry = account_data_entry(&initial_sync, &key);
-    assert_eq!(initial_entry["content"]["local_name"], "Acme 内部 · 工程");
-    assert_eq!(initial_entry["content"]["tags"][0], "work");
+    assert_eq!(initial_entry["content"], remark);
 
     // Second event updates the same key with the new payload.
-    let updated_remark = serde_json::json!({
-        "version": 1,
-        "subject": {"kind": "realm", "id": realm_id},
-        "local_name": "Acme · Eng (final)",
-        "pinned": false,
-        "saved_at": "2026-05-08T10:00:00Z",
-        "updated_at": "2026-05-09T10:00:00Z"
-    });
+    let updated_remark = account_data_client_side_marker("55", "opaque-realm-remark-v2");
     let updated = submit_actor_private_event(
         state.clone(),
         &alice,
@@ -158,7 +141,7 @@ async fn account_data_realm_remark_round_trip() {
         serde_json::json!({
             "key": key.as_str(),
             "owner": "did:web:alice.example",
-            "body": updated_remark.clone(),
+            "encrypted_payload": updated_remark.clone(),
             "updated_at": "2026-05-09T10:00:00Z"
         }),
     )
@@ -175,8 +158,7 @@ async fn account_data_realm_remark_round_trip() {
     )
     .await;
     let entry = account_data_entry(&sync_resp, &key);
-    assert_eq!(entry["content"]["local_name"], "Acme · Eng (final)");
-    assert_eq!(entry["content"]["pinned"], false);
+    assert_eq!(entry["content"], updated_remark);
 
     // Actor isolation: Bob's /sync does NOT see Alice's remark.
     let bob_sync = account_subscribe_frame(
@@ -230,6 +212,98 @@ async fn account_data_realm_remark_round_trip() {
 }
 
 #[tokio::test]
+async fn encrypted_account_data_requires_envelope_metadata_or_marker() {
+    const ALICE_DEVICE: &str = "ck:device:01904100-0000-7000-8000-a11ce0000001";
+
+    let state = AppState::new(test_config(), Db { pool: None });
+    let alice = dev_token_for_device(
+        state.clone(),
+        "did:web:alice.example",
+        ALICE_DEVICE,
+        "Alice",
+    )
+    .await;
+    let key = "ck.saved.v1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB";
+    let envelope = account_data_encrypted_envelope();
+
+    let accepted = submit_actor_private_event(
+        state.clone(),
+        &alice,
+        "did:web:alice.example",
+        ALICE_DEVICE,
+        DEMO_REALM_ID,
+        "ck.account_data.set",
+        serde_json::json!({
+            "key": key,
+            "owner": "did:web:alice.example",
+            "encrypted_payload": envelope.clone(),
+            "updated_at": "2026-06-18T00:00:00Z"
+        }),
+    )
+    .await;
+    assert_eq!(
+        accepted["status"], "accepted",
+        "encrypted account_data response: {accepted}"
+    );
+
+    let sync = account_subscribe_frame(
+        state.clone(),
+        Some(&alice),
+        "catchup=true&set_presence=online",
+    )
+    .await;
+    let entry = account_data_entry(&sync, key);
+    assert_eq!(entry["content"], envelope);
+
+    let rejected = submit_actor_private_event(
+        state.clone(),
+        &alice,
+        "did:web:alice.example",
+        ALICE_DEVICE,
+        DEMO_REALM_ID,
+        "ck.account_data.set",
+        serde_json::json!({
+            "key": key,
+            "owner": "did:web:alice.example",
+            "encrypted_payload": {"ciphertext": "opaque"},
+            "updated_at": "2026-06-18T00:01:00Z"
+        }),
+    )
+    .await;
+    assert_eq!(
+        rejected["error"]["code"], "schema_violation",
+        "invalid encrypted account_data response: {rejected}"
+    );
+
+    let marker_key = "ck.file_transfer.v1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+    let marker = serde_json::json!({
+        "client_side_conformance": {
+            "encrypted_account_data": true,
+            "profile_id": "ck.profile.e2ee_client.v1",
+            "plaintext_schema_id": "ck.schema.file_transfer.v1",
+            "payload_digest": "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+        },
+        "content_type": "application/vnd.cokret.account-data+json",
+        "ciphertext": "opaque-client-envelope"
+    });
+    let put: Value = TestClient::put(format!(
+        "http://server/_cokret/self/account_data/{marker_key}"
+    ))
+    .add_header("authorization", format!("Bearer {alice}"), true)
+    .json(&serde_json::json!({"content": marker.clone()}))
+    .send(&app_from_state(state.clone()))
+    .await
+    .take_json()
+    .await
+    .unwrap();
+    assert_eq!(
+        put["data_type"], marker_key,
+        "marker account_data PUT: {put}"
+    );
+    assert_eq!(put["content"], marker);
+}
+
+#[tokio::test]
 async fn account_data_requires_auth() {
     let event = signed_actor_private_event_envelope(
         "did:web:alice.example",
@@ -257,4 +331,40 @@ fn account_data_entry<'a>(sync: &'a Value, key: &str) -> &'a Value {
         .iter()
         .find(|entry| entry["data_type"] == key)
         .expect("account_data entry present in sync response")
+}
+
+fn account_data_encrypted_envelope() -> Value {
+    serde_json::json!({
+        "scheme": "mls-rfc9420",
+        "version": "1.0",
+        "group_id": "testGroup",
+        "epoch": 1,
+        "content_type": "application/vnd.cokret.account-data+json",
+        "ciphertext": "b3BhcXVl",
+        "aad_visibility_event_id": "hidden",
+        "aad": {
+            "realm_id": DEMO_REALM_ID,
+            "event_kind": "ck.account_data.set"
+        },
+        "key_ref": {
+            "algorithm": "MLS",
+            "group_state_ref": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+        },
+        "aad_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+        "payload_digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333"
+    })
+}
+
+fn account_data_client_side_marker(hex_pair: &str, ciphertext: &str) -> Value {
+    let digest = hex_pair.repeat(32);
+    serde_json::json!({
+        "client_side_conformance": {
+            "encrypted_account_data": true,
+            "profile_id": "ck.profile.e2ee_client.v1",
+            "plaintext_schema_id": "ck.schema.realm_remark.v1",
+            "payload_digest": format!("sha256:{digest}")
+        },
+        "content_type": "application/vnd.cokret.account-data+json",
+        "ciphertext": ciphertext
+    })
 }

@@ -2,6 +2,7 @@ use crate::state::AppState;
 use crate::wire::now;
 
 mod access;
+mod account_data_encryption;
 mod admin;
 // CKP-0007 (P2A.3) — `/_cokret/self/circles/*` admin surface.
 pub(crate) mod circles;

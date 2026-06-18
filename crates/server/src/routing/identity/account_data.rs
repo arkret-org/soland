@@ -79,89 +79,25 @@ const REGISTERED_ACCOUNT_DATA_TYPES: &[AccountDataTypeSpec] = &[
     },
 ];
 
-const PRIVATE_ACCOUNT_DATA_PREFIXES: &[&str] = &[
-    cokret_sdk::ACCOUNT_DATA_TYPE_REMINDER,
-    cokret_sdk::ACCOUNT_DATA_TYPE_SCHEDULED_SEND,
-    cokret_sdk::ACCOUNT_DATA_TYPE_SNOOZE,
-    cokret_sdk::ACCOUNT_DATA_TYPE_SAVED,
-    cokret_sdk::ACCOUNT_DATA_TYPE_DRAFT,
-    cokret_sdk::ACCOUNT_DATA_TYPE_FILE_TRANSFER,
-    cokret_sdk::ACCOUNT_DATA_TYPE_SEARCH_INDEX_MANIFEST,
-];
-
 fn registered_account_data_type(data_type: &str) -> Option<&'static AccountDataTypeSpec> {
-    let canonical_type = private_account_data_prefix(data_type).unwrap_or(data_type);
+    let canonical_type =
+        crate::routing::account_data_encryption::encrypted_account_data_prefix(data_type)
+            .unwrap_or(data_type);
     REGISTERED_ACCOUNT_DATA_TYPES
         .iter()
         .find(|spec| spec.data_type == canonical_type)
 }
 
-fn private_account_data_prefix(data_type: &str) -> Option<&'static str> {
-    PRIVATE_ACCOUNT_DATA_PREFIXES
-        .iter()
-        .copied()
-        .find(|prefix| {
-            data_type
-                .strip_prefix(*prefix)
-                .is_some_and(|rest| rest.is_empty() || rest.starts_with(':'))
-        })
-}
-
 fn validate_registered_account_data_key(data_type: &str) -> Result<(), AppError> {
-    if private_account_data_prefix(data_type).is_some() {
-        cokret_sdk::validate_private_account_data_key(data_type)
-            .map_err(|error| AppError::invalid_param(error.to_string()))?;
-    }
-    Ok(())
+    crate::routing::account_data_encryption::validate_encrypted_account_data_key(data_type)
+        .map_err(|error| AppError::invalid_param(error.message()))
 }
 
 fn validate_private_account_data_content(data_type: &str, content: &Value) -> Result<(), AppError> {
-    if private_account_data_prefix(data_type).is_none() {
-        return Ok(());
-    }
-    let Some(object) = content.as_object() else {
-        return Err(AppError::invalid_param(
-            "private account_data content must be an encrypted envelope object",
-        ));
-    };
-    if object.get("tombstone").is_some() {
-        return Ok(());
-    }
-    for forbidden in [
-        "body",
-        "target_ref",
-        "collection_title",
-        "note",
-        "message_payload",
-        "content",
-        "blind_tokens",
-        "shard_key",
-        "transfer_id",
-        "blob_ref",
-        "filename",
-        "media_type",
-        "plaintext_size_bytes",
-        "content_digest",
-        "recipient_device_ids",
-        "content_key",
-        "local_path",
-    ] {
-        if object.contains_key(forbidden) {
-            return Err(AppError::invalid_param(format!(
-                "private account_data content must not expose `{forbidden}` in plaintext",
-            )));
-        }
-    }
-    if object.contains_key("encrypted_payload")
-        || object.contains_key("encrypted_content")
-        || object.contains_key("ciphertext")
-    {
-        Ok(())
-    } else {
-        Err(AppError::invalid_param(
-            "private account_data content requires encrypted_payload, encrypted_content, or ciphertext",
-        ))
-    }
+    crate::routing::account_data_encryption::validate_encrypted_account_data_value(
+        data_type, content,
+    )
+    .map_err(|error| AppError::invalid_param(error.message()))
 }
 
 pub(super) fn router() -> Router {
@@ -428,9 +364,31 @@ async fn delete_account_data(
 
 #[cfg(test)]
 mod tests {
-    use serde_json::json;
+    use serde_json::{Value, json};
 
     use super::*;
+
+    fn encrypted_envelope() -> Value {
+        json!({
+            "scheme": "mls-rfc9420",
+            "version": "1.0",
+            "group_id": "testGroup",
+            "epoch": 1,
+            "content_type": "application/vnd.cokret.account-data+json",
+            "ciphertext": "b3BhcXVl",
+            "aad_visibility_event_id": "hidden",
+            "aad": {
+                "realm_id": "ck:realm:0196419b-0000-7000-8000-000000000000",
+                "event_kind": "ck.account_data.set"
+            },
+            "key_ref": {
+                "algorithm": "MLS",
+                "group_state_ref": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+            },
+            "aad_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+            "payload_digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333"
+        })
+    }
 
     #[test]
     fn private_account_data_key_patterns_are_validated() {
@@ -450,7 +408,7 @@ mod tests {
             "ck.draft.v1:message:ck:message:01904100-0000-7000-8000-000000000001:main",
         )
         .unwrap_err();
-        assert!(err.to_string().contains("raw typed refs"));
+        assert!(err.to_string().contains("registered private key pattern"));
     }
 
     #[test]
@@ -459,7 +417,7 @@ mod tests {
         assert!(
             validate_private_account_data_content(
                 key,
-                &json!({"encrypted_payload": {"ciphertext": "opaque"}}),
+                &json!({"encrypted_payload": encrypted_envelope()}),
             )
             .is_ok()
         );
@@ -469,14 +427,14 @@ mod tests {
             &json!({"body": {"collection_title": "Leaks"}}),
         )
         .unwrap_err();
-        assert!(err.to_string().contains("body"));
+        assert!(err.to_string().contains("plaintext"));
 
         let transfer_key = "ck.file_transfer.v1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
         let err = validate_private_account_data_content(
             transfer_key,
-            &json!({"filename": "private.pdf", "encrypted_payload": {"ciphertext": "opaque"}}),
+            &json!({"filename": "private.pdf", "encrypted_payload": encrypted_envelope()}),
         )
         .unwrap_err();
-        assert!(err.to_string().contains("filename"));
+        assert!(err.to_string().contains("plaintext"));
     }
 }

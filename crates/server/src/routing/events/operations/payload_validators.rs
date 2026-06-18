@@ -185,61 +185,16 @@ pub(crate) fn validate_account_data_set_payload(operation: &Operation) -> Result
         .get("key")
         .and_then(Value::as_str)
         .ok_or("account_data.set requires key")?;
-    if private_account_data_key_prefix(key).is_none() {
-        return Ok(());
-    }
-    cokret_sdk::validate_private_account_data_key(key)
-        .map_err(|_| "account_data.set key must use registered private key pattern")?;
+    crate::routing::account_data_encryption::validate_encrypted_account_data_key(key)
+        .map_err(|error| error.message())?;
     if operation.payload.get("tombstone").is_some() {
         return Ok(());
     }
-    for forbidden in [
-        "body",
-        "target_ref",
-        "collection_title",
-        "note",
-        "message_payload",
-        "content",
-        "blind_tokens",
-        "shard_key",
-        "transfer_id",
-        "blob_ref",
-        "filename",
-        "media_type",
-        "plaintext_size_bytes",
-        "content_digest",
-        "recipient_device_ids",
-        "content_key",
-        "local_path",
-    ] {
-        if operation.payload.get(forbidden).is_some() {
-            return Err("account_data.set private payload leaks plaintext field");
-        }
-    }
-    if operation.payload.get("encrypted_payload").is_some()
-        || operation.payload.get("encrypted_content").is_some()
-    {
-        Ok(())
-    } else {
-        Err("account_data.set private payload requires encrypted_payload or encrypted_content")
-    }
-}
-
-fn private_account_data_key_prefix(key: &str) -> Option<&'static str> {
-    [
-        cokret_sdk::ACCOUNT_DATA_TYPE_REMINDER,
-        cokret_sdk::ACCOUNT_DATA_TYPE_SCHEDULED_SEND,
-        cokret_sdk::ACCOUNT_DATA_TYPE_SNOOZE,
-        cokret_sdk::ACCOUNT_DATA_TYPE_SAVED,
-        cokret_sdk::ACCOUNT_DATA_TYPE_DRAFT,
-        cokret_sdk::ACCOUNT_DATA_TYPE_FILE_TRANSFER,
-        cokret_sdk::ACCOUNT_DATA_TYPE_SEARCH_INDEX_MANIFEST,
-    ]
-    .into_iter()
-    .find(|prefix| {
-        key.strip_prefix(*prefix)
-            .is_some_and(|rest| rest.is_empty() || rest.starts_with(':'))
-    })
+    crate::routing::account_data_encryption::validate_encrypted_account_data_value(
+        key,
+        &operation.payload,
+    )
+    .map_err(|error| error.message())
 }
 
 pub(crate) fn validate_read_marker_payload(operation: &Operation) -> Result<(), &'static str> {
