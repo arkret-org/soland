@@ -620,6 +620,13 @@ fn assert_integrity_error(error: SyncCursorError) {
     }
 }
 
+fn insert_cursor_field(cursor: &mut Value, key: &str, value: Value) {
+    cursor
+        .as_object_mut()
+        .expect("cursor test value is object")
+        .insert(key.to_owned(), value);
+}
+
 #[tokio::test]
 async fn inline_cursor_body_is_rejected_by_core_stateful_cursor_parser() {
     let state = test_state();
@@ -642,6 +649,106 @@ async fn inline_cursor_body_is_rejected_by_core_stateful_cursor_parser() {
         .expect_err("inline cursor body must be rejected");
 
     assert_integrity_error(error);
+}
+
+#[tokio::test]
+async fn inline_filter_digest_pseudo_fields_are_rejected_by_cursor_parsers() {
+    let state = test_state();
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    let handle = "a".repeat(22);
+
+    for field in ["filter_digest", "_filter_digest"] {
+        let mut stream_cursor = json!({
+            "v": "1",
+            "purpose": "stream",
+            "t": chrono::Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true),
+            "x": now_ms + 60_000,
+            "h": handle.clone(),
+        });
+        insert_cursor_field(&mut stream_cursor, field, json!("client-supplied"));
+        let token = encode_sync_cursor_value(stream_cursor);
+        let error = parse_and_validate_sync_cursor(&token, &state, None, None, now_ms)
+            .await
+            .expect_err("inline filter digest pseudo-field must be rejected");
+        assert_integrity_error(error);
+
+        let mut events_cursor = json!({
+            "v": "1",
+            "purpose": EVENTS_QUERY_CURSOR_PURPOSE,
+            "t": chrono::Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true),
+            "x": now_ms + 60_000,
+            "h": handle.clone(),
+        });
+        insert_cursor_field(&mut events_cursor, field, json!("client-supplied"));
+        let token = encode_sync_cursor_value(events_cursor);
+        let error =
+            parse_and_validate_events_query_cursor(&token, &state, None, "digest-a", now_ms)
+                .await
+                .expect_err("events query inline filter digest pseudo-field must be rejected");
+        assert_integrity_error(error);
+    }
+}
+
+#[tokio::test]
+async fn events_query_cursor_rejects_bare_event_id_cursor() {
+    let state = test_state();
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    let error = parse_and_validate_events_query_cursor(
+        "ck:event:01904100-0000-7000-8000-0000000000e1",
+        &state,
+        None,
+        "digest-a",
+        now_ms,
+    )
+    .await
+    .expect_err("events query must not accept a bare event_id cursor");
+
+    match error {
+        SyncCursorError::Invalid(message) => {
+            assert!(message.contains("ck:cursor"));
+        }
+        other => panic!("expected invalid cursor shape, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn events_query_cursor_binds_purpose_and_filter_digest() {
+    let state = test_state();
+    let session = roster_session(&state, "did:web:alice.example");
+    let filter_a = sync_filter_digest(Some(&json!({
+        "operation_id": "ck.self.events.query.scan",
+        "realms": [ROSTER_REALM],
+        "actors": [],
+        "filters": {},
+        "order": "default",
+    })));
+    let filter_b = sync_filter_digest(Some(&json!({
+        "operation_id": "ck.self.events.query.scan",
+        "realms": [ROSTER_REALM],
+        "actors": [],
+        "filters": {"kind": "ck.message.create"},
+        "order": "default",
+    })));
+    let event_id = "ck:event:01904100-0000-7000-8000-0000000000e1";
+    let token = sync_token_for_events_query(&state, Some(&session), &filter_a, event_id).await;
+    let now_ms = chrono::Utc::now().timestamp_millis();
+
+    let parsed =
+        parse_and_validate_events_query_cursor(&token, &state, Some(&session), &filter_a, now_ms)
+            .await
+            .expect("matching events query cursor parses");
+    assert_eq!(parsed.event_id, event_id);
+
+    let error =
+        parse_and_validate_events_query_cursor(&token, &state, Some(&session), &filter_b, now_ms)
+            .await
+            .expect_err("changed query-scope digest must reject cursor replay");
+    assert!(matches!(error, SyncCursorError::Mismatch(_)));
+
+    let error = parse_and_validate_sync_cursor(&token, &state, Some(&session), None, now_ms)
+        .await
+        .expect_err("events query cursor must not parse as account stream cursor");
+    assert!(matches!(error, SyncCursorError::Invalid(_)));
 }
 
 #[tokio::test]

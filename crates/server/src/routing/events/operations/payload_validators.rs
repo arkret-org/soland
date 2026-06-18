@@ -428,16 +428,14 @@ fn validate_read_cursor_hlc(hlc: &str) -> Result<(), &'static str> {
 /// `relation.md` admission guard for `ck.relation.create` / `.update` /
 /// `.tombstone`, covering two reducer-managed invariants:
 ///
-/// 1. **`effective_scope` is reducer-stamped** (§2 table): the actor MUST NOT
-///    submit it; the reducer materialises it from `scope_circle_id`. Any
-///    actor-supplied `effective_scope` is `schema_violation`
-///    (`effective_scope_reducer_managed`).
+/// 1. **`effective_scope` is reducer-stamped** (§2 table): the actor MUST NOT submit it; the
+///    reducer materialises it from `scope_circle_id`. Any actor-supplied `effective_scope` is
+///    `schema_violation` (`effective_scope_reducer_managed`).
 /// 2. **derived-edge single-source** (§3.2): `watches` (truth source
-///    `ck.component.strand.watch.v1`, write path `ck.strand.watch.set`) and
-///    Board/List `contains` (truth source `ck.space.parent` / `ck.strand.move`)
-///    are derived projections; a direct `ck.relation.*` on them MUST
-///    `schema_violation`. The container `contains` shape is identified by a
-///    Space `from_ref` (`ck:space:…`); a `Strand -> Strand` `contains` stays a
+///    `ck.component.strand.watch.v1`, write path `ck.strand.watch.set`) and Board/List `contains`
+///    (truth source `ck.space.parent` / `ck.strand.move`) are derived projections; a direct
+///    `ck.relation.*` on them MUST `schema_violation`. The container `contains` shape is identified
+///    by a Space `from_ref` (`ck:space:…`); a `Strand -> Strand` `contains` stays a
 ///    directly-writable weak relation (§3.2 line 85) and is not blocked.
 pub(crate) fn validate_relation_operation_payload(
     operation: &Operation,
@@ -487,11 +485,11 @@ pub(crate) fn validate_morph_update_payload(operation: &Operation) -> Result<(),
 
 /// `morph.md` §2 / §4 forbidden-wire guard for `ck.morph.update`:
 /// - `morph_type` is immutable after `ck.morph.create` (`morph_type_immutable`).
-/// - the stage axis (`stage` / `stage_changed_at`) changes only via
-///   `ck.morph.stage.set`; writing it through an update patch is `schema_violation`.
-/// - the reserved business-field set (`fields.stage` / `fields.lifecycle` /
-///   `fields.progress_state` / `fields.stage_reason`) is forbidden-wire in any
-///   representation (dotted `fields.<name>` path or whole-`fields` object replace).
+/// - the stage axis (`stage` / `stage_changed_at`) changes only via `ck.morph.stage.set`; writing
+///   it through an update patch is `schema_violation`.
+/// - the reserved business-field set (`fields.stage` / `fields.lifecycle` / `fields.progress_state`
+///   / `fields.stage_reason`) is forbidden-wire in any representation (dotted `fields.<name>` path
+///   or whole-`fields` object replace).
 fn reject_forbidden_morph_update_patch(
     patch: &serde_json::Map<String, Value>,
 ) -> Result<(), &'static str> {

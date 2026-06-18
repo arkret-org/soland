@@ -403,6 +403,7 @@ struct EventsQueryParts {
     before: Option<String>,
     order: String,
     limit: usize,
+    filters: Option<Value>,
 }
 
 fn validate_events_query_order(order: &str) -> Result<(), crate::error::AppError> {
@@ -412,6 +413,117 @@ fn validate_events_query_order(order: &str) -> Result<(), crate::error::AppError
             "order must be default, ascending, or descending",
         )),
     }
+}
+
+fn events_query_filters_param(req: &Request) -> Result<Option<Value>, crate::error::AppError> {
+    query_param(req, "filters")
+        .map(|value| {
+            serde_json::from_str(&value)
+                .map_err(|_| crate::error::AppError::invalid_param("filters must be a JSON value"))
+        })
+        .transpose()
+}
+
+fn reject_events_query_filter_digest_pseudo_fields(
+    filters: Option<&Value>,
+) -> Result<(), crate::error::AppError> {
+    if filters.is_some_and(value_contains_filter_digest_pseudo_field) {
+        return Err(crate::error::AppError::invalid_param(
+            "filters must not contain cursor filter_digest fields",
+        ));
+    }
+    Ok(())
+}
+
+fn value_contains_filter_digest_pseudo_field(value: &Value) -> bool {
+    match value {
+        Value::Object(object) => {
+            object.contains_key("_filter_digest")
+                || object.contains_key("filter_digest")
+                || object
+                    .values()
+                    .any(value_contains_filter_digest_pseudo_field)
+        }
+        Value::Array(values) => values.iter().any(value_contains_filter_digest_pseudo_field),
+        _ => false,
+    }
+}
+
+fn reject_events_query_filter_digest_query_params(
+    req: &Request,
+) -> Result<(), crate::error::AppError> {
+    if query_param(req, "_filter_digest").is_some() || query_param(req, "filter_digest").is_some() {
+        return Err(crate::error::AppError::invalid_param(
+            "cursor filter_digest is server-derived",
+        ));
+    }
+    Ok(())
+}
+
+fn events_query_scope_digest(
+    realms: &[String],
+    actors: &[String],
+    filters: Option<&Value>,
+    order: &str,
+) -> String {
+    let realms = realms
+        .iter()
+        .cloned()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    let actors = actors
+        .iter()
+        .cloned()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    let binding = json!({
+        "operation_id": "ck.self.events.query.scan",
+        "realms": realms,
+        "actors": actors,
+        "filters": filters.cloned().unwrap_or_else(|| json!({})),
+        "order": order,
+    });
+    sync_filter_digest(Some(&binding))
+}
+
+fn events_query_cursor_error(error: SyncCursorError) -> crate::error::AppError {
+    match error {
+        SyncCursorError::Expired => crate::error::AppError::new(
+            crate::error::ErrorCode::CursorExpired,
+            "cursor has expired",
+        ),
+        SyncCursorError::Invalid(message) => crate::error::AppError::invalid_param(message),
+        SyncCursorError::Mismatch(message) | SyncCursorError::Integrity(message) => {
+            crate::error::AppError::new(crate::error::ErrorCode::CursorIntegrityInvalid, message)
+        }
+        SyncCursorError::Revoked => crate::error::AppError::new(
+            crate::error::ErrorCode::CursorRevoked,
+            "cursor authority has been revoked",
+        ),
+    }
+}
+
+async fn events_query_cursor_target(
+    state: &AppState,
+    session: Option<&SessionRecord>,
+    filter_digest: &str,
+    cursor: Option<&str>,
+) -> Result<Option<String>, crate::error::AppError> {
+    let Some(cursor) = cursor else {
+        return Ok(None);
+    };
+    parse_and_validate_events_query_cursor(
+        cursor,
+        state,
+        session,
+        filter_digest,
+        chrono::Utc::now().timestamp_millis(),
+    )
+    .await
+    .map(|cursor| Some(cursor.event_id))
+    .map_err(events_query_cursor_error)
 }
 
 fn events_query_direction(parts: &EventsQueryParts) -> bool {
@@ -474,6 +586,8 @@ pub(crate) async fn events_query(
     req: &mut Request,
 ) -> crate::result::JsonResult<EventsQueryOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
+    reject_events_query_filter_digest_query_params(req)?;
+    let filters = events_query_filters_param(req)?;
     let limit = query_param(req, "limit")
         .and_then(|value| value.parse::<usize>().ok())
         .unwrap_or(100)
@@ -485,6 +599,7 @@ pub(crate) async fn events_query(
         before: query_param(req, "before"),
         order: query_param(req, "order").unwrap_or_else(|| "default".to_owned()),
         limit,
+        filters,
     };
     events_query_impl(state, req, parts).await
 }
@@ -521,6 +636,7 @@ pub(crate) async fn events_query_post(
             .map(|limit| limit as usize)
             .unwrap_or(100)
             .clamp(1, 100),
+        filters: body.filters,
     };
     events_query_impl(state, req, parts).await
 }
@@ -531,6 +647,7 @@ async fn events_query_impl(
     parts: EventsQueryParts,
 ) -> crate::result::JsonResult<EventsQueryOutcome> {
     validate_events_query_order(&parts.order)?;
+    reject_events_query_filter_digest_pseudo_fields(parts.filters.as_ref())?;
     if parts.realms.is_empty() && parts.actors.is_empty() {
         return Err(crate::error::AppError::missing_param(
             "events.query requires at least one of realms[] / actors[]",
@@ -544,35 +661,66 @@ async fn events_query_impl(
             )));
         }
     }
-    // Dispatch: if no Realms (actor-scoped query), forward to the durable
-    // Event-store reader in routing/events.rs which builds an actor-keyed
-    // `frontier.actors` map. The projection-aware path below is Realm-keyed.
-    if realms.is_empty() {
-        let session =
+    let session = if realms.is_empty() {
+        Some(
             authenticated_session(state, req)
                 .await
                 .map_err(|(status, code, message)| {
                     crate::error::AppError::invalid_param(message)
                         .with_status(status)
                         .with_wire_code(code)
-                })?;
-        let response = durable_events_query_from_parts(state, &session, &parts).await;
-        return crate::result::json_ok(response);
-    }
-    // Anonymous scan is allowed (public realms), but a presented-yet-invalid
-    // bearer must surface its 401 rather than degrade to anonymous — see
-    // `subscribe_session_or_render` for the cursor-masking rationale.
-    let session = match authenticated_session(state, req).await {
-        Ok(session) => Some(session),
-        Err((status, code, message)) => {
-            if request_presents_auth_material(req) {
-                return Err(crate::error::AppError::invalid_param(message)
-                    .with_status(status)
-                    .with_wire_code(code));
+                })?,
+        )
+    } else {
+        // Anonymous scan is allowed (public realms), but a presented-yet-invalid
+        // bearer must surface its 401 rather than degrade to anonymous — see
+        // `subscribe_session_or_render` for the cursor-masking rationale.
+        match authenticated_session(state, req).await {
+            Ok(session) => Some(session),
+            Err((status, code, message)) => {
+                if request_presents_auth_material(req) {
+                    return Err(crate::error::AppError::invalid_param(message)
+                        .with_status(status)
+                        .with_wire_code(code));
+                }
+                None
             }
-            None
         }
     };
+    let filter_digest =
+        events_query_scope_digest(&realms, &parts.actors, parts.filters.as_ref(), &parts.order);
+    let (cursor_token, stop_cursor_token, backward) = events_query_cursor_and_stop(&parts);
+    let cursor = events_query_cursor_target(
+        state,
+        session.as_ref(),
+        &filter_digest,
+        cursor_token.as_deref(),
+    )
+    .await?;
+    let stop_cursor = events_query_cursor_target(
+        state,
+        session.as_ref(),
+        &filter_digest,
+        stop_cursor_token.as_deref(),
+    )
+    .await?;
+    // Dispatch: if no Realms (actor-scoped query), forward to the durable
+    // Event-store reader in routing/events.rs which builds an actor-keyed
+    // `frontier.actors` map. The projection-aware path below is Realm-keyed.
+    if realms.is_empty() {
+        let response = durable_events_query_from_parts(
+            state,
+            session.as_ref().expect("actor query requires session"),
+            &parts,
+            cursor.as_deref(),
+            stop_cursor.as_deref(),
+            backward,
+            &filter_digest,
+            cursor_token.clone(),
+        )
+        .await;
+        return crate::result::json_ok(response);
+    }
     let mut accessible_realms: Vec<String> = Vec::with_capacity(realms.len());
     for realm in realms {
         if realm_id_accessible(state, &realm, session.as_ref()).await {
@@ -583,7 +731,6 @@ async fn events_query_impl(
         return Err(crate::error::AppError::not_found("not found"));
     }
     let limit = parts.limit;
-    let (cursor, stop_cursor, backward) = events_query_cursor_and_stop(&parts);
 
     // Single-Realm fast path: paginate + apply visibility over the projection
     // store, then enrich the final page to full Event envelopes
@@ -595,12 +742,10 @@ async fn events_query_impl(
         match projected_event_page(state, realm_id, cursor.as_deref(), limit).await {
             Ok(Some(page)) => {
                 let mut events: Vec<Value> = Vec::new();
-                let mut last_visible_position = None;
+                let mut last_visible_event_id = None;
                 for event in &page.items {
                     if projection_record_visible_to_session(state, event, session.as_ref()).await {
-                        last_visible_position = Some(
-                            timeline_event_position(state, &event.event_id, event.created_at).await,
-                        );
+                        last_visible_event_id = Some(event.event_id.clone());
                         events.push(projection_event_json(event));
                     }
                 }
@@ -608,21 +753,28 @@ async fn events_query_impl(
                     events.reverse();
                 }
                 let events = truncate_before_stop_cursor(events, stop_cursor.as_deref());
-                let terminal_cursor = match last_visible_position {
-                    Some(position) => {
-                        Some(sync_token_for_realm_position(state, realm_id, position).await)
-                    }
-                    None => Some(sync_token_for_state(state).await),
+                let next_event_id = page
+                    .next_cursor
+                    .as_deref()
+                    .or(last_visible_event_id.as_deref());
+                let next_cursor = match next_event_id {
+                    Some(event_id) => Some(
+                        sync_token_for_events_query(
+                            state,
+                            session.as_ref(),
+                            &filter_digest,
+                            event_id,
+                        )
+                        .await,
+                    ),
+                    None => None,
                 };
                 let events = full_events_from_projection_json(state, &events).await;
                 return crate::result::json_ok(EventsQueryOutcome {
                     events,
                     snapshot_bootstrap: None,
-                    prev_cursor: cursor.clone(),
-                    next_cursor: match page.next_cursor {
-                        Some(next_cursor) => Some(next_cursor),
-                        None => terminal_cursor,
-                    },
+                    prev_cursor: cursor_token.clone(),
+                    next_cursor,
                     has_more: page.has_more,
                     range_completeness: Value::Null,
                 });
@@ -639,8 +791,8 @@ async fn events_query_impl(
         return crate::result::json_ok(EventsQueryOutcome {
             events: Vec::new(),
             snapshot_bootstrap: None,
-            prev_cursor: cursor.clone(),
-            next_cursor: Some(sync_token_for_state(state).await),
+            prev_cursor: cursor_token.clone(),
+            next_cursor: None,
             has_more: false,
             range_completeness: Value::Null,
         });
@@ -688,22 +840,20 @@ async fn events_query_impl(
     if page_events.len() > limit {
         page_events.truncate(limit);
     }
-    let next_cursor = match limited
-        .then(|| {
-            page_events
-                .last()
-                .and_then(|event| event["event_id"].as_str().map(ToOwned::to_owned))
-        })
-        .flatten()
+    let next_cursor = match page_events
+        .last()
+        .and_then(|event| event["event_id"].as_str())
     {
-        Some(next_cursor) => Some(next_cursor),
-        None => Some(sync_token_for_state(state).await),
+        Some(event_id) => Some(
+            sync_token_for_events_query(state, session.as_ref(), &filter_digest, event_id).await,
+        ),
+        None => None,
     };
     let events = full_events_from_projection_json(state, &page_events).await;
     crate::result::json_ok(EventsQueryOutcome {
         events,
         snapshot_bootstrap: None,
-        prev_cursor: cursor.clone(),
+        prev_cursor: cursor_token.clone(),
         next_cursor,
         has_more: limited,
         range_completeness: Value::Null,
@@ -739,6 +889,11 @@ async fn durable_events_query_from_parts(
     state: &AppState,
     session: &SessionRecord,
     parts: &EventsQueryParts,
+    cursor: Option<&str>,
+    stop_cursor: Option<&str>,
+    backward: bool,
+    filter_digest: &str,
+    cursor_token: Option<String>,
 ) -> EventsQueryOutcome {
     let actors_set: BTreeSet<&str> = parts.actors.iter().map(String::as_str).collect();
     let realms_set: BTreeSet<&str> = parts.realms.iter().map(String::as_str).collect();
@@ -771,12 +926,10 @@ async fn durable_events_query_from_parts(
             .cmp(&right.received_at)
             .then_with(|| left.event_id.cmp(&right.event_id))
     });
-    let (cursor, stop_cursor, backward) = events_query_cursor_and_stop(parts);
     if backward {
         records.reverse();
     }
     let start = cursor
-        .as_deref()
         .and_then(|cursor| records.iter().position(|record| record.event_id == cursor))
         .map(|index| index + 1)
         .unwrap_or(0);
@@ -785,7 +938,7 @@ async fn durable_events_query_from_parts(
         .skip(start)
         .take(parts.limit + 1)
         .collect::<Vec<_>>();
-    if let Some(stop_cursor) = stop_cursor.as_deref()
+    if let Some(stop_cursor) = stop_cursor
         && let Some(index) = page
             .iter()
             .position(|record| record.event_id == stop_cursor)
@@ -796,9 +949,13 @@ async fn durable_events_query_from_parts(
     if has_more {
         page.truncate(parts.limit);
     }
-    let next_cursor = has_more
-        .then(|| page.last().map(|record| record.event_id.clone()))
-        .flatten();
+    let next_cursor = match page.last() {
+        Some(record) => Some(
+            sync_token_for_events_query(state, Some(session), filter_digest, &record.event_id)
+                .await,
+        ),
+        None => None,
+    };
     let events = page
         .iter()
         .filter_map(|record| super::super::event_log::sdk_event_for_state(state, record).ok())
@@ -807,7 +964,7 @@ async fn durable_events_query_from_parts(
         events,
         snapshot_bootstrap: None,
         next_cursor,
-        prev_cursor: None,
+        prev_cursor: cursor_token,
         has_more,
         range_completeness: Value::Null,
     }

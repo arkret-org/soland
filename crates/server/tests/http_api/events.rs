@@ -532,7 +532,7 @@ async fn sync_cursor_rejects_facets_and_renderer_changes() {
 }
 
 #[tokio::test]
-async fn sync_backfill_exposes_prev_cursor_and_limited_timeline_pages() {
+async fn events_query_exposes_prev_cursor_and_limited_timeline_pages() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
     let realm_id = DEMO_REALM_ID;
@@ -561,9 +561,10 @@ async fn sync_backfill_exposes_prev_cursor_and_limited_timeline_pages() {
     .await
     .unwrap();
     assert_eq!(first_page["events"].as_array().unwrap().len(), 1);
-    assert_eq!(first_page["limited"], true);
+    assert_eq!(first_page["has_more"], true);
     assert!(first_page["prev_cursor"].is_null());
     let next_cursor = first_page["next_cursor"].as_str().unwrap();
+    assert!(next_cursor.starts_with("ck:cursor:"));
 
     let second_page: Value = TestClient::get(format!(
         "http://server/_cokret/self/events?realms={realm_id}&limit=1&after={next_cursor}"
@@ -576,22 +577,6 @@ async fn sync_backfill_exposes_prev_cursor_and_limited_timeline_pages() {
     .unwrap();
     assert_eq!(second_page["prev_cursor"], next_cursor);
     assert_eq!(second_page["events"].as_array().unwrap().len(), 1);
-    let to_cursor = second_page["events"][0]["event_id"].as_str().unwrap();
-    let gap: Value = TestClient::get(format!(
-        "http://server/_cokret/self/sync/backfill/gap?realm_id={realm_id}&from_cursor={next_cursor}&to_cursor={to_cursor}&limit=10"
-    ))
-    .add_header("authorization", format!("Bearer {token}"), true)
-    .send(&app_from_state(state.clone()))
-    .await
-    .take_json()
-    .await
-    .unwrap();
-    assert_eq!(gap["from_cursor"], next_cursor);
-    assert_eq!(gap["to_cursor"], to_cursor);
-    assert_eq!(gap["prev_cursor"], next_cursor);
-    assert_eq!(gap["gap_complete"], true);
-    assert_eq!(gap["events"].as_array().unwrap().len(), 1);
-    assert_eq!(gap["production_gap"], "durable_sync_position_validation");
 
     let mut invalid_cursor = TestClient::get(format!(
         "http://server/_cokret/self/events?realms={realm_id}&after=ck:event:01904100-0000-7000-8000-b8ab57920a67"
@@ -601,7 +586,7 @@ async fn sync_backfill_exposes_prev_cursor_and_limited_timeline_pages() {
     .await;
     assert_eq!(invalid_cursor.status_code.unwrap().as_u16(), 400);
     let invalid_cursor_body: Value = invalid_cursor.take_json().await.unwrap();
-    assert_eq!(invalid_cursor_body["error"]["code"], "invalid_cursor");
+    assert_eq!(invalid_cursor_body["error"]["code"], "invalid_param");
 }
 
 #[tokio::test]

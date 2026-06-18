@@ -253,8 +253,9 @@ impl ProjectionState {
 
 #[cfg(test)]
 mod cross_realm_relation_tests {
-    use super::*;
     use serde_json::json;
+
+    use super::*;
 
     const REALM_A: &str = "ck:realm:01904100-0000-7000-8000-000000000a01";
     const REALM_B: &str = "ck:realm:01904100-0000-7000-8000-000000000a02";
@@ -292,7 +293,8 @@ mod cross_realm_relation_tests {
     fn proj() -> ProjectionState {
         let mut proj = ProjectionState::default();
         proj.strands.insert(STRAND_A.to_owned(), strand_in(REALM_A));
-        proj.strands.insert(STRAND_A2.to_owned(), strand_in(REALM_A));
+        proj.strands
+            .insert(STRAND_A2.to_owned(), strand_in(REALM_A));
         proj.strands.insert(STRAND_B.to_owned(), strand_in(REALM_B));
         proj
     }
@@ -311,26 +313,32 @@ mod cross_realm_relation_tests {
 
     #[test]
     fn structural_contains_within_realm_is_allowed() {
-        assert!(proj()
-            .check_relation_cross_realm(&relation_op("contains", STRAND_A, STRAND_A2))
-            .is_ok());
+        assert!(
+            proj()
+                .check_relation_cross_realm(&relation_op("contains", STRAND_A, STRAND_A2))
+                .is_ok()
+        );
     }
 
     #[test]
     fn weak_reference_across_realms_is_allowed() {
-        assert!(proj()
-            .check_relation_cross_realm(&relation_op("references", STRAND_A, STRAND_B))
-            .is_ok());
+        assert!(
+            proj()
+                .check_relation_cross_realm(&relation_op("references", STRAND_A, STRAND_B))
+                .is_ok()
+        );
     }
 
     #[test]
     fn unknown_endpoint_is_not_rejected_out_of_order() {
-        assert!(proj()
-            .check_relation_cross_realm(&relation_op(
-                "contains",
-                STRAND_A,
-                "ck:strand:01904100-0000-7000-8000-0000000000ff"
-            ))
-            .is_ok());
+        assert!(
+            proj()
+                .check_relation_cross_realm(&relation_op(
+                    "contains",
+                    STRAND_A,
+                    "ck:strand:01904100-0000-7000-8000-0000000000ff"
+                ))
+                .is_ok()
+        );
     }
 }

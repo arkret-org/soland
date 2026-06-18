@@ -223,6 +223,8 @@ pub fn is_valid_sync_token(token: &str) -> bool {
         || value.get("issuer_kid").is_some()
         || value.get("_ctx").is_some()
         || value.get("_positions").is_some()
+        || value.get("_filter_digest").is_some()
+        || value.get("filter_digest").is_some()
     {
         return false;
     }
@@ -233,7 +235,7 @@ pub fn is_valid_sync_token(token: &str) -> bool {
         && value
             .get("purpose")
             .and_then(|purpose| purpose.as_str())
-            .is_some_and(|purpose| matches!(purpose, "stream" | "barrier"))
+            .is_some_and(|purpose| matches!(purpose, "stream" | "barrier" | "events_query"))
         && value.get("t").and_then(|t| t.as_str()).is_some()
         && value
             .get("x")

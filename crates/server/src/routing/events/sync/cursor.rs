@@ -23,6 +23,11 @@ pub struct SyncCursor {
 }
 
 #[derive(Debug)]
+pub(crate) struct EventsQueryCursor {
+    pub event_id: String,
+}
+
+#[derive(Debug)]
 pub enum SyncCursorError {
     Invalid(&'static str),
     Mismatch(&'static str),
@@ -35,6 +40,18 @@ pub enum SyncCursorError {
     Revoked,
 }
 
+pub(crate) const EVENTS_QUERY_CURSOR_PURPOSE: &str = "events_query";
+
+fn cursor_principal_device(session: Option<&SessionRecord>) -> (String, String) {
+    let principal_id = session
+        .map(|session| session.actor.clone())
+        .unwrap_or_else(|| "anonymous".to_owned());
+    let device_id = session
+        .map(|session| session.device_id.clone())
+        .unwrap_or_else(|| "anonymous".to_owned());
+    (principal_id, device_id)
+}
+
 pub async fn sync_token_for_client_sync(
     state: &AppState,
     session: Option<&SessionRecord>,
@@ -45,12 +62,7 @@ pub async fn sync_token_for_client_sync(
 ) -> String {
     let issued_at = chrono::Utc::now();
     let expires_at = issued_at + ChronoDuration::hours(1);
-    let principal_id = session
-        .map(|session| session.actor.clone())
-        .unwrap_or_else(|| "anonymous".to_owned());
-    let device_id = session
-        .map(|session| session.device_id.clone())
-        .unwrap_or_else(|| "anonymous".to_owned());
+    let (principal_id, device_id) = cursor_principal_device(session);
     let device_positions = BTreeMap::from([(device_id.clone(), issued_at.timestamp_micros())]);
     let filter_digest = sync_filter_digest(filter);
     let issued_at_ms = issued_at.timestamp_millis();
@@ -101,16 +113,53 @@ pub async fn sync_token_for_client_sync(
     encode_sync_cursor_value(cursor)
 }
 
-pub(crate) async fn sync_token_for_state(state: &AppState) -> String {
-    sync_token_for_state_positions(state, BTreeMap::new()).await
+pub(crate) async fn sync_token_for_events_query(
+    state: &AppState,
+    session: Option<&SessionRecord>,
+    filter_digest: &str,
+    event_id: &str,
+) -> String {
+    let issued_at = chrono::Utc::now();
+    let expires_at = issued_at + ChronoDuration::hours(1);
+    let issued_at_ms = issued_at.timestamp_millis();
+    let expires_at_ms = expires_at.timestamp_millis();
+    let (principal_id, device_id) = cursor_principal_device(session);
+    let target = json!({ "event_id": event_id });
+    let binding = events_query_cursor_handle_binding(
+        &principal_id,
+        &device_id,
+        &state.config.service_did,
+        filter_digest,
+        &target,
+    );
+    let handle = derive_cursor_handle(&state.sync_cursor_hmac_key, &binding);
+    upsert_sync_cursor_record(
+        state,
+        SyncCursorRecord {
+            handle: handle.clone(),
+            principal_id: Some(principal_id),
+            device_id: Some(device_id),
+            service_id: state.config.service_did.clone(),
+            filter_digest: Some(filter_digest.to_owned()),
+            purpose: EVENTS_QUERY_CURSOR_PURPOSE.to_owned(),
+            positions: None,
+            target: Some(target),
+            issued_at_ms,
+            expires_at_ms,
+        },
+    )
+    .await;
+    encode_sync_cursor_value(json!({
+        "v": "1",
+        "purpose": EVENTS_QUERY_CURSOR_PURPOSE,
+        "t": issued_at.to_rfc3339_opts(SecondsFormat::Millis, true),
+        "x": expires_at_ms,
+        "h": handle
+    }))
 }
 
-pub(crate) async fn sync_token_for_realm_position(
-    state: &AppState,
-    realm_id: &str,
-    position: i64,
-) -> String {
-    sync_token_for_state_positions(state, BTreeMap::from([(realm_id.to_owned(), position)])).await
+pub(crate) async fn sync_token_for_state(state: &AppState) -> String {
+    sync_token_for_state_positions(state, BTreeMap::new()).await
 }
 
 async fn sync_token_for_state_positions(
@@ -209,6 +258,25 @@ pub(crate) fn stream_cursor_handle_binding(
         .unwrap_or_else(|_| binding.to_string().into_bytes())
 }
 
+pub(crate) fn events_query_cursor_handle_binding(
+    principal_id: &str,
+    device_id: &str,
+    service_id: &str,
+    filter_digest: &str,
+    target: &Value,
+) -> Vec<u8> {
+    let binding = json!({
+        "principal_id": principal_id,
+        "device_id": device_id,
+        "service_id": service_id,
+        "filter_digest": filter_digest,
+        "purpose": EVENTS_QUERY_CURSOR_PURPOSE,
+        "target": target,
+    });
+    cokret_sdk::canonical::canonical_json_bytes(&binding)
+        .unwrap_or_else(|_| binding.to_string().into_bytes())
+}
+
 /// Canonical byte string the GENERIC service-level cursor handle is derived
 /// from (`sync_token_for_state`: empty positions, no session binding). Shaped
 /// differently from [`stream_cursor_handle_binding`] so the two namespaces
@@ -285,7 +353,15 @@ async fn stored_sync_cursor_by_handle(
     state: &AppState,
     handle: &str,
 ) -> Result<Value, SyncCursorError> {
-    let record = state
+    let record = stored_sync_cursor_record_by_handle(state, handle).await?;
+    Ok(stored_value_from_sync_cursor_record(record))
+}
+
+async fn stored_sync_cursor_record_by_handle(
+    state: &AppState,
+    handle: &str,
+) -> Result<SyncCursorRecord, SyncCursorError> {
+    state
         .persistence
         .sync_cursors()
         .get(handle)
@@ -294,8 +370,7 @@ async fn stored_sync_cursor_by_handle(
             tracing::warn!(%error, handle, "sync cursor handle lookup failed");
             SyncCursorError::Integrity("sync cursor handle lookup failed")
         })?
-        .ok_or(SyncCursorError::Integrity("sync cursor handle is unknown"))?;
-    Ok(stored_value_from_sync_cursor_record(record))
+        .ok_or(SyncCursorError::Integrity("sync cursor handle is unknown"))
 }
 
 /// Rebuild the in-memory `{ctx, positions, target?, expires_at_ms}` stored
@@ -311,6 +386,7 @@ fn stored_value_from_sync_cursor_record(record: SyncCursorRecord) -> Value {
         ctx.insert("device_id".to_owned(), Value::String(device_id));
     }
     ctx.insert("service_id".to_owned(), Value::String(record.service_id));
+    ctx.insert("purpose".to_owned(), Value::String(record.purpose));
     if let Some(filter_digest) = record.filter_digest {
         ctx.insert("filter_digest".to_owned(), Value::String(filter_digest));
     }
@@ -336,6 +412,8 @@ fn has_inline_cursor_body_marker(value: &Value) -> bool {
         || value.get("s").is_some()
         || value.get("d").is_some()
         || value.get("target").is_some()
+        || value.get("_filter_digest").is_some()
+        || value.get("filter_digest").is_some()
         || value.get("issuer_kid").is_some()
 }
 
@@ -430,6 +508,15 @@ pub async fn parse_and_validate_sync_cursor(
         .map(|session| session.device_id.as_str())
         .unwrap_or("anonymous");
     if ctx
+        .get("purpose")
+        .and_then(|purpose| purpose.as_str())
+        .is_none_or(|purpose| purpose != "stream")
+    {
+        return Err(SyncCursorError::Integrity(
+            "cursor handle purpose does not match account stream",
+        ));
+    }
+    if ctx
         .get("principal_id")
         .and_then(|principal| principal.as_str())
         .is_none_or(|principal| principal != expected_principal)
@@ -489,6 +576,113 @@ pub async fn parse_and_validate_sync_cursor(
         account_positions,
         to_device_position,
         issued_at_ms,
+    })
+}
+
+pub(crate) async fn parse_and_validate_events_query_cursor(
+    token: &str,
+    state: &AppState,
+    session: Option<&SessionRecord>,
+    filter_digest: &str,
+    now_ms: i64,
+) -> Result<EventsQueryCursor, SyncCursorError> {
+    if !token.starts_with("ck:cursor:") {
+        return Err(SyncCursorError::Invalid(
+            "events query cursor must be a ck:cursor token",
+        ));
+    }
+    let value = decode_sync_cursor_value(token)?;
+    if value
+        .get("v")
+        .and_then(|v| v.as_str())
+        .is_none_or(|v| v != "1")
+    {
+        return Err(SyncCursorError::Invalid(
+            "events query cursor must be a v1 cursor",
+        ));
+    }
+    if value
+        .get("purpose")
+        .and_then(|purpose| purpose.as_str())
+        .is_none_or(|purpose| purpose != EVENTS_QUERY_CURSOR_PURPOSE)
+    {
+        return Err(SyncCursorError::Integrity(
+            "cursor purpose does not match events query",
+        ));
+    }
+    if cursor_authority_revoked(state, token, session, now_ms) {
+        return Err(SyncCursorError::Revoked);
+    }
+    let Some(expires_at) = value.get("x").and_then(|expires_at| expires_at.as_i64()) else {
+        return Err(SyncCursorError::Invalid(
+            "events query cursor must contain x",
+        ));
+    };
+    if expires_at <= now_ms {
+        return Err(SyncCursorError::Expired);
+    }
+    if has_inline_cursor_body_marker(&value)
+        || value.get("_ctx").is_some()
+        || value.get("_positions").is_some()
+    {
+        return Err(SyncCursorError::Integrity(
+            "events query cursor must use stateful handle form",
+        ));
+    };
+    let Some(handle) = value.get("h").and_then(|h| h.as_str()) else {
+        return Err(SyncCursorError::Integrity(
+            "events query cursor must contain h",
+        ));
+    };
+    if validate_cursor_handle(handle).is_err() {
+        return Err(SyncCursorError::Invalid("invalid cursor handle"));
+    }
+    let record = stored_sync_cursor_record_by_handle(state, handle).await?;
+    if record.expires_at_ms <= now_ms {
+        let _ = state.persistence.sync_cursors().delete(handle).await;
+        return Err(SyncCursorError::Integrity("sync cursor handle has expired"));
+    }
+    if record.purpose.as_str() != EVENTS_QUERY_CURSOR_PURPOSE {
+        return Err(SyncCursorError::Integrity(
+            "cursor handle purpose does not match events query",
+        ));
+    }
+    let (expected_principal, expected_device) = cursor_principal_device(session);
+    if record.principal_id.as_deref() != Some(expected_principal.as_str()) {
+        return Err(SyncCursorError::Mismatch(
+            "cursor principal does not match request actor",
+        ));
+    }
+    if record.device_id.as_deref() != Some(expected_device.as_str()) {
+        return Err(SyncCursorError::Mismatch(
+            "cursor device does not match request device",
+        ));
+    }
+    if record.service_id.as_str() != state.config.service_did.as_str() {
+        return Err(SyncCursorError::Mismatch(
+            "cursor service does not match this service DID",
+        ));
+    }
+    if record.filter_digest.as_deref() != Some(filter_digest) {
+        return Err(SyncCursorError::Mismatch(
+            "cursor filter digest does not match request filter",
+        ));
+    }
+    let target = record
+        .target
+        .as_ref()
+        .and_then(|target| target.get("event_id"))
+        .and_then(Value::as_str)
+        .ok_or(SyncCursorError::Integrity(
+            "events query cursor handle is missing target.event_id",
+        ))?;
+    if !target.starts_with("ck:event:") {
+        return Err(SyncCursorError::Integrity(
+            "events query cursor target must be an event id",
+        ));
+    }
+    Ok(EventsQueryCursor {
+        event_id: target.to_owned(),
     })
 }
 

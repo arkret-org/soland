@@ -240,8 +240,9 @@ async fn inception_bootstrap_seal(
 
 #[cfg(test)]
 mod prev_refs_limit_tests {
-    use super::*;
     use serde_json::json;
+
+    use super::*;
 
     fn object(refs: serde_json::Value) -> serde_json::Map<String, Value> {
         json!({ "prev_refs": refs }).as_object().unwrap().clone()
@@ -270,6 +271,9 @@ mod prev_refs_limit_tests {
     fn distinct_prev_refs_within_limit_ok() {
         let refs = json!(["ck:event:e1", "ck:event:e2"]);
         let out = event_ref_list(&object(refs), "prev_refs", MAX_EVENT_PREV_REFS).unwrap();
-        assert_eq!(out, vec!["ck:event:e1".to_owned(), "ck:event:e2".to_owned()]);
+        assert_eq!(
+            out,
+            vec!["ck:event:e1".to_owned(), "ck:event:e2".to_owned()]
+        );
     }
 }
