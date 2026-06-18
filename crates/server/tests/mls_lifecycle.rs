@@ -20,6 +20,11 @@ use std::collections::BTreeMap;
 
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use chrono::Utc;
+use cokret_sdk::{
+    CrossSigningBinding, CrossSigningKeyRecord, CrossSigningPublishContent, Did,
+    SignedCrossSigningKey, TypedTrustDomainId,
+};
 use salvo::http::StatusCode;
 use salvo::test::{ResponseExt, TestClient};
 use serde_json::{Value, json};
@@ -161,6 +166,58 @@ async fn dev_token(state: AppState, actor: &str, device_id: &str, display: &str)
     login["access_token"].as_str().unwrap().to_owned()
 }
 
+fn cross_signing_publish(principal: &str, generation: u64) -> CrossSigningPublishContent {
+    let principal_id = Did::new(principal.to_owned()).unwrap();
+    CrossSigningPublishContent {
+        principal_id: principal_id.clone(),
+        trust_domain: TypedTrustDomainId::new("ck:trust_domain:soland-mls-test.local").unwrap(),
+        principal_signing_key: CrossSigningKeyRecord {
+            kid: format!("{principal}#principal-signing"),
+            alg: "EdDSA".to_owned(),
+            public_key: "z6MkPrincipalAlice".to_owned(),
+            key_format: "multibase".to_owned(),
+        },
+        self_signing_key: SignedCrossSigningKey {
+            key: CrossSigningKeyRecord {
+                kid: format!("{principal}#self-signing"),
+                alg: "EdDSA".to_owned(),
+                public_key: "z6MkSelfAlice".to_owned(),
+                key_format: "multibase".to_owned(),
+            },
+            binding: CrossSigningBinding {
+                verification_method: format!("{principal}#principal-signing"),
+                alg: "EdDSA".to_owned(),
+                signature: format!("psk-sig-ssk-gen-{generation}"),
+            },
+        },
+        user_signing_key: SignedCrossSigningKey {
+            key: CrossSigningKeyRecord {
+                kid: format!("{principal}#user-signing"),
+                alg: "EdDSA".to_owned(),
+                public_key: "z6MkUserAlice".to_owned(),
+                key_format: "multibase".to_owned(),
+            },
+            binding: CrossSigningBinding {
+                verification_method: format!("{principal}#principal-signing"),
+                alg: "EdDSA".to_owned(),
+                signature: format!("psk-sig-usk-gen-{generation}"),
+            },
+        },
+        expected_previous_generation: generation.saturating_sub(1),
+        generation,
+        issued_at: Utc::now(),
+    }
+}
+
+fn seed_cross_signing_generation(state: &AppState, principal: &str, generation: u64) {
+    let mut manager = state.cross_signing.lock().expect("cross_signing lock");
+    for current in 1..=generation {
+        manager
+            .record_cross_signing_publish(cross_signing_publish(principal, current))
+            .unwrap();
+    }
+}
+
 #[tokio::test]
 async fn mls_lifecycle_end_to_end() {
     let state = AppState::new(test_config(), Db { pool: None });
@@ -168,15 +225,53 @@ async fn mls_lifecycle_end_to_end() {
     let alice_did = "did:web:alice.example";
     let alice_device = "ck:device:01904100-0000-7000-8000-a11ce0000001";
     let alice_token = dev_token(state.clone(), alice_did, alice_device, "Alice").await;
+    seed_cross_signing_generation(&state, alice_did, 3);
+    let realm_id = "ck:realm:01904100-0000-7000-8000-00000000e2ee";
 
     // ── 1. upload a KeyPackage (W1C: ck.self.keys.keypackages.upload.create) ──
     let keypackage_id = "ck:mls_keypackage:t-01";
+    let keypackage_id_mismatch = "ck:mls_keypackage:t-02";
+    let uploaded_keypackage_ref = "ck:mls:keypackage:test-01";
+    let mismatch_keypackage_ref = "ck:mls:keypackage:test-02";
+    let keypackage_bytes = b"opaque-mls-keypackage";
+    let mismatch_keypackage_bytes = b"opaque-mls-keypackage-mismatch";
+    let keypackage_digest = cokret_sdk::canonical::sha256_digest(keypackage_bytes);
+    let mismatch_keypackage_digest =
+        cokret_sdk::canonical::sha256_digest(mismatch_keypackage_bytes);
+    let capabilities = json!(["ck.mls.rfc9420", "ck.mls.profile.full"]);
+    let capabilities_digest = sha256_json(&capabilities);
+    let mismatch_capabilities = json!(["ck.mls.rfc9420"]);
+    let device_signature = json!({
+        "kid": format!("{alice_did}#{alice_device}"),
+        "alg": "EdDSA",
+        "sig": b64(b"device-signature")
+    });
     let publish_body = json!({
-        "keypackage_id": keypackage_id,
-        "actor_id": alice_did,
+        "principal_id": alice_did,
         "device_id": alice_device,
-        "lifetime": {"not_before": 1, "not_after": 4_102_444_800_i64},
-        "key_package_bytes_b64": b64(b"opaque-mls-keypackage"),
+        "device_signature": device_signature.clone(),
+        "key_packages": [
+            {
+                "keypackage_id": keypackage_id,
+                "keypackage_ref": uploaded_keypackage_ref,
+                "keypackage_digest": keypackage_digest.clone(),
+                "key_package": b64(keypackage_bytes),
+                "cipher_suites": ["MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519"],
+                "capabilities": capabilities.clone(),
+                "expires_at": "2100-01-01T00:00:00Z",
+                "created_at": "2026-05-25T00:00:00Z"
+            },
+            {
+                "keypackage_id": keypackage_id_mismatch,
+                "keypackage_ref": mismatch_keypackage_ref,
+                "keypackage_digest": mismatch_keypackage_digest,
+                "key_package": b64(mismatch_keypackage_bytes),
+                "cipher_suites": ["MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519"],
+                "capabilities": mismatch_capabilities,
+                "expires_at": "2100-01-01T00:00:00Z",
+                "created_at": "2026-05-25T00:00:01Z"
+            }
+        ]
     });
     let publish_resp = TestClient::post("http://server/_cokret/self/keys/keypackages/upload")
         .add_header("authorization", format!("Bearer {alice_token}"), true)
@@ -186,8 +281,11 @@ async fn mls_lifecycle_end_to_end() {
     assert_eq!(publish_resp.status_code, Some(StatusCode::OK));
     let mut publish_resp = publish_resp;
     let publish_json: Value = publish_resp.take_json().await.unwrap();
-    assert_eq!(publish_json["keypackage_id"], json!(keypackage_id));
-    assert_eq!(publish_json["claimed"], json!(false));
+    assert_eq!(publish_json["accepted"], json!(2));
+    assert_eq!(
+        publish_json["key_package_refs"],
+        json!([uploaded_keypackage_ref, mismatch_keypackage_ref])
+    );
     assert!(
         state
             .persistence
@@ -198,49 +296,75 @@ async fn mls_lifecycle_end_to_end() {
             .is_some(),
         "publish must mirror into the store"
     );
+    let published_row = state
+        .persistence
+        .mls_key_packages()
+        .get(keypackage_id)
+        .await
+        .unwrap()
+        .expect("published KeyPackage row");
+    assert_eq!(
+        published_row.capabilities,
+        vec![
+            "ck.mls.rfc9420".to_owned(),
+            "ck.mls.profile.full".to_owned()
+        ]
+    );
+    assert_eq!(published_row.capabilities_digest, capabilities_digest);
+    assert_eq!(published_row.ssk_generation, None);
 
     // ── 2a. atomic claim wins (W1C: ck.self.keys.keypackages.command.claim) ───
-    // keypackage_id is now carried in the body, not the URL.
     let claim_url = "http://server/_cokret/self/keys/keypackages/claim".to_owned();
     let claim_resp = TestClient::post(&claim_url)
         .add_header("authorization", format!("Bearer {alice_token}"), true)
         .json(&json!({
-            "keypackage_id": keypackage_id,
-            "mls_group_ref": "ck:mls_group:abc"
+            "target_principal_id": alice_did,
+            "intended_realm_id": realm_id,
+            "requester": alice_did,
+            "required_capabilities": ["ck.mls.profile.full"],
+            "claim_nonce": b64(b"claim-nonce-01"),
+            "expires_at": "2100-01-01T00:00:00Z",
+            "mls_group_id": "ck:mls_group:abc"
         }))
         .send(&app_from_state(state.clone()))
         .await;
     assert_eq!(claim_resp.status_code, Some(StatusCode::OK));
     let mut claim_resp = claim_resp;
     let claim_json: Value = claim_resp.take_json().await.unwrap();
-    assert_eq!(claim_json["mls_group_ref"], json!("ck:mls_group:abc"));
-    assert!(claim_json.get("group_id").is_none());
+    let claims = claim_json["claims"].as_array().expect("claims array");
+    assert_eq!(claims.len(), 1);
+    assert_eq!(claims[0]["keypackage_ref"], json!(uploaded_keypackage_ref));
+    assert_eq!(claims[0]["keypackage_digest"], json!(keypackage_digest));
+    assert_eq!(claims[0]["capabilities"], capabilities);
+    assert_eq!(claims[0]["capabilities_digest"], json!(capabilities_digest));
+    assert_eq!(claims[0]["ssk_generation"], json!(3));
+    assert_eq!(claims[0]["device_signature"], device_signature);
 
-    // ── 2b. second claim must collide with 409 ───────────────────
-    let collide_resp = TestClient::post(&claim_url)
+    // ── 2b. required capabilities must be a subset of the published set ─
+    let rejected_claim_resp = TestClient::post(&claim_url)
         .add_header("authorization", format!("Bearer {alice_token}"), true)
         .json(&json!({
-            "keypackage_id": keypackage_id,
-            "mls_group_ref": "ck:mls_group:second"
+            "target_principal_id": alice_did,
+            "intended_realm_id": realm_id,
+            "requester": alice_did,
+            "required_capabilities": ["ck.mls.profile.full"],
+            "claim_nonce": b64(b"claim-nonce-02"),
+            "expires_at": "2100-01-01T00:00:00Z",
+            "mls_group_id": "ck:mls_group:second"
         }))
         .send(&app_from_state(state.clone()))
         .await;
-    assert_eq!(collide_resp.status_code, Some(StatusCode::CONFLICT));
-    let mut collide_resp = collide_resp;
-    let collide_json: Value = collide_resp.take_json().await.unwrap();
-    // Error envelopes wrap the canonical code under `error.code`.
-    let collide_code = collide_json["error"]["code"]
-        .as_str()
-        .or_else(|| collide_json["code"].as_str());
+    assert_eq!(rejected_claim_resp.status_code, Some(StatusCode::OK));
+    let mut rejected_claim_resp = rejected_claim_resp;
+    let rejected_claim_json: Value = rejected_claim_resp.take_json().await.unwrap();
+    assert!(rejected_claim_json["claims"].as_array().unwrap().is_empty());
     assert_eq!(
-        collide_code,
-        Some("mls_keypackage_already_claimed"),
-        "second claim must surface the wire reason: {collide_json}"
+        rejected_claim_json["failures"][0]["reason_code"],
+        json!("claim_failed")
     );
 
     let bob_did = "did:web:bob.example";
     let bob_device = "ck:device:01904100-0000-7000-8000-b0b0e0000001";
-    let realm_id = "ck:realm:01904100-0000-7000-8000-00000000e2ee";
     let group_id = "ck:mls_group:abc";
     let effective_scope = json!({"kind": "realm", "realm_id": realm_id});
     let frontier_ref = "ck:event:01904100-0000-7000-8000-00000000f00d";

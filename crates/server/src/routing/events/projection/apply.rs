@@ -43,12 +43,18 @@ pub(super) async fn mirror_mls_effect_to_persistence(
                 .and_then(|projection| projection.mls_key_packages.get(keypackage_id).cloned())
                 .map(|kp| MlsKeyPackageRow {
                     id: kp.id,
+                    keypackage_ref: kp.keypackage_ref,
+                    keypackage_digest: kp.keypackage_digest,
                     actor_id: kp.actor_id,
                     device_id: kp.device_id,
+                    key_package_bytes: kp.key_package_bytes,
+                    capabilities: kp.capabilities,
+                    capabilities_digest: kp.capabilities_digest,
+                    device_signature: kp.device_signature,
                     lifetime_not_before: kp.lifetime.not_before,
                     lifetime_not_after: kp.lifetime.not_after,
-                    key_package_bytes: kp.key_package_bytes,
                     claimed_by_mls_group_id: kp.claimed_by,
+                    ssk_generation: kp.ssk_generation,
                     consumed_at: kp.consumed_at,
                     created_at: kp.created_at,
                 });
@@ -66,7 +72,7 @@ pub(super) async fn mirror_mls_effect_to_persistence(
             if let Err(error) = state
                 .persistence
                 .mls_key_packages()
-                .try_claim(keypackage_id, group_id, *consumed_at)
+                .try_claim(keypackage_id, group_id, None, *consumed_at)
                 .await
             {
                 tracing::warn!(%error, keypackage_id = %keypackage_id, "failed to mirror MLS KeyPackage claim");

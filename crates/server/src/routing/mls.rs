@@ -146,6 +146,7 @@ async fn upload_keypackage(
         return Err(AppError::missing_param("key_packages is required"));
     }
 
+    let default_device_signature = body.device_signature.clone();
     let mut accepted = 0_u32;
     let mut key_package_refs = Vec::new();
     let mut rejected = Vec::new();
@@ -157,13 +158,59 @@ async fn upload_keypackage(
                 continue;
             }
         };
-        let keypackage_ref = entry
-            .get("keypackage_ref")
-            .and_then(Value::as_str)
-            .unwrap_or(keypackage_id.as_str())
-            .to_owned();
+        let keypackage_ref = match entry_string(&entry, "keypackage_ref") {
+            Ok(value) => value.to_owned(),
+            Err(reason) => {
+                rejected.push(keypackage_failure(&entry, &device_id, reason));
+                continue;
+            }
+        };
         let key_package_bytes_b64 = match entry_string(&entry, "key_package") {
             Ok(value) => value.to_owned(),
+            Err(reason) => {
+                rejected.push(keypackage_failure(&entry, &device_id, reason));
+                continue;
+            }
+        };
+        let key_package_bytes = match decode_key_package(&key_package_bytes_b64) {
+            Ok(bytes) => bytes,
+            Err(reason) => {
+                rejected.push(keypackage_failure(&entry, &device_id, reason));
+                continue;
+            }
+        };
+        let keypackage_digest = match entry_string(&entry, "keypackage_digest") {
+            Ok(value) => value.to_owned(),
+            Err(reason) => {
+                rejected.push(keypackage_failure(&entry, &device_id, reason));
+                continue;
+            }
+        };
+        let computed_keypackage_digest = cokret_sdk::canonical::sha256_digest(&key_package_bytes);
+        if keypackage_digest != computed_keypackage_digest {
+            rejected.push(keypackage_failure(
+                &entry,
+                &device_id,
+                "keypackage_digest_mismatch",
+            ));
+            continue;
+        }
+        let capabilities = match entry_string_list(&entry, "capabilities") {
+            Ok(value) => value,
+            Err(reason) => {
+                rejected.push(keypackage_failure(&entry, &device_id, reason));
+                continue;
+            }
+        };
+        let capabilities_digest = match canonical_capabilities_digest(&capabilities) {
+            Ok(digest) => digest,
+            Err(reason) => {
+                rejected.push(keypackage_failure(&entry, &device_id, reason));
+                continue;
+            }
+        };
+        let device_signature = match entry_signature(&entry, &default_device_signature) {
+            Ok(signature) => signature,
             Err(reason) => {
                 rejected.push(keypackage_failure(&entry, &device_id, reason));
                 continue;
@@ -184,15 +231,20 @@ async fn upload_keypackage(
             }
         };
 
-        // Run the reducer's projection update first — that path enforces
-        // the MLS bytes/lifetime shape and gives us the canonical rejected
-        // reason if anything is malformed. The public operation id stays at
-        // the HTTP layer; the reducer sees the durable `ck.mls.keypackage`.
+        // Run the reducer's projection update first so the in-process
+        // projection carries the same metadata we mirror into the store.
         let publish_payload = json!({
             "action": "publish",
             "keypackage_id": keypackage_id.clone(),
+            "keypackage_ref": keypackage_ref.clone(),
+            "keypackage_digest": keypackage_digest,
             "actor_id": actor_id.clone(),
+            "principal_id": actor_id.clone(),
             "device_id": device_id.clone(),
+            "capabilities": capabilities,
+            "capabilities_digest": capabilities_digest,
+            "device_signature": device_signature,
+            "created_at": created_at,
             "lifetime": {
                 "not_before": created_at,
                 "not_after": expires_at,
@@ -275,7 +327,9 @@ async fn claim_keypackage(
         )
         .with_wire_code("mls_keypackage_claim_request_expired"));
     }
+    let required_capabilities = required_capability_set(&body.required_capabilities)?;
 
+    let target_principal_did = body.target_principal_id.clone();
     let target_principal_id = body.target_principal_id.to_string();
     let target_device_ids = body
         .target_device_ids
@@ -303,19 +357,26 @@ async fn claim_keypackage(
             })
             .filter(|kp| kp.claimed_by.is_none())
             .filter(|kp| kp.lifetime.not_after > now_secs)
+            .filter(|kp| capabilities_satisfy(&kp.capabilities, &required_capabilities))
             .min_by_key(|kp| (kp.created_at, kp.id.as_str()))
             .map(|kp| kp.id.clone())
     };
     let Some(keypackage_id) = keypackage_id else {
+        let reason_code = if available_before > 0 {
+            "claim_failed"
+        } else {
+            reducer::mls::REASON_KEYPACKAGE_NOT_FOUND
+        };
         return json_ok(KeyPackagesClaimOutcome {
             claims: Vec::new(),
             failures: vec![json!({
                 "device_id": target_device_ids.iter().next().cloned().unwrap_or_default(),
-                "reason_code": reducer::mls::REASON_KEYPACKAGE_NOT_FOUND,
+                "reason_code": reason_code,
             })],
             available_count: Some(available_before),
         });
     };
+    let ssk_generation = current_accepted_ssk_generation(state, &target_principal_did)?;
     let mls_group_ref = body
         .mls_group_id
         .clone()
@@ -331,6 +392,7 @@ async fn claim_keypackage(
         "action": "claim",
         "keypackage_id": keypackage_id,
         "group_id": mls_group_ref,
+        "ssk_generation": ssk_generation,
     });
     let op = build_op(crate::kinds::CK_MLS_KEYPACKAGE, payload);
     let effect = reducer::mls::apply_keypackage_claim(&mut state.projection.lock().unwrap(), &op);
@@ -376,7 +438,12 @@ async fn claim_keypackage(
     let updated = state
         .persistence
         .mls_key_packages()
-        .try_claim(&claimed_keypackage_id, &claimed_group_id, consumed_at)
+        .try_claim(
+            &claimed_keypackage_id,
+            &claimed_group_id,
+            Some(ssk_generation),
+            consumed_at,
+        )
         .await
         .map_err(|err| AppError::internal(format!("mls_key_packages.try_claim: {err}")))?;
     if updated.is_none() {
@@ -394,7 +461,7 @@ async fn claim_keypackage(
     };
 
     json_ok(KeyPackagesClaimOutcome {
-        claims: vec![keypackage_claim_record(&claimed_record, &body.claim_nonce)],
+        claims: vec![keypackage_claim_record(&claimed_record, &body.claim_nonce)?],
         failures: Vec::new(),
         available_count: Some(available_keypackage_count(
             state,
@@ -433,7 +500,7 @@ async fn consume_keypackages(
         match state
             .persistence
             .mls_key_packages()
-            .try_claim(&keypackage_id, &group_id, consumed_at)
+            .try_claim(&keypackage_id, &group_id, None, consumed_at)
             .await
         {
             Ok(Some(_)) => consumed.push(keypackage_id),
@@ -496,7 +563,7 @@ async fn revoke_keypackages(
                 match state
                     .persistence
                     .mls_key_packages()
-                    .try_claim(&keypackage_id, "revoked", revoked_at)
+                    .try_claim(&keypackage_id, "revoked", None, revoked_at)
                     .await
                 {
                     Ok(Some(_)) => revoked.push(keypackage_id),
@@ -611,11 +678,122 @@ fn entry_string<'a>(entry: &'a Value, field: &'static str) -> Result<&'a str, St
         .ok_or_else(|| format!("{field}_missing"))
 }
 
+fn entry_string_list(entry: &Value, field: &'static str) -> Result<Vec<String>, String> {
+    let values = entry
+        .get(field)
+        .and_then(Value::as_array)
+        .ok_or_else(|| format!("{field}_missing"))?;
+    if values.is_empty() {
+        return Err(format!("{field}_missing"));
+    }
+    let mut out = Vec::with_capacity(values.len());
+    let mut seen = BTreeSet::new();
+    for value in values {
+        let item = value
+            .as_str()
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| format!("{field}_invalid"))?;
+        if !seen.insert(item.to_owned()) {
+            return Err(format!("{field}_duplicate"));
+        }
+        out.push(item.to_owned());
+    }
+    Ok(out)
+}
+
 fn entry_timestamp(entry: &Value, field: &'static str) -> Result<i64, String> {
     let value = entry_string(entry, field)?;
     DateTime::parse_from_rfc3339(value)
         .map(|timestamp| timestamp.timestamp())
         .map_err(|_| format!("{field}_invalid"))
+}
+
+fn decode_key_package(encoded: &str) -> Result<Vec<u8>, String> {
+    URL_SAFE_NO_PAD
+        .decode(encoded.trim_end_matches('='))
+        .map_err(|_| "key_package_invalid_b64".to_owned())
+        .and_then(|bytes| {
+            if bytes.is_empty() {
+                Err("key_package_empty".to_owned())
+            } else {
+                Ok(bytes)
+            }
+        })
+}
+
+fn canonical_capabilities_digest(capabilities: &[String]) -> Result<String, String> {
+    cokret_sdk::canonical::canonical_json_bytes(&capabilities.to_vec())
+        .map(cokret_sdk::canonical::sha256_digest)
+        .map_err(|_| "capabilities_digest_failed".to_owned())
+}
+
+fn entry_signature(entry: &Value, default_signature: &Value) -> Result<Value, String> {
+    let signature = entry.get("device_signature").unwrap_or(default_signature);
+    let object = signature
+        .as_object()
+        .ok_or_else(|| "device_signature_missing".to_owned())?;
+    let has_required = ["kid", "sig"].into_iter().all(|field| {
+        object
+            .get(field)
+            .and_then(Value::as_str)
+            .is_some_and(|value| !value.is_empty())
+    });
+    if !has_required {
+        return Err("device_signature_invalid".to_owned());
+    }
+    if object
+        .get("alg")
+        .and_then(Value::as_str)
+        .is_some_and(str::is_empty)
+    {
+        return Err("device_signature_invalid".to_owned());
+    }
+    Ok(signature.clone())
+}
+
+fn required_capability_set(capabilities: &[String]) -> Result<BTreeSet<String>, AppError> {
+    if capabilities.is_empty() {
+        return Err(AppError::missing_param("required_capabilities is required"));
+    }
+    let mut out = BTreeSet::new();
+    for capability in capabilities {
+        if capability.is_empty() {
+            return Err(AppError::invalid_param(
+                "required_capabilities entries must be non-empty",
+            ));
+        }
+        if !out.insert(capability.clone()) {
+            return Err(AppError::invalid_param(
+                "required_capabilities entries must be unique",
+            ));
+        }
+    }
+    Ok(out)
+}
+
+fn capabilities_satisfy(published: &[String], required: &BTreeSet<String>) -> bool {
+    let published: BTreeSet<_> = published.iter().cloned().collect();
+    required.is_subset(&published)
+}
+
+fn current_accepted_ssk_generation(
+    state: &AppState,
+    principal: &cokret_sdk::Did,
+) -> Result<u64, AppError> {
+    state
+        .cross_signing
+        .lock()
+        .expect("cross_signing lock")
+        .current_cross_signing(principal)
+        .map(|publish| publish.generation)
+        .filter(|generation| *generation >= 1)
+        .ok_or_else(|| {
+            AppError::new(
+                ErrorCode::FailedPrecondition,
+                "current cross-signing publish is required for KeyPackage claim",
+            )
+            .with_wire_code("claim_generation_mismatch")
+        })
 }
 
 fn keypackage_failure(entry: &Value, device_id: &str, reason_code: impl Into<String>) -> Value {
@@ -665,26 +843,32 @@ fn available_keypackage_count(state: &AppState, actor_id: &str, device_id: Optio
         .count() as u64
 }
 
-fn keypackage_claim_record(record: &MlsKeyPackageRow, claim_nonce: &str) -> Value {
+fn keypackage_claim_record(
+    record: &MlsKeyPackageRow,
+    claim_nonce: &str,
+) -> Result<Value, AppError> {
+    let Some(ssk_generation) = record.ssk_generation else {
+        return Err(AppError::new(
+            ErrorCode::FailedPrecondition,
+            "KeyPackage claim is missing accepted cross-signing generation",
+        )
+        .with_wire_code("claim_generation_mismatch"));
+    };
     let key_package = URL_SAFE_NO_PAD.encode(&record.key_package_bytes);
-    json!({
+    Ok(json!({
         "claim_id": format!("{}:{claim_nonce}", record.id),
-        "keypackage_ref": record.id.clone(),
-        "keypackage_digest": cokret_sdk::canonical::sha256_digest(&record.key_package_bytes),
+        "keypackage_ref": record.keypackage_ref.clone(),
+        "keypackage_digest": record.keypackage_digest.clone(),
         "principal_id": record.actor_id.clone(),
         "device_id": record.device_id.clone(),
         "key_package": key_package,
-        "capabilities": ["unknown"],
-        "capabilities_digest": cokret_sdk::canonical::sha256_digest(b"[\"unknown\"]"),
-        "ssk_generation": 1,
+        "capabilities": record.capabilities.clone(),
+        "capabilities_digest": record.capabilities_digest.clone(),
+        "ssk_generation": ssk_generation,
         "expires_at": unix_timestamp_rfc3339(record.lifetime_not_after),
-        "device_signature": {
-            "kid": format!("{}#{}", record.actor_id, record.device_id),
-            "alg": "unknown",
-            "sig": "unknown",
-        },
+        "device_signature": record.device_signature.clone(),
         "revocation_status": "active",
-    })
+    }))
 }
 
 fn unix_timestamp_rfc3339(timestamp: i64) -> String {
@@ -711,12 +895,18 @@ fn build_op(object_type: &str, payload: Value) -> Operation {
 fn key_package_to_record(kp: &MlsKeyPackage) -> MlsKeyPackageRow {
     MlsKeyPackageRow {
         id: kp.id.clone(),
+        keypackage_ref: kp.keypackage_ref.clone(),
+        keypackage_digest: kp.keypackage_digest.clone(),
         actor_id: kp.actor_id.clone(),
         device_id: kp.device_id.clone(),
+        key_package_bytes: kp.key_package_bytes.clone(),
+        capabilities: kp.capabilities.clone(),
+        capabilities_digest: kp.capabilities_digest.clone(),
+        device_signature: kp.device_signature.clone(),
         lifetime_not_before: kp.lifetime.not_before,
         lifetime_not_after: kp.lifetime.not_after,
-        key_package_bytes: kp.key_package_bytes.clone(),
         claimed_by_mls_group_id: kp.claimed_by.clone(),
+        ssk_generation: kp.ssk_generation,
         consumed_at: kp.consumed_at,
         created_at: kp.created_at,
     }

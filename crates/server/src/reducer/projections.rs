@@ -188,6 +188,8 @@ pub struct KeyPackageLifetime {
 pub struct MlsKeyPackage {
     /// Canonical `ck:mls_keypackage:<uuid>` identifier.
     pub id: String,
+    pub keypackage_ref: String,
+    pub keypackage_digest: String,
     pub actor_id: String,
     pub device_id: String,
     pub lifetime: KeyPackageLifetime,
@@ -195,10 +197,16 @@ pub struct MlsKeyPackage {
     /// §11). Server treats this as a black box; only the recipient device
     /// can decrypt the Welcome it backs.
     pub key_package_bytes: Vec<u8>,
+    pub capabilities: Vec<String>,
+    pub capabilities_digest: String,
+    pub device_signature: serde_json::Value,
     /// `None` while the KeyPackage is still claimable; `Some(group_id)`
     /// after a successful CAS claim. The CAS guarantees at-most-one
     /// claim across concurrent Welcomes.
     pub claimed_by: Option<String>,
+    /// Accepted cross-signing generation captured when the claim was
+    /// issued. `None` while the KeyPackage is only published.
+    pub ssk_generation: Option<u64>,
     /// Unix seconds at which the CAS claim happened (mirrors
     /// `claimed_by`).
     pub consumed_at: Option<i64>,

@@ -404,12 +404,18 @@ CREATE TABLE public.mls_commits (
 
 CREATE TABLE public.mls_key_packages (
     id text NOT NULL,
+    keypackage_ref text NOT NULL,
+    keypackage_digest text NOT NULL,
     actor_id text NOT NULL,
     device_id text NOT NULL,
+    key_package_bytes bytea NOT NULL,
+    capabilities jsonb DEFAULT '[]'::jsonb NOT NULL,
+    capabilities_digest text NOT NULL,
+    device_signature jsonb DEFAULT '{}'::jsonb NOT NULL,
     lifetime_not_before bigint NOT NULL,
     lifetime_not_after bigint NOT NULL,
-    key_package_bytes bytea NOT NULL,
     claimed_by_mls_group_id text,
+    ssk_generation bigint,
     consumed_at bigint,
     created_at bigint NOT NULL
 );

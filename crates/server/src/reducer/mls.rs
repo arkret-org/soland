@@ -72,10 +72,18 @@ pub fn apply_keypackage_publish(
     op: &Operation,
 ) -> ProjectionEffectOut {
     let payload = &op.payload;
-    let Some(id) = payload.get("keypackage_id").and_then(Value::as_str) else {
+    let Some(id) = payload
+        .get("keypackage_id")
+        .or_else(|| payload.get("keypackage_ref"))
+        .and_then(Value::as_str)
+    else {
         return reject("mls_keypackage_id_missing");
     };
-    let Some(actor_id) = payload.get("actor_id").and_then(Value::as_str) else {
+    let Some(actor_id) = payload
+        .get("actor_id")
+        .or_else(|| payload.get("principal_id"))
+        .and_then(Value::as_str)
+    else {
         return reject("mls_keypackage_actor_missing");
     };
     let Some(device_id) = payload.get("device_id").and_then(Value::as_str) else {
@@ -98,15 +106,50 @@ pub fn apply_keypackage_publish(
         Some(Err(_)) => return reject("mls_keypackage_bytes_invalid_b64"),
         None => return reject("mls_keypackage_bytes_missing"),
     };
+    let keypackage_ref = payload
+        .get("keypackage_ref")
+        .and_then(Value::as_str)
+        .unwrap_or(id)
+        .to_owned();
+    let computed_keypackage_digest = cokret_sdk::canonical::sha256_digest(&key_package_bytes);
+    let keypackage_digest = payload
+        .get("keypackage_digest")
+        .and_then(Value::as_str)
+        .unwrap_or(computed_keypackage_digest.as_str())
+        .to_owned();
+    if keypackage_digest != computed_keypackage_digest {
+        return reject("mls_keypackage_digest_mismatch");
+    }
+    let capabilities = string_array(payload.get("capabilities"));
+    let capabilities_digest = match cokret_sdk::canonical::canonical_json_bytes(&capabilities) {
+        Ok(bytes) => cokret_sdk::canonical::sha256_digest(bytes),
+        Err(_) => return reject("mls_keypackage_capabilities_digest_failed"),
+    };
+    if let Some(published_digest) = payload.get("capabilities_digest").and_then(Value::as_str)
+        && published_digest != capabilities_digest
+    {
+        return reject("mls_keypackage_capabilities_digest_mismatch");
+    }
+    let device_signature = payload
+        .get("device_signature")
+        .cloned()
+        .unwrap_or(Value::Null);
 
-    let created_at = op.created_at.timestamp();
+    let created_at =
+        parse_timestamp(payload.get("created_at")).unwrap_or_else(|| op.created_at.timestamp());
     let row = MlsKeyPackage {
         id: id.to_owned(),
+        keypackage_ref,
+        keypackage_digest,
         actor_id: actor_id.to_owned(),
         device_id: device_id.to_owned(),
         lifetime,
         key_package_bytes,
+        capabilities,
+        capabilities_digest,
+        device_signature,
         claimed_by: None,
+        ssk_generation: None,
         consumed_at: None,
         created_at,
     };
@@ -160,6 +203,7 @@ pub fn apply_keypackage_claim(state: &mut ProjectionState, op: &Operation) -> Pr
     if consumed_at >= row.lifetime.not_after {
         return reject(REASON_KEYPACKAGE_EXPIRED);
     }
+    row.ssk_generation = payload.get("ssk_generation").and_then(Value::as_u64);
     row.claimed_by = Some(group_id.to_owned());
     row.consumed_at = Some(consumed_at);
 
@@ -643,6 +687,28 @@ fn parse_lifetime(v: Option<&Value>) -> Result<KeyPackageLifetime, &'static str>
         not_before,
         not_after,
     })
+}
+
+fn parse_timestamp(value: Option<&Value>) -> Option<i64> {
+    match value {
+        Some(Value::Number(number)) => number.as_i64(),
+        Some(Value::String(value)) => chrono::DateTime::parse_from_rfc3339(value)
+            .ok()
+            .map(|timestamp| timestamp.timestamp()),
+        _ => None,
+    }
+}
+
+fn string_array(value: Option<&Value>) -> Vec<String> {
+    match value {
+        Some(Value::Array(values)) => values
+            .iter()
+            .filter_map(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+            .collect(),
+        _ => Vec::new(),
+    }
 }
 
 const WELCOME_FORBIDDEN_METADATA_KEYS: &[&str] = &[

@@ -9,13 +9,19 @@ use super::*;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MlsKeyPackageRow {
     pub id: String,
+    pub keypackage_ref: String,
+    pub keypackage_digest: String,
     pub actor_id: String,
     pub device_id: String,
+    pub key_package_bytes: Vec<u8>,
+    pub capabilities: Vec<String>,
+    pub capabilities_digest: String,
+    pub device_signature: Value,
     pub lifetime_not_before: i64,
     pub lifetime_not_after: i64,
-    pub key_package_bytes: Vec<u8>,
     /// MLS group id that claimed this row. `None` while claimable.
     pub claimed_by_mls_group_id: Option<String>,
+    pub ssk_generation: Option<u64>,
     pub consumed_at: Option<i64>,
     pub created_at: i64,
 }
@@ -67,6 +73,7 @@ pub trait MlsKeyPackageStore: Send + Sync {
         &self,
         id: &str,
         mls_group_id: &str,
+        ssk_generation: Option<u64>,
         consumed_at: i64,
     ) -> PersistenceResult<Option<MlsKeyPackageRow>>;
     /// Snapshot all rows. Diagnostics + the integration test rely on it.
@@ -161,6 +168,7 @@ impl MlsKeyPackageStore for MemoryMlsKeyPackageStore {
         &self,
         id: &str,
         group_id: &str,
+        ssk_generation: Option<u64>,
         consumed_at: i64,
     ) -> PersistenceResult<Option<MlsKeyPackageRow>> {
         let mut rows = self.rows.lock().expect("mls keypackage lock");
@@ -172,6 +180,9 @@ impl MlsKeyPackageStore for MemoryMlsKeyPackageStore {
             return Ok(None);
         }
         row.claimed_by_mls_group_id = Some(group_id.to_owned());
+        if let Some(generation) = ssk_generation {
+            row.ssk_generation = Some(generation);
+        }
         row.consumed_at = Some(consumed_at);
         Ok(Some(row.clone()))
     }
@@ -454,24 +465,42 @@ pub(crate) struct PgMlsCommitStore {
     pub(crate) pool: PgPool,
 }
 
+fn db_ssk_generation(generation: Option<u64>) -> PersistenceResult<Option<i64>> {
+    generation
+        .map(|generation| {
+            i64::try_from(generation)
+                .map_err(|_| PersistenceError::Internal("ssk_generation exceeds i64".to_owned()))
+        })
+        .transpose()
+}
+
 #[async_trait]
 impl MlsKeyPackageStore for PgMlsKeyPackageStore {
     async fn put(&self, record: &MlsKeyPackageRow) -> PersistenceResult<bool> {
         let mut conn = pg_conn(&self.pool).await?;
+        let ssk_generation = db_ssk_generation(record.ssk_generation)?;
         let inserted = sql_query(
             "INSERT INTO mls_key_packages \
-             (id, actor_id, device_id, lifetime_not_before, lifetime_not_after, \
-              key_package_bytes, claimed_by_mls_group_id, consumed_at, created_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) \
+             (id, keypackage_ref, keypackage_digest, actor_id, device_id, key_package_bytes, \
+              capabilities, capabilities_digest, device_signature, lifetime_not_before, \
+              lifetime_not_after, claimed_by_mls_group_id, ssk_generation, consumed_at, \
+              created_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) \
              ON CONFLICT (id) DO NOTHING",
         )
         .bind::<Text, _>(&record.id)
+        .bind::<Text, _>(&record.keypackage_ref)
+        .bind::<Text, _>(&record.keypackage_digest)
         .bind::<Text, _>(&record.actor_id)
         .bind::<Text, _>(&record.device_id)
+        .bind::<Binary, _>(&record.key_package_bytes)
+        .bind::<Jsonb, _>(serde_json::json!(record.capabilities))
+        .bind::<Text, _>(&record.capabilities_digest)
+        .bind::<Jsonb, _>(&record.device_signature)
         .bind::<BigInt, _>(record.lifetime_not_before)
         .bind::<BigInt, _>(record.lifetime_not_after)
-        .bind::<Binary, _>(&record.key_package_bytes)
         .bind::<Nullable<Text>, _>(&record.claimed_by_mls_group_id)
+        .bind::<Nullable<BigInt>, _>(ssk_generation)
         .bind::<Nullable<BigInt>, _>(record.consumed_at)
         .bind::<BigInt, _>(record.created_at)
         .execute(&mut *conn)
@@ -482,8 +511,10 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
     async fn get(&self, id: &str) -> PersistenceResult<Option<MlsKeyPackageRow>> {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(
-            "SELECT id, actor_id, device_id, lifetime_not_before, lifetime_not_after, \
-             key_package_bytes, claimed_by_mls_group_id, consumed_at, created_at \
+            "SELECT id, keypackage_ref, keypackage_digest, actor_id, device_id, \
+             key_package_bytes, capabilities, capabilities_digest, device_signature, \
+             lifetime_not_before, lifetime_not_after, claimed_by_mls_group_id, ssk_generation, \
+             consumed_at, created_at \
              FROM mls_key_packages WHERE id = $1",
         )
         .bind::<Text, _>(id)
@@ -498,18 +529,24 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
         &self,
         id: &str,
         group_id: &str,
+        ssk_generation: Option<u64>,
         consumed_at: i64,
     ) -> PersistenceResult<Option<MlsKeyPackageRow>> {
         let mut conn = pg_conn(&self.pool).await?;
+        let ssk_generation = db_ssk_generation(ssk_generation)?;
         sql_query(
             "UPDATE mls_key_packages \
-             SET claimed_by_mls_group_id = $2, consumed_at = $3 \
+             SET claimed_by_mls_group_id = $2, ssk_generation = COALESCE($3, ssk_generation), \
+                 consumed_at = $4 \
              WHERE id = $1 AND claimed_by_mls_group_id IS NULL \
-             RETURNING id, actor_id, device_id, lifetime_not_before, lifetime_not_after, \
-             key_package_bytes, claimed_by_mls_group_id, consumed_at, created_at",
+             RETURNING id, keypackage_ref, keypackage_digest, actor_id, device_id, \
+             key_package_bytes, capabilities, capabilities_digest, device_signature, \
+             lifetime_not_before, lifetime_not_after, claimed_by_mls_group_id, ssk_generation, \
+             consumed_at, created_at",
         )
         .bind::<Text, _>(id)
         .bind::<Text, _>(group_id)
+        .bind::<Nullable<BigInt>, _>(ssk_generation)
         .bind::<BigInt, _>(consumed_at)
         .get_result::<MlsKeyPackagePgRow>(&mut *conn)
         .await
@@ -521,8 +558,10 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
     async fn snapshot_all(&self) -> PersistenceResult<Vec<MlsKeyPackageRow>> {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(
-            "SELECT id, actor_id, device_id, lifetime_not_before, lifetime_not_after, \
-             key_package_bytes, claimed_by_mls_group_id, consumed_at, created_at \
+            "SELECT id, keypackage_ref, keypackage_digest, actor_id, device_id, \
+             key_package_bytes, capabilities, capabilities_digest, device_signature, \
+             lifetime_not_before, lifetime_not_after, claimed_by_mls_group_id, ssk_generation, \
+             consumed_at, created_at \
              FROM mls_key_packages ORDER BY created_at ASC, id ASC",
         )
         .load::<MlsKeyPackagePgRow>(&mut *conn)
@@ -740,17 +779,29 @@ struct MlsKeyPackagePgRow {
     #[diesel(sql_type = Text)]
     id: String,
     #[diesel(sql_type = Text)]
+    keypackage_ref: String,
+    #[diesel(sql_type = Text)]
+    keypackage_digest: String,
+    #[diesel(sql_type = Text)]
     actor_id: String,
     #[diesel(sql_type = Text)]
     device_id: String,
+    #[diesel(sql_type = Binary)]
+    key_package_bytes: Vec<u8>,
+    #[diesel(sql_type = Jsonb)]
+    capabilities: Value,
+    #[diesel(sql_type = Text)]
+    capabilities_digest: String,
+    #[diesel(sql_type = Jsonb)]
+    device_signature: Value,
     #[diesel(sql_type = BigInt)]
     lifetime_not_before: i64,
     #[diesel(sql_type = BigInt)]
     lifetime_not_after: i64,
-    #[diesel(sql_type = Binary)]
-    key_package_bytes: Vec<u8>,
     #[diesel(sql_type = Nullable<Text>)]
     claimed_by_mls_group_id: Option<String>,
+    #[diesel(sql_type = Nullable<BigInt>)]
+    ssk_generation: Option<i64>,
     #[diesel(sql_type = Nullable<BigInt>)]
     consumed_at: Option<i64>,
     #[diesel(sql_type = BigInt)]
@@ -761,12 +812,21 @@ impl From<MlsKeyPackagePgRow> for MlsKeyPackageRow {
     fn from(row: MlsKeyPackagePgRow) -> Self {
         Self {
             id: row.id,
+            keypackage_ref: row.keypackage_ref,
+            keypackage_digest: row.keypackage_digest,
             actor_id: row.actor_id,
             device_id: row.device_id,
+            key_package_bytes: row.key_package_bytes,
+            capabilities: json_string_array(row.capabilities),
+            capabilities_digest: row.capabilities_digest,
+            device_signature: row.device_signature,
             lifetime_not_before: row.lifetime_not_before,
             lifetime_not_after: row.lifetime_not_after,
-            key_package_bytes: row.key_package_bytes,
             claimed_by_mls_group_id: row.claimed_by_mls_group_id,
+            ssk_generation: row
+                .ssk_generation
+                .and_then(|generation| u64::try_from(generation).ok())
+                .filter(|generation| *generation >= 1),
             consumed_at: row.consumed_at,
             created_at: row.created_at,
         }
