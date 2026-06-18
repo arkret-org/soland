@@ -553,6 +553,40 @@ async fn typing_submit_rejects_unknown_strand_scope() {
 }
 
 #[tokio::test]
+async fn typing_submit_rejects_disabled_discussion_strand_scope() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let token = dev_token(state.clone()).await;
+    let strand_id = "ck:strand:01904100-0000-7000-8000-7a1c00000001";
+    insert_typing_scope_strand(state.clone(), strand_id, Some(false));
+    let sent_at = chrono::Utc::now();
+    let expires_at = sent_at + chrono::Duration::seconds(30);
+
+    let rejected_typing = TestClient::post("http://server/_cokret/self/ephemeral")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&serde_json::json!({
+            "kind": "ck.typing",
+            "realm_id": DEMO_REALM_ID,
+            "actor_id": "did:web:alice.example",
+            "sent_at": sent_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+            "expires_at": expires_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+            "payload": {
+                "scope_id": strand_id,
+                "typing": true
+            }
+        }))
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(rejected_typing.status_code, Some(StatusCode::FORBIDDEN));
+    let typing_after_reject = state
+        .persistence
+        .typing()
+        .list_for_realm(DEMO_REALM_ID)
+        .await
+        .unwrap();
+    assert!(typing_after_reject.is_empty());
+}
+
+#[tokio::test]
 async fn public_read_receipt_rejected_for_world_readable_realm_without_opt_in() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
@@ -696,6 +730,86 @@ async fn typing_fanout_respects_receiver_blocklist() {
         }),
         "Bob's blocklist must suppress Alice typing fanout: {bob_ephemeral:?}"
     );
+}
+
+#[tokio::test]
+async fn typing_fanout_hides_cached_record_when_discussion_track_disabled() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    add_test_realm_member(&state, DEMO_REALM_ID, "did:web:bob.example");
+    let bob_token = dev_token_for_device(
+        state.clone(),
+        "did:web:bob.example",
+        "ck:device:01904100-0000-7000-8000-b0b000000002",
+        "Bob Desktop",
+    )
+    .await;
+    let strand_id = "ck:strand:01904100-0000-7000-8000-7a1c00000002";
+    insert_typing_scope_strand(state.clone(), strand_id, Some(false));
+    let now = chrono::Utc::now();
+    state
+        .persistence
+        .typing()
+        .put(soland::state::TypingRecord {
+            actor: "did:web:alice.example".to_owned(),
+            realm_id: DEMO_REALM_ID.to_owned(),
+            scope_id: Some(strand_id.to_owned()),
+            expires_at: now + chrono::Duration::seconds(30),
+            updated_at: now,
+        })
+        .await
+        .unwrap();
+
+    let bob_sync = account_subscribe_frame(state.clone(), Some(&bob_token), "catchup=true").await;
+    let bob_ephemeral = bob_sync["realms"][DEMO_REALM_ID]["ephemeral"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    assert!(
+        bob_ephemeral.iter().all(|entry| {
+            entry["type"] != "ck.typing"
+                || entry["actors"].as_array().is_none_or(|actors| {
+                    actors
+                        .iter()
+                        .all(|actor| actor["actor"] != "did:web:alice.example")
+                })
+        }),
+        "disabled discussion track must suppress cached typing fanout: {bob_ephemeral:?}"
+    );
+}
+
+fn insert_typing_scope_strand(state: AppState, strand_id: &str, discussion_enabled: Option<bool>) {
+    let now = chrono::Utc::now();
+    state
+        .projection
+        .lock()
+        .expect("projection mutex")
+        .strands
+        .insert(
+            strand_id.to_owned(),
+            soland::reducer::StrandProjection {
+                strand_id: strand_id.to_owned(),
+                realm_id: DEMO_REALM_ID.to_owned(),
+                tracks: std::collections::BTreeMap::from([(
+                    cokret_sdk::STRAND_TRACK_NAME_DISCUSSION.to_owned(),
+                    cokret_sdk::StrandTrackConfig {
+                        enabled: discussion_enabled,
+                        is_primary: Some(true),
+                        profile: Some("discussion".to_owned()),
+                        ..Default::default()
+                    },
+                )]),
+                title: "Typing scope".to_owned(),
+                summary: None,
+                fields: Default::default(),
+                state: soland::reducer::ObjectLifecycleState::Active,
+                state_changed_at: None,
+                created_by: "did:web:alice.example".to_owned(),
+                created_at: now,
+                updated_by: None,
+                updated_at: None,
+                scope_circle_id: None,
+            },
+        );
 }
 
 #[tokio::test]

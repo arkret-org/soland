@@ -41,7 +41,7 @@ fn strand_lifecycle_round_trip() {
         &make_operation(
             crate::kinds::CK_STRAND_ARCHIVE,
             realm_id,
-            serde_json::json!({ "strand_id": strand_id, "sender": "did:web:alice.example" }),
+            serde_json::json!({ "target_ref": strand_id, "sender": "did:web:alice.example" }),
         ),
         &hlc,
     );
@@ -61,7 +61,7 @@ fn strand_lifecycle_round_trip() {
         &make_operation(
             crate::kinds::CK_STRAND_RESTORE,
             realm_id,
-            serde_json::json!({ "strand_id": strand_id, "sender": "did:web:alice.example" }),
+            serde_json::json!({ "target_ref": strand_id, "sender": "did:web:alice.example" }),
         ),
         &hlc,
     );
@@ -105,7 +105,7 @@ fn strand_lifecycle_preflight_rejects_illegal_transitions() {
     let restore_op = make_operation(
         crate::kinds::CK_STRAND_RESTORE,
         realm_id,
-        serde_json::json!({ "strand_id": strand_id }),
+        serde_json::json!({ "target_ref": strand_id }),
     );
     assert_eq!(
         state.check_strand_lifecycle_transition(&restore_op),
@@ -117,14 +117,14 @@ fn strand_lifecycle_preflight_rejects_illegal_transitions() {
         &make_operation(
             crate::kinds::CK_STRAND_ARCHIVE,
             realm_id,
-            serde_json::json!({ "strand_id": strand_id }),
+            serde_json::json!({ "target_ref": strand_id }),
         ),
         &hlc,
     );
     let archive_again = make_operation(
         crate::kinds::CK_STRAND_ARCHIVE,
         realm_id,
-        serde_json::json!({ "strand_id": strand_id }),
+        serde_json::json!({ "target_ref": strand_id }),
     );
     assert_eq!(
         state.check_strand_lifecycle_transition(&archive_again),
@@ -152,7 +152,7 @@ fn strand_lifecycle_preflight_tolerates_unknown_strand() {
     let archive_unknown = make_operation(
         crate::kinds::CK_STRAND_ARCHIVE,
         "ck:realm:01904100-0000-7000-8000-cfc039892036",
-        serde_json::json!({ "strand_id": "ck:strand:nope-not-here" }),
+        serde_json::json!({ "target_ref": "ck:strand:nope-not-here" }),
     );
     assert_eq!(
         state.check_strand_lifecycle_transition(&archive_unknown),
@@ -668,6 +668,64 @@ fn strand_tracks_update_touches_active_strand_only() {
     assert!(state.strands[strand_id].updated_at.is_some());
 }
 
+#[test]
+fn strand_tracks_update_projects_discussion_enabled_state() {
+    let mut state = ProjectionState::new();
+    let hlc = ServerHlc::new("test");
+    let realm_id = "ck:realm:01904100-0000-7000-8000-cfc039892036";
+    let strand_id = "ck:strand:01904100-0000-7000-8000-4fb50799ad52";
+
+    state.apply(
+        &make_operation(
+            crate::kinds::CK_STRAND_CREATE,
+            realm_id,
+            serde_json::json!({
+                "object": {
+                    "id": strand_id,
+                    "realm_id": realm_id,
+                    "created_by": "did:web:alice.example",
+                    "tracks": {
+                        "discussion": {
+                            "is_primary": true,
+                            "profile": "discussion"
+                        }
+                    }
+                }
+            }),
+        ),
+        &hlc,
+    );
+
+    let tracks_op = make_operation(
+        crate::kinds::CK_STRAND_TRACKS_UPDATE,
+        realm_id,
+        serde_json::json!({
+            "strand_id": strand_id,
+            "patch": {
+                "tracks.discussion.enabled": {"$op": "set", "value": false}
+            },
+            "sender": "did:web:alice.example",
+        }),
+    );
+    assert_eq!(state.check_strand_tracks_transition(&tracks_op), Ok(()));
+    let effect = state.apply(&tracks_op, &hlc);
+
+    assert!(matches!(
+        effect,
+        ProjectionEffect::StrandLifecycle {
+            new_state: ObjectLifecycleState::Active,
+            ..
+        }
+    ));
+    assert_eq!(
+        state.strands[strand_id]
+            .tracks
+            .get(cokret_sdk::STRAND_TRACK_NAME_DISCUSSION)
+            .and_then(|track| track.enabled),
+        Some(false)
+    );
+}
+
 /// Preflight returns `strand_not_active` when parent Strand is archived
 /// (or any non-Active state). Reducer-level enforcement is also
 /// present as defence-in-depth — both verified here.
@@ -697,7 +755,7 @@ fn strand_tracks_preflight_rejects_when_strand_archived() {
         &make_operation(
             crate::kinds::CK_STRAND_ARCHIVE,
             realm_id,
-            serde_json::json!({ "strand_id": strand_id }),
+            serde_json::json!({ "target_ref": strand_id }),
         ),
         &hlc,
     );

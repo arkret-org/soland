@@ -572,6 +572,7 @@ CREATE TABLE public.projection_strands (
     id uuid NOT NULL,
     realm_id uuid NOT NULL,
     scope_circle_id uuid,
+    tracks jsonb DEFAULT '{"synthesis": {}}'::jsonb NOT NULL,
     title text NOT NULL,
     summary text,
     state text DEFAULT 'active'::text NOT NULL,

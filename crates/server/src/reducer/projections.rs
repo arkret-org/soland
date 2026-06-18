@@ -7,6 +7,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use cokret_sdk::StrandTrackConfig;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -380,6 +381,9 @@ impl SpaceContainerLifecycleState {
 pub struct StrandProjection {
     pub strand_id: String,
     pub realm_id: String,
+    /// Active Strand track definitions. Track entries are display/timeline
+    /// configuration only; access still derives from `scope_circle_id`.
+    pub tracks: BTreeMap<String, StrandTrackConfig>,
     pub title: String,
     pub summary: Option<String>,
     pub fields: BTreeMap<String, Value>,
@@ -394,6 +398,13 @@ pub struct StrandProjection {
     /// `scope_circle_id` (spec: `scope_circle_id` is a Strand field, not a
     /// message field); messages never carry their own scope.
     pub scope_circle_id: Option<String>,
+}
+
+pub(crate) fn default_strand_tracks() -> BTreeMap<String, StrandTrackConfig> {
+    BTreeMap::from([(
+        cokret_sdk::STRAND_TRACK_NAME_SYNTHESIS.to_owned(),
+        StrandTrackConfig::synthesis(),
+    )])
 }
 
 /// CKP-0007 — server-side Circle state cache. Mirrors `projection_circles` +

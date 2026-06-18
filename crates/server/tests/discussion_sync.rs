@@ -313,6 +313,10 @@ fn install_projected_strand_scope(
             StrandProjection {
                 strand_id: strand_id.to_owned(),
                 realm_id: realm_id.to_owned(),
+                tracks: std::collections::BTreeMap::from([(
+                    cokret_sdk::STRAND_TRACK_NAME_DISCUSSION.to_owned(),
+                    cokret_sdk::StrandTrackConfig::discussion_primary(),
+                )]),
                 title: "Confidential discussion".to_owned(),
                 summary: None,
                 fields: Default::default(),

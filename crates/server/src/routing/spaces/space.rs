@@ -13,7 +13,8 @@
 
 use chrono::{DateTime, Utc};
 use cokret_sdk::{
-    Did, RealmId, RealmLifecycleView, RealmModerationPolicyReplaceRequestBody, SpaceId,
+    Did, RealmId, RealmLifecycleView, RealmModerationPolicyReplaceRequestBody,
+    STRAND_TRACK_NAME_DISCUSSION, SpaceId,
 };
 use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
@@ -1045,6 +1046,16 @@ pub async fn typing_scope_allows_actor(
     if strand.state != ObjectLifecycleState::Active {
         return Err(AppError::capability_denied(
             "ck.typing scope strand is not active",
+        ));
+    }
+    let Some(discussion_track) = strand.tracks.get(STRAND_TRACK_NAME_DISCUSSION) else {
+        return Err(AppError::capability_denied(
+            "ck.typing scope discussion track is disabled",
+        ));
+    };
+    if discussion_track.enabled == Some(false) {
+        return Err(AppError::capability_denied(
+            "ck.typing scope discussion track is disabled",
         ));
     }
     if let Some(scope_circle_id) = strand.scope_circle_id.as_deref()

@@ -49,6 +49,14 @@ impl ProjectionState {
                     .collect::<BTreeMap<_, _>>()
             })
             .unwrap_or_default();
+        let tracks = match strand_tracks_from_object(object) {
+            Ok(tracks) => tracks,
+            Err(reason) => {
+                return ProjectionEffect::Rejected {
+                    reason: reason.to_owned(),
+                };
+            }
+        };
         // CKP-0007: intra-Realm discussion boundaries are expressed via
         // `scope_circle_id` (Circle); when present, validate the Circle is in
         // this Realm and active.
@@ -101,6 +109,7 @@ impl ProjectionState {
         let projection = StrandProjection {
             strand_id: strand_id.clone(),
             realm_id,
+            tracks,
             title,
             summary,
             fields,
@@ -251,10 +260,7 @@ impl ProjectionState {
     /// are a kind of update; parent Strand MUST be Active or the admission
     /// MUST `failed_precondition` with `strand_not_active` before
     /// persistence. Unknown Strand tolerated (causal / backfill — matches
-    /// the lifecycle preflight family). soland's projection doesn't
-    /// carry track-level state (StrandProjection has no `tracks` field by
-    /// design — SDK is the source of truth client-side); only the parent
-    /// Strand's lifecycle state matters here.
+    /// the lifecycle preflight family).
     pub fn check_strand_tracks_transition(
         &self,
         operation: &Operation,
@@ -276,6 +282,10 @@ impl ProjectionState {
         };
         if strand.state != ObjectLifecycleState::Active {
             return Err("strand_not_active");
+        }
+        let next_tracks = apply_strand_tracks_update_to_map(&strand.tracks, &operation.payload)?;
+        if next_tracks.is_empty() {
+            return Err("strand_tracks_empty");
         }
         Ok(())
     }
@@ -346,10 +356,7 @@ impl ProjectionState {
     /// Apply `ck.strand.tracks.update` server-side. State guard runs in
     /// `check_strand_tracks_transition` preflight; by the time this reducer
     /// fires, the parent Strand is known to be Active (or unknown, in which
-    /// case the touch is a no-op). The actual track membership lives in
-    /// SDK reducer's Strand.tracks; soland's projection just bumps
-    /// `updated_at` so read-after-write sees the change. Unknown Strand
-    /// tolerated.
+    /// case the touch is a no-op). Unknown Strand tolerated.
     pub(crate) fn apply_strand_track_touch(
         &mut self,
         operation: &Operation,
@@ -376,6 +383,19 @@ impl ProjectionState {
             return ProjectionEffect::Rejected {
                 reason: "strand_not_active".to_owned(),
             };
+        }
+        match apply_strand_tracks_update_to_map(&strand.tracks, &operation.payload) {
+            Ok(tracks) if !tracks.is_empty() => strand.tracks = tracks,
+            Ok(_) => {
+                return ProjectionEffect::Rejected {
+                    reason: "strand_tracks_empty".to_owned(),
+                };
+            }
+            Err(reason) => {
+                return ProjectionEffect::Rejected {
+                    reason: reason.to_owned(),
+                };
+            }
         }
         strand.updated_by = operation
             .payload
@@ -446,4 +466,176 @@ impl ProjectionState {
             level_public,
         }
     }
+}
+
+fn strand_tracks_from_object(
+    object: &serde_json::Map<String, Value>,
+) -> Result<BTreeMap<String, cokret_sdk::StrandTrackConfig>, &'static str> {
+    let Some(tracks_value) = object.get("tracks") else {
+        return Ok(crate::reducer::projections::default_strand_tracks());
+    };
+    let tracks = serde_json::from_value::<BTreeMap<String, cokret_sdk::StrandTrackConfig>>(
+        tracks_value.clone(),
+    )
+    .map_err(|_| "strand_tracks_invalid")?;
+    validate_strand_tracks(&tracks)?;
+    if tracks.is_empty() {
+        return Err("strand_tracks_empty");
+    }
+    Ok(tracks)
+}
+
+fn apply_strand_tracks_update_to_map(
+    current: &BTreeMap<String, cokret_sdk::StrandTrackConfig>,
+    payload: &Value,
+) -> Result<BTreeMap<String, cokret_sdk::StrandTrackConfig>, &'static str> {
+    let mut tracks = current.clone();
+    let mut changed = false;
+    if let Some(track_updates) = payload
+        .get("tracks")
+        .map(parse_track_update_map)
+        .transpose()?
+    {
+        for (track_id, track) in track_updates {
+            cokret_sdk::validate_strand_track_name(&track_id)
+                .map_err(|_| "strand_track_name_invalid")?;
+            tracks.insert(track_id, track);
+            changed = true;
+        }
+    }
+    if let Some(patch) = payload.get("patch").and_then(Value::as_object) {
+        if let Some(track_updates) = patch
+            .get("tracks")
+            .map(parse_track_update_map)
+            .transpose()?
+        {
+            for (track_id, track) in track_updates {
+                cokret_sdk::validate_strand_track_name(&track_id)
+                    .map_err(|_| "strand_track_name_invalid")?;
+                tracks.insert(track_id, track);
+                changed = true;
+            }
+        }
+        for (path, patch_value) in patch {
+            if path == "tracks" {
+                continue;
+            }
+            let Some(rest) = path.strip_prefix("tracks.") else {
+                continue;
+            };
+            let segments = rest.split('.').collect::<Vec<_>>();
+            match segments.as_slice() {
+                [track_id] => {
+                    apply_whole_track_patch(&mut tracks, track_id, patch_value)?;
+                    changed = true;
+                }
+                [track_id, field] => {
+                    apply_track_field_patch(&mut tracks, track_id, field, patch_value)?;
+                    changed = true;
+                }
+                _ => return Err("strand_tracks_patch_invalid"),
+            }
+        }
+    }
+    if !changed {
+        return Err("strand_tracks_update_requires_tracks");
+    }
+    validate_strand_tracks(&tracks)?;
+    Ok(tracks)
+}
+
+fn parse_track_update_map(
+    value: &Value,
+) -> Result<BTreeMap<String, cokret_sdk::StrandTrackConfig>, &'static str> {
+    serde_json::from_value::<BTreeMap<String, cokret_sdk::StrandTrackConfig>>(value.clone())
+        .map_err(|_| "strand_tracks_invalid")
+}
+
+fn apply_whole_track_patch(
+    tracks: &mut BTreeMap<String, cokret_sdk::StrandTrackConfig>,
+    track_id: &str,
+    patch_value: &Value,
+) -> Result<(), &'static str> {
+    cokret_sdk::validate_strand_track_name(track_id).map_err(|_| "strand_track_name_invalid")?;
+    let patch = parse_patch_operation(patch_value)?;
+    match patch {
+        TrackPatchOperation::Set(value) => {
+            let track = serde_json::from_value::<cokret_sdk::StrandTrackConfig>(value.clone())
+                .map_err(|_| "strand_tracks_invalid")?;
+            tracks.insert(track_id.to_owned(), track);
+        }
+        TrackPatchOperation::Remove => {
+            tracks.remove(track_id);
+        }
+    }
+    Ok(())
+}
+
+fn apply_track_field_patch(
+    tracks: &mut BTreeMap<String, cokret_sdk::StrandTrackConfig>,
+    track_id: &str,
+    field: &str,
+    patch_value: &Value,
+) -> Result<(), &'static str> {
+    cokret_sdk::validate_strand_track_name(track_id).map_err(|_| "strand_track_name_invalid")?;
+    let patch = parse_patch_operation(patch_value)?;
+    let mut track_value = tracks
+        .get(track_id)
+        .map(serde_json::to_value)
+        .transpose()
+        .map_err(|_| "strand_tracks_invalid")?
+        .unwrap_or_else(|| serde_json::json!({}));
+    let Some(track_object) = track_value.as_object_mut() else {
+        return Err("strand_tracks_invalid");
+    };
+    match patch {
+        TrackPatchOperation::Set(value) => {
+            if !matches!(
+                field,
+                "enabled" | "is_primary" | "profile" | "template" | "metadata"
+            ) {
+                return Err("strand_tracks_patch_invalid");
+            }
+            track_object.insert(field.to_owned(), value.clone());
+        }
+        TrackPatchOperation::Remove => {
+            track_object.remove(field);
+        }
+    }
+    let track = serde_json::from_value::<cokret_sdk::StrandTrackConfig>(track_value)
+        .map_err(|_| "strand_tracks_invalid")?;
+    tracks.insert(track_id.to_owned(), track);
+    Ok(())
+}
+
+enum TrackPatchOperation<'a> {
+    Set(&'a Value),
+    Remove,
+}
+
+fn parse_patch_operation(value: &Value) -> Result<TrackPatchOperation<'_>, &'static str> {
+    let Some(object) = value.as_object() else {
+        return Ok(TrackPatchOperation::Set(value));
+    };
+    let Some(op) = object.get("$op").and_then(Value::as_str) else {
+        return Ok(TrackPatchOperation::Set(value));
+    };
+    match op {
+        "set" | "replace" => object
+            .get("value")
+            .map(TrackPatchOperation::Set)
+            .ok_or("strand_tracks_patch_invalid"),
+        "remove" | "unset" | "delete" => Ok(TrackPatchOperation::Remove),
+        _ => Err("strand_tracks_patch_invalid"),
+    }
+}
+
+fn validate_strand_tracks(
+    tracks: &BTreeMap<String, cokret_sdk::StrandTrackConfig>,
+) -> Result<(), &'static str> {
+    for track_id in tracks.keys() {
+        cokret_sdk::validate_strand_track_name(track_id)
+            .map_err(|_| "strand_track_name_invalid")?;
+    }
+    Ok(())
 }

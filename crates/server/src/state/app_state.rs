@@ -1029,6 +1029,7 @@ async fn hydrate_projections_from_persistence(
                 StrandProjection {
                     strand_id: record.strand_id,
                     realm_id: record.realm_id,
+                    tracks: record.tracks,
                     title: record.title,
                     summary: record.summary,
                     fields: Default::default(),

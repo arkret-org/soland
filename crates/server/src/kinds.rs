@@ -31,8 +31,8 @@ pub use cokret_sdk::events::kinds::STRAND_MOVE as CK_STRAND_MOVE;
 // against the `Strand.tracks` map; atomic across multiple tracks. soland's
 // wire validator enforces payload shape (strand_id + patch | tracks) and
 // the spec common-fields.md §5.1 update-on-non-active state guard.
-// StrandProjection doesn't carry `tracks` server-side; the touch just
-// bumps `updated_at` (mirror of ck.strand.move/reorder pattern).
+// StrandProjection carries the server-side track map so ephemeral/read gates
+// can fail closed when discussion is disabled.
 pub use cokret_sdk::events::kinds::STRAND_TRACKS_UPDATE as CK_STRAND_TRACKS_UPDATE;
 // Round 16 — Strand watch subscription event. Writes the
 // `ck.component.strand.watch.v1` cas-register cell keyed by

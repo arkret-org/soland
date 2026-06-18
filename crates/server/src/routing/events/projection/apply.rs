@@ -356,6 +356,7 @@ async fn write_through_projection(state: &AppState, operation: &Operation) {
         Snapshot::Strand(StrandProjectionRecord {
             strand_id: f.strand_id.clone(),
             realm_id: f.realm_id.clone(),
+            tracks: f.tracks.clone(),
             title: f.title.clone(),
             summary: f.summary.clone(),
             state: object_state_str(f.state).to_owned(),

@@ -89,6 +89,7 @@ pub struct SpaceContainerProjectionRecord {
 pub struct StrandProjectionRecord {
     pub strand_id: String,
     pub realm_id: String,
+    pub tracks: BTreeMap<String, cokret_sdk::StrandTrackConfig>,
     pub title: String,
     pub summary: Option<String>,
     /// One of `active` / `archived` / `deleted` / `redacted` per spec.
@@ -564,6 +565,10 @@ struct StrandProjectionRow {
     strand_id: Uuid,
     #[diesel(sql_type = SqlUuid)]
     realm_id: Uuid,
+    #[diesel(sql_type = Nullable<SqlUuid>)]
+    scope_circle_id: Option<Uuid>,
+    #[diesel(sql_type = Jsonb)]
+    tracks: serde_json::Value,
     #[diesel(sql_type = Text)]
     title: String,
     #[diesel(sql_type = Nullable<Text>)]
@@ -580,8 +585,6 @@ struct StrandProjectionRow {
     updated_by: Option<String>,
     #[diesel(sql_type = Nullable<Timestamptz>)]
     updated_at: Option<chrono::DateTime<chrono::Utc>>,
-    #[diesel(sql_type = Nullable<SqlUuid>)]
-    scope_circle_id: Option<Uuid>,
 }
 
 impl From<StrandProjectionRow> for StrandProjectionRecord {
@@ -589,6 +592,10 @@ impl From<StrandProjectionRow> for StrandProjectionRecord {
         Self {
             strand_id: ids::format_typed_uuid("strand", &row.strand_id),
             realm_id: ids::format_typed_uuid("realm", &row.realm_id),
+            scope_circle_id: row
+                .scope_circle_id
+                .map(|u| ids::format_typed_uuid("circle", &u)),
+            tracks: serde_json::from_value(row.tracks).unwrap_or_default(),
             title: row.title,
             summary: row.summary,
             state: row.state,
@@ -597,15 +604,12 @@ impl From<StrandProjectionRow> for StrandProjectionRecord {
             created_at: row.created_at,
             updated_by: row.updated_by,
             updated_at: row.updated_at,
-            scope_circle_id: row
-                .scope_circle_id
-                .map(|u| ids::format_typed_uuid("circle", &u)),
         }
     }
 }
 
-const STRAND_PROJECTION_COLUMNS: &str = "id AS strand_id, realm_id, title, summary, state, \
-     state_changed_at, created_by_id AS created_by, created_at, updated_by_id AS updated_by, updated_at, scope_circle_id";
+const STRAND_PROJECTION_COLUMNS: &str = "id AS strand_id, realm_id, scope_circle_id, tracks, title, summary, state, \
+     state_changed_at, created_by_id AS created_by, created_at, updated_by_id AS updated_by, updated_at";
 
 #[async_trait]
 impl StrandProjectionStore for PgStrandProjectionStore {
@@ -624,23 +628,33 @@ impl StrandProjectionStore for PgStrandProjectionStore {
 
     async fn put(&self, record: &StrandProjectionRecord) -> PersistenceResult<()> {
         let mut conn = pg_conn(&self.pool).await?;
+        let tracks = serde_json::to_value(&record.tracks)
+            .unwrap_or_else(|_| Value::Object(Default::default()));
         sql_query(
             "INSERT INTO projection_strands \
-             (id, realm_id, title, summary, state, state_changed_at, \
-              created_by_id, created_at, updated_by_id, updated_at, scope_circle_id) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) \
+             (id, realm_id, scope_circle_id, tracks, title, summary, state, state_changed_at, \
+              created_by_id, created_at, updated_by_id, updated_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) \
              ON CONFLICT (id) DO UPDATE SET \
                 realm_id = EXCLUDED.realm_id, \
+                scope_circle_id = EXCLUDED.scope_circle_id, \
+                tracks = EXCLUDED.tracks, \
                 title = EXCLUDED.title, \
                 summary = EXCLUDED.summary, \
                 state = EXCLUDED.state, \
                 state_changed_at = EXCLUDED.state_changed_at, \
                 updated_by_id = EXCLUDED.updated_by_id, \
-                updated_at = EXCLUDED.updated_at, \
-                scope_circle_id = EXCLUDED.scope_circle_id",
+                updated_at = EXCLUDED.updated_at",
         )
         .bind::<SqlUuid, _>(ids::typed_uuid_part_or_panic(&record.strand_id))
         .bind::<SqlUuid, _>(ids::typed_uuid_part_or_panic(&record.realm_id))
+        .bind::<Nullable<SqlUuid>, _>(
+            record
+                .scope_circle_id
+                .as_deref()
+                .map(ids::typed_uuid_part_or_panic),
+        )
+        .bind::<Jsonb, _>(&tracks)
         .bind::<Text, _>(&record.title)
         .bind::<Nullable<Text>, _>(&record.summary)
         .bind::<Text, _>(&record.state)
@@ -649,12 +663,6 @@ impl StrandProjectionStore for PgStrandProjectionStore {
         .bind::<Timestamptz, _>(record.created_at)
         .bind::<Nullable<Text>, _>(&record.updated_by)
         .bind::<Nullable<Timestamptz>, _>(record.updated_at)
-        .bind::<Nullable<SqlUuid>, _>(
-            record
-                .scope_circle_id
-                .as_deref()
-                .map(ids::typed_uuid_part_or_panic),
-        )
         .execute(&mut *conn)
         .await
         .map(|_| ())
