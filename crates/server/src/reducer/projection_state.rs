@@ -193,6 +193,11 @@ pub struct ProjectionState {
     /// commits so E2EE message paths can gate plaintext fallback against
     /// stale epochs.
     pub mls_commit_epochs: BTreeMap<MlsCommitEpochKey, MlsCommitEpoch>,
+    /// Reducer-derived MLS remove obligations. A parent Realm
+    /// `ck.member.state -> leave/ban` removes the actor from every Circle in
+    /// that Realm. For MLS-backed Circle scopes, the same transition queues an
+    /// obligation for the MLS path to issue a remove proposal/commit.
+    pub pending_mls_removals: Vec<MlsRemoveObligation>,
     /// G3.S2 — per-Realm `ck.realm.policy_server` projection. Cas-
     /// register semantics — last write wins. Org-level fallback (when
     /// a Realm has no row of its own) is resolved at query time by

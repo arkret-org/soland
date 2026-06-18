@@ -350,6 +350,7 @@ impl ProjectionState {
         };
         let target_state = payload
             .get("state")
+            .or_else(|| payload.get("membership"))
             .and_then(Value::as_str)
             .unwrap_or("active")
             .to_owned();

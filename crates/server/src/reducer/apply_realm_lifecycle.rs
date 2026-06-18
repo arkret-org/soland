@@ -133,6 +133,16 @@ impl ProjectionState {
                 updated_at: now,
             },
         );
+        if matches!(new_state, "leave" | "ban") {
+            let updated_by = operation
+                .payload
+                .get("sender")
+                .and_then(Value::as_str)
+                .unwrap_or(member.as_str());
+            self.cascade_realm_member_removal_to_circles(
+                &realm_id, &member, new_state, updated_by, now,
+            );
+        }
 
         // Synthesize the FSM cell state. Cell ref shape per spec
         // `ck:cell:ck.component.member.state.v1:<actor_id>` — note the
@@ -151,6 +161,37 @@ impl ProjectionState {
             realm_id,
             member,
             action: new_state.to_owned(),
+        }
+    }
+
+    fn cascade_realm_member_removal_to_circles(
+        &mut self,
+        realm_id: &str,
+        member: &str,
+        trigger_membership: &str,
+        updated_by: &str,
+        now: chrono::DateTime<chrono::Utc>,
+    ) {
+        for circle in self
+            .circles
+            .values_mut()
+            .filter(|circle| circle.realm_id == realm_id)
+        {
+            if !circle.members.remove(member) {
+                continue;
+            }
+            circle.updated_by = Some(updated_by.to_owned());
+            circle.updated_at = Some(now);
+            if circle.encryption_profile == "mls_rfc9420" {
+                self.pending_mls_removals.push(MlsRemoveObligation {
+                    realm_id: realm_id.to_owned(),
+                    circle_id: Some(circle.circle_id.clone()),
+                    mls_group_ref: circle.mls_group_ref.clone(),
+                    actor_id: member.to_owned(),
+                    trigger_membership: trigger_membership.to_owned(),
+                    triggered_at: now,
+                });
+            }
         }
     }
 

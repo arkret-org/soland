@@ -290,6 +290,19 @@ pub struct MlsCommitEpoch {
     pub committed_at: i64,
 }
 
+/// Reducer-derived MLS remove obligation created when a parent Realm
+/// membership removal cascades into an MLS-backed Circle. The MLS worker path
+/// is responsible for turning this obligation into a remove proposal/commit.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MlsRemoveObligation {
+    pub realm_id: String,
+    pub circle_id: Option<String>,
+    pub mls_group_ref: Option<String>,
+    pub actor_id: String,
+    pub trigger_membership: String,
+    pub triggered_at: chrono::DateTime<chrono::Utc>,
+}
+
 /// Server-side Space-container state cache. Mirrors the
 /// `projection_space_containers` table.
 #[derive(Clone, Debug, PartialEq, Eq)]

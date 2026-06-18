@@ -22,7 +22,8 @@ use serde_json::{Value, json};
 use soland::hlc::ServerHlc;
 use soland::kinds::{
     CK_CIRCLE_CREATE, CK_CIRCLE_MEMBER_STATE, CK_CIRCLE_TOMBSTONE, CK_CIRCLE_UPDATE,
-    CK_MESSAGE_CREATE, CK_REALM_CREATE, CK_REALM_POLICY_COMPONENTS, CK_STRAND_CREATE,
+    CK_MEMBER_STATE, CK_MESSAGE_CREATE, CK_REALM_CREATE, CK_REALM_POLICY_COMPONENTS,
+    CK_STRAND_CREATE,
 };
 use soland::reducer::{
     CircleLifecycleState, ProjectionEffect, ProjectionState, SolandMembershipState,
@@ -283,6 +284,7 @@ fn circle_member_must_be_realm_member() {
                 "circle_id": CIRCLE_A,
                 "actor": BOB,
                 "state": "active",
+                "sender": ALICE,
             }),
         ),
         &hlc,
@@ -375,6 +377,7 @@ fn circle_member_remove_updates_active_set_and_scope_visibility() {
                 "circle_id": CIRCLE_A,
                 "actor_id": BOB,
                 "membership": "left",
+                "sender": ALICE,
             }),
         ),
         &hlc,
@@ -390,6 +393,95 @@ fn circle_member_remove_updates_active_set_and_scope_visibility() {
         !state.circle_scope_visible_to_actor(CIRCLE_A, BOB),
         "removed Circle member must not see new Circle-scoped content"
     );
+}
+
+fn assert_parent_membership_cascades_circle_membership(target_membership: &str) {
+    let mut state = ProjectionState::new();
+    let hlc = ServerHlc::new("circles-parent-membership-cascade-test");
+    seed_realm(&mut state, &hlc, REALM_A, ALICE);
+    add_realm_member(&mut state, &hlc, REALM_A, ALICE);
+    add_realm_member(&mut state, &hlc, REALM_A, BOB);
+
+    for (circle_id, encryption_profile) in [(CIRCLE_A, "mls_rfc9420"), (CIRCLE_B, "none")] {
+        state.apply(
+            &op(
+                CK_CIRCLE_CREATE,
+                REALM_A,
+                json!({
+                    "object": {
+                        "id": circle_id,
+                        "realm_id": REALM_A,
+                        "title": "Private Ops",
+                        "created_by": ALICE,
+                        "encryption_profile": encryption_profile,
+                    }
+                }),
+            ),
+            &hlc,
+        );
+        state.apply(
+            &op(
+                CK_CIRCLE_MEMBER_STATE,
+                REALM_A,
+                json!({
+                    "circle_id": circle_id,
+                    "actor": BOB,
+                    "state": "active",
+                    "sender": ALICE,
+                    "manage_capability_verified": true,
+                }),
+            ),
+            &hlc,
+        );
+        assert!(
+            state.circle_scope_visible_to_actor(circle_id, BOB),
+            "fixture should start with Bob active in {circle_id}"
+        );
+    }
+
+    let effect = state.apply(
+        &op(
+            CK_MEMBER_STATE,
+            REALM_A,
+            json!({
+                "actor_id": BOB,
+                "membership": target_membership,
+                "sender": ALICE,
+            }),
+        ),
+        &hlc,
+    );
+    assert!(matches!(
+        effect,
+        ProjectionEffect::MembershipChanged { ref member, ref action, .. }
+            if member == BOB && action == target_membership
+    ));
+    for circle_id in [CIRCLE_A, CIRCLE_B] {
+        assert!(
+            !state.circle_scope_visible_to_actor(circle_id, BOB),
+            "parent Realm {target_membership} must remove Bob from Circle {circle_id}"
+        );
+    }
+    assert_eq!(
+        state.pending_mls_removals.len(),
+        1,
+        "only the MLS-backed Circle should queue an MLS remove obligation"
+    );
+    let obligation = &state.pending_mls_removals[0];
+    assert_eq!(obligation.realm_id, REALM_A);
+    assert_eq!(obligation.circle_id.as_deref(), Some(CIRCLE_A));
+    assert_eq!(obligation.actor_id, BOB);
+    assert_eq!(obligation.trigger_membership, target_membership);
+}
+
+#[test]
+fn realm_leave_cascades_circle_membership() {
+    assert_parent_membership_cascades_circle_membership("leave");
+}
+
+#[test]
+fn realm_ban_cascades_circle_membership() {
+    assert_parent_membership_cascades_circle_membership("ban");
 }
 
 #[test]

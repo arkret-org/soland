@@ -96,13 +96,13 @@ pub(crate) use projections::space_container_id_from_payload;
 pub use projections::{
     AppletProjection, CapabilityDerivedState, ChildScopePolicy, CircleLifecycleState,
     CircleProjection, DocumentVersionProjection, ErasureReceiptRecord, FanoutPeerStatus,
-    KeyPackageLifetime, MessageState, MlsCommitEpoch, MlsCommitEpochKey, MlsKeyPackage, MlsWelcome,
-    MlsWelcomeQueueKey, MorphProjection, ObjectLifecycleState, PinProjection, PollOptionState,
-    PollState, ProjectedMessageView, PushRouteCellValue, PushRouteSubject, ReactionState,
-    ReadMarkerState, RealmInheritancePolicyState, RealmLinkState, RealmPolicyServerConfig,
-    RedactionCellValue, RsvpProjection, SolandAgentProjection, SolandMembershipState,
-    SolandRealmState, SolandRelationState, SpaceContainerLifecycleState, SpaceContainerProjection,
-    StrandProjection,
+    KeyPackageLifetime, MessageState, MlsCommitEpoch, MlsCommitEpochKey, MlsKeyPackage,
+    MlsRemoveObligation, MlsWelcome, MlsWelcomeQueueKey, MorphProjection, ObjectLifecycleState,
+    PinProjection, PollOptionState, PollState, ProjectedMessageView, PushRouteCellValue,
+    PushRouteSubject, ReactionState, ReadMarkerState, RealmInheritancePolicyState, RealmLinkState,
+    RealmPolicyServerConfig, RedactionCellValue, RsvpProjection, SolandAgentProjection,
+    SolandMembershipState, SolandRealmState, SolandRelationState, SpaceContainerLifecycleState,
+    SpaceContainerProjection, StrandProjection,
 };
 
 #[cfg(test)]
