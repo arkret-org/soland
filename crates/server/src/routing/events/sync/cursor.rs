@@ -710,10 +710,79 @@ pub fn decode_sync_cursor_value(token: &str) -> Result<serde_json::Value, SyncCu
         .map_err(|_| SyncCursorError::Invalid("after cursor must contain JSON"))
 }
 
+const FILTER_DIGEST_COLLECTION_KEYS: &[&str] =
+    &["realms", "actors", "event_types", "not_event_types", "kind"];
+const FILTER_DIGEST_FALSE_DEFAULT_KEYS: &[&str] =
+    &["lazy_load_members", "include_redundant_members"];
+
+pub(crate) fn normalized_filter_digest_value(filter: Option<&serde_json::Value>) -> Value {
+    filter
+        .map(normalize_filter_digest_collections)
+        .unwrap_or_else(|| json!({}))
+}
+
+fn normalize_filter_digest_collections(value: &Value) -> Value {
+    match value {
+        Value::Object(object) => {
+            let mut normalized = serde_json::Map::new();
+            for (key, value) in object {
+                if FILTER_DIGEST_FALSE_DEFAULT_KEYS.contains(&key.as_str())
+                    && value == &Value::Bool(false)
+                {
+                    continue;
+                }
+                let value = if FILTER_DIGEST_COLLECTION_KEYS.contains(&key.as_str()) {
+                    normalize_filter_digest_string_collection(value)
+                } else {
+                    normalize_filter_digest_collections(value)
+                };
+                if FILTER_DIGEST_COLLECTION_KEYS.contains(&key.as_str())
+                    && matches!(&value, Value::Array(values) if values.is_empty())
+                {
+                    continue;
+                }
+                normalized.insert(key.clone(), value);
+            }
+            Value::Object(normalized)
+        }
+        Value::Array(values) => Value::Array(
+            values
+                .iter()
+                .map(normalize_filter_digest_collections)
+                .collect(),
+        ),
+        _ => value.clone(),
+    }
+}
+
+fn normalize_filter_digest_string_collection(value: &Value) -> Value {
+    let Value::Array(values) = value else {
+        return normalize_filter_digest_collections(value);
+    };
+    let Some(strings) = values
+        .iter()
+        .map(Value::as_str)
+        .collect::<Option<BTreeSet<_>>>()
+    else {
+        return Value::Array(
+            values
+                .iter()
+                .map(normalize_filter_digest_collections)
+                .collect(),
+        );
+    };
+    Value::Array(
+        strings
+            .into_iter()
+            .map(|value| Value::String(value.to_owned()))
+            .collect(),
+    )
+}
+
 pub fn sync_filter_digest(filter: Option<&serde_json::Value>) -> String {
-    let empty_filter = json!({});
+    let filter = normalized_filter_digest_value(filter);
     let binding = json!({
-        "filter": filter.unwrap_or(&empty_filter),
+        "filter": filter,
     });
     cokret_sdk::canonical::canonical_sha256(&binding)
         .unwrap_or_else(|_| cokret_sdk::canonical::sha256_digest(binding.to_string().as_bytes()))

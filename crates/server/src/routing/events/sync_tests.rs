@@ -944,6 +944,79 @@ async fn events_query_cursor_binds_purpose_and_filter_digest() {
     assert!(matches!(error, SyncCursorError::Invalid(_)));
 }
 
+#[test]
+fn sync_filter_digest_normalizes_account_filter_collections() {
+    let filter_a = json!({
+        "realms": ["ck:realm:b", "ck:realm:a", "ck:realm:a"],
+        "event_types": ["ck.reaction.add", "ck.message.create", "ck.message.create"],
+        "not_event_types": ["ck.redaction", "ck.audit.accessed"],
+        "lazy_load_members": false,
+        "include_redundant_members": false
+    });
+    let filter_b = json!({
+        "realms": ["ck:realm:a", "ck:realm:b"],
+        "event_types": ["ck.message.create", "ck.reaction.add"],
+        "not_event_types": ["ck.audit.accessed", "ck.redaction"]
+    });
+    assert_eq!(
+        sync_filter_digest(Some(&filter_a)),
+        sync_filter_digest(Some(&filter_b))
+    );
+
+    let narrowed = json!({
+        "realms": ["ck:realm:a", "ck:realm:b"],
+        "event_types": ["ck.message.create"],
+        "not_event_types": ["ck.audit.accessed", "ck.redaction"]
+    });
+    assert_ne!(
+        sync_filter_digest(Some(&filter_a)),
+        sync_filter_digest(Some(&narrowed))
+    );
+}
+
+#[test]
+fn sync_filter_digest_normalizes_events_query_scope_collections() {
+    let scope_a = json!({
+        "operation_id": "ck.self.events.query.scan",
+        "realms": ["ck:realm:b", "ck:realm:a", "ck:realm:a"],
+        "actors": ["did:web:bob.example", "did:web:alice.example"],
+        "filters": {
+            "kind": ["ck.reaction.add", "ck.message.create", "ck.message.create"],
+            "not_event_types": ["ck.redaction", "ck.audit.accessed"]
+        },
+        "order": "default"
+    });
+    let scope_b = json!({
+        "operation_id": "ck.self.events.query.scan",
+        "realms": ["ck:realm:a", "ck:realm:b"],
+        "actors": ["did:web:alice.example", "did:web:bob.example"],
+        "filters": {
+            "kind": ["ck.message.create", "ck.reaction.add"],
+            "not_event_types": ["ck.audit.accessed", "ck.redaction"]
+        },
+        "order": "default"
+    });
+    assert_eq!(
+        sync_filter_digest(Some(&scope_a)),
+        sync_filter_digest(Some(&scope_b))
+    );
+
+    let different_order = json!({
+        "operation_id": "ck.self.events.query.scan",
+        "realms": ["ck:realm:a", "ck:realm:b"],
+        "actors": ["did:web:alice.example", "did:web:bob.example"],
+        "filters": {
+            "kind": ["ck.message.create", "ck.reaction.add"],
+            "not_event_types": ["ck.audit.accessed", "ck.redaction"]
+        },
+        "order": "ascending"
+    });
+    assert_ne!(
+        sync_filter_digest(Some(&scope_a)),
+        sync_filter_digest(Some(&different_order))
+    );
+}
+
 #[tokio::test]
 async fn unchanged_frontier_remints_same_handle_and_advance_keeps_old_token_valid() {
     let state = test_state();
