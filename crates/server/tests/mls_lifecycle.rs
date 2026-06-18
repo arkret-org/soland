@@ -53,6 +53,7 @@ fn test_config() -> AppConfig {
         development_mode: true,
         oauth_introspection_url: None,
         oauth_introspection_bearer: None,
+        oidc_client_id: None,
         session_grant_introspection_url: None,
         session_grant_introspection_bearer: None,
         did_resolver_allow_methods: vec!["web".to_owned(), "key".to_owned()],
