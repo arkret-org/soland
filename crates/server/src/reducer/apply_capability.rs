@@ -31,12 +31,43 @@
 
 use super::*;
 
+const RESOURCE_SELECTOR_MAX_ITEMS: usize = 256;
+const RESOURCE_SELECTOR_JSON_MAX_BYTES: usize = 64 * 1024;
+const RESOURCE_SELECTOR_FIELD_MAX_BYTES: usize = 1024;
+const RESOURCE_SELECTOR_UNKNOWN_FIELDS_MAX: usize = 256;
+
+const RESOURCE_SELECTOR_KNOWN_FIELDS: &[&str] = &[
+    "kind",
+    "realm_id",
+    "space_id",
+    "circle_id",
+    "object_type",
+    "object_ref",
+    "strand_id",
+    "message_id",
+    "morph_id",
+    "morph_type",
+    "relation_kind",
+    "relation_id",
+    "view_id",
+    "event_id",
+    "actor_id",
+    "schema_ref",
+    "policy_id",
+    "invite_id",
+    "blob_ref",
+    "match_scope",
+    // Legacy projection input accepted by existing soland tests.
+    "id",
+];
+
 /// Map a cell grant body's resource selectors to the engine `Grant`'s single
 /// `resource` String.
 /// Precedence: an explicit string selector / `id` wins; a realm-kind
-/// selector resolves to its `id` (or the grant's realm); everything else
-/// (wildcard / empty) falls back to `*` so the grant is not silently
-/// narrowed out of the index.
+/// selector resolves to its `id` (or the grant's realm); canonical wildcard
+/// selectors map to the legacy `*` sentinel. The current legacy engine treats
+/// that sentinel as fail-closed, so accepting the canonical shape here does not
+/// create an allow-all grant before the full selector evaluator lands.
 fn engine_resource_from_body(body: &Value, realm_id: &str) -> String {
     let mut selectors = value_array_field(body, "resources");
     selectors.extend(value_array_field(body, "resource_selectors"));
@@ -69,6 +100,9 @@ fn engine_grant_from_cell_body(
     body: &Value,
     revoked: bool,
 ) -> Option<crate::authz::Grant> {
+    if validate_grant_body_scope(body).is_err() {
+        return None;
+    }
     let realm_id = body
         .get("realm_id")
         .and_then(Value::as_str)
@@ -123,6 +157,105 @@ fn engine_grant_from_cell_body(
         delegated_from,
         expires_at,
     })
+}
+
+fn validate_grant_body_scope(body: &Value) -> Result<(), &'static str> {
+    let actions = validate_grant_actions(body)?;
+    crate::authz::validate_capability_actions(&actions)?;
+    validate_grant_resources(body)
+}
+
+fn validate_grant_actions(body: &Value) -> Result<Vec<String>, &'static str> {
+    let Some(actions) = body.get("actions").and_then(Value::as_array) else {
+        return Err("capability_grant_actions_empty");
+    };
+    if actions.is_empty() {
+        return Err("capability_grant_actions_empty");
+    }
+    actions
+        .iter()
+        .map(|action| {
+            action
+                .as_str()
+                .map(ToOwned::to_owned)
+                .ok_or("capability_grant_action_invalid")
+        })
+        .collect()
+}
+
+fn validate_grant_resources(body: &Value) -> Result<(), &'static str> {
+    let mut selectors = Vec::new();
+    if let Some(resources) = body.get("resources") {
+        let Some(resources) = resources.as_array() else {
+            return Err("capability_grant_resources_invalid");
+        };
+        selectors.extend(resources.iter());
+    }
+    if let Some(resource_selectors) = body.get("resource_selectors") {
+        let Some(resource_selectors) = resource_selectors.as_array() else {
+            return Err("capability_grant_resources_invalid");
+        };
+        selectors.extend(resource_selectors.iter());
+    }
+    if selectors.is_empty() {
+        return Err("capability_grant_resources_empty");
+    }
+    if selectors.len() > RESOURCE_SELECTOR_MAX_ITEMS {
+        return Err("selector_too_complex");
+    }
+    let json_bytes =
+        serde_json::to_vec(&selectors).map_err(|_| "capability_grant_resources_invalid")?;
+    if json_bytes.len() > RESOURCE_SELECTOR_JSON_MAX_BYTES {
+        return Err("selector_too_complex");
+    }
+    for selector in selectors {
+        validate_resource_selector(selector)?;
+    }
+    Ok(())
+}
+
+fn validate_resource_selector(selector: &Value) -> Result<(), &'static str> {
+    match selector {
+        Value::String(pattern) => crate::authz::validate_resource_pattern(pattern),
+        Value::Object(map) => {
+            let unknown_fields = map
+                .keys()
+                .filter(|key| !RESOURCE_SELECTOR_KNOWN_FIELDS.contains(&key.as_str()))
+                .count();
+            if unknown_fields > RESOURCE_SELECTOR_UNKNOWN_FIELDS_MAX {
+                return Err("selector_too_complex");
+            }
+            if map.get("actor_id").and_then(Value::as_str) == Some("*") {
+                return Err("capability_grant_resource_wildcard_forbidden");
+            }
+            for value in map.values() {
+                validate_selector_field_value(value)?;
+            }
+            Ok(())
+        }
+        _ => Err("capability_grant_resources_invalid"),
+    }
+}
+
+fn validate_selector_field_value(value: &Value) -> Result<(), &'static str> {
+    match value {
+        Value::String(value) if value.len() > RESOURCE_SELECTOR_FIELD_MAX_BYTES => {
+            Err("selector_too_complex")
+        }
+        Value::Array(values) => {
+            for value in values {
+                validate_selector_field_value(value)?;
+            }
+            Ok(())
+        }
+        Value::Object(map) => {
+            for value in map.values() {
+                validate_selector_field_value(value)?;
+            }
+            Ok(())
+        }
+        _ => Ok(()),
+    }
 }
 
 /// or_set add dot for a capability event. Deterministic per accepted event.
@@ -271,6 +404,11 @@ impl ProjectionState {
                 reason: "capability_grant_issuer_missing".to_owned(),
             };
         }
+        if let Err(reason) = validate_grant_body_scope(grant_body(&operation.payload)) {
+            return ProjectionEffect::Rejected {
+                reason: reason.to_owned(),
+            };
+        }
         let realm_id = operation.realm_id.to_string();
         let Some(cell_ref) = Self::capability_grant_cell_ref(&grant_id) else {
             return ProjectionEffect::Rejected {
@@ -396,6 +534,11 @@ impl ProjectionState {
         if grant_issuer(&operation.payload).is_none() {
             return ProjectionEffect::Rejected {
                 reason: "capability_delegate_issuer_missing".to_owned(),
+            };
+        }
+        if let Err(reason) = validate_grant_body_scope(body) {
+            return ProjectionEffect::Rejected {
+                reason: reason.to_owned(),
             };
         }
         let realm_id = operation.realm_id.to_string();
@@ -785,6 +928,8 @@ mod delegation_cycle_tests {
                 "grant": {
                     "issuer": "did:web:alice.example",
                     "parent_grant_id": parent_grant_id,
+                    "actions": ["ck.message.create"],
+                    "resources": [{ "kind": "realm", "realm_id": REALM }],
                 }
             }),
         )

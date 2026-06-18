@@ -35,6 +35,14 @@ fn op(kind: &str, realm_id: &str, payload: Value) -> Operation {
 }
 
 fn grant_op(grant_id: &str) -> Operation {
+    grant_op_with(
+        grant_id,
+        vec![json!(ACTION)],
+        vec![json!({ "kind": "realm", "id": REALM })],
+    )
+}
+
+fn grant_op_with(grant_id: &str, actions: Vec<Value>, resources: Vec<Value>) -> Operation {
     op(
         soland::kinds::CK_CAPABILITY_GRANT,
         REALM,
@@ -46,8 +54,8 @@ fn grant_op(grant_id: &str) -> Operation {
                 "realm_id": REALM,
                 "issuer": ISSUER,
                 "subject": SUBJECT,
-                "actions": [ACTION],
-                "resources": [{ "kind": "realm", "id": REALM }],
+                "actions": actions,
+                "resources": resources,
             }
         }),
     )
@@ -171,4 +179,62 @@ fn repeated_revoke_is_idempotent() {
     );
     assert!(after_second.iter().all(item_revoked));
     assert!(!check_allows(&state, GRANT_ID));
+}
+
+#[test]
+fn wildcard_action_grant_is_rejected() {
+    let mut state = ProjectionState::new();
+    let hlc = ServerHlc::new("test");
+    let effect = state.apply(
+        &grant_op_with(
+            GRANT_ID,
+            vec![json!("ck.pin.*")],
+            vec![json!({ "kind": "realm", "id": REALM })],
+        ),
+        &hlc,
+    );
+    match effect {
+        ProjectionEffect::Rejected { reason } => {
+            assert_eq!(reason, "capability_grant_action_wildcard_forbidden");
+        }
+        other => panic!("expected Rejected, got {other:?}"),
+    }
+    assert!(grant_cell_items(&state, GRANT_ID).is_empty());
+}
+
+#[test]
+fn bare_wildcard_resource_grant_is_rejected() {
+    let mut state = ProjectionState::new();
+    let hlc = ServerHlc::new("test");
+    let effect = state.apply(
+        &grant_op_with(GRANT_ID, vec![json!("ck.pin.add")], vec![json!("*")]),
+        &hlc,
+    );
+    match effect {
+        ProjectionEffect::Rejected { reason } => {
+            assert_eq!(reason, "capability_grant_resource_wildcard_forbidden");
+        }
+        other => panic!("expected Rejected, got {other:?}"),
+    }
+    assert!(grant_cell_items(&state, GRANT_ID).is_empty());
+}
+
+#[test]
+fn selector_resource_count_limit_is_enforced() {
+    let mut state = ProjectionState::new();
+    let hlc = ServerHlc::new("test");
+    let resources = (0..257)
+        .map(|_| json!({ "kind": "realm", "id": REALM }))
+        .collect();
+    let effect = state.apply(
+        &grant_op_with(GRANT_ID, vec![json!("ck.pin.add")], resources),
+        &hlc,
+    );
+    match effect {
+        ProjectionEffect::Rejected { reason } => {
+            assert_eq!(reason, "selector_too_complex");
+        }
+        other => panic!("expected Rejected, got {other:?}"),
+    }
+    assert!(grant_cell_items(&state, GRANT_ID).is_empty());
 }

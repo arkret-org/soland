@@ -34,6 +34,12 @@ use serde::Serialize;
 
 use crate::ids;
 
+const SELECTOR_SHORTHAND_MAX_BYTES: usize = 4096;
+const SELECTOR_TOKEN_MAX: usize = 256;
+const SELECTOR_DISJUNCTION_MAX: usize = 16;
+const SELECTOR_CONJUNCTION_MAX: usize = 64;
+const SELECTOR_TERM_MAX_BYTES: usize = 1024;
+
 /// Result of an authorization check.
 #[derive(Clone, Debug, Serialize)]
 pub struct AuthzResult {
@@ -116,10 +122,12 @@ impl SolandAuthzEngine {
             delegated_from,
             expires_at,
         };
-        self.grants
-            .lock()
-            .expect("grants lock")
-            .insert(grant.grant_id.clone(), grant.clone());
+        if grant_scope_valid(&grant).is_ok() {
+            self.grants
+                .lock()
+                .expect("grants lock")
+                .insert(grant.grant_id.clone(), grant.clone());
+        }
         grant
     }
 
@@ -178,6 +186,14 @@ impl SolandAuthzEngine {
             &snapshot,
             chrono::Utc::now(),
         )?;
+        if validate_capability_actions(&child.actions).is_err() {
+            return Err(DelegationError::ActionsNotHeld {
+                offending: child.actions.clone(),
+            });
+        }
+        if validate_resource_pattern(&child.resource).is_err() {
+            return Err(DelegationError::ResourceOutOfScope);
+        }
         // SDK leaves grant_id empty for caller-supplied id allocation.
         child.grant_id = ids::generate_grant_id();
         self.grants
@@ -332,7 +348,8 @@ impl SolandAuthzEngine {
                 !g.revoked
                     && g.realm_id == realm_id
                     && g.subject == actor
-                    && g.actions.iter().any(|a| a == action || a == "*")
+                    && grant_scope_valid(g).is_ok()
+                    && g.actions.iter().any(|a| a == action)
                     && resource_matches(&g.resource, resource)
                     && !is_grant_expired(g, now)
                     && delegation_chain_intact(&snapshot, &g.grant_id, now)
@@ -453,7 +470,7 @@ impl Default for SolandAuthzEngine {
 /// circle-wide grants without enumerating each circle.
 pub(crate) fn resource_matches(pattern: &str, resource: &str) -> bool {
     if pattern == "*" {
-        return true;
+        return false;
     }
     // Exact match
     if pattern == resource {
@@ -488,6 +505,92 @@ pub(crate) fn resource_matches(pattern: &str, resource: &str) -> bool {
         return resource.starts_with(prefix);
     }
     false
+}
+
+pub(crate) fn grant_scope_valid(grant: &Grant) -> Result<(), &'static str> {
+    validate_capability_actions(&grant.actions)?;
+    validate_resource_pattern(&grant.resource)
+}
+
+pub(crate) fn validate_capability_actions(actions: &[String]) -> Result<(), &'static str> {
+    if actions.is_empty() {
+        return Err("capability_grant_actions_empty");
+    }
+    for action in actions {
+        validate_capability_action(action)?;
+    }
+    Ok(())
+}
+
+fn validate_capability_action(action: &str) -> Result<(), &'static str> {
+    if action.contains('*') {
+        return Err("capability_grant_action_wildcard_forbidden");
+    }
+    let mut segments = action.split('.');
+    if segments.next() != Some("ck") {
+        return Err("capability_grant_action_invalid");
+    }
+    let mut saw_segment = false;
+    for segment in segments {
+        saw_segment = true;
+        if segment.is_empty()
+            || !segment
+                .bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
+        {
+            return Err("capability_grant_action_invalid");
+        }
+    }
+    if !saw_segment {
+        return Err("capability_grant_action_invalid");
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_resource_pattern(pattern: &str) -> Result<(), &'static str> {
+    let pattern = pattern.trim();
+    if pattern == "*" {
+        return Err("capability_grant_resource_wildcard_forbidden");
+    }
+    if pattern.len() > SELECTOR_SHORTHAND_MAX_BYTES {
+        return Err("selector_too_complex");
+    }
+    if pattern.is_empty() {
+        return Err("capability_grant_resource_invalid");
+    }
+
+    let alternatives: Vec<&str> = pattern.split(',').collect();
+    if alternatives.len() > SELECTOR_DISJUNCTION_MAX {
+        return Err("selector_too_complex");
+    }
+
+    let mut token_count = 0usize;
+    let mut term_count = 0usize;
+    for alternative in alternatives {
+        let terms: Vec<&str> = alternative.split('+').collect();
+        for term in terms {
+            let term = term.trim();
+            if term.is_empty() {
+                return Err("capability_grant_resource_invalid");
+            }
+            if term.len() > SELECTOR_TERM_MAX_BYTES {
+                return Err("selector_too_complex");
+            }
+            if term == "*" || term == "actor:*" {
+                return Err("capability_grant_resource_wildcard_forbidden");
+            }
+            term_count += 1;
+        }
+    }
+    token_count += term_count;
+    if term_count > 0 {
+        token_count += pattern.matches(',').count() + pattern.matches('+').count();
+    }
+    if token_count > SELECTOR_TOKEN_MAX || term_count > SELECTOR_CONJUNCTION_MAX {
+        return Err("selector_too_complex");
+    }
+
+    Ok(())
 }
 
 /// Pick the resulting decision over a set of satisfied grants.
@@ -790,8 +893,8 @@ mod tests {
         let engine = SolandAuthzEngine::new();
         let result = engine.check(
             "did:web:alice",
-            "manage_space",
-            "space:ck:space:1",
+            "ck.space.manage",
+            "ck:space:1",
             "ck:space:1",
             Some("did:web:alice"),
             &[],
@@ -807,8 +910,8 @@ mod tests {
         let members = vec!["did:web:bob".to_owned()];
         let result = engine.check(
             "did:web:bob",
-            "read",
-            "space:ck:space:1",
+            "ck.strand.read",
+            "ck:space:1",
             "ck:space:1",
             Some("did:web:alice"),
             &members,
@@ -819,8 +922,8 @@ mod tests {
 
         let denied = engine.check(
             "did:web:bob",
-            "manage_space",
-            "space:ck:space:1",
+            "ck.space.manage",
+            "ck:space:1",
             "ck:space:1",
             Some("did:web:alice"),
             &members,
@@ -836,14 +939,14 @@ mod tests {
             "ck:space:1".to_owned(),
             "did:web:alice".to_owned(),
             "did:web:bob".to_owned(),
-            "*".to_owned(),
-            vec!["manage_space".to_owned()],
+            "ck:space:1".to_owned(),
+            vec!["ck.space.manage".to_owned()],
             vec![],
         );
         let result = engine.check(
             "did:web:bob",
-            "manage_space",
-            "space:ck:space:1",
+            "ck.space.manage",
+            "ck:space:1",
             "ck:space:1",
             Some("did:web:alice"),
             &[],
@@ -860,8 +963,8 @@ mod tests {
             "ck:space:1".to_owned(),
             "did:web:alice".to_owned(),
             "did:web:bob".to_owned(),
-            "*".to_owned(),
-            vec!["send".to_owned()],
+            "ck:space:1".to_owned(),
+            vec!["ck.message.create".to_owned()],
             vec![Constraint::Decision {
                 decision: GrantDecisionVerdict::Allow,
             }],
@@ -870,16 +973,16 @@ mod tests {
             "ck:space:1".to_owned(),
             "did:web:alice".to_owned(),
             "did:web:bob".to_owned(),
-            "*".to_owned(),
-            vec!["send".to_owned()],
+            "ck:space:1".to_owned(),
+            vec!["ck.message.create".to_owned()],
             vec![Constraint::Decision {
                 decision: GrantDecisionVerdict::Deny,
             }],
         );
         let result = engine.check(
             "did:web:bob",
-            "send",
-            "space:ck:space:1",
+            "ck.message.create",
+            "ck:space:1",
             "ck:space:1",
             Some("did:web:alice"),
             &[],
@@ -898,8 +1001,8 @@ mod tests {
             "ck:space:1".to_owned(),
             "did:web:alice".to_owned(),
             "did:web:bob".to_owned(),
-            "*".to_owned(),
-            vec!["send".to_owned()],
+            "ck:space:1".to_owned(),
+            vec!["ck.message.create".to_owned()],
             vec![Constraint::Decision {
                 decision: GrantDecisionVerdict::RequireReview,
             }],
@@ -908,16 +1011,16 @@ mod tests {
             "ck:space:1".to_owned(),
             "did:web:alice".to_owned(),
             "did:web:bob".to_owned(),
-            "*".to_owned(),
-            vec!["send".to_owned()],
+            "ck:space:1".to_owned(),
+            vec!["ck.message.create".to_owned()],
             vec![Constraint::Decision {
                 decision: GrantDecisionVerdict::Allow,
             }],
         );
         let reviewed = engine.check(
             "did:web:bob",
-            "send",
-            "space:ck:space:1",
+            "ck.message.create",
+            "ck:space:1",
             "ck:space:1",
             Some("did:web:alice"),
             &[],
@@ -930,16 +1033,16 @@ mod tests {
             "ck:space:1".to_owned(),
             "did:web:alice".to_owned(),
             "did:web:bob".to_owned(),
-            "*".to_owned(),
-            vec!["send".to_owned()],
+            "ck:space:1".to_owned(),
+            vec!["ck.message.create".to_owned()],
             vec![Constraint::Decision {
                 decision: GrantDecisionVerdict::Quarantine,
             }],
         );
         let quarantined = engine.check(
             "did:web:bob",
-            "send",
-            "space:ck:space:1",
+            "ck.message.create",
+            "ck:space:1",
             "ck:space:1",
             Some("did:web:alice"),
             &[],
@@ -956,15 +1059,15 @@ mod tests {
             "ck:space:1".to_owned(),
             "did:web:alice".to_owned(),
             "did:web:bob".to_owned(),
-            "*".to_owned(),
-            vec!["manage_space".to_owned()],
+            "ck:space:1".to_owned(),
+            vec!["ck.space.manage".to_owned()],
             vec![],
         );
         engine.revoke_grant_with_cascade(&grant.grant_id);
         let result = engine.check(
             "did:web:bob",
-            "manage_space",
-            "space:ck:space:1",
+            "ck.space.manage",
+            "ck:space:1",
             "ck:space:1",
             Some("did:web:alice"),
             &[],
@@ -978,13 +1081,61 @@ mod tests {
         let engine = SolandAuthzEngine::new();
         let result = engine.check(
             "did:web:eve",
-            "read",
-            "space:ck:space:1",
+            "ck.strand.read",
+            "ck:space:1",
             "ck:space:1",
             Some("did:web:alice"),
             &[],
             &[],
         );
         assert!(!result.allowed);
+    }
+
+    #[test]
+    fn wildcard_action_grant_is_fail_closed() {
+        let engine = SolandAuthzEngine::new();
+        engine.create_grant(
+            "ck:realm:1".to_owned(),
+            "did:web:alice".to_owned(),
+            "did:web:bob".to_owned(),
+            "ck:realm:1".to_owned(),
+            vec!["ck.pin.*".to_owned()],
+            vec![],
+        );
+        let result = engine.check(
+            "did:web:bob",
+            "ck.pin.add",
+            "ck:realm:1",
+            "ck:realm:1",
+            None,
+            &[],
+            &[],
+        );
+        assert!(!result.allowed);
+        assert_eq!(result.reason, "capability_denied");
+    }
+
+    #[test]
+    fn bare_wildcard_resource_grant_is_fail_closed() {
+        let engine = SolandAuthzEngine::new();
+        engine.create_grant(
+            "ck:realm:1".to_owned(),
+            "did:web:alice".to_owned(),
+            "did:web:bob".to_owned(),
+            "*".to_owned(),
+            vec!["ck.pin.add".to_owned()],
+            vec![],
+        );
+        let result = engine.check(
+            "did:web:bob",
+            "ck.pin.add",
+            "ck:realm:1",
+            "ck:realm:1",
+            None,
+            &[],
+            &[],
+        );
+        assert!(!result.allowed);
+        assert_eq!(result.reason, "capability_denied");
     }
 }
