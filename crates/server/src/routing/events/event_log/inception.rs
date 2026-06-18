@@ -43,13 +43,22 @@ pub(super) fn event_ref_list(
             "event reference lists must be arrays",
         ));
     };
+    // scalability-constraints.md §2. `prev_refs` carries reason_code
+    // `prev_refs_too_large` (which also covers the MUST-dedup rule); other ref
+    // lists carry `refs_too_large`. Both are `schema_violation` reasons.
+    let too_large_reason = if key == "prev_refs" {
+        "prev_refs_too_large"
+    } else {
+        "refs_too_large"
+    };
     if values.len() > max_len {
         return Err(event_validation_error(
             StatusCode::BAD_REQUEST,
-            "quota_exceeded",
-            "event reference list exceeds the active profile limit",
+            too_large_reason,
+            "event reference list exceeds the v1 maximum entry count",
         ));
     }
+    let mut seen = std::collections::HashSet::with_capacity(values.len());
     values
         .iter()
         .map(|value| {
@@ -65,6 +74,14 @@ pub(super) fn event_ref_list(
                     StatusCode::BAD_REQUEST,
                     "invalid_param",
                     "event references must use the ck:event: typed prefix",
+                ));
+            }
+            // scalability-constraints.md §2 — entries MUST be deduplicated.
+            if !seen.insert(event_id) {
+                return Err(event_validation_error(
+                    StatusCode::BAD_REQUEST,
+                    too_large_reason,
+                    "event reference list MUST NOT contain duplicate entries",
                 ));
             }
             Ok(event_id.to_owned())
@@ -219,4 +236,40 @@ async fn inception_bootstrap_seal(
     chrono::DateTime::parse_from_rfc3339(version_time)
         .ok()
         .map(|parsed| parsed.with_timezone(&chrono::Utc))
+}
+
+#[cfg(test)]
+mod prev_refs_limit_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn object(refs: serde_json::Value) -> serde_json::Map<String, Value> {
+        json!({ "prev_refs": refs }).as_object().unwrap().clone()
+    }
+
+    // scalability-constraints.md §2 — prev_refs ≤ 128.
+    #[test]
+    fn prev_refs_over_max_rejected() {
+        let refs: Vec<Value> = (0..(MAX_EVENT_PREV_REFS + 1))
+            .map(|i| json!(format!("ck:event:e{i}")))
+            .collect();
+        let err =
+            event_ref_list(&object(json!(refs)), "prev_refs", MAX_EVENT_PREV_REFS).unwrap_err();
+        assert_eq!(err.code, "prev_refs_too_large");
+    }
+
+    // §2 — entries MUST be deduplicated (`prev_refs_too_large` covers dedup).
+    #[test]
+    fn duplicate_prev_refs_rejected() {
+        let refs = json!(["ck:event:e1", "ck:event:e1"]);
+        let err = event_ref_list(&object(refs), "prev_refs", MAX_EVENT_PREV_REFS).unwrap_err();
+        assert_eq!(err.code, "prev_refs_too_large");
+    }
+
+    #[test]
+    fn distinct_prev_refs_within_limit_ok() {
+        let refs = json!(["ck:event:e1", "ck:event:e2"]);
+        let out = event_ref_list(&object(refs), "prev_refs", MAX_EVENT_PREV_REFS).unwrap();
+        assert_eq!(out, vec!["ck:event:e1".to_owned(), "ck:event:e2".to_owned()]);
+    }
 }

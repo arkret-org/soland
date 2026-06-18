@@ -120,9 +120,10 @@ impl ProjectionState {
             if let Some(title) = patch_metadata_string_value(patch, "title") {
                 morph.title = title;
             }
-            if let Some(morph_type) = patch_string_value(patch, "morph_type").flatten() {
-                morph.morph_type = morph_type;
-            }
+            // `morph.md` §4 (line 149): `morph_type` is immutable after
+            // `ck.morph.create`. Admission rejects an update patch that names it
+            // (`morph_type_immutable`); the reducer never mutates the field so the
+            // invariant also holds for any event that bypasses admission.
             apply_morph_fields_patch(&mut morph.fields, patch);
         }
         morph.updated_by = operation

@@ -369,11 +369,11 @@ pub fn operation_schema_for_kind(kind: &str) -> Option<OperationPayloadSchema> {
         },
         kinds::CK_RELATION_CREATE => OperationPayloadSchema {
             requirements: RELATION_CREATE_REQUIREMENTS,
-            validate: None,
+            validate: Some(validate_relation_operation_payload),
         },
         kinds::CK_RELATION_UPDATE | kinds::CK_RELATION_DELETE => OperationPayloadSchema {
             requirements: RELATION_ID_REQUIREMENTS,
-            validate: None,
+            validate: Some(validate_relation_operation_payload),
         },
         // G3.S5 — `ck.realm.link`. Permissive schema (target_realm_id +
         // link_kind required; the reducer's `apply_realm_link`

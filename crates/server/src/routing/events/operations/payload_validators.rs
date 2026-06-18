@@ -425,6 +425,49 @@ fn validate_read_cursor_hlc(hlc: &str) -> Result<(), &'static str> {
     Ok(())
 }
 
+/// `relation.md` admission guard for `ck.relation.create` / `.update` /
+/// `.tombstone`, covering two reducer-managed invariants:
+///
+/// 1. **`effective_scope` is reducer-stamped** (§2 table): the actor MUST NOT
+///    submit it; the reducer materialises it from `scope_circle_id`. Any
+///    actor-supplied `effective_scope` is `schema_violation`
+///    (`effective_scope_reducer_managed`).
+/// 2. **derived-edge single-source** (§3.2): `watches` (truth source
+///    `ck.component.strand.watch.v1`, write path `ck.strand.watch.set`) and
+///    Board/List `contains` (truth source `ck.space.parent` / `ck.strand.move`)
+///    are derived projections; a direct `ck.relation.*` on them MUST
+///    `schema_violation`. The container `contains` shape is identified by a
+///    Space `from_ref` (`ck:space:…`); a `Strand -> Strand` `contains` stays a
+///    directly-writable weak relation (§3.2 line 85) and is not blocked.
+pub(crate) fn validate_relation_operation_payload(
+    operation: &Operation,
+) -> Result<(), &'static str> {
+    if operation.payload.get("effective_scope").is_some() {
+        return Err("effective_scope_reducer_managed");
+    }
+    let relation_kind = ["relation_kind", "kind"]
+        .iter()
+        .find_map(|field| operation.payload.get(*field).and_then(Value::as_str));
+    let Some(relation_kind) = relation_kind else {
+        return Ok(());
+    };
+    match relation_kind {
+        "watches" => Err("relation_kind_watches_derived"),
+        "contains" => {
+            let from_ref = ["from_ref", "from"]
+                .iter()
+                .find_map(|field| operation.payload.get(*field).and_then(Value::as_str))
+                .unwrap_or_default();
+            if from_ref.starts_with("ck:space:") {
+                Err("relation_kind_contains_derived")
+            } else {
+                Ok(())
+            }
+        }
+        _ => Ok(()),
+    }
+}
+
 pub(crate) fn validate_morph_update_payload(operation: &Operation) -> Result<(), &'static str> {
     let Some(patch) = operation.payload.get("patch").and_then(Value::as_object) else {
         return Ok(());
@@ -438,7 +481,58 @@ pub(crate) fn validate_morph_update_payload(operation: &Operation) -> Result<(),
     if patch.contains_key("schema_refs") {
         return Err("morph_schema_refs_evolution_unauthorized");
     }
+    reject_forbidden_morph_update_patch(patch)?;
     Ok(())
+}
+
+/// `morph.md` §2 / §4 forbidden-wire guard for `ck.morph.update`:
+/// - `morph_type` is immutable after `ck.morph.create` (`morph_type_immutable`).
+/// - the stage axis (`stage` / `stage_changed_at`) changes only via
+///   `ck.morph.stage.set`; writing it through an update patch is `schema_violation`.
+/// - the reserved business-field set (`fields.stage` / `fields.lifecycle` /
+///   `fields.progress_state` / `fields.stage_reason`) is forbidden-wire in any
+///   representation (dotted `fields.<name>` path or whole-`fields` object replace).
+fn reject_forbidden_morph_update_patch(
+    patch: &serde_json::Map<String, Value>,
+) -> Result<(), &'static str> {
+    const FORBIDDEN_FIELD: &[&str] = &["stage", "lifecycle", "progress_state", "stage_reason"];
+    for (path, value) in patch {
+        if path == "morph_type" {
+            return Err("morph_type_immutable");
+        }
+        if path == "stage" || path == "stage_changed_at" {
+            return Err("morph_stage_patch_forbidden");
+        }
+        if let Some(field) = path.strip_prefix("fields.") {
+            if FORBIDDEN_FIELD.contains(&field) {
+                return Err("morph_forbidden_field_patch");
+            }
+        }
+        if path == "fields" {
+            if let Some(map) = patch_set_value(value).and_then(Value::as_object) {
+                if FORBIDDEN_FIELD.iter().any(|field| map.contains_key(*field)) {
+                    return Err("morph_forbidden_field_patch");
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Decode a field-patch entry to the value it sets, or `None` for unset /
+/// unknown ops. Mirrors the reducer's `patch_action`: a bare value (no `$op`
+/// envelope) is itself the set value; `{"$op":"set"|"add","value":…}` carries
+/// it explicitly; `unset`/`remove`/unknown set nothing. Kept inline so the
+/// admission layer does not depend on reducer-internal helpers.
+fn patch_set_value(value: &Value) -> Option<&Value> {
+    match value
+        .as_object()
+        .and_then(|object| object.get("$op").and_then(Value::as_str))
+    {
+        None => Some(value),
+        Some("set" | "add") => value.get("value"),
+        Some(_) => None,
+    }
 }
 
 pub(crate) fn validate_morph_create_payload(operation: &Operation) -> Result<(), &'static str> {

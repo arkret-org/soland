@@ -2,7 +2,6 @@ use super::*;
 
 pub(crate) fn event_semantic_refs(
     object: &serde_json::Map<String, Value>,
-    _state: &AppState,
     max_len: usize,
 ) -> Result<Vec<String>, EventValidationError> {
     let Some(value) = object.get("refs") else {
@@ -15,11 +14,12 @@ pub(crate) fn event_semantic_refs(
             "refs must be an array",
         ));
     };
+    // scalability-constraints.md §2 — total refs[] across all roles ≤ 128.
     if values.len() > max_len {
         return Err(event_validation_error(
             StatusCode::BAD_REQUEST,
-            "quota_exceeded",
-            "refs exceeds the active profile limit",
+            "refs_too_large",
+            "refs[] exceeds the v1 maximum of 128 entries",
         ));
     }
     let mut authorized_refs = Vec::new();
@@ -55,6 +55,16 @@ pub(crate) fn event_semantic_refs(
             }
             authorized_refs.push(id);
         }
+    }
+    // scalability-constraints.md §2 — the `authorized_by` role is capped at 64
+    // within the 128 total; authorized_by refs MUST be the minimal authorizing
+    // state set (event-and-patch.md §2.2).
+    if authorized_refs.len() > MAX_AUTHORIZED_BY_REFS {
+        return Err(event_validation_error(
+            StatusCode::BAD_REQUEST,
+            "refs_too_large",
+            "authorized_by refs exceed the v1 maximum of 64 entries",
+        ));
     }
     Ok(authorized_refs)
 }
@@ -812,4 +822,44 @@ pub async fn effective_read_receipt_policy_for_realm(
         .and_then(Value::as_bool)
         .unwrap_or(true);
     Some((disclosure, visibility, scope_overrides_allowed))
+}
+
+#[cfg(test)]
+mod refs_limit_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn refs_object(refs: serde_json::Value) -> serde_json::Map<String, Value> {
+        json!({ "refs": refs }).as_object().unwrap().clone()
+    }
+
+    // scalability-constraints.md §2 — total refs[] across all roles ≤ 128.
+    #[test]
+    fn total_refs_over_max_rejected_as_refs_too_large() {
+        let refs: Vec<Value> = (0..(MAX_EVENT_REFS + 1))
+            .map(|_| json!({"id": "ck:event:e", "role": "after"}))
+            .collect();
+        let err = event_semantic_refs(&refs_object(json!(refs)), MAX_EVENT_REFS).unwrap_err();
+        assert_eq!(err.code, "refs_too_large");
+    }
+
+    // §2 — `authorized_by` role ≤ 64 within the 128 total.
+    #[test]
+    fn authorized_by_over_max_rejected_as_refs_too_large() {
+        let refs: Vec<Value> = (0..(MAX_AUTHORIZED_BY_REFS + 1))
+            .map(|_| json!({"id": "ck:event:e1", "role": "authorized_by"}))
+            .collect();
+        let err = event_semantic_refs(&refs_object(json!(refs)), MAX_EVENT_REFS).unwrap_err();
+        assert_eq!(err.code, "refs_too_large");
+    }
+
+    #[test]
+    fn within_limits_collects_only_authorized_by_refs() {
+        let refs = json!([
+            {"id": "ck:event:e1", "role": "authorized_by"},
+            {"id": "ck:event:e2", "role": "after"}
+        ]);
+        let out = event_semantic_refs(&refs_object(refs), MAX_EVENT_REFS).unwrap();
+        assert_eq!(out, vec!["ck:event:e1".to_owned()]);
+    }
 }

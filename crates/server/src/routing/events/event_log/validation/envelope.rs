@@ -423,7 +423,7 @@ pub(crate) async fn validate_event_envelope(
     }
 
     let prev_refs = event_ref_list(object, "prev_refs", MAX_EVENT_PREV_REFS)?;
-    let authorized_refs = event_semantic_refs(object, state, MAX_EVENT_REFS)?;
+    let authorized_refs = event_semantic_refs(object, MAX_EVENT_REFS)?;
     let canonical_bytes = event_canonical_bytes(envelope)?;
     let canonical_digest = event_digest(&canonical_bytes);
     validate_strand_watch_audit_pair(

@@ -656,6 +656,15 @@ pub(in crate::routing) async fn submit_event_value(
                     reason,
                 ));
             }
+            // relation.md §4 — structural contains/belongs_to MUST stay within a
+            // single Realm; reject cross-Realm structural relations at ingest.
+            if let Err(reason) = proj.check_relation_cross_realm(operation) {
+                return Err(SubmitOneError::new(
+                    StatusCode::PRECONDITION_FAILED,
+                    reason,
+                    reason,
+                ));
+            }
             if let Some(reason) = preflight_mls_projection_reject(&proj, operation) {
                 return Err(SubmitOneError::new(
                     StatusCode::PRECONDITION_FAILED,

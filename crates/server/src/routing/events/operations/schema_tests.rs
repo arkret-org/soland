@@ -404,3 +404,187 @@ mod sdk_artifact_schema_tests {
         );
     }
 }
+
+mod derived_relation_and_morph_immutability_tests {
+    use cokret_sdk::Operation;
+    use serde_json::json;
+
+    use super::super::*;
+
+    fn op(kind: &'static str, payload: serde_json::Value) -> Operation {
+        Operation::create(
+            cokret_sdk::OperationId::new("ck:operation:01904100-0000-7000-8000-57d7d85564c5")
+                .unwrap(),
+            cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-668e2181b41d").unwrap(),
+            kind,
+            payload,
+        )
+    }
+
+    // relation.md §3.2 — `watches` is always a derived edge; a direct
+    // ck.relation.create MUST be rejected.
+    #[test]
+    fn relation_create_watches_is_rejected() {
+        let operation = op(
+            kinds::CK_RELATION_CREATE,
+            json!({
+                "relation_id": "ck:relation:01904100-0000-7000-8000-000000000001",
+                "relation_kind": "watches",
+                "from_ref": "did:web:alice.example",
+                "to_ref": "ck:strand:01904100-0000-7000-8000-000000000002"
+            }),
+        );
+        assert_eq!(
+            validate_relation_operation_payload(&operation),
+            Err("relation_kind_watches_derived")
+        );
+    }
+
+    // relation.md §3.2 line 83/84 — Board/List `contains` (Space `from_ref`) is
+    // a derived projection; a direct ck.relation.create MUST be rejected.
+    #[test]
+    fn relation_create_container_contains_is_rejected() {
+        let operation = op(
+            kinds::CK_RELATION_CREATE,
+            json!({
+                "relation_id": "ck:relation:01904100-0000-7000-8000-000000000003",
+                "relation_kind": "contains",
+                "from_ref": "ck:space:01904100-0000-7000-8000-000000000004",
+                "to_ref": "ck:strand:01904100-0000-7000-8000-000000000005"
+            }),
+        );
+        assert_eq!(
+            validate_relation_operation_payload(&operation),
+            Err("relation_kind_contains_derived")
+        );
+    }
+
+    // relation.md §3.2 line 85 — Strand -> Strand `contains` (non-container)
+    // stays a directly-writable weak relation and MUST NOT be blocked.
+    #[test]
+    fn relation_create_strand_subtask_contains_is_allowed() {
+        let operation = op(
+            kinds::CK_RELATION_CREATE,
+            json!({
+                "relation_id": "ck:relation:01904100-0000-7000-8000-000000000006",
+                "relation_kind": "contains",
+                "from_ref": "ck:strand:01904100-0000-7000-8000-000000000007",
+                "to_ref": "ck:strand:01904100-0000-7000-8000-000000000008"
+            }),
+        );
+        assert!(validate_relation_operation_payload(&operation).is_ok());
+    }
+
+    #[test]
+    fn relation_create_weak_reference_is_allowed() {
+        let operation = op(
+            kinds::CK_RELATION_CREATE,
+            json!({
+                "relation_id": "ck:relation:01904100-0000-7000-8000-000000000009",
+                "relation_kind": "references",
+                "from_ref": "ck:strand:01904100-0000-7000-8000-00000000000a",
+                "to_ref": "ck:strand:01904100-0000-7000-8000-00000000000b"
+            }),
+        );
+        assert!(validate_relation_operation_payload(&operation).is_ok());
+    }
+
+    // relation.md §2 — effective_scope is reducer-stamped; an actor-supplied
+    // value MUST be rejected.
+    #[test]
+    fn relation_create_actor_supplied_effective_scope_is_rejected() {
+        let operation = op(
+            kinds::CK_RELATION_CREATE,
+            json!({
+                "relation_id": "ck:relation:01904100-0000-7000-8000-00000000000f",
+                "relation_kind": "references",
+                "from_ref": "ck:strand:01904100-0000-7000-8000-000000000010",
+                "to_ref": "ck:strand:01904100-0000-7000-8000-000000000011",
+                "effective_scope": {"kind": "realm"}
+            }),
+        );
+        assert_eq!(
+            validate_relation_operation_payload(&operation),
+            Err("effective_scope_reducer_managed")
+        );
+    }
+
+    // morph.md §4 line 149 — morph_type is immutable after create.
+    #[test]
+    fn morph_update_morph_type_is_immutable() {
+        let bare = op(
+            kinds::CK_MORPH_UPDATE,
+            json!({
+                "morph_id": "ck:morph:01904100-0000-7000-8000-00000000000c",
+                "patch": {"morph_type": "task"}
+            }),
+        );
+        assert_eq!(
+            validate_morph_update_payload(&bare),
+            Err("morph_type_immutable")
+        );
+        let enveloped = op(
+            kinds::CK_MORPH_UPDATE,
+            json!({
+                "morph_id": "ck:morph:01904100-0000-7000-8000-00000000000c",
+                "patch": {"morph_type": {"$op": "set", "value": "task"}}
+            }),
+        );
+        assert_eq!(
+            validate_morph_update_payload(&enveloped),
+            Err("morph_type_immutable")
+        );
+    }
+
+    // morph.md §2 line 47 — the stage axis and reserved business fields are
+    // forbidden-wire on ck.morph.update, in both the dotted `fields.<name>`
+    // form and a whole-`fields` object replace.
+    #[test]
+    fn morph_update_stage_axis_is_forbidden_wire() {
+        let top_stage = op(
+            kinds::CK_MORPH_UPDATE,
+            json!({
+                "morph_id": "ck:morph:01904100-0000-7000-8000-00000000000d",
+                "patch": {"stage": "done"}
+            }),
+        );
+        assert_eq!(
+            validate_morph_update_payload(&top_stage),
+            Err("morph_stage_patch_forbidden")
+        );
+        let dotted = op(
+            kinds::CK_MORPH_UPDATE,
+            json!({
+                "morph_id": "ck:morph:01904100-0000-7000-8000-00000000000d",
+                "patch": {"fields.lifecycle": "archived"}
+            }),
+        );
+        assert_eq!(
+            validate_morph_update_payload(&dotted),
+            Err("morph_forbidden_field_patch")
+        );
+        let object_replace = op(
+            kinds::CK_MORPH_UPDATE,
+            json!({
+                "morph_id": "ck:morph:01904100-0000-7000-8000-00000000000d",
+                "patch": {"fields": {"$op": "set", "value": {"stage_reason": "x"}}}
+            }),
+        );
+        assert_eq!(
+            validate_morph_update_payload(&object_replace),
+            Err("morph_forbidden_field_patch")
+        );
+    }
+
+    #[test]
+    fn morph_update_ordinary_field_patch_is_allowed() {
+        let operation = op(
+            kinds::CK_MORPH_UPDATE,
+            json!({
+                "morph_id": "ck:morph:01904100-0000-7000-8000-00000000000e",
+                "patch": {"fields.severity": "high", "fields": {"$op": "set", "value": {"status": "open"}}}
+            }),
+        );
+        assert!(validate_morph_update_payload(&operation).is_ok());
+    }
+}

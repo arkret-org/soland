@@ -51,8 +51,13 @@ use crate::wire::describe;
 use crate::{artifacts, kinds};
 
 const MAX_EVENT_BYTES: usize = 64 * 1024;
-const MAX_EVENT_PREV_REFS: usize = 32;
-const MAX_EVENT_REFS: usize = 64;
+// scalability-constraints.md §2: prev_refs ≤ 128 (with MUST-dedup), refs[] total
+// ≤ 128, and the `authorized_by` role ≤ 64 within that total. These are the v1
+// interop maxima a conformant receiver MUST accept; a stricter local cap would
+// reject another node's valid wire object (spec §1).
+const MAX_EVENT_PREV_REFS: usize = 128;
+const MAX_EVENT_REFS: usize = 128;
+const MAX_AUTHORIZED_BY_REFS: usize = 64;
 const MAX_EVENT_RESOLVE: usize = 100;
 const MAX_EVENT_SUBMIT_BATCH: usize = 100;
 
