@@ -29,6 +29,7 @@ async fn events_describe(depot: &mut Depot) -> JsonResult<cokret_sdk::ServerDesc
         state.config.oidc_client_id.as_deref(),
         &state.config.trust_domain,
         state.config.resumable_upload_incomplete_ttl_seconds,
+        state.config.to_device_queue_capacity,
     );
     crate::routing::system::describe::apply_claim_level_partition(
         &mut description,

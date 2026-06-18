@@ -2,6 +2,7 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 
 pub const DEFAULT_MAX_REQUEST_SIZE_BYTES: usize = 1024 * 1024;
+pub const DEFAULT_TO_DEVICE_QUEUE_CAPACITY: usize = 10_000;
 
 #[derive(Clone, Debug)]
 pub struct AppConfig {
@@ -181,6 +182,12 @@ pub struct AppConfig {
     /// false. Empty (default) keeps the previous "dev-mode only" posture for
     /// these endpoints. Env: `SOLAND_ADMIN_PRINCIPAL_DIDS` (comma-separated).
     pub admin_principal_dids: Vec<String>,
+    /// Maximum unacknowledged to-device messages retained per
+    /// `(recipient_principal_id, device_id)`. Older messages beyond this
+    /// capacity are dropped, and the device lost watermark is advanced so the
+    /// next to-device response can carry `lost=true`.
+    /// Env: `SOLAND_TO_DEVICE_QUEUE_CAPACITY` (default 10_000).
+    pub to_device_queue_capacity: usize,
     /// Max age (in seconds) a cached outbound push bridge contract is allowed
     /// to keep its trusted state without re-verification. Snapshots whose
     /// `freshness_at` is older than this are treated as stale on cache_hit and
@@ -619,6 +626,11 @@ impl AppConfig {
                     .collect::<Vec<_>>()
             })
             .unwrap_or_default();
+        let to_device_queue_capacity = std::env::var("SOLAND_TO_DEVICE_QUEUE_CAPACITY")
+            .ok()
+            .and_then(|value| value.trim().parse::<usize>().ok())
+            .filter(|value| *value > 0)
+            .unwrap_or(DEFAULT_TO_DEVICE_QUEUE_CAPACITY);
         let push_bridge_cache_ttl_seconds = std::env::var("SOLAND_PUSH_BRIDGE_CACHE_TTL_SECS")
             .ok()
             .and_then(|value| value.trim().parse::<u64>().ok())
@@ -725,6 +737,7 @@ impl AppConfig {
             admin_default_page_limit,
             admin_max_page_limit,
             admin_principal_dids,
+            to_device_queue_capacity,
             push_bridge_cache_ttl_seconds,
             push_bridge_trusted_service_dids,
             resumable_upload_dir,

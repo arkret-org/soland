@@ -224,8 +224,8 @@ pub(crate) async fn build_sync_snapshot(
     let mut to_device_lost = None;
     let to_device = if let Some(session) = session {
         let device_messages = state.persistence.device_messages();
-        if let Err(error) = device_messages.prune_expired(now()).await {
-            tracing::error!(%error, "failed to prune expired to-device messages during sync snapshot");
+        if let Err(error) = prune_device_messages_for_limits(state).await {
+            tracing::error!(%error, "failed to prune to-device messages during sync snapshot");
         }
         let lost_watermark = match device_messages
             .lost_watermark(&session.actor, &session.device_id)

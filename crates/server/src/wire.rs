@@ -850,6 +850,7 @@ pub fn describe(
     oidc_client_id: Option<&str>,
     trust_domain: &str,
     resumable_upload_incomplete_ttl_seconds: u64,
+    to_device_queue_capacity: usize,
 ) -> ServerDescription {
     // Legacy alias list (`supported_auth_methods`) for pre-`methods[]` clients.
     let mut supported_auth_methods = Vec::new();
@@ -1129,7 +1130,8 @@ pub fn describe(
                 "max_grants_per_decision": 1024,
                 "max_grant_constraints": 64,
                 "max_resource_selector_depth": 16,
-                "max_to_device_page": 1000
+                "max_to_device_page": 1000,
+                "max_to_device_queue_per_device": to_device_queue_capacity
             },
             "profile_status": {
                 "conformance": "limited_reference",
@@ -1250,6 +1252,7 @@ mod tests {
             None,
             "ck:trust_domain:soland.example",
             86_400,
+            10_000,
         );
         let value = serde_json::to_value(description).expect("description serializes");
         assert_eq!(
@@ -1286,6 +1289,10 @@ mod tests {
         assert_eq!(
             value["limits"]["resumable_upload_max_bytes"],
             json!(10 * 1024 * 1024)
+        );
+        assert_eq!(
+            value["limits"]["scalability_constraints"]["max_to_device_queue_per_device"],
+            json!(10_000)
         );
     }
 }

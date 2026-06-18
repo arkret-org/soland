@@ -254,6 +254,7 @@ fn build_server_description(state: &AppState) -> ServerDescription {
         state.config.oidc_client_id.as_deref(),
         &state.config.trust_domain,
         state.config.resumable_upload_incomplete_ttl_seconds,
+        state.config.to_device_queue_capacity,
     );
     // T6.1 — claim-level partition of the describe response.
     // See cokret-spec/spec/v1/zh/sync/service-surface.md §3.0 and

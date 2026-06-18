@@ -39,6 +39,7 @@ pub(crate) use salvo::prelude::*;
 pub(crate) use serde_json::{Value, json};
 pub(crate) use tokio::sync::broadcast::error::RecvError;
 
+use super::super::identity::device_messages::prune_device_messages_for_limits;
 pub(crate) use super::projection::{
     actor_erased_in_realm, retention_tombstone_for_event, tombstone_timeline_event_for_retention,
     tombstone_timeline_event_value,

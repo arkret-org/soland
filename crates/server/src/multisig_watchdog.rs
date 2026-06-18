@@ -418,6 +418,7 @@ mod tests {
             admin_default_page_limit: 100,
             admin_max_page_limit: 1000,
             admin_principal_dids: Vec::new(),
+            to_device_queue_capacity: 10_000,
             push_bridge_cache_ttl_seconds: 900,
             push_bridge_trusted_service_dids: Vec::new(),
             resumable_upload_dir: std::path::PathBuf::from("./soland-resumable-uploads"),

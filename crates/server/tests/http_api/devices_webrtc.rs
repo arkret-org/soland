@@ -221,6 +221,71 @@ async fn to_device_pairing_request_reaches_existing_device_and_gate_pair_authori
 }
 
 #[tokio::test]
+async fn to_device_capacity_eviction_sets_lost_watermark() {
+    let mut config = test_config();
+    config.to_device_queue_capacity = 2;
+    let state = AppState::new(config, Db { pool: None });
+    let alice_token = dev_token(state.clone()).await;
+    let bob = "did:web:bob.example";
+    let bob_device = "ck:device:01904100-0000-7000-8000-b0b000000001";
+    let bob_token = dev_token_for_device(state.clone(), bob, bob_device, "Bob Phone").await;
+
+    for seq in 1..=3 {
+        let mut device_targets = serde_json::Map::new();
+        device_targets.insert(
+            bob_device.to_owned(),
+            device_message_target(
+                "ck.key.verification.request",
+                serde_json::json!({
+                    "transaction_id": format!("capacity-{seq}"),
+                    "seq": seq
+                }),
+            ),
+        );
+        let mut actor_targets = serde_json::Map::new();
+        actor_targets.insert(bob.to_owned(), Value::Object(device_targets));
+        let sent: Value = TestClient::post("http://server/_cokret/self/device_messages")
+            .add_header("authorization", format!("Bearer {alice_token}"), true)
+            .add_header("Idempotency-Key", format!("capacity-{seq}"), true)
+            .json(&serde_json::json!({
+                "messages": actor_targets
+            }))
+            .send(&app_from_state(state.clone()))
+            .await
+            .take_json()
+            .await
+            .unwrap();
+        assert_eq!(sent["ok"], true);
+        assert_eq!(sent["delivered"][bob][0], bob_device);
+    }
+
+    let pulled: Value = TestClient::get("http://server/_cokret/self/device_messages")
+        .add_header("authorization", format!("Bearer {bob_token}"), true)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(pulled["lost"], true);
+    let messages = pulled["messages"].as_array().unwrap();
+    assert_eq!(messages.len(), 2);
+    assert_eq!(messages[0]["content"]["seq"], 2);
+    assert_eq!(messages[1]["content"]["seq"], 3);
+    assert!(
+        pulled["ack_token"]
+            .as_str()
+            .is_some_and(|token| !token.is_empty())
+    );
+
+    let subscribe = account_subscribe_frame(state, Some(&bob_token), "catchup=true").await;
+    assert_eq!(subscribe["to_device"]["lost"], true);
+    let subscribe_messages = subscribe["to_device"]["messages"].as_array().unwrap();
+    assert_eq!(subscribe_messages.len(), 2);
+    assert_eq!(subscribe_messages[0]["content"]["seq"], 2);
+    assert_eq!(subscribe_messages[1]["content"]["seq"], 3);
+}
+
+#[tokio::test]
 async fn protocol_device_surface_excludes_pairing_request_scaffold() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;

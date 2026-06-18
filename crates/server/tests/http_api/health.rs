@@ -344,6 +344,7 @@ async fn describe_returns_development_mode_field() {
     let prod_config = AppConfig {
         development_mode: false,
         admin_principal_dids: vec!["did:web:ops.example".to_owned()],
+        to_device_queue_capacity: 10_000,
         ..test_config()
     };
     let prod_state = AppState::new(prod_config, Db { pool: None });
@@ -415,6 +416,7 @@ async fn healthz_exposes_hardening_status() {
     let prod_config = AppConfig {
         development_mode: false,
         admin_principal_dids: vec!["did:web:ops.example".to_owned()],
+        to_device_queue_capacity: 10_000,
         tls_cert_path: Some(std::path::PathBuf::from("/etc/soland/tls.crt")),
         tls_key_path: Some(std::path::PathBuf::from("/etc/soland/tls.key")),
         cors_allow_origin: Some("https://app.example.com".to_owned()),

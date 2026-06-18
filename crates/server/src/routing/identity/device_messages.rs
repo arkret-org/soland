@@ -34,6 +34,18 @@ pub(crate) const BLOCKLIST_UPDATE_TYPE: &str = "ck.account.blocklist.update";
 pub(crate) const READ_MARKER_UPDATE_TYPE: &str = "ck.read_cursor.update";
 pub(crate) const TO_DEVICE_PAGE_LIMIT: usize = 1000;
 
+pub(crate) async fn prune_device_messages_for_limits(
+    state: &AppState,
+) -> crate::persistence::PersistenceResult<()> {
+    let device_messages = state.persistence.device_messages();
+    let now = now();
+    device_messages.prune_expired(now).await?;
+    device_messages
+        .prune_over_capacity(state.config.to_device_queue_capacity, now)
+        .await?;
+    Ok(())
+}
+
 pub(super) fn protocol_router() -> Router {
     Router::new()
         .push(
@@ -166,6 +178,9 @@ async fn send_device_messages(
             delivered.insert(recipient.to_string(), json!(delivered_devices));
         }
     }
+    if let Err(error) = prune_device_messages_for_limits(state).await {
+        tracing::error!(%error, "failed to prune to-device messages after send");
+    }
     json_ok(DeviceMessagesSendOutcome {
         ok: true,
         delivered,
@@ -217,6 +232,9 @@ pub(crate) async fn fanout_actor_private_update(
             Ok(()) => delivered += 1,
             Err(error) => tracing::error!(%error, actor, "failed to fan out actor-private update"),
         }
+    }
+    if let Err(error) = prune_device_messages_for_limits(state).await {
+        tracing::error!(%error, actor, "failed to prune to-device messages after actor-private fanout");
     }
     delivered
 }
@@ -295,8 +313,7 @@ async fn get_device_messages(
         None => TO_DEVICE_PAGE_LIMIT,
     };
     let device_messages = state.persistence.device_messages();
-    device_messages
-        .prune_expired(now())
+    prune_device_messages_for_limits(state)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
     let lost_watermark = device_messages

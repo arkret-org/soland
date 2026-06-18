@@ -50,6 +50,12 @@ pub trait DeviceMessageStore: Send + Sync {
     ) -> PersistenceResult<Vec<DeviceMessageRecord>>;
     /// Prune expired unacked messages and record the highest lost queue position per device.
     async fn prune_expired(&self, now: chrono::DateTime<Utc>) -> PersistenceResult<usize>;
+    /// Prune older unacked messages beyond a per-device capacity, recording lost positions.
+    async fn prune_over_capacity(
+        &self,
+        per_device_capacity: usize,
+        now: chrono::DateTime<Utc>,
+    ) -> PersistenceResult<usize>;
     /// Highest queue position known lost for this device due to TTL/capacity eviction.
     async fn lost_watermark(
         &self,
@@ -293,6 +299,54 @@ impl DeviceMessageStore for MemoryDeviceMessageStore {
         Ok(before - queue.len())
     }
 
+    async fn prune_over_capacity(
+        &self,
+        per_device_capacity: usize,
+        _now: chrono::DateTime<Utc>,
+    ) -> PersistenceResult<usize> {
+        if per_device_capacity == 0 {
+            return Ok(0);
+        }
+        let mut queue = self.queue.lock().expect("device message lock");
+        let before = queue.len();
+        let mut positions_by_device: BTreeMap<(String, String), Vec<i64>> = BTreeMap::new();
+        for message in queue.iter() {
+            positions_by_device
+                .entry((message.recipient.clone(), message.device_id.clone()))
+                .or_default()
+                .push(message.position);
+        }
+        let mut lost_through_by_device = BTreeMap::new();
+        for (key, positions) in &mut positions_by_device {
+            positions.sort_unstable();
+            if positions.len() > per_device_capacity {
+                let dropped_count = positions.len() - per_device_capacity;
+                if let Some(lost_through) = positions.get(dropped_count - 1).copied() {
+                    lost_through_by_device.insert(key.clone(), lost_through);
+                }
+            }
+        }
+        if lost_through_by_device.is_empty() {
+            return Ok(0);
+        }
+        {
+            let mut watermarks = self
+                .lost_watermarks
+                .lock()
+                .expect("device message lost watermark lock");
+            for (key, lost_through) in &lost_through_by_device {
+                let entry = watermarks.entry(key.clone()).or_default();
+                *entry = (*entry).max(*lost_through);
+            }
+        }
+        queue.retain(|message| {
+            !lost_through_by_device
+                .get(&(message.recipient.clone(), message.device_id.clone()))
+                .is_some_and(|lost_through| message.position <= *lost_through)
+        });
+        Ok(before - queue.len())
+    }
+
     async fn lost_watermark(
         &self,
         recipient: &str,
@@ -531,9 +585,53 @@ impl DeviceMessageStore for PgDeviceMessageStore {
                      updated_at = EXCLUDED.updated_at \
                  RETURNING 1 \
              ) \
-             DELETE FROM device_messages \
+            DELETE FROM device_messages \
              WHERE COALESCE(NULLIF(content->>'expires_at', '')::timestamptz, created_at + interval '1 hour') <= $1",
         )
+        .bind::<Timestamptz, _>(now)
+        .execute(&mut *conn)
+        .await
+        .map_err(PersistenceError::from)
+    }
+
+    async fn prune_over_capacity(
+        &self,
+        per_device_capacity: usize,
+        now: chrono::DateTime<Utc>,
+    ) -> PersistenceResult<usize> {
+        if per_device_capacity == 0 {
+            return Ok(0);
+        }
+        let mut conn = pg_conn(&self.pool).await?;
+        sql_query(
+            "WITH ranked AS ( \
+                 SELECT recipient, device_id, position, \
+                        ROW_NUMBER() OVER ( \
+                            PARTITION BY recipient, device_id \
+                            ORDER BY position DESC \
+                        ) AS keep_rank \
+                 FROM device_messages \
+             ), evicted AS ( \
+                 SELECT recipient, device_id, MAX(position) AS lost_through \
+                 FROM ranked \
+                 WHERE keep_rank > $1 \
+                 GROUP BY recipient, device_id \
+             ), upserted AS ( \
+                 INSERT INTO device_message_lost_watermarks \
+                     (recipient, device_id, lost_through, updated_at) \
+                 SELECT recipient, device_id, lost_through, $2 FROM evicted \
+                 ON CONFLICT (recipient, device_id) DO UPDATE \
+                 SET lost_through = GREATEST(device_message_lost_watermarks.lost_through, EXCLUDED.lost_through), \
+                     updated_at = EXCLUDED.updated_at \
+                 RETURNING 1 \
+             ) \
+             DELETE FROM device_messages USING ranked \
+             WHERE device_messages.recipient = ranked.recipient \
+               AND device_messages.device_id = ranked.device_id \
+               AND device_messages.position = ranked.position \
+               AND ranked.keep_rank > $1",
+        )
+        .bind::<BigInt, _>(per_device_capacity as i64)
         .bind::<Timestamptz, _>(now)
         .execute(&mut *conn)
         .await
