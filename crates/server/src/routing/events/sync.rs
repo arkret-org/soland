@@ -60,8 +60,8 @@ pub(crate) use crate::ids;
 pub(crate) use crate::persistence::SyncCursorRecord;
 pub(crate) use crate::reducer::ProjectionState;
 pub(crate) use crate::state::{
-    AppState, HandleClaimDigestInput, HandleClaimEvidenceRecord, PresenceRecord,
-    ProjectionEventRecord, RealmDirectoryEntry, RealmMetaRecord, SessionRecord,
+    AppState, DeviceInventoryRecord, HandleClaimDigestInput, HandleClaimEvidenceRecord,
+    PresenceRecord, ProjectionEventRecord, RealmDirectoryEntry, RealmMetaRecord, SessionRecord,
 };
 pub(crate) use crate::wire::{EventsQueryPostRequestBody, SyncDescription, SyncRequestBody};
 

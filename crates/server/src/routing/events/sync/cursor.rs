@@ -14,6 +14,8 @@ pub struct SyncCursor {
     /// it is intentionally separate from `positions.realms` so metadata-only
     /// deltas cannot mask later visible timeline events.
     pub account_positions: BTreeMap<String, i64>,
+    /// Device-list aggregate frontier per tracked principal.
+    pub device_list_positions: BTreeMap<String, i64>,
     pub to_device_position: i64,
     /// `ctx.issued_at_ms` from the stateful handle. Used for forward-progress
     /// pruning of older handles after a client proves it persisted a cursor.
@@ -58,6 +60,7 @@ pub async fn sync_token_for_client_sync(
     filter: Option<&serde_json::Value>,
     realms_positions: BTreeMap<String, i64>,
     account_realms_positions: BTreeMap<String, i64>,
+    device_list_positions: BTreeMap<String, i64>,
     to_device_position: i64,
 ) -> String {
     let issued_at = chrono::Utc::now();
@@ -70,6 +73,7 @@ pub async fn sync_token_for_client_sync(
     let positions = json!({
         "realms": realms_positions,
         "account_realms": account_realms_positions,
+        "device_lists": device_list_positions,
         "devices": device_positions,
         "to_device": to_device_position
     });
@@ -84,6 +88,7 @@ pub async fn sync_token_for_client_sync(
         &filter_digest,
         &realms_positions,
         &account_realms_positions,
+        &device_list_positions,
         to_device_position,
     );
     let handle = derive_cursor_handle(&state.sync_cursor_hmac_key, &binding);
@@ -184,6 +189,7 @@ async fn sync_token_for_state_positions(
             positions: Some(json!({
                 "realms": realms_positions,
                 "account_realms": {},
+                "device_lists": {},
                 "devices": {},
                 "to_device": 0
             })),
@@ -242,6 +248,7 @@ pub(crate) fn stream_cursor_handle_binding(
     filter_digest: &str,
     realms_positions: &BTreeMap<String, i64>,
     account_realms_positions: &BTreeMap<String, i64>,
+    device_list_positions: &BTreeMap<String, i64>,
     to_device_position: i64,
 ) -> Vec<u8> {
     let binding = json!({
@@ -252,6 +259,7 @@ pub(crate) fn stream_cursor_handle_binding(
         "purpose": "stream",
         "realms": realms_positions,
         "account_realms": account_realms_positions,
+        "device_lists": device_list_positions,
         "to_device": to_device_position,
     });
     cokret_sdk::canonical::canonical_json_bytes(&binding)
@@ -291,6 +299,7 @@ fn service_cursor_handle_binding(
         "service_id": service_id,
         "realms": realms_positions,
         "account_realms": {},
+        "device_lists": {},
         "to_device": 0,
     });
     cokret_sdk::canonical::canonical_json_bytes(&binding)
@@ -566,6 +575,7 @@ pub async fn parse_and_validate_sync_cursor(
         "account_realms",
         Some("cursor handle is missing positions.account_realms"),
     )?;
+    let device_list_positions = cursor_position_map(positions_value, "device_lists", None)?;
     let to_device_position = positions_value
         .get("to_device")
         .and_then(|position| position.as_i64())
@@ -574,6 +584,7 @@ pub async fn parse_and_validate_sync_cursor(
     Ok(SyncCursor {
         positions,
         account_positions,
+        device_list_positions,
         to_device_position,
         issued_at_ms,
     })

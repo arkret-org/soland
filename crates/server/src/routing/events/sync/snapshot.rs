@@ -62,19 +62,30 @@ pub(crate) async fn build_sync_snapshot(
     };
     drop(visible_realm_ids);
 
-    let mut presence_actors = BTreeSet::new();
+    let mut visible_actors = BTreeSet::new();
     for (_, _, _, _, _, members) in &visible_realms {
         for member in members {
             if let Some(actor) = roster_member_actor_id(member) {
-                presence_actors.insert(actor);
+                visible_actors.insert(actor);
             }
         }
     }
+    if let Some(session) = session {
+        visible_actors.insert(session.actor.clone());
+    }
     let presence = if body.after.is_none() {
-        presence_events_for_actors(state, presence_actors, session).await
+        presence_events_for_actors(state, visible_actors.clone(), session).await
     } else {
         Vec::new()
     };
+    let (device_lists, device_list_positions) = device_lists_for_actors(
+        state,
+        session,
+        &visible_actors,
+        after_cursor,
+        body.after.is_some(),
+    )
+    .await;
 
     // Clone the projection so the per-Realm loop below can `.await` async
     // visibility/timeline helpers without holding the (non-Send) lock guard
@@ -262,6 +273,7 @@ pub(crate) async fn build_sync_snapshot(
                         filter_value.as_ref(),
                         BTreeMap::new(),
                         BTreeMap::new(),
+                        BTreeMap::new(),
                         to_device_position,
                     )
                     .await,
@@ -305,6 +317,7 @@ pub(crate) async fn build_sync_snapshot(
             filter_value.as_ref(),
             timeline_positions,
             account_positions,
+            device_list_positions,
             to_device_position,
         )
         .await,
@@ -315,7 +328,7 @@ pub(crate) async fn build_sync_snapshot(
         to_device_limited,
         to_device_next_cursor,
         to_device_lost,
-        device_lists: json!({"changed": [], "left": []}),
+        device_lists,
         account_data,
         presence,
         notifications: serde_json::Value::Null,
@@ -666,6 +679,82 @@ async fn timeline_events_for_realm(
 fn account_realm_projection_position(meta: Option<&RealmMetaRecord>, realm_id: &str) -> i64 {
     meta.map(|record| timestamp_position_with_tie_breaker(record.updated_at, realm_id))
         .unwrap_or_default()
+}
+
+async fn device_lists_for_actors(
+    state: &AppState,
+    session: Option<&SessionRecord>,
+    visible_actors: &BTreeSet<String>,
+    after_cursor: &SyncCursor,
+    is_incremental: bool,
+) -> (Value, BTreeMap<String, i64>) {
+    if session.is_none() {
+        return (json!({"changed": [], "left": []}), BTreeMap::new());
+    }
+
+    let mut positions = BTreeMap::new();
+    let mut changed = BTreeSet::new();
+    let mut left = BTreeSet::new();
+    let devices = state.persistence.devices();
+
+    for actor in visible_actors {
+        let records = match devices.list_for_actor_including_revoked(actor).await {
+            Ok(records) => records,
+            Err(error) => {
+                tracing::error!(%error, actor, "failed to load device list for sync snapshot");
+                changed.insert(actor.clone());
+                continue;
+            }
+        };
+        let position = records
+            .iter()
+            .map(device_inventory_position)
+            .max()
+            .unwrap_or_default();
+        positions.insert(actor.clone(), position);
+
+        if !is_incremental {
+            changed.insert(actor.clone());
+            continue;
+        }
+
+        match after_cursor.device_list_positions.get(actor).copied() {
+            Some(previous_position) if position <= previous_position => {}
+            _ => {
+                changed.insert(actor.clone());
+            }
+        }
+    }
+
+    if is_incremental {
+        for actor in after_cursor.device_list_positions.keys() {
+            if !visible_actors.contains(actor) {
+                left.insert(actor.clone());
+            }
+        }
+    }
+
+    (
+        json!({
+            "changed": changed.into_iter().collect::<Vec<_>>(),
+            "left": left.into_iter().collect::<Vec<_>>(),
+        }),
+        positions,
+    )
+}
+
+fn device_inventory_position(record: &DeviceInventoryRecord) -> i64 {
+    let key = format!("{}\0{}", record.actor, record.device_id);
+    record
+        .updated_at
+        .timestamp_micros()
+        .saturating_mul(TIMELINE_POSITION_SUBTICKS)
+        .saturating_add(stable_position_tie_breaker(&key))
+}
+
+fn stable_position_tie_breaker(key: &str) -> i64 {
+    let digest = sha256_hex(key.as_bytes());
+    i64::from_str_radix(&digest[..3], 16).unwrap_or_default() & 0x03ff
 }
 
 pub(crate) async fn timeline_event_position(

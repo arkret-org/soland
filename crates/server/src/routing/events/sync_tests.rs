@@ -5,6 +5,7 @@ fn derive_cursor_handle_is_deterministic_and_spec_shaped() {
     let key = b"test-cursor-key-0123456789abcdef";
     let realms = BTreeMap::from([("ck:realm:a".to_owned(), 7i64)]);
     let account_realms = BTreeMap::from([("ck:realm:a".to_owned(), 11i64)]);
+    let device_lists = BTreeMap::from([("did:web:alice.example".to_owned(), 13i64)]);
     let binding = stream_cursor_handle_binding(
         "did:web:alice",
         "ck:device:1",
@@ -12,6 +13,7 @@ fn derive_cursor_handle_is_deterministic_and_spec_shaped() {
         "fd0",
         &realms,
         &account_realms,
+        &device_lists,
         3,
     );
     let h1 = derive_cursor_handle(key, &binding);
@@ -40,8 +42,27 @@ fn derive_cursor_handle_excludes_devices_timestamp() {
     let key = b"test-cursor-key-0123456789abcdef";
     let realms = BTreeMap::from([("ck:realm:a".to_owned(), 7i64)]);
     let account_realms = BTreeMap::from([("ck:realm:a".to_owned(), 11i64)]);
-    let a = stream_cursor_handle_binding("p", "d", "s", "f", &realms, &account_realms, 3);
-    let b = stream_cursor_handle_binding("p", "d", "s", "f", &realms, &account_realms, 3);
+    let device_lists = BTreeMap::from([("did:web:alice.example".to_owned(), 13i64)]);
+    let a = stream_cursor_handle_binding(
+        "p",
+        "d",
+        "s",
+        "f",
+        &realms,
+        &account_realms,
+        &device_lists,
+        3,
+    );
+    let b = stream_cursor_handle_binding(
+        "p",
+        "d",
+        "s",
+        "f",
+        &realms,
+        &account_realms,
+        &device_lists,
+        3,
+    );
     assert_eq!(derive_cursor_handle(key, &a), derive_cursor_handle(key, &b));
 }
 
@@ -50,12 +71,58 @@ fn derive_cursor_handle_separates_bindings_and_keys() {
     let realms = BTreeMap::from([("ck:realm:a".to_owned(), 7i64)]);
     let account_realms = BTreeMap::from([("ck:realm:a".to_owned(), 11i64)]);
     let advanced_account_realms = BTreeMap::from([("ck:realm:a".to_owned(), 12i64)]);
-    let base = stream_cursor_handle_binding("p", "d", "s", "f", &realms, &account_realms, 3);
-    let other_device =
-        stream_cursor_handle_binding("p", "d2", "s", "f", &realms, &account_realms, 3);
-    let advanced = stream_cursor_handle_binding("p", "d", "s", "f", &realms, &account_realms, 4);
-    let advanced_account =
-        stream_cursor_handle_binding("p", "d", "s", "f", &realms, &advanced_account_realms, 3);
+    let device_lists = BTreeMap::from([("did:web:alice.example".to_owned(), 13i64)]);
+    let advanced_device_lists = BTreeMap::from([("did:web:alice.example".to_owned(), 14i64)]);
+    let base = stream_cursor_handle_binding(
+        "p",
+        "d",
+        "s",
+        "f",
+        &realms,
+        &account_realms,
+        &device_lists,
+        3,
+    );
+    let other_device = stream_cursor_handle_binding(
+        "p",
+        "d2",
+        "s",
+        "f",
+        &realms,
+        &account_realms,
+        &device_lists,
+        3,
+    );
+    let advanced = stream_cursor_handle_binding(
+        "p",
+        "d",
+        "s",
+        "f",
+        &realms,
+        &account_realms,
+        &device_lists,
+        4,
+    );
+    let advanced_account = stream_cursor_handle_binding(
+        "p",
+        "d",
+        "s",
+        "f",
+        &realms,
+        &advanced_account_realms,
+        &device_lists,
+        3,
+    );
+    let advanced_devices = stream_cursor_handle_binding(
+        "p",
+        "d",
+        "s",
+        "f",
+        &realms,
+        &account_realms,
+        &advanced_device_lists,
+        3,
+    );
     let k1 = b"key-aaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     let k2 = b"key-bbbbbbbbbbbbbbbbbbbbbbbbbbbb";
     assert_ne!(
@@ -72,6 +139,11 @@ fn derive_cursor_handle_separates_bindings_and_keys() {
         derive_cursor_handle(k1, &base),
         derive_cursor_handle(k1, &advanced_account),
         "advanced account projection position -> different handle"
+    );
+    assert_ne!(
+        derive_cursor_handle(k1, &base),
+        derive_cursor_handle(k1, &advanced_devices),
+        "advanced device-list position -> different handle"
     );
     assert_ne!(
         derive_cursor_handle(k1, &base),
@@ -584,6 +656,123 @@ fn roster_limits_large_inline_handle_claim_payloads() {
     assert_eq!(row["handle_claims_limited"], true);
 }
 
+#[tokio::test]
+async fn sync_snapshot_emits_device_list_baseline_changes_and_left_principals() {
+    let mut config = test_config();
+    config.seed_demo_data = false;
+    let state = AppState::new(config, crate::db::Db { pool: None });
+    let session = roster_session(&state, ROSTER_CALLER);
+    state
+        .realms
+        .lock()
+        .unwrap()
+        .upsert(roster_realm(false, true));
+
+    let created_at = DateTime::parse_from_rfc3339("2026-06-18T00:00:00Z")
+        .unwrap()
+        .with_timezone(&Utc);
+    let updated_at = created_at + ChronoDuration::seconds(1);
+    for (actor, device_id) in [
+        (
+            ROSTER_ACTOR,
+            "ck:device:01904100-0000-7000-8000-0000000000a1",
+        ),
+        (
+            ROSTER_CALLER,
+            "ck:device:01904100-0000-7000-8000-0000000000b1",
+        ),
+    ] {
+        state
+            .persistence
+            .devices()
+            .put(&DeviceInventoryRecord {
+                actor: actor.to_owned(),
+                device_id: device_id.to_owned(),
+                display_name: None,
+                verification_state: "verified".to_owned(),
+                payload: json!({"algorithms": ["mls_rfc9420"]}),
+                created_at,
+                updated_at,
+                revoked_at: None,
+            })
+            .await
+            .expect("device inserted");
+    }
+
+    let body = roster_body(&state.config.service_did);
+    let initial = build_sync_snapshot(&state, Some(&session), &body, &SyncCursor::default()).await;
+    assert_eq!(
+        initial.device_lists,
+        json!({"changed": [ROSTER_ACTOR, ROSTER_CALLER], "left": []})
+    );
+    let filter_value = sync_filter_value(body.filter.as_ref());
+    let initial_cursor = parse_and_validate_sync_cursor(
+        &initial.cursor,
+        &state,
+        Some(&session),
+        filter_value.as_ref(),
+        chrono::Utc::now().timestamp_millis(),
+    )
+    .await
+    .expect("initial cursor parses");
+
+    let mut revoked = state
+        .persistence
+        .devices()
+        .list_for_actor_including_revoked(ROSTER_ACTOR)
+        .await
+        .expect("device list")
+        .into_iter()
+        .next()
+        .expect("actor device exists");
+    revoked.revoked_at = Some(updated_at + ChronoDuration::seconds(1));
+    revoked.updated_at = updated_at + ChronoDuration::seconds(1);
+    state
+        .persistence
+        .devices()
+        .put(&revoked)
+        .await
+        .expect("device revoked");
+
+    let mut incremental_body = body.clone();
+    incremental_body.after = Some(initial.cursor.clone());
+    let after_revocation =
+        build_sync_snapshot(&state, Some(&session), &incremental_body, &initial_cursor).await;
+    assert_eq!(
+        after_revocation.device_lists,
+        json!({"changed": [ROSTER_ACTOR], "left": []}),
+        "device revocation changes the principal device list, not top-level left"
+    );
+    let incremental_filter_value = sync_filter_value(incremental_body.filter.as_ref());
+    let after_revocation_cursor = parse_and_validate_sync_cursor(
+        &after_revocation.cursor,
+        &state,
+        Some(&session),
+        incremental_filter_value.as_ref(),
+        chrono::Utc::now().timestamp_millis(),
+    )
+    .await
+    .expect("revocation cursor parses");
+
+    state
+        .realms
+        .lock()
+        .unwrap()
+        .upsert(roster_realm(false, false));
+    let after_scope_loss = build_sync_snapshot(
+        &state,
+        Some(&session),
+        &incremental_body,
+        &after_revocation_cursor,
+    )
+    .await;
+    assert_eq!(
+        after_scope_loss.device_lists,
+        json!({"changed": [], "left": [ROSTER_ACTOR]}),
+        "principals no longer visible through any Realm leave the tracked device list set"
+    );
+}
+
 #[test]
 fn auth_material_present_separates_anonymous_from_bad_credential() {
     // Genuinely anonymous: no Authorization header, no query token → the
@@ -768,6 +957,7 @@ async fn unchanged_frontier_remints_same_handle_and_advance_keeps_old_token_vali
         None,
         positions.clone(),
         BTreeMap::new(),
+        BTreeMap::new(),
         3,
     )
     .await;
@@ -776,6 +966,7 @@ async fn unchanged_frontier_remints_same_handle_and_advance_keeps_old_token_vali
         Some(&session),
         None,
         positions.clone(),
+        BTreeMap::new(),
         BTreeMap::new(),
         3,
     )
@@ -794,9 +985,16 @@ async fn unchanged_frontier_remints_same_handle_and_advance_keeps_old_token_vali
 
     // Frontier advances -> a different handle; the OLD token still
     // resolves (rows coexist until forward-progress pruning).
-    let advanced =
-        sync_token_for_client_sync(&state, Some(&session), None, positions, BTreeMap::new(), 4)
-            .await;
+    let advanced = sync_token_for_client_sync(
+        &state,
+        Some(&session),
+        None,
+        positions,
+        BTreeMap::new(),
+        BTreeMap::new(),
+        4,
+    )
+    .await;
     assert_ne!(handle_of(&first), handle_of(&advanced));
     let parsed_old = parse_and_validate_sync_cursor(&first, &state, Some(&session), None, now_ms)
         .await
@@ -822,15 +1020,23 @@ async fn presenting_a_cursor_prunes_strictly_older_stream_handles() {
         None,
         positions.clone(),
         BTreeMap::new(),
+        BTreeMap::new(),
         1,
     )
     .await;
     // Deterministic issued_at_ms is stamped at first mint; ensure the
     // second mint lands strictly later on the ms clock.
     tokio::time::sleep(std::time::Duration::from_millis(5)).await;
-    let new_token =
-        sync_token_for_client_sync(&state, Some(&session), None, positions, BTreeMap::new(), 2)
-            .await;
+    let new_token = sync_token_for_client_sync(
+        &state,
+        Some(&session),
+        None,
+        positions,
+        BTreeMap::new(),
+        BTreeMap::new(),
+        2,
+    )
+    .await;
 
     let presented =
         parse_and_validate_sync_cursor(&new_token, &state, Some(&session), None, now_ms)
@@ -868,6 +1074,7 @@ async fn revoked_cursor_returns_revoked_error() {
         None,
         None,
         BTreeMap::from([("ck:realm:revoke-test".to_owned(), 3)]),
+        BTreeMap::new(),
         BTreeMap::new(),
         5,
     )
@@ -908,6 +1115,7 @@ async fn expired_revocation_entry_is_pruned_and_does_not_block() {
         None,
         None,
         BTreeMap::from([("ck:realm:revoke-gc".to_owned(), 1)]),
+        BTreeMap::new(),
         BTreeMap::new(),
         0,
     )

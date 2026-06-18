@@ -13,6 +13,10 @@ pub trait DeviceInventoryStore: Send + Sync {
     ) -> PersistenceResult<Option<DeviceInventoryRecord>>;
     async fn put(&self, record: &DeviceInventoryRecord) -> PersistenceResult<()>;
     async fn list_for_actor(&self, actor: &str) -> PersistenceResult<Vec<DeviceInventoryRecord>>;
+    async fn list_for_actor_including_revoked(
+        &self,
+        actor: &str,
+    ) -> PersistenceResult<Vec<DeviceInventoryRecord>>;
     async fn list(&self) -> PersistenceResult<Vec<DeviceInventoryRecord>>;
 }
 
@@ -113,6 +117,18 @@ impl DeviceInventoryStore for MemoryDeviceInventoryStore {
         Ok(data
             .values()
             .filter(|record| record.actor == actor && record.revoked_at.is_none())
+            .cloned()
+            .collect())
+    }
+
+    async fn list_for_actor_including_revoked(
+        &self,
+        actor: &str,
+    ) -> PersistenceResult<Vec<DeviceInventoryRecord>> {
+        let data = self.data.lock().expect("lock");
+        Ok(data
+            .values()
+            .filter(|record| record.actor == actor)
             .cloned()
             .collect())
     }
@@ -686,6 +702,21 @@ impl DeviceInventoryStore for PgDeviceInventoryStore {
         let rows = sql_query(
             "SELECT actor_id AS actor, device_id, payload, verification_state, created_at, updated_at, revoked_at \
              FROM devices WHERE actor_id = $1 AND revoked_at IS NULL ORDER BY device_id",
+        )
+        .bind::<Text, _>(actor)
+        .load::<DeviceRow>(&mut *conn).await
+        .map_err(PersistenceError::from)?;
+        Ok(rows.into_iter().map(DeviceInventoryRecord::from).collect())
+    }
+
+    async fn list_for_actor_including_revoked(
+        &self,
+        actor: &str,
+    ) -> PersistenceResult<Vec<DeviceInventoryRecord>> {
+        let mut conn = pg_conn(&self.pool).await?;
+        let rows = sql_query(
+            "SELECT actor_id AS actor, device_id, payload, verification_state, created_at, updated_at, revoked_at \
+             FROM devices WHERE actor_id = $1 ORDER BY device_id",
         )
         .bind::<Text, _>(actor)
         .load::<DeviceRow>(&mut *conn).await
