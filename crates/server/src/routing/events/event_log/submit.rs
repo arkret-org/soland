@@ -656,6 +656,14 @@ pub(in crate::routing) async fn submit_event_value(
                     reason,
                 ));
             }
+            if let Err(reason) = proj.check_pin_scope_safety(operation) {
+                let status = if reason == "not_found" {
+                    StatusCode::NOT_FOUND
+                } else {
+                    StatusCode::PRECONDITION_FAILED
+                };
+                return Err(SubmitOneError::new(status, reason, reason));
+            }
             // relation.md §4 — structural contains/belongs_to MUST stay within a
             // single Realm; reject cross-Realm structural relations at ingest.
             if let Err(reason) = proj.check_relation_cross_realm(operation) {

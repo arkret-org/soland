@@ -119,6 +119,23 @@ pub fn tombstone_projection_event_for_retention(
     event.payload = retention_tombstone_payload_value(&event.payload, tombstone);
 }
 
+pub fn stub_pin_projection_event_for_invisible_target(
+    projection: &crate::reducer::ProjectionState,
+    event: &mut ProjectionEventRecord,
+) {
+    if !kinds::is_pin_kind(&event.event_kind) {
+        return;
+    }
+    let Some(target_ref) = event.payload.get("target_ref").and_then(Value::as_str) else {
+        event.payload = pin_target_locked_stub_payload(&event.payload);
+        return;
+    };
+    if projection.pin_target_is_visible_for_projection(target_ref) {
+        return;
+    }
+    event.payload = pin_target_locked_stub_payload(&event.payload);
+}
+
 pub fn tombstone_timeline_event_for_retention(
     event: &mut Value,
     tombstone: &RetentionTombstoneRecord,
@@ -232,4 +249,75 @@ fn tombstone_payload_value(payload: &Value) -> Value {
     );
     object.insert("encrypted".to_owned(), json!(false));
     value
+}
+
+fn pin_target_locked_stub_payload(payload: &Value) -> Value {
+    let pin_scope = payload.get("pin_scope").cloned().unwrap_or(Value::Null);
+    json!({
+        "pin_scope": pin_scope,
+        "target": {
+            "visibility": "locked"
+        },
+        "target_stub": true
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::reducer::{MessageState, ProjectionState, RedactionCellValue};
+
+    #[test]
+    fn pin_projection_event_for_redacted_target_is_stubbed() {
+        let event_id = "ck:event:01904100-0000-7000-8000-0000000000a1";
+        let realm_id = "ck:realm:01904100-0000-7000-8000-cfc039892036";
+        let now = chrono::Utc::now();
+        let mut projection = ProjectionState::new();
+        projection.messages.insert(
+            event_id.to_owned(),
+            MessageState {
+                event_id: event_id.to_owned(),
+                realm_id: realm_id.to_owned(),
+                sender: "did:web:alice.example".to_owned(),
+                thread_id: realm_id.to_owned(),
+                content: json!({"kind": "ck.content.text", "body": "secret"}),
+                expiry: None,
+                encrypted: false,
+                operation_id: "ck:operation:01904100-0000-7000-8000-0000000000a2".to_owned(),
+                created_at: now,
+                revision_of: None,
+                redacted_at: Some(now),
+            },
+        );
+        projection.redaction_cells.insert(
+            event_id.to_owned(),
+            Some(RedactionCellValue {
+                redacted_at: now,
+                by: "did:web:alice.example".to_owned(),
+                reason: Some("policy".to_owned()),
+            }),
+        );
+        let mut event = ProjectionEventRecord {
+            event_id: "ck:operation:01904100-0000-7000-8000-0000000000a3".to_owned(),
+            realm_id: realm_id.to_owned(),
+            event_kind: crate::kinds::CK_PIN_ADD.to_owned(),
+            operation_type: "create".to_owned(),
+            operation_id: None,
+            sender: Some("did:web:alice.example".to_owned()),
+            payload: json!({
+                "pin_scope": {"kind": "realm", "id": realm_id},
+                "target_ref": event_id,
+                "rank": "a0",
+                "note": "secret note"
+            }),
+            created_at: now,
+        };
+
+        stub_pin_projection_event_for_invisible_target(&projection, &mut event);
+
+        assert_eq!(event.payload["target_stub"], json!(true));
+        assert_eq!(event.payload["target"]["visibility"], json!("locked"));
+        assert!(event.payload.get("target_ref").is_none());
+        assert!(event.payload.get("note").is_none());
+    }
 }

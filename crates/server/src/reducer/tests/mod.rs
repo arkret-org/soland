@@ -4,6 +4,7 @@ mod call_state;
 mod cells_realm;
 mod circle_encryption;
 mod moderation;
+mod pin_scope_safety;
 mod redaction_message;
 mod space_container;
 mod strand_morph;

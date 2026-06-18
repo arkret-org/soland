@@ -19,6 +19,8 @@ pub fn operation_policy_reason_code(message: &str) -> (salvo::http::StatusCode, 
             salvo::http::StatusCode::FORBIDDEN,
             "applet_registration_unauthorized",
         )
+    } else if message == "not_found" {
+        (salvo::http::StatusCode::NOT_FOUND, "not_found")
     } else {
         (salvo::http::StatusCode::FORBIDDEN, "capability_denied")
     }
@@ -66,6 +68,7 @@ pub async fn validate_operation_policy(
         validate_direct_conversation_realm_policy(state, operation)?;
         validate_member_state_policy(state, operation).await?;
         validate_circle_scope_membership(state, operation)?;
+        validate_pin_scope_safety(state, operation)?;
         validate_applet_registration_authz(state, operation).await?;
         validate_moderation_event_policy(state, operation).await?;
         validate_set_default_strand_policy(state, operation).await?;
@@ -80,6 +83,16 @@ pub async fn validate_operation_policy(
         validate_disappearing_message_policy(state, operation)?;
     }
     Ok(())
+}
+
+fn validate_pin_scope_safety(state: &AppState, operation: &Operation) -> Result<(), &'static str> {
+    if !kinds::canonical_kind_for_operation(operation).is_some_and(kinds::is_pin_kind) {
+        return Ok(());
+    }
+    let Ok(projection) = state.projection.lock() else {
+        return Err("pin_scope_safety_unavailable");
+    };
+    projection.check_pin_scope_safety(operation)
 }
 
 /// SEC-08 — server-side defence-in-depth for `ck.profile.mls.minimal_metadata_realm.v1`

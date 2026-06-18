@@ -511,6 +511,11 @@ impl ProjectionState {
                 reason: "pin_target_ref_missing".to_owned(),
             };
         };
+        if let Err(reason) = self.check_pin_scope_safety(operation) {
+            return ProjectionEffect::Rejected {
+                reason: reason.to_owned(),
+            };
+        }
         let map_key = (pin_scope_key.clone(), target_ref.to_owned());
         let operation_kind = crate::kinds::canonical_kind_for_operation(operation);
         if operation_kind == Some(crate::kinds::CK_PIN_REMOVE) {
@@ -552,6 +557,167 @@ impl ProjectionState {
             target_ref: target_ref.to_owned(),
             active: true,
         }
+    }
+
+    pub fn check_pin_scope_safety(&self, operation: &Operation) -> Result<(), &'static str> {
+        if !crate::kinds::canonical_kind_for_operation(operation)
+            .is_some_and(crate::kinds::is_pin_kind)
+        {
+            return Ok(());
+        }
+        let Some(pin_scope) = operation.payload.get("pin_scope") else {
+            return Ok(());
+        };
+        let Some(target_ref) = operation.payload.get("target_ref").and_then(Value::as_str) else {
+            return Ok(());
+        };
+        let Some(pin_home) = self.pin_scope_effective_scope(pin_scope) else {
+            return Err("not_found");
+        };
+        let Some(target_scope) = self.pin_target_effective_scope(target_ref) else {
+            return Err("not_found");
+        };
+        if pin_home.realm_id != target_scope.realm_id {
+            return Err("not_found");
+        }
+        if let Some(target_circle_id) = target_scope.scope_circle_id.as_deref()
+            && pin_home.scope_circle_id.as_deref() != Some(target_circle_id)
+        {
+            return Err("not_found");
+        }
+        Ok(())
+    }
+
+    pub fn pin_target_is_visible_for_projection(&self, target_ref: &str) -> bool {
+        self.pin_target_effective_scope(target_ref).is_some()
+    }
+
+    fn pin_scope_effective_scope(&self, pin_scope: &Value) -> Option<PinEffectiveScope> {
+        let (kind, id) = pin_scope_parts(pin_scope)?;
+        match kind {
+            "realm" => {
+                let live =
+                    self.realm_states.contains_key(id) || self.realm_create_log(id).is_some();
+                (live && !self.realm_is_in_terminal_state(id)).then(|| PinEffectiveScope {
+                    realm_id: id.to_owned(),
+                    scope_circle_id: None,
+                })
+            }
+            "circle" => {
+                let circle = self.circles.get(id)?;
+                (circle.state == CircleLifecycleState::Active).then(|| PinEffectiveScope {
+                    realm_id: circle.realm_id.clone(),
+                    scope_circle_id: Some(circle.circle_id.clone()),
+                })
+            }
+            "strand" => {
+                let strand = self.strands.get(id)?;
+                (!strand.state.is_terminal()).then(|| PinEffectiveScope {
+                    realm_id: strand.realm_id.clone(),
+                    scope_circle_id: strand.scope_circle_id.clone(),
+                })
+            }
+            "space" => {
+                let space = self.space_containers.get(id)?;
+                (space.state != SpaceContainerLifecycleState::Tombstoned).then(|| {
+                    PinEffectiveScope {
+                        realm_id: space.realm_id.clone(),
+                        scope_circle_id: space.scope_circle_id.clone(),
+                    }
+                })
+            }
+            _ => None,
+        }
+    }
+
+    fn pin_target_effective_scope(&self, target_ref: &str) -> Option<PinEffectiveScope> {
+        if let Some(message) = self
+            .messages
+            .get(&message_event_id_from_ref(target_ref))
+            .or_else(|| self.messages.get(target_ref))
+        {
+            if self.pin_target_is_quarantined(target_ref) {
+                return None;
+            }
+            if self
+                .redaction_cells
+                .get(&message.event_id)
+                .and_then(|cell| cell.as_ref())
+                .is_some()
+            {
+                return None;
+            }
+            return Some(PinEffectiveScope {
+                realm_id: message.realm_id.clone(),
+                scope_circle_id: self.strand_scope_circle_id(&message.thread_id),
+            });
+        }
+        if let Some(strand) = self.strands.get(target_ref) {
+            if self.pin_target_is_quarantined(target_ref) {
+                return None;
+            }
+            return (!strand.state.is_terminal()).then(|| PinEffectiveScope {
+                realm_id: strand.realm_id.clone(),
+                scope_circle_id: strand.scope_circle_id.clone(),
+            });
+        }
+        if let Some(space) = self.space_containers.get(target_ref) {
+            if self.pin_target_is_quarantined(target_ref) {
+                return None;
+            }
+            return (space.state != SpaceContainerLifecycleState::Tombstoned).then(|| {
+                PinEffectiveScope {
+                    realm_id: space.realm_id.clone(),
+                    scope_circle_id: space.scope_circle_id.clone(),
+                }
+            });
+        }
+        if let Some(morph) = self.morphs.get(target_ref) {
+            if self.pin_target_is_quarantined(target_ref) {
+                return None;
+            }
+            return (!morph.state.is_terminal()).then(|| PinEffectiveScope {
+                realm_id: morph.realm_id.clone(),
+                scope_circle_id: None,
+            });
+        }
+        if let Some(relation) = self.relations.get(target_ref) {
+            if self.pin_target_is_quarantined(target_ref) {
+                return None;
+            }
+            return relation.is_active().then(|| PinEffectiveScope {
+                realm_id: relation.realm_id.clone(),
+                scope_circle_id: None,
+            });
+        }
+        None
+    }
+
+    fn pin_target_is_quarantined(&self, target_ref: &str) -> bool {
+        self.cells
+            .iter()
+            .filter(|(cell_ref, _)| {
+                cell_ref
+                    .as_str()
+                    .starts_with("ck:cell:ck.component.moderation_state.v1:")
+            })
+            .any(|(_, state)| {
+                let CellState::Value(Value::Array(items)) = state else {
+                    return false;
+                };
+                items.iter().any(|item| {
+                    let value = item.get("value").unwrap_or(item);
+                    !value
+                        .get("lifted")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false)
+                        && moderation_value_targets_ref(value, target_ref)
+                        && matches!(
+                            value.get("verdict").and_then(Value::as_str),
+                            Some("quarantine" | "quarantined")
+                        )
+                })
+            })
     }
 
     pub(crate) fn apply_read_cursor(
@@ -623,4 +789,17 @@ impl ProjectionState {
         }
         ProjectionEffect::ReadMarkerUpdated(marker)
     }
+}
+
+struct PinEffectiveScope {
+    realm_id: String,
+    scope_circle_id: Option<String>,
+}
+
+fn moderation_value_targets_ref(value: &Value, target_ref: &str) -> bool {
+    let Some(value_target_ref) = value.get("target_ref").and_then(Value::as_str) else {
+        return false;
+    };
+    value_target_ref == target_ref
+        || message_event_id_from_ref(value_target_ref) == message_event_id_from_ref(target_ref)
 }

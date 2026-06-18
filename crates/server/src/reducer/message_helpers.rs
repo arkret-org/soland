@@ -62,6 +62,12 @@ pub(crate) fn pin_scope_key(pin_scope: &Value) -> Option<String> {
     Some(format!("{kind}:{id}"))
 }
 
+pub(crate) fn pin_scope_parts(pin_scope: &Value) -> Option<(&str, &str)> {
+    let kind = pin_scope.get("kind").and_then(Value::as_str)?;
+    let id = pin_scope.get("id").and_then(Value::as_str)?;
+    Some((kind, id))
+}
+
 /// Build the stored message content. `scope_circle_id` is the Strand-derived
 /// circle scope (spec: messages never carry their own scope — it is resolved
 /// from the message's Strand by the caller via
