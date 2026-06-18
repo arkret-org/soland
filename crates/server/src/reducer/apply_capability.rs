@@ -427,6 +427,60 @@ impl ProjectionState {
         }
     }
 
+    /// Resolve a delegated grant's parent grant id from its delegate cell
+    /// (`refs[role="parent_grant"]` / `value.parent_grant_id`). Returns `None`
+    /// for root grants (no delegate cell) — which terminates the chain walk.
+    fn delegate_parent_of(&self, grant_id: &str) -> Option<String> {
+        let cell_ref = Self::capability_delegate_cell_ref(grant_id)?;
+        let items = self.capability_cell_items(&cell_ref);
+        let last = items.last()?;
+        let body = last.get("value").unwrap_or(last);
+        body.get("parent_grant_id")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned)
+    }
+
+    /// capabilities.md §10.2 — DFS the parent chain of an incoming
+    /// `ck.capability.delegate(child_grant_id, parent_grant_id)`; reject the
+    /// whole delegation with `delegation_cycle` if the new child closes a cycle
+    /// (appears as one of its own ancestors) or the chain already contains one.
+    /// A `delegation_cycle` MUST NOT project even if each grant looks valid
+    /// individually. Runs at ingest (pre-commit) so the cyclic edge never enters
+    /// the delegate cell / authz index.
+    pub fn check_delegation_cycle(&self, operation: &Operation) -> Result<(), &'static str> {
+        if crate::kinds::canonical_kind_for_operation(operation)
+            != Some(crate::kinds::CK_CAPABILITY_DELEGATE)
+        {
+            return Ok(());
+        }
+        let body = grant_body(&operation.payload);
+        let Some(grant_id) = operation.payload.get("grant_id").and_then(Value::as_str) else {
+            return Ok(());
+        };
+        let parent = body
+            .get("parent_grant_id")
+            .and_then(Value::as_str)
+            .or_else(|| {
+                operation
+                    .payload
+                    .get("parent_grant_id")
+                    .and_then(Value::as_str)
+            });
+        let Some(parent) = parent else {
+            return Ok(());
+        };
+        let mut visited: std::collections::HashSet<String> = std::collections::HashSet::new();
+        visited.insert(grant_id.to_owned());
+        let mut cursor = Some(parent.to_owned());
+        while let Some(node) = cursor {
+            if node == grant_id || !visited.insert(node.clone()) {
+                return Err("delegation_cycle");
+            }
+            cursor = self.delegate_parent_of(&node);
+        }
+        Ok(())
+    }
+
     /// CKP-0008 §4.5 / D3 — project `ck.agent.key.authorize`: record the
     /// authorized key for the agent and clear
     /// `effective_after_first_authorized_key` on every pending capability
@@ -706,5 +760,66 @@ mod agent_key_flag_tests {
             json!({ "agent_principal_id": AGENT, "key_id": "ck:agent_key:dev1" }),
         ));
         assert!(!state.agent_has_authorized_key(AGENT));
+    }
+}
+
+#[cfg(test)]
+mod delegation_cycle_tests {
+    use cokret_sdk::{Operation, OperationId, RealmId};
+    use serde_json::json;
+
+    use crate::reducer::ProjectionState;
+
+    const REALM: &str = "ck:realm:01970000-0000-7000-8000-000000000000";
+    const G_A: &str = "ck:grant:01970000-0000-7000-8000-00000000a001";
+    const G_B: &str = "ck:grant:01970000-0000-7000-8000-00000000b002";
+    const G_C: &str = "ck:grant:01970000-0000-7000-8000-00000000c003";
+
+    fn delegate_op(grant_id: &str, parent_grant_id: &str) -> Operation {
+        Operation::create(
+            OperationId::new("ck:operation:01970000-0000-7000-8000-0000000000fe").unwrap(),
+            RealmId::new(REALM.to_owned()).unwrap(),
+            crate::kinds::CK_CAPABILITY_DELEGATE,
+            json!({
+                "grant_id": grant_id,
+                "grant": {
+                    "issuer": "did:web:alice.example",
+                    "parent_grant_id": parent_grant_id,
+                }
+            }),
+        )
+    }
+
+    fn proj_with_chain() -> ProjectionState {
+        // Project g_b delegated from root g_a, so the chain is g_a <- g_b.
+        let mut proj = ProjectionState::default();
+        proj.apply_capability_delegate(&delegate_op(G_B, G_A), chrono::Utc::now());
+        proj
+    }
+
+    #[test]
+    fn delegate_closing_a_cycle_is_rejected() {
+        // g_a delegated from g_b would close g_a <- g_b <- g_a.
+        let proj = proj_with_chain();
+        assert_eq!(
+            proj.check_delegation_cycle(&delegate_op(G_A, G_B)),
+            Err("delegation_cycle")
+        );
+    }
+
+    #[test]
+    fn self_delegation_is_rejected() {
+        let proj = ProjectionState::default();
+        assert_eq!(
+            proj.check_delegation_cycle(&delegate_op(G_A, G_A)),
+            Err("delegation_cycle")
+        );
+    }
+
+    #[test]
+    fn acyclic_delegation_is_allowed() {
+        // g_c delegated from g_b: chain g_b <- g_c over existing g_a <- g_b.
+        let proj = proj_with_chain();
+        assert!(proj.check_delegation_cycle(&delegate_op(G_C, G_B)).is_ok());
     }
 }

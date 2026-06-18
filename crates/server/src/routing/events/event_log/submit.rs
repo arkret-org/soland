@@ -665,6 +665,15 @@ pub(in crate::routing) async fn submit_event_value(
                     reason,
                 ));
             }
+            // capabilities.md §10.2 — a ck.capability.delegate that closes a
+            // delegation cycle MUST be rejected before it projects.
+            if let Err(reason) = proj.check_delegation_cycle(operation) {
+                return Err(SubmitOneError::new(
+                    StatusCode::PRECONDITION_FAILED,
+                    reason,
+                    reason,
+                ));
+            }
             if let Some(reason) = preflight_mls_projection_reject(&proj, operation) {
                 return Err(SubmitOneError::new(
                     StatusCode::PRECONDITION_FAILED,
