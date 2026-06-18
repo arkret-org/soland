@@ -120,7 +120,7 @@ fn response_from_media_cell(realm_id: &str, value: Option<&Value>) -> RealmMedia
 
 #[endpoint(
     operation_id = "org.cokret.soland.admin.realms.media_service.get",
-    tags("admin", "realm", "media"),
+    tags("soland-admin", "realm", "media"),
     summary = "Get effective Realm media_service epoch",
     status_codes(200, 400, 401, 403, 500)
 )]
@@ -172,7 +172,7 @@ async fn admin_get_realm_media_service(
 
 #[endpoint(
     operation_id = "org.cokret.soland.admin.media.statistics",
-    tags("admin", "media"),
+    tags("soland-admin", "media"),
     summary = "Read aggregate media statistics"
 )]
 #[tracing::instrument(skip_all, fields(op = "org.cokret.soland.admin.media.statistics"))]
@@ -230,7 +230,7 @@ async fn get_media_statistics(
 
 #[endpoint(
     operation_id = "org.cokret.soland.admin.media.by_actor",
-    tags("admin", "media"),
+    tags("soland-admin", "media"),
     summary = "Read media usage grouped by actor"
 )]
 #[tracing::instrument(skip_all, fields(op = "org.cokret.soland.admin.media.by_actor"))]

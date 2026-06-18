@@ -200,7 +200,7 @@ fn admin_notary_value_from_sdk(value: SdkNotaryValue, envelope: Option<&Value>) 
 /// notary cell value.
 #[endpoint(
     operation_id = "org.cokret.soland.admin.realms.notary.get",
-    tags("admin", "notary"),
+    tags("soland-admin", "notary"),
     summary = "Get current notary cell value"
 )]
 #[tracing::instrument(skip_all, fields(op = "org.cokret.soland.admin.realms.notary.get"))]
@@ -244,7 +244,7 @@ pub(crate) async fn admin_get_notary(
 /// NotaryWorker key.
 #[endpoint(
     operation_id = "org.cokret.soland.admin.realms.notary.reconfigure",
-    tags("admin", "notary"),
+    tags("soland-admin", "notary"),
     summary = "Submit notary reconfiguration Move"
 )]
 #[tracing::instrument(

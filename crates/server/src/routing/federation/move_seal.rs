@@ -437,7 +437,7 @@ pub struct SignSealOutcome {
 /// periodic ticker to call the same worker function.
 #[endpoint(
     operation_id = "org.cokret.soland.admin.seals.sign",
-    tags("admin", "seals"),
+    tags("soland-admin", "seals"),
     summary = "Trigger one notary signing pass for a Realm"
 )]
 #[tracing::instrument(skip_all, fields(op = "org.cokret.soland.admin.seals.sign"))]

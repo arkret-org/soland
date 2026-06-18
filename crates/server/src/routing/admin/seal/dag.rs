@@ -19,7 +19,7 @@ use crate::{JsonResult, json_ok};
 /// + state_root snapshot built from the live `SealStore`.
 #[endpoint(
     operation_id = "org.cokret.soland.admin.spaces.seal_dag.get",
-    tags("admin", "seal-dag"),
+    tags("soland-admin", "seal-dag"),
     summary = "Get Seal DAG snapshot for a Space"
 )]
 #[tracing::instrument(skip_all, fields(op = "org.cokret.soland.admin.spaces.seal_dag.get"))]
@@ -104,7 +104,7 @@ pub(crate) async fn admin_get_seal_dag(
 /// `max_control_moves` is honoured via `run_one_signing_pass`.
 #[endpoint(
     operation_id = "org.cokret.soland.admin.spaces.seal_dag.compact",
-    tags("admin", "seal-dag"),
+    tags("soland-admin", "seal-dag"),
     summary = "Trigger signed compaction Seal"
 )]
 #[tracing::instrument(
@@ -241,7 +241,7 @@ pub(crate) async fn admin_compact_seal_dag(
 /// store guarantees no leaf prune (returns 4xx instead).
 #[endpoint(
     operation_id = "org.cokret.soland.admin.spaces.seal_dag.prune",
-    tags("admin", "seal-dag"),
+    tags("soland-admin", "seal-dag"),
     summary = "Evaluate + prune a historical Seal"
 )]
 #[tracing::instrument(skip_all, fields(op = "org.cokret.soland.admin.spaces.seal_dag.prune"))]

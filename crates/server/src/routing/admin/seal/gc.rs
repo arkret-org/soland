@@ -23,7 +23,7 @@ pub struct GcCandidatesOutcome {
 /// are GC-eligible per MAL-13 rules. Read-only (no actual deletion).
 #[salvo::oapi::endpoint(
     operation_id = "org.cokret.soland.admin.spaces.gc_candidates",
-    tags("admin", "gc"),
+    tags("soland-admin", "gc"),
     summary = "List GC-eligible Moves for a Space"
 )]
 pub(crate) async fn admin_list_gc_candidates(

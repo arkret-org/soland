@@ -129,7 +129,7 @@ fn collect_bottom_entries_for_realm(state: &AppState, realm_id: &str) -> Vec<Bot
 /// this Realm.
 #[endpoint(
     operation_id = "org.cokret.soland.admin.realms.bottom.list",
-    tags("admin", "bottom"),
+    tags("soland-admin", "bottom"),
     summary = "List Bottom cells in a Realm"
 )]
 #[tracing::instrument(skip_all, fields(op = "org.cokret.soland.admin.realms.bottom.list"))]
@@ -151,7 +151,7 @@ pub(crate) async fn admin_list_realm_bottom(
 /// `GET /_soland/admin/bottom` — global cross-Realm bottom entries.
 #[endpoint(
     operation_id = "org.cokret.soland.admin.bottom.list_global",
-    tags("admin", "bottom"),
+    tags("soland-admin", "bottom"),
     summary = "List Bottom cells across every Realm"
 )]
 #[tracing::instrument(skip_all, fields(op = "org.cokret.soland.admin.bottom.list_global"))]
@@ -190,7 +190,7 @@ pub(crate) async fn admin_list_bottom_global(
 ///   non-trivial and lives behind a separate admin signer strand.
 #[endpoint(
     operation_id = "org.cokret.soland.admin.realms.bottom.repair",
-    tags("admin", "bottom"),
+    tags("soland-admin", "bottom"),
     summary = "Submit repair Move for a Bottom cell"
 )]
 #[tracing::instrument(skip_all, fields(op = "org.cokret.soland.admin.realms.bottom.repair"))]

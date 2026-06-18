@@ -66,8 +66,8 @@ pub fn router_with_rate_limiter_and_request_size_config(
         // `_soland` parent prepends the new namespace segment in one place.
         // Four sibling sub-trees are resolved by salvo fallthrough; ordering
         // matters only where paths overlap:
-        //   1. `spec_router`   — canonical `ck.admin.*` (server/status,
-        //      accounts, devices, moderation/queue).
+        //   1. `spec_router`   — soland-local admin endpoints
+        //      (server/status, accounts, devices, moderation/queue).
         //   2. `admin_router`  — operator surface (notary / multisig /
         //      bottom / seal-dag / gc-candidates / delivery-binding /
         //      moderation sub-actions). Registered BEFORE the collection so

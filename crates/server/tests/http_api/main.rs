@@ -24,6 +24,7 @@ mod health;
 mod identity;
 mod lifecycle;
 mod mimi;
+mod openapi;
 mod policy_snapshot;
 mod projection;
 mod push_keys;

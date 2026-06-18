@@ -129,7 +129,7 @@ pub fn admin_router() -> Router {
     // Registered ahead of `router()` (the `{resource}` collection
     // wildcard) at the root so the concrete `bottom` segment wins.
     Router::with_path("admin")
-        .oapi_tag("admin")
+        .oapi_tag("soland-admin")
         .hoop(RequireAdmin::scope(cokret_sdk::admin_scopes::ADMIN_READ))
         .push(Router::with_path("realms").post(collection::admin_create_realm))
         .push(

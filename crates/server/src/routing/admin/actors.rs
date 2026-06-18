@@ -17,7 +17,7 @@ pub(super) fn router() -> Router {
 
 #[endpoint(
     operation_id = "org.cokret.soland.admin.actors.get",
-    tags("admin", "actors"),
+    tags("soland-admin", "actors"),
     summary = "Read an admin actor projection row"
 )]
 #[tracing::instrument(skip_all, fields(op = "org.cokret.soland.admin.actors.get"))]

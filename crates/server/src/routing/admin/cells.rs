@@ -126,7 +126,7 @@ fn required_realm_scope(req: &mut Request) -> Result<RealmId, AppError> {
 /// `CellRef::new` to round-trip into the projection map.
 #[endpoint(
     operation_id = "org.cokret.soland.admin.cells.get",
-    tags("admin", "cells"),
+    tags("soland-admin", "cells"),
     summary = "Get one cell's resolved state"
 )]
 #[tracing::instrument(skip_all, fields(op = "org.cokret.soland.admin.cells.get"))]
@@ -224,7 +224,7 @@ async fn admin_get_cell(
 ///   to `0`.
 #[endpoint(
     operation_id = "org.cokret.soland.admin.cells.list",
-    tags("admin", "cells"),
+    tags("soland-admin", "cells"),
     summary = "List cells matching a Realm + family prefix filter"
 )]
 #[tracing::instrument(skip_all, fields(op = "org.cokret.soland.admin.cells.list"))]

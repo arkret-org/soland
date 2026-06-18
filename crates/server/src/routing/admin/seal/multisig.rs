@@ -47,7 +47,7 @@ pub struct PartialSubmitOutcome {
 /// trigger aggregation via a separate ops command — not exposed yet).
 #[salvo::oapi::endpoint(
     operation_id = "org.cokret.soland.admin.multisig.partial",
-    tags("admin", "multisig")
+    tags("soland-admin", "multisig")
 )]
 pub(crate) async fn admin_submit_multisig_partial(
     aa: AuthArgs,
@@ -167,7 +167,7 @@ pub(crate) async fn admin_submit_multisig_partial(
 /// `GET /_soland/admin/realms/{realm_id}/multisig/pending`.
 #[salvo::oapi::endpoint(
     operation_id = "org.cokret.soland.admin.multisig.pending",
-    tags("admin", "multisig")
+    tags("soland-admin", "multisig")
 )]
 pub(crate) async fn admin_list_multisig_pending(
     aa: AuthArgs,
@@ -260,7 +260,7 @@ pub struct RotateSigningKeyOutcome {
 
 #[salvo::oapi::endpoint(
     operation_id = "org.cokret.soland.admin.realms.notary.rotate_signing_key",
-    tags("admin", "notary"),
+    tags("soland-admin", "notary"),
     summary = "Rotate the NotaryWorker signing key"
 )]
 pub(crate) async fn admin_rotate_signing_key(

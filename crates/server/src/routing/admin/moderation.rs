@@ -170,7 +170,7 @@ pub struct AssignReviewerReq {
 
 #[endpoint(
     operation_id = "org.cokret.soland.admin.moderation.queue.assign",
-    tags("admin", "moderation"),
+    tags("soland-admin", "moderation"),
     summary = "Assign reviewer DIDs to a queue item"
 )]
 #[tracing::instrument(
@@ -227,7 +227,7 @@ pub struct PrioritiseReq {
 
 #[endpoint(
     operation_id = "org.cokret.soland.admin.moderation.queue.priority",
-    tags("admin", "moderation"),
+    tags("soland-admin", "moderation"),
     summary = "Set priority on a queue item"
 )]
 #[tracing::instrument(
@@ -285,7 +285,7 @@ async fn prioritise_queue_item(
 
 #[endpoint(
     operation_id = "org.cokret.soland.admin.moderation.appeals.list",
-    tags("admin", "moderation"),
+    tags("soland-admin", "moderation"),
     summary = "List moderation appeals (latest event per appeal)"
 )]
 #[tracing::instrument(
@@ -314,7 +314,7 @@ async fn list_appeals(
 
 #[endpoint(
     operation_id = "org.cokret.soland.admin.moderation.appeals.get",
-    tags("admin", "moderation"),
+    tags("soland-admin", "moderation"),
     summary = "Full history of one moderation appeal"
 )]
 #[tracing::instrument(

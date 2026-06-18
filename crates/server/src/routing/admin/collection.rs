@@ -188,7 +188,7 @@ pub(super) struct AdminInviteTokenItem {
 
 #[endpoint(
     operation_id = "org.cokret.soland.admin.collection",
-    tags("admin"),
+    tags("soland-admin"),
     summary = "Dev-only paginated admin snapshot of a named collection"
 )]
 #[tracing::instrument(skip_all, fields(op = "org.cokret.soland.admin.collection"))]
@@ -342,7 +342,7 @@ pub(super) struct AdminCreateRealmRequestBody {
 
 #[endpoint(
     operation_id = "org.cokret.soland.admin.realm.create",
-    tags("admin"),
+    tags("soland-admin"),
     summary = "Create a Realm through the canonical operation pipeline"
 )]
 #[tracing::instrument(skip_all, fields(op = "org.cokret.soland.admin.realm.create"))]
@@ -406,7 +406,7 @@ pub(super) async fn admin_create_realm(
 
 #[endpoint(
     operation_id = "org.cokret.soland.admin.realm.get",
-    tags("admin"),
+    tags("soland-admin"),
     summary = "Read a Realm security-boundary admin row"
 )]
 #[tracing::instrument(skip_all, fields(op = "org.cokret.soland.admin.realm.get"))]
@@ -421,7 +421,7 @@ pub(super) async fn admin_get_realm(
 
 #[endpoint(
     operation_id = "org.cokret.soland.admin.realm.delete",
-    tags("admin"),
+    tags("soland-admin"),
     summary = "Destroy a Realm through the canonical operation pipeline"
 )]
 #[tracing::instrument(skip_all, fields(op = "org.cokret.soland.admin.realm.delete"))]
@@ -454,7 +454,7 @@ pub(super) async fn admin_delete_realm(
 
 #[endpoint(
     operation_id = "org.cokret.soland.admin.realm.members",
-    tags("admin"),
+    tags("soland-admin"),
     summary = "List Realm members for the admin surface"
 )]
 #[tracing::instrument(skip_all, fields(op = "org.cokret.soland.admin.realm.members"))]

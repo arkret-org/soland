@@ -98,7 +98,7 @@ fn response_from_cell(realm_id: &str, value: Option<&Value>) -> RealmDeliveryBin
 /// `super::require_admin_principal`).
 #[endpoint(
     operation_id = "org.cokret.soland.admin.realms.delivery_binding_policy.get",
-    tags("admin", "realm", "delivery_binding_policy"),
+    tags("soland-admin", "realm", "delivery_binding_policy"),
     summary = "Get effective Realm delivery-binding-policy"
 )]
 #[tracing::instrument(
@@ -160,7 +160,7 @@ pub struct MemberRoutabilityListOutcome {
 /// `allowed_recipient_services` allow-list, with a live push route).
 #[endpoint(
     operation_id = "org.cokret.soland.admin.realms.member_routability.list",
-    tags("admin", "realm", "delivery_binding"),
+    tags("soland-admin", "realm", "delivery_binding"),
     summary = "List per-member delivery routability for a Realm",
     status_codes(200, 400, 401, 403, 500)
 )]
@@ -300,7 +300,7 @@ pub struct DeliveryBindingHandoverListOutcome {
 /// Realm). Empty until a handover has been recorded.
 #[endpoint(
     operation_id = "org.cokret.soland.admin.realms.delivery_binding.handovers",
-    tags("admin", "realm", "delivery_binding"),
+    tags("soland-admin", "realm", "delivery_binding"),
     summary = "List delivery-binding handover audit rows for a Realm",
     status_codes(200, 400, 401, 403, 500)
 )]

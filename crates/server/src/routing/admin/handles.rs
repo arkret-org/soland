@@ -158,7 +158,7 @@ async fn handle_record_by_id(
 
 #[endpoint(
     operation_id = "org.cokret.soland.admin.handles.list",
-    tags("admin", "handles"),
+    tags("soland-admin", "handles"),
     summary = "List operator handle rows",
     status_codes(200, 401, 403, 500)
 )]
@@ -216,7 +216,7 @@ async fn list_handles(
 
 #[endpoint(
     operation_id = "org.cokret.soland.admin.handles.get",
-    tags("admin", "handles"),
+    tags("soland-admin", "handles"),
     summary = "Read a single operator handle row",
     status_codes(200, 401, 403, 404, 500)
 )]
@@ -235,7 +235,7 @@ async fn get_handle(
 
 #[endpoint(
     operation_id = "org.cokret.soland.admin.handles.audit",
-    tags("admin", "handles"),
+    tags("soland-admin", "handles"),
     summary = "Read the audit trail for a handle",
     status_codes(200, 401, 403, 404, 500)
 )]
@@ -328,7 +328,7 @@ fn audit_entry_to_handle_event(entry: Value) -> AdminHandleAuditEvent {
 
 #[endpoint(
     operation_id = "org.cokret.soland.admin.handles.revoke",
-    tags("admin", "handles"),
+    tags("soland-admin", "handles"),
     summary = "Operator-level handle revocation",
     status_codes(200, 401, 403, 404, 500)
 )]
@@ -390,7 +390,7 @@ async fn revoke_handle(
 
 #[endpoint(
     operation_id = "org.cokret.soland.admin.handles.reassign",
-    tags("admin", "handles"),
+    tags("soland-admin", "handles"),
     summary = "Operator-level handle re-bind to a new subject DID",
     status_codes(200, 400, 401, 403, 404, 409, 500)
 )]

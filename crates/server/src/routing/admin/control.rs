@@ -78,7 +78,7 @@ pub struct AdminControlFrameOutcome {
 /// considers a fresh-from-frontier start).
 #[endpoint(
     operation_id = "org.cokret.soland.admin.events.resync_required",
-    tags("admin", "events"),
+    tags("soland-admin", "events"),
     summary = "Broadcast a resync_required control frame to subscribers"
 )]
 #[tracing::instrument(
@@ -132,7 +132,7 @@ async fn admin_emit_resync_required(
 /// before reconnecting; the existing session token is no longer accepted.
 #[endpoint(
     operation_id = "org.cokret.soland.admin.events.unauthorized",
-    tags("admin", "events"),
+    tags("soland-admin", "events"),
     summary = "Broadcast an unauthorized control frame to subscribers"
 )]
 #[tracing::instrument(skip_all, fields(op = "org.cokret.soland.admin.events.unauthorized"))]

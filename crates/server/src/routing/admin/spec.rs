@@ -1,8 +1,9 @@
 //! Product-local soland operator endpoints.
 //!
-//! The public Cokret protocol namespace does not define `ck.admin.*`
-//! operations. soland serves operator-only controls under `/_soland/admin/*`
-//! with local `org.cokret.soland.*` operation IDs. These endpoints share that
+//! The public Cokret protocol namespace does not define admin operations.
+//! soland serves operator-only controls under `/_soland/admin/*`
+//! with local `org.cokret.soland.*` operation IDs and the `soland-admin`
+//! OpenAPI tag. These endpoints share that
 //! namespace with the soland operator infrastructure (seal DAG, bottom-cell
 //! repair, multisig -- see [`super::seal`]) and the admin collection snapshot
 //! (see [`super::collection`]); salvo router fallthrough keeps the three
@@ -154,7 +155,7 @@ pub(super) fn router() -> Router {
 
 #[endpoint(
     operation_id = "org.cokret.soland.admin.get_server_status",
-    tags("admin"),
+    tags("soland-admin"),
     summary = "Read operator admin status",
     status_codes(200, 401, 403, 500)
 )]
@@ -204,7 +205,7 @@ async fn get_server_status(
 
 #[endpoint(
     operation_id = "org.cokret.soland.admin.get_server_info",
-    tags("admin"),
+    tags("soland-admin"),
     summary = "Read operator node info (version / build / key config)",
     status_codes(200, 401, 403, 500)
 )]
@@ -231,7 +232,7 @@ async fn get_server_info(
 
 #[endpoint(
     operation_id = "org.cokret.soland.admin.get_server_stats",
-    tags("admin"),
+    tags("soland-admin"),
     summary = "Read operator node counters (accounts / realms / devices / storage)",
     status_codes(200, 401, 403, 500)
 )]
@@ -308,7 +309,7 @@ async fn get_server_stats(
 
 #[endpoint(
     operation_id = "org.cokret.soland.admin.update_account_status",
-    tags("admin"),
+    tags("soland-admin"),
     summary = "Set an account moderation status",
     status_codes(200, 400, 401, 403, 500)
 )]
@@ -335,7 +336,7 @@ async fn update_account_status(
 
 #[endpoint(
     operation_id = "org.cokret.soland.admin.lock_account",
-    tags("admin"),
+    tags("soland-admin"),
     summary = "Lock an account and revoke active access",
     status_codes(200, 400, 401, 403, 404, 409, 500)
 )]
@@ -352,7 +353,7 @@ async fn lock_account(
 
 #[endpoint(
     operation_id = "org.cokret.soland.admin.unlock_account",
-    tags("admin"),
+    tags("soland-admin"),
     summary = "Return a locked account to active state",
     status_codes(200, 400, 401, 403, 404, 409, 500)
 )]
@@ -369,7 +370,7 @@ async fn unlock_account(
 
 #[endpoint(
     operation_id = "org.cokret.soland.admin.suspend_account",
-    tags("admin"),
+    tags("soland-admin"),
     summary = "Suspend an account while leaving existing sessions to expire naturally",
     status_codes(200, 400, 401, 403, 404, 409, 500)
 )]
@@ -386,7 +387,7 @@ async fn suspend_account(
 
 #[endpoint(
     operation_id = "org.cokret.soland.admin.unsuspend_account",
-    tags("admin"),
+    tags("soland-admin"),
     summary = "Return a suspended account to active state",
     status_codes(200, 400, 401, 403, 404, 409, 500)
 )]
@@ -403,7 +404,7 @@ async fn unsuspend_account(
 
 #[endpoint(
     operation_id = "org.cokret.soland.admin.deactivate_account",
-    tags("admin"),
+    tags("soland-admin"),
     summary = "Deactivate an account and revoke active access",
     status_codes(200, 400, 401, 403, 404, 409, 500)
 )]
@@ -494,7 +495,7 @@ fn account_lifecycle_change_response(
 
 #[endpoint(
     operation_id = "org.cokret.soland.admin.revoke_device",
-    tags("admin"),
+    tags("soland-admin"),
     summary = "Revoke a device as an administrator",
     status_codes(200, 400, 401, 403, 404, 500)
 )]
@@ -552,7 +553,7 @@ async fn revoke_device(
 
 #[endpoint(
     operation_id = "org.cokret.soland.admin.get_moderation_queue",
-    tags("admin", "moderation"),
+    tags("soland-admin", "moderation"),
     summary = "List canonical moderation queue items",
     status_codes(200, 401, 403, 500)
 )]
