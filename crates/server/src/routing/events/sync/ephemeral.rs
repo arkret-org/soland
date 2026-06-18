@@ -9,7 +9,8 @@ use salvo::prelude::*;
 use serde_json::Value;
 
 use crate::routing::spaces::space::{
-    realm_has_member, realm_history_visibility_for_id, typing_scope_allows_actor,
+    PresenceVisibilityPolicy, presence_visibility_for_actor, realm_has_member,
+    realm_history_visibility_for_id, typing_scope_allows_actor,
 };
 use crate::state::{AppState, PresenceRecord, TypingRecord};
 
@@ -177,6 +178,10 @@ async fn persist_ephemeral_typing(
         .and_then(Value::as_bool)
         .unwrap_or(true);
     if typing {
+        if presence_visibility_for_actor(state, actor).await == PresenceVisibilityPolicy::Nobody {
+            let _ = state.persistence.typing().remove(actor, realm_id).await;
+            return Ok(());
+        }
         let scope_id = envelope
             .payload
             .get("scope_id")
@@ -210,6 +215,12 @@ async fn persist_ephemeral_presence(
     actor: &str,
     envelope: &cokret_sdk::EphemeralEnvelope,
 ) {
+    if presence_visibility_for_actor(state, actor).await == PresenceVisibilityPolicy::Nobody {
+        if let Err(error) = state.persistence.presence().delete(actor).await {
+            tracing::error!(%error, "failed to clear hidden ephemeral presence");
+        }
+        return;
+    }
     let status = envelope
         .payload
         .get("status")

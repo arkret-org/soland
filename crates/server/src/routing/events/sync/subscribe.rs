@@ -3,6 +3,9 @@
 //! to_device NDJSON delta machinery and its auth-material gate.
 
 use super::*;
+use crate::routing::spaces::space::{
+    PresenceVisibilityPolicy, presence_visibility_for_actor, presence_visible_to_session,
+};
 
 #[endpoint]
 #[tracing::instrument(skip_all, fields(op = "account_describe"))]
@@ -53,7 +56,6 @@ const ACCOUNT_SUBSCRIBE_MAX_WAIT_MS: u64 = 60_000;
 /// the read-amplification of busy Realms bounded at the cost of up to this
 /// much extra delivery latency per long-poll turn.
 const SUBSCRIBE_REBUILD_DEBOUNCE_MS: u64 = 150;
-
 /// Pure predicate: do the `Authorization` header value and/or query string
 /// carry authentication material? Split out from the `Request` so the
 /// degrade-vs-propagate decision is unit-testable without a live request.
@@ -209,7 +211,13 @@ pub(super) async fn account_subscribe(depot: &mut Depot, req: &mut Request, res:
             );
             return;
         };
-        if let Err(error) = state
+        if presence_visibility_for_actor(&state, &session.actor).await
+            == PresenceVisibilityPolicy::Nobody
+        {
+            if let Err(error) = state.persistence.presence().delete(&session.actor).await {
+                tracing::error!(%error, "failed to clear hidden presence");
+            }
+        } else if let Err(error) = state
             .persistence
             .presence()
             .put(PresenceRecord {
@@ -465,9 +473,13 @@ pub(crate) fn roster_member_actor_id(member: &Value) -> Option<String> {
 pub(crate) async fn presence_events_for_actors(
     state: &AppState,
     actors: BTreeSet<String>,
+    session: Option<&SessionRecord>,
 ) -> Vec<Value> {
     let mut events = Vec::new();
     for actor in actors {
+        if !presence_visible_to_session(state, &actor, session).await {
+            continue;
+        }
         if let Ok(Some(record)) = state.persistence.presence().get(&actor).await {
             events.push(presence_sync_event_json(record));
         }

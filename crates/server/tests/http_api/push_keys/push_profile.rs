@@ -424,6 +424,103 @@ async fn push_profile_and_moderation_contracts_work() {
 }
 
 #[tokio::test]
+async fn presence_visibility_nobody_clears_presence_and_typing() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let token = dev_token(state.clone()).await;
+    state
+        .persistence
+        .account_data()
+        .put(&soland::state::AccountDataRecord {
+            actor: "did:web:alice.example".to_owned(),
+            data_type: "ck.presence.visibility".to_owned(),
+            payload: serde_json::json!({"presence_visibility": "nobody"}),
+            updated_at: chrono::Utc::now(),
+        })
+        .await
+        .unwrap();
+    state
+        .persistence
+        .presence()
+        .put(PresenceRecord {
+            actor: "did:web:alice.example".to_owned(),
+            status: "online".to_owned(),
+            updated_at: chrono::Utc::now(),
+        })
+        .await
+        .unwrap();
+
+    let hidden_sync = account_subscribe_frame(state.clone(), Some(&token), "catchup=true").await;
+    assert!(
+        hidden_sync["presence"]["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|event| event["actor_id"] != "did:web:alice.example"),
+        "presence_visibility=nobody must hide cached presence: {hidden_sync}"
+    );
+
+    let sent_at = chrono::Utc::now();
+    let expires_at = sent_at + chrono::Duration::seconds(30);
+    let presence: Value = TestClient::post("http://server/_cokret/self/ephemeral")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&serde_json::json!({
+            "kind": "ck.presence",
+            "realm_id": DEMO_REALM_ID,
+            "actor_id": "did:web:alice.example",
+            "sent_at": sent_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+            "expires_at": expires_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+            "payload": {
+                "status": "online"
+            }
+        }))
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(presence["accepted"], true);
+    assert!(
+        state
+            .persistence
+            .presence()
+            .get("did:web:alice.example")
+            .await
+            .unwrap()
+            .is_none(),
+        "nobody policy must clear cached presence instead of refreshing it"
+    );
+
+    let typing: Value = TestClient::post("http://server/_cokret/self/ephemeral")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&serde_json::json!({
+            "kind": "ck.typing",
+            "realm_id": DEMO_REALM_ID,
+            "actor_id": "did:web:alice.example",
+            "sent_at": sent_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+            "expires_at": expires_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+            "payload": {
+                "typing": true
+            }
+        }))
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(typing["accepted"], true);
+    assert!(
+        state
+            .persistence
+            .typing()
+            .list_for_realm(DEMO_REALM_ID)
+            .await
+            .unwrap()
+            .is_empty(),
+        "nobody policy must suppress typing persistence"
+    );
+}
+
+#[tokio::test]
 async fn typing_submit_rejects_unknown_strand_scope() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;

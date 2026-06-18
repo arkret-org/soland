@@ -5,6 +5,7 @@ use super::*;
 pub trait PresenceStore: Send + Sync {
     async fn put(&self, presence: PresenceRecord) -> PersistenceResult<()>;
     async fn get(&self, actor: &str) -> PersistenceResult<Option<PresenceRecord>>;
+    async fn delete(&self, actor: &str) -> PersistenceResult<()>;
 }
 
 /// Typing indicators per (actor, Realm). Auto-prunes expired entries.
@@ -84,6 +85,11 @@ impl PresenceStore for MemoryPresenceStore {
 
     async fn get(&self, actor: &str) -> PersistenceResult<Option<PresenceRecord>> {
         Ok(self.data.lock().expect("presence lock").get(actor).cloned())
+    }
+
+    async fn delete(&self, actor: &str) -> PersistenceResult<()> {
+        self.data.lock().expect("presence lock").remove(actor);
+        Ok(())
     }
 }
 
@@ -300,6 +306,16 @@ impl PresenceStore for PgPresenceStore {
             .await
             .optional()
             .map(|row| row.map(PresenceRecord::from))
+            .map_err(PersistenceError::from)
+    }
+
+    async fn delete(&self, actor: &str) -> PersistenceResult<()> {
+        let mut conn = pg_conn(&self.pool).await?;
+        sql_query("DELETE FROM presence WHERE id = $1")
+            .bind::<Text, _>(actor)
+            .execute(&mut *conn)
+            .await
+            .map(|_| ())
             .map_err(PersistenceError::from)
     }
 }

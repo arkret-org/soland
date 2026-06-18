@@ -71,7 +71,7 @@ pub(crate) async fn build_sync_snapshot(
         }
     }
     let presence = if body.after.is_none() {
-        presence_events_for_actors(state, presence_actors).await
+        presence_events_for_actors(state, presence_actors, session).await
     } else {
         Vec::new()
     };

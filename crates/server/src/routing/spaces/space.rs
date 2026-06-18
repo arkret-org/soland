@@ -946,6 +946,66 @@ pub async fn prune_expired_typing(state: &AppState) {
     }
 }
 
+const ACCOUNT_DATA_TYPE_PRESENCE_VISIBILITY: &str = "ck.presence.visibility";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PresenceVisibilityPolicy {
+    Public,
+    ContactsOnly,
+    Nobody,
+}
+
+pub(crate) async fn presence_visibility_for_actor(
+    state: &AppState,
+    actor: &str,
+) -> PresenceVisibilityPolicy {
+    state
+        .persistence
+        .account_data()
+        .get(actor, ACCOUNT_DATA_TYPE_PRESENCE_VISIBILITY)
+        .await
+        .ok()
+        .flatten()
+        .map(|record| presence_visibility_policy_from_payload(&record.payload))
+        .unwrap_or(PresenceVisibilityPolicy::Public)
+}
+
+fn presence_visibility_policy_from_payload(payload: &Value) -> PresenceVisibilityPolicy {
+    match payload
+        .get("presence_visibility")
+        .and_then(Value::as_str)
+        .unwrap_or("public")
+    {
+        "public" => PresenceVisibilityPolicy::Public,
+        "contacts_only" => PresenceVisibilityPolicy::ContactsOnly,
+        "nobody" => PresenceVisibilityPolicy::Nobody,
+        _ => PresenceVisibilityPolicy::Nobody,
+    }
+}
+
+pub(crate) async fn presence_visible_to_session(
+    state: &AppState,
+    actor: &str,
+    session: Option<&SessionRecord>,
+) -> bool {
+    let Some(session) = session else {
+        return false;
+    };
+    match presence_visibility_for_actor(state, actor).await {
+        PresenceVisibilityPolicy::Nobody => false,
+        PresenceVisibilityPolicy::Public => true,
+        PresenceVisibilityPolicy::ContactsOnly => {
+            actor == session.actor
+                || crate::routing::spaces::directory::has_accepted_contact(
+                    state,
+                    &session.actor,
+                    actor,
+                )
+                .await
+        }
+    }
+}
+
 pub async fn typing_scope_allows_actor(
     state: &AppState,
     realm_id: &str,
@@ -1064,6 +1124,9 @@ async fn typing_record_visible_to_session(
     record: &TypingRecord,
     session: &SessionRecord,
 ) -> bool {
+    if !presence_visible_to_session(state, &record.actor, Some(session)).await {
+        return false;
+    }
     if personal_blocklist_blocks_actor(state, session, &record.actor).await {
         return false;
     }
