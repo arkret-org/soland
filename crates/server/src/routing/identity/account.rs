@@ -197,7 +197,7 @@ pub(super) fn protocol_router() -> Router {
         .push(
             Router::with_path("invite-receive-policy")
                 .get(get_invite_receive_policy)
-                .post(set_invite_receive_policy),
+                .put(set_invite_receive_policy),
         )
 }
 

@@ -6,7 +6,7 @@
 //!
 //!   * `POST /mimi/strands/{strand_id}/messages` -> emits a `MessageRecord` + a `ck.message.create`
 //!     projection event so the MIMI ingress shows up on the canonical Cokret timeline.
-//!   * `PUT  /mimi/strands/{strand_id}/update` -> emits a `ck.mimi.room_binding` projection event
+//!   * `POST /mimi/strands/{strand_id}/update` -> emits a `ck.mimi.room_binding` projection event
 //!     whenever the update body carries a `room_binding` block.
 //!   * `POST /mimi/strands/{strand_id}/notify` -> broadcasts a synthetic
 //!     `ck.open.mimi.command.notify` projection event so live subscribers observe MIMI fanout.
@@ -45,7 +45,7 @@ pub(super) fn router() -> Router {
     Router::with_path("mimi")
         .push(Router::with_path("provider-directory").get(mimi_provider_directory))
         .push(Router::with_path("key-material").post(mimi_key_material))
-        .push(Router::with_path("strands/{strand_id}/update").put(mimi_room_update))
+        .push(Router::with_path("strands/{strand_id}/update").post(mimi_room_update))
         .push(Router::with_path("strands/{strand_id}/notify").post(mimi_notify))
         .push(Router::with_path("strands/{strand_id}/messages").post(mimi_room_message))
         .push(Router::with_path("strands/{strand_id}/group-info").get(mimi_group_info))

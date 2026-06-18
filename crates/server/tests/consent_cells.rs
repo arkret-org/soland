@@ -69,7 +69,7 @@ async fn dev_token(app: &salvo::Service, actor: &str) -> String {
     let login: Value = TestClient::post("http://server/_soland/gate/auth/dev-login")
         .json(&serde_json::json!({
             "actor": actor,
-            "device_id": format!("ck:device:test-{}", actor.replace(':', "-")),
+            "device_id": ids::generate("device"),
             "display_name": actor,
         }))
         .send(app)
@@ -537,7 +537,7 @@ async fn contact_row_surfaces_invite_consent_grant_ref() {
     );
 }
 
-/// invite-addressing.md §5 — `GET`/`POST /_cokret/self/invite-receive-policy`
+/// invite-addressing.md §5 — `GET`/`PUT /_cokret/self/invite-receive-policy`
 /// round-trip the subject's private policy through the same in-memory store
 /// the tombstone `blocked_subjects` writes to, and reject a mismatched
 /// `subject_id` with an authorization error.
@@ -575,7 +575,7 @@ async fn invite_receive_policy_get_set_round_trips() {
         "unknown_invites": "drop",
         "blocked_subjects": [mallory],
     });
-    let stored: Value = TestClient::post("http://server/_cokret/self/invite-receive-policy")
+    let stored: Value = TestClient::put("http://server/_cokret/self/invite-receive-policy")
         .add_header("Authorization", format!("Bearer {alice_token}"), true)
         .json(&custom)
         .send(&app)
@@ -605,7 +605,7 @@ async fn invite_receive_policy_get_set_round_trips() {
         "explicit_address_behavior": "quarantine",
         "unknown_invites": "drop",
     });
-    let rejected = TestClient::post("http://server/_cokret/self/invite-receive-policy")
+    let rejected = TestClient::put("http://server/_cokret/self/invite-receive-policy")
         .add_header("Authorization", format!("Bearer {alice_token}"), true)
         .json(&mismatched)
         .send(&app)

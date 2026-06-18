@@ -555,7 +555,7 @@ const SOLAND_EXTENSION_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &
     ),
     (
         "/_cokret/open/mimi/strands/{strand_id}/update",
-        PathItemType::Put,
+        PathItemType::Post,
         "mimi",
         "ck.open.mimi.command.update_room",
         "MIMI external room interop update",

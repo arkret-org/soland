@@ -54,27 +54,29 @@ async fn mimi_provider_facade_contracts_work() {
 
     let key_material: Value = TestClient::post("http://server/_cokret/open/mimi/key-material")
         .json(&serde_json::json!({
-            "target_identifier": "mimi://soland.local/users/alice",
-            "protocol_draft": "draft-ietf-mimi-protocol-06"
+            "requester": "did:web:alice.example",
+            "strand_id": "ck:strand:01964180-0000-7000-8000-000000000000",
+            "device_id": "ck:device:01904100-0000-7000-8000-a11ce0000001",
+            "mimi_room_uri": "mimi://soland.local/rooms/01JSMIMI",
+            "realm_id": "ck:realm:0196419b-0000-7000-8000-000000000000"
         }))
         .send(&service)
         .await
         .take_json()
         .await
         .unwrap();
-    assert_eq!(key_material["ok"], true);
-    assert_eq!(
-        key_material["receipt"]["operation_id"],
-        "ck.open.mimi.exchange.request_key_material"
-    );
+    assert_eq!(key_material["failures"], serde_json::json!([]));
 
     let room_binding: Value =
-        TestClient::put("http://server/_cokret/open/mimi/strands/01JSMIMI/update")
+        TestClient::post("http://server/_cokret/open/mimi/strands/01JSMIMI/update")
             .json(&serde_json::json!({
-                "room_binding": {
-                    "mimi_room_uri": "mimi://soland.local/rooms/01JSMIMI",
-                    "binding_scope": {
-                        "realm_id": "ck:realm:0196419b-0000-7000-8000-000000000000"
+                "mls_group_id": "mimi-group-01JSMIMI",
+                "update": {
+                    "room_binding": {
+                        "mimi_room_uri": "mimi://soland.local/rooms/01JSMIMI",
+                        "binding_scope": {
+                            "realm_id": "ck:realm:0196419b-0000-7000-8000-000000000000"
+                        }
                     }
                 }
             }))
@@ -83,7 +85,8 @@ async fn mimi_provider_facade_contracts_work() {
             .take_json()
             .await
             .unwrap();
-    assert_eq!(room_binding["ok"], true);
+    assert_eq!(room_binding["accepted"], true);
+    assert!(room_binding["room_state_ref"].as_str().is_some());
 
     let group_info: Value =
         TestClient::get("http://server/_cokret/open/mimi/strands/01JSMIMI/group-info")
@@ -93,7 +96,7 @@ async fn mimi_provider_facade_contracts_work() {
             .await
             .unwrap();
     assert_eq!(
-        group_info["room_id"], "01JSMIMI",
+        group_info["group_info"]["mimi_room_uri"], "mimi://soland.local/rooms/01JSMIMI",
         "group_info response: {group_info}"
     );
     assert_eq!(
@@ -103,69 +106,71 @@ async fn mimi_provider_facade_contracts_work() {
 
     let identifier: Value = TestClient::post("http://server/_cokret/open/mimi/identifiers/query")
         .json(&serde_json::json!({
-            "query": "mimi://remote.example/alice",
-            "privacy_mode": "private_contact_discovery"
+            "identifiers": ["mimi://remote.example/alice"],
+            "privacy_profile": "private_contact_discovery"
         }))
         .send(&service)
         .await
         .take_json()
         .await
         .unwrap();
-    assert_eq!(identifier["reachable"], true);
-    assert_eq!(identifier["mapped_did"], "did:web:alice.example");
     assert_eq!(
-        identifier["receipt"]["extra"]["contact_graph_exposed"],
-        false
+        identifier["matches"][0]["identifier"],
+        "mimi://remote.example/alice"
     );
+    assert_eq!(identifier["matches"][0]["reachable"], false);
+    assert_eq!(
+        identifier["matches"][0]["reason_code"],
+        "identifier_mapping_not_available"
+    );
+    assert_eq!(identifier["has_more"], false);
 
     let mapped: Value =
         TestClient::post("http://server/_cokret/open/mimi/strands/01JSMIMI/messages")
             .json(&serde_json::json!({
-                "source_format": "text/markdown;variant=GFM-MIMI",
-                "body": "hello from MIMI"
+                "sender_actor_id": "did:web:alice.example",
+                "device_id": "ck:device:01904100-0000-7000-8000-a11ce0000001",
+                "ciphertext": {
+                    "body": "hello from MIMI"
+                },
+                "mls_group_id": "mimi-group-01JSMIMI"
             }))
             .send(&service)
             .await
             .take_json()
             .await
             .unwrap();
-    assert_eq!(mapped["ok"], true);
-    assert_eq!(
-        mapped["receipt"]["operation_id"],
-        "ck.open.mimi.command.submit_message"
-    );
-    assert_eq!(
-        mapped["receipt"]["extra"]["target_format"],
-        "ck.message.create"
-    );
+    assert!(mapped["event_ref"].as_str().is_some());
+    assert_eq!(mapped["delivery"]["status"], "accepted");
+    assert!(mapped["rejected"].is_null());
 
     let proxy: Value = TestClient::post("http://server/_cokret/open/mimi/proxy-download")
         .json(&serde_json::json!({
-            "blob_ref": "ck:blob:sha256:e2e",
-            "asset_privacy_policy": "provider_proxy"
+            "asset_ref": "ck:blob:sha256:e2e",
+            "requester": "did:web:alice.example"
         }))
         .send(&service)
         .await
         .take_json()
         .await
         .unwrap();
-    assert_eq!(proxy["ok"], true);
     assert!(
-        proxy["proxy_url"]
+        proxy["download_ref"]
             .as_str()
             .unwrap()
             .contains("/mimi/proxy-download")
     );
-    assert_eq!(
-        proxy["receipt"]["extra"]["direct_object_store_url_returned"],
-        false
-    );
+    assert!(proxy["expires_at"].as_str().is_some());
 
     let report = TestClient::post("http://server/_cokret/open/mimi/report-abuse")
         .json(&serde_json::json!({
+            "strand_id": "ck:strand:01964180-0000-7000-8000-000000000000",
             "mimi_room_uri": "mimi://soland.local/rooms/01JSMIMI",
-            "target_event_digest": "sha256:target",
-            "frank": {"scheme": "dev-frank"}
+            "realm_id": "ck:realm:0196419b-0000-7000-8000-000000000000",
+            "target_ref": "sha256:target",
+            "reporter": "did:web:alice.example",
+            "abuse_reason_code": "spam",
+            "franking_proof": {"scheme": "dev-frank"}
         }))
         .send(&service)
         .await;
