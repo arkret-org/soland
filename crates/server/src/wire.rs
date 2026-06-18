@@ -970,10 +970,10 @@ pub fn describe(
         "index.query.local_projection".to_owned(),
     ];
     let compat_surfaces = Vec::new();
-    let plaintext_visibility = serde_json::json!({
-        "default": "encrypted",
-        "services": [],
-    });
+    // soland is a principal_server with an E2EE event store: it claims no
+    // plaintext / reversible-derived data classes. Canonical empty
+    // `plaintext_visibility` per service-describe.schema.json.
+    let plaintext_visibility = cokret_sdk::PlaintextVisibility::none();
 
     ServerDescription {
         service_did: service_did.parse().expect("valid service DID"),
@@ -1014,7 +1014,12 @@ pub fn describe(
         experimental_features,
         compat_surfaces,
         development_mode,
-        rate_limit: serde_json::json!({"kind": "windowed", "per_minute": 600}),
+        // service-describe.schema.json requires `rate_limit_policy` or
+        // `rate_limit_policy_id` (the legacy top-level `rate_limit` field was
+        // removed). Advertise the service-wide windowed budget as a canonical
+        // policy.
+        rate_limit_policy: Some(cokret_sdk::RateLimitPolicy::windowed_per_minute(600)),
+        rate_limit_policy_id: None,
         egress_network_policy: Some(cokret_sdk::EgressNetworkPolicy::deny_private_defaults()),
         supported_features: vec![
             "org.cokret.soland.feature.auth.logout".to_owned(),
@@ -1065,23 +1070,31 @@ pub fn describe(
         // Emit the same public base URL used by the HTTP describe handler so
         // clients can build `base_url + operation_path` directly.
         supported_bindings: vec![
-            serde_json::json!({"kind": "http_json", "base_url": public_base_url.trim_end_matches('/')}),
+            cokret_sdk::SupportedBinding::new("http_json")
+                .with_base_url(public_base_url.trim_end_matches('/')),
             // Per-operation HTTP companion binding (transport-bindings.md
             // §6.1): tus 1.0.0 resumable upload for ck.self.blob.upload.
             // Versions/extensions mirror the OPTIONS probe answers of
             // routing::interop::blob_resumable — describe and wire MUST
             // agree.
-            serde_json::json!({
-                "kind": "tus",
-                "base_url": format!(
+            cokret_sdk::SupportedBinding::new("tus")
+                .with_base_url(format!(
                     "{}/_cokret/self/blob/resumable",
                     public_base_url.trim_end_matches('/')
+                ))
+                .with_extra(
+                    "operations",
+                    serde_json::json!(["ck.self.blob.upload.create"]),
+                )
+                .with_extra("extension_profile_required", serde_json::Value::Null)
+                .with_extra(
+                    "tus_version",
+                    serde_json::json!(crate::routing::TUS_VERSIONS),
+                )
+                .with_extra(
+                    "tus_extensions",
+                    serde_json::json!(crate::routing::TUS_EXTENSIONS),
                 ),
-                "operations": ["ck.self.blob.upload.create"],
-                "extension_profile_required": serde_json::Value::Null,
-                "tus_version": crate::routing::TUS_VERSIONS,
-                "tus_extensions": crate::routing::TUS_EXTENSIONS,
-            }),
         ],
         supported_reducer_profiles: vec!["ck.reducer.v1".to_owned()],
         supported_schema_profiles: vec!["ck.schema.core.v1".to_owned()],

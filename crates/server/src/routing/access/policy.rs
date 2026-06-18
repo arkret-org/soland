@@ -1,11 +1,19 @@
-//! Policy document CRUD + policy decision check.
+//! Policy decision check (protocol surface) + owner-scoped policy document
+//! CRUD (soland product surface).
 //!
-//! Surfaces:
+//! Protocol surface (`/_cokret/self/...`):
 //! - `POST   /_cokret/self/policy/check`        â€” evaluate a `SolandPolicyCheckRequestBody`
-//! - `GET    /_cokret/self/policies`            â€” list owner-scoped policies
-//! - `POST   /_cokret/self/policies`            â€” upsert one policy document
-//! - `GET    /_cokret/self/policies/{id}`       â€” read one policy document
-//! - `DELETE /_cokret/self/policies/{id}`       â€” remove one policy document
+//!
+//! Product surface (`/_soland/self/...`): owner-scoped policy document storage
+//! CRUD is deployment-local management, NOT a v1 protocol operation
+//! (`service-http-binding.md` §1007 keeps policy_document storage out of the
+//! core operation surface). It is therefore served off the protocol root and
+//! uses reverse-domain `org.cokret.soland.policy_document.*` operation ids
+//! rather than the `ck.*` protocol namespace:
+//! - `GET    /_soland/self/policies`            â€” list owner-scoped policies
+//! - `POST   /_soland/self/policies`            â€” upsert one policy document
+//! - `GET    /_soland/self/policies/{id}`       â€” read one policy document
+//! - `DELETE /_soland/self/policies/{id}`       â€” remove one policy document
 //!
 //! `policy_document_to_response`, `is_valid_generated_or_custom_id`, and the
 //! supported-effect/scope/type validators are `pub` so admin / authz handlers
@@ -33,12 +41,18 @@ use crate::wire::{
     SolandPolicyCheckOutcome, SolandPolicyCheckRequestBody, UpsertPolicyDocumentRequestBody,
 };
 
+/// Protocol surface (`/_cokret/self/...`): only the policy decision check is
+/// a v1 protocol operation (`ck.self.policy.query.check`).
 pub(super) fn protocol_router() -> Router {
+    Router::new().push(Router::with_path("policy/check").post(policy_check))
+}
+
+/// Product surface (`/_soland/self/...`): owner-scoped policy document storage
+/// CRUD. Deployment-local management capability backing
+/// `ck.self.policy.query.check`; kept off the protocol root per
+/// `service-http-binding.md` §1007.
+pub(super) fn product_router() -> Router {
     Router::new()
-        .push(Router::with_path("policy/check").post(policy_check))
-        // Spec `policy_document` operation group (`ck.self.policy_document.*`),
-        // canonical path `/_cokret/self/policies*`. These are the owner-scoped
-        // authorization policy documents backing `ck.self.policy.query.check`.
         .push(
             Router::with_path("policies")
                 .get(list_policy_documents)
@@ -52,11 +66,11 @@ pub(super) fn protocol_router() -> Router {
 }
 
 #[endpoint(
-    operation_id = "ck.self.policy_document.query.list",
+    operation_id = "org.cokret.soland.policy_document.query.list",
     tags("policy"),
     summary = "List policy documents owned by the authenticated actor"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.policy_document.query.list"))]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.policy_document.query.list"))]
 async fn list_policy_documents(
     aa: AuthArgs,
     scope: QueryParam<String, false>,
@@ -93,11 +107,14 @@ async fn list_policy_documents(
 }
 
 #[endpoint(
-    operation_id = "ck.self.policy_document.resource.get",
+    operation_id = "org.cokret.soland.policy_document.resource.get",
     tags("policy"),
     summary = "Read a single policy document by id"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.policy_document.resource.get"))]
+#[tracing::instrument(
+    skip_all,
+    fields(op = "org.cokret.soland.policy_document.resource.get")
+)]
 async fn get_policy_document(
     aa: AuthArgs,
     policy_id: PathParam<String>,
@@ -120,11 +137,14 @@ async fn get_policy_document(
 }
 
 #[endpoint(
-    operation_id = "ck.self.policy_document.command.upsert",
+    operation_id = "org.cokret.soland.policy_document.command.upsert",
     tags("policy"),
     summary = "Idempotently create or replace a policy document"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.policy_document.command.upsert"))]
+#[tracing::instrument(
+    skip_all,
+    fields(op = "org.cokret.soland.policy_document.command.upsert")
+)]
 async fn upsert_policy_document(
     aa: AuthArgs,
     body: JsonBody<UpsertPolicyDocumentRequestBody>,
@@ -197,11 +217,14 @@ async fn upsert_policy_document(
 }
 
 #[endpoint(
-    operation_id = "ck.self.policy_document.resource.delete",
+    operation_id = "org.cokret.soland.policy_document.resource.delete",
     tags("policy"),
     summary = "Delete a policy document by id"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.policy_document.resource.delete"))]
+#[tracing::instrument(
+    skip_all,
+    fields(op = "org.cokret.soland.policy_document.resource.delete")
+)]
 async fn delete_policy_document(
     aa: AuthArgs,
     policy_id: PathParam<String>,
@@ -476,7 +499,8 @@ async fn matching_policy_decision(
                 .cloned()
                 .unwrap_or_default();
             let reason_code = match decision.as_str() {
-                "deny" => "policy_denied",
+                "hard_deny" => "policy_denied",
+                "soft_deny" => "policy_soft_denied",
                 "require_review" => "policy_review_required",
                 "quarantine" => "policy_quarantine",
                 _ => "policy_allowed",
@@ -563,7 +587,14 @@ pub fn is_valid_policy_type(value: &str) -> bool {
 }
 
 pub fn is_supported_policy_effect(value: &str) -> bool {
-    matches!(value, "allow" | "deny" | "require_review" | "quarantine")
+    // v1 policy decision enum (service-http-binding.md §577 /
+    // service-operation-dtos.schema.json#PolicyCheckOutcome.decision):
+    // `allow`, `soft_deny`, `hard_deny`, `quarantine`, `require_review`.
+    // The legacy `deny` value is no longer a valid wire decision.
+    matches!(
+        value,
+        "allow" | "soft_deny" | "hard_deny" | "require_review" | "quarantine"
+    )
 }
 
 pub fn is_valid_generated_or_custom_id(value: &str, kind: &str) -> bool {

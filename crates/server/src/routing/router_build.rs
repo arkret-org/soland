@@ -135,7 +135,9 @@ fn api_v1_router(conformance_harness_enabled: bool) -> Router {
                 .push(spaces::router())
                 // self/events/*.
                 .push(events::router())
-                // self/authz/* + self/policy/check + self/policies (policy_document).
+                // self/authz/* + self/policy/check. (Owner-scoped policy
+                // document CRUD lives on the product surface at
+                // `/_soland/self/policies*`, see `soland_local_router`.)
                 .push(access::router())
                 // self/circles/* (ck.self.circle.*).
                 .push(circles::router())
@@ -208,6 +210,12 @@ fn soland_local_router() -> Router {
                 .hoop(identity::session_pop::verify_session_pop)
                 .push(spaces::local_router())
                 .push(admin::audit_router())
+                // Owner-scoped policy document storage CRUD
+                // (`/_soland/self/policies*`). Deployment-local management
+                // capability backing `ck.self.policy.query.check`; kept off
+                // the `/_cokret/...` protocol root per
+                // `service-http-binding.md` §1007.
+                .push(access::product_router())
                 // The old soland-internal WebRTC session stack
                 // (`/_soland/self/webrtc/*`, `/_soland/self/calls/*`) is retired:
                 // media token / ICE config are served only from the spec

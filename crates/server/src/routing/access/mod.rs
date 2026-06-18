@@ -8,8 +8,16 @@ use super::{
     validate_did,
 };
 
+/// Protocol surface mounted under `/_cokret/self/...`.
 pub fn router() -> Router {
     Router::new()
         .push(authz::protocol_router())
         .push(policy::protocol_router())
+}
+
+/// Product surface mounted under `/_soland/self/...`: owner-scoped policy
+/// document storage CRUD (deployment-local management, not a v1 protocol
+/// operation).
+pub fn product_router() -> Router {
+    Router::new().push(policy::product_router())
 }

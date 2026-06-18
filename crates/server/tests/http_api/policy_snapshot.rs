@@ -25,7 +25,8 @@ async fn policy_check_and_validation_work() {
         .take_json()
         .await
         .unwrap();
-    assert_eq!(policy["decision"], "allow");
+    // No owner policy document matches yet → fail-closed default decision.
+    assert_eq!(policy["decision"], "require_review");
     assert_eq!(policy["decision_trace"]["request_id"], "req1");
     assert_eq!(
         policy["decision_trace"]["actor_id"],
@@ -34,12 +35,12 @@ async fn policy_check_and_validation_work() {
     assert_eq!(policy["decision_trace"]["action"], "message.send");
     assert_eq!(policy["decision_trace"]["cache"]["mode"], "in_memory");
 
-    let unauthenticated_policy = TestClient::post("http://server/_cokret/self/policies")
+    let unauthenticated_policy = TestClient::post("http://server/_soland/self/policies")
         .json(&serde_json::json!({
             "scope": "ck:realm:0196419b-0000-7000-8000-000000000000",
             "subject_ref": "did:web:alice.example",
             "policy_type": "message.send",
-            "effect": "deny"
+            "effect": "hard_deny"
         }))
         .send(&app_from_state(state.clone()))
         .await;
@@ -48,13 +49,13 @@ async fn policy_check_and_validation_work() {
         Some(StatusCode::UNAUTHORIZED)
     );
 
-    let policy_document: Value = TestClient::post("http://server/_cokret/self/policies")
+    let policy_document: Value = TestClient::post("http://server/_soland/self/policies")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
             "scope": "ck:realm:0196419b-0000-7000-8000-000000000000",
             "subject_ref": "did:web:alice.example",
             "policy_type": "message.send",
-            "effect": "deny",
+            "effect": "hard_deny",
             "actions": ["message.send"],
             "resource": {"kind": "realm", "realm_id": "ck:realm:0196419b-0000-7000-8000-000000000000"},
             "obligations": [{"type": "audit", "level": "high"}]
@@ -65,9 +66,9 @@ async fn policy_check_and_validation_work() {
         .await
         .unwrap();
     let policy_id = policy_document["policy_id"].as_str().unwrap().to_owned();
-    assert_eq!(policy_document["payload"]["effect"], "deny");
+    assert_eq!(policy_document["payload"]["effect"], "hard_deny");
 
-    let policies: Value = TestClient::get("http://server/_cokret/self/policies")
+    let policies: Value = TestClient::get("http://server/_soland/self/policies")
         .add_header("authorization", format!("Bearer {token}"), true)
         .send(&app_from_state(state.clone()))
         .await
@@ -91,7 +92,7 @@ async fn policy_check_and_validation_work() {
         .take_json()
         .await
         .unwrap();
-    assert_eq!(denied["decision"], "deny");
+    assert_eq!(denied["decision"], "hard_deny");
     assert_eq!(denied["reason_code"], "policy_denied");
     assert_eq!(denied["policy_id"], policy_id);
     assert_eq!(denied["obligations"][0]["type"], "audit");
@@ -101,7 +102,7 @@ async fn policy_check_and_validation_work() {
     assert!(denied["decision_trace"]["missing_proofs"].is_array());
 
     let deleted: Value =
-        TestClient::delete(format!("http://server/_cokret/self/policies/{policy_id}"))
+        TestClient::delete(format!("http://server/_soland/self/policies/{policy_id}"))
             .add_header("authorization", format!("Bearer {token}"), true)
             .send(&app_from_state(state.clone()))
             .await
@@ -110,7 +111,7 @@ async fn policy_check_and_validation_work() {
             .unwrap();
     assert_eq!(deleted["ok"], true);
 
-    let allowed_again: Value = TestClient::post("http://server/_cokret/self/policy/check")
+    let after_delete: Value = TestClient::post("http://server/_cokret/self/policy/check")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
             "request_id": "req3",
@@ -125,7 +126,8 @@ async fn policy_check_and_validation_work() {
         .take_json()
         .await
         .unwrap();
-    assert_eq!(allowed_again["decision"], "allow");
+    // Policy removed → back to the fail-closed default.
+    assert_eq!(after_delete["decision"], "require_review");
 
     let invalid = TestClient::post("http://server/_soland/gate/auth/dev-login")
         .json(&serde_json::json!({
