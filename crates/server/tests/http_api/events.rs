@@ -5,6 +5,115 @@
 #![allow(unused_imports)]
 use super::common::*;
 
+async fn optional_pg_app_state() -> Option<AppState> {
+    if std::env::var("DATABASE_URL")
+        .ok()
+        .filter(|url| !url.trim().is_empty())
+        .is_none()
+    {
+        return None;
+    }
+    let db = Db::from_env()
+        .await
+        .expect("postgres migrations should run");
+    let state = AppState::new(test_config(), db);
+    state.hydrate().await.expect("postgres state hydrates");
+    Some(state)
+}
+
+async fn account_subscribe_first_frame_with_status(
+    state: AppState,
+    token: Option<&str>,
+    query: &str,
+) -> (StatusCode, Value) {
+    let url = if query.is_empty() {
+        "http://server/_cokret/self/account/subscribe".to_owned()
+    } else {
+        format!("http://server/_cokret/self/account/subscribe?{query}")
+    };
+    let mut request = TestClient::get(url);
+    if let Some(token) = token {
+        request = request.add_header("authorization", format!("Bearer {token}"), true);
+    }
+    let mut response = request.send(&app_from_state(state)).await;
+    let status = response.status_code.expect("response status");
+    let body = response.take_string().await.expect("response body");
+    let first = body.lines().next().unwrap_or(body.as_str());
+    let frame = serde_json::from_str(first).unwrap_or_else(|error| {
+        panic!("account subscribe returned non-json frame: {error}: {body}")
+    });
+    (status, frame)
+}
+
+#[tokio::test]
+async fn pg_account_subscribe_cursor_handle_survives_app_state_rebuild() {
+    let Some(first_state) = optional_pg_app_state().await else {
+        return;
+    };
+    let suffix = uuid::Uuid::now_v7().simple().to_string();
+    let actor = format!("did:web:pg-cursor-{suffix}.example");
+    let device = new_prefixed_uuid7("ck:device:");
+    let token =
+        dev_token_for_device(first_state.clone(), &actor, &device, "Pg Cursor Restart").await;
+
+    let baseline = account_subscribe_frame(first_state.clone(), Some(&token), "catchup=true").await;
+    let cursor = baseline["cursor"]
+        .as_str()
+        .expect("baseline cursor")
+        .to_owned();
+    assert!(cursor.starts_with("ck:cursor:"));
+
+    let Some(restarted_state) = optional_pg_app_state().await else {
+        return;
+    };
+    let (status, resumed) = account_subscribe_first_frame_with_status(
+        restarted_state,
+        Some(&token),
+        &format!("catchup=true&max_wait_ms=0&after={cursor}"),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK, "resume response: {resumed}");
+    assert_eq!(resumed["kind"], "delta");
+    assert!(
+        resumed.get("error").is_none(),
+        "pg restart resume must not fail cursor integrity: {resumed}"
+    );
+}
+
+#[tokio::test]
+async fn memory_account_subscribe_cursor_handle_does_not_survive_app_state_rebuild() {
+    let first_state = AppState::new(test_config(), Db { pool: None });
+    let actor = "did:web:memory-cursor-restart.example";
+    let device = "ck:device:01904100-0000-7000-8000-0badc0ffee01";
+    let first_token =
+        dev_token_for_device(first_state.clone(), actor, device, "Memory Cursor Restart").await;
+    let baseline = account_subscribe_frame(first_state, Some(&first_token), "catchup=true").await;
+    let cursor = baseline["cursor"]
+        .as_str()
+        .expect("baseline cursor")
+        .to_owned();
+    assert!(cursor.starts_with("ck:cursor:"));
+
+    let restarted_state = AppState::new(test_config(), Db { pool: None });
+    let restarted_token = dev_token_for_device(
+        restarted_state.clone(),
+        actor,
+        device,
+        "Memory Cursor Restart",
+    )
+    .await;
+    let (status, rejected) = account_subscribe_first_frame_with_status(
+        restarted_state,
+        Some(&restarted_token),
+        &format!("catchup=true&max_wait_ms=0&after={cursor}"),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::BAD_REQUEST, "memory resume: {rejected}");
+    assert_eq!(rejected["error"]["code"], "cursor_integrity_invalid");
+}
+
 #[tokio::test]
 async fn account_subscribe_projects_realm_encryption_profile() {
     let state = AppState::new(test_config(), Db { pool: None });
