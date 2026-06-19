@@ -199,9 +199,9 @@ pub(crate) async fn set_account_lifecycle_state(
     }
 
     let previous_state = state.account_lifecycle_state(did);
-    if previous_state == "erased" {
+    if previous_state == "erasure_pending" {
         return Err(
-            AppError::conflict("erased accounts cannot transition state")
+            AppError::conflict("accounts pending erasure cannot transition state")
                 .with_wire_code("account_erased"),
         );
     }
@@ -365,7 +365,7 @@ pub(super) async fn erase_account(
 ) -> JsonResult<AccountEraseOutcome> {
     // Spec: identity/account-lifecycle.md §3 — erasure pseudonymizes
     // PII, revokes device records, and flips the actor into a permanent
-    // `erased` state so subsequent authenticated requests return 401
+    // `erasure_pending` state so subsequent authenticated requests return 401
     // `account_erased`. The implementation here is the v1 "memory ledger"
     // variant — full pseudonymization of historical events lands once
     // the projection rewrite worker ships.
@@ -420,7 +420,7 @@ pub(super) async fn erase_account(
     state.set_account_lifecycle_record(
         &actor,
         AccountLifecycleRecord {
-            state: "erased".to_owned(),
+            state: "erasure_pending".to_owned(),
             reason: Some("account_erasure".to_owned()),
             changed_by: Some(actor.clone()),
             changed_at,
@@ -439,7 +439,7 @@ pub(super) async fn erase_account(
         &actor,
         &actor,
         &previous_state,
-        "erased",
+        "erasure_pending",
         Some("account_erasure".to_owned()),
         changed_at,
         sessions_revoked,
@@ -572,7 +572,7 @@ pub(super) async fn erase_account(
         .unwrap_or_default();
     json_ok(AccountEraseOutcome {
         did: actor,
-        state: "erased".to_owned(),
+        state: "erasure_pending".to_owned(),
         erased_at: completed_at_wire,
         erasure_receipt,
         realm_erasure_receipts,

@@ -5,7 +5,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use arc_swap::ArcSwap;
 use cokret_sdk::identity::CompositeDidResolver;
-use cokret_sdk::{AppletPackage, Did, RealmId};
+use cokret_sdk::{AccountStatus, AppletPackage, Did, RealmId};
 use ed25519_dalek::SigningKey;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -736,7 +736,7 @@ impl AppState {
             .contains(did)
         {
             return AccountLifecycleRecord {
-                state: "erased".to_owned(),
+                state: AccountStatus::ErasurePending.as_str().to_owned(),
                 reason: Some("account_erased".to_owned()),
                 changed_by: None,
                 changed_at: chrono::Utc::now(),
@@ -755,8 +755,13 @@ impl AppState {
             })
     }
 
+    pub fn account_lifecycle_status(&self, did: &str) -> AccountStatus {
+        let record = self.account_lifecycle_record(did);
+        account_lifecycle_status_from_wire(&record.state)
+    }
+
     pub fn account_lifecycle_state(&self, did: &str) -> String {
-        self.account_lifecycle_record(did).state
+        self.account_lifecycle_status(did).as_str().to_owned()
     }
 
     pub fn set_account_lifecycle_record(&self, did: &str, record: AccountLifecycleRecord) {
@@ -926,6 +931,16 @@ impl AppState {
         let secs = ts.timestamp();
         let bucketed = secs - secs.rem_euclid(PSI_HIT_BUCKET_SECS);
         chrono::DateTime::<chrono::Utc>::from_timestamp(bucketed, 0).unwrap_or(ts)
+    }
+}
+
+fn account_lifecycle_status_from_wire(value: &str) -> AccountStatus {
+    match value {
+        "erased" => AccountStatus::ErasurePending,
+        _ => AccountStatus::from_wire(value).unwrap_or_else(|| {
+            tracing::warn!(state = value, "unknown account lifecycle state");
+            AccountStatus::Suspended
+        }),
     }
 }
 

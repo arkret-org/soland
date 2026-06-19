@@ -27,14 +27,15 @@ use cokret_sdk::http::{
 use cokret_sdk::models::InviteReceivePolicy;
 use cokret_sdk::{
     ACTOR_PROFILE_SCHEMA, AccountDeviceSummary, AccountRegisterOutcome, AccountRegisterRequestBody,
-    AccountUpdateProfileOutcome, AccountUpdateProfileRequestBody, AccountView, ActorKind,
-    ActorProfile, ActorProfileId, BlobRef, DeviceId, Did, ErrorCode, EventId, RealmId, StrandId,
+    AccountStatus, AccountUpdateProfileOutcome, AccountUpdateProfileRequestBody, AccountView,
+    ActorKind, ActorProfile, ActorProfileId, BlobRef, DeviceId, Did, ErrorCode, EventId, RealmId,
+    StrandId,
 };
 use ed25519_dalek::Signer as _;
 use salvo::http::StatusCode;
 use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use super::auth::{revoke_devices_for_actor, revoke_sessions_for_actor};
@@ -47,6 +48,7 @@ use super::{
     AuthArgs, append_audit_log, handle_for_did, normalize_localpart, now, sha256_hex, validate_did,
 };
 use crate::error::AppError;
+use crate::routing::validate_device_id;
 use crate::state::{
     AccountLifecycleRecord, AccountRecord, AppState, ContactRecord, DeviceInventoryRecord,
     DirectConversationBindingRecord,
@@ -202,6 +204,15 @@ pub(super) fn protocol_router() -> Router {
         )
 }
 
+pub(in crate::routing) fn local_router() -> Router {
+    Router::with_path("account")
+        .push(Router::with_path("register").post(local_account_register))
+        .push(Router::with_path("me").get(local_account_me))
+        .push(Router::with_path("export").get(lifecycle::export_account))
+        .push(Router::with_path("deactivate").post(lifecycle::deactivate_account))
+        .push(Router::with_path("erase").post(lifecycle::erase_account))
+}
+
 fn contact_routes() -> Router {
     Router::with_path("contacts")
         .get(list_contacts)
@@ -213,6 +224,139 @@ fn contact_routes() -> Router {
 fn direct_conversation_routes() -> Router {
     Router::with_path("direct-conversations")
         .push(Router::with_path("resolve").post(direct_conversation_resolve))
+}
+
+#[derive(Clone, Debug, Deserialize, salvo::oapi::ToSchema)]
+#[serde(deny_unknown_fields)]
+struct LocalAccountRegisterRequestBody {
+    pub did: String,
+    pub handle: String,
+    #[serde(default)]
+    pub display_name: Option<String>,
+    #[serde(default)]
+    pub device_id: Option<String>,
+}
+
+#[endpoint(
+    operation_id = "org.cokret.soland.account.register",
+    tags("account"),
+    summary = "Register a local account projection",
+    status_codes(200, 400, 409, 500)
+)]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.account.register"))]
+async fn local_account_register(
+    depot: &mut Depot,
+    body: JsonBody<LocalAccountRegisterRequestBody>,
+) -> JsonResult<SolandAccountRegisterOutcome> {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let body = body.into_inner();
+    let did = validate_did(&body.did)
+        .map_err(|_| AppError::invalid_param("invalid account DID"))?
+        .as_str()
+        .to_owned();
+    crate::routing::extensions::sovereign::validate_sovereign_did_registration(state, &did)?;
+
+    let localpart = normalize_localpart(&body.handle);
+    if localpart.is_empty() {
+        return Err(AppError::invalid_param(
+            "handle localpart must not be empty",
+        ));
+    }
+    let accounts = state
+        .persistence
+        .accounts()
+        .list()
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    if accounts
+        .iter()
+        .any(|account| account.did == did || account.localpart == localpart)
+    {
+        return Err(AppError::new(
+            crate::error::ErrorCode::DuplicateConflict,
+            "account already exists",
+        ));
+    }
+
+    let account = AccountRecord {
+        id: crate::ids::generate_account_id(),
+        did: did.clone(),
+        localpart,
+        display_name: body
+            .display_name
+            .clone()
+            .or_else(|| Some(body.handle.trim_start_matches('@').to_owned())),
+        bio: None,
+        avatar_url: None,
+        created_at: now(),
+    };
+    state
+        .persistence
+        .accounts()
+        .put(&account)
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    if let Some(device_id) = body.device_id.as_deref() {
+        let device_id = validate_device_id(device_id)
+            .map_err(|_| AppError::invalid_param("invalid device_id"))?;
+        let registered_at = now();
+        let device = DeviceInventoryRecord {
+            actor: did.clone(),
+            device_id: device_id.as_str().to_owned(),
+            display_name: account.display_name.clone(),
+            verification_state: "unverified".to_owned(),
+            payload: json!({
+                "device_id": device_id.as_str(),
+                "display_name": account.display_name.clone(),
+                "verification": "unverified",
+                "registered_with_account": true,
+            }),
+            created_at: registered_at,
+            updated_at: registered_at,
+            revoked_at: None,
+        };
+        state
+            .persistence
+            .devices()
+            .put(&device)
+            .await
+            .map_err(|error| AppError::internal(error.to_string()))?;
+    }
+    append_audit_log(
+        state,
+        Some(&did),
+        "account.register",
+        json!({"handle": account.handle(), "via": "local"}),
+        "accepted",
+    )
+    .await;
+
+    json_ok(account_response(account, state))
+}
+
+#[endpoint(
+    operation_id = "org.cokret.soland.account.me",
+    tags("account"),
+    summary = "Get the authenticated local account projection",
+    status_codes(200, 401, 404, 500)
+)]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.account.me"))]
+async fn local_account_me(
+    aa: AuthArgs,
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<SolandAccountRegisterOutcome> {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let session = aa.authenticated_session(state, req).await?;
+    let account = state
+        .persistence
+        .accounts()
+        .get(&session.actor)
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?
+        .ok_or_else(|| AppError::not_found("not found"))?;
+
+    json_ok(account_response(account, state))
 }
 
 #[endpoint(
@@ -243,7 +387,7 @@ async fn account_viewer(
     let primary_handle_claim = account_primary_handle_claim(state, &account);
     json_ok(AccountView {
         principal_id,
-        state: state.account_lifecycle_state(&account.did),
+        state: state.account_lifecycle_status(&account.did),
         devices,
         primary_handle_claim,
         primary_handle_claim_ref: None,
@@ -360,7 +504,7 @@ async fn gate_account_register(
     let primary_handle_claim = account_primary_handle_claim(state, &account);
     json_ok(AccountRegisterOutcome {
         principal_id: body.principal_id,
-        state: state.account_lifecycle_state(&did),
+        state: AccountStatus::Active,
         devices,
         primary_handle_claim,
         primary_handle_claim_ref: None,

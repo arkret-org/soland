@@ -11,7 +11,7 @@ fn account_new_session_error(state: &AppState, actor: &str) -> Option<AppError> 
 
 /// Lifecycle gate for new session issuance. Wire codes come from the spec
 /// error-code-registry: `locked` / `suspended` deny by account policy →
-/// `policy_denied` (403); `deactivated` / `erased` hit the
+/// `policy_denied` (403); `deactivated` / `erasure_pending` hit the
 /// account-lifecycle.md §7.1 write barrier → `failed_precondition` with
 /// reason `principal_deactivated`. The pre-rename lifecycle word is kept in
 /// `error.details.reason_detail` for operators.
@@ -38,11 +38,11 @@ pub(crate) fn account_new_session_tuple(
             "principal_deactivated (account_status=deactivated)",
             "account has been deactivated",
         )),
-        "erased" => Some((
+        "erasure_pending" => Some((
             StatusCode::CONFLICT,
             "failed_precondition",
-            "principal_deactivated (account_status=erased)",
-            "account has been erased",
+            "principal_deactivated (account_status=erasure_pending)",
+            "account erasure is pending",
         )),
         _ => None,
     }
@@ -78,7 +78,7 @@ pub(crate) fn account_existing_session_error(
     // a policy denial and MUST surface as 403 with the registry code
     // `policy_denied`.
     //
-    // `erased` is the exception kept at 401: erasure invalidates the
+    // `erasure_pending` is the exception kept at 401: erasure invalidates the
     // bearer itself, so re-auth is the right signal — registry code
     // `unauthenticated` ("authentication material is missing or invalid").
     match state.account_lifecycle_state(actor).as_str() {
@@ -88,10 +88,10 @@ pub(crate) fn account_existing_session_error(
             "policy_denied",
             "account has been deactivated",
         )),
-        "erased" => Some((
+        "erasure_pending" => Some((
             StatusCode::UNAUTHORIZED,
             "unauthenticated",
-            "account has been erased",
+            "account erasure is pending",
         )),
         _ => None,
     }

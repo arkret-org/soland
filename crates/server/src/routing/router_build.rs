@@ -208,6 +208,7 @@ fn soland_local_router() -> Router {
         .push(
             Router::with_path("self")
                 .hoop(identity::session_pop::verify_session_pop)
+                .push(identity::account::local_router())
                 .push(spaces::local_router())
                 .push(admin::audit_router())
                 // Owner-scoped policy document storage CRUD

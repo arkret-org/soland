@@ -32,6 +32,64 @@ async fn account_viewer_returns_device_summaries() {
 }
 
 #[tokio::test]
+async fn account_erasure_projects_erasure_pending_state() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let token = dev_token(state.clone()).await;
+
+    let erased: Value = TestClient::post("http://server/_soland/self/account/erase")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+
+    assert_eq!(erased["state"], "erasure_pending");
+    assert_eq!(
+        state.account_lifecycle_state("did:web:alice.example"),
+        "erasure_pending"
+    );
+
+    let viewer = TestClient::get("http://server/_cokret/self/account/viewer")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(viewer.status_code.unwrap().as_u16(), 401);
+}
+
+#[tokio::test]
+async fn local_account_register_duplicate_conflict_and_me_reads_state() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let token = register_account(
+        state.clone(),
+        "did:web:bob.example",
+        "@bob",
+        "ck:device:01904100-0000-7000-8000-b0b0b0000002",
+    )
+    .await;
+
+    let duplicate = TestClient::post("http://server/_soland/self/account/register")
+        .json(&serde_json::json!({
+            "did": "did:web:bob.example",
+            "handle": "@bob",
+            "device_id": "ck:device:01904100-0000-7000-8000-b0b0b0000022"
+        }))
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(duplicate.status_code.unwrap().as_u16(), 409);
+
+    let me: Value = TestClient::get("http://server/_soland/self/account/me")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(me["did"], "did:web:bob.example");
+    assert_eq!(me["state"], "active");
+}
+
+#[tokio::test]
 async fn account_viewer_does_not_authorize_unverified_session_device() {
     let state = AppState::new(test_config(), Db { pool: None });
     let first_device = "ck:device:01904100-0000-7000-8000-a11ce0000001";

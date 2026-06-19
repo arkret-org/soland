@@ -68,7 +68,7 @@ pub async fn demo_actors(state: &AppState) -> Vec<Value> {
         let account_state = state.account_lifecycle_state(&account.did);
         // GDPR erasure / deactivation: terminal account states MUST NOT
         // surface in directory search results.
-        if matches!(account_state.as_str(), "deactivated" | "erased") {
+        if matches!(account_state.as_str(), "deactivated" | "erasure_pending") {
             continue;
         }
         actors.push(json!({
@@ -102,7 +102,7 @@ pub async fn demo_actors(state: &AppState) -> Vec<Value> {
         .unwrap_or_default();
     for (did, actor_devices) in devices.iter() {
         let account_state = state.account_lifecycle_state(did);
-        if matches!(account_state.as_str(), "deactivated" | "erased") {
+        if matches!(account_state.as_str(), "deactivated" | "erasure_pending") {
             continue;
         }
         if actors
