@@ -6,6 +6,7 @@ mod circle_encryption;
 mod circle_history;
 mod invite_claim;
 mod moderation;
+mod pin_rsvp_encryption;
 mod pin_scope_safety;
 mod redaction_message;
 mod space_container;

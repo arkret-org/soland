@@ -461,6 +461,15 @@ impl ProjectionState {
                 reason: "rsvp_status_missing".to_owned(),
             };
         };
+        if let Err(reason) = validate_encrypted_projection_field(
+            operation,
+            "comment",
+            "rsvp_comment_encrypted_payload_required",
+        ) {
+            return ProjectionEffect::Rejected {
+                reason: reason.to_owned(),
+            };
+        }
         let occurrence = operation
             .payload
             .get("occurrence")
@@ -512,6 +521,15 @@ impl ProjectionState {
             };
         };
         if let Err(reason) = self.check_pin_scope_safety(operation) {
+            return ProjectionEffect::Rejected {
+                reason: reason.to_owned(),
+            };
+        }
+        if let Err(reason) = validate_encrypted_projection_field(
+            operation,
+            "note",
+            "pin_note_encrypted_payload_required",
+        ) {
             return ProjectionEffect::Rejected {
                 reason: reason.to_owned(),
             };
@@ -814,6 +832,114 @@ impl ProjectionState {
         }
         ProjectionEffect::ReadMarkerUpdated(marker)
     }
+}
+
+fn validate_encrypted_projection_field(
+    operation: &Operation,
+    field: &str,
+    reason: &'static str,
+) -> Result<(), &'static str> {
+    let Some(value) = operation.payload.get(field) else {
+        return Ok(());
+    };
+    if encrypted_projection_field_matches_operation(value, operation) {
+        Ok(())
+    } else {
+        Err(reason)
+    }
+}
+
+fn encrypted_projection_field_matches_operation(value: &Value, operation: &Operation) -> bool {
+    let Some(kind) = crate::kinds::canonical_kind_for_operation(operation) else {
+        return false;
+    };
+    let Some(envelope) = value.as_object() else {
+        return false;
+    };
+    if envelope.contains_key("cleartext_commitment") || envelope.contains_key("authentication_tag")
+    {
+        return false;
+    }
+    if envelope.get("scheme").and_then(Value::as_str) != Some("mls-rfc9420") {
+        return false;
+    }
+    for field in [
+        "version",
+        "group_id",
+        "content_type",
+        "ciphertext",
+        "payload_digest",
+        "aad_digest",
+    ] {
+        if !json_string_field(envelope, field) {
+            return false;
+        }
+    }
+    if !envelope
+        .get("version")
+        .and_then(Value::as_str)
+        .is_some_and(|version| version.split_once('.').is_some())
+    {
+        return false;
+    }
+    if envelope
+        .get("epoch")
+        .is_none_or(|value| value.as_u64().is_none())
+    {
+        return false;
+    }
+    if !matches!(
+        envelope
+            .get("aad_visibility_event_id")
+            .and_then(Value::as_str),
+        Some("hidden" | "routing_digest" | "opaque_id")
+    ) {
+        return false;
+    }
+    if !envelope
+        .get("payload_digest")
+        .and_then(Value::as_str)
+        .is_some_and(valid_hash_digest)
+        || !envelope
+            .get("aad_digest")
+            .and_then(Value::as_str)
+            .is_some_and(valid_hash_digest)
+    {
+        return false;
+    }
+    let Some(aad) = envelope.get("aad").and_then(Value::as_object) else {
+        return false;
+    };
+    if aad.get("realm_id").and_then(Value::as_str) != Some(operation.realm_id.as_str())
+        || aad.get("event_kind").and_then(Value::as_str) != Some(kind)
+    {
+        return false;
+    }
+    let Some(key_ref) = envelope.get("key_ref").and_then(Value::as_object) else {
+        return false;
+    };
+    key_ref.get("algorithm").and_then(Value::as_str) == Some("MLS")
+        && json_string_field(key_ref, "group_state_ref")
+}
+
+fn json_string_field(object: &serde_json::Map<String, Value>, field: &str) -> bool {
+    object
+        .get(field)
+        .and_then(Value::as_str)
+        .is_some_and(|value| !value.trim().is_empty())
+}
+
+fn valid_hash_digest(value: &str) -> bool {
+    let Some(hex) = value
+        .strip_prefix("sha256:")
+        .or_else(|| value.strip_prefix("blake3:"))
+    else {
+        return false;
+    };
+    hex.len() == 64
+        && hex
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
 struct PinEffectiveScope {
