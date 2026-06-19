@@ -185,9 +185,10 @@ pub(super) async fn mirror_mls_effect_to_persistence(
 /// in persistence. Lock is released BEFORE the persistence write so
 /// any backend latency doesn't stall other reducer paths.
 ///
-/// Unknown / unrelated kinds are no-ops. Lookup misses (e.g. archive
-/// for an unknown object — reducer tolerates this for causal /
-/// backfill ordering) also produce no write.
+/// Unknown / unrelated kinds are no-ops. Lookup misses produce no immediate
+/// write; reducer-level pending replay applies them once the target is
+/// materialized, and the later create/snapshot write-through captures the
+/// converged projection.
 async fn write_through_projection(state: &AppState, operation: &Operation) {
     use crate::kinds;
     use crate::persistence::{

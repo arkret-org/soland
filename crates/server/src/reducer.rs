@@ -101,12 +101,12 @@ pub use projections::{
     FanoutPeerStatus, InviteProjection, KeyPackageLifetime, MessageExpiryProjection,
     MessageExpiryProjectionState, MessageState, MlsCommitEpoch, MlsCommitEpochKey, MlsKeyPackage,
     MlsRemoveObligation, MlsWelcome, MlsWelcomeQueueKey, MorphProjection, ObjectLifecycleState,
-    PinProjection, PollOptionState, PollState, ProjectedMessageView, PushRouteCellValue,
-    PushRouteSubject, ReactionState, ReadMarkerState, RealmInheritancePolicyState, RealmLinkState,
-    RealmPolicyServerConfig, RedactionCellValue, RsvpProjection, SolandAgentProjection,
-    SolandKeyBackupActiveSeries, SolandMembershipState, SolandRealmState, SolandRelationState,
-    SpaceContainerLifecycleState, SpaceContainerProjection, StrandProjection,
-    message_expiry_projection_from_value,
+    PendingReplayEntry, PinProjection, PollOptionState, PollState, ProjectedMessageView,
+    PushRouteCellValue, PushRouteSubject, ReactionState, ReadMarkerState,
+    RealmInheritancePolicyState, RealmLinkState, RealmPolicyServerConfig, RedactionCellValue,
+    RsvpProjection, SolandAgentProjection, SolandKeyBackupActiveSeries, SolandMembershipState,
+    SolandRealmState, SolandRelationState, SpaceContainerLifecycleState, SpaceContainerProjection,
+    StrandProjection, message_expiry_projection_from_value,
 };
 
 #[cfg(test)]

@@ -73,6 +73,10 @@ pub struct ProjectionState {
     /// the projection layer consults this map at read time and replaces
     /// the payload with the tombstone.
     pub redaction_cells: BTreeMap<String, Option<RedactionCellValue>>,
+    /// Accepted projection operations whose local target is not materialized
+    /// yet. Backfill/snapshot/create arrival drains this queue and replays the
+    /// operations instead of losing them as accepted no-ops.
+    pub pending_replay: BTreeMap<String, Vec<PendingReplayEntry>>,
     /// Per-cell effective state
     /// populated from the Move/Seal pipeline's `apply_seal` write-back.
     ///
@@ -246,6 +250,77 @@ impl ProjectionState {
 
     pub fn push_route_cell_value(&self, subject: &PushRouteSubject) -> Option<&PushRouteCellValue> {
         self.push_routes.get(subject)
+    }
+
+    pub(crate) fn queue_pending_replay(
+        &mut self,
+        target_ref: impl Into<String>,
+        operation: &Operation,
+        reason: impl Into<String>,
+    ) -> ProjectionEffect {
+        let target_ref = target_ref.into();
+        let reason = reason.into();
+        let operation_id = operation.operation_id.to_string();
+        let queue = self.pending_replay.entry(target_ref.clone()).or_default();
+        if !queue.iter().any(|entry| entry.operation_id == operation_id) {
+            queue.push(PendingReplayEntry {
+                target_ref: target_ref.clone(),
+                reason: reason.clone(),
+                operation_id: operation_id.clone(),
+                operation: operation.clone(),
+                queued_at: operation.created_at,
+            });
+        }
+        ProjectionEffect::PendingReplayQueued {
+            target_ref,
+            operation_id,
+            reason,
+        }
+    }
+
+    pub(crate) fn projected_ref_exists(&self, target_ref: &str) -> bool {
+        if target_ref.starts_with("ck:space:") {
+            return self.space_containers.contains_key(target_ref);
+        }
+        if target_ref.starts_with("ck:strand:") {
+            return self.strands.contains_key(target_ref);
+        }
+        if target_ref.starts_with("ck:morph:") {
+            return self.morphs.contains_key(target_ref);
+        }
+        if target_ref.starts_with("ck:relation:") {
+            return self.relations.contains_key(target_ref);
+        }
+        if target_ref.starts_with("ck:event:") || target_ref.starts_with("ck:message:") {
+            let event_id = message_event_id_from_ref(target_ref);
+            return self.messages.contains_key(target_ref) || self.messages.contains_key(&event_id);
+        }
+        false
+    }
+
+    pub fn replay_resolved_pending(&mut self, hlc: &ServerHlc) -> usize {
+        let mut replayed = 0usize;
+        for _ in 0..128 {
+            let ready_targets = self
+                .pending_replay
+                .keys()
+                .filter(|target_ref| self.projected_ref_exists(target_ref))
+                .cloned()
+                .collect::<Vec<_>>();
+            if ready_targets.is_empty() {
+                break;
+            }
+            for target_ref in ready_targets {
+                let Some(entries) = self.pending_replay.remove(&target_ref) else {
+                    continue;
+                };
+                for entry in entries {
+                    let _ = self.apply_once(&entry.operation, hlc);
+                    replayed += 1;
+                }
+            }
+        }
+        replayed
     }
 
     pub(crate) fn apply_device_push_route(&mut self, operation: &Operation) -> ProjectionEffect {
@@ -563,7 +638,7 @@ impl ProjectionState {
     /// `lattice_kinds.rs`; the structured ProjectionState fields don't
     /// mirror them. `routing/projection.rs::project_read_receipt_policy`
     /// handles the read-receipt cache fast path explicitly.
-    pub fn apply(&mut self, operation: &Operation, hlc: &ServerHlc) -> ProjectionEffect {
+    fn apply_once(&mut self, operation: &Operation, hlc: &ServerHlc) -> ProjectionEffect {
         let Some(kind) = crate::kinds::canonical_kind_for_operation(operation) else {
             return ProjectionEffect::Ignored;
         };
@@ -571,6 +646,12 @@ impl ProjectionState {
             Some(dispatch) => dispatch(self, operation, hlc),
             None => ProjectionEffect::Ignored,
         }
+    }
+
+    pub fn apply(&mut self, operation: &Operation, hlc: &ServerHlc) -> ProjectionEffect {
+        let effect = self.apply_once(operation, hlc);
+        self.replay_resolved_pending(hlc);
+        effect
     }
 
     /// Apply a batch of operations.

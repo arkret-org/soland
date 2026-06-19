@@ -7,6 +7,7 @@ mod circle_history;
 mod invite_claim;
 mod key_backup_active_series;
 mod moderation;
+mod pending_replay;
 mod pin_rsvp_encryption;
 mod pin_scope_safety;
 mod redaction_message;

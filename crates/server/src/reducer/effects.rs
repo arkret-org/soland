@@ -272,6 +272,15 @@ pub enum ProjectionEffect {
         subject: PushRouteSubject,
         action: String,
     },
+    /// An accepted projection event referenced a target that has not reached
+    /// this reducer yet. The operation is retained in
+    /// `ProjectionState::pending_replay` and replayed once the target is
+    /// materialized by backfill, snapshot restore, or a later create event.
+    PendingReplayQueued {
+        target_ref: String,
+        operation_id: String,
+        reason: String,
+    },
     /// P2 — `ck.moderation.decision` projected as an or_set add into the
     /// `ck.component.moderation_state.v1` cell keyed by `payload.target_ref`
     /// (content-moderation.md §2.6). Carries an issuer/target_ref/decision

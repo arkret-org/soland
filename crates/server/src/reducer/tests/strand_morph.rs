@@ -390,18 +390,19 @@ fn strand_position_events_touch_projection_without_changing_state() {
     assert_eq!(state.strands[strand_id].state, ObjectLifecycleState::Active);
 }
 
-/// Unknown Strand tolerated by the position-touch helper, same convention
-/// as the lifecycle helpers (causal / backfill ordering).
+/// Unknown Strand position events are queued and replayed after backfill.
 #[test]
-fn strand_position_events_tolerate_unknown_strand() {
+fn strand_position_events_queue_unknown_strand() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
+    let realm_id = "ck:realm:01904100-0000-7000-8000-cfc039892036";
+    let strand_id = "ck:strand:01904100-0000-7000-8000-2fb50799ad51";
     let effect = state.apply(
         &make_operation(
             crate::kinds::CK_STRAND_MOVE,
-            "ck:realm:01904100-0000-7000-8000-cfc039892036",
+            realm_id,
             serde_json::json!({
-                "strand_id": "ck:strand:nope-not-here",
+                "strand_id": strand_id,
                 "board_space_id": "ck:space:01904100-0000-7000-8000-c10dc0000001",
                 "target_space_id": "ck:space:01904100-0000-7000-8000-c10dc0000002",
                 "rank": "a1",
@@ -409,7 +410,27 @@ fn strand_position_events_tolerate_unknown_strand() {
         ),
         &hlc,
     );
-    assert!(matches!(effect, ProjectionEffect::Ignored));
+    assert!(matches!(
+        effect,
+        ProjectionEffect::PendingReplayQueued { ref target_ref, .. } if target_ref == strand_id
+    ));
+    state.apply(
+        &make_operation(
+            crate::kinds::CK_STRAND_CREATE,
+            realm_id,
+            serde_json::json!({
+                "object": {
+                    "id": strand_id,
+                    "realm_id": realm_id,
+                    "metadata": { "title": "Backfill target" },
+                    "created_by": "did:web:alice.example",
+                }
+            }),
+        ),
+        &hlc,
+    );
+    assert!(state.pending_replay.get(strand_id).is_none());
+    assert!(state.strands[strand_id].updated_at.is_some());
 }
 
 // ── ck.redaction -> Strand / Morph terminal-state push ──

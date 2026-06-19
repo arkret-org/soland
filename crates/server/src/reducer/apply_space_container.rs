@@ -8,7 +8,8 @@ impl ProjectionState {
     /// HTTP admission with a 412 failed_precondition instead of letting
     /// the reducer accept-then-reject after persistence. Unknown Space container
     /// (no prior ck.space.create projected) returns Ok — causal /
-    /// backfill ordering is allowed; the reducer also tolerates it.
+    /// backfill ordering is allowed; the reducer queues the operation for
+    /// pending replay instead of applying a no-op.
     pub fn check_space_container_lifecycle_transition(
         &self,
         operation: &Operation,
@@ -194,7 +195,7 @@ impl ProjectionState {
     /// existing Space container. Per common-fields.md §5.1 ("update on non-active
     /// object MUST fail"): rejects with the spec `space_not_active` reason
     /// code if the target is not in Active state. Unknown Space container is
-    /// tolerated.
+    /// queued for pending replay.
     pub(crate) fn apply_space_container_update(
         &mut self,
         operation: &Operation,
@@ -206,7 +207,11 @@ impl ProjectionState {
             };
         };
         let Some(space_container) = self.space_containers.get_mut(&container_space_id) else {
-            return ProjectionEffect::Ignored;
+            return self.queue_pending_replay(
+                container_space_id,
+                operation,
+                "space_container_unknown",
+            );
         };
         if space_container.state != SpaceContainerLifecycleState::Active {
             return ProjectionEffect::Rejected {
@@ -262,8 +267,19 @@ impl ProjectionState {
         };
         if let Some(parent_space_id) = parent_ref.as_deref() {
             let Some(space_container) = self.space_containers.get(&container_space_id) else {
-                return ProjectionEffect::Ignored;
+                return self.queue_pending_replay(
+                    container_space_id.to_owned(),
+                    operation,
+                    "space_container_unknown",
+                );
             };
+            if !self.space_containers.contains_key(parent_space_id) {
+                return self.queue_pending_replay(
+                    parent_space_id.to_owned(),
+                    operation,
+                    "space_parent_unknown",
+                );
+            }
             if let Err(reason) = self.check_space_child_scope_policy(
                 parent_space_id,
                 space_container.scope_circle_id.as_deref(),
@@ -276,7 +292,11 @@ impl ProjectionState {
             }
         }
         let Some(space_container) = self.space_containers.get_mut(&container_space_id) else {
-            return ProjectionEffect::Ignored;
+            return self.queue_pending_replay(
+                container_space_id,
+                operation,
+                "space_container_unknown",
+            );
         };
         if space_container.state != SpaceContainerLifecycleState::Active {
             return ProjectionEffect::Rejected {
@@ -299,8 +319,8 @@ impl ProjectionState {
     /// Apply a `ck.space.archive` / `ck.space.restore` / `ck.space.tombstone`
     /// event with the canonical state-machine guard from
     /// `common-fields.md §5.1`. Unknown Space container (no prior
-    /// ck.space.create in the projection) is tolerated — returns `Ignored` so causal /
-    /// backfill ordering doesn't get flagged as invalid. Invalid source
+    /// ck.space.create in the projection) is queued for pending replay so causal /
+    /// backfill ordering doesn't get lost. Invalid source
     /// state returns `Rejected { reason }` with the spec reason_code;
     /// `event_log::submit_event` maps that to HTTP 412.
     pub(crate) fn apply_space_container_lifecycle(
@@ -343,11 +363,13 @@ impl ProjectionState {
             .map(ToOwned::to_owned);
         {
             let Some(space_container) = self.space_containers.get_mut(&container_space_id) else {
-                // Unknown Space container — likely the ck.space.create has not yet
-                // been projected (causal / backfill window). Tolerate
-                // silently per the spec convention (common-fields.md §5.1
-                // unknown-object tolerance).
-                return ProjectionEffect::Ignored;
+                // Unknown Space container: retain this operation until the
+                // create/backfill path materializes the target, then replay it.
+                return self.queue_pending_replay(
+                    container_space_id,
+                    operation,
+                    "space_container_unknown",
+                );
             };
 
             if !allowed_source.contains(&space_container.state) {

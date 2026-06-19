@@ -114,7 +114,7 @@ impl ProjectionState {
             };
         };
         let Some(morph) = self.morphs.get_mut(&morph_id) else {
-            return ProjectionEffect::Ignored;
+            return self.queue_pending_replay(morph_id, operation, "morph_unknown");
         };
         if morph.state != ObjectLifecycleState::Active {
             return ProjectionEffect::Rejected {
@@ -173,7 +173,7 @@ impl ProjectionState {
             };
         };
         let Some(morph) = self.morphs.get_mut(&morph_id) else {
-            return ProjectionEffect::Ignored;
+            return self.queue_pending_replay(morph_id, operation, "morph_unknown");
         };
         let (allowed_source, target_state, reason_on_invalid) = match transition {
             ObjectLifecycleTransition::Archive => (

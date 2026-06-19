@@ -78,6 +78,20 @@ impl RelationProfile {
 }
 
 impl ProjectionState {
+    fn missing_relation_endpoint(
+        &self,
+        from_ref: Option<&str>,
+        to_ref: Option<&str>,
+    ) -> Option<String> {
+        for endpoint in [from_ref, to_ref].into_iter().flatten() {
+            if relation_endpoint_needs_projection(endpoint) && !self.projected_ref_exists(endpoint)
+            {
+                return Some(endpoint.to_owned());
+            }
+        }
+        None
+    }
+
     pub(crate) fn apply_relation_create(
         &mut self,
         operation: &Operation,
@@ -114,6 +128,11 @@ impl ProjectionState {
             .or_else(|| operation.payload.get("to_ref"))
             .and_then(|v| v.as_str())
             .map(ToOwned::to_owned);
+        if let Some(target_ref) =
+            self.missing_relation_endpoint(from_ref.as_deref(), to_ref.as_deref())
+        {
+            return self.queue_pending_replay(target_ref, operation, "relation_endpoint_unknown");
+        }
         let fields = operation
             .payload
             .get("fields")
@@ -630,10 +649,10 @@ impl ProjectionState {
             };
         }
         // Patch-merge on the existing relation. If the relation does not yet
-        // exist locally (out-of-order replication), drop the update — a
-        // subsequent gap-fill will replay create + update in order.
+        // exist locally (out-of-order replication), retain the update for
+        // pending replay when the create is backfilled.
         let Some(relation) = self.relations.get_mut(&relation_id) else {
-            return ProjectionEffect::Ignored;
+            return self.queue_pending_replay(relation_id, operation, "relation_unknown");
         };
         if let Some(scope_circle_id) = relation_scope_circle_id_from_payload(&operation.payload)
             && relation.scope_circle_id.as_deref() != Some(scope_circle_id.as_str())
@@ -692,7 +711,13 @@ impl ProjectionState {
             .unwrap_or("")
             .to_owned();
 
-        if let Some(relation) = self.relations.get_mut(&relation_id) {
+        if relation_id.is_empty() {
+            return ProjectionEffect::Ignored;
+        }
+        let Some(relation) = self.relations.get_mut(&relation_id) else {
+            return self.queue_pending_replay(relation_id, operation, "relation_unknown");
+        };
+        {
             relation.state = "tombstoned".to_owned();
             relation.updated_at = operation.created_at;
         }
@@ -799,6 +824,15 @@ fn relation_scope_circle_id_from_payload(payload: &Value) -> Option<String> {
         .and_then(Value::as_str)
         .filter(|value| value.starts_with("ck:circle:"))
         .map(ToOwned::to_owned)
+}
+
+fn relation_endpoint_needs_projection(endpoint: &str) -> bool {
+    endpoint.starts_with("ck:space:")
+        || endpoint.starts_with("ck:strand:")
+        || endpoint.starts_with("ck:morph:")
+        || endpoint.starts_with("ck:relation:")
+        || endpoint.starts_with("ck:event:")
+        || endpoint.starts_with("ck:message:")
 }
 
 fn relation_event_digest(operation: &Operation) -> String {

@@ -147,7 +147,7 @@ impl ProjectionState {
 
     /// Apply `ck.strand.update` — patch title / summary on an existing Strand.
     /// Spec common-fields.md §5.1: update on non-active object MUST fail
-    /// with `strand_not_active`. Unknown Strand tolerated.
+    /// with `strand_not_active`. Unknown Strand is queued for pending replay.
     pub(crate) fn apply_strand_update(
         &mut self,
         operation: &Operation,
@@ -162,7 +162,7 @@ impl ProjectionState {
         // CKP-0007: Strand scope is set at create time; `scope_circle_id`
         // rebinds fail below with `scope_rebind_forbidden`.
         let Some(strand) = self.strands.get_mut(&strand_id) else {
-            return ProjectionEffect::Ignored;
+            return self.queue_pending_replay(strand_id, operation, "strand_unknown");
         };
         if strand.state != ObjectLifecycleState::Active {
             return ProjectionEffect::Rejected {
@@ -203,7 +203,7 @@ impl ProjectionState {
 
     /// Apply `ck.strand.archive` / `ck.strand.restore`. Spec
     /// `common-fields.md §5.1` + `event-payload.schema.json`
-    /// `object_lifecycle_payload`. Unknown Strand tolerated. The target id is
+    /// `object_lifecycle_payload`. Unknown Strand is queued for pending replay. The target id is
     /// carried by `target_ref` per spec.
     pub(crate) fn apply_strand_lifecycle(
         &mut self,
@@ -222,7 +222,7 @@ impl ProjectionState {
             };
         };
         let Some(strand) = self.strands.get_mut(&strand_id) else {
-            return ProjectionEffect::Ignored;
+            return self.queue_pending_replay(strand_id, operation, "strand_unknown");
         };
         let (allowed_source, target_state, reason_on_invalid) = match transition {
             ObjectLifecycleTransition::Archive => (
@@ -295,7 +295,7 @@ impl ProjectionState {
     /// `ck.component.strand.position.v1` cell family on the Move/Seal
     /// pipeline. The Event-Envelope reducer just bumps `updated_at` /
     /// `updated_by` on the Strand projection so read-after-write sees the
-    /// touch. Unknown Strand is tolerated (causal / backfill).
+    /// touch. Unknown Strand is queued for pending replay.
     pub(crate) fn apply_strand_position_touch(
         &mut self,
         operation: &Operation,
@@ -313,7 +313,7 @@ impl ProjectionState {
         };
         let position = strand_position_from_lifecycle_payload(&operation.payload);
         let Some(strand) = self.strands.get(&strand_id) else {
-            return ProjectionEffect::Ignored;
+            return self.queue_pending_replay(strand_id, operation, "strand_unknown");
         };
         if let Some((_, list_space_id, _)) = position.as_ref()
             && let Err(reason) = self.check_space_child_scope_policy(
@@ -328,7 +328,7 @@ impl ProjectionState {
             };
         }
         let Some(strand) = self.strands.get_mut(&strand_id) else {
-            return ProjectionEffect::Ignored;
+            return self.queue_pending_replay(strand_id, operation, "strand_unknown");
         };
         strand.updated_by = operation
             .payload
@@ -355,8 +355,8 @@ impl ProjectionState {
 
     /// Apply `ck.strand.tracks.update` server-side. State guard runs in
     /// `check_strand_tracks_transition` preflight; by the time this reducer
-    /// fires, the parent Strand is known to be Active (or unknown, in which
-    /// case the touch is a no-op). Unknown Strand tolerated.
+    /// fires, the parent Strand is known to be Active. Unknown Strand targets
+    /// are queued for pending replay.
     pub(crate) fn apply_strand_track_touch(
         &mut self,
         operation: &Operation,
@@ -373,7 +373,7 @@ impl ProjectionState {
             };
         };
         let Some(strand) = self.strands.get_mut(&strand_id) else {
-            return ProjectionEffect::Ignored;
+            return self.queue_pending_replay(strand_id, operation, "strand_unknown");
         };
         // Defence-in-depth: even though check_strand_tracks_transition
         // gated this at the admission layer, re-check here so direct

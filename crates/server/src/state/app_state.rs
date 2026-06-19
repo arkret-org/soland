@@ -654,6 +654,7 @@ impl AppState {
             proj.space_containers.extend(proj_updates.space_containers);
             proj.strands.extend(proj_updates.strands);
             proj.morphs.extend(proj_updates.morphs);
+            proj.replay_resolved_pending(&self.hlc);
         }
 
         // Hydrate per-subject invite_receive_policy overrides from durable

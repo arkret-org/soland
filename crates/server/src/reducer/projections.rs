@@ -7,7 +7,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use cokret_sdk::StrandTrackConfig;
+use cokret_sdk::{Operation, StrandTrackConfig};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -19,6 +19,15 @@ pub struct PushRouteSubject {
     pub principal_id: String,
     pub device_id: String,
     pub push_route: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct PendingReplayEntry {
+    pub target_ref: String,
+    pub reason: String,
+    pub operation_id: String,
+    pub operation: Operation,
+    pub queued_at: chrono::DateTime<chrono::Utc>,
 }
 
 /// Stream-F (Wave 2C) — per-peer fanout status for a single

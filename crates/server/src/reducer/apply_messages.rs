@@ -249,9 +249,10 @@ impl ProjectionState {
             };
             self.messages.insert(new_event_id, revised);
             effect
-        } else {
-            // Original not found; treat as a new message
+        } else if original_id.is_empty() {
             self.apply_message(operation, now)
+        } else {
+            self.queue_pending_replay(original_id, operation, "message_revision_target_unknown")
         }
     }
 
@@ -359,6 +360,13 @@ impl ProjectionState {
                     morph_id: object_ref,
                     new_state: ObjectLifecycleState::Redacted,
                 };
+            }
+            if object_ref.starts_with("ck:strand:") || object_ref.starts_with("ck:morph:") {
+                return self.queue_pending_replay(
+                    object_ref,
+                    operation,
+                    "redaction_object_unknown",
+                );
             }
         }
 
