@@ -9,6 +9,7 @@
 //! - `GET /health` — liveness + database/events health
 //! - `GET /readyz` — readiness gate for deploy orchestrators
 //! - `GET /_cokret/describe`
+//! - `GET /_soland/describe`
 //! - `GET /_soland/gate/auth/bridge/describe`
 //! - `GET /_soland/self/integration/describe`
 //!
@@ -23,13 +24,14 @@ use diesel_async::RunQueryDsl;
 use salvo::http::StatusCode;
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
-use serde_json::json;
+use serde_json::{Value, json};
 
 use crate::state::AppState;
 use crate::wire::{
     AuthBridgeAuthDescriptor, AuthBridgeDescribeOutcome, AuthBridgeExamples,
     AuthBridgePushDescriptor, HealthOutcome, IntegrationDependencyDescriptor,
-    IntegrationDescribeOutcome, IntegrationSurfaceDescriptor, describe,
+    IntegrationDescribeOutcome, IntegrationSurfaceDescriptor, SolandServerDescribeOutcome,
+    UnsupportedProfileDescriptor, describe,
 };
 use crate::{JsonResult, json_ok};
 
@@ -96,6 +98,7 @@ pub(super) fn protocol_router() -> Router {
 
 pub(super) fn local_router() -> Router {
     Router::new()
+        .push(Router::with_path("describe").get(soland_describe))
         // soland-local integration describe → self-scoped.
         .push(Router::with_path("self/integration/describe").get(integration_describe))
 }
@@ -241,6 +244,42 @@ struct HealthCheckRow {
 async fn server_describe(depot: &mut Depot) -> JsonResult<ServerDescribeOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     json_ok(ServerDescribeOutcome(build_server_description(state)))
+}
+
+#[endpoint(
+    operation_id = "org.cokret.soland.system.describe",
+    tags("soland-local"),
+    summary = "Soland operator capability description"
+)]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.system.describe"))]
+async fn soland_describe(depot: &mut Depot) -> JsonResult<SolandServerDescribeOutcome> {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let service = build_server_description(state);
+    let unsupported_profiles = unsupported_profiles_from_limits(&service.limits);
+    json_ok(SolandServerDescribeOutcome {
+        service,
+        unsupported_profiles,
+        proof_verifier_mode: state.config.proof_verifier_mode().to_owned(),
+        admin_auth_mode: state.config.admin_auth_mode().to_owned(),
+        erasure_receipts_endpoint: "/_soland/admin/audit/erasure-receipts".to_owned(),
+        hardening: state.config.hardening_status(),
+    })
+}
+
+fn unsupported_profiles_from_limits(limits: &Value) -> Vec<UnsupportedProfileDescriptor> {
+    limits
+        .pointer("/profile_status/unsupported_profiles")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|item| {
+            Some(UnsupportedProfileDescriptor {
+                profile: item.get("profile")?.as_str()?.to_owned(),
+                status: item.get("status")?.as_str()?.to_owned(),
+                reason: item.get("reason")?.as_str()?.to_owned(),
+            })
+        })
+        .collect()
 }
 
 fn build_server_description(state: &AppState) -> ServerDescription {

@@ -990,13 +990,13 @@ pub fn describe(
                 "ck.profile.principal_server_events_api.v1".to_owned(),
                 "ck.profile.mimi_interop.v1".to_owned(),
                 "ck.profile.file_transfer.v1".to_owned(),
+                "ck.profile.webrtc_media.v1".to_owned(),
             ];
             // PROF-1 (R3 spec-sync 2026-05-27, cokret-spec b47ff6ec) —
             // advertise `ck.profile.media_service_binding.v1` whenever the
-            // server exposes the `ck.self.call.media.exchange.issue_token` handler.
-            // soland mounts the handler unconditionally (see
-            // `routing::interop::webrtc::router` — `/_cokret/self/rtc/token`),
-            // so the claim is unconditional too.
+            // server exposes the `ck.self.call.media.exchange.issue_token`
+            // handler. soland mounts the handler unconditionally, and also
+            // claims the required `ck.profile.webrtc_media.v1` dependency above.
             profiles.push("ck.profile.media_service_binding.v1".to_owned());
             // PROF-1 — `ck.profile.accountable_principals.strict_reject.v1` is
             // gated by `SOLAND_ACCOUNTABLE_TO_STRICT_REJECT=true`.
