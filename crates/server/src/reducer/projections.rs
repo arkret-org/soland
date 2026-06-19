@@ -750,10 +750,13 @@ pub struct SolandRelationState {
     pub relation_id: String,
     pub realm_id: String,
     pub relation_kind: String,
+    pub scope_circle_id: Option<String>,
     pub from_ref: Option<String>,
     pub to_ref: Option<String>,
     pub fields: BTreeMap<String, Value>,
     pub state: String,
+    pub source_event_id: Option<String>,
+    pub source_event_digest: Option<String>,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }

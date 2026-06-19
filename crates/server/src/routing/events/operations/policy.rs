@@ -284,15 +284,24 @@ fn validate_reaction_scope_policy(
 }
 
 /// circle.md §8 — resolve the Circle a write operation lands content into, if
-/// any. Returns the `ck:circle:…` id when the operation introduces or mutates a
-/// Circle-scoped object, else `None` (Realm-default scope). Object-carrying
-/// creates declare scope inline (`payload.object` / `payload.relation`);
-/// `ck.message.create` and Strand update / lifecycle derive scope from the
-/// projected Strand — a Message never self-declares its scope.
+/// any. Returns the `ck:circle:…` id when the operation introduces, mutates, or
+/// tombstones a Circle-scoped object, else `None` (Realm-default scope).
+/// Object-carrying creates declare scope inline (`payload.object` /
+/// `payload.relation` / top-level `scope_circle_id`); updates and lifecycle
+/// writes derive scope from the projected target. `ck.message.create` derives
+/// scope from the projected Strand — a Message never self-declares its scope.
 fn operation_target_scope_circle_id(
     projection: &crate::reducer::ProjectionState,
     operation: &Operation,
 ) -> Option<String> {
+    let top_level_scope = || -> Option<String> {
+        operation
+            .payload
+            .get("scope_circle_id")
+            .and_then(Value::as_str)
+            .filter(|value| value.starts_with("ck:circle:"))
+            .map(ToOwned::to_owned)
+    };
     let inline_scope = |field: &str| -> Option<String> {
         operation
             .payload
@@ -302,6 +311,13 @@ fn operation_target_scope_circle_id(
             .and_then(Value::as_str)
             .filter(|value| value.starts_with("ck:circle:"))
             .map(ToOwned::to_owned)
+    };
+    let relation_scope = |field: &str| -> Option<String> {
+        operation
+            .payload
+            .get(field)
+            .and_then(Value::as_str)
+            .and_then(|relation_id| projection.relation_scope_circle_id(relation_id))
     };
     let strand_scope = |field: &str| -> Option<String> {
         operation
@@ -321,7 +337,12 @@ fn operation_target_scope_circle_id(
         kinds::CK_STRAND_CREATE | kinds::CK_MORPH_CREATE | kinds::CK_SPACE_CONTAINER_CREATE => {
             inline_scope("object")
         }
-        kinds::CK_RELATION_CREATE => inline_scope("relation").or_else(|| inline_scope("object")),
+        kinds::CK_RELATION_CREATE => inline_scope("relation")
+            .or_else(|| inline_scope("object"))
+            .or_else(top_level_scope),
+        kinds::CK_RELATION_UPDATE | kinds::CK_RELATION_DELETE => {
+            relation_scope("relation_id").or_else(|| relation_scope("id"))
+        }
         kinds::CK_MESSAGE_CREATE | kinds::CK_STRAND_UPDATE => strand_scope("strand_id"),
         kinds::CK_MORPH_UPDATE => morph_scope("morph_id").or_else(|| morph_scope("target_ref")),
         kinds::CK_MORPH_ARCHIVE | kinds::CK_MORPH_RESTORE => morph_scope("morph_id"),
@@ -370,9 +391,9 @@ fn operation_target_scope_circle_id(
 /// admission too.
 ///
 /// Coverage: object-carrying creates (Strand / Morph / Space / Relation),
-/// `ck.message.create`, Strand update / lifecycle, Morph update / lifecycle,
-/// and `ck.reaction.add` / `ck.reaction.remove` (scope derived from the target
-/// Message's Strand).
+/// relation update/tombstone, `ck.message.create`, Strand update / lifecycle,
+/// Morph update / lifecycle, and `ck.reaction.add` / `ck.reaction.remove`
+/// (scope derived from the target Message's Strand).
 ///
 /// Membership is evaluated against the current Circle projection (soland's
 /// convergence frontier), matching the delivery-side check. Peer / service-

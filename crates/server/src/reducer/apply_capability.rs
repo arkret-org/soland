@@ -846,6 +846,7 @@ mod agent_key_flag_tests {
             payload,
             idempotency_key: None,
             created_at: chrono::Utc::now(),
+            canonical_event_digest: None,
         }
     }
 

@@ -531,12 +531,26 @@ impl ProjectionState {
             .filter(|scope| scope.starts_with("ck:circle:"))
     }
 
+    pub fn space_container_scope_circle_id(&self, space_id: &str) -> Option<String> {
+        self.space_containers
+            .get(space_id)
+            .and_then(|space| space.scope_circle_id.clone())
+            .filter(|scope| scope.starts_with("ck:circle:"))
+    }
+
     /// CKP-0007 - resolve the Circle (`ck:circle:...`) a Morph is scoped to, if
     /// any. Used by admission gates for `ck.morph.update` and lifecycle writes.
     pub fn morph_scope_circle_id(&self, morph_id: &str) -> Option<String> {
         self.morphs
             .get(morph_id)
             .and_then(|morph| morph.scope_circle_id.clone())
+            .filter(|scope| scope.starts_with("ck:circle:"))
+    }
+
+    pub fn relation_scope_circle_id(&self, relation_id: &str) -> Option<String> {
+        self.relations
+            .get(relation_id)
+            .and_then(|relation| relation.scope_circle_id.clone())
             .filter(|scope| scope.starts_with("ck:circle:"))
     }
 }

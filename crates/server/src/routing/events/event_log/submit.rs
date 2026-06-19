@@ -667,9 +667,9 @@ pub(in crate::routing) async fn submit_event_value(
                 };
                 return Err(SubmitOneError::new(status, reason, reason));
             }
-            // relation.md §4 — structural contains/belongs_to MUST stay within a
-            // single Realm; reject cross-Realm structural relations at ingest.
-            if let Err(reason) = proj.check_relation_cross_realm(operation) {
+            // relation.md §2/§4 — relation effective scope is reducer-managed,
+            // and structural contains/belongs_to MUST stay within one Realm.
+            if let Err(reason) = proj.check_relation_invariants(operation) {
                 return Err(SubmitOneError::new(
                     StatusCode::PRECONDITION_FAILED,
                     reason,

@@ -570,7 +570,13 @@ fn validate_read_cursor_hlc(hlc: &str) -> Result<(), &'static str> {
 pub(crate) fn validate_relation_operation_payload(
     operation: &Operation,
 ) -> Result<(), &'static str> {
-    if operation.payload.get("effective_scope").is_some() {
+    if operation.payload.get("effective_scope").is_some()
+        || operation
+            .payload
+            .get("relation")
+            .and_then(Value::as_object)
+            .is_some_and(|relation| relation.contains_key("effective_scope"))
+    {
         return Err("effective_scope_reducer_managed");
     }
     let relation_kind = ["relation_kind", "kind"]

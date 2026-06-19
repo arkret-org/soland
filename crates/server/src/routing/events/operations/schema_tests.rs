@@ -509,6 +509,26 @@ mod derived_relation_and_morph_immutability_tests {
         );
     }
 
+    #[test]
+    fn relation_create_nested_effective_scope_is_rejected() {
+        let operation = op(
+            kinds::CK_RELATION_CREATE,
+            json!({
+                "relation": {
+                    "id": "ck:relation:01904100-0000-7000-8000-00000000001f",
+                    "relation_kind": "references",
+                    "from_ref": "ck:strand:01904100-0000-7000-8000-000000000020",
+                    "to_ref": "ck:strand:01904100-0000-7000-8000-000000000021",
+                    "effective_scope": {"kind": "realm"}
+                }
+            }),
+        );
+        assert_eq!(
+            validate_relation_operation_payload(&operation),
+            Err("effective_scope_reducer_managed")
+        );
+    }
+
     // morph.md §4 line 149 — morph_type is immutable after create.
     #[test]
     fn morph_update_morph_type_is_immutable() {

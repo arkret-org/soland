@@ -323,3 +323,109 @@ async fn act_on_behalf_agent_allows_effective_selection_and_active_grant() {
         .await
         .expect("effective act-on-behalf grant should pass");
 }
+
+#[tokio::test]
+async fn circle_scoped_relation_update_and_delete_require_circle_membership() {
+    let state = test_state();
+    let realm_id =
+        cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-000000000801".to_owned())
+            .unwrap();
+    let circle_id = "ck:circle:01904100-0000-7000-8000-000000000801";
+    let relation_id = "ck:relation:01904100-0000-7000-8000-000000000801";
+    let now = chrono::Utc::now();
+    {
+        let mut projection = state.projection.lock().expect("projection mutex");
+        let mut members = std::collections::BTreeSet::new();
+        members.insert("did:web:alice.example".to_owned());
+        projection.circles.insert(
+            circle_id.to_owned(),
+            crate::reducer::CircleProjection {
+                circle_id: circle_id.to_owned(),
+                realm_id: realm_id.to_string(),
+                title: "Private".to_owned(),
+                summary: None,
+                directory_visibility: "private".to_owned(),
+                join_rule: "invite".to_owned(),
+                history_visibility: "joined".to_owned(),
+                content_encryption_floor: None,
+                metadata_encryption_floor: None,
+                encryption_profile: "none".to_owned(),
+                mls_group_ref: None,
+                state: crate::reducer::CircleLifecycleState::Active,
+                state_changed_at: None,
+                created_by: "did:web:alice.example".to_owned(),
+                created_at: now,
+                updated_by: None,
+                updated_at: None,
+                members,
+            },
+        );
+        projection.relations.insert(
+            relation_id.to_owned(),
+            crate::reducer::SolandRelationState {
+                relation_id: relation_id.to_owned(),
+                realm_id: realm_id.to_string(),
+                relation_kind: "confidential_discussion_of".to_owned(),
+                scope_circle_id: Some(circle_id.to_owned()),
+                from_ref: Some("ck:strand:01904100-0000-7000-8000-000000000811".to_owned()),
+                to_ref: Some("ck:strand:01904100-0000-7000-8000-000000000812".to_owned()),
+                fields: Default::default(),
+                state: "active".to_owned(),
+                source_event_id: Some("ck:event:01904100-0000-7000-8000-000000000801".to_owned()),
+                source_event_digest: Some(
+                    "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+                        .to_owned(),
+                ),
+                created_at: now,
+                updated_at: now,
+            },
+        );
+    }
+
+    let bob_update = op(
+        realm_id.clone(),
+        "000000000802",
+        kinds::CK_RELATION_UPDATE,
+        json!({
+            "relation_id": relation_id,
+            "sender": "did:web:bob.example",
+            "fields": {"label": "nope"}
+        }),
+    );
+    assert_eq!(
+        validate_operation_policy(&state, &[bob_update])
+            .await
+            .unwrap_err(),
+        "circle_scope_membership_required"
+    );
+
+    let alice_update = op(
+        realm_id.clone(),
+        "000000000803",
+        kinds::CK_RELATION_UPDATE,
+        json!({
+            "relation_id": relation_id,
+            "sender": "did:web:alice.example",
+            "fields": {"label": "ok"}
+        }),
+    );
+    validate_operation_policy(&state, &[alice_update])
+        .await
+        .expect("circle member can update scoped relation");
+
+    let bob_delete = op(
+        realm_id,
+        "000000000804",
+        kinds::CK_RELATION_DELETE,
+        json!({
+            "relation_id": relation_id,
+            "sender": "did:web:bob.example"
+        }),
+    );
+    assert_eq!(
+        validate_operation_policy(&state, &[bob_delete])
+            .await
+            .unwrap_err(),
+        "circle_scope_membership_required"
+    );
+}

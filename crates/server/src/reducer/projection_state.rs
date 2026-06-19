@@ -463,6 +463,9 @@ impl ProjectionState {
         now: chrono::DateTime<chrono::Utc>,
     ) {
         let relation_id = format!("ck:relation:kanban.position:{board_space_id}:{strand_id}");
+        let scope_circle_id = self
+            .strand_scope_circle_id(strand_id)
+            .or_else(|| self.space_container_scope_circle_id(list_space_id));
         let relation = self
             .relations
             .entry(relation_id.clone())
@@ -470,15 +473,19 @@ impl ProjectionState {
                 relation_id: relation_id.clone(),
                 realm_id: realm_id.to_owned(),
                 relation_kind: "contains".to_owned(),
+                scope_circle_id: scope_circle_id.clone(),
                 from_ref: Some(list_space_id.to_owned()),
                 to_ref: Some(strand_id.to_owned()),
                 fields: BTreeMap::new(),
                 state: "active".to_owned(),
+                source_event_id: None,
+                source_event_digest: None,
                 created_at: now,
                 updated_at: now,
             });
         relation.realm_id = realm_id.to_owned();
         relation.relation_kind = "contains".to_owned();
+        relation.scope_circle_id = scope_circle_id;
         relation.from_ref = Some(list_space_id.to_owned());
         relation.to_ref = Some(strand_id.to_owned());
         relation.fields.insert(

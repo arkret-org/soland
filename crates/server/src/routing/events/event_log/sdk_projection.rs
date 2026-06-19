@@ -245,6 +245,7 @@ pub(crate) fn projection_operation_from_event(
         parsed.kind.clone(),
         Value::Object(payload_object.clone()),
     );
+    operation.canonical_event_digest = Some(parsed.canonical_digest.clone());
     operation.created_at = envelope
         .get("created_at")
         .and_then(Value::as_str)
@@ -281,7 +282,7 @@ fn normalize_relation_create_payload(
                 .entry("relation_kind".to_owned())
                 .or_insert_with(|| Value::String(relation_kind.to_owned()));
         }
-        for field in ["from_ref", "to_ref", "rank", "fields"] {
+        for field in ["from_ref", "to_ref", "rank", "fields", "scope_circle_id"] {
             if let Some(value) = relation.get(field) {
                 payload_object
                     .entry(field.to_owned())
