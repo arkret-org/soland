@@ -296,6 +296,7 @@ impl ProjectionState {
                     resolved_at: None,
                     resolution_event_id: None,
                     cancel_reason: None,
+                    approval: None,
                 },
             );
         }
@@ -323,10 +324,82 @@ impl ProjectionState {
         if let Some(request) = self.agent_action_requests.get_mut(&request_id)
             && request.status == AgentActionRequestStatus::Pending
         {
+            let approval = if status == AgentActionRequestStatus::Approved {
+                let Some(approval_id) = operation
+                    .payload
+                    .get("approval_id")
+                    .and_then(|v| v.as_str())
+                    .map(ToOwned::to_owned)
+                else {
+                    return ProjectionEffect::Rejected {
+                        reason: "agent_action_approval_missing_approval_id".to_owned(),
+                    };
+                };
+                let Some(proposed_action) = operation
+                    .payload
+                    .get("proposed_action")
+                    .and_then(|v| v.as_str())
+                    .map(ToOwned::to_owned)
+                else {
+                    return ProjectionEffect::Rejected {
+                        reason: "agent_action_approval_missing_proposed_action".to_owned(),
+                    };
+                };
+                let Some(target) = operation.payload.get("target").cloned() else {
+                    return ProjectionEffect::Rejected {
+                        reason: "agent_action_approval_missing_target".to_owned(),
+                    };
+                };
+                let Some(approved_payload_digest) = operation
+                    .payload
+                    .get("approved_payload_digest")
+                    .and_then(|v| v.as_str())
+                    .map(ToOwned::to_owned)
+                else {
+                    return ProjectionEffect::Rejected {
+                        reason: "agent_action_approval_missing_payload_digest".to_owned(),
+                    };
+                };
+                let Some(approval_nonce) = operation
+                    .payload
+                    .get("approval_nonce")
+                    .and_then(|v| v.as_str())
+                    .map(ToOwned::to_owned)
+                else {
+                    return ProjectionEffect::Rejected {
+                        reason: "agent_action_approval_missing_nonce".to_owned(),
+                    };
+                };
+                let Some(expires_at) = operation
+                    .payload
+                    .get("expires_at")
+                    .and_then(|v| v.as_str())
+                    .and_then(|value| {
+                        chrono::DateTime::parse_from_rfc3339(value)
+                            .ok()
+                            .map(|dt| dt.with_timezone(&chrono::Utc))
+                    })
+                else {
+                    return ProjectionEffect::Rejected {
+                        reason: "agent_action_approval_missing_expires_at".to_owned(),
+                    };
+                };
+                Some(AgentActionApprovalProjection {
+                    approval_id,
+                    proposed_action,
+                    target,
+                    approved_payload_digest,
+                    approval_nonce,
+                    expires_at,
+                })
+            } else {
+                None
+            };
             request.status = status;
             request.resolved_at = Some(operation.created_at);
             request.resolution_event_id = Some(operation.operation_id.to_string());
             request.cancel_reason = None;
+            request.approval = approval;
         }
         let kind = match status {
             AgentActionRequestStatus::Approved => crate::kinds::CK_AGENT_ACTION_APPROVE,

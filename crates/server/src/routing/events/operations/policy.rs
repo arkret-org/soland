@@ -933,7 +933,7 @@ fn validate_agent_act_on_behalf_authorization_ref(
     state: &AppState,
     operation: &Operation,
     agent_principal_id: &str,
-) -> Result<(), &'static str> {
+) -> Result<String, &'static str> {
     let authorization_ref = operation
         .payload
         .get("authorization_ref")
@@ -944,7 +944,7 @@ fn validate_agent_act_on_behalf_authorization_ref(
         return Err("agent_act_on_behalf_authorization_ref_invalid");
     }
     let Some(action) = agent_participation_action(operation) else {
-        return Ok(());
+        return Ok(authorization_ref.to_owned());
     };
     let resource = operation
         .object_id
@@ -965,6 +965,114 @@ fn validate_agent_act_on_behalf_authorization_ref(
         .any(|candidate| candidate == action || candidate == "*");
     if !action_allowed || !crate::authz::resource_matches(&grant.resource, resource) {
         return Err("agent_act_on_behalf_authorization_ref_scope");
+    }
+    Ok(authorization_ref.to_owned())
+}
+
+fn agent_action_target_matches(target: &Value, operation: &Operation) -> bool {
+    if target
+        .get("operation_id")
+        .and_then(Value::as_str)
+        .is_some_and(|operation_id| operation_id == operation.operation_id.as_str())
+    {
+        return true;
+    }
+    match target.get("kind").and_then(Value::as_str) {
+        Some("realm") => target
+            .get("realm_id")
+            .and_then(Value::as_str)
+            .is_some_and(|realm_id| realm_id == operation.realm_id.as_str()),
+        Some("strand") => {
+            let Some(target_ref) = target.get("ref").and_then(Value::as_str) else {
+                return false;
+            };
+            operation
+                .payload
+                .get("strand_id")
+                .or_else(|| operation.payload.get("thread_id"))
+                .and_then(Value::as_str)
+                .is_some_and(|strand_id| strand_id == target_ref)
+        }
+        Some("message") | Some("object") => {
+            let Some(target_ref) = target.get("ref").and_then(Value::as_str) else {
+                return false;
+            };
+            operation.object_id.as_deref() == Some(target_ref)
+                || operation
+                    .payload
+                    .get("message_id")
+                    .and_then(Value::as_str)
+                    .is_some_and(|message_id| message_id == target_ref)
+        }
+        _ => false,
+    }
+}
+
+fn validate_agent_act_on_behalf_approval(
+    state: &AppState,
+    operation: &Operation,
+    agent_principal_id: &str,
+    authorization_ref: &str,
+) -> Result<(), &'static str> {
+    let request_id = operation
+        .payload
+        .get("approval_request_id")
+        .or_else(|| operation.payload.get("request_id"))
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .ok_or("agent_act_on_behalf_approval_request_id_missing")?;
+    let approval_nonce = operation
+        .payload
+        .get("approval_nonce")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .ok_or("agent_act_on_behalf_approval_nonce_missing")?;
+    let action = agent_participation_action(operation)
+        .ok_or("agent_act_on_behalf_approval_action_unsupported")?;
+    let Ok(projection) = state.projection.lock() else {
+        return Err("agent_act_on_behalf_approval_unavailable");
+    };
+    let request = projection
+        .agent_action_requests
+        .get(request_id)
+        .ok_or("agent_act_on_behalf_approval_request_missing")?;
+    if request.status != crate::reducer::AgentActionRequestStatus::Approved {
+        return Err("agent_act_on_behalf_approval_request_not_approved");
+    }
+    if request.agent_principal_id != agent_principal_id {
+        return Err("agent_act_on_behalf_approval_agent_mismatch");
+    }
+    let approval = request
+        .approval
+        .as_ref()
+        .ok_or("agent_act_on_behalf_approval_missing")?;
+    if approval.approval_nonce != approval_nonce {
+        return Err("agent_act_on_behalf_approval_nonce_mismatch");
+    }
+    if approval.expires_at <= chrono::Utc::now() {
+        return Err("agent_act_on_behalf_approval_expired");
+    }
+    if approval.proposed_action != action {
+        return Err("agent_act_on_behalf_approval_action_mismatch");
+    }
+    if !agent_action_target_matches(&approval.target, operation) {
+        return Err("agent_act_on_behalf_approval_target_mismatch");
+    }
+    let payload_digest = cokret_sdk::canonical::canonical_sha256(&operation.payload)
+        .map_err(|_| "agent_act_on_behalf_approval_payload_digest_invalid")?;
+    if approval.approved_payload_digest != payload_digest {
+        return Err("agent_act_on_behalf_approval_payload_digest_mismatch");
+    }
+    let expires_at = approval.expires_at;
+    drop(projection);
+    if !state.remember_agent_approval_nonce(
+        agent_principal_id,
+        authorization_ref,
+        request_id,
+        approval_nonce,
+        expires_at,
+    ) {
+        return Err(cokret_sdk::error::REASON_APPROVAL_NONCE_REUSED);
     }
     Ok(())
 }
@@ -1000,9 +1108,15 @@ pub async fn validate_agent_reply_participation(
         let Some((agent_principal_id, mode)) = agent_context else {
             continue;
         };
-        if mode == AgentParticipationMode::ActOnBehalf {
-            validate_agent_act_on_behalf_authorization_ref(state, operation, &agent_principal_id)?;
-        }
+        let authorization_ref = if mode == AgentParticipationMode::ActOnBehalf {
+            Some(validate_agent_act_on_behalf_authorization_ref(
+                state,
+                operation,
+                &agent_principal_id,
+            )?)
+        } else {
+            None
+        };
         let realm_uuid = ap_uuid_part(operation.realm_id.as_str()).to_owned();
         let realm_key = format!("realm:{realm_uuid}");
         let strand_key = operation
@@ -1051,6 +1165,14 @@ pub async fn validate_agent_reply_participation(
         }
         if !ap_effective_for_mode(mode, &selection, ceiling) {
             return Err(mode.rejection_reason());
+        }
+        if let Some(authorization_ref) = authorization_ref {
+            validate_agent_act_on_behalf_approval(
+                state,
+                operation,
+                &agent_principal_id,
+                &authorization_ref,
+            )?;
         }
     }
     Ok(())

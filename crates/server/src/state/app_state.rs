@@ -109,6 +109,10 @@ pub struct AppState {
     /// inserts.
     pub moderation_franking_replay_nonces:
         Arc<Mutex<BTreeMap<String, ModerationFrankingReplayRecord>>>,
+    /// Process-local single-use approval nonce ledger for native-agent
+    /// act-on-behalf publishes. Durable controller approval state lives in the
+    /// projection; this table prevents replay within the approval TTL.
+    pub agent_approval_nonces: Arc<Mutex<BTreeMap<String, chrono::DateTime<chrono::Utc>>>>,
     /// Per-actor notifications read marker. `mark_all_read(actor)` writes
     /// `Utc::now()`; the notifications read-side filter uses it to flag
     /// rows as read. Same in-memory shape as the other two.
@@ -537,6 +541,7 @@ impl AppState {
             key_backup_download_tracker: Arc::new(Mutex::new(BTreeMap::new())),
             moderation_report_rate_tracker: Arc::new(Mutex::new(BTreeMap::new())),
             moderation_franking_replay_nonces: Arc::new(Mutex::new(BTreeMap::new())),
+            agent_approval_nonces: Arc::new(Mutex::new(BTreeMap::new())),
             notification_read_cursors: Arc::new(Mutex::new(BTreeMap::new())),
             sync_cursor_hmac_key,
             push_target_hmac_key,
@@ -1074,6 +1079,33 @@ impl AppState {
                 last_seen_at: now,
             },
         );
+        true
+    }
+
+    /// Consume a native-agent act-on-behalf approval nonce until the approval
+    /// expires. Returns false when the nonce was already consumed or expired.
+    pub fn remember_agent_approval_nonce(
+        &self,
+        agent_principal_id: &str,
+        authorization_ref: &str,
+        request_id: &str,
+        approval_nonce: &str,
+        expires_at: chrono::DateTime<chrono::Utc>,
+    ) -> bool {
+        let now = chrono::Utc::now();
+        if expires_at <= now {
+            return false;
+        }
+        let mut map = self
+            .agent_approval_nonces
+            .lock()
+            .expect("agent_approval_nonces lock");
+        map.retain(|_, expiry| *expiry > now);
+        let key = format!("{agent_principal_id}:{authorization_ref}:{request_id}:{approval_nonce}");
+        if map.contains_key(&key) {
+            return false;
+        }
+        map.insert(key, expires_at);
         true
     }
 

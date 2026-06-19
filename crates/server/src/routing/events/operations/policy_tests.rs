@@ -181,6 +181,7 @@ fn act_on_behalf_message(
     seed: &str,
     agent_principal_id: &str,
     authorization_ref: Option<&str>,
+    approval: Option<(&str, &str)>,
 ) -> Operation {
     let mut payload = json!({
         "sender": "did:web:alice.example",
@@ -193,7 +194,53 @@ fn act_on_behalf_message(
             .expect("payload object")
             .insert("authorization_ref".to_owned(), json!(authorization_ref));
     }
+    if let Some((request_id, approval_nonce)) = approval {
+        let object = payload.as_object_mut().expect("payload object");
+        object.insert("approval_request_id".to_owned(), json!(request_id));
+        object.insert("approval_nonce".to_owned(), json!(approval_nonce));
+    }
     op(realm_id, seed, kinds::CK_MESSAGE_CREATE, payload)
+}
+
+fn insert_approved_agent_action(
+    state: &AppState,
+    message: &Operation,
+    request_id: &str,
+    agent_principal_id: &str,
+    approval_nonce: &str,
+) {
+    let payload_digest = cokret_sdk::canonical::canonical_sha256(&message.payload).unwrap();
+    state
+        .projection
+        .lock()
+        .expect("projection")
+        .agent_action_requests
+        .insert(
+            request_id.to_owned(),
+            crate::reducer::AgentActionRequestProjection {
+                request_id: request_id.to_owned(),
+                agent_principal_id: agent_principal_id.to_owned(),
+                status: crate::reducer::AgentActionRequestStatus::Approved,
+                requested_at: message.created_at - chrono::Duration::minutes(1),
+                resolved_at: Some(message.created_at),
+                resolution_event_id: Some(
+                    "ck:event:01904100-0000-7000-8000-0000000007aa".to_owned(),
+                ),
+                cancel_reason: None,
+                approval: Some(crate::reducer::AgentActionApprovalProjection {
+                    approval_id: "ck:agent_approval:01904100-0000-7000-8000-0000000007aa"
+                        .to_owned(),
+                    proposed_action: kinds::CK_MESSAGE_CREATE.to_owned(),
+                    target: json!({
+                        "kind": "realm",
+                        "realm_id": message.realm_id.as_str(),
+                    }),
+                    approved_payload_digest: payload_digest,
+                    approval_nonce: approval_nonce.to_owned(),
+                    expires_at: message.created_at + chrono::Duration::minutes(10),
+                }),
+            },
+        );
 }
 
 #[tokio::test]
@@ -277,6 +324,7 @@ async fn act_on_behalf_agent_requires_participation_bit() {
         "000000000701",
         agent,
         Some(grant.grant_id.as_str()),
+        None,
     );
 
     assert_eq!(
@@ -308,6 +356,7 @@ async fn act_on_behalf_agent_requires_authorization_ref_covering_action() {
         "000000000702",
         agent,
         Some(grant.grant_id.as_str()),
+        None,
     );
 
     assert_eq!(
@@ -339,11 +388,81 @@ async fn act_on_behalf_agent_allows_effective_selection_and_active_grant() {
         "000000000703",
         agent,
         Some(grant.grant_id.as_str()),
+        Some(("request-703", "nonce-703")),
     );
+    insert_approved_agent_action(&state, &message, "request-703", agent, "nonce-703");
 
     validate_agent_reply_participation(&state, &[message])
         .await
         .expect("effective act-on-behalf grant should pass");
+}
+
+#[tokio::test]
+async fn act_on_behalf_agent_requires_fresh_approval_request() {
+    let state = test_state();
+    let realm_id =
+        cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-000000000704".to_owned())
+            .unwrap();
+    let agent = "did:web:agent.example";
+    register_agent_selection(&state, &realm_id, agent, true, true).await;
+    let grant = state.authz.create_grant(
+        realm_id.to_string(),
+        "did:web:alice.example".to_owned(),
+        agent.to_owned(),
+        realm_id.to_string(),
+        vec![kinds::CK_MESSAGE_CREATE.to_owned()],
+        Vec::new(),
+    );
+    let message = act_on_behalf_message(
+        realm_id,
+        "000000000704",
+        agent,
+        Some(grant.grant_id.as_str()),
+        Some(("request-704", "nonce-704")),
+    );
+
+    assert_eq!(
+        validate_agent_reply_participation(&state, &[message])
+            .await
+            .unwrap_err(),
+        "agent_act_on_behalf_approval_request_missing"
+    );
+}
+
+#[tokio::test]
+async fn act_on_behalf_agent_consumes_approval_nonce_once() {
+    let state = test_state();
+    let realm_id =
+        cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-000000000705".to_owned())
+            .unwrap();
+    let agent = "did:web:agent.example";
+    register_agent_selection(&state, &realm_id, agent, true, true).await;
+    let grant = state.authz.create_grant(
+        realm_id.to_string(),
+        "did:web:alice.example".to_owned(),
+        agent.to_owned(),
+        realm_id.to_string(),
+        vec![kinds::CK_MESSAGE_CREATE.to_owned()],
+        Vec::new(),
+    );
+    let message = act_on_behalf_message(
+        realm_id,
+        "000000000705",
+        agent,
+        Some(grant.grant_id.as_str()),
+        Some(("request-705", "nonce-705")),
+    );
+    insert_approved_agent_action(&state, &message, "request-705", agent, "nonce-705");
+
+    validate_agent_reply_participation(&state, std::slice::from_ref(&message))
+        .await
+        .expect("first approval nonce use should pass");
+    assert_eq!(
+        validate_agent_reply_participation(&state, &[message])
+            .await
+            .unwrap_err(),
+        cokret_sdk::error::REASON_APPROVAL_NONCE_REUSED
+    );
 }
 
 #[tokio::test]

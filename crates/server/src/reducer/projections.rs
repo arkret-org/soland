@@ -651,6 +651,17 @@ pub struct AgentActionRequestProjection {
     pub resolved_at: Option<chrono::DateTime<chrono::Utc>>,
     pub resolution_event_id: Option<String>,
     pub cancel_reason: Option<String>,
+    pub approval: Option<AgentActionApprovalProjection>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentActionApprovalProjection {
+    pub approval_id: String,
+    pub proposed_action: String,
+    pub target: serde_json::Value,
+    pub approved_payload_digest: String,
+    pub approval_nonce: String,
+    pub expires_at: chrono::DateTime<chrono::Utc>,
 }
 
 /// State enum shared by Strand and Morph projections (mirrors SDK

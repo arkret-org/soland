@@ -96,18 +96,18 @@ pub use projection_state::ProjectionState;
 // sibling `apply_*` modules via `super::*`.
 pub(crate) use projections::space_container_id_from_payload;
 pub use projections::{
-    AgentActionRequestProjection, AgentActionRequestStatus, AppletProjection,
-    CapabilityDerivedState, ChildScopePolicy, CircleLifecycleState, CircleMembershipState,
-    CircleProjection, DocumentVersionProjection, ErasureReceiptRecord, FanoutPeerStatus,
-    InviteProjection, KeyPackageLifetime, MessageExpiryProjection, MessageExpiryProjectionState,
-    MessageState, MlsCommitEpoch, MlsCommitEpochKey, MlsKeyPackage, MlsRemoveObligation,
-    MlsWelcome, MlsWelcomeQueueKey, MorphProjection, ObjectLifecycleState, PendingReplayEntry,
-    PinProjection, PollOptionState, PollState, ProjectedMessageView, PushRouteCellValue,
-    PushRouteSubject, ReactionState, ReadMarkerState, RealmInheritancePolicyState, RealmLinkState,
-    RealmPolicyServerConfig, RedactionCellValue, RsvpProjection, SolandAgentProjection,
-    SolandKeyBackupActiveSeries, SolandMembershipState, SolandRealmState, SolandRelationState,
-    SpaceContainerLifecycleState, SpaceContainerProjection, StrandProjection,
-    message_expiry_projection_from_value,
+    AgentActionApprovalProjection, AgentActionRequestProjection, AgentActionRequestStatus,
+    AppletProjection, CapabilityDerivedState, ChildScopePolicy, CircleLifecycleState,
+    CircleMembershipState, CircleProjection, DocumentVersionProjection, ErasureReceiptRecord,
+    FanoutPeerStatus, InviteProjection, KeyPackageLifetime, MessageExpiryProjection,
+    MessageExpiryProjectionState, MessageState, MlsCommitEpoch, MlsCommitEpochKey, MlsKeyPackage,
+    MlsRemoveObligation, MlsWelcome, MlsWelcomeQueueKey, MorphProjection, ObjectLifecycleState,
+    PendingReplayEntry, PinProjection, PollOptionState, PollState, ProjectedMessageView,
+    PushRouteCellValue, PushRouteSubject, ReactionState, ReadMarkerState,
+    RealmInheritancePolicyState, RealmLinkState, RealmPolicyServerConfig, RedactionCellValue,
+    RsvpProjection, SolandAgentProjection, SolandKeyBackupActiveSeries, SolandMembershipState,
+    SolandRealmState, SolandRelationState, SpaceContainerLifecycleState, SpaceContainerProjection,
+    StrandProjection, message_expiry_projection_from_value,
 };
 
 #[cfg(test)]
