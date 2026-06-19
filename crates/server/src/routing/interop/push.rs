@@ -23,10 +23,15 @@
 //! `is_supported_push_action` / `push_notification_leaks_private_payload` /
 //! `push_rule_to_json`.
 
+use base64::Engine as _;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use hmac::{Hmac, KeyInit, Mac};
 use salvo::http::StatusCode;
 use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
 use serde_json::{Value, json};
+use sha2::Sha256;
+use subtle::ConstantTimeEq;
 
 use super::audit::append_audit_log;
 use super::auth::{SessionGrantValidationInput, validate_session_grant_binding};
@@ -49,6 +54,55 @@ use crate::wire::{
 /// fetch worker before fan-out leaks past a stale contract. v1 unreleased,
 /// no operator knob yet — bump here when the refresh worker lands.
 const PUSH_GATEWAY_CONTRACT_MAX_AGE_HOURS: i64 = 24;
+pub(crate) const PUSH_TARGET_SALT_ROTATION_SECONDS: i64 = 30 * 24 * 60 * 60;
+const PUSH_TARGET_RETAIN_SECONDS: i64 = 24 * 60 * 60;
+
+pub(crate) fn push_target_privacy_derivation_claim(now: chrono::DateTime<chrono::Utc>) -> Value {
+    json!({
+        "push_target_id": {
+            "derivation_profile": "ck.push_target_id.hmac_sha256.v1",
+            "secret_scope": "per_service",
+            "salt_epoch_id": push_target_salt_epoch_id_at(now),
+            "salt_rotation_seconds": PUSH_TARGET_SALT_ROTATION_SECONDS,
+            "input_binding": [
+                "recipient_service_did",
+                "principal_id",
+                "device_id",
+                "push_route_id",
+                "salt_epoch_id"
+            ]
+        }
+    })
+}
+
+fn push_target_salt_epoch_id_at(now: chrono::DateTime<chrono::Utc>) -> String {
+    let epoch = now
+        .timestamp()
+        .div_euclid(PUSH_TARGET_SALT_ROTATION_SECONDS);
+    format!("ck.push.salt_epoch.{epoch}")
+}
+
+fn derive_push_target_id(
+    root_key: &[u8; 32],
+    recipient_service_did: &str,
+    principal_id: &str,
+    device_id: &str,
+    push_route_id: &str,
+    salt_epoch_id: &str,
+) -> Result<String, AppError> {
+    let input = json!({
+        "recipient_service_did": recipient_service_did,
+        "principal_id": principal_id,
+        "device_id": device_id,
+        "push_route_id": push_route_id,
+        "salt_epoch_id": salt_epoch_id,
+    });
+    let canonical = cokret_sdk::canonical::canonical_json_bytes(&input)
+        .map_err(|error| AppError::internal(format!("push target canonicalize: {error}")))?;
+    let epoch_key = hmac_sha256(root_key, salt_epoch_id.as_bytes());
+    let tag = hmac_sha256(&epoch_key, &canonical);
+    Ok(format!("ck:pseudonym:push:{}", URL_SAFE_NO_PAD.encode(tag)))
+}
 #[endpoint(
     operation_id = "ck.edge.push.command.register_device",
     tags("push"),
@@ -86,17 +140,60 @@ pub(super) async fn push_register(
     if body.device_id.as_str().trim().is_empty() {
         return Err(AppError::invalid_param("invalid device_id"));
     }
-    let registration_id = format!("ck:push:{}", body.device_id.as_str());
     let principal_id = session.actor.clone();
     let device_id = body.device_id.as_str().to_owned();
     let platform = body.platform.clone();
     let app_id = body.app_id.clone();
     let push_gateway = body.push_gateway.clone();
     let push_key = body.push_key.clone();
+    let recipient_service_did = body
+        .recipient_service_did
+        .as_ref()
+        .map(|did| did.as_str())
+        .unwrap_or(state.config.service_did.as_str());
+    if recipient_service_did != state.config.service_did {
+        return Err(AppError::invalid_param(
+            "recipient_service_did must match this service",
+        ));
+    }
+    let push_route_id = push_route_id_for_registration(&body);
+    let salt_epoch_id = push_target_salt_epoch_id_at(now());
+    let push_target_id = derive_push_target_id(
+        &state.push_target_hmac_key,
+        &state.config.service_did,
+        &principal_id,
+        &device_id,
+        &push_route_id,
+        &salt_epoch_id,
+    )?;
+    let registration_id = push_target_id.clone();
+    let previous_registrations = state
+        .persistence
+        .push_devices()
+        .snapshot_all()
+        .await
+        .unwrap_or_else(|error| {
+            tracing::error!(%error, "failed to read prior push device registrations");
+            Vec::new()
+        });
+    let retained_push_targets = retained_push_targets_for_route(
+        &previous_registrations,
+        &principal_id,
+        &device_id,
+        &push_route_id,
+        &push_target_id,
+        now() + chrono::Duration::seconds(PUSH_TARGET_RETAIN_SECONDS),
+    );
     let mut warnings = Vec::new();
     if let Some(auth_warning) = auth_warning {
         warnings.push(auth_warning);
     }
+    state
+        .persistence
+        .push_devices()
+        .unregister(&principal_id, &device_id, None, app_id.as_deref())
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?;
     if let Err(error) = state
         .persistence
         .push_devices()
@@ -109,6 +206,12 @@ pub(super) async fn push_register(
             "app_id": app_id,
             "push_gateway": push_gateway,
             "push_key": push_key,
+            "recipient_service_did": state.config.service_did.as_str(),
+            "push_route_id": push_route_id,
+            "push_target_id": push_target_id,
+            "salt_epoch_id": salt_epoch_id,
+            "salt_rotation_seconds": PUSH_TARGET_SALT_ROTATION_SECONDS,
+            "retained_push_targets": retained_push_targets,
             "auth_mode": if warnings.is_empty() { "bearer" } else { "session_grant_bridge" },
         }))
         .await
@@ -134,6 +237,103 @@ fn canonical_error_code(wire: &str) -> crate::error::ErrorCode {
         "session_expired" => ErrorCode::CursorExpired,
         _ => ErrorCode::InternalError,
     }
+}
+
+fn push_route_id_for_registration(body: &PushRegisterDeviceRequestBody) -> String {
+    body.app_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .or_else(|| {
+            body.platform
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(|value| format!("platform:{value}"))
+        })
+        .unwrap_or_else(|| {
+            let route_digest =
+                sha256_hex(format!("{}|{}", body.push_gateway, body.push_key).as_bytes());
+            format!("gateway:{route_digest}")
+        })
+}
+
+fn retained_push_targets_for_route(
+    registrations: &[Value],
+    principal_id: &str,
+    device_id: &str,
+    push_route_id: &str,
+    new_push_target_id: &str,
+    retained_until: chrono::DateTime<chrono::Utc>,
+) -> Vec<Value> {
+    registrations
+        .iter()
+        .filter(|registration| {
+            registration.get("actor").and_then(Value::as_str) == Some(principal_id)
+                && registration.get("device_id").and_then(Value::as_str) == Some(device_id)
+                && registration.get("push_route_id").and_then(Value::as_str) == Some(push_route_id)
+        })
+        .filter_map(|registration| {
+            let target = registration.get("push_target_id").and_then(Value::as_str)?;
+            if target == new_push_target_id {
+                return None;
+            }
+            Some(json!({
+                "push_target_id": target,
+                "salt_epoch_id": registration
+                    .get("salt_epoch_id")
+                    .and_then(Value::as_str)
+                    .unwrap_or("unknown"),
+                "retained_until": retained_until,
+            }))
+        })
+        .collect()
+}
+
+fn push_registration_accepts_target(
+    registration: &Value,
+    push_target_id: &str,
+    now: chrono::DateTime<chrono::Utc>,
+) -> bool {
+    if registration
+        .get("push_target_id")
+        .and_then(Value::as_str)
+        .is_some_and(|registered| constant_time_str_eq(registered, push_target_id))
+    {
+        return true;
+    }
+    registration
+        .get("retained_push_targets")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .any(|entry| {
+            let target_matches = entry
+                .get("push_target_id")
+                .and_then(Value::as_str)
+                .is_some_and(|registered| constant_time_str_eq(registered, push_target_id));
+            if !target_matches {
+                return false;
+            }
+            entry
+                .get("retained_until")
+                .and_then(Value::as_str)
+                .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+                .map(|retained_until| retained_until.with_timezone(&chrono::Utc) >= now)
+                .unwrap_or(false)
+        })
+}
+
+fn constant_time_str_eq(left: &str, right: &str) -> bool {
+    left.as_bytes().ct_eq(right.as_bytes()).into()
+}
+
+fn hmac_sha256(key: &[u8], data: &[u8]) -> [u8; 32] {
+    let mut mac =
+        <Hmac<Sha256> as KeyInit>::new_from_slice(key).expect("HMAC accepts any key length");
+    mac.update(data);
+    mac.finalize().into_bytes().into()
 }
 
 #[endpoint(
@@ -297,6 +497,12 @@ pub(super) async fn push_notify(
 ) -> JsonResult<PushNotifyOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = body.into_inner();
+    let push_target_id = body
+        .notification
+        .push_target_id
+        .as_deref()
+        .filter(|value| cokret_sdk::is_valid_push_target_id(value))
+        .ok_or_else(|| AppError::invalid_param("notification.push_target_id is required"))?;
     let notification = serde_json::to_value(&body.notification).map_err(|error| {
         AppError::internal(format!("push notification request serialize: {error}"))
     })?;
@@ -325,9 +531,18 @@ pub(super) async fn push_notify(
             .unwrap_or_default();
         let Some(registered_device) = registered
             .iter()
-            .find(|registered| registered["device_id"].as_str() == Some(device_id))
+            .filter(|registered| registered["device_id"].as_str() == Some(device_id))
+            .find(|registered| push_registration_accepts_target(registered, push_target_id, now()))
         else {
-            rejected.push(push_rejection(device, "unknown_device", None));
+            let has_device = registered
+                .iter()
+                .any(|registered| registered["device_id"].as_str() == Some(device_id));
+            let reason = if has_device {
+                "push_target_mismatch"
+            } else {
+                "unknown_device"
+            };
+            rejected.push(push_rejection(device, reason, None));
             continue;
         };
         let actor = registered_device
@@ -741,4 +956,96 @@ fn is_valid_push_rule_id(value: &str) -> bool {
 
 fn is_supported_push_action(action: &str) -> bool {
     matches!(action, "notify" | "dont_notify" | "highlight" | "sound")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn push_target_derivation_is_pairwise_and_stable() {
+        let root_key = [7u8; 32];
+        let epoch = "ck.push.salt_epoch.42";
+        let first = derive_push_target_id(
+            &root_key,
+            "did:web:soland.example",
+            "did:web:alice.example",
+            "ck:device:01904100-0000-7000-8000-000000000001",
+            "yougen.web",
+            epoch,
+        )
+        .unwrap();
+        let again = derive_push_target_id(
+            &root_key,
+            "did:web:soland.example",
+            "did:web:alice.example",
+            "ck:device:01904100-0000-7000-8000-000000000001",
+            "yougen.web",
+            epoch,
+        )
+        .unwrap();
+        let other_route = derive_push_target_id(
+            &root_key,
+            "did:web:soland.example",
+            "did:web:alice.example",
+            "ck:device:01904100-0000-7000-8000-000000000001",
+            "yougen.voip",
+            epoch,
+        )
+        .unwrap();
+        let other_service = derive_push_target_id(
+            &root_key,
+            "did:web:org.example",
+            "did:web:alice.example",
+            "ck:device:01904100-0000-7000-8000-000000000001",
+            "yougen.web",
+            epoch,
+        )
+        .unwrap();
+
+        assert_eq!(first, again);
+        assert_ne!(first, other_route);
+        assert_ne!(first, other_service);
+        assert!(cokret_sdk::is_valid_push_target_id(&first));
+        assert!(!first.contains("alice"));
+        assert!(!first.contains("device"));
+    }
+
+    #[test]
+    fn retained_push_target_acceptance_is_time_bounded() {
+        let current = "ck:pseudonym:push:aaaaaaaaaaaaaaaaaaaaaa";
+        let retained = "ck:pseudonym:push:bbbbbbbbbbbbbbbbbbbbbb";
+        let now = chrono::DateTime::parse_from_rfc3339("2026-06-19T00:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let registration = json!({
+            "push_target_id": current,
+            "retained_push_targets": [{
+                "push_target_id": retained,
+                "salt_epoch_id": "ck.push.salt_epoch.41",
+                "retained_until": "2026-06-19T01:00:00Z"
+            }]
+        });
+
+        assert!(push_registration_accepts_target(
+            &registration,
+            current,
+            now
+        ));
+        assert!(push_registration_accepts_target(
+            &registration,
+            retained,
+            now
+        ));
+        assert!(!push_registration_accepts_target(
+            &registration,
+            retained,
+            now + chrono::Duration::hours(2)
+        ));
+        assert!(!push_registration_accepts_target(
+            &registration,
+            "ck:pseudonym:push:cccccccccccccccccccccc",
+            now
+        ));
+    }
 }

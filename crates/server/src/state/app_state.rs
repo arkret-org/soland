@@ -119,6 +119,10 @@ pub struct AppState {
     /// `persistence.sync_cursors()` table, so a restart no longer invalidates
     /// every client's resume cursor.
     pub sync_cursor_hmac_key: [u8; 32],
+    /// Domain-separated root key for service-scoped push target pseudonyms.
+    /// Per-epoch keys are derived from this root inside the push routing
+    /// module; only public epoch labels are exposed on describe.
+    pub push_target_hmac_key: [u8; 32],
     /// Revoked cursor authorities (`ck.self.account.command.revoke_cursor`). High-assurance
     /// optional endpoint: a revoked cursor returns `cursor_revoked` and MUST NOT
     /// advance to-device ack, account-subscribe resume position, wait-for barrier
@@ -458,6 +462,12 @@ impl AppState {
             hasher.update(signing_seed);
             hasher.finalize().into()
         };
+        let push_target_hmac_key: [u8; 32] = {
+            let mut hasher = Sha256::new();
+            hasher.update(b"soland:push-target-id:v1:");
+            hasher.update(signing_seed);
+            hasher.finalize().into()
+        };
 
         // Per-admin signing keys: build a single
         // [`AdminKeyStore`] for this principal. The application_id
@@ -529,6 +539,7 @@ impl AppState {
             moderation_franking_replay_nonces: Arc::new(Mutex::new(BTreeMap::new())),
             notification_read_cursors: Arc::new(Mutex::new(BTreeMap::new())),
             sync_cursor_hmac_key,
+            push_target_hmac_key,
             sync_cursor_revocations: Arc::new(Mutex::new(Vec::new())),
             to_device_position_counter: Arc::new(AtomicI64::new(now.timestamp_micros())),
             consent_cells: Arc::new(Mutex::new(BTreeMap::new())),

@@ -74,7 +74,9 @@ mod snapshot;
 /// this one entry point from it).
 pub use events::sync::spawn_sync_cursor_ttl_sweeper;
 pub use interop::spawn_resumable_upload_ttl_sweeper;
-pub(crate) use interop::{MAX_BLOB_UPLOAD_BYTES, TUS_EXTENSIONS, TUS_VERSIONS};
+pub(crate) use interop::{
+    MAX_BLOB_UPLOAD_BYTES, TUS_EXTENSIONS, TUS_VERSIONS, push_target_privacy_derivation_claim,
+};
 // OpenAPI internals + 404/405 helpers shared across the routing children. The
 // glob re-exports keep these reachable from `super::*` in the child modules
 // (and from `wire.rs` via `crate::routing::soland_extension_operation_ids`).

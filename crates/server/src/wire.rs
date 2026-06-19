@@ -1046,6 +1046,7 @@ pub fn describe(
             "org.cokret.soland.feature.policy.check_signed_decision".to_owned(),
             "org.cokret.soland.feature.profile.presence".to_owned(),
             "org.cokret.soland.feature.push.register_device".to_owned(),
+            "org.cokret.soland.feature.push.target_id_hmac_rotation".to_owned(),
             "org.cokret.soland.feature.push.rules".to_owned(),
             "org.cokret.soland.feature.blob.upload".to_owned(),
             // Spec crypto-media/media-and-blob.md §2.1 — protocol-level
@@ -1104,6 +1105,7 @@ pub fn describe(
         supported_reducer_profiles: vec!["ck.reducer.v1".to_owned()],
         supported_schema_profiles: vec!["ck.schema.core.v1".to_owned()],
         auth_metadata,
+        privacy_derivation: Some(crate::routing::push_target_privacy_derivation_claim(now())),
         limits: serde_json::json!({
             "storage": storage,
             "max_limit": 100,
@@ -1386,6 +1388,36 @@ mod tests {
                 .contains(&json!(
                     "org.cokret.soland.feature.policy.check_signed_decision"
                 ))
+        );
+        assert!(
+            value["supported_features"]
+                .as_array()
+                .expect("features array")
+                .contains(&json!(
+                    "org.cokret.soland.feature.push.target_id_hmac_rotation"
+                ))
+        );
+        assert_eq!(
+            value["privacy_derivation"]["push_target_id"]["derivation_profile"],
+            json!("ck.push_target_id.hmac_sha256.v1")
+        );
+        assert_eq!(
+            value["privacy_derivation"]["push_target_id"]["secret_scope"],
+            json!("per_service")
+        );
+        assert_eq!(
+            value["privacy_derivation"]["push_target_id"]["salt_rotation_seconds"],
+            json!(30 * 24 * 60 * 60)
+        );
+        assert_eq!(
+            value["privacy_derivation"]["push_target_id"]["input_binding"],
+            json!([
+                "recipient_service_did",
+                "principal_id",
+                "device_id",
+                "push_route_id",
+                "salt_epoch_id"
+            ])
         );
         assert_eq!(
             value["limits"]["resumable_upload_incomplete_ttl_seconds"],
