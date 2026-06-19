@@ -355,14 +355,14 @@ pub struct ConsentCellKey {
     pub scope: String,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ConsentGrantDot {
     pub dot: String,
     pub expires_at: Option<chrono::DateTime<chrono::Utc>>,
     pub granted_at: chrono::DateTime<chrono::Utc>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ConsentCellRecord {
     pub holder: String,
     pub peer: String,

@@ -2,10 +2,10 @@
 
 use super::*;
 
-/// PostgreSQL-backed persistence store for the durable account / session /
-/// device / federation-transaction path. Every other sub-store falls back
-/// to the in-memory implementation while T0-3 lands the per-table Pg
-/// migrations and `PgFooStore` impls.
+/// PostgreSQL-backed persistence store for durable projections with shipped Pg
+/// tables. Stores without a Pg implementation still delegate to the embedded
+/// memory fallback, but contact, consent-cell, invite-receive-policy, and
+/// direct-conversation binding accessors are wired to Pg stores.
 pub struct PgPersistenceStore {
     accounts: PgAccountStore,
     sessions: PgSessionStore,

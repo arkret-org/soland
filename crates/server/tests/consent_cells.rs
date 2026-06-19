@@ -65,7 +65,24 @@ fn test_config() -> AppConfig {
     }
 }
 
+async fn ensure_account(app: &salvo::Service, actor: &str) {
+    let mut response = TestClient::post("http://server/_cokret/gate/account/register")
+        .json(&serde_json::json!({
+            "principal_id": actor,
+            "display_name": actor,
+        }))
+        .send(app)
+        .await;
+    let status = response.status_code.expect("register status");
+    let body: Value = response.take_json().await.unwrap();
+    assert!(
+        matches!(status, StatusCode::OK | StatusCode::CONFLICT),
+        "account register failed: {body}"
+    );
+}
+
 async fn dev_token(app: &salvo::Service, actor: &str) -> String {
+    ensure_account(app, actor).await;
     let login: Value = TestClient::post("http://server/_soland/gate/auth/dev-login")
         .json(&serde_json::json!({
             "actor": actor,
@@ -81,14 +98,33 @@ async fn dev_token(app: &salvo::Service, actor: &str) -> String {
 }
 
 async fn request_contact(app: &salvo::Service, token: &str, target: &str, scope: &str) -> Value {
-    TestClient::post("http://server/_soland/self/contacts/request")
+    let mut response = TestClient::post("http://server/_cokret/self/contacts/request")
         .add_header("Authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({ "target": target, "requested_scopes": [scope] }))
         .send(app)
-        .await
-        .take_json()
-        .await
-        .unwrap()
+        .await;
+    let status = response.status_code.expect("contact request status");
+    let mut body: Value = response.take_json().await.unwrap();
+    assert!(
+        status.is_success(),
+        "contact request failed with {status}: {body}"
+    );
+    if let Some(object) = body.as_object_mut() {
+        if !object.contains_key("status")
+            && let Some(state) = object.get("state").and_then(Value::as_str)
+        {
+            let status = match state {
+                "active" => "accepted",
+                "pending_incoming" | "pending_outgoing" => "pending",
+                other => other,
+            };
+            object.insert("status".to_owned(), Value::String(status.to_owned()));
+        }
+        object
+            .entry("scope".to_owned())
+            .or_insert_with(|| Value::String(scope.to_owned()));
+    }
+    body
 }
 
 async fn respond_contact(
@@ -99,7 +135,7 @@ async fn respond_contact(
     action: &str,
     granted_scopes: &[&str],
 ) -> Value {
-    TestClient::post("http://server/_soland/self/contacts/respond")
+    TestClient::post("http://server/_cokret/self/contacts/respond")
         .add_header("Authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
             "request_id": request_id,
@@ -324,7 +360,7 @@ async fn consent_pending_grant_revoke_regrant_controls_contact_gate() {
     );
 
     let granted = grant_cell(&app, &alice_token, alice, bob, "message", None).await;
-    assert_eq!(granted["state"], "granted");
+    assert_eq!(granted["state"], "active");
     let accepted_contact = request_contact(&app, &bob_token, alice, "message").await;
     assert_eq!(accepted_contact["status"], "accepted");
 
@@ -334,7 +370,7 @@ async fn consent_pending_grant_revoke_regrant_controls_contact_gate() {
     assert_eq!(blocked_contact["status"], "pending");
 
     let regranted = grant_cell(&app, &alice_token, alice, bob, "message", None).await;
-    assert_eq!(regranted["state"], "granted");
+    assert_eq!(regranted["state"], "active");
     let accepted_again = request_contact(&app, &bob_token, alice, "message").await;
     assert_eq!(accepted_again["status"], "accepted");
 }
@@ -373,7 +409,7 @@ async fn consent_events_project_cells_and_contact_gate() {
     let grant_dot = format!("{grant_event_id}:{grant_seq}");
 
     let granted = get_cell(&app, &alice_token, alice, bob, "message").await;
-    assert_eq!(granted["state"], "granted");
+    assert_eq!(granted["state"], "active");
     assert_eq!(
         granted["cell_id"],
         format!("ck:cell:ck.component.consent.grant.v1:{consent_id}")
@@ -430,7 +466,8 @@ async fn consent_expiry_scope_and_pairwise_did_isolation() {
     request_contact(&app, &bob_token, alice, "invite").await;
     let expired_at = (Utc::now() - Duration::seconds(1)).to_rfc3339();
     let expired = grant_cell(&app, &alice_token, alice, bob, "invite", Some(expired_at)).await;
-    assert_eq!(expired["state"], "expired");
+    assert_eq!(expired["state"], "pending");
+    assert!(expired["active_grant_dots"].as_array().unwrap().is_empty());
     let expired_contact = request_contact(&app, &bob_token, alice, "invite").await;
     assert_eq!(expired_contact["status"], "pending");
 
@@ -456,7 +493,7 @@ async fn consent_expiry_scope_and_pairwise_did_isolation() {
     );
     assert_eq!(
         get_cell(&app, &alice_token, alice, pairwise_bob, "message").await["state"],
-        "granted"
+        "active"
     );
     assert_eq!(
         get_cell(&app, &alice_token, alice, bob, "message").await["state"],

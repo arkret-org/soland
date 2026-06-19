@@ -39,8 +39,9 @@ use serde_json::{Value, json};
 
 use super::auth::{revoke_devices_for_actor, revoke_sessions_for_actor};
 use super::consent::{
-    active_invite_consent_grant_ref, grant_contact_managed_consent, has_active_consent_for_scope,
-    normalize_scope, persist_consent_cell, record_pending_request, revoke_contact_managed_consent,
+    active_invite_consent_grant_ref, consent_cell_snapshot, grant_contact_managed_consent,
+    has_active_consent_for_scope, normalize_scope, persist_consent_cell, record_pending_request,
+    revoke_contact_managed_consent,
 };
 use super::{
     AuthArgs, append_audit_log, handle_for_did, normalize_localpart, now, sha256_hex, validate_did,

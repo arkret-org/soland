@@ -24,7 +24,7 @@ async fn main() -> anyhow::Result<()> {
     let config = AppConfig::from_env_and_args()?;
     let db = Db::from_env().await?;
     let state = AppState::new(config, db);
-    state.hydrate().await;
+    state.hydrate().await?;
 
     let candidates = match realm_id.as_deref() {
         Some(id) => {

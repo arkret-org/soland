@@ -30,7 +30,9 @@ use crate::config::{AppConfig, NotarySigningKeyOrigin};
 use crate::db::Db;
 use crate::hlc::ServerHlc;
 use crate::object_storage::{ObjectStorage, build_object_storage};
-use crate::persistence::{PersistenceStore, PgPersistenceStore, SolandMemoryPersistenceStore};
+use crate::persistence::{
+    PersistenceResult, PersistenceStore, PgPersistenceStore, SolandMemoryPersistenceStore,
+};
 use crate::reducer::ProjectionState;
 use crate::verified_profiles::VerifiedProfileDescriptor;
 
@@ -563,7 +565,7 @@ impl AppState {
     /// in an async context (driven from `main`); see the diesel-async
     /// conversion. Safe to call in memory mode — every store read returns an
     /// empty snapshot, so this is a no-op there.
-    pub async fn hydrate(&self) {
+    pub async fn hydrate(&self) -> PersistenceResult<()> {
         let now = chrono::Utc::now();
         if self.config.seed_demo_data {
             let demo_realm_id = "ck:realm:0196419b-0000-7000-8000-000000000000";
@@ -629,11 +631,11 @@ impl AppState {
         // Hydrate per-subject invite_receive_policy overrides from durable
         // storage into the in-memory working map (built off-lock first; the
         // async snapshot read MUST NOT hold the std Mutex across `.await`).
-        if let Ok(policies) = self
+        let policies = self
             .persistence
             .invite_receive_policies()
             .snapshot_all()
-            .await
+            .await?;
         {
             let mut map = self
                 .invite_receive_policies
@@ -647,7 +649,8 @@ impl AppState {
         // Hydrate the holder-private consent-cell projection from durable
         // storage. Built off-lock first; the async snapshot read MUST NOT hold
         // the std Mutex across `.await`.
-        if let Ok(cells) = self.persistence.consent_cells().snapshot_all().await {
+        let cells = self.persistence.consent_cells().snapshot_all().await?;
+        {
             let mut map = self.consent_cells.lock().expect("consent_cells lock");
             for (key, record) in cells {
                 map.entry(key).or_insert(record);
@@ -656,11 +659,11 @@ impl AppState {
 
         // Hydrate the direct-conversation binding projection (sorted
         // participant pair → binding) from durable storage.
-        if let Ok(bindings) = self
+        let bindings = self
             .persistence
             .direct_conversation_bindings()
             .snapshot_all()
-            .await
+            .await?;
         {
             let mut map = self
                 .direct_conversation_bindings
@@ -694,6 +697,7 @@ impl AppState {
                 tracing::warn!(%error, "failed to hydrate cursor revocations from persistence store");
             }
         }
+        Ok(())
     }
 
     /// MID-1..6 — borrow a clone of the in-memory MemberIdentity

@@ -1215,3 +1215,186 @@ async fn memory_direct_conversation_binding_store_put_get_delete() {
     store.delete(key).await.unwrap();
     assert!(store.get(key).await.unwrap().is_none());
 }
+
+async fn optional_pg_persistence_store() -> Option<PgPersistenceStore> {
+    if std::env::var("DATABASE_URL")
+        .ok()
+        .filter(|url| !url.trim().is_empty())
+        .is_none()
+    {
+        return None;
+    }
+    let db = crate::db::Db::from_env()
+        .await
+        .expect("postgres migrations should run");
+    Some(PgPersistenceStore::new(
+        db.pool.expect("DATABASE_URL yields a postgres pool"),
+    ))
+}
+
+#[tokio::test]
+async fn pg_contact_consent_policy_and_direct_binding_survive_store_restart() {
+    let Some(first) = optional_pg_persistence_store().await else {
+        return;
+    };
+    let Some(restarted) = optional_pg_persistence_store().await else {
+        return;
+    };
+
+    let suffix = uuid::Uuid::now_v7().simple().to_string();
+    let alice = format!("did:web:pg-alice-{suffix}.example");
+    let bob = format!("did:web:pg-bob-{suffix}.example");
+    let mallory = format!("did:web:pg-mallory-{suffix}.example");
+    let now = Utc::now();
+
+    let contact = ContactRecord {
+        requester: alice.clone(),
+        target: bob.clone(),
+        scope: "direct_message".to_owned(),
+        status: "accepted".to_owned(),
+        message: Some("postgres round trip".to_owned()),
+        peer_service_did: Some(format!("did:web:pg-peer-service-{suffix}.example")),
+        created_at: now,
+        updated_at: now,
+    };
+    first.contacts().put(&contact).await.unwrap();
+
+    let fetched_contact = restarted
+        .contacts()
+        .get_scoped(&alice, &bob, "direct_message")
+        .await
+        .unwrap()
+        .expect("contact row survives a new Pg store");
+    assert_eq!(fetched_contact.status, "accepted");
+    assert_eq!(
+        fetched_contact.message.as_deref(),
+        Some("postgres round trip")
+    );
+    assert!(
+        restarted
+            .contacts()
+            .list_for_actor(&bob)
+            .await
+            .unwrap()
+            .iter()
+            .any(|row| row.requester.as_str() == alice && row.target.as_str() == bob)
+    );
+
+    let mut policy = crate::routing::invites::default_invite_receive_policy(&alice);
+    policy
+        .blocked_subjects
+        .push(cokret_sdk::Did::new(mallory.clone()).unwrap());
+    first.invite_receive_policies().put(&policy).await.unwrap();
+
+    let fetched_policy = restarted
+        .invite_receive_policies()
+        .get(&alice)
+        .await
+        .unwrap()
+        .expect("invite_receive_policy row survives a new Pg store");
+    assert!(
+        fetched_policy
+            .blocked_subjects
+            .iter()
+            .any(|did| did.as_str() == mallory)
+    );
+    assert!(
+        restarted
+            .invite_receive_policies()
+            .snapshot_all()
+            .await
+            .unwrap()
+            .iter()
+            .any(|(subject, _)| subject == &alice)
+    );
+
+    let grant_dot = format!("ck:event:01904100-0000-7000-8000-{suffix}:0");
+    let revoked_dot = format!("ck:event:01904100-0000-7000-8001-{suffix}:0");
+    let mut grant_dots = BTreeMap::new();
+    grant_dots.insert(
+        grant_dot.clone(),
+        ConsentGrantDot {
+            dot: grant_dot.clone(),
+            expires_at: Some(now + chrono::Duration::hours(1)),
+            granted_at: now,
+        },
+    );
+    let mut revoked_dots = BTreeSet::new();
+    revoked_dots.insert(revoked_dot.clone());
+    let consent_cell = ConsentCellRecord {
+        holder: alice.clone(),
+        peer: bob.clone(),
+        scope: "invite".to_owned(),
+        cell_id: format!("ck:cell:ck.component.consent.grant.v1:{suffix}"),
+        requested_at: Some(now),
+        grant_dots,
+        revoked_dots,
+        revoked_at: None,
+        updated_at: now,
+    };
+    first.consent_cells().put(&consent_cell).await.unwrap();
+
+    let fetched_cell = restarted
+        .consent_cells()
+        .get(&alice, &bob, "invite")
+        .await
+        .unwrap()
+        .expect("consent cell row survives a new Pg store");
+    assert_eq!(fetched_cell.cell_id, consent_cell.cell_id);
+    assert!(fetched_cell.grant_dots.contains_key(&grant_dot));
+    assert!(fetched_cell.revoked_dots.contains(&revoked_dot));
+    assert!(
+        restarted
+            .consent_cells()
+            .snapshot_all()
+            .await
+            .unwrap()
+            .iter()
+            .any(|(key, _)| {
+                key.holder.as_str() == alice && key.peer.as_str() == bob && key.scope == "invite"
+            })
+    );
+
+    let mut participants = vec![alice.clone(), bob.clone()];
+    participants.sort();
+    let pair_key = participants.join("\0");
+    let binding = DirectConversationBindingRecord {
+        participants_unordered: participants.clone(),
+        realm_id: ids::generate_realm_id(),
+        main_strand_id: ids::generate("strand"),
+        binding_event_ref: ids::generate_event_id(),
+        state: "active".to_owned(),
+        created_at: now,
+        updated_at: now,
+    };
+    first
+        .direct_conversation_bindings()
+        .put(&pair_key, &binding)
+        .await
+        .unwrap();
+
+    let fetched_binding = restarted
+        .direct_conversation_bindings()
+        .get(&pair_key)
+        .await
+        .unwrap()
+        .expect("direct binding row survives a new Pg store");
+    assert_eq!(fetched_binding.realm_id, binding.realm_id);
+    assert_eq!(fetched_binding.main_strand_id, binding.main_strand_id);
+    assert!(
+        restarted
+            .direct_conversation_bindings()
+            .snapshot_all()
+            .await
+            .unwrap()
+            .iter()
+            .any(|(key, _)| key == &pair_key)
+    );
+
+    restarted.contacts().delete(&alice, &bob).await.unwrap();
+    restarted
+        .direct_conversation_bindings()
+        .delete(&pair_key)
+        .await
+        .unwrap();
+}

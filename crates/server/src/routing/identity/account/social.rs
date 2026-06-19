@@ -52,9 +52,10 @@ pub(crate) async fn contact_request(
     // contact-managed grant is a real `ck.consent.grant`; its event ref is
     // referenced from the `ck.contact.requested` fact's
     // `requester_consent_refs[]`.
+    let requester_previous = consent_cell_snapshot(state, &session.actor, &target, &scope);
     let (requester_consent_ref, requester_consent_cell) =
         grant_contact_managed_consent(state, &session.actor, &target, &scope, now());
-    persist_consent_cell(state, &requester_consent_cell).await;
+    persist_consent_cell(state, &requester_consent_cell, requester_previous).await?;
     let requester_consent_refs = EventId::new(requester_consent_ref)
         .ok()
         .into_iter()
@@ -67,8 +68,9 @@ pub(crate) async fn contact_request(
     } else if has_active_consent_for_scope(state, &target, &session.actor, &scope, now()) {
         "accepted"
     } else {
+        let pending_previous = consent_cell_snapshot(state, &target, &session.actor, &scope);
         let pending = record_pending_request(state, &target, &session.actor, &scope, now());
-        persist_consent_cell(state, &pending).await;
+        persist_consent_cell(state, &pending, pending_previous).await?;
         "pending"
     };
     let store = state.persistence.contacts();
@@ -242,6 +244,7 @@ pub(crate) async fn contact_respond(
             // Spec contact-and-direct-conversation.md §3 — each granted scope
             // writes a target-controlled `ck.consent.grant`; its event ref is
             // referenced from the `ck.contact.accepted` `consent_grant_refs[]`.
+            let previous = consent_cell_snapshot(state, &session.actor, &contact.requester, &scope);
             let (grant_ref, grant_cell) = grant_contact_managed_consent(
                 state,
                 &session.actor,
@@ -249,7 +252,7 @@ pub(crate) async fn contact_respond(
                 &scope,
                 now(),
             );
-            persist_consent_cell(state, &grant_cell).await;
+            persist_consent_cell(state, &grant_cell, previous).await?;
             if let Ok(event_ref) = EventId::new(grant_ref) {
                 consent_grant_refs.push(event_ref);
             }
@@ -332,8 +335,8 @@ pub(crate) async fn contact_tombstone(
     // tombstone rather than a full one.
     let (revoked_dots, complete, revoked_cells) =
         revoke_contact_managed_consent(state, &holder, &peer, &body.revoke_scopes, now);
-    for cell in &revoked_cells {
-        persist_consent_cell(state, cell).await;
+    for mutation in &revoked_cells {
+        persist_consent_cell(state, &mutation.updated, mutation.previous.clone()).await?;
     }
 
     // Flip every holder↔peer contact row this holder controls to
@@ -381,17 +384,23 @@ pub(crate) async fn contact_tombstone(
     }
 
     if body.block_peer {
-        if let Some(policy) = block_peer_in_invite_policy(state, &holder, &peer) {
-            // Write the hard-block through to durable storage so it survives
-            // restarts (hydrated back by `AppState::hydrate`).
-            if let Err(error) = state
+        if let Some(policy) = blocked_invite_policy_update(state, &holder, &peer) {
+            state
                 .persistence
                 .invite_receive_policies()
                 .put(&policy)
                 .await
-            {
-                tracing::warn!(%error, holder = %holder, "failed to persist invite_receive_policy block");
-            }
+                .map_err(|error| {
+                    tracing::error!(%error, holder = %holder, "failed to persist invite_receive_policy block");
+                    AppError::internal(format!(
+                        "failed to persist invite_receive_policy block: {error}"
+                    ))
+                })?;
+            state
+                .invite_receive_policies
+                .lock()
+                .expect("invite_receive_policies lock")
+                .insert(holder.clone(), policy);
         }
     }
 
@@ -459,27 +468,28 @@ pub(crate) async fn contact_tombstone(
 /// (spec invite-addressing.md §5 / 0015 §3.4). Materializes the holder's
 /// recommended default policy first if no override exists yet, so the hard
 /// block is the only durable mutation a tombstone needs to make.
-/// Returns the mutated policy clone when the in-memory map changed, so the
-/// async caller can write it through to durable storage. `None` when the peer
-/// DID is malformed or already blocked (no durable write needed).
-fn block_peer_in_invite_policy(
+/// Returns the mutated policy clone so the async caller can write it through
+/// to durable storage before publishing it into the in-memory projection.
+/// `None` when the peer DID is malformed or already blocked.
+fn blocked_invite_policy_update(
     state: &AppState,
     holder: &str,
     peer: &str,
 ) -> Option<cokret_sdk::InviteReceivePolicy> {
     let peer_did = Did::new(peer.to_owned()).ok()?;
-    let mut policies = state
+    let policies = state
         .invite_receive_policies
         .lock()
         .expect("invite_receive_policies lock");
-    let policy = policies
-        .entry(holder.to_owned())
-        .or_insert_with(|| crate::routing::invites::default_invite_receive_policy(holder));
+    let mut policy = policies
+        .get(holder)
+        .cloned()
+        .unwrap_or_else(|| crate::routing::invites::default_invite_receive_policy(holder));
     if policy.blocked_subjects.iter().any(|did| did == &peer_did) {
         return None;
     }
     policy.blocked_subjects.push(peer_did);
-    Some(policy.clone())
+    Some(policy)
 }
 
 #[endpoint(
@@ -538,21 +548,22 @@ pub(crate) async fn set_invite_receive_policy(
             "invite_receive_policy.subject_id must equal the session actor",
         ));
     }
+    // Write through to durable storage so the override survives restarts
+    // (hydrated back into the in-memory map by `AppState::hydrate`).
+    state
+        .persistence
+        .invite_receive_policies()
+        .put(&policy)
+        .await
+        .map_err(|error| {
+            tracing::error!(%error, actor = %session.actor, "failed to persist invite_receive_policy");
+            AppError::internal(format!("failed to persist invite_receive_policy: {error}"))
+        })?;
     state
         .invite_receive_policies
         .lock()
         .expect("invite_receive_policies lock")
         .insert(session.actor.clone(), policy.clone());
-    // Write through to durable storage so the override survives restarts
-    // (hydrated back into the in-memory map by `AppState::hydrate`).
-    if let Err(error) = state
-        .persistence
-        .invite_receive_policies()
-        .put(&policy)
-        .await
-    {
-        tracing::warn!(%error, actor = %session.actor, "failed to persist invite_receive_policy");
-    }
     json_ok(policy)
 }
 
@@ -895,7 +906,28 @@ pub(crate) async fn create_direct_binding_with_realm(
         .put(pair_key, &reserved)
         .await
     {
-        tracing::warn!(%error, pair_key, "failed to persist direct binding to durable storage");
+        let removed = {
+            let mut guard = state
+                .direct_conversation_bindings
+                .lock()
+                .expect("direct_conversation_bindings lock");
+            let removed = guard
+                .get(pair_key)
+                .is_some_and(|binding| binding.binding_event_ref == reserved.binding_event_ref);
+            if removed {
+                guard.remove(pair_key);
+            }
+            removed
+        };
+        tracing::error!(
+            %error,
+            pair_key,
+            removed,
+            "failed to persist direct binding to durable storage"
+        );
+        return Err(AppError::internal(format!(
+            "failed to persist direct binding: {error}"
+        )));
     }
 
     // Binding fact (spec §6) — the canonical pair → (realm_id, main_strand_id)

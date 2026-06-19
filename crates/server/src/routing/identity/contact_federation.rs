@@ -27,7 +27,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
-use super::consent::{grant_contact_managed_consent, normalize_scope, persist_consent_cell};
+use super::consent::{
+    consent_cell_snapshot, grant_contact_managed_consent, normalize_scope, persist_consent_cell,
+};
 use super::now;
 use crate::error::AppError;
 use crate::result::{JsonResult, json_ok};
@@ -362,9 +364,10 @@ async fn project_delivered_contact_fact(
             // requester's row surfaces invite_consent_grant_ref / bidirectional
             // scopes, mirroring the local accept path.
             for granted in granted_scopes(payload) {
+                let previous = consent_cell_snapshot(state, issuer, subject_id, &granted);
                 let (_grant_ref, grant_cell) =
                     grant_contact_managed_consent(state, issuer, subject_id, &granted, now());
-                persist_consent_cell(state, &grant_cell).await;
+                persist_consent_cell(state, &grant_cell, previous).await?;
             }
             let mut contact = store
                 .get_scoped(subject_id, issuer, &scope)

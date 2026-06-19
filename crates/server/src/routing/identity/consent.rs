@@ -57,6 +57,7 @@ async fn project_consent_grant_operation(
     let consent_id = consent_id(&operation.payload)?;
     let expires_at = consent_expires_at(&operation.payload)?;
     let dot = consent_grant_dot(operation, &consent_id);
+    let previous = consent_cell_snapshot(state, &holder, &peer, &scope);
     let updated = grant_cell_with_dot(
         state,
         &holder,
@@ -67,7 +68,7 @@ async fn project_consent_grant_operation(
         expires_at,
         operation.created_at,
     );
-    persist_consent_cell(state, &updated).await;
+    persist_consent_cell(state, &updated, previous).await?;
     let contact_status = if effective_state(&updated, operation.created_at) == "granted" {
         "accepted"
     } else {
@@ -94,8 +95,9 @@ async fn project_consent_revoke_operation(
     validate_holder_update(&holder, &holder, &peer)?;
     let observed_dots = observed_dots(&operation.payload)?;
     let revoked_at = consent_revoked_at(&operation.payload)?.unwrap_or(operation.created_at);
+    let previous = consent_cell_snapshot(state, &holder, &peer, &scope);
     let updated = revoke_cell_with_dots(state, &holder, &peer, &scope, &observed_dots, revoked_at);
-    persist_consent_cell(state, &updated).await;
+    persist_consent_cell(state, &updated, previous).await?;
     upsert_contact_status_at(state, &peer, &holder, &scope, "pending", revoked_at).await
 }
 
@@ -191,6 +193,7 @@ async fn grant_consent_cell(
     let body = body.into_inner();
     validate_holder_update(&session.actor, &holder, body.peer_did.as_str())?;
     let scope = normalize_scope(body.consent_scope.as_deref())?;
+    let previous = consent_cell_snapshot(state, &holder, body.peer_did.as_str(), &scope);
     let updated = grant_cell(
         state,
         &holder,
@@ -199,7 +202,7 @@ async fn grant_consent_cell(
         body.expires_at,
         now(),
     );
-    persist_consent_cell(state, &updated).await;
+    persist_consent_cell(state, &updated, previous).await?;
     let contact_status = if effective_state(&updated, now()) == "granted" {
         "accepted"
     } else {
@@ -249,8 +252,9 @@ async fn revoke_consent_cell(
     let body = body.into_inner();
     validate_holder_update(&session.actor, &holder, body.peer_did.as_str())?;
     let scope = normalize_scope(body.consent_scope.as_deref())?;
+    let previous = consent_cell_snapshot(state, &holder, body.peer_did.as_str(), &scope);
     let updated = revoke_cell(state, &holder, body.peer_did.as_str(), &scope, now());
-    persist_consent_cell(state, &updated).await;
+    persist_consent_cell(state, &updated, previous).await?;
     upsert_contact_status(state, body.peer_did.as_str(), &holder, &scope, "pending").await?;
     append_audit_log(
         state,
@@ -305,6 +309,7 @@ async fn request_consent_cell(
         return Err(AppError::not_found("holder account not found"));
     }
     let scope = normalize_scope(body.consent_scope.as_deref())?;
+    let previous = consent_cell_snapshot(state, body.holder_did.as_str(), peer.as_str(), &scope);
     let cell = record_pending_request(
         state,
         body.holder_did.as_str(),
@@ -312,7 +317,7 @@ async fn request_consent_cell(
         &scope,
         now(),
     );
-    persist_consent_cell(state, &cell).await;
+    persist_consent_cell(state, &cell, previous).await?;
     res.status_code(StatusCode::CREATED);
     json_ok(consent_response(&cell, now())?)
 }
@@ -336,23 +341,66 @@ pub(super) fn normalize_scope(input: Option<&str>) -> Result<String, AppError> {
     }
 }
 
-/// Write-through a single mutated consent cell to durable storage. The
-/// in-memory `consent_cells` map is the authoritative working projection and
-/// is updated synchronously under lock by the `grant_*`/`revoke_*` helpers;
-/// this is invoked at the async boundary so a restart re-hydrates the cell.
-/// A persistence failure is logged but never fails the request — the
-/// in-memory projection already reflects the accepted mutation (same
-/// best-effort contract as the invite-receive-policy write-through).
-pub(super) async fn persist_consent_cell(state: &AppState, record: &ConsentCellRecord) {
+pub(super) fn consent_cell_snapshot(
+    state: &AppState,
+    holder: &str,
+    peer: &str,
+    scope: &str,
+) -> Option<ConsentCellRecord> {
+    state
+        .consent_cells
+        .lock()
+        .expect("consent_cells lock")
+        .get(&consent_key(holder, peer, scope))
+        .cloned()
+}
+
+/// Write-through a single mutated consent cell to durable storage.
+///
+/// Callers update the in-memory working projection before reaching this async
+/// boundary. On durable write failure, this helper rolls back the matching
+/// in-memory mutation before surfacing the request failure.
+pub(super) async fn persist_consent_cell(
+    state: &AppState,
+    record: &ConsentCellRecord,
+    previous: Option<ConsentCellRecord>,
+) -> Result<(), AppError> {
     if let Err(error) = state.persistence.consent_cells().put(record).await {
-        tracing::warn!(
+        let restored = restore_consent_cell_after_persist_failure(state, record, previous);
+        tracing::error!(
             %error,
             holder = %record.holder,
             peer = %record.peer,
             scope = %record.scope,
+            restored,
             "failed to persist consent cell to durable storage"
         );
+        return Err(AppError::internal(format!(
+            "failed to persist consent cell: {error}"
+        )));
     }
+    Ok(())
+}
+
+fn restore_consent_cell_after_persist_failure(
+    state: &AppState,
+    record: &ConsentCellRecord,
+    previous: Option<ConsentCellRecord>,
+) -> bool {
+    let key = consent_key(&record.holder, &record.peer, &record.scope);
+    let mut cells = state.consent_cells.lock().expect("consent_cells lock");
+    if !cells.get(&key).is_some_and(|current| current == record) {
+        return false;
+    }
+    match previous {
+        Some(previous) => {
+            cells.insert(key, previous);
+        }
+        None => {
+            cells.remove(&key);
+        }
+    }
+    true
 }
 
 pub(super) fn record_pending_request(
@@ -533,6 +581,11 @@ pub(crate) fn grant_contact_managed_consent(
     (event_id, updated)
 }
 
+pub(crate) struct ConsentCellMutation {
+    pub previous: Option<ConsentCellRecord>,
+    pub updated: ConsentCellRecord,
+}
+
 /// Spec contact-and-direct-conversation.md §3 — `ck.self.contact.command.tombstone`
 /// MUST enumerate and revoke the holder's contact-managed active grant
 /// dots toward `peer`. When `scopes` is empty, default to every scope the
@@ -553,7 +606,7 @@ pub(crate) fn revoke_contact_managed_consent(
     peer: &str,
     scopes: &[String],
     revoked_at: DateTime<Utc>,
-) -> (Vec<String>, bool, Vec<ConsentCellRecord>) {
+) -> (Vec<String>, bool, Vec<ConsentCellMutation>) {
     // Resolve the target scope set: explicit `revoke_scopes` (normalized)
     // or every scope the holder currently has a cell for toward `peer`.
     let target_scopes: Vec<String> = if scopes.is_empty() {
@@ -589,6 +642,7 @@ pub(crate) fn revoke_contact_managed_consent(
         if active_before.is_empty() {
             continue;
         }
+        let previous = consent_cell_snapshot(state, holder, peer, &scope);
         let updated = revoke_cell(state, holder, peer, &scope, revoked_at);
         // Confirm every previously-active dot is now revoked; otherwise the
         // enumeration was incomplete and we MUST flag partial.
@@ -599,7 +653,7 @@ pub(crate) fn revoke_contact_managed_consent(
                 complete = false;
             }
         }
-        mutated.push(updated);
+        mutated.push(ConsentCellMutation { previous, updated });
     }
     (revoked_refs, complete, mutated)
 }
@@ -1240,8 +1294,9 @@ mod tests {
         let now = Utc::now();
 
         // Grant + write-through, mirroring the routing call sites.
+        let previous = consent_cell_snapshot(&state, bob, alice, "message");
         let (_grant_ref, cell) = grant_contact_managed_consent(&state, bob, alice, "message", now);
-        persist_consent_cell(&state, &cell).await;
+        persist_consent_cell(&state, &cell, previous).await.unwrap();
 
         // Persistence holds the cell.
         let snapshot = state
@@ -1259,7 +1314,7 @@ mod tests {
             Db { pool: None },
             state.persistence.clone(),
         );
-        fresh.hydrate().await;
+        fresh.hydrate().await.unwrap();
         assert!(
             has_active_consent_for_scope(&fresh, bob, alice, "message", now),
             "re-hydrated consent grant is active after boot"
