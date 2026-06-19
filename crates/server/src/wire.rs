@@ -1043,6 +1043,7 @@ pub fn describe(
             "org.cokret.soland.feature.directory.search_realms".to_owned(),
             "org.cokret.soland.feature.directory.resolve_realm".to_owned(),
             "org.cokret.soland.feature.authz.check".to_owned(),
+            "org.cokret.soland.feature.policy.check_signed_decision".to_owned(),
             "org.cokret.soland.feature.profile.presence".to_owned(),
             "org.cokret.soland.feature.push.register_device".to_owned(),
             "org.cokret.soland.feature.push.rules".to_owned(),
@@ -1119,6 +1120,26 @@ pub fn describe(
                     "federation.transaction",
                     "blob.upload"
                 ]
+            },
+            "authz_policy": {
+                "authz_check": {
+                    "operation_id": "ck.self.authz.query.check",
+                    "path": "/_cokret/self/authz/check",
+                    "decision_source": "local_projection_preflight_diagnostic",
+                    "signed_decision": false,
+                    "emits_dynamic_obligations": false,
+                    "usable_as_event_auth_context": false
+                },
+                "policy_check": {
+                    "operation_id": "ck.self.policy.query.check",
+                    "path": "/_cokret/self/policy/check",
+                    "decision_source": "policy_server_signed_decision",
+                    "signed_decision": true,
+                    "emits_dynamic_obligations": true,
+                    "binds_auth_state_digest": true,
+                    "binds_policy_frontier_digest": true,
+                    "binds_membership_frontier_digest": true
+                }
             },
             "search": {
                 "directory": {
@@ -1358,6 +1379,14 @@ mod tests {
                     "org.cokret.soland.feature.personal_productivity.reminder_snooze_private_wake"
                 ))
         );
+        assert!(
+            value["supported_features"]
+                .as_array()
+                .expect("features array")
+                .contains(&json!(
+                    "org.cokret.soland.feature.policy.check_signed_decision"
+                ))
+        );
         assert_eq!(
             value["limits"]["resumable_upload_incomplete_ttl_seconds"],
             json!(86_400)
@@ -1381,6 +1410,30 @@ mod tests {
         assert_eq!(
             value["limits"]["search"]["realm_private_message_search"]["plaintext_remote_search"],
             json!(false)
+        );
+        assert_eq!(
+            value["limits"]["authz_policy"]["authz_check"]["decision_source"],
+            json!("local_projection_preflight_diagnostic")
+        );
+        assert_eq!(
+            value["limits"]["authz_policy"]["authz_check"]["signed_decision"],
+            json!(false)
+        );
+        assert_eq!(
+            value["limits"]["authz_policy"]["authz_check"]["emits_dynamic_obligations"],
+            json!(false)
+        );
+        assert_eq!(
+            value["limits"]["authz_policy"]["policy_check"]["decision_source"],
+            json!("policy_server_signed_decision")
+        );
+        assert_eq!(
+            value["limits"]["authz_policy"]["policy_check"]["signed_decision"],
+            json!(true)
+        );
+        assert_eq!(
+            value["limits"]["authz_policy"]["policy_check"]["emits_dynamic_obligations"],
+            json!(true)
         );
         assert_eq!(
             value["limits"]["personal_productivity"]["reminders"]["storage"],
