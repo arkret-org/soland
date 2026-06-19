@@ -82,7 +82,7 @@ pub use revocation::{
     is_device_revoked, revoke_device_record, revoke_devices_for_actor, revoke_sessions_for_actor,
     session_token_hash, token_for,
 };
-pub use sessions::{auth_or_render, authenticated_session, authenticated_session_fresh};
+pub use sessions::{auth_or_render, authenticated_session};
 
 pub(super) fn router() -> Router {
     local_router()

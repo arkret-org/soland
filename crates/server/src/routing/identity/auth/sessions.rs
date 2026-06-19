@@ -63,9 +63,16 @@ pub async fn authenticated_session(
     // Branch (a) here so (b)/(c) below are byte-for-byte unchanged.
     if super::super::auth_grant_dpop::is_grant_dpop_presentation(req) {
         // The presented credential is request-scoped: it is validated and used
-        // for this request, never persisted as a local bearer. Sensitive-op
-        // cache bypass is exposed via `authenticated_session_fresh`.
-        return super::super::auth_grant_dpop::grant_dpop_session(state, req, token, false).await;
+        // for this request, never persisted as a local bearer. Writes and
+        // sensitive reads bypass the introspection cache so revocation is
+        // observed before admitting a high-risk operation.
+        return super::super::auth_grant_dpop::grant_dpop_session(
+            state,
+            req,
+            token,
+            request_requires_fresh_introspection(req),
+        )
+        .await;
     }
     let token_hash = session_token_hash(token, &state.config.service_did);
     let session = state
@@ -113,43 +120,30 @@ pub async fn authenticated_session(
     Ok(session)
 }
 
-/// Force-fresh variant of [`authenticated_session`] for sensitive operations.
-///
-/// Identical to [`authenticated_session`] except that the grant + DPoP inbound
-/// path (§3.3) bypasses the ≤120s introspection cache and re-introspects the
-/// grant against coauth, so a just-revoked grant fails closed immediately
-/// rather than after the cache TTL (api-conventions.md §3.3 D2: "sensitive
-/// operations MUST bypass the cache and force a fresh introspection"). The dev
-/// bearer and OAuth-introspection paths are unaffected (they carry no cache of
-/// their own here). Handlers serving sensitive operations (key backup, device
-/// management, moderation, etc.) SHOULD call this instead.
-// Wave 1 exposes the force-fresh API; wiring individual sensitive handlers to
-// call it is a follow-up, so it has no in-crate caller yet.
-#[allow(dead_code)]
-pub async fn authenticated_session_fresh(
-    state: &AppState,
-    req: &Request,
-) -> Result<SessionRecord, (StatusCode, &'static str, &'static str)> {
-    if super::super::auth_grant_dpop::is_grant_dpop_presentation(req) {
-        if let Some(query) = req.uri().query()
-            && (query.contains("access_token=")
-                || query.contains("auth=")
-                || query.contains("token="))
-        {
-            return Err((
-                StatusCode::UNAUTHORIZED,
-                "unauthenticated",
-                "auth material in query strings is not allowed",
-            ));
-        }
-        let token = bearer_token(req).ok_or((
-            StatusCode::UNAUTHORIZED,
-            "unauthenticated",
-            "missing bearer token",
-        ))?;
-        return super::super::auth_grant_dpop::grant_dpop_session(state, req, token, true).await;
+fn request_requires_fresh_introspection(req: &Request) -> bool {
+    method_path_requires_fresh_introspection(req.method(), req.uri().path())
+}
+
+fn method_path_requires_fresh_introspection(method: &salvo::http::Method, path: &str) -> bool {
+    if !matches!(
+        *method,
+        salvo::http::Method::GET | salvo::http::Method::HEAD | salvo::http::Method::OPTIONS
+    ) {
+        return true;
     }
-    authenticated_session(state, req).await
+    [
+        "/account",
+        "/authz",
+        "/device_messages",
+        "/devices",
+        "/keys",
+        "/members",
+        "/moderation",
+        "/policy/check",
+        "/projection",
+    ]
+    .iter()
+    .any(|fragment| path.contains(fragment))
 }
 
 /// Extract a short, redaction-safe preview of any auth-material parameter
@@ -172,6 +166,50 @@ fn query_string_token_preview(query: &str) -> String {
         }
     }
     String::new()
+}
+
+#[cfg(test)]
+mod tests {
+    use salvo::http::Method;
+
+    use super::*;
+
+    #[test]
+    fn fresh_introspection_required_for_writes() {
+        assert!(method_path_requires_fresh_introspection(
+            &Method::POST,
+            "/_cokret/self/events"
+        ));
+        assert!(method_path_requires_fresh_introspection(
+            &Method::DELETE,
+            "/_cokret/self/account_data/m.push_rules"
+        ));
+    }
+
+    #[test]
+    fn fresh_introspection_required_for_sensitive_reads() {
+        for path in [
+            "/_cokret/self/account",
+            "/_cokret/self/authz/effective-grants",
+            "/_cokret/self/device_messages",
+            "/_cokret/self/keys/backups",
+            "/_cokret/self/keys/query",
+            "/_cokret/self/projection/strands",
+        ] {
+            assert!(
+                method_path_requires_fresh_introspection(&Method::GET, path),
+                "{path} should bypass cached grant introspection"
+            );
+        }
+    }
+
+    #[test]
+    fn low_sensitivity_reads_can_use_cached_introspection() {
+        assert!(!method_path_requires_fresh_introspection(
+            &Method::GET,
+            "/_cokret/self/realms/r1/links"
+        ));
+    }
 }
 
 async fn authenticated_oauth_session(
