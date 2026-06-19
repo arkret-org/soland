@@ -51,11 +51,11 @@ pub(super) async fn project_invite_accept_operation(
         );
         return;
     }
-    if record.status != "pending" {
+    if !matches!(record.status.as_str(), "pending" | "claimed") {
         tracing::debug!(
             invite_id = %invite_id,
             status = %record.status,
-            "ck.invite.accept on non-pending invite; ignored"
+            "ck.invite.accept on non-acceptable invite; ignored"
         );
         return;
     }
@@ -92,6 +92,170 @@ pub(super) async fn project_invite_accept_operation(
         realm_id = %realm_id,
         "ck.invite.accept projected: invite accepted + membership cascaded"
     );
+}
+
+pub(super) async fn project_invite_third_party_operation(state: &AppState, operation: &Operation) {
+    if !kinds::operation_is_invite_third_party(operation) {
+        return;
+    }
+    let Some(payload) = operation.payload.as_object() else {
+        return;
+    };
+    let invite = payload.get("invite").and_then(Value::as_object);
+    let Some(invite_id) = invite_string_field(payload, invite, "invite_id", "id") else {
+        tracing::warn!(
+            operation_id = %operation.operation_id,
+            "ck.invite.third_party missing invite id"
+        );
+        return;
+    };
+    if cokret_sdk::InviteId::new(invite_id.clone()).is_err() {
+        tracing::warn!(invite_id = %invite_id, "ck.invite.third_party malformed invite id");
+        return;
+    }
+    let realm_id = invite_string_field(payload, invite, "realm_id", "realm_id")
+        .unwrap_or_else(|| operation.realm_id.to_string());
+    if realm_id != operation.realm_id.as_str() {
+        tracing::warn!(
+            invite_id = %invite_id,
+            realm_id = %realm_id,
+            operation_realm = %operation.realm_id,
+            "ck.invite.third_party realm mismatch"
+        );
+        return;
+    }
+    let Some(inviter) = invite_string_field(payload, invite, "inviter", "inviter") else {
+        tracing::warn!(invite_id = %invite_id, "ck.invite.third_party missing inviter");
+        return;
+    };
+    let Some(third_party_id) = invite_value_field(payload, invite, "third_party_id").cloned()
+    else {
+        tracing::warn!(invite_id = %invite_id, "ck.invite.third_party missing third_party_id");
+        return;
+    };
+    let expires_at = invite_string_field(payload, invite, "expires_at", "expires_at")
+        .and_then(|value| chrono::DateTime::parse_from_rfc3339(&value).ok())
+        .map(|value| value.with_timezone(&chrono::Utc));
+    let created_at = invite_string_field(payload, invite, "created_at", "created_at")
+        .and_then(|value| chrono::DateTime::parse_from_rfc3339(&value).ok())
+        .map(|value| value.with_timezone(&chrono::Utc))
+        .unwrap_or(operation.created_at);
+    let join_rule_snapshot = invite_value_field(payload, invite, "join_rule_snapshot")
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!({"join_rule": "invite"}));
+    let invites = state.persistence.realm_invites();
+    if matches!(invites.get(&invite_id).await, Ok(Some(_))) {
+        return;
+    }
+    let mut third_party_id = Some(third_party_id);
+    let mut status = "pending".to_owned();
+    if expires_at.is_some_and(|expires_at| expires_at <= operation.created_at) {
+        status = "expired".to_owned();
+        remove_third_party_active_material(&mut third_party_id, true);
+    }
+    let record = RealmInviteRecord {
+        invite_id: invite_id.clone(),
+        realm_id: operation.realm_id.to_string(),
+        inviter,
+        invitee: None,
+        invite_delivery_target: None,
+        introduction_evidence_digest: None,
+        third_party_id,
+        join_rule_snapshot: Some(join_rule_snapshot),
+        invite_token: String::new(),
+        status,
+        claim_nonces: std::collections::BTreeMap::new(),
+        expires_at,
+        created_at,
+        updated_at: Some(operation.created_at),
+    };
+    match invites.put(record).await {
+        Ok(()) => touch_realm(state, operation.realm_id.as_str()).await,
+        Err(error) => {
+            tracing::warn!(%error, invite_id = %invite_id, "failed to project third-party invite")
+        }
+    }
+}
+
+pub(super) async fn project_invite_claim_operation(state: &AppState, operation: &Operation) {
+    if !kinds::operation_is_invite_claim(operation) {
+        return;
+    }
+    let Some(payload) = operation.payload.as_object() else {
+        return;
+    };
+    let Some(invite_id) = string_field(payload, "invite_id") else {
+        return;
+    };
+    let Some(subject_id) = string_field(payload, "subject_id") else {
+        return;
+    };
+    let Some(token_commitment) = string_field(payload, "token_commitment") else {
+        return;
+    };
+    let Some(claim_nonce) = string_field(payload, "claim_nonce") else {
+        return;
+    };
+    let invites = state.persistence.realm_invites();
+    let Ok(Some(mut record)) = invites.get(&invite_id).await else {
+        return;
+    };
+    match record.claim_nonces.get(&claim_nonce) {
+        Some(existing_operation_id) if existing_operation_id != operation.operation_id.as_str() => {
+            tracing::debug!(invite_id = %invite_id, "duplicate ck.invite.claim nonce ignored");
+            return;
+        }
+        Some(_) => {}
+        None => {
+            record
+                .claim_nonces
+                .insert(claim_nonce.clone(), operation.operation_id.to_string());
+        }
+    }
+    if record
+        .expires_at
+        .is_some_and(|expires_at| expires_at <= operation.created_at)
+    {
+        record.status = "expired".to_owned();
+        record.updated_at = Some(operation.created_at);
+        record.invite_token.clear();
+        remove_third_party_active_material(&mut record.third_party_id, true);
+        let _ = invites.put(record).await;
+        return;
+    }
+    if record.realm_id != operation.realm_id.as_str() || record.status != "pending" {
+        return;
+    }
+    if record
+        .third_party_id
+        .as_ref()
+        .and_then(third_party_token_commitment)
+        != Some(token_commitment.as_str())
+    {
+        let _ = invites.put(record).await;
+        return;
+    }
+    if !claim_binding_matches(
+        &record,
+        payload,
+        &subject_id,
+        &claim_nonce,
+        operation.created_at,
+    ) {
+        let _ = invites.put(record).await;
+        return;
+    }
+    record.status = "claimed".to_owned();
+    record.invitee = Some(subject_id);
+    record.updated_at = Some(operation.created_at);
+    record.invite_token.clear();
+    remove_third_party_active_material(&mut record.third_party_id, false);
+    match invites.put(record).await {
+        Ok(()) => touch_realm(state, operation.realm_id.as_str()).await,
+        Err(error) => {
+            tracing::warn!(%error, invite_id = %invite_id, "failed to project invite claim")
+        }
+    }
 }
 
 pub(super) fn invite_acceptance_ref_for_operation(operation: &Operation) -> Option<String> {
@@ -174,10 +338,14 @@ pub(super) async fn project_invite_create_operation(
         invitee: Some(invitee.as_str().to_owned()),
         invite_delivery_target: invite_delivery_target_for_operation(operation),
         introduction_evidence_digest: introduction_evidence_digest_for_operation(operation),
+        third_party_id: None,
+        join_rule_snapshot: None,
         invite_token,
         status: "pending".to_owned(),
+        claim_nonces: std::collections::BTreeMap::new(),
         expires_at,
         created_at: operation.created_at,
+        updated_at: None,
     };
     match invites.put(record).await {
         Ok(()) => {
@@ -212,6 +380,120 @@ fn invite_id_for_operation(operation: &Operation) -> Option<String> {
     }
     ids::typed_uuid_part(operation.operation_id.as_str())
         .map(|uuid| ids::format_typed_uuid("invite", &uuid))
+}
+
+fn invite_string_field(
+    payload: &serde_json::Map<String, Value>,
+    invite: Option<&serde_json::Map<String, Value>>,
+    payload_field: &str,
+    invite_field: &str,
+) -> Option<String> {
+    invite
+        .and_then(|object| object.get(invite_field))
+        .or_else(|| payload.get(payload_field))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn invite_value_field<'a>(
+    payload: &'a serde_json::Map<String, Value>,
+    invite: Option<&'a serde_json::Map<String, Value>>,
+    field: &str,
+) -> Option<&'a Value> {
+    invite
+        .and_then(|object| object.get(field))
+        .or_else(|| payload.get(field))
+}
+
+fn string_field(payload: &serde_json::Map<String, Value>, field: &str) -> Option<String> {
+    payload
+        .get(field)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn third_party_token_commitment(third_party_id: &Value) -> Option<&str> {
+    third_party_id
+        .get("token_commitment")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+}
+
+fn remove_third_party_active_material(third_party_id: &mut Option<Value>, remove_commitment: bool) {
+    let Some(value) = third_party_id.as_mut() else {
+        return;
+    };
+    let Some(object) = value.as_object_mut() else {
+        return;
+    };
+    for key in [
+        "token_salt",
+        "token_salt_id",
+        "lookup_table_ref",
+        "pepper",
+        "pepper_id",
+    ] {
+        object.remove(key);
+    }
+    if remove_commitment {
+        object.remove("token_commitment");
+    }
+}
+
+fn claim_binding_matches(
+    record: &RealmInviteRecord,
+    payload: &serde_json::Map<String, Value>,
+    subject_id: &str,
+    claim_nonce: &str,
+    now: chrono::DateTime<chrono::Utc>,
+) -> bool {
+    let Some(binding) = payload.get("binding_proof").and_then(Value::as_object) else {
+        return false;
+    };
+    if binding.get("subject_id").and_then(Value::as_str) != Some(subject_id) {
+        return false;
+    }
+    if binding.get("realm_id").and_then(Value::as_str) != Some(record.realm_id.as_str()) {
+        return false;
+    }
+    if binding.get("audience").and_then(Value::as_str) != Some("cokret.invite.claim") {
+        return false;
+    }
+    if binding.get("claim_nonce").and_then(Value::as_str) != Some(claim_nonce) {
+        return false;
+    }
+    let Some(service_did) = binding
+        .get("verification_service_did")
+        .and_then(Value::as_str)
+    else {
+        return false;
+    };
+    if record
+        .third_party_id
+        .as_ref()
+        .and_then(|third_party| third_party.get("verification_service_did"))
+        .and_then(Value::as_str)
+        != Some(service_did)
+    {
+        return false;
+    }
+    let Some(expires_at) = binding
+        .get("expires_at")
+        .and_then(Value::as_str)
+        .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+        .map(|value| value.with_timezone(&chrono::Utc))
+    else {
+        return false;
+    };
+    expires_at > now
+        && record
+            .expires_at
+            .is_none_or(|invite_expiry| expires_at <= invite_expiry)
 }
 
 fn invitee_for_operation(operation: &Operation) -> Option<Did> {

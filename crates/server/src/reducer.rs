@@ -26,6 +26,7 @@
 // SOL-07-005: strand/morph/circle/applet/agent `apply_*` reducers (additional
 // `impl ProjectionState` blocks) split out of this file.
 mod apply_capability;
+mod apply_invites;
 mod apply_messages;
 mod apply_moderation;
 mod apply_objects;
@@ -96,13 +97,13 @@ pub(crate) use projections::space_container_id_from_payload;
 pub use projections::{
     AppletProjection, CapabilityDerivedState, ChildScopePolicy, CircleLifecycleState,
     CircleProjection, DocumentVersionProjection, ErasureReceiptRecord, FanoutPeerStatus,
-    KeyPackageLifetime, MessageState, MlsCommitEpoch, MlsCommitEpochKey, MlsKeyPackage,
-    MlsRemoveObligation, MlsWelcome, MlsWelcomeQueueKey, MorphProjection, ObjectLifecycleState,
-    PinProjection, PollOptionState, PollState, ProjectedMessageView, PushRouteCellValue,
-    PushRouteSubject, ReactionState, ReadMarkerState, RealmInheritancePolicyState, RealmLinkState,
-    RealmPolicyServerConfig, RedactionCellValue, RsvpProjection, SolandAgentProjection,
-    SolandMembershipState, SolandRealmState, SolandRelationState, SpaceContainerLifecycleState,
-    SpaceContainerProjection, StrandProjection,
+    InviteProjection, KeyPackageLifetime, MessageState, MlsCommitEpoch, MlsCommitEpochKey,
+    MlsKeyPackage, MlsRemoveObligation, MlsWelcome, MlsWelcomeQueueKey, MorphProjection,
+    ObjectLifecycleState, PinProjection, PollOptionState, PollState, ProjectedMessageView,
+    PushRouteCellValue, PushRouteSubject, ReactionState, ReadMarkerState,
+    RealmInheritancePolicyState, RealmLinkState, RealmPolicyServerConfig, RedactionCellValue,
+    RsvpProjection, SolandAgentProjection, SolandMembershipState, SolandRealmState,
+    SolandRelationState, SpaceContainerLifecycleState, SpaceContainerProjection, StrandProjection,
 };
 
 #[cfg(test)]

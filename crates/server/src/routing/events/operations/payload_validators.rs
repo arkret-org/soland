@@ -97,6 +97,181 @@ fn validate_invite_create_known_fields(payload: &Value) -> Result<(), &'static s
     Ok(())
 }
 
+pub(crate) fn validate_invite_third_party_payload(
+    operation: &Operation,
+) -> Result<(), &'static str> {
+    let payload = operation
+        .payload
+        .as_object()
+        .ok_or("ck.invite.third_party payload must be an object")?;
+    let invite = payload.get("invite").and_then(Value::as_object);
+    let invite_id = invite_field(payload, invite, "invite_id", "id")
+        .ok_or("ck.invite.third_party requires invite_id")?;
+    if cokret_sdk::InviteId::new(invite_id).is_err() {
+        return Err("ck.invite.third_party invite_id must be ck:invite:<uuidv7>");
+    }
+    let realm_id = invite_field(payload, invite, "realm_id", "realm_id")
+        .unwrap_or_else(|| operation.realm_id.to_string());
+    if realm_id != operation.realm_id.as_str() {
+        return Err("ck.invite.third_party realm_id must match envelope realm_id");
+    }
+    let inviter = invite_field(payload, invite, "inviter", "inviter")
+        .ok_or("ck.invite.third_party requires inviter")?;
+    if cokret_sdk::Did::new(inviter).is_err() {
+        return Err("ck.invite.third_party inviter must be a DID");
+    }
+    let third_party_id = invite_value(payload, invite, "third_party_id")
+        .and_then(Value::as_object)
+        .ok_or("ck.invite.third_party third_party_id must be an object")?;
+    for forbidden in ["token", "plaintext_token", "email", "phone", "address"] {
+        if third_party_id.contains_key(forbidden) {
+            return Err("ck.invite.third_party must not carry plaintext token or 3PID");
+        }
+    }
+    let service_did = third_party_id
+        .get("verification_service_did")
+        .and_then(Value::as_str)
+        .ok_or("third_party_id.verification_service_did is required")?;
+    if cokret_sdk::Did::new(service_did.to_owned()).is_err() {
+        return Err("third_party_id.verification_service_did must be a DID");
+    }
+    if third_party_id
+        .get("verification_public_key")
+        .and_then(Value::as_str)
+        .is_none_or(str::is_empty)
+    {
+        return Err("third_party_id.verification_public_key is required");
+    }
+    if let Some(token_commitment) = third_party_id
+        .get("token_commitment")
+        .and_then(Value::as_str)
+        && cokret_sdk::Hash::new(token_commitment.to_owned()).is_err()
+    {
+        return Err("third_party_id.token_commitment must be a hash");
+    }
+    if third_party_id.get("lookup_table_ref").is_none()
+        && third_party_id.get("token_commitment").is_none()
+    {
+        return Err("third_party_id requires token_commitment or lookup_table_ref");
+    }
+    let expires_at = invite_field(payload, invite, "expires_at", "expires_at")
+        .ok_or("ck.invite.third_party requires expires_at")?;
+    if cokret_sdk::canonical::validate_timestamp_canonical(&expires_at).is_err() {
+        return Err("ck.invite.third_party expires_at must be a canonical timestamp");
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_invite_claim_payload(operation: &Operation) -> Result<(), &'static str> {
+    let payload = operation
+        .payload
+        .as_object()
+        .ok_or("ck.invite.claim payload must be an object")?;
+    let invite_id =
+        payload_string(payload, "invite_id").ok_or("ck.invite.claim requires invite_id")?;
+    if cokret_sdk::InviteId::new(invite_id).is_err() {
+        return Err("ck.invite.claim invite_id must be ck:invite:<uuidv7>");
+    }
+    let subject_id =
+        payload_string(payload, "subject_id").ok_or("ck.invite.claim requires subject_id")?;
+    if cokret_sdk::Did::new(subject_id.clone()).is_err() {
+        return Err("ck.invite.claim subject_id must be a DID");
+    }
+    let token_commitment = payload_string(payload, "token_commitment")
+        .ok_or("ck.invite.claim requires token_commitment")?;
+    if cokret_sdk::Hash::new(token_commitment).is_err() {
+        return Err("ck.invite.claim token_commitment must be a hash");
+    }
+    let claim_nonce =
+        payload_string(payload, "claim_nonce").ok_or("ck.invite.claim requires claim_nonce")?;
+    let binding = payload
+        .get("binding_proof")
+        .and_then(Value::as_object)
+        .ok_or("ck.invite.claim binding_proof must be an object")?;
+    let binding_subject = binding
+        .get("subject_id")
+        .and_then(Value::as_str)
+        .ok_or("binding_proof.subject_id is required")?;
+    if binding_subject != subject_id {
+        return Err("binding_proof.subject_id must match subject_id");
+    }
+    if binding.get("realm_id").and_then(Value::as_str) != Some(operation.realm_id.as_str()) {
+        return Err("binding_proof.realm_id must match envelope realm_id");
+    }
+    if binding.get("audience").and_then(Value::as_str) != Some("cokret.invite.claim") {
+        return Err("binding_proof.audience must be cokret.invite.claim");
+    }
+    if binding.get("claim_nonce").and_then(Value::as_str) != Some(claim_nonce.as_str()) {
+        return Err("binding_proof.claim_nonce must match claim_nonce");
+    }
+    let service_did = binding
+        .get("verification_service_did")
+        .and_then(Value::as_str)
+        .ok_or("binding_proof.verification_service_did is required")?;
+    if cokret_sdk::Did::new(service_did.to_owned()).is_err() {
+        return Err("binding_proof.verification_service_did must be a DID");
+    }
+    if binding
+        .get("verification_method")
+        .and_then(Value::as_str)
+        .is_none_or(str::is_empty)
+    {
+        return Err("binding_proof.verification_method is required");
+    }
+    let expires_at = binding
+        .get("expires_at")
+        .and_then(Value::as_str)
+        .ok_or("binding_proof.expires_at is required")?;
+    if cokret_sdk::canonical::validate_timestamp_canonical(expires_at).is_err() {
+        return Err("binding_proof.expires_at must be a canonical timestamp");
+    }
+    if binding.get("signature").is_none() && binding.get("sig").is_none() {
+        return Err("binding_proof.signature is required");
+    }
+    if payload
+        .get("subject_proof")
+        .and_then(Value::as_object)
+        .is_none()
+    {
+        return Err("ck.invite.claim subject_proof must be an object");
+    }
+    Ok(())
+}
+
+fn invite_field(
+    payload: &serde_json::Map<String, Value>,
+    invite: Option<&serde_json::Map<String, Value>>,
+    payload_field: &str,
+    invite_field: &str,
+) -> Option<String> {
+    invite
+        .and_then(|object| object.get(invite_field))
+        .or_else(|| payload.get(payload_field))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn invite_value<'a>(
+    payload: &'a serde_json::Map<String, Value>,
+    invite: Option<&'a serde_json::Map<String, Value>>,
+    field: &str,
+) -> Option<&'a Value> {
+    invite
+        .and_then(|object| object.get(field))
+        .or_else(|| payload.get(field))
+}
+
+fn payload_string(payload: &serde_json::Map<String, Value>, field: &str) -> Option<String> {
+    payload
+        .get(field)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
 pub fn validate_message_operation_payload(operation: &Operation) -> Result<(), &'static str> {
     if crate::kinds::operation_is_message_create(operation) {
         if operation

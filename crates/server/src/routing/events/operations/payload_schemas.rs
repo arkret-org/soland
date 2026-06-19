@@ -20,6 +20,7 @@ pub(crate) const RELATION_FROM_FIELDS: &[&str] = &["from_ref", "from"];
 pub(crate) const RELATION_TO_FIELDS: &[&str] = &["to_ref", "to"];
 pub(crate) const MEMBER_ACTOR_FIELDS: &[&str] = &["actor_id", "member", "actor", "sender"];
 pub(crate) const INVITE_CREATE_TARGET_FIELDS: &[&str] = &["invitee", "actor_id", "member"];
+pub(crate) const INVITE_THIRD_PARTY_FIELDS: &[&str] = &["invite", "third_party_id"];
 pub(crate) const READ_MARKER_ACTOR_FIELDS: &[&str] = &["actor_id"];
 pub(crate) const CONSENT_PEER_FIELDS: &[&str] = &["peer", "peer_did", "grantee_did"];
 pub(crate) const CONSENT_SCOPE_FIELDS: &[&str] = &["consent_scope", "scope"];
@@ -145,6 +146,22 @@ pub(crate) const INVITE_CREATE_REQUIREMENTS: &[PayloadRequirement] = &[
         "expires_at",
         "ck.invite.create operation requires expires_at",
     ),
+];
+pub(crate) const INVITE_THIRD_PARTY_REQUIREMENTS: &[PayloadRequirement] =
+    &[PayloadRequirement::AnyOf(
+        INVITE_THIRD_PARTY_FIELDS,
+        "ck.invite.third_party requires invite or third_party_id",
+    )];
+pub(crate) const INVITE_CLAIM_REQUIREMENTS: &[PayloadRequirement] = &[
+    PayloadRequirement::Required("invite_id", "ck.invite.claim requires invite_id"),
+    PayloadRequirement::Required("subject_id", "ck.invite.claim requires subject_id"),
+    PayloadRequirement::Required(
+        "token_commitment",
+        "ck.invite.claim requires token_commitment",
+    ),
+    PayloadRequirement::Required("claim_nonce", "ck.invite.claim requires claim_nonce"),
+    PayloadRequirement::Required("binding_proof", "ck.invite.claim requires binding_proof"),
+    PayloadRequirement::Required("subject_proof", "ck.invite.claim requires subject_proof"),
 ];
 pub(crate) const INVITE_STATE_REQUIREMENTS: &[PayloadRequirement] = &[];
 pub(crate) const REALM_CREATE_REQUIREMENTS: &[PayloadRequirement] =

@@ -101,6 +101,25 @@ pub(crate) fn preflight_moderation_projection_reject(
     }
 }
 
+pub(crate) fn preflight_invite_projection_reject(
+    proj: &crate::reducer::ProjectionState,
+    operation: &Operation,
+    hlc: &crate::hlc::ServerHlc,
+) -> Option<String> {
+    let kind = kinds::canonical_kind_string(operation);
+    if !matches!(
+        kind.as_str(),
+        kinds::CK_INVITE_THIRD_PARTY | kinds::CK_INVITE_CLAIM
+    ) {
+        return None;
+    }
+    let mut snapshot = proj.clone();
+    match snapshot.apply(operation, hlc) {
+        crate::reducer::ProjectionEffect::Rejected { reason } => Some(reason),
+        _ => None,
+    }
+}
+
 fn event_realm_id(object: &serde_json::Map<String, Value>) -> Result<String, EventValidationError> {
     if let Some(realm_id) = event_string_field(object, &["realm_id"]) {
         if RealmId::new(realm_id.clone()).is_err() {

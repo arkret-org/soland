@@ -226,10 +226,14 @@ pub async fn project_membership_operation(state: &AppState, origin: &str, operat
                 invitee: Some(invitee.as_str().to_owned()),
                 invite_delivery_target: None,
                 introduction_evidence_digest: None,
+                third_party_id: None,
+                join_rule_snapshot: None,
                 invite_token,
                 status: "pending".to_owned(),
+                claim_nonces: std::collections::BTreeMap::new(),
                 expires_at: None,
                 created_at: operation.created_at,
+                updated_at: None,
             };
             match invites.put(record).await {
                 Ok(()) => tracing::info!(
@@ -288,7 +292,7 @@ async fn project_invite_acceptance(state: &AppState, member: &str, operation: &O
     if record.invitee.as_deref() != Some(member) {
         return;
     }
-    if record.status == "accepted" {
+    if !matches!(record.status.as_str(), "pending" | "claimed") {
         return;
     }
     record.status = "accepted".to_owned();

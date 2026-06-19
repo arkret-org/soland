@@ -455,6 +455,14 @@ pub fn operation_schema_for_kind(kind: &str) -> Option<OperationPayloadSchema> {
             requirements: INVITE_CREATE_REQUIREMENTS,
             validate: Some(validate_invite_create_payload),
         },
+        kinds::CK_INVITE_THIRD_PARTY => OperationPayloadSchema {
+            requirements: INVITE_THIRD_PARTY_REQUIREMENTS,
+            validate: Some(validate_invite_third_party_payload),
+        },
+        kinds::CK_INVITE_CLAIM => OperationPayloadSchema {
+            requirements: INVITE_CLAIM_REQUIREMENTS,
+            validate: Some(validate_invite_claim_payload),
+        },
         kinds::CK_AUDIT_ERASURE_RECEIPT => OperationPayloadSchema {
             requirements: ERASURE_RECEIPT_REQUIREMENTS,
             validate: None,

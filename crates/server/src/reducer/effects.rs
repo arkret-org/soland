@@ -50,6 +50,12 @@ pub enum ProjectionEffect {
         member: String,
         action: String,
     },
+    InviteStateChanged {
+        invite_id: String,
+        realm_id: String,
+        state: String,
+        invitee: Option<String>,
+    },
     RealmLifecycle {
         realm_id: String,
         action: String,

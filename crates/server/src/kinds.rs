@@ -118,6 +118,11 @@ pub use cokret_sdk::events::kinds::{
     REALM_PREVIEW_POLICY as CK_REALM_PREVIEW_POLICY, REALM_SEARCH_POLICY as CK_REALM_SEARCH_POLICY,
     REALM_TOMBSTONE as CK_REALM_TOMBSTONE, REALM_UPDATE as CK_REALM_UPDATE,
 };
+pub const CK_INVITE_ACCEPT: &str = "ck.invite.accept";
+pub const CK_INVITE_CANCEL: &str = "ck.invite.cancel";
+pub const CK_INVITE_CLAIM: &str = "ck.invite.claim";
+pub const CK_INVITE_REVOKE: &str = "ck.invite.revoke";
+pub const CK_INVITE_THIRD_PARTY: &str = "ck.invite.third_party";
 pub const CK_CONFLICT_REPAIR: &str = "ck.conflict.repair";
 pub const CK_ACCOUNT_DATA_SET: &str = "ck.account_data.set";
 // Round 14e+ (2026-05-16) — Agent protocol family. Spec
@@ -409,6 +414,11 @@ fn canonical_registered_kind(object_type: &str) -> Option<&str> {
         CK_CONTAINER_MOVE_ITEM => Some(CK_CONTAINER_MOVE_ITEM),
         CK_CONTAINER_REBALANCE => Some(CK_CONTAINER_REBALANCE),
         CK_INVITE_CREATE => Some(CK_INVITE_CREATE),
+        CK_INVITE_ACCEPT => Some(CK_INVITE_ACCEPT),
+        CK_INVITE_CANCEL => Some(CK_INVITE_CANCEL),
+        CK_INVITE_CLAIM => Some(CK_INVITE_CLAIM),
+        CK_INVITE_REVOKE => Some(CK_INVITE_REVOKE),
+        CK_INVITE_THIRD_PARTY => Some(CK_INVITE_THIRD_PARTY),
         CK_READ_MARKER => Some(CK_READ_MARKER),
         CK_REALM_CREATE | CK_REALM_UPDATE | CK_REALM_ARCHIVE | CK_REALM_DESTROY
         | CK_REALM_TOMBSTONE => Some(match object_type {
@@ -585,6 +595,14 @@ pub fn operation_is_invite_create(operation: &Operation) -> bool {
     canonical_kind_for_operation(operation) == Some(CK_INVITE_CREATE)
 }
 
+pub fn operation_is_invite_claim(operation: &Operation) -> bool {
+    canonical_kind_for_operation(operation) == Some(CK_INVITE_CLAIM)
+}
+
+pub fn operation_is_invite_third_party(operation: &Operation) -> bool {
+    canonical_kind_for_operation(operation) == Some(CK_INVITE_THIRD_PARTY)
+}
+
 pub fn operation_is_realm_lifecycle(operation: &Operation) -> bool {
     canonical_kind_for_operation(operation).is_some_and(is_realm_lifecycle_kind)
 }
@@ -600,7 +618,12 @@ pub fn is_membership_kind(kind: &str) -> bool {
 pub fn is_invite_kind(kind: &str) -> bool {
     matches!(
         kind,
-        CK_INVITE_CREATE | "ck.invite.accept" | "ck.invite.cancel"
+        CK_INVITE_CREATE
+            | CK_INVITE_ACCEPT
+            | CK_INVITE_CANCEL
+            | CK_INVITE_CLAIM
+            | CK_INVITE_REVOKE
+            | CK_INVITE_THIRD_PARTY
     )
 }
 

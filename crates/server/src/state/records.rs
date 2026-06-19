@@ -412,10 +412,14 @@ pub struct RealmInviteRecord {
     pub invitee: Option<String>,
     pub invite_delivery_target: Option<Value>,
     pub introduction_evidence_digest: Option<String>,
+    pub third_party_id: Option<Value>,
+    pub join_rule_snapshot: Option<Value>,
     pub invite_token: String,
     pub status: String,
+    pub claim_nonces: BTreeMap<String, String>,
     pub expires_at: Option<chrono::DateTime<chrono::Utc>>,
     pub created_at: chrono::DateTime<chrono::Utc>,
+    pub updated_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 #[derive(Clone, Debug)]

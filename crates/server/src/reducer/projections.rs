@@ -91,6 +91,21 @@ pub struct PushRouteCellValue {
     pub revoked_targets: Vec<String>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct InviteProjection {
+    pub invite_id: String,
+    pub realm_id: String,
+    pub inviter: String,
+    pub invitee: Option<String>,
+    pub third_party_id: Option<Value>,
+    pub join_rule_snapshot: Value,
+    pub state: String,
+    pub expires_at: chrono::DateTime<chrono::Utc>,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub updated_at: chrono::DateTime<chrono::Utc>,
+    pub claim_nonces: BTreeMap<String, String>,
+}
+
 /// R3.1 — structured cache row for a single directed Realm link.
 /// Mirrors the `ck.component.realm.link.v1` cell value plus envelope-
 /// derived timestamps so the query API can render `created_at` /

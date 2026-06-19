@@ -713,10 +713,14 @@ CREATE TABLE public.realm_invites (
     invitee_id text,
     invite_delivery_target jsonb,
     introduction_evidence_digest text,
+    third_party_id jsonb,
+    join_rule_snapshot jsonb,
     invite_token text NOT NULL,
     status text NOT NULL,
+    claim_nonces jsonb DEFAULT '{}'::jsonb NOT NULL,
     expires_at timestamp with time zone,
-    created_at timestamp with time zone DEFAULT now() NOT NULL
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone
 );
 
 CREATE TABLE public.recovery_policies (

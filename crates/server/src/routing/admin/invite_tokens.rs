@@ -81,10 +81,14 @@ async fn create_invite_token(
         introduction_evidence_digest: body
             .introduction_evidence_digest
             .filter(|value| !value.trim().is_empty()),
+        third_party_id: None,
+        join_rule_snapshot: None,
         invite_token: ids::generate("invite-token"),
         status: "pending".to_owned(),
+        claim_nonces: std::collections::BTreeMap::new(),
         expires_at: parse_expires_at(body.expires_at.as_deref())?,
         created_at: Utc::now(),
+        updated_at: None,
     };
     state
         .persistence

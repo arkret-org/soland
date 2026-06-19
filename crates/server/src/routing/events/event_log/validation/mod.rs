@@ -7,8 +7,8 @@ mod payload_shape;
 pub(crate) use audit::append_encrypted_message_franking;
 pub(super) use enrollment::validate_device_enrollment_authority_binding;
 pub(crate) use envelope::{
-    canonical_json_hash, preflight_mls_projection_reject, preflight_moderation_projection_reject,
-    validate_event_envelope,
+    canonical_json_hash, preflight_invite_projection_reject, preflight_mls_projection_reject,
+    preflight_moderation_projection_reject, validate_event_envelope,
 };
 pub(super) use envelope::{
     event_requirements_schema_id, validate_event_critical_features, validate_event_proofs,

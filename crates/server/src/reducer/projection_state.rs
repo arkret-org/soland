@@ -50,6 +50,10 @@ pub struct ProjectionState {
     /// Banned and knocking members are derived via `members_in_state`
     /// against the FSM state field, not stored as separate collections.
     pub members: BTreeMap<(String, String), SolandMembershipState>,
+    /// Server-side invite projection keyed by `invite_id`.
+    /// `ck.invite.third_party` creates pending third-party invites and
+    /// `ck.invite.claim` converts them into DID-targeted claimed invites.
+    pub invites: BTreeMap<String, InviteProjection>,
     /// Realm lifecycle state keyed by realm_id.
     pub realm_states: BTreeMap<String, SolandRealmState>,
     /// Redacted event IDs (tombstones). This stays as a flat

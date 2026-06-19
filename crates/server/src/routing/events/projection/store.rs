@@ -216,6 +216,10 @@ pub async fn project_federation_operation(state: &AppState, origin: &str, operat
         project_federated_message(state, origin, operation).await;
     } else if kinds::operation_is_invite_create(operation) {
         project_invite_create_operation(state, origin, operation).await;
+    } else if kinds::operation_is_invite_third_party(operation) {
+        project_invite_third_party_operation(state, operation).await;
+    } else if kinds::operation_is_invite_claim(operation) {
+        project_invite_claim_operation(state, operation).await;
     } else if kinds::canonical_kind_string(operation) == "ck.invite.accept" {
         project_invite_accept_operation(state, origin, operation).await;
     } else if kinds::operation_is_membership(operation)

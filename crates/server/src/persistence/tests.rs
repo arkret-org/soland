@@ -930,10 +930,14 @@ async fn memory_realm_invite_store_put_get_snapshot_matches_trait() {
             "recipient_service_type": "principal_server"
         })),
         introduction_evidence_digest: Some(format!("sha256:{}", "1".repeat(64))),
+        third_party_id: None,
+        join_rule_snapshot: None,
         invite_token: "tok-abc".to_owned(),
         status: "pending".to_owned(),
+        claim_nonces: BTreeMap::new(),
         expires_at: Some(now + chrono::Duration::hours(24)),
         created_at: now,
+        updated_at: None,
     };
     store.put(record.clone()).await.unwrap();
 

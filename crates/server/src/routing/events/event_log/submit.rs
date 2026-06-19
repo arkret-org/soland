@@ -592,7 +592,7 @@ pub(in crate::routing) async fn submit_event_value(
                 rejection.message,
             ));
         }
-        {
+        let invite_preflight_reject = {
             // Admission checks below are mandatory and MUST NOT be skipped
             // (fail-closed). The projection lock is the poison-free
             // `state::Mutex`, so acquiring it cannot fail and this block
@@ -710,6 +710,23 @@ pub(in crate::routing) async fn submit_event_value(
                     reason,
                 ));
             }
+            preflight_invite_projection_reject(&proj, operation, &state.hlc)
+        };
+        if let Some(reason) = invite_preflight_reject {
+            record_rejected_invite_claim_effect(state, operation)
+                .await
+                .map_err(|message| {
+                    SubmitOneError::new(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "invite_claim_reject_effect_failed",
+                        message,
+                    )
+                })?;
+            return Err(SubmitOneError::new(
+                StatusCode::PRECONDITION_FAILED,
+                reason.clone(),
+                reason,
+            ));
         }
     }
 
@@ -874,6 +891,102 @@ pub(in crate::routing) async fn submit_event_value(
     )
     .await;
     Ok(event_submit_response(state, EventsSubmitStatus::Accepted, parsed.event_id).await)
+}
+
+async fn record_rejected_invite_claim_effect(
+    state: &AppState,
+    operation: &Operation,
+) -> Result<(), String> {
+    if !kinds::operation_is_invite_claim(operation) {
+        return Ok(());
+    }
+    let Some(payload) = operation.payload.as_object() else {
+        return Ok(());
+    };
+    let Some(invite_id) = rejected_invite_claim_string_field(payload, "invite_id") else {
+        return Ok(());
+    };
+    let Some(claim_nonce) = rejected_invite_claim_string_field(payload, "claim_nonce") else {
+        return Ok(());
+    };
+
+    let invites = state.persistence.realm_invites();
+    let Some(mut record) = invites
+        .get(&invite_id)
+        .await
+        .map_err(|error| format!("load invite {invite_id}: {error}"))?
+    else {
+        return Ok(());
+    };
+
+    let mut changed = false;
+    match record.claim_nonces.get(&claim_nonce) {
+        Some(existing_operation_id) if existing_operation_id != operation.operation_id.as_str() => {
+            return Ok(());
+        }
+        Some(_) => {}
+        None => {
+            record
+                .claim_nonces
+                .insert(claim_nonce.clone(), operation.operation_id.to_string());
+            changed = true;
+        }
+    }
+
+    if record
+        .expires_at
+        .is_some_and(|expires_at| expires_at <= operation.created_at)
+    {
+        record.status = "expired".to_owned();
+        record.invite_token.clear();
+        remove_rejected_claim_active_material(&mut record.third_party_id, true);
+        changed = true;
+    }
+
+    if !changed {
+        return Ok(());
+    }
+    record.updated_at = Some(operation.created_at);
+    invites
+        .put(record)
+        .await
+        .map_err(|error| format!("store invite rejected claim effect: {error}"))
+}
+
+fn rejected_invite_claim_string_field(
+    payload: &serde_json::Map<String, Value>,
+    field: &str,
+) -> Option<String> {
+    payload
+        .get(field)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn remove_rejected_claim_active_material(
+    third_party_id: &mut Option<Value>,
+    remove_commitment: bool,
+) {
+    let Some(value) = third_party_id.as_mut() else {
+        return;
+    };
+    let Some(object) = value.as_object_mut() else {
+        return;
+    };
+    for key in [
+        "token_salt",
+        "token_salt_id",
+        "lookup_table_ref",
+        "pepper",
+        "pepper_id",
+    ] {
+        object.remove(key);
+    }
+    if remove_commitment {
+        object.remove("token_commitment");
+    }
 }
 
 async fn enqueue_peer_event_fanout(

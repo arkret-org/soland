@@ -378,10 +378,14 @@ pub(crate) async fn seed_test_realm(
                     "recipient_service_type": "principal_server"
                 })),
                 introduction_evidence_digest: Some(format!("sha256:{}", "1".repeat(64))),
+                third_party_id: None,
+                join_rule_snapshot: None,
                 invite_token,
                 status: "pending".to_owned(),
+                claim_nonces: std::collections::BTreeMap::new(),
                 expires_at: None,
                 created_at: now,
+                updated_at: None,
             })
             .await
             .unwrap();

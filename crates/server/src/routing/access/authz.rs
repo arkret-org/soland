@@ -348,7 +348,7 @@ async fn invites(
         .unwrap_or_default()
         .into_iter()
         .filter(|invite| {
-            invite.status == "pending"
+            matches!(invite.status.as_str(), "pending" | "claimed")
                 && invite
                     .invitee
                     .as_deref()
@@ -390,24 +390,27 @@ fn invite_record_to_sdk(invite: crate::state::RealmInviteRecord) -> Result<Invit
             .map_err(|error| AppError::internal(error.to_string()))?,
         invite_delivery_target,
         introduction_evidence_digest,
-        third_party_id: None,
-        join_rule_snapshot: json!({
-            "join_rule": "invite",
-            "invite_token": invite.invite_token,
-            "introduction_evidence_digest": invite.introduction_evidence_digest,
+        third_party_id: invite.third_party_id,
+        join_rule_snapshot: invite.join_rule_snapshot.unwrap_or_else(|| {
+            json!({
+                "join_rule": "invite",
+                "invite_token": invite.invite_token,
+                "introduction_evidence_digest": invite.introduction_evidence_digest,
+            })
         }),
         capability_grant_refs: Vec::new(),
         expires_at,
         state: invite_state_from_record(&invite.status),
         created_at: invite.created_at,
         updated_by: None,
-        updated_at: None,
+        updated_at: invite.updated_at,
     })
 }
 
 fn invite_state_from_record(status: &str) -> InviteState {
     match status {
         "accepted" => InviteState::Accepted,
+        "claimed" => InviteState::Claimed,
         "rejected" => InviteState::Rejected,
         "revoked" => InviteState::Revoked,
         "expired" => InviteState::Expired,
