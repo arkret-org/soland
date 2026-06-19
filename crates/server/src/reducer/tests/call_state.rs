@@ -465,6 +465,25 @@ fn call_state_transcript_capture_requires_consent_and_rejects_unknown_state() {
         ProjectionEffect::Rejected { reason }
             if reason == "transcription_artifact_pipeline_bypassed"
     ));
+
+    // §5.1 — terminal transcript state must bind its start event.
+    assert!(matches!(
+        state.apply(
+            &make_operation(
+                crate::kinds::CK_CALL_STATE,
+                realm,
+                serde_json::json!({
+                    "call_id": call_id,
+                    "transcript_state": "ready",
+                    "transcript_result": {
+                        "media_type": "text/vtt"
+                    }
+                }),
+            ),
+            &hlc,
+        ),
+        ProjectionEffect::Rejected { reason } if reason == "schema_violation"
+    ));
 }
 
 #[test]

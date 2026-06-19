@@ -121,6 +121,17 @@ fn grant_moderation_decision(state: &AppState, realm_id: &cokret_sdk::RealmId, a
     );
 }
 
+fn grant_call_action(state: &AppState, realm_id: &cokret_sdk::RealmId, actor: &str, action: &str) {
+    state.authz.create_grant(
+        realm_id.to_string(),
+        "did:web:owner.example".to_owned(),
+        actor.to_owned(),
+        realm_id.to_string(),
+        vec![action.to_owned()],
+        Vec::new(),
+    );
+}
+
 async fn register_agent_selection(
     state: &AppState,
     realm_id: &cokret_sdk::RealmId,
@@ -519,4 +530,100 @@ async fn moderation_decision_rejects_missing_issuer_even_with_sender_grant() {
             .unwrap_err(),
         "moderation_decision_issuer_missing"
     );
+}
+
+#[tokio::test]
+async fn call_recording_start_defaults_to_record_capability() {
+    let state = test_state();
+    let realm_id =
+        cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-000000000904".to_owned())
+            .unwrap();
+    grant_call_action(
+        &state,
+        &realm_id,
+        "did:web:recorder.example",
+        cokret_sdk::CAP_ACTION_CALL_RECORD,
+    );
+    let start = op(
+        realm_id,
+        "000000000904",
+        cokret_sdk::events::kinds::CALL_RECORDING_START,
+        json!({
+            "sender": "did:web:recorder.example",
+            "call_id": "ck:call:01904100-0000-7000-8000-000000000904",
+            "recording_id": "recording-904"
+        }),
+    );
+
+    validate_operation_policy(&state, &[start])
+        .await
+        .expect("ck.call.record should authorize recording capture");
+}
+
+#[tokio::test]
+async fn call_recording_start_transcript_requires_transcribe_capability() {
+    let state = test_state();
+    let realm_id =
+        cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-000000000905".to_owned())
+            .unwrap();
+    grant_call_action(
+        &state,
+        &realm_id,
+        "did:web:recorder.example",
+        cokret_sdk::CAP_ACTION_CALL_RECORD,
+    );
+    let start = op(
+        realm_id,
+        "000000000905",
+        cokret_sdk::events::kinds::CALL_RECORDING_START,
+        json!({
+            "sender": "did:web:recorder.example",
+            "call_id": "ck:call:01904100-0000-7000-8000-000000000905",
+            "recording_id": "transcript-905",
+            "capture_kind": "transcript"
+        }),
+    );
+
+    assert_eq!(
+        validate_operation_policy(&state, &[start])
+            .await
+            .unwrap_err(),
+        cokret_sdk::ERROR_CODE_TRANSCRIPTION_DENIED
+    );
+    assert_eq!(
+        operation_policy_reason_code(cokret_sdk::ERROR_CODE_TRANSCRIPTION_DENIED),
+        (
+            salvo::http::StatusCode::FORBIDDEN,
+            cokret_sdk::ERROR_CODE_TRANSCRIPTION_DENIED
+        )
+    );
+}
+
+#[tokio::test]
+async fn call_recording_start_transcript_allows_transcribe_capability() {
+    let state = test_state();
+    let realm_id =
+        cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-000000000906".to_owned())
+            .unwrap();
+    grant_call_action(
+        &state,
+        &realm_id,
+        "did:web:recorder.example",
+        cokret_sdk::CAP_ACTION_CALL_TRANSCRIBE,
+    );
+    let start = op(
+        realm_id,
+        "000000000906",
+        cokret_sdk::events::kinds::CALL_RECORDING_START,
+        json!({
+            "sender": "did:web:recorder.example",
+            "call_id": "ck:call:01904100-0000-7000-8000-000000000906",
+            "recording_id": "transcript-906",
+            "capture_kind": "transcript"
+        }),
+    );
+
+    validate_operation_policy(&state, &[start])
+        .await
+        .expect("ck.call.transcribe should authorize transcript capture");
 }

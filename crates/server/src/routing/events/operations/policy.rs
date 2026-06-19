@@ -19,6 +19,11 @@ pub fn operation_policy_reason_code(message: &str) -> (salvo::http::StatusCode, 
             salvo::http::StatusCode::FORBIDDEN,
             "applet_registration_unauthorized",
         )
+    } else if message == cokret_sdk::ERROR_CODE_TRANSCRIPTION_DENIED {
+        (
+            salvo::http::StatusCode::FORBIDDEN,
+            cokret_sdk::ERROR_CODE_TRANSCRIPTION_DENIED,
+        )
     } else if message == "not_found" {
         (salvo::http::StatusCode::NOT_FOUND, "not_found")
     } else {
@@ -70,6 +75,7 @@ pub async fn validate_operation_policy(
         validate_circle_scope_membership(state, operation)?;
         validate_pin_scope_safety(state, operation)?;
         validate_applet_registration_authz(state, operation).await?;
+        validate_call_recording_start_policy(state, operation).await?;
         validate_moderation_event_policy(state, operation).await?;
         validate_set_default_strand_policy(state, operation).await?;
         validate_history_visibility_policy(state, operation).await?;
@@ -1257,6 +1263,53 @@ async fn validate_moderation_event_policy(
         return Ok(());
     }
     Err("missing_capability")
+}
+
+async fn validate_call_recording_start_policy(
+    state: &AppState,
+    operation: &Operation,
+) -> Result<(), &'static str> {
+    if kinds::canonical_kind_string(operation) != cokret_sdk::events::kinds::CALL_RECORDING_START {
+        return Ok(());
+    }
+    let action = call_recording_start_required_action(operation);
+    let Some(actor) = operation_actor(operation) else {
+        return Ok(());
+    };
+    let realm_id = operation.realm_id.as_str();
+    let (owner, members) = realm_owner_and_members(state, realm_id).await;
+    if state
+        .authz
+        .check(
+            actor,
+            action,
+            realm_id,
+            realm_id,
+            owner.as_deref(),
+            &members,
+            &[],
+        )
+        .allowed
+    {
+        return Ok(());
+    }
+    if action == cokret_sdk::CAP_ACTION_CALL_TRANSCRIBE {
+        Err(cokret_sdk::ERROR_CODE_TRANSCRIPTION_DENIED)
+    } else {
+        Err("missing_capability")
+    }
+}
+
+fn call_recording_start_required_action(operation: &Operation) -> &'static str {
+    match operation
+        .payload
+        .get("capture_kind")
+        .and_then(Value::as_str)
+        .unwrap_or("recording")
+    {
+        "transcript" => cokret_sdk::CAP_ACTION_CALL_TRANSCRIBE,
+        _ => cokret_sdk::CAP_ACTION_CALL_RECORD,
+    }
 }
 
 /// Extract the authoring actor for a moderation event from the spec field for

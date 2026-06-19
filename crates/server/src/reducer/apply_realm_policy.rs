@@ -267,6 +267,14 @@ impl ProjectionState {
                 };
             }
         }
+        if let Some(reason) = validate_transcript_result_storage(
+            value.get("transcript_state").and_then(Value::as_str),
+            value.get("transcript_result"),
+        ) {
+            return ProjectionEffect::Rejected {
+                reason: reason.to_owned(),
+            };
+        }
 
         if let Ok(cell_id) =
             cokret_sdk::CellRef::new(format!("ck:cell:ck.component.call.state.v1:{call_id}"))
@@ -915,4 +923,23 @@ fn validate_capture_state(
         return Some(crate::error::reasons::RECORDING_CONSENT_REQUIRED);
     }
     None
+}
+
+fn validate_transcript_result_storage(
+    state: Option<&str>,
+    result: Option<&Value>,
+) -> Option<&'static str> {
+    let state = state.filter(|value| !value.is_empty())?;
+    if !matches!(state, "stopped" | "ready" | "failed") {
+        return None;
+    }
+    let has_start_event_id = result
+        .and_then(|result| result.get("transcript_start_event_id"))
+        .and_then(Value::as_str)
+        .is_some_and(|value| !value.is_empty());
+    if has_start_event_id {
+        None
+    } else {
+        Some(cokret_sdk::ERROR_CODE_SCHEMA_VIOLATION)
+    }
 }
