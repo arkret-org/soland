@@ -179,10 +179,12 @@ impl MlsKeyPackageStore for MemoryMlsKeyPackageStore {
             // Already claimed — CAS loser path.
             return Ok(None);
         }
-        row.claimed_by_mls_group_id = Some(group_id.to_owned());
-        if let Some(generation) = ssk_generation {
-            row.ssk_generation = Some(generation);
+        if let Some(generation) = ssk_generation
+            && row.ssk_generation != Some(generation)
+        {
+            return Ok(None);
         }
+        row.claimed_by_mls_group_id = Some(group_id.to_owned());
         row.consumed_at = Some(consumed_at);
         Ok(Some(row.clone()))
     }
@@ -539,6 +541,7 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
              SET claimed_by_mls_group_id = $2, ssk_generation = COALESCE($3, ssk_generation), \
                  consumed_at = $4 \
              WHERE id = $1 AND claimed_by_mls_group_id IS NULL \
+               AND ($3 IS NULL OR ssk_generation = $3) \
              RETURNING id, keypackage_ref, keypackage_digest, actor_id, device_id, \
              key_package_bytes, capabilities, capabilities_digest, device_signature, \
              lifetime_not_before, lifetime_not_after, claimed_by_mls_group_id, ssk_generation, \

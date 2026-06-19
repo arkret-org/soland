@@ -146,6 +146,7 @@ async fn upload_keypackage(
     if body.key_packages.is_empty() {
         return Err(AppError::missing_param("key_packages is required"));
     }
+    let ssk_generation = current_accepted_ssk_generation(state, &body.principal_id)?;
 
     let default_device_signature = body.device_signature.clone();
     let mut accepted = 0_u32;
@@ -245,6 +246,7 @@ async fn upload_keypackage(
             "capabilities": capabilities,
             "capabilities_digest": capabilities_digest,
             "device_signature": device_signature,
+            "ssk_generation": ssk_generation,
             "created_at": created_at,
             "lifetime": {
                 "not_before": created_at,
@@ -294,7 +296,12 @@ async fn upload_keypackage(
         accepted,
         rejected,
         key_package_refs,
-        available_count: Some(available_keypackage_count(state, &actor_id, None)),
+        available_count: Some(available_keypackage_count(
+            state,
+            &actor_id,
+            None,
+            Some(ssk_generation),
+        )),
     })
 }
 
@@ -338,6 +345,7 @@ async fn claim_keypackage(
         .iter()
         .map(ToString::to_string)
         .collect::<BTreeSet<_>>();
+    let ssk_generation = current_accepted_ssk_generation(state, &target_principal_did)?;
     let available_before = available_keypackage_count(
         state,
         &target_principal_id,
@@ -346,6 +354,7 @@ async fn claim_keypackage(
         } else {
             None
         },
+        Some(ssk_generation),
     );
     let now_secs = now().timestamp();
     let keypackage_id = {
@@ -358,6 +367,7 @@ async fn claim_keypackage(
                 target_device_ids.is_empty() || target_device_ids.contains(kp.device_id.as_str())
             })
             .filter(|kp| kp.claimed_by.is_none())
+            .filter(|kp| kp.ssk_generation == Some(ssk_generation))
             .filter(|kp| kp.lifetime.not_after > now_secs)
             .filter(|kp| capabilities_satisfy(&kp.capabilities, &required_capabilities))
             .min_by_key(|kp| (kp.created_at, kp.id.as_str()))
@@ -380,7 +390,6 @@ async fn claim_keypackage(
             available_count: Some(available_before),
         });
     };
-    let ssk_generation = current_accepted_ssk_generation(state, &target_principal_did)?;
     let mls_group_ref = body
         .mls_group_id
         .clone()
@@ -424,6 +433,11 @@ async fn claim_keypackage(
                     AppError::new(ErrorCode::FailedPrecondition, "KeyPackage lifetime expired")
                         .with_wire_code(reason)
                 }
+                reducer::mls::REASON_KEYPACKAGE_CLAIM_GENERATION_MISMATCH => AppError::new(
+                    ErrorCode::FailedPrecondition,
+                    "KeyPackage cross-signing generation mismatch",
+                )
+                .with_wire_code(reason),
                 _ => AppError::new(ErrorCode::SchemaViolation, reason),
             };
             return Err(err);
@@ -471,6 +485,7 @@ async fn claim_keypackage(
             state,
             &target_principal_id,
             None,
+            Some(ssk_generation),
         )),
     })
 }
@@ -839,7 +854,12 @@ fn consume_group_ref(body: &KeyPackagesConsumeRequestBody) -> String {
         .unwrap_or_else(|| "manual-consume".to_owned())
 }
 
-fn available_keypackage_count(state: &AppState, actor_id: &str, device_id: Option<&str>) -> u64 {
+fn available_keypackage_count(
+    state: &AppState,
+    actor_id: &str,
+    device_id: Option<&str>,
+    ssk_generation: Option<u64>,
+) -> u64 {
     let now_secs = now().timestamp();
     let projection = state.projection.lock().unwrap();
     projection
@@ -847,6 +867,7 @@ fn available_keypackage_count(state: &AppState, actor_id: &str, device_id: Optio
         .values()
         .filter(|kp| kp.actor_id == actor_id)
         .filter(|kp| device_id.is_none_or(|device_id| kp.device_id == device_id))
+        .filter(|kp| ssk_generation.is_none_or(|generation| kp.ssk_generation == Some(generation)))
         .filter(|kp| kp.claimed_by.is_none())
         .filter(|kp| kp.lifetime.not_after > now_secs)
         .count() as u64

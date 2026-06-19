@@ -42,6 +42,9 @@ pub const REASON_KEYPACKAGE_NOT_FOUND: &str = "mls_keypackage_not_found";
 /// Reason code emitted when a published KeyPackage's lifetime window
 /// is already past `not_after`. Mirrors RFC 9420 §10.
 pub const REASON_KEYPACKAGE_EXPIRED: &str = "mls_keypackage_expired";
+/// Reason code emitted when a KeyPackage publish/claim is missing the
+/// accepted cross-signing generation or attempts to consume an older one.
+pub const REASON_KEYPACKAGE_CLAIM_GENERATION_MISMATCH: &str = "claim_generation_mismatch";
 /// Reason code emitted when a commit's `expected_prev_epoch` does not
 /// match the group's stored epoch (out-of-order / stale / replay).
 pub const REASON_COMMIT_EPOCH_SKEW: &str = "mls_epoch_skew";
@@ -137,6 +140,13 @@ pub fn apply_keypackage_publish(
 
     let created_at =
         parse_timestamp(payload.get("created_at")).unwrap_or_else(|| op.created_at.timestamp());
+    let Some(ssk_generation) = payload
+        .get("ssk_generation")
+        .and_then(Value::as_u64)
+        .filter(|generation| *generation >= 1)
+    else {
+        return reject(REASON_KEYPACKAGE_CLAIM_GENERATION_MISMATCH);
+    };
     let row = MlsKeyPackage {
         id: id.to_owned(),
         keypackage_ref,
@@ -149,7 +159,7 @@ pub fn apply_keypackage_publish(
         capabilities_digest,
         device_signature,
         claimed_by: None,
-        ssk_generation: None,
+        ssk_generation: Some(ssk_generation),
         consumed_at: None,
         created_at,
     };
@@ -203,7 +213,16 @@ pub fn apply_keypackage_claim(state: &mut ProjectionState, op: &Operation) -> Pr
     if consumed_at >= row.lifetime.not_after {
         return reject(REASON_KEYPACKAGE_EXPIRED);
     }
-    row.ssk_generation = payload.get("ssk_generation").and_then(Value::as_u64);
+    let Some(claim_generation) = payload
+        .get("ssk_generation")
+        .and_then(Value::as_u64)
+        .filter(|generation| *generation >= 1)
+    else {
+        return reject(REASON_KEYPACKAGE_CLAIM_GENERATION_MISMATCH);
+    };
+    if row.ssk_generation != Some(claim_generation) {
+        return reject(REASON_KEYPACKAGE_CLAIM_GENERATION_MISMATCH);
+    }
     row.claimed_by = Some(group_id.to_owned());
     row.consumed_at = Some(consumed_at);
 
@@ -949,6 +968,7 @@ mod tests {
             "actor_id": actor,
             "device_id": device,
             "lifetime": {"not_before": 1, "not_after": not_after},
+            "ssk_generation": 7,
             "key_package_bytes_b64": b64(b"opaque-keypackage-bytes"),
         })
     }
@@ -987,7 +1007,8 @@ mod tests {
             json!({
                 "action": "claim",
                 "keypackage_id": "ck:mls_keypackage:01",
-                "group_id": "ck:mls_group:abc"
+                "group_id": "ck:mls_group:abc",
+                "ssk_generation": 7
             }),
         );
         let claim_effect = apply_keypackage_claim(&mut state, &claim);
@@ -1030,7 +1051,8 @@ mod tests {
             json!({
                 "action": "claim",
                 "keypackage_id": "ck:mls_keypackage:02",
-                "group_id": "ck:mls_group:first"
+                "group_id": "ck:mls_group:first",
+                "ssk_generation": 7
             }),
         );
         let e1 = apply_keypackage_claim(&mut state, &claim1);
@@ -1046,7 +1068,8 @@ mod tests {
             json!({
                 "action": "claim",
                 "keypackage_id": "ck:mls_keypackage:02",
-                "group_id": "ck:mls_group:second"
+                "group_id": "ck:mls_group:second",
+                "ssk_generation": 7
             }),
         );
         let e2 = apply_keypackage_claim(&mut state, &claim2);
@@ -1060,6 +1083,43 @@ mod tests {
         let row = state.mls_key_packages.get("ck:mls_keypackage:02").unwrap();
         assert_eq!(row.claimed_by.as_deref(), Some("ck:mls_group:first"));
         assert_eq!(row.consumed_at, Some(200));
+    }
+
+    #[test]
+    fn keypackage_claim_rejects_stale_cross_signing_generation() {
+        let mut state = ProjectionState::default();
+        let publish = op_at(
+            100,
+            "ck.mls.keypackage",
+            publish_payload(
+                "ck:mls_keypackage:03",
+                "did:web:alice.example",
+                "ck:device:alice-desktop",
+                1_000_000,
+            ),
+        );
+        let _ = apply_keypackage_publish(&mut state, &publish);
+
+        let claim = op_at(
+            200,
+            "ck.mls.keypackage",
+            json!({
+                "action": "claim",
+                "keypackage_id": "ck:mls_keypackage:03",
+                "group_id": "ck:mls_group:abc",
+                "ssk_generation": 8
+            }),
+        );
+        let effect = apply_keypackage_claim(&mut state, &claim);
+        match effect {
+            ProjectionEffect::Rejected { reason } => {
+                assert_eq!(reason, REASON_KEYPACKAGE_CLAIM_GENERATION_MISMATCH);
+            }
+            other => panic!("expected Rejected, got {other:?}"),
+        }
+        let row = state.mls_key_packages.get("ck:mls_keypackage:03").unwrap();
+        assert!(row.claimed_by.is_none());
+        assert_eq!(row.ssk_generation, Some(7));
     }
 
     #[test]

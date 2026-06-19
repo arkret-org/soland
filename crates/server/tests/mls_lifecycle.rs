@@ -313,7 +313,7 @@ async fn mls_lifecycle_end_to_end() {
         ]
     );
     assert_eq!(published_row.capabilities_digest, capabilities_digest);
-    assert_eq!(published_row.ssk_generation, None);
+    assert_eq!(published_row.ssk_generation, Some(3));
 
     // ── 2a. atomic claim wins (W1C: ck.self.keys.keypackages.command.claim) ───
     let claim_url = "http://server/_cokret/self/keys/keypackages/claim".to_owned();
