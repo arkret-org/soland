@@ -4,13 +4,14 @@
 //! events. Projects the six active moderation kinds into the canonical cells
 //! declared by `event-kind-registry.json`:
 //!
-//! - `ck.moderation.decision` → `ck.component.moderation_state.v1` (or_set, one cell per
-//!   `payload.decision_id`). The add value is the decision snapshot (`issuer` / `target_ref` /
-//!   `verdict` / `realm_id`), so the appeal separation-of-duties check can reverse-resolve the
-//!   original decision issuer from the cell.
-//! - `ck.moderation.decision.lift` → observed-remove / supersede on the same cell keyed by
-//!   `payload.decision_ref`. Terminal per content-moderation.md §2.6 (same §12.1 rule as
-//!   capabilities): once a decision_id is lifted, a later re-add stays lifted.
+//! - `ck.moderation.decision` -> `ck.component.moderation_state.v1` (or_set, one cell per
+//!   `payload.target_ref`). The add value is the decision snapshot (`decision_id` / `issuer` /
+//!   `target_ref` / `decision` / `realm_id`), so the appeal separation-of-duties check can
+//!   reverse-resolve the original decision issuer from the cell.
+//! - `ck.moderation.decision.lift` -> observed-remove / supersede on the same target cell. It marks
+//!   entries whose `decision_id` matches `payload.decision_ref` as lifted. Terminal per
+//!   content-moderation.md §2.6 (same §12.1 rule as capabilities): once a decision_id is lifted, a
+//!   later re-add stays lifted.
 //! - `ck.moderation.appeal.{submit,review,decision,close}` → `ck.component.moderation.appeal.v1`
 //!   (fsm, one cell per `payload.appeal_id`). Deterministic state machine (none) → submitted →
 //!   under_review → decided → closed, with `close` also reachable from submitted / under_review
@@ -40,13 +41,6 @@ use super::*;
 /// (content-moderation.md §5.5.1.1 / moderation-appeal.schema.json).
 const APPEAL_VERDICTS: [&str; 3] = ["uphold", "overturn", "modify"];
 
-/// or_set add dot for a moderation event projected from the
-/// `Operation` boundary. Deterministic per accepted event (mirrors
-/// `apply_capability::capability_add_dot`).
-fn moderation_add_dot(operation: &Operation) -> String {
-    operation.operation_id.to_string()
-}
-
 fn payload_str(operation: &Operation, field: &str) -> Option<String> {
     operation
         .payload
@@ -56,6 +50,22 @@ fn payload_str(operation: &Operation, field: &str) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
+fn payload_ref(operation: &Operation, field: &str) -> Option<String> {
+    let value = operation.payload.get(field)?;
+    value
+        .as_str()
+        .filter(|value| !value.trim().is_empty())
+        .map(ToOwned::to_owned)
+        .or_else(|| {
+            value
+                .get("id")
+                .or_else(|| value.get("ref"))
+                .and_then(Value::as_str)
+                .filter(|value| !value.trim().is_empty())
+                .map(ToOwned::to_owned)
+        })
+}
+
 /// The issuer of a moderation decision. The wire payload may name it
 /// `issuer` (canonical) or `decided_by` (admin-era snapshot); accept either
 /// so a decision projected by either path reverse-resolves consistently.
@@ -63,10 +73,32 @@ fn decision_issuer(operation: &Operation) -> Option<String> {
     payload_str(operation, "issuer").or_else(|| payload_str(operation, "decided_by"))
 }
 
+fn moderation_decision_id(operation: &Operation) -> String {
+    payload_str(operation, "decision_id")
+        .or_else(|| payload_str(operation, "event_id"))
+        .unwrap_or_else(|| operation.operation_id.to_string())
+}
+
+fn moderation_request_canonical_digest(operation: &Operation) -> Option<String> {
+    payload_str(operation, "request_canonical_digest").or_else(|| {
+        operation
+            .payload
+            .get("policy_decision_ref")
+            .and_then(|value| value.get("request_canonical_digest"))
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .map(ToOwned::to_owned)
+    })
+}
+
+fn moderation_add_tag(decision_kind: &str, issuer: &str, request_digest: &str) -> String {
+    format!("{decision_kind}:{issuer}:{request_digest}")
+}
+
 impl ProjectionState {
-    fn moderation_state_cell_ref(decision_id: &str) -> Option<CellRef> {
+    fn moderation_state_cell_ref(target_ref: &str) -> Option<CellRef> {
         CellRef::new(format!(
-            "ck:cell:ck.component.moderation_state.v1:{decision_id}"
+            "ck:cell:ck.component.moderation_state.v1:{target_ref}"
         ))
         .ok()
     }
@@ -87,6 +119,28 @@ impl ProjectionState {
         }
     }
 
+    fn moderation_items_for_decision(&self, decision_id: &str) -> Vec<Value> {
+        self.cells
+            .iter()
+            .filter(|(cell_ref, _)| {
+                cell_ref
+                    .as_str()
+                    .starts_with("ck:cell:ck.component.moderation_state.v1:")
+            })
+            .flat_map(|(_, state)| match state {
+                CellState::Value(Value::Array(items)) => items.clone(),
+                _ => Vec::new(),
+            })
+            .filter(|item| {
+                let value = item.get("value").unwrap_or(item);
+                value
+                    .get("decision_id")
+                    .and_then(Value::as_str)
+                    .is_some_and(|value| value == decision_id)
+            })
+            .collect()
+    }
+
     /// True when any surviving or_set item on this moderation_state cell is
     /// observed-removed (lifted). Drives the §2.6 terminal rule: once a
     /// decision_id is lifted, re-adds stay lifted.
@@ -104,20 +158,14 @@ impl ProjectionState {
     /// NOT lifted — i.e. there is a live decision under this id. Used by the
     /// `modify` atomicity check (the new decision MUST already be present).
     pub(crate) fn moderation_decision_is_live(&self, decision_id: &str) -> bool {
-        let Some(cell_ref) = Self::moderation_state_cell_ref(decision_id) else {
-            return false;
-        };
-        let items = self.moderation_cell_items(&cell_ref);
+        let items = self.moderation_items_for_decision(decision_id);
         !items.is_empty() && !Self::moderation_cell_has_lifted_item(&items)
     }
 
     /// True when the moderation_state cell for `decision_id` exists and is
     /// lifted. Used by the `overturn` atomicity check.
     pub(crate) fn moderation_decision_is_lifted(&self, decision_id: &str) -> bool {
-        let Some(cell_ref) = Self::moderation_state_cell_ref(decision_id) else {
-            return false;
-        };
-        let items = self.moderation_cell_items(&cell_ref);
+        let items = self.moderation_items_for_decision(decision_id);
         !items.is_empty() && Self::moderation_cell_has_lifted_item(&items)
     }
 
@@ -126,8 +174,7 @@ impl ProjectionState {
     /// projected here (causal / backfill tolerance — separation-of-duties is
     /// only enforced when we can observe the original decision's issuer).
     pub(crate) fn moderation_decision_issuer(&self, decision_id: &str) -> Option<String> {
-        let cell_ref = Self::moderation_state_cell_ref(decision_id)?;
-        let items = self.moderation_cell_items(&cell_ref);
+        let items = self.moderation_items_for_decision(decision_id);
         items.iter().rev().find_map(|item| {
             let value = item.get("value").unwrap_or(item);
             value
@@ -166,15 +213,23 @@ impl ProjectionState {
     }
 
     /// P2 — project `ck.moderation.decision` as an or_set add on the
-    /// moderation_state cell keyed by `payload.decision_id`.
+    /// moderation_state cell keyed by `payload.target_ref`.
     pub(crate) fn apply_moderation_decision(
         &mut self,
         operation: &Operation,
         now: chrono::DateTime<chrono::Utc>,
     ) -> ProjectionEffect {
-        let Some(decision_id) = payload_str(operation, "decision_id") else {
+        let decision_id = moderation_decision_id(operation);
+        let Some(target_ref) = payload_ref(operation, "target_ref") else {
             return ProjectionEffect::Rejected {
-                reason: "moderation_decision_id_missing".to_owned(),
+                reason: "moderation_decision_target_ref_missing".to_owned(),
+            };
+        };
+        let Some(decision_kind) =
+            payload_str(operation, "decision").or_else(|| payload_str(operation, "action"))
+        else {
+            return ProjectionEffect::Rejected {
+                reason: "moderation_decision_kind_missing".to_owned(),
             };
         };
         // Structural acceptance: a sealed decision MUST name its issuer so the
@@ -185,8 +240,13 @@ impl ProjectionState {
                 reason: "moderation_decision_issuer_missing".to_owned(),
             };
         };
+        let Some(request_digest) = moderation_request_canonical_digest(operation) else {
+            return ProjectionEffect::Rejected {
+                reason: "moderation_request_canonical_digest_missing".to_owned(),
+            };
+        };
         let realm_id = operation.realm_id.to_string();
-        let Some(cell_ref) = Self::moderation_state_cell_ref(&decision_id) else {
+        let Some(cell_ref) = Self::moderation_state_cell_ref(&target_ref) else {
             return ProjectionEffect::Rejected {
                 reason: "moderation_decision_cell_ref_invalid".to_owned(),
             };
@@ -195,11 +255,20 @@ impl ProjectionState {
         let mut items = self.moderation_cell_items(&cell_ref);
         // §2.6 terminal: a re-add of an already-lifted decision_id does NOT
         // revive. Carry the lifted tombstone onto the new add.
-        let terminal_lifted = Self::moderation_cell_has_lifted_item(&items);
+        let terminal_lifted = Self::moderation_cell_has_lifted_item(
+            &self.moderation_items_for_decision(&decision_id),
+        );
+        let tag = moderation_add_tag(&decision_kind, &issuer, &request_digest);
         let mut value = operation.payload.clone();
         if let Value::Object(map) = &mut value {
             map.insert("decision_id".to_owned(), Value::String(decision_id.clone()));
+            map.insert("target_ref".to_owned(), Value::String(target_ref));
+            map.insert("decision".to_owned(), Value::String(decision_kind));
             map.insert("issuer".to_owned(), Value::String(issuer));
+            map.insert(
+                "request_canonical_digest".to_owned(),
+                Value::String(request_digest),
+            );
             map.entry("realm_id".to_owned())
                 .or_insert_with(|| Value::String(realm_id.clone()));
             if terminal_lifted {
@@ -209,7 +278,7 @@ impl ProjectionState {
             }
         }
         items.push(serde_json::json!({
-            "tag": moderation_add_dot(operation),
+            "tag": tag,
             "value": value,
         }));
         self.cells
@@ -222,16 +291,13 @@ impl ProjectionState {
     }
 
     /// P2 — project `ck.moderation.decision.lift` as an or_set observed-remove
-    /// / supersede on the moderation_state cell keyed by `payload.decision_ref`.
+    /// / supersede on the moderation_state cell keyed by `payload.target_ref`.
     /// Idempotent: lifting an already-lifted decision converges.
     pub(crate) fn apply_moderation_decision_lift(
         &mut self,
         operation: &Operation,
         now: chrono::DateTime<chrono::Utc>,
     ) -> ProjectionEffect {
-        // The lift's cell subject is `payload.decision_ref` (event-kind-
-        // registry). Accept `decision_id` as a fallback for the admin-era
-        // snapshot shape.
         let Some(decision_id) = payload_str(operation, "decision_ref")
             .or_else(|| payload_str(operation, "decision_id"))
         else {
@@ -239,8 +305,13 @@ impl ProjectionState {
                 reason: "moderation_lift_decision_ref_missing".to_owned(),
             };
         };
+        let Some(target_ref) = payload_ref(operation, "target_ref") else {
+            return ProjectionEffect::Rejected {
+                reason: "moderation_lift_target_ref_missing".to_owned(),
+            };
+        };
         let realm_id = operation.realm_id.to_string();
-        let Some(cell_ref) = Self::moderation_state_cell_ref(&decision_id) else {
+        let Some(cell_ref) = Self::moderation_state_cell_ref(&target_ref) else {
             return ProjectionEffect::Rejected {
                 reason: "moderation_lift_cell_ref_invalid".to_owned(),
             };
@@ -253,10 +324,11 @@ impl ProjectionState {
             // projected): write a tombstone-only item so the terminal rule
             // holds and a later re-add of the same decision_id stays lifted.
             items.push(serde_json::json!({
-                "tag": moderation_add_dot(operation),
+                "tag": format!("lift:{}:{}", decision_id, operation.operation_id),
                 "value": {
-                    "decision_id": decision_id,
-                    "realm_id": realm_id,
+                    "decision_id": decision_id.clone(),
+                    "target_ref": target_ref.clone(),
+                    "realm_id": realm_id.clone(),
                     "lifted": true,
                     "lifted_at": lifted_at,
                 },
@@ -264,6 +336,7 @@ impl ProjectionState {
         } else {
             // Observed-remove: mark every surviving add for this decision_id
             // lifted (terminal). Repeated lift is idempotent.
+            let mut lifted_any = false;
             for item in &mut items {
                 let target = if item.get("value").is_some() {
                     item.get_mut("value").expect("value present")
@@ -271,10 +344,27 @@ impl ProjectionState {
                     item
                 };
                 if let Value::Object(map) = target {
+                    if map.get("decision_id").and_then(Value::as_str) != Some(decision_id.as_str())
+                    {
+                        continue;
+                    }
                     map.insert("lifted".to_owned(), Value::Bool(true));
                     map.entry("lifted_at".to_owned())
                         .or_insert_with(|| Value::String(lifted_at.clone()));
+                    lifted_any = true;
                 }
+            }
+            if !lifted_any {
+                items.push(serde_json::json!({
+                    "tag": format!("lift:{}:{}", decision_id, operation.operation_id),
+                    "value": {
+                        "decision_id": decision_id.clone(),
+                        "target_ref": target_ref.clone(),
+                        "realm_id": realm_id.clone(),
+                        "lifted": true,
+                        "lifted_at": lifted_at,
+                    },
+                }));
             }
         }
         self.cells

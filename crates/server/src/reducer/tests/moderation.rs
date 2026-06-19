@@ -10,10 +10,13 @@ use crate::reducer::*;
 const MOD_REALM: &str = "ck:realm:01904100-0000-7000-8000-d0d0d0d0d0d0";
 const MOD_DECISION_ID: &str = "ck:event:01904100-0000-7000-8000-0d0d0d0d0d01";
 const MOD_APPEAL_ID: &str = "ck:appeal:01904100-0000-7000-8000-0a0a0a0a0a01";
+const MOD_TARGET_REF: &str = "ck:message:01904100-0000-7000-8000-000000000777";
+const MOD_REQUEST_DIGEST: &str =
+    "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
 fn mod_decision_cell_ref() -> CellRef {
     CellRef::new(format!(
-        "ck:cell:ck.component.moderation_state.v1:{MOD_DECISION_ID}"
+        "ck:cell:ck.component.moderation_state.v1:{MOD_TARGET_REF}"
     ))
     .unwrap()
 }
@@ -26,8 +29,10 @@ fn seed_decision(state: &mut ProjectionState, hlc: &ServerHlc, issuer: &str) {
             "decision_id": MOD_DECISION_ID,
             "realm_id": MOD_REALM,
             "issuer": issuer,
-            "target_ref": "ck:message:01904100-0000-7000-8000-000000000777",
-            "action": "ban",
+            "target_ref": MOD_TARGET_REF,
+            "decision": "quarantine",
+            "action": "quarantine_message",
+            "request_canonical_digest": MOD_REQUEST_DIGEST,
         }),
     );
     let effect = state.apply(&op, hlc);
@@ -45,7 +50,7 @@ fn submit_appeal(state: &mut ProjectionState, hlc: &ServerHlc, appellant: &str) 
             "appeal_id": MOD_APPEAL_ID,
             "realm_id": MOD_REALM,
             "decision_ref": MOD_DECISION_ID,
-            "target_ref": "ck:message:01904100-0000-7000-8000-000000000777",
+            "target_ref": MOD_TARGET_REF,
             "appellant": appellant,
             "reason_text_ref": "appeal text",
         }),
@@ -72,12 +77,23 @@ fn moderation_decision_then_lift_converges_on_cell() {
         state.moderation_decision_issuer(MOD_DECISION_ID).as_deref(),
         Some("did:web:mod.example")
     );
+    let items = match state.cells.get(&mod_decision_cell_ref()) {
+        Some(CellState::Value(Value::Array(items))) => items,
+        other => panic!("moderation target cell should contain an or_set array, got {other:?}"),
+    };
+    assert_eq!(
+        items[0].get("tag").and_then(Value::as_str),
+        Some(
+            "quarantine:did:web:mod.example:sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        )
+    );
 
     let lift = make_operation(
         crate::kinds::CK_MODERATION_DECISION_LIFT,
         MOD_REALM,
         serde_json::json!({
             "decision_ref": MOD_DECISION_ID,
+            "target_ref": MOD_TARGET_REF,
             "realm_id": MOD_REALM,
         }),
     );
@@ -236,6 +252,7 @@ fn moderation_appeal_overturn_missing_lift_rejected() {
         MOD_REALM,
         serde_json::json!({
             "decision_ref": MOD_DECISION_ID,
+            "target_ref": MOD_TARGET_REF,
             "realm_id": MOD_REALM,
         }),
     );

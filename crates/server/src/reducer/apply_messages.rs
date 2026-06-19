@@ -636,7 +636,7 @@ impl ProjectionState {
             .get(&message_event_id_from_ref(target_ref))
             .or_else(|| self.messages.get(target_ref))
         {
-            if self.pin_target_is_quarantined(target_ref) {
+            if self.pin_target_is_blocked_by_moderation(target_ref) {
                 return None;
             }
             if self
@@ -653,7 +653,7 @@ impl ProjectionState {
             });
         }
         if let Some(strand) = self.strands.get(target_ref) {
-            if self.pin_target_is_quarantined(target_ref) {
+            if self.pin_target_is_blocked_by_moderation(target_ref) {
                 return None;
             }
             return (!strand.state.is_terminal()).then(|| PinEffectiveScope {
@@ -662,7 +662,7 @@ impl ProjectionState {
             });
         }
         if let Some(space) = self.space_containers.get(target_ref) {
-            if self.pin_target_is_quarantined(target_ref) {
+            if self.pin_target_is_blocked_by_moderation(target_ref) {
                 return None;
             }
             return (space.state != SpaceContainerLifecycleState::Tombstoned).then(|| {
@@ -673,7 +673,7 @@ impl ProjectionState {
             });
         }
         if let Some(morph) = self.morphs.get(target_ref) {
-            if self.pin_target_is_quarantined(target_ref) {
+            if self.pin_target_is_blocked_by_moderation(target_ref) {
                 return None;
             }
             return (!morph.state.is_terminal()).then(|| PinEffectiveScope {
@@ -682,7 +682,7 @@ impl ProjectionState {
             });
         }
         if let Some(relation) = self.relations.get(target_ref) {
-            if self.pin_target_is_quarantined(target_ref) {
+            if self.pin_target_is_blocked_by_moderation(target_ref) {
                 return None;
             }
             return relation.is_active().then(|| PinEffectiveScope {
@@ -693,7 +693,7 @@ impl ProjectionState {
         None
     }
 
-    fn pin_target_is_quarantined(&self, target_ref: &str) -> bool {
+    fn pin_target_is_blocked_by_moderation(&self, target_ref: &str) -> bool {
         self.cells
             .iter()
             .filter(|(cell_ref, _)| {
@@ -707,15 +707,40 @@ impl ProjectionState {
                 };
                 items.iter().any(|item| {
                     let value = item.get("value").unwrap_or(item);
-                    !value
+                    if value
                         .get("lifted")
                         .and_then(Value::as_bool)
                         .unwrap_or(false)
-                        && moderation_value_targets_ref(value, target_ref)
-                        && matches!(
-                            value.get("verdict").and_then(Value::as_str),
-                            Some("quarantine" | "quarantined")
-                        )
+                    {
+                        return false;
+                    }
+                    if !moderation_value_targets_ref(value, target_ref) {
+                        return false;
+                    }
+                    let decision = value
+                        .get("decision")
+                        .or_else(|| value.get("verdict"))
+                        .and_then(Value::as_str);
+                    let action = value.get("action").and_then(Value::as_str);
+                    match decision {
+                        Some("soft_deny") => false,
+                        Some("hard_deny" | "quarantine" | "quarantined" | "require_review") => true,
+                        Some(_) => true,
+                        None => match action {
+                            Some(
+                                "deny_join"
+                                | "deny_restricted_join"
+                                | "deny_invite"
+                                | "deny_write"
+                                | "deny_federation"
+                                | "quarantine_message"
+                                | "require_review"
+                                | "redact_on_accept"
+                                | "shadow_collapse",
+                            ) => true,
+                            Some(_) | None => true,
+                        },
+                    }
                 })
             })
     }

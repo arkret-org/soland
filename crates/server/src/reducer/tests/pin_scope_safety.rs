@@ -159,3 +159,41 @@ fn pin_rejects_quarantined_message_target() {
     assert_eq!(state.check_pin_scope_safety(&operation), Err("not_found"));
     assert!(!state.pin_target_is_visible_for_projection(MESSAGE_EVENT_ID));
 }
+
+#[test]
+fn pin_rejects_active_moderation_decision_head() {
+    let mut state = ProjectionState::new();
+    let hlc = ServerHlc::new("test");
+    seed_scoped_message(&mut state, &hlc);
+    state.cells.insert(
+        CellRef::new(format!(
+            "ck:cell:ck.component.moderation_state.v1:{MESSAGE_EVENT_ID}"
+        ))
+        .unwrap(),
+        CellState::Value(serde_json::json!([{
+            "tag": "hard_deny:did:web:mod.example:sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "value": {
+                "decision_id": "ck:event:01904100-0000-7000-8000-000000000909",
+                "target_ref": MESSAGE_EVENT_ID,
+                "decision": "hard_deny",
+                "issuer": "did:web:mod.example",
+                "request_canonical_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                "realm_id": REALM_ID
+            }
+        }, {
+            "tag": "require_review:did:web:other.example:sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            "value": {
+                "decision_id": "ck:event:01904100-0000-7000-8000-000000000910",
+                "target_ref": MESSAGE_EVENT_ID,
+                "decision": "require_review",
+                "issuer": "did:web:other.example",
+                "request_canonical_digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+                "realm_id": REALM_ID
+            }
+        }])),
+    );
+
+    let operation = pin_add(serde_json::json!({"kind": "circle", "id": CIRCLE_ID}));
+    assert_eq!(state.check_pin_scope_safety(&operation), Err("not_found"));
+    assert!(!state.pin_target_is_visible_for_projection(MESSAGE_EVENT_ID));
+}

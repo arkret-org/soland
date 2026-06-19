@@ -1224,7 +1224,7 @@ async fn validate_moderation_event_policy(
     // Peer/service-originated federation operations predate a typed actor
     // envelope; they stay accepted so convergence/backfill keep working
     // (mirrors the ban gate). Direct client submits always carry an actor.
-    let Some(actor) = moderation_actor(operation) else {
+    let Some(actor) = moderation_actor(operation, kind)? else {
         return Ok(());
     };
 
@@ -1259,27 +1259,60 @@ async fn validate_moderation_event_policy(
     Err("missing_capability")
 }
 
-/// Extract the authoring actor for a moderation event. Decision events name
-/// the issuer (`issuer` / `decided_by`); appeal submit names `appellant`;
-/// appeal review/decision name `reviewer`; close names `closer`. Falls back
-/// to the envelope `sender`.
-fn moderation_actor(operation: &Operation) -> Option<&str> {
-    [
-        "sender",
-        "issuer",
-        "decided_by",
-        "reviewer",
-        "closer",
-        "appellant",
-    ]
-    .into_iter()
-    .find_map(|field| {
-        operation
+/// Extract the authoring actor for a moderation event from the spec field for
+/// that kind. The projection adapter injects envelope.actor_id into
+/// payload.sender; when both sender and the kind-specific actor are present
+/// they must match so a privileged sender cannot spoof the decision issuer.
+fn moderation_actor<'a>(
+    operation: &'a Operation,
+    kind: &str,
+) -> Result<Option<&'a str>, &'static str> {
+    let actor = match kind {
+        kinds::CK_MODERATION_DECISION => operation
             .payload
-            .get(field)
+            .get("issuer")
+            .or_else(|| operation.payload.get("decided_by"))
             .and_then(Value::as_str)
             .filter(|value| !value.trim().is_empty())
-    })
+            .ok_or("moderation_decision_issuer_missing")?,
+        kinds::CK_MODERATION_DECISION_LIFT => {
+            return Ok(operation
+                .payload
+                .get("sender")
+                .or_else(|| operation.payload.get("actor_id"))
+                .and_then(Value::as_str)
+                .filter(|value| !value.trim().is_empty()));
+        }
+        kinds::CK_MODERATION_APPEAL_SUBMIT => operation
+            .payload
+            .get("appellant")
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .ok_or("moderation_appeal_actor_missing")?,
+        kinds::CK_MODERATION_APPEAL_REVIEW | kinds::CK_MODERATION_APPEAL_DECISION => operation
+            .payload
+            .get("reviewer")
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .ok_or("moderation_appeal_actor_missing")?,
+        kinds::CK_MODERATION_APPEAL_CLOSE => operation
+            .payload
+            .get("closer")
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .ok_or("moderation_appeal_actor_missing")?,
+        _ => return Ok(None),
+    };
+    if operation
+        .payload
+        .get("sender")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .is_some_and(|sender| sender != actor)
+    {
+        return Err("moderation_actor_mismatch");
+    }
+    Ok(Some(actor))
 }
 
 /// True when an `appeal.close` is an appellant self-withdrawal: the closer

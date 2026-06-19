@@ -268,8 +268,8 @@ pub enum ProjectionEffect {
         action: String,
     },
     /// P2 — `ck.moderation.decision` projected as an or_set add into the
-    /// `ck.component.moderation_state.v1` cell keyed by `payload.decision_id`
-    /// (content-moderation.md §2.6). Carries an issuer/target_ref/verdict
+    /// `ck.component.moderation_state.v1` cell keyed by `payload.target_ref`
+    /// (content-moderation.md §2.6). Carries an issuer/target_ref/decision
     /// snapshot so the appeal separation-of-duties check can reverse-resolve
     /// the original decision issuer from the cell.
     ModerationDecisionProjected {
@@ -277,8 +277,8 @@ pub enum ProjectionEffect {
         realm_id: String,
     },
     /// P2 — `ck.moderation.decision.lift` projected as an or_set
-    /// observed-remove / supersede on the moderation_state cell keyed by
-    /// `payload.decision_ref`. Terminal: a re-add of a lifted decision_id
+    /// observed-remove / supersede on the moderation_state target cell.
+    /// Terminal: a re-add of a lifted decision_id
     /// stays lifted (mirrors capabilities.md §12.1).
     ModerationDecisionLifted {
         decision_id: String,

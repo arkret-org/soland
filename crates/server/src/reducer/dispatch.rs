@@ -698,7 +698,7 @@ fn apply_capability_delegate_dispatch(
 
 /// P2 — dispatch for `ck.moderation.decision`. Projects the decision snapshot
 /// as an or_set add into the `ck.component.moderation_state.v1` cell keyed by
-/// `payload.decision_id`.
+/// `payload.target_ref`.
 fn apply_moderation_decision_dispatch(
     s: &mut ProjectionState,
     op: &Operation,
@@ -708,8 +708,8 @@ fn apply_moderation_decision_dispatch(
 }
 
 /// P2 — dispatch for `ck.moderation.decision.lift`. Projects an observed-
-/// remove / supersede on the moderation_state cell keyed by
-/// `payload.decision_ref`.
+/// remove / supersede on the moderation_state target cell, marking the
+/// `payload.decision_ref` decision lifted.
 fn apply_moderation_decision_lift_dispatch(
     s: &mut ProjectionState,
     op: &Operation,

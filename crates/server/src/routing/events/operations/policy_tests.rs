@@ -110,6 +110,17 @@ fn test_state() -> AppState {
     AppState::new(test_config(), Db { pool: None })
 }
 
+fn grant_moderation_decision(state: &AppState, realm_id: &cokret_sdk::RealmId, actor: &str) {
+    state.authz.create_grant(
+        realm_id.to_string(),
+        "did:web:owner.example".to_owned(),
+        actor.to_owned(),
+        realm_id.to_string(),
+        vec![kinds::CK_MODERATION_DECISION.to_owned()],
+        Vec::new(),
+    );
+}
+
 async fn register_agent_selection(
     state: &AppState,
     realm_id: &cokret_sdk::RealmId,
@@ -427,5 +438,85 @@ async fn circle_scoped_relation_update_and_delete_require_circle_membership() {
             .await
             .unwrap_err(),
         "circle_scope_membership_required"
+    );
+}
+
+#[tokio::test]
+async fn moderation_decision_checks_issuer_capability_not_sender_spoof() {
+    let state = test_state();
+    let realm_id =
+        cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-000000000901".to_owned())
+            .unwrap();
+    grant_moderation_decision(&state, &realm_id, "did:web:moderator.example");
+    let decision = op(
+        realm_id,
+        "000000000901",
+        kinds::CK_MODERATION_DECISION,
+        json!({
+            "sender": "did:web:moderator.example",
+            "issuer": "did:web:impostor.example",
+            "target_ref": "ck:message:01904100-0000-7000-8000-000000000901",
+            "decision": "quarantine",
+            "request_canonical_digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+        }),
+    );
+
+    assert_eq!(
+        validate_operation_policy(&state, &[decision])
+            .await
+            .unwrap_err(),
+        "moderation_actor_mismatch"
+    );
+}
+
+#[tokio::test]
+async fn moderation_decision_allows_authorized_issuer() {
+    let state = test_state();
+    let realm_id =
+        cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-000000000902".to_owned())
+            .unwrap();
+    grant_moderation_decision(&state, &realm_id, "did:web:moderator.example");
+    let decision = op(
+        realm_id,
+        "000000000902",
+        kinds::CK_MODERATION_DECISION,
+        json!({
+            "sender": "did:web:moderator.example",
+            "issuer": "did:web:moderator.example",
+            "target_ref": "ck:message:01904100-0000-7000-8000-000000000902",
+            "decision": "quarantine",
+            "request_canonical_digest": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+        }),
+    );
+
+    validate_operation_policy(&state, &[decision])
+        .await
+        .expect("issuer with matching moderation capability should pass");
+}
+
+#[tokio::test]
+async fn moderation_decision_rejects_missing_issuer_even_with_sender_grant() {
+    let state = test_state();
+    let realm_id =
+        cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-000000000903".to_owned())
+            .unwrap();
+    grant_moderation_decision(&state, &realm_id, "did:web:moderator.example");
+    let decision = op(
+        realm_id,
+        "000000000903",
+        kinds::CK_MODERATION_DECISION,
+        json!({
+            "sender": "did:web:moderator.example",
+            "target_ref": "ck:message:01904100-0000-7000-8000-000000000903",
+            "decision": "quarantine",
+            "request_canonical_digest": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+        }),
+    );
+
+    assert_eq!(
+        validate_operation_policy(&state, &[decision])
+            .await
+            .unwrap_err(),
+        "moderation_decision_issuer_missing"
     );
 }
