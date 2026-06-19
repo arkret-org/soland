@@ -1037,6 +1037,7 @@ pub fn describe(
             "org.cokret.soland.feature.sync.bound_cursor".to_owned(),
             "org.cokret.soland.feature.sync.incremental_since".to_owned(),
             "org.cokret.soland.feature.sync.typing".to_owned(),
+            "org.cokret.soland.feature.personal_productivity.scheduled_send_wake_only".to_owned(),
             "org.cokret.soland.feature.directory.search_realms".to_owned(),
             "org.cokret.soland.feature.directory.resolve_realm".to_owned(),
             "org.cokret.soland.feature.authz.check".to_owned(),
@@ -1138,6 +1139,19 @@ pub fn describe(
                     "plaintext_remote_search": false,
                     "directory_surface": "directory_only",
                     "requires_plaintext_visible_services_for_plaintext": true
+                }
+            },
+            "personal_productivity": {
+                "scheduled_send": {
+                    "profile": "ck.profile.personal_productivity.v1",
+                    "account_data_type": "ck.scheduled_send.v1",
+                    "storage": "encrypted_private_account_data",
+                    "plaintext_payload_accepted": false,
+                    "server_dispatches_message_create": false,
+                    "server_action": "holder_wake_sync_only",
+                    "wakeup_kind": "scheduled_send",
+                    "planned_message_id_anchor": "ck.message.create.payload.message_id",
+                    "shared_history_materialization": "client_submitted_ck.message.create_only"
                 }
             },
             "scalability_constraints": {
@@ -1306,6 +1320,14 @@ mod tests {
                 .expect("features array")
                 .contains(&json!("ck.feature.blob.resumable_upload.tus.v1"))
         );
+        assert!(
+            value["supported_features"]
+                .as_array()
+                .expect("features array")
+                .contains(&json!(
+                    "org.cokret.soland.feature.personal_productivity.scheduled_send_wake_only"
+                ))
+        );
         assert_eq!(
             value["limits"]["resumable_upload_incomplete_ttl_seconds"],
             json!(86_400)
@@ -1329,6 +1351,22 @@ mod tests {
         assert_eq!(
             value["limits"]["search"]["realm_private_message_search"]["plaintext_remote_search"],
             json!(false)
+        );
+        assert_eq!(
+            value["limits"]["personal_productivity"]["scheduled_send"]["storage"],
+            json!("encrypted_private_account_data")
+        );
+        assert_eq!(
+            value["limits"]["personal_productivity"]["scheduled_send"]["server_dispatches_message_create"],
+            json!(false)
+        );
+        assert_eq!(
+            value["limits"]["personal_productivity"]["scheduled_send"]["server_action"],
+            json!("holder_wake_sync_only")
+        );
+        assert_eq!(
+            value["limits"]["personal_productivity"]["scheduled_send"]["wakeup_kind"],
+            json!("scheduled_send")
         );
         assert_eq!(
             value["limits"]["scalability_constraints"]["max_to_device_queue_per_device"],

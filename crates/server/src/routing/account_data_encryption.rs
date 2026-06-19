@@ -497,6 +497,32 @@ mod tests {
     }
 
     #[test]
+    fn scheduled_send_rejects_plaintext_message_payload() {
+        let key = "ck.scheduled_send.v1:ck:message:01904100-0000-7000-8000-000000000001";
+        validate_encrypted_account_data_key(key).unwrap();
+        validate_encrypted_account_data_value(key, &conformance_marker()).unwrap();
+
+        let err = validate_encrypted_account_data_value(
+            key,
+            &json!({
+                "kind": "scheduled_send",
+                "planned_message_id": "ck:message:01904100-0000-7000-8000-000000000001",
+                "send_at": "2026-06-19T08:00:00Z",
+                "message_payload": {
+                    "message_id": "ck:message:01904100-0000-7000-8000-000000000001",
+                    "content": {"kind": "ck.content.text", "body": "secret"}
+                },
+                "message_payload_digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+                "updated_hlc": "01904100-0000-7000-8000-000000000001",
+                "encrypted_payload": conformance_marker()
+            }),
+        )
+        .unwrap_err();
+
+        assert_eq!(err, AccountDataEncryptionError::PlaintextField);
+    }
+
+    #[test]
     fn search_index_manifest_rejects_plaintext_manifest_fields() {
         let key = "ck.search.index_manifest.v1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
         validate_encrypted_account_data_key(key).unwrap();
