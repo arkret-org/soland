@@ -474,3 +474,103 @@ fn read_receipt_policy_cell_value_helper_extracts_canonical_value() {
         Some(false)
     );
 }
+
+fn base_search_policy() -> Value {
+    serde_json::json!({
+        "enabled_profile_refs": ["ck.profile.search.blind_index.v1"],
+        "allowed_service_dids": ["did:web:search.example"],
+        "data_classes": ["blind_tokens"],
+        "revocation_behavior": "fail_closed",
+        "leakage_class": "deterministic_token",
+        "index_retention_ms": 86_400_000u64,
+    })
+}
+
+fn apply_search_policy_payload(payload: Value) -> ProjectionEffect {
+    let mut state = ProjectionState::new();
+    let hlc = ServerHlc::new("test");
+    state.apply(
+        &make_operation(
+            crate::kinds::CK_REALM_SEARCH_POLICY,
+            "ck:realm:01904100-0000-7000-8000-cfc039892036",
+            payload,
+        ),
+        &hlc,
+    )
+}
+
+fn assert_search_policy_rejected(payload: Value, expected_reason: &str) {
+    match apply_search_policy_payload(payload) {
+        ProjectionEffect::Rejected { reason } => assert_eq!(reason, expected_reason),
+        other => panic!("expected search policy rejection, got {other:?}"),
+    }
+}
+
+#[test]
+fn realm_search_policy_accepts_wrapped_valid_policy_and_projects_inner_value() {
+    let mut state = ProjectionState::new();
+    let hlc = ServerHlc::new("test");
+    let policy = base_search_policy();
+    let effect = state.apply(
+        &make_operation(
+            crate::kinds::CK_REALM_SEARCH_POLICY,
+            "ck:realm:01904100-0000-7000-8000-cfc039892036",
+            serde_json::json!({ "value": policy.clone() }),
+        ),
+        &hlc,
+    );
+    assert!(matches!(
+        effect,
+        ProjectionEffect::RealmSearchPolicyProjected { .. }
+    ));
+    let cell = state
+        .realm_search_policy_cell_value("ck:realm:01904100-0000-7000-8000-cfc039892036")
+        .expect("search policy cell should resolve");
+    assert_eq!(cell, &policy);
+}
+
+#[test]
+fn realm_search_policy_forward_private_requires_matching_leakage_class() {
+    let mut policy = base_search_policy();
+    policy["enabled_profile_refs"] = serde_json::json!(["ck.profile.search.forward_private.v1"]);
+    policy.as_object_mut().unwrap().remove("leakage_class");
+    assert_search_policy_rejected(
+        policy,
+        "search_policy_forward_private_leakage_class_required",
+    );
+}
+
+#[test]
+fn realm_search_policy_forward_private_requires_token_rotation_cadence() {
+    let mut policy = base_search_policy();
+    policy["enabled_profile_refs"] = serde_json::json!(["ck.profile.search.forward_private.v1"]);
+    policy["leakage_class"] = serde_json::json!("forward_private");
+    assert_search_policy_rejected(
+        policy,
+        "search_policy_forward_private_token_rotation_required",
+    );
+}
+
+#[test]
+fn realm_search_policy_rejects_invalid_data_class() {
+    let mut policy = base_search_policy();
+    policy["data_classes"] = serde_json::json!(["private_plaintext"]);
+    assert_search_policy_rejected(policy, "search_policy_data_class_invalid");
+}
+
+#[test]
+fn realm_search_policy_rejects_missing_revocation_behavior() {
+    let mut policy = base_search_policy();
+    policy
+        .as_object_mut()
+        .unwrap()
+        .remove("revocation_behavior");
+    assert_search_policy_rejected(policy, "search_policy_revocation_behavior_missing");
+}
+
+#[test]
+fn realm_search_policy_rejects_access_hiding_until_supported_profile_exists() {
+    let mut policy = base_search_policy();
+    policy["leakage_class"] = serde_json::json!("access_hiding");
+    assert_search_policy_rejected(policy, "search_policy_access_hiding_unsupported");
+}

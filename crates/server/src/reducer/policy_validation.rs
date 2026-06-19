@@ -117,6 +117,116 @@ pub(crate) fn state_payload_value(payload: &Value) -> &Value {
     payload.get("value").unwrap_or(payload)
 }
 
+const SEARCH_POLICY_PROFILES: &[&str] = &[
+    "ck.profile.search.client_index.v1",
+    "ck.profile.search.blind_index.v1",
+    "ck.profile.search.forward_private.v1",
+];
+const SEARCH_POLICY_DATA_CLASSES: &[&str] = &[
+    "encrypted_index",
+    "blind_tokens",
+    "plaintext",
+    "reversible_summary",
+];
+const SEARCH_POLICY_LEAKAGE_CLASSES: &[&str] =
+    &["deterministic_token", "forward_private", "access_hiding"];
+const SEARCH_POLICY_REVOCATION_BEHAVIORS: &[&str] = &["fail_closed", "drop_stale"];
+
+fn required_string_array(
+    policy: &Value,
+    field: &'static str,
+    allowed: Option<&[&str]>,
+    invalid_reason: &'static str,
+) -> Result<Vec<String>, &'static str> {
+    let Some(items) = policy.get(field).and_then(Value::as_array) else {
+        return Err(invalid_reason);
+    };
+    let mut seen = BTreeSet::new();
+    let mut out = Vec::with_capacity(items.len());
+    for item in items {
+        let Some(value) = item.as_str().filter(|value| !value.trim().is_empty()) else {
+            return Err(invalid_reason);
+        };
+        if let Some(allowed) = allowed
+            && !allowed.contains(&value)
+        {
+            return Err(invalid_reason);
+        }
+        if !seen.insert(value.to_owned()) {
+            return Err(invalid_reason);
+        }
+        out.push(value.to_owned());
+    }
+    Ok(out)
+}
+
+pub(crate) fn validate_realm_search_policy_payload(policy: &Value) -> Result<(), &'static str> {
+    let Some(object) = policy.as_object() else {
+        return Err("search_policy_invalid");
+    };
+    let profiles = required_string_array(
+        policy,
+        "enabled_profile_refs",
+        Some(SEARCH_POLICY_PROFILES),
+        "search_policy_enabled_profile_refs_invalid",
+    )?;
+    required_string_array(
+        policy,
+        "allowed_service_dids",
+        None,
+        "search_policy_allowed_service_dids_invalid",
+    )?;
+    let data_classes = required_string_array(
+        policy,
+        "data_classes",
+        Some(SEARCH_POLICY_DATA_CLASSES),
+        "search_policy_data_class_invalid",
+    )?;
+    if data_classes.is_empty() {
+        return Err("search_policy_data_classes_empty");
+    }
+    let revocation_behavior = object
+        .get("revocation_behavior")
+        .and_then(Value::as_str)
+        .ok_or("search_policy_revocation_behavior_missing")?;
+    if !SEARCH_POLICY_REVOCATION_BEHAVIORS.contains(&revocation_behavior) {
+        return Err("search_policy_revocation_behavior_invalid");
+    }
+    let leakage_class = object
+        .get("leakage_class")
+        .and_then(Value::as_str)
+        .unwrap_or("deterministic_token");
+    if !SEARCH_POLICY_LEAKAGE_CLASSES.contains(&leakage_class) {
+        return Err("search_policy_leakage_class_invalid");
+    }
+    if leakage_class == "access_hiding" {
+        return Err("search_policy_access_hiding_unsupported");
+    }
+    let forward_private_enabled = profiles
+        .iter()
+        .any(|profile| profile == "ck.profile.search.forward_private.v1");
+    if forward_private_enabled && leakage_class != "forward_private" {
+        return Err("search_policy_forward_private_leakage_class_required");
+    }
+    if leakage_class == "forward_private" && !forward_private_enabled {
+        return Err("search_policy_forward_private_profile_required");
+    }
+    if let Some(value) = object.get("token_rotation_cadence_ms")
+        && value.as_u64().is_none()
+    {
+        return Err("search_policy_token_rotation_cadence_invalid");
+    }
+    if forward_private_enabled && object.get("token_rotation_cadence_ms").is_none() {
+        return Err("search_policy_forward_private_token_rotation_required");
+    }
+    if let Some(value) = object.get("index_retention_ms")
+        && value.as_u64().is_none()
+    {
+        return Err("search_policy_index_retention_invalid");
+    }
+    Ok(())
+}
+
 /// Validate the Join Policy subset that the reducer must enforce before
 /// accepting the policy-components cell. The full Join Policy model has
 /// several gate families; this validator focuses on reducer-hard invariants:

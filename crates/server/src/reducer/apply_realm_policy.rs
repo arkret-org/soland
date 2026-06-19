@@ -95,11 +95,16 @@ impl ProjectionState {
 
     pub(crate) fn apply_realm_search_policy(&mut self, operation: &Operation) -> ProjectionEffect {
         let realm_id = operation.realm_id.to_string();
+        let value = state_payload_value(&operation.payload).clone();
+        if let Err(reason) = validate_realm_search_policy_payload(&value) {
+            return ProjectionEffect::Rejected {
+                reason: reason.to_owned(),
+            };
+        }
         if let Ok(cell_id) = cokret_sdk::CellRef::new(format!(
             "ck:cell:ck.component.realm.search_policy.v1:{realm_id}"
         )) {
-            self.cells
-                .insert(cell_id, CellState::Value(operation.payload.clone()));
+            self.cells.insert(cell_id, CellState::Value(value));
         }
         ProjectionEffect::RealmSearchPolicyProjected { realm_id }
     }
