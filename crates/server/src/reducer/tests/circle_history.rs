@@ -144,3 +144,98 @@ fn realm_leave_cascades_to_circle_history_membership() {
         Some("leave")
     );
 }
+
+#[test]
+fn circle_member_leave_enqueues_mls_remove_obligation() {
+    let (mut state, hlc, base) = seed_state("joined");
+    state.circles.get_mut(CIRCLE).unwrap().mls_group_ref = Some("ck:mls:group:circle".to_owned());
+    let join_at = base + Duration::minutes(5);
+    let leave_at = base + Duration::minutes(30);
+    let mut join = make_operation(
+        crate::kinds::CK_CIRCLE_MEMBER_STATE,
+        REALM,
+        serde_json::json!({
+            "circle_id": CIRCLE,
+            "actor": BOB,
+            "state": "active",
+            "sender": ALICE,
+            "manage_capability_verified": true,
+        }),
+    );
+    join.created_at = join_at;
+    assert!(matches!(
+        state.apply(&join, &hlc),
+        ProjectionEffect::CircleMemberStateChanged { .. }
+    ));
+
+    let mut leave = make_operation(
+        crate::kinds::CK_CIRCLE_MEMBER_STATE,
+        REALM,
+        serde_json::json!({
+            "circle_id": CIRCLE,
+            "actor": BOB,
+            "membership": "leave",
+            "sender": BOB,
+        }),
+    );
+    leave.created_at = leave_at;
+    assert!(matches!(
+        state.apply(&leave, &hlc),
+        ProjectionEffect::CircleMemberStateChanged { .. }
+    ));
+
+    assert_eq!(state.pending_mls_removals.len(), 1);
+    let obligation = &state.pending_mls_removals[0];
+    assert_eq!(obligation.realm_id, REALM);
+    assert_eq!(obligation.circle_id.as_deref(), Some(CIRCLE));
+    assert_eq!(
+        obligation.mls_group_ref.as_deref(),
+        Some("ck:mls:group:circle")
+    );
+    assert_eq!(obligation.actor_id, BOB);
+    assert_eq!(obligation.trigger_membership, "leave");
+    assert_eq!(obligation.triggered_at, leave_at);
+}
+
+#[test]
+fn circle_tombstone_enqueues_mls_remove_obligations_for_active_members() {
+    let (mut state, hlc, base) = seed_state("joined");
+    {
+        let circle = state.circles.get_mut(CIRCLE).unwrap();
+        circle.mls_group_ref = Some("ck:mls:group:circle".to_owned());
+        circle.members.insert(ALICE.to_owned());
+        circle.members.insert(BOB.to_owned());
+    }
+    let tombstone_at = base + Duration::minutes(40);
+    let mut tombstone = make_operation(
+        crate::kinds::CK_CIRCLE_TOMBSTONE,
+        REALM,
+        serde_json::json!({
+            "circle_id": CIRCLE,
+            "sender": ALICE,
+        }),
+    );
+    tombstone.created_at = tombstone_at;
+    assert!(matches!(
+        state.apply(&tombstone, &hlc),
+        ProjectionEffect::CircleLifecycle {
+            new_state: CircleLifecycleState::Tombstoned,
+            ..
+        }
+    ));
+
+    let mut removed = state
+        .pending_mls_removals
+        .iter()
+        .map(|obligation| obligation.actor_id.as_str())
+        .collect::<Vec<_>>();
+    removed.sort();
+    assert_eq!(removed, vec![ALICE, BOB]);
+    assert!(state.pending_mls_removals.iter().all(|obligation| {
+        obligation.realm_id == REALM
+            && obligation.circle_id.as_deref() == Some(CIRCLE)
+            && obligation.mls_group_ref.as_deref() == Some("ck:mls:group:circle")
+            && obligation.trigger_membership == "tombstone"
+            && obligation.triggered_at == tombstone_at
+    }));
+}

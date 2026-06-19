@@ -313,9 +313,10 @@ pub struct MlsCommitEpoch {
     pub committed_at: i64,
 }
 
-/// Reducer-derived MLS remove obligation created when a parent Realm
-/// membership removal cascades into an MLS-backed Circle. The MLS worker path
-/// is responsible for turning this obligation into a remove proposal/commit.
+/// Reducer-derived MLS remove obligation created when an MLS-backed Circle
+/// loses an active member directly or through parent Realm membership cascade.
+/// The MLS worker path is responsible for turning this obligation into a
+/// remove proposal/commit.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MlsRemoveObligation {
     pub realm_id: String,

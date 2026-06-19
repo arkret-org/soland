@@ -313,9 +313,33 @@ impl ProjectionState {
             .and_then(Value::as_str)
             .map(ToOwned::to_owned);
         circle.updated_at = Some(now);
-        if target == CircleLifecycleState::Tombstoned {
+        let tombstoned_mls_scope = if target == CircleLifecycleState::Tombstoned {
+            let members = if circle.encryption_profile == "mls_rfc9420" {
+                circle.members.iter().cloned().collect::<Vec<_>>()
+            } else {
+                Vec::new()
+            };
             // Membership is invalidated when the Circle is tombstoned.
             circle.members.clear();
+            Some((
+                circle.realm_id.clone(),
+                circle.mls_group_ref.clone(),
+                members,
+            ))
+        } else {
+            None
+        };
+        if let Some((realm_id, mls_group_ref, members)) = tombstoned_mls_scope {
+            for member in members {
+                self.pending_mls_removals.push(MlsRemoveObligation {
+                    realm_id: realm_id.clone(),
+                    circle_id: Some(circle_id.clone()),
+                    mls_group_ref: mls_group_ref.clone(),
+                    actor_id: member,
+                    trigger_membership: "tombstone".to_owned(),
+                    triggered_at: now,
+                });
+            }
         }
         ProjectionEffect::CircleLifecycle {
             circle_id,
@@ -432,12 +456,16 @@ impl ProjectionState {
                 reason: "circle_not_active".to_owned(),
             };
         }
+        let mut removed_mls_member = None;
         match target_state.as_str() {
             "join" | "active" => {
                 circle.members.insert(actor.clone());
             }
             "leave" | "ban" | "removed" | "banned" | "left" => {
-                circle.members.remove(&actor);
+                if circle.members.remove(&actor) && circle.encryption_profile == "mls_rfc9420" {
+                    removed_mls_member =
+                        Some((circle.realm_id.clone(), circle.mls_group_ref.clone()));
+                }
             }
             "invite" | "knock" | "invited" => {
                 // Invited members are not yet active; no projection-side
@@ -456,6 +484,16 @@ impl ProjectionState {
             .map(ToOwned::to_owned);
         circle.updated_at = Some(now);
         self.update_circle_membership_projection(&circle_id, &actor, &target_state, now);
+        if let Some((realm_id, mls_group_ref)) = removed_mls_member {
+            self.pending_mls_removals.push(MlsRemoveObligation {
+                realm_id,
+                circle_id: Some(circle_id.clone()),
+                mls_group_ref,
+                actor_id: actor.clone(),
+                trigger_membership: normalize_circle_membership_state(&target_state).to_owned(),
+                triggered_at: now,
+            });
+        }
         ProjectionEffect::CircleMemberStateChanged {
             circle_id,
             member: actor,
@@ -640,8 +678,8 @@ fn normalize_circle_membership_state(state: &str) -> &str {
     match state {
         "join" | "active" => "join",
         "invite" | "invited" => "invite",
-        "ban" | "banned" | "removed" => "ban",
-        "leave" | "left" => "leave",
+        "ban" | "banned" => "ban",
+        "leave" | "left" | "removed" => "leave",
         "knock" => "knock",
         _ => state,
     }
