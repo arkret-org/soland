@@ -12,17 +12,18 @@ use std::time::Duration;
 
 use chrono::Utc;
 use cokret_sdk::RealmId;
+use cokret_sdk::models::EffectiveScope;
 use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use super::{append_audit_log, now, query_param, realm_has_member, validate_did};
+use super::{append_audit_log, now, query_param, realm_has_member, sha256_hex, validate_did};
 use crate::error::{AppError, ErrorCode};
 use crate::ids;
 use crate::result::{JsonResult, json_ok};
 use crate::routing::system::extract::AuthArgs;
-use crate::state::AppState;
+use crate::state::{AppState, MODERATION_REPORT_EVIDENCE_MAX_TOTAL_BLOB_BYTES};
 use crate::wire::{ModerationReportOutcome, ModerationReportRequestBody};
 
 pub(super) fn protocol_router() -> Router {
@@ -36,6 +37,389 @@ struct ModerationReportsOutcome {
     total: usize,
     visibility: String,
 }
+
+#[derive(Clone, Debug)]
+pub(super) struct ModerationReportSafety {
+    pub effective_scope: Value,
+    pub evidence_package: Option<Value>,
+    pub franking_proof: Option<Value>,
+}
+
+pub(super) fn moderation_request_source_ip_hash(req: &Request) -> String {
+    let source = trusted_forwarded_client(req).unwrap_or_else(|| req.remote_addr().to_string());
+    sha256_hex(source.as_bytes())
+}
+
+pub(super) fn moderation_request_source_service(req: &Request) -> Option<String> {
+    req.headers()
+        .get("source-service-did")
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+pub(super) fn validate_moderation_report_safety(
+    state: &AppState,
+    realm_id: &str,
+    reporter: &str,
+    target_ref: &str,
+    effective_scope: Option<&EffectiveScope>,
+    evidence_package: &Value,
+    franking_proof: &Value,
+    source_service: Option<&str>,
+    source_ip_hash: &str,
+) -> Result<ModerationReportSafety, AppError> {
+    let rate = state.record_moderation_report_attempt(
+        reporter,
+        source_service,
+        realm_id,
+        source_ip_hash,
+        target_ref,
+    );
+    if rate.rate_limited {
+        return Err(AppError::new(
+            ErrorCode::RateLimited,
+            "moderation report rate limit exceeded",
+        )
+        .with_status(StatusCode::TOO_MANY_REQUESTS)
+        .with_reason_detail(format!(
+            "bucket={} count={} limit={} retry_after_ms={}",
+            rate.bucket.as_deref().unwrap_or("unknown"),
+            rate.count,
+            rate.limit,
+            rate.retry_after_ms
+        )));
+    }
+
+    let effective_scope = moderation_effective_scope_value(realm_id, effective_scope)?;
+    let evidence_package =
+        validate_moderation_evidence_package(evidence_package, &effective_scope)?;
+    let franking_proof = validate_moderation_franking_proof(state, realm_id, franking_proof)?;
+    Ok(ModerationReportSafety {
+        effective_scope,
+        evidence_package,
+        franking_proof,
+    })
+}
+
+fn trusted_forwarded_client(req: &Request) -> Option<String> {
+    if std::env::var("SOLAND_RATE_LIMIT_TRUST_X_FORWARDED_FOR")
+        .ok()
+        .as_deref()
+        != Some("1")
+    {
+        return None;
+    }
+    let header = req
+        .headers()
+        .get("x-forwarded-for")
+        .and_then(|value| value.to_str().ok())?;
+    header
+        .split(',')
+        .map(str::trim)
+        .find(|part| !part.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn moderation_effective_scope_value(
+    realm_id: &str,
+    effective_scope: Option<&EffectiveScope>,
+) -> Result<Value, AppError> {
+    match effective_scope {
+        None => Ok(json!({"kind": "realm", "realm_id": realm_id})),
+        Some(EffectiveScope::Realm {
+            realm_id: scope_realm,
+        }) => {
+            if scope_realm.as_str() != realm_id {
+                return Err(AppError::invalid_param(
+                    "effective_scope.realm_id must match report realm_id",
+                ));
+            }
+            Ok(json!({"kind": "realm", "realm_id": scope_realm.as_str()}))
+        }
+        Some(EffectiveScope::Circle {
+            realm_id: scope_realm,
+            circle_id,
+        }) => {
+            if scope_realm.as_str() != realm_id {
+                return Err(AppError::invalid_param(
+                    "effective_scope.realm_id must match report realm_id",
+                ));
+            }
+            Ok(json!({
+                "kind": "circle",
+                "realm_id": scope_realm.as_str(),
+                "circle_id": circle_id.as_str(),
+            }))
+        }
+    }
+}
+
+fn validate_moderation_evidence_package(
+    evidence_package: &Value,
+    effective_scope: &Value,
+) -> Result<Option<Value>, AppError> {
+    if evidence_package.is_null() {
+        return Ok(None);
+    }
+    let object = evidence_package
+        .as_object()
+        .ok_or_else(|| AppError::invalid_param("evidence_package must be an object"))?;
+    let canonical_bytes =
+        cokret_sdk::canonical::canonical_json_bytes(evidence_package).map_err(|error| {
+            AppError::bad_json(format!(
+                "evidence_package is not canonical-json encodable: {error}"
+            ))
+        })?;
+    if canonical_bytes.len() > MODERATION_REPORT_EVIDENCE_MAX_TOTAL_BLOB_BYTES {
+        return Err(AppError::new(
+            ErrorCode::PayloadTooLarge,
+            "evidence_package exceeds max_total_blob_bytes",
+        )
+        .with_status(StatusCode::PAYLOAD_TOO_LARGE)
+        .with_reason_detail(format!(
+            "max_total_blob_bytes={}",
+            MODERATION_REPORT_EVIDENCE_MAX_TOTAL_BLOB_BYTES
+        )));
+    }
+    let Some(encryption) = object
+        .get("encryption")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return Err(AppError::invalid_param(
+            "evidence_package.encryption is required",
+        ));
+    };
+    let encryption = encryption.to_ascii_lowercase();
+    if matches!(encryption.as_str(), "none" | "plaintext" | "cleartext") {
+        return Err(AppError::invalid_param(
+            "evidence_package must be encrypted",
+        ));
+    }
+    if !object
+        .get("ciphertext_digest")
+        .and_then(Value::as_str)
+        .is_some_and(is_valid_report_hash)
+    {
+        return Err(AppError::invalid_param(
+            "evidence_package.ciphertext_digest must be a hash digest",
+        ));
+    }
+    if object
+        .get("plaintext_digest")
+        .and_then(Value::as_str)
+        .is_some_and(|digest| !is_valid_report_hash(digest))
+    {
+        return Err(AppError::invalid_param(
+            "evidence_package.plaintext_digest must be a hash digest",
+        ));
+    }
+    if !object
+        .get("recipients")
+        .and_then(Value::as_array)
+        .is_some_and(|recipients| !recipients.is_empty())
+    {
+        return Err(AppError::invalid_param(
+            "evidence_package.recipients must name at least one moderator audience",
+        ));
+    }
+    let scope_matches = object.get("effective_scope") == Some(effective_scope)
+        || object
+            .get("audience")
+            .and_then(|audience| audience.get("effective_scope"))
+            == Some(effective_scope);
+    if !scope_matches {
+        return Err(AppError::invalid_param(
+            "evidence_package audience must bind the report effective_scope",
+        ));
+    }
+    if let Some(key) = contains_forbidden_key(evidence_package, EVIDENCE_PACKAGE_FORBIDDEN_KEYS) {
+        return Err(AppError::invalid_param(format!(
+            "evidence_package contains forbidden key `{key}`"
+        )));
+    }
+    Ok(Some(evidence_package.clone()))
+}
+
+fn validate_moderation_franking_proof(
+    state: &AppState,
+    realm_id: &str,
+    franking_proof: &Value,
+) -> Result<Option<Value>, AppError> {
+    if franking_proof.is_null() {
+        return Ok(None);
+    }
+    let object = franking_proof
+        .as_object()
+        .ok_or_else(|| AppError::invalid_param("franking_proof must be an object"))?;
+    if object.get("kind").and_then(Value::as_str) != Some("ck.moderation.franking_proof") {
+        return Err(AppError::invalid_param(
+            "franking_proof.kind must be ck.moderation.franking_proof",
+        ));
+    }
+    if object.get("realm_id").and_then(Value::as_str) != Some(realm_id) {
+        return Err(AppError::invalid_param(
+            "franking_proof.realm_id must match report realm_id",
+        ));
+    }
+    if !required_string_field(object, "franking_proof_id", "franking_proof")?
+        .starts_with("ck:franking_proof:")
+    {
+        return Err(AppError::invalid_param(
+            "franking_proof.franking_proof_id must be a franking proof id",
+        ));
+    }
+    if !required_string_field(object, "event_id", "franking_proof")?.starts_with("ck:event:") {
+        return Err(AppError::invalid_param(
+            "franking_proof.event_id must be an event id",
+        ));
+    }
+    for field in ["routing_metadata_digest", "ciphertext_digest", "aad_digest"] {
+        if !object
+            .get(field)
+            .and_then(Value::as_str)
+            .is_some_and(is_valid_report_hash)
+        {
+            return Err(AppError::invalid_param(format!(
+                "franking_proof.{field} must be a hash digest"
+            )));
+        }
+    }
+    let received_by = required_string_field(object, "received_by", "franking_proof")?;
+    validate_did(received_by)
+        .map_err(|_| AppError::invalid_param("franking_proof.received_by must be a DID"))?;
+    let replay_nonce = required_string_field(object, "replay_nonce", "franking_proof")?;
+    if !is_valid_replay_nonce(replay_nonce) {
+        return Err(AppError::invalid_param(
+            "franking_proof.replay_nonce must be base64url 16..256 chars",
+        ));
+    }
+    if required_string_field(object, "signature", "franking_proof")?.is_empty() {
+        return Err(AppError::invalid_param(
+            "franking_proof.signature must be non-empty",
+        ));
+    }
+    let received_at = required_string_field(object, "received_at", "franking_proof")?;
+    if !received_at.ends_with('Z') || chrono::DateTime::parse_from_rfc3339(received_at).is_err() {
+        return Err(AppError::invalid_param(
+            "franking_proof.received_at must be a UTC timestamp",
+        ));
+    }
+    validate_franking_sender_claim(object)?;
+    if let Some(key) = contains_forbidden_key(franking_proof, FRANKING_PROOF_FORBIDDEN_KEYS) {
+        return Err(AppError::invalid_param(format!(
+            "franking_proof contains forbidden key `{key}`"
+        )));
+    }
+    if !state.remember_moderation_franking_nonce(realm_id, received_by, replay_nonce) {
+        return Err(AppError::new(
+            ErrorCode::DuplicateConflict,
+            "franking_proof replay_nonce was already used",
+        )
+        .with_status(StatusCode::CONFLICT));
+    }
+    Ok(Some(franking_proof.clone()))
+}
+
+fn validate_franking_sender_claim(object: &serde_json::Map<String, Value>) -> Result<(), AppError> {
+    let sender_claim = object
+        .get("sender_claim")
+        .and_then(Value::as_object)
+        .ok_or_else(|| AppError::invalid_param("franking_proof.sender_claim must be an object"))?;
+    let actor_id = required_string_field(sender_claim, "actor_id", "franking_proof.sender_claim")?;
+    validate_did(actor_id).map_err(|_| {
+        AppError::invalid_param("franking_proof.sender_claim.actor_id must be a DID")
+    })?;
+    let device_id =
+        required_string_field(sender_claim, "device_id", "franking_proof.sender_claim")?;
+    if !device_id.starts_with("ck:device:") {
+        return Err(AppError::invalid_param(
+            "franking_proof.sender_claim.device_id must be a device id",
+        ));
+    }
+    if !sender_claim
+        .get("mls_group_id_digest")
+        .and_then(Value::as_str)
+        .is_some_and(is_valid_report_hash)
+    {
+        return Err(AppError::invalid_param(
+            "franking_proof.sender_claim.mls_group_id_digest must be a hash digest",
+        ));
+    }
+    Ok(())
+}
+
+fn required_string_field<'a>(
+    object: &'a serde_json::Map<String, Value>,
+    field: &str,
+    context: &str,
+) -> Result<&'a str, AppError> {
+    object
+        .get(field)
+        .and_then(Value::as_str)
+        .ok_or_else(|| AppError::invalid_param(format!("{context}.{field} is required")))
+}
+
+fn is_valid_report_hash(value: &str) -> bool {
+    value
+        .strip_prefix("sha256:")
+        .or_else(|| value.strip_prefix("blake3:"))
+        .is_some_and(|hex| {
+            hex.len() == 64 && hex.chars().all(|c| matches!(c, '0'..='9' | 'a'..='f'))
+        })
+}
+
+fn is_valid_replay_nonce(value: &str) -> bool {
+    (16..=256).contains(&value.len())
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+}
+
+fn contains_forbidden_key(value: &Value, keys: &[&str]) -> Option<String> {
+    match value {
+        Value::Object(object) => object.iter().find_map(|(key, nested)| {
+            if keys.contains(&key.as_str()) {
+                Some(key.clone())
+            } else {
+                contains_forbidden_key(nested, keys)
+            }
+        }),
+        Value::Array(values) => values
+            .iter()
+            .find_map(|nested| contains_forbidden_key(nested, keys)),
+        _ => None,
+    }
+}
+
+const EVIDENCE_PACKAGE_FORBIDDEN_KEYS: &[&str] = &[
+    "plaintext",
+    "plaintext_body",
+    "body_plaintext",
+    "message_plaintext",
+    "history_key",
+    "history_secret",
+    "mls_epoch_secret",
+    "epoch_secret",
+    "epoch_key",
+    "exporter_secret",
+];
+
+const FRANKING_PROOF_FORBIDDEN_KEYS: &[&str] = &[
+    "plaintext",
+    "plaintext_body",
+    "attachment_filename",
+    "reply_excerpt",
+    "mentions",
+    "private_handle",
+    "plaintext_digest",
+    "plaintext_hash",
+    "mls_group_id",
+    "epoch",
+];
 
 #[endpoint(
     operation_id = "ck.self.moderation.command.report",
@@ -62,19 +446,49 @@ async fn moderation_report(
             "reporter cannot see the target realm",
         ));
     }
+    let realm_id = body.realm_id.as_str().to_owned();
+    let target_ref = body.target_ref.clone();
+    let report_reason_code = body.report_reason_code.clone();
+    let reporter = body.reporter.as_str().to_owned();
+    let source_service = moderation_request_source_service(req);
+    let source_ip_hash = moderation_request_source_ip_hash(req);
+    let safety = validate_moderation_report_safety(
+        state,
+        &realm_id,
+        &reporter,
+        &target_ref,
+        body.effective_scope.as_ref(),
+        &body.evidence_package,
+        &body.franking_proof,
+        source_service.as_deref(),
+        &source_ip_hash,
+    )?;
     let report_id = ids::generate_report_id();
     // Internal assignment keeps the `<did>#moderation` role form; the wire
     // `routed_to` carries bare DIDs only (spec pattern forbids fragments).
     let moderation_role = format!("{}#moderation", state.config.service_did);
     let audit_policy = audit_disclosure_policy_for_realm(state, body.realm_id.as_str()).await;
-    let report_payload = json!({
-        "report_id": report_id,
-        "realm_id": body.realm_id,
-        "target_ref": body.target_ref,
-        "report_reason_code": body.report_reason_code,
-        "reporter": body.reporter,
-        "created_at": now(),
-    });
+    let mut report_fields = serde_json::Map::new();
+    report_fields.insert("report_id".to_owned(), json!(report_id));
+    report_fields.insert("realm_id".to_owned(), json!(realm_id));
+    report_fields.insert("effective_scope".to_owned(), safety.effective_scope);
+    report_fields.insert("target_ref".to_owned(), json!(target_ref));
+    report_fields.insert("report_reason_code".to_owned(), json!(report_reason_code));
+    if let Some(description) = body.description {
+        report_fields.insert("description".to_owned(), json!(description));
+    }
+    report_fields.insert("reporter".to_owned(), json!(reporter));
+    if !body.evidence_refs.is_empty() {
+        report_fields.insert("evidence_refs".to_owned(), json!(body.evidence_refs));
+    }
+    if let Some(evidence_package) = safety.evidence_package {
+        report_fields.insert("evidence_package".to_owned(), evidence_package);
+    }
+    if let Some(franking_proof) = safety.franking_proof {
+        report_fields.insert("franking_proof".to_owned(), franking_proof);
+    }
+    report_fields.insert("created_at".to_owned(), json!(now()));
+    let report_payload = Value::Object(report_fields);
     if let Err(error) = state
         .persistence
         .moderation()
@@ -89,8 +503,8 @@ async fn moderation_report(
         .append_action(json!({
             "action_id": ids::generate("moderation_action"),
             "report_id": report_id,
-            "realm_id": body.realm_id,
-            "target_ref": body.target_ref,
+            "realm_id": realm_id,
+            "target_ref": target_ref,
             "status": "open",
             "assigned_to": moderation_role.clone(),
             "created_at": now(),
@@ -655,4 +1069,189 @@ pub(crate) async fn appeal_state(state: &AppState, appeal_id: &str) -> Option<St
                 .and_then(Value::as_str)
                 .map(ToOwned::to_owned)
         })
+}
+
+#[cfg(test)]
+mod report_safety_tests {
+    use serde_json::{Value, json};
+
+    use super::*;
+    use crate::config::{AppConfig, IceServersConfig, LiveKitConfig, ObjectStorageConfig};
+    use crate::db::Db;
+
+    const REALM: &str = "ck:realm:01904100-0000-7000-8000-d0d0d0d0d0d0";
+    const TARGET: &str = "ck:message:01904100-0000-7000-8000-000000000777";
+    const REPORTER: &str = "did:web:alice.example";
+
+    fn test_state() -> AppState {
+        AppState::new(
+            AppConfig {
+                bind: "127.0.0.1:0".parse().unwrap(),
+                metrics_bind: "127.0.0.1:0".parse().unwrap(),
+                public_base_url: "http://server".to_owned(),
+                service_did: "did:web:soland.local".to_owned(),
+                tls_cert_path: None,
+                tls_key_path: None,
+                database_url: None,
+                object_storage: ObjectStorageConfig::local(
+                    std::env::temp_dir().join("soland-moderation-tests"),
+                ),
+                ice: IceServersConfig::default(),
+                livekit: LiveKitConfig::default(),
+                cors_allow_origin: None,
+                auth_server_url: None,
+                oidc_client_id: None,
+                development_mode: true,
+                oauth_introspection_url: None,
+                oauth_introspection_bearer: None,
+                session_grant_introspection_url: None,
+                session_grant_introspection_bearer: None,
+                did_resolver_allow_methods: vec![
+                    "web".to_owned(),
+                    "key".to_owned(),
+                    "uuid".to_owned(),
+                ],
+                embedded_webvh_provider_enabled: false,
+                embedded_webvh_registration_bearer: None,
+                external_webvh_provider_url: None,
+                external_webvh_provider_active: false,
+                default_webvh_provider_id: None,
+                jws_replay_window_seconds: 0,
+                jws_replay_window_per_family: std::collections::BTreeMap::new(),
+                notary_signing_key_seed: None,
+                agent_audit_binding_signing_seed: None,
+                use_keystore: false,
+                federation_policy: crate::config::FederationPolicy::Mesh,
+                federation_peers: Vec::new(),
+                federation_outbound_enabled: false,
+                admin_default_page_limit: 100,
+                admin_max_page_limit: 1000,
+                admin_principal_dids: Vec::new(),
+                to_device_queue_capacity: 10_000,
+                push_bridge_cache_ttl_seconds: 900,
+                push_bridge_trusted_service_dids: Vec::new(),
+                resumable_upload_dir: std::path::PathBuf::from("./soland-resumable-uploads"),
+                resumable_upload_incomplete_ttl_seconds: 86_400,
+                seal_compaction_min_age_seconds: 604_800,
+                compaction_min_witnesses: 1,
+                compaction_preserve_genesis: true,
+                compaction_prune_only_singleton_successors: true,
+                compaction_prune_walk_interval_seconds: 0,
+                compaction_prune_walk_per_realm_limit: 50,
+                seed_demo_data: false,
+                trust_domain: "ck:trust_domain:soland.local".to_owned(),
+                sovereign_enclave_enabled: false,
+                sovereign_enclave_allowed_outbound_hosts: Vec::new(),
+                erasure_propagation_window_ms: 604_800_000,
+                log_format: crate::config::LogFormat::Plain,
+            },
+            Db { pool: None },
+        )
+    }
+
+    fn realm_scope() -> Value {
+        json!({"kind": "realm", "realm_id": REALM})
+    }
+
+    fn hash(ch: char) -> String {
+        format!("sha256:{}", ch.to_string().repeat(64))
+    }
+
+    fn valid_evidence(scope: Value) -> Value {
+        json!({
+            "encryption": "xchacha20poly1305",
+            "recipients": ["did:web:moderator.example#key-1"],
+            "ciphertext_digest": hash('a'),
+            "plaintext_digest": hash('b'),
+            "effective_scope": scope,
+        })
+    }
+
+    fn valid_franking() -> Value {
+        json!({
+            "kind": "ck.moderation.franking_proof",
+            "franking_proof_id": "ck:franking_proof:01904100-0000-7000-8000-000000000111",
+            "realm_id": REALM,
+            "event_id": "ck:event:01904100-0000-7000-8000-000000000222",
+            "routing_metadata_digest": hash('c'),
+            "ciphertext_digest": hash('d'),
+            "aad_digest": hash('e'),
+            "sender_claim": {
+                "actor_id": REPORTER,
+                "device_id": "ck:device:01904100-0000-7000-8000-000000000333",
+                "mls_group_id_digest": hash('f'),
+            },
+            "received_by": "did:web:soland.local",
+            "received_at": "2026-04-30T00:00:00Z",
+            "replay_nonce": "nonce_0123456789",
+            "signature": "sig",
+        })
+    }
+
+    #[test]
+    fn evidence_package_must_bind_effective_scope() {
+        let scope = realm_scope();
+        let good = valid_evidence(scope.clone());
+        assert!(validate_moderation_evidence_package(&good, &scope).is_ok());
+
+        let bad_scope = json!({
+            "kind": "realm",
+            "realm_id": "ck:realm:01904100-0000-7000-8000-badbadbadbad",
+        });
+        let bad = valid_evidence(bad_scope);
+        let error = validate_moderation_evidence_package(&bad, &scope).unwrap_err();
+        assert_eq!(error.code, ErrorCode::InvalidParam);
+    }
+
+    #[test]
+    fn evidence_package_over_max_total_blob_bytes_is_rejected() {
+        let scope = realm_scope();
+        let mut evidence = valid_evidence(scope.clone());
+        evidence
+            .as_object_mut()
+            .unwrap()
+            .insert("padding".to_owned(), json!("x".repeat(70 * 1024)));
+        let error = validate_moderation_evidence_package(&evidence, &scope).unwrap_err();
+        assert_eq!(error.code, ErrorCode::PayloadTooLarge);
+    }
+
+    #[test]
+    fn duplicate_target_report_hits_layered_rate_limit() {
+        let state = test_state();
+        let first = validate_moderation_report_safety(
+            &state,
+            REALM,
+            REPORTER,
+            TARGET,
+            None,
+            &Value::Null,
+            &Value::Null,
+            None,
+            "source-ip-hash",
+        );
+        assert!(first.is_ok());
+
+        let second = validate_moderation_report_safety(
+            &state,
+            REALM,
+            REPORTER,
+            TARGET,
+            None,
+            &Value::Null,
+            &Value::Null,
+            None,
+            "source-ip-hash",
+        )
+        .unwrap_err();
+        assert_eq!(second.code, ErrorCode::RateLimited);
+    }
+
+    #[test]
+    fn franking_replay_nonce_is_rejected_within_window() {
+        let state = test_state();
+        let proof = valid_franking();
+        assert!(validate_moderation_franking_proof(&state, REALM, &proof).is_ok());
+        let replay = validate_moderation_franking_proof(&state, REALM, &proof).unwrap_err();
+        assert_eq!(replay.code, ErrorCode::DuplicateConflict);
+    }
 }

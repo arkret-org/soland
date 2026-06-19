@@ -20,10 +20,15 @@ use super::records::{
     AccountLifecycleRecord, AccountRecord, CanonicalEventRecord, ConsentCellKey, ConsentCellRecord,
     CursorRevocation, DirectConversationBindingRecord, FailedLoginRecord,
     KEY_BACKUP_DOWNLOAD_WINDOW, KeyBackupDownloadOutcome, KeyBackupDownloadRecord,
-    OrganizationPolicyRecord, OrganizationRecord, PSI_HIT_BUCKET_SECS, PSI_PROBE_MAX_PER_WINDOW,
-    PSI_PROBE_WINDOW, PsiProbeOutcome, PsiProbeRecord, RealmMetaRecord,
-    RealmModerationPolicyRecord, RetentionPolicyRecord, RetentionTombstoneRecord,
-    SovereignDeploymentState,
+    MODERATION_FRANKING_REPLAY_MAX_ENTRIES, MODERATION_FRANKING_REPLAY_WINDOW_SECS,
+    MODERATION_REPORT_MAX_PER_REPORTER_REALM_WINDOW,
+    MODERATION_REPORT_MAX_PER_REPORTER_TARGET_WINDOW, MODERATION_REPORT_MAX_PER_REPORTER_WINDOW,
+    MODERATION_REPORT_MAX_PER_SOURCE_IP_WINDOW, MODERATION_REPORT_MAX_PER_SOURCE_SERVICE_WINDOW,
+    MODERATION_REPORT_RATE_WINDOW_SECS, ModerationFrankingReplayRecord,
+    ModerationReportRateOutcome, ModerationReportRateRecord, OrganizationPolicyRecord,
+    OrganizationRecord, PSI_HIT_BUCKET_SECS, PSI_PROBE_MAX_PER_WINDOW, PSI_PROBE_WINDOW,
+    PsiProbeOutcome, PsiProbeRecord, RealmMetaRecord, RealmModerationPolicyRecord,
+    RetentionPolicyRecord, RetentionTombstoneRecord, SovereignDeploymentState,
 };
 use crate::authz::SolandAuthzEngine;
 use crate::config::{AppConfig, NotarySigningKeyOrigin};
@@ -94,6 +99,16 @@ pub struct AppState {
     /// anti-bulk-dump quota in `identity::key_backup::unlock_key_backup`.
     /// In-memory like the other limiters; a restart resets the window.
     pub key_backup_download_tracker: Arc<Mutex<BTreeMap<String, KeyBackupDownloadRecord>>>,
+    /// Per-scope moderation report quotas keyed by bucket labels. The
+    /// canonical report endpoint is an abuse-amplifiable write path, so it
+    /// carries a local rolling limiter in addition to the generic HTTP class
+    /// limiter.
+    pub moderation_report_rate_tracker: Arc<Mutex<BTreeMap<String, ModerationReportRateRecord>>>,
+    /// Bounded franking proof replay nonce ledger. Entries are process-local
+    /// and intentionally finite; stale or excess nonces are evicted before new
+    /// inserts.
+    pub moderation_franking_replay_nonces:
+        Arc<Mutex<BTreeMap<String, ModerationFrankingReplayRecord>>>,
     /// Per-actor notifications read marker. `mark_all_read(actor)` writes
     /// `Utc::now()`; the notifications read-side filter uses it to flag
     /// rows as read. Same in-memory shape as the other two.
@@ -510,6 +525,8 @@ impl AppState {
             failed_login_attempts: Arc::new(Mutex::new(BTreeMap::new())),
             psi_probe_tracker: Arc::new(Mutex::new(BTreeMap::new())),
             key_backup_download_tracker: Arc::new(Mutex::new(BTreeMap::new())),
+            moderation_report_rate_tracker: Arc::new(Mutex::new(BTreeMap::new())),
+            moderation_franking_replay_nonces: Arc::new(Mutex::new(BTreeMap::new())),
             notification_read_cursors: Arc::new(Mutex::new(BTreeMap::new())),
             sync_cursor_hmac_key,
             sync_cursor_revocations: Arc::new(Mutex::new(Vec::new())),
@@ -925,6 +942,129 @@ impl AppState {
     /// SEC-09 — floor a timestamp to [`PSI_HIT_BUCKET_SECS`] so PSI hit
     /// visibility only changes at coarse bucket boundaries, hiding the precise
     /// moment a holder's reachability bit flipped.
+    /// Record one moderation report attempt across the entrypoint's layered
+    /// anti-abuse buckets. The generic HTTP rate limiter remains the broad
+    /// transport guard; this protocol-level limiter adds reporter, source
+    /// service, Realm, source IP, and duplicate-target pressure.
+    pub fn record_moderation_report_attempt(
+        &self,
+        reporter: &str,
+        source_service: Option<&str>,
+        realm_id: &str,
+        source_ip_hash: &str,
+        target_ref: &str,
+    ) -> ModerationReportRateOutcome {
+        let mut buckets = vec![
+            (
+                format!("reporter:{reporter}"),
+                MODERATION_REPORT_MAX_PER_REPORTER_WINDOW,
+            ),
+            (
+                format!("reporter_realm:{reporter}:{realm_id}"),
+                MODERATION_REPORT_MAX_PER_REPORTER_REALM_WINDOW,
+            ),
+            (
+                format!("source_ip:{source_ip_hash}:moderation_report"),
+                MODERATION_REPORT_MAX_PER_SOURCE_IP_WINDOW,
+            ),
+            (
+                format!("reporter_target:{reporter}:{target_ref}"),
+                MODERATION_REPORT_MAX_PER_REPORTER_TARGET_WINDOW,
+            ),
+        ];
+        if let Some(source_service) = source_service.filter(|value| !value.trim().is_empty()) {
+            buckets.push((
+                format!("source_service:{source_service}"),
+                MODERATION_REPORT_MAX_PER_SOURCE_SERVICE_WINDOW,
+            ));
+        }
+
+        let mut map = self
+            .moderation_report_rate_tracker
+            .lock()
+            .expect("moderation_report_rate_tracker lock");
+        let now = chrono::Utc::now();
+        let window = chrono::Duration::seconds(MODERATION_REPORT_RATE_WINDOW_SECS);
+        let mut exceeded = None;
+        for (bucket, limit) in buckets {
+            let entry = map
+                .entry(bucket.clone())
+                .or_insert(ModerationReportRateRecord {
+                    count: 0,
+                    window_started_at: now,
+                    last_report_at: now,
+                });
+            if now - entry.window_started_at > window {
+                entry.count = 0;
+                entry.window_started_at = now;
+            }
+            entry.count = entry.count.saturating_add(1);
+            entry.last_report_at = now;
+            if exceeded.is_none() && entry.count > limit {
+                let retry_after_ms = (entry.window_started_at + window - now)
+                    .num_milliseconds()
+                    .max(0);
+                exceeded = Some(ModerationReportRateOutcome {
+                    rate_limited: true,
+                    bucket: Some(bucket),
+                    count: entry.count,
+                    limit,
+                    retry_after_ms,
+                });
+            }
+        }
+
+        exceeded.unwrap_or(ModerationReportRateOutcome {
+            rate_limited: false,
+            bucket: None,
+            count: 0,
+            limit: 0,
+            retry_after_ms: 0,
+        })
+    }
+
+    /// Remember a franking replay nonce within a finite retention window.
+    /// Returns `true` for a fresh nonce and `false` for an in-window replay.
+    pub fn remember_moderation_franking_nonce(
+        &self,
+        realm_id: &str,
+        received_by: &str,
+        replay_nonce: &str,
+    ) -> bool {
+        let mut map = self
+            .moderation_franking_replay_nonces
+            .lock()
+            .expect("moderation_franking_replay_nonces lock");
+        let now = chrono::Utc::now();
+        let expires_before =
+            now - chrono::Duration::seconds(MODERATION_FRANKING_REPLAY_WINDOW_SECS);
+        map.retain(|_, record| record.last_seen_at >= expires_before);
+        while map.len() >= MODERATION_FRANKING_REPLAY_MAX_ENTRIES {
+            let Some(oldest_key) = map
+                .iter()
+                .min_by_key(|(_, record)| record.first_seen_at)
+                .map(|(key, _)| key.clone())
+            else {
+                break;
+            };
+            map.remove(&oldest_key);
+        }
+
+        let key = format!("{realm_id}:{received_by}:{replay_nonce}");
+        if let Some(record) = map.get_mut(&key) {
+            record.last_seen_at = now;
+            return false;
+        }
+        map.insert(
+            key,
+            ModerationFrankingReplayRecord {
+                first_seen_at: now,
+                last_seen_at: now,
+            },
+        );
+        true
+    }
+
     pub fn psi_bucket_timestamp(
         ts: chrono::DateTime<chrono::Utc>,
     ) -> chrono::DateTime<chrono::Utc> {

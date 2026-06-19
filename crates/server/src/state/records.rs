@@ -295,6 +295,53 @@ pub struct KeyBackupDownloadOutcome {
     pub retry_after_ms: i64,
 }
 
+/// Upper bound for the canonical JSON bytes of a moderation evidence package.
+/// This is intentionally separate from the HTTP request-size guard because the
+/// report body can carry other metadata; the evidence blob itself must have a
+/// protocol-level ceiling.
+pub const MODERATION_REPORT_EVIDENCE_MAX_TOTAL_BLOB_BYTES: usize = 64 * 1024;
+/// Rolling window for moderation report entrypoint quota buckets.
+pub const MODERATION_REPORT_RATE_WINDOW_SECS: i64 = 10 * 60;
+/// Per-reporter reports admitted in one moderation window.
+pub const MODERATION_REPORT_MAX_PER_REPORTER_WINDOW: u32 = 20;
+/// Per-source-service reports admitted in one moderation window.
+pub const MODERATION_REPORT_MAX_PER_SOURCE_SERVICE_WINDOW: u32 = 80;
+/// Per-reporter-per-Realm reports admitted in one moderation window.
+pub const MODERATION_REPORT_MAX_PER_REPORTER_REALM_WINDOW: u32 = 10;
+/// Per-source-IP reports admitted in one moderation window.
+pub const MODERATION_REPORT_MAX_PER_SOURCE_IP_WINDOW: u32 = 80;
+/// Duplicate reports for the same target by the same reporter in one window.
+pub const MODERATION_REPORT_MAX_PER_REPORTER_TARGET_WINDOW: u32 = 1;
+/// Bounded franking replay nonce retention horizon.
+pub const MODERATION_FRANKING_REPLAY_WINDOW_SECS: i64 = 24 * 60 * 60;
+/// Bounded franking replay nonce ledger size.
+pub const MODERATION_FRANKING_REPLAY_MAX_ENTRIES: usize = 4096;
+
+/// Rolling counter for moderation report anti-abuse buckets.
+#[derive(Clone, Debug)]
+pub struct ModerationReportRateRecord {
+    pub count: u32,
+    pub window_started_at: chrono::DateTime<chrono::Utc>,
+    pub last_report_at: chrono::DateTime<chrono::Utc>,
+}
+
+/// Result of recording one moderation report attempt across all quota buckets.
+#[derive(Clone, Debug)]
+pub struct ModerationReportRateOutcome {
+    pub rate_limited: bool,
+    pub bucket: Option<String>,
+    pub count: u32,
+    pub limit: u32,
+    pub retry_after_ms: i64,
+}
+
+/// Bounded anti-replay ledger row for `franking_proof.replay_nonce`.
+#[derive(Clone, Debug)]
+pub struct ModerationFrankingReplayRecord {
+    pub first_seen_at: chrono::DateTime<chrono::Utc>,
+    pub last_seen_at: chrono::DateTime<chrono::Utc>,
+}
+
 #[derive(Clone, Debug)]
 pub struct WebvhDocumentRecord {
     pub did: String,

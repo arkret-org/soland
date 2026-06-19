@@ -35,6 +35,10 @@ use salvo::prelude::*;
 use serde::Serialize;
 use serde_json::{Value, json};
 
+use super::moderation::{
+    moderation_request_source_ip_hash, moderation_request_source_service,
+    validate_moderation_report_safety,
+};
 use super::{append_audit_log, now, sha256_hex};
 use crate::error::AppError;
 use crate::result::{JsonResult, json_ok};
@@ -639,40 +643,13 @@ async fn mimi_identifiers_query(
 async fn mimi_report_abuse(
     body: JsonBody<MimiReportAbuseRequestBody>,
     depot: &mut Depot,
+    req: &mut Request,
 ) -> JsonResult<MimiReportAbuseOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = typed_body_value(body.into_inner(), "mimi report abuse")?;
     if let Some(message) = unsupported_mimi_draft(&body) {
         return Err(AppError::invalid_param(message).with_wire_code("mimi_draft_unsupported"));
     }
-    let report_id = ids::generate_report_id();
-    if let Err(error) = state
-        .persistence
-        .moderation()
-        .append_report(json!({
-            "report_id": report_id,
-            "kind": "mimi_abuse_report",
-            "mimi_room_uri": body.get("mimi_room_uri").cloned(),
-            "provider_id": body.get("provider_id").cloned(),
-            "target_event_digest": body
-                .get("target_event_digest")
-                .or_else(|| body.get("target_ref"))
-                .cloned(),
-            "frank": body
-                .get("frank")
-                .or_else(|| body.get("franking_proof"))
-                .cloned(),
-            "created_at": now(),
-        }))
-        .await
-    {
-        tracing::error!(%error, "failed to persist mimi abuse report");
-    }
-
-    // Also emit a `ck.self.moderation.report` projection event so the
-    // audit timeline observes the report in the same shape native
-    // Cokret reports use. The MIMI provenance is preserved under
-    // `payload.mimi_provenance`.
     // Extract room_id segment from MIMI URI
     // `mimi://provider/rooms/<id>` so we can look up a bound Realm if any.
     let mimi_room_id = body
@@ -695,6 +672,96 @@ async fn mimi_report_abuse(
         )
         .with_wire_code("mimi_governance_binding_missing"));
     };
+    let reporter = body
+        .get("reporter_did")
+        .or_else(|| body.get("reporter"))
+        .and_then(Value::as_str)
+        .ok_or_else(|| AppError::invalid_param("mimi report requires reporter"))?;
+    let target_ref = body
+        .get("target_event_digest")
+        .or_else(|| body.get("target_ref"))
+        .and_then(Value::as_str)
+        .ok_or_else(|| AppError::invalid_param("mimi report requires target_ref"))?;
+    let evidence_package = body.get("evidence_package").unwrap_or(&Value::Null);
+    let franking_proof = body
+        .get("frank")
+        .or_else(|| body.get("franking_proof"))
+        .unwrap_or(&Value::Null);
+    let source_service = moderation_request_source_service(req);
+    let source_ip_hash = moderation_request_source_ip_hash(req);
+    let safety = validate_moderation_report_safety(
+        state,
+        &realm_id,
+        reporter,
+        target_ref,
+        None,
+        evidence_package,
+        franking_proof,
+        source_service.as_deref(),
+        &source_ip_hash,
+    )?;
+    let report_id = ids::generate_report_id();
+    let mut report_fields = serde_json::Map::new();
+    report_fields.insert("report_id".to_owned(), json!(report_id));
+    report_fields.insert("kind".to_owned(), json!("mimi_abuse_report"));
+    report_fields.insert("realm_id".to_owned(), json!(realm_id));
+    report_fields.insert("effective_scope".to_owned(), safety.effective_scope.clone());
+    report_fields.insert(
+        "mimi_room_uri".to_owned(),
+        body.get("mimi_room_uri").cloned().unwrap_or(Value::Null),
+    );
+    report_fields.insert(
+        "provider_id".to_owned(),
+        body.get("provider_id").cloned().unwrap_or(Value::Null),
+    );
+    report_fields.insert("target_event_digest".to_owned(), json!(target_ref));
+    report_fields.insert("reporter".to_owned(), json!(reporter));
+    if let Some(evidence_package) = safety.evidence_package.clone() {
+        report_fields.insert("evidence_package".to_owned(), evidence_package);
+    }
+    if let Some(franking_proof) = safety.franking_proof.clone() {
+        report_fields.insert("franking_proof".to_owned(), franking_proof);
+    }
+    report_fields.insert("created_at".to_owned(), json!(now()));
+    if let Err(error) = state
+        .persistence
+        .moderation()
+        .append_report(Value::Object(report_fields))
+        .await
+    {
+        tracing::error!(%error, "failed to persist mimi abuse report");
+    }
+
+    // Also emit a `ck.self.moderation.report` projection event so the
+    // audit timeline observes the report in the same shape native
+    // Cokret reports use. The MIMI provenance is preserved under
+    // `payload.mimi_provenance`.
+    let mut projection_payload = serde_json::Map::new();
+    projection_payload.insert("report_id".to_owned(), json!(report_id));
+    projection_payload.insert("effective_scope".to_owned(), safety.effective_scope);
+    projection_payload.insert("target_event_digest".to_owned(), json!(target_ref));
+    if let Some(franking_proof) = safety.franking_proof {
+        projection_payload.insert("franking_proof".to_owned(), franking_proof);
+    }
+    projection_payload.insert(
+        "abuse_reason_code".to_owned(),
+        body.get("abuse_reason_code")
+            .cloned()
+            .unwrap_or(Value::Null),
+    );
+    projection_payload.insert("evidence_encrypted".to_owned(), json!(true));
+    if let Some(evidence_package) = safety.evidence_package {
+        projection_payload.insert("evidence_package".to_owned(), evidence_package);
+    }
+    projection_payload.insert(
+        "mimi_provenance".to_owned(),
+        json!({
+            "facade": "soland.mimi.v1",
+            "mimi_room_uri": body.get("mimi_room_uri").cloned(),
+            "mimi_provider_id": mimi_provider_id(state),
+            "accepted_at": now(),
+        }),
+    );
     let report_event_id = ids::generate_event_id();
     let report_record = ProjectionEventRecord {
         event_id: report_event_id.clone(),
@@ -702,30 +769,8 @@ async fn mimi_report_abuse(
         event_kind: "ck.self.moderation.report".to_owned(),
         operation_type: "mimi_facade_report".to_owned(),
         operation_id: None,
-        sender: body
-            .get("reporter_did")
-            .or_else(|| body.get("reporter"))
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-        payload: json!({
-            "report_id": report_id,
-            "target_event_digest": body
-                .get("target_event_digest")
-                .or_else(|| body.get("target_ref"))
-                .cloned(),
-            "frank": body
-                .get("frank")
-                .or_else(|| body.get("franking_proof"))
-                .cloned(),
-            "abuse_reason_code": body.get("abuse_reason_code").cloned(),
-            "evidence_encrypted": true,
-            "mimi_provenance": {
-                "facade": "soland.mimi.v1",
-                "mimi_room_uri": body.get("mimi_room_uri").cloned(),
-                "mimi_provider_id": mimi_provider_id(state),
-                "accepted_at": now(),
-            },
-        }),
+        sender: Some(reporter.to_owned()),
+        payload: Value::Object(projection_payload),
         created_at: chrono::Utc::now(),
     };
     let _ = state.event_broadcast.send(EventNotification::event(
