@@ -21,6 +21,8 @@ use soland::db::Db;
 use soland::service;
 use soland::state::AppState;
 
+const DEMO_REALM_ID: &str = "ck:realm:0196419b-0000-7000-8000-000000000000";
+
 fn test_config() -> AppConfig {
     AppConfig {
         bind: "127.0.0.1:0".parse::<SocketAddr>().unwrap(),
@@ -81,6 +83,7 @@ fn test_config() -> AppConfig {
 }
 
 async fn dev_token(state: AppState) -> String {
+    state.hydrate().await.unwrap();
     let login: Value = TestClient::post("http://server/_soland/gate/auth/dev-login")
         .json(&json!({
             "actor": "did:web:alice.example",
@@ -135,7 +138,7 @@ async fn applet_install_package_registers_bot_projection_smoke() {
     let token = dev_token(state.clone()).await;
     let app = service(state.clone());
     let suffix = uuid::Uuid::now_v7().simple().to_string();
-    let realm_id = cokret_sdk::new_prefixed_uuid7("ck:realm:");
+    let realm_id = DEMO_REALM_ID;
     let applet_id = cokret_sdk::new_prefixed_uuid7("ck:applet:");
     let namespace = format!("bridge.install.{suffix}");
     let package = signed_applet_package(&applet_id, &namespace);
@@ -183,7 +186,7 @@ async fn applet_ghost_actor_provision_writes_durable_profile_and_grant_events() 
     let applet_id = cokret_sdk::new_prefixed_uuid7("ck:applet:");
     let namespace = format!("bridge.provision.{suffix}");
     let package = signed_applet_package(&applet_id, &namespace);
-    let realm_id = cokret_sdk::new_prefixed_uuid7("ck:realm:");
+    let realm_id = DEMO_REALM_ID;
     let install = install_applet_package(
         &app,
         &token,
@@ -309,6 +312,100 @@ async fn applet_ghost_actor_provision_writes_durable_profile_and_grant_events() 
     }));
 }
 
+#[tokio::test]
+async fn applet_ghost_actor_provision_requires_approved_ghost_scope() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let token = dev_token(state.clone()).await;
+    let app = service(state);
+    let suffix = uuid::Uuid::now_v7().simple().to_string();
+    let applet_id = cokret_sdk::new_prefixed_uuid7("ck:applet:");
+    let namespace = format!("bridge.no-ghost-scope.{suffix}");
+    let package = signed_applet_package(&applet_id, &namespace);
+    let realm_id = DEMO_REALM_ID;
+    let install = install_applet_package_with_approved_actions(
+        &app,
+        &token,
+        &package,
+        &realm_id,
+        &format!("ghost-denied-{suffix}"),
+        vec!["ck.message.create".to_owned()],
+    )
+    .await;
+    assert_eq!(install["effective_status"], json!("partially_installed"));
+
+    let ghost_actor_id = format!(
+        "did:web:{}.applet.example:ghost:u-denied",
+        safe_did_token(&namespace)
+    );
+    let rejected: Value = TestClient::post(format!(
+        "http://server/_cokret/self/applets/{applet_id}/ghosts/provision"
+    ))
+    .add_header("Authorization", format!("Bearer {token}"), true)
+    .json(&json!({
+        "schema": "ck.applet.ghost_actor.provision_request.v1",
+        "applet_id": applet_id,
+        "service_did": package.service_did.to_string(),
+        "ghost_actor_id": ghost_actor_id,
+        "protocol": "slack",
+        "tenant": "T123",
+        "external_user_id": "U-denied",
+        "realm_id": realm_id,
+        "external_ref": {"team_id": "T123", "user_id": "U-denied"}
+    }))
+    .send(&app)
+    .await
+    .take_json()
+    .await
+    .unwrap();
+    assert_eq!(rejected["error"]["code"], json!("capability_denied"));
+}
+
+#[tokio::test]
+async fn applet_ghost_actor_provision_rejects_actor_namespace_mismatch() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let token = dev_token(state.clone()).await;
+    let app = service(state);
+    let suffix = uuid::Uuid::now_v7().simple().to_string();
+    let applet_id = cokret_sdk::new_prefixed_uuid7("ck:applet:");
+    let namespace = format!("bridge.namespace.{suffix}");
+    let package = signed_applet_package(&applet_id, &namespace);
+    let realm_id = DEMO_REALM_ID;
+    let install = install_applet_package(
+        &app,
+        &token,
+        &package,
+        &realm_id,
+        &format!("ghost-namespace-{suffix}"),
+    )
+    .await;
+    assert_eq!(install["effective_status"], json!("installed"));
+
+    let rejected: Value = TestClient::post(format!(
+        "http://server/_cokret/self/applets/{applet_id}/ghosts/provision"
+    ))
+    .add_header("Authorization", format!("Bearer {token}"), true)
+    .json(&json!({
+        "schema": "ck.applet.ghost_actor.provision_request.v1",
+        "applet_id": applet_id,
+        "service_did": package.service_did.to_string(),
+        "ghost_actor_id": "did:web:other.applet.example:ghost:u123",
+        "protocol": "slack",
+        "tenant": "T123",
+        "external_user_id": "U123",
+        "realm_id": realm_id,
+        "external_ref": {"team_id": "T123", "user_id": "U123"}
+    }))
+    .send(&app)
+    .await
+    .take_json()
+    .await
+    .unwrap();
+    assert_eq!(
+        rejected["error"]["code"],
+        json!("applet_namespace_mismatch")
+    );
+}
+
 async fn canonical_did_document(app: &salvo::Service, did: &str) -> Value {
     let body: Value = TestClient::get(format!(
         "http://server/_cokret/root/identity/document?did={did}"
@@ -330,7 +427,7 @@ async fn applet_bridge_register_ghost_route_revoke_smoke() {
     let applet_id = cokret_sdk::new_prefixed_uuid7("ck:applet:");
     let namespace = format!("bridge.smoke.{suffix}");
     let package = signed_applet_package(&applet_id, &namespace);
-    let realm_id = cokret_sdk::new_prefixed_uuid7("ck:realm:");
+    let realm_id = DEMO_REALM_ID;
     let install = install_applet_package(
         &app,
         &token,
@@ -546,6 +643,10 @@ fn signed_applet_package(applet_id: &str, namespace: &str) -> AppletPackage {
         bot_actor_id,
         vec!["cokret.portal".to_owned()],
         AppletWireNamespaces {
+            actors: vec![AppletNamespaceEntry::exclusive(format!(
+                "did:web:{}.applet.example:ghost:*",
+                safe_did_token(namespace)
+            ))],
             handles: vec![AppletNamespaceEntry::exclusive(namespace.to_owned())],
             ..Default::default()
         },
@@ -581,15 +682,37 @@ async fn install_applet_package(
     realm_id: &str,
     idempotency_key: &str,
 ) -> Value {
+    install_applet_package_with_approved_actions(
+        app,
+        token,
+        package,
+        realm_id,
+        idempotency_key,
+        package.requested_scopes.clone(),
+    )
+    .await
+}
+
+async fn install_applet_package_with_approved_actions(
+    app: &salvo::Service,
+    token: &str,
+    package: &AppletPackage,
+    realm_id: &str,
+    idempotency_key: &str,
+    approve_actions: Vec<String>,
+) -> Value {
     let effective_scope = json!({"kind": "realm", "realm_id": realm_id});
+    let allow_ghost_actors = approve_actions
+        .iter()
+        .any(|action| action == "ck.applet.ghost.provision");
     let preview: Value = TestClient::post("http://server/_cokret/self/applets/install/preview")
         .add_header("Authorization", format!("Bearer {token}"), true)
         .json(&json!({
             "applet_package": package,
             "effective_scope": effective_scope,
             "approval_request": {
-                "approve_actions": package.requested_scopes.clone(),
-                "allow_ghost_actors": true,
+                "approve_actions": approve_actions,
+                "allow_ghost_actors": allow_ghost_actors,
                 "allow_delegated_native_actors": false,
                 "allow_e2ee_join": false,
                 "allow_widget": false,

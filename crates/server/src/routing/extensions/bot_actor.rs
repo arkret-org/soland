@@ -32,7 +32,7 @@
 
 use std::sync::Mutex;
 
-use cokret_sdk::Operation;
+use cokret_sdk::{Did, Operation};
 use salvo::oapi::ToSchema;
 use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
@@ -136,6 +136,19 @@ pub fn list_bots_owned_by(owner_actor_id: &str) -> Vec<BotActor> {
         .collect()
 }
 
+fn validate_extension_actor_did(did: &str) -> Result<(), AppError> {
+    if did.contains('#') {
+        return Err(AppError::invalid_param(
+            "bot and ghost actor DID must be a DID scalar without fragment",
+        )
+        .with_wire_code("schema_violation"));
+    }
+    Did::new(did.to_owned()).map(|_| ()).map_err(|error| {
+        AppError::invalid_param(format!("bot or ghost actor DID is invalid: {error}"))
+            .with_wire_code("schema_violation")
+    })
+}
+
 // ── Reducer dispatch hooks ──────────────────────────────────────────
 
 /// Reducer adapter for `ck.extensions.bot_actor.register`.
@@ -148,6 +161,7 @@ pub fn list_bots_owned_by(owner_actor_id: &str) -> Vec<BotActor> {
 pub fn apply_bot_register(op: &Operation) -> Option<BotActor> {
     let payload = op.payload.as_object()?;
     let did = payload.get("did").and_then(Value::as_str)?.to_owned();
+    validate_extension_actor_did(&did).ok()?;
     let name = payload
         .get("name")
         .and_then(Value::as_str)
@@ -158,6 +172,9 @@ pub fn apply_bot_register(op: &Operation) -> Option<BotActor> {
         .and_then(Value::as_str)
         .unwrap_or(KIND_BOT)
         .to_owned();
+    if !(kind == KIND_BOT || kind == KIND_GHOST) {
+        return None;
+    }
     let owner = payload
         .get("owner_actor_id")
         .and_then(Value::as_str)
@@ -210,6 +227,7 @@ async fn register_endpoint(
     if body.did.trim().is_empty() {
         return Err(AppError::invalid_param("did is required"));
     }
+    validate_extension_actor_did(&body.did)?;
     if !(body.kind == KIND_BOT || body.kind == KIND_GHOST) {
         return Err(AppError::invalid_param(
             "kind MUST be either \"bot\" or \"ghost\"",
@@ -330,5 +348,11 @@ mod tests {
         assert!(revoke_bot("did:web:bot-revoke"));
         // Unknown DIDs return false.
         assert!(!revoke_bot("did:web:unknown"));
+    }
+
+    #[test]
+    fn bot_register_rejects_did_url_fragment() {
+        let err = validate_extension_actor_did("did:web:alice.example#agent").unwrap_err();
+        assert_eq!(err.wire_code(), "schema_violation");
     }
 }

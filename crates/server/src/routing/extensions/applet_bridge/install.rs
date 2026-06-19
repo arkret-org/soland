@@ -4,7 +4,7 @@
 use std::collections::BTreeSet;
 
 use cokret_sdk::{
-    AppletPackage, AppletWireNamespaces, ApprovedScope, EffectiveScope,
+    AppletPackage, AppletWireNamespaces, ApprovalRequest, ApprovedScope, EffectiveScope,
     InstallCapabilityConstraint, InstallCommitOutcome, InstallCommitRequestBody,
     InstallDeniedScope, InstallE2eeEffect, InstallEventSubmission, InstallNamespaceConflict,
     InstallPlan, InstallWidgetEffect, RealmId,
@@ -30,6 +30,8 @@ use crate::routing::events::strand::strand_id_from_realm_id;
 use crate::state::{AppState, EventNotification, MessageRecord, ProjectionEventRecord};
 use crate::{ids, kinds};
 
+pub(super) const GHOST_PROVISION_ACTION: &str = "ck.applet.ghost.provision";
+
 pub(super) async fn register_package_install(
     state: &AppState,
     owner_actor_id: &str,
@@ -43,6 +45,8 @@ pub(super) async fn register_package_install(
     let namespace = package_namespace(&package);
     let realm_id = effective_scope_realm_id(&commit.effective_scope);
     let approved_actions = actions_from_approved_scopes(&commit.approved_scopes);
+    let allow_ghost_actors =
+        allow_ghost_actors_for_install(&package, &approved_actions, &commit.actor_policy);
 
     if let Some(existing) = applet_record(state, &applet_id).await? {
         if existing.idempotency_key.as_deref() == Some(idempotency_key.as_str()) {
@@ -112,7 +116,7 @@ pub(super) async fn register_package_install(
         manifest: manifest_from_package(&package),
         package: Some(package.clone()),
         namespaces: Some(package.namespaces.clone()),
-        allow_ghost_actors: allow_ghost_actors_from_package(&package),
+        allow_ghost_actors,
         status: effective_status.to_owned(),
         registered_at: now,
         revoked_at: None,
@@ -501,11 +505,12 @@ pub(super) fn validate_applet_package(package: &AppletPackage) -> Result<(), App
     Ok(())
 }
 
-pub(super) fn approved_scopes_from_actions(
+pub(super) fn approved_scopes_from_approval_request(
     package: &AppletPackage,
     scope: &EffectiveScope,
-    approve_actions: &[String],
+    approval: &ApprovalRequest,
 ) -> Result<Vec<ApprovedScope>, AppError> {
+    let approve_actions = approval_actions_for_install(approval);
     let requested = package
         .requested_scopes
         .iter()
@@ -532,6 +537,15 @@ pub(super) fn approved_scopes_from_actions(
         circle_ids,
         constraints: Vec::new(),
     }])
+}
+
+pub(super) fn approval_actions_for_install(approval: &ApprovalRequest) -> Vec<String> {
+    approval
+        .approve_actions
+        .iter()
+        .filter(|action| approval.allow_ghost_actors || action.as_str() != GHOST_PROVISION_ACTION)
+        .cloned()
+        .collect()
 }
 
 pub(super) async fn build_install_plan(
@@ -834,12 +848,20 @@ pub(super) fn package_namespace(package: &AppletPackage) -> String {
         .unwrap_or_else(|| safe_token(&package.applet_id))
 }
 
-pub(super) fn allow_ghost_actors_from_package(package: &AppletPackage) -> bool {
-    package
+pub(super) fn allow_ghost_actors_for_install(
+    package: &AppletPackage,
+    approved_actions: &[String],
+    actor_policy: &cokret_sdk::ActorPolicy,
+) -> bool {
+    let package_allows = package
         .ghost_policy
         .get("allow_ghost_actors")
         .and_then(Value::as_bool)
-        .unwrap_or(false)
+        .unwrap_or(false);
+    let scope_approved = approved_actions
+        .iter()
+        .any(|action| action == GHOST_PROVISION_ACTION);
+    package_allows && scope_approved && actor_policy.ghost_actor_mode != "disallowed"
 }
 
 pub(super) fn capability_allows_message_create(capability: &str) -> bool {

@@ -3,8 +3,9 @@
 
 use cokret_sdk::{
     AccountabilityGrantPayload, AccountabilityScope, ActorProfileId,
-    AppletDelegatedEventAuthorization, AppletId, Did, Event, EventRef, GhostActorProfileRequest,
-    GhostActorProvisionRequestBody, Hash, Hlc, Proof, RealmId, canonical,
+    AppletDelegatedEventAuthorization, AppletId, AppletNamespaceDomain, Did, Event, EventRef,
+    GhostActorProfileRequest, GhostActorProvisionRequestBody, Hash, Hlc, Proof, RealmId, canonical,
+    namespace_pattern_matches,
 };
 use serde_json::{Value, json};
 
@@ -502,6 +503,21 @@ pub(super) fn ensure_formal_ghost_provision_allowed(
         return Err(AppError::capability_denied(
             "applet install does not grant ghost actor provisioning",
         ));
+    }
+    if let Some(namespaces) = record.namespaces.as_ref()
+        && !namespaces.actors.is_empty()
+        && !namespaces.actors.iter().any(|entry| {
+            namespace_pattern_matches(
+                AppletNamespaceDomain::Actors,
+                &entry.pattern,
+                provision.ghost_actor_id.as_str(),
+            )
+        })
+    {
+        return Err(AppError::capability_denied(
+            "ghost_actor_id is outside the installed applet actor namespace",
+        )
+        .with_wire_code("applet_namespace_mismatch"));
     }
     Ok(())
 }

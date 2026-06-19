@@ -20,9 +20,10 @@ use super::ghost::{
     validate_ghost_actor_provision_request,
 };
 use super::install::{
-    append_portal_message, applet_response, approved_scopes_from_actions, build_install_plan,
-    effective_scope_realm_id, parse_manifest, portal_message_payload, register_package_install,
-    register_verified_applet, require_realm_admin, validate_applet_package,
+    append_portal_message, applet_response, approved_scopes_from_approval_request,
+    build_install_plan, effective_scope_realm_id, parse_manifest, portal_message_payload,
+    register_package_install, register_verified_applet, require_realm_admin,
+    validate_applet_package,
 };
 use super::record::{
     accountability_chain, applet_display_name, applet_id_param, applet_record, applet_records,
@@ -151,10 +152,10 @@ async fn install_preview_endpoint(
     let _session = aa.authenticated_session(state, req).await?;
     let preview = body.into_inner();
     validate_applet_package(&preview.applet_package)?;
-    let approved_scopes = approved_scopes_from_actions(
+    let approved_scopes = approved_scopes_from_approval_request(
         &preview.applet_package,
         &preview.effective_scope,
-        &preview.approval_request.approve_actions,
+        &preview.approval_request,
     )?;
     let plan = build_install_plan(
         state,
