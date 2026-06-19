@@ -310,12 +310,21 @@ fn operation_target_scope_circle_id(
             .and_then(Value::as_str)
             .and_then(|strand_id| projection.strand_scope_circle_id(strand_id))
     };
+    let morph_scope = |field: &str| -> Option<String> {
+        operation
+            .payload
+            .get(field)
+            .and_then(Value::as_str)
+            .and_then(|morph_id| projection.morph_scope_circle_id(morph_id))
+    };
     match kinds::canonical_kind_for_operation(operation)? {
         kinds::CK_STRAND_CREATE | kinds::CK_MORPH_CREATE | kinds::CK_SPACE_CONTAINER_CREATE => {
             inline_scope("object")
         }
         kinds::CK_RELATION_CREATE => inline_scope("relation").or_else(|| inline_scope("object")),
         kinds::CK_MESSAGE_CREATE | kinds::CK_STRAND_UPDATE => strand_scope("strand_id"),
+        kinds::CK_MORPH_UPDATE => morph_scope("morph_id").or_else(|| morph_scope("target_ref")),
+        kinds::CK_MORPH_ARCHIVE | kinds::CK_MORPH_RESTORE => morph_scope("morph_id"),
         kinds::CK_STRAND_ARCHIVE
         | kinds::CK_STRAND_RESTORE
         | kinds::CK_STRAND_MOVE
@@ -361,11 +370,9 @@ fn operation_target_scope_circle_id(
 /// admission too.
 ///
 /// Coverage: object-carrying creates (Strand / Morph / Space / Relation),
-/// `ck.message.create`, Strand update / lifecycle, and `ck.reaction.add` /
-/// `ck.reaction.remove` (scope derived from the target Message's Strand). Morph
-/// update is not gated here because `MorphProjection` does not yet persist
-/// `scope_circle_id` (tracked separately); Morph *create* — the injection
-/// vector — is gated.
+/// `ck.message.create`, Strand update / lifecycle, Morph update / lifecycle,
+/// and `ck.reaction.add` / `ck.reaction.remove` (scope derived from the target
+/// Message's Strand).
 ///
 /// Membership is evaluated against the current Circle projection (soland's
 /// convergence frontier), matching the delivery-side check. Peer / service-

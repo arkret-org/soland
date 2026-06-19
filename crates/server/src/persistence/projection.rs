@@ -108,6 +108,7 @@ pub struct StrandProjectionRecord {
 pub struct MorphProjectionRecord {
     pub morph_id: String,
     pub realm_id: String,
+    pub scope_circle_id: Option<String>,
     pub morph_type: String,
     pub title: Option<String>,
     pub fields: serde_json::Value,
@@ -717,6 +718,8 @@ struct MorphProjectionRow {
     morph_id: Uuid,
     #[diesel(sql_type = SqlUuid)]
     realm_id: Uuid,
+    #[diesel(sql_type = Nullable<SqlUuid>)]
+    scope_circle_id: Option<Uuid>,
     #[diesel(sql_type = Text)]
     morph_type: String,
     #[diesel(sql_type = Nullable<Text>)]
@@ -748,6 +751,9 @@ impl From<MorphProjectionRow> for MorphProjectionRecord {
         Self {
             morph_id: ids::format_typed_uuid("morph", &row.morph_id),
             realm_id: ids::format_typed_uuid("realm", &row.realm_id),
+            scope_circle_id: row
+                .scope_circle_id
+                .map(|u| ids::format_typed_uuid("circle", &u)),
             morph_type: row.morph_type,
             title: row.title,
             fields: row.fields,
@@ -764,7 +770,7 @@ impl From<MorphProjectionRow> for MorphProjectionRecord {
     }
 }
 
-const MORPH_PROJECTION_COLUMNS: &str = "id AS morph_id, realm_id, morph_type, title, fields, \
+const MORPH_PROJECTION_COLUMNS: &str = "id AS morph_id, realm_id, scope_circle_id, morph_type, title, fields, \
      schema_refs, facets, versions, state, state_changed_at, created_by_id AS created_by, created_at, updated_by_id AS updated_by, \
      updated_at";
 
@@ -787,11 +793,12 @@ impl MorphProjectionStore for PgMorphProjectionStore {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(
             "INSERT INTO projection_morphs \
-             (id, realm_id, morph_type, title, fields, schema_refs, facets, versions, \
+             (id, realm_id, scope_circle_id, morph_type, title, fields, schema_refs, facets, versions, \
               state, state_changed_at, created_by_id, created_at, updated_by_id, updated_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) \
              ON CONFLICT (id) DO UPDATE SET \
                 realm_id = EXCLUDED.realm_id, \
+                scope_circle_id = EXCLUDED.scope_circle_id, \
                 morph_type = EXCLUDED.morph_type, \
                 title = EXCLUDED.title, \
                 fields = EXCLUDED.fields, \
@@ -805,6 +812,12 @@ impl MorphProjectionStore for PgMorphProjectionStore {
         )
         .bind::<SqlUuid, _>(ids::typed_uuid_part_or_panic(&record.morph_id))
         .bind::<SqlUuid, _>(ids::typed_uuid_part_or_panic(&record.realm_id))
+        .bind::<Nullable<SqlUuid>, _>(
+            record
+                .scope_circle_id
+                .as_deref()
+                .map(ids::typed_uuid_part_or_panic),
+        )
         .bind::<Text, _>(&record.morph_type)
         .bind::<Nullable<Text>, _>(&record.title)
         .bind::<Jsonb, _>(&record.fields)

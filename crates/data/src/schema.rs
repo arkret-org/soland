@@ -470,6 +470,7 @@ diesel::table! {
     projection_morphs (id) {
         id -> Uuid,
         realm_id -> Uuid,
+        scope_circle_id -> Nullable<Uuid>,
         morph_type -> Text,
         title -> Nullable<Text>,
         fields -> Jsonb,

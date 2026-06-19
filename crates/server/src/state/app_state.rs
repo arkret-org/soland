@@ -1078,6 +1078,7 @@ async fn hydrate_projections_from_persistence(
                 MorphProjection {
                     morph_id: record.morph_id,
                     realm_id: record.realm_id,
+                    scope_circle_id: record.scope_circle_id,
                     morph_type: record.morph_type,
                     title: record.title,
                     fields: record

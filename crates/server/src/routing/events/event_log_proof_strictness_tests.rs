@@ -554,6 +554,110 @@ async fn circle_scoped_reaction_requires_circle_membership() {
 }
 
 #[tokio::test]
+async fn circle_scoped_morph_update_requires_circle_membership() {
+    // circle.md §8 - Morph updates are writes into the Morph's effective
+    // scope. A Realm-wide grant is insufficient when the Morph was created
+    // under a Circle scope.
+    let state = make_state(true);
+    let realm_id = "ck:realm:01904100-0000-7000-8000-c3c3e0000001";
+    let circle_id = "ck:circle:01904100-0000-7000-8000-c3c3e0000002";
+    let scoped_morph_id = "ck:morph:01904100-0000-7000-8000-c3c3e0000003";
+    let realm_morph_id = "ck:morph:01904100-0000-7000-8000-c3c3e0000004";
+    let member = "did:web:alice.example";
+    let non_member = "did:web:slack-bridge.example:bot";
+    let now = chrono::Utc::now();
+
+    {
+        let mut projection = state.projection.lock().unwrap();
+        projection.circles.insert(
+            circle_id.to_owned(),
+            crate::reducer::CircleProjection {
+                circle_id: circle_id.to_owned(),
+                realm_id: realm_id.to_owned(),
+                title: "HR-Conf".to_owned(),
+                summary: None,
+                directory_visibility: "members".to_owned(),
+                join_rule: "invite".to_owned(),
+                history_visibility: "joined".to_owned(),
+                content_encryption_floor: None,
+                metadata_encryption_floor: None,
+                encryption_profile: "mls_rfc9420".to_owned(),
+                mls_group_ref: None,
+                state: crate::reducer::CircleLifecycleState::Active,
+                state_changed_at: None,
+                created_by: member.to_owned(),
+                created_at: now,
+                updated_by: None,
+                updated_at: None,
+                members: std::collections::BTreeSet::from([member.to_owned()]),
+            },
+        );
+        for (morph_id, scope_circle_id) in [
+            (scoped_morph_id, Some(circle_id.to_owned())),
+            (realm_morph_id, None),
+        ] {
+            projection.morphs.insert(
+                morph_id.to_owned(),
+                crate::reducer::MorphProjection {
+                    morph_id: morph_id.to_owned(),
+                    realm_id: realm_id.to_owned(),
+                    scope_circle_id,
+                    morph_type: "task".to_owned(),
+                    title: Some("Task".to_owned()),
+                    fields: std::collections::BTreeMap::new(),
+                    schema_refs: Vec::new(),
+                    facets: Vec::new(),
+                    versions: Vec::new(),
+                    state: crate::reducer::ObjectLifecycleState::Active,
+                    state_changed_at: None,
+                    created_by: member.to_owned(),
+                    created_at: now,
+                    updated_by: None,
+                    updated_at: None,
+                },
+            );
+        }
+    }
+
+    let morph_update = |sender: &str, morph_id: &str| {
+        cokret_sdk::Operation::create(
+            cokret_sdk::OperationId::new("ck:operation:01904100-0000-7000-8000-c3c3e000000a")
+                .unwrap(),
+            cokret_sdk::RealmId::new(realm_id.to_owned()).unwrap(),
+            kinds::CK_MORPH_UPDATE,
+            json!({
+                "sender": sender,
+                "morph_id": morph_id,
+                "target_ref": morph_id,
+                "patch": {"fields.status": "done"}
+            }),
+        )
+    };
+
+    validate_operation_policy(
+        &state,
+        std::slice::from_ref(&morph_update(member, scoped_morph_id)),
+    )
+    .await
+    .unwrap();
+
+    let err = validate_operation_policy(
+        &state,
+        std::slice::from_ref(&morph_update(non_member, scoped_morph_id)),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(err, "circle_scope_membership_required");
+
+    validate_operation_policy(
+        &state,
+        std::slice::from_ref(&morph_update(non_member, realm_morph_id)),
+    )
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
 async fn applet_registration_requires_realm_admin() {
     // applet-integration.md §4 — `ck.applet.registration` is gated by the
     // machine-readable `ck.realm.admin` capability. The dedicated install

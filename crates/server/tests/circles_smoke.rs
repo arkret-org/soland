@@ -22,8 +22,8 @@ use serde_json::{Value, json};
 use soland::hlc::ServerHlc;
 use soland::kinds::{
     CK_CIRCLE_CREATE, CK_CIRCLE_MEMBER_STATE, CK_CIRCLE_TOMBSTONE, CK_CIRCLE_UPDATE,
-    CK_MEMBER_STATE, CK_MESSAGE_CREATE, CK_REALM_CREATE, CK_REALM_POLICY_COMPONENTS,
-    CK_STRAND_CREATE,
+    CK_MEMBER_STATE, CK_MESSAGE_CREATE, CK_MORPH_CREATE, CK_REALM_CREATE,
+    CK_REALM_POLICY_COMPONENTS, CK_STRAND_CREATE,
 };
 use soland::reducer::{
     CircleLifecycleState, ProjectionEffect, ProjectionState, SolandMembershipState,
@@ -34,6 +34,7 @@ const REALM_B: &str = "ck:realm:01904100-0000-7000-8000-bbbbbbbbbbbb";
 const CIRCLE_A: &str = "ck:circle:01904100-0000-7000-8000-c11111111111";
 const CIRCLE_B: &str = "ck:circle:01904100-0000-7000-8000-c22222222222";
 const STRAND_X: &str = "ck:strand:01904100-0000-7000-8000-f11111111111";
+const MORPH_X: &str = "ck:morph:01904100-0000-7000-8000-f33333333333";
 const ALICE: &str = "did:web:alice.example";
 const BOB: &str = "did:web:bob.example";
 const MALLORY: &str = "did:web:mallory.example";
@@ -582,6 +583,57 @@ fn circle_scoped_message_preserves_scope_for_visibility_filtering() {
     assert!(
         !state.circle_scope_visible_to_actor(CIRCLE_A, MALLORY),
         "Realm member outside the Circle must not be eligible for Circle-scoped content"
+    );
+}
+
+#[test]
+fn circle_scoped_morph_preserves_scope_for_update_gates() {
+    let mut state = ProjectionState::new();
+    let hlc = ServerHlc::new("circles-morph-scope-test");
+    seed_realm(&mut state, &hlc, REALM_A, ALICE);
+    add_realm_member(&mut state, &hlc, REALM_A, ALICE);
+    state.apply(
+        &op(
+            CK_CIRCLE_CREATE,
+            REALM_A,
+            json!({
+                "object": {
+                    "id": CIRCLE_A,
+                    "realm_id": REALM_A,
+                    "title": "Private Ops",
+                    "created_by": ALICE,
+                }
+            }),
+        ),
+        &hlc,
+    );
+
+    let morph_created = state.apply(
+        &op(
+            CK_MORPH_CREATE,
+            REALM_A,
+            json!({
+                "object": {
+                    "id": MORPH_X,
+                    "realm_id": REALM_A,
+                    "morph_type": "task",
+                    "metadata": { "title": "Circle task" },
+                    "scope_circle_id": CIRCLE_A,
+                    "created_by": ALICE,
+                }
+            }),
+        ),
+        &hlc,
+    );
+    assert!(
+        !matches!(morph_created, ProjectionEffect::Rejected { .. }),
+        "circle-scoped Morph create must succeed, got {morph_created:?}"
+    );
+    let morph = state.morphs.get(MORPH_X).expect("morph projected");
+    assert_eq!(morph.scope_circle_id.as_deref(), Some(CIRCLE_A));
+    assert_eq!(
+        state.morph_scope_circle_id(MORPH_X),
+        Some(CIRCLE_A.to_owned())
     );
 }
 

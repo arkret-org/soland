@@ -516,6 +516,10 @@ impl CircleLifecycleState {
 pub struct MorphProjection {
     pub morph_id: String,
     pub realm_id: String,
+    /// CKP-0007 - the Circle this Morph is scoped to, if any (`ck:circle:...`).
+    /// Morph updates and lifecycle writes must satisfy the same Circle
+    /// membership conjunct as creates.
+    pub scope_circle_id: Option<String>,
     pub morph_type: String,
     pub title: Option<String>,
     pub fields: BTreeMap<String, Value>,

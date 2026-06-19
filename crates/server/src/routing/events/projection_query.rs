@@ -386,6 +386,11 @@ async fn list_morph_projections(
         .morphs
         .values()
         .filter(|m| m.realm_id == realm_id)
+        .filter(|m| {
+            m.scope_circle_id.as_deref().is_none_or(|circle_id| {
+                proj.circle_scope_visible_to_actor(circle_id, &session.actor)
+            })
+        })
         .filter(|m| include_terminal || !is_object_terminal(m.state))
         .map(|m| {
             Ok(ProjectionMorphRow {

@@ -379,6 +379,7 @@ async fn write_through_projection(state: &AppState, operation: &Operation) {
         Snapshot::Morph(MorphProjectionRecord {
             morph_id: m.morph_id.clone(),
             realm_id: m.realm_id.clone(),
+            scope_circle_id: m.scope_circle_id.clone(),
             morph_type: m.morph_type.clone(),
             title: m.title.clone(),
             fields: serde_json::Value::Object(

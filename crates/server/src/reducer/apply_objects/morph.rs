@@ -41,6 +41,11 @@ impl ProjectionState {
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_owned();
+        let scope_circle_id = object
+            .get("scope_circle_id")
+            .and_then(Value::as_str)
+            .filter(|value| value.starts_with("ck:circle:"))
+            .map(ToOwned::to_owned);
         let title = object
             .get("metadata")
             .and_then(Value::as_object)
@@ -70,6 +75,7 @@ impl ProjectionState {
         let projection = MorphProjection {
             morph_id: morph_id.clone(),
             realm_id,
+            scope_circle_id,
             morph_type,
             title,
             fields,

@@ -530,4 +530,13 @@ impl ProjectionState {
             .and_then(|strand| strand.scope_circle_id.clone())
             .filter(|scope| scope.starts_with("ck:circle:"))
     }
+
+    /// CKP-0007 - resolve the Circle (`ck:circle:...`) a Morph is scoped to, if
+    /// any. Used by admission gates for `ck.morph.update` and lifecycle writes.
+    pub fn morph_scope_circle_id(&self, morph_id: &str) -> Option<String> {
+        self.morphs
+            .get(morph_id)
+            .and_then(|morph| morph.scope_circle_id.clone())
+            .filter(|scope| scope.starts_with("ck:circle:"))
+    }
 }

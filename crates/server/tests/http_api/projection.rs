@@ -381,6 +381,111 @@ async fn projection_morphs_endpoint_reports_lifecycle_state() {
 }
 
 #[tokio::test]
+async fn projection_morphs_endpoint_filters_circle_scope() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let alice = dev_token(state.clone()).await;
+    let bob = register_account(
+        state.clone(),
+        "did:web:bob.example",
+        "@bob",
+        "ck:device:01904100-0000-7000-8000-b0b0b0002001",
+    )
+    .await;
+    let realm_id = DEMO_REALM_ID;
+    add_test_realm_member(&state, realm_id, "did:web:bob.example");
+    let circle_id = "ck:circle:01904100-0000-7000-8000-d20dc0000c01";
+    let public_morph_id = "ck:morph:01904100-0000-7000-8000-d20dc0000101";
+    let scoped_morph_id = "ck:morph:01904100-0000-7000-8000-d20dc0000102";
+    let now = chrono::Utc::now();
+
+    {
+        let mut projection = state.projection.lock().unwrap();
+        projection.circles.insert(
+            circle_id.to_owned(),
+            soland::reducer::CircleProjection {
+                circle_id: circle_id.to_owned(),
+                realm_id: realm_id.to_owned(),
+                title: "Need to know".to_owned(),
+                summary: None,
+                directory_visibility: "members".to_owned(),
+                join_rule: "invite".to_owned(),
+                history_visibility: "joined".to_owned(),
+                content_encryption_floor: None,
+                metadata_encryption_floor: None,
+                encryption_profile: "none".to_owned(),
+                mls_group_ref: None,
+                state: soland::reducer::CircleLifecycleState::Active,
+                state_changed_at: None,
+                created_by: "did:web:alice.example".to_owned(),
+                created_at: now,
+                updated_by: None,
+                updated_at: None,
+                members: std::collections::BTreeSet::from(["did:web:alice.example".to_owned()]),
+            },
+        );
+        for (morph_id, scope_circle_id) in [
+            (public_morph_id, None),
+            (scoped_morph_id, Some(circle_id.to_owned())),
+        ] {
+            projection.morphs.insert(
+                morph_id.to_owned(),
+                soland::reducer::MorphProjection {
+                    morph_id: morph_id.to_owned(),
+                    realm_id: realm_id.to_owned(),
+                    scope_circle_id,
+                    morph_type: "task".to_owned(),
+                    title: Some("Scoped task".to_owned()),
+                    fields: Default::default(),
+                    schema_refs: Vec::new(),
+                    facets: Vec::new(),
+                    versions: Vec::new(),
+                    state: soland::reducer::ObjectLifecycleState::Active,
+                    state_changed_at: None,
+                    created_by: "did:web:alice.example".to_owned(),
+                    created_at: now,
+                    updated_by: None,
+                    updated_at: None,
+                },
+            );
+        }
+    }
+
+    let bob_body: Value = TestClient::get(format!(
+        "http://server/_cokret/self/projection/morphs?realm_id={realm_id}"
+    ))
+    .add_header("authorization", format!("Bearer {bob}"), true)
+    .send(&app_from_state(state.clone()))
+    .await
+    .take_json()
+    .await
+    .unwrap();
+    let bob_morphs = bob_body["morphs"].as_array().unwrap();
+    assert!(bob_morphs.iter().any(|m| m["morph_id"] == public_morph_id));
+    assert!(!bob_morphs.iter().any(|m| m["morph_id"] == scoped_morph_id));
+
+    let alice_body: Value = TestClient::get(format!(
+        "http://server/_cokret/self/projection/morphs?realm_id={realm_id}"
+    ))
+    .add_header("authorization", format!("Bearer {alice}"), true)
+    .send(&app_from_state(state.clone()))
+    .await
+    .take_json()
+    .await
+    .unwrap();
+    let alice_morphs = alice_body["morphs"].as_array().unwrap();
+    assert!(
+        alice_morphs
+            .iter()
+            .any(|m| m["morph_id"] == public_morph_id)
+    );
+    assert!(
+        alice_morphs
+            .iter()
+            .any(|m| m["morph_id"] == scoped_morph_id)
+    );
+}
+
+#[tokio::test]
 async fn projection_document_endpoint_reports_body_versions_relations_and_range_comments() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
