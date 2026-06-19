@@ -11,6 +11,7 @@ pub mod error;
 pub mod gc;
 pub mod hlc;
 pub mod ids;
+mod invite_claim_proofs;
 pub mod jws_verify;
 pub mod kinds;
 pub mod metrics;

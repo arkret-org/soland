@@ -1,4 +1,7 @@
 use super::*;
+use crate::invite_claim_proofs::{
+    invite_claim_proof_context_from_projection, verify_invite_claim_proofs_for_operation,
+};
 
 #[derive(Debug)]
 pub(in crate::routing) struct ValidatedEventEnvelope {
@@ -592,7 +595,7 @@ pub(in crate::routing) async fn submit_event_value(
                 rejection.message,
             ));
         }
-        let invite_preflight_reject = {
+        let (invite_preflight_reject, invite_proof_context) = {
             // Admission checks below are mandatory and MUST NOT be skipped
             // (fail-closed). The projection lock is the poison-free
             // `state::Mutex`, so acquiring it cannot fail and this block
@@ -710,7 +713,16 @@ pub(in crate::routing) async fn submit_event_value(
                     reason,
                 ));
             }
-            preflight_invite_projection_reject(&proj, operation, &state.hlc)
+            let invite_preflight_reject =
+                preflight_invite_projection_reject(&proj, operation, &state.hlc);
+            let invite_proof_context = if invite_preflight_reject.is_none() {
+                invite_claim_proof_context_from_projection(&proj, operation).map_err(|reason| {
+                    SubmitOneError::new(StatusCode::PRECONDITION_FAILED, reason, reason)
+                })?
+            } else {
+                None
+            };
+            (invite_preflight_reject, invite_proof_context)
         };
         if let Some(reason) = invite_preflight_reject {
             record_rejected_invite_claim_effect(state, operation)
@@ -725,6 +737,25 @@ pub(in crate::routing) async fn submit_event_value(
             return Err(SubmitOneError::new(
                 StatusCode::PRECONDITION_FAILED,
                 reason.clone(),
+                reason,
+            ));
+        }
+        if let Some(context) = invite_proof_context
+            && let Err(reason) =
+                verify_invite_claim_proofs_for_operation(state, operation, &context)
+        {
+            record_rejected_invite_claim_effect(state, operation)
+                .await
+                .map_err(|message| {
+                    SubmitOneError::new(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "invite_claim_reject_effect_failed",
+                        message,
+                    )
+                })?;
+            return Err(SubmitOneError::new(
+                StatusCode::PRECONDITION_FAILED,
+                reason,
                 reason,
             ));
         }

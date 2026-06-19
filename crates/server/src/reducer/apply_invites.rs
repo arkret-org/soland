@@ -481,9 +481,13 @@ fn validate_subject_proof(
     let Some(object) = subject_proof.as_object() else {
         return Err("subject_proof_not_object");
     };
-    if nested_proof_string(object, "signature").is_none()
-        && nested_proof_string(object, "sig").is_none()
-    {
+    if nested_proof_string(object, "verification_method").is_none() {
+        return Err("subject_proof_method_required");
+    }
+    if nested_proof_string(object, "alg") != Some("EdDSA".to_owned()) {
+        return Err("subject_proof_alg_unsupported");
+    }
+    if nested_proof_string(object, "signature").is_none() {
         return Err("subject_proof_signature_required");
     }
     if let Some(proof_subject) = nested_proof_string(object, "subject_id")
@@ -508,27 +512,26 @@ fn validate_subject_proof(
     {
         return Err("subject_proof_binding_digest_mismatch");
     }
-    if let Some(transcript_digest) = nested_proof_string(object, "transcript_digest") {
-        let transcript = json!({
-            "audience": INVITE_AUDIENCE,
-            "binding_proof_digest": binding_digest,
-            "claim_nonce": claim_nonce,
-            "invite_id": invite_id,
-            "realm_id": realm_id,
-            "subject_id": subject_id,
-            "token_commitment": token_commitment,
-            "verification_service_did": third_party_id
-                .get("verification_service_did")
-                .and_then(Value::as_str)
-                .unwrap_or_default(),
-        });
-        let Some(expected_digest) = cokret_sdk::canonical::canonical_sha256(&transcript).ok()
-        else {
-            return Err("subject_proof_transcript_invalid");
-        };
-        if transcript_digest != expected_digest {
-            return Err("subject_proof_transcript_mismatch");
-        }
+    let Some(transcript_digest) = nested_proof_string(object, "transcript_digest") else {
+        return Err("subject_proof_transcript_required");
+    };
+    let Some(expected_digest) = crate::invite_claim_proofs::subject_proof_transcript_digest(
+        subject_id,
+        invite_id,
+        realm_id,
+        token_commitment,
+        claim_nonce,
+        third_party_id
+            .get("verification_service_did")
+            .and_then(Value::as_str)
+            .unwrap_or_default(),
+        &binding_digest,
+    )
+    .ok() else {
+        return Err("subject_proof_transcript_invalid");
+    };
+    if transcript_digest != expected_digest {
+        return Err("subject_proof_transcript_mismatch");
     }
     Ok(())
 }

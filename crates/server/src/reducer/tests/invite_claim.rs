@@ -6,6 +6,7 @@ const REALM: &str = "ck:realm:0196419b-0000-7000-8000-000000000001";
 const INVITE: &str = "ck:invite:0196419b-0000-7000-8000-000000000101";
 const INVITER: &str = "did:web:alice.example";
 const SUBJECT: &str = "did:web:bob.example";
+const SUBJECT_METHOD: &str = "did:web:bob.example#device-1";
 const SERVICE: &str = "did:web:verify.example";
 const VERIFICATION_METHOD: &str = "did:web:verify.example#invite-key";
 const TOKEN_COMMITMENT: &str =
@@ -39,22 +40,37 @@ fn third_party_invite(expires_at: &str) -> Value {
 }
 
 fn claim_payload(nonce: &str, token_commitment: &str, service_did: &str) -> Value {
+    let binding_proof = json!({
+        "verification_service_did": service_did,
+        "verification_method": VERIFICATION_METHOD,
+        "subject_id": SUBJECT,
+        "realm_id": REALM,
+        "audience": "cokret.invite.claim",
+        "claim_nonce": nonce,
+        "expires_at": "2099-01-01T00:00:00Z",
+        "signature": "test-signature"
+    });
+    let binding_digest = cokret_sdk::canonical::canonical_sha256(&binding_proof).unwrap();
+    let transcript_digest = crate::invite_claim_proofs::subject_proof_transcript_digest(
+        SUBJECT,
+        INVITE,
+        REALM,
+        token_commitment,
+        nonce,
+        service_did,
+        &binding_digest,
+    )
+    .unwrap();
     json!({
         "invite_id": INVITE,
         "subject_id": SUBJECT,
         "token_commitment": token_commitment,
         "claim_nonce": nonce,
-        "binding_proof": {
-            "verification_service_did": service_did,
-            "verification_method": VERIFICATION_METHOD,
-            "subject_id": SUBJECT,
-            "realm_id": REALM,
-            "audience": "cokret.invite.claim",
-            "claim_nonce": nonce,
-            "expires_at": "2099-01-01T00:00:00Z",
-            "signature": "test-signature"
-        },
+        "binding_proof": binding_proof,
         "subject_proof": {
+            "verification_method": SUBJECT_METHOD,
+            "alg": "EdDSA",
+            "transcript_digest": transcript_digest,
             "signature": "subject-signature"
         }
     })
