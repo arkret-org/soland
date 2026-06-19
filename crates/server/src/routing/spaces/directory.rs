@@ -82,8 +82,8 @@ use actors_users::*;
 use agent_selector::*;
 use demo::*;
 pub use demo::{checked_limit, demo_actors, demo_organization, query_matches};
+pub use discovery::actor_visible_to;
 use discovery::*;
-pub use discovery::{actor_visible_to, has_accepted_contact};
 // Re-export the helpers that sibling routing modules reach for at their
 // original visibility (the moved definitions now live in submodules).
 pub(crate) use handles::signed_handle_claim_value;

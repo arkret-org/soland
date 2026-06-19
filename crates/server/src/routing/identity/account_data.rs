@@ -77,6 +77,18 @@ const REGISTERED_ACCOUNT_DATA_TYPES: &[AccountDataTypeSpec] = &[
         data_type: cokret_sdk::ACCOUNT_DATA_TYPE_SEARCH_INDEX_MANIFEST,
         controller_private: true,
     },
+    AccountDataTypeSpec {
+        data_type: "ck.dnd_schedule",
+        controller_private: true,
+    },
+    AccountDataTypeSpec {
+        data_type: "ck.presence.visibility",
+        controller_private: true,
+    },
+    AccountDataTypeSpec {
+        data_type: "ck.push_rules",
+        controller_private: true,
+    },
 ];
 
 fn registered_account_data_type(data_type: &str) -> Option<&'static AccountDataTypeSpec> {
@@ -421,7 +433,18 @@ mod tests {
             )
             .is_ok()
         );
+        assert!(
+            validate_private_account_data_content(
+                "ck.push_rules",
+                &json!({"encrypted_payload": encrypted_envelope()}),
+            )
+            .is_ok()
+        );
         assert!(validate_private_account_data_content(key, &json!({"tombstone": true})).is_ok());
+        let err =
+            validate_private_account_data_content("ck.dnd_schedule", &json!({"enabled": true}))
+                .unwrap_err();
+        assert!(err.to_string().contains("encrypted"));
         let err = validate_private_account_data_content(
             key,
             &json!({"body": {"collection_title": "Leaks"}}),

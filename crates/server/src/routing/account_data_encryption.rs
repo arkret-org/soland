@@ -7,10 +7,18 @@ const CLIENT_SIDE_CONFORMANCE: &str = "client_side_conformance";
 const ACCOUNT_DATA_TYPE_AGENT_DRAFT: &str = "ck.agent.draft.v1";
 const ACCOUNT_DATA_TYPE_AGENT_SIDECAR_PROJECTION: &str = "ck.agent.sidecar_projection.v1";
 const ACCOUNT_DATA_TYPE_AGENT_PARTICIPATION: &str = "ck.agent.participation.v1";
+const ACCOUNT_DATA_TYPE_DND_SCHEDULE: &str = "ck.dnd_schedule";
 const ACCOUNT_DATA_TYPE_INVITE_QUARANTINE: &str = "ck.account.invite_quarantine";
+const ACCOUNT_DATA_TYPE_PRESENCE_VISIBILITY: &str = "ck.presence.visibility";
+const ACCOUNT_DATA_TYPE_PUSH_RULES: &str = "ck.push_rules";
 const ACCOUNT_DATA_TYPE_TAGS_REALM: &str = "ck.tags.realm";
 
-const EXACT_ENCRYPTED_ACCOUNT_DATA_KEYS: &[&str] = &[ACCOUNT_DATA_TYPE_INVITE_QUARANTINE];
+const EXACT_ENCRYPTED_ACCOUNT_DATA_KEYS: &[&str] = &[
+    ACCOUNT_DATA_TYPE_DND_SCHEDULE,
+    ACCOUNT_DATA_TYPE_INVITE_QUARANTINE,
+    ACCOUNT_DATA_TYPE_PRESENCE_VISIBILITY,
+    ACCOUNT_DATA_TYPE_PUSH_RULES,
+];
 
 const SDK_VALIDATED_ENCRYPTED_ACCOUNT_DATA_PREFIXES: &[&str] = &[
     cokret_sdk::ACCOUNT_DATA_TYPE_CONTACTS_ACTOR,
@@ -421,6 +429,16 @@ mod tests {
 
     #[test]
     fn standard_encrypted_account_data_requires_encrypted_carrier() {
+        for key in [
+            ACCOUNT_DATA_TYPE_DND_SCHEDULE,
+            ACCOUNT_DATA_TYPE_PRESENCE_VISIBILITY,
+            ACCOUNT_DATA_TYPE_PUSH_RULES,
+        ] {
+            let err =
+                validate_encrypted_account_data_value(key, &json!({"enabled": true})).unwrap_err();
+            assert_eq!(err, AccountDataEncryptionError::MissingEncryptedCarrier);
+        }
+
         let err = validate_encrypted_account_data_value(
             "ck.contacts.realm.ck:realm:0196419b-0000-7000-8000-000000000000",
             &json!({"local_name": "Acme"}),

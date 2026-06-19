@@ -278,7 +278,7 @@ async fn push_profile_and_moderation_contracts_work() {
         "initial account_data must not include ck.push_rules: {initial_rules}"
     );
 
-    let push_rule = submit_actor_private_event(
+    let plaintext_push_rule = submit_actor_private_event(
         state.clone(),
         &token,
         "did:web:alice.example",
@@ -303,18 +303,18 @@ async fn push_profile_and_moderation_contracts_work() {
         }),
     )
     .await;
-    assert_eq!(
-        push_rule["status"], "accepted",
-        "ck.push_rules account_data response: {push_rule}"
+    assert_ne!(
+        plaintext_push_rule["status"], "accepted",
+        "ck.push_rules account_data must not accept plaintext content: {plaintext_push_rule}"
     );
 
     let listed_rules = account_subscribe_frame(state.clone(), Some(&token), "catchup=true").await;
-    let push_rules = account_data_entry(&listed_rules, "ck.push_rules")
-        .expect("ck.push_rules appears in account subscribe");
-    assert_eq!(push_rules["content"]["rules"].as_array().unwrap().len(), 1);
-    assert_eq!(push_rules["content"]["rules"][0]["rule_id"], "mute-device");
+    assert!(
+        account_data_entry(&listed_rules, "ck.push_rules").is_none(),
+        "rejected plaintext push rules must not appear as account_data: {listed_rules}"
+    );
 
-    let muted_notify: Value = TestClient::post("http://server/_cokret/edge/push/notify")
+    let notify_after_rejected_rule: Value = TestClient::post("http://server/_cokret/edge/push/notify")
         .json(&serde_json::json!({
             "notification": {
                 "push_target_id": "ck:push_target:01904100-0000-7000-8000-000000000001",
@@ -327,52 +327,12 @@ async fn push_profile_and_moderation_contracts_work() {
         .take_json()
         .await
         .unwrap();
-    let rejected = muted_notify["rejected"].as_array().unwrap();
-    assert_eq!(rejected.len(), 2);
-    assert!(rejected.iter().any(|device| {
-        device["device_id"] == "ck:device:01904100-0000-7000-8000-a11ce0000001"
-            && device["reason"] == "push_rule"
-            && device["rule_id"] == "mute-device"
-    }));
+    let rejected = notify_after_rejected_rule["rejected"].as_array().unwrap();
+    assert_eq!(rejected.len(), 1);
     assert!(rejected.iter().any(|device| {
         device["device_id"] == "ck:device:01904100-0000-7000-8000-71551c000004"
             && device["reason"] == "unknown_device"
     }));
-
-    let deleted_rule = submit_actor_private_event(
-        state.clone(),
-        &token,
-        "did:web:alice.example",
-        "ck:device:01904100-0000-7000-8000-a11ce0000001",
-        DEMO_REALM_ID,
-        "ck.account_data.set",
-        serde_json::json!({
-            "key": "ck.push_rules",
-            "owner": "did:web:alice.example",
-            "tombstone": true,
-            "updated_at": "2026-05-08T10:01:00Z"
-        }),
-    )
-    .await;
-    assert_eq!(
-        deleted_rule["status"], "accepted",
-        "ck.push_rules tombstone response: {deleted_rule}"
-    );
-
-    let unmuted_notify: Value = TestClient::post("http://server/_cokret/edge/push/notify")
-        .json(&serde_json::json!({
-            "notification": {
-                "push_target_id": "ck:push_target:01904100-0000-7000-8000-000000000002",
-                "wakeup_kind": "message",
-                "devices": [{"device_id": "ck:device:01904100-0000-7000-8000-a11ce0000001"}]
-            }
-        }))
-        .send(&app_from_state(state.clone()))
-        .await
-        .take_json()
-        .await
-        .unwrap();
-    assert!(unmuted_notify["rejected"].as_array().unwrap().is_empty());
 
     let report: Value = TestClient::post("http://server/_cokret/self/moderation/report")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -424,20 +384,22 @@ async fn push_profile_and_moderation_contracts_work() {
 }
 
 #[tokio::test]
-async fn presence_visibility_nobody_clears_presence_and_typing() {
+async fn presence_visibility_account_data_requires_encrypted_content() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
-    state
-        .persistence
-        .account_data()
-        .put(&soland::state::AccountDataRecord {
-            actor: "did:web:alice.example".to_owned(),
-            data_type: "ck.presence.visibility".to_owned(),
-            payload: serde_json::json!({"presence_visibility": "nobody"}),
-            updated_at: chrono::Utc::now(),
-        })
-        .await
-        .unwrap();
+
+    let plaintext_policy =
+        TestClient::put("http://server/_cokret/self/account_data/ck.presence.visibility")
+            .add_header("authorization", format!("Bearer {token}"), true)
+            .json(&serde_json::json!({
+                "content": {
+                    "presence_visibility": "nobody"
+                }
+            }))
+            .send(&app_from_state(state.clone()))
+            .await;
+    assert_eq!(plaintext_policy.status_code.unwrap().as_u16(), 400);
+
     state
         .persistence
         .presence()
@@ -449,14 +411,14 @@ async fn presence_visibility_nobody_clears_presence_and_typing() {
         .await
         .unwrap();
 
-    let hidden_sync = account_subscribe_frame(state.clone(), Some(&token), "catchup=true").await;
+    let visible_sync = account_subscribe_frame(state.clone(), Some(&token), "catchup=true").await;
     assert!(
-        hidden_sync["presence"]["events"]
+        visible_sync["presence"]["events"]
             .as_array()
             .unwrap()
             .iter()
-            .all(|event| event["actor_id"] != "did:web:alice.example"),
-        "presence_visibility=nobody must hide cached presence: {hidden_sync}"
+            .any(|event| event["actor_id"] == "did:web:alice.example"),
+        "encrypted presence account_data must not be parsed as plaintext relay policy: {visible_sync}"
     );
 
     let sent_at = chrono::Utc::now();
@@ -486,8 +448,8 @@ async fn presence_visibility_nobody_clears_presence_and_typing() {
             .get("did:web:alice.example")
             .await
             .unwrap()
-            .is_none(),
-        "nobody policy must clear cached presence instead of refreshing it"
+            .is_some(),
+        "encrypted presence preferences must not clear server-visible presence"
     );
 
     let typing: Value = TestClient::post("http://server/_cokret/self/ephemeral")
@@ -508,15 +470,101 @@ async fn presence_visibility_nobody_clears_presence_and_typing() {
         .await
         .unwrap();
     assert_eq!(typing["accepted"], true);
+    let typing_records = state
+        .persistence
+        .typing()
+        .list_for_realm(DEMO_REALM_ID)
+        .await
+        .unwrap();
+    assert!(
+        !typing_records.is_empty(),
+        "encrypted presence preferences must not suppress server-visible typing"
+    );
+
+    state
+        .persistence
+        .account_data()
+        .put(&soland::state::AccountDataRecord {
+            actor: "did:web:alice.example".to_owned(),
+            data_type: "ck.presence.visibility".to_owned(),
+            payload: serde_json::json!({
+                "encrypted_payload": {
+                    "ciphertext": "opaque-presence-policy"
+                }
+            }),
+            updated_at: chrono::Utc::now(),
+        })
+        .await
+        .unwrap();
+
+    let hidden_sync = account_subscribe_frame(state.clone(), Some(&token), "catchup=true").await;
+    assert!(
+        hidden_sync["presence"]["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|event| event["actor_id"] != "did:web:alice.example"),
+        "opaque presence policy must fail closed for cached presence: {hidden_sync}"
+    );
+
+    let opaque_sent_at = chrono::Utc::now();
+    let opaque_expires_at = opaque_sent_at + chrono::Duration::seconds(30);
+    let hidden_presence: Value = TestClient::post("http://server/_cokret/self/ephemeral")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&serde_json::json!({
+            "kind": "ck.presence",
+            "realm_id": DEMO_REALM_ID,
+            "actor_id": "did:web:alice.example",
+            "sent_at": opaque_sent_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+            "expires_at": opaque_expires_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+            "payload": {
+                "status": "online"
+            }
+        }))
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(hidden_presence["accepted"], true);
     assert!(
         state
             .persistence
-            .typing()
-            .list_for_realm(DEMO_REALM_ID)
+            .presence()
+            .get("did:web:alice.example")
             .await
             .unwrap()
-            .is_empty(),
-        "nobody policy must suppress typing persistence"
+            .is_none(),
+        "opaque presence policy must clear server-visible presence"
+    );
+
+    let hidden_typing: Value = TestClient::post("http://server/_cokret/self/ephemeral")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&serde_json::json!({
+            "kind": "ck.typing",
+            "realm_id": DEMO_REALM_ID,
+            "actor_id": "did:web:alice.example",
+            "sent_at": opaque_sent_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+            "expires_at": opaque_expires_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+            "payload": {
+                "typing": true
+            }
+        }))
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(hidden_typing["accepted"], true);
+    let hidden_typing_records = state
+        .persistence
+        .typing()
+        .list_for_realm(DEMO_REALM_ID)
+        .await
+        .unwrap();
+    assert!(
+        hidden_typing_records.is_empty(),
+        "opaque presence policy must suppress server-visible typing"
     );
 }
 
