@@ -3,6 +3,7 @@ use std::path::PathBuf;
 
 pub const DEFAULT_MAX_REQUEST_SIZE_BYTES: usize = 1024 * 1024;
 pub const DEFAULT_TO_DEVICE_QUEUE_CAPACITY: usize = 10_000;
+pub const PQ_HYBRID_TLS_DEPLOYMENT_PROBE_ENV: &str = "SOLAND_PQ_TLS_DEPLOYMENT_PROBE";
 
 #[derive(Clone, Debug)]
 pub struct AppConfig {
@@ -829,6 +830,29 @@ impl AppConfig {
         self.tls_cert_path.is_some() && self.tls_key_path.is_some()
     }
 
+    pub fn pq_hybrid_tls_probe_verified_from_value(value: Option<&str>) -> bool {
+        let Some(value) = value else {
+            return false;
+        };
+        matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "verified" | "x25519mlkem768" | "tls13+x25519mlkem768"
+        )
+    }
+
+    pub fn pq_hybrid_tls_probe_verified(&self) -> bool {
+        let value = env_non_empty(PQ_HYBRID_TLS_DEPLOYMENT_PROBE_ENV);
+        Self::pq_hybrid_tls_probe_verified_from_value(value.as_deref())
+    }
+
+    pub fn pq_hybrid_tls_probe_configured(&self) -> bool {
+        env_non_empty(PQ_HYBRID_TLS_DEPLOYMENT_PROBE_ENV).is_some()
+    }
+
+    pub fn pq_hybrid_tls_ready(&self) -> bool {
+        self.development_mode || self.pq_hybrid_tls_probe_verified()
+    }
+
     /// T8.3 — derive a non-sensitive production hardening snapshot from
     /// the live config. Values are environment-detected (no operator
     /// hand-holding required); `warnings[]` enumerates the failing
@@ -840,6 +864,10 @@ impl AppConfig {
     pub fn hardening_status(&self) -> crate::wire::HardeningStatus {
         let development_mode = self.development_mode;
         let tls_enabled = self.tls_enabled();
+        let pq_hybrid_tls_required_group = crate::artifacts::pq_hybrid_tls_required_group();
+        let pq_hybrid_tls_probe_artifact =
+            crate::artifacts::PQ_HYBRID_TLS_DEPLOYMENT_PROBE_ARTIFACT_REF;
+        let pq_hybrid_tls_probe_verified = self.pq_hybrid_tls_probe_verified();
         // CSP is enforced upstream by the reverse proxy (Caddyfile /
         // nginx); we can't probe the live header from inside the app,
         // but a configured `cors_allow_origin` is a strong signal that
@@ -878,6 +906,7 @@ impl AppConfig {
         let checks = [
             ("development_mode_disabled", !development_mode),
             ("tls_enabled", tls_enabled),
+            ("pq_hybrid_tls_probe_verified", pq_hybrid_tls_probe_verified),
             ("csp_header_configured", csp_header_configured),
             ("cors_strict", cors_strict),
             ("secret_manager_in_use", secret_manager_in_use),
@@ -910,6 +939,9 @@ impl AppConfig {
         crate::wire::HardeningStatus {
             development_mode,
             tls_enabled,
+            pq_hybrid_tls_required_group: pq_hybrid_tls_required_group.to_owned(),
+            pq_hybrid_tls_probe_artifact: pq_hybrid_tls_probe_artifact.to_owned(),
+            pq_hybrid_tls_probe_verified,
             csp_header_configured,
             cors_strict,
             secret_manager_in_use,
@@ -1416,5 +1448,22 @@ mod tests {
         env.set_file(path.to_str().unwrap());
         assert!(env_non_empty_or_file(&env.name).unwrap().is_none());
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn pq_hybrid_tls_probe_parser_accepts_only_artifact_success_values() {
+        assert!(AppConfig::pq_hybrid_tls_probe_verified_from_value(Some(
+            "verified"
+        )));
+        assert!(AppConfig::pq_hybrid_tls_probe_verified_from_value(Some(
+            "X25519MLKEM768"
+        )));
+        assert!(AppConfig::pq_hybrid_tls_probe_verified_from_value(Some(
+            "tls13+x25519mlkem768"
+        )));
+        assert!(!AppConfig::pq_hybrid_tls_probe_verified_from_value(Some(
+            "classical-x25519"
+        )));
+        assert!(!AppConfig::pq_hybrid_tls_probe_verified_from_value(None));
     }
 }

@@ -30,6 +30,7 @@ async fn health_and_describe_work() {
         .unwrap();
     assert_eq!(readyz["ok"], true);
     assert_eq!(readyz["checks"]["database"]["ok"], true);
+    assert_eq!(readyz["checks"]["pq_hybrid_tls"]["ok"], true);
 
     let describe: Value = TestClient::get("http://server/_cokret/describe")
         .send(&app())
@@ -409,6 +410,12 @@ async fn healthz_exposes_hardening_status() {
     assert_eq!(hardening["development_mode"], true);
     assert_eq!(hardening["rate_limit_enabled"], true);
     assert_eq!(hardening["admin_auth_mode"], "development");
+    assert_eq!(hardening["pq_hybrid_tls_required_group"], "X25519MLKEM768");
+    assert_eq!(
+        hardening["pq_hybrid_tls_probe_artifact"],
+        "deployment-probes.json#/probes/0"
+    );
+    assert!(hardening["pq_hybrid_tls_probe_verified"].is_boolean());
     let score = hardening["checklist_score"].as_u64().unwrap();
     let max = hardening["checklist_max"].as_u64().unwrap();
     assert!(max >= 8, "checklist_max should cover at least 8 fields");

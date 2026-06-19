@@ -34,6 +34,7 @@ SOLAND_BIND=0.0.0.0:8698
 SOLAND_PUBLIC_BASE_URL=https://soland.example
 SOLAND_TLS_CERT_PATH=/etc/soland/tls/fullchain.pem
 SOLAND_TLS_KEY_PATH=/etc/soland/tls/privkey.pem
+SOLAND_PQ_TLS_DEPLOYMENT_PROBE=verified
 SOLAND_SERVICE_DID=did:web:soland.example
 SOLAND_EMBEDDED_WEBVH_PROVIDER_ENABLED=true
 SOLAND_EMBEDDED_WEBVH_REGISTRATION_BEARER=<shared-secret-configured-in-coauth>
@@ -205,6 +206,12 @@ does not set it by default.
 ## 4. Front with TLS
 
 soland speaks plaintext HTTP — terminate TLS in the reverse proxy.
+The Cokret v1 transport baseline requires TLS 1.3 connections to negotiate
+`X25519MLKEM768` and fail closed when the peer cannot offer it. Run that
+handshake probe against the externally reachable client-service and
+service-to-service listener, then set `SOLAND_PQ_TLS_DEPLOYMENT_PROBE=verified`
+only for a passing deployment. Production `/readyz` returns 503 until that
+machine-verifiable probe evidence is present.
 
 Caddy example:
 
@@ -428,6 +435,9 @@ pre-upgrade backup if you need to roll back.
 - Object storage uses a dedicated bucket/prefix or a dedicated local volume
   with quota enforcement.
 - Reverse proxy enforces TLS 1.2+ and the security headers you require.
+- Reverse proxy / gateway TLS 1.3 probe verifies `X25519MLKEM768` negotiation
+  and sets `SOLAND_PQ_TLS_DEPLOYMENT_PROBE=verified`; classical fallback is not
+  accepted.
 - Reverse proxy, API gateway, or load balancer enforces a shared rate-limit
   budget when more than one soland replica is running. soland's built-in
   limiter is per-process and must not be treated as a distributed quota.

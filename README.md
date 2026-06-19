@@ -188,6 +188,7 @@ All settings can be supplied via environment variables (preferred) or a
 | `SOLAND_PUBLIC_BASE_URL` | `http://<bind>` | Advertised base URL (`/_cokret/describe`) |
 | `SOLAND_TLS_CERT_PATH` | unset | TLS certificate PEM path; when paired with `SOLAND_TLS_KEY_PATH`, soland serves HTTPS via rustls |
 | `SOLAND_TLS_KEY_PATH` | unset | TLS private-key PEM path paired with `SOLAND_TLS_CERT_PATH` |
+| `SOLAND_PQ_TLS_DEPLOYMENT_PROBE` | unset | Set to `verified` only after an external TLS 1.3 probe proves `X25519MLKEM768` negotiation and fail-closed classical fallback |
 | `SOLAND_SERVICE_DID` | `did:web:soland.local` | Service DID — also the proof `audience` binding |
 | `SOLAND_EMBEDDED_WEBVH_PROVIDER_ENABLED` | `true` | Enable soland's built-in `did:webvh` provider for coauth registration |
 | `SOLAND_EMBEDDED_WEBVH_REGISTRATION_BEARER` | unset | Shared bearer token coauth must present to write embedded `did:webvh` registrations |
@@ -423,6 +424,7 @@ The same list is computed at runtime and surfaced on
 
 - [ ] `SOLAND_DEVELOPMENT_MODE=false` (default — only flip to true on a loopback dev bind)
 - [ ] TLS enabled (`SOLAND_TLS_CERT_PATH` / `SOLAND_TLS_KEY_PATH`, or terminated at the reverse proxy)
+- [ ] PQ-hybrid TLS deployment probe verified (`SOLAND_PQ_TLS_DEPLOYMENT_PROBE=verified` after `X25519MLKEM768` is negotiated)
 - [ ] CSP header configured at the reverse proxy
 - [ ] CORS limited to the configured allowed origins (`SOLAND_CORS_ALLOW_ORIGIN`)
 - [ ] Secrets in a secret manager (`SOLAND_NOTARY_SIGNING_KEY`, OAuth introspection bearer)

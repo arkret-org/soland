@@ -26,11 +26,16 @@ pub const OPERATION_REGISTRY_JSON: &str =
     include_str!("../../../../cokret-spec/spec/v1/artifacts/registry/operation-registry.json");
 pub const ID_KIND_REGISTRY_JSON: &str =
     include_str!("../../../../cokret-spec/spec/v1/artifacts/registry/id-kind-registry.json");
+pub const DEPLOYMENT_PROBES_JSON: &str =
+    include_str!("../../../../cokret-spec/spec/v1/artifacts/deployment-probes.json");
+
+pub const PQ_HYBRID_TLS_DEPLOYMENT_PROBE_ARTIFACT_REF: &str = "deployment-probes.json#/probes/0";
 
 static EVENT_KIND_REGISTRY: OnceLock<Value> = OnceLock::new();
 static SCHEMA_REGISTRY: OnceLock<Value> = OnceLock::new();
 static OPERATION_REGISTRY: OnceLock<Value> = OnceLock::new();
 static ID_KIND_REGISTRY: OnceLock<Value> = OnceLock::new();
+static DEPLOYMENT_PROBES: OnceLock<Value> = OnceLock::new();
 static ACTIVE_DURABLE_EVENT_KINDS: OnceLock<BTreeSet<String>> = OnceLock::new();
 static ACTIVE_LOCAL_OPERATION_EVENT_KINDS: OnceLock<BTreeSet<String>> = OnceLock::new();
 static ACTIVE_DURABLE_CELL_BINDINGS: OnceLock<Vec<EventKindCellBinding>> = OnceLock::new();
@@ -85,6 +90,21 @@ pub fn operation_registry() -> &'static Value {
 
 pub fn id_kind_registry() -> &'static Value {
     ID_KIND_REGISTRY.get_or_init(|| parse_artifact(ID_KIND_REGISTRY_JSON, "id-kind registry"))
+}
+
+pub fn deployment_probes() -> &'static Value {
+    DEPLOYMENT_PROBES.get_or_init(|| parse_artifact(DEPLOYMENT_PROBES_JSON, "deployment probes"))
+}
+
+pub fn pq_hybrid_tls_required_group() -> &'static str {
+    deployment_probes()
+        .get("probes")
+        .and_then(Value::as_array)
+        .and_then(|probes| probes.first())
+        .and_then(|probe| probe.get("tls"))
+        .and_then(|tls| tls.get("required_named_group"))
+        .and_then(Value::as_str)
+        .unwrap_or("X25519MLKEM768")
 }
 
 pub fn active_durable_event_kinds() -> &'static BTreeSet<String> {
@@ -322,7 +342,11 @@ pub fn registry_summary() -> Value {
             "schemas": schema_entries().len(),
             "operation_surface_groups": operation_surface_groups().len(),
             "operations": operation_ids().len(),
-            "id_kinds": id_kind_forms().len()
+            "id_kinds": id_kind_forms().len(),
+            "deployment_probes": deployment_probes()
+                .get("probes")
+                .and_then(Value::as_array)
+                .map_or(0, Vec::len)
         }
     })
 }
@@ -348,6 +372,7 @@ pub fn validate_embedded_artifacts() -> Result<(), ArtifactError> {
         (SCHEMA_REGISTRY_JSON, "schema registry"),
         (OPERATION_REGISTRY_JSON, "operation registry"),
         (ID_KIND_REGISTRY_JSON, "id-kind registry"),
+        (DEPLOYMENT_PROBES_JSON, "deployment probes"),
     ] {
         serde_json::from_str::<Value>(json).map_err(|source| ArtifactError { label, source })?;
     }
@@ -393,6 +418,20 @@ mod tests {
                 .any(|op| op == "ck.edge.push.command.notify")
         );
         assert!(operations.iter().all(|op| operation_ids().contains(op)));
+    }
+
+    #[test]
+    fn deployment_probe_helper_reads_pq_tls_group() {
+        assert_eq!(pq_hybrid_tls_required_group(), "X25519MLKEM768");
+        assert!(
+            deployment_probes()
+                .get("probes")
+                .and_then(Value::as_array)
+                .is_some_and(|probes| probes.iter().any(|probe| {
+                    probe.get("probe_id").and_then(Value::as_str)
+                        == Some("deployment_probe.tls.pq_hybrid_x25519mlkem768.v1")
+                }))
+        );
     }
 
     #[test]

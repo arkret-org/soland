@@ -56,6 +56,7 @@ struct ReadyzChecks {
     oauth_introspection: ReadyzConfiguredCheck,
     session_grant_introspection: ReadyzConfiguredCheck,
     external_webvh_provider: ReadyzExternalWebvhProviderCheck,
+    pq_hybrid_tls: ReadyzConfiguredCheck,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
@@ -157,11 +158,13 @@ async fn readyz(depot: &mut Depot, res: &mut Response) -> JsonResult<ReadyzOutco
         || state.config.session_grant_introspection_bearer.is_some();
     let external_webvh_provider_ready = state.config.external_webvh_provider_url.is_none()
         || state.config.external_webvh_provider_active;
+    let pq_hybrid_tls_ready = state.config.pq_hybrid_tls_ready();
     let ok = database_ok
         && migrations_applied
         && oauth_introspection_ready
         && session_grant_introspection_ready
-        && external_webvh_provider_ready;
+        && external_webvh_provider_ready
+        && pq_hybrid_tls_ready;
     if !ok {
         res.status_code(StatusCode::SERVICE_UNAVAILABLE);
     }
@@ -172,6 +175,8 @@ async fn readyz(depot: &mut Depot, res: &mut Response) -> JsonResult<ReadyzOutco
         Some("migrations_pending".to_owned())
     } else if !database_ok {
         Some("database_unreachable".to_owned())
+    } else if !pq_hybrid_tls_ready {
+        Some("pq_hybrid_tls_probe_missing".to_owned())
     } else {
         None
     };
@@ -211,6 +216,10 @@ async fn readyz(depot: &mut Depot, res: &mut Response) -> JsonResult<ReadyzOutco
                 ok: external_webvh_provider_ready,
                 configured: state.config.external_webvh_provider_url.is_some(),
                 active: state.config.external_webvh_provider_active,
+            },
+            pq_hybrid_tls: ReadyzConfiguredCheck {
+                ok: pq_hybrid_tls_ready,
+                configured: state.config.pq_hybrid_tls_probe_configured(),
             },
         },
     })
