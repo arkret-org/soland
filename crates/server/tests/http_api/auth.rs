@@ -3,6 +3,8 @@
 //! Helpers live in [`super::common`]; pull them in via `use`.
 
 #![allow(unused_imports)]
+use soland::state::DeviceMessageRecord;
+
 use super::common::*;
 
 #[tokio::test(flavor = "multi_thread")]
@@ -13,15 +15,18 @@ async fn oauth_bearer_introspection_authenticates_directly() {
     config.oauth_introspection_bearer = Some("shared-secret".to_owned());
     let state = AppState::new(config, Db { pool: None });
 
-    let me: Value = TestClient::get("http://server/_soland/self/account/me")
+    let me: Value = TestClient::get("http://server/_cokret/self/account/viewer")
         .add_header("authorization", "Bearer coauth_access_token", true)
         .send(&app_from_state(state.clone()))
         .await
         .take_json()
         .await
         .unwrap();
-    assert_eq!(me["did"], "did:web:oauth.example");
-    assert_eq!(me["handle"], "@oauth-alice");
+    assert_eq!(me["principal_id"], "did:web:oauth.example");
+    assert_eq!(
+        me["primary_handle_claim"]["handle"],
+        "oauth-alice:soland.local"
+    );
 
     let request = request_handle.join().unwrap();
     assert!(request.contains("token=coauth_access_token"));
@@ -142,7 +147,7 @@ async fn protected_endpoints_reject_query_auth_material() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
     let mut response = TestClient::get(format!(
-        "http://server/_soland/self/account/me?access_token={token}"
+        "http://server/_cokret/self/account/viewer?access_token={token}"
     ))
     .send(&app_from_state(state))
     .await;
@@ -155,6 +160,117 @@ async fn protected_endpoints_reject_query_auth_material() {
         body["error"]["message"],
         "auth material in query strings is not allowed"
     );
+}
+
+#[tokio::test]
+async fn hard_logout_removes_push_registration_and_to_device_queue_for_device() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let actor = "did:web:alice.example";
+    let device_a = "ck:device:01904100-0000-7000-8000-a11ce00000aa";
+    let device_b = "ck:device:01904100-0000-7000-8000-a11ce00000bb";
+    let token_a = dev_token_for_device(state.clone(), actor, device_a, "Alice Phone").await;
+    let _token_b = dev_token_for_device(state.clone(), actor, device_b, "Alice Tablet").await;
+
+    state
+        .persistence
+        .push_devices()
+        .register(serde_json::json!({
+            "registration_id": "ck:push:device-a-main",
+            "actor": actor,
+            "device_id": device_a,
+            "push_gateway": "https://floria.example",
+            "push_key": "push-key-a-main",
+            "app_id": "yougen-main",
+        }))
+        .await
+        .unwrap();
+    state
+        .persistence
+        .push_devices()
+        .register(serde_json::json!({
+            "registration_id": "ck:push:device-a-voip",
+            "actor": actor,
+            "device_id": device_a,
+            "push_gateway": "https://floria.example",
+            "push_key": "push-key-a-voip",
+            "app_id": "yougen-voip",
+        }))
+        .await
+        .unwrap();
+    state
+        .persistence
+        .push_devices()
+        .register(serde_json::json!({
+            "registration_id": "ck:push:device-b-main",
+            "actor": actor,
+            "device_id": device_b,
+            "push_gateway": "https://floria.example",
+            "push_key": "push-key-b-main",
+            "app_id": "yougen-main",
+        }))
+        .await
+        .unwrap();
+    state
+        .persistence
+        .device_messages()
+        .append(DeviceMessageRecord {
+            idempotency_key: "logout-device-a".to_owned(),
+            sender: actor.to_owned(),
+            recipient: actor.to_owned(),
+            device_id: device_a.to_owned(),
+            position: 1,
+            content: serde_json::json!({"type": "ck.test.device_message"}),
+            created_at: chrono::Utc::now(),
+        })
+        .await
+        .unwrap();
+    state
+        .persistence
+        .device_messages()
+        .append(DeviceMessageRecord {
+            idempotency_key: "logout-device-b".to_owned(),
+            sender: actor.to_owned(),
+            recipient: actor.to_owned(),
+            device_id: device_b.to_owned(),
+            position: 2,
+            content: serde_json::json!({"type": "ck.test.device_message"}),
+            created_at: chrono::Utc::now(),
+        })
+        .await
+        .unwrap();
+
+    let mut response = TestClient::post("http://server/_cokret/gate/account/logout")
+        .add_header("authorization", format!("Bearer {token_a}"), true)
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(response.status_code.unwrap(), StatusCode::OK);
+    let body: Value = response.take_json().await.unwrap();
+    assert_eq!(body["ok"], true);
+    assert_eq!(body["revoked"], true);
+
+    let push_devices = state
+        .persistence
+        .push_devices()
+        .snapshot_all()
+        .await
+        .unwrap();
+    assert_eq!(push_devices.len(), 1);
+    assert_eq!(push_devices[0]["device_id"], device_b);
+    let device_a_messages = state
+        .persistence
+        .device_messages()
+        .list_after(actor, device_a, 0)
+        .await
+        .unwrap();
+    assert!(device_a_messages.is_empty());
+    let device_b_messages = state
+        .persistence
+        .device_messages()
+        .list_after(actor, device_b, 0)
+        .await
+        .unwrap();
+    assert_eq!(device_b_messages.len(), 1);
+    assert_eq!(device_b_messages[0].device_id, device_b);
 }
 
 #[tokio::test]

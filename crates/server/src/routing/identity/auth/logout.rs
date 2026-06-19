@@ -14,9 +14,10 @@ use super::*;
 /// Termination is two-sided:
 ///  - **Principal-side (here, fully):** revoke the principal's local bearer sessions for the
 ///    grant's device, mark the device session record revoked (so device-scoped writes fail closed
-///    on this Principal Server), and drop the device's queued to-device messages. It does NOT write
-///    `ck.account.status`, does NOT emit `ck.device.revoke`, and does NOT erase durable device
-///    authorization — re-login restores this device locally.
+///    on this Principal Server), remove the device's push registrations, and drop the device's
+///    queued to-device messages. It does NOT write `ck.account.status`, does NOT emit
+///    `ck.device.revoke`, and does NOT erase durable device authorization — re-login restores this
+///    device locally.
 ///  - **Auth-side (trigger):** forward the grant bearer + the verbatim client DPoP proof to
 ///    coauth's `session-grants/logout` so the grant rotation chain + browser session are terminated
 ///    (§4.1 step 2, the durability-critical step).
@@ -77,11 +78,7 @@ pub(super) async fn logout(
             revoke_device_record(state, principal_id, device_id)
                 .await
                 .map_err(AppError::internal)?;
-            let _ = state
-                .persistence
-                .device_messages()
-                .purge(principal_id, device_id)
-                .await;
+            let delivery_purge = purge_device_delivery_state(state, principal_id, device_id).await;
             revoked = revoked_count > 0;
             append_audit_log(
                 state,
@@ -90,6 +87,8 @@ pub(super) async fn logout(
                 json!({
                     "device_id": device_id,
                     "principal_side_sessions_revoked": revoked_count,
+                    "to_device_messages_dropped": delivery_purge.to_device_messages_dropped,
+                    "push_registrations_removed": delivery_purge.push_registrations_removed,
                 }),
                 "accepted",
             )
@@ -113,8 +112,9 @@ pub(super) async fn logout(
 /// `dev_login` mints plain soland session bearers (not DPoP-bound grants), so
 /// the Authorization bearer IS the local session bearer. Perform the
 /// principal-side termination directly (revoke the bearer session + mark the
-/// device session record revoked + drop to-device), mirroring the production
-/// principal-side effects without an Auth Server round-trip.
+/// device session record revoked + remove push registrations + drop
+/// to-device), mirroring the production principal-side effects without an Auth
+/// Server round-trip.
 async fn dev_mode_local_logout(state: &AppState, token: &str) -> Result<LogoutOutcome, AppError> {
     let token_hash = session_token_hash(token, &state.config.service_did);
     let revoked_session = match state
@@ -141,21 +141,64 @@ async fn dev_mode_local_logout(state: &AppState, token: &str) -> Result<LogoutOu
         revoke_device_record(state, &session.actor, &session.device_id)
             .await
             .map_err(AppError::internal)?;
+        let delivery_purge =
+            purge_device_delivery_state(state, &session.actor, &session.device_id).await;
         append_audit_log(
             state,
             Some(&session.actor),
             "auth.logout",
-            json!({"device_id": session.device_id, "revoked_at": session.revoked_at}),
+            json!({
+                "device_id": session.device_id,
+                "revoked_at": session.revoked_at,
+                "to_device_messages_dropped": delivery_purge.to_device_messages_dropped,
+                "push_registrations_removed": delivery_purge.push_registrations_removed,
+            }),
             "accepted",
         )
         .await;
-        let _ = state
-            .persistence
-            .device_messages()
-            .purge(&session.actor, &session.device_id)
-            .await;
     }
     Ok(LogoutOutcome { ok: true, revoked })
+}
+
+#[derive(Default)]
+struct DeviceDeliveryPurgeOutcome {
+    to_device_messages_dropped: usize,
+    push_registrations_removed: usize,
+}
+
+async fn purge_device_delivery_state(
+    state: &AppState,
+    actor: &str,
+    device_id: &str,
+) -> DeviceDeliveryPurgeOutcome {
+    let to_device_messages_dropped = match state
+        .persistence
+        .device_messages()
+        .purge(actor, device_id)
+        .await
+    {
+        Ok(count) => count,
+        Err(error) => {
+            tracing::error!(%error, actor, device_id, "failed to purge to-device messages on logout");
+            0
+        }
+    };
+    let push_registrations_removed = match state
+        .persistence
+        .push_devices()
+        .unregister(actor, device_id, None, None)
+        .await
+    {
+        Ok(count) => count,
+        Err(error) => {
+            tracing::error!(%error, actor, device_id, "failed to unregister push devices on logout");
+            0
+        }
+    };
+    DeviceDeliveryPurgeOutcome {
+        to_device_messages_dropped,
+        push_registrations_removed,
+    }
 }
 
 /// Read the verbatim `DPoP` header off the request so it can be forwarded to
