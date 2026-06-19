@@ -155,6 +155,19 @@ fn verify_actor_headers_reject_destination_mismatch() {
     assert_eq!(error.http_status(), StatusCode::CONFLICT);
 }
 
+#[test]
+fn private_inbound_write_rail_fails_closed_outside_development_mode() {
+    let mut config = config_with_policy(FederationPolicy::Mesh, Vec::new());
+    config.development_mode = false;
+    let state = AppState::new(config, Db { pool: None });
+
+    let error = ensure_private_inbound_write_rail_local(&state)
+        .expect_err("private inbound write rail must fail closed in production mode");
+
+    assert_eq!(error.http_status(), StatusCode::NOT_IMPLEMENTED);
+    assert_eq!(error.wire_code(), "federation_interop_track_only");
+}
+
 #[tokio::test]
 async fn mesh_policy_broadcasts_to_every_peer() {
     let cfg = config_with_policy(
