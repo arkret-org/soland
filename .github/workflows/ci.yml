@@ -143,3 +143,54 @@ jobs:
             echo "::error::Each migration's down.sql must exactly invert its up.sql."
             exit 1
           fi
+
+  postgres-http-api:
+    name: Postgres HTTP API cursor tests
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: soland
+          POSTGRES_PASSWORD: soland
+          POSTGRES_DB: soland_cursor
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U soland"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgres://soland:soland@localhost:5432/soland_cursor
+    steps:
+      - name: Checkout soland
+        uses: actions/checkout@v6
+        with:
+          path: soland
+
+      - name: Checkout Cokret Rust SDK
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ github.repository_owner }}/cokret-rust-sdk
+          path: cokret-rust-sdk
+          token: ${{ secrets.CI_REPO_TOKEN || github.token }}
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: soland -> target
+
+      - name: Wait for postgres
+        run: |
+          for i in {1..30}; do
+            pg_isready -h localhost -p 5432 -U soland && break
+            sleep 1
+          done
+
+      - name: Test sync cursor restart behavior
+        run: cargo test --locked -p soland --test http_api cursor_handle
+        working-directory: soland
