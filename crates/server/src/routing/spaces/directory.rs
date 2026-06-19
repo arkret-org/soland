@@ -92,6 +92,9 @@ use organization_resolution::*;
 use preview_token::*;
 use realm_resolution::*;
 
+const DIRECTORY_RESOURCE_TYPES: &[&str] = &["space", "organization", "actor"];
+const DIRECTORY_DISCOVERY_PROFILES: &[&str] = &["ck.profile.directory_service.v1"];
+
 pub(crate) fn protocol_router() -> Router {
     Router::new()
         .push(Router::with_path("directory/describe").get(directory_describe))
@@ -129,12 +132,14 @@ async fn directory_describe(depot: &mut Depot) -> JsonResult<DirectoryDescriptio
         .map_err(|error| AppError::internal(format!("invalid configured service_did: {error}")))?;
     json_ok(DirectoryDescription {
         service_did,
-        resource_types: vec![
-            "space".to_owned(),
-            "organization".to_owned(),
-            "actor".to_owned(),
-        ],
-        discovery_profiles: vec!["ck.profile.directory_service.v1".to_owned()],
+        resource_types: DIRECTORY_RESOURCE_TYPES
+            .iter()
+            .map(|resource| (*resource).to_owned())
+            .collect(),
+        discovery_profiles: DIRECTORY_DISCOVERY_PROFILES
+            .iter()
+            .map(|profile| (*profile).to_owned())
+            .collect(),
         restricted_query_proof: Some(false),
     })
 }
@@ -151,5 +156,16 @@ mod tests {
         for intent in ["", "search", "mention_all", "Mention"] {
             assert!(!selector_intent_allowed(intent));
         }
+    }
+
+    #[test]
+    fn directory_describe_resource_types_exclude_private_message_search() {
+        assert!(DIRECTORY_RESOURCE_TYPES.contains(&"space"));
+        assert!(DIRECTORY_RESOURCE_TYPES.contains(&"organization"));
+        assert!(DIRECTORY_RESOURCE_TYPES.contains(&"actor"));
+        assert!(!DIRECTORY_RESOURCE_TYPES.contains(&"message"));
+        assert!(!DIRECTORY_RESOURCE_TYPES.contains(&"strand"));
+        assert!(!DIRECTORY_DISCOVERY_PROFILES.contains(&"ck.profile.search.client_index.v1"));
+        assert!(!DIRECTORY_DISCOVERY_PROFILES.contains(&"ck.profile.search.blind_index.v1"));
     }
 }

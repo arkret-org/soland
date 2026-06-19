@@ -1117,6 +1117,29 @@ pub fn describe(
                     "blob.upload"
                 ]
             },
+            "search": {
+                "directory": {
+                    "operation_prefix": "ck.find.directory.",
+                    "resource_types": ["space", "organization", "actor"],
+                    "returns_message_hits": false,
+                    "returns_snippets": false
+                },
+                "client_index": {
+                    "profile": "ck.profile.search.client_index.v1",
+                    "manifest_account_data_type": "ck.search.index_manifest.v1",
+                    "manifest_storage": "encrypted_private_account_data",
+                    "shard_blob_purpose": "search_index_shard",
+                    "shard_storage": "encrypted_blob_bytes",
+                    "returns_hits": false,
+                    "returns_snippets": false,
+                    "term_metadata": false
+                },
+                "realm_private_message_search": {
+                    "plaintext_remote_search": false,
+                    "directory_surface": "directory_only",
+                    "requires_plaintext_visible_services_for_plaintext": true
+                }
+            },
             "scalability_constraints": {
                 "source": "cokret-spec/spec/v1/zh/conformance/scalability-constraints.md",
                 "max_event_bytes": 65536,
@@ -1290,6 +1313,22 @@ mod tests {
         assert_eq!(
             value["limits"]["resumable_upload_max_bytes"],
             json!(10 * 1024 * 1024)
+        );
+        assert_eq!(
+            value["limits"]["search"]["directory"]["returns_message_hits"],
+            json!(false)
+        );
+        assert_eq!(
+            value["limits"]["search"]["client_index"]["manifest_storage"],
+            json!("encrypted_private_account_data")
+        );
+        assert_eq!(
+            value["limits"]["search"]["client_index"]["shard_blob_purpose"],
+            json!("search_index_shard")
+        );
+        assert_eq!(
+            value["limits"]["search"]["realm_private_message_search"]["plaintext_remote_search"],
+            json!(false)
         );
         assert_eq!(
             value["limits"]["scalability_constraints"]["max_to_device_queue_per_device"],

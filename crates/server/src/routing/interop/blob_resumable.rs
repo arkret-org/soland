@@ -44,8 +44,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::blob::{
-    MAX_BLOB_UPLOAD_BYTES, blob_upload_outcome, enforce_blob_quota,
-    file_transfer_blob_encryption_metadata, is_valid_blob_purpose,
+    MAX_BLOB_UPLOAD_BYTES, blob_purpose_requires_encryption, blob_upload_outcome,
+    encrypted_blob_encryption_metadata_for_purpose, enforce_blob_quota, is_valid_blob_purpose,
 };
 use super::{
     auth_or_render, is_valid_sha256_digest, now, realm_allows_plaintext_service, realm_has_member,
@@ -748,21 +748,29 @@ async fn resumable_finalize(depot: &mut Depot, req: &mut Request, res: &mut Resp
         }
         None => None,
     };
-    // First resumable round only carries the E2EE / file-transfer shapes
-    // yougen uses; encrypted blobs never take filename/MIME from metadata
-    // (spec §2.1 privacy rule), plaintext blobs land as octet-stream.
+    if blob_purpose_requires_encryption(purpose.as_deref()) && !encrypted {
+        render_error(
+            res,
+            StatusCode::BAD_REQUEST,
+            "invalid_param",
+            "search index shard uploads must be encrypted",
+        );
+        return;
+    }
+    // Encrypted blobs never take filename/MIME from metadata (spec §2.1
+    // privacy rule); plaintext blobs land as octet-stream.
     let encryption: Option<Value> = if encrypted {
-        if purpose.as_deref() == Some("file_transfer") {
-            Some(file_transfer_blob_encryption_metadata())
-        } else {
+        let Some(encryption) = encrypted_blob_encryption_metadata_for_purpose(purpose.as_deref())
+        else {
             render_error(
                 res,
                 StatusCode::BAD_REQUEST,
                 "invalid_param",
-                "encrypted resumable uploads require Upload-Metadata purpose=file_transfer",
+                "encrypted resumable uploads require a supported encrypted Upload-Metadata purpose",
             );
             return;
-        }
+        };
+        Some(encryption)
     } else {
         None
     };

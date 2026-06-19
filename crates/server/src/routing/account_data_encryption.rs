@@ -252,14 +252,27 @@ fn reject_operation_plaintext_fields(
 fn reject_content_plaintext_fields(
     object: &Map<String, Value>,
 ) -> Result<(), AccountDataEncryptionError> {
-    if FORBIDDEN_PLAINTEXT_FIELDS
-        .iter()
-        .any(|field| object.contains_key(*field))
-    {
+    if object.iter().any(|(field, value)| {
+        field_is_forbidden_plaintext(field) || contains_forbidden_field(value)
+    }) {
         Err(AccountDataEncryptionError::PlaintextField)
     } else {
         Ok(())
     }
+}
+
+fn contains_forbidden_field(value: &Value) -> bool {
+    match value {
+        Value::Object(object) => object.iter().any(|(field, value)| {
+            field_is_forbidden_plaintext(field) || contains_forbidden_field(value)
+        }),
+        Value::Array(values) => values.iter().any(contains_forbidden_field),
+        _ => false,
+    }
+}
+
+fn field_is_forbidden_plaintext(field: &str) -> bool {
+    FORBIDDEN_PLAINTEXT_FIELDS.contains(&field)
 }
 
 fn validate_encrypted_carrier(value: &Value) -> Result<(), AccountDataEncryptionError> {
@@ -481,5 +494,28 @@ mod tests {
             err,
             AccountDataEncryptionError::InvalidEnvelopeMetadataOrMarker
         );
+    }
+
+    #[test]
+    fn search_index_manifest_rejects_plaintext_manifest_fields() {
+        let key = "ck.search.index_manifest.v1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+        validate_encrypted_account_data_key(key).unwrap();
+        validate_encrypted_account_data_value(key, &conformance_marker()).unwrap();
+
+        let err = validate_encrypted_account_data_value(
+            key,
+            &json!({
+                "realm_id": "ck:realm:0196419b-0000-7000-8000-000000000000",
+                "shards": [{
+                    "shard_key": "term-derived-key",
+                    "blob_ref": "ck:blob:sha256:1111111111111111111111111111111111111111111111111111111111111111",
+                    "ciphertext_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+                }],
+                "encrypted_payload": conformance_marker()
+            }),
+        )
+        .unwrap_err();
+
+        assert_eq!(err, AccountDataEncryptionError::PlaintextField);
     }
 }

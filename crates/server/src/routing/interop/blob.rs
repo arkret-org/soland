@@ -190,11 +190,12 @@ async fn blob_upload(depot: &mut Depot, req: &mut Request, res: &mut Response) {
             return;
         }
     };
-    if encrypted_flag == Some(true)
-        && encryption.is_none()
-        && upload_purpose.as_deref() == Some("file_transfer")
-    {
-        encryption = Some(file_transfer_blob_encryption_metadata());
+    if encrypted_flag == Some(true) && encryption.is_none() {
+        if let Some(metadata) =
+            encrypted_blob_encryption_metadata_for_purpose(upload_purpose.as_deref())
+        {
+            encryption = Some(metadata);
+        }
     }
     let encrypted = encryption.is_some() || encrypted_flag.unwrap_or(false);
     if encrypted_flag == Some(true) && encryption.is_none() {
@@ -202,7 +203,7 @@ async fn blob_upload(depot: &mut Depot, req: &mut Request, res: &mut Response) {
             res,
             StatusCode::BAD_REQUEST,
             "invalid_param",
-            "encrypted blob uploads require x-cokret-attachment-envelope or x-cokret-blob-purpose=file_transfer",
+            "encrypted blob uploads require x-cokret-attachment-envelope or a supported encrypted x-cokret-blob-purpose",
         );
         return;
     }
@@ -212,6 +213,15 @@ async fn blob_upload(depot: &mut Depot, req: &mut Request, res: &mut Response) {
             StatusCode::BAD_REQUEST,
             "invalid_param",
             "x-cokret-blob-encrypted=false conflicts with encrypted attachment metadata",
+        );
+        return;
+    }
+    if blob_purpose_requires_encryption(upload_purpose.as_deref()) && !encrypted {
+        render_error(
+            res,
+            StatusCode::BAD_REQUEST,
+            "invalid_param",
+            "search index shard uploads must be encrypted",
         );
         return;
     }
@@ -802,11 +812,29 @@ fn blob_upload_purpose(req: &Request) -> Result<Option<String>, &'static str> {
     Ok(None)
 }
 
-pub(super) fn file_transfer_blob_encryption_metadata() -> Value {
-    json!({
-        "scheme": "ck.file_transfer.encrypted_blob.v1",
-        "purpose": "file_transfer",
-    })
+pub(super) const BLOB_PURPOSE_FILE_TRANSFER: &str = "file_transfer";
+pub(super) const BLOB_PURPOSE_SEARCH_INDEX_SHARD: &str = "search_index_shard";
+
+pub(super) fn encrypted_blob_encryption_metadata_for_purpose(
+    purpose: Option<&str>,
+) -> Option<Value> {
+    match purpose {
+        Some(BLOB_PURPOSE_FILE_TRANSFER) => Some(json!({
+            "scheme": "ck.file_transfer.encrypted_blob.v1",
+            "purpose": BLOB_PURPOSE_FILE_TRANSFER,
+        })),
+        Some(BLOB_PURPOSE_SEARCH_INDEX_SHARD) => Some(json!({
+            "scheme": "ck.search.encrypted_index_shard.v1",
+            "purpose": BLOB_PURPOSE_SEARCH_INDEX_SHARD,
+            "profile_id": "ck.profile.search.client_index.v1",
+            "data_class": "encrypted_index",
+        })),
+        _ => None,
+    }
+}
+
+pub(super) fn blob_purpose_requires_encryption(purpose: Option<&str>) -> bool {
+    matches!(purpose, Some(BLOB_PURPOSE_SEARCH_INDEX_SHARD))
 }
 
 /// Spec `blob.schema.json#/$defs/encrypted_attachment` carries a `scheme`
@@ -1352,6 +1380,28 @@ mod tests {
             }))
             .is_ok()
         );
+    }
+
+    #[test]
+    fn search_index_shard_purpose_uses_opaque_encrypted_blob_metadata() {
+        let metadata =
+            encrypted_blob_encryption_metadata_for_purpose(Some(BLOB_PURPOSE_SEARCH_INDEX_SHARD))
+                .expect("search shard purpose supported");
+        assert_eq!(
+            metadata,
+            json!({
+                "scheme": "ck.search.encrypted_index_shard.v1",
+                "purpose": "search_index_shard",
+                "profile_id": "ck.profile.search.client_index.v1",
+                "data_class": "encrypted_index",
+            })
+        );
+        assert!(blob_purpose_requires_encryption(Some(
+            BLOB_PURPOSE_SEARCH_INDEX_SHARD
+        )));
+        assert!(metadata.get("term").is_none());
+        assert!(metadata.get("message_id").is_none());
+        assert!(metadata.get("snippet").is_none());
     }
 
     #[test]
