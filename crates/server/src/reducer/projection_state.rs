@@ -158,6 +158,11 @@ pub struct ProjectionState {
     /// for any agent_principal_id we've seen; `Deactivated` is terminal
     /// (no transition out, no resume after).
     pub agent_lifecycles: BTreeMap<String, AgentLifecycleState>,
+    /// Actor-private action approval queue keyed by `request_id`.
+    /// `ck.agent.action_request` creates pending entries; approve/reject
+    /// resolves them, and pause/deactivate cancels every still-pending request
+    /// for the target agent before any future endpoint can be registered.
+    pub agent_action_requests: BTreeMap<String, AgentActionRequestProjection>,
     /// CKP-0008 §4.5 / D3 — accepted, non-revoked agent key authorizations
     /// keyed by `agent_principal_id`. An entry is the set of authorized
     /// `key_id`s the agent currently holds (cleared on

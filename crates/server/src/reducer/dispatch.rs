@@ -17,8 +17,8 @@ use cokret_sdk::{AgentLifecycleState, Operation};
 use serde_json::Value;
 
 use super::{
-    CircleLifecycleState, ObjectLifecycleTransition, ProjectionEffect, ProjectionState,
-    RealmLinkState, SpaceContainerLifecycleTransition, apply_moderation, mls,
+    AgentActionRequestStatus, CircleLifecycleState, ObjectLifecycleTransition, ProjectionEffect,
+    ProjectionState, RealmLinkState, SpaceContainerLifecycleTransition, apply_moderation, mls,
 };
 use crate::hlc::ServerHlc;
 
@@ -496,34 +496,25 @@ fn apply_agent_draft_propose_dispatch(
     }
 }
 fn apply_agent_action_request_dispatch(
-    _s: &mut ProjectionState,
+    s: &mut ProjectionState,
     op: &Operation,
     _hlc: &ServerHlc,
 ) -> ProjectionEffect {
-    ProjectionEffect::AgentPrivateEventAccepted {
-        kind: crate::kinds::CK_AGENT_ACTION_REQUEST,
-        event_id: op.operation_id.to_string(),
-    }
+    s.apply_agent_action_request(op)
 }
 fn apply_agent_action_approve_dispatch(
-    _s: &mut ProjectionState,
+    s: &mut ProjectionState,
     op: &Operation,
     _hlc: &ServerHlc,
 ) -> ProjectionEffect {
-    ProjectionEffect::AgentPrivateEventAccepted {
-        kind: crate::kinds::CK_AGENT_ACTION_APPROVE,
-        event_id: op.operation_id.to_string(),
-    }
+    s.apply_agent_action_resolution(op, AgentActionRequestStatus::Approved)
 }
 fn apply_agent_action_reject_dispatch(
-    _s: &mut ProjectionState,
+    s: &mut ProjectionState,
     op: &Operation,
     _hlc: &ServerHlc,
 ) -> ProjectionEffect {
-    ProjectionEffect::AgentPrivateEventAccepted {
-        kind: crate::kinds::CK_AGENT_ACTION_REJECT,
-        event_id: op.operation_id.to_string(),
-    }
+    s.apply_agent_action_resolution(op, AgentActionRequestStatus::Rejected)
 }
 /// MID-1..6 (R3.1/R3.2, cokret-spec @ b56cab1) — reducer-side dispatch for
 /// `ck.member.identity.update`. The full ordered-log projection +

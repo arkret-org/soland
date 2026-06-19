@@ -109,6 +109,24 @@ impl ProjectionState {
                 reason: "agent_endpoint_missing_agent_id".to_owned(),
             };
         };
+        match self
+            .agent_lifecycles
+            .get(&agent_id)
+            .copied()
+            .unwrap_or_default()
+        {
+            AgentLifecycleState::Active => {}
+            AgentLifecycleState::Paused => {
+                return ProjectionEffect::Rejected {
+                    reason: "agent_paused".to_owned(),
+                };
+            }
+            AgentLifecycleState::Deactivated => {
+                return ProjectionEffect::Rejected {
+                    reason: "agent_deactivated".to_owned(),
+                };
+            }
+        }
         let first_endpoint = operation
             .payload
             .get("endpoints")
@@ -211,9 +229,139 @@ impl ProjectionState {
         }
         self.agent_lifecycles
             .insert(agent_principal_id.clone(), target);
+        if matches!(
+            target,
+            AgentLifecycleState::Paused | AgentLifecycleState::Deactivated
+        ) {
+            self.revoke_agent_runtime_bindings(&agent_principal_id, target, operation);
+        }
         ProjectionEffect::AgentLifecycleProjected {
             agent_principal_id,
             new_state: target,
+        }
+    }
+
+    pub(crate) fn apply_agent_action_request(&mut self, operation: &Operation) -> ProjectionEffect {
+        let Some(agent_principal_id) = operation
+            .payload
+            .get("agent_principal_id")
+            .and_then(|v| v.as_str())
+            .map(ToOwned::to_owned)
+        else {
+            return ProjectionEffect::Rejected {
+                reason: "agent_action_request_missing_agent_principal_id".to_owned(),
+            };
+        };
+        let Some(request_id) = operation
+            .payload
+            .get("request_id")
+            .and_then(|v| v.as_str())
+            .map(ToOwned::to_owned)
+        else {
+            return ProjectionEffect::Rejected {
+                reason: "agent_action_request_missing_request_id".to_owned(),
+            };
+        };
+        match self
+            .agent_lifecycles
+            .get(&agent_principal_id)
+            .copied()
+            .unwrap_or_default()
+        {
+            AgentLifecycleState::Active => {}
+            AgentLifecycleState::Paused => {
+                return ProjectionEffect::Rejected {
+                    reason: "agent_paused".to_owned(),
+                };
+            }
+            AgentLifecycleState::Deactivated => {
+                return ProjectionEffect::Rejected {
+                    reason: "agent_deactivated".to_owned(),
+                };
+            }
+        }
+
+        let should_insert = self
+            .agent_action_requests
+            .get(&request_id)
+            .is_none_or(|existing| existing.status == AgentActionRequestStatus::Pending);
+        if should_insert {
+            self.agent_action_requests.insert(
+                request_id.clone(),
+                AgentActionRequestProjection {
+                    request_id,
+                    agent_principal_id,
+                    status: AgentActionRequestStatus::Pending,
+                    requested_at: operation.created_at,
+                    resolved_at: None,
+                    resolution_event_id: None,
+                    cancel_reason: None,
+                },
+            );
+        }
+        ProjectionEffect::AgentPrivateEventAccepted {
+            kind: crate::kinds::CK_AGENT_ACTION_REQUEST,
+            event_id: operation.operation_id.to_string(),
+        }
+    }
+
+    pub(crate) fn apply_agent_action_resolution(
+        &mut self,
+        operation: &Operation,
+        status: AgentActionRequestStatus,
+    ) -> ProjectionEffect {
+        let Some(request_id) = operation
+            .payload
+            .get("request_id")
+            .and_then(|v| v.as_str())
+            .map(ToOwned::to_owned)
+        else {
+            return ProjectionEffect::Rejected {
+                reason: "agent_action_resolution_missing_request_id".to_owned(),
+            };
+        };
+        if let Some(request) = self.agent_action_requests.get_mut(&request_id)
+            && request.status == AgentActionRequestStatus::Pending
+        {
+            request.status = status;
+            request.resolved_at = Some(operation.created_at);
+            request.resolution_event_id = Some(operation.operation_id.to_string());
+            request.cancel_reason = None;
+        }
+        let kind = match status {
+            AgentActionRequestStatus::Approved => crate::kinds::CK_AGENT_ACTION_APPROVE,
+            AgentActionRequestStatus::Rejected => crate::kinds::CK_AGENT_ACTION_REJECT,
+            AgentActionRequestStatus::Pending | AgentActionRequestStatus::Cancelled => {
+                crate::kinds::CK_AGENT_ACTION_REQUEST
+            }
+        };
+        ProjectionEffect::AgentPrivateEventAccepted {
+            kind,
+            event_id: operation.operation_id.to_string(),
+        }
+    }
+
+    fn revoke_agent_runtime_bindings(
+        &mut self,
+        agent_principal_id: &str,
+        target: AgentLifecycleState,
+        operation: &Operation,
+    ) {
+        self.agents.remove(agent_principal_id);
+        let reason = match target {
+            AgentLifecycleState::Paused => "agent_paused",
+            AgentLifecycleState::Deactivated => "agent_deactivated",
+            AgentLifecycleState::Active => return,
+        };
+        for request in self.agent_action_requests.values_mut() {
+            if request.agent_principal_id == agent_principal_id
+                && request.status == AgentActionRequestStatus::Pending
+            {
+                request.status = AgentActionRequestStatus::Cancelled;
+                request.resolved_at = Some(operation.created_at);
+                request.resolution_event_id = Some(operation.operation_id.to_string());
+                request.cancel_reason = Some(reason.to_owned());
+            }
         }
     }
 }

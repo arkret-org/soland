@@ -29,6 +29,7 @@
 //! event is `.result`, not `.status`, so the family classifier
 //! `is_agent_kind` can distinguish "still running" from "done".
 
+use cokret_sdk::AgentLifecycleState;
 use serde_json::{Value, json};
 
 use super::projection::append_projection_event;
@@ -92,51 +93,97 @@ pub async fn maybe_emit_echo_result_for_session_start(
         .to_owned();
     let params = body.get("params").cloned().unwrap_or(Value::Null);
 
+    enum AgentDispatchSnapshot {
+        Ready {
+            protocol: String,
+            endpoint_url: Option<String>,
+        },
+        Missing,
+        Retired,
+    }
+
     // Dispatch by counterparty_agent. Look up the SolandAgentProjection; if absent
     // the runtime cannot route the invocation, so fail closed with
-    // an error result. When present, capture the `endpoint_url` (if
-    // any) so the result envelope can report it. We snapshot the
-    // lookup inside the lock and drop the guard immediately so the
-    // subsequent broadcast/append paths can re-acquire it.
-    let agent_snapshot: Option<(String, Option<String>)> =
-        state.projection.lock().ok().and_then(|proj| {
-            proj.agents
-                .get(&agent_principal_id)
-                .map(|p| (p.protocol.clone(), p.endpoint_url.clone()))
-        });
-    let Some((agent_protocol, agent_endpoint_url)) = agent_snapshot else {
-        let error_payload = json!({
-            "session_id": session_id,
-            "status": "failed",
-            "result": Value::Null,
-            "error": {
-                "code": "unknown_agent",
-                "message": format!(
-                    "counterparty_agent `{agent_principal_id}` is not registered (no ck.agent.endpoint accepted)"
+    // an error result. Lifecycle-retired endpoints are reported separately
+    // from never-registered agents so callers do not retry a revoked binding.
+    // When present, capture the `endpoint_url` (if any) so the result envelope
+    // can report it. We snapshot the lookup inside the lock and drop the guard
+    // immediately so the subsequent broadcast/append paths can re-acquire it.
+    let agent_snapshot =
+        state
+            .projection
+            .lock()
+            .ok()
+            .map_or(AgentDispatchSnapshot::Missing, |proj| {
+                if proj
+                    .agent_lifecycles
+                    .get(&agent_principal_id)
+                    .is_some_and(|lifecycle| *lifecycle != AgentLifecycleState::Active)
+                {
+                    return AgentDispatchSnapshot::Retired;
+                }
+                proj.agents
+                    .get(&agent_principal_id)
+                    .map(|p| AgentDispatchSnapshot::Ready {
+                        protocol: p.protocol.clone(),
+                        endpoint_url: p.endpoint_url.clone(),
+                    })
+                    .unwrap_or(AgentDispatchSnapshot::Missing)
+            });
+    let (agent_protocol, agent_endpoint_url) = match agent_snapshot {
+        AgentDispatchSnapshot::Ready {
+            protocol,
+            endpoint_url,
+        } => (protocol, endpoint_url),
+        AgentDispatchSnapshot::Missing | AgentDispatchSnapshot::Retired => {
+            let (error_code, error_message, operation_type) = match agent_snapshot {
+                AgentDispatchSnapshot::Retired => (
+                    "agent_endpoint_retired",
+                    format!(
+                        "counterparty_agent `{agent_principal_id}` endpoint is retired or inactive"
+                    ),
+                    "agent_echo_bridge_endpoint_retired",
                 ),
-            },
-            "detail": {
-                "agent_principal_id": agent_principal_id,
-                "bridge": "soland.reference.agent_echo",
-            },
-        });
-        let error_record = ProjectionEventRecord {
-            event_id: ids::generate("event"),
-            realm_id: operation.realm_id.to_string(),
-            event_kind: kinds::CK_AGENT_INTEROP_SESSION_RESULT.to_owned(),
-            operation_type: "agent_echo_bridge_failed".to_owned(),
-            operation_id: None,
-            sender: Some(origin.to_owned()),
-            payload: error_payload,
-            created_at: chrono::Utc::now(),
-        };
-        let _ = state.event_broadcast.send(EventNotification::event(
-            error_record.realm_id.clone(),
-            error_record.event_id.clone(),
-            super::projection::projection_event_json(&error_record),
-        ));
-        append_projection_event(state, error_record).await;
-        return;
+                AgentDispatchSnapshot::Missing => (
+                    "unknown_agent",
+                    format!(
+                        "counterparty_agent `{agent_principal_id}` is not registered (no ck.agent.endpoint accepted)"
+                    ),
+                    "agent_echo_bridge_failed",
+                ),
+                AgentDispatchSnapshot::Ready { .. } => unreachable!(),
+            };
+            let error_payload = json!({
+                "session_id": session_id,
+                "status": "failed",
+                "result": Value::Null,
+                "error": {
+                    "code": error_code,
+                    "message": error_message,
+                },
+                "detail": {
+                    "agent_principal_id": agent_principal_id,
+                    "bridge": "soland.reference.agent_echo",
+                },
+            });
+            let error_record = ProjectionEventRecord {
+                event_id: ids::generate("event"),
+                realm_id: operation.realm_id.to_string(),
+                event_kind: kinds::CK_AGENT_INTEROP_SESSION_RESULT.to_owned(),
+                operation_type: operation_type.to_owned(),
+                operation_id: None,
+                sender: Some(origin.to_owned()),
+                payload: error_payload,
+                created_at: chrono::Utc::now(),
+            };
+            let _ = state.event_broadcast.send(EventNotification::event(
+                error_record.realm_id.clone(),
+                error_record.event_id.clone(),
+                super::projection::projection_event_json(&error_record),
+            ));
+            append_projection_event(state, error_record).await;
+            return;
+        }
     };
 
     // Intermediate status event: the runtime acknowledges the
@@ -668,6 +715,47 @@ mod tests {
         assert!(
             result_entry.payload.get("audit_binding").is_none(),
             "failure path must not carry an audit_binding"
+        );
+    }
+
+    #[tokio::test]
+    async fn agent_echo_bridge_fails_closed_for_retired_endpoint() {
+        let state = test_state();
+        let session = "ck:session:01904100-0000-7000-8000-deadbeefdeae";
+        let agent_id = "did:web:paused-agent.example";
+        register_agent(&state, agent_id);
+        {
+            let mut proj = state.projection.lock().expect("projection lock");
+            proj.agent_lifecycles
+                .insert(agent_id.to_owned(), AgentLifecycleState::Paused);
+        }
+
+        let op = build_agent_session_start(session, agent_id, json!({"op": "ping"}));
+        maybe_emit_echo_result_for_session_start(&state, "did:web:alice.example", &op).await;
+        let projections = state
+            .persistence
+            .projection_events()
+            .snapshot_all()
+            .await
+            .expect("snapshot");
+        assert!(
+            !projections.iter().any(|e| {
+                e.event_kind == kinds::CK_AGENT_INTEROP_SESSION_STATUS
+                    && e.payload["session_id"] == session
+            }),
+            "retired endpoint dispatch must skip the status(working) event"
+        );
+        let result_entry = projections
+            .iter()
+            .find(|e| {
+                e.event_kind == kinds::CK_AGENT_INTEROP_SESSION_RESULT
+                    && e.payload["session_id"] == session
+            })
+            .expect("error result event missing");
+        assert_eq!(result_entry.payload["status"], "failed");
+        assert_eq!(
+            result_entry.payload["error"]["code"],
+            "agent_endpoint_retired"
         );
     }
 

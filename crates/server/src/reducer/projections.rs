@@ -628,6 +628,31 @@ pub struct SolandAgentProjection {
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AgentActionRequestStatus {
+    Pending,
+    Approved,
+    Rejected,
+    Cancelled,
+}
+
+/// Server-side pending approval queue entry for `ck.agent.action_request`.
+///
+/// Actor-private action events do not advance reducer input clocks, but the
+/// controller still needs a fail-closed projection so lifecycle revocation can
+/// cancel outstanding approvals before an agent resumes or re-registers a
+/// runtime endpoint.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentActionRequestProjection {
+    pub request_id: String,
+    pub agent_principal_id: String,
+    pub status: AgentActionRequestStatus,
+    pub requested_at: chrono::DateTime<chrono::Utc>,
+    pub resolved_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub resolution_event_id: Option<String>,
+    pub cancel_reason: Option<String>,
+}
+
 /// State enum shared by Strand and Morph projections (mirrors SDK
 /// `cokret_sdk::ObjectState`). Unlike `SpaceContainerLifecycleState` which has
 /// a single `Tombstoned` terminal, Strand / Morph use `Redacted` as their terminal
