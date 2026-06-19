@@ -573,6 +573,8 @@ pub(super) async fn erase_account(
     json_ok(AccountEraseOutcome {
         did: actor,
         state: "erasure_pending".to_owned(),
+        status: "pending_deletion".to_owned(),
+        management_status: "pending_deletion".to_owned(),
         erased_at: completed_at_wire,
         erasure_receipt,
         realm_erasure_receipts,
@@ -587,6 +589,8 @@ pub(super) async fn erase_account(
 struct AccountEraseOutcome {
     pub did: String,
     pub state: String,
+    pub status: String,
+    pub management_status: String,
     pub erased_at: String,
     pub erasure_receipt: Value,
     pub realm_erasure_receipts: Vec<Value>,

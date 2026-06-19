@@ -96,8 +96,10 @@ struct AdminAccountLifecycleOutcome {
     account_id: String,
     did: String,
     previous_state: String,
+    protocol_state: String,
     state: String,
     status: String,
+    management_status: String,
     reason: Option<String>,
     updated_by: String,
     changed_by: String,
@@ -447,31 +449,83 @@ async fn admin_set_account_status(
     next_state: &str,
     reason: Option<String>,
 ) -> JsonResult<AdminAccountLifecycleOutcome> {
-    let reason = reason
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_owned);
-    let change =
-        set_account_lifecycle_state(state, account_id, next_state, admin_actor, reason.clone())
-            .await?;
+    let normalized = normalize_admin_account_status(next_state, reason)?;
+    let reason = normalized.reason.clone();
+    let change = set_account_lifecycle_state(
+        state,
+        account_id,
+        normalized.protocol_state,
+        admin_actor,
+        reason.clone(),
+    )
+    .await?;
     append_audit_log(
         state,
         Some(admin_actor),
         "admin.account.set_status",
         json!({
             "account_id": account_id,
-            "status": next_state,
+            "status": normalized.management_status,
+            "protocol_state": normalized.protocol_state,
             "reason": reason,
         }),
         "accepted",
     )
     .await;
-    json_ok(account_lifecycle_change_response(change))
+    json_ok(account_lifecycle_change_response(
+        change,
+        normalized.management_status,
+    ))
+}
+
+struct AdminAccountStatusProjection {
+    protocol_state: &'static str,
+    management_status: String,
+    reason: Option<String>,
+}
+
+fn normalize_admin_account_status(
+    status: &str,
+    reason: Option<String>,
+) -> Result<AdminAccountStatusProjection, AppError> {
+    let management_status = status.trim();
+    if management_status.is_empty() {
+        return Err(AppError::invalid_param("status is required"));
+    }
+    let reason = reason
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned);
+    let (protocol_state, default_reason) = match management_status {
+        "active" => ("active", None),
+        "locked" => ("locked", None),
+        "suspended" => ("suspended", None),
+        "deactivated" => ("deactivated", None),
+        "disabled" => ("deactivated", Some("disabled")),
+        "recovery_locked" => ("locked", Some("recovery_locked")),
+        "pending_deletion" | "erasure_pending" => {
+            return Err(AppError::invalid_param(
+                "pending deletion must use the account erasure flow",
+            ));
+        }
+        _ => {
+            return Err(AppError::invalid_param(
+                "status must be active, locked, suspended, deactivated, disabled, or recovery_locked",
+            ));
+        }
+    };
+    let reason = reason.or_else(|| default_reason.map(str::to_owned));
+    Ok(AdminAccountStatusProjection {
+        protocol_state,
+        management_status: management_status.to_owned(),
+        reason,
+    })
 }
 
 fn account_lifecycle_change_response(
     change: AccountLifecycleChange,
+    management_status: String,
 ) -> AdminAccountLifecycleOutcome {
     let did = change.did;
     let state = change.state;
@@ -481,8 +535,10 @@ fn account_lifecycle_change_response(
         account_id: did.clone(),
         did,
         previous_state: change.previous_state,
+        protocol_state: state.clone(),
         state: state.clone(),
-        status: state,
+        status: management_status.clone(),
+        management_status,
         reason: change.reason,
         updated_by: changed_by.clone(),
         changed_by,

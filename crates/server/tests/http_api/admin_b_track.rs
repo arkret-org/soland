@@ -31,6 +31,74 @@ async fn admin_actor_detail_includes_account_lifecycle_linkage() {
 }
 
 #[tokio::test]
+async fn admin_account_status_aliases_keep_protocol_state_closed() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let admin = dev_token(state.clone()).await;
+    let _bob = register_account(
+        state.clone(),
+        "did:web:bob.example",
+        "@bob",
+        "ck:device:01904100-0000-7000-8000-b0b0b0000002",
+    )
+    .await;
+
+    let recovery_locked: Value =
+        TestClient::post("http://server/_soland/admin/accounts/did:web:bob.example/status")
+            .add_header("authorization", format!("Bearer {admin}"), true)
+            .json(&serde_json::json!({"status": "recovery_locked"}))
+            .send(&app_from_state(state.clone()))
+            .await
+            .take_json()
+            .await
+            .unwrap();
+
+    assert_eq!(recovery_locked["state"], "locked");
+    assert_eq!(recovery_locked["protocol_state"], "locked");
+    assert_eq!(recovery_locked["status"], "recovery_locked");
+    assert_eq!(recovery_locked["management_status"], "recovery_locked");
+    assert_eq!(recovery_locked["reason"], "recovery_locked");
+    assert_eq!(
+        state.account_lifecycle_state("did:web:bob.example"),
+        "locked"
+    );
+
+    let _carol = register_account(
+        state.clone(),
+        "did:web:carol.example",
+        "@carol",
+        "ck:device:01904100-0000-7000-8000-ca2010000003",
+    )
+    .await;
+    let disabled: Value =
+        TestClient::post("http://server/_soland/admin/accounts/did:web:carol.example/status")
+            .add_header("authorization", format!("Bearer {admin}"), true)
+            .json(&serde_json::json!({"status": "disabled"}))
+            .send(&app_from_state(state.clone()))
+            .await
+            .take_json()
+            .await
+            .unwrap();
+
+    assert_eq!(disabled["state"], "deactivated");
+    assert_eq!(disabled["protocol_state"], "deactivated");
+    assert_eq!(disabled["status"], "disabled");
+    assert_eq!(disabled["management_status"], "disabled");
+    assert_eq!(disabled["reason"], "disabled");
+    assert_eq!(
+        state.account_lifecycle_state("did:web:carol.example"),
+        "deactivated"
+    );
+
+    let pending =
+        TestClient::post("http://server/_soland/admin/accounts/did:web:bob.example/status")
+            .add_header("authorization", format!("Bearer {admin}"), true)
+            .json(&serde_json::json!({"status": "pending_deletion"}))
+            .send(&app_from_state(state.clone()))
+            .await;
+    assert_eq!(pending.status_code.unwrap().as_u16(), 400);
+}
+
+#[tokio::test]
 async fn admin_invite_token_create_and_revoke_round_trip() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
