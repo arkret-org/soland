@@ -74,6 +74,13 @@ pub async fn authenticated_session(
         )
         .await;
     }
+    if bearer_looks_like_session_grant(token) {
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            "unauthenticated",
+            "session grant requires DPoP proof",
+        ));
+    }
     let token_hash = session_token_hash(token, &state.config.service_did);
     let session = state
         .persistence
@@ -146,6 +153,36 @@ fn method_path_requires_fresh_introspection(method: &salvo::http::Method, path: 
     .any(|fragment| path.contains(fragment))
 }
 
+fn bearer_looks_like_session_grant(token: &str) -> bool {
+    let mut parts = token.split('.');
+    let (_header, payload, _signature) =
+        match (parts.next(), parts.next(), parts.next(), parts.next()) {
+            (Some(header), Some(payload), Some(signature), None) => (header, payload, signature),
+            _ => return false,
+        };
+
+    let Some(payload) = decode_jwt_payload_json(payload) else {
+        return false;
+    };
+    token_type_claim(&payload) == Some("ck.session.grant")
+}
+
+fn decode_jwt_payload_json(payload: &str) -> Option<serde_json::Value> {
+    use base64::Engine as _;
+
+    let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(payload.as_bytes())
+        .ok()?;
+    serde_json::from_slice(&bytes).ok()
+}
+
+fn token_type_claim(payload: &serde_json::Value) -> Option<&str> {
+    payload
+        .get("type")
+        .and_then(serde_json::Value::as_str)
+        .or_else(|| payload.get("kind").and_then(serde_json::Value::as_str))
+}
+
 /// Extract a short, redaction-safe preview of any auth-material parameter
 /// (`access_token=`, `auth=`, or `token=`) found in `query`. Returns at most
 /// the first 8 characters of the parameter value, followed by `…` if the
@@ -209,6 +246,47 @@ mod tests {
             &Method::GET,
             "/_cokret/self/realms/r1/links"
         ));
+    }
+
+    #[test]
+    fn bare_session_grant_jwt_is_classified_from_wire_type() {
+        let token = compact_jwt(serde_json::json!({
+            "type": "ck.session.grant",
+            "subject": "did:web:alice.example",
+        }));
+
+        assert!(bearer_looks_like_session_grant(&token));
+    }
+
+    #[test]
+    fn bare_session_grant_jwt_is_classified_from_compat_kind() {
+        let token = compact_jwt(serde_json::json!({
+            "kind": "ck.session.grant",
+            "subject": "did:web:alice.example",
+        }));
+
+        assert!(bearer_looks_like_session_grant(&token));
+    }
+
+    #[test]
+    fn non_grant_bearers_are_not_classified_as_session_grants() {
+        let oauth = compact_jwt(serde_json::json!({
+            "type": "access_token",
+            "sub": "did:web:alice.example",
+        }));
+
+        assert!(!bearer_looks_like_session_grant(&oauth));
+        assert!(!bearer_looks_like_session_grant("opaque-dev-bearer"));
+        assert!(!bearer_looks_like_session_grant("not.valid.base64"));
+    }
+
+    fn compact_jwt(payload: serde_json::Value) -> String {
+        use base64::Engine as _;
+
+        let header = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(br#"{"alg":"EdDSA"}"#);
+        let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(serde_json::to_vec(&payload).expect("payload must serialize"));
+        format!("{header}.{payload}.signature")
     }
 }
 
