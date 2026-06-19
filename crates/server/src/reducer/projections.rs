@@ -709,6 +709,140 @@ pub struct MessageState {
     pub redacted_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum MessageExpiryProjectionState {
+    Live,
+    Expired,
+    UnsupportedTrigger,
+    InvalidMetadata,
+}
+
+impl MessageExpiryProjectionState {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Live => "active",
+            Self::Expired => "expired",
+            Self::UnsupportedTrigger => "unsupported_trigger",
+            Self::InvalidMetadata => "invalid_metadata",
+        }
+    }
+
+    pub fn is_stub(&self) -> bool {
+        !matches!(self, Self::Live)
+    }
+
+    pub fn reason_code(&self) -> Option<&'static str> {
+        match self {
+            Self::Live => None,
+            Self::Expired => Some("ttl_expired"),
+            Self::UnsupportedTrigger => Some("read_trigger_unsupported"),
+            Self::InvalidMetadata => Some("invalid_expiry_metadata"),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MessageExpiryProjection {
+    pub state: MessageExpiryProjectionState,
+    pub trigger: String,
+    pub expires_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub anchor_hlc: Option<String>,
+}
+
+impl MessageExpiryProjection {
+    pub fn is_stub(&self) -> bool {
+        self.state.is_stub()
+    }
+
+    pub fn state_str(&self) -> &'static str {
+        self.state.as_str()
+    }
+
+    pub fn reason_code(&self) -> Option<&'static str> {
+        self.state.reason_code()
+    }
+}
+
+impl MessageState {
+    pub fn expiry_projection_at(
+        &self,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Option<MessageExpiryProjection> {
+        message_expiry_projection_from_value(self.expiry.as_ref(), self.created_at, now)
+    }
+
+    pub fn requires_expiry_stub_at(&self, now: chrono::DateTime<chrono::Utc>) -> bool {
+        self.expiry_projection_at(now)
+            .is_some_and(|projection| projection.is_stub())
+    }
+}
+
+pub fn message_expiry_projection_from_value(
+    expiry: Option<&Value>,
+    created_at: chrono::DateTime<chrono::Utc>,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Option<MessageExpiryProjection> {
+    let Some(expiry) = expiry else {
+        return None;
+    };
+    let Some(object) = expiry.as_object() else {
+        return Some(MessageExpiryProjection {
+            state: MessageExpiryProjectionState::InvalidMetadata,
+            trigger: "unknown".to_owned(),
+            expires_at: None,
+            anchor_hlc: None,
+        });
+    };
+    let trigger = object
+        .get("trigger")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown")
+        .to_owned();
+    let anchor_hlc = object
+        .get("seal_hlc")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
+    if trigger != "on_send" {
+        return Some(MessageExpiryProjection {
+            state: if matches!(trigger.as_str(), "on_first_read" | "on_last_read") {
+                MessageExpiryProjectionState::UnsupportedTrigger
+            } else {
+                MessageExpiryProjectionState::InvalidMetadata
+            },
+            trigger,
+            expires_at: None,
+            anchor_hlc,
+        });
+    }
+    let ttl_ms = object.get("ttl_ms").and_then(Value::as_u64);
+    let grace_ms = object.get("grace_ms").and_then(Value::as_u64).unwrap_or(0);
+    let expires_at = ttl_ms
+        .and_then(|ttl_ms| ttl_ms.checked_add(grace_ms))
+        .and_then(|total_ms| i64::try_from(total_ms).ok())
+        .and_then(|total_ms| {
+            created_at.checked_add_signed(chrono::Duration::milliseconds(total_ms))
+        });
+    let Some(expires_at) = expires_at else {
+        return Some(MessageExpiryProjection {
+            state: MessageExpiryProjectionState::InvalidMetadata,
+            trigger,
+            expires_at: None,
+            anchor_hlc,
+        });
+    };
+    Some(MessageExpiryProjection {
+        state: if expires_at <= now {
+            MessageExpiryProjectionState::Expired
+        } else {
+            MessageExpiryProjectionState::Live
+        },
+        trigger,
+        expires_at: Some(expires_at),
+        anchor_hlc,
+    })
+}
+
 #[derive(Clone, Debug)]
 pub struct ReactionState {
     pub actor: String,

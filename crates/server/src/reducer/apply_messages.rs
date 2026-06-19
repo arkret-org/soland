@@ -665,6 +665,9 @@ impl ProjectionState {
             {
                 return None;
             }
+            if message.requires_expiry_stub_at(chrono::Utc::now()) {
+                return None;
+            }
             return Some(PinEffectiveScope {
                 realm_id: message.realm_id.clone(),
                 scope_circle_id: self.strand_scope_circle_id(&message.thread_id),

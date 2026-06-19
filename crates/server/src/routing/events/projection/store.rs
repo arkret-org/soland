@@ -67,6 +67,7 @@ pub async fn projected_event_page(
     if let Ok(projection) = state.projection.lock() {
         for event in &mut page_items {
             tombstone_projection_event_for_erased_actor(&projection, event);
+            stub_projection_event_for_message_expiry(&projection, event, now());
             stub_pin_projection_event_for_invisible_target(&projection, event);
         }
     }

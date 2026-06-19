@@ -95,13 +95,17 @@ impl ProjectionState {
             .get(event_id)
             .and_then(|cell| cell.as_ref())
             .cloned();
-        let content = match (&redaction, viewer_is_author) {
+        let expired = msg.requires_expiry_stub_at(chrono::Utc::now());
+        let content = match (&redaction, viewer_is_author, expired) {
+            // Expiry applies to authors too; it is projection state, not a
+            // redaction audit view.
+            (_, _, true) => None,
             // No redaction in effect — full payload visible.
-            (None, _) => Some(msg.content.clone()),
+            (None, _, false) => Some(msg.content.clone()),
             // Author keeps the audit-view of the original payload.
-            (Some(_), true) => Some(msg.content.clone()),
+            (Some(_), true, false) => Some(msg.content.clone()),
             // Other members see the tombstone.
-            (Some(_), false) => None,
+            (Some(_), false, false) => None,
         };
         Some(ProjectedMessageView {
             event_id: msg.event_id.clone(),
