@@ -106,6 +106,18 @@ pub struct InviteProjection {
     pub claim_nonces: BTreeMap<String, String>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SolandKeyBackupActiveSeries {
+    pub actor_id: String,
+    pub backup_class: String,
+    pub active_series_id: String,
+    pub previous_series_ids: Vec<String>,
+    pub frontier_ref: Value,
+    pub issued_at: chrono::DateTime<chrono::Utc>,
+    pub ssk_generation: u64,
+    pub event_id: String,
+}
+
 /// R3.1 — structured cache row for a single directed Realm link.
 /// Mirrors the `ck.component.realm.link.v1` cell value plus envelope-
 /// derived timestamps so the query API can render `created_at` /

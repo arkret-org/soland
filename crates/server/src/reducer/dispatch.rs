@@ -173,6 +173,13 @@ fn apply_invite_claim_dispatch(
 ) -> ProjectionEffect {
     s.apply_invite_claim(op, op.created_at)
 }
+fn apply_key_backup_active_series_dispatch(
+    s: &mut ProjectionState,
+    op: &Operation,
+    _hlc: &ServerHlc,
+) -> ProjectionEffect {
+    s.apply_key_backup_active_series(op)
+}
 fn apply_realm_create_dispatch(
     s: &mut ProjectionState,
     op: &Operation,
@@ -885,6 +892,10 @@ pub fn default_apply_registry() -> std::collections::HashMap<&'static str, Apply
     m.insert(CK_MEMBER_STATE, apply_membership_dispatch);
     m.insert(CK_INVITE_THIRD_PARTY, apply_invite_third_party_dispatch);
     m.insert(CK_INVITE_CLAIM, apply_invite_claim_dispatch);
+    m.insert(
+        CK_KEY_BACKUP_ACTIVE_SERIES,
+        apply_key_backup_active_series_dispatch,
+    );
     // MID-1..6 (R3.1/R3.2 spec-sync, cokret-spec @ b56cab1) —
     // `ck.member.identity.update`. Cell family
     // `ck.component.member.identity.v1`, lattice `ordered_log`, bottom

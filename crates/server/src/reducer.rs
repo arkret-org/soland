@@ -27,6 +27,7 @@
 // `impl ProjectionState` blocks) split out of this file.
 mod apply_capability;
 mod apply_invites;
+mod apply_key_backup;
 mod apply_messages;
 mod apply_moderation;
 mod apply_objects;
@@ -102,8 +103,9 @@ pub use projections::{
     MorphProjection, ObjectLifecycleState, PinProjection, PollOptionState, PollState,
     ProjectedMessageView, PushRouteCellValue, PushRouteSubject, ReactionState, ReadMarkerState,
     RealmInheritancePolicyState, RealmLinkState, RealmPolicyServerConfig, RedactionCellValue,
-    RsvpProjection, SolandAgentProjection, SolandMembershipState, SolandRealmState,
-    SolandRelationState, SpaceContainerLifecycleState, SpaceContainerProjection, StrandProjection,
+    RsvpProjection, SolandAgentProjection, SolandKeyBackupActiveSeries, SolandMembershipState,
+    SolandRealmState, SolandRelationState, SpaceContainerLifecycleState, SpaceContainerProjection,
+    StrandProjection,
 };
 
 #[cfg(test)]

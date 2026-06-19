@@ -5,6 +5,7 @@ mod cells_realm;
 mod circle_encryption;
 mod circle_history;
 mod invite_claim;
+mod key_backup_active_series;
 mod moderation;
 mod pin_rsvp_encryption;
 mod pin_scope_safety;
