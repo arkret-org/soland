@@ -1038,6 +1038,8 @@ pub fn describe(
             "org.cokret.soland.feature.sync.incremental_since".to_owned(),
             "org.cokret.soland.feature.sync.typing".to_owned(),
             "org.cokret.soland.feature.personal_productivity.scheduled_send_wake_only".to_owned(),
+            "org.cokret.soland.feature.personal_productivity.reminder_snooze_private_wake"
+                .to_owned(),
             "org.cokret.soland.feature.directory.search_realms".to_owned(),
             "org.cokret.soland.feature.directory.resolve_realm".to_owned(),
             "org.cokret.soland.feature.authz.check".to_owned(),
@@ -1142,6 +1144,16 @@ pub fn describe(
                 }
             },
             "personal_productivity": {
+                "reminders": {
+                    "profile": "ck.profile.personal_productivity.v1",
+                    "account_data_type": "ck.reminders.v1",
+                    "storage": "encrypted_private_account_data",
+                    "plaintext_payload_accepted": false,
+                    "server_action": "local_or_push_wake_only",
+                    "wakeup_kind": "reminder",
+                    "target_ref_visible_in_shared_event": false,
+                    "note_visible_in_shared_event": false
+                },
                 "scheduled_send": {
                     "profile": "ck.profile.personal_productivity.v1",
                     "account_data_type": "ck.scheduled_send.v1",
@@ -1152,6 +1164,16 @@ pub fn describe(
                     "wakeup_kind": "scheduled_send",
                     "planned_message_id_anchor": "ck.message.create.payload.message_id",
                     "shared_history_materialization": "client_submitted_ck.message.create_only"
+                },
+                "snooze": {
+                    "profile": "ck.profile.personal_productivity.v1",
+                    "account_data_type": "ck.snooze.v1",
+                    "storage": "encrypted_private_account_data",
+                    "plaintext_payload_accepted": false,
+                    "target_key": "holder_derived_unlinkable",
+                    "private_projection_scope": "holder_only",
+                    "shared_state_mutation": false,
+                    "target_ref_visible_in_shared_event": false
                 }
             },
             "scalability_constraints": {
@@ -1328,6 +1350,14 @@ mod tests {
                     "org.cokret.soland.feature.personal_productivity.scheduled_send_wake_only"
                 ))
         );
+        assert!(
+            value["supported_features"]
+                .as_array()
+                .expect("features array")
+                .contains(&json!(
+                    "org.cokret.soland.feature.personal_productivity.reminder_snooze_private_wake"
+                ))
+        );
         assert_eq!(
             value["limits"]["resumable_upload_incomplete_ttl_seconds"],
             json!(86_400)
@@ -1353,6 +1383,22 @@ mod tests {
             json!(false)
         );
         assert_eq!(
+            value["limits"]["personal_productivity"]["reminders"]["storage"],
+            json!("encrypted_private_account_data")
+        );
+        assert_eq!(
+            value["limits"]["personal_productivity"]["reminders"]["wakeup_kind"],
+            json!("reminder")
+        );
+        assert_eq!(
+            value["limits"]["personal_productivity"]["reminders"]["target_ref_visible_in_shared_event"],
+            json!(false)
+        );
+        assert_eq!(
+            value["limits"]["personal_productivity"]["reminders"]["note_visible_in_shared_event"],
+            json!(false)
+        );
+        assert_eq!(
             value["limits"]["personal_productivity"]["scheduled_send"]["storage"],
             json!("encrypted_private_account_data")
         );
@@ -1367,6 +1413,18 @@ mod tests {
         assert_eq!(
             value["limits"]["personal_productivity"]["scheduled_send"]["wakeup_kind"],
             json!("scheduled_send")
+        );
+        assert_eq!(
+            value["limits"]["personal_productivity"]["snooze"]["storage"],
+            json!("encrypted_private_account_data")
+        );
+        assert_eq!(
+            value["limits"]["personal_productivity"]["snooze"]["target_key"],
+            json!("holder_derived_unlinkable")
+        );
+        assert_eq!(
+            value["limits"]["personal_productivity"]["snooze"]["shared_state_mutation"],
+            json!(false)
         );
         assert_eq!(
             value["limits"]["scalability_constraints"]["max_to_device_queue_per_device"],

@@ -497,6 +497,49 @@ mod tests {
     }
 
     #[test]
+    fn reminder_rejects_plaintext_note_and_target_ref() {
+        let key = "ck.reminders.v1:local-reminder-1";
+        validate_encrypted_account_data_key(key).unwrap();
+        validate_encrypted_account_data_value(key, &conformance_marker()).unwrap();
+
+        let err = validate_encrypted_account_data_value(
+            key,
+            &json!({
+                "kind": "reminder",
+                "target_ref": "ck:message:01904100-0000-7000-8000-000000000001",
+                "remind_at": "2026-06-19T08:00:00Z",
+                "note": "private reminder note",
+                "updated_hlc": "01904100-0000-7000-8000-000000000001",
+                "encrypted_payload": conformance_marker()
+            }),
+        )
+        .unwrap_err();
+
+        assert_eq!(err, AccountDataEncryptionError::PlaintextField);
+    }
+
+    #[test]
+    fn snooze_rejects_plaintext_target_ref() {
+        let key = "ck.snooze.v1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+        validate_encrypted_account_data_key(key).unwrap();
+        validate_encrypted_account_data_value(key, &conformance_marker()).unwrap();
+
+        let err = validate_encrypted_account_data_value(
+            key,
+            &json!({
+                "kind": "snooze",
+                "target_ref": "ck:strand:01904100-0000-7000-8000-000000000001",
+                "snooze_expires_at": "2026-06-19T09:00:00Z",
+                "updated_hlc": "01904100-0000-7000-8000-000000000001",
+                "encrypted_payload": conformance_marker()
+            }),
+        )
+        .unwrap_err();
+
+        assert_eq!(err, AccountDataEncryptionError::PlaintextField);
+    }
+
+    #[test]
     fn scheduled_send_rejects_plaintext_message_payload() {
         let key = "ck.scheduled_send.v1:ck:message:01904100-0000-7000-8000-000000000001";
         validate_encrypted_account_data_key(key).unwrap();
