@@ -81,7 +81,7 @@ impl ProjectionState {
         let history_visibility = object
             .get("history_visibility")
             .and_then(Value::as_str)
-            .unwrap_or("joined")
+            .unwrap_or("invited")
             .to_owned();
         let content_encryption_floor = object
             .get("content_encryption_floor")
@@ -455,6 +455,7 @@ impl ProjectionState {
             .and_then(Value::as_str)
             .map(ToOwned::to_owned);
         circle.updated_at = Some(now);
+        self.update_circle_membership_projection(&circle_id, &actor, &target_state, now);
         ProjectionEffect::CircleMemberStateChanged {
             circle_id,
             member: actor,
@@ -519,6 +520,86 @@ impl ProjectionState {
         })
     }
 
+    pub fn circle_membership(
+        &self,
+        circle_id: &str,
+        actor: &str,
+    ) -> Option<&CircleMembershipState> {
+        self.circle_memberships
+            .get(&(circle_id.to_owned(), actor.to_owned()))
+    }
+
+    pub fn circle_scope_visible_to_actor_at(
+        &self,
+        circle_id: &str,
+        actor: &str,
+        event_created_at: chrono::DateTime<chrono::Utc>,
+    ) -> bool {
+        let Some(circle) = self.circles.get(circle_id) else {
+            return false;
+        };
+        if circle.state == CircleLifecycleState::Tombstoned || !circle.members.contains(actor) {
+            return false;
+        }
+        let Some(membership) = self.circle_membership(circle_id, actor) else {
+            return false;
+        };
+        if !matches!(membership.state.as_str(), "join" | "active") {
+            return false;
+        }
+        circle_history_visibility_allows(
+            circle.history_visibility.as_str(),
+            membership,
+            event_created_at,
+        )
+    }
+
+    fn update_circle_membership_projection(
+        &mut self,
+        circle_id: &str,
+        actor: &str,
+        target_state: &str,
+        now: chrono::DateTime<chrono::Utc>,
+    ) {
+        let key = (circle_id.to_owned(), actor.to_owned());
+        let previous = self.circle_memberships.get(&key).cloned();
+        let normalized_state = normalize_circle_membership_state(target_state);
+        let state = previous
+            .as_ref()
+            .filter(|m| {
+                normalized_state == "invite" && matches!(m.state.as_str(), "join" | "active")
+            })
+            .map(|m| m.state.clone())
+            .unwrap_or_else(|| normalized_state.to_owned());
+        let invited_at = match state.as_str() {
+            "invite" => previous.as_ref().and_then(|m| m.invited_at).or(Some(now)),
+            "join" => previous.as_ref().and_then(|m| {
+                m.invited_at
+                    .or_else(|| (m.state == "invite").then_some(m.updated_at))
+            }),
+            _ => previous.as_ref().and_then(|m| m.invited_at),
+        };
+        let joined_at = match (state.as_str(), previous.as_ref()) {
+            ("join", Some(previous)) if matches!(previous.state.as_str(), "join" | "active") => {
+                previous.joined_at
+            }
+            ("join", _) => now,
+            (_, Some(previous)) => previous.joined_at,
+            _ => now,
+        };
+        self.circle_memberships.insert(
+            key,
+            CircleMembershipState {
+                circle_id: circle_id.to_owned(),
+                member: actor.to_owned(),
+                state,
+                invited_at,
+                joined_at,
+                updated_at: now,
+            },
+        );
+    }
+
     /// CKP-0007 — resolve the Circle (`ck:circle:…`) a Strand is scoped to, if
     /// any. A message's effective circle-scope is derived from its Strand via
     /// this lookup — never from the message payload (spec: `scope_circle_id`
@@ -552,5 +633,29 @@ impl ProjectionState {
             .get(relation_id)
             .and_then(|relation| relation.scope_circle_id.clone())
             .filter(|scope| scope.starts_with("ck:circle:"))
+    }
+}
+
+fn normalize_circle_membership_state(state: &str) -> &str {
+    match state {
+        "join" | "active" => "join",
+        "invite" | "invited" => "invite",
+        "ban" | "banned" | "removed" => "ban",
+        "leave" | "left" => "leave",
+        "knock" => "knock",
+        _ => state,
+    }
+}
+
+fn circle_history_visibility_allows(
+    history_visibility: &str,
+    membership: &CircleMembershipState,
+    event_created_at: chrono::DateTime<chrono::Utc>,
+) -> bool {
+    match history_visibility {
+        "world_readable" | "shared" => true,
+        "invited" => event_created_at >= membership.invited_at.unwrap_or(membership.joined_at),
+        "joined" => event_created_at >= membership.joined_at,
+        _ => false,
     }
 }

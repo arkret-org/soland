@@ -172,6 +172,7 @@ impl ProjectionState {
         updated_by: &str,
         now: chrono::DateTime<chrono::Utc>,
     ) {
+        let mut removed_circle_ids = Vec::new();
         for circle in self
             .circles
             .values_mut()
@@ -180,6 +181,7 @@ impl ProjectionState {
             if !circle.members.remove(member) {
                 continue;
             }
+            removed_circle_ids.push(circle.circle_id.clone());
             circle.updated_by = Some(updated_by.to_owned());
             circle.updated_at = Some(now);
             if circle.encryption_profile == "mls_rfc9420" {
@@ -192,6 +194,28 @@ impl ProjectionState {
                     triggered_at: now,
                 });
             }
+        }
+        for circle_id in removed_circle_ids {
+            let previous = self
+                .circle_memberships
+                .get(&(circle_id.clone(), member.to_owned()))
+                .cloned();
+            self.circle_memberships.insert(
+                (circle_id.clone(), member.to_owned()),
+                CircleMembershipState {
+                    circle_id,
+                    member: member.to_owned(),
+                    state: trigger_membership.to_owned(),
+                    invited_at: previous
+                        .as_ref()
+                        .and_then(|membership| membership.invited_at),
+                    joined_at: previous
+                        .as_ref()
+                        .map(|membership| membership.joined_at)
+                        .unwrap_or(now),
+                    updated_at: now,
+                },
+            );
         }
     }
 

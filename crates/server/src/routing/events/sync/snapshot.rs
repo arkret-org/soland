@@ -615,6 +615,7 @@ async fn timeline_events_for_realm(
         if !circle_scope_visible_to_session(
             projection,
             message_scope_circle_id(&message.content),
+            message.created_at,
             session,
             Some(&message.sender),
         ) {
@@ -654,6 +655,7 @@ async fn timeline_events_for_realm(
         if !circle_scope_visible_to_session(
             projection,
             message_scope_circle_id(&message.content),
+            message.created_at,
             session,
             Some(&message.sender),
         ) {
@@ -1067,6 +1069,7 @@ fn message_scope_circle_id(content: &Value) -> Option<&str> {
 fn circle_scope_visible_to_session(
     projection: &ProjectionState,
     scope_circle_id: Option<&str>,
+    event_created_at: chrono::DateTime<chrono::Utc>,
     session: Option<&SessionRecord>,
     sender: Option<&str>,
 ) -> bool {
@@ -1079,7 +1082,7 @@ fn circle_scope_visible_to_session(
     let Some(session) = session else {
         return false;
     };
-    projection.circle_scope_visible_to_actor(scope_circle_id, &session.actor)
+    projection.circle_scope_visible_to_actor_at(scope_circle_id, &session.actor, event_created_at)
 }
 
 fn add_scope_circle_metadata(event: &mut serde_json::Value, content: &serde_json::Value) {

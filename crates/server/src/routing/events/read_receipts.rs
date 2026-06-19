@@ -280,14 +280,20 @@ async fn read_receipt_relay_visible_to_session(
             if !active_realm_member(state, &record.realm_id, &session.actor).await {
                 return false;
             }
-            if !read_scope_visible_to_session(state, &record.read_scope, session) {
+            if !read_scope_visible_to_session(state, &record.read_scope, session, record.created_at)
+            {
                 return false;
             }
             target_record_visible_to_session(state, record, Some(session), target_hint).await
         }
         "public" => {
             if let Some(session) = session {
-                if !read_scope_visible_to_session(state, &record.read_scope, session) {
+                if !read_scope_visible_to_session(
+                    state,
+                    &record.read_scope,
+                    session,
+                    record.created_at,
+                ) {
                     return false;
                 }
             } else if read_scope_circle_id(state, &record.read_scope).is_some() {
@@ -369,6 +375,7 @@ fn read_scope_visible_to_session(
     state: &AppState,
     read_scope: &Value,
     session: &SessionRecord,
+    created_at: DateTime<Utc>,
 ) -> bool {
     let Some(circle_id) = read_scope_circle_id(state, read_scope) else {
         return true;
@@ -377,7 +384,7 @@ fn read_scope_visible_to_session(
         .projection
         .lock()
         .expect("projection lock")
-        .circle_scope_visible_to_actor(&circle_id, &session.actor)
+        .circle_scope_visible_to_actor_at(&circle_id, &session.actor, created_at)
 }
 
 fn read_scope_circle_id(state: &AppState, read_scope: &Value) -> Option<String> {

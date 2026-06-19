@@ -3,6 +3,7 @@ use super::*;
 mod call_state;
 mod cells_realm;
 mod circle_encryption;
+mod circle_history;
 mod invite_claim;
 mod moderation;
 mod pin_scope_safety;

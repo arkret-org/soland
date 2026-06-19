@@ -488,6 +488,16 @@ pub struct CircleProjection {
     pub members: BTreeSet<String>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CircleMembershipState {
+    pub circle_id: String,
+    pub member: String,
+    pub state: String,
+    pub invited_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub joined_at: chrono::DateTime<chrono::Utc>,
+    pub updated_at: chrono::DateTime<chrono::Utc>,
+}
+
 /// CKP-0007 — Circle lifecycle state. Matches spec `circle.schema.json`
 /// `state` enum (active / archived / tombstoned). Distinct from
 /// [`ObjectLifecycleState`] (which carries the redacted/deleted forms used

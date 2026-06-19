@@ -772,7 +772,7 @@ fn circle_event_visible_to_session(
         .projection
         .lock()
         .expect("projection mutex")
-        .circle_scope_visible_to_actor(&scope_circle_id, &session.actor)
+        .circle_scope_visible_to_actor_at(&scope_circle_id, &session.actor, record.received_at)
 }
 
 /// Scan the durable Event store for the most

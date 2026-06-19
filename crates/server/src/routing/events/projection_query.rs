@@ -30,6 +30,7 @@
 //! default. Explicit `include_terminal=true` returns the full set for audit /
 //! debugging UIs.
 
+use chrono::{DateTime, Utc};
 use cokret_sdk::{
     Did, MorphId, ProjectionAssignedToRelation, ProjectionMorphList, ProjectionMorphRow,
     ProjectionObjectState, ProjectionSpaceList, ProjectionSpaceRow, ProjectionSpaceState,
@@ -39,14 +40,14 @@ use salvo::http::StatusCode;
 use salvo::oapi::extract::QueryParam;
 use salvo::prelude::*;
 
-use super::realm_id_accessible;
+use super::{realm_discoverability, realm_history_visibility, realm_id_accessible};
 use crate::error::{AppError, ErrorCode};
 use crate::reducer::{
     ObjectLifecycleState, ProjectionState, SolandRelationState, SpaceContainerLifecycleState,
 };
 use crate::result::{JsonResult, json_ok};
 use crate::routing::system::extract::AuthArgs;
-use crate::state::AppState;
+use crate::state::{AppState, SessionRecord};
 
 pub(super) fn protocol_router() -> Router {
     Router::new()
@@ -100,6 +101,66 @@ where
 
 fn total_count(len: usize) -> Result<u64, AppError> {
     u64::try_from(len).map_err(|_| AppError::internal("projection row count overflow"))
+}
+
+fn projection_row_visible_to_session(
+    projection: &ProjectionState,
+    realm_id: &str,
+    session: &SessionRecord,
+    sender: &str,
+    created_at: DateTime<Utc>,
+    scope_circle_id: Option<&str>,
+    history_visibility: &str,
+    discoverability: &str,
+) -> bool {
+    if sender == session.actor {
+        return true;
+    }
+    if !projection_realm_history_allows(
+        projection,
+        realm_id,
+        &session.actor,
+        created_at,
+        history_visibility,
+        discoverability,
+    ) {
+        return false;
+    }
+    scope_circle_id.is_none_or(|circle_id| {
+        projection.circle_scope_visible_to_actor_at(circle_id, &session.actor, created_at)
+    })
+}
+
+fn projection_realm_history_allows(
+    projection: &ProjectionState,
+    realm_id: &str,
+    actor: &str,
+    created_at: DateTime<Utc>,
+    history_visibility: &str,
+    discoverability: &str,
+) -> bool {
+    match history_visibility {
+        "world_readable" => true,
+        "shared" => {
+            discoverability == "public"
+                || projection
+                    .member(realm_id, actor)
+                    .is_some_and(|member| member.state == "join")
+        }
+        "invited" => projection
+            .member(realm_id, actor)
+            .and_then(|member| {
+                member.invited_at.or_else(|| {
+                    matches!(member.state.as_str(), "invite" | "join").then_some(member.updated_at)
+                })
+            })
+            .is_some_and(|visible_at| created_at >= visible_at),
+        "joined" => projection
+            .member(realm_id, actor)
+            .filter(|member| member.state == "join")
+            .is_some_and(|member| created_at >= member.joined_at),
+        _ => false,
+    }
 }
 
 fn relation_string_field<'a>(
@@ -216,6 +277,8 @@ async fn list_space_container_projections(
         )
         .with_status(StatusCode::FORBIDDEN));
     }
+    let history_visibility = realm_history_visibility(state, &realm_id).await;
+    let discoverability = realm_discoverability(state, &realm_id).await;
     let proj = state.projection.lock().map_err(|_| {
         AppError::new(
             ErrorCode::TemporarilyUnavailable,
@@ -227,6 +290,18 @@ async fn list_space_container_projections(
         .space_containers
         .values()
         .filter(|p| p.realm_id == realm_id)
+        .filter(|p| {
+            projection_row_visible_to_session(
+                &proj,
+                &realm_id,
+                &session,
+                &p.created_by,
+                p.created_at,
+                p.scope_circle_id.as_deref(),
+                &history_visibility,
+                &discoverability,
+            )
+        })
         .filter(|p| include_terminal || p.state != SpaceContainerLifecycleState::Tombstoned)
         .map(|p| {
             Ok(ProjectionSpaceRow {
@@ -291,6 +366,8 @@ async fn list_strand_projections(
         )
         .with_status(StatusCode::FORBIDDEN));
     }
+    let history_visibility = realm_history_visibility(state, &realm_id).await;
+    let discoverability = realm_discoverability(state, &realm_id).await;
     let proj = state.projection.lock().map_err(|_| {
         AppError::new(
             ErrorCode::TemporarilyUnavailable,
@@ -308,6 +385,18 @@ async fn list_strand_projections(
         .strands
         .values()
         .filter(|f| f.realm_id == realm_id)
+        .filter(|f| {
+            projection_row_visible_to_session(
+                &proj,
+                &realm_id,
+                &session,
+                &f.created_by,
+                f.created_at,
+                f.scope_circle_id.as_deref(),
+                &history_visibility,
+                &discoverability,
+            )
+        })
         .filter(|f| include_terminal || !is_object_terminal(f.state))
         .map(|f| {
             let (board_space_id, list_space_id, rank) =
@@ -375,6 +464,8 @@ async fn list_morph_projections(
         )
         .with_status(StatusCode::FORBIDDEN));
     }
+    let history_visibility = realm_history_visibility(state, &realm_id).await;
+    let discoverability = realm_discoverability(state, &realm_id).await;
     let proj = state.projection.lock().map_err(|_| {
         AppError::new(
             ErrorCode::TemporarilyUnavailable,
@@ -387,9 +478,16 @@ async fn list_morph_projections(
         .values()
         .filter(|m| m.realm_id == realm_id)
         .filter(|m| {
-            m.scope_circle_id.as_deref().is_none_or(|circle_id| {
-                proj.circle_scope_visible_to_actor(circle_id, &session.actor)
-            })
+            projection_row_visible_to_session(
+                &proj,
+                &realm_id,
+                &session,
+                &m.created_by,
+                m.created_at,
+                m.scope_circle_id.as_deref(),
+                &history_visibility,
+                &discoverability,
+            )
         })
         .filter(|m| include_terminal || !is_object_terminal(m.state))
         .map(|m| {
