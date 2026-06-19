@@ -45,3 +45,4 @@ pub use records::{
     SovereignRealmRecord, SovereignStoreForwardRecord, TypingRecord, WebvhDocumentRecord,
     WebvhLogRecord,
 };
+pub(crate) use records::{clamp_key_backup_daily_download_limit, key_backup_daily_download_limit};

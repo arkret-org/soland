@@ -216,6 +216,24 @@ pub const KEY_BACKUP_DAILY_DOWNLOAD_LIMIT_MAX: u32 = 256;
 /// as "per principal per 24h".
 pub const KEY_BACKUP_DOWNLOAD_WINDOW: chrono::Duration = chrono::Duration::hours(24);
 
+pub(crate) fn key_backup_daily_download_limit() -> u32 {
+    let configured = std::env::var("SOLAND_KEY_BACKUP_DAILY_DOWNLOAD_LIMIT")
+        .ok()
+        .and_then(|value| value.trim().parse::<u32>().ok());
+    clamp_key_backup_daily_download_limit(configured)
+}
+
+pub(crate) fn clamp_key_backup_daily_download_limit(configured: Option<u32>) -> u32 {
+    configured
+        .map(|value| {
+            value.clamp(
+                KEY_BACKUP_DAILY_DOWNLOAD_LIMIT_MIN,
+                KEY_BACKUP_DAILY_DOWNLOAD_LIMIT_MAX,
+            )
+        })
+        .unwrap_or(KEY_BACKUP_DAILY_DOWNLOAD_LIMIT_DEFAULT)
+}
+
 /// A revoked cursor authority recorded by `ck.self.account.command.revoke_cursor`.
 ///
 /// `scope` mirrors the wire enum: `this_cursor` matches the exact cursor by

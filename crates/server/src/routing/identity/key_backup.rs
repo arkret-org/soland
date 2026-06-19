@@ -17,7 +17,9 @@ use super::append_audit_log;
 use crate::error::{AppError, ErrorCode};
 use crate::result::{JsonResult, json_ok};
 use crate::routing::system::extract::AuthArgs;
-use crate::state::{AppState, RecoveryPolicyRecord, RecoverySessionRecord};
+use crate::state::{
+    AppState, RecoveryPolicyRecord, RecoverySessionRecord, key_backup_daily_download_limit,
+};
 use crate::wire::{
     KeyBackupPutStatus, KeysBackupsDeleteOutcome, KeysBackupsList, KeysBackupsReplaceOutcome,
 };
@@ -57,29 +59,6 @@ const KEY_BACKUP_CONTENT_TYPES: &[&str] = &[
     "pending_welcome",
     "private_account_state",
 ];
-/// Spec `identity/key-management.md` §7.8 — resolve the effective
-/// per-principal rolling-24h download quota for full-ciphertext key-backup
-/// reads. Defaults to [`KEY_BACKUP_DAILY_DOWNLOAD_LIMIT_DEFAULT`]; the
-/// deployment may adjust via `SOLAND_KEY_BACKUP_DAILY_DOWNLOAD_LIMIT`, but
-/// only inside the spec-allowed `[16, 256]` range — values outside the range
-/// are clamped, not honored (the spec forbids relaxing past the ceiling).
-pub(in crate::routing) fn key_backup_daily_download_limit() -> u32 {
-    let configured = std::env::var("SOLAND_KEY_BACKUP_DAILY_DOWNLOAD_LIMIT")
-        .ok()
-        .and_then(|value| value.trim().parse::<u32>().ok());
-    clamp_key_backup_daily_download_limit(configured)
-}
-
-fn clamp_key_backup_daily_download_limit(configured: Option<u32>) -> u32 {
-    configured
-        .map(|value| {
-            value.clamp(
-                crate::state::KEY_BACKUP_DAILY_DOWNLOAD_LIMIT_MIN,
-                crate::state::KEY_BACKUP_DAILY_DOWNLOAD_LIMIT_MAX,
-            )
-        })
-        .unwrap_or(crate::state::KEY_BACKUP_DAILY_DOWNLOAD_LIMIT_DEFAULT)
-}
 const KEY_BACKUP_AUTH_REQUIRED_SIGNED_FIELDS: &[&str] = &[
     "backup_id",
     "actor_id",
@@ -691,20 +670,23 @@ mod tests {
 
         // Unset → spec default (64).
         assert_eq!(
-            clamp_key_backup_daily_download_limit(None),
+            crate::state::clamp_key_backup_daily_download_limit(None),
             KEY_BACKUP_DAILY_DOWNLOAD_LIMIT_DEFAULT
         );
         // In-range values are honored as-is.
-        assert_eq!(clamp_key_backup_daily_download_limit(Some(100)), 100);
+        assert_eq!(
+            crate::state::clamp_key_backup_daily_download_limit(Some(100)),
+            100
+        );
         // Outside the spec-allowed [16, 256] range the value is clamped —
         // §7.8 forbids relaxing past the ceiling, and a sub-floor value
         // would break a single legitimate long-series restore.
         assert_eq!(
-            clamp_key_backup_daily_download_limit(Some(1)),
+            crate::state::clamp_key_backup_daily_download_limit(Some(1)),
             KEY_BACKUP_DAILY_DOWNLOAD_LIMIT_MIN
         );
         assert_eq!(
-            clamp_key_backup_daily_download_limit(Some(100_000)),
+            crate::state::clamp_key_backup_daily_download_limit(Some(100_000)),
             KEY_BACKUP_DAILY_DOWNLOAD_LIMIT_MAX
         );
     }
