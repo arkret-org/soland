@@ -161,6 +161,81 @@ mod message_projection_schema_tests {
     }
 }
 
+mod agent_action_schema_tests {
+    use cokret_sdk::Operation;
+    use serde_json::json;
+
+    use super::super::*;
+
+    fn op(kind: &str, payload: serde_json::Value) -> Operation {
+        Operation::create(
+            cokret_sdk::OperationId::new("ck:operation:01904100-0000-7000-8000-57d7d85564c5")
+                .unwrap(),
+            cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-668e2181b41d").unwrap(),
+            kind,
+            payload,
+        )
+    }
+
+    #[test]
+    fn action_approve_accepts_complete_draft_bound_payload() {
+        let schema = operation_schema_for_kind(kinds::CK_AGENT_ACTION_APPROVE).unwrap();
+        let operation = op(
+            kinds::CK_AGENT_ACTION_APPROVE,
+            json!({
+                "approval_id": "ck:agent_approval:01904100-0000-7000-8000-000000000001",
+                "draft_id": "ck:agent_draft:01904100-0000-7000-8000-000000000001",
+                "agent_principal_id": "did:web:agent.example",
+                "controller_principal_id": "did:web:alice.example",
+                "proposed_action": "ck.message.create",
+                "target": {
+                    "kind": "realm",
+                    "realm_id": "ck:realm:01904100-0000-7000-8000-668e2181b41d"
+                },
+                "approved_payload_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "draft_content_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                "approval_nonce": "nonce-01904100",
+                "approved_at": "2026-06-19T00:00:00Z",
+                "expires_at": "2026-06-19T00:10:00Z"
+            }),
+        );
+
+        assert!(validate_operation_schema(&operation, schema).is_ok());
+    }
+
+    #[test]
+    fn action_approve_rejects_legacy_minimal_payload() {
+        let schema = operation_schema_for_kind(kinds::CK_AGENT_ACTION_APPROVE).unwrap();
+        let operation = op(
+            kinds::CK_AGENT_ACTION_APPROVE,
+            json!({ "request_id": "ck:agent-action-request:01904100-0000-7000-8000-000000000001" }),
+        );
+
+        assert_eq!(
+            validate_operation_schema(&operation, schema),
+            Err("operation payload violates SDK artifact schema")
+        );
+    }
+
+    #[test]
+    fn action_reject_accepts_complete_draft_bound_payload() {
+        let schema = operation_schema_for_kind(kinds::CK_AGENT_ACTION_REJECT).unwrap();
+        let operation = op(
+            kinds::CK_AGENT_ACTION_REJECT,
+            json!({
+                "rejection_id": "ck:agent_rejection:01904100-0000-7000-8000-000000000001",
+                "draft_id": "ck:agent_draft:01904100-0000-7000-8000-000000000001",
+                "agent_principal_id": "did:web:agent.example",
+                "controller_principal_id": "did:web:alice.example",
+                "reason": "needs review",
+                "rejected_at": "2026-06-19T00:00:00Z"
+            }),
+        );
+
+        assert!(validate_operation_schema(&operation, schema).is_ok());
+    }
+}
+
 mod spec_sync_validator_tests {
     use cokret_sdk::Operation;
     use serde_json::json;

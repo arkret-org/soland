@@ -688,11 +688,11 @@ pub fn operation_schema_for_kind(kind: &str) -> Option<OperationPayloadSchema> {
         },
         kinds::CK_AGENT_ACTION_APPROVE => OperationPayloadSchema {
             requirements: AGENT_ACTION_APPROVE_REQUIREMENTS,
-            validate: None,
+            validate: Some(validate_operation_payload_against_sdk_artifact),
         },
         kinds::CK_AGENT_ACTION_REJECT => OperationPayloadSchema {
             requirements: AGENT_ACTION_REJECT_REQUIREMENTS,
-            validate: None,
+            validate: Some(validate_operation_payload_against_sdk_artifact),
         },
         kinds::CK_CROSS_SIGNING_RESET => OperationPayloadSchema {
             requirements: CROSS_SIGNING_RESET_REQUIREMENTS,

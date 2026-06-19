@@ -506,14 +506,14 @@ pub(crate) const AGENT_ACTION_REQUEST_REQUIREMENTS: &[PayloadRequirement] = &[
     PayloadRequirement::Required("request_id", "ck.agent.action_request requires request_id"),
 ];
 pub(crate) const AGENT_ACTION_APPROVE_REQUIREMENTS: &[PayloadRequirement] =
-    &[PayloadRequirement::Required(
-        "request_id",
-        "ck.agent.action_approve requires request_id",
+    &[PayloadRequirement::AnyOf(
+        &["request_id", "draft_id"],
+        "ck.agent.action_approve requires request_id or draft_id",
     )];
 pub(crate) const AGENT_ACTION_REJECT_REQUIREMENTS: &[PayloadRequirement] =
-    &[PayloadRequirement::Required(
-        "request_id",
-        "ck.agent.action_reject requires request_id",
+    &[PayloadRequirement::AnyOf(
+        &["request_id", "draft_id"],
+        "ck.agent.action_reject requires request_id or draft_id",
     )];
 
 pub(crate) const CROSS_SIGNING_RESET_REQUIREMENTS: &[PayloadRequirement] = &[

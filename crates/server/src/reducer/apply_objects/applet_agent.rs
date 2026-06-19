@@ -311,17 +311,18 @@ impl ProjectionState {
         operation: &Operation,
         status: AgentActionRequestStatus,
     ) -> ProjectionEffect {
-        let Some(request_id) = operation
+        let Some(request_key) = operation
             .payload
             .get("request_id")
+            .or_else(|| operation.payload.get("draft_id"))
             .and_then(|v| v.as_str())
             .map(ToOwned::to_owned)
         else {
             return ProjectionEffect::Rejected {
-                reason: "agent_action_resolution_missing_request_id".to_owned(),
+                reason: "agent_action_resolution_missing_request_or_draft_id".to_owned(),
             };
         };
-        if let Some(request) = self.agent_action_requests.get_mut(&request_id)
+        if let Some(request) = self.agent_action_requests.get_mut(&request_key)
             && request.status == AgentActionRequestStatus::Pending
         {
             let approval = if status == AgentActionRequestStatus::Approved {

@@ -33,7 +33,18 @@ fn action_approve(request_id: &str) -> Operation {
     make_operation(
         crate::kinds::CK_AGENT_ACTION_APPROVE,
         REALM,
-        serde_json::json!({ "request_id": request_id }),
+        serde_json::json!({
+            "approval_id": "ck:agent-approval:01904100-0000-7000-8000-cfc039892038",
+            "request_id": request_id,
+            "agent_principal_id": AGENT,
+            "controller_principal_id": "did:web:controller.example",
+            "proposed_action": "ck.message.create",
+            "target": { "kind": "realm", "realm_id": REALM },
+            "approved_payload_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "approval_nonce": "nonce-01904100",
+            "approved_at": "2026-06-19T00:00:10Z",
+            "expires_at": "2026-06-19T00:10:10Z"
+        }),
     )
 }
 
@@ -167,5 +178,8 @@ fn approved_action_request_is_not_cancelled_by_lifecycle() {
     state.apply(&pause_agent(), &hlc);
     let request = &state.agent_action_requests[REQUEST];
     assert_eq!(request.status, AgentActionRequestStatus::Approved);
+    let approval = request.approval.as_ref().expect("approval projection");
+    assert_eq!(approval.approval_nonce, "nonce-01904100");
+    assert_eq!(approval.proposed_action, "ck.message.create");
     assert!(request.cancel_reason.is_none());
 }
