@@ -147,6 +147,7 @@ async fn peer_invites_submit(
         device_id: format!("peer-invite:{source_service_did}"),
         audience: state.config.service_did.clone(),
         session_public_key: None,
+        agent_session: None,
         expires_at: now() + Duration::minutes(5),
         created_at: now(),
         revoked_at: None,

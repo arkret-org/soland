@@ -1,6 +1,13 @@
 use std::collections::{BTreeMap, BTreeSet};
 
+use cokret_sdk::FreshnessState;
 use serde_json::Value;
+
+#[derive(Clone, Debug)]
+pub struct AgentSessionRecord {
+    pub scope_details: Value,
+    pub freshness_state: FreshnessState,
+}
 
 #[derive(Clone, Debug)]
 pub struct SessionRecord {
@@ -12,6 +19,7 @@ pub struct SessionRecord {
     /// RFC 9421 PoP presentations on `/_cokret/self/*` (api-conventions.md
     /// §3.2). `None` for bearer-only / dev-login / OAuth-bridged sessions.
     pub session_public_key: Option<String>,
+    pub agent_session: Option<AgentSessionRecord>,
     pub expires_at: chrono::DateTime<chrono::Utc>,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub revoked_at: Option<chrono::DateTime<chrono::Utc>>,

@@ -156,6 +156,7 @@ impl From<SessionRow> for SessionRecord {
             device_id: row.device_id,
             audience: row.audience,
             session_public_key: row.session_public_key,
+            agent_session: None,
             expires_at: row.expires_at,
             created_at: row.created_at,
             revoked_at: row.revoked_at,

@@ -104,6 +104,7 @@ fn controller_dev_session(controller_did: &str, state: &AppState) -> SessionReco
         device_id: "agent-dev-fanout".to_owned(),
         audience: state.config.service_did.clone(),
         session_public_key: None,
+        agent_session: None,
         expires_at: now() + chrono::Duration::minutes(5),
         created_at: now(),
         revoked_at: None,

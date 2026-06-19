@@ -336,6 +336,7 @@ async fn authenticated_oauth_session(
         audience: state.config.service_did.clone(),
         // OAuth-bridged sessions are bearer-only (no ck.session.grant PoP key).
         session_public_key: None,
+        agent_session: None,
         expires_at: oauth.expires_at,
         created_at: now(),
         revoked_at: None,

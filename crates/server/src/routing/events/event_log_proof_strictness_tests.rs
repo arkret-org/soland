@@ -85,6 +85,7 @@ fn session() -> SessionRecord {
         device_id: "ck:device:01904100-0000-7000-8000-a11ce0000001".to_owned(),
         audience: "did:web:soland.local".to_owned(),
         session_public_key: None,
+        agent_session: None,
         expires_at: chrono::Utc::now() + chrono::Duration::hours(1),
         created_at: chrono::Utc::now(),
         revoked_at: None,

@@ -188,6 +188,7 @@ pub(super) async fn dev_login(
         audience: state.config.service_did.clone(),
         // dev-login does not carry a ck.session.grant signing key; bearer-only.
         session_public_key: None,
+        agent_session: None,
         expires_at,
         created_at: now(),
         revoked_at: None,

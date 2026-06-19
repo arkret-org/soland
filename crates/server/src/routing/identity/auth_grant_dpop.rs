@@ -16,8 +16,8 @@
 //!   3. DPoP `htm` == request method, `htu` == request URL, `ath` == base64url(sha256(grant)).
 //!   4. DPoP `jti` + `iat` freshness window for replay defense.
 //!   5. grant audience == this service's `service_did`.
-//!   6. grant scope contains the principal-server `session.bind` scope AND a device scope;
-//!      principal / device binding consistent; grant not expired.
+//!   6. human/device grants contain `session.bind` plus a device scope; agent grants carry fresh
+//!      `agent_key_proof` resource-scope metadata. Grant not expired.
 //!
 //! DPoP does NOT bind the request body — body integrity rides on TLS, same as
 //! Matrix (api-conventions.md §3.3). Body-bound integrity is layered separately
@@ -31,6 +31,7 @@ use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::{DateTime, Duration, Utc};
 use cokret_sdk::http_signature::{Ed25519PublicKey, public_key_from_bytes};
+use cokret_sdk::{FreshnessState, SessionGrantProofKind};
 use ed25519_dalek::{Signature, Verifier};
 use salvo::http::StatusCode;
 use salvo::prelude::Request;
@@ -38,7 +39,7 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 use super::auth::PRINCIPAL_SESSION_BIND_SCOPE;
-use crate::state::{AppState, SessionRecord};
+use crate::state::{AgentSessionRecord, AppState, SessionRecord};
 use crate::wire::{
     SessionGrantIntrospectGrant, SessionGrantIntrospectOutcome, SessionGrantIntrospectRequestBody,
     SessionGrantIntrospectStatus, SessionGrantIntrospectionProof,
@@ -430,6 +431,72 @@ pub(crate) fn is_grant_dpop_presentation(req: &Request) -> bool {
     req.headers().contains_key("dpop")
 }
 
+fn session_binding_from_introspection(
+    grant: &SessionGrantIntrospectGrant,
+) -> Result<(String, Option<AgentSessionRecord>), AuthError> {
+    let is_agent_session = grant.proof_kind == Some(SessionGrantProofKind::AgentKeyProof);
+    if is_agent_session {
+        if !grant.scope_details.is_object() {
+            return Err(unauthenticated(
+                "agent session grant omitted resource scope metadata",
+            ));
+        }
+        match grant.freshness_state.unwrap_or(FreshnessState::Unknown) {
+            FreshnessState::Fresh => {}
+            FreshnessState::Stale => {
+                return Err((
+                    StatusCode::UNAUTHORIZED,
+                    "auth_stale",
+                    "agent session revocation freshness is stale",
+                ));
+            }
+            FreshnessState::Unknown => {
+                return Err((
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "auth_unavailable",
+                    "agent session revocation freshness is unknown",
+                ));
+            }
+        }
+        return Ok((
+            format!("agent-session:{}", grant.id),
+            Some(AgentSessionRecord {
+                scope_details: grant.scope_details.clone(),
+                freshness_state: FreshnessState::Fresh,
+            }),
+        ));
+    }
+
+    if !grant
+        .scopes
+        .iter()
+        .any(|scope| scope == PRINCIPAL_SESSION_BIND_SCOPE)
+    {
+        return Err(unauthenticated(
+            "session grant is missing the principal-server session.bind scope",
+        ));
+    }
+    let scope_device_id = grant
+        .scopes
+        .iter()
+        .find_map(|scope| scope.strip_prefix(DEVICE_SCOPE_PREFIX))
+        .map(str::to_owned);
+    let Some(scope_device_id) = scope_device_id else {
+        return Err(unauthenticated("session grant is missing a device scope"));
+    };
+
+    let device_id = match grant.device_id.as_deref() {
+        Some(bound) if bound != scope_device_id => {
+            return Err(unauthenticated(
+                "session grant device binding does not match its device scope",
+            ));
+        }
+        Some(bound) => bound.to_owned(),
+        None => scope_device_id,
+    };
+    Ok((device_id, None))
+}
+
 /// Validate a presented `ck.session.grant` + DPoP and synthesize a
 /// request-scoped `SessionRecord`. Not persisted as a local bearer.
 ///
@@ -463,37 +530,9 @@ pub(crate) async fn grant_dpop_session(
         ));
     }
 
-    // 6a. scope: principal-server session.bind scope + a device scope.
-    if !grant
-        .scopes
-        .iter()
-        .any(|scope| scope == PRINCIPAL_SESSION_BIND_SCOPE)
-    {
-        return Err(unauthenticated(
-            "session grant is missing the principal-server session.bind scope",
-        ));
-    }
-    let scope_device_id = grant
-        .scopes
-        .iter()
-        .find_map(|scope| scope.strip_prefix(DEVICE_SCOPE_PREFIX))
-        .map(str::to_owned);
-    let Some(scope_device_id) = scope_device_id else {
-        return Err(unauthenticated("session grant is missing a device scope"));
-    };
-
-    // 6b. principal / device binding consistency. The grant's bound device
-    //     (`device_id`) MUST agree with the device scope; both identify the
-    //     device this request is bound to.
-    let device_id = match grant.device_id.as_deref() {
-        Some(bound) if bound != scope_device_id => {
-            return Err(unauthenticated(
-                "session grant device binding does not match its device scope",
-            ));
-        }
-        Some(bound) => bound.to_owned(),
-        None => scope_device_id,
-    };
+    // 6a/6b. Human/device grants carry `session.bind` + a device scope; agent
+    // grants carry fresh resource-scope metadata instead.
+    let (device_id, agent_session) = session_binding_from_introspection(&grant)?;
 
     // 6c. grant not expired.
     if grant.expires_at <= crate::wire::now() {
@@ -567,6 +606,7 @@ pub(crate) async fn grant_dpop_session(
         device_id,
         audience: state.config.service_did.clone(),
         session_public_key: Some(grant.session_public_key),
+        agent_session,
         expires_at: grant.expires_at,
         created_at: now,
         revoked_at: None,
@@ -721,5 +761,95 @@ mod tests {
         let a = introspection_cache_key("grant", "did:web:a");
         let b = introspection_cache_key("grant", "did:web:b");
         assert_ne!(a, b);
+    }
+
+    fn test_introspection_grant() -> SessionGrantIntrospectGrant {
+        SessionGrantIntrospectGrant {
+            id: "grant-1".to_owned(),
+            issuer: "did:web:coauth.local".to_owned(),
+            subject: "did:web:alice.example".to_owned(),
+            service_account_id: "alice".to_owned(),
+            device_id: Some("device-1".to_owned()),
+            audience: "did:web:soland.local".to_owned(),
+            scopes: vec![
+                PRINCIPAL_SESSION_BIND_SCOPE.to_owned(),
+                format!("{DEVICE_SCOPE_PREFIX}device-1"),
+            ],
+            expires_at: crate::wire::now() + Duration::minutes(5),
+            revoked_at: None,
+            revocation_ref: "ck:session:grant-1".to_owned(),
+            session_public_key: "{}".to_owned(),
+            cnf_jkt: Some("holder-thumbprint".to_owned()),
+            proof_kind: None,
+            scope_details: Value::Null,
+            freshness_state: None,
+        }
+    }
+
+    #[test]
+    fn device_session_binding_requires_device_scope() {
+        let mut grant = test_introspection_grant();
+        grant.scopes = vec![PRINCIPAL_SESSION_BIND_SCOPE.to_owned()];
+
+        let err = session_binding_from_introspection(&grant).unwrap_err();
+
+        assert_eq!(err.0, StatusCode::UNAUTHORIZED);
+        assert_eq!(err.1, "unauthenticated");
+        assert_eq!(err.2, "session grant is missing a device scope");
+    }
+
+    #[test]
+    fn agent_session_binding_materializes_scope_details() {
+        let mut grant = test_introspection_grant();
+        grant.id = "agent-grant-1".to_owned();
+        grant.device_id = None;
+        grant.scopes = vec!["ck.agent.action:message.send".to_owned()];
+        grant.proof_kind = Some(SessionGrantProofKind::AgentKeyProof);
+        grant.scope_details = serde_json::json!({
+            "agent_principal_id": "did:web:agent.example",
+            "controller_did": "did:web:alice.example",
+            "resources": {
+                "realm_refs": ["ck:realm:team"],
+            },
+        });
+        grant.freshness_state = Some(FreshnessState::Fresh);
+
+        let (device_id, agent_session) = session_binding_from_introspection(&grant).unwrap();
+
+        assert_eq!(device_id, "agent-session:agent-grant-1");
+        let agent_session = agent_session.unwrap();
+        assert_eq!(agent_session.freshness_state, FreshnessState::Fresh);
+        assert_eq!(
+            agent_session.scope_details["agent_principal_id"],
+            "did:web:agent.example"
+        );
+    }
+
+    #[test]
+    fn agent_session_binding_requires_scope_details() {
+        let mut grant = test_introspection_grant();
+        grant.proof_kind = Some(SessionGrantProofKind::AgentKeyProof);
+        grant.freshness_state = Some(FreshnessState::Fresh);
+
+        let err = session_binding_from_introspection(&grant).unwrap_err();
+
+        assert_eq!(err.0, StatusCode::UNAUTHORIZED);
+        assert_eq!(err.1, "unauthenticated");
+        assert_eq!(err.2, "agent session grant omitted resource scope metadata");
+    }
+
+    #[test]
+    fn agent_session_binding_requires_fresh_introspection() {
+        let mut grant = test_introspection_grant();
+        grant.proof_kind = Some(SessionGrantProofKind::AgentKeyProof);
+        grant.scope_details = serde_json::json!({
+            "agent_principal_id": "did:web:agent.example",
+        });
+
+        let err = session_binding_from_introspection(&grant).unwrap_err();
+
+        assert_eq!(err.0, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(err.1, "auth_unavailable");
+        assert_eq!(err.2, "agent session revocation freshness is unknown");
     }
 }

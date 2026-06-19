@@ -333,6 +333,7 @@ pub(crate) async fn submit_federation_events(
             device_id,
             audience: state.config.service_did.clone(),
             session_public_key: None,
+            agent_session: None,
             expires_at: created_at + Duration::minutes(5),
             created_at,
             revoked_at: None,
