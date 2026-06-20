@@ -1,10 +1,9 @@
 //! Capability-based authorization engine.
 //!
 //! Evaluates grants to determine whether an actor may perform an action
-//! on a resource within a space. Default rules:
+//! on a resource within a scope. Default rules:
 //! - Owner gets all actions
-//! - Member gets read, send, react, edit_own
-//! - Explicit grants override defaults
+//! - Explicit grants authorize non-owner actors
 //!
 //! ## G3.S2 — policy server integration
 //!
@@ -318,7 +317,6 @@ impl SolandAuthzEngine {
     ///
     /// Default rules (when no explicit grants exist):
     /// - Owner of the realm → all actions allowed
-    /// - Member of the realm → read, send, react, edit_own allowed
     /// - Everyone else → denied
     #[allow(clippy::too_many_arguments)]
     pub fn check(
@@ -432,17 +430,7 @@ impl SolandAuthzEngine {
             };
         }
 
-        if members.iter().any(|m| m == actor) {
-            let member_actions = ["ck.strand.read", "ck.message.create"];
-            if member_actions.contains(&action) {
-                return AuthzResult {
-                    allowed: true,
-                    reason: "member".to_owned(),
-                    reason_detail: None,
-                    grants: Vec::new(),
-                };
-            }
-        }
+        let _ = members;
 
         AuthzResult {
             allowed: false,
@@ -905,9 +893,46 @@ mod tests {
     }
 
     #[test]
-    fn member_gets_read_only() {
+    fn membership_does_not_grant_baseline_capability() {
         let engine = SolandAuthzEngine::new();
         let members = vec!["did:web:bob".to_owned()];
+        let read = engine.check(
+            "did:web:bob",
+            "ck.strand.read",
+            "ck:space:1",
+            "ck:space:1",
+            Some("did:web:alice"),
+            &members,
+            &[],
+        );
+        assert!(!read.allowed);
+        assert_eq!(read.reason, "capability_denied");
+
+        let write = engine.check(
+            "did:web:bob",
+            "ck.message.create",
+            "ck:space:1",
+            "ck:space:1",
+            Some("did:web:alice"),
+            &members,
+            &[],
+        );
+        assert!(!write.allowed);
+        assert_eq!(write.reason, "capability_denied");
+    }
+
+    #[test]
+    fn member_read_requires_explicit_grant() {
+        let engine = SolandAuthzEngine::new();
+        let members = vec!["did:web:bob".to_owned()];
+        engine.create_grant(
+            "ck:space:1".to_owned(),
+            "did:web:alice".to_owned(),
+            "did:web:bob".to_owned(),
+            "ck:space:1".to_owned(),
+            vec!["ck.strand.read".to_owned()],
+            vec![],
+        );
         let result = engine.check(
             "did:web:bob",
             "ck.strand.read",
@@ -918,18 +943,7 @@ mod tests {
             &[],
         );
         assert!(result.allowed);
-        assert_eq!(result.reason, "member");
-
-        let denied = engine.check(
-            "did:web:bob",
-            "ck.space.manage",
-            "ck:space:1",
-            "ck:space:1",
-            Some("did:web:alice"),
-            &members,
-            &[],
-        );
-        assert!(!denied.allowed);
+        assert_eq!(result.reason, "explicit_grant");
     }
 
     #[test]
