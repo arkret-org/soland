@@ -405,6 +405,228 @@ async fn recovery_session_principal_signing_rejects_bad_signature() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn recovery_session_trusted_recovery_service_proof_verifies_and_audits() {
+    let state = shared_recovery_state(Arc::new(SolandMemoryPersistenceStore::new()));
+    let signing = SigningKey::from_bytes(&[134u8; 32]);
+    let (principal_id, _vm) = did_key_principal(&signing);
+    let service_key = SigningKey::from_bytes(&[135u8; 32]);
+    let (service_did, service_vm) = did_key_principal(&service_key);
+    seed_reset_recovery_policy(
+        &state,
+        &principal_id,
+        "trusted_recovery_service",
+        serde_json::json!({
+            "trusted_recovery_services": [{ "service_did": service_did.clone() }]
+        }),
+    )
+    .await;
+    let token = dev_token_for_device(
+        state.clone(),
+        &principal_id,
+        RECOVERY_TEST_DEVICE,
+        "Recovery",
+    )
+    .await;
+    let create_body = serde_json::json!({
+        "principal_id": principal_id.clone(),
+        "trust_domain": "ck:trust_domain:soland.local",
+        "requesting_device_id": "ck:device:01904100-0000-7000-8000-000000000139",
+        "ssk_generation": 1,
+    });
+    let session = post_recovery(
+        state.clone(),
+        &token,
+        "/_cokret/root/identity/recovery-sessions",
+        &create_body,
+        StatusCode::CREATED,
+    )
+    .await;
+    let session_id = session["recovery_session_id"].as_str().unwrap().to_owned();
+    let challenge = session["challenge"].as_str().unwrap().to_owned();
+    let audience = state.config.service_did.clone();
+    let signature = sign_trusted_recovery_service_proof(
+        &service_key,
+        &session,
+        &service_did,
+        &service_vm,
+        &audience,
+        None,
+    );
+
+    let proof_body = serde_json::json!({
+        "proof": {
+            "kind": "trusted_recovery_service",
+            "challenge": challenge,
+            "service_did": service_did.clone(),
+            "audience": audience.clone(),
+            "verification_method": service_vm.clone(),
+            "alg": "EdDSA",
+            "signature": signature,
+        },
+    });
+    let body = post_recovery(
+        state.clone(),
+        &token,
+        &format!("/_cokret/root/identity/recovery-sessions/{session_id}/proofs"),
+        &proof_body,
+        StatusCode::OK,
+    )
+    .await;
+    assert_eq!(body["state"], "verified");
+    assert_eq!(body["proof_summary"]["kind"], "trusted_recovery_service");
+    assert!(
+        body["proof_summary"]["proof_digest"]
+            .as_str()
+            .unwrap()
+            .starts_with("sha256:")
+    );
+
+    let fetched = get_recovery(
+        state.clone(),
+        &token,
+        &format!("/_cokret/root/identity/recovery-sessions/{session_id}"),
+        StatusCode::OK,
+    )
+    .await;
+    assert_eq!(fetched["state"], "verified");
+    assert_eq!(fetched["proof_summary"], body["proof_summary"]);
+
+    let audit = state
+        .persistence
+        .audit()
+        .list_for_actor(&principal_id)
+        .await
+        .unwrap();
+    let proof_audit = audit
+        .iter()
+        .find(|entry| {
+            entry.get("action").and_then(Value::as_str)
+                == Some("ck.root.identity.recovery_session.command.submit_proof")
+        })
+        .expect("submit_proof audit row");
+    assert_eq!(proof_audit["outcome"], "verified");
+    assert_eq!(
+        proof_audit["payload"]["proof_kind"],
+        "trusted_recovery_service"
+    );
+    assert_eq!(
+        proof_audit["payload"]["proof_summary"],
+        body["proof_summary"]
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn recovery_session_trusted_recovery_service_rejects_unlisted_service_and_allows_retry() {
+    let state = shared_recovery_state(Arc::new(SolandMemoryPersistenceStore::new()));
+    let signing = SigningKey::from_bytes(&[136u8; 32]);
+    let (principal_id, _vm) = did_key_principal(&signing);
+    let service_key = SigningKey::from_bytes(&[137u8; 32]);
+    let (service_did, service_vm) = did_key_principal(&service_key);
+    let attacker_service_key = SigningKey::from_bytes(&[138u8; 32]);
+    let (attacker_service_did, attacker_service_vm) = did_key_principal(&attacker_service_key);
+    seed_reset_recovery_policy(
+        &state,
+        &principal_id,
+        "trusted_recovery_service",
+        serde_json::json!({
+            "trusted_recovery_services": [{ "service_did": service_did.clone() }]
+        }),
+    )
+    .await;
+    let token = dev_token_for_device(
+        state.clone(),
+        &principal_id,
+        RECOVERY_TEST_DEVICE,
+        "Recovery",
+    )
+    .await;
+    let create_body = serde_json::json!({
+        "principal_id": principal_id.clone(),
+        "trust_domain": "ck:trust_domain:soland.local",
+        "requesting_device_id": "ck:device:01904100-0000-7000-8000-000000000140",
+        "ssk_generation": 1,
+    });
+    let session = post_recovery(
+        state.clone(),
+        &token,
+        "/_cokret/root/identity/recovery-sessions",
+        &create_body,
+        StatusCode::CREATED,
+    )
+    .await;
+    let session_id = session["recovery_session_id"].as_str().unwrap().to_owned();
+    let challenge = session["challenge"].as_str().unwrap().to_owned();
+    let audience = state.config.service_did.clone();
+    let rejected_signature = sign_trusted_recovery_service_proof(
+        &attacker_service_key,
+        &session,
+        &attacker_service_did,
+        &attacker_service_vm,
+        &audience,
+        None,
+    );
+    let rejected_body = serde_json::json!({
+        "proof": {
+            "kind": "trusted_recovery_service",
+            "challenge": challenge,
+            "service_did": attacker_service_did.clone(),
+            "audience": audience.clone(),
+            "verification_method": attacker_service_vm.clone(),
+            "alg": "EdDSA",
+            "signature": rejected_signature,
+        },
+    });
+    let body = post_recovery(
+        state.clone(),
+        &token,
+        &format!("/_cokret/root/identity/recovery-sessions/{session_id}/proofs"),
+        &rejected_body,
+        StatusCode::UNAUTHORIZED,
+    )
+    .await;
+    assert_eq!(body["error"]["code"], "recovery_proof_authority_invalid");
+
+    let fetched = get_recovery(
+        state.clone(),
+        &token,
+        &format!("/_cokret/root/identity/recovery-sessions/{session_id}"),
+        StatusCode::OK,
+    )
+    .await;
+    assert_eq!(fetched["state"], "pending");
+
+    let accepted_signature = sign_trusted_recovery_service_proof(
+        &service_key,
+        &session,
+        &service_did,
+        &service_vm,
+        &state.config.service_did,
+        None,
+    );
+    let accepted_audience = state.config.service_did.clone();
+    let accepted_body = serde_json::json!({
+        "proof": {
+            "kind": "trusted_recovery_service",
+            "challenge": session["challenge"],
+            "service_did": service_did.clone(),
+            "audience": accepted_audience,
+            "verification_method": service_vm.clone(),
+            "alg": "EdDSA",
+            "signature": accepted_signature,
+        },
+    });
+    let body = post_recovery(
+        state,
+        &token,
+        &format!("/_cokret/root/identity/recovery-sessions/{session_id}/proofs"),
+        &accepted_body,
+        StatusCode::OK,
+    )
+    .await;
+    assert_eq!(body["state"], "verified");
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn recovery_session_proof_rejects_challenge_mismatch() {
     let state = shared_recovery_state(Arc::new(SolandMemoryPersistenceStore::new()));
     let signing = SigningKey::from_bytes(&[106u8; 32]);
@@ -484,7 +706,10 @@ async fn recovery_session_complete_rejects_unverified() {
         state,
         &token,
         &format!("/_cokret/root/identity/recovery-sessions/{session_id}/complete"),
-        &serde_json::json!({}),
+        &serde_json::json!({
+            "authorization_event_id": AUTH_EVENT_ID,
+            "device_list_update_event_id": LIST_EVENT_ID,
+        }),
         StatusCode::CONFLICT,
     )
     .await;

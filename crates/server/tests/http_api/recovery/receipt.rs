@@ -94,6 +94,41 @@ async fn recovery_receipt_rejects_unauthorized_device() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn recovery_receipt_rejects_revoked_recovered_device() {
+    let state = shared_recovery_state(Arc::new(SolandMemoryPersistenceStore::new()));
+    let signing = SigningKey::from_bytes(&[80u8; 32]);
+    let (principal_id, vm) = did_key_principal(&signing);
+    let (policy_id, device_id) =
+        authorize_device_via_recovery(&state, &signing, &principal_id, &vm).await;
+    let mut device = state
+        .persistence
+        .devices()
+        .get(&principal_id, &device_id)
+        .await
+        .unwrap()
+        .expect("authorized recovered device");
+    let now = chrono::Utc::now();
+    device.revoked_at = Some(now);
+    device.updated_at = now;
+    state.persistence.devices().put(&device).await.unwrap();
+    let token = dev_token(state.clone()).await;
+
+    let receipt = signed_device_recovery_receipt(
+        &recovery_device_key(),
+        &principal_id,
+        &policy_id,
+        1,
+        &device_id,
+        RECEIPT_FIELDS,
+    );
+    let body = post_recovery_receipt(state, &token, &receipt, StatusCode::CONFLICT).await;
+    assert_eq!(
+        body["error"]["code"],
+        "recovery_receipt_device_not_authorized"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn recovery_receipt_requires_backup_classes_unlocked() {
     // device-lifecycle.md §15 step 7: backup_classes_unlocked is a required
     // normative receipt field. Dropping it MUST be rejected.

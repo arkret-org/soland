@@ -65,6 +65,7 @@ pub(crate) async fn open_recovery_session(
     principal_id: &str,
     vm: &str,
 ) -> Value {
+    ingest_fresh_recovery_did_document(&state, principal_id).await;
     seed_recovery_policy(&state, principal_id, vm, 1, None).await;
     let create_body = serde_json::json!({
         "principal_id": principal_id,
@@ -98,6 +99,44 @@ pub(crate) fn sign_recovery_proof(signing: &SigningKey, session: &Value) -> Stri
         "challenge": session["challenge"],
         "created_at": session["created_at"],
         "expires_at": session["expires_at"],
+    });
+    let bytes = cokret_sdk::canonical::canonical_json_bytes(&transcript).unwrap();
+    URL_SAFE_NO_PAD.encode(signing.sign(&bytes).to_bytes())
+}
+
+pub(crate) fn sign_trusted_recovery_service_proof(
+    signing: &SigningKey,
+    session: &Value,
+    service_did: &str,
+    verification_method: &str,
+    audience: &str,
+    attestation_ref: Option<&str>,
+) -> String {
+    let mut proof_body = serde_json::json!({
+        "kind": "trusted_recovery_service",
+        "challenge": session["challenge"],
+        "service_did": service_did,
+        "audience": audience,
+        "verification_method": verification_method,
+        "alg": "EdDSA",
+    });
+    if let Some(attestation_ref) = attestation_ref {
+        proof_body["attestation_ref"] = serde_json::json!(attestation_ref);
+    }
+    let transcript = serde_json::json!({
+        "type": "ck.identity.recovery_proof.v1",
+        "kind": "trusted_recovery_service",
+        "principal_id": session["principal_id"],
+        "requesting_device_id": session["requesting_device_id"],
+        "trust_domain": session["trust_domain"],
+        "policy_id": session["policy_id"],
+        "policy_version": session["policy_version"],
+        "recovery_session_id": session["recovery_session_id"],
+        "ssk_generation": session["ssk_generation"],
+        "challenge": session["challenge"],
+        "created_at": session["created_at"],
+        "expires_at": session["expires_at"],
+        "proof_body": proof_body,
     });
     let bytes = cokret_sdk::canonical::canonical_json_bytes(&transcript).unwrap();
     URL_SAFE_NO_PAD.encode(signing.sign(&bytes).to_bytes())
@@ -175,7 +214,7 @@ pub(crate) fn signed_device_recovery_receipt(
         "completed_at": "2026-05-30T00:00:01Z",
         "auth_data": {
             "verification_method": format!("{principal_id}#{new_device_id}"),
-            "signature_algorithm": "Ed25519",
+            "signature_algorithm": "EdDSA",
             "signed_fields": signed_fields,
             "signature": ""
         }
@@ -743,7 +782,7 @@ pub(crate) fn signed_recovery_receipt(
         "completed_at": "2026-05-30T00:00:01Z",
         "auth_data": {
             "verification_method": verification_method,
-            "signature_algorithm": "Ed25519",
+            "signature_algorithm": "EdDSA",
             "signed_fields": signed_fields,
             "signature": ""
         }
@@ -787,6 +826,9 @@ pub(crate) async fn post_recovery_policy(
     body: &Value,
     expected_status: StatusCode,
 ) -> Value {
+    if let Some(principal_id) = body.get("principal_id").and_then(Value::as_str) {
+        ingest_fresh_recovery_did_document(&state, principal_id).await;
+    }
     let mut response = TestClient::post("http://server/_cokret/root/identity/recovery-policy")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(body)

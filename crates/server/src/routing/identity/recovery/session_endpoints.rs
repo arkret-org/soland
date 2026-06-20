@@ -65,7 +65,7 @@ pub(super) fn recovery_proof_summary(record: &RecoverySessionRecord) -> Option<V
     let proof = record.proof_payload.as_ref()?.get("proof")?.as_object()?;
     let kind = proof.get("kind").and_then(Value::as_str)?;
     let verification_method = proof.get("verification_method").and_then(Value::as_str);
-    let transcript = recovery_proof_transcript(record, kind);
+    let transcript = recovery_proof_summary_transcript(record, proof)?;
     let transcript_bytes = cokret_sdk::canonical::canonical_json_bytes(&transcript).ok()?;
     let proof_digest = cokret_sdk::canonical::sha256_digest(&transcript_bytes);
     let mut summary = json!({ "kind": kind, "proof_digest": proof_digest });
@@ -73,6 +73,24 @@ pub(super) fn recovery_proof_summary(record: &RecoverySessionRecord) -> Option<V
         summary["verification_method"] = json!(vm);
     }
     Some(summary)
+}
+
+fn recovery_proof_summary_transcript(
+    record: &RecoverySessionRecord,
+    proof: &Map<String, Value>,
+) -> Option<Value> {
+    let kind = proof.get("kind").and_then(Value::as_str)?;
+    match kind {
+        "trusted_recovery_service" => {
+            let proof_body = trusted_recovery_service_proof_body(proof).ok()?;
+            Some(generic_recovery_proof_transcript(
+                record,
+                "trusted_recovery_service",
+                proof_body,
+            ))
+        }
+        _ => Some(recovery_proof_transcript(record, kind)),
+    }
 }
 
 pub(super) fn typed_recovery_session_state(
@@ -377,6 +395,9 @@ pub(super) async fn recovery_session_proof_submit(
         "principal_signing" => {
             verify_principal_signing_proof(state, &record, proof).await?;
         }
+        "trusted_recovery_service" => {
+            verify_trusted_recovery_service_proof(state, &record, proof).await?;
+        }
         other => {
             return Err(AppError::unsupported_feature(format!(
                 "proof.kind `{other}` verification not yet implemented (C-P3)"
@@ -401,6 +422,31 @@ pub(super) async fn recovery_session_proof_submit(
         .update(updated.clone())
         .await
         .map_err(recovery_session_store_error)?;
+
+    let proof_summary = recovery_proof_summary(&updated).unwrap_or(Value::Null);
+    append_audit_log(
+        state,
+        Some(&updated.principal_id),
+        "ck.root.identity.recovery_session.command.submit_proof",
+        json!({
+            "recovery_session_id": updated.recovery_session_id.clone(),
+            "principal_id": updated.principal_id.clone(),
+            "policy_id": updated.policy_id.clone(),
+            "trust_domain": updated.trust_domain.clone(),
+            "proof_kind": proof_kind,
+            "verification_method": proof
+                .get("verification_method")
+                .cloned()
+                .unwrap_or(Value::Null),
+            "service_did": proof
+                .get("service_did")
+                .cloned()
+                .unwrap_or(Value::Null),
+            "proof_summary": proof_summary,
+        }),
+        "verified",
+    )
+    .await;
 
     json_ok(RecoverySessionProofSubmitOutcome {
         recovery_session_id: RecoverySessionId::new(updated.recovery_session_id.clone())
@@ -484,6 +530,185 @@ pub(super) async fn verify_principal_signing_proof(
         })
 }
 
+pub(super) async fn verify_trusted_recovery_service_proof(
+    state: &AppState,
+    record: &RecoverySessionRecord,
+    proof: &Map<String, Value>,
+) -> Result<(), AppError> {
+    let alg = required_proof_string(proof, "alg")?;
+    if !matches!(alg, "EdDSA" | "Ed25519") {
+        return Err(AppError::invalid_param(format!(
+            "proof.alg `{alg}` not in {{EdDSA, Ed25519}}",
+        )));
+    }
+    let service_did = required_proof_string(proof, "service_did")?;
+    let audience = required_proof_string(proof, "audience")?;
+    if audience != state.config.service_did {
+        return Err(recovery_proof_authority_error(format!(
+            "proof.audience `{audience}` does not match this service"
+        )));
+    }
+    let verification_method = required_proof_string(proof, "verification_method")?;
+    let _service_did = Did::new(service_did.to_owned()).map_err(|error| {
+        recovery_proof_authority_error(format!("proof.service_did is invalid: {error}"))
+    })?;
+    if !recovery_policy_mentions_identifier(
+        &record.policy_payload,
+        &[
+            "trusted_recovery_service",
+            "trusted_recovery_services",
+            "trusted_services",
+            "recovery_services",
+        ],
+        service_did,
+    ) {
+        return Err(recovery_proof_authority_error(format!(
+            "proof.service_did `{service_did}` is not trusted by the bound recovery policy"
+        )));
+    }
+    if recovery_policy_requires_trusted_service_attestation(&record.policy_payload)
+        && proof
+            .get("attestation_ref")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .is_none()
+    {
+        return Err(recovery_proof_authority_error(
+            "trusted recovery service proof is missing attestation_ref",
+        ));
+    }
+    crate::jws_verify::validate_verification_method_controller(service_did, verification_method)
+        .map_err(|error| {
+            recovery_proof_authority_error(format!(
+                "proof.verification_method authority invalid: {error}"
+            ))
+        })?;
+    let service_key = crate::jws_verify::resolve_ed25519_pubkey(state, verification_method)
+        .map_err(|error| {
+            recovery_proof_authority_error(format!("trusted recovery service key invalid: {error}"))
+        })?;
+    let proof_body = trusted_recovery_service_proof_body(proof)?;
+    let transcript =
+        generic_recovery_proof_transcript(record, "trusted_recovery_service", proof_body);
+    let transcript_bytes =
+        cokret_sdk::canonical::canonical_json_bytes(&transcript).map_err(|error| {
+            AppError::internal(format!("recovery proof transcript failed: {error}"))
+        })?;
+    let signature_b64 = required_proof_string(proof, "signature")?;
+    let raw = URL_SAFE_NO_PAD
+        .decode(signature_b64.as_bytes())
+        .or_else(|_| STANDARD.decode(signature_b64.as_bytes()))
+        .map_err(|_| recovery_signature_error("proof.signature is not base64/base64url"))?;
+    let signature = Signature::from_slice(&raw)
+        .map_err(|_| recovery_signature_error("proof.signature must be 64 Ed25519 bytes"))?;
+    service_key
+        .verify(&transcript_bytes, &signature)
+        .map_err(|_| {
+            crate::metrics::record_digest_mismatch("recovery_proof_digest");
+            recovery_signature_error("trusted recovery service proof signature verification failed")
+        })
+}
+
+fn required_proof_string<'a>(
+    proof: &'a Map<String, Value>,
+    key: &str,
+) -> Result<&'a str, AppError> {
+    proof
+        .get(key)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| AppError::invalid_param(format!("proof.{key} is required")))
+}
+
+fn trusted_recovery_service_proof_body(proof: &Map<String, Value>) -> Result<Value, AppError> {
+    let mut body = json!({
+        "kind": "trusted_recovery_service",
+        "challenge": required_proof_string(proof, "challenge")?,
+        "service_did": required_proof_string(proof, "service_did")?,
+        "audience": required_proof_string(proof, "audience")?,
+        "verification_method": required_proof_string(proof, "verification_method")?,
+        "alg": required_proof_string(proof, "alg")?,
+    });
+    if let Some(attestation_ref) = proof
+        .get("attestation_ref")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        body["attestation_ref"] = json!(attestation_ref);
+    }
+    Ok(body)
+}
+
+fn recovery_policy_mentions_identifier(
+    policy_payload: &Value,
+    top_level_keys: &[&str],
+    identifier: &str,
+) -> bool {
+    top_level_keys.iter().any(|key| {
+        policy_payload
+            .get(*key)
+            .is_some_and(|value| value_mentions_identifier(value, identifier))
+    })
+}
+
+fn value_mentions_identifier(value: &Value, identifier: &str) -> bool {
+    match value {
+        Value::String(value) => value == identifier,
+        Value::Array(values) => values
+            .iter()
+            .any(|value| value_mentions_identifier(value, identifier)),
+        Value::Object(object) => object
+            .values()
+            .any(|value| value_mentions_identifier(value, identifier)),
+        _ => false,
+    }
+}
+
+fn recovery_policy_requires_trusted_service_attestation(policy_payload: &Value) -> bool {
+    [
+        "/trusted_recovery_service/attestation_required",
+        "/trusted_recovery_services/attestation_required",
+        "/proof_requirements/trusted_recovery_service/attestation_required",
+        "/attestation_required",
+    ]
+    .iter()
+    .any(|pointer| {
+        policy_payload
+            .pointer(pointer)
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+    }) || ["trusted_recovery_service", "trusted_recovery_services"]
+        .iter()
+        .any(|key| {
+            policy_payload
+                .get(*key)
+                .is_some_and(value_requires_attestation)
+        })
+}
+
+fn value_requires_attestation(value: &Value) -> bool {
+    match value {
+        Value::Object(object) => {
+            object
+                .get("attestation_required")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+                || object.values().any(value_requires_attestation)
+        }
+        Value::Array(values) => values.iter().any(value_requires_attestation),
+        _ => false,
+    }
+}
+
+fn recovery_proof_authority_error(message: impl Into<String>) -> AppError {
+    AppError::new(ErrorCode::InvalidSignature, message.into())
+        .with_status(StatusCode::UNAUTHORIZED)
+        .with_wire_code("recovery_proof_authority_invalid")
+}
+
 /// Canonical recovery-proof transcript binding every session-defining field.
 /// Both the requesting device (when signing) and the server (when verifying)
 /// MUST construct this identically.
@@ -503,6 +728,28 @@ pub(super) fn recovery_proof_transcript(record: &RecoverySessionRecord, kind: &s
         // recovery-session.schema.json $defs/principal_signing_transcript.
         "created_at": record.created_at.to_rfc3339_opts(SecondsFormat::Millis, true),
         "expires_at": record.expires_at.to_rfc3339_opts(SecondsFormat::Millis, true),
+    })
+}
+
+pub(super) fn generic_recovery_proof_transcript(
+    record: &RecoverySessionRecord,
+    kind: &str,
+    proof_body: Value,
+) -> Value {
+    json!({
+        "type": "ck.identity.recovery_proof.v1",
+        "kind": kind,
+        "principal_id": record.principal_id,
+        "requesting_device_id": record.requesting_device_id,
+        "trust_domain": record.trust_domain,
+        "policy_id": record.policy_id,
+        "policy_version": record.policy_version,
+        "recovery_session_id": record.recovery_session_id,
+        "ssk_generation": record.ssk_generation,
+        "challenge": record.challenge,
+        "created_at": record.created_at.to_rfc3339_opts(SecondsFormat::Millis, true),
+        "expires_at": record.expires_at.to_rfc3339_opts(SecondsFormat::Millis, true),
+        "proof_body": proof_body,
     })
 }
 
