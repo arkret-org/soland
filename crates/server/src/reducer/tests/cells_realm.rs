@@ -543,12 +543,24 @@ fn realm_search_policy_forward_private_requires_matching_leakage_class() {
 #[test]
 fn realm_search_policy_forward_private_requires_token_rotation_cadence() {
     let mut policy = base_search_policy();
-    policy["enabled_profile_refs"] = serde_json::json!(["ck.profile.search.forward_private.v1"]);
+    policy["enabled_profile_refs"] = serde_json::json!([
+        "ck.profile.search.blind_index.v1",
+        "ck.profile.search.forward_private.v1"
+    ]);
     policy["leakage_class"] = serde_json::json!("forward_private");
     assert_search_policy_rejected(
         policy,
         "search_policy_forward_private_token_rotation_required",
     );
+}
+
+#[test]
+fn realm_search_policy_forward_private_requires_blind_index_profile() {
+    let mut policy = base_search_policy();
+    policy["enabled_profile_refs"] = serde_json::json!(["ck.profile.search.forward_private.v1"]);
+    policy["leakage_class"] = serde_json::json!("forward_private");
+    policy["token_rotation_cadence_ms"] = serde_json::json!(3_600_000u64);
+    assert_search_policy_rejected(policy, "search_policy_forward_private_blind_index_required");
 }
 
 #[test]

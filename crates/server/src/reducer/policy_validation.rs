@@ -211,6 +211,13 @@ pub(crate) fn validate_realm_search_policy_payload(policy: &Value) -> Result<(),
     if leakage_class == "forward_private" && !forward_private_enabled {
         return Err("search_policy_forward_private_profile_required");
     }
+    if forward_private_enabled
+        && !profiles
+            .iter()
+            .any(|profile| profile == "ck.profile.search.blind_index.v1")
+    {
+        return Err("search_policy_forward_private_blind_index_required");
+    }
     if let Some(value) = object.get("token_rotation_cadence_ms")
         && value.as_u64().is_none()
     {
