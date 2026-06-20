@@ -38,7 +38,7 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use cokret_sdk::identity::DidResolver;
 use cokret_sdk::models::AuthzDecision;
 use cokret_sdk::{
-    Did, Hash, PolicyCheckBoundTo, PolicyCheckOutcome, PolicyCheckRequestBody,
+    Did, FreshnessState, Hash, PolicyCheckBoundTo, PolicyCheckOutcome, PolicyCheckRequestBody,
     PolicyCheckSignature, PolicyCheckSource, RealmId,
 };
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
@@ -382,6 +382,7 @@ impl PolicyClient {
             },
             expires_at: chrono::Utc::now()
                 + chrono::Duration::seconds(config.cache_ttl_seconds as i64),
+            freshness_state: FreshnessState::Unknown,
             auth_state_digest: zero_hash.clone(),
             policy_frontier_digest: zero_hash.clone(),
             membership_frontier_digest: zero_hash,
@@ -485,6 +486,7 @@ struct PolicyDecisionTranscript<'a> {
     request_id: &'a str,
     decision: &'a AuthzDecision,
     bound_to: &'a PolicyCheckBoundTo,
+    freshness_state: &'a FreshnessState,
     auth_state_digest: &'a Hash,
     policy_frontier_digest: &'a Hash,
     membership_frontier_digest: &'a Hash,
@@ -504,6 +506,7 @@ fn policy_decision_transcript_bytes(
         request_id: request.request_id.as_str(),
         decision: &response.decision,
         bound_to: &response.bound_to,
+        freshness_state: &response.freshness_state,
         auth_state_digest: &response.auth_state_digest,
         policy_frontier_digest: &response.policy_frontier_digest,
         membership_frontier_digest: &response.membership_frontier_digest,
@@ -696,6 +699,7 @@ mod tests {
                 request_canonical_digest: zero.clone(),
                 policy_server_id: Did::new("did:web:policy.example.com").unwrap(),
             },
+            freshness_state: FreshnessState::Fresh,
             auth_state_digest: zero.clone(),
             policy_frontier_digest: zero.clone(),
             membership_frontier_digest: zero,
@@ -758,6 +762,7 @@ mod tests {
                 request_canonical_digest: wire_request.request_canonical_digest.clone(),
                 policy_server_id: Did::new("did:web:policy.example.com").unwrap(),
             },
+            freshness_state: FreshnessState::Fresh,
             auth_state_digest: zero.clone(),
             policy_frontier_digest: zero.clone(),
             membership_frontier_digest: zero,
