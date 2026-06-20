@@ -293,6 +293,73 @@ async fn peer_events_submit_accepts_known_member_relayed_by_foreign_domain() {
 }
 
 #[tokio::test]
+async fn peer_events_submit_accepts_bound_mls_welcome_and_rejects_missing_claim_envelope() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let welcome_event_id = "ck:event:01904100-0000-7000-8000-fede00000b01";
+    let welcome_event = event_envelope(
+        welcome_event_id,
+        "ck.mls.welcome",
+        "ck.schema.event.v1",
+        "did:web:alice.example",
+        51,
+        mls_welcome_payload("claim-peer-01", "opaque-peer-welcome"),
+    );
+    let outcome = submit_peer_event(state.clone(), &welcome_event).await;
+    assert_eq!(outcome["status"], "accepted", "{outcome:?}");
+    assert_eq!(outcome["accepted"], serde_json::json!([welcome_event_id]));
+    assert_eq!(
+        state
+            .persistence
+            .mls_welcomes()
+            .snapshot_all()
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+
+    let missing_claim_event_id = "ck:event:01904100-0000-7000-8000-fede00000b02";
+    let mut missing_claim_payload =
+        mls_welcome_payload("claim-peer-02", "opaque-peer-welcome-missing");
+    missing_claim_payload
+        .as_object_mut()
+        .unwrap()
+        .remove("claim_envelope");
+    let missing_claim_event = event_envelope(
+        missing_claim_event_id,
+        "ck.mls.welcome",
+        "ck.schema.event.v1",
+        "did:web:alice.example",
+        52,
+        missing_claim_payload,
+    );
+    let outcome = submit_peer_event(state.clone(), &missing_claim_event).await;
+    assert_eq!(outcome["status"], "partial", "{outcome:?}");
+    assert!(outcome["accepted"].as_array().unwrap().is_empty());
+    let rejected = outcome["rejected"].as_array().unwrap();
+    assert_eq!(rejected.len(), 1);
+    assert_eq!(rejected[0]["id"], missing_claim_event_id);
+    assert_eq!(rejected[0]["reason_code"], "schema_violation");
+    assert!(
+        rejected[0]["detail"]
+            .as_str()
+            .unwrap()
+            .contains("claim_envelope"),
+        "{outcome:?}"
+    );
+    assert_eq!(
+        state
+            .persistence
+            .mls_welcomes()
+            .snapshot_all()
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+#[tokio::test]
 async fn peer_events_query_clips_circle_event_outside_source_did_member_scope() {
     let state = AppState::new(test_config(), Db { pool: None });
     seed_peer_read_authorization(&state, PEER_SOURCE_DID, "did:web:bob.example").await;
@@ -380,7 +447,14 @@ async fn self_events_reject_federation_wire() {
         .await;
     assert_eq!(response.status_code.unwrap(), StatusCode::BAD_REQUEST);
     let body: Value = response.take_json().await.unwrap();
-    assert_eq!(body["error"]["code"], "schema_violation");
+    assert_eq!(body["error"]["code"], "missing_param");
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("event_id"),
+        "{body:?}"
+    );
 }
 
 fn peer_submit_body(event: &Value) -> Value {
@@ -404,6 +478,22 @@ fn peer_submit_body(event: &Value) -> Value {
         "events": [event],
         "idempotency_key": format!("ck:outbox:event:{event_id}"),
     })
+}
+
+async fn submit_peer_event(state: AppState, event: &Value) -> Value {
+    let body = peer_submit_body(event);
+    let target = "http://server/_cokret/peer/events";
+    let mut submit = TestClient::post(target).json(&body);
+    for (name, value) in signed_federation_push_headers(PEER_SOURCE_DID, SERVICE_DID, target, &body)
+    {
+        submit = submit.add_header(name, value, true);
+    }
+    submit
+        .send(&app_from_state(state))
+        .await
+        .take_json()
+        .await
+        .unwrap()
 }
 
 fn peer_get_headers(target_uri: &str) -> Vec<(&'static str, String)> {
@@ -537,6 +627,75 @@ fn circle_member_event(event_id: &str, member_did: &str, sender: &str, seq: u64)
     )
 }
 
+fn mls_welcome_payload(claim_id: &str, ciphertext: &str) -> Value {
+    let group_id = "ck:mls_group:peer-dm";
+    let keypackage_ref = "sha256:5555555555555555555555555555555555555555555555555555555555555555";
+    let keypackage_digest =
+        "sha256:5555555555555555555555555555555555555555555555555555555555555555";
+    serde_json::json!({
+        "mls_group_id": group_id,
+        "epoch": 1,
+        "recipient_principal_id": "did:web:bob.example",
+        "recipient_device_id": "ck:device:01904100-0000-7000-8000-b0b0e0000001",
+        "keypackage_ref": keypackage_ref,
+        "keypackage_digest": keypackage_digest,
+        "claim_id": claim_id,
+        "claim_ref": {
+            "claim_id": claim_id,
+            "keypackage_ref": keypackage_ref,
+            "keypackage_digest": keypackage_digest,
+            "capabilities_digest": "sha256:6666666666666666666666666666666666666666666666666666666666666666",
+            "ssk_generation": 1
+        },
+        "claim_envelope": {
+            "keypackage_ref": keypackage_ref,
+            "keypackage_digest": keypackage_digest,
+            "intended_realm_id": TEST_REALM_ID,
+            "claim_id": claim_id,
+            "requester_did": "did:web:alice.example",
+            "ssk_generation": 1,
+            "nonce": b64(format!("{claim_id}-nonce-128-bit-material").as_bytes()),
+            "welcome_digest": cokret_sdk::canonical::sha256_digest(ciphertext.as_bytes()),
+            "created_at": "2026-05-25T00:00:02Z",
+            "signature": {
+                "kid": "did:web:alice.example#self-signing",
+                "alg": "EdDSA",
+                "sig": b64(format!("{claim_id}-signature").as_bytes())
+            }
+        },
+        "welcome_ref": "ck:blob:sha256:8888888888888888888888888888888888888888888888888888888888888888",
+        "ciphertext": ciphertext,
+        "expires_at": "2026-05-25T01:00:00Z",
+        "commit_ref": "ck:event:01904100-0000-7000-8000-fede00000c01",
+        "governance_binding": mls_governance_binding(group_id)
+    })
+}
+
+fn mls_governance_binding(group_id: &str) -> Value {
+    serde_json::json!({
+        "binding_version": 1,
+        "encoding_profile": "cbor-deterministic-rfc8949-v1",
+        "realm_id": TEST_REALM_ID,
+        "effective_scope": {
+            "kind": "realm",
+            "realm_id": TEST_REALM_ID
+        },
+        "mls_group_id": group_id,
+        "previous_epoch": 0,
+        "next_epoch": 0,
+        "membership_frontier": [
+            "ck:event:01904100-0000-7000-8000-fede00000a01"
+        ],
+        "policy_root": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+        "binding_profile": soland::kinds::MLS_GOVERNANCE_BINDING_FULL_PROFILE,
+        "reducer_profile": soland::kinds::MLS_REDUCER_PROFILE_V1
+    })
+}
+
+fn b64(bytes: &[u8]) -> String {
+    URL_SAFE_NO_PAD.encode(bytes)
+}
+
 fn event_envelope(
     event_id: &str,
     kind: &str,
@@ -564,7 +723,7 @@ fn event_envelope(
             "device_id": "ck:device:01904100-0000-7000-8000-a11ce0000001",
             "audience": SERVICE_DID,
             "domain": SERVICE_DID,
-            "payload_digest": sha256_json(&serde_json::json!({}))
+            "payload_digest": sha256_json(&payload)
         }]
     });
     event["canonical_digest"] = serde_json::json!(event_canonical_digest(&event));
