@@ -51,7 +51,7 @@ use crate::ids;
 use crate::kinds::{
     CK_CIRCLE_ARCHIVE, CK_CIRCLE_CREATE, CK_CIRCLE_MEMBER_STATE, CK_CIRCLE_TOMBSTONE,
 };
-use crate::reducer::{CircleLifecycleState, CircleProjection};
+use crate::reducer::{CircleLifecycleState, CircleProjection, ProjectionState};
 use crate::result::{JsonResult, json_ok};
 use crate::routing::events::event_log::submit_event_value;
 use crate::state::AppState;
@@ -79,7 +79,17 @@ where
         .map_err(|e| AppError::internal(format!("stored circle {field}: {e}")))
 }
 
-fn circle_view_from(c: &CircleProjection) -> Result<CircleView, AppError> {
+fn circle_view_from_projection(
+    projection: &ProjectionState,
+    c: &CircleProjection,
+) -> Result<CircleView, AppError> {
+    circle_view_from_with_pending(c, pending_mls_removals_from_projection(projection, c))
+}
+
+fn circle_view_from_with_pending(
+    c: &CircleProjection,
+    pending_mls_removals: Vec<Did>,
+) -> Result<CircleView, AppError> {
     Ok(CircleView {
         circle_id: parse_sdk_field("circle_id", &c.circle_id)?,
         realm_id: parse_sdk_field("realm_id", &c.realm_id)?,
@@ -100,6 +110,7 @@ fn circle_view_from(c: &CircleProjection) -> Result<CircleView, AppError> {
             .transpose()?,
         encryption_profile: parse_sdk_field("encryption_profile", &c.encryption_profile)?,
         mls_group_ref: c.mls_group_ref.clone(),
+        pending_mls_removals,
         state: parse_sdk_field("state", c.state.as_str())?,
         members: c
             .members
@@ -115,6 +126,27 @@ fn circle_view_from(c: &CircleProjection) -> Result<CircleView, AppError> {
             .transpose()?,
         updated_at: c.updated_at,
     })
+}
+
+fn pending_mls_removals_from_projection(
+    projection: &ProjectionState,
+    circle: &CircleProjection,
+) -> Vec<Did> {
+    projection
+        .pending_mls_removals
+        .iter()
+        .filter(|obligation| {
+            obligation.realm_id == circle.realm_id
+                && obligation.circle_id.as_deref() == Some(circle.circle_id.as_str())
+                && obligation.mls_group_ref.as_deref().is_none_or(|group_ref| {
+                    circle
+                        .mls_group_ref
+                        .as_deref()
+                        .is_none_or(|expected| expected == group_ref)
+                })
+        })
+        .filter_map(|obligation| Did::new(obligation.actor_id.clone()).ok())
+        .collect()
 }
 
 fn circle_membership_to_reducer_state(membership: CircleMembership) -> &'static str {
@@ -284,7 +316,7 @@ async fn list_circles(
     let circles = projection
         .circles_for_realm(realm_id.as_str())
         .iter()
-        .map(|c| circle_view_from(c))
+        .map(|c| circle_view_from_projection(&projection, c))
         .collect::<Result<Vec<_>, _>>()?;
     json_ok(CircleList { realm_id, circles })
 }
@@ -308,7 +340,7 @@ async fn get_circle(
     let circle = projection
         .circle(&circle_id)
         .ok_or_else(|| AppError::not_found("circle not found"))?;
-    json_ok(circle_view_from(circle)?)
+    json_ok(circle_view_from_projection(&projection, circle)?)
 }
 
 #[endpoint(
@@ -353,7 +385,7 @@ async fn post_circle(
     let circle = projection
         .circle(circle_id.as_str())
         .ok_or_else(|| AppError::internal("circle create accepted but not projected"))?;
-    json_ok(circle_view_from(circle)?)
+    json_ok(circle_view_from_projection(&projection, circle)?)
 }
 
 #[endpoint(
@@ -648,11 +680,11 @@ async fn submit_circle_lifecycle(
     let projection = state.projection.lock().expect("projection mutex");
     // For tombstone the read-helper hides the row; fall back to direct
     // map lookup so the response still surfaces the terminal state.
-    let response = projection
+    let circle = projection
         .circle(&circle_id)
         .or_else(|| projection.circles.get(&circle_id))
-        .ok_or_else(|| AppError::not_found("circle not found"))
-        .and_then(circle_view_from)?;
+        .ok_or_else(|| AppError::not_found("circle not found"))?;
+    let response = circle_view_from_projection(&projection, circle)?;
     json_ok(response)
 }
 
