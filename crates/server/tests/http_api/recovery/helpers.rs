@@ -639,6 +639,7 @@ pub(crate) async fn seed_bearer_session_with_device_payload(
             device_id: device_id.to_owned(),
             audience: state.config.service_did.clone(),
             session_public_key: None,
+            agent_session: None,
             expires_at: now + chrono::Duration::minutes(10),
             created_at: now,
             revoked_at: None,

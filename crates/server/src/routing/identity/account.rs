@@ -27,9 +27,11 @@ use cokret_sdk::http::{
 use cokret_sdk::models::InviteReceivePolicy;
 use cokret_sdk::{
     ACTOR_PROFILE_SCHEMA, AccountDeviceSummary, AccountRegisterOutcome, AccountRegisterRequestBody,
-    AccountStatus, AccountUpdateProfileOutcome, AccountUpdateProfileRequestBody, AccountView,
-    ActorKind, ActorProfile, ActorProfileId, BlobRef, DeviceId, Did, ErrorCode, EventId, RealmId,
-    StrandId,
+    AccountRegistrationAudit, AccountRegistrationAuditOutcome, AccountRegistrationEvidenceSummary,
+    AccountRegistrationPolicy, AccountRegistrationPolicyEvidence,
+    AccountRegistrationRateLimitPolicy, AccountStatus, AccountUpdateProfileOutcome,
+    AccountUpdateProfileRequestBody, AccountView, ActorKind, ActorProfile, ActorProfileId, BlobRef,
+    DeviceId, Did, ErrorCode, EventId, Hash, RealmId, StrandId,
 };
 use ed25519_dalek::Signer as _;
 use salvo::http::StatusCode;
@@ -237,6 +239,330 @@ struct LocalAccountRegisterRequestBody {
     pub device_id: Option<String>,
 }
 
+fn account_registration_policy_snapshot(state: &AppState) -> AccountRegistrationPolicy {
+    state
+        .account_registration_policy
+        .lock()
+        .expect("account registration policy lock")
+        .clone()
+}
+
+fn account_registration_policy_digest(
+    policy: &AccountRegistrationPolicy,
+) -> Result<Hash, AppError> {
+    let digest = cokret_sdk::canonical::canonical_sha256(policy)
+        .map_err(|error| AppError::internal(format!("registration policy digest: {error}")))?;
+    Hash::new(digest).map_err(|error| {
+        AppError::internal(format!("registration policy digest is invalid: {error}"))
+    })
+}
+
+fn account_registration_evidence_summary(
+    evidence: Option<&AccountRegistrationPolicyEvidence>,
+) -> AccountRegistrationEvidenceSummary {
+    AccountRegistrationEvidenceSummary {
+        verification_code_present: evidence
+            .and_then(|value| value.verification_code.as_deref())
+            .is_some_and(|value| !value.trim().is_empty()),
+        invitation_token_present: evidence
+            .and_then(|value| value.invitation_token.as_deref())
+            .is_some_and(|value| !value.trim().is_empty()),
+        organization: evidence
+            .and_then(|value| value.organization.as_deref())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned),
+    }
+}
+
+fn account_registration_audit(
+    policy: &AccountRegistrationPolicy,
+    evidence: Option<&AccountRegistrationPolicyEvidence>,
+    outcome: AccountRegistrationAuditOutcome,
+    retry_after_ms: Option<u64>,
+) -> Result<AccountRegistrationAudit, AppError> {
+    Ok(AccountRegistrationAudit {
+        outcome,
+        policy_digest: account_registration_policy_digest(policy)?,
+        evidence: account_registration_evidence_summary(evidence),
+        retry_after_ms,
+    })
+}
+
+async fn append_account_registration_audit(
+    state: &AppState,
+    did: &str,
+    handle: Option<&str>,
+    audit: &AccountRegistrationAudit,
+) {
+    append_audit_log(
+        state,
+        Some(did),
+        "account.register",
+        json!({
+            "operation_id": "ck.gate.account.command.register",
+            "principal_id": did,
+            "handle_requested": handle,
+            "via": "gate",
+            "registration_audit": audit,
+        }),
+        audit.outcome.as_str(),
+    )
+    .await;
+}
+
+async fn reject_account_registration(
+    state: &AppState,
+    did: &str,
+    handle: Option<&str>,
+    audit: AccountRegistrationAudit,
+    code: crate::error::ErrorCode,
+    message: &'static str,
+) -> AppError {
+    append_account_registration_audit(state, did, handle, &audit).await;
+    AppError::new(code, message).with_reason_detail(audit.outcome.as_str())
+}
+
+fn digest_registration_secret(value: &str) -> Result<Hash, AppError> {
+    Hash::new(cokret_sdk::canonical::sha256_digest(
+        value.trim().as_bytes(),
+    ))
+    .map_err(|error| AppError::internal(format!("registration secret digest: {error}")))
+}
+
+fn evidence_secret_matches(
+    value: Option<&str>,
+    accepted_digests: &[Hash],
+) -> Result<bool, AppError> {
+    let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(false);
+    };
+    if accepted_digests.is_empty() {
+        return Ok(true);
+    }
+    let digest = digest_registration_secret(value)?;
+    Ok(accepted_digests.iter().any(|accepted| accepted == &digest))
+}
+
+fn normalized_registration_policy_label(value: &str) -> String {
+    value.trim().trim_end_matches('.').to_ascii_lowercase()
+}
+
+fn did_web_host_candidate(did: &str) -> Option<String> {
+    let host = did.strip_prefix("did:web:")?;
+    let host = host.split(':').next().unwrap_or(host);
+    Some(normalized_registration_policy_label(
+        &host.replace(':', "."),
+    ))
+}
+
+fn organization_allowed(
+    did: &str,
+    policy: &AccountRegistrationPolicy,
+    evidence: Option<&AccountRegistrationPolicyEvidence>,
+) -> bool {
+    if policy.organization_allowlist.is_empty() {
+        return true;
+    }
+    let mut candidates = Vec::new();
+    if let Some(organization) = evidence.and_then(|value| value.organization.as_deref()) {
+        candidates.push(normalized_registration_policy_label(organization));
+    }
+    if let Some(host) = did_web_host_candidate(did) {
+        candidates.push(host);
+    }
+    policy.organization_allowlist.iter().any(|allowed| {
+        let allowed = normalized_registration_policy_label(allowed);
+        candidates
+            .iter()
+            .any(|candidate| candidate == &allowed || candidate.ends_with(&format!(".{allowed}")))
+    })
+}
+
+fn account_registration_retry_after_ms(
+    state: &AppState,
+    did: &str,
+    rate_limit: Option<&AccountRegistrationRateLimitPolicy>,
+) -> Option<u64> {
+    let rate_limit = rate_limit?;
+    if rate_limit.max_attempts == 0 || rate_limit.window_seconds == 0 {
+        return Some(0);
+    }
+    let now = now();
+    let window = chrono::Duration::seconds(rate_limit.window_seconds as i64);
+    let mut tracker = state
+        .account_registration_rate_tracker
+        .lock()
+        .expect("account registration rate tracker lock");
+    let entry = tracker.entry(did.to_owned()).or_insert((now, 0));
+    if now.signed_duration_since(entry.0) >= window {
+        *entry = (now, 0);
+    }
+    if entry.1 >= rate_limit.max_attempts {
+        let retry = window
+            .checked_sub(&now.signed_duration_since(entry.0))
+            .unwrap_or_else(chrono::Duration::zero)
+            .num_milliseconds()
+            .max(0) as u64;
+        return Some(retry);
+    }
+    entry.1 += 1;
+    None
+}
+
+async fn enforce_account_registration_policy(
+    state: &AppState,
+    did: &str,
+    handle: Option<&str>,
+    evidence: Option<&AccountRegistrationPolicyEvidence>,
+) -> Result<AccountRegistrationAudit, AppError> {
+    let policy = account_registration_policy_snapshot(state);
+    if !policy.enabled {
+        let audit = account_registration_audit(
+            &policy,
+            evidence,
+            AccountRegistrationAuditOutcome::RegistrationClosed,
+            None,
+        )?;
+        return Err(reject_account_registration(
+            state,
+            did,
+            handle,
+            audit,
+            crate::error::ErrorCode::FailedPrecondition,
+            "account registration is closed",
+        )
+        .await);
+    }
+    if let Some(retry_after_ms) =
+        account_registration_retry_after_ms(state, did, policy.rate_limit.as_ref())
+    {
+        let audit = account_registration_audit(
+            &policy,
+            evidence,
+            AccountRegistrationAuditOutcome::RateLimited,
+            Some(retry_after_ms),
+        )?;
+        return Err(reject_account_registration(
+            state,
+            did,
+            handle,
+            audit,
+            crate::error::ErrorCode::RateLimited,
+            "account registration rate limit exceeded",
+        )
+        .await);
+    }
+    let verification_code = evidence.and_then(|value| value.verification_code.as_deref());
+    if policy.verification_code.required
+        && verification_code
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .is_none()
+    {
+        let audit = account_registration_audit(
+            &policy,
+            evidence,
+            AccountRegistrationAuditOutcome::VerificationCodeRequired,
+            None,
+        )?;
+        return Err(reject_account_registration(
+            state,
+            did,
+            handle,
+            audit,
+            crate::error::ErrorCode::FailedPrecondition,
+            "registration verification code is required",
+        )
+        .await);
+    }
+    if policy.verification_code.required
+        && let Some(code_digest) = policy.verification_code.code_digest.as_ref()
+        && !evidence_secret_matches(verification_code, std::slice::from_ref(code_digest))?
+    {
+        let audit = account_registration_audit(
+            &policy,
+            evidence,
+            AccountRegistrationAuditOutcome::VerificationCodeInvalid,
+            None,
+        )?;
+        return Err(reject_account_registration(
+            state,
+            did,
+            handle,
+            audit,
+            crate::error::ErrorCode::FailedPrecondition,
+            "registration verification code is invalid",
+        )
+        .await);
+    }
+    if !organization_allowed(did, &policy, evidence) {
+        let audit = account_registration_audit(
+            &policy,
+            evidence,
+            AccountRegistrationAuditOutcome::OrganizationNotAllowed,
+            None,
+        )?;
+        return Err(reject_account_registration(
+            state,
+            did,
+            handle,
+            audit,
+            crate::error::ErrorCode::FailedPrecondition,
+            "principal is not allowed by the registration organization policy",
+        )
+        .await);
+    }
+    let invitation_token = evidence.and_then(|value| value.invitation_token.as_deref());
+    if policy.invitation.required
+        && invitation_token
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .is_none()
+    {
+        let audit = account_registration_audit(
+            &policy,
+            evidence,
+            AccountRegistrationAuditOutcome::InvitationRequired,
+            None,
+        )?;
+        return Err(reject_account_registration(
+            state,
+            did,
+            handle,
+            audit,
+            crate::error::ErrorCode::FailedPrecondition,
+            "registration invitation token is required",
+        )
+        .await);
+    }
+    if policy.invitation.required
+        && !evidence_secret_matches(invitation_token, &policy.invitation.token_digests)?
+    {
+        let audit = account_registration_audit(
+            &policy,
+            evidence,
+            AccountRegistrationAuditOutcome::InvitationInvalid,
+            None,
+        )?;
+        return Err(reject_account_registration(
+            state,
+            did,
+            handle,
+            audit,
+            crate::error::ErrorCode::FailedPrecondition,
+            "registration invitation token is invalid",
+        )
+        .await);
+    }
+    account_registration_audit(
+        &policy,
+        evidence,
+        AccountRegistrationAuditOutcome::Accepted,
+        None,
+    )
+}
+
 #[endpoint(
     operation_id = "org.cokret.soland.account.register",
     tags("account"),
@@ -400,9 +726,9 @@ async fn account_viewer(
 /// binding (`ck.gate.account.command.register`, surface group `account_auth`).
 ///
 /// Spec: sync/service-http-binding.md — request is
-/// `AccountRegisterRequestBody {principal_id, display_name?, device_id?,
-/// proof?}`; a bare `handle` field MUST NOT be accepted (the first handle
-/// arrives via a signed handle claim, cf. identity-handles.md), so the
+/// `AccountRegisterRequestBody {principal_id, handle?, display_name?,
+/// device_id?, proof?, policy_evidence?}`. When `handle` is present the
+/// Principal Server issues the first signed handle claim; otherwise the
 /// account is provisioned with a synthetic localpart derived from the DID
 /// (same bootstrap rule as `dev_login`). The optional lifecycle `proof`
 /// shares the session-grant proof vocabulary; signature verification of
@@ -412,7 +738,7 @@ async fn account_viewer(
     operation_id = "ck.gate.account.command.register",
     tags("account"),
     summary = "Register an account (spec account_auth binding)",
-    status_codes(200, 400, 409, 500)
+    status_codes(200, 400, 409, 429, 500)
 )]
 #[tracing::instrument(skip_all, fields(op = "ck.gate.account.command.register"))]
 async fn gate_account_register(
@@ -423,6 +749,13 @@ async fn gate_account_register(
     let body = body.into_inner();
     let did = body.principal_id.as_str().to_owned();
     crate::routing::extensions::sovereign::validate_sovereign_did_registration(state, &did)?;
+    let registration_audit = enforce_account_registration_policy(
+        state,
+        &did,
+        body.handle.as_deref(),
+        body.policy_evidence.as_ref(),
+    )
+    .await?;
     let existing = state
         .persistence
         .accounts()
@@ -430,10 +763,21 @@ async fn gate_account_register(
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
     if existing.is_some() {
-        return Err(AppError::new(
+        let duplicate_audit = AccountRegistrationAudit {
+            outcome: AccountRegistrationAuditOutcome::DuplicateConflict,
+            policy_digest: registration_audit.policy_digest.clone(),
+            evidence: registration_audit.evidence.clone(),
+            retry_after_ms: None,
+        };
+        return Err(reject_account_registration(
+            state,
+            &did,
+            body.handle.as_deref(),
+            duplicate_audit,
             crate::error::ErrorCode::DuplicateConflict,
             "account already exists",
-        ));
+        )
+        .await);
     }
     let localpart = match body.handle.as_deref() {
         Some(handle) => resolve_registration_localpart(state, handle).await?,
@@ -492,14 +836,8 @@ async fn gate_account_register(
             .await
             .map_err(|error| AppError::internal(error.to_string()))?;
     }
-    append_audit_log(
-        state,
-        Some(&did),
-        "account.register",
-        json!({"handle": account.handle(), "via": "gate"}),
-        "accepted",
-    )
-    .await;
+    append_account_registration_audit(state, &did, Some(&account.handle()), &registration_audit)
+        .await;
     let devices = account_device_summaries(state, &did).await?;
     let primary_handle_claim = account_primary_handle_claim(state, &account);
     json_ok(AccountRegisterOutcome {
@@ -510,6 +848,7 @@ async fn gate_account_register(
         primary_handle_claim_ref: None,
         handle_claim_digests: Vec::new(),
         profile: None,
+        registration_audit: Some(registration_audit),
     })
 }
 

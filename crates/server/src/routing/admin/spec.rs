@@ -53,10 +53,8 @@ struct AdminServerInfoOutcome {
     service_did: String,
     trust_domain: String,
     development_mode: bool,
-    /// Whether the deployment accepts public self-registration. soland
-    /// does not gate registration on a dedicated flag yet, so this tracks
-    /// `development_mode` (open in dev, closed otherwise) until the
-    /// registration-policy cell lands.
+    /// Whether the deployment accepts public self-registration according to
+    /// the canonical account registration policy DTO.
     allow_public_registration: bool,
 }
 
@@ -228,7 +226,11 @@ async fn get_server_info(
         service_did: state.config.service_did.clone(),
         trust_domain: state.config.trust_domain.clone(),
         development_mode: state.config.development_mode,
-        allow_public_registration: state.config.development_mode,
+        allow_public_registration: state
+            .account_registration_policy
+            .lock()
+            .expect("account registration policy lock")
+            .enabled,
     })
 }
 

@@ -7,6 +7,10 @@ use soland::state::DeviceMessageRecord;
 
 use super::common::*;
 
+fn registration_secret_digest(value: &str) -> cokret_sdk::Hash {
+    cokret_sdk::Hash::new(cokret_sdk::canonical::sha256_digest(value.as_bytes())).unwrap()
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn oauth_bearer_introspection_authenticates_directly() {
     let (introspection_url, request_handle) = spawn_oauth_introspection_server();
@@ -43,6 +47,189 @@ async fn oauth_bearer_introspection_authenticates_directly() {
         })
         .expect("OAuth device auto-provisioned");
     assert!(oauth_device.device_id.starts_with("ck:device:"));
+}
+
+#[tokio::test]
+async fn account_registration_policy_rejects_closed_and_audits() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    {
+        let mut policy = state
+            .account_registration_policy
+            .lock()
+            .expect("account registration policy lock");
+        policy.enabled = false;
+    }
+
+    let mut response = TestClient::post("http://server/_cokret/gate/account/register")
+        .json(&serde_json::json!({
+            "principal_id": "did:web:closed-register.example",
+        }))
+        .send(&app_from_state(state.clone()))
+        .await;
+    let status = response.status_code.unwrap();
+    let body: Value = response.take_json().await.unwrap();
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["error"]["code"], "failed_precondition");
+    assert_eq!(
+        body["error"]["details"]["reason_detail"],
+        "registration_closed"
+    );
+
+    let audit = state
+        .persistence
+        .audit()
+        .list_for_actor("did:web:closed-register.example")
+        .await
+        .unwrap();
+    assert_eq!(audit.len(), 1);
+    assert_eq!(audit[0]["outcome"], "registration_closed");
+    assert_eq!(
+        audit[0]["payload"]["registration_audit"]["outcome"],
+        "registration_closed"
+    );
+}
+
+#[tokio::test]
+async fn account_registration_policy_evidence_and_rate_limit_are_enforced() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    {
+        let mut policy = state
+            .account_registration_policy
+            .lock()
+            .expect("account registration policy lock");
+        *policy = cokret_sdk::AccountRegistrationPolicy {
+            verification_code: cokret_sdk::AccountRegistrationVerificationPolicy {
+                required: true,
+                code_digest: Some(registration_secret_digest("246810")),
+            },
+            organization_allowlist: vec!["example.edu".to_owned()],
+            invitation: cokret_sdk::AccountRegistrationInvitationPolicy {
+                required: true,
+                token_digests: vec![registration_secret_digest("invite-token")],
+            },
+            ..cokret_sdk::AccountRegistrationPolicy::default()
+        };
+    }
+
+    let mut missing_code = TestClient::post("http://server/_cokret/gate/account/register")
+        .json(&serde_json::json!({
+            "principal_id": "did:web:alice.example.edu",
+        }))
+        .send(&app_from_state(state.clone()))
+        .await;
+    let status = missing_code.status_code.unwrap();
+    let missing_code: Value = missing_code.take_json().await.unwrap();
+    assert_eq!(status, StatusCode::CONFLICT, "{missing_code}");
+    assert_eq!(
+        missing_code["error"]["details"]["reason_detail"],
+        "verification_code_required"
+    );
+
+    let mut wrong_org = TestClient::post("http://server/_cokret/gate/account/register")
+        .json(&serde_json::json!({
+            "principal_id": "did:web:bob.other.example",
+            "policy_evidence": {
+                "verification_code": "246810",
+                "organization": "other.example",
+                "invitation_token": "invite-token"
+            }
+        }))
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(wrong_org.status_code.unwrap(), StatusCode::CONFLICT);
+    let wrong_org: Value = wrong_org.take_json().await.unwrap();
+    assert_eq!(
+        wrong_org["error"]["details"]["reason_detail"],
+        "organization_not_allowed"
+    );
+
+    let mut missing_invite = TestClient::post("http://server/_cokret/gate/account/register")
+        .json(&serde_json::json!({
+            "principal_id": "did:web:invite-missing.example.edu",
+            "policy_evidence": {
+                "verification_code": "246810",
+                "organization": "example.edu"
+            }
+        }))
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(missing_invite.status_code.unwrap(), StatusCode::CONFLICT);
+    let missing_invite: Value = missing_invite.take_json().await.unwrap();
+    assert_eq!(
+        missing_invite["error"]["details"]["reason_detail"],
+        "invitation_required"
+    );
+
+    let accepted: Value = TestClient::post("http://server/_cokret/gate/account/register")
+        .json(&serde_json::json!({
+            "principal_id": "did:web:carol.example.edu",
+            "display_name": "Carol",
+            "policy_evidence": {
+                "verification_code": "246810",
+                "organization": "example.edu",
+                "invitation_token": "invite-token"
+            }
+        }))
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(accepted["principal_id"], "did:web:carol.example.edu");
+    assert_eq!(accepted["registration_audit"]["outcome"], "accepted");
+    assert_eq!(
+        accepted["registration_audit"]["evidence"]["organization"],
+        "example.edu"
+    );
+
+    let mut duplicate = TestClient::post("http://server/_cokret/gate/account/register")
+        .json(&serde_json::json!({
+            "principal_id": "did:web:carol.example.edu",
+            "policy_evidence": {
+                "verification_code": "246810",
+                "organization": "example.edu",
+                "invitation_token": "invite-token"
+            }
+        }))
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(duplicate.status_code.unwrap(), StatusCode::CONFLICT);
+    let duplicate: Value = duplicate.take_json().await.unwrap();
+    assert_eq!(
+        duplicate["error"]["details"]["reason_detail"],
+        "duplicate_conflict"
+    );
+
+    let rate_limited_state = AppState::new(test_config(), Db { pool: None });
+    {
+        let mut policy = rate_limited_state
+            .account_registration_policy
+            .lock()
+            .expect("account registration policy lock");
+        policy.rate_limit = Some(cokret_sdk::AccountRegistrationRateLimitPolicy {
+            max_attempts: 1,
+            window_seconds: 60,
+        });
+    }
+    let _: Value = TestClient::post("http://server/_cokret/gate/account/register")
+        .json(&serde_json::json!({
+            "principal_id": "did:web:rate-register.example",
+        }))
+        .send(&app_from_state(rate_limited_state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    let mut limited = TestClient::post("http://server/_cokret/gate/account/register")
+        .json(&serde_json::json!({
+            "principal_id": "did:web:rate-register.example",
+        }))
+        .send(&app_from_state(rate_limited_state.clone()))
+        .await;
+    assert_eq!(limited.status_code.unwrap(), StatusCode::TOO_MANY_REQUESTS);
+    let limited: Value = limited.take_json().await.unwrap();
+    assert_eq!(limited["error"]["code"], "rate_limited");
+    assert_eq!(limited["error"]["details"]["reason_detail"], "rate_limited");
 }
 
 #[tokio::test]

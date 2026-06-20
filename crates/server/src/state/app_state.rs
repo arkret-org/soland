@@ -5,7 +5,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use arc_swap::ArcSwap;
 use cokret_sdk::identity::CompositeDidResolver;
-use cokret_sdk::{AccountStatus, AppletPackage, Did, RealmId};
+use cokret_sdk::{AccountRegistrationPolicy, AccountStatus, AppletPackage, Did, RealmId};
 use ed25519_dalek::SigningKey;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -90,6 +90,15 @@ pub struct AppState {
     /// A successful login clears the row. Durable storage lands with
     /// the account-state projection.
     pub failed_login_attempts: Arc<Mutex<BTreeMap<String, FailedLoginRecord>>>,
+    /// Deployment-local account registration policy. It uses the canonical
+    /// account-operation DTO so the HTTP handler, audit payload, tests, and a
+    /// future admin policy cell all speak the same wire vocabulary.
+    pub account_registration_policy: Arc<Mutex<AccountRegistrationPolicy>>,
+    /// Process-local registration attempt counters keyed by principal DID.
+    /// This is the account-registration-specific quota; the generic HTTP rate
+    /// limiter still protects the route by source address.
+    pub account_registration_rate_tracker:
+        Arc<Mutex<BTreeMap<String, (chrono::DateTime<chrono::Utc>, u32)>>>,
     /// SEC-09 — per-`(requester_did, holder_did)` PSI / contact-discovery
     /// probe counters; backs the timing-side-channel rate limit in
     /// `directory::private_contact_discovery`.
@@ -537,6 +546,8 @@ impl AppState {
             account_lifecycle: Arc::new(Mutex::new(BTreeMap::new())),
             erased_actors: Arc::new(Mutex::new(BTreeSet::new())),
             failed_login_attempts: Arc::new(Mutex::new(BTreeMap::new())),
+            account_registration_policy: Arc::new(Mutex::new(AccountRegistrationPolicy::default())),
+            account_registration_rate_tracker: Arc::new(Mutex::new(BTreeMap::new())),
             psi_probe_tracker: Arc::new(Mutex::new(BTreeMap::new())),
             key_backup_download_tracker: Arc::new(Mutex::new(BTreeMap::new())),
             moderation_report_rate_tracker: Arc::new(Mutex::new(BTreeMap::new())),

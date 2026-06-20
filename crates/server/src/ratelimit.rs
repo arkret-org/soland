@@ -6,8 +6,9 @@
 //! recognize three endpoint classes:
 //!
 //! - `auth`   — the credential/bearer-issuing surface (strict, low ceiling): the spec-canonical
-//!   `/_cokret/gate/account/session-grants` and `/_cokret/gate/account/agent-key-pair`, plus the
-//!   `/_soland/gate/auth/*` auth routes. Must be hardened against credential-stuffing.
+//!   `/_cokret/gate/account/register`, `/_cokret/gate/account/session-grants`, and
+//!   `/_cokret/gate/account/agent-key-pair`, plus the `/_soland/gate/auth/*` auth routes. Must be
+//!   hardened against credential-stuffing.
 //! - `api`    — every other `/_cokret/*` request (moderate ceiling).
 //! - `other`  — anything outside `/_cokret/*` (default ceiling).
 //!
@@ -77,10 +78,11 @@ impl EndpointClass {
         // Credential/bearer-issuing endpoints get the strict `Auth` bucket so the
         // anti-credential-stuffing quota actually covers them. These do NOT live
         // under a single `/_cokret/gate/auth/` prefix: the spec-canonical
-        // session-grant exchange and agent-key-pair authorization sit under
+        // account registration, session-grant exchange, and agent-key-pair authorization sit under
         // `/_cokret/gate/account/*`, and the private auth surface lives under
         // `/_soland/gate/auth/*`. Match the real routes, not a dead prefix.
-        if path == "/_cokret/gate/account/session-grants"
+        if path == "/_cokret/gate/account/register"
+            || path == "/_cokret/gate/account/session-grants"
             || path == "/_cokret/gate/account/agent-key-pair"
             || path.starts_with("/_soland/gate/auth/")
         {
