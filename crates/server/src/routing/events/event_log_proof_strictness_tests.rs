@@ -1334,17 +1334,144 @@ fn soland_dev_proof_gate_matches_sdk_production_verifier() {
         .expect("SDK ProductionVerifier must accept detached_jws kind");
 }
 
-fn data_event_object_with_refs(refs: Vec<String>) -> serde_json::Map<String, Value> {
+const DATA_EVENT_REALM: &str = "ck:realm:01904100-0000-7000-8000-000000000001";
+const DATA_EVENT_ACTOR: &str = "did:web:alice.example";
+const DATA_EVENT_STRAND: &str = "ck:strand:01904100-0000-7000-8000-000000000001";
+
+fn data_event_seal_id() -> cokret_sdk::SealId {
+    cokret_sdk::SealId::new(format!("ck:seal:sha256:{}", "a".repeat(64))).unwrap()
+}
+
+fn data_event_move_id(byte: u8) -> cokret_sdk::MoveId {
+    cokret_sdk::MoveId::new(format!("sha256:{}", format!("{byte:02x}").repeat(32))).unwrap()
+}
+
+fn data_event_hash(byte: u8) -> cokret_sdk::Hash {
+    cokret_sdk::Hash::new(format!("sha256:{}", format!("{byte:02x}").repeat(32))).unwrap()
+}
+
+fn data_event_dummy_signature() -> cokret_sdk::MoveSignature {
+    use chrono::TimeZone;
+
+    cokret_sdk::MoveSignature {
+        alg: "EdDSA".to_owned(),
+        verification_method: "did:web:notary.example#k1".to_owned(),
+        payload_digest: data_event_hash(0xff),
+        created_at: chrono::Utc.with_ymd_and_hms(2026, 5, 8, 0, 0, 0).unwrap(),
+        jws: "AAAA.BBBB.CCCC".to_owned(),
+    }
+}
+
+fn insert_data_event_seal(state: &AppState, covered: Vec<cokret_sdk::MoveId>) -> String {
+    use chrono::TimeZone;
+
+    let seal_id = data_event_seal_id();
+    let realm = cokret_sdk::RealmId::new(DATA_EVENT_REALM.to_owned()).unwrap();
+    let seal = cokret_sdk::Seal {
+        id: seal_id.clone(),
+        realm_id: realm,
+        predecessor_refs: Vec::new(),
+        delta: Vec::new(),
+        control_event_set_root: data_event_hash(0x22),
+        state_root: data_event_hash(0x77),
+        completeness_root: data_event_hash(0x33),
+        notary_seq: 1,
+        data_view_root: None,
+        data_event_set_root: None,
+        availability_root: None,
+        coverage_scope: None,
+        covered_event_digests: covered,
+        previous_state_root: None,
+        previous_digest_algorithm: None,
+        notary_signature: cokret_sdk::NotarySig::Single(data_event_dummy_signature()),
+        sealed_at: chrono::Utc.with_ymd_and_hms(2026, 5, 8, 0, 0, 0).unwrap(),
+        hlc: cokret_sdk::Hlc::new("0189c4d2af00-0000-aabbccdd".to_owned()).unwrap(),
+        kind: cokret_sdk::SealKind::Normal,
+    };
+    cokret_sdk::state_res::SealStore::put(state.seal_store.as_ref(), &seal).unwrap();
+    seal_id.as_str().to_owned()
+}
+
+fn data_event_grant(grant_id: &str, action: &str, revoked: bool) -> crate::authz::Grant {
+    crate::authz::Grant {
+        grant_id: grant_id.to_owned(),
+        realm_id: DATA_EVENT_REALM.to_owned(),
+        issuer: "did:web:owner.example".to_owned(),
+        subject: DATA_EVENT_ACTOR.to_owned(),
+        resource: DATA_EVENT_STRAND.to_owned(),
+        actions: vec![action.to_owned()],
+        constraints: Vec::new(),
+        revoked,
+        created_at: chrono::Utc::now(),
+        delegated_from: None,
+        expires_at: None,
+    }
+}
+
+fn insert_historical_data_event_grant(
+    state: &AppState,
+    grant_id: &str,
+    action: &str,
+    revoked: bool,
+) -> String {
+    let realm = cokret_sdk::RealmId::new(DATA_EVENT_REALM.to_owned()).unwrap();
+    let seal_id = data_event_seal_id();
+    let move_id = data_event_move_id(0xab);
+    let cell = cokret_sdk::CellRef::new(format!(
+        "ck:cell:ck.component.capability.grant.v1:{grant_id}"
+    ))
+    .unwrap();
+    let mut value = json!({
+        "grant_id": grant_id,
+        "schema": "ck.schema.capability_grant.v1",
+        "realm_id": DATA_EVENT_REALM,
+        "issuer": "did:web:owner.example",
+        "subject": DATA_EVENT_ACTOR,
+        "actions": [action],
+        "resources": [DATA_EVENT_STRAND],
+        "issued_at": "2026-05-08T00:00:00Z"
+    });
+    if revoked {
+        value["revoked"] = Value::Bool(true);
+        value["revoked_at"] = Value::String("2026-05-08T00:01:00Z".to_owned());
+    }
+    let op = cokret_sdk::LatticeOp {
+        op_type: cokret_sdk::LatticeOpType::Add,
+        tag: Some("ck:operation:01904100-0000-7000-8000-000000000999".to_owned()),
+        value: Some(value),
+        from: None,
+        to: None,
+        reason: None,
+        issuer_seq: None,
+    };
+    cokret_sdk::state_res::CellStore::append_sealed_effects(
+        state.cell_store.as_ref(),
+        &realm,
+        &seal_id,
+        &[(
+            cell,
+            cokret_sdk::lattice::SealedOp::new(move_id.clone(), op),
+        )],
+    )
+    .unwrap();
+    insert_data_event_seal(state, vec![move_id])
+}
+
+fn data_event_object_with_refs(
+    seal_ref: &str,
+    refs: Vec<String>,
+) -> serde_json::Map<String, Value> {
     json!({
-        "seal_ref": format!("ck:seal:sha256:{}", "a".repeat(64)),
+        "seal_ref": seal_ref,
+        "created_at": "2026-05-08T00:02:00Z",
         "auth_context": {
-            "did": "did:web:alice.example",
+            "did": DATA_EVENT_ACTOR,
             "key_id": "ck:device:01904100-0000-7000-8000-a11ce0000001",
             "key_epoch": 1,
             "capability_refs": refs
         },
         "effects": [{
-            "cell": "ck:cell:ck.component.strand.discussion.timeline.v1:ck:strand:01904100-0000-7000-8000-000000000001",
+            "cell": format!("ck:cell:ck.component.strand.discussion.timeline.v1:{DATA_EVENT_STRAND}"),
             "op": {"kind": "append"}
         }]
     })
@@ -1356,14 +1483,16 @@ fn data_event_object_with_refs(refs: Vec<String>) -> serde_json::Map<String, Val
 #[test]
 fn data_event_capability_ref_must_resolve() {
     let state = make_state(true);
-    let object = data_event_object_with_refs(vec![
-        "ck:grant:01904100-0000-7000-8000-000000000111".to_owned(),
-    ]);
+    let seal_ref = insert_data_event_seal(&state, Vec::new());
+    let object = data_event_object_with_refs(
+        &seal_ref,
+        vec!["ck:grant:01904100-0000-7000-8000-000000000111".to_owned()],
+    );
 
     let err = validate_data_event_capability_refs(
         &state,
-        "did:web:alice.example",
-        "ck:realm:01904100-0000-7000-8000-000000000001",
+        DATA_EVENT_ACTOR,
+        DATA_EVENT_REALM,
         "ck.message.create",
         &object,
     )
@@ -1376,34 +1505,29 @@ fn data_event_capability_ref_must_resolve() {
 #[test]
 fn data_event_capability_ref_must_cover_effect_cell() {
     let state = make_state(true);
-    let realm_id = "ck:realm:01904100-0000-7000-8000-000000000001";
-    let actor = "did:web:alice.example";
-    let grant = state.authz.create_grant(
-        realm_id.to_owned(),
-        "did:web:owner.example".to_owned(),
-        actor.to_owned(),
-        "ck:strand:01904100-0000-7000-8000-000000000001".to_owned(),
-        vec!["ck.message.create".to_owned()],
-        vec![],
-    );
-    let object = data_event_object_with_refs(vec![grant.grant_id.clone()]);
+    let grant_id = "ck:grant:01904100-0000-7000-8000-000000000112";
+    let seal_ref = insert_historical_data_event_grant(&state, grant_id, "ck.message.create", false);
+    let object = data_event_object_with_refs(&seal_ref, vec![grant_id.to_owned()]);
 
-    validate_data_event_capability_refs(&state, actor, realm_id, "ck.message.create", &object)
-        .expect("matching grant must cover the DataEvent effect cell");
-
-    let wrong_action = state.authz.create_grant(
-        realm_id.to_owned(),
-        "did:web:owner.example".to_owned(),
-        actor.to_owned(),
-        "ck:strand:01904100-0000-7000-8000-000000000001".to_owned(),
-        vec!["ck.reaction.add".to_owned()],
-        vec![],
-    );
-    let wrong_action_object = data_event_object_with_refs(vec![wrong_action.grant_id]);
-    let err = validate_data_event_capability_refs(
+    validate_data_event_capability_refs(
         &state,
-        actor,
-        realm_id,
+        DATA_EVENT_ACTOR,
+        DATA_EVENT_REALM,
+        "ck.message.create",
+        &object,
+    )
+    .expect("matching grant must cover the DataEvent effect cell");
+
+    let wrong_state = make_state(true);
+    let wrong_grant_id = "ck:grant:01904100-0000-7000-8000-000000000113";
+    let wrong_seal_ref =
+        insert_historical_data_event_grant(&wrong_state, wrong_grant_id, "ck.reaction.add", false);
+    let wrong_action_object =
+        data_event_object_with_refs(&wrong_seal_ref, vec![wrong_grant_id.to_owned()]);
+    let err = validate_data_event_capability_refs(
+        &wrong_state,
+        DATA_EVENT_ACTOR,
+        DATA_EVENT_REALM,
         "ck.message.create",
         &wrong_action_object,
     )
@@ -1415,25 +1539,41 @@ fn data_event_capability_ref_must_cover_effect_cell() {
 #[test]
 fn data_event_capability_ref_must_not_be_revoked() {
     let state = make_state(true);
-    let realm_id = "ck:realm:01904100-0000-7000-8000-000000000001";
-    let actor = "did:web:alice.example";
-    let grant = state.authz.create_grant(
-        realm_id.to_owned(),
-        "did:web:owner.example".to_owned(),
-        actor.to_owned(),
-        "ck:strand:01904100-0000-7000-8000-000000000001".to_owned(),
-        vec!["ck.message.create".to_owned()],
-        vec![],
-    );
-    state.authz.revoke_grant_with_cascade(&grant.grant_id);
-    let object = data_event_object_with_refs(vec![grant.grant_id]);
+    let grant_id = "ck:grant:01904100-0000-7000-8000-000000000114";
+    let seal_ref = insert_historical_data_event_grant(&state, grant_id, "ck.message.create", true);
+    let object = data_event_object_with_refs(&seal_ref, vec![grant_id.to_owned()]);
 
-    let err =
-        validate_data_event_capability_refs(&state, actor, realm_id, "ck.message.create", &object)
-            .expect_err("revoked capability_ref must reject");
+    let err = validate_data_event_capability_refs(
+        &state,
+        DATA_EVENT_ACTOR,
+        DATA_EVENT_REALM,
+        "ck.message.create",
+        &object,
+    )
+    .expect_err("revoked capability_ref must reject");
 
     assert_eq!(err.code, "capability_denied");
     assert!(err.message.contains("revoked"));
+}
+
+#[test]
+fn data_event_uses_seal_ref_pre_state_not_live_authz_index() {
+    let state = make_state(true);
+    let grant_id = "ck:grant:01904100-0000-7000-8000-000000000115";
+    let seal_ref = insert_historical_data_event_grant(&state, grant_id, "ck.message.create", false);
+    state
+        .authz
+        .upsert_projected_grant(data_event_grant(grant_id, "ck.message.create", true));
+    let object = data_event_object_with_refs(&seal_ref, vec![grant_id.to_owned()]);
+
+    validate_data_event_capability_refs(
+        &state,
+        DATA_EVENT_ACTOR,
+        DATA_EVENT_REALM,
+        "ck.message.create",
+        &object,
+    )
+    .expect("DataEvent authz must evaluate the seal_ref pre-state, not the live authz index");
 }
 
 // ----------------------------------------------------------------------------

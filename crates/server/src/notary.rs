@@ -41,7 +41,7 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use cokret_sdk::lattice::{CellState, SealedOp};
 use cokret_sdk::state_res::{
     CellRegistry, CellStore, MoveStore, SealStore, StoreError, apply_seal, compute_state_root,
-    control_event_set_root, effective_seal_view, verify_move,
+    control_event_set_root, effective_seal_view, effective_state_at, verify_move,
 };
 use cokret_sdk::{
     CellRef, Hash, Hlc, Move, MoveId, MoveSignature, NotarySig, RealmId, Seal, SealId,
@@ -140,7 +140,7 @@ impl NotaryWorker {
 
         // Recompute pre_state map (effective_seal_view returns state_root
         // but we need the per-cell map for verify_move).
-        let pre_state = self.read_effective_state(state, realm_id)?;
+        let pre_state = self.read_effective_state(state, realm_id, &view.predecessor_refs)?;
 
         // Step 5: deterministic order + pre-flight verify. The signature
         // verifier is chosen by `select_jws_verifier` (production
@@ -178,7 +178,7 @@ impl NotaryWorker {
         // Step 6: predict the post-state and state_root after applying
         // accepted moves' effects on top of pre_state.
         let predicted_state_root =
-            self.predict_post_state_root(state, realm_id, &pre_state, &accepted)?;
+            self.predict_post_state_root(state, realm_id, &view.covered_event_digests, &accepted)?;
 
         // Step 7: compose Seal (predecessor_refs = current leaves,
         // delta = newly accepted moves), then derive id, then sign
@@ -459,19 +459,16 @@ impl NotaryWorker {
         &self,
         state: &AppState,
         realm_id: &RealmId,
+        leaves: &[SealId],
     ) -> Result<BTreeMap<CellRef, CellState>, NotaryError> {
-        let mut out = BTreeMap::new();
-        let cells = state.cell_store.list_cells(realm_id)?;
-        for cell in cells {
-            let ops = state.cell_store.sealed_ops_for_cell(realm_id, &cell)?;
-            let binding = state
-                .cell_registry
-                .resolve(realm_id, &cell)
-                .map_err(|e| NotaryError::Store(format!("cell registry resolve: {e}")))?;
-            let resolved = binding.lattice.join(&cell, &ops);
-            out.insert(cell, resolved);
-        }
-        Ok(out)
+        effective_state_at(
+            leaves,
+            realm_id,
+            state.seal_store.as_ref(),
+            state.cell_store.as_ref(),
+            state.cell_registry.as_ref(),
+        )
+        .map_err(|e| NotaryError::Store(format!("effective state: {e}")))
     }
 
     /// Predict the state_root after the accepted Moves' effects are
@@ -481,15 +478,23 @@ impl NotaryWorker {
         &self,
         state: &AppState,
         realm_id: &RealmId,
-        _pre_state: &BTreeMap<CellRef, CellState>,
+        covered_event_digests: &[MoveId],
         accepted: &[Move],
     ) -> Result<Hash, NotaryError> {
         // Build per-cell list of (current ops ++ new ops).
         let mut ops_by_cell: BTreeMap<CellRef, Vec<SealedOp>> = BTreeMap::new();
+        let covered: BTreeSet<MoveId> = covered_event_digests.iter().cloned().collect();
         // Seed with all currently-known cells.
         for cell in state.cell_store.list_cells(realm_id)? {
-            let ops = state.cell_store.sealed_ops_for_cell(realm_id, &cell)?;
-            ops_by_cell.insert(cell, ops);
+            let ops: Vec<SealedOp> = state
+                .cell_store
+                .sealed_ops_for_cell(realm_id, &cell)?
+                .into_iter()
+                .filter(|op| covered.contains(&op.move_id))
+                .collect();
+            if !ops.is_empty() {
+                ops_by_cell.insert(cell, ops);
+            }
         }
         // Layer on the new accepted Moves' effects.
         for m in accepted {

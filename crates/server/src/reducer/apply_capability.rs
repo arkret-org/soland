@@ -159,6 +159,32 @@ fn engine_grant_from_cell_body(
     })
 }
 
+pub(crate) fn engine_grant_from_capability_cell_state(
+    grant_id: &str,
+    cell_state: &CellState,
+) -> Option<crate::authz::Grant> {
+    let CellState::Value(Value::Array(items)) = cell_state else {
+        return None;
+    };
+    if items.is_empty() {
+        return None;
+    }
+    let revoked = items.iter().any(|item| {
+        let value = item.get("value").unwrap_or(item);
+        grant_snapshot_from_value(value).revoked
+    });
+    let last = items.last()?;
+    let body = last.get("value").unwrap_or(last);
+    if body
+        .get("effective_after_first_authorized_key")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        return None;
+    }
+    engine_grant_from_cell_body(grant_id, body, revoked)
+}
+
 fn validate_grant_body_scope(body: &Value) -> Result<(), &'static str> {
     let actions = validate_grant_actions(body)?;
     crate::authz::validate_capability_actions(&actions)?;

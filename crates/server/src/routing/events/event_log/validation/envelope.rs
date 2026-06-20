@@ -157,6 +157,30 @@ pub(in crate::routing::events::event_log) fn validate_data_event_capability_refs
             "DataEvent must not carry seal_basis",
         ));
     }
+    let seal_ref = object
+        .get("seal_ref")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            event_validation_error(
+                StatusCode::FORBIDDEN,
+                "capability_denied",
+                "DataEvent requires seal_ref to resolve the authorization pre-state",
+            )
+        })?;
+    let seal_id = cokret_sdk::SealId::new(seal_ref.to_owned()).map_err(|_| {
+        event_validation_error(
+            StatusCode::BAD_REQUEST,
+            "schema_violation",
+            "DataEvent seal_ref must be a valid ck:seal id",
+        )
+    })?;
+    let realm = RealmId::new(realm_id.to_owned()).map_err(|_| {
+        event_validation_error(
+            StatusCode::BAD_REQUEST,
+            "schema_violation",
+            "DataEvent realm_id must be a valid ck:realm id",
+        )
+    })?;
     let effects = object
         .get("effects")
         .and_then(Value::as_array)
@@ -202,12 +226,10 @@ pub(in crate::routing::events::event_log) fn validate_data_event_capability_refs
         ));
     }
 
-    let effective_by_id: std::collections::BTreeMap<String, crate::authz::Grant> = state
-        .authz
-        .grants_for_subject(actor_id, realm_id)
-        .into_iter()
-        .map(|grant| (grant.grant_id.clone(), grant))
-        .collect();
+    let historical_grants = data_event_grants_at_seal_ref(state, &realm, &seal_id)?;
+    let auth_time = data_event_auth_time(object);
+    let effective_by_id =
+        effective_historical_grants_for_subject(&historical_grants, actor_id, realm_id, auth_time);
     let mut referenced = Vec::with_capacity(refs.len());
     for value in refs {
         let grant_id = value.as_str().ok_or_else(|| {
@@ -224,11 +246,11 @@ pub(in crate::routing::events::event_log) fn validate_data_event_capability_refs
                 "DataEvent capability_refs[] entry is not a valid ck:grant id",
             ));
         }
-        let stored = state.authz.get_grant(grant_id).ok_or_else(|| {
+        let stored = historical_grants.get(grant_id).ok_or_else(|| {
             event_validation_error(
                 StatusCode::FORBIDDEN,
                 "capability_denied",
-                format!("DataEvent capability_ref {grant_id} is not projected"),
+                format!("DataEvent capability_ref {grant_id} is not projected at seal_ref"),
             )
         })?;
         if stored.revoked {
@@ -284,6 +306,98 @@ pub(in crate::routing::events::event_log) fn validate_data_event_capability_refs
         }
     }
     Ok(())
+}
+
+fn data_event_grants_at_seal_ref(
+    state: &AppState,
+    realm: &RealmId,
+    seal_id: &cokret_sdk::SealId,
+) -> Result<std::collections::BTreeMap<String, crate::authz::Grant>, EventValidationError> {
+    let seal = cokret_sdk::state_res::SealStore::get(state.seal_store.as_ref(), seal_id).map_err(
+        |error| {
+            event_validation_error(
+                StatusCode::FORBIDDEN,
+                "capability_denied",
+                format!("DataEvent seal_ref lookup failed: {error}"),
+            )
+        },
+    )?;
+    let Some(seal) = seal else {
+        return Err(event_validation_error(
+            StatusCode::FORBIDDEN,
+            "capability_denied",
+            "DataEvent seal_ref is not projected",
+        ));
+    };
+    if seal.realm_id != *realm {
+        return Err(event_validation_error(
+            StatusCode::FORBIDDEN,
+            "capability_denied",
+            "DataEvent seal_ref does not belong to the event realm",
+        ));
+    }
+
+    let state_at_ref = cokret_sdk::state_res::effective_state_at(
+        std::slice::from_ref(seal_id),
+        realm,
+        state.seal_store.as_ref(),
+        state.cell_store.as_ref(),
+        state.cell_registry.as_ref(),
+    )
+    .map_err(|error| {
+        event_validation_error(
+            StatusCode::FORBIDDEN,
+            "capability_denied",
+            format!("DataEvent seal_ref pre-state could not be resolved: {error}"),
+        )
+    })?;
+
+    let mut grants = std::collections::BTreeMap::new();
+    const CAPABILITY_GRANT_CELL_PREFIX: &str = "ck:cell:ck.component.capability.grant.v1:";
+    for (cell_ref, cell_state) in state_at_ref {
+        let Some(grant_id) = cell_ref.as_str().strip_prefix(CAPABILITY_GRANT_CELL_PREFIX) else {
+            continue;
+        };
+        if crate::ids::parse_typed_uuid(grant_id, "grant").is_none() {
+            continue;
+        }
+        if let Some(grant) =
+            crate::reducer::engine_grant_from_capability_cell_state(grant_id, &cell_state)
+        {
+            grants.insert(grant_id.to_owned(), grant);
+        }
+    }
+    Ok(grants)
+}
+
+fn effective_historical_grants_for_subject(
+    grants: &std::collections::BTreeMap<String, crate::authz::Grant>,
+    actor_id: &str,
+    realm_id: &str,
+    auth_time: chrono::DateTime<chrono::Utc>,
+) -> std::collections::BTreeMap<String, crate::authz::Grant> {
+    let snapshot: Vec<crate::authz::Grant> = grants.values().cloned().collect();
+    snapshot
+        .iter()
+        .filter(|grant| {
+            grant.subject == actor_id
+                && grant.realm_id == realm_id
+                && !grant.revoked
+                && crate::authz::grant_scope_valid(grant).is_ok()
+                && !crate::authz::is_grant_expired(grant, auth_time)
+                && crate::authz::delegation_chain_intact(&snapshot, &grant.grant_id, auth_time)
+        })
+        .map(|grant| (grant.grant_id.clone(), grant.clone()))
+        .collect()
+}
+
+fn data_event_auth_time(object: &serde_json::Map<String, Value>) -> chrono::DateTime<chrono::Utc> {
+    object
+        .get("created_at")
+        .and_then(Value::as_str)
+        .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+        .map(|value| value.with_timezone(&chrono::Utc))
+        .unwrap_or_else(chrono::Utc::now)
 }
 
 fn grant_covers_data_event_effect(
