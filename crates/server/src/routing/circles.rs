@@ -35,15 +35,15 @@
 use cokret_sdk::{
     CircleCreateRequestBody, CircleDirectoryVisibility, CircleId, CircleList,
     CircleMemberRequestBody, CircleMembership, CircleMembershipOutcome, CircleScopeRotateOutcome,
-    CircleView, Did, EncryptionFloor, EncryptionProfile, HistoryVisibility, Operation, OperationId,
-    RealmId,
+    CircleScopeRotateRequestBody, CircleView, Did, EncryptionFloor, EncryptionProfile, Event,
+    EventId, HistoryVisibility, Operation, OperationId, RealmId,
 };
 use salvo::http::StatusCode;
 use salvo::oapi::extract::{JsonBody, PathParam, QueryParam};
 use salvo::prelude::*;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
-use serde_json::json;
+use serde_json::{Value, json};
 
 use super::{AuthArgs, accept_local_operations};
 use crate::error::{AppError, ErrorCode};
@@ -51,8 +51,9 @@ use crate::ids;
 use crate::kinds::{
     CK_CIRCLE_ARCHIVE, CK_CIRCLE_CREATE, CK_CIRCLE_MEMBER_STATE, CK_CIRCLE_TOMBSTONE,
 };
-use crate::reducer::CircleProjection;
+use crate::reducer::{CircleLifecycleState, CircleProjection};
 use crate::result::{JsonResult, json_ok};
+use crate::routing::events::event_log::submit_event_value;
 use crate::state::AppState;
 
 pub(crate) fn router() -> Router {
@@ -126,7 +127,142 @@ fn circle_membership_to_reducer_state(membership: CircleMembership) -> &'static 
     }
 }
 
+fn scope_rotate_failed(reason: &'static str, detail: impl Into<String>) -> AppError {
+    AppError::new(ErrorCode::FailedPrecondition, detail.into())
+        .with_status(StatusCode::PRECONDITION_FAILED)
+        .with_wire_code(reason)
+}
+
+fn circle_projection_snapshot(
+    state: &AppState,
+    circle_id: &str,
+) -> Result<CircleProjection, AppError> {
+    let projection = state.projection.lock().expect("projection mutex");
+    projection
+        .circles
+        .get(circle_id)
+        .cloned()
+        .ok_or_else(|| AppError::not_found("circle not found"))
+}
+
+fn validate_scope_rotate_events(
+    circle: &CircleProjection,
+    events: &[Event],
+) -> Result<Option<String>, AppError> {
+    if circle.state != CircleLifecycleState::Active {
+        return Err(scope_rotate_failed(
+            "circle_not_active",
+            "circle scope rotation requires an active Circle",
+        ));
+    }
+    if circle.encryption_profile != "mls_rfc9420" {
+        return Err(scope_rotate_failed(
+            "circle_scope_not_mls_backed",
+            "circle scope rotation requires encryption_profile=mls_rfc9420",
+        ));
+    }
+    if events.is_empty() {
+        return Err(scope_rotate_failed(
+            "mls_rotate_events_required",
+            "circle scope rotation requires at least one ck.mls.commit event",
+        ));
+    }
+
+    let mut saw_commit = false;
+    let mut group_ref = circle.mls_group_ref.clone();
+    for event in events {
+        let kind = event.kind.as_str();
+        match kind {
+            "ck.mls.genesis" | "ck.mls.proposal" | "ck.mls.commit" | "ck.mls.welcome" => {}
+            _ => {
+                return Err(scope_rotate_failed(
+                    "mls_rotate_event_kind_invalid",
+                    format!("circle scope rotation cannot submit {kind}"),
+                ));
+            }
+        }
+        if event.realm_id.as_str() != circle.realm_id {
+            return Err(scope_rotate_failed(
+                "mls_rotate_realm_mismatch",
+                "MLS rotate event realm_id must match the Circle realm_id",
+            ));
+        }
+        match event.effective_scope.as_ref() {
+            Some(cokret_sdk::models::EffectiveScope::Circle {
+                realm_id,
+                circle_id,
+            }) if realm_id.as_str() == circle.realm_id
+                && circle_id.as_str() == circle.circle_id => {}
+            _ => {
+                return Err(scope_rotate_failed(
+                    "mls_rotate_scope_mismatch",
+                    "MLS rotate event effective_scope must match the Circle scope",
+                ));
+            }
+        }
+        let event_group_ref = mls_event_group_ref(&event.content).ok_or_else(|| {
+            scope_rotate_failed(
+                "mls_rotate_group_missing",
+                "MLS rotate event payload requires mls_group_id or group_id",
+            )
+        })?;
+        match group_ref.as_deref() {
+            Some(expected) if expected != event_group_ref => {
+                return Err(scope_rotate_failed(
+                    "mls_rotate_group_mismatch",
+                    "MLS rotate events must target the Circle's current MLS group",
+                ));
+            }
+            Some(_) => {}
+            None => group_ref = Some(event_group_ref),
+        }
+        if kind == "ck.mls.commit" {
+            saw_commit = true;
+        }
+    }
+
+    if !saw_commit {
+        return Err(scope_rotate_failed(
+            "mls_rotate_commit_required",
+            "circle scope rotation requires a ck.mls.commit event",
+        ));
+    }
+
+    Ok(group_ref)
+}
+
+fn mls_event_group_ref(payload: &Value) -> Option<String> {
+    payload
+        .get("mls_group_id")
+        .or_else(|| payload.get("group_id"))
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
 // ── Handlers ────────────────────────────────────────────────────────────
+
+fn pending_mls_removals_for_circle(
+    state: &AppState,
+    circle: &CircleProjection,
+    expected_group_ref: Option<&str>,
+) -> Vec<Did> {
+    let projection = state.projection.lock().expect("projection mutex");
+    projection
+        .pending_mls_removals
+        .iter()
+        .filter(|obligation| {
+            obligation.realm_id == circle.realm_id
+                && obligation.circle_id.as_deref() == Some(circle.circle_id.as_str())
+                && obligation.mls_group_ref.as_deref().is_none_or(|group_ref| {
+                    expected_group_ref
+                        .or(circle.mls_group_ref.as_deref())
+                        .is_none_or(|expected| expected == group_ref)
+                })
+        })
+        .filter_map(|obligation| Did::new(obligation.actor_id.clone()).ok())
+        .collect()
+}
 
 #[endpoint(
     operation_id = "ck.self.circle.query.list",
@@ -370,22 +506,93 @@ async fn delete_circle_member(
 async fn post_scope_rotate(
     aa: AuthArgs,
     circle_id: PathParam<String>,
+    body: JsonBody<CircleScopeRotateRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<CircleScopeRotateOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let circle_id = circle_id.into_inner();
-    let _realm_scope = circle_realm_scope(state, &circle_id)?;
-    tracing::info!(
-        actor = %session.actor,
-        %circle_id,
-        "circle scope rotation rejected because MLS key rotation is not implemented"
-    );
-    Err(AppError::unsupported_feature(
-        "circle scope rotation requires MLS genesis/commit/welcome key rotation; no rotation was applied",
-    )
-    .with_status(StatusCode::NOT_IMPLEMENTED))
+    let body = body.into_inner();
+    let circle = circle_projection_snapshot(state, &circle_id)?;
+    let expected_group_ref = validate_scope_rotate_events(&circle, &body.events)?;
+    let pending_removals_before =
+        pending_mls_removals_for_circle(state, &circle, expected_group_ref.as_deref());
+
+    let mut accepted = Vec::new();
+    let mut duplicate = Vec::new();
+    let mut rejected = Vec::new();
+    let mut quarantine = Vec::new();
+
+    for event in body.events {
+        let event_id = event.event_id.clone();
+        let envelope = serde_json::to_value(event).map_err(|e| {
+            AppError::new(
+                ErrorCode::InvalidParam,
+                format!("event envelope cannot be encoded: {e}"),
+            )
+            .with_status(StatusCode::BAD_REQUEST)
+            .with_wire_code("bad_json")
+        })?;
+        match submit_event_value(state, &session, envelope).await {
+            Ok(response) => {
+                let typed_id = EventId::new(response.event_id.clone())
+                    .map_err(|e| AppError::internal(format!("event_id: {e}")))?;
+                accepted.push(typed_id.clone());
+                if response.duplicate {
+                    duplicate.push(typed_id);
+                }
+            }
+            Err(error) => {
+                if let Some(event_id) = error.quarantine_event_id {
+                    let typed_id = EventId::new(event_id)
+                        .map_err(|e| AppError::internal(format!("event_id: {e}")))?;
+                    quarantine.push(typed_id);
+                } else {
+                    rejected.push(json!({
+                        "id": event_id,
+                        "reason_code": error.code,
+                        "detail": error.message,
+                    }));
+                }
+            }
+        }
+    }
+
+    if !rejected.is_empty() || !quarantine.is_empty() {
+        return json_ok(CircleScopeRotateOutcome {
+            circle_id: CircleId::new(circle_id)
+                .map_err(|e| AppError::invalid_param(format!("circle_id: {e}")))?,
+            mls_group_ref: expected_group_ref,
+            note: Some("mls scope rotation submitted with per-event failures".to_owned()),
+            accepted,
+            duplicate,
+            rejected,
+            quarantine,
+            cleared_pending_removals: Vec::new(),
+        });
+    }
+
+    let mls_group_ref = {
+        let projection = state.projection.lock().expect("projection mutex");
+        let circle = projection
+            .circles
+            .get(&circle_id)
+            .ok_or_else(|| AppError::not_found("circle not found"))?;
+        circle.mls_group_ref.clone()
+    };
+
+    json_ok(CircleScopeRotateOutcome {
+        circle_id: CircleId::new(circle_id)
+            .map_err(|e| AppError::invalid_param(format!("circle_id: {e}")))?,
+        mls_group_ref,
+        note: Some("mls scope rotation accepted via canonical ck.mls events".to_owned()),
+        accepted,
+        duplicate,
+        rejected,
+        quarantine,
+        cleared_pending_removals: pending_removals_before,
+    })
 }
 
 #[endpoint(

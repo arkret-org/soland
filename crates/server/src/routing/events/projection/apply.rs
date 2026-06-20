@@ -142,6 +142,7 @@ pub(super) async fn mirror_mls_effect_to_persistence(
             {
                 tracing::warn!(%error, group_id = %group_id, "failed to mirror MLS genesis epoch");
             }
+            bind_circle_mls_group(state, group_id, effective_scope, false);
         }
         crate::reducer::MlsEffect::CommitEpochAdvanced {
             group_id,
@@ -173,8 +174,72 @@ pub(super) async fn mirror_mls_effect_to_persistence(
             {
                 tracing::warn!(%error, group_id = %group_id, "failed to mirror MLS commit epoch");
             }
+            bind_circle_mls_group(state, group_id, effective_scope, true);
         }
     }
+}
+
+fn bind_circle_mls_group(
+    state: &AppState,
+    group_id: &str,
+    effective_scope: &Value,
+    clear_pending_removals: bool,
+) {
+    let Some((realm_id, circle_id)) = circle_scope_parts(effective_scope) else {
+        return;
+    };
+
+    let mut projection = state.projection.lock().expect("projection lock");
+    {
+        let Some(circle) = projection.circles.get_mut(&circle_id) else {
+            tracing::warn!(%realm_id, %circle_id, %group_id, "MLS circle scope has no Circle projection");
+            return;
+        };
+        if circle.realm_id != realm_id {
+            tracing::warn!(%realm_id, %circle_id, circle_realm_id = %circle.realm_id, %group_id, "MLS circle scope realm mismatch");
+            return;
+        }
+        if circle.encryption_profile != "mls_rfc9420" {
+            tracing::warn!(%realm_id, %circle_id, %group_id, "MLS scope bound to non-MLS Circle projection");
+            return;
+        }
+        match circle.mls_group_ref.as_deref() {
+            Some(existing) if existing != group_id => {
+                tracing::warn!(%realm_id, %circle_id, %group_id, existing, "MLS group mismatch for Circle projection");
+                return;
+            }
+            Some(_) => {}
+            None => {
+                circle.mls_group_ref = Some(group_id.to_owned());
+            }
+        }
+    }
+
+    if clear_pending_removals {
+        let before = projection.pending_mls_removals.len();
+        projection.pending_mls_removals.retain(|obligation| {
+            !(obligation.realm_id == realm_id
+                && obligation.circle_id.as_deref() == Some(circle_id.as_str())
+                && obligation
+                    .mls_group_ref
+                    .as_deref()
+                    .is_none_or(|expected| expected == group_id))
+        });
+        let cleared = before.saturating_sub(projection.pending_mls_removals.len());
+        if cleared > 0 {
+            tracing::info!(%realm_id, %circle_id, %group_id, cleared, "cleared pending MLS remove obligations");
+        }
+    }
+}
+
+fn circle_scope_parts(effective_scope: &Value) -> Option<(String, String)> {
+    let scope = effective_scope.as_object()?;
+    if scope.get("kind").and_then(Value::as_str) != Some("circle") {
+        return None;
+    }
+    let realm_id = scope.get("realm_id").and_then(Value::as_str)?.to_owned();
+    let circle_id = scope.get("circle_id").and_then(Value::as_str)?.to_owned();
+    Some((realm_id, circle_id))
 }
 
 /// After the deterministic reducer mutates the in-memory
