@@ -5,6 +5,7 @@ pub fn operation_policy_reason_code(message: &str) -> (salvo::http::StatusCode, 
         || message.starts_with("message_redact_window")
         || message.starts_with("disappearing_")
         || message.starts_with("direct_conversation_")
+        || message.starts_with("cross_signing_reset_")
         || message == cokret_sdk::error::REASON_REACTION_SCOPE_MISMATCH
     {
         (

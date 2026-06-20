@@ -499,7 +499,8 @@ async fn project_accepted_operations_inner(
             crate::routing::identity::cross_signing::project_cross_signing_reset(
                 state,
                 &operation.payload,
-            );
+            )
+            .await;
         }
         // Device-identity Phase 1 — persist an accepted `ck.device.authorize`'s
         // `payload.device_public_key` into the devices table so the

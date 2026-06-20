@@ -64,6 +64,13 @@ pub trait DeviceMessageStore: Send + Sync {
     ) -> PersistenceResult<Option<i64>>;
     /// Drop everything queued for the recipient+device (used on session revoke).
     async fn purge(&self, recipient: &str, device_id: &str) -> PersistenceResult<usize>;
+    /// Drop queued verification / cross-signing bootstrap messages for this
+    /// principal unless they are explicitly bound to `new_generation`.
+    async fn purge_cross_signing_reset_stale_messages(
+        &self,
+        recipient: &str,
+        new_generation: u64,
+    ) -> PersistenceResult<usize>;
 }
 
 /// Long-term device key bundles (one per `(actor, device_id)`).
@@ -185,6 +192,44 @@ fn device_message_expires_at(message: &DeviceMessageRecord) -> chrono::DateTime<
         .get("expires_at")
         .and_then(|value| serde_json::from_value(value.clone()).ok())
         .unwrap_or_else(|| message.created_at + chrono::Duration::hours(1))
+}
+
+fn queued_reset_message_generation(content: &Value) -> Option<u64> {
+    content
+        .get("new_generation")
+        .and_then(value_as_u64_or_string)
+        .or_else(|| {
+            content
+                .get("content")
+                .and_then(|inner| inner.get("new_generation"))
+                .and_then(value_as_u64_or_string)
+        })
+}
+
+fn value_as_u64_or_string(value: &Value) -> Option<u64> {
+    value
+        .as_u64()
+        .or_else(|| value.as_str().and_then(|value| value.parse::<u64>().ok()))
+}
+
+fn queued_message_kind(content: &Value) -> Option<&str> {
+    content
+        .get("kind")
+        .and_then(Value::as_str)
+        .or_else(|| content.get("content")?.get("kind")?.as_str())
+}
+
+fn cross_signing_reset_blocks_queued_message(content: &Value, new_generation: u64) -> bool {
+    if queued_reset_message_generation(content) == Some(new_generation) {
+        return false;
+    }
+    let Some(kind) = queued_message_kind(content) else {
+        return false;
+    };
+    kind.starts_with("ck.key.verification.")
+        || kind.starts_with("ck.cross_signing.")
+        || kind.contains("trust_bootstrap")
+        || kind.contains("trust.bootstrap")
 }
 
 #[async_trait]
@@ -368,6 +413,46 @@ impl DeviceMessageStore for MemoryDeviceMessageStore {
             .lock()
             .expect("device message ack lock")
             .retain(|_, token| !(token.recipient == recipient && token.device_id == device_id));
+        Ok(before - queue.len())
+    }
+
+    async fn purge_cross_signing_reset_stale_messages(
+        &self,
+        recipient: &str,
+        new_generation: u64,
+    ) -> PersistenceResult<usize> {
+        let mut queue = self.queue.lock().expect("device message lock");
+        let before = queue.len();
+        let mut lost_by_device: BTreeMap<String, i64> = BTreeMap::new();
+        for message in queue.iter().filter(|message| {
+            message.recipient == recipient
+                && cross_signing_reset_blocks_queued_message(&message.content, new_generation)
+        }) {
+            let entry = lost_by_device.entry(message.device_id.clone()).or_default();
+            *entry = (*entry).max(message.position);
+        }
+        if lost_by_device.is_empty() {
+            return Ok(0);
+        }
+        {
+            let mut watermarks = self
+                .lost_watermarks
+                .lock()
+                .expect("device message lost watermark lock");
+            for (device_id, lost_through) in &lost_by_device {
+                let key = (recipient.to_owned(), device_id.clone());
+                let entry = watermarks.entry(key).or_default();
+                *entry = (*entry).max(*lost_through);
+            }
+        }
+        queue.retain(|message| {
+            !(message.recipient == recipient
+                && cross_signing_reset_blocks_queued_message(&message.content, new_generation))
+        });
+        self.ack_tokens
+            .lock()
+            .expect("device message ack lock")
+            .retain(|_, token| token.recipient != recipient);
         Ok(before - queue.len())
     }
 }
@@ -675,6 +760,60 @@ impl DeviceMessageStore for PgDeviceMessageStore {
         )
         .bind::<Text, _>(recipient)
         .bind::<Text, _>(device_id)
+        .execute(&mut *conn)
+        .await
+        .map_err(PersistenceError::from)
+    }
+
+    async fn purge_cross_signing_reset_stale_messages(
+        &self,
+        recipient: &str,
+        new_generation: u64,
+    ) -> PersistenceResult<usize> {
+        let mut conn = pg_conn(&self.pool).await?;
+        let generation = new_generation.to_string();
+        let now = Utc::now();
+        sql_query(
+            "DELETE FROM device_message_ack_tokens \
+             WHERE recipient = $1",
+        )
+        .bind::<Text, _>(recipient)
+        .execute(&mut *conn)
+        .await
+        .map_err(PersistenceError::from)?;
+        sql_query(
+            "WITH candidates AS ( \
+                 SELECT recipient, device_id, position \
+                 FROM device_messages \
+                 WHERE recipient = $1 \
+                   AND ( \
+                     COALESCE(content->>'kind', content->'content'->>'kind') LIKE 'ck.key.verification.%' \
+                     OR COALESCE(content->>'kind', content->'content'->>'kind') LIKE 'ck.cross_signing.%' \
+                     OR COALESCE(content->>'kind', content->'content'->>'kind') LIKE '%trust_bootstrap%' \
+                     OR COALESCE(content->>'kind', content->'content'->>'kind') LIKE '%trust.bootstrap%' \
+                   ) \
+                   AND COALESCE(content->>'new_generation', content->'content'->>'new_generation') IS DISTINCT FROM $2 \
+             ), evicted AS ( \
+                 SELECT recipient, device_id, MAX(position) AS lost_through \
+                 FROM candidates \
+                 GROUP BY recipient, device_id \
+             ), upserted AS ( \
+                 INSERT INTO device_message_lost_watermarks \
+                     (recipient, device_id, lost_through, updated_at) \
+                 SELECT recipient, device_id, lost_through, $3 FROM evicted \
+                 ON CONFLICT (recipient, device_id) DO UPDATE \
+                 SET lost_through = GREATEST(device_message_lost_watermarks.lost_through, EXCLUDED.lost_through), \
+                     updated_at = EXCLUDED.updated_at \
+                 RETURNING 1 \
+             ) \
+             DELETE FROM device_messages USING candidates \
+             WHERE device_messages.recipient = candidates.recipient \
+               AND device_messages.device_id = candidates.device_id \
+               AND device_messages.position = candidates.position",
+        )
+        .bind::<Text, _>(recipient)
+        .bind::<Text, _>(&generation)
+        .bind::<Timestamptz, _>(now)
         .execute(&mut *conn)
         .await
         .map_err(PersistenceError::from)

@@ -9,14 +9,21 @@
 //! supply the DID-resolved Ed25519 verification and the control-set check that
 //! the SDK explicitly leaves to the caller.
 
+use std::collections::BTreeSet;
+
 use base64::Engine as _;
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
-use cokret_sdk::{CrossSigningPublishContent, DeviceId, DeviceStatus, DeviceTrustBinding, Did};
+use cokret_sdk::{
+    CrossSigningPublishContent, CrossSigningResetContent, CrossSigningResetProof, DeviceId,
+    DeviceQuorumSignature, DeviceStatus, DeviceTrustBinding, Did,
+};
 use ed25519_dalek::{Signature, Verifier as _, VerifyingKey};
 use serde_json::{Map, Value};
 
 use crate::error::{AppError, ErrorCode};
-use crate::state::AppState;
+use crate::state::{AppState, RecoveryPolicyRecord};
+
+const CROSS_SIGNING_RESET_REPLAY_RETENTION_SECONDS: i64 = 90_000;
 
 /// Parse the `ck.cross_signing.publish` operation payload into the SDK content
 /// type. Returns a wire reason code on malformed input.
@@ -105,17 +112,14 @@ pub fn project_cross_signing_publish(state: &AppState, payload: &Value) {
     }
 }
 
-/// Validate a `ck.cross_signing.reset` BEFORE acceptance (read-only). Only the
-/// `principal_signing` proof variant is implemented (signed by the principal's
-/// current DID control key over `reset_signing_input`); the other high-risk
-/// variants (recovery_unlock / device_quorum / trusted_recovery_service) are
-/// rejected as unimplemented rather than silently accepted. CAS: the reset's
-/// `previous_generation` MUST equal the currently accepted generation.
+/// Validate a `ck.cross_signing.reset` BEFORE acceptance (read-only). Verifies
+/// the active-generation CAS precondition, replay fence, and one of the four
+/// reset proof families over the SDK canonical reset transcript.
 pub async fn validate_cross_signing_reset(
     state: &AppState,
     payload: &Value,
 ) -> Result<(), &'static str> {
-    let content: cokret_sdk::CrossSigningResetContent =
+    let content: CrossSigningResetContent =
         serde_json::from_value(payload.clone()).map_err(|_| "cross_signing_reset_malformed")?;
     content
         .validate_structure()
@@ -123,6 +127,9 @@ pub async fn validate_cross_signing_reset(
 
     let principal =
         Did::new(content.principal_id.as_str().to_owned()).map_err(|_| "cross_signing_bad_did")?;
+    if cross_signing_reset_replay_seen(state, &content) {
+        return Err("cross_signing_reset_replayed");
+    }
 
     // CAS precondition against the currently accepted generation.
     let current = {
@@ -132,46 +139,374 @@ pub async fn validate_cross_signing_reset(
             .unwrap_or(0)
     };
     if content.previous_generation != current {
-        return Err("cross_signing_reset_cas_conflict");
+        return Err("cross_signing_reset_generation_mismatch");
     }
 
+    let input = content
+        .reset_signing_input()
+        .map_err(|_| "cross_signing_reset_input_failed")?;
     match &content.proof {
-        cokret_sdk::CrossSigningResetProof::PrincipalSigning {
+        CrossSigningResetProof::PrincipalSigning {
             verification_method,
+            alg,
             signature,
-            ..
         } => {
-            // PSK control-set: the signing key MUST resolve in the principal's
-            // DID document.
+            ensure_reset_alg(alg)?;
+            crate::jws_verify::validate_verification_method_controller(
+                content.principal_id.as_str(),
+                verification_method,
+            )
+            .map_err(|_| "cross_signing_reset_proof_authority_invalid")?;
             let psk = crate::jws_verify::resolve_ed25519_pubkey(state, verification_method)
-                .map_err(|_| "cross_signing_reset_key_not_in_control_set")?;
-            let input = content
-                .reset_signing_input()
-                .map_err(|_| "cross_signing_reset_input_failed")?;
+                .map_err(|_| "cross_signing_reset_proof_authority_invalid")?;
             if !ed25519_verify(&psk, &input, signature) {
                 return Err("cross_signing_reset_signature_invalid");
             }
             Ok(())
         }
-        _ => Err("cross_signing_reset_proof_kind_unimplemented"),
+        CrossSigningResetProof::RecoveryUnlock {
+            recovery_session_id: _,
+            recovery_secret_ref,
+            unlock_commitment,
+            alg,
+            signature,
+        } => {
+            ensure_reset_alg(alg)?;
+            let policy = active_reset_recovery_policy(state, &content, "recovery_unlock").await?;
+            if !policy_mentions_identifier(
+                &policy,
+                &[
+                    "recovery_unlock",
+                    "recovery_secret_refs",
+                    "recovery_secrets",
+                    "recovery_keys",
+                    "secret_refs",
+                ],
+                recovery_secret_ref,
+            ) {
+                return Err("cross_signing_reset_recovery_ref_unknown");
+            }
+            let expected = content
+                .recovery_unlock_commitment()
+                .map_err(|_| "cross_signing_reset_input_failed")?;
+            if unlock_commitment != &expected {
+                return Err("cross_signing_reset_unlock_commitment_mismatch");
+            }
+            let recovery_key =
+                crate::jws_verify::resolve_ed25519_pubkey(state, recovery_secret_ref)
+                    .map_err(|_| "cross_signing_reset_recovery_ref_unknown")?;
+            if !ed25519_verify(&recovery_key, &input, signature) {
+                return Err("cross_signing_reset_signature_invalid");
+            }
+            Ok(())
+        }
+        CrossSigningResetProof::DeviceQuorum {
+            threshold,
+            signatures,
+        } => {
+            let policy = active_reset_recovery_policy(state, &content, "device_quorum").await?;
+            if let Some(required) = policy_device_quorum_threshold(&policy)
+                && *threshold < required
+            {
+                return Err("cross_signing_reset_quorum_below_policy");
+            }
+            verify_device_quorum_reset(
+                state,
+                content.principal_id.as_str(),
+                *threshold,
+                signatures,
+                &input,
+            )
+            .await
+        }
+        CrossSigningResetProof::TrustedRecoveryService {
+            service_did,
+            verification_method,
+            alg,
+            signature,
+            attestation_ref,
+        } => {
+            ensure_reset_alg(alg)?;
+            let policy =
+                active_reset_recovery_policy(state, &content, "trusted_recovery_service").await?;
+            if !policy_mentions_identifier(
+                &policy,
+                &[
+                    "trusted_recovery_service",
+                    "trusted_recovery_services",
+                    "trusted_services",
+                    "recovery_services",
+                ],
+                service_did.as_str(),
+            ) {
+                return Err("cross_signing_reset_recovery_service_unknown");
+            }
+            if policy_requires_trusted_service_attestation(&policy) && attestation_ref.is_none() {
+                return Err("cross_signing_reset_attestation_missing");
+            }
+            crate::jws_verify::validate_verification_method_controller(
+                service_did.as_str(),
+                verification_method,
+            )
+            .map_err(|_| "cross_signing_reset_proof_authority_invalid")?;
+            let service_key = crate::jws_verify::resolve_ed25519_pubkey(state, verification_method)
+                .map_err(|_| "cross_signing_reset_proof_authority_invalid")?;
+            if !ed25519_verify(&service_key, &input, signature) {
+                return Err("cross_signing_reset_signature_invalid");
+            }
+            Ok(())
+        }
     }
 }
 
 /// Record an accepted `ck.cross_signing.reset` into the `DeviceManager` (drops
 /// the current publish + bumps the generation high-water; marks devices
 /// `needs_reverification`). Validation already ran pre-acceptance.
-pub fn project_cross_signing_reset(state: &AppState, payload: &Value) {
-    let content: cokret_sdk::CrossSigningResetContent =
-        match serde_json::from_value(payload.clone()) {
-            Ok(content) => content,
-            Err(error) => {
-                tracing::warn!(%error, "cross_signing.reset projector: malformed payload");
-                return;
-            }
-        };
-    let mut mgr = state.cross_signing.lock().expect("cross_signing lock");
-    if let Err(error) = mgr.record_cross_signing_reset(&content) {
+pub async fn project_cross_signing_reset(state: &AppState, payload: &Value) {
+    let content: CrossSigningResetContent = match serde_json::from_value(payload.clone()) {
+        Ok(content) => content,
+        Err(error) => {
+            tracing::warn!(%error, "cross_signing.reset projector: malformed payload");
+            return;
+        }
+    };
+    let recorded = {
+        let mut mgr = state.cross_signing.lock().expect("cross_signing lock");
+        mgr.record_cross_signing_reset(&content)
+    };
+    if let Err(error) = recorded {
         tracing::warn!(%error, "cross_signing.reset projector: record rejected");
+        return;
+    }
+    remember_cross_signing_reset_replay(state, &content);
+    if let Err(error) = state
+        .persistence
+        .device_messages()
+        .purge_cross_signing_reset_stale_messages(
+            content.principal_id.as_str(),
+            content.new_generation,
+        )
+        .await
+    {
+        tracing::warn!(%error, "cross_signing.reset projector: queued verification purge failed");
+    }
+}
+
+fn ensure_reset_alg(alg: &str) -> Result<(), &'static str> {
+    match alg {
+        "EdDSA" | "Ed25519" => Ok(()),
+        _ => Err("cross_signing_reset_proof_authority_invalid"),
+    }
+}
+
+async fn active_reset_recovery_policy(
+    state: &AppState,
+    content: &CrossSigningResetContent,
+    proof_kind: &str,
+) -> Result<RecoveryPolicyRecord, &'static str> {
+    let policy = state
+        .persistence
+        .recovery_policies()
+        .get_active_for_principal(content.principal_id.as_str())
+        .await
+        .map_err(|_| "cross_signing_reset_proof_authority_invalid")?
+        .ok_or("cross_signing_reset_recovery_ref_unknown")?;
+    if policy.trust_domain != content.trust_domain.as_str() {
+        return Err("cross_signing_reset_proof_authority_invalid");
+    }
+    if let Some(expires_at) = policy.expires_at
+        && expires_at <= content.issued_at
+    {
+        return Err("cross_signing_reset_proof_authority_invalid");
+    }
+    if !policy
+        .allowed_proof_kinds
+        .iter()
+        .any(|kind| kind == proof_kind)
+    {
+        return Err("cross_signing_reset_proof_authority_invalid");
+    }
+    Ok(policy)
+}
+
+fn cross_signing_reset_replay_seen(state: &AppState, content: &CrossSigningResetContent) -> bool {
+    let now = chrono::Utc::now();
+    let cutoff = now - chrono::Duration::seconds(CROSS_SIGNING_RESET_REPLAY_RETENTION_SECONDS);
+    let mut replays = state
+        .cross_signing_reset_replays
+        .lock()
+        .expect("cross_signing_reset_replays lock");
+    replays.retain(|_, seen_at| *seen_at >= cutoff);
+    replays.contains_key(&(
+        content.principal_id.as_str().to_owned(),
+        content.previous_generation,
+    ))
+}
+
+fn remember_cross_signing_reset_replay(state: &AppState, content: &CrossSigningResetContent) {
+    let now = chrono::Utc::now();
+    let cutoff = now - chrono::Duration::seconds(CROSS_SIGNING_RESET_REPLAY_RETENTION_SECONDS);
+    let mut replays = state
+        .cross_signing_reset_replays
+        .lock()
+        .expect("cross_signing_reset_replays lock");
+    replays.retain(|_, seen_at| *seen_at >= cutoff);
+    replays.insert(
+        (
+            content.principal_id.as_str().to_owned(),
+            content.previous_generation,
+        ),
+        now,
+    );
+}
+
+async fn verify_device_quorum_reset(
+    state: &AppState,
+    principal_id: &str,
+    threshold: u32,
+    signatures: &[DeviceQuorumSignature],
+    input: &[u8],
+) -> Result<(), &'static str> {
+    let devices = state
+        .persistence
+        .devices()
+        .list_for_actor_including_revoked(principal_id)
+        .await
+        .map_err(|_| "cross_signing_reset_quorum_insufficient")?;
+    let mut seen_devices = BTreeSet::new();
+    let mut valid = 0u32;
+    for contribution in signatures {
+        ensure_reset_alg(&contribution.alg)?;
+        if !seen_devices.insert(contribution.device_id.as_str().to_owned()) {
+            return Err("cross_signing_reset_quorum_insufficient");
+        }
+        let Some(record) = devices
+            .iter()
+            .find(|record| record.device_id == contribution.device_id.as_str())
+        else {
+            return Err("cross_signing_reset_quorum_insufficient");
+        };
+        if record.revoked_at.is_some() || record.verification_state != "verified" {
+            return Err("cross_signing_reset_quorum_insufficient");
+        }
+        let device_public_key = record
+            .payload
+            .get("device_public_key")
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .ok_or("cross_signing_reset_proof_authority_invalid")?;
+        if !device_quorum_method_matches(
+            principal_id,
+            contribution.device_id.as_str(),
+            device_public_key,
+            &contribution.verification_method,
+        ) {
+            return Err("cross_signing_reset_proof_authority_invalid");
+        }
+        let device_key = decode_ed25519_key(device_public_key, "multibase")
+            .map_err(|_| "cross_signing_reset_proof_authority_invalid")?;
+        if !ed25519_verify(&device_key, input, &contribution.signature) {
+            return Err("cross_signing_reset_signature_invalid");
+        }
+        valid += 1;
+    }
+    if valid < threshold {
+        return Err("cross_signing_reset_quorum_insufficient");
+    }
+    Ok(())
+}
+
+fn device_quorum_method_matches(
+    principal_id: &str,
+    device_id: &str,
+    device_public_key: &str,
+    verification_method: &str,
+) -> bool {
+    verification_method == format!("{principal_id}#{device_id}")
+        || verification_method == format!("did:key:{device_public_key}#{device_public_key}")
+        || verification_method == format!("did:key:{device_public_key}")
+}
+
+fn policy_mentions_identifier(
+    policy: &RecoveryPolicyRecord,
+    top_level_keys: &[&str],
+    identifier: &str,
+) -> bool {
+    top_level_keys.iter().any(|key| {
+        policy
+            .raw_payload
+            .get(*key)
+            .is_some_and(|value| value_mentions_identifier(value, identifier))
+    })
+}
+
+fn value_mentions_identifier(value: &Value, identifier: &str) -> bool {
+    match value {
+        Value::String(value) => value == identifier,
+        Value::Array(values) => values
+            .iter()
+            .any(|value| value_mentions_identifier(value, identifier)),
+        Value::Object(object) => object
+            .values()
+            .any(|value| value_mentions_identifier(value, identifier)),
+        _ => false,
+    }
+}
+
+fn policy_device_quorum_threshold(policy: &RecoveryPolicyRecord) -> Option<u32> {
+    [
+        "/device_quorum/k",
+        "/device_quorum/threshold",
+        "/device_quorum/quorum_size",
+        "/proof_requirements/device_quorum/k",
+        "/proof_requirements/device_quorum/threshold",
+        "/proof_requirements/device_quorum/quorum_size",
+    ]
+    .iter()
+    .find_map(|pointer| {
+        policy
+            .raw_payload
+            .pointer(pointer)
+            .and_then(Value::as_u64)
+            .and_then(|value| u32::try_from(value).ok())
+    })
+}
+
+fn policy_requires_trusted_service_attestation(policy: &RecoveryPolicyRecord) -> bool {
+    [
+        "/trusted_recovery_service/attestation_required",
+        "/trusted_recovery_services/attestation_required",
+        "/proof_requirements/trusted_recovery_service/attestation_required",
+        "/attestation_required",
+    ]
+    .iter()
+    .any(|pointer| {
+        policy
+            .raw_payload
+            .pointer(pointer)
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+    }) || ["trusted_recovery_service", "trusted_recovery_services"]
+        .iter()
+        .any(|key| {
+            policy
+                .raw_payload
+                .get(*key)
+                .is_some_and(value_requires_attestation)
+        })
+}
+
+fn value_requires_attestation(value: &Value) -> bool {
+    match value {
+        Value::Object(object) => {
+            object
+                .get("attestation_required")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+                || object.values().any(value_requires_attestation)
+        }
+        Value::Array(values) => values.iter().any(value_requires_attestation),
+        _ => false,
     }
 }
 

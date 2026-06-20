@@ -63,6 +63,10 @@ pub struct AppState {
     /// reducer projections; durable rehydration rides on the durable event
     /// store (control-realm Phase 3).
     pub cross_signing: Arc<Mutex<cokret_sdk::DeviceManager>>,
+    /// Process-local replay fence for consumed cross-signing reset
+    /// `(principal_id, previous_generation)` tuples.
+    pub cross_signing_reset_replays:
+        Arc<Mutex<BTreeMap<(String, u64), chrono::DateTime<chrono::Utc>>>>,
     /// In-memory handle release ledger keyed by bare localpart. Records
     /// `released_localpart → released_at` for every handle vacated by
     /// `claim_handle` / `transfer_handle`; new claims for a localpart still
@@ -542,6 +546,7 @@ impl AppState {
             object_storage,
             realms: Arc::new(Mutex::new(realms)),
             cross_signing: Arc::new(Mutex::new(cokret_sdk::DeviceManager::new())),
+            cross_signing_reset_replays: Arc::new(Mutex::new(BTreeMap::new())),
             handle_releases: Arc::new(Mutex::new(BTreeMap::new())),
             account_lifecycle: Arc::new(Mutex::new(BTreeMap::new())),
             erased_actors: Arc::new(Mutex::new(BTreeSet::new())),
