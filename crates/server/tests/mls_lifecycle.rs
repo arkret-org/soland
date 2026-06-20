@@ -382,7 +382,9 @@ async fn mls_lifecycle_end_to_end() {
         "previous_epoch": 0,
         "next_epoch": 0,
         "membership_frontier": [frontier_ref],
-        "policy_root": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+        "policy_root": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+        "binding_profile": soland::kinds::MLS_GOVERNANCE_BINDING_FULL_PROFILE,
+        "reducer_profile": soland::kinds::MLS_REDUCER_PROFILE_V1
     });
 
     // ── 3a. Realm + MLS group genesis enter through canonical events ─
@@ -488,6 +490,22 @@ async fn mls_lifecycle_end_to_end() {
                 "capabilities_digest": "sha256:6666666666666666666666666666666666666666666666666666666666666666",
                 "ssk_generation": 1
             },
+            "claim_envelope": {
+                "keypackage_ref": keypackage_ref,
+                "keypackage_digest": "sha256:5555555555555555555555555555555555555555555555555555555555555555",
+                "intended_realm_id": realm_id,
+                "claim_id": "claim-01",
+                "requester_did": alice_did,
+                "ssk_generation": 1,
+                "nonce": b64(b"welcome-claim-nonce-01-128-bit"),
+                "welcome_digest": cokret_sdk::canonical::sha256_digest(b"opaque-mls-welcome"),
+                "created_at": "2026-05-25T00:00:02Z",
+                "signature": {
+                    "kid": format!("{alice_did}#self-signing"),
+                    "alg": "EdDSA",
+                    "sig": b64(b"welcome-claim-envelope-signature")
+                }
+            },
             "welcome_ref": welcome_ref,
             "ciphertext": "opaque-mls-welcome",
             "expires_at": "2026-05-25T01:00:00Z",
@@ -522,7 +540,9 @@ async fn mls_lifecycle_end_to_end() {
         "previous_epoch": 0,
         "next_epoch": 1,
         "membership_frontier": [frontier_ref],
-        "policy_root": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+        "policy_root": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+        "binding_profile": soland::kinds::MLS_GOVERNANCE_BINDING_FULL_PROFILE,
+        "reducer_profile": soland::kinds::MLS_REDUCER_PROFILE_V1
     });
     let commit = signed_event(
         "ck:event:01904100-0000-7000-8000-00000000e2e3",

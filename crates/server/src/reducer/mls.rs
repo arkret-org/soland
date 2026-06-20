@@ -51,6 +51,10 @@ pub const REASON_COMMIT_EPOCH_SKEW: &str = "mls_epoch_skew";
 /// Reject code for Welcome payloads that try to carry plaintext sender,
 /// profile, relationship, or device metadata outside the opaque MLS bytes.
 pub const REASON_WELCOME_METADATA_LEAK: &str = "mls_welcome_metadata_leak";
+/// Reject code for MLS Welcome payloads whose KeyPackage claim transcript
+/// is missing or does not bind the Welcome bytes to the recipient realm.
+pub const REASON_KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH: &str =
+    cokret_sdk::error::REASON_KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH;
 /// Reject code for commits whose governance binding does not name an
 /// attested governance Seal set to add into the covered_seals accumulator.
 pub const REASON_COMMIT_COVERED_SEALS_MISSING: &str = "mls_covered_seals_missing";
@@ -303,6 +307,16 @@ pub fn apply_welcome_enqueue(state: &mut ProjectionState, op: &Operation) -> Pro
         (None, Some(ciphertext)) if !ciphertext.is_empty() => ciphertext.as_bytes().to_vec(),
         _ => return reject("mls_welcome_bytes_missing"),
     };
+    if let Err(reason) = validate_welcome_trust_binding(
+        op,
+        group_id,
+        recipient_actor_id,
+        key_package_id,
+        &welcome_bytes,
+        payload,
+    ) {
+        return reject(reason);
+    }
 
     let row = MlsWelcome {
         id: welcome_id.to_owned(),
@@ -584,6 +598,7 @@ fn validate_genesis_governance_binding(
     {
         return Err("mls_governance_binding_encoding_profile_invalid");
     }
+    validate_binding_profiles(binding)?;
     if binding.get("mls_group_id").and_then(Value::as_str) != Some(group_id) {
         return Err("mls_governance_binding_group_mismatch");
     }
@@ -655,6 +670,183 @@ fn validate_binding_frontier_and_policy(binding: &Value) -> Result<(), &'static 
         return Err("mls_governance_binding_policy_root_missing");
     }
     Ok(())
+}
+
+fn validate_binding_profiles(binding: &Value) -> Result<(), &'static str> {
+    if binding.get("binding_profile").and_then(Value::as_str)
+        != Some(crate::kinds::MLS_GOVERNANCE_BINDING_FULL_PROFILE)
+    {
+        return Err("mls_governance_binding_profile_invalid");
+    }
+    if binding.get("reducer_profile").and_then(Value::as_str)
+        != Some(crate::kinds::MLS_REDUCER_PROFILE_V1)
+    {
+        return Err("mls_governance_binding_reducer_profile_invalid");
+    }
+    Ok(())
+}
+
+fn validate_welcome_trust_binding(
+    op: &Operation,
+    group_id: &str,
+    recipient_actor_id: &str,
+    key_package_id: &str,
+    welcome_bytes: &[u8],
+    payload: &Value,
+) -> Result<(), &'static str> {
+    let binding = payload
+        .get("governance_binding")
+        .or_else(|| payload.get("mls_governance_binding"))
+        .ok_or("mls_welcome_governance_binding_missing")?;
+    let effective_scope = binding
+        .get("effective_scope")
+        .ok_or("mls_governance_binding_scope_missing")?;
+    validate_welcome_governance_binding(binding, group_id, op.realm_id.as_str(), effective_scope)?;
+
+    let claim_id = payload
+        .get("claim_id")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .ok_or(REASON_KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;
+    let keypackage_ref = payload
+        .get("keypackage_ref")
+        .and_then(Value::as_str)
+        .unwrap_or(key_package_id);
+    if keypackage_ref != key_package_id {
+        return Err(REASON_KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH);
+    }
+    let keypackage_digest = payload
+        .get("keypackage_digest")
+        .and_then(Value::as_str)
+        .filter(|value| is_sha256_digest(value))
+        .ok_or(REASON_KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;
+    let claim_ref = payload
+        .get("claim_ref")
+        .and_then(Value::as_object)
+        .ok_or(REASON_KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;
+    let claim_ssk_generation = claim_ref
+        .get("ssk_generation")
+        .and_then(Value::as_u64)
+        .filter(|generation| *generation >= 1)
+        .ok_or(REASON_KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;
+    if claim_ref.get("claim_id").and_then(Value::as_str) != Some(claim_id)
+        || claim_ref.get("keypackage_ref").and_then(Value::as_str) != Some(keypackage_ref)
+        || claim_ref.get("keypackage_digest").and_then(Value::as_str) != Some(keypackage_digest)
+        || claim_ref
+            .get("capabilities_digest")
+            .and_then(Value::as_str)
+            .is_none_or(|value| !is_sha256_digest(value))
+    {
+        return Err(REASON_KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH);
+    }
+
+    let envelope = payload
+        .get("claim_envelope")
+        .and_then(Value::as_object)
+        .ok_or(REASON_KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;
+    let expected_welcome_digest = cokret_sdk::canonical::sha256_digest(welcome_bytes);
+    if envelope.get("claim_id").and_then(Value::as_str) != Some(claim_id)
+        || envelope.get("keypackage_ref").and_then(Value::as_str) != Some(keypackage_ref)
+        || envelope.get("keypackage_digest").and_then(Value::as_str) != Some(keypackage_digest)
+        || envelope.get("intended_realm_id").and_then(Value::as_str) != Some(op.realm_id.as_str())
+        || envelope.get("ssk_generation").and_then(Value::as_u64) != Some(claim_ssk_generation)
+        || envelope.get("welcome_digest").and_then(Value::as_str)
+            != Some(expected_welcome_digest.as_str())
+        || envelope
+            .get("nonce")
+            .and_then(Value::as_str)
+            .is_none_or(str::is_empty)
+        || envelope
+            .get("created_at")
+            .and_then(Value::as_str)
+            .is_none_or(str::is_empty)
+        || envelope
+            .get("requester_did")
+            .and_then(Value::as_str)
+            .is_none_or(str::is_empty)
+    {
+        return Err(REASON_KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH);
+    }
+    validate_welcome_claim_signature(envelope)?;
+    validate_welcome_recipient_binding(payload, recipient_actor_id)
+}
+
+fn validate_welcome_governance_binding(
+    binding: &Value,
+    group_id: &str,
+    realm_id: &str,
+    effective_scope: &Value,
+) -> Result<(), &'static str> {
+    if binding.get("binding_version").and_then(Value::as_u64) != Some(1) {
+        return Err("mls_governance_binding_version_invalid");
+    }
+    if binding.get("encoding_profile").and_then(Value::as_str)
+        != Some("cbor-deterministic-rfc8949-v1")
+    {
+        return Err("mls_governance_binding_encoding_profile_invalid");
+    }
+    validate_binding_profiles(binding)?;
+    if binding.get("mls_group_id").and_then(Value::as_str) != Some(group_id) {
+        return Err("mls_governance_binding_group_mismatch");
+    }
+    if binding.get("realm_id").and_then(Value::as_str) != Some(realm_id) {
+        return Err("mls_governance_binding_realm_mismatch");
+    }
+    validate_effective_scope(effective_scope)?;
+    validate_binding_scope(binding, effective_scope)?;
+    validate_binding_frontier_and_policy(binding)
+}
+
+fn validate_welcome_claim_signature(envelope: &Map<String, Value>) -> Result<(), &'static str> {
+    let signature = envelope
+        .get("signature")
+        .and_then(Value::as_object)
+        .ok_or(REASON_KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;
+    let requester = envelope
+        .get("requester_did")
+        .and_then(Value::as_str)
+        .ok_or(REASON_KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;
+    let kid = signature
+        .get("kid")
+        .and_then(Value::as_str)
+        .ok_or(REASON_KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;
+    if !kid.starts_with(requester)
+        || signature
+            .get("sig")
+            .and_then(Value::as_str)
+            .is_none_or(str::is_empty)
+    {
+        return Err(REASON_KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH);
+    }
+    Ok(())
+}
+
+fn validate_welcome_recipient_binding(
+    payload: &Value,
+    recipient_actor_id: &str,
+) -> Result<(), &'static str> {
+    let Some(bound_recipient) = payload
+        .get("recipient_principal_id")
+        .or_else(|| payload.get("recipient_actor_id"))
+        .and_then(Value::as_str)
+    else {
+        return Err(REASON_KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH);
+    };
+    if bound_recipient == recipient_actor_id {
+        Ok(())
+    } else {
+        Err(REASON_KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)
+    }
+}
+
+fn is_sha256_digest(value: &str) -> bool {
+    let Some(hex) = value.strip_prefix("sha256:") else {
+        return false;
+    };
+    hex.len() == 64
+        && hex
+            .chars()
+            .all(|c| c.is_ascii_digit() || matches!(c, 'a'..='f'))
 }
 
 fn validate_effective_scope(scope: &Value) -> Result<(), &'static str> {
@@ -892,7 +1084,9 @@ mod tests {
             "membership_frontier": [
                 frontier
             ],
-            "policy_root": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+            "policy_root": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+            "binding_profile": crate::kinds::MLS_GOVERNANCE_BINDING_FULL_PROFILE,
+            "reducer_profile": crate::kinds::MLS_REDUCER_PROFILE_V1
         });
         if let Some(circle_id) = binding["effective_scope"]
             .get("circle_id")
@@ -908,6 +1102,47 @@ mod tests {
         governance_binding_for_scope(previous_epoch, "ck:mls_group:abc", realm_scope())
     }
 
+    fn welcome_payload(welcome_id: &str) -> Value {
+        let keypackage_ref = "ck:mls_keypackage:01";
+        let keypackage_digest =
+            "sha256:5555555555555555555555555555555555555555555555555555555555555555";
+        json!({
+            "welcome_id": welcome_id,
+            "group_id": "ck:mls_group:abc",
+            "recipient_actor_id": "did:web:bob.example",
+            "recipient_device_id": "ck:device:bob-phone",
+            "welcome_bytes_b64": b64(b"opaque-welcome-bytes"),
+            "key_package_id": keypackage_ref,
+            "keypackage_ref": keypackage_ref,
+            "keypackage_digest": keypackage_digest,
+            "claim_id": "claim-01",
+            "claim_ref": {
+                "claim_id": "claim-01",
+                "keypackage_ref": keypackage_ref,
+                "keypackage_digest": keypackage_digest,
+                "capabilities_digest": "sha256:6666666666666666666666666666666666666666666666666666666666666666",
+                "ssk_generation": 7
+            },
+            "claim_envelope": {
+                "keypackage_ref": keypackage_ref,
+                "keypackage_digest": keypackage_digest,
+                "intended_realm_id": "ck:realm:0196419b-0000-7000-8000-000000000000",
+                "claim_id": "claim-01",
+                "requester_did": "did:web:alice.example",
+                "ssk_generation": 7,
+                "nonce": b64(b"welcome-claim-nonce-01-128-bit"),
+                "welcome_digest": cokret_sdk::canonical::sha256_digest(b"opaque-welcome-bytes"),
+                "created_at": "2026-05-25T00:00:02Z",
+                "signature": {
+                    "kid": "did:web:alice.example#self-signing",
+                    "alg": "EdDSA",
+                    "sig": b64(b"welcome-claim-envelope-signature")
+                }
+            },
+            "governance_binding": governance_binding(0)
+        })
+    }
+
     fn genesis_binding(group_id: &str, effective_scope: Value) -> Value {
         let realm_id = "ck:realm:0196419b-0000-7000-8000-000000000000";
         let mut binding = json!({
@@ -921,7 +1156,9 @@ mod tests {
             "membership_frontier": [
                 "ck:event:0196419b-0000-7000-8000-000000000000"
             ],
-            "policy_root": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+            "policy_root": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+            "binding_profile": crate::kinds::MLS_GOVERNANCE_BINDING_FULL_PROFILE,
+            "reducer_profile": crate::kinds::MLS_REDUCER_PROFILE_V1
         });
         if let Some(circle_id) = binding["effective_scope"]
             .get("circle_id")
@@ -1125,18 +1362,7 @@ mod tests {
     #[test]
     fn welcome_enqueue_then_fetch_marks_delivered() {
         let mut state = ProjectionState::default();
-        let enqueue = op_at(
-            300,
-            "ck.mls.welcome",
-            json!({
-                "welcome_id": "ck:mls_welcome:w1",
-                "group_id": "ck:mls_group:abc",
-                "recipient_actor_id": "did:web:bob.example",
-                "recipient_device_id": "ck:device:bob-phone",
-                "welcome_bytes_b64": b64(b"opaque-welcome-bytes"),
-                "key_package_id": "ck:mls_keypackage:01",
-            }),
-        );
+        let enqueue = op_at(300, "ck.mls.welcome", welcome_payload("ck:mls_welcome:w1"));
         let effect = apply_welcome_enqueue(&mut state, &enqueue);
         assert!(matches!(
             effect,
@@ -1179,26 +1405,31 @@ mod tests {
     #[test]
     fn welcome_enqueue_rejects_plaintext_identity_metadata() {
         let mut state = ProjectionState::default();
-        let enqueue = op_at(
-            300,
-            "ck.mls.welcome",
-            json!({
-                "welcome_id": "ck:mls_welcome:w-leaky",
-                "group_id": "ck:mls_group:abc",
-                "recipient_actor_id": "did:web:bob.example",
-                "recipient_device_id": "ck:device:bob-phone",
-                "welcome_bytes_b64": b64(b"opaque-welcome-bytes"),
-                "key_package_id": "ck:mls_keypackage:01",
-                "metadata": {
-                    "sender_handle": "@alice",
-                    "routing_hint": "ok"
-                }
-            }),
-        );
+        let mut payload = welcome_payload("ck:mls_welcome:w-leaky");
+        payload["metadata"] = json!({
+            "sender_handle": "@alice",
+            "routing_hint": "ok"
+        });
+        let enqueue = op_at(300, "ck.mls.welcome", payload);
         let effect = apply_welcome_enqueue(&mut state, &enqueue);
         assert!(matches!(
             effect,
             ProjectionEffect::Rejected { reason } if reason == REASON_WELCOME_METADATA_LEAK
+        ));
+        assert!(state.mls_welcomes.is_empty());
+    }
+
+    #[test]
+    fn welcome_enqueue_rejects_missing_claim_envelope() {
+        let mut state = ProjectionState::default();
+        let mut payload = welcome_payload("ck:mls_welcome:w-unbound");
+        payload.as_object_mut().unwrap().remove("claim_envelope");
+        let enqueue = op_at(300, "ck.mls.welcome", payload);
+        let effect = apply_welcome_enqueue(&mut state, &enqueue);
+        assert!(matches!(
+            effect,
+            ProjectionEffect::Rejected { reason }
+                if reason == REASON_KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH
         ));
         assert!(state.mls_welcomes.is_empty());
     }
@@ -1301,7 +1532,9 @@ mod tests {
                         "mls_group_id": "ck:mls_group:abc",
                         "previous_epoch": 0,
                         "next_epoch": 1,
-                        "policy_root": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+                        "policy_root": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+                        "binding_profile": crate::kinds::MLS_GOVERNANCE_BINDING_FULL_PROFILE,
+                        "reducer_profile": crate::kinds::MLS_REDUCER_PROFILE_V1
                     },
                 }),
             ),

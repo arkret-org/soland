@@ -63,6 +63,9 @@ use serde_json::Value;
 
 use crate::artifacts;
 
+pub const MLS_GOVERNANCE_BINDING_FULL_PROFILE: &str = "ck.profile.mls_governance_binding.full.v1";
+pub const MLS_REDUCER_PROFILE_V1: &str = "ck.reducer.v1";
+
 // CKP-0007 — typed Relation kind couples a "wide synthesis" Strand (often
 // Realm-default scope) to a "narrow discussion" Strand bound to a
 // `scope_circle_id` Circle. Stored on `ck.relation.create` /
@@ -287,6 +290,14 @@ pub fn validate_mls_governance_binding(payload: &Value) -> Result<(), &'static s
         != Some("cbor-deterministic-rfc8949-v1")
     {
         return Err("mls_governance_binding_encoding_profile_invalid");
+    }
+    if binding.get("binding_profile").and_then(Value::as_str)
+        != Some(MLS_GOVERNANCE_BINDING_FULL_PROFILE)
+    {
+        return Err("mls_governance_binding_profile_invalid");
+    }
+    if binding.get("reducer_profile").and_then(Value::as_str) != Some(MLS_REDUCER_PROFILE_V1) {
+        return Err("mls_governance_binding_reducer_profile_invalid");
     }
     let Some(group_id) = payload
         .get("mls_group_id")
@@ -787,7 +798,9 @@ mod tests {
                 "previous_epoch": 7,
                 "next_epoch": 8,
                 "membership_frontier": ["ck:event:0196419b-0000-7000-8000-000000000001"],
-                "policy_root": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+                "policy_root": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+                "binding_profile": MLS_GOVERNANCE_BINDING_FULL_PROFILE,
+                "reducer_profile": MLS_REDUCER_PROFILE_V1
             }
         });
 
@@ -812,7 +825,9 @@ mod tests {
                 "previous_epoch": 6,
                 "next_epoch": 8,
                 "membership_frontier": ["ck:event:0196419b-0000-7000-8000-000000000001"],
-                "policy_root": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+                "policy_root": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+                "binding_profile": MLS_GOVERNANCE_BINDING_FULL_PROFILE,
+                "reducer_profile": MLS_REDUCER_PROFILE_V1
             }
         });
         assert_eq!(
@@ -836,7 +851,9 @@ mod tests {
                 "previous_epoch": 7,
                 "next_epoch": 8,
                 "membership_frontier": ["ck:event:0196419b-0000-7000-8000-000000000001"],
-                "policy_root": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+                "policy_root": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+                "binding_profile": MLS_GOVERNANCE_BINDING_FULL_PROFILE,
+                "reducer_profile": MLS_REDUCER_PROFILE_V1
             }
         });
         assert_eq!(
