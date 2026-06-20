@@ -11,8 +11,9 @@ pub(crate) use envelope::{
     preflight_moderation_projection_reject, validate_event_envelope,
 };
 pub(super) use envelope::{
-    event_requirements_schema_id, validate_event_critical_features, validate_event_proofs,
-    validate_event_schema_and_payload, validate_event_time_fields, validate_member_identity_proof,
+    event_requirements_schema_id, validate_data_event_capability_refs,
+    validate_event_critical_features, validate_event_proofs, validate_event_schema_and_payload,
+    validate_event_time_fields, validate_member_identity_proof,
 };
 pub(crate) use mls_governance::payload_declares_media_plaintext_service;
 pub(super) use mls_governance::{

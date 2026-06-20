@@ -1334,6 +1334,108 @@ fn soland_dev_proof_gate_matches_sdk_production_verifier() {
         .expect("SDK ProductionVerifier must accept detached_jws kind");
 }
 
+fn data_event_object_with_refs(refs: Vec<String>) -> serde_json::Map<String, Value> {
+    json!({
+        "seal_ref": format!("ck:seal:sha256:{}", "a".repeat(64)),
+        "auth_context": {
+            "did": "did:web:alice.example",
+            "key_id": "ck:device:01904100-0000-7000-8000-a11ce0000001",
+            "key_epoch": 1,
+            "capability_refs": refs
+        },
+        "effects": [{
+            "cell": "ck:cell:ck.component.strand.discussion.timeline.v1:ck:strand:01904100-0000-7000-8000-000000000001",
+            "op": {"kind": "append"}
+        }]
+    })
+    .as_object()
+    .unwrap()
+    .clone()
+}
+
+#[test]
+fn data_event_capability_ref_must_resolve() {
+    let state = make_state(true);
+    let object = data_event_object_with_refs(vec![
+        "ck:grant:01904100-0000-7000-8000-000000000111".to_owned(),
+    ]);
+
+    let err = validate_data_event_capability_refs(
+        &state,
+        "did:web:alice.example",
+        "ck:realm:01904100-0000-7000-8000-000000000001",
+        "ck.message.create",
+        &object,
+    )
+    .expect_err("unknown capability_ref must reject");
+
+    assert_eq!(err.code, "capability_denied");
+    assert!(err.message.contains("not projected"));
+}
+
+#[test]
+fn data_event_capability_ref_must_cover_effect_cell() {
+    let state = make_state(true);
+    let realm_id = "ck:realm:01904100-0000-7000-8000-000000000001";
+    let actor = "did:web:alice.example";
+    let grant = state.authz.create_grant(
+        realm_id.to_owned(),
+        "did:web:owner.example".to_owned(),
+        actor.to_owned(),
+        "ck:strand:01904100-0000-7000-8000-000000000001".to_owned(),
+        vec!["ck.message.create".to_owned()],
+        vec![],
+    );
+    let object = data_event_object_with_refs(vec![grant.grant_id.clone()]);
+
+    validate_data_event_capability_refs(&state, actor, realm_id, "ck.message.create", &object)
+        .expect("matching grant must cover the DataEvent effect cell");
+
+    let wrong_action = state.authz.create_grant(
+        realm_id.to_owned(),
+        "did:web:owner.example".to_owned(),
+        actor.to_owned(),
+        "ck:strand:01904100-0000-7000-8000-000000000001".to_owned(),
+        vec!["ck.reaction.add".to_owned()],
+        vec![],
+    );
+    let wrong_action_object = data_event_object_with_refs(vec![wrong_action.grant_id]);
+    let err = validate_data_event_capability_refs(
+        &state,
+        actor,
+        realm_id,
+        "ck.message.create",
+        &wrong_action_object,
+    )
+    .expect_err("wrong action must not cover the DataEvent effect cell");
+    assert_eq!(err.code, "capability_denied");
+    assert!(err.message.contains("do not cover action"));
+}
+
+#[test]
+fn data_event_capability_ref_must_not_be_revoked() {
+    let state = make_state(true);
+    let realm_id = "ck:realm:01904100-0000-7000-8000-000000000001";
+    let actor = "did:web:alice.example";
+    let grant = state.authz.create_grant(
+        realm_id.to_owned(),
+        "did:web:owner.example".to_owned(),
+        actor.to_owned(),
+        "ck:strand:01904100-0000-7000-8000-000000000001".to_owned(),
+        vec!["ck.message.create".to_owned()],
+        vec![],
+    );
+    state.authz.revoke_grant_with_cascade(&grant.grant_id);
+    let object = data_event_object_with_refs(vec![grant.grant_id]);
+
+    let err =
+        validate_data_event_capability_refs(&state, actor, realm_id, "ck.message.create", &object)
+            .expect_err("revoked capability_ref must reject");
+
+    assert_eq!(err.code, "capability_denied");
+    assert!(err.message.contains("revoked"));
+}
+
 // ----------------------------------------------------------------------------
 // Device-identity B-model (device-lifecycle.md §5.4): service_attested
 // ck.device.authorize enrollment-authority binding admission.

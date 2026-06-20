@@ -139,6 +139,181 @@ fn event_realm_id(object: &serde_json::Map<String, Value>) -> Result<String, Eve
     ))
 }
 
+pub(in crate::routing::events::event_log) fn validate_data_event_capability_refs(
+    state: &AppState,
+    actor_id: &str,
+    realm_id: &str,
+    kind: &str,
+    object: &serde_json::Map<String, Value>,
+) -> Result<(), EventValidationError> {
+    let is_data_event = object.contains_key("seal_ref") || object.contains_key("auth_context");
+    if !is_data_event {
+        return Ok(());
+    }
+    if object.contains_key("seal_basis") {
+        return Err(event_validation_error(
+            StatusCode::BAD_REQUEST,
+            "schema_violation",
+            "DataEvent must not carry seal_basis",
+        ));
+    }
+    let effects = object
+        .get("effects")
+        .and_then(Value::as_array)
+        .ok_or_else(|| {
+            event_validation_error(
+                StatusCode::FORBIDDEN,
+                "capability_denied",
+                "DataEvent requires effects[] to verify capability coverage",
+            )
+        })?;
+    if effects.is_empty() {
+        return Err(event_validation_error(
+            StatusCode::FORBIDDEN,
+            "capability_denied",
+            "DataEvent effects[] must be non-empty for capability coverage",
+        ));
+    }
+    let auth_context = object
+        .get("auth_context")
+        .and_then(Value::as_object)
+        .ok_or_else(|| {
+            event_validation_error(
+                StatusCode::FORBIDDEN,
+                "capability_denied",
+                "DataEvent requires auth_context.capability_refs[]",
+            )
+        })?;
+    let refs = auth_context
+        .get("capability_refs")
+        .and_then(Value::as_array)
+        .ok_or_else(|| {
+            event_validation_error(
+                StatusCode::FORBIDDEN,
+                "capability_denied",
+                "DataEvent requires auth_context.capability_refs[]",
+            )
+        })?;
+    if refs.is_empty() {
+        return Err(event_validation_error(
+            StatusCode::FORBIDDEN,
+            "capability_denied",
+            "DataEvent capability_refs[] must be non-empty",
+        ));
+    }
+
+    let effective_by_id: std::collections::BTreeMap<String, crate::authz::Grant> = state
+        .authz
+        .grants_for_subject(actor_id, realm_id)
+        .into_iter()
+        .map(|grant| (grant.grant_id.clone(), grant))
+        .collect();
+    let mut referenced = Vec::with_capacity(refs.len());
+    for value in refs {
+        let grant_id = value.as_str().ok_or_else(|| {
+            event_validation_error(
+                StatusCode::FORBIDDEN,
+                "capability_denied",
+                "DataEvent capability_refs[] entries must be grant ids",
+            )
+        })?;
+        if crate::ids::parse_typed_uuid(grant_id, "grant").is_none() {
+            return Err(event_validation_error(
+                StatusCode::FORBIDDEN,
+                "capability_denied",
+                "DataEvent capability_refs[] entry is not a valid ck:grant id",
+            ));
+        }
+        let stored = state.authz.get_grant(grant_id).ok_or_else(|| {
+            event_validation_error(
+                StatusCode::FORBIDDEN,
+                "capability_denied",
+                format!("DataEvent capability_ref {grant_id} is not projected"),
+            )
+        })?;
+        if stored.revoked {
+            return Err(event_validation_error(
+                StatusCode::FORBIDDEN,
+                "capability_denied",
+                format!("DataEvent capability_ref {grant_id} is revoked"),
+            ));
+        }
+        if stored.subject != actor_id || stored.realm_id != realm_id {
+            return Err(event_validation_error(
+                StatusCode::FORBIDDEN,
+                "capability_denied",
+                format!("DataEvent capability_ref {grant_id} does not cover actor/realm"),
+            ));
+        }
+        if crate::authz::grant_scope_valid(&stored).is_err() {
+            return Err(event_validation_error(
+                StatusCode::FORBIDDEN,
+                "capability_denied",
+                format!("DataEvent capability_ref {grant_id} has invalid scope"),
+            ));
+        }
+        let Some(effective) = effective_by_id.get(grant_id) else {
+            return Err(event_validation_error(
+                StatusCode::FORBIDDEN,
+                "capability_denied",
+                format!("DataEvent capability_ref {grant_id} is expired or delegation-broken"),
+            ));
+        };
+        referenced.push(effective.clone());
+    }
+
+    for effect in effects {
+        let cell = effect.get("cell").and_then(Value::as_str).ok_or_else(|| {
+            event_validation_error(
+                StatusCode::BAD_REQUEST,
+                "schema_violation",
+                "DataEvent effects[] entries require cell",
+            )
+        })?;
+        if !referenced
+            .iter()
+            .any(|grant| grant_covers_data_event_effect(grant, kind, realm_id, cell))
+        {
+            return Err(event_validation_error(
+                StatusCode::FORBIDDEN,
+                "capability_denied",
+                format!(
+                    "DataEvent capability_refs[] do not cover action {kind} on effect cell {cell}"
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn grant_covers_data_event_effect(
+    grant: &crate::authz::Grant,
+    action: &str,
+    realm_id: &str,
+    cell: &str,
+) -> bool {
+    grant.actions.iter().any(|candidate| candidate == action)
+        && effect_resource_candidates(cell, realm_id)
+            .iter()
+            .any(|resource| crate::authz::resource_matches(&grant.resource, resource))
+}
+
+fn effect_resource_candidates(cell: &str, realm_id: &str) -> Vec<String> {
+    let mut resources = vec![realm_id.to_owned(), cell.to_owned()];
+    let mut parts = cell.splitn(4, ':');
+    if matches!(parts.next(), Some("ck"))
+        && matches!(parts.next(), Some("cell"))
+        && parts.next().is_some()
+        && let Some(subject) = parts.next()
+        && (subject.starts_with("ck:") || subject.starts_with("did:"))
+    {
+        resources.push(subject.to_owned());
+    }
+    resources.sort();
+    resources.dedup();
+    resources
+}
+
 pub(crate) async fn validate_event_envelope(
     state: &AppState,
     session: &SessionRecord,
@@ -339,6 +514,7 @@ pub(crate) async fn validate_event_envelope(
     }
     require_object_field(object, "payload")?;
     validate_event_schema_and_payload(state, &kind, &schema_id, envelope, object)?;
+    validate_data_event_capability_refs(state, &actor_id, &realm_id, &kind, object)?;
     if kind == kinds::CK_MEMBER_IDENTITY_UPDATE {
         validate_member_identity_proof(state, object.get("payload").unwrap_or(&Value::Null))?;
     }
