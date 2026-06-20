@@ -17,6 +17,31 @@ fn device_message_target(kind: &str, content: Value) -> Value {
     })
 }
 
+async fn post_account_device_pair(
+    state: AppState,
+    token: &str,
+    new_device_id: &str,
+    challenge_signature: &str,
+) -> (StatusCode, Value) {
+    let mut response = TestClient::post("http://server/_cokret/gate/account/device-pair")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&serde_json::json!({
+            "pairing_code": "pairing-code",
+            "new_device_pubkey": {
+                "kty": "OKP",
+                "kid": new_device_id,
+                "alg": "EdDSA",
+                "public_key": "emtleQ"
+            },
+            "challenge_signature": challenge_signature
+        }))
+        .send(&app_from_state(state))
+        .await;
+    let status = response.status_code.expect("device-pair status");
+    let body = response.take_json().await.expect("device-pair json");
+    (status, body)
+}
+
 #[tokio::test]
 async fn account_device_pair_registers_sibling_via_canonical_gate_route() {
     let state = AppState::new(test_config(), Db { pool: None });
@@ -93,6 +118,95 @@ async fn account_device_pair_registers_sibling_via_canonical_gate_route() {
                     && event["outcome"] == "accepted"
                     && event["payload"]["new_device_id"] == sibling
             })
+    );
+}
+
+#[tokio::test]
+async fn account_device_pair_rejects_untrusted_authorizers_and_bad_proofs() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let actor = "did:web:alice.example";
+    let trusted_device = "ck:device:01904100-0000-7000-8000-a11ce0000001";
+    let unverified_device = "ck:device:01904100-0000-7000-8000-9b04e0000008";
+    let first_new_device = "ck:device:01904100-0000-7000-8000-9b04e0000009";
+    let second_new_device = "ck:device:01904100-0000-7000-8000-9b04e000000a";
+    let third_new_device = "ck:device:01904100-0000-7000-8000-9b04e000000b";
+
+    let trusted_token =
+        dev_token_for_device(state.clone(), actor, trusted_device, "Alice Desktop").await;
+    let unverified_token =
+        dev_token_for_device(state.clone(), actor, unverified_device, "Alice Browser").await;
+
+    let (status, body) =
+        post_account_device_pair(state.clone(), &unverified_token, first_new_device, "c2ln").await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    assert_eq!(body["error"]["code"], "device_not_authorized", "{body}");
+
+    let (status, body) =
+        post_account_device_pair(state.clone(), &trusted_token, second_new_device, "!").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["error"]["code"], "invalid_param", "{body}");
+
+    let (status, body) =
+        post_account_device_pair(state.clone(), &trusted_token, trusted_device, "c2ln").await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(
+        body["error"]["code"], "cannot_pair_current_device",
+        "{body}"
+    );
+
+    let (status, paired) =
+        post_account_device_pair(state.clone(), &trusted_token, first_new_device, "c2ln").await;
+    assert_eq!(status, StatusCode::OK, "{paired}");
+    assert_eq!(paired["device_id"], first_new_device);
+
+    let (status, body) =
+        post_account_device_pair(state.clone(), &trusted_token, first_new_device, "c2ln").await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["error"]["code"], "device_already_authorized", "{body}");
+
+    let mut revoked_target = state
+        .persistence
+        .devices()
+        .get(actor, first_new_device)
+        .await
+        .unwrap()
+        .expect("paired device record");
+    revoked_target.revoked_at = Some(chrono::Utc::now());
+    state
+        .persistence
+        .devices()
+        .put(&revoked_target)
+        .await
+        .unwrap();
+    let (status, body) =
+        post_account_device_pair(state.clone(), &trusted_token, first_new_device, "c2ln").await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["error"]["code"], "device_revoked", "{body}");
+
+    let mut revoked = state
+        .persistence
+        .devices()
+        .get(actor, trusted_device)
+        .await
+        .unwrap()
+        .expect("trusted device record");
+    revoked.revoked_at = Some(chrono::Utc::now());
+    state.persistence.devices().put(&revoked).await.unwrap();
+
+    let (status, body) =
+        post_account_device_pair(state.clone(), &trusted_token, third_new_device, "c2ln").await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "{body}");
+    assert_eq!(body["error"]["code"], "unauthenticated", "{body}");
+
+    let audit = state.persistence.audit().snapshot_all().await.unwrap();
+    assert_eq!(
+        audit
+            .iter()
+            .filter(
+                |event| event["action"] == "account.device_pair" && event["outcome"] == "accepted"
+            )
+            .count(),
+        1
     );
 }
 

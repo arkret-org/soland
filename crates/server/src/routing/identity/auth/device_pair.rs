@@ -43,14 +43,19 @@ async fn authorize_account_device_pair(
     if let Some(existing) = state
         .persistence
         .devices()
-        .get(&session.actor, &device_id)
+        .list_for_actor_including_revoked(&session.actor)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
-        && existing.revoked_at.is_none()
-        && existing.verification_state == "verified"
+        .into_iter()
+        .find(|device| device.device_id == device_id)
     {
-        return Err(AppError::conflict("device is already authorized")
-            .with_wire_code("device_already_authorized"));
+        if existing.revoked_at.is_some() {
+            return Err(AppError::conflict("device is revoked").with_wire_code("device_revoked"));
+        }
+        if existing.verification_state == "verified" {
+            return Err(AppError::conflict("device is already authorized")
+                .with_wire_code("device_already_authorized"));
+        }
     }
 
     let authorized_event_ref = ids::generate_event_id();
