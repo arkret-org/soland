@@ -1,6 +1,7 @@
 use salvo::prelude::*;
 
 mod authz;
+mod capability_fanout;
 pub(super) mod policy;
 
 use super::{
@@ -20,4 +21,9 @@ pub fn router() -> Router {
 /// operation).
 pub fn product_router() -> Router {
     Router::new().push(policy::product_router())
+}
+
+/// Deployment-local root surface mounted under `/_soland/root/...`.
+pub fn root_router() -> Router {
+    Router::new().push(capability_fanout::router())
 }

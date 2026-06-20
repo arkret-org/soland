@@ -205,6 +205,7 @@ fn soland_local_router() -> Router {
         .hoop(wait_for_sync_token)
         .push(system::local_router())
         .push(identity::local_router())
+        .push(Router::with_path("root").push(access::root_router()))
         .push(
             Router::with_path("self")
                 .hoop(identity::session_pop::verify_session_pop)
