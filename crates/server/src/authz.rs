@@ -434,7 +434,7 @@ impl SolandAuthzEngine {
 
         AuthzResult {
             allowed: false,
-            reason: "capability_denied".to_owned(),
+            reason: default_deny_reason(action).to_owned(),
             reason_detail: None,
             grants: Vec::new(),
         }
@@ -444,6 +444,13 @@ impl SolandAuthzEngine {
 impl Default for SolandAuthzEngine {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+fn default_deny_reason(action: &str) -> &'static str {
+    match action {
+        "ck.message.create" => "no_strand_track_message_grant",
+        _ => "capability_denied",
     }
 }
 
@@ -918,7 +925,7 @@ mod tests {
             &[],
         );
         assert!(!write.allowed);
-        assert_eq!(write.reason, "capability_denied");
+        assert_eq!(write.reason, "no_strand_track_message_grant");
     }
 
     #[test]
