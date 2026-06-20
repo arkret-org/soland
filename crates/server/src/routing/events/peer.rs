@@ -2,10 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::{DateTime, SecondsFormat, Utc};
 use cokret_sdk::http::{EventsQueryOutcome, EventsResolveOutcome, EventsResolveRequestBody};
-use cokret_sdk::{
-    Did, EventId, EventsQueryPostRequestBody, EventsSubmitFederationRequestBody, Hash, RealmId,
-    canonical,
-};
+use cokret_sdk::{Did, EventId, EventsQueryPostRequestBody, Hash, RealmId, canonical};
 use salvo::http::StatusCode;
 use salvo::prelude::*;
 use serde::Serialize;
@@ -117,7 +114,7 @@ async fn peer_events_describe(depot: &mut Depot) -> JsonResult<PeerEventsDescrib
 #[tracing::instrument(skip_all, fields(op = "ck.peer.events.command.submit"))]
 async fn peer_events_submit(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let body = match req.parse_json::<EventsSubmitFederationRequestBody>().await {
+    let body_value = match req.parse_json::<Value>().await {
         Ok(body) => body,
         Err(_) => {
             render_error(
@@ -129,21 +126,11 @@ async fn peer_events_submit(depot: &mut Depot, req: &mut Request, res: &mut Resp
             return;
         }
     };
-    let body_value = match serde_json::to_value(&body) {
-        Ok(body_value) => body_value,
-        Err(error) => {
-            render_app_error(
-                res,
-                AppError::internal(format!("peer events submit body serialize: {error}")),
-            );
-            return;
-        }
-    };
     if let Err(error) = validate_peer_request(state, req, Some(&body_value)) {
         render_app_error(res, error);
         return;
     }
-    super::event_log::submit_federation_events(state, req, body, res).await;
+    super::event_log::submit_federation_events(state, req, body_value, res).await;
 }
 
 #[endpoint(
@@ -307,15 +294,17 @@ async fn peer_events_frontier(
     if !authz.frontier_visible_for_realm(realm_id.as_str()) {
         return Err(AppError::not_found("not found"));
     }
+    let visible_realm_records = records
+        .iter()
+        .filter(|record| {
+            super::event_log::canonical_realm_id_for_record(record).as_deref()
+                == Some(realm_id.as_str())
+                && authz.record_visible(record)
+        })
+        .collect::<Vec<_>>();
     let mut actor_frontier: BTreeMap<String, u64> = BTreeMap::new();
-    let mut actor_heads: BTreeMap<String, (u64, chrono::DateTime<chrono::Utc>, String)> =
-        BTreeMap::new();
     let mut max_hlc: Option<String> = None;
-    for record in records.iter().filter(|record| {
-        super::event_log::canonical_realm_id_for_record(record).as_deref()
-            == Some(realm_id.as_str())
-            && authz.record_visible(record)
-    }) {
+    for record in &visible_realm_records {
         actor_frontier
             .entry(record.actor_id.clone())
             .and_modify(|seq| *seq = (*seq).max(record.actor_seq))
@@ -326,31 +315,18 @@ async fn peer_events_frontier(
                 _ => Some(hlc.to_owned()),
             };
         }
-        let replace =
-            actor_heads
-                .get(&record.actor_id)
-                .is_none_or(|(seq, received_at, event_id)| {
-                    record.actor_seq > *seq
-                        || (record.actor_seq == *seq && record.received_at > *received_at)
-                        || (record.actor_seq == *seq
-                            && record.received_at == *received_at
-                            && record.event_id.as_str() > event_id.as_str())
-                });
-        if replace {
-            actor_heads.insert(
-                record.actor_id.clone(),
-                (
-                    record.actor_seq,
-                    record.received_at,
-                    record.event_id.clone(),
-                ),
-            );
-        }
     }
-    let heads = actor_heads
-        .values()
-        .map(|(_, _, event_id)| event_id.clone())
+    let mut heads = visible_realm_records
+        .iter()
+        .filter(|record| {
+            actor_frontier
+                .get(record.actor_id.as_str())
+                .is_some_and(|seq| *seq == record.actor_seq)
+        })
+        .map(|record| record.event_id.clone())
         .collect::<Vec<_>>();
+    heads.sort();
+    heads.dedup();
     let typed_heads = heads
         .iter()
         .map(|event_id| {

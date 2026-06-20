@@ -122,7 +122,104 @@ async fn peer_events_query_and_frontier_use_peer_surface() {
     );
 }
 
-/// SOL-02-007 — the federation submit path MUST bind the envelope actor to
+#[tokio::test]
+async fn peer_events_submit_quarantines_actor_seq_sibling_overflow() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let now = Utc::now();
+    for idx in 0..16 {
+        let event_id = format!("ck:event:01904100-0000-7000-8000-fede000001{idx:02x}");
+        let mut event = signed_event_envelope(&event_id, 41, Vec::new());
+        event["canonical_digest"] = serde_json::json!(event_canonical_digest(&event));
+        put_event_record(&state, event, now + ChronoDuration::seconds(idx)).await;
+    }
+
+    let mut overflow = signed_event_envelope(
+        "ck:event:01904100-0000-7000-8000-fede000001ff",
+        41,
+        Vec::new(),
+    );
+    overflow["canonical_digest"] = serde_json::json!(event_canonical_digest(&overflow));
+    let body = peer_submit_body(&overflow);
+    let target = "http://server/_cokret/peer/events";
+    let mut submit = TestClient::post(target).json(&body);
+    for (name, value) in signed_federation_push_headers(PEER_SOURCE_DID, SERVICE_DID, target, &body)
+    {
+        submit = submit.add_header(name, value, true);
+    }
+    let outcome: Value = submit
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(outcome["status"], "partial", "{outcome:?}");
+    assert_eq!(
+        outcome["quarantine"],
+        serde_json::json!(["ck:event:01904100-0000-7000-8000-fede000001ff"]),
+        "{outcome:?}"
+    );
+    assert!(outcome["rejected"].as_array().is_none_or(Vec::is_empty));
+    assert!(
+        state
+            .persistence
+            .events()
+            .get("ck:event:01904100-0000-7000-8000-fede000001ff")
+            .await
+            .unwrap()
+            .is_none(),
+        "quarantined sibling must not advance accepted event storage"
+    );
+}
+
+#[tokio::test]
+async fn peer_events_frontier_exposes_current_sibling_heads() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    seed_peer_read_authorization(&state, PEER_SOURCE_DID, "did:web:alice.example").await;
+    let now = Utc::now();
+    for (idx, event_id) in [
+        "ck:event:01904100-0000-7000-8000-fede000002a1",
+        "ck:event:01904100-0000-7000-8000-fede000002a2",
+    ]
+    .iter()
+    .enumerate()
+    {
+        let mut event = signed_event_envelope(event_id, 42, Vec::new());
+        event["canonical_digest"] = serde_json::json!(event_canonical_digest(&event));
+        put_event_record(&state, event, now + ChronoDuration::seconds(idx as i64)).await;
+    }
+
+    let frontier_target =
+        format!("http://server/_cokret/peer/events/frontier?realm_id={TEST_REALM_ID}");
+    let mut frontier = TestClient::get(frontier_target.clone());
+    for (name, value) in peer_get_headers(&frontier_target) {
+        frontier = frontier.add_header(name, value, true);
+    }
+    let frontier: Value = frontier
+        .send(&app_from_state(state))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    let heads = frontier["heads"].as_array().unwrap();
+    assert!(
+        heads
+            .iter()
+            .any(|head| head == "ck:event:01904100-0000-7000-8000-fede000002a1"),
+        "{frontier:?}"
+    );
+    assert!(
+        heads
+            .iter()
+            .any(|head| head == "ck:event:01904100-0000-7000-8000-fede000002a2"),
+        "{frontier:?}"
+    );
+    assert_eq!(
+        frontier["actor_seq_upper_bounds"]["did:web:alice.example"],
+        42
+    );
+}
+
+/// SOL-02-007 - the federation submit path MUST bind the envelope actor to
 /// the asserted `source-trust-domain`: an actor whose home domain differs
 /// from the source domain AND who is not a known member of the binding
 /// Realm is rejected before any session is constructed.

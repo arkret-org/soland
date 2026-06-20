@@ -3,6 +3,8 @@ use crate::invite_claim_proofs::{
     invite_claim_proof_context_from_projection, verify_invite_claim_proofs_for_operation,
 };
 
+const MAX_ACTOR_SEQ_SIBLINGS: usize = 16;
+
 #[derive(Debug)]
 pub(in crate::routing) struct ValidatedEventEnvelope {
     pub(in crate::routing) event_id: String,
@@ -30,6 +32,7 @@ pub(in crate::routing) struct SubmitOneError {
     pub status: StatusCode,
     pub code: String,
     pub message: String,
+    pub quarantine_event_id: Option<String>,
 }
 
 #[derive(Debug)]
@@ -37,6 +40,14 @@ pub(in crate::routing) struct SubmittedEventOutcome {
     pub event_id: String,
     pub duplicate: bool,
     pub outcome: EventsSubmitOutcome,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct RawFederationEventsSubmitBody {
+    service_binding_ref: FederationServiceBindingRef,
+    events: Vec<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    idempotency_key: Option<String>,
 }
 
 impl SubmitOneError {
@@ -49,6 +60,20 @@ impl SubmitOneError {
             status,
             code: code.into(),
             message: message.into(),
+            quarantine_event_id: None,
+        }
+    }
+
+    pub(in crate::routing) fn quarantine(
+        event_id: impl Into<String>,
+        code: impl Into<String>,
+        message: impl Into<String>,
+    ) -> Self {
+        Self {
+            status: StatusCode::OK,
+            code: code.into(),
+            message: message.into(),
+            quarantine_event_id: Some(event_id.into()),
         }
     }
 }
@@ -72,6 +97,17 @@ pub(super) fn event_validation_error(
 }
 
 pub(super) fn render_submit_one_error(res: &mut Response, error: SubmitOneError) {
+    if let Some(event_id) = error.quarantine_event_id {
+        res.render(Json(events_submit_outcome(
+            EventsSubmitStatus::Partial,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            vec![event_id],
+            None,
+        )));
+        return;
+    }
     render_error(res, error.status, &error.code, &error.message);
 }
 
@@ -106,6 +142,7 @@ pub(super) async fn submit_event_batch(
     let mut accepted = Vec::new();
     let mut duplicate = Vec::new();
     let mut rejected = Vec::new();
+    let mut quarantine = Vec::new();
 
     for envelope in envelopes {
         let envelope = match serde_json::to_value(envelope) {
@@ -128,15 +165,21 @@ pub(super) async fn submit_event_batch(
                     duplicate.push(response.event_id);
                 }
             }
-            Err(error) => rejected.push(json!({
-                "id": id,
-                "reason_code": error.code,
-                "detail": error.message,
-            })),
+            Err(error) => {
+                if let Some(event_id) = error.quarantine_event_id {
+                    quarantine.push(event_id);
+                } else {
+                    rejected.push(json!({
+                        "id": id,
+                        "reason_code": error.code,
+                        "detail": error.message,
+                    }));
+                }
+            }
         }
     }
 
-    let status = if !rejected.is_empty() {
+    let status = if !rejected.is_empty() || !quarantine.is_empty() {
         EventsSubmitStatus::Partial
     } else if accepted.len() == duplicate.len() && !duplicate.is_empty() {
         EventsSubmitStatus::Duplicate
@@ -148,6 +191,7 @@ pub(super) async fn submit_event_batch(
         accepted,
         duplicate,
         rejected,
+        quarantine,
         Some(super::super::sync::sync_token_for_state(state).await),
     )));
 }
@@ -155,17 +199,17 @@ pub(super) async fn submit_event_batch(
 pub(crate) async fn submit_federation_events(
     state: &AppState,
     req: &Request,
-    body: EventsSubmitFederationRequestBody,
+    body_value: Value,
     res: &mut Response,
 ) {
-    let body_value = match serde_json::to_value(&body) {
+    let submit = match serde_json::from_value::<RawFederationEventsSubmitBody>(body_value.clone()) {
         Ok(value) => value,
         Err(error) => {
             render_error(
                 res,
                 StatusCode::BAD_REQUEST,
-                "schema_violation",
-                &format!("invalid ck.peer.events.command.submit shape: {error}"),
+                "bad_json",
+                &format!("invalid ck.peer.events.command.submit request body: {error}"),
             );
             return;
         }
@@ -234,10 +278,9 @@ pub(crate) async fn submit_federation_events(
         return;
     }
 
-    let submit = body;
-    if let Err((code, message)) =
-        SolandEventsSubmitRequestBody::validate_federation_binding(&submit)
-    {
+    if let Err((code, message)) = SolandEventsSubmitRequestBody::validate_federation_service_binding(
+        &submit.service_binding_ref,
+    ) {
         render_error(res, StatusCode::BAD_REQUEST, code, &message);
         return;
     }
@@ -264,21 +307,11 @@ pub(crate) async fn submit_federation_events(
     let mut accepted = Vec::new();
     let mut duplicate = Vec::new();
     let mut rejected = Vec::new();
+    let mut quarantine = Vec::new();
     let created_at = now();
     let source_trust_domain = trust_headers.source_trust_domain.as_str().to_owned();
 
     for envelope in submit.events {
-        let envelope = match serde_json::to_value(envelope) {
-            Ok(value) => value,
-            Err(error) => {
-                rejected.push(json!({
-                    "id": "unknown",
-                    "reason_code": "bad_json",
-                    "detail": format!("event envelope re-encode failed: {error}"),
-                }));
-                continue;
-            }
-        };
         let id = event_string_field_from_value(&envelope, "event_id")
             .unwrap_or_else(|| "unknown".to_owned());
         let event_realm = event_string_field_from_value(&envelope, "realm_id");
@@ -345,15 +378,21 @@ pub(crate) async fn submit_federation_events(
                     duplicate.push(response.event_id);
                 }
             }
-            Err(error) => rejected.push(json!({
-                "id": id,
-                "reason_code": error.code,
-                "detail": error.message,
-            })),
+            Err(error) => {
+                if let Some(event_id) = error.quarantine_event_id {
+                    quarantine.push(event_id);
+                } else {
+                    rejected.push(json!({
+                        "id": id,
+                        "reason_code": error.code,
+                        "detail": error.message,
+                    }));
+                }
+            }
         }
     }
 
-    let status = if !rejected.is_empty() {
+    let status = if !rejected.is_empty() || !quarantine.is_empty() {
         EventsSubmitStatus::Partial
     } else if accepted.len() == duplicate.len() && !duplicate.is_empty() {
         EventsSubmitStatus::Duplicate
@@ -371,7 +410,8 @@ pub(crate) async fn submit_federation_events(
             "request_canonical_digest": request_hash,
             "accepted": accepted,
             "duplicate": duplicate,
-            "rejected_count": rejected.len()
+            "rejected_count": rejected.len(),
+            "quarantine_count": quarantine.len()
         }),
         status_label,
     )
@@ -381,6 +421,7 @@ pub(crate) async fn submit_federation_events(
         accepted,
         duplicate,
         rejected,
+        quarantine,
         Some(super::super::sync::sync_token_for_state(state).await),
     )));
 }
@@ -424,6 +465,7 @@ pub(super) fn events_submit_outcome(
     accepted: Vec<String>,
     duplicate: Vec<String>,
     rejected: Vec<Value>,
+    quarantine: Vec<String>,
     cursor: Option<String>,
 ) -> EventsSubmitOutcome {
     EventsSubmitOutcome {
@@ -437,12 +479,83 @@ pub(super) fn events_submit_outcome(
             .filter_map(|event_id| EventId::new(event_id).ok())
             .collect(),
         rejected,
-        quarantine: Vec::new(),
+        quarantine: quarantine
+            .into_iter()
+            .filter_map(|event_id| EventId::new(event_id).ok())
+            .collect(),
         actor_frontier: Value::Null,
         realm_frontier: Value::Null,
         cursor,
         original_outcome: None,
     }
+}
+
+async fn enforce_sibling_fork_limit(
+    state: &AppState,
+    session: &SessionRecord,
+    parsed: &ValidatedEventEnvelope,
+    existing_records: &[CanonicalEventRecord],
+) -> Result<(), SubmitOneError> {
+    let prev_frontier_digest = prev_frontier_digest(&parsed.prev_refs)?;
+    let sibling_count = existing_records
+        .iter()
+        .filter(|record| record.actor_id == parsed.actor_id && record.actor_seq == parsed.actor_seq)
+        .filter_map(|record| stored_prev_frontier_digest(record).ok())
+        .filter(|digest| digest == &prev_frontier_digest)
+        .count();
+    if sibling_count < MAX_ACTOR_SEQ_SIBLINGS {
+        return Ok(());
+    }
+    append_audit_log(
+        state,
+        Some(&session.actor),
+        "events.submit",
+        json!({
+            "event_id": parsed.event_id.clone(),
+            "realm_id": parsed.realm_id.clone(),
+            "actor_id": parsed.actor_id.clone(),
+            "actor_seq": parsed.actor_seq,
+            "prev_frontier_digest": prev_frontier_digest,
+            "accepted_sibling_count": sibling_count,
+            "max_actor_seq_siblings": MAX_ACTOR_SEQ_SIBLINGS,
+        }),
+        "fork_quarantine",
+    )
+    .await;
+    Err(SubmitOneError::quarantine(
+        parsed.event_id.clone(),
+        "fork_quarantine",
+        "actor_seq sibling fork limit exceeded; event is quarantined pending actor-chain repair",
+    ))
+}
+
+fn stored_prev_frontier_digest(record: &CanonicalEventRecord) -> Result<String, SubmitOneError> {
+    let prev_refs = record
+        .envelope
+        .get("prev_refs")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(ToOwned::to_owned)
+        .collect::<Vec<_>>();
+    prev_frontier_digest(&prev_refs)
+}
+
+fn prev_frontier_digest(prev_refs: &[String]) -> Result<String, SubmitOneError> {
+    let mut sorted = prev_refs.to_vec();
+    sorted.sort();
+    sorted.dedup();
+    canonical::canonical_sha256(&Value::Array(
+        sorted.into_iter().map(Value::String).collect(),
+    ))
+    .map_err(|error| {
+        SubmitOneError::new(
+            StatusCode::BAD_REQUEST,
+            "schema_violation",
+            format!("prev_refs cannot be canonicalized: {error}"),
+        )
+    })
 }
 
 pub(in crate::routing) async fn submit_event_value(
@@ -495,17 +608,31 @@ pub(in crate::routing) async fn submit_event_value(
             "event_id already exists with different canonical bytes",
         ));
     }
-    if let Ok(Some(max_seq)) = store.max_actor_seq(&parsed.actor_id).await
-        && parsed.actor_seq <= max_seq
+    let existing_records = store.snapshot_all().await.map_err(|error| {
+        SubmitOneError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal_error",
+            format!("events store unavailable: {error}"),
+        )
+    })?;
+    if let Some(max_seq) = existing_records
+        .iter()
+        .filter(|record| record.actor_id == parsed.actor_id)
+        .map(|record| record.actor_seq)
+        .max()
+        && parsed.actor_seq < max_seq
     {
         return Err(SubmitOneError::new(
             StatusCode::CONFLICT,
             "cas_conflict",
-            "actor_seq must be strictly increasing for the actor",
+            "actor_seq is older than the accepted actor frontier",
         ));
     }
     for prev_ref in &parsed.prev_refs {
-        if !store.contains(prev_ref).await.unwrap_or(false) {
+        if !existing_records
+            .iter()
+            .any(|record| record.event_id == *prev_ref)
+        {
             return Err(SubmitOneError::new(
                 StatusCode::CONFLICT,
                 "dependency_missing",
@@ -514,7 +641,10 @@ pub(in crate::routing) async fn submit_event_value(
         }
     }
     for authorized_ref in &parsed.authorized_refs {
-        if !store.contains(authorized_ref).await.unwrap_or(false) {
+        if !existing_records
+            .iter()
+            .any(|record| record.event_id == *authorized_ref)
+        {
             return Err(SubmitOneError::new(
                 StatusCode::CONFLICT,
                 "dependency_missing",
@@ -522,6 +652,7 @@ pub(in crate::routing) async fn submit_event_value(
             ));
         }
     }
+    enforce_sibling_fork_limit(state, session, &parsed, &existing_records).await?;
 
     let projection_operation = projection_operation_from_event(&parsed, &envelope);
     tracing::debug!(

@@ -188,7 +188,10 @@ fn federation_binding_rejects_duplicate_frontier_entries() {
         events: Vec::new(),
         idempotency_key: None,
     };
-    let err = SolandEventsSubmitRequestBody::validate_federation_binding(&req).unwrap_err();
+    let err = SolandEventsSubmitRequestBody::validate_federation_service_binding(
+        &req.service_binding_ref,
+    )
+    .unwrap_err();
     assert_eq!(err.0, cokret_sdk::ERROR_CODE_SCHEMA_VIOLATION);
 }
 
@@ -211,7 +214,10 @@ fn federation_binding_rejects_reducer_profile_digest_mismatch() {
         idempotency_key: None,
     };
 
-    let err = SolandEventsSubmitRequestBody::validate_federation_binding(&req).unwrap_err();
+    let err = SolandEventsSubmitRequestBody::validate_federation_service_binding(
+        &req.service_binding_ref,
+    )
+    .unwrap_err();
     assert_eq!(err.0, cokret_sdk::ERROR_CODE_REDUCER_PROFILE_MISMATCH);
 }
 
@@ -236,5 +242,6 @@ fn federation_binding_accepts_registry_reducer_profile_digest() {
         idempotency_key: None,
     };
 
-    SolandEventsSubmitRequestBody::validate_federation_binding(&req).unwrap();
+    SolandEventsSubmitRequestBody::validate_federation_service_binding(&req.service_binding_ref)
+        .unwrap();
 }

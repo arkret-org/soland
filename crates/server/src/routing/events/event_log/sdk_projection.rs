@@ -128,6 +128,7 @@ pub(crate) async fn event_submit_response(
                 Vec::new()
             },
             Vec::new(),
+            Vec::new(),
             Some(super::super::sync::sync_token_for_state(state).await),
         ),
     }

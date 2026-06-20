@@ -24,8 +24,9 @@ use cokret_sdk::http::{
 };
 use cokret_sdk::{
     ActorFrontierView, Audience, Did, Event, EventId, EventRef, EventsFrontierAccountClientState,
-    EventsFrontierView, EventsSubmitFederationRequestBody, Hash, Hlc, Operation, OperationId,
-    Proof, RealmId, RealmSealFrontierView, TypedTrustDomainId, canonical, proof_kind,
+    EventsFrontierView, EventsSubmitFederationRequestBody, FederationServiceBindingRef, Hash, Hlc,
+    Operation, OperationId, Proof, RealmId, RealmSealFrontierView, TypedTrustDomainId, canonical,
+    proof_kind,
 };
 use ed25519_dalek::Verifier as _;
 use salvo::http::StatusCode;

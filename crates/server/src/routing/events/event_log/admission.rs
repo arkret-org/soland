@@ -32,10 +32,9 @@ impl SolandEventsSubmitRequestBody {
     /// additionally reject `membership_frontier` and
     /// `delivery_binding_frontier` if they are non-empty arrays containing
     /// duplicates.
-    pub fn validate_federation_binding(
-        req: &EventsSubmitFederationRequestBody,
+    pub fn validate_federation_service_binding(
+        binding: &FederationServiceBindingRef,
     ) -> Result<(), (&'static str, String)> {
-        let binding = &req.service_binding_ref;
         for (name, frontier) in [
             ("membership_frontier", &binding.membership_frontier),
             (
