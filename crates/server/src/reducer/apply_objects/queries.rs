@@ -95,7 +95,7 @@ impl ProjectionState {
             .get(event_id)
             .and_then(|cell| cell.as_ref())
             .cloned();
-        let expired = msg.requires_expiry_stub_at(chrono::Utc::now());
+        let expired = self.message_requires_expiry_stub_at(msg, chrono::Utc::now());
         let content = match (&redaction, viewer_is_author, expired) {
             // Expiry applies to authors too; it is projection state, not a
             // redaction audit view.

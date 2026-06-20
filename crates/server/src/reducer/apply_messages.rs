@@ -673,7 +673,7 @@ impl ProjectionState {
             {
                 return None;
             }
-            if message.requires_expiry_stub_at(chrono::Utc::now()) {
+            if self.message_requires_expiry_stub_at(message, chrono::Utc::now()) {
                 return None;
             }
             return Some(PinEffectiveScope {
@@ -840,9 +840,109 @@ impl ProjectionState {
             .is_some_and(|existing| existing.updated_at >= marker.updated_at);
         if !dominated {
             self.read_cursors.insert(key, marker.clone());
+            self.observe_message_read_for_expiry(
+                &marker.actor_id,
+                marker.position.event_id.as_str(),
+                marker.position.hlc.as_str(),
+                now,
+            );
         }
         ProjectionEffect::ReadMarkerUpdated(marker)
     }
+
+    pub fn message_expiry_projection_at(
+        &self,
+        message: &MessageState,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Option<MessageExpiryProjection> {
+        message_expiry_projection_from_value_with_anchor(
+            message.expiry.as_ref(),
+            message.created_at,
+            now,
+            self.message_expiry_anchors.get(&message.event_id),
+        )
+    }
+
+    pub fn message_requires_expiry_stub_at(
+        &self,
+        message: &MessageState,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> bool {
+        self.message_expiry_projection_at(message, now)
+            .is_some_and(|projection| projection.is_stub())
+    }
+
+    pub(crate) fn observe_message_read_for_expiry(
+        &mut self,
+        actor_id: &str,
+        target_ref: &str,
+        anchor_hlc: &str,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> bool {
+        if actor_id.is_empty() || anchor_hlc.is_empty() {
+            return false;
+        }
+        let event_id = message_event_id_from_ref(target_ref);
+        let Some(message) = self
+            .messages
+            .get(&event_id)
+            .or_else(|| self.messages.get(target_ref))
+        else {
+            return false;
+        };
+        let Some(trigger) = message_expiry_trigger(message.expiry.as_ref()) else {
+            return false;
+        };
+        if !matches!(trigger.as_str(), "on_first_read" | "on_last_read") {
+            return false;
+        }
+        let event_id = message.event_id.clone();
+        let realm_id = message.realm_id.clone();
+        if self.message_expiry_anchors.contains_key(&event_id) {
+            return false;
+        }
+
+        let should_anchor = match trigger.as_str() {
+            "on_first_read" => true,
+            "on_last_read" => {
+                self.message_expiry_readers
+                    .entry(event_id.clone())
+                    .or_default()
+                    .insert(actor_id.to_owned());
+                let readers = self
+                    .message_expiry_readers
+                    .get(&event_id)
+                    .cloned()
+                    .unwrap_or_default();
+                let eligible = self
+                    .members_of_realm(&realm_id)
+                    .into_iter()
+                    .map(|member| member.member.clone())
+                    .collect::<BTreeSet<_>>();
+                !eligible.is_empty() && eligible.is_subset(&readers)
+            }
+            _ => false,
+        };
+        if !should_anchor {
+            return false;
+        }
+        self.message_expiry_anchors.insert(
+            event_id,
+            MessageExpiryAnchor {
+                trigger,
+                anchor_hlc: anchor_hlc.to_owned(),
+                anchored_at: now,
+            },
+        );
+        true
+    }
+}
+
+fn message_expiry_trigger(expiry: Option<&Value>) -> Option<String> {
+    expiry?
+        .get("trigger")
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned)
 }
 
 fn validate_encrypted_projection_field(

@@ -145,9 +145,10 @@ pub fn retention_tombstone_for_event(
 pub fn apply_message_expiry_timeline_projection(
     event: &mut Value,
     message: &crate::reducer::MessageState,
+    projection: &crate::reducer::ProjectionState,
     now: DateTime<Utc>,
 ) -> bool {
-    let Some(expiry) = message.expiry_projection_at(now) else {
+    let Some(expiry) = projection.message_expiry_projection_at(message, now) else {
         return false;
     };
     if !expiry.is_stub() {
@@ -169,7 +170,7 @@ pub fn stub_projection_event_for_message_expiry(
     let expiry = projection
         .messages
         .get(&event.event_id)
-        .and_then(|message| message.expiry_projection_at(now))
+        .and_then(|message| projection.message_expiry_projection_at(message, now))
         .or_else(|| {
             message_expiry_projection_from_value(event.payload.get("expiry"), event.created_at, now)
         });
@@ -452,7 +453,9 @@ fn pin_target_locked_stub_payload(payload: &Value) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::reducer::{MessageState, ProjectionState, RedactionCellValue};
+    use crate::reducer::{
+        MessageState, ProjectionState, RedactionCellValue, SolandMembershipState,
+    };
 
     fn fixed_time(value: &str) -> chrono::DateTime<chrono::Utc> {
         chrono::DateTime::parse_from_rfc3339(value)
@@ -526,7 +529,7 @@ mod tests {
     }
 
     #[test]
-    fn read_trigger_message_without_anchor_is_fail_closed_stub() {
+    fn read_trigger_message_without_anchor_stays_pending_without_plaintext_downgrade() {
         let event_id = "ck:event:01904100-0000-7000-8000-0000000000b1";
         let realm_id = "ck:realm:01904100-0000-7000-8000-cfc039892036";
         let mut message = expired_message(event_id, realm_id);
@@ -543,14 +546,103 @@ mod tests {
             &projection,
         );
 
+        assert!(event.get("expiry_stub").is_none());
+        assert_eq!(event["expiry_state"], json!("active"));
+        assert_eq!(event["expiry_trigger"], json!("on_first_read"));
+        assert_eq!(event["content"]["body"], json!("secret"));
+        assert!(event.get("expires_at").is_none());
+    }
+
+    #[test]
+    fn read_trigger_message_expires_after_aggregate_anchor() {
+        let event_id = "ck:event:01904100-0000-7000-8000-0000000000b2";
+        let realm_id = "ck:realm:01904100-0000-7000-8000-cfc039892036";
+        let mut message = expired_message(event_id, realm_id);
+        message.expiry = Some(json!({
+            "ttl_ms": 1,
+            "trigger": "on_first_read",
+            "grace_ms": 0
+        }));
+        let mut projection = ProjectionState::new();
+        projection
+            .messages
+            .insert(event_id.to_owned(), message.clone());
+
+        assert!(projection.observe_message_read_for_expiry(
+            "did:web:bob.example",
+            event_id,
+            "019041000000-0001-00000001",
+            fixed_time("2020-01-01T00:00:00Z"),
+        ));
+
+        let event = crate::routing::events::projection::sync_timeline_message_json_with_projection(
+            &message,
+            &projection,
+        );
+
         assert_eq!(event["expiry_stub"], json!(true));
-        assert_eq!(event["expiry_state"], json!("unsupported_trigger"));
-        assert_eq!(event["expiry_reason"], json!("read_trigger_unsupported"));
+        assert_eq!(event["expiry_state"], json!("expired"));
+        assert_eq!(event["expiry_trigger"], json!("on_first_read"));
+        assert_eq!(
+            event["expiry_anchor_hlc"],
+            json!("019041000000-0001-00000001")
+        );
         assert_eq!(
             event["content"]["body"],
             json!(RETENTION_EXPIRED_PLACEHOLDER)
         );
-        assert_ne!(event["content"]["body"], json!("secret"));
+    }
+
+    #[test]
+    fn on_last_read_waits_for_active_realm_member_aggregate() {
+        let event_id = "ck:event:01904100-0000-7000-8000-0000000000b3";
+        let realm_id = "ck:realm:01904100-0000-7000-8000-cfc039892036";
+        let now = fixed_time("2020-01-01T00:00:00Z");
+        let mut message = expired_message(event_id, realm_id);
+        message.expiry = Some(json!({
+            "ttl_ms": 1,
+            "trigger": "on_last_read",
+            "grace_ms": 0
+        }));
+        let mut projection = ProjectionState::new();
+        projection
+            .messages
+            .insert(event_id.to_owned(), message.clone());
+        for member in ["did:web:alice.example", "did:web:bob.example"] {
+            projection.members.insert(
+                (realm_id.to_owned(), member.to_owned()),
+                SolandMembershipState {
+                    member: member.to_owned(),
+                    realm_id: realm_id.to_owned(),
+                    state: "join".to_owned(),
+                    role: "member".to_owned(),
+                    invited_at: None,
+                    joined_at: now,
+                    updated_at: now,
+                },
+            );
+        }
+
+        assert!(!projection.observe_message_read_for_expiry(
+            "did:web:bob.example",
+            event_id,
+            "019041000000-0001-00000002",
+            now,
+        ));
+        assert!(projection.message_expiry_anchors.get(event_id).is_none());
+        assert!(projection.observe_message_read_for_expiry(
+            "did:web:alice.example",
+            event_id,
+            "019041000000-0001-00000003",
+            now,
+        ));
+
+        let anchor = projection
+            .message_expiry_anchors
+            .get(event_id)
+            .expect("last-read aggregate anchor");
+        assert_eq!(anchor.trigger, "on_last_read");
+        assert_eq!(anchor.anchor_hlc, "019041000000-0001-00000003");
     }
 
     #[test]

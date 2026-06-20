@@ -44,6 +44,17 @@ pub(crate) async fn relay_ephemeral_read_receipt(
             "ck.receipt.read target event is not visible to the actor",
         ));
     }
+    {
+        let mut projection = state.projection.lock().expect("projection lock");
+        projection.observe_message_read_for_expiry(
+            &session.actor,
+            &normalized.event_id,
+            &normalized
+                .created_at
+                .to_rfc3339_opts(SecondsFormat::Millis, true),
+            normalized.created_at,
+        );
+    }
 
     let record = ReadReceiptRelayRecord {
         realm_id: realm_id.to_owned(),

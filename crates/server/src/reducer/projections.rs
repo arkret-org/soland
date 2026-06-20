@@ -794,6 +794,13 @@ pub struct MessageExpiryProjection {
     pub anchor_hlc: Option<String>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MessageExpiryAnchor {
+    pub trigger: String,
+    pub anchor_hlc: String,
+    pub anchored_at: chrono::DateTime<chrono::Utc>,
+}
+
 impl MessageExpiryProjection {
     pub fn is_stub(&self) -> bool {
         self.state.is_stub()
@@ -827,6 +834,15 @@ pub fn message_expiry_projection_from_value(
     created_at: chrono::DateTime<chrono::Utc>,
     now: chrono::DateTime<chrono::Utc>,
 ) -> Option<MessageExpiryProjection> {
+    message_expiry_projection_from_value_with_anchor(expiry, created_at, now, None)
+}
+
+pub fn message_expiry_projection_from_value_with_anchor(
+    expiry: Option<&Value>,
+    created_at: chrono::DateTime<chrono::Utc>,
+    now: chrono::DateTime<chrono::Utc>,
+    anchor: Option<&MessageExpiryAnchor>,
+) -> Option<MessageExpiryProjection> {
     let Some(expiry) = expiry else {
         return None;
     };
@@ -843,21 +859,57 @@ pub fn message_expiry_projection_from_value(
         .and_then(Value::as_str)
         .unwrap_or("unknown")
         .to_owned();
-    let anchor_hlc = object
+    let payload_anchor_hlc = object
         .get("seal_hlc")
         .and_then(Value::as_str)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned);
-    if trigger != "on_send" {
+
+    if matches!(trigger.as_str(), "on_first_read" | "on_last_read") {
+        let ttl_ms = object.get("ttl_ms").and_then(Value::as_u64);
+        let grace_ms = object.get("grace_ms").and_then(Value::as_u64).unwrap_or(0);
+        let Some(anchor) = anchor.filter(|anchor| anchor.trigger == trigger) else {
+            return Some(MessageExpiryProjection {
+                state: MessageExpiryProjectionState::Live,
+                trigger,
+                expires_at: None,
+                anchor_hlc: payload_anchor_hlc,
+            });
+        };
+        let expires_at = ttl_ms
+            .and_then(|ttl_ms| ttl_ms.checked_add(grace_ms))
+            .and_then(|total_ms| i64::try_from(total_ms).ok())
+            .and_then(|total_ms| {
+                anchor
+                    .anchored_at
+                    .checked_add_signed(chrono::Duration::milliseconds(total_ms))
+            });
+        let Some(expires_at) = expires_at else {
+            return Some(MessageExpiryProjection {
+                state: MessageExpiryProjectionState::InvalidMetadata,
+                trigger,
+                expires_at: None,
+                anchor_hlc: Some(anchor.anchor_hlc.clone()),
+            });
+        };
         return Some(MessageExpiryProjection {
-            state: if matches!(trigger.as_str(), "on_first_read" | "on_last_read") {
-                MessageExpiryProjectionState::UnsupportedTrigger
+            state: if expires_at <= now {
+                MessageExpiryProjectionState::Expired
             } else {
-                MessageExpiryProjectionState::InvalidMetadata
+                MessageExpiryProjectionState::Live
             },
             trigger,
+            expires_at: Some(expires_at),
+            anchor_hlc: Some(anchor.anchor_hlc.clone()),
+        });
+    }
+
+    if trigger != "on_send" {
+        return Some(MessageExpiryProjection {
+            state: MessageExpiryProjectionState::InvalidMetadata,
+            trigger,
             expires_at: None,
-            anchor_hlc,
+            anchor_hlc: payload_anchor_hlc,
         });
     }
     let ttl_ms = object.get("ttl_ms").and_then(Value::as_u64);
@@ -873,7 +925,7 @@ pub fn message_expiry_projection_from_value(
             state: MessageExpiryProjectionState::InvalidMetadata,
             trigger,
             expires_at: None,
-            anchor_hlc,
+            anchor_hlc: payload_anchor_hlc,
         });
     };
     Some(MessageExpiryProjection {
@@ -884,7 +936,7 @@ pub fn message_expiry_projection_from_value(
         },
         trigger,
         expires_at: Some(expires_at),
-        anchor_hlc,
+        anchor_hlc: payload_anchor_hlc,
     })
 }
 

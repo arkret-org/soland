@@ -34,6 +34,14 @@ pub struct ProjectionState {
     pub pins: BTreeMap<(String, String), PinProjection>,
     /// Read markers keyed by (realm_id, actor, scope_id). LWW.
     pub read_cursors: BTreeMap<(String, String, String), ReadMarkerState>,
+    /// Disappearing-message read-trigger anchors keyed by message event_id.
+    /// The projection stores only the accepted aggregate anchor, never the
+    /// reader identities exposed on wire.
+    pub message_expiry_anchors: BTreeMap<String, MessageExpiryAnchor>,
+    /// Private reducer-side contribution set for read-trigger aggregation.
+    /// This is used to make duplicate read delivery idempotent and to decide
+    /// when `on_last_read` has reached the active Realm member set.
+    pub message_expiry_readers: BTreeMap<String, BTreeSet<String>>,
     /// Relations keyed by relation_id. LWW by HLC.
     pub relations: BTreeMap<String, SolandRelationState>,
     /// Poll projections keyed by poll_id. Poll create is a message content
