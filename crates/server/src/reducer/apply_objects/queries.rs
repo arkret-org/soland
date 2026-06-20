@@ -307,10 +307,9 @@ impl ProjectionState {
             .or_else(|| components.pointer("/components/join_policy"))
     }
 
-    /// Submit-time and reducer-time hard gate for
-    /// `principal_admission`. This gate is evaluated before normal Join
-    /// Policy combinators so manual review or other proofs cannot bypass
-    /// Realm-level principal DID admission.
+    /// Submit-time and reducer-time hard gate for Join Policy.
+    /// `principal_admission` and `cooldown` are non-bypassable
+    /// preconditions; remaining gates are evaluated with `combinator`.
     pub fn check_membership_join_admission(
         &self,
         operation: &Operation,
@@ -339,17 +338,136 @@ impl ProjectionState {
         let Some(gates) = join_policy.get("gates").and_then(Value::as_array) else {
             return Err("gate_check_failed");
         };
+        let proofs = operation
+            .payload
+            .get("gate_proofs")
+            .and_then(Value::as_array)
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
+        if proofs.len() > 16 || gate_proofs_have_duplicate_gate_ids(proofs) {
+            return Err("gate_check_failed");
+        }
         for gate in gates {
             let Some(gate) = gate.as_object() else {
                 return Err("gate_check_failed");
             };
-            if gate.get("kind").and_then(Value::as_str) == Some("principal_admission")
-                && !principal_admission_gate_allows(gate, member)
-            {
-                return Err("gate_check_failed");
+            match gate.get("kind").and_then(Value::as_str) {
+                Some("principal_admission") => {
+                    if !principal_admission_gate_allows(gate, member) {
+                        return Err("gate_check_failed");
+                    }
+                }
+                Some("cooldown") => {
+                    if self.cooldown_gate_blocks_join(
+                        gate,
+                        operation.realm_id.as_str(),
+                        member,
+                        operation.created_at,
+                    ) {
+                        return Err("gate_check_failed");
+                    }
+                }
+                _ => {}
             }
         }
-        Ok(())
+        let normal_gates = gates.iter().filter_map(Value::as_object).filter(|gate| {
+            !matches!(
+                gate.get("kind").and_then(Value::as_str),
+                Some("principal_admission" | "cooldown")
+            )
+        });
+        match join_policy.get("combinator").and_then(Value::as_str) {
+            Some("all") => {
+                for gate in normal_gates {
+                    if !self.join_gate_allows(gate, proofs, member, operation.created_at) {
+                        return Err("gate_check_failed");
+                    }
+                }
+                Ok(())
+            }
+            Some("any") => {
+                let mut saw_normal_gate = false;
+                for gate in normal_gates {
+                    saw_normal_gate = true;
+                    if self.join_gate_allows(gate, proofs, member, operation.created_at) {
+                        return Ok(());
+                    }
+                }
+                if saw_normal_gate {
+                    Err("gate_check_failed")
+                } else {
+                    Ok(())
+                }
+            }
+            _ => Err("gate_check_failed"),
+        }
+    }
+
+    fn cooldown_gate_blocks_join(
+        &self,
+        gate: &serde_json::Map<String, Value>,
+        realm_id: &str,
+        member: &str,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> bool {
+        let Some(min_interval) = gate
+            .get("min_interval_since_leave")
+            .and_then(Value::as_str)
+            .and_then(parse_iso8601_duration)
+        else {
+            return true;
+        };
+        let Some(previous) = self.member(realm_id, member) else {
+            return false;
+        };
+        previous.state == "leave" && now.signed_duration_since(previous.updated_at) < min_interval
+    }
+
+    fn join_gate_allows(
+        &self,
+        gate: &serde_json::Map<String, Value>,
+        proofs: &[Value],
+        member: &str,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> bool {
+        match gate.get("kind").and_then(Value::as_str) {
+            Some("parent_membership") => self.parent_membership_gate_allows(gate, member),
+            Some("challenge_response") => gate
+                .get("gate_id")
+                .and_then(Value::as_str)
+                .and_then(|gate_id| gate_proof_for_gate(proofs, gate_id))
+                .is_some_and(|proof| challenge_response_gate_allows(gate, proof, now)),
+            Some("claim_required") => gate
+                .get("gate_id")
+                .and_then(Value::as_str)
+                .and_then(|gate_id| gate_proof_for_gate(proofs, gate_id))
+                .is_some_and(claim_required_gate_has_proof),
+            Some("application_form" | "manual_review") => false,
+            _ => false,
+        }
+    }
+
+    fn parent_membership_gate_allows(
+        &self,
+        gate: &serde_json::Map<String, Value>,
+        member: &str,
+    ) -> bool {
+        let required = gate
+            .get("require_min_membership")
+            .and_then(Value::as_str)
+            .unwrap_or("join");
+        gate.get("membership_source_realm_ids")
+            .and_then(Value::as_array)
+            .is_some_and(|source_realms| {
+                source_realms
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .any(|realm_id| {
+                        self.member(realm_id, member).is_some_and(|membership| {
+                            membership_state_satisfies_minimum(&membership.state, required)
+                        })
+                    })
+            })
     }
 
     pub fn realm_disappearing_policy_cell_value(&self, realm_id: &str) -> Option<&Value> {
@@ -559,4 +677,27 @@ impl ProjectionState {
             })
         })
     }
+}
+
+fn gate_proofs_have_duplicate_gate_ids(proofs: &[Value]) -> bool {
+    let mut seen = std::collections::BTreeSet::new();
+    for proof in proofs {
+        let Some(gate_id) = proof.get("gate_id").and_then(Value::as_str) else {
+            return true;
+        };
+        if gate_id.trim().is_empty() || !seen.insert(gate_id.to_owned()) {
+            return true;
+        }
+    }
+    false
+}
+
+fn gate_proof_for_gate<'a>(
+    proofs: &'a [Value],
+    gate_id: &str,
+) -> Option<&'a serde_json::Map<String, Value>> {
+    proofs.iter().find_map(|proof| {
+        let object = proof.as_object()?;
+        (object.get("gate_id").and_then(Value::as_str) == Some(gate_id)).then_some(object)
+    })
 }
