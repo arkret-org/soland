@@ -235,7 +235,7 @@ pub fn is_valid_sync_token(token: &str) -> bool {
         && value
             .get("purpose")
             .and_then(|purpose| purpose.as_str())
-            .is_some_and(|purpose| matches!(purpose, "stream" | "barrier" | "events_query"))
+            .is_some_and(|purpose| matches!(purpose, "stream" | "barrier"))
         && value.get("t").and_then(|t| t.as_str()).is_some()
         && value
             .get("x")

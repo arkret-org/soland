@@ -869,7 +869,7 @@ async fn inline_filter_digest_pseudo_fields_are_rejected_by_cursor_parsers() {
 
         let mut events_cursor = json!({
             "v": "1",
-            "purpose": EVENTS_QUERY_CURSOR_PURPOSE,
+            "purpose": STREAM_CURSOR_PURPOSE,
             "t": chrono::Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true),
             "x": now_ms + 60_000,
             "h": handle.clone(),
@@ -907,7 +907,7 @@ async fn events_query_cursor_rejects_bare_event_id_cursor() {
 }
 
 #[tokio::test]
-async fn events_query_cursor_binds_purpose_and_filter_digest() {
+async fn events_query_cursor_uses_stream_purpose_and_binds_filter_digest() {
     let state = test_state();
     let session = roster_session(&state, "did:web:alice.example");
     let filter_a = sync_filter_digest(Some(&json!({
@@ -927,6 +927,23 @@ async fn events_query_cursor_binds_purpose_and_filter_digest() {
     let event_id = "ck:event:01904100-0000-7000-8000-0000000000e1";
     let token = sync_token_for_events_query(&state, Some(&session), &filter_a, event_id).await;
     let now_ms = chrono::Utc::now().timestamp_millis();
+    let token_value = decode_sync_cursor_value(&token).expect("events query cursor decodes");
+    assert_eq!(
+        token_value.get("purpose").and_then(Value::as_str),
+        Some(STREAM_CURSOR_PURPOSE)
+    );
+    let handle = token_value
+        .get("h")
+        .and_then(Value::as_str)
+        .expect("cursor handle");
+    let record = state
+        .persistence
+        .sync_cursors()
+        .get(handle)
+        .await
+        .unwrap()
+        .expect("events query cursor handle persisted");
+    assert_eq!(record.purpose, STREAM_CURSOR_PURPOSE);
 
     let parsed =
         parse_and_validate_events_query_cursor(&token, &state, Some(&session), &filter_a, now_ms)
@@ -943,7 +960,10 @@ async fn events_query_cursor_binds_purpose_and_filter_digest() {
     let error = parse_and_validate_sync_cursor(&token, &state, Some(&session), None, now_ms)
         .await
         .expect_err("events query cursor must not parse as account stream cursor");
-    assert!(matches!(error, SyncCursorError::Invalid(_)));
+    assert!(matches!(
+        error,
+        SyncCursorError::Mismatch(_) | SyncCursorError::Integrity(_)
+    ));
 }
 
 #[test]
