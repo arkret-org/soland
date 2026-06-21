@@ -463,6 +463,8 @@ pub(crate) async fn federation_pull_operations(
     if cokret_sdk::RealmId::new(realm_id.clone()).is_err() {
         return Err(AppError::invalid_param("invalid realm_id"));
     }
+    let realm_id_typed =
+        cokret_sdk::RealmId::new(realm_id.clone()).expect("realm_id was validated");
     let after_cursor: Option<String> = after_cursor.into_inner();
     let limit = limit.into_inner().unwrap_or(100).min(100);
     let want_snapshot_bootstrap = snapshot_bootstrap.into_inner().unwrap_or(false);
@@ -474,6 +476,29 @@ pub(crate) async fn federation_pull_operations(
         .unwrap_or_default();
     let redacted = redaction_targets_from_operations(&realm_operations);
     let snapshot_bootstrap = want_snapshot_bootstrap.then(|| {
+        let snapshot_join_candidate = crate::notary::ensure_realm_seal_head(state, &realm_id_typed)
+            .ok()
+            .flatten()
+            .map(|seal| {
+                json!({
+                    "realm_id": realm_id.clone(),
+                    "service_did": state.config.service_did.clone(),
+                    "service_type": "principal_server",
+                    "role": "primary",
+                    "endpoint": state.config.public_base_url.clone(),
+                    "operations": ["ck.self.events.command.submit"],
+                    "join_methods": ["invite_accept", "member_join", "knock", "application"],
+                    "priority": 0,
+                    "source": "directory_ingest",
+                    "seal_basis": {
+                        "leaves": [seal.id],
+                        "control_event_set_root": seal.control_event_set_root,
+                        "state_root": seal.state_root,
+                    },
+                    "as_of": now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+                    "expires_at": (now() + Duration::minutes(10)).to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+                })
+            });
         let manifest = json!({
             "type": "snapshot_bootstrap",
             "realm_id": realm_id,
@@ -486,19 +511,7 @@ pub(crate) async fn federation_pull_operations(
             "manifest": manifest,
             "state_digest": state_digest,
             "chunks": [],
-            "join_candidates": [{
-                "realm_id": realm_id,
-                "service_did": state.config.service_did.clone(),
-                "service_type": "principal_server",
-                "role": "primary",
-                "endpoint": state.config.public_base_url.clone(),
-                "operations": ["ck.self.events.command.submit"],
-                "join_methods": ["invite_accept", "member_join", "knock", "application"],
-                "priority": 0,
-                "source": "directory_ingest",
-                "as_of": now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
-                "expires_at": (now() + Duration::minutes(10)).to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
-            }],
+            "join_candidates": snapshot_join_candidate.into_iter().collect::<Vec<_>>(),
         })
     });
     let mut seen_cursor = after_cursor.is_none();
