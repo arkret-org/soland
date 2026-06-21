@@ -165,7 +165,7 @@ DATABASE_URL=postgres://soland:soland@localhost:5432/soland \
 ```bash
 docker run --rm -p 8698:8698 \
   -e SOLAND_PUBLIC_BASE_URL=https://soland.example \
-  -e SOLAND_SERVICE_DID=did:web:soland.example \
+  -e SOLAND_SERVICE_DID=did:webvh:<scid>:soland.example:webvh:service \
   -e SOLAND_OAUTH_INTROSPECTION_URL=https://coauth.example/oauth2/introspect \
   -e SOLAND_OAUTH_INTROSPECTION_BEARER=shared-secret-known-by-coauth \
   -e DATABASE_URL=postgres://soland:soland@db:5432/soland \
@@ -189,7 +189,7 @@ All settings can be supplied via environment variables (preferred) or a
 | `SOLAND_TLS_CERT_PATH` | unset | TLS certificate PEM path; when paired with `SOLAND_TLS_KEY_PATH`, soland serves HTTPS via rustls |
 | `SOLAND_TLS_KEY_PATH` | unset | TLS private-key PEM path paired with `SOLAND_TLS_CERT_PATH` |
 | `SOLAND_PQ_TLS_DEPLOYMENT_PROBE` | unset | Set to `verified` only after an external TLS 1.3 probe proves `X25519MLKEM768` negotiation and fail-closed classical fallback |
-| `SOLAND_SERVICE_DID` | `did:web:soland.local` | Service DID — also the proof `audience` binding |
+| `SOLAND_SERVICE_DID` | `did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service` | Service DID — also the proof `audience` binding |
 | `SOLAND_EMBEDDED_WEBVH_PROVIDER_ENABLED` | `true` | Enable soland's built-in `did:webvh` provider for coauth registration |
 | `SOLAND_EMBEDDED_WEBVH_REGISTRATION_BEARER` | unset | Shared bearer token coauth must present to write embedded `did:webvh` registrations |
 | `SOLAND_EXTERNAL_WEBVH_PROVIDER_URL` | unset | Optional external `did:webvh` provider, such as a standalone StarID service |
@@ -254,7 +254,7 @@ and the `local.host.pem` / `local.host-key.pem` file names.
    ```dotenv
    SOLAND_BIND=127.0.0.1:443
    SOLAND_PUBLIC_BASE_URL=https://local.host:443
-   SOLAND_SERVICE_DID=did:web:local.host
+   SOLAND_SERVICE_DID=did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:local.host:webvh:service
    SOLAND_TLS_CERT_PATH=./local.host.pem
    SOLAND_TLS_KEY_PATH=./local.host-key.pem
    SOLAND_OBJECT_STORAGE_BACKEND=filesystem
@@ -287,7 +287,7 @@ Start soland on `127.0.0.1:8698`, start coauth on `127.0.0.1:7080`, then run:
 ```dotenv
 SOLAND_BIND=127.0.0.1:8698
 SOLAND_PUBLIC_BASE_URL=https://local.host
-SOLAND_SERVICE_DID=did:web:local.host
+SOLAND_SERVICE_DID=did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:local.host:webvh:service
 SOLAND_DEVELOPMENT_MODE=true
 SOLAND_OAUTH_INTROSPECTION_URL=https://auth.local.host/oauth/introspect
 SOLAND_OAUTH_INTROSPECTION_BEARER=local-coauth-oauth-introspection

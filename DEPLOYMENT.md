@@ -35,7 +35,7 @@ SOLAND_PUBLIC_BASE_URL=https://soland.example
 SOLAND_TLS_CERT_PATH=/etc/soland/tls/fullchain.pem
 SOLAND_TLS_KEY_PATH=/etc/soland/tls/privkey.pem
 SOLAND_PQ_TLS_DEPLOYMENT_PROBE=verified
-SOLAND_SERVICE_DID=did:web:soland.example
+SOLAND_SERVICE_DID=did:webvh:<scid>:soland.example:webvh:service
 SOLAND_EMBEDDED_WEBVH_PROVIDER_ENABLED=true
 SOLAND_EMBEDDED_WEBVH_REGISTRATION_BEARER=<shared-secret-configured-in-coauth>
 # Optional: use a standalone webvh provider instead of, or alongside, the embedded provider.
@@ -157,7 +157,7 @@ docker run --name soland --restart=always -d \
   -p 127.0.0.1:8698:8698 \
   -e SOLAND_BIND=0.0.0.0:8698 \
   -e SOLAND_PUBLIC_BASE_URL=https://soland.example \
-  -e SOLAND_SERVICE_DID=did:web:soland.example \
+  -e SOLAND_SERVICE_DID=did:webvh:<scid>:soland.example:webvh:service \
   -e SOLAND_OAUTH_INTROSPECTION_URL=https://coauth.example/oauth2/introspect \
   -e SOLAND_OAUTH_INTROSPECTION_BEARER=<shared-secret-configured-in-coauth> \
   -e DATABASE_URL=postgres://soland:<password>@db:5432/soland?sslmode=verify-full \
@@ -183,7 +183,7 @@ helm template soland ./deploy/helm/soland \
   --namespace cokret \
   --set image.tag=<tag> \
   --set env.SOLAND_PUBLIC_BASE_URL=https://soland.example \
-  --set env.SOLAND_SERVICE_DID=did:web:soland.example \
+  --set env.SOLAND_SERVICE_DID=did:webvh:<scid>:soland.example:webvh:service \
   --set secretEnv.DATABASE_URL='postgres://soland:<password>@db.internal:5432/soland?sslmode=verify-full' \
   --set secretEnv.SOLAND_OAUTH_INTROSPECTION_URL=https://coauth.example/oauth2/introspect \
   --set secretEnv.SOLAND_OAUTH_INTROSPECTION_BEARER='<shared-secret-configured-in-coauth>'

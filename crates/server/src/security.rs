@@ -463,24 +463,38 @@ fn url_host(raw_url: &str) -> Option<String> {
 }
 
 fn did_web_domain(did: &str) -> Option<String> {
-    let rest = did
-        .strip_prefix("did:web:")
-        .or_else(|| did.strip_prefix("did:webvh:"))?;
-    let domain = rest
-        .split(':')
-        .next()?
-        .replace("%3A", ":")
-        .replace("%3a", ":");
+    let domain = if let Some(rest) = did.strip_prefix("did:web:") {
+        rest.split(':').next()?
+    } else if let Some(rest) = did.strip_prefix("did:webvh:") {
+        let mut parts = rest.split(':');
+        let scid = parts.next()?;
+        let host = parts.next()?;
+        if scid.is_empty() {
+            return None;
+        }
+        host
+    } else {
+        return None;
+    };
+    let domain = domain
+        .split("%3A")
+        .next()
+        .unwrap_or(domain)
+        .split("%3a")
+        .next()
+        .unwrap_or(domain)
+        .trim_end_matches('.')
+        .to_ascii_lowercase();
     (!domain.trim().is_empty()).then_some(domain)
 }
 
 fn trust_domain_from_service_did(service_did: &str) -> String {
-    let scope = service_did
-        .strip_prefix("did:web:")
-        .or_else(|| service_did.strip_prefix("did:key:"))
-        .or_else(|| service_did.strip_prefix("did:webvh:"))
-        .unwrap_or(service_did)
-        .replace(':', ".");
+    let scope = did_web_domain(service_did).unwrap_or_else(|| {
+        service_did
+            .strip_prefix("did:key:")
+            .unwrap_or(service_did)
+            .replace(':', ".")
+    });
     format!("ck:trust_domain:{scope}")
 }
 
@@ -639,6 +653,26 @@ mod tests {
         assert!(!federation_peer_denied(
             "https://good.example",
             "did:web:good.example"
+        ));
+        unsafe {
+            std::env::remove_var(SOLAND_FEDERATION_DENYLIST);
+        }
+    }
+
+    #[test]
+    fn federation_denylist_matches_did_webvh_host_not_scid() {
+        let _guard = env_lock().lock().expect("env test lock");
+        unsafe {
+            std::env::set_var(
+                SOLAND_FEDERATION_DENYLIST,
+                "domain:local.host, ck:trust_domain:local.host",
+            );
+        }
+        assert!(federation_origin_denied(
+            "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:local.host:webvh:service"
+        ));
+        assert!(!federation_origin_denied(
+            "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:other.host:webvh:service"
         ));
         unsafe {
             std::env::remove_var(SOLAND_FEDERATION_DENYLIST);

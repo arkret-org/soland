@@ -19,7 +19,7 @@ if [ ! -f "$TARBALL" ]; then
 fi
 
 DATABASE_URL="${SOLAND_DATABASE_URL:-${DATABASE_URL:-${PASION_DATABASE_URL:-}}}"
-SERVICE_DID="${SOLAND_SERVICE_DID:-did:web:soland.local}"
+SERVICE_DID="${SOLAND_SERVICE_DID:-did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service}"
 USE_KEYSTORE="${SOLAND_USE_KEYSTORE:-false}"
 WORKDIR="$(mktemp -d -t soland-restore-XXXXXX)"
 trap 'rm -rf "$WORKDIR"' EXIT

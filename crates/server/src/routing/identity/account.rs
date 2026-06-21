@@ -72,16 +72,20 @@ pub(crate) async fn record_handle_release(
     Ok(())
 }
 
-/// This Principal Server's handle domain, derived from its `did:web:` service
-/// DID (`did:web:local.host` -> `local.host`). Mirrors the derivation used by
-/// `directory::signed_handle_claim`.
+/// This Principal Server's handle domain. Handles are scoped to the server
+/// host, not to a DID method-specific identifier. Prefer the advertised public
+/// base URL so `did:webvh` service DIDs do not have to be parsed to recover a
+/// handle domain.
 fn principal_handle_domain(state: &AppState) -> String {
-    state
-        .config
-        .service_did
-        .strip_prefix("did:web:")
-        .map(|value| value.replace(':', "."))
+    handle_domain_from_public_base_url(&state.config.public_base_url)
+        .or_else(|| did_host_candidate(&state.config.service_did))
         .unwrap_or_else(|| "soland.local".to_owned())
+}
+
+fn handle_domain_from_public_base_url(public_base_url: &str) -> Option<String> {
+    let url = reqwest::Url::parse(public_base_url).ok()?;
+    let host = url.host_str()?.trim().trim_end_matches('.');
+    (!host.is_empty()).then(|| normalized_registration_policy_label(host))
 }
 
 /// Resolve the durable account localpart from a canonical registration handle
@@ -358,12 +362,34 @@ fn normalized_registration_policy_label(value: &str) -> String {
     value.trim().trim_end_matches('.').to_ascii_lowercase()
 }
 
+fn did_host_candidate(did: &str) -> Option<String> {
+    did_web_host_candidate(did).or_else(|| did_webvh_host_candidate(did))
+}
+
 fn did_web_host_candidate(did: &str) -> Option<String> {
     let host = did.strip_prefix("did:web:")?;
     let host = host.split(':').next().unwrap_or(host);
     Some(normalized_registration_policy_label(
         &host.replace(':', "."),
     ))
+}
+
+fn did_webvh_host_candidate(did: &str) -> Option<String> {
+    let rest = did.strip_prefix("did:webvh:")?;
+    let mut parts = rest.split(':');
+    let scid = parts.next()?;
+    let host = parts.next()?;
+    if scid.is_empty() || host.is_empty() {
+        return None;
+    }
+    let host = host
+        .split("%3A")
+        .next()
+        .unwrap_or(host)
+        .split("%3a")
+        .next()
+        .unwrap_or(host);
+    Some(normalized_registration_policy_label(host))
 }
 
 fn organization_allowed(
@@ -378,7 +404,7 @@ fn organization_allowed(
     if let Some(organization) = evidence.and_then(|value| value.organization.as_deref()) {
         candidates.push(normalized_registration_policy_label(organization));
     }
-    if let Some(host) = did_web_host_candidate(did) {
+    if let Some(host) = did_host_candidate(did) {
         candidates.push(host);
     }
     policy.organization_allowlist.iter().any(|allowed| {
@@ -1155,6 +1181,35 @@ fn account_device_summary(device: DeviceInventoryRecord) -> Result<AccountDevice
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    #[test]
+    fn handle_domain_prefers_public_base_url_host() {
+        assert_eq!(
+            handle_domain_from_public_base_url("https://Local.Host/base/path").as_deref(),
+            Some("local.host")
+        );
+    }
+
+    #[test]
+    fn did_host_candidate_extracts_webvh_host_not_scid() {
+        assert_eq!(
+            did_host_candidate(
+                "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:local.host:webvh:alice"
+            )
+            .as_deref(),
+            Some("local.host")
+        );
+    }
+
+    #[test]
+    fn did_host_candidate_keeps_legacy_web_service_did_host() {
+        assert_eq!(
+            did_host_candidate("did:web:local.host").as_deref(),
+            Some("local.host")
+        );
+    }
+
     #[test]
     fn principal_realm_for_did_is_deterministic() {
         let a = crate::routing::identity::recovery::principal_control_realm_for_did(

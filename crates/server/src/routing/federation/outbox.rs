@@ -224,13 +224,7 @@ fn header_value(headers: &reqwest::header::HeaderMap, name: &str) -> Option<Stri
 }
 
 fn trust_domain_from_service_did(service_did: &str) -> String {
-    let scope = service_did
-        .strip_prefix("did:web:")
-        .or_else(|| service_did.strip_prefix("did:key:"))
-        .or_else(|| service_did.strip_prefix("did:webvh:"))
-        .unwrap_or(service_did)
-        .replace(':', ".");
-    format!("ck:trust_domain:{scope}")
+    super::federation::trust_domain_from_service_did(service_did)
 }
 
 /// Compute the RFC 9530 `Content-Digest` header value for a body.

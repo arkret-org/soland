@@ -29,7 +29,7 @@ WORKDIR="$(mktemp -d -t soland-backup-XXXXXX)"
 trap 'rm -rf "$WORKDIR"' EXIT
 
 DATABASE_URL="${SOLAND_DATABASE_URL:-${DATABASE_URL:-${PASION_DATABASE_URL:-}}}"
-SERVICE_DID="${SOLAND_SERVICE_DID:-did:web:soland.local}"
+SERVICE_DID="${SOLAND_SERVICE_DID:-did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service}"
 USE_KEYSTORE="${SOLAND_USE_KEYSTORE:-false}"
 BACKUP_DIR="${SOLAND_BACKUP_DIR:-./backups}"
 mkdir -p "$BACKUP_DIR"

@@ -527,8 +527,10 @@ impl AppConfig {
             .parse()?;
         let public_base_url =
             std::env::var("SOLAND_PUBLIC_BASE_URL").unwrap_or_else(|_| format!("http://{bind}"));
-        let service_did = std::env::var("SOLAND_SERVICE_DID")
-            .unwrap_or_else(|_| "did:web:soland.local".to_owned());
+        let service_did = std::env::var("SOLAND_SERVICE_DID").unwrap_or_else(|_| {
+            "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service"
+                .to_owned()
+        });
         let tls_cert_path = env_non_empty("SOLAND_TLS_CERT_PATH").map(PathBuf::from);
         let tls_key_path = env_non_empty("SOLAND_TLS_KEY_PATH").map(PathBuf::from);
         if tls_cert_path.is_some() != tls_key_path.is_some() {
@@ -1143,11 +1145,9 @@ fn derive_trust_domain(service_did: &str) -> anyhow::Result<String> {
         })?;
         return Ok(value);
     }
-    let host = service_did
-        .strip_prefix("did:web:")
-        .or_else(|| service_did.strip_prefix("did:key:"))
-        .or_else(|| service_did.strip_prefix("did:webvh:"))
-        .unwrap_or(service_did);
+    let host = did_host_from_service_did(service_did)
+        .or_else(|| service_did.strip_prefix("did:key:").map(str::to_owned))
+        .unwrap_or_else(|| service_did.to_owned());
     // Normalise to the SDK scope grammar: lowercase, keep
     // [a-z0-9.\-_:].
     let scope: String = host
@@ -1168,6 +1168,31 @@ fn derive_trust_domain(service_did: &str) -> anyhow::Result<String> {
         )
     })?;
     Ok(candidate)
+}
+
+fn did_host_from_service_did(service_did: &str) -> Option<String> {
+    let host = if let Some(rest) = service_did.strip_prefix("did:web:") {
+        rest.split(':').next()?
+    } else if let Some(rest) = service_did.strip_prefix("did:webvh:") {
+        let mut parts = rest.split(':');
+        let scid = parts.next()?;
+        let host = parts.next()?;
+        if scid.is_empty() {
+            return None;
+        }
+        host
+    } else {
+        return None;
+    };
+    let host = host
+        .split("%3A")
+        .next()
+        .unwrap_or(host)
+        .split("%3a")
+        .next()
+        .unwrap_or(host)
+        .trim_end_matches('.');
+    (!host.is_empty()).then(|| host.to_owned())
 }
 
 fn env_csv(name: &str) -> Option<Vec<String>> {
@@ -1274,6 +1299,16 @@ mod tests {
             default_did_resolver_allow_methods(),
             vec!["webvh", "web", "key", "uuid"]
         );
+    }
+
+    #[test]
+    fn trust_domain_derives_webvh_host_not_scid() {
+        let _env = ScopedEnv::new("SOLAND_TRUST_DOMAIN");
+        let trust_domain = derive_trust_domain(
+            "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:local.host:webvh:service",
+        )
+        .unwrap();
+        assert_eq!(trust_domain, "ck:trust_domain:local.host");
     }
 
     #[test]
