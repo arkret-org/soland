@@ -17,7 +17,6 @@
 //! never mistaken for security boundaries.
 
 use cokret_sdk::lattice::CellState;
-use cokret_sdk::state_res::{CellRegistry, CellStore};
 use cokret_sdk::{CellRef, RealmId};
 use salvo::http::StatusCode;
 use salvo::prelude::*;

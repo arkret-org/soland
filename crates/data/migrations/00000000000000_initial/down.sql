@@ -1,6 +1,7 @@
 -- Squashed initial migration. This drops all tables. Only use in development.
 DROP TABLE IF EXISTS account_datas CASCADE;
 DROP TABLE IF EXISTS accounts CASCADE;
+DROP TABLE IF EXISTS account_lifecycle CASCADE;
 DROP TABLE IF EXISTS agent_grants CASCADE;
 DROP TABLE IF EXISTS agent_keys CASCADE;
 DROP TABLE IF EXISTS agent_participation CASCADE;
@@ -18,6 +19,10 @@ DROP TABLE IF EXISTS read_receipt_relay CASCADE;
 DROP TABLE IF EXISTS read_receipt_relay_position CASCADE;
 DROP TABLE IF EXISTS read_receipt_relay_watermark CASCADE;
 DROP TABLE IF EXISTS canonical_events CASCADE;
+DROP TABLE IF EXISTS state_moves CASCADE;
+DROP TABLE IF EXISTS state_seals CASCADE;
+DROP TABLE IF EXISTS state_cell_ops CASCADE;
+DROP TABLE IF EXISTS state_cell_cache CASCADE;
 DROP TABLE IF EXISTS consent_cells CASCADE;
 DROP TABLE IF EXISTS contacts CASCADE;
 DROP TABLE IF EXISTS device_message_ack_tokens CASCADE;

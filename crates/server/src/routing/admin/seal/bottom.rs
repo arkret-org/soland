@@ -4,7 +4,6 @@ use std::collections::BTreeSet;
 
 use cokret_sdk::lattice::CellState;
 use cokret_sdk::move_event::{Effect, LatticeOp, LatticeOpType};
-use cokret_sdk::state_res::{CellStore, MoveStore};
 use cokret_sdk::{CellRef, Move, MoveSigner, RealmId, UnsignedMove};
 use salvo::http::StatusCode;
 use salvo::oapi::extract::{JsonBody, PathParam};

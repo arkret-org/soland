@@ -9,6 +9,13 @@ pub trait AccountStore: Send + Sync {
     async fn delete(&self, did: &str) -> PersistenceResult<()>;
 }
 
+#[async_trait]
+pub trait AccountLifecycleStore: Send + Sync {
+    async fn put(&self, did: &str, record: &AccountLifecycleRecord) -> PersistenceResult<()>;
+    async fn delete(&self, did: &str) -> PersistenceResult<()>;
+    async fn snapshot_all(&self) -> PersistenceResult<Vec<(String, AccountLifecycleRecord)>>;
+}
+
 /// Trait for actor-private account data storage.
 ///
 /// `data_type` is the canonical wire key (e.g. `ck.contacts.actor.<did>`,
@@ -65,6 +72,47 @@ impl AccountStore for MemoryAccountStore {
         let mut data = self.data.lock().expect("lock");
         data.remove(did);
         Ok(())
+    }
+}
+
+pub(crate) struct MemoryAccountLifecycleStore {
+    data: Arc<Mutex<BTreeMap<String, AccountLifecycleRecord>>>,
+}
+
+impl MemoryAccountLifecycleStore {
+    pub(crate) fn new() -> Self {
+        Self {
+            data: Arc::new(Mutex::new(BTreeMap::new())),
+        }
+    }
+}
+
+#[async_trait]
+impl AccountLifecycleStore for MemoryAccountLifecycleStore {
+    async fn put(&self, did: &str, record: &AccountLifecycleRecord) -> PersistenceResult<()> {
+        self.data
+            .lock()
+            .expect("account lifecycle lock")
+            .insert(did.to_owned(), record.clone());
+        Ok(())
+    }
+
+    async fn delete(&self, did: &str) -> PersistenceResult<()> {
+        self.data
+            .lock()
+            .expect("account lifecycle lock")
+            .remove(did);
+        Ok(())
+    }
+
+    async fn snapshot_all(&self) -> PersistenceResult<Vec<(String, AccountLifecycleRecord)>> {
+        Ok(self
+            .data
+            .lock()
+            .expect("account lifecycle lock")
+            .iter()
+            .map(|(did, record)| (did.clone(), record.clone()))
+            .collect())
     }
 }
 
@@ -179,6 +227,72 @@ impl AccountStore for PgAccountStore {
     }
 }
 
+pub(crate) struct PgAccountLifecycleStore {
+    pub(crate) pool: PgPool,
+}
+
+#[async_trait]
+impl AccountLifecycleStore for PgAccountLifecycleStore {
+    async fn put(&self, did: &str, record: &AccountLifecycleRecord) -> PersistenceResult<()> {
+        let mut conn = pg_conn(&self.pool).await?;
+        sql_query(
+            "INSERT INTO account_lifecycle \
+             (principal_id, state, reason, changed_by, changed_at) \
+             VALUES ($1, $2, $3, $4, $5) \
+             ON CONFLICT (principal_id) DO UPDATE SET \
+               state = EXCLUDED.state, \
+               reason = EXCLUDED.reason, \
+               changed_by = EXCLUDED.changed_by, \
+               changed_at = EXCLUDED.changed_at",
+        )
+        .bind::<Text, _>(did)
+        .bind::<Text, _>(&record.state)
+        .bind::<Nullable<Text>, _>(&record.reason)
+        .bind::<Nullable<Text>, _>(&record.changed_by)
+        .bind::<Timestamptz, _>(record.changed_at)
+        .execute(&mut *conn)
+        .await
+        .map(|_| ())
+        .map_err(PersistenceError::from)
+    }
+
+    async fn delete(&self, did: &str) -> PersistenceResult<()> {
+        let mut conn = pg_conn(&self.pool).await?;
+        sql_query("DELETE FROM account_lifecycle WHERE principal_id = $1")
+            .bind::<Text, _>(did)
+            .execute(&mut *conn)
+            .await
+            .map(|_| ())
+            .map_err(PersistenceError::from)
+    }
+
+    async fn snapshot_all(&self) -> PersistenceResult<Vec<(String, AccountLifecycleRecord)>> {
+        let mut conn = pg_conn(&self.pool).await?;
+        sql_query(
+            "SELECT principal_id, state, reason, changed_by, changed_at \
+             FROM account_lifecycle ORDER BY principal_id",
+        )
+        .load::<AccountLifecycleRow>(&mut *conn)
+        .await
+        .map(|rows| {
+            rows.into_iter()
+                .map(|row| {
+                    (
+                        row.principal_id,
+                        AccountLifecycleRecord {
+                            state: row.state,
+                            reason: row.reason,
+                            changed_by: row.changed_by,
+                            changed_at: row.changed_at,
+                        },
+                    )
+                })
+                .collect()
+        })
+        .map_err(PersistenceError::from)
+    }
+}
+
 pub(crate) struct PgAccountDataStore {
     pub(crate) pool: PgPool,
 }
@@ -260,6 +374,20 @@ struct AccountRow {
     display_name: Option<String>,
     #[diesel(sql_type = Timestamptz)]
     created_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(QueryableByName)]
+struct AccountLifecycleRow {
+    #[diesel(sql_type = Text)]
+    principal_id: String,
+    #[diesel(sql_type = Text)]
+    state: String,
+    #[diesel(sql_type = Nullable<Text>)]
+    reason: Option<String>,
+    #[diesel(sql_type = Nullable<Text>)]
+    changed_by: Option<String>,
+    #[diesel(sql_type = Timestamptz)]
+    changed_at: chrono::DateTime<chrono::Utc>,
 }
 
 impl From<AccountRow> for AccountRecord {

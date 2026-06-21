@@ -1,6 +1,5 @@
 //! Seal DAG admin endpoints — snapshot, compaction, prune.
 
-use cokret_sdk::state_res::SealStore;
 use cokret_sdk::{RealmId, SealId};
 use salvo::http::StatusCode;
 use salvo::oapi::extract::{JsonBody, PathParam};
@@ -345,10 +344,7 @@ pub(crate) async fn admin_prune_seal_dag(
         }
     }
 
-    // Genesis check — soland's `MemorySealStore` tracks genesis via
-    // `set_genesis_if_absent`; the spec-canonical zero-seal placeholder
-    // (`ck:seal:sha256:000...`) used at `apply_seal` genesis is also
-    // treated as genesis when present.
+    // Genesis check through the active SealStore backend.
     let is_genesis = match seal_store.genesis(&realm) {
         Ok(Some(g)) => g.as_str() == candidate_id.as_str(),
         _ => false,

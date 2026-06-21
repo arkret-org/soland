@@ -42,6 +42,7 @@ object_store = "0.13.2"
 opentelemetry = { version = "0.32.0", default-features = false }
 opentelemetry-otlp = { version = "0.32.0", default-features = false }
 opentelemetry_sdk = { version = "0.32.1", default-features = false }
+proptest = "1.6.0"
 rand = "0.10.1"
 reqwest = { version = "0.13.4", default-features = false, features = ["form"] }
 salvo = { version = "0.93.0", default-features = false }

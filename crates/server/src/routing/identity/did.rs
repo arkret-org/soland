@@ -21,16 +21,16 @@ use cokret_sdk::{
     Did, DidDocumentRef, DidOperationSubmitOutcome, DidOperationSubmitRequestBody, Hash,
     IdentityDocumentView, IdentityResolveOutcome,
 };
-use ed25519_dalek::{PUBLIC_KEY_LENGTH, SIGNATURE_LENGTH, Signature, Verifier, VerifyingKey};
 use salvo::http::{StatusCode, header};
 use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
 
 use super::webvh_validation::{
-    WebvhLogEntry, validate_log_chain, validate_witness_policy_for_log, verify_scid_against_did,
+    WebvhLogEntry, derive_webvh_scid_from_skeleton, validate_log_chain,
+    validate_witness_policy_for_log, verify_scid_against_did, verify_webvh_log_proof,
+    webvh_entry_hash_multibase,
 };
 use super::{append_audit_log, bearer_token, now, render_error, sha256_hex, validate_did};
 use crate::error::{AppError, ErrorCode};

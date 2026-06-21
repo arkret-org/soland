@@ -21,13 +21,14 @@
 //! same helper the embedded provider uses to derive the SCID and entry
 //! hashes, so validation and production stay in lockstep.
 
-use ed25519_dalek::{PUBLIC_KEY_LENGTH, SIGNATURE_LENGTH, Signature, Verifier, VerifyingKey};
+use ed25519_dalek::{SIGNATURE_LENGTH, Signature, Verifier, VerifyingKey};
 use salvo::http::StatusCode;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 use crate::error::{AppError, ErrorCode};
 
+#[cfg(test)]
 const ED25519_MULTICODEC_PREFIX: [u8; 2] = [0xed, 0x01];
 const WEBVH_SCID_PLACEHOLDER: &str = "{SCID}";
 pub const WEBVH_DEGRADED_NO_WITNESS_MAX_SECS: i64 = 24 * 60 * 60;
@@ -239,7 +240,7 @@ pub fn validate_log_chain(log: &[WebvhLogEntry]) -> Result<(), WebvhValidationEr
             reason: "versionId must be \"<seq>-<hash>\"".to_owned(),
         }
     })?;
-    let recomputed_genesis = webvh_entry_hash(&log[0].payload).map_err(|reason| {
+    let recomputed_genesis = webvh_entry_hash_multibase(&log[0].payload).map_err(|reason| {
         WebvhValidationError::MalformedEntry {
             at_index: 0,
             reason,
@@ -291,7 +292,7 @@ pub fn validate_log_chain(log: &[WebvhLogEntry]) -> Result<(), WebvhValidationEr
                 reason: "versionId must be \"<seq>-<hash>\"".to_owned(),
             }
         })?;
-        let recomputed = webvh_entry_hash(&current.payload).map_err(|reason| {
+        let recomputed = webvh_entry_hash_multibase(&current.payload).map_err(|reason| {
             WebvhValidationError::MalformedEntry {
                 at_index: index,
                 reason,
@@ -329,6 +330,12 @@ pub fn derive_scid_from_genesis(genesis: &WebvhLogEntry) -> Result<String, Webvh
             reason: error.to_string(),
         }
     })?;
+    Ok(sha256_multihash_multibase(&canonical))
+}
+
+pub(crate) fn derive_webvh_scid_from_skeleton(skeleton: &Value) -> Result<String, String> {
+    let canonical =
+        cokret_sdk::canonical::canonical_json_bytes(skeleton).map_err(|error| error.to_string())?;
     Ok(sha256_multihash_multibase(&canonical))
 }
 
@@ -517,6 +524,61 @@ fn verify_one_witness_proof(
     })
 }
 
+pub(crate) fn verify_webvh_log_proof(entry: &Value) -> Result<(), String> {
+    let proof = entry
+        .get("proof")
+        .and_then(Value::as_array)
+        .and_then(|items| items.first())
+        .and_then(Value::as_object)
+        .ok_or_else(|| "entry must include proof[0]".to_owned())?;
+    let proof_type = proof
+        .get("type")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if proof_type != "DataIntegrityProof" {
+        return Err("proof type must be DataIntegrityProof".to_owned());
+    }
+    let cryptosuite = proof
+        .get("cryptosuite")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if cryptosuite != "eddsa-jcs-2022" {
+        return Err("proof cryptosuite must be eddsa-jcs-2022".to_owned());
+    }
+    let verification_method = proof
+        .get("verificationMethod")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let public_key_multibase = verification_method
+        .rsplit_once('#')
+        .map(|(_, fragment)| fragment)
+        .unwrap_or(verification_method);
+    let update_keys = entry
+        .pointer("/parameters/updateKeys")
+        .and_then(Value::as_array)
+        .map(|items| items.iter().filter_map(Value::as_str).collect::<Vec<_>>())
+        .unwrap_or_default();
+    if !update_keys.contains(&public_key_multibase) {
+        return Err("proof verificationMethod must reference updateKeys[0]".to_owned());
+    }
+    let public_key = decode_ed25519_public_key(public_key_multibase)?;
+    let signature = decode_webvh_signature(
+        proof
+            .get("proofValue")
+            .and_then(Value::as_str)
+            .unwrap_or_default(),
+    )?;
+    let mut canonical = entry.clone();
+    if let Value::Object(map) = &mut canonical {
+        map.remove("proof");
+    }
+    let payload = cokret_sdk::canonical::canonical_json_bytes(&canonical)
+        .map_err(|error| error.to_string())?;
+    public_key
+        .verify(&payload, &signature)
+        .map_err(|_| "webvh log proof signature is invalid".to_owned())
+}
+
 #[derive(Default)]
 struct WitnessPolicy {
     required_threshold: usize,
@@ -619,20 +681,20 @@ fn split_version_id(version_id: &str) -> Option<(u64, &str)> {
     Some((seq, hash))
 }
 
-fn webvh_entry_hash(entry: &Value) -> Result<String, String> {
+pub(crate) fn webvh_entry_hash_multibase(entry: &Value) -> Result<String, String> {
+    let stripped = strip_webvh_entry_for_hash(entry);
+    let canonical = cokret_sdk::canonical::canonical_json_bytes(&stripped)
+        .map_err(|error| error.to_string())?;
+    Ok(sha256_multihash_multibase(&canonical))
+}
+
+pub(crate) fn strip_webvh_entry_for_hash(entry: &Value) -> Value {
     let mut stripped = entry.clone();
     if let Value::Object(map) = &mut stripped {
         map.remove("proof");
         map.remove("versionId");
-        // `witness` is part of the entry contents for chain-hash
-        // purposes (so witness signatures bind to the same bytes as
-        // controller signatures), but we still strip it here because
-        // the embedded provider's `strip_webvh_entry_for_hash` in
-        // `did.rs` does the same — keeping the two paths aligned.
     }
-    let canonical = cokret_sdk::canonical::canonical_json_bytes(&stripped)
-        .map_err(|error| error.to_string())?;
-    Ok(sha256_multihash_multibase(&canonical))
+    stripped
 }
 
 /// Recreate the canonical SCID-derivation skeleton from a genesis entry:
@@ -667,7 +729,7 @@ fn scid_skeleton_from_genesis(entry: &Value) -> Result<Value, String> {
     Ok(skeleton)
 }
 
-fn sha256_multihash_multibase(bytes: &[u8]) -> String {
+pub(crate) fn sha256_multihash_multibase(bytes: &[u8]) -> String {
     let digest = Sha256::digest(bytes);
     let mut multihash = Vec::with_capacity(34);
     multihash.push(0x12); // sha2-256
@@ -676,13 +738,13 @@ fn sha256_multihash_multibase(bytes: &[u8]) -> String {
     format!("z{}", bs58::encode(multihash).into_string())
 }
 
-fn decode_ed25519_public_key(value: &str) -> Result<VerifyingKey, String> {
+pub(crate) fn decode_ed25519_public_key(value: &str) -> Result<VerifyingKey, String> {
     let key_bytes = cokret_sdk::decode_ed25519_multibase(value)
         .map_err(|error| format!("public key must be base58btc ed25519-pub multibase: {error}"))?;
     VerifyingKey::from_bytes(&key_bytes).map_err(|_| "invalid ed25519 public key".to_owned())
 }
 
-fn decode_webvh_signature(value: &str) -> Result<Signature, String> {
+pub(crate) fn decode_webvh_signature(value: &str) -> Result<Signature, String> {
     let rest = value
         .strip_prefix('z')
         .ok_or_else(|| "proofValue must use base58btc multibase".to_owned())?;
@@ -700,7 +762,7 @@ fn decode_webvh_signature(value: &str) -> Result<Signature, String> {
 // --- SEC-01: verifiable resolver degraded/health diagnostic signal ---
 #[cfg(test)]
 mod tests {
-    use ed25519_dalek::{Signer, SigningKey};
+    use ed25519_dalek::{PUBLIC_KEY_LENGTH, Signer, SigningKey};
     use rand::RngExt;
 
     use super::*;
@@ -756,7 +818,7 @@ mod tests {
         let realised: Value =
             serde_json::from_str(&text.replace(WEBVH_SCID_PLACEHOLDER, &scid)).unwrap();
         // 3) Compute the entry's own versionId hash.
-        let entry_hash = webvh_entry_hash(&realised).unwrap();
+        let entry_hash = webvh_entry_hash_multibase(&realised).unwrap();
         let mut entry = realised;
         if let Value::Object(map) = &mut entry {
             map.insert("versionId".to_owned(), json!(format!("1-{entry_hash}")));
@@ -778,7 +840,7 @@ mod tests {
                 "id": format!("did:webvh:{scid}:test.example:webvh:alice"),
             },
         });
-        let hash = webvh_entry_hash(&body).unwrap();
+        let hash = webvh_entry_hash_multibase(&body).unwrap();
         let mut entry = body;
         if let Value::Object(map) = &mut entry {
             map.insert("versionId".to_owned(), json!(format!("2-{hash}")));
@@ -810,7 +872,7 @@ mod tests {
             // Recompute this entry's own versionId so we isolate the
             // failure to the previousVersionId mismatch (otherwise the
             // self-hash check fires first).
-            let recomputed = webvh_entry_hash(&Value::Object(map.clone())).unwrap();
+            let recomputed = webvh_entry_hash_multibase(&Value::Object(map.clone())).unwrap();
             map.insert("versionId".to_owned(), json!(format!("2-{recomputed}")));
         }
         let log = vec![genesis, WebvhLogEntry::new(entry_two)];

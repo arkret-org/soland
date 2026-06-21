@@ -216,15 +216,14 @@ pub(crate) async fn set_account_lifecycle_state(
     let mut sessions_revoked = 0;
     let mut devices_revoked = 0;
     if previous_state != next_state {
-        state.set_account_lifecycle_record(
-            did,
-            AccountLifecycleRecord {
-                state: next_state.to_owned(),
-                reason: reason.clone(),
-                changed_by: Some(changed_by.to_owned()),
-                changed_at,
-            },
-        );
+        let record = AccountLifecycleRecord {
+            state: next_state.to_owned(),
+            reason: reason.clone(),
+            changed_by: Some(changed_by.to_owned()),
+            changed_at,
+        };
+        persist_account_lifecycle_record(state, did, &record).await?;
+        state.set_account_lifecycle_record(did, record);
         if matches!(next_state, "locked" | "deactivated") {
             sessions_revoked = revoke_sessions_for_actor(state, did)
                 .await
@@ -273,7 +272,7 @@ async fn append_account_state_change_audit(
     sessions_revoked: usize,
     devices_revoked: usize,
 ) {
-    // 产品私有审计语义:不得占用协议 `ck.` 前缀,统一用 soland 反向域名。
+    // Product-private audit actions must not occupy the protocol `ck.` prefix.
     let payload = json!({
         "schema": "org.cokret.soland.account.state_change.v1",
         "actor": did,
@@ -417,23 +416,14 @@ pub(super) async fn erase_account(
     let memberships_removed = remove_realm_memberships_for_actor(state, &actor);
     let previous_state = state.account_lifecycle_state(&actor);
     let changed_at = now();
-    state.set_account_lifecycle_record(
-        &actor,
-        AccountLifecycleRecord {
-            state: "erasure_pending".to_owned(),
-            reason: Some("account_erasure".to_owned()),
-            changed_by: Some(actor.clone()),
-            changed_at,
-        },
-    );
-    // Mark the actor as erased in-process; the `authenticated_session`
-    // path checks this set and returns 401 `account_erased` for any
-    // future request bearing a still-valid session token.
-    state
-        .erased_actors
-        .lock()
-        .expect("erased_actors lock")
-        .insert(actor.clone());
+    let lifecycle_record = AccountLifecycleRecord {
+        state: "erasure_pending".to_owned(),
+        reason: Some("account_erasure".to_owned()),
+        changed_by: Some(actor.clone()),
+        changed_at,
+    };
+    persist_account_lifecycle_record(state, &actor, &lifecycle_record).await?;
+    state.set_account_lifecycle_record(&actor, lifecycle_record);
     append_account_state_change_audit(
         state,
         &actor,
@@ -772,6 +762,28 @@ fn erasure_receipt_payload_digest(payload: &Value) -> String {
     let bytes = cokret_sdk::canonical::canonical_json_bytes(payload)
         .unwrap_or_else(|_| payload.to_string().into_bytes());
     cokret_sdk::canonical::sha256_digest(&bytes)
+}
+
+async fn persist_account_lifecycle_record(
+    state: &AppState,
+    did: &str,
+    record: &AccountLifecycleRecord,
+) -> Result<(), AppError> {
+    if record.state == "active" {
+        state
+            .persistence
+            .account_lifecycle()
+            .delete(did)
+            .await
+            .map_err(|error| AppError::internal(error.to_string()))
+    } else {
+        state
+            .persistence
+            .account_lifecycle()
+            .put(did, record)
+            .await
+            .map_err(|error| AppError::internal(error.to_string()))
+    }
 }
 
 fn erasure_receipt_proof_signature(state: &AppState, payload: &Value) -> String {

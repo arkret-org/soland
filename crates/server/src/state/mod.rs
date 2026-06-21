@@ -9,6 +9,7 @@ mod member_identity;
 mod notification;
 mod realm_directory;
 mod records;
+mod state_resolution;
 
 pub use app_state::AppState;
 pub(crate) use app_state::getrandom_seed;

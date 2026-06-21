@@ -40,8 +40,8 @@ use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use cokret_sdk::lattice::{CellState, SealedOp};
 use cokret_sdk::state_res::{
-    CellRegistry, CellStore, MoveStore, SealStore, StoreError, apply_seal, compute_state_root,
-    control_event_set_root, effective_seal_view, effective_state_at, verify_move,
+    StoreError, apply_seal, compute_state_root, control_event_set_root, effective_seal_view,
+    effective_state_at, verify_move,
 };
 use cokret_sdk::{
     CellRef, Hash, Hlc, Move, MoveId, MoveSignature, NotarySig, RealmId, Seal, SealId,

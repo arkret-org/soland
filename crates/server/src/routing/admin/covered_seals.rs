@@ -17,7 +17,6 @@
 //! DTOs (`sodmin/src/types/covered_seals.rs`).
 
 use cokret_sdk::RealmId;
-use cokret_sdk::state_res::SealStore;
 use salvo::http::StatusCode;
 use salvo::oapi::extract::PathParam;
 use salvo::prelude::*;

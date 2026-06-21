@@ -84,3 +84,6 @@ tracing-appender = {workspace = true}
 tracing-opentelemetry = {workspace = true,default-features = false,optional = true}
 tracing-subscriber = {workspace = true,features = ["env-filter", "json"]}
 uuid = {workspace = true,features = ["v4", "v7", "serde"]}
+
+[dev-dependencies]
+proptest = {workspace = true}

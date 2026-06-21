@@ -107,6 +107,7 @@ pub type PersistenceResult<T> = Result<T, PersistenceError>;
 /// these accessors.
 pub trait PersistenceStore: Send + Sync {
     fn accounts(&self) -> &dyn AccountStore;
+    fn account_lifecycle(&self) -> &dyn AccountLifecycleStore;
     fn sessions(&self) -> &dyn SessionStore;
     fn account_data(&self) -> &dyn AccountDataStore;
     fn contacts(&self) -> &dyn ContactStore;

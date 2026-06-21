@@ -1,7 +1,6 @@
 //! Notary cell admin endpoints — read + reconfigure.
 
 use cokret_sdk::move_event::{Effect, LatticeOp, LatticeOpType};
-use cokret_sdk::state_res::MoveStore;
 use cokret_sdk::{Did, Move, MoveSigner, NotaryValue as SdkNotaryValue, RealmId, UnsignedMove};
 use salvo::http::StatusCode;
 use salvo::oapi::extract::{JsonBody, PathParam};

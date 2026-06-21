@@ -12,10 +12,9 @@
 //!
 //! # Two-tier verifier model (unchanged)
 //!
-//! - Dev mode (`config.development_mode == true`): handlers use
-//!   `routing::federation::move_seal::verify_jws_shape` — RFC 7515 §3.2 detached shape, alg=EdDSA,
-//!   no zero-sentinel signature, no actual crypto. Lets test fixtures and local dev iterate without
-//!   managing real keys.
+//! - Dev mode (`config.development_mode == true`): handlers use [`verify_jws_shape`] — RFC 7515
+//!   §3.2 detached shape, alg=EdDSA, no zero-sentinel signature, no actual crypto. Lets test
+//!   fixtures and local dev iterate without managing real keys.
 //! - Production mode (default): handlers use [`verify_jws_ed25519`] via
 //!   [`AppState::jws_verifier`]'s closure factory — same shape checks PLUS DID resolution + Ed25519
 //!   public-key extraction + RFC 7515 §5.2 signing-input reconstruction + ed25519-dalek verify.
@@ -57,6 +56,71 @@ pub use cokret_sdk::jws::{
     effective_window_for_move, physical_millis_from_hlc, verify_replay_window,
     verify_replay_window_at, verify_replay_window_for_move, verify_replay_window_for_move_at,
 };
+
+/// Shape-only detached-JWS verifier for development mode.
+///
+/// This is intentionally colocated with soland's production SDK verifier
+/// adapter so handlers do not define their own detached-JWS shape semantics.
+/// Production mode still delegates to [`verify_jws_ed25519`].
+pub fn verify_jws_shape(
+    canonical_bytes: &[u8],
+    jws: &str,
+    verification_method: &str,
+    issuer: &str,
+) -> Result<(), String> {
+    if jws.is_empty() {
+        return Err("empty JWS string".to_owned());
+    }
+    if verification_method.is_empty() {
+        return Err("empty verification_method".to_owned());
+    }
+    if issuer.is_empty() {
+        return Err("empty issuer".to_owned());
+    }
+    if canonical_bytes.is_empty() {
+        return Err("empty canonical bytes".to_owned());
+    }
+
+    let parts: Vec<&str> = jws.split('.').collect();
+    if parts.len() != 3 {
+        return Err(format!(
+            "JWS must have 3 dot-separated segments, got {}",
+            parts.len()
+        ));
+    }
+    let (header_b64u, payload_b64u, signature_b64u) = (parts[0], parts[1], parts[2]);
+    if !payload_b64u.is_empty() {
+        return Err("detached JWS payload segment must be empty".to_owned());
+    }
+    if signature_b64u.is_empty() {
+        return Err("JWS signature segment is empty".to_owned());
+    }
+    if signature_b64u.bytes().all(|b| b == b'A') {
+        return Err("JWS signature is the all-zero sentinel".to_owned());
+    }
+
+    let header_bytes = base64::Engine::decode(
+        &base64::engine::general_purpose::URL_SAFE_NO_PAD,
+        header_b64u,
+    )
+    .map_err(|e| format!("JWS header is not base64url: {e}"))?;
+    let header: serde_json::Value = serde_json::from_slice(&header_bytes)
+        .map_err(|e| format!("JWS header is not JSON: {e}"))?;
+    let alg = header
+        .get("alg")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| "JWS protected header missing `alg`".to_owned())?;
+    if alg != "EdDSA" {
+        return Err(format!("unsupported JWS alg `{alg}`; spec requires EdDSA"));
+    }
+
+    let _sig_bytes = base64::Engine::decode(
+        &base64::engine::general_purpose::URL_SAFE_NO_PAD,
+        signature_b64u,
+    )
+    .map_err(|e| format!("JWS signature is not base64url: {e}"))?;
+    Ok(())
+}
 
 /// Production Ed25519 detached-JWS verifier.
 ///

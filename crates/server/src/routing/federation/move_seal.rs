@@ -90,96 +90,11 @@ pub fn select_jws_verifier(
 ) -> impl Fn(&[u8], &str, &str, &str) -> Result<(), String> + Copy + use<'_> {
     move |canonical_bytes, jws, vm, issuer| {
         if state.config.development_mode {
-            verify_jws_shape(canonical_bytes, jws, vm, issuer)
+            crate::jws_verify::verify_jws_shape(canonical_bytes, jws, vm, issuer)
         } else {
             crate::jws_verify::verify_jws_ed25519(canonical_bytes, jws, vm, issuer, state)
         }
     }
-}
-
-/// JWS shape verifier used by `verify_move` / `apply_seal`. Rejects:
-///   - empty / sentinel signature segments
-///   - JWS strings that don't have the `<protected>..<signature>` detached shape (RFC 7515 §3.2
-///     with empty payload segment)
-///   - protected headers not parseable as base64url-JSON or whose `alg` is not in the spec-allowed
-///     set (`EdDSA` for now)
-///   - empty issuer or verification_method
-///
-/// Real Ed25519 signature verification (resolving `verification_method`
-/// to a public key + `verify(canonical_bytes, signature)`) depends on the
-/// production DID resolver.
-fn verify_jws_shape(
-    canonical_bytes: &[u8],
-    jws: &str,
-    verification_method: &str,
-    issuer: &str,
-) -> Result<(), String> {
-    // Bail on empty pieces — clients sometimes send an unsigned Move with a
-    // sentinel value during local dev; in production this MUST be rejected.
-    if jws.is_empty() {
-        return Err("empty JWS string".to_owned());
-    }
-    if verification_method.is_empty() {
-        return Err("empty verification_method".to_owned());
-    }
-    if issuer.is_empty() {
-        return Err("empty issuer".to_owned());
-    }
-    if canonical_bytes.is_empty() {
-        return Err("empty canonical bytes".to_owned());
-    }
-
-    // Detached JWS shape: header..signature (empty payload segment between
-    // the two dots).
-    let parts: Vec<&str> = jws.split('.').collect();
-    if parts.len() != 3 {
-        return Err(format!(
-            "JWS must have 3 dot-separated segments, got {}",
-            parts.len()
-        ));
-    }
-    let (header_b64u, payload_b64u, signature_b64u) = (parts[0], parts[1], parts[2]);
-    if !payload_b64u.is_empty() {
-        return Err("detached JWS payload segment must be empty".to_owned());
-    }
-    if signature_b64u.is_empty() {
-        return Err("JWS signature segment is empty".to_owned());
-    }
-    // Sentinel: signature is all 'A' chars (base64url for zero bytes) — the
-    // negative-fixture marker for "tampered / unsigned".
-    if signature_b64u.bytes().all(|b| b == b'A') {
-        return Err("JWS signature is the all-zero sentinel".to_owned());
-    }
-
-    // Decode + parse the protected header.
-    let header_bytes = base64::Engine::decode(
-        &base64::engine::general_purpose::URL_SAFE_NO_PAD,
-        header_b64u,
-    )
-    .map_err(|e| format!("JWS header is not base64url: {e}"))?;
-    let header: serde_json::Value = serde_json::from_slice(&header_bytes)
-        .map_err(|e| format!("JWS header is not JSON: {e}"))?;
-    let alg = header
-        .get("alg")
-        .and_then(serde_json::Value::as_str)
-        .ok_or_else(|| "JWS protected header missing `alg`".to_owned())?;
-    if alg != "EdDSA" {
-        return Err(format!("unsupported JWS alg `{alg}`; spec requires EdDSA"));
-    }
-
-    // Decode the signature segment to confirm it's well-formed base64url.
-    let _sig_bytes = base64::Engine::decode(
-        &base64::engine::general_purpose::URL_SAFE_NO_PAD,
-        signature_b64u,
-    )
-    .map_err(|e| format!("JWS signature is not base64url: {e}"))?;
-
-    // Production Ed25519 verification runs here once the DID resolver is
-    // available:
-    //   let pub_key = resolve_verification_method(verification_method)?;
-    //   ed25519_dalek::Verifier::verify(&pub_key, canonical_bytes, &sig_bytes)
-    //       .map_err(|e| format!("Ed25519 verify failed: {e}"))?;
-    Ok(())
 }
 
 /// Response from `POST /_soland/peer/moves`.
@@ -246,13 +161,10 @@ async fn submit_move(
         }));
     }
 
-    state
-        .move_store
-        .put_pending_via_trait(&move_obj)
-        .map_err(|e| {
-            AppError::new(ErrorCode::InternalError, e.to_string())
-                .with_status(StatusCode::INTERNAL_SERVER_ERROR)
-        })?;
+    state.move_store.put_pending(&move_obj).map_err(|e| {
+        AppError::new(ErrorCode::InternalError, e.to_string())
+            .with_status(StatusCode::INTERNAL_SERVER_ERROR)
+    })?;
     super::federation::broadcast_move_to_peers(state, move_obj.id.as_str()).await;
 
     json_ok(SubmitMoveOutcome {
@@ -496,21 +408,6 @@ async fn admin_sign_seal(
         .with_status(StatusCode::FORBIDDEN)),
         Err(e) => Err(AppError::new(ErrorCode::InternalError, e.to_string())
             .with_status(StatusCode::CONFLICT)),
-    }
-}
-
-/// Trait extension to give `MemoryMoveStore` an `&self` `put_pending`
-/// callable through `Arc<MemoryMoveStore>` without requiring callers to
-/// `&*` the Arc. (`MoveStore` trait already takes `&self`; this is just
-/// a syntactic convenience matching the rest of soland's store usage.)
-trait MoveStorePutVia {
-    fn put_pending_via_trait(&self, m: &Move) -> cokret_sdk::state_res::StoreResult<()>;
-}
-
-impl MoveStorePutVia for cokret_sdk::state_res::MemoryMoveStore {
-    fn put_pending_via_trait(&self, m: &Move) -> cokret_sdk::state_res::StoreResult<()> {
-        use cokret_sdk::state_res::MoveStore;
-        self.put_pending(m)
     }
 }
 

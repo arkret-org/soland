@@ -10,7 +10,7 @@
 //!     and the cargo-runnable bin.
 //!   - `bin/soland-gc-scan.rs` — `cargo run --bin soland-gc-scan -- --realm-id <id> --dry-run`.
 
-use cokret_sdk::state_res::{MoveStore, SealStore, union_predecessor_covered_events};
+use cokret_sdk::state_res::union_predecessor_covered_events;
 use cokret_sdk::{Move, MoveId, RealmId};
 
 use crate::state::AppState;

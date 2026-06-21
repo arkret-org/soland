@@ -34,7 +34,6 @@
 //!   full multi-signer compaction are placeholder-only — these need the admin signer strand +
 //!   per-Realm leader election that lands under `_todos.md` MAL-3 / MAL-11.
 
-use cokret_sdk::state_res::SealStore;
 use cokret_sdk::{Did, Ed25519MoveSigner, Hlc, RealmId, SealId};
 use salvo::http::StatusCode;
 

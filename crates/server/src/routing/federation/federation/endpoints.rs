@@ -1,5 +1,4 @@
 use chrono::Duration;
-use cokret_sdk::state_res::SealStore;
 use cokret_sdk::{Did, RealmId};
 use salvo::http::StatusCode;
 use salvo::oapi::extract::{JsonBody, PathParam, QueryParam};

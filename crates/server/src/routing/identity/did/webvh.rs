@@ -337,9 +337,7 @@ pub(super) fn derive_webvh_scid(skeleton: &Value) -> Result<String, String> {
             "inception log entry must contain {WEBVH_SCID_PLACEHOLDER} placeholders"
         ));
     }
-    let canonical =
-        cokret_sdk::canonical::canonical_json_bytes(skeleton).map_err(|error| error.to_string())?;
-    Ok(sha256_multihash_multibase(&canonical))
+    derive_webvh_scid_from_skeleton(skeleton)
 }
 
 pub(super) fn contains_webvh_placeholder(value: &Value) -> bool {
@@ -356,106 +354,6 @@ pub(super) fn substitute_webvh_scid(value: Value, scid: &str) -> Value {
         return value;
     };
     serde_json::from_str(&text.replace(WEBVH_SCID_PLACEHOLDER, scid)).unwrap_or(value)
-}
-
-pub(super) fn webvh_entry_hash_multibase(value: &Value) -> Result<String, String> {
-    let canonical = cokret_sdk::canonical::canonical_json_bytes(&strip_webvh_entry_for_hash(value))
-        .map_err(|error| error.to_string())?;
-    Ok(sha256_multihash_multibase(&canonical))
-}
-
-pub(super) fn strip_webvh_entry_for_hash(value: &Value) -> Value {
-    let mut clone = value.clone();
-    if let Value::Object(map) = &mut clone {
-        map.remove("proof");
-        map.remove("versionId");
-    }
-    clone
-}
-
-pub(super) fn sha256_multihash_multibase(bytes: &[u8]) -> String {
-    let digest = Sha256::digest(bytes);
-    let mut multihash = Vec::with_capacity(34);
-    multihash.push(0x12);
-    multihash.push(0x20);
-    multihash.extend_from_slice(&digest);
-    format!("z{}", bs58::encode(multihash).into_string())
-}
-
-pub(super) fn verify_webvh_log_proof(entry: &Value) -> Result<(), String> {
-    let proof = entry
-        .get("proof")
-        .and_then(Value::as_array)
-        .and_then(|items| items.first())
-        .and_then(Value::as_object)
-        .ok_or_else(|| "entry must include proof[0]".to_owned())?;
-    let proof_type = proof
-        .get("type")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    if proof_type != "DataIntegrityProof" {
-        return Err("proof type must be DataIntegrityProof".to_owned());
-    }
-    let cryptosuite = proof
-        .get("cryptosuite")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    if cryptosuite != "eddsa-jcs-2022" {
-        return Err("proof cryptosuite must be eddsa-jcs-2022".to_owned());
-    }
-    let verification_method = proof
-        .get("verificationMethod")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    let public_key_multibase = verification_method
-        .rsplit_once('#')
-        .map(|(_, fragment)| fragment)
-        .unwrap_or(verification_method);
-    let update_keys = entry
-        .pointer("/parameters/updateKeys")
-        .and_then(Value::as_array)
-        .map(|items| items.iter().filter_map(Value::as_str).collect::<Vec<_>>())
-        .unwrap_or_default();
-    if !update_keys.contains(&public_key_multibase) {
-        return Err("proof verificationMethod must reference updateKeys[0]".to_owned());
-    }
-    let public_key = decode_ed25519_public_key(public_key_multibase)?;
-    let signature = decode_webvh_signature(
-        proof
-            .get("proofValue")
-            .and_then(Value::as_str)
-            .unwrap_or_default(),
-    )?;
-    let mut canonical = entry.clone();
-    if let Value::Object(map) = &mut canonical {
-        map.remove("proof");
-    }
-    let payload = cokret_sdk::canonical::canonical_json_bytes(&canonical)
-        .map_err(|error| error.to_string())?;
-    public_key
-        .verify(&payload, &signature)
-        .map_err(|_| "webvh log proof signature is invalid".to_owned())
-}
-
-pub(super) fn decode_ed25519_public_key(value: &str) -> Result<VerifyingKey, String> {
-    let key_bytes = cokret_sdk::decode_ed25519_multibase(value)
-        .map_err(|error| format!("public key must be base58btc ed25519-pub multibase: {error}"))?;
-    VerifyingKey::from_bytes(&key_bytes).map_err(|_| "invalid ed25519 public key".to_owned())
-}
-
-pub(super) fn decode_webvh_signature(value: &str) -> Result<Signature, String> {
-    let rest = value
-        .strip_prefix('z')
-        .ok_or_else(|| "proofValue must use base58btc multibase".to_owned())?;
-    let raw = bs58::decode(rest)
-        .into_vec()
-        .map_err(|error| format!("proofValue base58 decode failed: {error}"))?;
-    if raw.len() != SIGNATURE_LENGTH {
-        return Err("ed25519 proofValue must be 64 bytes".to_owned());
-    }
-    let mut signature_bytes = [0u8; SIGNATURE_LENGTH];
-    signature_bytes.copy_from_slice(&raw);
-    Ok(Signature::from_bytes(&signature_bytes))
 }
 
 pub(super) fn valid_multibase_key(value: &str) -> bool {

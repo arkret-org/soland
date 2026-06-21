@@ -5,6 +5,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use arc_swap::ArcSwap;
 use cokret_sdk::identity::CompositeDidResolver;
+use cokret_sdk::state_res::{CellRegistry, CellStore, MoveStore, SealStore};
 use cokret_sdk::{AccountRegistrationPolicy, AccountStatus, AppletPackage, Did, RealmId};
 use ed25519_dalek::SigningKey;
 use serde_json::Value;
@@ -77,15 +78,8 @@ pub struct AppState {
     pub handle_releases: Arc<Mutex<BTreeMap<String, chrono::DateTime<chrono::Utc>>>>,
     /// Account lifecycle state projection keyed by actor DID. Missing rows
     /// mean `active`; non-active rows gate auth/session issuance and directory
-    /// visibility. Kept beside `erased_actors` until the durable account-state
-    /// projection lands.
+    /// visibility. Hydrated from `persistence.account_lifecycle()` at boot.
     pub account_lifecycle: Arc<Mutex<BTreeMap<String, AccountLifecycleRecord>>>,
-    /// Erased actors — DID set. Once an actor `erase`s itself, every
-    /// subsequent authenticated request from that bearer returns 401
-    /// `unauthenticated` (account erased; and directory hits skip the row). Same in-memory
-    /// trade-off as `handle_releases`: persistent ledger lands with the
-    /// account-state projection.
-    pub erased_actors: Arc<Mutex<BTreeSet<String>>>,
     /// In-memory failed-auth counter, keyed by actor DID.
     /// Spec: A.3 — auth handlers (`/_soland/gate/auth/dev-login`,
     /// `/_cokret/gate/account/session-grants`) bump the counter on failure; once it
@@ -204,14 +198,12 @@ pub struct AppState {
     /// Accepted Realm-level moderation-policy overrides keyed by Realm id.
     pub realm_moderation_policies: Arc<Mutex<BTreeMap<String, RealmModerationPolicyRecord>>>,
     pub did_resolver: Arc<CompositeDidResolver>,
-    /// Move/Seal/Lattice runtime stores.
-    /// In-memory backends from the SDK; production deployments will
-    /// swap these for Pg-backed implementations behind the same trait
-    /// surface (`MoveStore` / `SealStore` / `CellStore` / `CellRegistry`).
-    pub move_store: Arc<cokret_sdk::state_res::MemoryMoveStore>,
-    pub seal_store: Arc<cokret_sdk::state_res::MemorySealStore>,
-    pub cell_store: Arc<cokret_sdk::state_res::MemoryCellStore>,
-    pub cell_registry: Arc<cokret_sdk::state_res::MemoryCellRegistry>,
+    /// Move/Seal/Lattice runtime stores. Pg-backed in database mode,
+    /// SDK memory-backed in explicitly in-memory test mode.
+    pub move_store: Arc<dyn MoveStore>,
+    pub seal_store: Arc<dyn SealStore>,
+    pub cell_store: Arc<dyn CellStore>,
+    pub cell_registry: Arc<dyn CellRegistry>,
     /// Live event notification channel for `ck.self.events.stream.subscribe`
     /// long-poll/SSE streaming. Writers
     /// (`routing::events::projection::project_accepted_operations`,
@@ -526,6 +518,9 @@ impl AppState {
         }
         let admin_keystore = Arc::new(admin_keystore);
 
+        let state_resolution_stores =
+            super::state_resolution::build_state_resolution_stores(db.pool.clone());
+
         // Space-container/Strand/Morph projections are hydrated from durable
         // persistence in [`AppState::hydrate`] (an explicit async boot step)
         // rather than here, because the persistence store is now async. The
@@ -547,7 +542,6 @@ impl AppState {
             cross_signing_reset_replays: Arc::new(Mutex::new(BTreeMap::new())),
             handle_releases: Arc::new(Mutex::new(BTreeMap::new())),
             account_lifecycle: Arc::new(Mutex::new(BTreeMap::new())),
-            erased_actors: Arc::new(Mutex::new(BTreeSet::new())),
             failed_login_attempts: Arc::new(Mutex::new(BTreeMap::new())),
             account_registration_policy: Arc::new(Mutex::new(AccountRegistrationPolicy::default())),
             account_registration_rate_tracker: Arc::new(Mutex::new(BTreeMap::new())),
@@ -576,15 +570,10 @@ impl AppState {
             organization_realms: Arc::new(Mutex::new(BTreeMap::new())),
             realm_moderation_policies: Arc::new(Mutex::new(BTreeMap::new())),
             did_resolver,
-            move_store: Arc::new(cokret_sdk::state_res::MemoryMoveStore::default()),
-            seal_store: Arc::new(cokret_sdk::state_res::MemorySealStore::default()),
-            cell_store: Arc::new(cokret_sdk::state_res::MemoryCellStore::default()),
-            // Register all soland LatticeKind impls into the SDK cell
-            // registry so the
-            // Move/Seal receive pipeline resolves every spec-declared
-            // cell family. Replaces the SDK's built-in defaults (which
-            // covered only ~10 generic families).
-            cell_registry: Arc::new(crate::reducer::lattice_kinds::build_sdk_cell_registry()),
+            move_store: state_resolution_stores.move_store,
+            seal_store: state_resolution_stores.seal_store,
+            cell_store: state_resolution_stores.cell_store,
+            cell_registry: state_resolution_stores.cell_registry,
             // Live event broadcast for ck.self.events.stream.subscribe streaming.
             // Capacity 1024 events; readers
             // falling behind get `Lagged` and emit `dropped` control frames.
@@ -676,6 +665,27 @@ impl AppState {
             proj.replay_resolved_pending(&self.hlc);
         }
 
+        let hydrated_realm_ids: Vec<RealmId> = {
+            let realms = self.realms.lock().expect("realms lock");
+            realms
+                .search(Default::default())
+                .into_iter()
+                .filter_map(|entry| RealmId::new(entry.realm_id.to_string()).ok())
+                .collect()
+        };
+        {
+            let mut proj = self.projection.lock().expect("projection lock");
+            for realm_id in hydrated_realm_ids {
+                if let Err(error) = proj.reload_cells_from_store(
+                    &realm_id,
+                    self.cell_store.as_ref(),
+                    self.cell_registry.as_ref(),
+                ) {
+                    tracing::warn!(%error, realm_id = %realm_id, "failed to hydrate cells from state store");
+                }
+            }
+        }
+
         // Hydrate per-subject invite_receive_policy overrides from durable
         // storage into the in-memory working map (built off-lock first; the
         // async snapshot read MUST NOT hold the std Mutex across `.await`).
@@ -719,6 +729,21 @@ impl AppState {
                 .expect("direct_conversation_bindings lock");
             for (participants_key, record) in bindings {
                 map.entry(participants_key).or_insert(record);
+            }
+        }
+
+        let lifecycle_records = self.persistence.account_lifecycle().snapshot_all().await?;
+        {
+            let mut map = self
+                .account_lifecycle
+                .lock()
+                .expect("account_lifecycle lock");
+            for (did, record) in lifecycle_records {
+                if record.state == "active" {
+                    map.remove(&did);
+                } else {
+                    map.insert(did, record);
+                }
             }
         }
 
@@ -777,19 +802,6 @@ impl AppState {
     }
 
     pub fn account_lifecycle_record(&self, did: &str) -> AccountLifecycleRecord {
-        if self
-            .erased_actors
-            .lock()
-            .expect("erased_actors lock")
-            .contains(did)
-        {
-            return AccountLifecycleRecord {
-                state: AccountStatus::ErasurePending.as_str().to_owned(),
-                reason: Some("account_erased".to_owned()),
-                changed_by: None,
-                changed_at: chrono::Utc::now(),
-            };
-        }
         self.account_lifecycle
             .lock()
             .expect("account_lifecycle lock")
