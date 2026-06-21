@@ -209,7 +209,7 @@ async fn directory_resolve_handle_invite_accepts_canonical_handles_without_conta
         Db { pool: None },
     );
     let alice = dev_token(state.clone()).await;
-    let _bob = register_account(
+    let bob = register_account(
         state.clone(),
         "did:web:bob.example",
         "@bob",
@@ -258,6 +258,41 @@ async fn directory_resolve_handle_invite_accepts_canonical_handles_without_conta
     assert_eq!(
         body["member_delivery_binding"]["recipient_service_did"],
         "did:web:local.host"
+    );
+
+    let drop_handle_policy = serde_json::json!({
+        "schema": "ck.schema.invite_receive_policy.v1",
+        "subject_id": "did:web:bob.example",
+        "allowed_introduction_kinds": ["locator_ref", "consent_grant", "shared_realm"],
+        "explicit_address_behavior": "quarantine",
+        "handle_claim_behavior": "drop",
+        "unknown_invites": "drop"
+    });
+    let saved_policy: Value = TestClient::put("http://server/_cokret/self/invite-receive-policy")
+        .add_header("authorization", format!("Bearer {bob}"), true)
+        .json(&drop_handle_policy)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(saved_policy["handle_claim_behavior"], "drop");
+
+    let blocked_by_bob_policy =
+        TestClient::post("http://server/_cokret/find/directory/resolve-handle")
+            .add_header("authorization", format!("Bearer {alice}"), true)
+            .json(&serde_json::json!({
+                "handle": "bob:local.host",
+                "intent": "invite",
+                "requester": "did:web:alice.example",
+                "realm_id": realm_id,
+                "audience": realm_id,
+            }))
+            .send(&app_from_state(state.clone()))
+            .await;
+    assert_eq!(
+        blocked_by_bob_policy.status_code.unwrap(),
+        StatusCode::NOT_FOUND
     );
 
     let hidden_remote_lookup =

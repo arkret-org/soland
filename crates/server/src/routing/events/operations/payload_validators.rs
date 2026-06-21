@@ -379,7 +379,7 @@ pub(crate) fn validate_read_marker_payload(operation: &Operation) -> Result<(), 
         .and_then(|value| value.as_object())
         .ok_or("read marker read_scope must be an object")?;
     for key in read_scope.keys() {
-        if !["kind", "ref", "track_name", "track_scope"].contains(&key.as_str()) {
+        if !["kind", "ref", "track_name"].contains(&key.as_str()) {
             return Err("read marker read_scope has unknown field");
         }
     }
@@ -392,42 +392,53 @@ pub(crate) fn validate_read_marker_payload(operation: &Operation) -> Result<(), 
             if read_scope.get("ref").is_some_and(|value| !value.is_null()) {
                 return Err("read marker read_scope.ref must be omitted for realm");
             }
-        }
-        "strand" | "thread" | "view" | "message" | "morph" => {
             if read_scope
+                .get("track_name")
+                .is_some_and(|value| !value.is_null())
+            {
+                return Err("read marker read_scope.track_name requires kind strand");
+            }
+        }
+        "circle" | "space" | "strand" | "thread" => {
+            let reference = read_scope
                 .get("ref")
                 .and_then(|value| value.as_str())
-                .is_none_or(|value| value.trim().is_empty())
-            {
-                return Err("read marker read_scope.ref is required");
+                .filter(|value| !value.trim().is_empty())
+                .ok_or("read marker read_scope.ref is required")?;
+            let expected_prefix = match kind {
+                "circle" => "ck:circle:",
+                "space" => "ck:space:",
+                "strand" => "ck:strand:",
+                "thread" => "ck:message:",
+                _ => unreachable!(),
+            };
+            if !reference.starts_with(expected_prefix) {
+                return Err("read marker read_scope.ref has invalid typed id kind");
             }
+            if kind != "strand"
+                && read_scope
+                    .get("track_name")
+                    .is_some_and(|value| !value.is_null())
+            {
+                return Err("read marker read_scope.track_name requires kind strand");
+            }
+        }
+        "view" | "message" | "morph" => {
+            return Err("read marker read_scope.kind is receipt-only");
         }
         "strand_discussion" | "strand_synthesis" => {
             return Err("read marker read_scope.kind removed; use strand plus track_name");
         }
         _ => return Err("read marker read_scope.kind is invalid"),
     }
-    match (
-        kind,
-        read_scope
-            .get("track_name")
-            .and_then(|value| value.as_str()),
-        read_scope
-            .get("track_scope")
-            .and_then(|value| value.as_str()),
-    ) {
-        ("strand", Some(track), None) => validate_read_scope_track(track)?,
-        ("strand", None, Some("all")) => {}
-        ("strand", Some(_), Some(_)) => {
-            return Err("read marker read_scope requires exactly one of track_name or track_scope");
+    if let Some(track) = read_scope
+        .get("track_name")
+        .and_then(|value| value.as_str())
+    {
+        if kind != "strand" {
+            return Err("read marker read_scope.track_name requires kind strand");
         }
-        ("strand", None, None) => {
-            return Err("read marker read_scope requires track_name or track_scope");
-        }
-        (_, Some(_), _) | (_, _, Some(_)) => {
-            return Err("read marker read_scope.track_name/track_scope requires kind strand");
-        }
-        _ => {}
+        validate_read_scope_track(track)?;
     }
     let position = operation
         .payload
@@ -554,7 +565,6 @@ fn validate_read_cursor_hlc(hlc: &str) -> Result<(), &'static str> {
     }
     Ok(())
 }
-
 /// `relation.md` admission guard for `ck.relation.create` / `.update` /
 /// `.tombstone`, covering two reducer-managed invariants:
 ///
@@ -828,12 +838,27 @@ pub fn validate_encrypted_payload_envelope(
     let Some(envelope) = content.as_object() else {
         return Err("encrypted content must be a JSON object");
     };
+
+    for field in [
+        "cleartext_commitment",
+        "authentication_tag",
+        "digests",
+        "ciphertext_digest",
+    ] {
+        if envelope.contains_key(field) {
+            return Err("encrypted content envelope contains forbidden field");
+        }
+    }
+
     for field in [
         "scheme",
+        "version",
         "group_id",
         "content_type",
         "ciphertext",
-        "authentication_tag",
+        "aad_visibility_event_id",
+        "payload_digest",
+        "aad_digest",
     ] {
         if envelope
             .get(field)
@@ -843,11 +868,20 @@ pub fn validate_encrypted_payload_envelope(
             return Err("encrypted content envelope is missing required string fields");
         }
     }
-    if !envelope
-        .get("version")
-        .is_some_and(|value| value.as_u64().is_some() || value.as_str().is_some())
-    {
+
+    if envelope.get("scheme").and_then(Value::as_str) != Some("mls-rfc9420") {
+        return Err("encrypted content envelope scheme must be mls-rfc9420");
+    }
+    let Some(version) = envelope.get("version").and_then(Value::as_str) else {
         return Err("encrypted content envelope requires version");
+    };
+    if !version.split_once('.').is_some_and(|(major, minor)| {
+        !major.is_empty()
+            && !minor.is_empty()
+            && major.bytes().all(|byte| byte.is_ascii_digit())
+            && minor.bytes().all(|byte| byte.is_ascii_digit())
+    }) {
+        return Err("encrypted content envelope version must be major.minor");
     }
     if envelope
         .get("epoch")
@@ -855,26 +889,95 @@ pub fn validate_encrypted_payload_envelope(
     {
         return Err("encrypted content envelope requires numeric epoch");
     }
-    if envelope.get("aad").is_none() {
+
+    let Some(aad) = envelope.get("aad").and_then(Value::as_object) else {
         return Err("encrypted content envelope requires aad");
-    }
-    if !envelope
-        .get("key_ref")
-        .is_some_and(|value| value.is_object() || value.as_str().is_some())
-    {
-        return Err("encrypted content envelope requires key_ref");
-    }
-    let Some(digests) = envelope.get("digests").and_then(|value| value.as_object()) else {
-        return Err("encrypted content envelope requires digests");
     };
-    if digests.is_empty() {
-        return Err("encrypted content envelope requires digests");
-    }
-    if !digests
-        .values()
-        .all(|value| value.as_str().is_some_and(is_valid_sha256_digest))
+    if aad
+        .get("realm_id")
+        .and_then(Value::as_str)
+        .is_none_or(|value| value.trim().is_empty())
+        || aad
+            .get("event_kind")
+            .and_then(Value::as_str)
+            .is_none_or(|value| value.trim().is_empty())
     {
-        return Err("encrypted content envelope digests must be sha256:<64 lowercase hex>");
+        return Err("encrypted content envelope aad requires realm_id and event_kind");
     }
+
+    let Some(key_ref) = envelope.get("key_ref").and_then(Value::as_object) else {
+        return Err("encrypted content envelope requires key_ref");
+    };
+    if key_ref.get("algorithm").and_then(Value::as_str) != Some("MLS")
+        || key_ref
+            .get("group_state_ref")
+            .and_then(Value::as_str)
+            .is_none_or(|value| value.trim().is_empty())
+    {
+        return Err("encrypted content envelope key_ref is invalid");
+    }
+
+    for field in ["payload_digest", "aad_digest"] {
+        if !envelope
+            .get(field)
+            .and_then(Value::as_str)
+            .is_some_and(is_valid_encrypted_envelope_digest)
+        {
+            return Err(
+                "encrypted content envelope digest must be sha256/blake3:<64 lowercase hex>",
+            );
+        }
+    }
+
+    match envelope
+        .get("aad_visibility_event_id")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+    {
+        "hidden" => {
+            if aad.contains_key("event_id") || aad.contains_key("event_ref_digest") {
+                return Err("encrypted content envelope hidden aad exposes event id");
+            }
+        }
+        "routing_digest" => {
+            if aad.contains_key("event_id") {
+                return Err("encrypted content envelope routing_digest aad forbids event_id");
+            }
+            if !aad
+                .get("event_ref_digest")
+                .and_then(Value::as_str)
+                .is_some_and(is_valid_encrypted_envelope_digest)
+            {
+                return Err(
+                    "encrypted content envelope routing_digest aad requires event_ref_digest",
+                );
+            }
+        }
+        "opaque_id" => {
+            if aad.contains_key("event_ref_digest") {
+                return Err("encrypted content envelope opaque_id aad forbids event_ref_digest");
+            }
+            if aad
+                .get("event_id")
+                .and_then(Value::as_str)
+                .is_none_or(|value| value.trim().is_empty())
+            {
+                return Err("encrypted content envelope opaque_id aad requires event_id");
+            }
+        }
+        _ => return Err("encrypted content envelope aad_visibility_event_id is invalid"),
+    }
+
     Ok(())
+}
+
+fn is_valid_encrypted_envelope_digest(value: &str) -> bool {
+    let Some((algorithm, digest)) = value.split_once(':') else {
+        return false;
+    };
+    matches!(algorithm, "sha256" | "blake3")
+        && digest.len() == 64
+        && digest
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }

@@ -405,6 +405,9 @@ pub struct ContactRecord {
     pub target: String,
     pub scope: String,
     pub status: String,
+    pub request_event_ref: Option<String>,
+    pub response_event_ref: Option<String>,
+    pub tombstone_event_ref: Option<String>,
     /// Optional free-text greeting carried on `ck.contact.requested`
     /// (spec 0015 §3.4). NFC-normalized, 1..2000 chars. `None` when the
     /// request carried no message or the row originated from a consent

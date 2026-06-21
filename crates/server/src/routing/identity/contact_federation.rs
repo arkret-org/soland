@@ -19,9 +19,9 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use chrono::SecondsFormat;
 use cokret_sdk::{
-    ContactIntroductionEvidence, Did, DisclosedOutcome, Event, Hash, Hlc, InviteReceiveAction,
-    PeerContactAddress, PeerContactDeliveryRequest, PeerContactFactKind, Proof, RealmId, canonical,
-    proof_kind,
+    ContactIntroductionEvidence, Did, DisclosedOutcome, Event, EventId, Hash, Hlc,
+    InviteReceiveAction, PeerContactAddress, PeerContactDeliveryRequest, PeerContactFactKind,
+    Proof, RealmId, canonical, proof_kind,
 };
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -74,6 +74,7 @@ pub(crate) async fn federate_contact_fact(
     recipient_service_did: &str,
     introduction_evidence: Option<ContactIntroductionEvidence>,
     fact_payload: Value,
+    contact_event_id: &str,
 ) -> Result<bool, AppError> {
     let recipient_service_did = recipient_service_did.trim();
     if recipient_service_did.is_empty() || recipient_service_did == state.config.service_did {
@@ -98,8 +99,14 @@ pub(crate) async fn federate_contact_fact(
     let fact_kind = PeerContactFactKind::from_wire(fact_kind)
         .map_err(|error| AppError::invalid_param(error.to_string()))?;
     let issuer_pcr = super::recovery::principal_control_realm_for_did(issuer);
-    let contact_event =
-        build_contact_envelope(state, fact_kind, issuer, &issuer_pcr, fact_payload)?;
+    let contact_event = build_contact_envelope(
+        state,
+        fact_kind,
+        issuer,
+        &issuer_pcr,
+        fact_payload,
+        contact_event_id,
+    )?;
     let idempotency_key = contact_delivery_idempotency_key(
         &state.config.service_did,
         recipient_service_did,
@@ -157,6 +164,7 @@ fn build_contact_envelope(
     issuer: &str,
     issuer_pcr: &str,
     fact_payload: Value,
+    contact_event_id: &str,
 ) -> Result<Event, AppError> {
     let realm_id = RealmId::new(issuer_pcr.to_owned())
         .map_err(|error| AppError::internal(format!("issuer PCR realm_id invalid: {error}")))?;
@@ -166,6 +174,8 @@ fn build_contact_envelope(
         .map_err(|error| AppError::internal(format!("contact event HLC invalid: {error}")))?;
     let mut event = Event::new(fact_kind.as_str(), realm_id, actor_id, 0, hlc, fact_payload)
         .map_err(|error| AppError::internal(format!("contact event build failed: {error}")))?;
+    event.event_id = EventId::new(contact_event_id.to_owned())
+        .map_err(|error| AppError::internal(format!("contact event_id invalid: {error}")))?;
     let event_digest = event
         .event_digest()
         .map_err(|error| AppError::internal(format!("contact event digest failed: {error}")))?;
@@ -315,6 +325,7 @@ async fn peer_contacts_submit(
         &issuer,
         &subject_id,
         &payload,
+        delivery.contact_event.event_id.as_str(),
         source_service_did.as_deref(),
     )
     .await?;
@@ -395,6 +406,7 @@ async fn project_delivered_contact_fact(
     issuer: &str,
     subject_id: &str,
     payload: &Value,
+    contact_event_id: &str,
     source_service_did: Option<&str>,
 ) -> Result<&'static str, AppError> {
     let scope = normalize_scope(
@@ -435,6 +447,9 @@ async fn project_delivered_contact_fact(
                 target: subject_id.to_owned(),
                 scope,
                 status: "pending".to_owned(),
+                request_event_ref: Some(contact_event_id.to_owned()),
+                response_event_ref: None,
+                tombstone_event_ref: None,
                 message,
                 // Peer end of this pending_incoming row is the remote requester
                 // (`issuer`), hosted on the delivering source server. The local
@@ -471,6 +486,9 @@ async fn project_delivered_contact_fact(
                     target: issuer.to_owned(),
                     scope: scope.clone(),
                     status: "accepted".to_owned(),
+                    request_event_ref: None,
+                    response_event_ref: Some(contact_event_id.to_owned()),
+                    tombstone_event_ref: None,
                     message: None,
                     peer_service_did: None,
                     created_at: now(),
@@ -480,6 +498,7 @@ async fn project_delivered_contact_fact(
                 return Ok("duplicate");
             }
             contact.status = "accepted".to_owned();
+            contact.response_event_ref = Some(contact_event_id.to_owned());
             contact.updated_at = now();
             // Peer end is the remote accepter (`issuer`), hosted on the
             // delivering source server. Record/backfill it so the requester's
@@ -503,6 +522,9 @@ async fn project_delivered_contact_fact(
                     target: issuer.to_owned(),
                     scope: scope.clone(),
                     status: "rejected".to_owned(),
+                    request_event_ref: None,
+                    response_event_ref: Some(contact_event_id.to_owned()),
+                    tombstone_event_ref: None,
                     message: None,
                     peer_service_did: source_service_did.map(ToOwned::to_owned),
                     created_at: now(),
@@ -512,6 +534,7 @@ async fn project_delivered_contact_fact(
                 return Ok("duplicate");
             }
             contact.status = "rejected".to_owned();
+            contact.response_event_ref = Some(contact_event_id.to_owned());
             contact.updated_at = now();
             store
                 .put(&contact)
@@ -532,6 +555,7 @@ async fn project_delivered_contact_fact(
                     continue;
                 }
                 row.status = "tombstoned".to_owned();
+                row.tombstone_event_ref = Some(contact_event_id.to_owned());
                 row.updated_at = now();
                 store
                     .put(&row)
@@ -682,6 +706,7 @@ mod tests {
             requester,
             target,
             &payload,
+            "ck:event:0196419b-0000-7000-8000-000000000001",
             Some(source_service_did),
         )
         .await
@@ -702,6 +727,10 @@ mod tests {
             "peer_service_did must be the originating requester's PS, not the recipient's own \
              service_did ({})",
             state.config.service_did,
+        );
+        assert_eq!(
+            record.request_event_ref.as_deref(),
+            Some("ck:event:0196419b-0000-7000-8000-000000000001"),
         );
         assert_ne!(
             record.peer_service_did.as_deref(),

@@ -360,6 +360,7 @@ async fn invites(
     crate::result::json_ok(AuthzInviteList {
         invites: invite_list,
         next_cursor: None,
+        has_more: false,
     })
 }
 

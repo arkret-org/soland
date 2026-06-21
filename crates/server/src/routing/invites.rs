@@ -13,12 +13,12 @@ use chrono::Duration;
 use cokret_sdk::models::{DisclosurePolicy, HandleClaim};
 use cokret_sdk::{
     CandidateIntent, CandidateValidationContext, ContactIntroductionEvidence, DetachedPayloadProof,
-    Did, DisclosedOutcome, DisclosureLevel, Handle, HandleBindingState, Hash, IntroductionEvidence,
-    InviteDeliveryOutcome, InviteDeliveryOutcomeStatus, InviteDeliveryRequest,
-    InviteLocatorResolveRequestBody, InviteReceiveAction, InviteReceivePolicy,
-    MemberDeliveryBindingCandidate, PrincipalLocator, PrincipalLocatorDisplayHint,
-    PrincipalLocatorProof, PrincipalLocatorProofPurpose, ReceivePolicyConstraints,
-    ReceivePolicySurface, UnknownInviteAction, canonical,
+    Did, DirectoryIntent, DisclosedOutcome, DisclosureLevel, Handle, HandleBindingState, Hash,
+    IntroductionEvidence, InviteDeliveryOutcome, InviteDeliveryOutcomeStatus,
+    InviteDeliveryRequest, InviteLocatorResolveRequestBody, InviteReceiveAction,
+    InviteReceivePolicy, MemberDeliveryBindingCandidate, PrincipalLocator,
+    PrincipalLocatorDisplayHint, PrincipalLocatorProof, PrincipalLocatorProofPurpose,
+    ReceivePolicyConstraints, ReceivePolicySurface, UnknownInviteAction, canonical,
 };
 use salvo::http::StatusCode;
 use salvo::prelude::*;
@@ -421,6 +421,72 @@ pub(crate) fn resolve_invite_receive_policy(
 }
 
 /// Spec invite-addressing.md §2/§5/§5.1/§7-8 — the full receive decision.
+pub(crate) fn directory_handle_claim_resolve_allowed(
+    state: &AppState,
+    intent: Option<DirectoryIntent>,
+    requester: Option<&Did>,
+    subject: &str,
+    recipient_service_did: &str,
+    source_service_did: &str,
+    handle_claim: &HandleClaim,
+    resolved_by: Option<Did>,
+) -> bool {
+    if !matches!(
+        intent,
+        Some(
+            DirectoryIntent::ContactRequest | DirectoryIntent::Invite | DirectoryIntent::MemberAdd
+        )
+    ) {
+        return true;
+    }
+    let Some(requester) = requester else {
+        return false;
+    };
+    let Some(handle) = handle_claim.handle.clone() else {
+        return false;
+    };
+    let policy = resolve_invite_receive_policy(state, subject);
+    let decision = match intent {
+        Some(DirectoryIntent::ContactRequest) => {
+            let evidence = ContactIntroductionEvidence::HandleClaim {
+                handle,
+                handle_claim: Box::new(handle_claim.clone()),
+                resolved_by,
+                resolved_at: Some(chrono::Utc::now()),
+            };
+            evaluate_contact_receive(
+                state,
+                &policy,
+                &evidence,
+                requester.as_str(),
+                subject,
+                recipient_service_did,
+                source_service_did,
+            )
+        }
+        Some(DirectoryIntent::Invite | DirectoryIntent::MemberAdd) => {
+            let evidence = IntroductionEvidence::HandleClaim {
+                handle,
+                handle_claim: Box::new(handle_claim.clone()),
+                member_delivery_binding_candidate: None,
+                resolved_by,
+                resolved_at: Some(chrono::Utc::now()),
+            };
+            evaluate_invite_receive(
+                state,
+                &policy,
+                &evidence,
+                requester.as_str(),
+                subject,
+                recipient_service_did,
+                source_service_did,
+            )
+        }
+        _ => return true,
+    };
+    decision.effective_kind == "handle_claim" && decision.action != InviteReceiveAction::Drop
+}
+
 fn evaluate_invite_receive(
     state: &AppState,
     policy: &InviteReceivePolicy,

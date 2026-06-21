@@ -217,11 +217,7 @@ pub(crate) fn poll_choices_from_content(content: &Value) -> Vec<String> {
 }
 
 pub(crate) fn read_scope_key(scope: &ReadScopeWire) -> String {
-    let track_selector = scope
-        .track
-        .as_deref()
-        .or_else(|| scope.track_scope.as_ref().map(|_| "all"))
-        .unwrap_or("");
+    let track_selector = scope.track.as_deref().unwrap_or("");
     format!(
         "{}\u{1f}{}\u{1f}{}",
         scope.kind.as_str(),

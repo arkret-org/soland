@@ -326,6 +326,9 @@ CREATE TABLE public.contacts (
     target_id text NOT NULL,
     scope text NOT NULL,
     status text NOT NULL,
+    request_event_ref text,
+    response_event_ref text,
+    tombstone_event_ref text,
     message text,
     peer_service_id text,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
@@ -1481,6 +1484,8 @@ CREATE INDEX push_bridge_cache_fetched_at_idx ON public.push_bridge_cache USING 
 CREATE INDEX push_bridge_cache_trust_freshness_idx ON public.push_bridge_cache USING btree (trust_level, freshness_at);
 
 CREATE INDEX realm_invites_invitee_idx ON public.realm_invites USING btree (invitee_id);
+
+CREATE UNIQUE INDEX realm_invites_live_direct_unique_idx ON public.realm_invites USING btree (realm_id, invitee_id) WHERE ((invitee_id IS NOT NULL) AND (third_party_id IS NULL) AND (status = ANY (ARRAY['pending'::text, 'claimed'::text, 'send_failed'::text])));
 
 CREATE INDEX realm_invites_realm_idx ON public.realm_invites USING btree (realm_id);
 

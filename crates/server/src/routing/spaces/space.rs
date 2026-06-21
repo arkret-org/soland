@@ -567,15 +567,9 @@ pub async fn realm_has_member_by_id(state: &AppState, realm_id: &str, actor: &st
             if realm.members.contains(&actor_typed) {
                 true
             } else {
-                let members: Vec<String> = realm
-                    .members
-                    .iter()
-                    .map(|did| did.as_str().to_owned())
-                    .collect();
-                tracing::warn!(
+                tracing::trace!(
                     %realm_id,
                     %actor,
-                    realm_members = ?members,
                     "realm_has_member_by_id: actor not in realm members"
                 );
                 false

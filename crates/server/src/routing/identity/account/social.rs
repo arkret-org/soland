@@ -88,7 +88,7 @@ pub(crate) async fn contact_request(
                 &existing,
                 &session.actor,
                 Vec::new(),
-            ));
+            )?);
         }
         let status_changed = existing.status != contact_status;
         // A re-sent request MAY refresh the greeting; keep the prior one
@@ -109,7 +109,7 @@ pub(crate) async fn contact_request(
             &existing,
             &session.actor,
             requester_consent_refs,
-        ));
+        )?);
     }
     if store
         .get_scoped(&target, &session.actor, &scope)
@@ -122,11 +122,15 @@ pub(crate) async fn contact_request(
             "contact relationship already exists",
         ));
     }
+    let request_event_ref = synthetic_contact_event_ref();
     let contact = ContactRecord {
         requester: session.actor,
         target,
         scope,
         status: contact_status.to_owned(),
+        request_event_ref: Some(request_event_ref.to_string()),
+        response_event_ref: None,
+        tombstone_event_ref: None,
         message,
         // Local (same-Principal-Server) request: peer's home server is this
         // service, so there is nothing cross-PS to address.
@@ -166,12 +170,15 @@ pub(crate) async fn contact_request(
             recipient_service_did,
             Some(introduction_evidence),
             json!({
-                "requester": contact.requester,
-                "target": contact.target,
+                "request_id": request_event_ref.as_str(),
+                "requester": contact.requester.clone(),
+                "target": contact.target.clone(),
                 "requested_scopes": [contact.scope.clone()],
-                "message": contact.message,
+                "requester_consent_refs": requester_consent_refs.clone(),
+                "message": contact.message.clone(),
                 "introduction_evidence_digest": introduction_evidence_digest,
             }),
+            request_event_ref.as_str(),
         )
         .await?;
     }
@@ -180,7 +187,7 @@ pub(crate) async fn contact_request(
         &contact,
         &contact.requester,
         requester_consent_refs,
-    ))
+    )?)
 }
 
 /// Spec 0015 §3.4 — normalize a contact-request greeting: trim, NFC, and
@@ -248,15 +255,29 @@ pub(crate) async fn contact_respond(
             "rejected"
         };
         if contact.status == requested_status {
-            return json_ok(contact_respond_outcome(&contact, Vec::new()));
+            if contact.response_event_ref.is_none() {
+                return Err(contact_failed_precondition(
+                    cokret_sdk::ERROR_CODE_CONTACT_REQUEST_NOT_PENDING,
+                    "contact request is no longer pending",
+                ));
+            }
+            return json_ok(contact_respond_outcome(&contact, Vec::new())?);
         }
         return Err(AppError::new(
             crate::error::ErrorCode::DuplicateConflict,
             "contact request is no longer pending",
         ));
     }
+    let request_event_ref = contact_event_ref(&contact.request_event_ref, "request_event_ref")?;
+    if request_event_ref != body.request_id {
+        return Err(contact_failed_precondition(
+            cokret_sdk::ERROR_CODE_CONTACT_REQUEST_NOT_PENDING,
+            "contact request_id does not match the pending request",
+        ));
+    }
     let mut consent_grant_refs = Vec::new();
     let mut granted_scope_wire = Vec::new();
+    let response_event_ref = synthetic_contact_event_ref();
     contact.status = if body.action == "accept" {
         let scopes = contact_respond_scopes(&body, &contact.scope)?;
         for scope in scopes {
@@ -281,6 +302,7 @@ pub(crate) async fn contact_respond(
     } else {
         "rejected".to_owned()
     };
+    contact.response_event_ref = Some(response_event_ref.to_string());
     contact.updated_at = now();
     store
         .put(&contact)
@@ -310,15 +332,18 @@ pub(crate) async fn contact_respond(
             &requester_service_did,
             None,
             json!({
-                "requester": contact.requester,
-                "target": session.actor,
-                "scope": contact.scope,
+                "request_id": request_event_ref.as_str(),
+                "requester": contact.requester.clone(),
+                "target": session.actor.clone(),
+                "scope": contact.scope.clone(),
                 "granted_scopes": granted_scope_wire,
+                "consent_grant_refs": consent_grant_refs.clone(),
             }),
+            response_event_ref.as_str(),
         )
         .await?;
     }
-    json_ok(contact_respond_outcome(&contact, consent_grant_refs))
+    json_ok(contact_respond_outcome(&contact, consent_grant_refs)?)
 }
 
 #[endpoint(
@@ -364,6 +389,7 @@ pub(crate) async fn contact_tombstone(
     // tombstone target.
     let store = state.persistence.contacts();
     let mut tombstoned_any = false;
+    let tombstone_event_ref = synthetic_contact_event_ref();
     // Peer's home Principal Server learned from a stored holder↔peer row (set
     // on cross-PS contact deliveries). Used as the federation fallback when the
     // request body omits `peer_service_did`.
@@ -392,6 +418,7 @@ pub(crate) async fn contact_tombstone(
             continue;
         }
         row.status = "tombstoned".to_owned();
+        row.tombstone_event_ref = Some(tombstone_event_ref.to_string());
         row.updated_at = now;
         store
             .put(&row)
@@ -469,6 +496,7 @@ pub(crate) async fn contact_tombstone(
                 "full_peer_revoke": body.full_peer_revoke,
                 "block_peer": body.block_peer,
             }),
+            tombstone_event_ref.as_str(),
         )
         .await?;
     }
@@ -478,7 +506,7 @@ pub(crate) async fn contact_tombstone(
         .filter_map(|dot| EventId::new(format!("ck:event:{}", sha256_hex(dot.as_bytes()))).ok())
         .collect::<Vec<_>>();
     json_ok(ContactTombstone {
-        tombstone_event_ref: synthetic_contact_event_ref(),
+        tombstone_event_ref,
         consent_revoke_refs,
         state: ContactState::Tombstoned,
         partial_revoke: (!complete).then_some(true),
@@ -645,27 +673,46 @@ fn contact_request_outcome(
     contact: &ContactRecord,
     actor: &str,
     requester_consent_refs: Vec<EventId>,
-) -> ContactRequestOutcome {
-    ContactRequestOutcome {
-        request_event_ref: synthetic_contact_event_ref(),
+) -> Result<ContactRequestOutcome, AppError> {
+    let request_event_ref = contact_event_ref(&contact.request_event_ref, "request_event_ref")?;
+    Ok(ContactRequestOutcome {
+        request_event_ref,
         requester_consent_refs,
         state: directional_contact_state(actor, contact),
-    }
+    })
 }
 
 fn contact_respond_outcome(
     contact: &ContactRecord,
     consent_grant_refs: Vec<EventId>,
-) -> ContactRespondOutcome {
-    ContactRespondOutcome {
-        response_event_ref: synthetic_contact_event_ref(),
+) -> Result<ContactRespondOutcome, AppError> {
+    let response_event_ref = contact_event_ref(&contact.response_event_ref, "response_event_ref")?;
+    Ok(ContactRespondOutcome {
+        response_event_ref,
         consent_grant_refs,
         state: directional_contact_state(&contact.target, contact),
-    }
+    })
 }
 
 fn synthetic_contact_event_ref() -> EventId {
     EventId::new(crate::ids::generate_event_id()).expect("generated contact event id is valid")
+}
+
+fn contact_event_ref(value: &Option<String>, field: &str) -> Result<EventId, AppError> {
+    value
+        .as_deref()
+        .ok_or_else(|| AppError::internal(format!("contact projection missing {field}")))
+        .and_then(|event_ref| {
+            EventId::new(event_ref.to_owned()).map_err(|error| {
+                AppError::internal(format!("contact projection invalid {field}: {error}"))
+            })
+        })
+}
+
+fn optional_contact_event_ref(value: &Option<String>) -> Option<EventId> {
+    value
+        .as_deref()
+        .and_then(|event_ref| EventId::new(event_ref.to_owned()).ok())
 }
 
 fn contact_list_rows(
@@ -674,6 +721,12 @@ fn contact_list_rows(
     records: Vec<ContactRecord>,
 ) -> Vec<ContactListRow> {
     let mut rows: BTreeMap<String, ContactListRow> = BTreeMap::new();
+    let mut records = records;
+    records.sort_by(|left, right| {
+        left.created_at
+            .cmp(&right.created_at)
+            .then_with(|| left.scope.cmp(&right.scope))
+    });
     for record in records {
         let peer = if record.requester == actor {
             record.target.clone()
@@ -697,6 +750,15 @@ fn contact_list_rows(
         });
         if contact_state_rank(&row_state) > contact_state_rank(&entry.state) {
             entry.state = row_state;
+        }
+        if entry.request_event_ref.is_none() {
+            entry.request_event_ref = optional_contact_event_ref(&record.request_event_ref);
+        }
+        if entry.response_event_ref.is_none() {
+            entry.response_event_ref = optional_contact_event_ref(&record.response_event_ref);
+        }
+        if entry.tombstone_event_ref.is_none() {
+            entry.tombstone_event_ref = optional_contact_event_ref(&record.tombstone_event_ref);
         }
         // Surface the peer's home Principal Server when learned from a cross-PS
         // delivery (None for same-PS contacts). Multiple scoped records can
@@ -811,6 +873,10 @@ pub(crate) async fn accepted_contact_for_pair(
 }
 
 pub(crate) fn direct_resolve_precondition(reason: &'static str, message: &'static str) -> AppError {
+    contact_failed_precondition(reason, message)
+}
+
+fn contact_failed_precondition(reason: &'static str, message: &'static str) -> AppError {
     AppError::new(ErrorCode::FailedPrecondition, message)
         .with_status(StatusCode::PRECONDITION_FAILED)
         .with_wire_code(reason)

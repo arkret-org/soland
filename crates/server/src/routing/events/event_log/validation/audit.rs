@@ -48,21 +48,14 @@ pub(crate) async fn append_encrypted_message_franking(
 }
 
 fn encrypted_message_ciphertext_digest(envelope: &Value) -> Option<String> {
-    for pointer in [
-        "/payload/encrypted_content/digests/ciphertext",
-        "/payload/encrypted_content/ciphertext_digest",
-        "/payload/ciphertext_digest",
-    ] {
-        if let Some(digest) = envelope.pointer(pointer).and_then(Value::as_str)
-            && is_valid_sha256_digest(digest)
-        {
-            return Some(digest.to_owned());
-        }
-    }
-    envelope
-        .pointer("/payload/encrypted_content/ciphertext")
+    if let Some(digest) = envelope
+        .pointer("/payload/encrypted_content/payload_digest")
         .and_then(Value::as_str)
-        .map(|ciphertext| cokret_sdk::canonical::sha256_digest(ciphertext.as_bytes()))
+        && is_valid_sha256_digest(digest)
+    {
+        return Some(digest.to_owned());
+    }
+    None
 }
 
 async fn audit_disclosure_policy_for_realm(state: &AppState, realm_id: &str) -> Option<Value> {

@@ -340,7 +340,13 @@ async fn minimal_metadata_realm_rejects_non_hidden_aad() {
                 "aad": {
                     "realm_id": realm_id,
                     "event_kind": "ck.message.create"
-                }
+                },
+                "key_ref": {
+                    "algorithm": "MLS",
+                    "group_state_ref": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+                },
+                "payload_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+                "aad_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
             }
         })
     };
@@ -781,7 +787,17 @@ async fn non_minimal_metadata_realm_allows_any_aad() {
                 "content_type": "application/json",
                 "ciphertext": "base64url",
                 "aad_visibility_event_id": "routing_digest",
-                "aad": {"realm_id": realm_id, "event_kind": "ck.message.create"}
+                "aad": {
+                    "realm_id": realm_id,
+                    "event_kind": "ck.message.create",
+                    "event_ref_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+                },
+                "key_ref": {
+                    "algorithm": "MLS",
+                    "group_state_ref": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+                },
+                "payload_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+                "aad_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
             }
         }),
     );

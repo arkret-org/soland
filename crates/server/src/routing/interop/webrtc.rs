@@ -17,7 +17,10 @@ use std::collections::BTreeSet;
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::{DateTime, Duration, Utc};
-use cokret_sdk::{DeviceId, Did, MediaIceConfigRequestBody, MediaIceMode, RealmId};
+use cokret_sdk::{
+    CellRef, DeviceId, Did, MediaIceConfigRequestBody, MediaIceMode, Operation, OperationId,
+    RealmId,
+};
 use ed25519_dalek::Signer as _;
 use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
@@ -27,9 +30,10 @@ use serde_json::{Value, json};
 use super::{now, realm_has_member, sha256_hex, validate_device_id, validate_did};
 use crate::error::{AppError, ErrorCode};
 use crate::ids;
+use crate::reducer::{ProjectionEffect, ProjectionState};
 use crate::result::{JsonResult, json_ok};
 use crate::routing::system::extract::AuthArgs;
-use crate::state::{AppState, SessionRecord};
+use crate::state::{AppState, CanonicalEventRecord, SessionRecord};
 use crate::wire::{
     CallMediaParticipantBinding, CallMediaServiceSignature, CallMediaTokenExchangeOutcome,
     CallMediaTokenExchangeRequestBody,
@@ -669,7 +673,7 @@ async fn handle_rtc_token(
     // Read the durable `ck.call.state` cell once. It MAY be absent (a brand-new
     // call whose initiator is redeeming a token before writing the first
     // `ck.call.state` event). Absent cell ⇒ no committed focus and no bans.
-    let call_state = CallStateCell::load(state, body.call_id.as_str())?;
+    let call_state = CallStateCell::load(state, body.call_id.as_str()).await?;
 
     // (3) `webrtc-signaling.md` §3a — a banned actor MUST NOT re-issue a join
     // token for this call's lifetime. The ban set is the durable
@@ -913,18 +917,28 @@ impl CallStateCell {
     /// Load the `ck.component.call.state.v1` cell for `call_id`. The cell id is
     /// `ck:cell:ck.component.call.state.v1:{call_id}` — the same form the
     /// `apply_call_state` reducer writes (see `apply_realm_policy.rs`).
-    fn load(state: &AppState, call_id: &str) -> Result<Self, AppError> {
-        let cell_id =
-            cokret_sdk::CellRef::new(format!("ck:cell:ck.component.call.state.v1:{call_id}"))
-                .map_err(|error| {
-                    AppError::internal(format!("invalid call.state cell id: {error}"))
-                })?;
-        let value = {
+    async fn load(state: &AppState, call_id: &str) -> Result<Self, AppError> {
+        let cell_id = call_state_cell_ref(call_id)?;
+        let cached = {
             let projection = state
                 .projection
                 .lock()
                 .map_err(|error| AppError::internal(format!("projection lock: {error}")))?;
             projection.cell_value(&cell_id).cloned()
+        };
+        let value = match call_state_from_event_log(state, call_id, &cell_id).await? {
+            Some(value) => {
+                let mut projection = state
+                    .projection
+                    .lock()
+                    .map_err(|error| AppError::internal(format!("projection lock: {error}")))?;
+                projection.cells.insert(
+                    cell_id,
+                    cokret_sdk::lattice::CellState::Value(value.clone()),
+                );
+                Some(value)
+            }
+            None => cached,
         };
         Ok(Self { value })
     }
@@ -957,6 +971,97 @@ impl CallStateCell {
                 && row.get("actor_id").and_then(Value::as_str) == Some(actor_id)
         })
     }
+}
+
+fn call_state_cell_ref(call_id: &str) -> Result<CellRef, AppError> {
+    CellRef::new(format!("ck:cell:ck.component.call.state.v1:{call_id}"))
+        .map_err(|error| AppError::internal(format!("invalid call.state cell id: {error}")))
+}
+
+async fn call_state_from_event_log(
+    state: &AppState,
+    call_id: &str,
+    cell_id: &CellRef,
+) -> Result<Option<Value>, AppError> {
+    let mut records = state
+        .persistence
+        .events()
+        .snapshot_all()
+        .await
+        .map_err(|error| AppError::internal(format!("events store unavailable: {error}")))?
+        .into_iter()
+        .filter(|record| {
+            record.kind == crate::kinds::CK_CALL_STATE && record_call_id(record) == Some(call_id)
+        })
+        .collect::<Vec<_>>();
+    if records.is_empty() {
+        return Ok(None);
+    }
+    records.sort_by(|left, right| {
+        left.received_at
+            .cmp(&right.received_at)
+            .then_with(|| left.actor_seq.cmp(&right.actor_seq))
+            .then_with(|| left.event_id.cmp(&right.event_id))
+    });
+
+    let mut projection = ProjectionState::new();
+    for record in &records {
+        let Some(operation) = call_state_operation_from_record(record)? else {
+            continue;
+        };
+        match projection.apply(&operation, &state.hlc) {
+            ProjectionEffect::CallStateProjected { .. } => {}
+            ProjectionEffect::Rejected { reason } => {
+                tracing::warn!(
+                    event_id = %record.event_id,
+                    call_id = %call_id,
+                    reason = %reason,
+                    "accepted ck.call.state did not project during RTC token cold projection"
+                );
+            }
+            _ => {}
+        }
+    }
+    Ok(projection.cell_value(cell_id).cloned())
+}
+
+fn record_call_id(record: &CanonicalEventRecord) -> Option<&str> {
+    record
+        .envelope
+        .get("payload")
+        .and_then(|payload| payload.get("call_id"))
+        .and_then(Value::as_str)
+}
+
+fn call_state_operation_from_record(
+    record: &CanonicalEventRecord,
+) -> Result<Option<Operation>, AppError> {
+    let Some(realm_id) = crate::routing::events::event_log::canonical_realm_id_for_record(record)
+    else {
+        return Ok(None);
+    };
+    let realm_id = RealmId::new(realm_id).map_err(|error| AppError::internal(error.to_string()))?;
+    let Some(suffix) = record.event_id.strip_prefix("ck:event:") else {
+        return Ok(None);
+    };
+    let operation_id = OperationId::new(format!("ck:operation:{suffix}"))
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    let payload = record
+        .envelope
+        .get("payload")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    let mut operation =
+        Operation::create(operation_id, realm_id, crate::kinds::CK_CALL_STATE, payload);
+    operation.canonical_event_digest = Some(record.canonical_digest.clone());
+    operation.created_at = record
+        .envelope
+        .get("created_at")
+        .and_then(Value::as_str)
+        .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
+        .map(|value| value.with_timezone(&Utc))
+        .unwrap_or(record.received_at);
+    Ok(Some(operation))
 }
 
 fn media_service_epoch_for_realm(

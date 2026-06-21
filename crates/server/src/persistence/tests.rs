@@ -75,6 +75,9 @@ async fn memory_contact_store_filtering() {
             target: "bob".to_owned(),
             scope: "message".to_owned(),
             status: "accepted".to_owned(),
+            request_event_ref: None,
+            response_event_ref: None,
+            tombstone_event_ref: None,
             message: None,
             peer_service_did: None,
             created_at: now,
@@ -89,6 +92,9 @@ async fn memory_contact_store_filtering() {
             target: "alice".to_owned(),
             scope: "invite".to_owned(),
             status: "pending".to_owned(),
+            request_event_ref: Some("ck:event:0196419b-0000-7000-8000-000000000101".to_owned()),
+            response_event_ref: None,
+            tombstone_event_ref: None,
             message: None,
             peer_service_did: None,
             created_at: now,
@@ -1072,6 +1078,9 @@ async fn memory_contact_store_put_get_roundtrip() {
         target: "did:web:bob.example".to_owned(),
         scope: "message".to_owned(),
         status: "accepted".to_owned(),
+        request_event_ref: Some("ck:event:0196419b-0000-7000-8000-000000000102".to_owned()),
+        response_event_ref: Some("ck:event:0196419b-0000-7000-8000-000000000103".to_owned()),
+        tombstone_event_ref: None,
         message: Some("hi".to_owned()),
         peer_service_did: Some("did:web:bob-ps.example".to_owned()),
         created_at: Utc::now(),
@@ -1085,6 +1094,14 @@ async fn memory_contact_store_put_get_roundtrip() {
         .unwrap()
         .expect("row round-trips");
     assert_eq!(scoped.status, "accepted");
+    assert_eq!(
+        scoped.request_event_ref.as_deref(),
+        Some("ck:event:0196419b-0000-7000-8000-000000000102")
+    );
+    assert_eq!(
+        scoped.response_event_ref.as_deref(),
+        Some("ck:event:0196419b-0000-7000-8000-000000000103")
+    );
     assert_eq!(
         scoped.peer_service_did.as_deref(),
         Some("did:web:bob-ps.example")
@@ -1258,6 +1275,15 @@ async fn pg_contact_consent_policy_and_direct_binding_survive_store_restart() {
         target: bob.clone(),
         scope: "direct_message".to_owned(),
         status: "accepted".to_owned(),
+        request_event_ref: Some(format!(
+            "ck:event:0196419b-0000-7000-8000-{}",
+            &suffix[..12]
+        )),
+        response_event_ref: Some(format!(
+            "ck:event:0196419b-0000-7000-8000-{}",
+            &suffix[12..24]
+        )),
+        tombstone_event_ref: None,
         message: Some("postgres round trip".to_owned()),
         peer_service_did: Some(format!("did:web:pg-peer-service-{suffix}.example")),
         created_at: now,
@@ -1275,6 +1301,11 @@ async fn pg_contact_consent_policy_and_direct_binding_survive_store_restart() {
     assert_eq!(
         fetched_contact.message.as_deref(),
         Some("postgres round trip")
+    );
+    assert_eq!(fetched_contact.request_event_ref, contact.request_event_ref);
+    assert_eq!(
+        fetched_contact.response_event_ref,
+        contact.response_event_ref
     );
     assert!(
         restarted

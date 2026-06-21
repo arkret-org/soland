@@ -310,6 +310,32 @@ pub(super) async fn project_invite_create_operation(
             return;
         }
     }
+    let already_live = invites
+        .snapshot_all()
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .any(|existing| {
+            existing.realm_id == operation.realm_id.as_str()
+                && existing.invitee.as_deref() == Some(invitee.as_str())
+                && existing.third_party_id.is_none()
+                && matches!(
+                    existing.status.as_str(),
+                    "pending" | "claimed" | "send_failed"
+                )
+                && existing
+                    .expires_at
+                    .is_none_or(|expires_at| expires_at > operation.created_at)
+        });
+    if already_live {
+        tracing::debug!(
+            invite_id = %invite_id,
+            invitee = %invitee.as_str(),
+            realm_id = %operation.realm_id,
+            "ck.invite.create projection skipped: live direct invite already exists"
+        );
+        return;
+    }
 
     let inviter = operation
         .payload

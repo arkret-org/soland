@@ -134,6 +134,7 @@ pub struct EnvelopeVectorRequest {
     vector_id: String,
     #[salvo(schema(value_type = serde_json::Value))]
     envelope: Value,
+    ciphertext_base64url: Option<String>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -464,7 +465,17 @@ pub async fn envelope(
     let _vector = body.vector_id.as_str();
     let canonical = canonical_json(&body.envelope)
         .map_err(|err| AppError::new(ErrorCode::SchemaViolation, format!("canonicalize: {err}")))?;
-    let digest = sha256_digest(canonical.as_bytes());
+    let digest = if let Some(ciphertext) = body.ciphertext_base64url.as_deref() {
+        let ciphertext_bytes = URL_SAFE_NO_PAD
+            .decode(ciphertext)
+            .map_err(|err| AppError::invalid_param(format!("ciphertext_base64url: {err}")))?;
+        let mut material = Vec::with_capacity(canonical.len() + ciphertext_bytes.len());
+        material.extend_from_slice(canonical.as_bytes());
+        material.extend_from_slice(&ciphertext_bytes);
+        sha256_digest(&material)
+    } else {
+        sha256_digest(canonical.as_bytes())
+    };
     json_ok(CanonicalBytesDigestOutcome {
         canonical_bytes: canonical,
         digest,

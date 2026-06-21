@@ -296,6 +296,24 @@ pub(super) async fn resolve_handle(
             let did = actor["did"].as_str().unwrap_or_default().to_owned();
             let handle_claim =
                 signed_handle_claim(state, &lookup.canonical, &did, &audience, true)?;
+            let recipient_service_did = handle_claim
+                .member_delivery_binding
+                .as_ref()
+                .map(|binding| binding.recipient_service_did.as_str())
+                .unwrap_or(state.config.service_did.as_str());
+            let resolved_by = Did::new(state.config.service_did.clone()).ok();
+            if !crate::routing::invites::directory_handle_claim_resolve_allowed(
+                state,
+                body.intent,
+                body.requester.as_ref(),
+                &did,
+                recipient_service_did,
+                state.config.service_did.as_str(),
+                &handle_claim,
+                resolved_by,
+            ) {
+                return Err(AppError::not_found("not found"));
+            }
             // HDLREN-2 — surface the canonical `<localpart>:<domain>` handle
             // from the freshly signed claim so the top-level response field
             // matches handle-claim.schema.json (cokret-spec @ 7157ee8). The

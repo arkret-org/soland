@@ -44,7 +44,9 @@ pub(super) async fn set_read_cursor(
     validate_read_scope(&body.read_scope)?;
     validate_position(&body.position)?;
     let operation_id = ids::generate_operation_id();
-    let read_at = now();
+    let read_at = chrono::DateTime::<chrono::Utc>::from_timestamp(now().timestamp(), 0)
+        .ok_or_else(|| AppError::invalid_param("system clock timestamp out of range"))?;
+    let read_at_wire = cokret_sdk::canonical::format_timestamp_canonical(read_at);
     let payload = json!({
         "id": ids::generate_read_cursor_id(),
         "schema": "ck.schema.read_cursor.v1",
@@ -53,15 +55,16 @@ pub(super) async fn set_read_cursor(
         "device_id": device_id,
         "read_scope": body.read_scope.clone(),
         "position": body.position.clone(),
-        "updated_at": read_at,
+        "updated_at": read_at_wire,
     });
-    let operation = Operation::create(
+    let mut operation = Operation::create(
         OperationId::new(operation_id.clone())
             .map_err(|e| AppError::invalid_param(format!("operation_id: {e}")))?,
         realm_id.clone(),
         kinds::CK_READ_MARKER,
         payload,
     );
+    operation.created_at = read_at;
     accept_local_operations(state, &session.actor, &[operation])
         .await
         .map_err(|error| {
@@ -79,7 +82,7 @@ pub(super) async fn set_read_cursor(
             "realm_id": realm_id,
             "read_scope": body.read_scope.clone(),
             "position": body.position.clone(),
-            "updated_at": read_at,
+            "updated_at": read_at_wire,
         }),
     )
     .await;
@@ -145,46 +148,59 @@ fn validate_read_scope(scope: &ReadScope) -> Result<(), AppError> {
     }
     match &scope.kind {
         ReadScopeKind::Realm => {
-            if scope.object_ref.is_some() || scope.track.is_some() || scope.track_scope.is_some() {
+            if scope.object_ref.is_some() || scope.track.is_some() {
                 return Err(AppError::invalid_param(
-                    "read_scope.ref/track_name/track_scope must be omitted when kind is realm",
+                    "read_scope.ref/track_name must be omitted when kind is realm",
                 ));
             }
         }
         _ => {
-            if scope.object_ref.as_deref().unwrap_or("").trim().is_empty() {
+            let Some(object_ref) = scope
+                .object_ref
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            else {
                 return Err(AppError::invalid_param(
                     "read_scope.ref is required when kind is not realm",
+                ));
+            };
+            validate_scope_ref(&scope.kind, object_ref)?;
+            if !matches!(scope.kind, ReadScopeKind::Strand) && scope.track.is_some() {
+                return Err(AppError::invalid_param(
+                    "read_scope.track_name is only valid when kind is strand",
                 ));
             }
         }
     }
 
-    match (
-        &scope.kind,
-        scope.track.as_deref(),
-        scope.track_scope.as_ref(),
-    ) {
-        (ReadScopeKind::Strand, Some(track), None) => validate_track(track)?,
-        (ReadScopeKind::Strand, None, Some(_)) => {}
-        (ReadScopeKind::Strand, Some(_), Some(_)) => {
-            return Err(AppError::invalid_param(
-                "read_scope must carry exactly one of track_name or track_scope",
-            ));
-        }
-        (ReadScopeKind::Strand, None, None) => {
-            return Err(AppError::invalid_param(
-                "read_scope requires track_name or track_scope when kind is strand",
-            ));
-        }
-        (_, Some(_), _) | (_, _, Some(_)) => {
-            return Err(AppError::invalid_param(
-                "read_scope.track_name/track_scope is only valid when kind is strand",
-            ));
-        }
-        _ => {}
+    if matches!(scope.kind, ReadScopeKind::Strand)
+        && let Some(track) = scope.track.as_deref()
+    {
+        validate_track(track)?;
     }
 
+    Ok(())
+}
+
+fn validate_scope_ref(kind: &ReadScopeKind, object_ref: &str) -> Result<(), AppError> {
+    let expected_prefix = match kind {
+        ReadScopeKind::Circle => "ck:circle:",
+        ReadScopeKind::Space => "ck:space:",
+        ReadScopeKind::Strand => "ck:strand:",
+        ReadScopeKind::Thread => "ck:message:",
+        ReadScopeKind::Realm => return Ok(()),
+        _ => {
+            return Err(AppError::invalid_param(
+                "read_scope.kind must be one of realm/circle/space/strand/thread for a read cursor",
+            ));
+        }
+    };
+    if !object_ref.starts_with(expected_prefix) {
+        return Err(AppError::invalid_param(format!(
+            "read_scope.ref must use {expected_prefix} for this kind"
+        )));
+    }
     Ok(())
 }
 

@@ -318,6 +318,12 @@ struct ContactRow {
     #[diesel(sql_type = Text)]
     status: String,
     #[diesel(sql_type = Nullable<Text>)]
+    request_event_ref: Option<String>,
+    #[diesel(sql_type = Nullable<Text>)]
+    response_event_ref: Option<String>,
+    #[diesel(sql_type = Nullable<Text>)]
+    tombstone_event_ref: Option<String>,
+    #[diesel(sql_type = Nullable<Text>)]
     message: Option<String>,
     #[diesel(sql_type = Nullable<Text>)]
     peer_service_did: Option<String>,
@@ -334,6 +340,9 @@ impl From<ContactRow> for ContactRecord {
             target: row.target,
             scope: row.scope,
             status: row.status,
+            request_event_ref: row.request_event_ref,
+            response_event_ref: row.response_event_ref,
+            tombstone_event_ref: row.tombstone_event_ref,
             message: row.message,
             peer_service_did: row.peer_service_did,
             created_at: row.created_at,
@@ -342,7 +351,7 @@ impl From<ContactRow> for ContactRecord {
     }
 }
 
-const CONTACT_COLUMNS: &str = "requester_id AS requester, target_id AS target, scope, status, message, peer_service_id AS peer_service_did, created_at, updated_at";
+const CONTACT_COLUMNS: &str = "requester_id AS requester, target_id AS target, scope, status, request_event_ref, response_event_ref, tombstone_event_ref, message, peer_service_id AS peer_service_did, created_at, updated_at";
 
 #[async_trait]
 impl ContactStore for PgContactStore {
@@ -387,10 +396,13 @@ impl ContactStore for PgContactStore {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(
             "INSERT INTO contacts \
-             (id, requester_id, target_id, scope, status, message, peer_service_id, created_at, updated_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) \
+             (id, requester_id, target_id, scope, status, request_event_ref, response_event_ref, tombstone_event_ref, message, peer_service_id, created_at, updated_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) \
              ON CONFLICT (requester_id, target_id, scope) DO UPDATE SET \
                 status = EXCLUDED.status, \
+                request_event_ref = EXCLUDED.request_event_ref, \
+                response_event_ref = EXCLUDED.response_event_ref, \
+                tombstone_event_ref = EXCLUDED.tombstone_event_ref, \
                 message = EXCLUDED.message, \
                 peer_service_id = EXCLUDED.peer_service_id, \
                 updated_at = EXCLUDED.updated_at",
@@ -400,6 +412,9 @@ impl ContactStore for PgContactStore {
         .bind::<Text, _>(&record.target)
         .bind::<Text, _>(&record.scope)
         .bind::<Text, _>(&record.status)
+        .bind::<Nullable<Text>, _>(record.request_event_ref.as_deref())
+        .bind::<Nullable<Text>, _>(record.response_event_ref.as_deref())
+        .bind::<Nullable<Text>, _>(record.tombstone_event_ref.as_deref())
         .bind::<Nullable<Text>, _>(record.message.as_deref())
         .bind::<Nullable<Text>, _>(record.peer_service_did.as_deref())
         .bind::<Timestamptz, _>(record.created_at)

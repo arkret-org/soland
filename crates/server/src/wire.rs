@@ -1248,7 +1248,6 @@ pub struct RedactMessageOutcome {
 
 pub type SetReadMarkerRequestBody = cokret_sdk::ReadCursorAdvanceRequestBody;
 pub type ReadScopeWire = cokret_sdk::ReadScope;
-pub type ReadScopeTrackScopeWire = cokret_sdk::ReadScopeTrackScope;
 pub type ReadCursorPositionWire = cokret_sdk::ReadCursorPosition;
 pub type ReadMarkerOutcome = cokret_sdk::ReadMarkerOutcome;
 
