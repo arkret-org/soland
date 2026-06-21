@@ -273,9 +273,10 @@ async fn wildcard_cors_mirrors_origin_without_credentials() {
 }
 
 #[tokio::test]
-async fn server_describe_advertises_account_authority_when_configured() {
+async fn server_describe_advertises_account_authority_and_oidc_method_when_configured() {
     let mut config = test_config();
     config.account_authority_url = Some("https://auth.local.host".to_owned());
+    config.oidc_client_id = Some("01GFWR28C4KNE04WG3HKXB7C9R".to_owned());
     let service = app_from_state(AppState::new(config, Db { pool: None }));
 
     let describe: Value = TestClient::get("http://server/_cokret/describe")
@@ -288,6 +289,19 @@ async fn server_describe_advertises_account_authority_when_configured() {
     assert_eq!(
         describe["auth_metadata"]["account_authority"]["gate_account_base"],
         "https://auth.local.host/_cokret/gate/account"
+    );
+    assert_eq!(describe["auth_metadata"]["methods"][0]["method"], "oidc");
+    assert_eq!(
+        describe["auth_metadata"]["methods"][0]["issuer"],
+        "https://auth.local.host"
+    );
+    assert_eq!(
+        describe["auth_metadata"]["methods"][0]["openid_configuration"],
+        "https://auth.local.host/.well-known/openid-configuration"
+    );
+    assert_eq!(
+        describe["auth_metadata"]["methods"][0]["client_id"],
+        "01GFWR28C4KNE04WG3HKXB7C9R"
     );
 }
 
