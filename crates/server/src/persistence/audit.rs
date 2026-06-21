@@ -47,6 +47,28 @@ pub(crate) struct PgAuditStore {
     pub(crate) pool: PgPool,
 }
 
+fn audit_uuid_index(field: &str, value: &str, kind: &str) -> PersistenceResult<Uuid> {
+    ids::parse_typed_uuid(value, kind).ok_or_else(|| {
+        PersistenceError::Internal(format!(
+            "audit entry {field} is not a ck:{kind}: UUID: {value}"
+        ))
+    })
+}
+
+fn optional_audit_uuid_index(
+    field: &str,
+    value: Option<&str>,
+    kind: &str,
+) -> PersistenceResult<Option<Uuid>> {
+    value
+        .map(|value| audit_uuid_index(field, value, kind))
+        .transpose()
+}
+
+fn operation_uuid_index(value: Option<&str>) -> Option<Uuid> {
+    value.and_then(|value| ids::parse_typed_uuid(value, "operation"))
+}
+
 #[async_trait]
 impl AuditStore for PgAuditStore {
     async fn append(&self, entry: Value) -> PersistenceResult<()> {
@@ -68,12 +90,11 @@ impl AuditStore for PgAuditStore {
         let realm_id = extract("realm_id");
         let operation_id = extract("operation_id");
         let device_id = extract("device_id");
-        let audit_id_uuid = ids::typed_uuid_part_or_panic(&audit_id);
-        let request_id_uuid: Option<Uuid> =
-            request_id.as_deref().map(ids::typed_uuid_part_or_panic);
-        let realm_id_uuid: Option<Uuid> = realm_id.as_deref().map(ids::typed_uuid_part_or_panic);
-        let operation_id_uuid: Option<Uuid> =
-            operation_id.as_deref().map(ids::typed_uuid_part_or_panic);
+        let audit_id_uuid = audit_uuid_index("audit_id", &audit_id, "audit")?;
+        let request_id_uuid =
+            optional_audit_uuid_index("request_id", request_id.as_deref(), "request")?;
+        let realm_id_uuid = optional_audit_uuid_index("realm_id", realm_id.as_deref(), "realm")?;
+        let operation_id_uuid = operation_uuid_index(operation_id.as_deref());
         sql_query(
             "INSERT INTO audit_logs \
              (id, actor_id, request_id, action, outcome, realm_id, operation_id, device_id, payload, created_at) \
@@ -113,5 +134,36 @@ impl AuditStore for PgAuditStore {
             .await
             .map(|rows| rows.into_iter().map(|row| row.payload).collect())
             .map_err(PersistenceError::from)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn operation_uuid_index_ignores_protocol_operation_id() {
+        assert_eq!(
+            operation_uuid_index(Some("ck.gate.account.command.register")),
+            None
+        );
+    }
+
+    #[test]
+    fn operation_uuid_index_parses_typed_operation_uuid() {
+        let uuid = Uuid::parse_str("01904100-0000-7000-8000-000000000001").unwrap();
+
+        assert_eq!(
+            operation_uuid_index(Some("ck:operation:01904100-0000-7000-8000-000000000001")),
+            Some(uuid)
+        );
+    }
+
+    #[test]
+    fn audit_uuid_index_rejects_wrong_kind_without_panicking() {
+        let error = audit_uuid_index("request_id", "ck.gate.account.command.register", "request")
+            .unwrap_err();
+
+        assert!(matches!(error, PersistenceError::Internal(_)));
     }
 }

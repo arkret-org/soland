@@ -314,7 +314,7 @@ async fn append_account_registration_audit(
         Some(did),
         "account.register",
         json!({
-            "operation_id": "ck.gate.account.command.register",
+            "operation_contract": "ck.gate.account.command.register",
             "principal_id": did,
             "handle_requested": handle,
             "via": "gate",

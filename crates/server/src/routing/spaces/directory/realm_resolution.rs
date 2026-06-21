@@ -532,19 +532,26 @@ pub(super) fn join_candidates_for_resolved_realm(
     };
     let realm_id_typed =
         RealmId::new(realm_id.to_owned()).expect("directory realm id is validated");
-    // Disclose the current accepted Realm Seal head to resolvers the Directory
+    // Disclose the current accepted Realm Seal view to resolvers the Directory
     // has already authorized to resolve this Realm (this function is only
     // reached after `realm_resolvable_to`). An invitee who is not yet a member
     // cannot read the membership-gated `events/frontier` Realm Seal view, so
-    // they stamp this as the `seal_ref` of their `ck.member.state` invite→join
-    // event before signing (spec discovery-directory.md §9.1.1). When this
-    // deployment holds no accepted Seal for the Realm (e.g. it does not host
-    // it / cannot notarize), leave it unset and let the client route the join
-    // submission to the candidate `endpoint` instead.
-    let seal_head_ref = crate::notary::ensure_realm_seal_head(state, &realm_id_typed)
+    // they stamp this as `seal_ref` for DataEvents or as full `seal_basis` for
+    // Control Moves before signing (spec discovery-directory.md §9.1.1). When
+    // this deployment holds no accepted Seal for the Realm (e.g. it does not
+    // host it / cannot notarize), it must not advertise itself as a submit
+    // candidate.
+    let Some(seal) = crate::notary::ensure_realm_seal_head(state, &realm_id_typed)
         .ok()
         .flatten()
-        .map(|seal| seal.id);
+    else {
+        return Vec::new();
+    };
+    let seal_basis = cokret_sdk::SealBasis {
+        leaves: vec![seal.id.clone()],
+        control_event_set_root: seal.control_event_set_root.clone(),
+        state_root: seal.state_root.clone(),
+    };
     vec![RealmJoinCandidate {
         realm_id: realm_id_typed,
         service_did: Did::new(state.config.service_did.clone()).expect("service DID is validated"),
@@ -557,7 +564,7 @@ pub(super) fn join_candidates_for_resolved_realm(
         source: RealmJoinCandidateSource::DirectoryIngest,
         source_refs: Vec::new(),
         frontier_ref: None,
-        seal_head_ref,
+        seal_basis,
         as_of: observed_at,
         expires_at: observed_at + chrono::Duration::minutes(10),
         proofs: Vec::new(),

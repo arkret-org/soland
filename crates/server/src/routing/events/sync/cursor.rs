@@ -42,7 +42,7 @@ pub enum SyncCursorError {
     Revoked,
 }
 
-pub(crate) const EVENTS_QUERY_CURSOR_PURPOSE: &str = "events_query";
+pub(crate) const STREAM_CURSOR_PURPOSE: &str = "stream";
 
 fn cursor_principal_device(session: Option<&SessionRecord>) -> (String, String) {
     let principal_id = session
@@ -100,7 +100,7 @@ pub async fn sync_token_for_client_sync(
             device_id: Some(device_id),
             service_id: state.config.service_did.clone(),
             filter_digest: Some(filter_digest),
-            purpose: "stream".to_owned(),
+            purpose: STREAM_CURSOR_PURPOSE.to_owned(),
             positions: Some(positions),
             target: None,
             issued_at_ms,
@@ -110,7 +110,7 @@ pub async fn sync_token_for_client_sync(
     .await;
     let cursor = json!({
         "v": "1",
-        "purpose": "stream",
+        "purpose": STREAM_CURSOR_PURPOSE,
         "t": issued_at.to_rfc3339_opts(SecondsFormat::Millis, true),
         "x": expires_at_ms,
         "h": handle
@@ -146,7 +146,7 @@ pub(crate) async fn sync_token_for_events_query(
             device_id: Some(device_id),
             service_id: state.config.service_did.clone(),
             filter_digest: Some(filter_digest.to_owned()),
-            purpose: EVENTS_QUERY_CURSOR_PURPOSE.to_owned(),
+            purpose: STREAM_CURSOR_PURPOSE.to_owned(),
             positions: None,
             target: Some(target),
             issued_at_ms,
@@ -156,7 +156,7 @@ pub(crate) async fn sync_token_for_events_query(
     .await;
     encode_sync_cursor_value(json!({
         "v": "1",
-        "purpose": EVENTS_QUERY_CURSOR_PURPOSE,
+        "purpose": STREAM_CURSOR_PURPOSE,
         "t": issued_at.to_rfc3339_opts(SecondsFormat::Millis, true),
         "x": expires_at_ms,
         "h": handle
@@ -185,7 +185,7 @@ async fn sync_token_for_state_positions(
             device_id: None,
             service_id: state.config.service_did.clone(),
             filter_digest: None,
-            purpose: "stream".to_owned(),
+            purpose: STREAM_CURSOR_PURPOSE.to_owned(),
             positions: Some(json!({
                 "realms": realms_positions,
                 "account_realms": {},
@@ -201,7 +201,7 @@ async fn sync_token_for_state_positions(
     .await;
     encode_sync_cursor_value(json!({
             "v": "1",
-            "purpose": "stream",
+            "purpose": STREAM_CURSOR_PURPOSE,
             "t": issued_at.to_rfc3339_opts(SecondsFormat::Millis, true),
             "x": expires_at_ms,
             "h": handle
@@ -256,7 +256,7 @@ pub(crate) fn stream_cursor_handle_binding(
         "device_id": device_id,
         "service_id": service_id,
         "filter_digest": filter_digest,
-        "purpose": "stream",
+        "purpose": STREAM_CURSOR_PURPOSE,
         "realms": realms_positions,
         "account_realms": account_realms_positions,
         "device_lists": device_list_positions,
@@ -278,7 +278,7 @@ pub(crate) fn events_query_cursor_handle_binding(
         "device_id": device_id,
         "service_id": service_id,
         "filter_digest": filter_digest,
-        "purpose": EVENTS_QUERY_CURSOR_PURPOSE,
+        "purpose": STREAM_CURSOR_PURPOSE,
         "target": target,
     });
     cokret_sdk::canonical::canonical_json_bytes(&binding)
@@ -295,7 +295,7 @@ fn service_cursor_handle_binding(
 ) -> Vec<u8> {
     let binding = json!({
         "kind": "generic",
-        "purpose": "stream",
+        "purpose": STREAM_CURSOR_PURPOSE,
         "service_id": service_id,
         "realms": realms_positions,
         "account_realms": {},
@@ -462,7 +462,7 @@ pub async fn parse_and_validate_sync_cursor(
         || value
             .get("purpose")
             .and_then(|purpose| purpose.as_str())
-            .is_none_or(|purpose| purpose != "stream")
+            .is_none_or(|purpose| purpose != STREAM_CURSOR_PURPOSE)
     {
         return Err(SyncCursorError::Invalid(
             "after must be a v1 account cursor",
@@ -519,7 +519,7 @@ pub async fn parse_and_validate_sync_cursor(
     if ctx
         .get("purpose")
         .and_then(|purpose| purpose.as_str())
-        .is_none_or(|purpose| purpose != "stream")
+        .is_none_or(|purpose| purpose != STREAM_CURSOR_PURPOSE)
     {
         return Err(SyncCursorError::Integrity(
             "cursor handle purpose does not match account stream",
@@ -615,10 +615,10 @@ pub(crate) async fn parse_and_validate_events_query_cursor(
     if value
         .get("purpose")
         .and_then(|purpose| purpose.as_str())
-        .is_none_or(|purpose| purpose != EVENTS_QUERY_CURSOR_PURPOSE)
+        .is_none_or(|purpose| purpose != STREAM_CURSOR_PURPOSE)
     {
         return Err(SyncCursorError::Integrity(
-            "cursor purpose does not match events query",
+            "cursor purpose does not match stream",
         ));
     }
     if cursor_authority_revoked(state, token, session, now_ms) {
@@ -653,9 +653,9 @@ pub(crate) async fn parse_and_validate_events_query_cursor(
         let _ = state.persistence.sync_cursors().delete(handle).await;
         return Err(SyncCursorError::Integrity("sync cursor handle has expired"));
     }
-    if record.purpose.as_str() != EVENTS_QUERY_CURSOR_PURPOSE {
+    if record.purpose.as_str() != STREAM_CURSOR_PURPOSE {
         return Err(SyncCursorError::Integrity(
-            "cursor handle purpose does not match events query",
+            "cursor handle purpose does not match stream",
         ));
     }
     let (expected_principal, expected_device) = cursor_principal_device(session);
