@@ -522,8 +522,16 @@ async fn blob_get(depot: &mut Depot, req: &mut Request, res: &mut Response) {
             )
             .await;
             if req.method() != Method::HEAD {
-                let blob_bytes = match state.object_storage.get(&blob.storage_key).await {
-                    Ok(bytes) => bytes,
+                let object_range = match range {
+                    Some((start, end)) => start as u64..(end as u64 + 1),
+                    None => 0..total_len as u64,
+                };
+                let stream = match state
+                    .object_storage
+                    .get_range_stream(&blob.storage_key, object_range)
+                    .await
+                {
+                    Ok(stream) => stream,
                     Err(error) => {
                         tracing::error!(%error, storage_key = %blob.storage_key, "failed to read blob object");
                         render_error(
@@ -535,26 +543,7 @@ async fn blob_get(depot: &mut Depot, req: &mut Request, res: &mut Response) {
                         return;
                     }
                 };
-                if blob_bytes.len() != total_len {
-                    tracing::error!(
-                        storage_key = %blob.storage_key,
-                        expected = total_len,
-                        actual = blob_bytes.len(),
-                        "blob object size differs from metadata"
-                    );
-                    render_error(
-                        res,
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        "internal_error",
-                        "blob object size metadata mismatch",
-                    );
-                    return;
-                }
-                let body = match range {
-                    Some((start, end)) => blob_bytes[start..=end].to_vec(),
-                    None => blob_bytes,
-                };
-                res.write_body(body).ok();
+                res.stream(stream);
             }
         }
         None => render_error(res, StatusCode::NOT_FOUND, "not_found", "not found"),

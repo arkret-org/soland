@@ -2,10 +2,9 @@
 //!
 //! Spec: crypto-media/media-and-blob.md §2.1 — a per-operation HTTP
 //! companion binding of `ck.self.blob.upload.create`. tus carries the bytes
-//! (create / PATCH / HEAD / DELETE with offset resume); the PATCH that reaches
-//! the declared upload length turns the completed tus resource into a canonical
-//! blob with the same `blob_ref` / `content_digest` / `upload_receipt` the
-//! multipart path produces.
+//! (create / PATCH / HEAD / DELETE with offset resume); a completed upload is
+//! finalized into a canonical blob with the same `blob_ref` /
+//! `content_digest` / `upload_receipt` the multipart path produces.
 //!
 //! The tus wire protocol is implemented locally instead of via the
 //! `salvo-tus` crate: salvo-tus 0.93.0 keeps its `stores` module private,
@@ -21,6 +20,7 @@
 //!   `application/offset+octet-stream` body for creation-with-upload)
 //! - `HEAD    /{id}`          — query `Upload-Offset` to resume
 //! - `PATCH   /{id}`          — append a chunk at `Upload-Offset`
+//! - `POST    /{id}/finalize` — complete an upload whose offset reached `Upload-Length`
 //! - `DELETE  /{id}`          — terminate an in-progress upload
 //!
 //! Upload-Metadata keys understood at completion time: `purpose`, `encrypted`
@@ -40,6 +40,8 @@ use salvo::http::{HeaderValue, StatusCode};
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use sha2::{Digest as _, Sha256};
+use tokio::io::AsyncReadExt as _;
 
 use super::blob::{
     MAX_BLOB_UPLOAD_BYTES, blob_purpose_requires_encryption, blob_upload_outcome,
@@ -47,7 +49,7 @@ use super::blob::{
 };
 use super::{
     auth_or_render, is_valid_sha256_digest, now, realm_allows_plaintext_service, realm_has_member,
-    render_error, sha256_hex,
+    render_error,
 };
 use crate::state::{AppState, BlobRecord};
 
@@ -88,6 +90,7 @@ pub(super) fn router() -> Router {
                 .patch(tus_patch)
                 .delete(tus_delete),
         )
+        .push(Router::with_path("blob/resumable/{id}/finalize").post(tus_finalize))
 }
 
 /// Staging-file metadata for one in-progress upload. Internal to this
@@ -615,7 +618,7 @@ async fn tus_patch(depot: &mut Depot, req: &mut Request, res: &mut Response) {
         HeaderValue::from_str(&new_offset.to_string()).expect("numeric header"),
     );
     if new_offset == meta.declared_size_bytes {
-        complete_resumable_upload(state, &session.actor, &id, &meta, res).await;
+        res.status_code(StatusCode::NO_CONTENT);
         return;
     }
     if let Some(expires) = http_date(&meta.expires_at) {
@@ -625,6 +628,22 @@ async fn tus_patch(depot: &mut Depot, req: &mut Request, res: &mut Response) {
         );
     }
     res.status_code(StatusCode::NO_CONTENT);
+}
+
+#[handler]
+#[tracing::instrument(skip_all, fields(op = "blob_resumable_finalize"))]
+async fn tus_finalize(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let Some(session) = auth_or_render(state, req, res).await else {
+        return;
+    };
+    let id = req.param::<String>("id").unwrap_or_default();
+    let lock = upload_lock(&id);
+    let _guard = lock.lock().await;
+    let Some(meta) = load_gated(state, res, &id, &session.actor).await else {
+        return;
+    };
+    complete_resumable_upload(state, &session.actor, &id, &meta, res).await;
 }
 
 #[handler]
@@ -783,8 +802,9 @@ async fn complete_resumable_upload(
     }
 
     let dir = &state.config.resumable_upload_dir;
-    let bytes = match tokio::fs::read(data_path(dir, &id)).await {
-        Ok(bytes) => bytes,
+    let staged_data_path = data_path(dir, id);
+    let metadata = match tokio::fs::metadata(&staged_data_path).await {
+        Ok(metadata) => metadata,
         Err(error) => {
             tracing::error!(%error, upload_id = %id, "resumable upload data file unreadable");
             render_error(
@@ -796,7 +816,7 @@ async fn complete_resumable_upload(
             return;
         }
     };
-    if bytes.len() as u64 != meta.declared_size_bytes {
+    if metadata.len() != meta.declared_size_bytes {
         render_error(
             res,
             StatusCode::CONFLICT,
@@ -805,7 +825,19 @@ async fn complete_resumable_upload(
         );
         return;
     }
-    if bytes.len() > MAX_BLOB_UPLOAD_BYTES {
+    let size_bytes = match usize::try_from(metadata.len()) {
+        Ok(size_bytes) => size_bytes,
+        Err(_) => {
+            render_error(
+                res,
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "payload_too_large",
+                "blob exceeds maximum size",
+            );
+            return;
+        }
+    };
+    if size_bytes > MAX_BLOB_UPLOAD_BYTES {
         render_error(
             res,
             StatusCode::PAYLOAD_TOO_LARGE,
@@ -814,7 +846,7 @@ async fn complete_resumable_upload(
         );
         return;
     }
-    if let Err(message) = enforce_blob_quota(state, actor, realm_id.as_deref(), bytes.len()).await {
+    if let Err(message) = enforce_blob_quota(state, actor, realm_id.as_deref(), size_bytes).await {
         render_error(
             res,
             StatusCode::PAYLOAD_TOO_LARGE,
@@ -823,8 +855,19 @@ async fn complete_resumable_upload(
         );
         return;
     }
-    let size_bytes = bytes.len();
-    let sha256 = sha256_hex(&bytes);
+    let sha256 = match sha256_file_hex(&staged_data_path).await {
+        Ok(sha256) => sha256,
+        Err(error) => {
+            tracing::error!(%error, upload_id = %id, "resumable upload data file hash failed");
+            render_error(
+                res,
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                "resumable upload data unavailable",
+            );
+            return;
+        }
+    };
     let content_digest = format!("sha256:{sha256}");
     if let Some(expected) = expected_digest
         && expected != content_digest
@@ -846,7 +889,11 @@ async fn complete_resumable_upload(
     let media_type = "application/octet-stream".to_owned();
     let blob_ref = format!("ck:blob:sha256:{sha256}");
     let storage_key = state.object_storage.object_key_for_sha256(&sha256);
-    if let Err(error) = state.object_storage.put(&storage_key, bytes).await {
+    if let Err(error) = state
+        .object_storage
+        .put_file(&storage_key, &staged_data_path)
+        .await
+    {
         render_error(
             res,
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -906,6 +953,20 @@ async fn complete_resumable_upload(
         }
     };
     res.render(Json(outcome));
+}
+
+async fn sha256_file_hex(path: &Path) -> std::io::Result<String> {
+    let mut file = tokio::fs::File::open(path).await?;
+    let mut hasher = Sha256::new();
+    let mut buffer = vec![0u8; 1024 * 1024];
+    loop {
+        let read = file.read(&mut buffer).await?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+    Ok(hex::encode(hasher.finalize()))
 }
 
 /// Background sweeper for expired incomplete resumable upload parts.

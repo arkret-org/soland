@@ -4,13 +4,19 @@
 //! behind this trait so deployments can choose local disk or an S3-compatible
 //! object store without changing HTTP handlers or persistence code.
 
+use std::ops::Range;
+use std::path::Path as FsPath;
 use std::sync::Arc;
 
+use bytes::Bytes;
 use futures_util::future::BoxFuture;
+use futures_util::stream::BoxStream;
+use futures_util::{StreamExt as _, TryStreamExt as _};
 use object_store::aws::AmazonS3Builder;
 use object_store::local::LocalFileSystem;
 use object_store::path::Path as ObjectPath;
-use object_store::{ObjectStore, ObjectStoreExt};
+use object_store::{GetOptions, ObjectStore, ObjectStoreExt};
+use tokio::io::AsyncReadExt as _;
 
 use crate::config::ObjectStorageConfig;
 
@@ -18,6 +24,8 @@ use crate::config::ObjectStorageConfig;
 pub enum ObjectStorageError {
     #[error("invalid object key: {0}")]
     InvalidKey(String),
+    #[error("object storage IO error: {0}")]
+    Io(#[from] std::io::Error),
     #[error("object storage error: {0}")]
     Store(#[from] object_store::Error),
 }
@@ -28,7 +36,17 @@ pub trait ObjectStorage: Send + Sync {
     fn backend_name(&self) -> &'static str;
     fn object_key_for_sha256(&self, sha256: &str) -> String;
     fn put<'a>(&'a self, key: &'a str, bytes: Vec<u8>) -> BoxFuture<'a, ObjectStorageResult<()>>;
+    fn put_file<'a>(
+        &'a self,
+        key: &'a str,
+        file_path: &'a FsPath,
+    ) -> BoxFuture<'a, ObjectStorageResult<()>>;
     fn get<'a>(&'a self, key: &'a str) -> BoxFuture<'a, ObjectStorageResult<Vec<u8>>>;
+    fn get_range_stream<'a>(
+        &'a self,
+        key: &'a str,
+        range: Range<u64>,
+    ) -> BoxFuture<'a, ObjectStorageResult<BoxStream<'static, ObjectStorageResult<Bytes>>>>;
     fn delete<'a>(&'a self, key: &'a str) -> BoxFuture<'a, ObjectStorageResult<()>>;
 }
 
@@ -91,6 +109,8 @@ struct ObjectStoreStorage {
     store: Arc<dyn ObjectStore>,
 }
 
+const MULTIPART_UPLOAD_CHUNK_BYTES: usize = 8 * 1024 * 1024;
+
 impl ObjectStorage for ObjectStoreStorage {
     fn backend_name(&self) -> &'static str {
         self.backend_name
@@ -113,10 +133,63 @@ impl ObjectStorage for ObjectStoreStorage {
         })
     }
 
+    fn put_file<'a>(
+        &'a self,
+        key: &'a str,
+        file_path: &'a FsPath,
+    ) -> BoxFuture<'a, ObjectStorageResult<()>> {
+        Box::pin(async move {
+            let path = object_path(key)?;
+            let len = tokio::fs::metadata(file_path).await?.len();
+            if len <= MULTIPART_UPLOAD_CHUNK_BYTES as u64 {
+                let bytes = tokio::fs::read(file_path).await?;
+                self.store.put(&path, bytes.into()).await?;
+                return Ok(());
+            }
+
+            let mut file = tokio::fs::File::open(file_path).await?;
+            let mut upload = self.store.put_multipart(&path).await?;
+            let mut buffer = vec![0u8; MULTIPART_UPLOAD_CHUNK_BYTES];
+            loop {
+                let read = file.read(&mut buffer).await?;
+                if read == 0 {
+                    break;
+                }
+                if let Err(error) = upload.put_part(buffer[..read].to_vec().into()).await {
+                    let _ = upload.abort().await;
+                    return Err(ObjectStorageError::Store(error));
+                }
+            }
+            if let Err(error) = upload.complete().await {
+                let _ = upload.abort().await;
+                return Err(ObjectStorageError::Store(error));
+            }
+            Ok(())
+        })
+    }
+
     fn get<'a>(&'a self, key: &'a str) -> BoxFuture<'a, ObjectStorageResult<Vec<u8>>> {
         Box::pin(async move {
             let path = object_path(key)?;
             Ok(self.store.get(&path).await?.bytes().await?.to_vec())
+        })
+    }
+
+    fn get_range_stream<'a>(
+        &'a self,
+        key: &'a str,
+        range: Range<u64>,
+    ) -> BoxFuture<'a, ObjectStorageResult<BoxStream<'static, ObjectStorageResult<Bytes>>>> {
+        Box::pin(async move {
+            let path = object_path(key)?;
+            let result = self
+                .store
+                .get_opts(&path, GetOptions::new().with_range(Some(range)))
+                .await?;
+            Ok(result
+                .into_stream()
+                .map_err(ObjectStorageError::Store)
+                .boxed())
         })
     }
 
@@ -169,6 +242,17 @@ mod tests {
             storage.get(&key).await.unwrap(),
             b"hello-object-storage".to_vec()
         );
+        let streamed = storage
+            .get_range_stream(&key, 6..12)
+            .await
+            .unwrap()
+            .try_collect::<Vec<_>>()
+            .await
+            .unwrap()
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>();
+        assert_eq!(streamed, b"object".to_vec());
 
         storage.delete(&key).await.unwrap();
         assert!(storage.get(&key).await.is_err());
