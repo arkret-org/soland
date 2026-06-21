@@ -4,10 +4,14 @@ pub(super) fn selector_not_found() -> AppError {
     AppError::not_found("not found")
 }
 
-pub(super) fn selector_intent_allowed(intent: &str) -> bool {
+pub(super) fn selector_intent_allowed(intent: DirectoryIntent) -> bool {
     matches!(
-        intent.trim(),
-        "lookup" | "mention" | "invite" | "member_add"
+        intent,
+        DirectoryIntent::Lookup
+            | DirectoryIntent::Mention
+            | DirectoryIntent::Invite
+            | DirectoryIntent::MemberAdd
+            | DirectoryIntent::ContactRequest
     )
 }
 
@@ -17,7 +21,7 @@ pub(super) async fn selector_resolution_allowed(
     controller_subject: &str,
     request: &DirectoryResolveAgentSelectorRequestBody,
 ) -> bool {
-    if !selector_intent_allowed(&request.intent) {
+    if !selector_intent_allowed(request.intent) {
         return false;
     }
     let Some(session) = session else {

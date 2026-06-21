@@ -34,7 +34,7 @@ use cokret_sdk::{
     AGENT_SELECTOR_CLAIM_SCHEMA, ActorPreview, AgentSelectorClaim, Audience, DeliveryBindingHint,
     DeliveryMode, Did, DirectoryActorSearchOutcome, DirectoryAgentSelectorResolutionOutcome,
     DirectoryAnnounceOutcome, DirectoryAnnounceRequestBody, DirectoryDescription,
-    DirectoryHandleResolutionOutcome, DirectoryListHandlesForSubjectRequestBody,
+    DirectoryHandleResolutionOutcome, DirectoryIntent, DirectoryListHandlesForSubjectRequestBody,
     DirectoryOrganizationResolutionOutcome, DirectoryOrganizationSearchOutcome,
     DirectoryPrivateContactDiscoveryOutcome, DirectoryPrivateContactDiscoveryRequestBody,
     DirectoryPushRegisterOutcome, DirectoryPushRegisterRequestBody,
@@ -181,6 +181,7 @@ async fn directory_describe(depot: &mut Depot) -> JsonResult<DirectoryDescriptio
         limits: json!({}),
         plaintext_visibility: cokret_sdk::PlaintextVisibility::none(),
         privacy_derivation: None,
+        receive_policy_constraints: None,
         implemented_features: supported_features,
         claimed_profiles: supported_profiles
             .iter()
@@ -229,7 +230,13 @@ mod tests {
 
     #[test]
     fn selector_intent_is_exact_protocol_enum() {
-        for intent in ["lookup", "mention", "invite", "member_add"] {
+        for intent in [
+            "lookup",
+            "mention",
+            "invite",
+            "member_add",
+            "contact_request",
+        ] {
             assert!(selector_intent_allowed(intent));
         }
         for intent in ["", "search", "mention_all", "Mention"] {

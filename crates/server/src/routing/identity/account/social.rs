@@ -48,6 +48,10 @@ pub(crate) async fn contact_request(
     // bound to 1..2000 chars before it enters the requested fact/record.
     let message = normalize_contact_message(body.message.as_deref())?;
     let scope = contact_request_scope(&body)?;
+    let introduction_evidence = body
+        .introduction_evidence
+        .clone()
+        .unwrap_or(ContactIntroductionEvidence::ExplicitAddress);
     // Spec contact-and-direct-conversation.md §3 — the requester-side
     // contact-managed grant is a real `ck.consent.grant`; its event ref is
     // referenced from the `ck.contact.requested` fact's
@@ -152,17 +156,21 @@ pub(crate) async fn contact_request(
     if let Some(recipient_service_did) = recipient_service_did.as_deref()
         && is_remote_target
     {
+        let introduction_evidence_digest =
+            contact_introduction_evidence_digest(&introduction_evidence)?;
         super::super::contact_federation::federate_contact_fact(
             state,
             "ck.contact.requested",
             &contact.requester,
             &contact.target,
             recipient_service_did,
+            Some(introduction_evidence),
             json!({
                 "requester": contact.requester,
                 "target": contact.target,
                 "requested_scopes": [contact.scope.clone()],
                 "message": contact.message,
+                "introduction_evidence_digest": introduction_evidence_digest,
             }),
         )
         .await?;
@@ -194,6 +202,17 @@ fn normalize_contact_message(raw: Option<&str>) -> Result<Option<String>, AppErr
         ));
     }
     Ok(Some(normalized))
+}
+
+fn contact_introduction_evidence_digest(
+    evidence: &ContactIntroductionEvidence,
+) -> Result<String, AppError> {
+    let value = serde_json::to_value(evidence).map_err(|error| {
+        AppError::internal(format!("contact introduction evidence serialize: {error}"))
+    })?;
+    cokret_sdk::canonical::canonical_sha256(&value).map_err(|error| {
+        AppError::internal(format!("contact introduction evidence digest: {error}"))
+    })
 }
 
 #[endpoint(
@@ -289,6 +308,7 @@ pub(crate) async fn contact_respond(
             &session.actor,
             &contact.requester,
             &requester_service_did,
+            None,
             json!({
                 "requester": contact.requester,
                 "target": session.actor,
@@ -441,6 +461,7 @@ pub(crate) async fn contact_tombstone(
             &holder,
             &peer,
             &peer_service_did,
+            None,
             json!({
                 "holder": holder,
                 "peer": peer,

@@ -304,6 +304,7 @@ fn build_server_description(state: &AppState) -> ServerDescription {
         state.config.resumable_upload_incomplete_ttl_seconds,
         state.config.to_device_queue_capacity,
     );
+    description.receive_policy_constraints = state.config.receive_policy_constraints.clone();
     // T6.1 — claim-level partition of the describe response.
     // See cokret-spec/spec/v1/zh/sync/service-surface.md §3.0 and
     // `ck.schema.service_describe.v1`. `supported_operations` is

@@ -1067,6 +1067,7 @@ pub fn describe(
         supported_schema_profiles: vec!["ck.schema.core.v1".to_owned()],
         auth_metadata,
         privacy_derivation: Some(crate::routing::push_target_privacy_derivation_claim(now())),
+        receive_policy_constraints: None,
         limits: serde_json::json!({
             "storage": storage,
             "max_limit": 100,

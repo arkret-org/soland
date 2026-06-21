@@ -252,6 +252,10 @@ pub struct AppConfig {
     /// scope = lowercase alphanumerics/dot/dash/underscore/colon ≤128 chars).
     /// Defaults to `ck:trust_domain:<host_of_service_did>`.
     pub trust_domain: String,
+    /// Deployment/admin upper bound for invite/contact receive policies.
+    /// Constraints can only reduce holder reachability. Loaded from
+    /// `SOLAND_RECEIVE_POLICY_*` env vars and advertised on ServiceDescribe.
+    pub receive_policy_constraints: Option<cokret_sdk::ReceivePolicyConstraints>,
     /// When true, `AppState::new` seeds a deterministic demo Realm
     /// (`ck:realm:0196419b-...`), demo account (`did:web:alice.example`),
     /// and matching space_meta record on boot. Off by default so
@@ -706,6 +710,7 @@ impl AppConfig {
                 })
                 .unwrap_or_default();
         let trust_domain = derive_trust_domain(&service_did)?;
+        let receive_policy_constraints = load_receive_policy_constraints()?;
         let log_format = LogFormat::from_env(development_mode);
 
         Ok(Self {
@@ -758,6 +763,7 @@ impl AppConfig {
             compaction_prune_walk_per_realm_limit,
             seed_demo_data,
             trust_domain,
+            receive_policy_constraints,
             sovereign_enclave_enabled,
             sovereign_enclave_allowed_outbound_hosts,
             erasure_propagation_window_ms,
@@ -1193,6 +1199,129 @@ fn did_host_from_service_did(service_did: &str) -> Option<String> {
         .unwrap_or(host)
         .trim_end_matches('.');
     (!host.is_empty()).then(|| host.to_owned())
+}
+
+fn load_receive_policy_constraints() -> anyhow::Result<Option<cokret_sdk::ReceivePolicyConstraints>>
+{
+    let applies_to = env_csv_cap("SOLAND_RECEIVE_POLICY_APPLIES_TO")
+        .map(|values| {
+            values
+                .into_iter()
+                .map(|value| match value.as_str() {
+                    "invite_delivery" => Ok(cokret_sdk::ReceivePolicySurface::InviteDelivery),
+                    "contact_request" => Ok(cokret_sdk::ReceivePolicySurface::ContactRequest),
+                    other => anyhow::bail!(
+                        "SOLAND_RECEIVE_POLICY_APPLIES_TO contains unsupported surface {other}"
+                    ),
+                })
+                .collect::<anyhow::Result<Vec<_>>>()
+        })
+        .transpose()?;
+    let permitted_introduction_kinds =
+        env_csv_cap("SOLAND_RECEIVE_POLICY_PERMITTED_INTRODUCTION_KINDS");
+    let forbidden_introduction_kinds =
+        env_csv_cap("SOLAND_RECEIVE_POLICY_FORBIDDEN_INTRODUCTION_KINDS").unwrap_or_default();
+    let handle_claim_max_behavior =
+        env_receive_action("SOLAND_RECEIVE_POLICY_HANDLE_CLAIM_MAX_BEHAVIOR")?;
+    let explicit_address_max_behavior =
+        env_receive_action("SOLAND_RECEIVE_POLICY_EXPLICIT_ADDRESS_MAX_BEHAVIOR")?;
+    let unknown_invites_max_behavior =
+        env_unknown_action("SOLAND_RECEIVE_POLICY_UNKNOWN_INVITES_MAX_BEHAVIOR")?;
+    let allowed_handle_domains =
+        env_csv_cap("SOLAND_RECEIVE_POLICY_ALLOWED_HANDLE_DOMAINS").map(|domains| {
+            domains
+                .into_iter()
+                .map(|domain| domain.to_ascii_lowercase())
+                .collect()
+        });
+    let trusted_handle_issuers = env_did_csv_cap("SOLAND_RECEIVE_POLICY_TRUSTED_HANDLE_ISSUERS")?;
+    let trusted_directory_services =
+        env_did_csv_cap("SOLAND_RECEIVE_POLICY_TRUSTED_DIRECTORY_SERVICES")?;
+    let trusted_principal_services =
+        env_did_csv_cap("SOLAND_RECEIVE_POLICY_TRUSTED_PRINCIPAL_SERVICES")?;
+    let blocked_principal_services =
+        env_did_csv_cap("SOLAND_RECEIVE_POLICY_BLOCKED_PRINCIPAL_SERVICES")?;
+    let accepted_subject_did_methods =
+        env_csv_cap("SOLAND_RECEIVE_POLICY_ACCEPTED_SUBJECT_DID_METHODS");
+
+    let has_any_constraint = applies_to.is_some()
+        || permitted_introduction_kinds.is_some()
+        || !forbidden_introduction_kinds.is_empty()
+        || handle_claim_max_behavior.is_some()
+        || explicit_address_max_behavior.is_some()
+        || unknown_invites_max_behavior.is_some()
+        || allowed_handle_domains.is_some()
+        || trusted_handle_issuers.is_some()
+        || trusted_directory_services.is_some()
+        || trusted_principal_services.is_some()
+        || blocked_principal_services.is_some()
+        || accepted_subject_did_methods.is_some();
+    if !has_any_constraint {
+        return Ok(None);
+    }
+
+    Ok(Some(cokret_sdk::ReceivePolicyConstraints {
+        policy_version: Some("env".to_owned()),
+        applies_to,
+        permitted_introduction_kinds,
+        forbidden_introduction_kinds,
+        handle_claim_max_behavior,
+        explicit_address_max_behavior,
+        unknown_invites_max_behavior,
+        allowed_handle_domains,
+        trusted_handle_issuers,
+        trusted_directory_services,
+        trusted_principal_services,
+        blocked_principal_services,
+        accepted_subject_did_methods,
+    }))
+}
+
+fn env_receive_action(name: &str) -> anyhow::Result<Option<cokret_sdk::InviteReceiveAction>> {
+    let Some(value) = env_non_empty(name) else {
+        return Ok(None);
+    };
+    match value.as_str() {
+        "drop" => Ok(Some(cokret_sdk::InviteReceiveAction::Drop)),
+        "quarantine" => Ok(Some(cokret_sdk::InviteReceiveAction::Quarantine)),
+        "notify" => Ok(Some(cokret_sdk::InviteReceiveAction::Notify)),
+        other => anyhow::bail!("{name} must be drop, quarantine, or notify; got {other}"),
+    }
+}
+
+fn env_unknown_action(name: &str) -> anyhow::Result<Option<cokret_sdk::UnknownInviteAction>> {
+    let Some(value) = env_non_empty(name) else {
+        return Ok(None);
+    };
+    match value.as_str() {
+        "drop" => Ok(Some(cokret_sdk::UnknownInviteAction::Drop)),
+        "quarantine" => Ok(Some(cokret_sdk::UnknownInviteAction::Quarantine)),
+        other => anyhow::bail!("{name} must be drop or quarantine; got {other}"),
+    }
+}
+
+fn env_csv_cap(name: &str) -> Option<Vec<String>> {
+    let raw = std::env::var(name).ok()?;
+    Some(
+        raw.split(',')
+            .map(|value| value.trim().to_owned())
+            .filter(|value| !value.is_empty())
+            .collect(),
+    )
+}
+
+fn env_did_csv_cap(name: &str) -> anyhow::Result<Option<Vec<cokret_sdk::Did>>> {
+    let Some(values) = env_csv_cap(name) else {
+        return Ok(None);
+    };
+    values
+        .into_iter()
+        .map(|value| {
+            cokret_sdk::Did::new(value.clone())
+                .map_err(|error| anyhow::anyhow!("{name} contains invalid DID `{value}`: {error}"))
+        })
+        .collect::<anyhow::Result<Vec<_>>>()
+        .map(Some)
 }
 
 fn env_csv(name: &str) -> Option<Vec<String>> {

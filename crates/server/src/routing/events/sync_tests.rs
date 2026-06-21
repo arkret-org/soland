@@ -242,6 +242,7 @@ fn test_config() -> crate::config::AppConfig {
         compaction_prune_walk_per_realm_limit: 50,
         seed_demo_data: true,
         trust_domain: "ck:trust_domain:soland.local".to_owned(),
+        receive_policy_constraints: None,
         sovereign_enclave_enabled: false,
         sovereign_enclave_allowed_outbound_hosts: Vec::new(),
         erasure_propagation_window_ms: 604_800_000,

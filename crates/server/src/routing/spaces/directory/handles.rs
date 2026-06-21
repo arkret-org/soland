@@ -76,6 +76,7 @@ pub(super) async fn handle_resolvable_to(
         return true;
     }
     membership_builder_resolve_allowed(state, session, request).await
+        || contact_request_resolve_allowed(session, request).await
 }
 
 pub(super) async fn membership_builder_resolve_allowed(
@@ -87,8 +88,8 @@ pub(super) async fn membership_builder_resolve_allowed(
         return false;
     };
     if !matches!(
-        request.intent.as_deref().map(str::trim),
-        Some("invite" | "member_add")
+        request.intent,
+        Some(cokret_sdk::DirectoryIntent::Invite | cokret_sdk::DirectoryIntent::MemberAdd)
     ) {
         return false;
     }
@@ -100,6 +101,22 @@ pub(super) async fn membership_builder_resolve_allowed(
         return false;
     };
     super::realm_has_member(state, realm_id, &session.actor).await
+}
+
+pub(super) async fn contact_request_resolve_allowed(
+    session: Option<&SessionRecord>,
+    request: &DirectoryResolveHandleRequestBody,
+) -> bool {
+    let Some(session) = session else {
+        return false;
+    };
+    if request.intent != Some(cokret_sdk::DirectoryIntent::ContactRequest) {
+        return false;
+    }
+    matches!(
+        request.requester.as_ref().map(Did::as_str),
+        Some(requester) if requester == session.actor
+    )
 }
 
 pub(super) fn did_web_authority(authority: &str) -> String {
@@ -296,7 +313,9 @@ pub(super) async fn resolve_handle(
                 handle_claim,
             )?)
         }
-        None if membership_builder_resolve_allowed(state, session.as_ref(), &body).await => {
+        None if membership_builder_resolve_allowed(state, session.as_ref(), &body).await
+            || contact_request_resolve_allowed(session.as_ref(), &body).await =>
+        {
             let audience = resolve_handle_audience(&body, &state.config.service_did);
             remote_handle_resolution(&lookup, audience)
         }

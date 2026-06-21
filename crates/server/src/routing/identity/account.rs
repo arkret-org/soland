@@ -31,7 +31,7 @@ use cokret_sdk::{
     AccountRegistrationPolicy, AccountRegistrationPolicyEvidence,
     AccountRegistrationRateLimitPolicy, AccountStatus, AccountUpdateProfileOutcome,
     AccountUpdateProfileRequestBody, AccountView, ActorKind, ActorProfile, ActorProfileId, BlobRef,
-    DeviceId, Did, ErrorCode, EventId, Hash, RealmId, StrandId,
+    ContactIntroductionEvidence, DeviceId, Did, ErrorCode, EventId, Hash, RealmId, StrandId,
 };
 use ed25519_dalek::Signer as _;
 use salvo::http::StatusCode;

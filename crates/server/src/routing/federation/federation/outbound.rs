@@ -603,6 +603,7 @@ pub(crate) fn test_app_state_with_peers(
         compaction_prune_walk_per_realm_limit: 50,
         seed_demo_data: false,
         trust_domain: "ck:trust_domain:soland.local".to_owned(),
+        receive_policy_constraints: None,
         sovereign_enclave_enabled: false,
         sovereign_enclave_allowed_outbound_hosts: Vec::new(),
         erasure_propagation_window_ms,

@@ -19,8 +19,9 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use chrono::SecondsFormat;
 use cokret_sdk::{
-    Did, Event, Hash, Hlc, PeerContactAddress, PeerContactDeliveryRequest, PeerContactFactKind,
-    Proof, RealmId, canonical, proof_kind,
+    ContactIntroductionEvidence, Did, DisclosedOutcome, Event, Hash, Hlc, InviteReceiveAction,
+    PeerContactAddress, PeerContactDeliveryRequest, PeerContactFactKind, Proof, RealmId, canonical,
+    proof_kind,
 };
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -71,6 +72,7 @@ pub(crate) async fn federate_contact_fact(
     issuer: &str,
     subject_id: &str,
     recipient_service_did: &str,
+    introduction_evidence: Option<ContactIntroductionEvidence>,
     fact_payload: Value,
 ) -> Result<bool, AppError> {
     let recipient_service_did = recipient_service_did.trim();
@@ -117,6 +119,7 @@ pub(crate) async fn federate_contact_fact(
             recipient_service_type: Some("principal_server".to_owned()),
         },
         fact_kind,
+        introduction_evidence,
         idempotency_key,
     );
     let payload_bytes = canonical::canonical_json_bytes(&delivery)
@@ -263,6 +266,49 @@ async fn peer_contacts_submit(
     // contact-managed consent cells, so projection means upserting the
     // holder-scoped row (and, for accept, the target-controlled consent grant
     // refs the original issuer already wrote on its own PCR).
+    if delivery.fact_kind == PeerContactFactKind::Requested {
+        let Some(evidence) = delivery.introduction_evidence.as_ref() else {
+            return Err(super::super::events::peer::schema_violation(
+                "introduction_evidence is required for ck.contact.requested",
+            ));
+        };
+        validate_contact_introduction_evidence_digest(&payload, evidence)?;
+        let policy = crate::routing::invites::resolve_invite_receive_policy(state, &subject_id);
+        let decision = crate::routing::invites::evaluate_contact_receive(
+            state,
+            &policy,
+            evidence,
+            &issuer,
+            &subject_id,
+            recipient_service_did,
+            source_service_did.as_deref().unwrap_or_default(),
+        );
+        if decision.action != InviteReceiveAction::Notify {
+            super::append_audit_log(
+                state,
+                Some(&subject_id),
+                "peer.contacts.submit",
+                json!({
+                    "fact_kind": fact_kind,
+                    "issuer": issuer,
+                    "subject_id": subject_id,
+                    "introduction_kind": evidence.kind(),
+                    "effective_kind": decision.effective_kind,
+                    "trust_tier": decision.trust_tier.as_str(),
+                    "receive_action": receive_action_str(&decision.action),
+                }),
+                "deferred",
+            )
+            .await;
+            return json_ok(PeerContactDeliveryOutcome {
+                status: "deferred".to_owned(),
+                disclosed_outcome: decision.disclosed_outcome.map(disclosed_outcome_str),
+                received_at: Some(now().to_rfc3339_opts(SecondsFormat::Secs, true)),
+                retry_after_ms: None,
+            });
+        }
+    }
+
     let outcome = project_delivered_contact_fact(
         state,
         fact_kind,
@@ -292,6 +338,53 @@ async fn peer_contacts_submit(
         received_at: Some(now().to_rfc3339_opts(SecondsFormat::Secs, true)),
         retry_after_ms: None,
     })
+}
+
+fn validate_contact_introduction_evidence_digest(
+    payload: &Value,
+    evidence: &ContactIntroductionEvidence,
+) -> Result<(), AppError> {
+    let expected = payload
+        .get("introduction_evidence_digest")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            super::super::events::peer::schema_violation(
+                "contact_requested_payload.introduction_evidence_digest is required",
+            )
+        })?;
+    let evidence_value = serde_json::to_value(evidence).map_err(|error| {
+        super::super::events::peer::schema_violation(format!(
+            "contact introduction_evidence is not serializable: {error}"
+        ))
+    })?;
+    let actual = canonical::canonical_sha256(&evidence_value).map_err(|error| {
+        super::super::events::peer::schema_violation(format!(
+            "contact introduction_evidence is not canonical-hashable: {error}"
+        ))
+    })?;
+    if expected != actual {
+        return Err(super::super::events::peer::schema_violation(
+            "contact_requested_payload.introduction_evidence_digest mismatch",
+        ));
+    }
+    Ok(())
+}
+
+fn receive_action_str(action: &InviteReceiveAction) -> &'static str {
+    match action {
+        InviteReceiveAction::Drop => "drop",
+        InviteReceiveAction::Quarantine => "quarantine",
+        InviteReceiveAction::Notify => "notify",
+    }
+}
+
+fn disclosed_outcome_str(outcome: DisclosedOutcome) -> String {
+    match outcome {
+        DisclosedOutcome::Delivered => "delivered",
+        DisclosedOutcome::Blocked => "blocked",
+        DisclosedOutcome::Quarantined => "quarantined",
+    }
+    .to_owned()
 }
 
 /// Project a delivered contact fact into the local `subject_id`'s contact
@@ -559,6 +652,7 @@ mod tests {
             compaction_prune_walk_per_realm_limit: 50,
             seed_demo_data: false,
             trust_domain: "ck:trust_domain:recipient.local".to_owned(),
+            receive_policy_constraints: None,
             sovereign_enclave_enabled: false,
             sovereign_enclave_allowed_outbound_hosts: Vec::new(),
             erasure_propagation_window_ms: 604_800_000,

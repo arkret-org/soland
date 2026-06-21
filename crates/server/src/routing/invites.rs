@@ -10,13 +10,15 @@ use chrono::Duration;
 // auth/DID-proof type (re-exported explicitly), which shadows the
 // invite-addressing one from the `model::*` glob. Import the
 // invite-addressing variant via its `model` module path to disambiguate.
-use cokret_sdk::models::DisclosurePolicy;
+use cokret_sdk::models::{DisclosurePolicy, HandleClaim};
 use cokret_sdk::{
-    DetachedPayloadProof, Did, DisclosedOutcome, DisclosureLevel, Hash, IntroductionEvidence,
+    CandidateIntent, CandidateValidationContext, ContactIntroductionEvidence, DetachedPayloadProof,
+    Did, DisclosedOutcome, DisclosureLevel, Handle, HandleBindingState, Hash, IntroductionEvidence,
     InviteDeliveryOutcome, InviteDeliveryOutcomeStatus, InviteDeliveryRequest,
-    InviteLocatorResolveRequestBody, InviteReceiveAction, InviteReceivePolicy, PrincipalLocator,
-    PrincipalLocatorDisplayHint, PrincipalLocatorProof, PrincipalLocatorProofPurpose,
-    UnknownInviteAction, canonical,
+    InviteLocatorResolveRequestBody, InviteReceiveAction, InviteReceivePolicy,
+    MemberDeliveryBindingCandidate, PrincipalLocator, PrincipalLocatorDisplayHint,
+    PrincipalLocatorProof, PrincipalLocatorProofPurpose, ReceivePolicyConstraints,
+    ReceivePolicySurface, UnknownInviteAction, canonical,
 };
 use salvo::http::StatusCode;
 use salvo::prelude::*;
@@ -85,6 +87,7 @@ async fn peer_invites_submit(
         .to_owned();
     let inviter = actor.clone();
     let subject = delivery.invite_address.subject_id.as_str().to_owned();
+    let source_service_did = required_header(req, HEADER_SOURCE_SERVICE_DID)?;
 
     // Spec invite-addressing.md §5..§8 — resolve the subject's private
     // receive policy, derive the effective trust tier (downgrading
@@ -98,6 +101,8 @@ async fn peer_invites_submit(
         &delivery.introduction_evidence,
         &inviter,
         &subject,
+        delivery.invite_address.recipient_service_did.as_str(),
+        &source_service_did,
     );
 
     if decision.action != InviteReceiveAction::Notify {
@@ -126,7 +131,6 @@ async fn peer_invites_submit(
         return json_ok(outcome);
     }
 
-    let source_service_did = required_header(req, HEADER_SOURCE_SERVICE_DID)?;
     let trust_headers =
         crate::routing::federation::federation::FederationTrustHeaders::from_salvo_request(req)
             .map_err(|violation| {
@@ -318,15 +322,17 @@ async fn resolve_invite_locator(
 /// `{same_principal_server, explicit_address, missing/invalid evidence}`. The tier
 /// drives both the receive action and the §5.1 graded disclosure.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum TrustTier {
+pub(crate) enum TrustTier {
     High,
+    Discovery,
     Low,
 }
 
 impl TrustTier {
-    fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::High => "high",
+            Self::Discovery => "discovery",
             Self::Low => "low",
         }
     }
@@ -345,6 +351,7 @@ fn receive_action_str(action: &InviteReceiveAction) -> &'static str {
 fn trust_tier_for_kind(kind: &str) -> TrustTier {
     match kind {
         "locator_ref" | "consent_grant" | "shared_realm" => TrustTier::High,
+        "handle_claim" => TrustTier::Discovery,
         // same_principal_server / explicit_address / unknown → low
         _ => TrustTier::Low,
     }
@@ -353,11 +360,11 @@ fn trust_tier_for_kind(kind: &str) -> TrustTier {
 /// Outcome of applying the subject's `invite_receive_policy` to one
 /// delivery: the receive action, the effective (post-downgrade) evidence
 /// kind, its trust tier, and the graded-disclosure value to echo back.
-struct ReceiveDecision {
-    action: InviteReceiveAction,
-    effective_kind: &'static str,
-    trust_tier: TrustTier,
-    disclosed_outcome: Option<DisclosedOutcome>,
+pub(crate) struct ReceiveDecision {
+    pub(crate) action: InviteReceiveAction,
+    pub(crate) effective_kind: &'static str,
+    pub(crate) trust_tier: TrustTier,
+    pub(crate) disclosed_outcome: Option<DisclosedOutcome>,
 }
 
 /// Spec invite-addressing.md §5 — the recommended default
@@ -376,16 +383,21 @@ pub(crate) fn default_invite_receive_policy(subject: &str) -> InviteReceivePolic
             "locator_ref".to_owned(),
             "consent_grant".to_owned(),
             "shared_realm".to_owned(),
-            "same_principal_server".to_owned(),
         ],
         explicit_address_behavior: InviteReceiveAction::Quarantine,
+        handle_claim_behavior: Some(InviteReceiveAction::Quarantine),
         unknown_invites: UnknownInviteAction::Drop,
+        allowed_handle_domains: Vec::new(),
+        blocked_handle_domains: Vec::new(),
+        trusted_handle_issuers: Vec::new(),
+        trusted_directory_services: Vec::new(),
         trusted_realm_ids: Vec::new(),
         trusted_principal_services: Vec::new(),
         blocked_principal_services: Vec::new(),
         blocked_subjects: Vec::new(),
         disclosure: Some(DisclosurePolicy {
             high_trust: Some(DisclosureLevel::Outcome),
+            discovery_trust: Some(DisclosureLevel::Opaque),
             low_trust: Some(DisclosureLevel::Opaque),
         }),
     }
@@ -395,7 +407,10 @@ pub(crate) fn default_invite_receive_policy(subject: &str) -> InviteReceivePolic
 /// recommended default. `blocked_subjects` written by
 /// `ck.self.contact.command.tombstone(block_peer)` are merged from the in-memory
 /// override store.
-fn resolve_invite_receive_policy(state: &AppState, subject: &str) -> InviteReceivePolicy {
+pub(crate) fn resolve_invite_receive_policy(
+    state: &AppState,
+    subject: &str,
+) -> InviteReceivePolicy {
     state
         .invite_receive_policies
         .lock()
@@ -412,8 +427,11 @@ fn evaluate_invite_receive(
     evidence: &IntroductionEvidence,
     inviter: &str,
     subject: &str,
+    recipient_service_did: &str,
+    source_service_did: &str,
 ) -> ReceiveDecision {
     let now = now();
+    let constraints = constraints_for_surface(state, ReceivePolicySurface::InviteDelivery);
 
     // §5 — `blocked_subjects` hit: MUST drop and force opaque disclosure so
     // the blocklist cannot leak through the response side channel.
@@ -433,7 +451,25 @@ fn evaluate_invite_receive(
     // §2 — `consent_grant` evidence: verify the referenced grant is an
     // active `invite`/`any` dot the subject gave the inviter. On failure
     // MUST downgrade to low-trust `explicit_address`.
+    if principal_service_blocked(policy, constraints, source_service_did)
+        || !principal_service_trusted(policy, constraints, source_service_did)
+        || !subject_did_method_accepted(constraints, subject)
+    {
+        return opaque_drop(evidence.kind());
+    }
+
     let effective_kind: &'static str = match evidence {
+        IntroductionEvidence::LocatorRef { principal_locator } => {
+            if principal_locator.validate_minimal().is_ok()
+                && principal_locator.subject_id.as_str() == subject
+                && principal_locator.recipient_service_did.as_str() == recipient_service_did
+                && principal_locator.expires_at > now
+            {
+                "locator_ref"
+            } else {
+                "explicit_address"
+            }
+        }
         IntroductionEvidence::ConsentGrant {
             consent_grant_ref,
             consent_id,
@@ -451,8 +487,49 @@ fn evaluate_invite_receive(
                 "explicit_address"
             }
         }
+        IntroductionEvidence::SharedRealm { realm_id, .. } => {
+            if policy.trusted_realm_ids.is_empty()
+                || policy
+                    .trusted_realm_ids
+                    .iter()
+                    .any(|trusted| trusted == realm_id)
+            {
+                "shared_realm"
+            } else {
+                "explicit_address"
+            }
+        }
+        IntroductionEvidence::HandleClaim {
+            handle,
+            handle_claim,
+            member_delivery_binding_candidate,
+            resolved_by,
+            ..
+        } => {
+            if handle_claim_evidence_valid(
+                policy,
+                constraints,
+                handle,
+                handle_claim,
+                member_delivery_binding_candidate.as_deref(),
+                resolved_by.as_ref(),
+                subject,
+                recipient_service_did,
+                now,
+            ) {
+                "handle_claim"
+            } else {
+                "explicit_address"
+            }
+        }
         other => other.kind(),
     };
+
+    if kind_forbidden_by_constraints(constraints, effective_kind)
+        || !kind_permitted_by_constraints(constraints, effective_kind)
+    {
+        return opaque_drop(effective_kind);
+    }
 
     let trust_tier = trust_tier_for_kind(effective_kind);
 
@@ -463,16 +540,29 @@ fn evaluate_invite_receive(
         .iter()
         .any(|kind| kind == effective_kind);
 
-    let action = if allowlisted {
-        InviteReceiveAction::Notify
+    let unknown_path =
+        !allowlisted && !matches!(effective_kind, "handle_claim" | "explicit_address");
+
+    let mut action = if allowlisted {
+        match effective_kind {
+            "handle_claim" => policy
+                .handle_claim_behavior
+                .clone()
+                .unwrap_or(InviteReceiveAction::Quarantine),
+            "explicit_address" => policy.explicit_address_behavior.clone(),
+            _ => InviteReceiveAction::Notify,
+        }
+    } else if effective_kind == "handle_claim" {
+        policy
+            .handle_claim_behavior
+            .clone()
+            .unwrap_or(InviteReceiveAction::Quarantine)
     } else if effective_kind == "explicit_address" {
         policy.explicit_address_behavior.clone()
     } else {
-        match policy.unknown_invites {
-            UnknownInviteAction::Drop => InviteReceiveAction::Drop,
-            UnknownInviteAction::Quarantine => InviteReceiveAction::Quarantine,
-        }
+        unknown_action_to_receive(&policy.unknown_invites)
     };
+    action = apply_behavior_caps(constraints, effective_kind, unknown_path, action);
 
     // §5.1 — graded disclosure. High-trust + `outcome` echoes the real
     // result; everything else stays opaque (`disclosed_outcome = None`).
@@ -482,6 +572,11 @@ fn evaluate_invite_receive(
             .as_ref()
             .and_then(|d| d.high_trust.clone())
             .unwrap_or(DisclosureLevel::Outcome),
+        TrustTier::Discovery => policy
+            .disclosure
+            .as_ref()
+            .and_then(|d| d.discovery_trust.clone())
+            .unwrap_or(DisclosureLevel::Opaque),
         TrustTier::Low => policy
             .disclosure
             .as_ref()
@@ -503,6 +598,472 @@ fn evaluate_invite_receive(
         trust_tier,
         disclosed_outcome,
     }
+}
+
+pub(crate) fn evaluate_contact_receive(
+    state: &AppState,
+    policy: &InviteReceivePolicy,
+    evidence: &ContactIntroductionEvidence,
+    requester: &str,
+    subject: &str,
+    recipient_service_did: &str,
+    source_service_did: &str,
+) -> ReceiveDecision {
+    let now = now();
+    let constraints = constraints_for_surface(state, ReceivePolicySurface::ContactRequest);
+    let effective_kind: &'static str = match evidence {
+        ContactIntroductionEvidence::LocatorRef { principal_locator } => {
+            if principal_locator.validate_minimal().is_ok()
+                && principal_locator.subject_id.as_str() == subject
+                && principal_locator.recipient_service_did.as_str() == recipient_service_did
+                && principal_locator.expires_at > now
+            {
+                "locator_ref"
+            } else {
+                "explicit_address"
+            }
+        }
+        ContactIntroductionEvidence::ConsentGrant { .. } => "explicit_address",
+        ContactIntroductionEvidence::SharedRealm { realm_id, .. } => {
+            if policy.trusted_realm_ids.is_empty()
+                || policy
+                    .trusted_realm_ids
+                    .iter()
+                    .any(|trusted| trusted == realm_id)
+            {
+                "shared_realm"
+            } else {
+                "explicit_address"
+            }
+        }
+        ContactIntroductionEvidence::HandleClaim {
+            handle,
+            handle_claim,
+            resolved_by,
+            ..
+        } => {
+            if handle_claim_evidence_valid(
+                policy,
+                constraints,
+                handle,
+                handle_claim,
+                None,
+                resolved_by.as_ref(),
+                subject,
+                recipient_service_did,
+                now,
+            ) {
+                "handle_claim"
+            } else {
+                "explicit_address"
+            }
+        }
+        other => other.kind(),
+    };
+
+    if policy
+        .blocked_subjects
+        .iter()
+        .any(|did| did.as_str() == requester)
+        || principal_service_blocked(policy, constraints, source_service_did)
+        || !principal_service_trusted(policy, constraints, source_service_did)
+        || !subject_did_method_accepted(constraints, subject)
+        || kind_forbidden_by_constraints(constraints, effective_kind)
+        || !kind_permitted_by_constraints(constraints, effective_kind)
+    {
+        return opaque_drop(effective_kind);
+    }
+
+    let trust_tier = trust_tier_for_kind(effective_kind);
+    let allowlisted = policy
+        .allowed_introduction_kinds
+        .iter()
+        .any(|kind| kind == effective_kind);
+    let unknown_path =
+        !allowlisted && !matches!(effective_kind, "handle_claim" | "explicit_address");
+    let mut action = if allowlisted {
+        match effective_kind {
+            "handle_claim" => policy
+                .handle_claim_behavior
+                .clone()
+                .unwrap_or(InviteReceiveAction::Quarantine),
+            "explicit_address" => policy.explicit_address_behavior.clone(),
+            _ => InviteReceiveAction::Notify,
+        }
+    } else if effective_kind == "handle_claim" {
+        policy
+            .handle_claim_behavior
+            .clone()
+            .unwrap_or(InviteReceiveAction::Quarantine)
+    } else if effective_kind == "explicit_address" {
+        policy.explicit_address_behavior.clone()
+    } else {
+        unknown_action_to_receive(&policy.unknown_invites)
+    };
+    action = apply_behavior_caps(constraints, effective_kind, unknown_path, action);
+    let disclosure_level = match trust_tier {
+        TrustTier::High => policy
+            .disclosure
+            .as_ref()
+            .and_then(|d| d.high_trust.clone())
+            .unwrap_or(DisclosureLevel::Outcome),
+        TrustTier::Discovery => policy
+            .disclosure
+            .as_ref()
+            .and_then(|d| d.discovery_trust.clone())
+            .unwrap_or(DisclosureLevel::Opaque),
+        TrustTier::Low => policy
+            .disclosure
+            .as_ref()
+            .and_then(|d| d.low_trust.clone())
+            .unwrap_or(DisclosureLevel::Opaque),
+    };
+    let disclosed_outcome = match disclosure_level {
+        DisclosureLevel::Outcome => Some(match &action {
+            InviteReceiveAction::Notify => DisclosedOutcome::Delivered,
+            InviteReceiveAction::Quarantine => DisclosedOutcome::Quarantined,
+            InviteReceiveAction::Drop => DisclosedOutcome::Blocked,
+        }),
+        DisclosureLevel::Opaque => None,
+    };
+    ReceiveDecision {
+        action,
+        effective_kind,
+        trust_tier,
+        disclosed_outcome,
+    }
+}
+
+fn constraints_for_surface(
+    state: &AppState,
+    surface: ReceivePolicySurface,
+) -> Option<&ReceivePolicyConstraints> {
+    state
+        .config
+        .receive_policy_constraints
+        .as_ref()
+        .filter(|constraints| {
+            constraints
+                .applies_to
+                .as_ref()
+                .is_none_or(|surfaces| surfaces.iter().any(|candidate| *candidate == surface))
+        })
+}
+
+fn opaque_drop(effective_kind: &'static str) -> ReceiveDecision {
+    ReceiveDecision {
+        action: InviteReceiveAction::Drop,
+        effective_kind,
+        trust_tier: TrustTier::Low,
+        disclosed_outcome: None,
+    }
+}
+
+fn unknown_action_to_receive(action: &UnknownInviteAction) -> InviteReceiveAction {
+    match action {
+        UnknownInviteAction::Drop => InviteReceiveAction::Drop,
+        UnknownInviteAction::Quarantine => InviteReceiveAction::Quarantine,
+    }
+}
+
+fn receive_action_rank(action: &InviteReceiveAction) -> u8 {
+    match action {
+        InviteReceiveAction::Drop => 0,
+        InviteReceiveAction::Quarantine => 1,
+        InviteReceiveAction::Notify => 2,
+    }
+}
+
+fn cap_receive_action(
+    action: InviteReceiveAction,
+    cap: Option<&InviteReceiveAction>,
+) -> InviteReceiveAction {
+    let Some(cap) = cap else {
+        return action;
+    };
+    if receive_action_rank(&action) <= receive_action_rank(cap) {
+        action
+    } else {
+        cap.clone()
+    }
+}
+
+fn apply_behavior_caps(
+    constraints: Option<&ReceivePolicyConstraints>,
+    effective_kind: &str,
+    unknown_path: bool,
+    action: InviteReceiveAction,
+) -> InviteReceiveAction {
+    let Some(constraints) = constraints else {
+        return action;
+    };
+    let capped = match effective_kind {
+        "handle_claim" => {
+            cap_receive_action(action, constraints.handle_claim_max_behavior.as_ref())
+        }
+        "explicit_address" => {
+            cap_receive_action(action, constraints.explicit_address_max_behavior.as_ref())
+        }
+        _ => action,
+    };
+    if unknown_path {
+        match constraints.unknown_invites_max_behavior.as_ref() {
+            Some(UnknownInviteAction::Drop) => InviteReceiveAction::Drop,
+            Some(UnknownInviteAction::Quarantine) => {
+                cap_receive_action(capped, Some(&InviteReceiveAction::Quarantine))
+            }
+            None => capped,
+        }
+    } else {
+        capped
+    }
+}
+
+fn kind_forbidden_by_constraints(
+    constraints: Option<&ReceivePolicyConstraints>,
+    effective_kind: &str,
+) -> bool {
+    constraints.is_some_and(|constraints| {
+        constraints
+            .forbidden_introduction_kinds
+            .iter()
+            .any(|kind| kind == effective_kind)
+    })
+}
+
+fn kind_permitted_by_constraints(
+    constraints: Option<&ReceivePolicyConstraints>,
+    effective_kind: &str,
+) -> bool {
+    constraints
+        .and_then(|constraints| constraints.permitted_introduction_kinds.as_ref())
+        .is_none_or(|kinds| kinds.iter().any(|kind| kind == effective_kind))
+}
+
+fn did_in_list(value: &str, list: &[Did]) -> bool {
+    list.iter().any(|did| did.as_str() == value)
+}
+
+fn principal_service_blocked(
+    policy: &InviteReceivePolicy,
+    constraints: Option<&ReceivePolicyConstraints>,
+    source_service_did: &str,
+) -> bool {
+    policy
+        .blocked_principal_services
+        .iter()
+        .any(|did| did.as_str() == source_service_did)
+        || constraints
+            .and_then(|constraints| constraints.blocked_principal_services.as_ref())
+            .is_some_and(|blocked| did_in_list(source_service_did, blocked))
+}
+
+fn principal_service_trusted(
+    policy: &InviteReceivePolicy,
+    constraints: Option<&ReceivePolicyConstraints>,
+    source_service_did: &str,
+) -> bool {
+    if !policy.trusted_principal_services.is_empty()
+        && !did_in_list(source_service_did, &policy.trusted_principal_services)
+    {
+        return false;
+    }
+    constraints
+        .and_then(|constraints| constraints.trusted_principal_services.as_ref())
+        .is_none_or(|trusted| did_in_list(source_service_did, trusted))
+}
+
+fn subject_did_method_accepted(
+    constraints: Option<&ReceivePolicyConstraints>,
+    subject: &str,
+) -> bool {
+    let Some(methods) =
+        constraints.and_then(|constraints| constraints.accepted_subject_did_methods.as_ref())
+    else {
+        return true;
+    };
+    let Some(method) = did_method(subject) else {
+        return false;
+    };
+    methods.iter().any(|accepted| accepted == &method)
+}
+
+fn did_method(did: &str) -> Option<String> {
+    let mut parts = did.splitn(3, ':');
+    match (parts.next(), parts.next()) {
+        (Some("did"), Some(method)) if !method.is_empty() => Some(format!("did:{method}")),
+        _ => None,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn handle_claim_evidence_valid(
+    policy: &InviteReceivePolicy,
+    constraints: Option<&ReceivePolicyConstraints>,
+    handle: &Handle,
+    handle_claim: &HandleClaim,
+    candidate: Option<&MemberDeliveryBindingCandidate>,
+    resolved_by: Option<&Did>,
+    subject: &str,
+    recipient_service_did: &str,
+    now: chrono::DateTime<chrono::Utc>,
+) -> bool {
+    if handle_claim.validate().is_err() {
+        return false;
+    }
+    if handle_claim.handle.as_ref() != Some(handle) {
+        return false;
+    }
+    if handle_claim.subject.as_ref().map(Did::as_str) != Some(subject) {
+        return false;
+    }
+    if handle_claim.binding_state != Some(HandleBindingState::Verified) {
+        return false;
+    }
+    if handle_claim
+        .expires_at
+        .is_none_or(|expires_at| expires_at <= now)
+    {
+        return false;
+    }
+    if handle_claim.proofs.is_empty() {
+        return false;
+    }
+    if let Some(binding) = &handle_claim.member_delivery_binding
+        && binding.recipient_service_did.as_str() != recipient_service_did
+    {
+        return false;
+    }
+    if !handle_domain_allowed(policy, constraints, handle.domain()) {
+        return false;
+    }
+    if !handle_claim_issuer_allowed(policy, constraints, handle_claim) {
+        return false;
+    }
+    if !resolved_by_allowed(policy, constraints, resolved_by) {
+        return false;
+    }
+    if let Some(candidate) = candidate
+        && !member_delivery_candidate_valid(candidate, handle, subject, recipient_service_did, now)
+    {
+        return false;
+    }
+    true
+}
+
+fn handle_domain_allowed(
+    policy: &InviteReceivePolicy,
+    constraints: Option<&ReceivePolicyConstraints>,
+    domain: &str,
+) -> bool {
+    let domain = domain.to_ascii_lowercase();
+    if policy
+        .blocked_handle_domains
+        .iter()
+        .any(|blocked| blocked.eq_ignore_ascii_case(&domain))
+    {
+        return false;
+    }
+    if !policy.allowed_handle_domains.is_empty()
+        && !policy
+            .allowed_handle_domains
+            .iter()
+            .any(|allowed| allowed.eq_ignore_ascii_case(&domain))
+    {
+        return false;
+    }
+    constraints
+        .and_then(|constraints| constraints.allowed_handle_domains.as_ref())
+        .is_none_or(|allowed| {
+            allowed
+                .iter()
+                .any(|candidate| candidate.eq_ignore_ascii_case(&domain))
+        })
+}
+
+fn handle_claim_issuer_allowed(
+    policy: &InviteReceivePolicy,
+    constraints: Option<&ReceivePolicyConstraints>,
+    handle_claim: &HandleClaim,
+) -> bool {
+    if !policy.trusted_handle_issuers.is_empty()
+        && !handle_claim_matches_did_list(handle_claim, &policy.trusted_handle_issuers)
+    {
+        return false;
+    }
+    constraints
+        .and_then(|constraints| constraints.trusted_handle_issuers.as_ref())
+        .is_none_or(|trusted| handle_claim_matches_did_list(handle_claim, trusted))
+}
+
+fn handle_claim_matches_did_list(handle_claim: &HandleClaim, trusted: &[Did]) -> bool {
+    if trusted.is_empty() {
+        return false;
+    }
+    if handle_claim
+        .issuer_service_did
+        .as_ref()
+        .is_some_and(|issuer| trusted.iter().any(|did| did == issuer))
+    {
+        return true;
+    }
+    handle_claim
+        .issuer
+        .as_deref()
+        .and_then(|issuer| Did::new(issuer.to_owned()).ok())
+        .is_some_and(|issuer| trusted.iter().any(|did| did == &issuer))
+}
+
+fn resolved_by_allowed(
+    policy: &InviteReceivePolicy,
+    constraints: Option<&ReceivePolicyConstraints>,
+    resolved_by: Option<&Did>,
+) -> bool {
+    if !policy.trusted_directory_services.is_empty()
+        && !resolved_by
+            .is_some_and(|did| policy.trusted_directory_services.iter().any(|v| v == did))
+    {
+        return false;
+    }
+    constraints
+        .and_then(|constraints| constraints.trusted_directory_services.as_ref())
+        .is_none_or(|trusted| {
+            !trusted.is_empty()
+                && resolved_by.is_some_and(|did| trusted.iter().any(|candidate| candidate == did))
+        })
+}
+
+fn member_delivery_candidate_valid(
+    candidate: &MemberDeliveryBindingCandidate,
+    handle: &Handle,
+    subject: &str,
+    recipient_service_did: &str,
+    now: chrono::DateTime<chrono::Utc>,
+) -> bool {
+    if candidate.intent != CandidateIntent::Invite {
+        return false;
+    }
+    if &candidate.handle != handle {
+        return false;
+    }
+    if candidate.subject_id.as_str() != subject {
+        return false;
+    }
+    if candidate
+        .member_delivery_binding
+        .recipient_service_did
+        .as_str()
+        != recipient_service_did
+    {
+        return false;
+    }
+    let Ok(subject_did) = Did::new(subject.to_owned()) else {
+        return false;
+    };
+    let context = CandidateValidationContext::new(candidate.audience.clone())
+        .with_now(now)
+        .with_expected_subject(subject_did);
+    candidate.validate(&context).is_ok()
 }
 
 fn validate_invite_delivery_consistency(
