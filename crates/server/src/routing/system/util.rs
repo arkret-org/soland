@@ -246,9 +246,7 @@ pub fn is_valid_sync_token(token: &str) -> bool {
 
 /// `sha256:<64 lowercase hex>` shape.
 pub fn is_valid_sha256_digest(value: &str) -> bool {
-    value
-        .strip_prefix("sha256:")
-        .is_some_and(is_valid_sha256_hex)
+    value.starts_with("sha256:") && cokret_sdk::Hash::new(value.to_owned()).is_ok()
 }
 
 /// 64 lowercase hex characters.

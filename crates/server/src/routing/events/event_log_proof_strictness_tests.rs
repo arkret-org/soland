@@ -191,6 +191,20 @@ fn member_identity_tampered_payload_fails_closed() {
 }
 
 #[test]
+fn member_identity_unsupported_signature_algorithm_is_422() {
+    let state = make_state(false);
+    let signing_key = ed25519_dalek::SigningKey::from_bytes(&[9u8; 32]);
+    let (_, mut payload) = signed_member_identity_payload(&signing_key);
+    payload["identity_payload"]["member_identity"]["proof"]["signature_algorithm"] = json!("ES256");
+
+    let err = validate_member_identity_proof(&state, &payload)
+        .expect_err("unsupported MemberIdentity signature algorithm must fail closed");
+    let code = crate::error::ErrorCode::UnsupportedSignatureAlg;
+    assert_eq!(err.status, crate::error::error_http_status(code));
+    assert_eq!(err.code, code.as_str());
+}
+
+#[test]
 fn member_identity_encrypted_payload_is_unsupported_fail_closed() {
     let state = make_state(false);
     let payload = json!({
@@ -867,6 +881,28 @@ fn production_requires_requirements_schema() {
     assert_eq!(
         event_requirements_schema_id(&state, &object).unwrap(),
         "ck.schema.event.v1"
+    );
+}
+
+#[tokio::test]
+async fn top_level_effective_scope_is_reducer_managed() {
+    let state = make_state(false);
+    let session = session();
+    let envelope = json!({
+        "event_id": "ck:event:01904100-0000-7000-8000-00000000eff0",
+        "kind": crate::kinds::CK_REALM_CREATE,
+        "requirements": { "schema": ["ck.schema.event.v1"] },
+        "actor_id": session.actor.clone(),
+        "effective_scope": "ck:realm:01904100-0000-7000-8000-a11ce0000001"
+    });
+
+    let err = validate_event_envelope(&state, &session, &envelope)
+        .await
+        .expect_err("clients must not supply reducer-managed effective_scope");
+    assert_eq!(err.status, StatusCode::BAD_REQUEST);
+    assert_eq!(
+        err.code,
+        crate::error::reasons::EFFECTIVE_SCOPE_REDUCER_MANAGED
     );
 }
 

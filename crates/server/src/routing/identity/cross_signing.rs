@@ -761,19 +761,9 @@ pub(crate) fn resolve_current_cross_signing_publish(
 /// (`multibase` z-base58btc with the 0xed01 multicodec, or `raw_base64url`).
 pub(crate) fn decode_ed25519_key(material: &str, key_format: &str) -> Result<VerifyingKey, String> {
     let raw: Vec<u8> = match key_format {
-        "multibase" => {
-            let stripped = material
-                .strip_prefix('z')
-                .ok_or_else(|| "multibase key must start with 'z'".to_owned())?;
-            let decoded = bs58::decode(stripped)
-                .into_vec()
-                .map_err(|e| format!("multibase base58 decode: {e}"))?;
-            // Ed25519 multicodec prefix 0xed 0x01.
-            match decoded.as_slice() {
-                [0xed, 0x01, rest @ ..] => rest.to_vec(),
-                _ => return Err("unexpected multicodec prefix (want ed25519-pub)".to_owned()),
-            }
-        }
+        "multibase" => cokret_sdk::decode_ed25519_multibase(material)
+            .map(|bytes| bytes.to_vec())
+            .map_err(|e| e.to_string())?,
         "raw_base64url" => URL_SAFE_NO_PAD
             .decode(material.as_bytes())
             .or_else(|_| STANDARD.decode(material.as_bytes()))

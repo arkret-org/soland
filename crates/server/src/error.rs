@@ -182,6 +182,8 @@ pub mod reasons {
     // Agent / pairing / session-grant reason codes.
     pub const PROOF_INVALID: &str = core_error::ERROR_CODE_PROOF_INVALID;
     pub const ACTOR_KIND_REDUCER_MANAGED: &str = core_error::ERROR_CODE_ACTOR_KIND_REDUCER_MANAGED;
+    pub const EFFECTIVE_SCOPE_REDUCER_MANAGED: &str =
+        core_error::REASON_EFFECTIVE_SCOPE_REDUCER_MANAGED;
 
     // Media binding reason codes.
     pub const TOKEN_ISSUER_UNAUTHORISED: &str = core_error::ERROR_CODE_TOKEN_ISSUER_UNAUTHORISED;

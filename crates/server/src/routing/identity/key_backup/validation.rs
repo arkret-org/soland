@@ -19,16 +19,7 @@ pub(super) fn is_base64url_token(value: &str) -> bool {
 }
 
 pub(super) fn is_sha_digest(value: &str) -> bool {
-    let hex_ok =
-        |hex: &str, len: usize| hex.len() == len && hex.chars().all(|c| c.is_ascii_hexdigit());
-    value.strip_prefix("sha256:").is_some_and(|h| hex_ok(h, 64))
-        || value
-            .strip_prefix("sha3_256:")
-            .is_some_and(|h| hex_ok(h, 64))
-        || value.strip_prefix("blake3:").is_some_and(|h| hex_ok(h, 64))
-        || value
-            .strip_prefix("sha512:")
-            .is_some_and(|h| hex_ok(h, 128))
+    cokret_sdk::Hash::new(value.to_owned()).is_ok()
 }
 
 pub(super) fn backup_class_wire(backup_class: BackupClass) -> &'static str {
@@ -627,4 +618,21 @@ pub(super) fn validate_series_genesis_shape_typed(backup: &KeyBackup) -> Result<
         .with_wire_code("series_chain_broken"));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn digest_shape_uses_sdk_active_suites() {
+        let digest64 = "0".repeat(64);
+        let digest128 = "0".repeat(128);
+
+        assert!(is_sha_digest(&format!("sha256:{digest64}")));
+        assert!(is_sha_digest(&format!("blake3:{digest64}")));
+        assert!(!is_sha_digest(&format!("sha3_256:{digest64}")));
+        assert!(!is_sha_digest(&format!("sha512:{digest128}")));
+        assert!(!is_sha_digest(&format!("sha256:{}", "A".repeat(64))));
+    }
 }

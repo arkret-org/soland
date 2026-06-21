@@ -384,7 +384,8 @@ impl ProjectionState {
                         self.relation_winner_sort_key(left)
                             .cmp(&self.relation_winner_sort_key(right))
                     });
-                    losers.extend(ids.into_iter().skip(max));
+                    let loser_count = ids.len().saturating_sub(max);
+                    losers.extend(ids.into_iter().take(loser_count));
                 }
             }
             RelationConflictPolicy::Reject
@@ -996,7 +997,7 @@ mod cross_realm_relation_tests {
     }
 
     #[test]
-    fn duplicate_relation_uses_smallest_event_digest_winner() {
+    fn duplicate_relation_uses_largest_event_digest_winner() {
         let mut proj = ProjectionState::default();
         let now = chrono::Utc::now();
         let high = relation_op_with_id_digest(
@@ -1019,12 +1020,12 @@ mod cross_realm_relation_tests {
         proj.apply_relation_create(&high, now);
         proj.apply_relation_create(&low, now);
 
-        assert!(proj.relations[low.payload["relation_id"].as_str().unwrap()].is_active());
-        let high_state = &proj.relations[high.payload["relation_id"].as_str().unwrap()];
-        assert_eq!(high_state.state, "tombstoned");
+        assert!(proj.relations[high.payload["relation_id"].as_str().unwrap()].is_active());
+        let low_state = &proj.relations[low.payload["relation_id"].as_str().unwrap()];
+        assert_eq!(low_state.state, "tombstoned");
         assert_eq!(
-            high_state.source_event_digest.as_deref(),
-            Some("sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff")
+            low_state.source_event_digest.as_deref(),
+            Some("sha256:0000000000000000000000000000000000000000000000000000000000000001")
         );
     }
 
@@ -1038,7 +1039,7 @@ mod cross_realm_relation_tests {
             "belongs_to",
             STRAND_A,
             "ck:strand:01904100-0000-7000-8000-000000000e11",
-            "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+            "sha256:0000000000000000000000000000000000000000000000000000000000000002",
         );
         let winning_parent = relation_op_with_id_digest(
             "000000000e02",
@@ -1046,7 +1047,7 @@ mod cross_realm_relation_tests {
             "belongs_to",
             STRAND_A,
             "ck:strand:01904100-0000-7000-8000-000000000e12",
-            "sha256:0000000000000000000000000000000000000000000000000000000000000002",
+            "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
         );
 
         proj.apply_relation_create(&losing_parent, now);
@@ -1087,7 +1088,7 @@ mod cross_realm_relation_tests {
             "assigned_to",
             STRAND_A,
             "did:web:alice.example",
-            "sha256:0000000000000000000000000000000000000000000000000000000000000003",
+            "sha256:3333333333333333333333333333333333333333333333333333333333333333",
         );
 
         proj.apply_relation_create(&alice_old, now);

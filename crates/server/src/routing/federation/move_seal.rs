@@ -540,13 +540,7 @@ pub(crate) fn validate_seal_delta_entries(delta: &[String]) -> Result<(), (Error
 }
 
 fn is_sha256_digest(s: &str) -> bool {
-    let Some(hex) = s.strip_prefix("sha256:") else {
-        return false;
-    };
-    hex.len() == 64
-        && hex
-            .chars()
-            .all(|c| c.is_ascii_digit() || matches!(c, 'a'..='f'))
+    s.starts_with("sha256:") && cokret_sdk::Hash::new(s.to_owned()).is_ok()
 }
 
 #[cfg(test)]

@@ -618,34 +618,8 @@ fn decode_policy_ed25519_public_key(material: &str) -> Result<VerifyingKey, Stri
 }
 
 fn decode_ed25519_multibase(multibase: &str) -> Result<VerifyingKey, String> {
-    let stripped = multibase
-        .strip_prefix('z')
-        .ok_or_else(|| format!("public key multibase missing `z` prefix: `{multibase}`"))?;
-    let decoded = bs58::decode(stripped)
-        .into_vec()
-        .map_err(|e| format!("base58btc decode failed for `{stripped}`: {e}"))?;
-    if decoded.len() < 2 {
-        return Err(format!(
-            "multicodec key too short ({} bytes)",
-            decoded.len()
-        ));
-    }
-    if decoded[0] != 0xed || decoded[1] != 0x01 {
-        return Err(format!(
-            "expected ed25519-pub multicodec (0xed 0x01), got 0x{:02x} 0x{:02x}",
-            decoded[0], decoded[1]
-        ));
-    }
-    let key_bytes = &decoded[2..];
-    if key_bytes.len() != 32 {
-        return Err(format!(
-            "Ed25519 public key must be 32 bytes, got {}",
-            key_bytes.len()
-        ));
-    }
-    let mut raw = [0u8; 32];
-    raw.copy_from_slice(key_bytes);
-    VerifyingKey::from_bytes(&raw).map_err(|e| format!("invalid Ed25519 public key: {e}"))
+    let key_bytes = cokret_sdk::decode_ed25519_multibase(multibase).map_err(|e| e.to_string())?;
+    VerifyingKey::from_bytes(&key_bytes).map_err(|e| format!("invalid Ed25519 public key: {e}"))
 }
 
 #[cfg(test)]

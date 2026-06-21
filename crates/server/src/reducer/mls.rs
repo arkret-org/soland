@@ -840,13 +840,7 @@ fn validate_welcome_recipient_binding(
 }
 
 fn is_sha256_digest(value: &str) -> bool {
-    let Some(hex) = value.strip_prefix("sha256:") else {
-        return false;
-    };
-    hex.len() == 64
-        && hex
-            .chars()
-            .all(|c| c.is_ascii_digit() || matches!(c, 'a'..='f'))
+    value.starts_with("sha256:") && cokret_sdk::Hash::new(value.to_owned()).is_ok()
 }
 
 fn validate_effective_scope(scope: &Value) -> Result<(), &'static str> {

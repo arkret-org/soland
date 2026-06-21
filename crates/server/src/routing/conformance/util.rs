@@ -1,18 +1,8 @@
-//! Forked conformance primitives.
+//! Conformance primitives exposed over the HTTP resonance surface.
 //!
-//! These mirror the (currently `pub(crate)`) helpers in
-//! `cotest/src/conformance/mod.rs` — canonical JSON, sha256-prefixed digest,
-//! opaque cursor encoding. We fork rather than depend on `cotest` directly so
-//! soland avoids pulling in the cotest crate's heavy test-only dependency
-//! graph (`reqwest`, `jsonschema`, the cokret-http-client, ...).
-//!
-//! The Cokret spec — not either implementation — is the source of truth, so
-//! the two copies must stay byte-for-byte equivalent. Drift is caught by the
-//! HTTP conformance suite under `cotest/e2e/tests/conformance/`, which runs
-//! the same vectors against the in-process cotest suite and the HTTP surface
-//! these handlers expose.
-
-use std::collections::BTreeMap;
+//! Wire encoding must be the SDK production implementation, not a local fork:
+//! these handlers are used to prove soland and the shared SDK agree on the
+//! canonical protocol surface.
 
 use anyhow::Result;
 #[cfg(test)]
@@ -28,42 +18,8 @@ pub use cokret_sdk::canonical::sha256_digest;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-/// Canonical-JSON encode a `serde_json::Value`.
-///
-/// Object keys are sorted lexicographically; arrays preserve their input
-/// order; primitives (strings/numbers/booleans/null) are serialized via
-/// `serde_json::to_string` so escape rules match the spec encoding profile.
-/// No whitespace anywhere.
-///
-/// Forked from `cotest::conformance::canonical_json`.
 pub fn canonical_json(value: &Value) -> Result<String> {
-    match value {
-        Value::Object(map) => {
-            let mut ordered = BTreeMap::new();
-            for (key, value) in map {
-                ordered.insert(key, canonical_json(value)?);
-            }
-            let mut out = String::from("{");
-            for (index, (key, value)) in ordered.iter().enumerate() {
-                if index > 0 {
-                    out.push(',');
-                }
-                out.push_str(&serde_json::to_string(key)?);
-                out.push(':');
-                out.push_str(value);
-            }
-            out.push('}');
-            Ok(out)
-        }
-        Value::Array(items) => {
-            let canonical_items = items
-                .iter()
-                .map(canonical_json)
-                .collect::<Result<Vec<_>>>()?;
-            Ok(format!("[{}]", canonical_items.join(",")))
-        }
-        _ => Ok(serde_json::to_string(value)?),
-    }
+    cokret_sdk::canonical::canonical_json_string(value).map_err(Into::into)
 }
 
 /// Opaque cursor shape used by `/conformance/cursor`.
@@ -147,6 +103,19 @@ mod tests {
         assert_eq!(
             canonical_json(&value).unwrap(),
             r#"{"a":[3,{"x":2,"y":1}],"z":{"a":1,"b":2}}"#
+        );
+    }
+
+    #[test]
+    fn canonical_json_uses_sdk_utf16_key_order() {
+        let supplementary = char::from_u32(0x10000).unwrap().to_string();
+        let private_use = char::from_u32(0xE000).unwrap().to_string();
+        let value = json!({ private_use.clone(): 2, supplementary.clone(): 1 });
+        let canonical = canonical_json(&value).unwrap();
+
+        assert!(
+            canonical.find(&format!("\"{supplementary}\"")).unwrap()
+                < canonical.find(&format!("\"{private_use}\"")).unwrap()
         );
     }
 

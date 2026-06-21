@@ -106,13 +106,17 @@ pub const CK_REALM_SET_DEFAULT_STRAND: &str = "ck.realm.set_default_strand";
 // `ck.audit.erasure_receipt`. Distinct from `ck.realm.destroy`, which
 // is the GDPR-grade hard-delete request that retains a `retained_stub_digest`.
 pub use cokret_sdk::events::kinds::{
-    CONTAINER_MOVE_ITEM as CK_CONTAINER_MOVE_ITEM, CONTAINER_REBALANCE as CK_CONTAINER_REBALANCE,
-    INVITE_CREATE as CK_INVITE_CREATE, MEMBER_IDENTITY_UPDATE as CK_MEMBER_IDENTITY_UPDATE,
-    MEMBER_STATE as CK_MEMBER_STATE, MORPH_ARCHIVE as CK_MORPH_ARCHIVE,
-    MORPH_CREATE as CK_MORPH_CREATE, MORPH_RESTORE as CK_MORPH_RESTORE,
-    MORPH_UPDATE as CK_MORPH_UPDATE, READ_CURSOR_ADVANCE as CK_READ_MARKER,
-    REALM_ARCHIVE as CK_REALM_ARCHIVE, REALM_CREATE as CK_REALM_CREATE,
-    REALM_DESTROY as CK_REALM_DESTROY, REALM_DISAPPEARING_POLICY as CK_REALM_DISAPPEARING_POLICY,
+    ACCOUNT_DATA_SET as CK_ACCOUNT_DATA_SET, CONTAINER_MOVE_ITEM as CK_CONTAINER_MOVE_ITEM,
+    CONTAINER_REBALANCE as CK_CONTAINER_REBALANCE, INVITE_ACCEPT as CK_INVITE_ACCEPT,
+    INVITE_CANCEL as CK_INVITE_CANCEL, INVITE_CLAIM as CK_INVITE_CLAIM,
+    INVITE_CREATE as CK_INVITE_CREATE, INVITE_REVOKE as CK_INVITE_REVOKE,
+    INVITE_THIRD_PARTY as CK_INVITE_THIRD_PARTY,
+    MEMBER_IDENTITY_UPDATE as CK_MEMBER_IDENTITY_UPDATE, MEMBER_STATE as CK_MEMBER_STATE,
+    MORPH_ARCHIVE as CK_MORPH_ARCHIVE, MORPH_CREATE as CK_MORPH_CREATE,
+    MORPH_RESTORE as CK_MORPH_RESTORE, MORPH_UPDATE as CK_MORPH_UPDATE,
+    READ_CURSOR_ADVANCE as CK_READ_MARKER, REALM_ARCHIVE as CK_REALM_ARCHIVE,
+    REALM_CREATE as CK_REALM_CREATE, REALM_DESTROY as CK_REALM_DESTROY,
+    REALM_DISAPPEARING_POLICY as CK_REALM_DISAPPEARING_POLICY,
     REALM_HISTORY_SHARING_POLICY as CK_REALM_HISTORY_SHARING_POLICY,
     REALM_HISTORY_VISIBILITY as CK_REALM_HISTORY_VISIBILITY, REALM_KEY_SHARE as CK_REALM_KEY_SHARE,
     REALM_MEDIA_SERVICE as CK_REALM_MEDIA_SERVICE,
@@ -121,13 +125,7 @@ pub use cokret_sdk::events::kinds::{
     REALM_PREVIEW_POLICY as CK_REALM_PREVIEW_POLICY, REALM_SEARCH_POLICY as CK_REALM_SEARCH_POLICY,
     REALM_TOMBSTONE as CK_REALM_TOMBSTONE, REALM_UPDATE as CK_REALM_UPDATE,
 };
-pub const CK_INVITE_ACCEPT: &str = "ck.invite.accept";
-pub const CK_INVITE_CANCEL: &str = "ck.invite.cancel";
-pub const CK_INVITE_CLAIM: &str = "ck.invite.claim";
-pub const CK_INVITE_REVOKE: &str = "ck.invite.revoke";
-pub const CK_INVITE_THIRD_PARTY: &str = "ck.invite.third_party";
 pub const CK_CONFLICT_REPAIR: &str = "ck.conflict.repair";
-pub const CK_ACCOUNT_DATA_SET: &str = "ck.account_data.set";
 // Round 14e+ (2026-05-16) — Agent protocol family. Spec
 // `extensions/agent-integration.md`. Mirror of applet but with a
 // terminal `*.result` event that carries the signed audit binding.
@@ -135,17 +133,6 @@ pub const CK_ACCOUNT_DATA_SET: &str = "ck.account_data.set";
 // `extensions/applet-integration.md`. soland's role at this layer is to
 // validate wire shape + persist + dispatch; applet bridge state machine
 // lives client-side (yougen) and at the applet service itself.
-pub use cokret_sdk::events::kinds::{
-    AGENT_ENDPOINT as CK_AGENT_ENDPOINT, APPLET_BRIDGE_ERROR as CK_APPLET_BRIDGE_ERROR,
-    APPLET_DISCOVERY as CK_APPLET_DISCOVERY,
-    APPLET_INTEROP_SESSION_START as CK_APPLET_INTEROP_SESSION_START,
-    APPLET_INTEROP_SESSION_STATUS as CK_APPLET_INTEROP_SESSION_STATUS,
-    APPLET_REGISTRATION as CK_APPLET_REGISTRATION,
-    AUDIT_ERASURE_RECEIPT as CK_AUDIT_ERASURE_RECEIPT, CALL_STATE as CK_CALL_STATE,
-    CALL_SUMMARY as CK_CALL_SUMMARY, KEY_BACKUP_ACTIVE_SERIES as CK_KEY_BACKUP_ACTIVE_SERIES,
-    REDACTION as CK_REDACTION,
-};
-pub const CK_AGENT_INTEROP_SESSION_START: &str = "ck.agent.interop_session.start";
 // R3 spec-sync — new actor_private_event kinds (reducer_input=false; do
 // NOT advance the seal frontier / actor_seq). Wire-accepted only.
 // R3 spec-sync (2026-05-27, cokret-spec b47ff6ec) — agent lifecycle FSM
@@ -166,20 +153,21 @@ pub const CK_AGENT_INTEROP_SESSION_START: &str = "ck.agent.interop_session.start
 //
 // Canonical kinds per
 // `cokret-spec/spec/v1/artifacts/schemas/event-envelope.schema.json` (kind enum):
-//   - `ck.mls.keypackage`    — KeyPackage publication. The publish/claim distinction lives at the
-//     HTTP operation_id layer (`ck.self.keys.keypackages.upload.create` /
-//     `ck.self.keys.keypackages.command.claim`); the event log stores only the canonical kind. The
-//     reducer dispatches publish-vs-claim on the `payload.action == "publish" | "claim"` field.
-//   - `ck.mls.welcome`       — Welcome envelope reference. Per-(recipient, device) queue semantics
-//     are conveyed via payload shape; no separate `.enqueue` suffix.
+//   - `ck.mls.keypackage`    — KeyPackage publication. The publish/claim distinction lives at
+//     the HTTP operation_id layer (`ck.self.keys.keypackages.upload.create` /
+//     `ck.self.keys.keypackages.command.claim`); the event log stores only the canonical kind.
+//     The reducer dispatches publish-vs-claim on the `payload.action == "publish" | "claim"`
+//     field.
+//   - `ck.mls.welcome`       — Welcome envelope reference. Per-(recipient, device) queue
+//     semantics are conveyed via payload shape; no separate `.enqueue` suffix.
 //   - `ck.mls.commit`        — MLS commit (bumps the group's stored epoch by +1 from
-//     `payload.expected_prev_epoch`). The "epoch" semantics live in the payload, not in the kind
-//     suffix.
+//     `payload.expected_prev_epoch`). The "epoch" semantics live in the payload, not in the
+//     kind suffix.
 //   - `ck.mls.proposal`      — MLS proposal (wire-only; no reducer projection yet).
 //   - `ck.mls.genesis`       — MLS group genesis (initializes epoch 0 and the covered_seals
 //     accumulator).
-//   - `ck.mls.commit_failed` — diagnostic of a failed commit / Welcome processing path (wire-only;
-//     no reducer projection yet).
+//   - `ck.mls.commit_failed` — diagnostic of a failed commit / Welcome processing path
+//     (wire-only; no reducer projection yet).
 //
 // TODO(G3.S1-followup): decryption_pending — deferred-decryption queue +
 // retry path for messages that arrived before the key material; today the
@@ -276,6 +264,17 @@ pub use cokret_sdk::events::kinds::{
     REALM_DELIVERY_BINDING_POLICY as CK_REALM_DELIVERY_BINDING_POLICY,
     REALM_INHERITANCE_POLICY as CK_REALM_INHERITANCE_POLICY, REALM_LINK as CK_REALM_LINK,
     REALM_POLICY_SERVER as CK_REALM_POLICY_SERVER,
+};
+pub use cokret_sdk::events::kinds::{
+    AGENT_ENDPOINT as CK_AGENT_ENDPOINT,
+    AGENT_INTEROP_SESSION_START as CK_AGENT_INTEROP_SESSION_START,
+    APPLET_BRIDGE_ERROR as CK_APPLET_BRIDGE_ERROR, APPLET_DISCOVERY as CK_APPLET_DISCOVERY,
+    APPLET_INTEROP_SESSION_START as CK_APPLET_INTEROP_SESSION_START,
+    APPLET_INTEROP_SESSION_STATUS as CK_APPLET_INTEROP_SESSION_STATUS,
+    APPLET_REGISTRATION as CK_APPLET_REGISTRATION,
+    AUDIT_ERASURE_RECEIPT as CK_AUDIT_ERASURE_RECEIPT, CALL_STATE as CK_CALL_STATE,
+    CALL_SUMMARY as CK_CALL_SUMMARY, KEY_BACKUP_ACTIVE_SERIES as CK_KEY_BACKUP_ACTIVE_SERIES,
+    REDACTION as CK_REDACTION,
 };
 
 pub fn validate_mls_governance_binding(payload: &Value) -> Result<(), &'static str> {

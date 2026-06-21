@@ -545,6 +545,7 @@ dependencies = [
  "tracing",
  "unicode-normalization",
  "url",
+ "zeroize",
 ]
 
 [[package]]

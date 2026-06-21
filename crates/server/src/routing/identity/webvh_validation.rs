@@ -677,20 +677,8 @@ fn sha256_multihash_multibase(bytes: &[u8]) -> String {
 }
 
 fn decode_ed25519_public_key(value: &str) -> Result<VerifyingKey, String> {
-    let rest = value
-        .strip_prefix('z')
-        .ok_or_else(|| "public key must use base58btc multibase".to_owned())?;
-    let raw = bs58::decode(rest)
-        .into_vec()
-        .map_err(|error| format!("public key base58 decode failed: {error}"))?;
-    let bytes = raw
-        .strip_prefix(&ED25519_MULTICODEC_PREFIX)
-        .ok_or_else(|| "public key must be ed25519-pub multicodec".to_owned())?;
-    if bytes.len() != PUBLIC_KEY_LENGTH {
-        return Err("ed25519 public key must be 32 bytes".to_owned());
-    }
-    let mut key_bytes = [0u8; PUBLIC_KEY_LENGTH];
-    key_bytes.copy_from_slice(bytes);
+    let key_bytes = cokret_sdk::decode_ed25519_multibase(value)
+        .map_err(|error| format!("public key must be base58btc ed25519-pub multibase: {error}"))?;
     VerifyingKey::from_bytes(&key_bytes).map_err(|_| "invalid ed25519 public key".to_owned())
 }
 

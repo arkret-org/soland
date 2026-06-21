@@ -520,6 +520,13 @@ pub(crate) async fn validate_event_envelope(
             "envelope.actor_kind is reducer-managed; clients MUST NOT supply it",
         ));
     }
+    if object.get("effective_scope").is_some() {
+        return Err(event_validation_error(
+            StatusCode::BAD_REQUEST,
+            crate::error::reasons::EFFECTIVE_SCOPE_REDUCER_MANAGED,
+            "envelope.effective_scope is reducer-managed; clients MUST NOT supply it",
+        ));
+    }
 
     // CKP-0008 / CKP-0009 — when `executed_by` is present the reducer MUST
     // verify the DID resolved from `proof.verification_method` matches
@@ -1044,9 +1051,10 @@ pub(crate) fn validate_member_identity_proof(
         identity.proof.signature_algorithm,
         cokret_sdk::MemberIdentitySignatureAlgorithm::Ed25519
     ) {
+        let code = crate::error::ErrorCode::UnsupportedSignatureAlg;
         return Err(event_validation_error(
-            StatusCode::NOT_IMPLEMENTED,
-            "unsupported_feature",
+            crate::error::error_http_status(code),
+            code.as_str(),
             "only Ed25519 MemberIdentityProof.signature_algorithm is supported",
         ));
     }

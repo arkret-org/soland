@@ -1041,16 +1041,7 @@ fn json_string_field(object: &serde_json::Map<String, Value>, field: &str) -> bo
 }
 
 fn valid_hash_digest(value: &str) -> bool {
-    let Some(hex) = value
-        .strip_prefix("sha256:")
-        .or_else(|| value.strip_prefix("blake3:"))
-    else {
-        return false;
-    };
-    hex.len() == 64
-        && hex
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    cokret_sdk::Hash::new(value.to_owned()).is_ok()
 }
 
 struct PinEffectiveScope {
