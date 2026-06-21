@@ -272,11 +272,12 @@ async fn private_federation_write_rail_is_local_only() {
 }
 
 #[tokio::test]
-async fn readyz_returns_503_until_introspection_bearer_is_configured() {
+async fn readyz_returns_503_until_session_grant_introspection_bearer_is_configured() {
     let mut config = test_config();
     config.development_mode = false;
-    config.oauth_introspection_url = Some("https://coauth.example/oauth2/introspect".to_owned());
-    config.oauth_introspection_bearer = None;
+    config.session_grant_introspection_url =
+        Some("https://coauth.example/_cokret/gate/account/session-grants/introspect".to_owned());
+    config.session_grant_introspection_bearer = None;
     let service = app_from_state(AppState::new(config, Db { pool: None }));
 
     let mut response = TestClient::get("http://server/readyz").send(&service).await;
@@ -286,7 +287,7 @@ async fn readyz_returns_503_until_introspection_bearer_is_configured() {
     );
     let body: Value = response.take_json().await.unwrap();
     assert_eq!(body["ok"], false);
-    assert_eq!(body["checks"]["oauth_introspection"]["ok"], false);
+    assert_eq!(body["checks"]["session_grant_introspection"]["ok"], false);
 }
 
 #[tokio::test]

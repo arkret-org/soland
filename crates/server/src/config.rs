@@ -34,12 +34,12 @@ pub struct AppConfig {
     /// follow-up.
     pub livekit: LiveKitConfig,
     pub cors_allow_origin: Option<String>,
-    /// Public Auth / Account Server base URL advertised to browser clients in
-    /// `/_cokret/describe.auth_metadata`. Registration, password
-    /// recovery, passkey, OIDC, and email verification live there; soland only
-    /// consumes the resulting OAuth/session grants and may expose DID provider
+    /// Public Account Authority base URL advertised to browser clients in
+    /// `/_cokret/describe.auth_metadata.account_authority`. Registration,
+    /// password recovery, passkey, OIDC, and email verification live there;
+    /// soland consumes the resulting session grants and may expose DID provider
     /// primitives for trusted server-to-server calls.
-    pub auth_server_url: Option<String>,
+    pub account_authority_url: Option<String>,
     /// OAuth/OIDC `client_id` this soland deployment is registered as at the
     /// Auth Server, advertised to browser clients in
     /// `/_cokret/describe.auth_metadata.methods[].oidc.client_id`. The web
@@ -50,16 +50,6 @@ pub struct AppConfig {
     /// to fall back to.
     pub oidc_client_id: Option<String>,
     pub development_mode: bool,
-    /// Matrix/Palpo-style OAuth 2.0 introspection endpoint. When configured,
-    /// soland accepts the caller's `Authorization: Bearer <coauth access token>`
-    /// directly and verifies it by POSTing to this endpoint with
-    /// [`oauth_introspection_bearer`].
-    pub oauth_introspection_url: Option<String>,
-    /// Shared service bearer sent to [`oauth_introspection_url`] as
-    /// `Authorization: Bearer ...`. This mirrors the Matrix Authentication
-    /// Service / homeserver shared-secret model and is never exposed to
-    /// browsers or clients.
-    pub oauth_introspection_bearer: Option<String>,
     pub session_grant_introspection_url: Option<String>,
     pub session_grant_introspection_bearer: Option<String>,
     pub did_resolver_allow_methods: Vec<String>,
@@ -546,7 +536,7 @@ impl AppConfig {
         let object_storage = load_object_storage_config()?;
         let ice = load_ice_servers_config()?;
         let livekit = load_livekit_config()?;
-        let auth_server_url = env_non_empty("SOLAND_AUTH_SERVER_URL");
+        let account_authority_url = env_non_empty("SOLAND_ACCOUNT_AUTHORITY_URL");
         let oidc_client_id = env_non_empty("SOLAND_OAUTH_CLIENT_ID");
         // Default to a production-safe posture (no `dev_login`, no relaxed DID
         // validation, no admin snapshot endpoints). Local development must opt
@@ -569,9 +559,6 @@ impl AppConfig {
             .map(|v| v.trim().to_owned())
             .filter(|v| !v.is_empty())
             .or_else(|| development_mode.then(|| "*".to_owned()));
-        let oauth_introspection_url = env_non_empty("SOLAND_OAUTH_INTROSPECTION_URL");
-        let oauth_introspection_bearer =
-            env_non_empty_or_file("SOLAND_OAUTH_INTROSPECTION_BEARER")?;
         let session_grant_introspection_url =
             env_non_empty("SOLAND_SESSION_GRANT_INTROSPECTION_URL");
         let session_grant_introspection_bearer =
@@ -725,11 +712,9 @@ impl AppConfig {
             ice,
             livekit,
             cors_allow_origin,
-            auth_server_url,
+            account_authority_url,
             oidc_client_id,
             development_mode,
-            oauth_introspection_url,
-            oauth_introspection_bearer,
             session_grant_introspection_url,
             session_grant_introspection_bearer,
             did_resolver_allow_methods,
@@ -797,8 +782,6 @@ impl AppConfig {
     ///     admin endpoints.
     ///   - `"did_allowlist"` — production mode, `SOLAND_ADMIN_PRINCIPAL_DIDS` is non-empty; admin
     ///     endpoints accept calls whose session actor appears in the allowlist.
-    ///   - `"oauth_introspection"` — production mode, no DID allowlist but OAuth bearer
-    ///     introspection is configured. Any token coauth introspects as valid passes.
     ///   - `"closed"` — production mode with neither admin allowlist nor introspection configured;
     ///     admin endpoints are effectively locked.
     pub fn admin_auth_mode(&self) -> &'static str {
@@ -806,8 +789,6 @@ impl AppConfig {
             "development"
         } else if !self.admin_principal_dids.is_empty() {
             "did_allowlist"
-        } else if self.oauth_introspection_url.is_some() {
-            "oauth_introspection"
         } else {
             "closed"
         }

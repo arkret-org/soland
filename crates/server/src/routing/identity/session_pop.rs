@@ -32,7 +32,7 @@ use sha2::{Digest, Sha256};
 
 use crate::error::{AppError, ErrorCode};
 use crate::routing::federation::{signature_authority, signature_target_uri};
-use crate::routing::identity::auth::session_token_hash;
+use crate::routing::identity::auth::session_credential_hash;
 use crate::routing::system::util::bearer_token;
 use crate::state::AppState;
 
@@ -203,7 +203,7 @@ async fn session_signing_key_jwk(
         .map_err(|(_, _, message)| AppError::unauthenticated(message))?;
         return Ok(grant.session_public_key);
     }
-    let token_hash = session_token_hash(token, &state.config.service_did);
+    let token_hash = session_credential_hash(token, &state.config.service_did);
     let session = state
         .persistence
         .sessions()

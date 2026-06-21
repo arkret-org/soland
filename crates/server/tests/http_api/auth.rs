@@ -12,41 +12,18 @@ fn registration_secret_digest(value: &str) -> cokret_sdk::Hash {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn oauth_bearer_introspection_authenticates_directly() {
-    let (introspection_url, request_handle) = spawn_oauth_introspection_server();
-    let mut config = test_config();
-    config.oauth_introspection_url = Some(introspection_url);
-    config.oauth_introspection_bearer = Some("shared-secret".to_owned());
-    let state = AppState::new(config, Db { pool: None });
+async fn external_bearer_without_dpop_is_rejected() {
+    let state = AppState::new(test_config(), Db { pool: None });
 
-    let me: Value = TestClient::get("http://server/_cokret/self/account/viewer")
-        .add_header("authorization", "Bearer coauth_access_token", true)
-        .send(&app_from_state(state.clone()))
-        .await
-        .take_json()
-        .await
-        .unwrap();
-    assert_eq!(me["principal_id"], "did:web:oauth.example");
-    assert_eq!(
-        me["primary_handle_claim"]["handle"],
-        "oauth-alice:soland.local"
-    );
+    let mut response = TestClient::get("http://server/_cokret/self/account/viewer")
+        .add_header("authorization", "Bearer external-session-credential", true)
+        .send(&app_from_state(state))
+        .await;
 
-    let request = request_handle.join().unwrap();
-    assert!(request.contains("token=coauth_access_token"));
-    let devices = state
-        .persistence
-        .devices()
-        .list_for_actor("did:web:oauth.example")
-        .await
-        .unwrap();
-    let oauth_device = devices
-        .iter()
-        .find(|device| {
-            device.payload["raw_device_id"] == "ck:device:01904100-0000-7000-8000-0a4a40000006"
-        })
-        .expect("OAuth device auto-provisioned");
-    assert!(oauth_device.device_id.starts_with("ck:device:"));
+    assert_eq!(response.status_code.unwrap(), StatusCode::UNAUTHORIZED);
+    let body: Value = response.take_json().await.unwrap();
+    assert_eq!(body["ok"], false);
+    assert_eq!(body["error"]["code"], "unauthenticated");
 }
 
 #[tokio::test]

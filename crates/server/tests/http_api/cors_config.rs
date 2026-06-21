@@ -273,9 +273,9 @@ async fn wildcard_cors_mirrors_origin_without_credentials() {
 }
 
 #[tokio::test]
-async fn server_describe_advertises_auth_server_url_when_configured() {
+async fn server_describe_advertises_account_authority_when_configured() {
     let mut config = test_config();
-    config.auth_server_url = Some("https://auth.local.host".to_owned());
+    config.account_authority_url = Some("https://auth.local.host".to_owned());
     let service = app_from_state(AppState::new(config, Db { pool: None }));
 
     let describe: Value = TestClient::get("http://server/_cokret/describe")
@@ -286,8 +286,8 @@ async fn server_describe_advertises_auth_server_url_when_configured() {
         .unwrap();
 
     assert_eq!(
-        describe["auth_metadata"]["auth_server_url"],
-        "https://auth.local.host"
+        describe["auth_metadata"]["account_authority"]["gate_account_base"],
+        "https://auth.local.host/_cokret/gate/account"
     );
 }
 

@@ -49,10 +49,8 @@ fn test_config() -> AppConfig {
         ice: IceServersConfig::default(),
         livekit: LiveKitConfig::default(),
         cors_allow_origin: None,
-        auth_server_url: None,
+        account_authority_url: None,
         development_mode: true,
-        oauth_introspection_url: None,
-        oauth_introspection_bearer: None,
         oidc_client_id: None,
         session_grant_introspection_url: None,
         session_grant_introspection_bearer: None,
@@ -86,6 +84,7 @@ fn test_config() -> AppConfig {
         compaction_prune_walk_per_realm_limit: 50,
         seed_demo_data: false,
         trust_domain: "ck:trust_domain:soland-mls-test.local".to_owned(),
+        receive_policy_constraints: None,
         sovereign_enclave_enabled: false,
         sovereign_enclave_allowed_outbound_hosts: Vec::new(),
         erasure_propagation_window_ms: 604_800_000,
@@ -165,7 +164,7 @@ async fn dev_token(state: AppState, actor: &str, device_id: &str, display: &str)
         .take_json()
         .await
         .unwrap();
-    login["access_token"].as_str().unwrap().to_owned()
+    login["session_credential"].as_str().unwrap().to_owned()
 }
 
 fn cross_signing_publish(principal: &str, generation: u64) -> CrossSigningPublishContent {

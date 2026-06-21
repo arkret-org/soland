@@ -54,11 +54,9 @@ pub(crate) fn test_config() -> AppConfig {
         ice: IceServersConfig::default(),
         livekit: LiveKitConfig::default(),
         cors_allow_origin: None,
-        auth_server_url: None,
+        account_authority_url: None,
         oidc_client_id: None,
         development_mode: true,
-        oauth_introspection_url: None,
-        oauth_introspection_bearer: None,
         session_grant_introspection_url: None,
         session_grant_introspection_bearer: None,
         did_resolver_allow_methods: vec!["web".to_owned(), "key".to_owned(), "uuid".to_owned()],
@@ -96,6 +94,7 @@ pub(crate) fn test_config() -> AppConfig {
         compaction_prune_walk_per_realm_limit: 50,
         seed_demo_data: true,
         trust_domain: "ck:trust_domain:soland.local".to_owned(),
+        receive_policy_constraints: None,
         sovereign_enclave_enabled: false,
         sovereign_enclave_allowed_outbound_hosts: Vec::new(),
         erasure_propagation_window_ms: 604_800_000,
@@ -240,9 +239,9 @@ pub(crate) async fn dev_token(state: AppState) -> String {
         .take_json()
         .await
         .unwrap();
-    login["access_token"]
+    login["session_credential"]
         .as_str()
-        .unwrap_or_else(|| panic!("dev-login did not return access_token (got {login:?})"))
+        .unwrap_or_else(|| panic!("dev-login did not return session_credential (got {login:?})"))
         .to_owned()
 }
 

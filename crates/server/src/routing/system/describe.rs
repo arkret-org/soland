@@ -53,7 +53,6 @@ struct ReadyzOutcome {
 struct ReadyzChecks {
     database: ReadyzDatabaseCheck,
     migrations: ReadyzMigrationCheck,
-    oauth_introspection: ReadyzConfiguredCheck,
     session_grant_introspection: ReadyzConfiguredCheck,
     external_webvh_provider: ReadyzExternalWebvhProviderCheck,
     pq_hybrid_tls: ReadyzConfiguredCheck,
@@ -152,8 +151,6 @@ async fn readyz(depot: &mut Depot, res: &mut Response) -> JsonResult<ReadyzOutco
     // could observe transient `relation does not exist` errors on the
     // first few requests; the gate makes that race fail-closed.
     let migrations_applied = state.db.migrations_applied();
-    let oauth_introspection_ready = state.config.oauth_introspection_url.is_none()
-        || state.config.oauth_introspection_bearer.is_some();
     let session_grant_introspection_ready = state.config.session_grant_introspection_url.is_none()
         || state.config.session_grant_introspection_bearer.is_some();
     let external_webvh_provider_ready = state.config.external_webvh_provider_url.is_none()
@@ -161,7 +158,6 @@ async fn readyz(depot: &mut Depot, res: &mut Response) -> JsonResult<ReadyzOutco
     let pq_hybrid_tls_ready = state.config.pq_hybrid_tls_ready();
     let ok = database_ok
         && migrations_applied
-        && oauth_introspection_ready
         && session_grant_introspection_ready
         && external_webvh_provider_ready
         && pq_hybrid_tls_ready;
@@ -203,10 +199,6 @@ async fn readyz(depot: &mut Depot, res: &mut Response) -> JsonResult<ReadyzOutco
             migrations: ReadyzMigrationCheck {
                 ok: migrations_applied,
                 mode: state.db.mode().to_owned(),
-            },
-            oauth_introspection: ReadyzConfiguredCheck {
-                ok: oauth_introspection_ready,
-                configured: state.config.oauth_introspection_url.is_some(),
             },
             session_grant_introspection: ReadyzConfiguredCheck {
                 ok: session_grant_introspection_ready,
@@ -297,8 +289,7 @@ fn build_server_description(state: &AppState) -> ServerDescription {
         &state.config.public_base_url,
         state.db.mode(),
         state.config.development_mode,
-        state.config.oauth_introspection_url.is_some(),
-        state.config.auth_server_url.as_deref(),
+        state.config.account_authority_url.as_deref(),
         state.config.oidc_client_id.as_deref(),
         &state.config.trust_domain,
         state.config.resumable_upload_incomplete_ttl_seconds,
@@ -476,19 +467,19 @@ fn soland_compat_surfaces() -> Vec<cokret_sdk::CompatSurfaceEntry> {
 #[endpoint(
     operation_id = "org.cokret.soland.auth.bridge.describe",
     tags("auth"),
-    summary = "Auth bridge contract description (OAuth bearer introspection + push)"
+    summary = "Auth bridge contract description (session grant presentation + push)"
 )]
 #[tracing::instrument(skip_all, fields(op = "org.cokret.soland.auth.bridge.describe"))]
 pub(in crate::routing) async fn auth_bridge_describe() -> JsonResult<AuthBridgeDescribeOutcome> {
     json_ok(AuthBridgeDescribeOutcome {
         contract: "cokret.rest.principal_bridge.v1".to_owned(),
-        version: "2026-05-12-oauth-introspection".to_owned(),
+        version: "2026-06-21-session-grant-direct".to_owned(),
         api_base_path: "/_soland".to_owned(),
         auth: AuthBridgeAuthDescriptor {
             dev_login_path: "/_soland/gate/auth/dev-login".to_owned(),
-            session_grant_exchange_path: "/_cokret/gate/account/session-grants".to_owned(),
-            bearer_auth_scheme:
-                "Authorization: Bearer <coauth OAuth access token>; soland introspects it server-side"
+            session_grant_issuance_path: "/_cokret/gate/account/session-grants".to_owned(),
+            session_grant_presentation:
+                "Authorization: Bearer <ck.session.grant> with a DPoP proof on /_cokret/self/*"
                     .to_owned(),
             principal_id_body_field: "principal_id".to_owned(),
         },
@@ -497,16 +488,18 @@ pub(in crate::routing) async fn auth_bridge_describe() -> JsonResult<AuthBridgeD
             unregister_device_path: "/_cokret/edge/push/unregister-device".to_owned(),
             session_grant_header: "X-Cokret-Session-Grant".to_owned(),
             principal_id_body_field: "principal_id".to_owned(),
-            register_device_mode: "bearer_session_or_oauth_bearer_introspection".to_owned(),
+            register_device_mode: "session_grant_presentation_or_dev_session".to_owned(),
         },
         examples: AuthBridgeExamples {
-            session_grant_exchange_request: json!({
-                "grant_jwt": "eyJhbGciOiJFZERTQSIsImtpZCI6ImRpZDp3ZWI6Y29hdXRoLmV4YW1wbGUjMSJ9.eyJpc3MiOiJkaWQ6d2ViOmNvYXV0aC5leGFtcGxlIiwic3ViIjoiZGlkOndlYjphbGljZS5leGFtcGxlIiwiYXVkIjoiZGlkOndlYjpzb2xhbmQubG9jYWwifQ.example",
+            session_grant_issue_request: json!({
                 "principal_id": "did:web:alice.example",
                 "device_id": "ck:device:01904100-0000-7000-8000-000000000001",
-                "introspection_proof": {
+                "proof": {
+                    "proof_kind": "did_bound_signature",
                     "challenge": "challenge-01js0000000000000000000000",
-                    "proof_jwt": "eyJhbGciOiJFZERTQSIsImtpZCI6ImRpZDp3ZWI6YWxpY2UuZXhhbXBsZSNkZXZpY2Uta2V5In0.eyJjaGFsbGVuZ2UiOiJjaGFsbGVuZ2UtMDFqczAwMDAwMDAwMDAwMDAwMDAwMDAwMDAifQ.example"
+                    "request_canonical_digest": "sha256:7e4f3a0b6f0d0f3d9f8c3a2b1e0d9c8b7a6f5e4d3c2b1a009988776655443322",
+                    "audience": "did:web:soland.local",
+                    "signature": "eyJhbGciOiJFZERTQSIsImtpZCI6ImRpZDp3ZWI6YWxpY2UuZXhhbXBsZSNkZXZpY2Uta2V5In0.example"
                 }
             }),
             register_device_request: json!({
@@ -523,8 +516,7 @@ pub(in crate::routing) async fn auth_bridge_describe() -> JsonResult<AuthBridgeD
             }),
         },
         todos: vec![
-            "publish a first-class OAuth bearer introspection descriptor for the session-grant bridge shape".to_owned(),
-            "replace push register grant bridge headers with the same Authorization bearer path used by ordinary requests".to_owned(),
+            "replace push register grant bridge headers with the same session-grant presentation used by ordinary requests".to_owned(),
         ],
     })
 }
@@ -546,9 +538,9 @@ async fn integration_describe() -> JsonResult<IntegrationDescribeOutcome> {
         dependencies: vec![
             IntegrationDependencyDescriptor {
                 service: "coauth".to_owned(),
-                purpose: "oauth_bearer_introspection".to_owned(),
-                required_contract: "oauth2.token_introspection.rfc7662".to_owned(),
-                discovery_path: "/oauth/introspect".to_owned(),
+                purpose: "session_grant_introspection".to_owned(),
+                required_contract: "ck.gate.account.session_grant.introspect".to_owned(),
+                discovery_path: "/_cokret/gate/account/session-grants/introspect".to_owned(),
                 mode: "remote_service_contract".to_owned(),
             },
             IntegrationDependencyDescriptor {
@@ -566,15 +558,15 @@ async fn integration_describe() -> JsonResult<IntegrationDescribeOutcome> {
                 path: "/_soland/gate/auth/bridge/describe".to_owned(),
                 contract: "cokret.rest.principal_bridge.v1".to_owned(),
                 stability: "scaffold".to_owned(),
-                todo: "split session-grant fields from the primary OAuth bearer introspection contract.".to_owned(),
+                todo: "publish the same session-grant presentation requirements in the registry artifact.".to_owned(),
             },
             IntegrationSurfaceDescriptor {
-                name: "oauth_bearer_introspection".to_owned(),
+                name: "session_grant_presentation".to_owned(),
                 method: "Authorization".to_owned(),
                 path: "all protected /_cokret routes".to_owned(),
-                contract: "oauth2.token_introspection.rfc7662".to_owned(),
+                contract: "ck.session.grant+dpop".to_owned(),
                 stability: "scaffold".to_owned(),
-                todo: "make the introspection cache/timeout policy explicit in the published contract.".to_owned(),
+                todo: "make the session-grant introspection cache/timeout policy explicit in the published contract.".to_owned(),
             },
             IntegrationSurfaceDescriptor {
                 name: "outbound_push_bridge".to_owned(),
@@ -590,7 +582,7 @@ async fn integration_describe() -> JsonResult<IntegrationDescribeOutcome> {
                 path: "/_cokret/edge/push/register-device".to_owned(),
                 contract: "cokret.rest.principal_push_register.v1".to_owned(),
                 stability: "limited".to_owned(),
-                todo: "unify bearer and session-grant registration paths behind one capability-checked strand.".to_owned(),
+                todo: "unify push registration behind the same session-grant presentation used by ordinary requests.".to_owned(),
             },
             IntegrationSurfaceDescriptor {
                 name: "admin_bottom_manual_repair".to_owned(),
@@ -635,14 +627,14 @@ async fn integration_describe() -> JsonResult<IntegrationDescribeOutcome> {
         ],
         examples: json!({
             "compose_strand": {
-                "step_1": {"service": "coauth", "path": "/oauth/token", "method": "POST"},
-                "step_2": {"service": "soland", "path": "protected route", "method": "Authorization: Bearer <coauth access token>"},
+                "step_1": {"service": "coauth", "path": "/_cokret/gate/account/session-grants", "method": "POST"},
+                "step_2": {"service": "soland", "path": "protected route", "method": "Authorization: Bearer <ck.session.grant> + DPoP"},
                 "step_3": {"service": "soland", "path": "/_soland/edge/push/outbound/bridge/fetch", "method": "POST"},
                 "step_4": {"service": "soland", "path": "/_cokret/edge/push/register-device", "method": "POST"}
             }
         }),
         todos: vec![
-            "replace session-grant and push bridge scaffolds with the direct OAuth bearer path.".to_owned(),
+            "replace push bridge scaffolds with the direct session-grant presentation path.".to_owned(),
             "bind outbound push notify delivery to the fetched gateway contract's advertised auth modes.".to_owned(),
             "publish the same integration manifest fields in the OpenAPI surface.".to_owned(),
         ],
