@@ -54,24 +54,147 @@ pub(crate) async fn validate_realm_key_share_policy(
     else {
         return Err("history_sharing_policy_missing");
     };
-    let Some(policy) = meta.history_sharing_policy.as_ref() else {
+    let Some(policy_value) = meta.history_sharing_policy.as_ref() else {
         return Err("history_sharing_policy_missing");
     };
-    if policy
-        .get("default_key_share")
-        .and_then(Value::as_str)
-        .is_some_and(|value| value == "event_time_visibility")
+    let share =
+        serde_json::from_value::<cokret_sdk::RealmKeySharePayload>(operation.payload.clone())
+            .map_err(|_| "policy_denied")?;
+    if !realm_key_share_receiver_is_current_member(
+        state,
+        operation.realm_id.as_str(),
+        share.recipient_principal_id.as_str(),
+    )
+    .await
     {
-        return Ok(());
+        return Err("not_member");
     }
-    if policy
-        .get("restricted_rules")
-        .and_then(Value::as_array)
-        .is_some_and(|rules| !rules.is_empty())
+    if crate::routing::identity::auth::is_device_revoked(
+        state,
+        share.recipient_principal_id.as_str(),
+        &share.recipient_device_id,
+    )
+    .await
     {
-        return Ok(());
+        return Err("device_revoked");
     }
-    Err("history_not_visible")
+    let device = state
+        .persistence
+        .devices()
+        .get(
+            share.recipient_principal_id.as_str(),
+            &share.recipient_device_id,
+        )
+        .await
+        .map_err(|_| "policy_denied")?
+        .ok_or("policy_denied")?;
+    let policy = serde_json::from_value::<cokret_sdk::HistorySharingPolicyPayloadValue>(
+        policy_value.clone(),
+    )
+    .map_err(|_| "policy_denied")?;
+    cokret_sdk::validate_history_sharing_policy(&policy).map_err(|_| "policy_denied")?;
+    let visibility = share.key_scope.history_visibility.unwrap_or_else(|| {
+        meta.history_visibility
+            .parse()
+            .unwrap_or(cokret_sdk::HistoryVisibility::Restricted)
+    });
+    let receiver_state = realm_key_share_receiver_event_state(
+        state,
+        operation.realm_id.as_str(),
+        share.recipient_principal_id.as_str(),
+    );
+    let input = cokret_sdk::HistoryKeyShareGateInput {
+        visibility,
+        reader: cokret_sdk::HistoryReaderContext {
+            current_active_member: true,
+            event_state: receiver_state,
+            has_discoverability: true,
+            has_preview_token: false,
+        },
+        range: cokret_sdk::HistoryRangeContext {
+            since_invite: true,
+            since_join: receiver_state == cokret_sdk::HistoryReaderEventState::Joined,
+            epoch_span: realm_key_share_epoch_span(
+                share.key_scope.from_epoch,
+                share.key_scope.to_epoch,
+            ),
+        },
+        policy: Some(&policy),
+        key_source: realm_key_share_source(&share),
+        scope: None,
+        device: cokret_sdk::HistoryDeviceGate {
+            revoked: device.revoked_at.is_some(),
+            verified: device.verification_state == "verified",
+        },
+        safety_policy_allows: true,
+        audit: cokret_sdk::HistoryAuditGate {
+            required: policy.audit.share_audit_event_required,
+            satisfied: !policy.audit.share_audit_event_required,
+        },
+    };
+    let decision = cokret_sdk::evaluate_history_key_share_gates(input);
+    if decision.allowed {
+        Ok(())
+    } else {
+        Err(match decision.withheld_reason_code {
+            Some(cokret_sdk::RealmKeyWithheldReasonCode::NotMember) => "not_member",
+            Some(cokret_sdk::RealmKeyWithheldReasonCode::HistoryNotVisible) => {
+                "history_not_visible"
+            }
+            Some(cokret_sdk::RealmKeyWithheldReasonCode::PolicyDenied) => "policy_denied",
+            Some(cokret_sdk::RealmKeyWithheldReasonCode::BlacklistedDevice) => "device_revoked",
+            Some(cokret_sdk::RealmKeyWithheldReasonCode::UnverifiedDevice) => "policy_denied",
+            Some(cokret_sdk::RealmKeyWithheldReasonCode::UnknownSession) => "policy_denied",
+            None => "policy_denied",
+        })
+    }
+}
+
+async fn realm_key_share_receiver_is_current_member(
+    state: &AppState,
+    realm_id: &str,
+    receiver: &str,
+) -> bool {
+    if let Ok(projection) = state.projection.lock()
+        && let Some(member) = projection.member(realm_id, receiver)
+    {
+        return member.state == "join";
+    }
+    crate::routing::spaces::space::realm_has_member_by_id(state, realm_id, receiver).await
+}
+
+fn realm_key_share_receiver_event_state(
+    state: &AppState,
+    realm_id: &str,
+    receiver: &str,
+) -> cokret_sdk::HistoryReaderEventState {
+    if let Ok(projection) = state.projection.lock()
+        && let Some(member) = projection.member(realm_id, receiver)
+    {
+        return match member.state.as_str() {
+            "join" => cokret_sdk::HistoryReaderEventState::Joined,
+            "invite" => cokret_sdk::HistoryReaderEventState::Invited,
+            "leave" | "ban" => cokret_sdk::HistoryReaderEventState::Removed,
+            _ => cokret_sdk::HistoryReaderEventState::None,
+        };
+    }
+    cokret_sdk::HistoryReaderEventState::None
+}
+
+fn realm_key_share_source(
+    share: &cokret_sdk::RealmKeySharePayload,
+) -> cokret_sdk::HistoryKeySource {
+    if share.sender_device_id == share.recipient_device_id {
+        cokret_sdk::HistoryKeySource::OwnDevice
+    } else if share.encrypted_key_ref.is_some() {
+        cokret_sdk::HistoryKeySource::KeyBackup
+    } else {
+        cokret_sdk::HistoryKeySource::VerifiedMemberDevice
+    }
+}
+
+fn realm_key_share_epoch_span(from_epoch: Option<u64>, to_epoch: Option<u64>) -> Option<u64> {
+    Some(to_epoch?.saturating_sub(from_epoch?).saturating_add(1))
 }
 
 pub(crate) fn membership_target(operation: &Operation) -> Option<&str> {

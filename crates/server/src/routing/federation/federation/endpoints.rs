@@ -524,6 +524,9 @@ pub(crate) async fn federation_pull_operations(
         if !operation_is_visible(&operation, &redacted) {
             continue;
         }
+        if !operation_history_visible_for_legacy_federation_pull(state, &operation).await {
+            continue;
+        }
         if operations.len() == limit + 1 {
             break;
         }
@@ -591,7 +594,20 @@ pub(crate) async fn federation_backfill_operations(
         pulled += page.operations.len();
         peer_next_cursor = page.next_cursor.clone();
         peer_has_more = page.has_more;
-        let result = ingest_federation_operations(state, peer.did.as_str(), page.operations).await;
+        let mut visible_operations = Vec::new();
+        for operation in page.operations {
+            if operation_history_visible_for_legacy_federation_pull(state, &operation).await {
+                visible_operations.push(operation);
+            } else {
+                rejected.push(json!({
+                    "operation_id": operation.operation_id,
+                    "code": "history_not_visible",
+                    "message": "operation hidden by history_visibility",
+                }));
+            }
+        }
+        let result =
+            ingest_federation_operations(state, peer.did.as_str(), visible_operations).await;
         accepted.extend(
             result
                 .accepted
@@ -618,6 +634,26 @@ pub(crate) async fn federation_backfill_operations(
         frontier_before,
         frontier_after,
     })
+}
+
+async fn operation_history_visible_for_legacy_federation_pull(
+    state: &AppState,
+    operation: &cokret_sdk::Operation,
+) -> bool {
+    state
+        .persistence
+        .realm_meta()
+        .get(operation.realm_id.as_str())
+        .await
+        .ok()
+        .flatten()
+        .map(|meta| {
+            matches!(
+                meta.history_visibility.as_str(),
+                "world_readable" | "shared"
+            )
+        })
+        .unwrap_or(false)
 }
 
 #[endpoint(

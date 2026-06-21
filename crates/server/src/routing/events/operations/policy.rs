@@ -25,6 +25,27 @@ pub fn operation_policy_reason_code(message: &str) -> (salvo::http::StatusCode, 
             salvo::http::StatusCode::FORBIDDEN,
             crate::error::reasons::TRANSCRIPTION_DENIED,
         )
+    } else if matches!(
+        message,
+        "history_sharing_policy_missing"
+            | "history_not_visible"
+            | "not_member"
+            | "policy_denied"
+            | "device_revoked"
+            | "audit_required"
+    ) {
+        (
+            salvo::http::StatusCode::FORBIDDEN,
+            match message {
+                "history_sharing_policy_missing" => "history_sharing_policy_missing",
+                "history_not_visible" => "history_not_visible",
+                "not_member" => "not_member",
+                "policy_denied" => "policy_denied",
+                "device_revoked" => "device_revoked",
+                "audit_required" => "audit_required",
+                _ => "capability_denied",
+            },
+        )
     } else if message == "not_found" {
         (salvo::http::StatusCode::NOT_FOUND, "not_found")
     } else {
