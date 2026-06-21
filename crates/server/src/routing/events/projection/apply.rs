@@ -5,7 +5,7 @@ use super::*;
 use crate::kinds;
 use crate::persistence::{MlsKeyPackageRow, MlsWelcomeRecord};
 use crate::reducer::MlsWelcomeQueueKey;
-use crate::state::AppState;
+use crate::state::{AppState, DeviceMessageRecord};
 
 pub async fn project_accepted_operations_from_device(
     state: &AppState,
@@ -579,6 +579,9 @@ async fn project_accepted_operations_inner(
         if kinds::canonical_kind_string(operation) == kinds::CK_DEVICE_AUTHORIZE {
             project_device_authorize(state, &operation.payload).await;
         }
+        if kinds::canonical_kind_for_operation(operation) == Some(kinds::CK_REALM_KEY_SHARE) {
+            project_realm_key_share_to_device(state, origin, operation).await;
+        }
         // Also apply to the deterministic reducer.
         let reducer_effect =
             if actor_private_read_cursor_matches_origin(origin, source_device_id, operation) {
@@ -665,6 +668,36 @@ async fn project_accepted_operations_inner(
             state, origin, operation,
         )
         .await;
+    }
+}
+
+async fn project_realm_key_share_to_device(state: &AppState, origin: &str, operation: &Operation) {
+    let Ok(share) =
+        serde_json::from_value::<cokret_sdk::RealmKeySharePayload>(operation.payload.clone())
+    else {
+        return;
+    };
+    let content = json!({
+        "kind": kinds::CK_REALM_KEY_SHARE,
+        "realm_id": operation.realm_id,
+        "operation_id": operation.operation_id,
+        "payload": operation.payload,
+    });
+    let record = DeviceMessageRecord {
+        idempotency_key: format!("realm_key_share:{}", operation.operation_id),
+        sender: origin.to_owned(),
+        recipient: share.recipient_principal_id.to_string(),
+        device_id: share.recipient_device_id,
+        position: state.next_to_device_position(),
+        content,
+        created_at: operation.created_at,
+    };
+    if let Err(error) = state.persistence.device_messages().append(record).await {
+        tracing::warn!(
+            %error,
+            operation_id = %operation.operation_id,
+            "failed to enqueue realm key share to-device message"
+        );
     }
 }
 
