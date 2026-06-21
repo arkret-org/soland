@@ -30,6 +30,11 @@ CREATE TABLE public.account_lifecycle (
     CONSTRAINT account_lifecycle_state_check CHECK ((state = ANY (ARRAY['active'::text, 'locked'::text, 'suspended'::text, 'deactivated'::text, 'erasure_pending'::text])))
 );
 
+CREATE TABLE public.handle_releases (
+    localpart text NOT NULL,
+    released_at timestamp with time zone NOT NULL
+);
+
 CREATE TABLE public.agent_grants (
     id text NOT NULL,
     agent_principal_id text NOT NULL,
@@ -542,6 +547,61 @@ CREATE TABLE public.moderation_reports (
     created_at timestamp with time zone DEFAULT now() NOT NULL
 );
 
+CREATE TABLE public.organizations (
+    organization_id text NOT NULL,
+    organization_did text NOT NULL,
+    handle text,
+    display_name text NOT NULL,
+    verified boolean DEFAULT true NOT NULL,
+    members jsonb DEFAULT '[]'::jsonb NOT NULL,
+    member_count bigint DEFAULT 0 NOT NULL,
+    created_by text NOT NULL,
+    created_at timestamp with time zone NOT NULL,
+    updated_at timestamp with time zone NOT NULL
+);
+
+CREATE TABLE public.organization_policies (
+    organization_id text NOT NULL,
+    policy_id text NOT NULL,
+    payload jsonb NOT NULL,
+    version bigint NOT NULL,
+    updated_by text NOT NULL,
+    updated_at timestamp with time zone NOT NULL,
+    CONSTRAINT organization_policies_version_check CHECK ((version >= 0))
+);
+
+CREATE TABLE public.realm_organizations (
+    realm_id text NOT NULL,
+    organization_id text NOT NULL,
+    linked_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+CREATE TABLE public.realm_moderation_policies (
+    realm_id text NOT NULL,
+    payload jsonb NOT NULL,
+    updated_by text NOT NULL,
+    updated_at timestamp with time zone NOT NULL
+);
+
+CREATE TABLE public.retention_policies (
+    realm_id text NOT NULL,
+    ttl_seconds bigint NOT NULL,
+    updated_by text NOT NULL,
+    updated_at timestamp with time zone NOT NULL,
+    CONSTRAINT retention_policies_ttl_seconds_check CHECK ((ttl_seconds >= 0))
+);
+
+CREATE TABLE public.retention_tombstones (
+    event_id text NOT NULL,
+    realm_id text NOT NULL,
+    reason text NOT NULL,
+    policy_ttl_seconds bigint NOT NULL,
+    expired_at timestamp with time zone NOT NULL,
+    tombstoned_at timestamp with time zone NOT NULL,
+    sealed boolean DEFAULT false NOT NULL,
+    CONSTRAINT retention_tombstones_policy_ttl_seconds_check CHECK ((policy_ttl_seconds >= 0))
+);
+
 CREATE TABLE public.multisig_pending (
     id text NOT NULL,
     realm_id uuid NOT NULL,
@@ -952,6 +1012,9 @@ ALTER TABLE ONLY public.accounts
 ALTER TABLE ONLY public.account_lifecycle
     ADD CONSTRAINT account_lifecycle_pkey PRIMARY KEY (principal_id);
 
+ALTER TABLE ONLY public.handle_releases
+    ADD CONSTRAINT handle_releases_pkey PRIMARY KEY (localpart);
+
 ALTER TABLE ONLY public.agent_grants
     ADD CONSTRAINT agent_grants_pkey PRIMARY KEY (id);
 
@@ -1106,6 +1169,24 @@ ALTER TABLE ONLY public.moderation_actions
 
 ALTER TABLE ONLY public.moderation_reports
     ADD CONSTRAINT moderation_reports_pkey PRIMARY KEY (id);
+
+ALTER TABLE ONLY public.organizations
+    ADD CONSTRAINT organizations_pkey PRIMARY KEY (organization_id);
+
+ALTER TABLE ONLY public.organization_policies
+    ADD CONSTRAINT organization_policies_pkey PRIMARY KEY (organization_id);
+
+ALTER TABLE ONLY public.realm_organizations
+    ADD CONSTRAINT realm_organizations_pkey PRIMARY KEY (realm_id, organization_id);
+
+ALTER TABLE ONLY public.realm_moderation_policies
+    ADD CONSTRAINT realm_moderation_policies_pkey PRIMARY KEY (realm_id);
+
+ALTER TABLE ONLY public.retention_policies
+    ADD CONSTRAINT retention_policies_pkey PRIMARY KEY (realm_id);
+
+ALTER TABLE ONLY public.retention_tombstones
+    ADD CONSTRAINT retention_tombstones_pkey PRIMARY KEY (event_id);
 
 ALTER TABLE ONLY public.multisig_pending
     ADD CONSTRAINT multisig_pending_pkey PRIMARY KEY (id);
@@ -1326,6 +1407,14 @@ CREATE INDEX moderation_actions_target_idx ON public.moderation_actions USING bt
 CREATE INDEX moderation_reports_space_idx ON public.moderation_reports USING btree (realm_id);
 
 CREATE INDEX moderation_reports_target_idx ON public.moderation_reports USING btree (target_actor_id);
+
+CREATE INDEX organizations_handle_idx ON public.organizations USING btree (handle) WHERE (handle IS NOT NULL);
+
+CREATE INDEX organizations_did_idx ON public.organizations USING btree (organization_did);
+
+CREATE INDEX realm_organizations_organization_idx ON public.realm_organizations USING btree (organization_id);
+
+CREATE INDEX retention_tombstones_realm_idx ON public.retention_tombstones USING btree (realm_id);
 
 CREATE INDEX multisig_pending_claim_seq_idx ON public.multisig_pending USING btree (claim_seq);
 

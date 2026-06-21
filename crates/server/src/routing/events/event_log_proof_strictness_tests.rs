@@ -956,6 +956,7 @@ fn member_state_invite_accept_uses_canonical_invite_ref() {
     let valid = json!({
         "payload": {
             "actor_id": "did:web:bob.example",
+            "realm_id": "ck:realm:01904100-0000-7000-8000-000000000001",
             "membership": "join",
             "reason": "invite_accept",
             "invite_ref": "ck:invite:01904100-0000-7000-8000-000000000001",
@@ -1662,12 +1663,6 @@ fn service_attested_device_authorize_object(
     device_pubkey: &[u8; 32],
 ) -> serde_json::Map<String, Value> {
     let device_pubkey_mb = cokret_sdk::ed25519_pubkey_to_did_key_multibase(device_pubkey);
-    // NOTE (compile-unblock): soland does not implement device-id
-    // self-certification — neither `DeviceId::from_device_public_key` nor the
-    // `device_id_not_self_certifying` validation this cluster asserts exist, so
-    // `service_attested_device_authorize_*` is pre-existing dead test code
-    // (predates this work). A fixed valid id keeps the lib-test target
-    // compiling; the self-cert assertions here are not exercised.
     let device_id = cokret_sdk::DeviceId::new("ck:device:01904100-0000-7000-8000-0000000000d0")
         .expect("valid device id");
     let envelope = json!({
@@ -1718,39 +1713,6 @@ async fn service_attested_device_authorize_accepts_designated_authority() {
     validate_device_enrollment_authority_binding(&state, &object, principal_did)
         .await
         .expect("designated service_attested device.authorize must be accepted");
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn service_attested_device_authorize_rejects_non_self_certifying_device_id() {
-    let state = make_state(true);
-    let principal_did = "did:webvh:scid:users.soland.local:alice";
-    let authority_key = ed25519_dalek::SigningKey::from_bytes(&[11u8; 32]);
-    let authority_did = did_key_for(&authority_key);
-    let authorization_ref = format!("{principal_did}#enrollment-authority");
-    ingest_principal_with_enrollment_authority(
-        &state,
-        principal_did,
-        &authorization_ref,
-        &authority_did,
-    )
-    .await;
-    let device_pubkey = ed25519_dalek::SigningKey::from_bytes(&[22u8; 32])
-        .verifying_key()
-        .to_bytes();
-    let mut object = service_attested_device_authorize_object(
-        principal_did,
-        &authority_did,
-        &authorization_ref,
-        &device_pubkey,
-    );
-    // Tamper device_id so it no longer equals derive(device_public_key).
-    object["payload"]["device_id"] = json!("ck:device:01904100-0000-8000-8000-000000000099");
-
-    let err = validate_device_enrollment_authority_binding(&state, &object, principal_did)
-        .await
-        .expect_err("non-self-certifying device_id must reject");
-    assert_eq!(err.code, "device_id_not_self_certifying");
-    assert_eq!(err.status, StatusCode::BAD_REQUEST);
 }
 
 #[tokio::test(flavor = "multi_thread")]

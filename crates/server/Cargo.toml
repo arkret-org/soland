@@ -79,6 +79,7 @@ soland-data = {workspace = true}
 subtle = {workspace = true}
 thiserror = {workspace = true}
 tokio = {workspace = true,features = ["io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"]}
+tokio-postgres = {workspace = true}
 tracing = {workspace = true}
 tracing-appender = {workspace = true}
 tracing-opentelemetry = {workspace = true,default-features = false,optional = true}

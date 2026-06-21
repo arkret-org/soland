@@ -84,7 +84,7 @@ pub(crate) fn membership_target(operation: &Operation) -> Option<&str> {
         .and_then(Value::as_str)
 }
 
-pub(crate) fn validate_realm_moderation_policy(
+pub(crate) async fn validate_realm_moderation_policy(
     state: &AppState,
     operation: &Operation,
 ) -> Result<(), &'static str> {
@@ -92,15 +92,19 @@ pub(crate) fn validate_realm_moderation_policy(
         return Ok(());
     }
     let realm_id = operation.realm_id.as_str();
-    if crate::routing::organizations::realm_policy_override_requires_approval(
+    let requires_approval = crate::routing::organizations::realm_policy_override_requires_approval(
         state,
         realm_id,
         &operation.payload,
-    ) && !crate::routing::organizations::realm_policy_override_has_approval(
+    )
+    .await;
+    let has_approval = crate::routing::organizations::realm_policy_override_has_approval(
         state,
         realm_id,
         &operation.payload,
-    ) {
+    )
+    .await;
+    if requires_approval && !has_approval {
         return Err("requires_organization_approval");
     }
     Ok(())

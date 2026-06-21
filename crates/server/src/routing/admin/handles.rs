@@ -367,7 +367,9 @@ async fn revoke_handle(
         .put(&account)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
-    crate::routing::identity::account::record_handle_release(state, &released);
+    crate::routing::identity::account::record_handle_release(state, &released)
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?;
 
     append_audit_log(
         state,

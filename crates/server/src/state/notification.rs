@@ -1,9 +1,21 @@
 use std::collections::BTreeMap;
+use std::sync::Arc;
+use std::time::Duration;
 
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
+use diesel::sql_query;
+use diesel::sql_types::Text;
+use diesel_async::RunQueryDsl;
+use futures_util::future::poll_fn;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use tokio::sync::broadcast;
+use tokio_postgres::{AsyncMessage, NoTls};
+
+use crate::db::PgPool;
 
 pub(crate) const MAX_SUBSCRIBE_RECONNECT_WINDOW_MS: u64 = 86_400_000;
+const EVENT_NOTIFICATION_CHANNEL: &str = "soland_event_notifications";
 
 /// Poison-free mutex for every [`crate::state::AppState`] shared surface.
 ///
@@ -62,13 +74,13 @@ impl<T: ?Sized> Mutex<T> {
 ///   - `Unauthorized` — subscriber's session token revoked / expired mid-stream; client MUST close
 ///   - `Ephemeral` — short-TTL account-sync relay wakeup; events.subscribe ignores it
 ///     + re-auth
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct EventNotification {
     pub realm_id: String,
     pub kind: EventNotificationKind,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum EventNotificationKind {
     /// Ordinary projection event (one `ck.message.create` etc.).
     Event {
@@ -104,6 +116,127 @@ pub enum EventNotificationKind {
     Unauthorized { reason: String },
     /// Short-TTL account sync wakeup for relayed ephemeral state.
     Ephemeral { kind: String },
+}
+
+#[derive(Clone)]
+pub struct EventBroadcast {
+    local: broadcast::Sender<EventNotification>,
+    relay: Option<Arc<PgEventNotificationRelay>>,
+}
+
+#[derive(Clone)]
+struct PgEventNotificationRelay {
+    pool: PgPool,
+    database_url: String,
+    origin: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct PgEventNotificationEnvelope {
+    origin: String,
+    notification: EventNotification,
+}
+
+impl EventBroadcast {
+    pub fn new(pool: Option<PgPool>, database_url: Option<String>, capacity: usize) -> Self {
+        let local = broadcast::channel::<EventNotification>(capacity).0;
+        let relay = pool
+            .zip(database_url.filter(|value| !value.trim().is_empty()))
+            .map(|(pool, database_url)| {
+                Arc::new(PgEventNotificationRelay {
+                    pool,
+                    database_url,
+                    origin: uuid::Uuid::now_v7().to_string(),
+                })
+            });
+        if let Some(relay) = relay.clone()
+            && let Ok(handle) = tokio::runtime::Handle::try_current()
+        {
+            let local_for_listener = local.clone();
+            handle.spawn(async move {
+                relay.listen_forever(local_for_listener).await;
+            });
+        }
+        Self { local, relay }
+    }
+
+    pub fn subscribe(&self) -> broadcast::Receiver<EventNotification> {
+        self.local.subscribe()
+    }
+
+    pub fn send(
+        &self,
+        notification: EventNotification,
+    ) -> Result<usize, broadcast::error::SendError<EventNotification>> {
+        let local_result = self.local.send(notification.clone());
+        if let Some(relay) = self.relay.clone()
+            && let Ok(handle) = tokio::runtime::Handle::try_current()
+        {
+            handle.spawn(async move {
+                if let Err(error) = relay.publish(notification).await {
+                    tracing::warn!(%error, "failed to publish event notification over PostgreSQL");
+                }
+            });
+        }
+        local_result
+    }
+}
+
+impl PgEventNotificationRelay {
+    async fn publish(&self, notification: EventNotification) -> anyhow::Result<()> {
+        let envelope = PgEventNotificationEnvelope {
+            origin: self.origin.clone(),
+            notification,
+        };
+        let payload = serde_json::to_string(&envelope)?;
+        let mut conn = crate::persistence::pg_conn(&self.pool).await?;
+        sql_query("SELECT pg_notify('soland_event_notifications', $1)")
+            .bind::<Text, _>(&payload)
+            .execute(&mut *conn)
+            .await?;
+        Ok(())
+    }
+
+    async fn listen_forever(self: Arc<Self>, local: broadcast::Sender<EventNotification>) {
+        loop {
+            if let Err(error) = self.listen_once(local.clone()).await {
+                tracing::warn!(%error, "PostgreSQL event notification listener stopped");
+            }
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        }
+    }
+
+    async fn listen_once(&self, local: broadcast::Sender<EventNotification>) -> anyhow::Result<()> {
+        let (client, mut connection) = tokio_postgres::connect(&self.database_url, NoTls).await?;
+        client
+            .batch_execute(&format!("LISTEN {EVENT_NOTIFICATION_CHANNEL}"))
+            .await?;
+        loop {
+            match poll_fn(|cx| connection.poll_message(cx)).await {
+                Some(Ok(AsyncMessage::Notification(notification))) => {
+                    if notification.channel() != EVENT_NOTIFICATION_CHANNEL {
+                        continue;
+                    }
+                    let envelope =
+                        serde_json::from_str::<PgEventNotificationEnvelope>(notification.payload());
+                    let Ok(envelope) = envelope else {
+                        tracing::warn!("ignored malformed PostgreSQL event notification payload");
+                        continue;
+                    };
+                    if envelope.origin == self.origin {
+                        continue;
+                    }
+                    let _ = local.send(envelope.notification);
+                }
+                Some(Ok(AsyncMessage::Notice(notice))) => {
+                    tracing::debug!(message = %notice.message(), "PostgreSQL listener notice");
+                }
+                Some(Ok(_)) => {}
+                Some(Err(error)) => return Err(error.into()),
+                None => return Ok(()),
+            }
+        }
+    }
 }
 
 impl EventNotification {

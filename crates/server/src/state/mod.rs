@@ -19,7 +19,9 @@ pub use member_identity::{
     MemberIdentityEventRecord, MemberIdentityRegistry, MemberIdentityReplacementEdge,
     MemberIdentitySnapshot, MemberIdentitySubjectKey,
 };
-pub use notification::{EventNotification, EventNotificationKind, Mutex, SubscribeReconnectGate};
+pub use notification::{
+    EventBroadcast, EventNotification, EventNotificationKind, Mutex, SubscribeReconnectGate,
+};
 pub use realm_directory::{RealmDirectoryEntry, RealmDirectoryIndex, RealmDirectoryQuery};
 pub use records::{
     ACCOUNT_LOCKOUT_DURATION, ACCOUNT_LOCKOUT_THRESHOLD, ACCOUNT_LOCKOUT_WINDOW, AccountDataRecord,

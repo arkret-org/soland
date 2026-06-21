@@ -13,6 +13,9 @@ pub(super) async fn search_organizations(
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = body.into_inner();
     let limit = checked_limit(body.limit.map(|limit| limit as usize))?;
+    organizations::refresh_organization_projection(state)
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?;
     let mut results = organizations::organization_records_for_directory(state)
         .into_iter()
         .filter(|organization| query_matches(organization, body.query.as_deref()))
@@ -52,6 +55,9 @@ pub(super) async fn resolve_organization(
             "organization_did or handle is required",
         ));
     }
+    organizations::refresh_organization_projection(state)
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?;
     if let Some(organization) = organizations::organization_records_for_directory(state)
         .into_iter()
         .find(|organization| {

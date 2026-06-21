@@ -1,0 +1,901 @@
+use super::*;
+
+#[async_trait]
+pub trait HandleReleaseStore: Send + Sync {
+    async fn put(
+        &self,
+        localpart: &str,
+        released_at: chrono::DateTime<chrono::Utc>,
+    ) -> PersistenceResult<()>;
+    async fn snapshot_all(&self)
+    -> PersistenceResult<Vec<(String, chrono::DateTime<chrono::Utc>)>>;
+}
+
+#[async_trait]
+pub trait RetentionPolicyStore: Send + Sync {
+    async fn get(&self, realm_id: &str) -> PersistenceResult<Option<RetentionPolicyRecord>>;
+    async fn put(&self, record: &RetentionPolicyRecord) -> PersistenceResult<()>;
+    async fn snapshot_all(&self) -> PersistenceResult<Vec<RetentionPolicyRecord>>;
+}
+
+#[async_trait]
+pub trait RetentionTombstoneStore: Send + Sync {
+    async fn get(&self, event_id: &str) -> PersistenceResult<Option<RetentionTombstoneRecord>>;
+    async fn put(&self, record: &RetentionTombstoneRecord) -> PersistenceResult<()>;
+    async fn snapshot_all(&self) -> PersistenceResult<Vec<RetentionTombstoneRecord>>;
+}
+
+#[async_trait]
+pub trait OrganizationStore: Send + Sync {
+    async fn get(&self, organization_id: &str) -> PersistenceResult<Option<OrganizationRecord>>;
+    async fn put(&self, record: &OrganizationRecord) -> PersistenceResult<()>;
+    async fn list(&self) -> PersistenceResult<Vec<OrganizationRecord>>;
+}
+
+#[async_trait]
+pub trait OrganizationPolicyStore: Send + Sync {
+    async fn get(
+        &self,
+        organization_id: &str,
+    ) -> PersistenceResult<Option<OrganizationPolicyRecord>>;
+    async fn put(&self, record: &OrganizationPolicyRecord) -> PersistenceResult<()>;
+    async fn snapshot_all(&self) -> PersistenceResult<Vec<OrganizationPolicyRecord>>;
+}
+
+#[async_trait]
+pub trait RealmOrganizationStore: Send + Sync {
+    async fn link(&self, realm_id: &str, organization_id: &str) -> PersistenceResult<()>;
+    async fn snapshot_all(&self) -> PersistenceResult<Vec<(String, BTreeSet<String>)>>;
+}
+
+#[async_trait]
+pub trait RealmModerationPolicyStore: Send + Sync {
+    async fn get(&self, realm_id: &str) -> PersistenceResult<Option<RealmModerationPolicyRecord>>;
+    async fn put(&self, record: &RealmModerationPolicyRecord) -> PersistenceResult<()>;
+    async fn snapshot_all(&self) -> PersistenceResult<Vec<RealmModerationPolicyRecord>>;
+}
+
+pub(crate) struct MemoryHandleReleaseStore {
+    data: Arc<Mutex<BTreeMap<String, chrono::DateTime<chrono::Utc>>>>,
+}
+
+impl MemoryHandleReleaseStore {
+    pub(crate) fn new() -> Self {
+        Self {
+            data: Arc::new(Mutex::new(BTreeMap::new())),
+        }
+    }
+}
+
+#[async_trait]
+impl HandleReleaseStore for MemoryHandleReleaseStore {
+    async fn put(
+        &self,
+        localpart: &str,
+        released_at: chrono::DateTime<chrono::Utc>,
+    ) -> PersistenceResult<()> {
+        self.data
+            .lock()
+            .expect("handle release lock")
+            .insert(localpart.to_owned(), released_at);
+        Ok(())
+    }
+
+    async fn snapshot_all(
+        &self,
+    ) -> PersistenceResult<Vec<(String, chrono::DateTime<chrono::Utc>)>> {
+        Ok(self
+            .data
+            .lock()
+            .expect("handle release lock")
+            .iter()
+            .map(|(localpart, released_at)| (localpart.clone(), *released_at))
+            .collect())
+    }
+}
+
+pub(crate) struct MemoryRetentionPolicyStore {
+    data: Arc<Mutex<BTreeMap<String, RetentionPolicyRecord>>>,
+}
+
+impl MemoryRetentionPolicyStore {
+    pub(crate) fn new() -> Self {
+        Self {
+            data: Arc::new(Mutex::new(BTreeMap::new())),
+        }
+    }
+}
+
+#[async_trait]
+impl RetentionPolicyStore for MemoryRetentionPolicyStore {
+    async fn get(&self, realm_id: &str) -> PersistenceResult<Option<RetentionPolicyRecord>> {
+        Ok(self
+            .data
+            .lock()
+            .expect("retention policy lock")
+            .get(realm_id)
+            .cloned())
+    }
+
+    async fn put(&self, record: &RetentionPolicyRecord) -> PersistenceResult<()> {
+        self.data
+            .lock()
+            .expect("retention policy lock")
+            .insert(record.realm_id.clone(), record.clone());
+        Ok(())
+    }
+
+    async fn snapshot_all(&self) -> PersistenceResult<Vec<RetentionPolicyRecord>> {
+        Ok(self
+            .data
+            .lock()
+            .expect("retention policy lock")
+            .values()
+            .cloned()
+            .collect())
+    }
+}
+
+pub(crate) struct MemoryRetentionTombstoneStore {
+    data: Arc<Mutex<BTreeMap<String, RetentionTombstoneRecord>>>,
+}
+
+impl MemoryRetentionTombstoneStore {
+    pub(crate) fn new() -> Self {
+        Self {
+            data: Arc::new(Mutex::new(BTreeMap::new())),
+        }
+    }
+}
+
+#[async_trait]
+impl RetentionTombstoneStore for MemoryRetentionTombstoneStore {
+    async fn get(&self, event_id: &str) -> PersistenceResult<Option<RetentionTombstoneRecord>> {
+        Ok(self
+            .data
+            .lock()
+            .expect("retention tombstone lock")
+            .get(event_id)
+            .cloned())
+    }
+
+    async fn put(&self, record: &RetentionTombstoneRecord) -> PersistenceResult<()> {
+        self.data
+            .lock()
+            .expect("retention tombstone lock")
+            .insert(record.event_id.clone(), record.clone());
+        Ok(())
+    }
+
+    async fn snapshot_all(&self) -> PersistenceResult<Vec<RetentionTombstoneRecord>> {
+        Ok(self
+            .data
+            .lock()
+            .expect("retention tombstone lock")
+            .values()
+            .cloned()
+            .collect())
+    }
+}
+
+pub(crate) struct MemoryOrganizationStore {
+    data: Arc<Mutex<BTreeMap<String, OrganizationRecord>>>,
+}
+
+impl MemoryOrganizationStore {
+    pub(crate) fn new() -> Self {
+        Self {
+            data: Arc::new(Mutex::new(BTreeMap::new())),
+        }
+    }
+}
+
+#[async_trait]
+impl OrganizationStore for MemoryOrganizationStore {
+    async fn get(&self, organization_id: &str) -> PersistenceResult<Option<OrganizationRecord>> {
+        Ok(self
+            .data
+            .lock()
+            .expect("organization lock")
+            .get(organization_id)
+            .cloned())
+    }
+
+    async fn put(&self, record: &OrganizationRecord) -> PersistenceResult<()> {
+        self.data
+            .lock()
+            .expect("organization lock")
+            .insert(record.organization_id.clone(), record.clone());
+        Ok(())
+    }
+
+    async fn list(&self) -> PersistenceResult<Vec<OrganizationRecord>> {
+        Ok(self
+            .data
+            .lock()
+            .expect("organization lock")
+            .values()
+            .cloned()
+            .collect())
+    }
+}
+
+pub(crate) struct MemoryOrganizationPolicyStore {
+    data: Arc<Mutex<BTreeMap<String, OrganizationPolicyRecord>>>,
+}
+
+impl MemoryOrganizationPolicyStore {
+    pub(crate) fn new() -> Self {
+        Self {
+            data: Arc::new(Mutex::new(BTreeMap::new())),
+        }
+    }
+}
+
+#[async_trait]
+impl OrganizationPolicyStore for MemoryOrganizationPolicyStore {
+    async fn get(
+        &self,
+        organization_id: &str,
+    ) -> PersistenceResult<Option<OrganizationPolicyRecord>> {
+        Ok(self
+            .data
+            .lock()
+            .expect("organization policy lock")
+            .get(organization_id)
+            .cloned())
+    }
+
+    async fn put(&self, record: &OrganizationPolicyRecord) -> PersistenceResult<()> {
+        self.data
+            .lock()
+            .expect("organization policy lock")
+            .insert(record.organization_id.clone(), record.clone());
+        Ok(())
+    }
+
+    async fn snapshot_all(&self) -> PersistenceResult<Vec<OrganizationPolicyRecord>> {
+        Ok(self
+            .data
+            .lock()
+            .expect("organization policy lock")
+            .values()
+            .cloned()
+            .collect())
+    }
+}
+
+pub(crate) struct MemoryRealmOrganizationStore {
+    data: Arc<Mutex<BTreeMap<String, BTreeSet<String>>>>,
+}
+
+impl MemoryRealmOrganizationStore {
+    pub(crate) fn new() -> Self {
+        Self {
+            data: Arc::new(Mutex::new(BTreeMap::new())),
+        }
+    }
+}
+
+#[async_trait]
+impl RealmOrganizationStore for MemoryRealmOrganizationStore {
+    async fn link(&self, realm_id: &str, organization_id: &str) -> PersistenceResult<()> {
+        self.data
+            .lock()
+            .expect("realm organization lock")
+            .entry(realm_id.to_owned())
+            .or_default()
+            .insert(organization_id.to_owned());
+        Ok(())
+    }
+
+    async fn snapshot_all(&self) -> PersistenceResult<Vec<(String, BTreeSet<String>)>> {
+        Ok(self
+            .data
+            .lock()
+            .expect("realm organization lock")
+            .iter()
+            .map(|(realm_id, organizations)| (realm_id.clone(), organizations.clone()))
+            .collect())
+    }
+}
+
+pub(crate) struct MemoryRealmModerationPolicyStore {
+    data: Arc<Mutex<BTreeMap<String, RealmModerationPolicyRecord>>>,
+}
+
+impl MemoryRealmModerationPolicyStore {
+    pub(crate) fn new() -> Self {
+        Self {
+            data: Arc::new(Mutex::new(BTreeMap::new())),
+        }
+    }
+}
+
+#[async_trait]
+impl RealmModerationPolicyStore for MemoryRealmModerationPolicyStore {
+    async fn get(&self, realm_id: &str) -> PersistenceResult<Option<RealmModerationPolicyRecord>> {
+        Ok(self
+            .data
+            .lock()
+            .expect("realm moderation policy lock")
+            .get(realm_id)
+            .cloned())
+    }
+
+    async fn put(&self, record: &RealmModerationPolicyRecord) -> PersistenceResult<()> {
+        self.data
+            .lock()
+            .expect("realm moderation policy lock")
+            .insert(record.realm_id.clone(), record.clone());
+        Ok(())
+    }
+
+    async fn snapshot_all(&self) -> PersistenceResult<Vec<RealmModerationPolicyRecord>> {
+        Ok(self
+            .data
+            .lock()
+            .expect("realm moderation policy lock")
+            .values()
+            .cloned()
+            .collect())
+    }
+}
+
+pub(crate) struct PgHandleReleaseStore {
+    pub(crate) pool: PgPool,
+}
+
+#[async_trait]
+impl HandleReleaseStore for PgHandleReleaseStore {
+    async fn put(
+        &self,
+        localpart: &str,
+        released_at: chrono::DateTime<chrono::Utc>,
+    ) -> PersistenceResult<()> {
+        let mut conn = pg_conn(&self.pool).await?;
+        sql_query(
+            "INSERT INTO handle_releases (localpart, released_at) \
+             VALUES ($1, $2) \
+             ON CONFLICT (localpart) DO UPDATE SET released_at = EXCLUDED.released_at",
+        )
+        .bind::<Text, _>(localpart)
+        .bind::<Timestamptz, _>(released_at)
+        .execute(&mut *conn)
+        .await
+        .map(|_| ())
+        .map_err(PersistenceError::from)
+    }
+
+    async fn snapshot_all(
+        &self,
+    ) -> PersistenceResult<Vec<(String, chrono::DateTime<chrono::Utc>)>> {
+        let mut conn = pg_conn(&self.pool).await?;
+        sql_query("SELECT localpart, released_at FROM handle_releases ORDER BY localpart")
+            .load::<HandleReleaseRow>(&mut *conn)
+            .await
+            .map(|rows| {
+                rows.into_iter()
+                    .map(|row| (row.localpart, row.released_at))
+                    .collect()
+            })
+            .map_err(PersistenceError::from)
+    }
+}
+
+#[derive(QueryableByName)]
+struct HandleReleaseRow {
+    #[diesel(sql_type = Text)]
+    localpart: String,
+    #[diesel(sql_type = Timestamptz)]
+    released_at: chrono::DateTime<chrono::Utc>,
+}
+
+pub(crate) struct PgRetentionPolicyStore {
+    pub(crate) pool: PgPool,
+}
+
+#[async_trait]
+impl RetentionPolicyStore for PgRetentionPolicyStore {
+    async fn get(&self, realm_id: &str) -> PersistenceResult<Option<RetentionPolicyRecord>> {
+        let mut conn = pg_conn(&self.pool).await?;
+        sql_query(
+            "SELECT realm_id, ttl_seconds, updated_by, updated_at \
+             FROM retention_policies WHERE realm_id = $1",
+        )
+        .bind::<Text, _>(realm_id)
+        .get_result::<RetentionPolicyRow>(&mut *conn)
+        .await
+        .optional()
+        .map(|row| row.map(RetentionPolicyRecord::from))
+        .map_err(PersistenceError::from)
+    }
+
+    async fn put(&self, record: &RetentionPolicyRecord) -> PersistenceResult<()> {
+        let mut conn = pg_conn(&self.pool).await?;
+        sql_query(
+            "INSERT INTO retention_policies (realm_id, ttl_seconds, updated_by, updated_at) \
+             VALUES ($1, $2, $3, $4) \
+             ON CONFLICT (realm_id) DO UPDATE SET \
+               ttl_seconds = EXCLUDED.ttl_seconds, \
+               updated_by = EXCLUDED.updated_by, \
+               updated_at = EXCLUDED.updated_at",
+        )
+        .bind::<Text, _>(&record.realm_id)
+        .bind::<BigInt, _>(record.ttl_seconds)
+        .bind::<Text, _>(&record.updated_by)
+        .bind::<Timestamptz, _>(record.updated_at)
+        .execute(&mut *conn)
+        .await
+        .map(|_| ())
+        .map_err(PersistenceError::from)
+    }
+
+    async fn snapshot_all(&self) -> PersistenceResult<Vec<RetentionPolicyRecord>> {
+        let mut conn = pg_conn(&self.pool).await?;
+        sql_query(
+            "SELECT realm_id, ttl_seconds, updated_by, updated_at \
+             FROM retention_policies ORDER BY realm_id",
+        )
+        .load::<RetentionPolicyRow>(&mut *conn)
+        .await
+        .map(|rows| rows.into_iter().map(RetentionPolicyRecord::from).collect())
+        .map_err(PersistenceError::from)
+    }
+}
+
+#[derive(QueryableByName)]
+struct RetentionPolicyRow {
+    #[diesel(sql_type = Text)]
+    realm_id: String,
+    #[diesel(sql_type = BigInt)]
+    ttl_seconds: i64,
+    #[diesel(sql_type = Text)]
+    updated_by: String,
+    #[diesel(sql_type = Timestamptz)]
+    updated_at: chrono::DateTime<chrono::Utc>,
+}
+
+impl From<RetentionPolicyRow> for RetentionPolicyRecord {
+    fn from(row: RetentionPolicyRow) -> Self {
+        Self {
+            realm_id: row.realm_id,
+            ttl_seconds: row.ttl_seconds,
+            updated_by: row.updated_by,
+            updated_at: row.updated_at,
+        }
+    }
+}
+
+pub(crate) struct PgRetentionTombstoneStore {
+    pub(crate) pool: PgPool,
+}
+
+#[async_trait]
+impl RetentionTombstoneStore for PgRetentionTombstoneStore {
+    async fn get(&self, event_id: &str) -> PersistenceResult<Option<RetentionTombstoneRecord>> {
+        let mut conn = pg_conn(&self.pool).await?;
+        sql_query(
+            "SELECT event_id, realm_id, reason, policy_ttl_seconds, expired_at, tombstoned_at, sealed \
+             FROM retention_tombstones WHERE event_id = $1",
+        )
+        .bind::<Text, _>(event_id)
+        .get_result::<RetentionTombstoneRow>(&mut *conn)
+        .await
+        .optional()
+        .map(|row| row.map(RetentionTombstoneRecord::from))
+        .map_err(PersistenceError::from)
+    }
+
+    async fn put(&self, record: &RetentionTombstoneRecord) -> PersistenceResult<()> {
+        let mut conn = pg_conn(&self.pool).await?;
+        sql_query(
+            "INSERT INTO retention_tombstones \
+             (event_id, realm_id, reason, policy_ttl_seconds, expired_at, tombstoned_at, sealed) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7) \
+             ON CONFLICT (event_id) DO UPDATE SET \
+               realm_id = EXCLUDED.realm_id, \
+               reason = EXCLUDED.reason, \
+               policy_ttl_seconds = EXCLUDED.policy_ttl_seconds, \
+               expired_at = EXCLUDED.expired_at, \
+               tombstoned_at = EXCLUDED.tombstoned_at, \
+               sealed = EXCLUDED.sealed",
+        )
+        .bind::<Text, _>(&record.event_id)
+        .bind::<Text, _>(&record.realm_id)
+        .bind::<Text, _>(&record.reason)
+        .bind::<BigInt, _>(record.policy_ttl_seconds)
+        .bind::<Timestamptz, _>(record.expired_at)
+        .bind::<Timestamptz, _>(record.tombstoned_at)
+        .bind::<Bool, _>(record.sealed)
+        .execute(&mut *conn)
+        .await
+        .map(|_| ())
+        .map_err(PersistenceError::from)
+    }
+
+    async fn snapshot_all(&self) -> PersistenceResult<Vec<RetentionTombstoneRecord>> {
+        let mut conn = pg_conn(&self.pool).await?;
+        sql_query(
+            "SELECT event_id, realm_id, reason, policy_ttl_seconds, expired_at, tombstoned_at, sealed \
+             FROM retention_tombstones ORDER BY event_id",
+        )
+        .load::<RetentionTombstoneRow>(&mut *conn)
+        .await
+        .map(|rows| {
+            rows.into_iter()
+                .map(RetentionTombstoneRecord::from)
+                .collect()
+        })
+        .map_err(PersistenceError::from)
+    }
+}
+
+#[derive(QueryableByName)]
+struct RetentionTombstoneRow {
+    #[diesel(sql_type = Text)]
+    event_id: String,
+    #[diesel(sql_type = Text)]
+    realm_id: String,
+    #[diesel(sql_type = Text)]
+    reason: String,
+    #[diesel(sql_type = BigInt)]
+    policy_ttl_seconds: i64,
+    #[diesel(sql_type = Timestamptz)]
+    expired_at: chrono::DateTime<chrono::Utc>,
+    #[diesel(sql_type = Timestamptz)]
+    tombstoned_at: chrono::DateTime<chrono::Utc>,
+    #[diesel(sql_type = Bool)]
+    sealed: bool,
+}
+
+impl From<RetentionTombstoneRow> for RetentionTombstoneRecord {
+    fn from(row: RetentionTombstoneRow) -> Self {
+        Self {
+            event_id: row.event_id,
+            realm_id: row.realm_id,
+            reason: row.reason,
+            policy_ttl_seconds: row.policy_ttl_seconds,
+            expired_at: row.expired_at,
+            tombstoned_at: row.tombstoned_at,
+            sealed: row.sealed,
+        }
+    }
+}
+
+pub(crate) struct PgOrganizationStore {
+    pub(crate) pool: PgPool,
+}
+
+#[async_trait]
+impl OrganizationStore for PgOrganizationStore {
+    async fn get(&self, organization_id: &str) -> PersistenceResult<Option<OrganizationRecord>> {
+        let mut conn = pg_conn(&self.pool).await?;
+        sql_query(
+            "SELECT organization_id, organization_did, handle, display_name, verified, members, \
+                    member_count, created_by, created_at, updated_at \
+             FROM organizations WHERE organization_id = $1",
+        )
+        .bind::<Text, _>(organization_id)
+        .get_result::<OrganizationRow>(&mut *conn)
+        .await
+        .optional()
+        .map(|row| row.map(OrganizationRecord::from))
+        .map_err(PersistenceError::from)
+    }
+
+    async fn put(&self, record: &OrganizationRecord) -> PersistenceResult<()> {
+        let mut conn = pg_conn(&self.pool).await?;
+        let members = serde_json::to_value(record.members.iter().collect::<Vec<_>>())
+            .unwrap_or_else(|_| Value::Array(Vec::new()));
+        let member_count = i64::try_from(record.member_count).unwrap_or(i64::MAX);
+        sql_query(
+            "INSERT INTO organizations \
+             (organization_id, organization_did, handle, display_name, verified, members, \
+              member_count, created_by, created_at, updated_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) \
+             ON CONFLICT (organization_id) DO UPDATE SET \
+               organization_did = EXCLUDED.organization_did, \
+               handle = EXCLUDED.handle, \
+               display_name = EXCLUDED.display_name, \
+               verified = EXCLUDED.verified, \
+               members = EXCLUDED.members, \
+               member_count = EXCLUDED.member_count, \
+               updated_at = EXCLUDED.updated_at",
+        )
+        .bind::<Text, _>(&record.organization_id)
+        .bind::<Text, _>(&record.organization_did)
+        .bind::<Nullable<Text>, _>(&record.handle)
+        .bind::<Text, _>(&record.display_name)
+        .bind::<Bool, _>(record.verified)
+        .bind::<Jsonb, _>(&members)
+        .bind::<BigInt, _>(member_count)
+        .bind::<Text, _>(&record.created_by)
+        .bind::<Timestamptz, _>(record.created_at)
+        .bind::<Timestamptz, _>(record.updated_at)
+        .execute(&mut *conn)
+        .await
+        .map(|_| ())
+        .map_err(PersistenceError::from)
+    }
+
+    async fn list(&self) -> PersistenceResult<Vec<OrganizationRecord>> {
+        let mut conn = pg_conn(&self.pool).await?;
+        sql_query(
+            "SELECT organization_id, organization_did, handle, display_name, verified, members, \
+                    member_count, created_by, created_at, updated_at \
+             FROM organizations ORDER BY organization_id",
+        )
+        .load::<OrganizationRow>(&mut *conn)
+        .await
+        .map(|rows| rows.into_iter().map(OrganizationRecord::from).collect())
+        .map_err(PersistenceError::from)
+    }
+}
+
+#[derive(QueryableByName)]
+struct OrganizationRow {
+    #[diesel(sql_type = Text)]
+    organization_id: String,
+    #[diesel(sql_type = Text)]
+    organization_did: String,
+    #[diesel(sql_type = Nullable<Text>)]
+    handle: Option<String>,
+    #[diesel(sql_type = Text)]
+    display_name: String,
+    #[diesel(sql_type = Bool)]
+    verified: bool,
+    #[diesel(sql_type = Jsonb)]
+    members: Value,
+    #[diesel(sql_type = BigInt)]
+    member_count: i64,
+    #[diesel(sql_type = Text)]
+    created_by: String,
+    #[diesel(sql_type = Timestamptz)]
+    created_at: chrono::DateTime<chrono::Utc>,
+    #[diesel(sql_type = Timestamptz)]
+    updated_at: chrono::DateTime<chrono::Utc>,
+}
+
+impl From<OrganizationRow> for OrganizationRecord {
+    fn from(row: OrganizationRow) -> Self {
+        let members = json_string_array(row.members)
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+        Self {
+            organization_id: row.organization_id,
+            organization_did: row.organization_did,
+            handle: row.handle,
+            display_name: row.display_name,
+            verified: row.verified,
+            member_count: usize::try_from(row.member_count.max(0)).unwrap_or(usize::MAX),
+            members,
+            created_by: row.created_by,
+            created_at: row.created_at,
+            updated_at: row.updated_at,
+        }
+    }
+}
+
+pub(crate) struct PgOrganizationPolicyStore {
+    pub(crate) pool: PgPool,
+}
+
+#[async_trait]
+impl OrganizationPolicyStore for PgOrganizationPolicyStore {
+    async fn get(
+        &self,
+        organization_id: &str,
+    ) -> PersistenceResult<Option<OrganizationPolicyRecord>> {
+        let mut conn = pg_conn(&self.pool).await?;
+        sql_query(
+            "SELECT organization_id, policy_id, payload, version, updated_by, updated_at \
+             FROM organization_policies WHERE organization_id = $1",
+        )
+        .bind::<Text, _>(organization_id)
+        .get_result::<OrganizationPolicyRow>(&mut *conn)
+        .await
+        .optional()
+        .map(|row| row.map(OrganizationPolicyRecord::from))
+        .map_err(PersistenceError::from)
+    }
+
+    async fn put(&self, record: &OrganizationPolicyRecord) -> PersistenceResult<()> {
+        let mut conn = pg_conn(&self.pool).await?;
+        let version = i64::try_from(record.version).unwrap_or(i64::MAX);
+        sql_query(
+            "INSERT INTO organization_policies \
+             (organization_id, policy_id, payload, version, updated_by, updated_at) \
+             VALUES ($1, $2, $3, $4, $5, $6) \
+             ON CONFLICT (organization_id) DO UPDATE SET \
+               policy_id = EXCLUDED.policy_id, \
+               payload = EXCLUDED.payload, \
+               version = EXCLUDED.version, \
+               updated_by = EXCLUDED.updated_by, \
+               updated_at = EXCLUDED.updated_at",
+        )
+        .bind::<Text, _>(&record.organization_id)
+        .bind::<Text, _>(&record.policy_id)
+        .bind::<Jsonb, _>(&record.payload)
+        .bind::<BigInt, _>(version)
+        .bind::<Text, _>(&record.updated_by)
+        .bind::<Timestamptz, _>(record.updated_at)
+        .execute(&mut *conn)
+        .await
+        .map(|_| ())
+        .map_err(PersistenceError::from)
+    }
+
+    async fn snapshot_all(&self) -> PersistenceResult<Vec<OrganizationPolicyRecord>> {
+        let mut conn = pg_conn(&self.pool).await?;
+        sql_query(
+            "SELECT organization_id, policy_id, payload, version, updated_by, updated_at \
+             FROM organization_policies ORDER BY organization_id",
+        )
+        .load::<OrganizationPolicyRow>(&mut *conn)
+        .await
+        .map(|rows| {
+            rows.into_iter()
+                .map(OrganizationPolicyRecord::from)
+                .collect()
+        })
+        .map_err(PersistenceError::from)
+    }
+}
+
+#[derive(QueryableByName)]
+struct OrganizationPolicyRow {
+    #[diesel(sql_type = Text)]
+    organization_id: String,
+    #[diesel(sql_type = Text)]
+    policy_id: String,
+    #[diesel(sql_type = Jsonb)]
+    payload: Value,
+    #[diesel(sql_type = BigInt)]
+    version: i64,
+    #[diesel(sql_type = Text)]
+    updated_by: String,
+    #[diesel(sql_type = Timestamptz)]
+    updated_at: chrono::DateTime<chrono::Utc>,
+}
+
+impl From<OrganizationPolicyRow> for OrganizationPolicyRecord {
+    fn from(row: OrganizationPolicyRow) -> Self {
+        Self {
+            organization_id: row.organization_id,
+            policy_id: row.policy_id,
+            payload: row.payload,
+            version: u64::try_from(row.version.max(0)).unwrap_or(u64::MAX),
+            updated_by: row.updated_by,
+            updated_at: row.updated_at,
+        }
+    }
+}
+
+pub(crate) struct PgRealmOrganizationStore {
+    pub(crate) pool: PgPool,
+}
+
+#[async_trait]
+impl RealmOrganizationStore for PgRealmOrganizationStore {
+    async fn link(&self, realm_id: &str, organization_id: &str) -> PersistenceResult<()> {
+        let mut conn = pg_conn(&self.pool).await?;
+        sql_query(
+            "INSERT INTO realm_organizations (realm_id, organization_id, linked_at) \
+             VALUES ($1, $2, NOW()) \
+             ON CONFLICT (realm_id, organization_id) DO NOTHING",
+        )
+        .bind::<Text, _>(realm_id)
+        .bind::<Text, _>(organization_id)
+        .execute(&mut *conn)
+        .await
+        .map(|_| ())
+        .map_err(PersistenceError::from)
+    }
+
+    async fn snapshot_all(&self) -> PersistenceResult<Vec<(String, BTreeSet<String>)>> {
+        let mut conn = pg_conn(&self.pool).await?;
+        let rows = sql_query(
+            "SELECT realm_id, organization_id FROM realm_organizations \
+             ORDER BY realm_id, organization_id",
+        )
+        .load::<RealmOrganizationRow>(&mut *conn)
+        .await
+        .map_err(PersistenceError::from)?;
+        let mut out = BTreeMap::<String, BTreeSet<String>>::new();
+        for row in rows {
+            out.entry(row.realm_id)
+                .or_default()
+                .insert(row.organization_id);
+        }
+        Ok(out.into_iter().collect())
+    }
+}
+
+#[derive(QueryableByName)]
+struct RealmOrganizationRow {
+    #[diesel(sql_type = Text)]
+    realm_id: String,
+    #[diesel(sql_type = Text)]
+    organization_id: String,
+}
+
+pub(crate) struct PgRealmModerationPolicyStore {
+    pub(crate) pool: PgPool,
+}
+
+#[async_trait]
+impl RealmModerationPolicyStore for PgRealmModerationPolicyStore {
+    async fn get(&self, realm_id: &str) -> PersistenceResult<Option<RealmModerationPolicyRecord>> {
+        let mut conn = pg_conn(&self.pool).await?;
+        sql_query(
+            "SELECT realm_id, payload, updated_by, updated_at \
+             FROM realm_moderation_policies WHERE realm_id = $1",
+        )
+        .bind::<Text, _>(realm_id)
+        .get_result::<RealmModerationPolicyRow>(&mut *conn)
+        .await
+        .optional()
+        .map(|row| row.map(RealmModerationPolicyRecord::from))
+        .map_err(PersistenceError::from)
+    }
+
+    async fn put(&self, record: &RealmModerationPolicyRecord) -> PersistenceResult<()> {
+        let mut conn = pg_conn(&self.pool).await?;
+        sql_query(
+            "INSERT INTO realm_moderation_policies (realm_id, payload, updated_by, updated_at) \
+             VALUES ($1, $2, $3, $4) \
+             ON CONFLICT (realm_id) DO UPDATE SET \
+               payload = EXCLUDED.payload, \
+               updated_by = EXCLUDED.updated_by, \
+               updated_at = EXCLUDED.updated_at",
+        )
+        .bind::<Text, _>(&record.realm_id)
+        .bind::<Jsonb, _>(&record.payload)
+        .bind::<Text, _>(&record.updated_by)
+        .bind::<Timestamptz, _>(record.updated_at)
+        .execute(&mut *conn)
+        .await
+        .map(|_| ())
+        .map_err(PersistenceError::from)
+    }
+
+    async fn snapshot_all(&self) -> PersistenceResult<Vec<RealmModerationPolicyRecord>> {
+        let mut conn = pg_conn(&self.pool).await?;
+        sql_query(
+            "SELECT realm_id, payload, updated_by, updated_at \
+             FROM realm_moderation_policies ORDER BY realm_id",
+        )
+        .load::<RealmModerationPolicyRow>(&mut *conn)
+        .await
+        .map(|rows| {
+            rows.into_iter()
+                .map(RealmModerationPolicyRecord::from)
+                .collect()
+        })
+        .map_err(PersistenceError::from)
+    }
+}
+
+#[derive(QueryableByName)]
+struct RealmModerationPolicyRow {
+    #[diesel(sql_type = Text)]
+    realm_id: String,
+    #[diesel(sql_type = Jsonb)]
+    payload: Value,
+    #[diesel(sql_type = Text)]
+    updated_by: String,
+    #[diesel(sql_type = Timestamptz)]
+    updated_at: chrono::DateTime<chrono::Utc>,
+}
+
+impl From<RealmModerationPolicyRow> for RealmModerationPolicyRecord {
+    fn from(row: RealmModerationPolicyRow) -> Self {
+        Self {
+            realm_id: row.realm_id,
+            payload: row.payload,
+            updated_by: row.updated_by,
+            updated_at: row.updated_at,
+        }
+    }
+}

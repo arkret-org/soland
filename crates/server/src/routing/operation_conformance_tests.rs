@@ -284,23 +284,23 @@ fn builtin_operation_conformance_vectors_cover_registry() {
         OperationVector {
             name: "strand update",
             kind: kinds::CK_STRAND_UPDATE,
-            payload: json!({"strand_id": "ck:strand:01904100-0000-7000-8000-ca33616973bb", "patch": {"title": "Launch v2"}}),
+            payload: json!({"target_ref": "ck:strand:01904100-0000-7000-8000-ca33616973bb", "patch": {"title": "Launch v2"}}),
             valid: true,
         },
         OperationVector {
             name: "strand archive",
             kind: kinds::CK_STRAND_ARCHIVE,
-            payload: json!({"strand_id": "ck:strand:01904100-0000-7000-8000-ca33616973bb"}),
+            payload: json!({"target_ref": "ck:strand:01904100-0000-7000-8000-ca33616973bb"}),
             valid: true,
         },
         OperationVector {
             name: "strand restore",
             kind: kinds::CK_STRAND_RESTORE,
-            payload: json!({"strand_id": "ck:strand:01904100-0000-7000-8000-ca33616973bb"}),
+            payload: json!({"target_ref": "ck:strand:01904100-0000-7000-8000-ca33616973bb"}),
             valid: true,
         },
         OperationVector {
-            name: "strand archive missing strand_id",
+            name: "strand archive missing target_ref",
             kind: kinds::CK_STRAND_ARCHIVE,
             payload: json!({"reason": "stale_room"}),
             valid: false,

@@ -599,7 +599,7 @@ mod tests {
         let record = state
             .persistence
             .contacts()
-            .get_scoped(requester, target, "message")
+            .get_scoped(requester, target, "direct_message")
             .await
             .expect("contact store lookup")
             .expect("pending_incoming row was projected");

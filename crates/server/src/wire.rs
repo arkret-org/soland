@@ -970,6 +970,19 @@ pub fn describe(
         rate_limit_policy: Some(cokret_sdk::RateLimitPolicy::windowed_per_minute(600)),
         rate_limit_policy_id: None,
         egress_network_policy: Some(cokret_sdk::EgressNetworkPolicy::deny_private_defaults()),
+        resource_types: Vec::new(),
+        discovery_profiles: Vec::new(),
+        restricted_query_proof: None,
+        ingest_modes: Vec::new(),
+        accept_policy_kind: None,
+        accept_policy_ref: None,
+        default_ttl_seconds: None,
+        max_ttl_seconds: None,
+        revalidation_grace_seconds: None,
+        accepted_resource_kinds: Vec::new(),
+        accepted_did_methods: Vec::new(),
+        takedown_contact: None,
+        rate_limits: None,
         supported_features: vec![
             "org.cokret.soland.feature.auth.logout".to_owned(),
             "org.cokret.soland.feature.contacts.request".to_owned(),
@@ -1094,7 +1107,7 @@ pub fn describe(
             "search": {
                 "directory": {
                     "operation_prefix": "ck.find.directory.",
-                    "resource_types": ["space", "organization", "actor"],
+                    "resource_types": ["realm", "organization", "actor"],
                     "returns_message_hits": false,
                     "returns_snippets": false
                 },

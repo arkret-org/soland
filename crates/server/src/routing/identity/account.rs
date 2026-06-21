@@ -57,9 +57,19 @@ use crate::state::{
 };
 use crate::wire::SolandAccountRegisterOutcome;
 
-pub(crate) fn record_handle_release(state: &AppState, localpart: &str) {
+pub(crate) async fn record_handle_release(
+    state: &AppState,
+    localpart: &str,
+) -> Result<(), crate::persistence::PersistenceError> {
+    let released_at = chrono::Utc::now();
+    state
+        .persistence
+        .handle_releases()
+        .put(localpart, released_at)
+        .await?;
     let mut releases = state.handle_releases.lock().expect("handle_releases lock");
-    releases.insert(localpart.to_owned(), chrono::Utc::now());
+    releases.insert(localpart.to_owned(), released_at);
+    Ok(())
 }
 
 /// This Principal Server's handle domain, derived from its `did:web:` service

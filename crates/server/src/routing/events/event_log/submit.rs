@@ -1054,7 +1054,8 @@ pub(in crate::routing) async fn submit_event_value(
             state,
             &parsed.realm_id,
             &envelope_for_bootstrap,
-        );
+        )
+        .await;
     }
     append_encrypted_message_franking(state, &parsed, &envelope_for_bootstrap).await;
     append_audit_log(

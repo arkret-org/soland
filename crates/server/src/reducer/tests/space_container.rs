@@ -354,6 +354,23 @@ fn space_update_and_parent_accept_canonical_payload_fields() {
     assert_eq!(projection.title, "Renamed");
     assert_eq!(projection.rank.as_deref(), Some("mV"));
 
+    state.apply(
+        &make_operation(
+            crate::kinds::CK_SPACE_CONTAINER_CREATE,
+            realm_id,
+            serde_json::json!({
+                "object": {
+                    "id": parent_space_id,
+                    "realm_id": realm_id,
+                    "kind": "list",
+                    "title": "Parent",
+                    "created_by": "did:web:alice.example"
+                }
+            }),
+        ),
+        &hlc,
+    );
+
     let parent = make_operation(
         crate::kinds::CK_SPACE_CONTAINER_PARENT,
         realm_id,

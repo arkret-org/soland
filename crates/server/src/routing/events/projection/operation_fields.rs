@@ -172,7 +172,7 @@ pub(super) fn operation_retention_ttl_seconds(operation: &Operation) -> Option<i
         })
 }
 
-pub fn project_retention_policy_from_operation(
+pub async fn project_retention_policy_from_operation(
     state: &AppState,
     origin: &str,
     operation: &Operation,
@@ -186,6 +186,14 @@ pub fn project_retention_policy_from_operation(
         updated_by: origin.to_owned(),
         updated_at: operation.created_at,
     };
+    if let Err(error) = state.persistence.retention_policies().put(&record).await {
+        tracing::warn!(
+            %error,
+            realm_id = %record.realm_id,
+            "failed to persist retention policy projection"
+        );
+        return;
+    }
     state
         .retention_policies
         .lock()

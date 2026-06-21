@@ -109,6 +109,12 @@ async fn configure_retention_policy(
         updated_at: now,
     };
     state
+        .persistence
+        .retention_policies()
+        .put(&record)
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    state
         .retention_policies
         .lock()
         .expect("retention policies lock")
@@ -145,11 +151,19 @@ async fn sweep_retention_policy(
     let realm_id = required_string(body.realm_id.as_deref(), "realm_id")?;
     let now = optional_now(body.now.as_deref())?.unwrap_or_else(Utc::now);
     let policy = state
-        .retention_policies
-        .lock()
-        .expect("retention policies lock")
+        .persistence
+        .retention_policies()
         .get(&realm_id)
-        .cloned()
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?
+        .or_else(|| {
+            state
+                .retention_policies
+                .lock()
+                .expect("retention policies lock")
+                .get(&realm_id)
+                .cloned()
+        })
         .ok_or_else(|| AppError::not_found("retention policy not found"))?;
     let cutoff = now - Duration::seconds(policy.ttl_seconds);
     let events = state
@@ -178,6 +192,16 @@ async fn sweep_retention_policy(
             .collect()
     };
     for event in pending {
+        if state
+            .persistence
+            .retention_tombstones()
+            .get(&event.event_id)
+            .await
+            .map_err(|error| AppError::internal(error.to_string()))?
+            .is_some()
+        {
+            continue;
+        }
         let sealed = state
             .persistence
             .events()
@@ -193,6 +217,12 @@ async fn sweep_retention_policy(
             tombstoned_at: now,
             sealed,
         };
+        state
+            .persistence
+            .retention_tombstones()
+            .put(&tombstone)
+            .await
+            .map_err(|error| AppError::internal(error.to_string()))?;
         {
             let mut tombstones = state
                 .retention_tombstones

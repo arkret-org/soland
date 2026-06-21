@@ -4558,6 +4558,7 @@ dependencies = [
  "subtle",
  "thiserror",
  "tokio",
+ "tokio-postgres",
  "tracing",
  "tracing-appender",
  "tracing-opentelemetry",

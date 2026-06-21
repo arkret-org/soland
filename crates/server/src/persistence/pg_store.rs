@@ -19,6 +19,13 @@ pub struct PgPersistenceStore {
     devices: PgDeviceInventoryStore,
     federation_transactions: PgFederationTransactionStore,
     federation_outbox: PgFederationOutboxStore,
+    handle_releases: PgHandleReleaseStore,
+    retention_policies: PgRetentionPolicyStore,
+    retention_tombstones: PgRetentionTombstoneStore,
+    organizations: PgOrganizationStore,
+    organization_policies: PgOrganizationPolicyStore,
+    realm_organizations: PgRealmOrganizationStore,
+    realm_moderation_policies: PgRealmModerationPolicyStore,
     push_bridge_cache: PgPushBridgeCacheStore,
     multisig_pending: PgMultisigPendingStore,
     audit: PgAuditStore,
@@ -67,6 +74,13 @@ impl PgPersistenceStore {
             devices: PgDeviceInventoryStore { pool: pool.clone() },
             federation_transactions: PgFederationTransactionStore { pool: pool.clone() },
             federation_outbox: PgFederationOutboxStore { pool: pool.clone() },
+            handle_releases: PgHandleReleaseStore { pool: pool.clone() },
+            retention_policies: PgRetentionPolicyStore { pool: pool.clone() },
+            retention_tombstones: PgRetentionTombstoneStore { pool: pool.clone() },
+            organizations: PgOrganizationStore { pool: pool.clone() },
+            organization_policies: PgOrganizationPolicyStore { pool: pool.clone() },
+            realm_organizations: PgRealmOrganizationStore { pool: pool.clone() },
+            realm_moderation_policies: PgRealmModerationPolicyStore { pool: pool.clone() },
             push_bridge_cache: PgPushBridgeCacheStore { pool: pool.clone() },
             multisig_pending: PgMultisigPendingStore { pool: pool.clone() },
             audit: PgAuditStore { pool: pool.clone() },
@@ -157,6 +171,34 @@ impl PersistenceStore for PgPersistenceStore {
 
     fn federation_outbox(&self) -> &dyn FederationOutboxStore {
         &self.federation_outbox
+    }
+
+    fn handle_releases(&self) -> &dyn HandleReleaseStore {
+        &self.handle_releases
+    }
+
+    fn retention_policies(&self) -> &dyn RetentionPolicyStore {
+        &self.retention_policies
+    }
+
+    fn retention_tombstones(&self) -> &dyn RetentionTombstoneStore {
+        &self.retention_tombstones
+    }
+
+    fn organizations(&self) -> &dyn OrganizationStore {
+        &self.organizations
+    }
+
+    fn organization_policies(&self) -> &dyn OrganizationPolicyStore {
+        &self.organization_policies
+    }
+
+    fn realm_organizations(&self) -> &dyn RealmOrganizationStore {
+        &self.realm_organizations
+    }
+
+    fn realm_moderation_policies(&self) -> &dyn RealmModerationPolicyStore {
+        &self.realm_moderation_policies
     }
 
     fn audit(&self) -> &dyn AuditStore {

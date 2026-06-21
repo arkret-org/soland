@@ -392,7 +392,7 @@ pub(super) async fn erase_account(
         account.avatar_url = None;
         account.localpart = format!("erased-{}", short_actor_tag(&actor));
         let _ = state.persistence.accounts().put(&account).await;
-        record_handle_release(state, &previous_localpart);
+        let _ = record_handle_release(state, &previous_localpart).await;
     }
 
     // Revoke every device record so other surfaces (key delivery,

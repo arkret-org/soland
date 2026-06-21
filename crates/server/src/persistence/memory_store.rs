@@ -18,6 +18,13 @@ pub struct SolandMemoryPersistenceStore {
     devices: MemoryDeviceInventoryStore,
     federation_transactions: MemoryFederationTransactionStore,
     federation_outbox: MemoryFederationOutboxStore,
+    handle_releases: MemoryHandleReleaseStore,
+    retention_policies: MemoryRetentionPolicyStore,
+    retention_tombstones: MemoryRetentionTombstoneStore,
+    organizations: MemoryOrganizationStore,
+    organization_policies: MemoryOrganizationPolicyStore,
+    realm_organizations: MemoryRealmOrganizationStore,
+    realm_moderation_policies: MemoryRealmModerationPolicyStore,
     audit: MemoryAuditStore,
     moderation: MemoryModerationStore,
     federation_operations: MemoryFederationOperationsStore,
@@ -72,6 +79,13 @@ impl SolandMemoryPersistenceStore {
             devices: MemoryDeviceInventoryStore::new(),
             federation_transactions: MemoryFederationTransactionStore::new(),
             federation_outbox: MemoryFederationOutboxStore::new(),
+            handle_releases: MemoryHandleReleaseStore::new(),
+            retention_policies: MemoryRetentionPolicyStore::new(),
+            retention_tombstones: MemoryRetentionTombstoneStore::new(),
+            organizations: MemoryOrganizationStore::new(),
+            organization_policies: MemoryOrganizationPolicyStore::new(),
+            realm_organizations: MemoryRealmOrganizationStore::new(),
+            realm_moderation_policies: MemoryRealmModerationPolicyStore::new(),
             audit: MemoryAuditStore::new(),
             moderation: MemoryModerationStore::new(),
             federation_operations: MemoryFederationOperationsStore::new(),
@@ -172,6 +186,34 @@ impl PersistenceStore for SolandMemoryPersistenceStore {
 
     fn federation_outbox(&self) -> &dyn FederationOutboxStore {
         &self.federation_outbox
+    }
+
+    fn handle_releases(&self) -> &dyn HandleReleaseStore {
+        &self.handle_releases
+    }
+
+    fn retention_policies(&self) -> &dyn RetentionPolicyStore {
+        &self.retention_policies
+    }
+
+    fn retention_tombstones(&self) -> &dyn RetentionTombstoneStore {
+        &self.retention_tombstones
+    }
+
+    fn organizations(&self) -> &dyn OrganizationStore {
+        &self.organizations
+    }
+
+    fn organization_policies(&self) -> &dyn OrganizationPolicyStore {
+        &self.organization_policies
+    }
+
+    fn realm_organizations(&self) -> &dyn RealmOrganizationStore {
+        &self.realm_organizations
+    }
+
+    fn realm_moderation_policies(&self) -> &dyn RealmModerationPolicyStore {
+        &self.realm_moderation_policies
     }
 
     fn audit(&self) -> &dyn AuditStore {

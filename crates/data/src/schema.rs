@@ -12,6 +12,77 @@ diesel::table! {
 }
 
 diesel::table! {
+    handle_releases (localpart) {
+        localpart -> Text,
+        released_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
+    organizations (organization_id) {
+        organization_id -> Text,
+        organization_did -> Text,
+        handle -> Nullable<Text>,
+        display_name -> Text,
+        verified -> Bool,
+        members -> Jsonb,
+        member_count -> Int8,
+        created_by -> Text,
+        created_at -> Timestamptz,
+        updated_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
+    organization_policies (organization_id) {
+        organization_id -> Text,
+        policy_id -> Text,
+        payload -> Jsonb,
+        version -> Int8,
+        updated_by -> Text,
+        updated_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
+    realm_organizations (realm_id, organization_id) {
+        realm_id -> Text,
+        organization_id -> Text,
+        linked_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
+    realm_moderation_policies (realm_id) {
+        realm_id -> Text,
+        payload -> Jsonb,
+        updated_by -> Text,
+        updated_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
+    retention_policies (realm_id) {
+        realm_id -> Text,
+        ttl_seconds -> Int8,
+        updated_by -> Text,
+        updated_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
+    retention_tombstones (event_id) {
+        event_id -> Text,
+        realm_id -> Text,
+        reason -> Text,
+        policy_ttl_seconds -> Int8,
+        expired_at -> Timestamptz,
+        tombstoned_at -> Timestamptz,
+        sealed -> Bool,
+    }
+}
+
+diesel::table! {
     sessions (id) {
         id -> Text,
         actor_id -> Text,
@@ -560,6 +631,13 @@ diesel::table! {
 
 diesel::allow_tables_to_appear_in_same_query!(
     accounts,
+    handle_releases,
+    organizations,
+    organization_policies,
+    realm_organizations,
+    realm_moderation_policies,
+    retention_policies,
+    retention_tombstones,
     sessions,
     devices,
     federation_transactions,

@@ -81,7 +81,7 @@ pub async fn validate_operation_policy(
         validate_set_default_strand_policy(state, operation).await?;
         validate_history_visibility_policy(state, operation).await?;
         validate_realm_key_share_policy(state, operation).await?;
-        validate_realm_moderation_policy(state, operation)?;
+        validate_realm_moderation_policy(state, operation).await?;
         validate_poll_operation_policy(state, operation)?;
         validate_audience_mention_operation_policy(state, operation).await?;
         validate_message_edit_redact_window_policy(state, operation).await?;
@@ -1220,14 +1220,16 @@ async fn validate_member_state_policy(
         return Err(reason);
     }
     if operation.payload.get("membership").and_then(Value::as_str) == Some("join") {
-        if let Some(member) = membership_target(operation)
-            && crate::routing::organizations::organization_policy_blocks_join(
+        if let Some(member) = membership_target(operation) {
+            if crate::routing::organizations::organization_policy_blocks_join(
                 state,
                 operation.realm_id.as_str(),
                 member,
             )
-        {
-            return Err("organization_policy_denied");
+            .await
+            {
+                return Err("organization_policy_denied");
+            }
         }
         return Ok(());
     }

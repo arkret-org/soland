@@ -177,6 +177,75 @@ pub(crate) fn router() -> Router {
         )
 }
 
+pub(crate) async fn refresh_organization_projection(
+    state: &AppState,
+) -> Result<(), crate::persistence::PersistenceError> {
+    let organizations = state.persistence.organizations().list().await?;
+    {
+        let mut map = state.organizations.lock().expect("organizations lock");
+        for record in organizations {
+            map.insert(record.organization_id.clone(), record);
+        }
+    }
+
+    let policies = state
+        .persistence
+        .organization_policies()
+        .snapshot_all()
+        .await?;
+    {
+        let mut map = state
+            .organization_policies
+            .lock()
+            .expect("organization policies lock");
+        for record in policies {
+            map.insert(record.organization_id.clone(), record);
+        }
+    }
+
+    let links = state
+        .persistence
+        .realm_organizations()
+        .snapshot_all()
+        .await?;
+    {
+        let mut realm_map = state
+            .realm_organizations
+            .lock()
+            .expect("realm organizations lock");
+        let mut organization_map = state
+            .organization_realms
+            .lock()
+            .expect("organization realms lock");
+        for (realm_id, organization_ids) in links {
+            for organization_id in &organization_ids {
+                organization_map
+                    .entry(organization_id.clone())
+                    .or_default()
+                    .insert(realm_id.clone());
+            }
+            realm_map.insert(realm_id, organization_ids);
+        }
+    }
+
+    let realm_policies = state
+        .persistence
+        .realm_moderation_policies()
+        .snapshot_all()
+        .await?;
+    {
+        let mut map = state
+            .realm_moderation_policies
+            .lock()
+            .expect("realm moderation policies lock");
+        for record in realm_policies {
+            map.insert(record.realm_id.clone(), record);
+        }
+    }
+
+    Ok(())
+}
+
 #[endpoint(
     operation_id = "org.cokret.soland.organization.query.list",
     tags("organizations"),
@@ -190,6 +259,9 @@ async fn list_organizations(
 ) -> JsonResult<OrganizationListOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let _session = aa.authenticated_session(state, req).await?;
+    refresh_organization_projection(state)
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?;
     let mut rows = state
         .organizations
         .lock()
@@ -251,6 +323,12 @@ async fn upsert_organization(
         updated_at: now,
     };
     state
+        .persistence
+        .organizations()
+        .put(&record)
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    state
         .organizations
         .lock()
         .expect("organizations lock")
@@ -272,6 +350,9 @@ async fn get_organization(
 ) -> JsonResult<OrganizationView> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let _session = aa.authenticated_session(state, req).await?;
+    refresh_organization_projection(state)
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?;
     let organization_id = normalized_organization_id(&organization_id.into_inner())?;
     let record = state
         .organizations
@@ -300,6 +381,9 @@ async fn get_organization_policy(
 ) -> JsonResult<OrganizationPolicyView> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let _session = aa.authenticated_session(state, req).await?;
+    refresh_organization_projection(state)
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?;
     let organization_id = normalized_organization_id(&organization_id.into_inner())?;
     let policy = state
         .organization_policies
@@ -330,7 +414,9 @@ async fn upsert_organization_policy(
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let organization_id = normalized_organization_id(&organization_id.into_inner())?;
-    ensure_organization_placeholder(state, &organization_id, &session.actor);
+    ensure_organization_placeholder(state, &organization_id, &session.actor)
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?;
     let mut payload = Value::from(body.into_inner());
     if !payload.is_object() {
         return Err(AppError::bad_json(
@@ -355,10 +441,19 @@ async fn upsert_organization_policy(
     }
     let now = Utc::now();
     let version = state
-        .organization_policies
-        .lock()
-        .expect("organization policies lock")
+        .persistence
+        .organization_policies()
         .get(&organization_id)
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?
+        .or_else(|| {
+            state
+                .organization_policies
+                .lock()
+                .expect("organization policies lock")
+                .get(&organization_id)
+                .cloned()
+        })
         .map(|policy| policy.version.saturating_add(1))
         .unwrap_or(1);
     let policy_id = payload
@@ -380,6 +475,12 @@ async fn upsert_organization_policy(
         updated_by: session.actor.clone(),
         updated_at: now,
     };
+    state
+        .persistence
+        .organization_policies()
+        .put(&record)
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?;
     state
         .organization_policies
         .lock()
@@ -408,8 +509,12 @@ async fn link_organization_realm(
     let session = aa.authenticated_session(state, req).await?;
     let organization_id = normalized_organization_id(&organization_id.into_inner())?;
     let body = body.into_inner();
-    ensure_organization_placeholder(state, &organization_id, &session.actor);
-    link_realm_to_organization(state, &body.realm_id, &organization_id);
+    ensure_organization_placeholder(state, &organization_id, &session.actor)
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    link_realm_to_organization(state, &body.realm_id, &organization_id)
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?;
     json_ok(OrganizationRealmLinkOutcome {
         organization_id,
         realm_id: body.realm_id,
@@ -417,7 +522,7 @@ async fn link_organization_realm(
     })
 }
 
-pub(crate) fn record_realm_organizations_from_event(
+pub(crate) async fn record_realm_organizations_from_event(
     state: &AppState,
     realm_id: &str,
     envelope: &Value,
@@ -446,12 +551,26 @@ pub(crate) fn record_realm_organizations_from_event(
         let Ok(org_id) = normalized_organization_id(&org) else {
             continue;
         };
-        ensure_organization_placeholder(state, &org_id, "realm_create");
-        link_realm_to_organization(state, realm_id, &org_id);
+        if let Err(error) = ensure_organization_placeholder(state, &org_id, "realm_create").await {
+            tracing::warn!(%error, organization_id = %org_id, "failed to persist organization placeholder from Realm event");
+            continue;
+        }
+        if let Err(error) = link_realm_to_organization(state, realm_id, &org_id).await {
+            tracing::warn!(%error, %realm_id, organization_id = %org_id, "failed to persist Realm organization link");
+        }
     }
 }
 
-pub(crate) fn link_realm_to_organization(state: &AppState, realm_id: &str, organization_id: &str) {
+pub(crate) async fn link_realm_to_organization(
+    state: &AppState,
+    realm_id: &str,
+    organization_id: &str,
+) -> Result<(), crate::persistence::PersistenceError> {
+    state
+        .persistence
+        .realm_organizations()
+        .link(realm_id, organization_id)
+        .await?;
     state
         .realm_organizations
         .lock()
@@ -466,6 +585,7 @@ pub(crate) fn link_realm_to_organization(state: &AppState, realm_id: &str, organ
         .entry(organization_id.to_owned())
         .or_default()
         .insert(realm_id.to_owned());
+    Ok(())
 }
 
 pub(crate) fn realm_organization_ids(state: &AppState, realm_id: &str) -> Vec<String> {
@@ -535,11 +655,14 @@ pub(crate) fn effective_policy_for_realm(
     }
 }
 
-pub(crate) fn organization_policy_blocks_join(
+pub(crate) async fn organization_policy_blocks_join(
     state: &AppState,
     realm_id: &str,
     actor: &str,
 ) -> bool {
+    if let Err(error) = refresh_organization_projection(state).await {
+        tracing::warn!(%error, "failed to refresh organization projection for join policy");
+    }
     if accepted_realm_override_allows_join(state, realm_id, actor) {
         return false;
     }
@@ -558,7 +681,18 @@ pub(crate) fn organization_policy_blocks_join(
     })
 }
 
-pub(crate) fn realm_policy_override_requires_approval(
+pub(crate) async fn realm_policy_override_requires_approval(
+    state: &AppState,
+    realm_id: &str,
+    payload: &Value,
+) -> bool {
+    if let Err(error) = refresh_organization_projection(state).await {
+        tracing::warn!(%error, "failed to refresh organization projection for policy override");
+    }
+    realm_policy_override_requires_approval_cached(state, realm_id, payload)
+}
+
+fn realm_policy_override_requires_approval_cached(
     state: &AppState,
     realm_id: &str,
     payload: &Value,
@@ -584,12 +718,15 @@ pub(crate) fn realm_policy_override_requires_approval(
     })
 }
 
-pub(crate) fn realm_policy_override_has_approval(
+pub(crate) async fn realm_policy_override_has_approval(
     state: &AppState,
     realm_id: &str,
     payload: &Value,
 ) -> bool {
-    if !realm_policy_override_requires_approval(state, realm_id, payload) {
+    if let Err(error) = refresh_organization_projection(state).await {
+        tracing::warn!(%error, "failed to refresh organization projection for policy approval");
+    }
+    if !realm_policy_override_requires_approval_cached(state, realm_id, payload) {
         return true;
     }
     let org_ids = realm_organization_ids(state, realm_id)
@@ -600,12 +737,12 @@ pub(crate) fn realm_policy_override_has_approval(
         .any(|approval| approval_matches(approval, &org_ids))
 }
 
-pub(crate) fn persist_realm_moderation_policy(
+pub(crate) async fn persist_realm_moderation_policy(
     state: &AppState,
     realm_id: &str,
     payload: Value,
     actor: &str,
-) -> RealmModerationPolicyRecord {
+) -> Result<RealmModerationPolicyRecord, crate::persistence::PersistenceError> {
     let record = RealmModerationPolicyRecord {
         realm_id: realm_id.to_owned(),
         payload,
@@ -613,11 +750,16 @@ pub(crate) fn persist_realm_moderation_policy(
         updated_at: Utc::now(),
     };
     state
+        .persistence
+        .realm_moderation_policies()
+        .put(&record)
+        .await?;
+    state
         .realm_moderation_policies
         .lock()
         .expect("realm moderation policies lock")
         .insert(realm_id.to_owned(), record.clone());
-    record
+    Ok(record)
 }
 
 pub(crate) fn organization_records_for_directory(state: &AppState) -> Vec<Value> {
@@ -630,27 +772,40 @@ pub(crate) fn organization_records_for_directory(state: &AppState) -> Vec<Value>
         .collect()
 }
 
-fn ensure_organization_placeholder(state: &AppState, organization_id: &str, actor: &str) {
-    let mut guard = state.organizations.lock().expect("organizations lock");
-    if guard.contains_key(organization_id) {
-        return;
+async fn ensure_organization_placeholder(
+    state: &AppState,
+    organization_id: &str,
+    actor: &str,
+) -> Result<(), crate::persistence::PersistenceError> {
+    if state
+        .persistence
+        .organizations()
+        .get(organization_id)
+        .await?
+        .is_some()
+    {
+        return Ok(());
     }
     let now = Utc::now();
-    guard.insert(
-        organization_id.to_owned(),
-        OrganizationRecord {
-            organization_id: organization_id.to_owned(),
-            organization_did: organization_id.to_owned(),
-            handle: None,
-            display_name: display_name_from_organization_id(organization_id),
-            verified: true,
-            members: BTreeSet::new(),
-            member_count: 0,
-            created_by: actor.to_owned(),
-            created_at: now,
-            updated_at: now,
-        },
-    );
+    let record = OrganizationRecord {
+        organization_id: organization_id.to_owned(),
+        organization_did: organization_id.to_owned(),
+        handle: None,
+        display_name: display_name_from_organization_id(organization_id),
+        verified: true,
+        members: BTreeSet::new(),
+        member_count: 0,
+        created_by: actor.to_owned(),
+        created_at: now,
+        updated_at: now,
+    };
+    state.persistence.organizations().put(&record).await?;
+    state
+        .organizations
+        .lock()
+        .expect("organizations lock")
+        .insert(organization_id.to_owned(), record);
+    Ok(())
 }
 
 fn organization_record_view(state: &AppState, record: &OrganizationRecord) -> OrganizationView {

@@ -38,7 +38,7 @@ pub async fn ensure_projected_realm(state: &AppState, origin: &str, operation: &
             entry_public
         }
     };
-    project_retention_policy_from_operation(state, origin, operation);
+    project_retention_policy_from_operation(state, origin, operation).await;
 
     let now = now();
     let store = state.persistence.realm_meta();

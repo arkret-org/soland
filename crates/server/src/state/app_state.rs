@@ -10,11 +10,10 @@ use cokret_sdk::{AccountRegistrationPolicy, AccountStatus, AppletPackage, Did, R
 use ed25519_dalek::SigningKey;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use tokio::sync::broadcast;
 
 use super::did_resolver_chain;
 use super::member_identity::MemberIdentityRegistry;
-use super::notification::{EventNotification, Mutex, SubscribeReconnectGate};
+use super::notification::{EventBroadcast, Mutex, SubscribeReconnectGate};
 use super::realm_directory::{RealmDirectoryEntry, RealmDirectoryIndex};
 use super::records::{
     ACCOUNT_LOCKOUT_DURATION, ACCOUNT_LOCKOUT_THRESHOLD, ACCOUNT_LOCKOUT_WINDOW,
@@ -68,13 +67,9 @@ pub struct AppState {
     /// `(principal_id, previous_generation)` tuples.
     pub cross_signing_reset_replays:
         Arc<Mutex<BTreeMap<(String, u64), chrono::DateTime<chrono::Utc>>>>,
-    /// In-memory handle release ledger keyed by bare localpart. Records
-    /// `released_localpart → released_at` for every handle vacated by
-    /// `claim_handle` / `transfer_handle`; new claims for a localpart still
-    /// inside `HANDLE_GRACE_PERIOD_SECONDS` are rejected with
-    /// `handle_in_grace_period`. Spec: identity-handles.md
-    /// (handle release cooldown). The map is server-process-local; persistent
-    /// storage lands when the handle CRDT projection ships.
+    /// Handle release ledger keyed by bare localpart. The map is hydrated
+    /// from `persistence.handle_releases()` and write-through updates keep
+    /// post-release grace state durable across restarts.
     pub handle_releases: Arc<Mutex<BTreeMap<String, chrono::DateTime<chrono::Utc>>>>,
     /// Account lifecycle state projection keyed by actor DID. Missing rows
     /// mean `active`; non-active rows gate auth/session issuance and directory
@@ -174,18 +169,16 @@ pub struct AppState {
     /// conformance harness can exercise the protocol shape locally; a durable
     /// store can replace the backing map without changing the HTTP contract.
     pub sovereign_deployment: Arc<Mutex<SovereignDeploymentState>>,
-    /// Per-Realm retention policy projection. The policy is derived from
-    /// `retention_policy` fields on accepted Realm events and can be driven
-    /// by the local admin/test sweeper. A durable store can replace this
-    /// in-memory map without changing the read-side tombstone contract.
+    /// Per-Realm retention policy projection. Hydrated from durable
+    /// `retention_policies` rows and write-through on accepted Realm events
+    /// or admin updates.
     pub retention_policies: Arc<Mutex<BTreeMap<String, RetentionPolicyRecord>>>,
     /// Retention tombstones keyed by event_id. Tombstoned events keep their
     /// stable event_id and remain in the canonical/projection stores; render
     /// paths redact the content to `[expired]`.
     pub retention_tombstones: Arc<Mutex<BTreeMap<String, RetentionTombstoneRecord>>>,
-    /// Local organization directory rows keyed by organization DID/id. This is
-    /// the P2 governance projection surface used by organization moderation
-    /// policy and directory reads until a durable organization table lands.
+    /// Local organization directory rows keyed by organization DID/id.
+    /// Hydrated from durable organization projection rows.
     pub organizations: Arc<Mutex<BTreeMap<String, OrganizationRecord>>>,
     /// Current organization moderation policy per organization.
     pub organization_policies: Arc<Mutex<BTreeMap<String, OrganizationPolicyRecord>>>,
@@ -204,18 +197,11 @@ pub struct AppState {
     pub seal_store: Arc<dyn SealStore>,
     pub cell_store: Arc<dyn CellStore>,
     pub cell_registry: Arc<dyn CellRegistry>,
-    /// Live event notification channel for `ck.self.events.stream.subscribe`
-    /// long-poll/SSE streaming. Writers
-    /// (`routing::events::projection::project_accepted_operations`,
-    /// `routing::federation::move_seal::submit_seal`,
-    /// `crate::notary::NotaryWorker`) broadcast each accepted
-    /// projection event; subscribers in `routing::events::sync::events_subscribe`
-    /// `recv()` on a fresh receiver and write live frames to the NDJSON
-    /// streaming response. Capacity 1024 — enough for a multi-Space
-    /// principal under burst load; receivers that fall behind get
-    /// `RecvError::Lagged` and emit a `dropped` control frame to nudge
-    /// the client to resync.
-    pub event_broadcast: broadcast::Sender<EventNotification>,
+    /// Live event notification bus for `ck.self.events.stream.subscribe`.
+    /// Memory mode uses the local broadcast channel; PostgreSQL mode also
+    /// publishes over LISTEN/NOTIFY so subscribers connected to another
+    /// replica receive the same live frames.
+    pub event_broadcast: EventBroadcast,
     /// Server-enforced reconnect windows advertised by subscribe control
     /// frames. This prevents a faulty or overloaded client from immediately
     /// re-opening the same subscribe scope after `dropped` /
@@ -528,6 +514,11 @@ impl AppState {
         // write_through_projection` keeps these tables in sync as reducer
         // apply mutates the in-memory state.
         let hydrated = ProjectionState::new();
+        let event_broadcast_database_url = config
+            .database_url
+            .clone()
+            .or_else(|| std::env::var("DATABASE_URL").ok());
+        let event_broadcast_pool = db.pool.clone();
 
         Self {
             config,
@@ -574,10 +565,11 @@ impl AppState {
             seal_store: state_resolution_stores.seal_store,
             cell_store: state_resolution_stores.cell_store,
             cell_registry: state_resolution_stores.cell_registry,
-            // Live event broadcast for ck.self.events.stream.subscribe streaming.
-            // Capacity 1024 events; readers
-            // falling behind get `Lagged` and emit `dropped` control frames.
-            event_broadcast: broadcast::channel::<EventNotification>(1024).0,
+            event_broadcast: EventBroadcast::new(
+                event_broadcast_pool,
+                event_broadcast_database_url,
+                1024,
+            ),
             subscribe_reconnect_gate: Arc::new(Mutex::new(SubscribeReconnectGate::default())),
             notary_signing_key,
             notary_signing_key_origin,
@@ -744,6 +736,103 @@ impl AppState {
                 } else {
                     map.insert(did, record);
                 }
+            }
+        }
+
+        let handle_releases = self.persistence.handle_releases().snapshot_all().await?;
+        {
+            let mut map = self.handle_releases.lock().expect("handle_releases lock");
+            for (localpart, released_at) in handle_releases {
+                map.insert(localpart, released_at);
+            }
+        }
+
+        let retention_policies = self.persistence.retention_policies().snapshot_all().await?;
+        {
+            let mut map = self
+                .retention_policies
+                .lock()
+                .expect("retention_policies lock");
+            for record in retention_policies {
+                map.insert(record.realm_id.clone(), record);
+            }
+        }
+
+        let retention_tombstones = self
+            .persistence
+            .retention_tombstones()
+            .snapshot_all()
+            .await?;
+        {
+            let mut map = self
+                .retention_tombstones
+                .lock()
+                .expect("retention_tombstones lock");
+            for record in retention_tombstones {
+                map.insert(record.event_id.clone(), record);
+            }
+        }
+
+        let organizations = self.persistence.organizations().list().await?;
+        {
+            let mut map = self.organizations.lock().expect("organizations lock");
+            for record in organizations {
+                map.insert(record.organization_id.clone(), record);
+            }
+        }
+
+        let organization_policies = self
+            .persistence
+            .organization_policies()
+            .snapshot_all()
+            .await?;
+        {
+            let mut map = self
+                .organization_policies
+                .lock()
+                .expect("organization_policies lock");
+            for record in organization_policies {
+                map.insert(record.organization_id.clone(), record);
+            }
+        }
+
+        let realm_organizations = self
+            .persistence
+            .realm_organizations()
+            .snapshot_all()
+            .await?;
+        {
+            let mut realm_map = self
+                .realm_organizations
+                .lock()
+                .expect("realm_organizations lock");
+            let mut org_map = self
+                .organization_realms
+                .lock()
+                .expect("organization_realms lock");
+            for (realm_id, organization_ids) in realm_organizations {
+                for organization_id in &organization_ids {
+                    org_map
+                        .entry(organization_id.clone())
+                        .or_default()
+                        .insert(realm_id.clone());
+                }
+                realm_map.insert(realm_id, organization_ids);
+            }
+        }
+
+        let realm_moderation_policies = self
+            .persistence
+            .realm_moderation_policies()
+            .snapshot_all()
+            .await?;
+        {
+            let mut map = self
+                .realm_moderation_policies
+                .lock()
+                .expect("realm_moderation_policies lock");
+            for record in realm_moderation_policies {
+                map.insert(record.realm_id.clone(), record);
             }
         }
 

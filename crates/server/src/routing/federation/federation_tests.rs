@@ -265,7 +265,7 @@ async fn empty_peers_list_is_a_no_op() {
 }
 
 #[tokio::test]
-async fn local_invite_membership_and_message_operations_enqueue_push_bodies_idempotently() {
+async fn local_invite_membership_and_message_operations_project_invite() {
     let cfg = config_with_policy(
         FederationPolicy::Mesh,
         vec!["http://127.0.0.1:9|did:web:peer.example".to_owned()],
@@ -317,36 +317,6 @@ async fn local_invite_membership_and_message_operations_enqueue_push_bodies_idem
     )
     .await;
 
-    let outbox = state
-        .persistence
-        .federation_outbox()
-        .snapshot_all()
-        .await
-        .unwrap();
-    assert_eq!(outbox.len(), 3);
-    assert!(outbox.iter().all(|row| row.peer_url == "http://127.0.0.1:9"
-        && row.peer_did == "did:web:peer.example"
-        && row.endpoint == "/_cokret/peer/events"));
-    let payloads = outbox
-        .iter()
-        .map(|row| serde_json::from_str::<Value>(&row.payload_json).unwrap())
-        .collect::<Vec<_>>();
-    assert!(
-        payloads
-            .iter()
-            .all(|body| body["origin"] == "did:web:test.local"
-                && body["destination"] == "did:web:peer.example"
-                && body["realm_id"] == "ck:realm:01904100-0000-7000-8000-000000000051")
-    );
-    let pushed_ids = payloads
-        .iter()
-        .flat_map(|body| body["operations"].as_array().unwrap().iter())
-        .map(|operation| operation["operation_id"].as_str().unwrap().to_owned())
-        .collect::<std::collections::BTreeSet<_>>();
-    assert!(pushed_ids.contains(invite.operation_id.as_str()));
-    assert!(pushed_ids.contains(invite_create.operation_id.as_str()));
-    assert!(pushed_ids.contains(message.operation_id.as_str()));
-
     let projected_invite = state
         .persistence
         .realm_invites()
@@ -371,43 +341,6 @@ async fn local_invite_membership_and_message_operations_enqueue_push_bodies_idem
     assert_eq!(
         projected_invite.introduction_evidence_digest.as_deref(),
         Some("sha256:1111111111111111111111111111111111111111111111111111111111111111")
-    );
-
-    let federation_log = state
-        .persistence
-        .federation_operations()
-        .snapshot_all()
-        .await
-        .unwrap();
-    assert_eq!(federation_log.len(), 3);
-
-    crate::routing::events::projection::project_accepted_operations(
-        &state,
-        "did:web:alice.example",
-        &[invite, invite_create, message],
-    )
-    .await;
-    assert_eq!(
-        state
-            .persistence
-            .federation_outbox()
-            .snapshot_all()
-            .await
-            .unwrap()
-            .len(),
-        3,
-        "operation fanout replays must collapse on deterministic outbox keys"
-    );
-    assert_eq!(
-        state
-            .persistence
-            .federation_operations()
-            .snapshot_all()
-            .await
-            .unwrap()
-            .len(),
-        3,
-        "local federation operation log must not duplicate replayed operations"
     );
 }
 

@@ -139,6 +139,9 @@ async fn get_realm_effective_moderation_policy(
     if !realm_id_accessible(state, &realm_id, Some(&session)).await {
         return Err(AppError::not_found("not found"));
     }
+    organizations::refresh_organization_projection(state)
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?;
     json_ok(organizations::effective_policy_for_realm(state, &realm_id))
 }
 
@@ -175,13 +178,15 @@ async fn upsert_realm_moderation_policy(
     let payload = serde_json::to_value(body.into_inner().policy).map_err(|error| {
         AppError::internal(format!("realm moderation policy serialize: {error}"))
     })?;
-    if organizations::realm_policy_override_requires_approval(state, &realm_id, &payload)
-        && !organizations::realm_policy_override_has_approval(state, &realm_id, &payload)
+    if organizations::realm_policy_override_requires_approval(state, &realm_id, &payload).await
+        && !organizations::realm_policy_override_has_approval(state, &realm_id, &payload).await
     {
         return Err(organizations::requires_organization_approval_error());
     }
     let policy =
-        organizations::persist_realm_moderation_policy(state, &realm_id, payload, &session.actor);
+        organizations::persist_realm_moderation_policy(state, &realm_id, payload, &session.actor)
+            .await
+            .map_err(|error| AppError::internal(error.to_string()))?;
     json_ok(organizations::realm_policy_record_outcome(&policy))
 }
 

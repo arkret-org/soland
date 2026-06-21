@@ -117,7 +117,7 @@ mod reaction_and_window_policy_tests {
 
     #[test]
     fn realm_id_alias_forms_match() {
-        assert!(realm_ids_match(
+        assert!(!realm_ids_match(
             "ck:realm:01904100-0000-7000-8000-668e2181b41d",
             "ck:space:01904100-0000-7000-8000-668e2181b41d",
         ));

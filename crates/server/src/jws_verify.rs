@@ -20,8 +20,11 @@
 //!   public-key extraction + RFC 7515 §5.2 signing-input reconstruction + ed25519-dalek verify.
 
 use cokret_sdk::identity::{DidDocument, DidResolver};
+use cokret_sdk::signatures::{
+    Ed25519DetachedJwsVerifier, PublicKeyMaterial, VerifierError, build_proof_envelope,
+};
 use cokret_sdk::{Did, Hash};
-use ed25519_dalek::VerifyingKey;
+use ed25519_dalek::{SigningKey, VerifyingKey};
 
 use crate::persistence::{
     WEBVH_DOCUMENT_HIGH_RISK_TTL_SECS, WebvhFreshness, verify_did_document_freshness,
@@ -81,45 +84,41 @@ pub fn verify_jws_shape(
         return Err("empty canonical bytes".to_owned());
     }
 
-    let parts: Vec<&str> = jws.split('.').collect();
-    if parts.len() != 3 {
-        return Err(format!(
-            "JWS must have 3 dot-separated segments, got {}",
-            parts.len()
-        ));
+    let payload_digest = Hash::new(cokret_sdk::canonical::sha256_digest(canonical_bytes))
+        .map_err(|error| error.to_string())?;
+    let proof = build_proof_envelope(
+        "detached_jws",
+        "EdDSA",
+        verification_method,
+        payload_digest,
+        None,
+        None,
+        jws,
+    );
+    let verifier = Ed25519DetachedJwsVerifier::new();
+    let material = dev_shape_only_public_key();
+    match verifier.verify_proof(&proof, canonical_bytes, &material) {
+        Ok(()) => reject_zero_signature_sentinel(jws),
+        Err(VerifierError::Backend(error)) if error.contains("Ed25519 verification failed") => {
+            reject_zero_signature_sentinel(jws)
+        }
+        Err(error) => Err(error.to_string()),
     }
-    let (header_b64u, payload_b64u, signature_b64u) = (parts[0], parts[1], parts[2]);
-    if !payload_b64u.is_empty() {
-        return Err("detached JWS payload segment must be empty".to_owned());
-    }
-    if signature_b64u.is_empty() {
-        return Err("JWS signature segment is empty".to_owned());
-    }
-    if signature_b64u.bytes().all(|b| b == b'A') {
+}
+
+fn reject_zero_signature_sentinel(jws: &str) -> Result<(), String> {
+    let signature_b64u = jws.rsplit('.').next().unwrap_or_default();
+    if !signature_b64u.is_empty() && signature_b64u.bytes().all(|byte| byte == b'A') {
         return Err("JWS signature is the all-zero sentinel".to_owned());
     }
-
-    let header_bytes = base64::Engine::decode(
-        &base64::engine::general_purpose::URL_SAFE_NO_PAD,
-        header_b64u,
-    )
-    .map_err(|e| format!("JWS header is not base64url: {e}"))?;
-    let header: serde_json::Value = serde_json::from_slice(&header_bytes)
-        .map_err(|e| format!("JWS header is not JSON: {e}"))?;
-    let alg = header
-        .get("alg")
-        .and_then(serde_json::Value::as_str)
-        .ok_or_else(|| "JWS protected header missing `alg`".to_owned())?;
-    if alg != "EdDSA" {
-        return Err(format!("unsupported JWS alg `{alg}`; spec requires EdDSA"));
-    }
-
-    let _sig_bytes = base64::Engine::decode(
-        &base64::engine::general_purpose::URL_SAFE_NO_PAD,
-        signature_b64u,
-    )
-    .map_err(|e| format!("JWS signature is not base64url: {e}"))?;
     Ok(())
+}
+
+fn dev_shape_only_public_key() -> PublicKeyMaterial {
+    let public_key = SigningKey::from_bytes(&[7u8; 32]).verifying_key();
+    PublicKeyMaterial::Ed25519Raw {
+        bytes: public_key.to_bytes().to_vec(),
+    }
 }
 
 /// Production Ed25519 detached-JWS verifier.

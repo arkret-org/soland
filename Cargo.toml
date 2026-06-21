@@ -55,6 +55,7 @@ soland-data = { version = "0.3.0", path = "crates/data" }
 subtle = "2.6.1"
 thiserror = "2"
 tokio = "1.52.3"
+tokio-postgres = "0.7.17"
 tracing = "0.1.44"
 tracing-appender = "0.2.5"
 tracing-opentelemetry = { version = "0.33.0", default-features = false }

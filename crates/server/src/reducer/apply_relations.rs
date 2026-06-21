@@ -862,6 +862,7 @@ mod cross_realm_relation_tests {
     const CIRCLE_A: &str = "ck:circle:01904100-0000-7000-8000-000000000c01";
     const STRAND_A: &str = "ck:strand:01904100-0000-7000-8000-000000000b01";
     const STRAND_A2: &str = "ck:strand:01904100-0000-7000-8000-000000000b02";
+    const STRAND_A3: &str = "ck:strand:01904100-0000-7000-8000-000000000b04";
     const STRAND_B: &str = "ck:strand:01904100-0000-7000-8000-000000000b03";
 
     fn strand_in_scope(realm: &str, scope_circle_id: Option<&str>) -> StrandProjection {
@@ -926,6 +927,8 @@ mod cross_realm_relation_tests {
         proj.strands.insert(STRAND_A.to_owned(), strand_in(REALM_A));
         proj.strands
             .insert(STRAND_A2.to_owned(), strand_in(REALM_A));
+        proj.strands
+            .insert(STRAND_A3.to_owned(), strand_in(REALM_A));
         proj.strands.insert(STRAND_B.to_owned(), strand_in(REALM_B));
         proj
     }
@@ -998,7 +1001,7 @@ mod cross_realm_relation_tests {
 
     #[test]
     fn duplicate_relation_uses_largest_event_digest_winner() {
-        let mut proj = ProjectionState::default();
+        let mut proj = proj();
         let now = chrono::Utc::now();
         let high = relation_op_with_id_digest(
             "000000000d01",
@@ -1031,14 +1034,14 @@ mod cross_realm_relation_tests {
 
     #[test]
     fn belongs_to_many_to_one_uses_event_digest_winner() {
-        let mut proj = ProjectionState::default();
+        let mut proj = proj();
         let now = chrono::Utc::now();
         let losing_parent = relation_op_with_id_digest(
             "000000000e01",
             "ck:relation:01904100-0000-7000-8000-000000000e01",
             "belongs_to",
             STRAND_A,
-            "ck:strand:01904100-0000-7000-8000-000000000e11",
+            STRAND_A2,
             "sha256:0000000000000000000000000000000000000000000000000000000000000002",
         );
         let winning_parent = relation_op_with_id_digest(
@@ -1046,7 +1049,7 @@ mod cross_realm_relation_tests {
             "ck:relation:01904100-0000-7000-8000-000000000e02",
             "belongs_to",
             STRAND_A,
-            "ck:strand:01904100-0000-7000-8000-000000000e12",
+            STRAND_A3,
             "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
         );
 
@@ -1064,7 +1067,7 @@ mod cross_realm_relation_tests {
 
     #[test]
     fn assigned_to_allows_multiple_actors_but_dedupes_same_tuple() {
-        let mut proj = ProjectionState::default();
+        let mut proj = proj();
         let now = chrono::Utc::now();
         let alice_old = relation_op_with_id_digest(
             "000000000f01",
