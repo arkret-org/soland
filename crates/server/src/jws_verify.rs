@@ -5,7 +5,7 @@
 //! signature check, DID resolution, replay-window timing) live in the
 //! SDK so yougen, floria, cotest, teabay and soland share one
 //! wire-compatible implementation. This module exists only to bridge
-//! soland's [`AppState`]-rooted resolver lock into the SDK's
+//! soland's [`AppState`]-rooted resolver into the SDK's
 //! `&dyn DidResolver` API and to re-export the pure helpers (replay
 //! windows, HLC parsing) for soland callers that reference
 //! `crate::jws_verify::*`.
@@ -60,7 +60,7 @@ pub use cokret_sdk::jws::{
 
 /// Production Ed25519 detached-JWS verifier.
 ///
-/// Soland-side adapter: locks `state.did_resolver` and dispatches to
+/// Soland-side adapter: dispatches `state.did_resolver` to
 /// [`cokret_sdk::jws::verify_jws_ed25519`]. See the SDK module docs for
 /// the full spec (RFC 7515 detached shape, alg=EdDSA, did:key /
 /// did:web / did:webvh resolution).
@@ -71,16 +71,12 @@ pub fn verify_jws_ed25519(
     issuer: &str,
     state: &AppState,
 ) -> Result<(), String> {
-    let resolver = state
-        .did_resolver
-        .lock()
-        .map_err(|e| format!("DID resolver lock poisoned: {e}"))?;
     cokret_sdk::jws::verify_jws_ed25519(
         canonical_bytes,
         jws,
         verification_method,
         issuer,
-        &*resolver as &dyn DidResolver,
+        &*state.did_resolver as &dyn DidResolver,
     )
 }
 
@@ -91,11 +87,10 @@ pub fn resolve_ed25519_pubkey(
     state: &AppState,
     verification_method: &str,
 ) -> Result<VerifyingKey, String> {
-    let resolver = state
-        .did_resolver
-        .lock()
-        .map_err(|e| format!("DID resolver lock poisoned: {e}"))?;
-    cokret_sdk::jws::resolve_ed25519_pubkey(&*resolver as &dyn DidResolver, verification_method)
+    cokret_sdk::jws::resolve_ed25519_pubkey(
+        &*state.did_resolver as &dyn DidResolver,
+        verification_method,
+    )
 }
 
 /// Resolve and validate a DID-scoped Ed25519 verification method.
@@ -140,11 +135,8 @@ pub fn validate_verification_method_controller(
 }
 
 pub fn resolve_did_document(state: &AppState, did: &Did) -> Result<DidDocument, String> {
-    let resolver = state
+    let document = state
         .did_resolver
-        .lock()
-        .map_err(|e| format!("DID resolver lock poisoned: {e}"))?;
-    let document = resolver
         .resolve_did(did)
         .map_err(|error| format!("DID resolution failed: {error}"))?;
     if document.id != *did {

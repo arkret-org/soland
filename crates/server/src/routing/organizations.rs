@@ -52,7 +52,6 @@ pub(crate) struct OrganizationView {
     #[serde(skip_serializing_if = "Option::is_none")]
     handle: Option<String>,
     display_name: String,
-    name: String,
     verified: bool,
     verified_badge: bool,
     #[serde(default)]
@@ -179,11 +178,11 @@ pub(crate) fn router() -> Router {
 }
 
 #[endpoint(
-    operation_id = "ck.self.organization.query.list",
+    operation_id = "org.cokret.soland.organization.query.list",
     tags("organizations"),
     summary = "List locally known organizations"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.organization.query.list"))]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.organization.query.list"))]
 async fn list_organizations(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -207,11 +206,11 @@ async fn list_organizations(
 }
 
 #[endpoint(
-    operation_id = "ck.self.organization.command.upsert",
+    operation_id = "org.cokret.soland.organization.command.upsert",
     tags("organizations"),
     summary = "Create or update a local organization registry row"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.organization.command.upsert"))]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.organization.command.upsert"))]
 async fn upsert_organization(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -260,11 +259,11 @@ async fn upsert_organization(
 }
 
 #[endpoint(
-    operation_id = "ck.self.organization.resource.get",
+    operation_id = "org.cokret.soland.organization.resource.get",
     tags("organizations"),
     summary = "Read a local organization registry row"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.organization.resource.get"))]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.organization.resource.get"))]
 async fn get_organization(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -285,11 +284,14 @@ async fn get_organization(
 }
 
 #[endpoint(
-    operation_id = "ck.self.organization.policy.resource.get",
+    operation_id = "org.cokret.soland.organization.policy.resource.get",
     tags("organizations", "policy"),
     summary = "Read the current organization moderation policy"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.organization.policy.resource.get"))]
+#[tracing::instrument(
+    skip_all,
+    fields(op = "org.cokret.soland.organization.policy.resource.get")
+)]
 async fn get_organization_policy(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -310,11 +312,14 @@ async fn get_organization_policy(
 }
 
 #[endpoint(
-    operation_id = "ck.self.organization.policy.resource.replace",
+    operation_id = "org.cokret.soland.organization.policy.resource.replace",
     tags("organizations", "policy"),
     summary = "Publish an organization moderation policy"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.organization.policy.resource.replace"))]
+#[tracing::instrument(
+    skip_all,
+    fields(op = "org.cokret.soland.organization.policy.resource.replace")
+)]
 async fn upsert_organization_policy(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -384,11 +389,14 @@ async fn upsert_organization_policy(
 }
 
 #[endpoint(
-    operation_id = "ck.self.organization.realm.command.link",
+    operation_id = "org.cokret.soland.organization.realm.command.link",
     tags("organizations", "realms"),
     summary = "Link a Realm to an organization policy source"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.organization.realm.command.link"))]
+#[tracing::instrument(
+    skip_all,
+    fields(op = "org.cokret.soland.organization.realm.command.link")
+)]
 async fn link_organization_realm(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -659,7 +667,6 @@ fn organization_record_view(state: &AppState, record: &OrganizationRecord) -> Or
         organization_did: record.organization_did.clone(),
         handle: record.handle.clone(),
         display_name: record.display_name.clone(),
-        name: record.display_name.clone(),
         verified: record.verified,
         verified_badge: record.verified,
         members: record.members.iter().cloned().collect::<Vec<_>>(),

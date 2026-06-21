@@ -496,56 +496,6 @@ pub struct PolicyDocumentsOutcome {
 }
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct SolandPolicyCheckRequestBody {
-    pub request_id: String,
-    #[serde(default)]
-    pub realm_id: Option<String>,
-    pub request_canonical_digest: String,
-    pub action: String,
-    pub actor_id: String,
-    pub source: Value,
-    #[serde(default)]
-    pub event_preview: Option<Value>,
-    #[serde(default)]
-    pub auth_context: Option<Value>,
-}
-
-/// Frontier binding stamped onto every signed `SolandPolicyCheckOutcome`.
-///
-/// The four hashes pin the decision to a concrete authz universe so a
-/// client (or auditor) can detect that the decision is stale once any
-/// of the four frontiers move:
-///   - `realm_id` — scope this binding applies to (canonical `ck:realm:<uuid>` form). May be empty
-///     string when the request was realm-less (e.g. a global capability check).
-///   - `auth_state_digest` — sha256 hex over canonical JSON `{actor_id, action, resource,
-///     request_canonical_digest}`.
-///   - `policy_frontier_digest` — sha256 hex over canonical JSON `{policy_documents: [<sorted
-///     policy_ids>]}`.
-///   - `membership_frontier_digest` — sha256 hex over canonical JSON `{realm_id, members: [<sorted
-///     member DIDs>]}`.
-///   - `expires_at` — soft TTL for the binding (now + 1h).
-#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct PolicyBinding {
-    pub realm_id: String,
-    pub auth_state_digest: String,
-    pub policy_frontier_digest: String,
-    pub membership_frontier_digest: String,
-    pub expires_at: DateTime<Utc>,
-}
-
-#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct SolandPolicyCheckOutcome {
-    pub decision: String,
-    pub reason_code: String,
-    pub policy_id: Option<String>,
-    pub expires_at: DateTime<Utc>,
-    pub obligations: Vec<Value>,
-    pub decision_trace: Value,
-    pub bound_to: PolicyBinding,
-    pub signature: Value,
-}
-
-#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 pub struct DevLoginRequestBody {
     pub actor: String,
     pub device_id: String,
@@ -744,13 +694,13 @@ fn profile_limitations() -> Vec<Value> {
         }),
         json!({
             "area": "extensions.tsp",
-            "status": "stub_contract",
-            "reason": "TSP transport/route/audit endpoints are process-local scaffolding; real envelope verify/decrypt and persistent signed audit chain are not claimed"
+            "status": "unmounted",
+            "reason": "TSP transport/route/audit handlers remain unmounted until real envelope verify/decrypt and persistent signed audit chain exist"
         }),
         json!({
             "area": "extensions.bot_actor",
-            "status": "stub_contract",
-            "reason": "bot/ghost actor endpoints use a process-local registry; durable provisioning, accountability grants, and restart-safe state are not claimed"
+            "status": "unmounted",
+            "reason": "bot/ghost actor HTTP handlers remain unmounted until durable provisioning, accountability grants, and restart-safe state exist"
         }),
         json!({
             "area": "extensions.sovereign",
@@ -795,11 +745,10 @@ fn profile_limitations() -> Vec<Value> {
         }),
         json!({
             "area": "identity.resolver_health_signal",
-            "status": "verifier_only_unwired",
+            "status": "unsupported",
             "spec": "SEC-01 / identity-did.md §3.4",
-            "implemented": "a signed resolver degraded/health signal verifier (ResolverHealthSignal canonical transcript, ed25519 signature verification, fail-closed consumer verdict that rounds missing/unauthorized/stale/degraded toward FailClosed for high-risk writes) exists as a reference contract",
-            "unsupported": "no inbound channel feeds signed resolver-health signals to this deployment and high-risk-write paths (grant/revoke, recovery, device-authorization, key-rotation, MLS commit, realm-join, invite-accept) do not yet consult the verdict",
-            "reason": "soland is a relying party; wiring the verdict requires a resolver-health signal feed and per-write gate that are not present"
+            "unsupported": "resolver degraded/health signal verification is not wired into production paths",
+            "reason": "soland has no inbound resolver-health signal feed or per-write gate for this verdict"
         }),
         json!({
             "area": "federation.delivery_binding_handover_emit",
@@ -811,10 +760,9 @@ fn profile_limitations() -> Vec<Value> {
         }),
         json!({
             "area": "audit.policy_receipt_emit",
-            "status": "builder_only_unwired",
+            "status": "unsupported",
             "spec": "B1.12 / B1.16",
-            "implemented": "typed builders for the audit policy version hash and the late-key-recovery `ck.audit.policy_access` payload exist as reference contracts for out-of-tree signers",
-            "unsupported": "soland does not emit signed audit policy receipts on any production route; the builders are not invoked by a server emission path",
+            "unsupported": "soland does not emit signed audit policy receipts on any production route",
             "reason": "no production audit-receipt emission path is wired in this deployment"
         }),
     ]

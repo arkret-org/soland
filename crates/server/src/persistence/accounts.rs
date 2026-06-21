@@ -128,7 +128,7 @@ impl AccountStore for PgAccountStore {
     async fn get(&self, did: &str) -> PersistenceResult<Option<AccountRecord>> {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(
-            "SELECT id, actor_id AS did, localpart, display_name, created_at FROM accounts WHERE actor_id = $1",
+            "SELECT id, principal_id AS did, localpart, display_name, created_at FROM accounts WHERE principal_id = $1",
         )
         .bind::<Text, _>(did)
         .get_result::<AccountRow>(&mut *conn)
@@ -141,9 +141,9 @@ impl AccountStore for PgAccountStore {
     async fn put(&self, record: &AccountRecord) -> PersistenceResult<()> {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(
-            "INSERT INTO accounts (id, actor_id, localpart, display_name, payload, created_at, updated_at) \
+            "INSERT INTO accounts (id, principal_id, localpart, display_name, payload, created_at, updated_at) \
              VALUES ($1, $2, $3, $4, '{}'::jsonb, $5, $5) \
-             ON CONFLICT (actor_id) DO UPDATE SET localpart = EXCLUDED.localpart, \
+             ON CONFLICT (principal_id) DO UPDATE SET localpart = EXCLUDED.localpart, \
              display_name = EXCLUDED.display_name, updated_at = NOW()",
         )
         .bind::<SqlUuid, _>(ids::typed_uuid_part_or_panic(&record.id))
@@ -160,7 +160,7 @@ impl AccountStore for PgAccountStore {
     async fn list(&self) -> PersistenceResult<Vec<AccountRecord>> {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(
-            "SELECT id, actor_id AS did, localpart, display_name, created_at FROM accounts ORDER BY actor_id",
+            "SELECT id, principal_id AS did, localpart, display_name, created_at FROM accounts ORDER BY principal_id",
         )
         .load::<AccountRow>(&mut *conn)
         .await
@@ -170,7 +170,7 @@ impl AccountStore for PgAccountStore {
 
     async fn delete(&self, did: &str) -> PersistenceResult<()> {
         let mut conn = pg_conn(&self.pool).await?;
-        sql_query("DELETE FROM accounts WHERE actor = $1")
+        sql_query("DELETE FROM accounts WHERE principal_id = $1")
             .bind::<Text, _>(did)
             .execute(&mut *conn)
             .await

@@ -1098,14 +1098,12 @@ fn schema_error(error: anyhow::Error) -> AppError {
 }
 
 fn query_schema_error(message: impl Into<String>) -> AppError {
-    AppError::new(ErrorCode::SchemaViolation, message)
-        .with_wire_code("query_schema_violation")
-        .with_status(StatusCode::BAD_REQUEST)
+    AppError::new(ErrorCode::SchemaViolation, message).with_status(StatusCode::BAD_REQUEST)
 }
 
 fn limit_error(message: impl Into<String>) -> AppError {
     AppError::new(ErrorCode::QuotaExceeded, message)
-        .with_wire_code("scalability_limit_exceeded")
+        .with_wire_code("quota_exceeded")
         .with_status(StatusCode::PAYLOAD_TOO_LARGE)
 }
 
@@ -1223,7 +1221,7 @@ mod tests {
         let err = validate_query_shape("ck.vector.query.projection", &body, &query_value)
             .expect_err("secret projection must fail closed");
 
-        assert_eq!(err.wire_code(), "query_schema_violation");
+        assert_eq!(err.wire_code(), "schema_violation");
         assert_eq!(err.http_status(), StatusCode::BAD_REQUEST);
     }
 

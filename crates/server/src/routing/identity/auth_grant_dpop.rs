@@ -54,6 +54,7 @@ const DEVICE_SCOPE_PREFIX: &str = "urn:cokret:client:device:";
 /// SHOULD ≤ 120s). The revocation-visibility upper bound equals this TTL;
 /// sensitive operations bypass the cache entirely (`force_fresh`).
 const INTROSPECTION_CACHE_TTL: StdDuration = StdDuration::from_secs(120);
+const INTROSPECTION_CACHE_MAX_ENTRIES: usize = 4096;
 
 /// DPoP proof freshness window. The proof's `iat` MUST be within
 /// [now - WINDOW, now + skew]; combined with single-use `jti` tracking this
@@ -96,6 +97,7 @@ fn introspection_cache_key(grant_jwt: &str, audience: &str) -> String {
 
 fn cache_lookup(key: &str) -> Option<SessionGrantIntrospectGrant> {
     let mut cache = INTROSPECTION_CACHE.lock().ok()?;
+    prune_introspection_cache_locked(&mut cache, Instant::now());
     match cache.get(key) {
         Some(entry) if entry.inserted_at.elapsed() < INTROSPECTION_CACHE_TTL => {
             Some(entry.grant.clone())
@@ -110,6 +112,17 @@ fn cache_lookup(key: &str) -> Option<SessionGrantIntrospectGrant> {
 
 fn cache_store(key: String, grant: SessionGrantIntrospectGrant) {
     if let Ok(mut cache) = INTROSPECTION_CACHE.lock() {
+        prune_introspection_cache_locked(&mut cache, Instant::now());
+        while cache.len() >= INTROSPECTION_CACHE_MAX_ENTRIES {
+            let Some(oldest_key) = cache
+                .iter()
+                .min_by_key(|(_, entry)| entry.inserted_at)
+                .map(|(key, _)| key.clone())
+            else {
+                break;
+            };
+            cache.remove(&oldest_key);
+        }
         cache.insert(
             key,
             CachedIntrospection {
@@ -118,6 +131,13 @@ fn cache_store(key: String, grant: SessionGrantIntrospectGrant) {
             },
         );
     }
+}
+
+fn prune_introspection_cache_locked(
+    cache: &mut HashMap<String, CachedIntrospection>,
+    now: Instant,
+) {
+    cache.retain(|_, entry| now.duration_since(entry.inserted_at) < INTROSPECTION_CACHE_TTL);
 }
 
 /// Drop any cached introspection entry for `grant_jwt`. Called by logout so the

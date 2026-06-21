@@ -429,12 +429,12 @@ async fn blob_get(depot: &mut Depot, req: &mut Request, res: &mut Response) {
                 let direct_member_e2ee_download =
                     session.is_some() && matches!(block, PresignBlobBlock::E2ee);
                 if !direct_member_e2ee_download {
-                    let (code, reason) = block.as_error();
+                    let error = block.as_error();
                     render_error(
                         res,
-                        crate::error::error_http_status(code),
-                        code.as_str(),
-                        reason,
+                        error.http_status(),
+                        error.wire_code(),
+                        error.message.as_str(),
                     );
                     return;
                 }
@@ -647,8 +647,7 @@ async fn blob_presign(
     }
     let blob_value = presign_blob_policy_value(&blob);
     if let Some(block) = classify_presign_blob_block(&blob_value, &session.actor) {
-        let (code, reason) = block.as_error();
-        return Err(AppError::new(code, reason));
+        return Err(block.as_error());
     }
     let ttl_seconds = u64::from(body.max_age_seconds.unwrap_or(300)).clamp(1, 300);
     let expires_at = now() + chrono::Duration::seconds(ttl_seconds as i64);
@@ -1144,21 +1143,23 @@ pub enum PresignBlobBlock {
 }
 
 impl PresignBlobBlock {
-    pub fn as_error(self) -> (ErrorCode, &'static str) {
+    pub fn as_error(self) -> AppError {
         match self {
-            Self::E2ee => (
+            Self::E2ee => AppError::new(
                 ErrorCode::CapabilityDenied,
                 "blob is end-to-end encrypted; presign is refused fail-closed",
             ),
-            Self::LegalHold => (
-                ErrorCode::LegalHoldActive,
+            Self::LegalHold => AppError::new(
+                ErrorCode::FailedPrecondition,
                 "blob is currently subject to a legal hold; presign refused",
-            ),
-            Self::Redacted => (
-                ErrorCode::BlobRedacted,
+            )
+            .with_wire_code(crate::error::reasons::LEGAL_HOLD_ACTIVE),
+            Self::Redacted => AppError::new(
+                ErrorCode::FailedPrecondition,
                 "blob has been redacted; presign refused",
-            ),
-            Self::ActorPrivate => (
+            )
+            .with_wire_code(crate::error::reasons::BLOB_REDACTED),
+            Self::ActorPrivate => AppError::new(
                 ErrorCode::CapabilityDenied,
                 "blob is actor_private; only the owner may request a presign URL",
             ),

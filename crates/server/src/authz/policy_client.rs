@@ -49,6 +49,7 @@ use crate::reducer::RealmPolicyServerConfig;
 
 type VerificationKeyResolver =
     Arc<dyn Fn(&str) -> Result<VerifyingKey, String> + Send + Sync + 'static>;
+const POLICY_CACHE_MAX_ENTRIES: usize = 4096;
 
 /// Inputs needed to build a [`PolicyCheckRequestBody`] plus a
 /// per-request control surface (cache bypass).
@@ -145,6 +146,7 @@ impl PolicyCache {
     fn lookup(&self, realm_id: &str, canonical_hash: &str) -> Option<PolicyCheckOutcome> {
         let now = Instant::now();
         let mut guard = self.inner.lock().expect("policy cache mutex");
+        prune_policy_cache_locked(&mut guard, now);
         let key = (realm_id.to_owned(), canonical_hash.to_owned());
         if let Some(entry) = guard.get(&key)
             && entry.expires_at > now
@@ -164,6 +166,17 @@ impl PolicyCache {
     ) {
         let expires_at = Instant::now() + ttl;
         let mut guard = self.inner.lock().expect("policy cache mutex");
+        prune_policy_cache_locked(&mut guard, Instant::now());
+        while guard.len() >= POLICY_CACHE_MAX_ENTRIES {
+            let Some(oldest_key) = guard
+                .iter()
+                .min_by_key(|(_, entry)| entry.expires_at)
+                .map(|(key, _)| key.clone())
+            else {
+                break;
+            };
+            guard.remove(&oldest_key);
+        }
         guard.insert(
             (realm_id.to_owned(), canonical_hash.to_owned()),
             PolicyCacheEntry {
@@ -172,6 +185,13 @@ impl PolicyCache {
             },
         );
     }
+}
+
+fn prune_policy_cache_locked(
+    guard: &mut HashMap<(String, String), PolicyCacheEntry>,
+    now: Instant,
+) {
+    guard.retain(|_, entry| entry.expires_at > now);
 }
 
 /// Errors the outbound client may surface to callers. The handler-level
@@ -496,7 +516,7 @@ struct PolicyDecisionTranscript<'a> {
     obligations: &'a [Value],
 }
 
-fn policy_decision_transcript_bytes(
+pub(crate) fn policy_decision_transcript_bytes(
     request: &PolicyCheckRequestBody,
     response: &PolicyCheckOutcome,
 ) -> Result<Vec<u8>, PolicyClientError> {

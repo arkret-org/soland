@@ -29,6 +29,7 @@ use crate::error::{AppError, ErrorCode};
 use crate::state::{AppState, SessionRecord};
 
 const INTROSPECTION_CACHE_TTL: Duration = Duration::from_secs(30);
+const INTROSPECTION_CACHE_MAX_ENTRIES: usize = 1024;
 
 struct CacheEntry {
     grant: SessionGrantIntrospection,
@@ -41,7 +42,8 @@ fn cache() -> &'static Mutex<HashMap<String, CacheEntry>> {
 }
 
 fn read_cached(token_hash: &str) -> Option<SessionGrantIntrospection> {
-    let cache = cache().lock().ok()?;
+    let mut cache = cache().lock().ok()?;
+    prune_cache_locked(&mut cache, Instant::now());
     let entry = cache.get(token_hash)?;
     if entry.inserted_at.elapsed() > INTROSPECTION_CACHE_TTL {
         return None;
@@ -51,6 +53,17 @@ fn read_cached(token_hash: &str) -> Option<SessionGrantIntrospection> {
 
 fn cache_grant(token_hash: String, grant: SessionGrantIntrospection) {
     if let Ok(mut cache) = cache().lock() {
+        prune_cache_locked(&mut cache, Instant::now());
+        while cache.len() >= INTROSPECTION_CACHE_MAX_ENTRIES {
+            let Some(oldest_key) = cache
+                .iter()
+                .min_by_key(|(_, entry)| entry.inserted_at)
+                .map(|(key, _)| key.clone())
+            else {
+                break;
+            };
+            cache.remove(&oldest_key);
+        }
         cache.insert(
             token_hash,
             CacheEntry {
@@ -59,6 +72,10 @@ fn cache_grant(token_hash: String, grant: SessionGrantIntrospection) {
             },
         );
     }
+}
+
+fn prune_cache_locked(cache: &mut HashMap<String, CacheEntry>, now: Instant) {
+    cache.retain(|_, entry| now.duration_since(entry.inserted_at) < INTROSPECTION_CACHE_TTL);
 }
 
 /// Pull the raw bearer token from the request's `Authorization` header.

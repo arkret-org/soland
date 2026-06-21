@@ -809,54 +809,6 @@ fn apply_device_push_route_dispatch(
     s.apply_device_push_route(op)
 }
 
-// G3.S9 — adapter dispatches for the extensions module. These call
-// into the process-local registries in
-// `routing::extensions::{bot_actor, tsp}` (which own the structured
-// state for the stub) and always return `ProjectionEffect::Ignored`
-// because the central `ProjectionState` has no bot/tsp fields yet.
-// Full integration is a follow-up — see
-// `routing::extensions::mod.rs` TODO(G3.S9-followup).
-fn apply_bot_register(
-    _s: &mut ProjectionState,
-    op: &Operation,
-    _hlc: &ServerHlc,
-) -> ProjectionEffect {
-    let _ = crate::routing::extensions::bot_actor::apply_bot_register(op);
-    ProjectionEffect::Ignored
-}
-fn apply_bot_revoke(
-    _s: &mut ProjectionState,
-    op: &Operation,
-    _hlc: &ServerHlc,
-) -> ProjectionEffect {
-    let _ = crate::routing::extensions::bot_actor::apply_bot_revoke(op);
-    ProjectionEffect::Ignored
-}
-fn apply_tsp_transport_declare(
-    _s: &mut ProjectionState,
-    op: &Operation,
-    _hlc: &ServerHlc,
-) -> ProjectionEffect {
-    let _ = crate::routing::extensions::tsp::apply_tsp_transport_declare(op);
-    ProjectionEffect::Ignored
-}
-fn apply_tsp_route_establish(
-    _s: &mut ProjectionState,
-    op: &Operation,
-    _hlc: &ServerHlc,
-) -> ProjectionEffect {
-    let _ = crate::routing::extensions::tsp::apply_tsp_route_establish(op);
-    ProjectionEffect::Ignored
-}
-fn apply_tsp_audit_append(
-    _s: &mut ProjectionState,
-    op: &Operation,
-    _hlc: &ServerHlc,
-) -> ProjectionEffect {
-    let _ = crate::routing::extensions::tsp::apply_tsp_audit_append(op);
-    ProjectionEffect::Ignored
-}
-
 /// Build the canonical `event_kind → ApplyFn` registry consumed by
 /// [`super::ProjectionState::apply`]. Public so out-of-crate tests can assert
 /// the registry covers every canonical kind they care about.
@@ -1063,15 +1015,6 @@ pub fn default_apply_registry() -> std::collections::HashMap<&'static str, Apply
     m.insert(CK_MLS_WELCOME, apply_mls_welcome_dispatch);
     m.insert(CK_MLS_GENESIS, apply_mls_genesis_dispatch);
     m.insert(CK_MLS_COMMIT, apply_mls_commit_dispatch);
-    // G3.S9: extensions (applet/bot/tsp)
-    m.insert(CK_EXTENSIONS_BOT_REGISTER, apply_bot_register);
-    m.insert(CK_EXTENSIONS_BOT_REVOKE, apply_bot_revoke);
-    m.insert(
-        CK_EXTENSIONS_TSP_TRANSPORT_DECLARE,
-        apply_tsp_transport_declare,
-    );
-    m.insert(CK_EXTENSIONS_TSP_ROUTE_ESTABLISH, apply_tsp_route_establish);
-    m.insert(CK_EXTENSIONS_TSP_AUDIT_APPEND, apply_tsp_audit_append);
     // G3.S2: policy server cell
     m.insert(CK_REALM_POLICY_SERVER, apply_realm_policy_server_dispatch);
     m

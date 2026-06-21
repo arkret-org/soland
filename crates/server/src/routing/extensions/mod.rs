@@ -2,14 +2,9 @@
 //! actor support, TSP transport + route + audit, sovereign enclave
 //! profile guards).
 //!
-//! Deployment-local sub-routers are mounted under `/_soland/...` and are
-//! intentionally *runnable stubs*: they accept and return the
-//! spec-shaped wire envelopes the cotest scenarios expect
-//! (`cotest/e2e/scenarios/extensions/applet-bridge.md`,
-//! `cotest/e2e/scenarios/identity/tsp-bootstrap.md`,
-//! `cotest/e2e/scenarios/sync/sovereign-deployment.md`), without yet
-//! implementing the full TSP envelope cryptography, MIMI provider
-//! bridging, or bot capability inheritance chains.
+//! Deployment-local sub-routers are mounted under `/_soland/...`.
+//! Unfinished bot/TSP runnable stubs are intentionally not mounted in the
+//! production route tree.
 //!
 //! Spec seals:
 //!   - `cokret-spec/spec/v1/zh/extensions/applet-integration.md` §3–§5 (manifest signing, bot /
@@ -22,7 +17,7 @@
 //!
 //! TODO(G3.S9-followup): full TSP envelope verify/decrypt + nested
 //! metadata-privacy enforcement; capability inheritance from primary
-//! actor → bot/ghost; MIMI provider mapping for portal realms.
+//! actor to bot/ghost; MIMI provider mapping for portal realms.
 
 use salvo::prelude::*;
 
@@ -56,15 +51,9 @@ pub fn local_router() -> Router {
                 .push(applet_bridge::router())
                 .push(applet_manifest::router()),
         )
-        // `self` — applet install companion + bot/ghost actor + TSP +
-        // sovereign enclave surfaces.
+        // `self` — applet install companion + sovereign enclave surfaces.
         .push(
             Router::with_path("self")
-                .push(
-                    Router::with_path("extensions")
-                        .push(bot_actor::router())
-                        .push(tsp::router()),
-                )
                 .push(sovereign::router()),
         )
 }

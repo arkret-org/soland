@@ -57,7 +57,7 @@ impl FederationTrustHeaders {
         expected: &cokret_sdk::TypedTrustDomainId,
     ) -> Result<(), &'static str> {
         if self.destination_trust_domain != *expected {
-            return Err(cokret_sdk::ERROR_CODE_CROSS_DOMAIN_REPLAY_REJECTED);
+            return Err(crate::error::reasons::CROSS_DOMAIN_REPLAY_REJECTED);
         }
         Ok(())
     }

@@ -2,15 +2,15 @@
 //!
 //! Spec: crypto-media/media-and-blob.md §2.1 — a per-operation HTTP
 //! companion binding of `ck.self.blob.upload.create`. tus carries the bytes
-//! (create / PATCH / HEAD / DELETE with offset resume); a cokret-side
-//! finalize step turns the completed tus resource into a canonical blob
-//! with the same `blob_ref` / `content_digest` / `upload_receipt` the
+//! (create / PATCH / HEAD / DELETE with offset resume); the PATCH that reaches
+//! the declared upload length turns the completed tus resource into a canonical
+//! blob with the same `blob_ref` / `content_digest` / `upload_receipt` the
 //! multipart path produces.
 //!
 //! The tus wire protocol is implemented locally instead of via the
 //! `salvo-tus` crate: salvo-tus 0.93.0 keeps its `stores` module private,
 //! so neither the staging directory nor the upload state needed by
-//! finalize is reachable from outside the crate. The subset below is
+//! completion is reachable from outside the crate. The subset below is
 //! wire-compatible with tus 1.0.0 core plus the `creation`,
 //! `creation-with-upload`, `termination` and `expiration` extensions.
 //!
@@ -22,14 +22,12 @@
 //! - `HEAD    /{id}`          — query `Upload-Offset` to resume
 //! - `PATCH   /{id}`          — append a chunk at `Upload-Offset`
 //! - `DELETE  /{id}`          — terminate an in-progress upload
-//! - `POST    /{id}/finalize` — cokret extension: validate + ingest the completed bytes into the
-//!   blob store, returns `BlobUploadOutcome`
 //!
-//! Upload-Metadata keys understood at finalize time: `purpose`, `encrypted`
+//! Upload-Metadata keys understood at completion time: `purpose`, `encrypted`
 //! (`"true"`/`"false"`), `realm_id`, `content_digest` (`sha256:<hex>`
 //! pre-declaration). Per spec §2.1 privacy rules, plaintext filenames and
 //! MIME types of private/E2EE blobs MUST NOT appear in `Upload-Metadata`;
-//! the finalize path stores encrypted blobs as `application/octet-stream`
+//! the completion path stores encrypted blobs as `application/octet-stream`
 //! with no filename, exactly like the canonical upload path.
 
 use std::collections::HashMap;
@@ -78,9 +76,6 @@ const CT_OFFSET_OCTET_STREAM: &str = "application/offset+octet-stream";
 
 pub(super) fn router() -> Router {
     Router::new()
-        // Concrete `/finalize` segment registered before the `{id}`
-        // wildcard router so salvo resolves it first.
-        .push(Router::with_path("blob/resumable/{id}/finalize").post(resumable_finalize))
         .push(
             Router::with_path("blob/resumable")
                 .options(tus_options)
@@ -131,7 +126,7 @@ fn is_safe_upload_id(id: &str) -> bool {
 static UPLOAD_LOCKS: OnceLock<Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>> =
     OnceLock::new();
 
-/// Per-upload write serialization. PATCH / DELETE / finalize on the same
+/// Per-upload write serialization. PATCH / DELETE on the same
 /// id take the id lock so offset check + append + meta rewrite is atomic
 /// within this process.
 fn upload_lock(id: &str) -> Arc<tokio::sync::Mutex<()>> {
@@ -143,7 +138,7 @@ fn upload_lock(id: &str) -> Arc<tokio::sync::Mutex<()>> {
 }
 
 /// Drop the lock entry once the staged upload is gone (terminated,
-/// finalized, or expired) so the map does not grow with upload churn.
+/// completed, or expired) so the map does not grow with upload churn.
 fn release_upload_lock(id: &str) {
     if let Some(locks) = UPLOAD_LOCKS.get() {
         let mut map = locks.lock().expect("upload lock map poisoned");
@@ -619,9 +614,11 @@ async fn tus_patch(depot: &mut Depot, req: &mut Request, res: &mut Response) {
         H_UPLOAD_OFFSET,
         HeaderValue::from_str(&new_offset.to_string()).expect("numeric header"),
     );
-    if new_offset < meta.declared_size_bytes
-        && let Some(expires) = http_date(&meta.expires_at)
-    {
+    if new_offset == meta.declared_size_bytes {
+        complete_resumable_upload(state, &session.actor, &id, &meta, res).await;
+        return;
+    }
+    if let Some(expires) = http_date(&meta.expires_at) {
         headers.insert(
             H_UPLOAD_EXPIRES,
             HeaderValue::from_str(&expires).expect("formatted date"),
@@ -652,19 +649,13 @@ async fn tus_delete(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     res.status_code(StatusCode::NO_CONTENT);
 }
 
-#[endpoint]
-#[tracing::instrument(skip_all, fields(op = "blob_resumable_finalize"))]
-async fn resumable_finalize(depot: &mut Depot, req: &mut Request, res: &mut Response) {
-    let state = depot.obtain::<AppState>().expect("state injected");
-    let Some(session) = auth_or_render(state, req, res).await else {
-        return;
-    };
-    let id = req.param::<String>("id").unwrap_or_default();
-    let lock = upload_lock(&id);
-    let _guard = lock.lock().await;
-    let Some(meta) = load_gated(state, res, &id, &session.actor).await else {
-        return;
-    };
+async fn complete_resumable_upload(
+    state: &AppState,
+    actor: &str,
+    id: &str,
+    meta: &StagedUpload,
+    res: &mut Response,
+) {
     if meta.offset_bytes != meta.declared_size_bytes {
         render_error(
             res,
@@ -720,7 +711,7 @@ async fn resumable_finalize(depot: &mut Depot, req: &mut Request, res: &mut Resp
                 );
                 return;
             }
-            if !realm_has_member(state, &realm_id, &session.actor).await {
+            if !realm_has_member(state, &realm_id, actor).await {
                 render_error(
                     res,
                     StatusCode::FORBIDDEN,
@@ -823,9 +814,7 @@ async fn resumable_finalize(depot: &mut Depot, req: &mut Request, res: &mut Resp
         );
         return;
     }
-    if let Err(message) =
-        enforce_blob_quota(state, &session.actor, realm_id.as_deref(), bytes.len()).await
-    {
+    if let Err(message) = enforce_blob_quota(state, actor, realm_id.as_deref(), bytes.len()).await {
         render_error(
             res,
             StatusCode::PAYLOAD_TOO_LARGE,
@@ -840,7 +829,7 @@ async fn resumable_finalize(depot: &mut Depot, req: &mut Request, res: &mut Resp
     if let Some(expected) = expected_digest
         && expected != content_digest
     {
-        crate::metrics::record_digest_mismatch("blob_resumable_finalize");
+        crate::metrics::record_digest_mismatch("blob_resumable_patch");
         render_error(
             res,
             StatusCode::CONFLICT,
@@ -876,7 +865,7 @@ async fn resumable_finalize(depot: &mut Depot, req: &mut Request, res: &mut Resp
         filename: None,
         realm_id: realm_id.clone(),
         encryption: encryption.clone(),
-        uploaded_by: session.actor.clone(),
+        uploaded_by: actor.to_owned(),
         created_at: received_at,
     };
     if let Err(error) = state.persistence.blobs().put(&blob_ref, &record).await {
@@ -893,7 +882,7 @@ async fn resumable_finalize(depot: &mut Depot, req: &mut Request, res: &mut Resp
         return;
     }
     // Staging part is consumed; drop it so it can never be replayed or
-    // double-finalized. Removal failure is non-fatal (the TTL sweeper
+    // completed twice. Removal failure is non-fatal (the TTL sweeper
     // collects leftovers).
     remove_staged(dir, &id).await;
     release_upload_lock(&id);

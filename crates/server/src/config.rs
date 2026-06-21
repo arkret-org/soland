@@ -202,7 +202,7 @@ pub struct AppConfig {
     /// Env: `SOLAND_PUSH_BRIDGE_TRUSTED_SERVICE_DIDS` (comma-separated).
     pub push_bridge_trusted_service_dids: Vec<String>,
     /// Resumable (tus) blob upload — staging directory for in-progress
-    /// upload parts before they are finalized into the blob store. See
+    /// upload parts before they are completed into the blob store. See
     /// spec crypto-media/media-and-blob.md §2.1.
     /// Env: `SOLAND_RESUMABLE_UPLOAD_DIR` (default `./soland-resumable-uploads`).
     pub resumable_upload_dir: PathBuf,
@@ -585,6 +585,11 @@ impl AppConfig {
             .unwrap_or(300);
         let notary_signing_key_seed = load_notary_signing_key_seed()?;
         let agent_audit_binding_signing_seed = load_agent_audit_binding_signing_seed()?;
+        if !development_mode && agent_audit_binding_signing_seed.is_none() {
+            anyhow::bail!(
+                "SOLAND_AGENT_AUDIT_BINDING_SIGNING_SEED is required when SOLAND_DEVELOPMENT_MODE is false"
+            );
+        }
         let use_keystore = std::env::var("SOLAND_USE_KEYSTORE")
             .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes"))
             .unwrap_or(false);

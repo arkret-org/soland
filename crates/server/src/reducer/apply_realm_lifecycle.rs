@@ -683,7 +683,7 @@ impl ProjectionState {
                 && locked_td != new_td.as_str()
             {
                 return ProjectionEffect::Rejected {
-                    reason: cokret_sdk::ERROR_CODE_CROSS_DOMAIN_REPLAY_REJECTED.to_owned(),
+                    reason: crate::error::reasons::CROSS_DOMAIN_REPLAY_REJECTED.to_owned(),
                 };
             }
         }

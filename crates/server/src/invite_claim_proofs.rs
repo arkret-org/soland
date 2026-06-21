@@ -110,11 +110,7 @@ pub(crate) fn verify_invite_claim_proofs_for_operation(
         expected_verification_service_did: &context.expected_verification_service_did,
         invite_digest: &context.invite_digest,
     };
-    let resolver = state
-        .did_resolver
-        .lock()
-        .map_err(|_| "did_resolver_locked")?;
-    verify_invite_claim_proofs(&*resolver as &dyn DidResolver, &verification)
+    verify_invite_claim_proofs(&*state.did_resolver as &dyn DidResolver, &verification)
 }
 
 pub(crate) fn verify_invite_claim_proofs(

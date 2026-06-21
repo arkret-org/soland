@@ -374,14 +374,23 @@ async fn emit_agent_result_envelope(
     origin: &str,
     outcome: AgentInvocationOutcome,
 ) {
-    let (signing_seed, key_id): (&[u8; 32], &str) =
-        match state.config.agent_audit_binding_signing_seed.as_ref() {
-            Some(deployment_seed) => (deployment_seed, "soland.deployment.agent_echo.ed25519_v1"),
-            None => (
-                &REFERENCE_AGENT_AUDIT_ED25519_SEED,
-                REFERENCE_AGENT_AUDIT_ED25519_KEY_ID,
-            ),
-        };
+    let (signing_seed, key_id): (&[u8; 32], &str) = match state
+        .config
+        .agent_audit_binding_signing_seed
+        .as_ref()
+    {
+        Some(deployment_seed) => (deployment_seed, "soland.deployment.agent_echo.ed25519_v1"),
+        None if state.config.development_mode => (
+            &REFERENCE_AGENT_AUDIT_ED25519_SEED,
+            REFERENCE_AGENT_AUDIT_ED25519_KEY_ID,
+        ),
+        None => {
+            tracing::error!(
+                "agent audit binding signing seed missing; refusing to emit unsigned reference binding in production"
+            );
+            return;
+        }
+    };
 
     let (status, echo_value, error_block) = match outcome {
         AgentInvocationOutcome::Echo { echo } => ("completed", echo, None),

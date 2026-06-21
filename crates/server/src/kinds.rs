@@ -153,21 +153,20 @@ pub const CK_CONFLICT_REPAIR: &str = "ck.conflict.repair";
 //
 // Canonical kinds per
 // `cokret-spec/spec/v1/artifacts/schemas/event-envelope.schema.json` (kind enum):
-//   - `ck.mls.keypackage`    — KeyPackage publication. The publish/claim distinction lives at
-//     the HTTP operation_id layer (`ck.self.keys.keypackages.upload.create` /
-//     `ck.self.keys.keypackages.command.claim`); the event log stores only the canonical kind.
-//     The reducer dispatches publish-vs-claim on the `payload.action == "publish" | "claim"`
-//     field.
-//   - `ck.mls.welcome`       — Welcome envelope reference. Per-(recipient, device) queue
-//     semantics are conveyed via payload shape; no separate `.enqueue` suffix.
+//   - `ck.mls.keypackage`    — KeyPackage publication. The publish/claim distinction lives at the
+//     HTTP operation_id layer (`ck.self.keys.keypackages.upload.create` /
+//     `ck.self.keys.keypackages.command.claim`); the event log stores only the canonical kind. The
+//     reducer dispatches publish-vs-claim on the `payload.action == "publish" | "claim"` field.
+//   - `ck.mls.welcome`       — Welcome envelope reference. Per-(recipient, device) queue semantics
+//     are conveyed via payload shape; no separate `.enqueue` suffix.
 //   - `ck.mls.commit`        — MLS commit (bumps the group's stored epoch by +1 from
-//     `payload.expected_prev_epoch`). The "epoch" semantics live in the payload, not in the
-//     kind suffix.
+//     `payload.expected_prev_epoch`). The "epoch" semantics live in the payload, not in the kind
+//     suffix.
 //   - `ck.mls.proposal`      — MLS proposal (wire-only; no reducer projection yet).
 //   - `ck.mls.genesis`       — MLS group genesis (initializes epoch 0 and the covered_seals
 //     accumulator).
-//   - `ck.mls.commit_failed` — diagnostic of a failed commit / Welcome processing path
-//     (wire-only; no reducer projection yet).
+//   - `ck.mls.commit_failed` — diagnostic of a failed commit / Welcome processing path (wire-only;
+//     no reducer projection yet).
 //
 // TODO(G3.S1-followup): decryption_pending — deferred-decryption queue +
 // retry path for messages that arrived before the key material; today the
@@ -242,17 +241,24 @@ pub const CK_CONFLICT_REPAIR: &str = "ck.conflict.repair";
 pub use cokret_sdk::events::kinds::{
     AGENT_ACTION_APPROVE as CK_AGENT_ACTION_APPROVE, AGENT_ACTION_REJECT as CK_AGENT_ACTION_REJECT,
     AGENT_ACTION_REQUEST as CK_AGENT_ACTION_REQUEST, AGENT_DEACTIVATE as CK_AGENT_DEACTIVATE,
-    AGENT_DRAFT_PROPOSE as CK_AGENT_DRAFT_PROPOSE,
+    AGENT_DRAFT_PROPOSE as CK_AGENT_DRAFT_PROPOSE, AGENT_ENDPOINT as CK_AGENT_ENDPOINT,
     AGENT_INTEROP_SESSION_RESULT as CK_AGENT_INTEROP_SESSION_RESULT,
+    AGENT_INTEROP_SESSION_START as CK_AGENT_INTEROP_SESSION_START,
     AGENT_INTEROP_SESSION_STATUS as CK_AGENT_INTEROP_SESSION_STATUS,
     AGENT_KEY_AUTHORIZE as CK_AGENT_KEY_AUTHORIZE, AGENT_KEY_REVOKE as CK_AGENT_KEY_REVOKE,
     AGENT_PAUSE as CK_AGENT_PAUSE, AGENT_RESUME as CK_AGENT_RESUME,
-    CAPABILITY_DELEGATE as CK_CAPABILITY_DELEGATE, CAPABILITY_DERIVED as CK_CAPABILITY_DERIVED,
-    CAPABILITY_GRANT as CK_CAPABILITY_GRANT, CAPABILITY_REVOKE as CK_CAPABILITY_REVOKE,
-    CONSENT_GRANT as CK_CONSENT_GRANT, CONSENT_REVOKE as CK_CONSENT_REVOKE,
-    CROSS_SIGNING_PUBLISH as CK_CROSS_SIGNING_PUBLISH,
+    APPLET_BRIDGE_ERROR as CK_APPLET_BRIDGE_ERROR, APPLET_DISCOVERY as CK_APPLET_DISCOVERY,
+    APPLET_INTEROP_SESSION_START as CK_APPLET_INTEROP_SESSION_START,
+    APPLET_INTEROP_SESSION_STATUS as CK_APPLET_INTEROP_SESSION_STATUS,
+    APPLET_REGISTRATION as CK_APPLET_REGISTRATION,
+    AUDIT_ERASURE_RECEIPT as CK_AUDIT_ERASURE_RECEIPT, CALL_STATE as CK_CALL_STATE,
+    CALL_SUMMARY as CK_CALL_SUMMARY, CAPABILITY_DELEGATE as CK_CAPABILITY_DELEGATE,
+    CAPABILITY_DERIVED as CK_CAPABILITY_DERIVED, CAPABILITY_GRANT as CK_CAPABILITY_GRANT,
+    CAPABILITY_REVOKE as CK_CAPABILITY_REVOKE, CONSENT_GRANT as CK_CONSENT_GRANT,
+    CONSENT_REVOKE as CK_CONSENT_REVOKE, CROSS_SIGNING_PUBLISH as CK_CROSS_SIGNING_PUBLISH,
     CROSS_SIGNING_RESET as CK_CROSS_SIGNING_RESET, DEVICE_AUTHORIZE as CK_DEVICE_AUTHORIZE,
-    DEVICE_PUSH_ROUTE as CK_DEVICE_PUSH_ROUTE, MLS_COMMIT as CK_MLS_COMMIT,
+    DEVICE_PUSH_ROUTE as CK_DEVICE_PUSH_ROUTE,
+    KEY_BACKUP_ACTIVE_SERIES as CK_KEY_BACKUP_ACTIVE_SERIES, MLS_COMMIT as CK_MLS_COMMIT,
     MLS_GENESIS as CK_MLS_GENESIS, MLS_KEYPACKAGE as CK_MLS_KEYPACKAGE,
     MLS_WELCOME as CK_MLS_WELCOME, MODERATION_APPEAL_CLOSE as CK_MODERATION_APPEAL_CLOSE,
     MODERATION_APPEAL_DECISION as CK_MODERATION_APPEAL_DECISION,
@@ -263,18 +269,7 @@ pub use cokret_sdk::events::kinds::{
     MORPH_SCHEMA_MIGRATE as CK_MORPH_SCHEMA_MIGRATE,
     REALM_DELIVERY_BINDING_POLICY as CK_REALM_DELIVERY_BINDING_POLICY,
     REALM_INHERITANCE_POLICY as CK_REALM_INHERITANCE_POLICY, REALM_LINK as CK_REALM_LINK,
-    REALM_POLICY_SERVER as CK_REALM_POLICY_SERVER,
-};
-pub use cokret_sdk::events::kinds::{
-    AGENT_ENDPOINT as CK_AGENT_ENDPOINT,
-    AGENT_INTEROP_SESSION_START as CK_AGENT_INTEROP_SESSION_START,
-    APPLET_BRIDGE_ERROR as CK_APPLET_BRIDGE_ERROR, APPLET_DISCOVERY as CK_APPLET_DISCOVERY,
-    APPLET_INTEROP_SESSION_START as CK_APPLET_INTEROP_SESSION_START,
-    APPLET_INTEROP_SESSION_STATUS as CK_APPLET_INTEROP_SESSION_STATUS,
-    APPLET_REGISTRATION as CK_APPLET_REGISTRATION,
-    AUDIT_ERASURE_RECEIPT as CK_AUDIT_ERASURE_RECEIPT, CALL_STATE as CK_CALL_STATE,
-    CALL_SUMMARY as CK_CALL_SUMMARY, KEY_BACKUP_ACTIVE_SERIES as CK_KEY_BACKUP_ACTIVE_SERIES,
-    REDACTION as CK_REDACTION,
+    REALM_POLICY_SERVER as CK_REALM_POLICY_SERVER, REDACTION as CK_REDACTION,
 };
 
 pub fn validate_mls_governance_binding(payload: &Value) -> Result<(), &'static str> {

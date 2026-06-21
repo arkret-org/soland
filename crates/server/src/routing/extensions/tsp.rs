@@ -11,7 +11,8 @@
 //! - **Audit chain** — every TSP route hop emits an audit entry. Spec §8 (Security: audit log
 //!   records relationship id + payload hash + verification result).
 //!
-//! All state is process-local for the stub (see TODO at bottom).
+//! All state is process-local for the stub (see TODO at bottom), and the
+//! HTTP handlers are intentionally not mounted in the production router.
 //!
 //! TODO(G3.S9-followup): real TSP envelope verify/decrypt, nested
 //! metadata-privacy enforcement, signing of audit entries with the
@@ -20,12 +21,10 @@
 
 use std::sync::Mutex;
 
-use cokret_sdk::Operation;
 use salvo::oapi::ToSchema;
 use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 use crate::error::AppError;
@@ -220,79 +219,6 @@ fn hex_lower(bytes: &[u8]) -> String {
         s.push(HEX[(b & 0x0f) as usize] as char);
     }
     s
-}
-
-// ── Reducer dispatch hooks ──────────────────────────────────────────
-
-pub fn apply_tsp_transport_declare(op: &Operation) -> Option<TspTransport> {
-    let p = op.payload.as_object()?;
-    let transport = TspTransport {
-        transport_id: p.get("transport_id").and_then(Value::as_str)?.to_owned(),
-        transport_type: p
-            .get("transport_type")
-            .and_then(Value::as_str)
-            .unwrap_or("tsp-pairwise")
-            .to_owned(),
-        endpoint_url: p
-            .get("endpoint_url")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_owned(),
-        supported_protocols: p
-            .get("supported_protocols")
-            .and_then(Value::as_array)
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|v| v.as_str().map(ToOwned::to_owned))
-                    .collect()
-            })
-            .unwrap_or_default(),
-        created_at: op.created_at,
-        owner_actor_id: p
-            .get("owner_actor_id")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_owned(),
-    };
-    Some(declare_transport(transport))
-}
-
-pub fn apply_tsp_route_establish(op: &Operation) -> Option<TspRoute> {
-    let p = op.payload.as_object()?;
-    let route = TspRoute {
-        route_id: p.get("route_id").and_then(Value::as_str)?.to_owned(),
-        source_actor_id: p
-            .get("source_actor_id")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_owned(),
-        destination_actor_id: p
-            .get("destination_actor_id")
-            .and_then(Value::as_str)?
-            .to_owned(),
-        via_transports: p
-            .get("via_transports")
-            .and_then(Value::as_array)
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|v| v.as_str().map(ToOwned::to_owned))
-                    .collect()
-            })
-            .unwrap_or_default(),
-        established_at: op.created_at,
-    };
-    Some(establish_route(route))
-}
-
-pub fn apply_tsp_audit_append(op: &Operation) -> Option<TspAuditEntry> {
-    let p = op.payload.as_object()?;
-    let route_id = p.get("route_id").and_then(Value::as_str)?.to_owned();
-    let event_kind = p
-        .get("event_kind")
-        .and_then(Value::as_str)
-        .unwrap_or("envelope_sent")
-        .to_owned();
-    Some(append_audit(&route_id, &event_kind))
 }
 
 // ── HTTP surface ────────────────────────────────────────────────────

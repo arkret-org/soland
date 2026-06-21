@@ -8,13 +8,111 @@ pub struct RawDidDocumentJson(
     #[salvo(schema(value_type = serde_json::Value))] pub serde_json::Value,
 );
 
+#[derive(Clone, Debug, Serialize, salvo::oapi::ToSchema)]
+pub struct IdentityRegistryDescription {
+    pub protocol_version: String,
+    pub service_type: String,
+    pub service_did: Did,
+    pub trust_domain: String,
+    pub registry_mode: String,
+    pub supported_receipts: Vec<String>,
+    pub profiles: Vec<String>,
+    pub supported_profiles: Vec<String>,
+    pub supported_operations: Vec<String>,
+    pub supported_bindings: Vec<IdentityRegistryBinding>,
+    pub supported_features: Vec<String>,
+    pub auth_metadata: IdentityRegistryAuthMetadata,
+    #[salvo(schema(value_type = serde_json::Value))]
+    pub limits: Value,
+    pub plaintext_visibility: IdentityRegistryPlaintextVisibility,
+    pub implemented_features: Vec<String>,
+    pub claimed_profiles: Vec<IdentityRegistryClaimedProfile>,
+    pub verified_profiles: Vec<IdentityRegistryVerifiedProfile>,
+    pub experimental_features: Vec<String>,
+    pub compat_surfaces: Vec<String>,
+    pub development_mode: bool,
+    pub rate_limit_policy: IdentityRegistryRateLimitPolicy,
+    pub supported_did_methods: Vec<String>,
+    pub resolver_policy: IdentityResolverPolicy,
+    pub registry_visibility: IdentityRegistryVisibility,
+    #[salvo(schema(value_type = serde_json::Value))]
+    pub did_webvh: Value,
+    pub todos: Vec<String>,
+}
+
+#[derive(Clone, Debug, Serialize, salvo::oapi::ToSchema)]
+pub struct IdentityRegistryBinding {
+    pub kind: String,
+    pub base_url: String,
+    pub paths: Vec<String>,
+}
+
+#[derive(Clone, Debug, Serialize, salvo::oapi::ToSchema)]
+pub struct IdentityRegistryAuthMetadata {
+    pub mode: String,
+    pub read: String,
+}
+
+#[derive(Clone, Debug, Serialize, salvo::oapi::ToSchema)]
+pub struct IdentityRegistryPlaintextVisibility {
+    pub default: String,
+    pub services: Vec<String>,
+}
+
+#[derive(Clone, Debug, Serialize, salvo::oapi::ToSchema)]
+pub struct IdentityRegistryClaimedProfile {
+    pub profile_id: String,
+    pub claim_kind: String,
+}
+
+#[derive(Clone, Debug, Serialize, salvo::oapi::ToSchema)]
+pub struct IdentityRegistryVerifiedProfile {
+    pub profile_id: String,
+    pub verifier: String,
+}
+
+#[derive(Clone, Debug, Serialize, salvo::oapi::ToSchema)]
+pub struct IdentityRegistryRateLimitPolicy {
+    pub kind: String,
+    pub per_minute: u32,
+}
+
+#[derive(Clone, Debug, Serialize, salvo::oapi::ToSchema)]
+pub struct IdentityResolverPolicy {
+    pub allow_methods: Vec<String>,
+    pub freshness_receipts: IdentityFreshnessReceiptsPolicy,
+    pub webvh_validation: IdentityWebvhValidationPolicy,
+    #[salvo(schema(value_type = Vec<serde_json::Value>))]
+    pub trust_roots: Vec<Value>,
+}
+
+#[derive(Clone, Debug, Serialize, salvo::oapi::ToSchema)]
+pub struct IdentityFreshnessReceiptsPolicy {
+    pub endpoint_template: String,
+}
+
+#[derive(Clone, Debug, Serialize, salvo::oapi::ToSchema)]
+pub struct IdentityWebvhValidationPolicy {
+    pub witness_quorum: String,
+}
+
+#[derive(Clone, Debug, Serialize, salvo::oapi::ToSchema)]
+pub struct IdentityRegistryVisibility {
+    pub mode: String,
+    pub public_resolution: bool,
+    pub public_receipts: bool,
+    pub write_policy: String,
+}
+
 #[endpoint(
     operation_id = "ck.root.identity.registry.query.describe",
     tags("identity"),
     summary = "Identity registry capability description"
 )]
 #[tracing::instrument(skip_all, fields(op = "identity_describe"))]
-pub(crate) async fn identity_describe(depot: &mut Depot, res: &mut Response) {
+pub(crate) async fn identity_describe(
+    depot: &mut Depot,
+) -> JsonResult<IdentityRegistryDescription> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let did_webvh = did_webvh_descriptor(state);
     let mut profiles = vec![
@@ -24,15 +122,8 @@ pub(crate) async fn identity_describe(depot: &mut Depot, res: &mut Response) {
     if did_webvh["enabled"].as_bool().unwrap_or(false) {
         profiles.push("ck.identity.webvh.provider.v1".to_owned());
     }
-    if let Err(error) = Did::new(state.config.service_did.clone()) {
-        render_error(
-            res,
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "internal_error",
-            &format!("invalid configured service_did: {error}"),
-        );
-        return;
-    };
+    let service_did = Did::new(state.config.service_did.clone())
+        .map_err(|error| AppError::internal(format!("invalid configured service_did: {error}")))?;
     let supported_did_methods = state
         .config
         .did_resolver_allow_methods
@@ -41,83 +132,87 @@ pub(crate) async fn identity_describe(depot: &mut Depot, res: &mut Response) {
         .collect::<Vec<_>>();
     let trust_roots = identity_trust_roots(state);
     let supported_features = vec![
-        "ck.feature.identity.resolve.v1",
-        "ck.feature.identity.receipts.v1",
-        "ck.feature.identity.did_webvh.v1",
+        "ck.feature.identity.resolve.v1".to_owned(),
+        "ck.feature.identity.receipts.v1".to_owned(),
+        "ck.feature.identity.did_webvh.v1".to_owned(),
     ];
 
-    res.render(Json(json!({
-        "protocol_version": cokret_sdk::PROTOCOL_VERSION,
-        "service_type": "identity_registry",
-        "service_did": state.config.service_did,
-        "trust_domain": state.config.trust_domain,
-        "registry_mode": "development_local",
-        "supported_receipts": ["local"],
-        "profiles": profiles,
-        "supported_profiles": profiles,
-        "supported_operations": [
-            "ck.root.identity.registry.query.describe",
-            "ck.root.identity.query.resolve",
-            "ck.root.identity.document.resource.get",
-            "ck.root.identity.log.query.list",
-            "ck.root.identity.receipts.query.list",
-            "ck.root.identity.command.submit_did_operation"
+    json_ok(IdentityRegistryDescription {
+        protocol_version: cokret_sdk::PROTOCOL_VERSION.to_owned(),
+        service_type: "identity_registry".to_owned(),
+        service_did,
+        trust_domain: state.config.trust_domain.clone(),
+        registry_mode: "development_local".to_owned(),
+        supported_receipts: vec!["local".to_owned()],
+        profiles: profiles.clone(),
+        supported_profiles: profiles,
+        supported_operations: vec![
+            "ck.root.identity.registry.query.describe".to_owned(),
+            "ck.root.identity.query.resolve".to_owned(),
+            "ck.root.identity.document.resource.get".to_owned(),
+            "ck.root.identity.log.query.list".to_owned(),
+            "ck.root.identity.receipts.query.list".to_owned(),
+            "ck.root.identity.command.submit_did_operation".to_owned(),
         ],
-        "supported_bindings": [{
-            "kind": "http",
-            "base_url": state.config.public_base_url,
-            "paths": [
-                "/_cokret/root/identity/describe",
-                "/_cokret/root/identity/resolve",
-                "/_cokret/root/identity/document",
-                "/_cokret/root/identity/log",
-                "/_cokret/root/identity/receipts",
-                "/_cokret/root/identity/submit-did-operation"
-            ]
+        supported_bindings: vec![IdentityRegistryBinding {
+            kind: "http".to_owned(),
+            base_url: state.config.public_base_url.clone(),
+            paths: vec![
+                "/_cokret/root/identity/describe".to_owned(),
+                "/_cokret/root/identity/resolve".to_owned(),
+                "/_cokret/root/identity/document".to_owned(),
+                "/_cokret/root/identity/log".to_owned(),
+                "/_cokret/root/identity/receipts".to_owned(),
+                "/_cokret/root/identity/submit-did-operation".to_owned(),
+            ],
         }],
-        "supported_features": supported_features,
-        "auth_metadata": {
-            "mode": if state.config.development_mode { "development" } else { "production" },
-            "read": "public_metadata"
+        supported_features: supported_features.clone(),
+        auth_metadata: IdentityRegistryAuthMetadata {
+            mode: if state.config.development_mode {
+                "development".to_owned()
+            } else {
+                "production".to_owned()
+            },
+            read: "public_metadata".to_owned(),
         },
-        "limits": {},
-        "plaintext_visibility": {
-            "default": "metadata_only",
-            "services": []
+        limits: json!({}),
+        plaintext_visibility: IdentityRegistryPlaintextVisibility {
+            default: "metadata_only".to_owned(),
+            services: Vec::new(),
         },
-        "implemented_features": supported_features,
-        "claimed_profiles": [{
-            "profile_id": "ck.profile.identity_registry.v1",
-            "claim_kind": "self_claimed"
+        implemented_features: supported_features,
+        claimed_profiles: vec![IdentityRegistryClaimedProfile {
+            profile_id: "ck.profile.identity_registry.v1".to_owned(),
+            claim_kind: "self_claimed".to_owned(),
         }],
-        "verified_profiles": [],
-        "experimental_features": [],
-        "compat_surfaces": [],
-        "development_mode": state.config.development_mode,
-        "rate_limit_policy": {
-            "kind": "windowed",
-            "per_minute": 600
+        verified_profiles: Vec::new(),
+        experimental_features: Vec::new(),
+        compat_surfaces: Vec::new(),
+        development_mode: state.config.development_mode,
+        rate_limit_policy: IdentityRegistryRateLimitPolicy {
+            kind: "windowed".to_owned(),
+            per_minute: 600,
         },
-        "supported_did_methods": supported_did_methods,
-        "resolver_policy": {
-            "allow_methods": state.config.did_resolver_allow_methods,
-            "freshness_receipts": {
-                "endpoint_template": "/_cokret/root/identity/receipts?did={did}"
+        supported_did_methods,
+        resolver_policy: IdentityResolverPolicy {
+            allow_methods: state.config.did_resolver_allow_methods.clone(),
+            freshness_receipts: IdentityFreshnessReceiptsPolicy {
+                endpoint_template: "/_cokret/root/identity/receipts?did={did}".to_owned(),
             },
-            "webvh_validation": {
-                "witness_quorum": "enforced_for_local_webvh_records"
+            webvh_validation: IdentityWebvhValidationPolicy {
+                witness_quorum: "enforced_for_local_webvh_records".to_owned(),
             },
-            "trust_roots": trust_roots
+            trust_roots,
         },
-        "registry_visibility": {
-            "mode": "development_local",
-            "public_resolution": true,
-            "public_receipts": true,
-            "write_policy": "local_registry"
+        registry_visibility: IdentityRegistryVisibility {
+            mode: "development_local".to_owned(),
+            public_resolution: true,
+            public_receipts: true,
+            write_policy: "local_registry".to_owned(),
         },
-        "did_webvh": did_webvh,
-        "todos": []
-    })));
+        did_webvh,
+        todos: Vec::new(),
+    })
 }
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
@@ -464,14 +559,7 @@ pub(crate) async fn identity_resolve(
             record.method_evidence,
         ));
     }
-    let sdk_document = {
-        state
-            .did_resolver
-            .lock()
-            .expect("did resolver lock")
-            .resolve_did(&body.did)
-            .ok()
-    };
+    let sdk_document = state.did_resolver.resolve_did(&body.did).ok();
     if let Some(doc) = sdk_document {
         return json_ok(identity_resolve_outcome(
             body.did,

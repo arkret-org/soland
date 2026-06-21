@@ -128,9 +128,10 @@ fn verify_actor_headers_reject_digest_mismatch() {
     )
     .expect_err("mismatched digest rejected");
 
+    assert_eq!(error.code, crate::error::ErrorCode::Unauthenticated);
     assert_eq!(
-        error.code,
-        crate::error::ErrorCode::CrossDomainReplayRejected
+        error.wire_code(),
+        crate::error::reasons::CROSS_DOMAIN_REPLAY_REJECTED
     );
     assert_eq!(error.http_status(), StatusCode::CONFLICT);
 }
@@ -148,9 +149,10 @@ fn verify_actor_headers_reject_destination_mismatch() {
     )
     .expect_err("wrong destination rejected");
 
+    assert_eq!(error.code, crate::error::ErrorCode::Unauthenticated);
     assert_eq!(
-        error.code,
-        crate::error::ErrorCode::CrossDomainReplayRejected
+        error.wire_code(),
+        crate::error::reasons::CROSS_DOMAIN_REPLAY_REJECTED
     );
     assert_eq!(error.http_status(), StatusCode::CONFLICT);
 }

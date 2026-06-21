@@ -44,7 +44,7 @@ fn durable_kind_passes_submit_entry() {
 #[test]
 fn terminal_realm_blocks_non_audit_kind() {
     let blocked = terminal_realm_check(true, "ck.message.create");
-    assert!(matches!(blocked, Some((ErrorCode::RealmTerminalState, _))));
+    assert!(matches!(blocked, Some((ErrorCode::FailedPrecondition, _))));
     let audit_ok = terminal_realm_check(true, "ck.audit.accessed");
     assert!(audit_ok.is_none());
     let live_ok = terminal_realm_check(false, "ck.message.create");
@@ -63,7 +63,7 @@ fn cross_signing_reset_replay_rejects_wrong_trust_domain() {
         "ck:trust_domain:soland.local",
     )
     .unwrap_err();
-    assert_eq!(err.0, ErrorCode::CrossDomainReplayRejected);
+    assert_eq!(err.0, ErrorCode::Unauthenticated);
 }
 
 #[test]
@@ -78,7 +78,7 @@ fn cross_signing_reset_replay_rejects_wrong_event_id() {
         "ck:trust_domain:soland.local",
     )
     .unwrap_err();
-    assert_eq!(err.0, ErrorCode::ResetEventIdMismatch);
+    assert_eq!(err.0, ErrorCode::FailedPrecondition);
 }
 
 #[test]
@@ -99,7 +99,7 @@ fn cross_signing_reset_replay_passes_when_matched() {
 fn realm_policy_components_relaxed_window_ceiling() {
     let payload = json!({"e2ee_relaxed": {"relaxed_window_max_ms": 300_001 }});
     let err = realm_policy_components_check(&payload, &[], false, false, None).unwrap_err();
-    assert_eq!(err.0, ErrorCode::RelaxedWindowExceedsCeiling);
+    assert_eq!(err.0, ErrorCode::FailedPrecondition);
 }
 
 #[test]
@@ -113,16 +113,16 @@ fn realm_policy_components_e2ee_relaxed_compliance_mutex() {
         None,
     )
     .unwrap_err();
-    assert_eq!(err.0, ErrorCode::E2eeRelaxedDisallowedInComplianceProfile);
+    assert_eq!(err.0, ErrorCode::FailedPrecondition);
 }
 
 #[test]
 fn realm_policy_components_media_plaintext_triple_binding() {
     let payload = json!({"media_service_decrypts": true});
     let err = realm_policy_components_check(&payload, &[], false, true, None).unwrap_err();
-    assert_eq!(err.0, ErrorCode::MediaPlaintextServiceNotAuthorised);
+    assert_eq!(err.0, ErrorCode::FailedPrecondition);
     let err2 = realm_policy_components_check(&payload, &[], true, false, None).unwrap_err();
-    assert_eq!(err2.0, ErrorCode::MlsGovernanceBindingStale);
+    assert_eq!(err2.0, ErrorCode::FailedPrecondition);
     // No binding digest projected → only the policy_root coverage gate runs.
     realm_policy_components_check(&payload, &[], true, true, None).unwrap();
 }
@@ -161,12 +161,12 @@ fn realm_policy_components_media_decrypt_digest_recompute_gate() {
     // member-visible metadata) → rejected, fail closed.
     let stale = format!("sha256:{}", "c".repeat(64));
     let err = realm_policy_components_check(&payload, &[], true, true, Some(&stale)).unwrap_err();
-    assert_eq!(err.0, ErrorCode::MlsGovernanceBindingStale);
+    assert_eq!(err.0, ErrorCode::FailedPrecondition);
 
     // A malformed covered digest is also rejected (cannot be trusted).
     let err =
         realm_policy_components_check(&payload, &[], true, true, Some("not-a-hash")).unwrap_err();
-    assert_eq!(err.0, ErrorCode::MlsGovernanceBindingStale);
+    assert_eq!(err.0, ErrorCode::FailedPrecondition);
 }
 
 #[test]
@@ -218,7 +218,7 @@ fn federation_binding_rejects_reducer_profile_digest_mismatch() {
         &req.service_binding_ref,
     )
     .unwrap_err();
-    assert_eq!(err.0, cokret_sdk::ERROR_CODE_REDUCER_PROFILE_MISMATCH);
+    assert_eq!(err.0, cokret_sdk::REASON_REDUCER_PROFILE_MISMATCH);
 }
 
 #[test]

@@ -12,7 +12,7 @@ CREATE TABLE public.account_datas (
 
 CREATE TABLE public.accounts (
     id uuid NOT NULL,
-    actor_id text NOT NULL,
+    principal_id text NOT NULL,
     localpart text NOT NULL,
     display_name text,
     payload jsonb DEFAULT '{}'::jsonb NOT NULL,
@@ -898,7 +898,7 @@ ALTER TABLE ONLY public.accounts
     ADD CONSTRAINT accounts_pkey PRIMARY KEY (id);
 
 ALTER TABLE ONLY public.accounts
-    ADD CONSTRAINT accounts_actor_id_key UNIQUE (actor_id);
+    ADD CONSTRAINT accounts_principal_id_key UNIQUE (principal_id);
 
 ALTER TABLE ONLY public.accounts
     ADD CONSTRAINT accounts_localpart_key UNIQUE (localpart);

@@ -336,8 +336,18 @@ pub(super) fn organization_preview_from_value(
             .get("handle")
             .and_then(Value::as_str)
             .map(ToOwned::to_owned),
-        preview: organization.clone(),
+        preview: directory_organization_preview_payload(organization),
     })
+}
+
+fn directory_organization_preview_payload(organization: &Value) -> Value {
+    let mut preview = organization.clone();
+    if let Value::Object(object) = &mut preview {
+        if let Some(name) = object.remove("name") {
+            object.entry("title".to_owned()).or_insert(name);
+        }
+    }
+    preview
 }
 
 pub(super) fn organization_preview_with_spaces(

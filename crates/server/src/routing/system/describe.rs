@@ -616,22 +616,6 @@ async fn integration_describe() -> JsonResult<IntegrationDescribeOutcome> {
                 todo: "runtime_attestation verifier and controller approval ledger are not wired; requests carrying runtime_attestation are rejected.".to_owned(),
             },
             IntegrationSurfaceDescriptor {
-                name: "extensions_tsp".to_owned(),
-                method: "POST/GET".to_owned(),
-                path: "/_soland/self/extensions/tsp/*".to_owned(),
-                contract: "org.cokret.soland.extensions.tsp.*".to_owned(),
-                stability: "stub_contract".to_owned(),
-                todo: "process-local TSP transport/route/audit scaffold only; no real TSP envelope verify/decrypt or persistent signed audit chain.".to_owned(),
-            },
-            IntegrationSurfaceDescriptor {
-                name: "extensions_bot_actor".to_owned(),
-                method: "POST/GET/DELETE".to_owned(),
-                path: "/_soland/self/extensions/bots*".to_owned(),
-                contract: "org.cokret.soland.extensions.bots.*".to_owned(),
-                stability: "stub_contract".to_owned(),
-                todo: "process-local bot/ghost registry only; durable provisioning and accountability grant emission are not wired.".to_owned(),
-            },
-            IntegrationSurfaceDescriptor {
                 name: "extensions_sovereign".to_owned(),
                 method: "POST/GET".to_owned(),
                 path: "/_soland/self/deployment/*".to_owned(),

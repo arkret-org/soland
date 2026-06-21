@@ -1,7 +1,7 @@
 diesel::table! {
     accounts (id) {
         id -> Uuid,
-        actor_id -> Text,
+        principal_id -> Text,
         localpart -> Text,
         display_name -> Nullable<Text>,
         payload -> Jsonb,

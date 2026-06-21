@@ -20,10 +20,10 @@ pub fn operation_policy_reason_code(message: &str) -> (salvo::http::StatusCode, 
             salvo::http::StatusCode::FORBIDDEN,
             "applet_registration_unauthorized",
         )
-    } else if message == cokret_sdk::ERROR_CODE_TRANSCRIPTION_DENIED {
+    } else if message == crate::error::reasons::TRANSCRIPTION_DENIED {
         (
             salvo::http::StatusCode::FORBIDDEN,
-            cokret_sdk::ERROR_CODE_TRANSCRIPTION_DENIED,
+            crate::error::reasons::TRANSCRIPTION_DENIED,
         )
     } else if message == "not_found" {
         (salvo::http::StatusCode::NOT_FOUND, "not_found")
@@ -1417,7 +1417,7 @@ async fn validate_call_recording_start_policy(
         return Ok(());
     }
     if action == cokret_sdk::CAP_ACTION_CALL_TRANSCRIBE {
-        Err(cokret_sdk::ERROR_CODE_TRANSCRIPTION_DENIED)
+        Err(crate::error::reasons::TRANSCRIPTION_DENIED)
     } else {
         Err("missing_capability")
     }

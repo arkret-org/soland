@@ -38,18 +38,20 @@ pub(super) fn validate_federation_headers(
         .verify_destination(expected_destination)
         .map_err(|_| {
             AppError::new(
-                crate::error::ErrorCode::CrossDomainReplayRejected,
+                crate::error::ErrorCode::Unauthenticated,
                 "federation Destination-Trust-Domain header does not match this service",
             )
             .with_status(StatusCode::CONFLICT)
+            .with_wire_code(crate::error::reasons::CROSS_DOMAIN_REPLAY_REJECTED)
         })?;
     if request_hash != headers.request_canonical_digest.as_str() {
         crate::metrics::record_digest_mismatch("federation_request_binding");
         return Err(AppError::new(
-            crate::error::ErrorCode::CrossDomainReplayRejected,
+            crate::error::ErrorCode::Unauthenticated,
             "Request-Canonical-Digest does not match the canonical request body",
         )
-        .with_status(StatusCode::CONFLICT));
+        .with_status(StatusCode::CONFLICT)
+        .with_wire_code(crate::error::reasons::CROSS_DOMAIN_REPLAY_REJECTED));
     }
     Ok(())
 }

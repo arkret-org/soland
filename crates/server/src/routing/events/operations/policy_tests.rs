@@ -707,13 +707,13 @@ async fn call_recording_start_transcript_requires_transcribe_capability() {
         validate_operation_policy(&state, &[start])
             .await
             .unwrap_err(),
-        cokret_sdk::ERROR_CODE_TRANSCRIPTION_DENIED
+        crate::error::reasons::TRANSCRIPTION_DENIED
     );
     assert_eq!(
-        operation_policy_reason_code(cokret_sdk::ERROR_CODE_TRANSCRIPTION_DENIED),
+        operation_policy_reason_code(crate::error::reasons::TRANSCRIPTION_DENIED),
         (
             salvo::http::StatusCode::FORBIDDEN,
-            cokret_sdk::ERROR_CODE_TRANSCRIPTION_DENIED
+            crate::error::reasons::TRANSCRIPTION_DENIED
         )
     );
 }

@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use cokret_sdk::identity::{CompositeDidResolver, DidDocument, DidResolver};
-use cokret_sdk::{Did, Error as SdkError, Hash, Operation, RealmId};
+use cokret_sdk::{Did, Hash, Operation, RealmId};
 use salvo::http::StatusCode;
 use serde_json::json;
 
@@ -45,23 +45,16 @@ impl PolicyGateRejection {
 
 #[derive(Clone)]
 struct SharedDidResolver {
-    inner: Arc<crate::state::Mutex<CompositeDidResolver>>,
+    inner: Arc<CompositeDidResolver>,
 }
 
 impl DidResolver for SharedDidResolver {
     fn supports(&self, did: &Did) -> bool {
-        self.inner
-            .lock()
-            .map(|resolver| resolver.supports(did))
-            .unwrap_or(false)
+        self.inner.supports(did)
     }
 
     fn resolve_did(&self, did: &Did) -> cokret_sdk::Result<DidDocument> {
-        let resolver = self
-            .inner
-            .lock()
-            .map_err(|error| SdkError::Protocol(format!("DID resolver lock poisoned: {error}")))?;
-        resolver.resolve_did(did)
+        self.inner.resolve_did(did)
     }
 }
 

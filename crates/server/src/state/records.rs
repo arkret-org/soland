@@ -41,9 +41,9 @@ pub struct DeviceInventoryRecord {
 pub struct AccountRecord {
     /// Surrogate row primary key (`ck:account:<uuid7>`), minted by
     /// [`crate::ids::generate_account_id`] at account creation. Stable
-    /// internal handle decoupled from the `actor_id` DID (which may rotate).
+    /// internal handle decoupled from the `principal_id` DID (which may rotate).
     pub id: String,
-    /// The account's protocol identity DID (DB column `actor_id`).
+    /// The account's protocol identity DID (DB column `principal_id`).
     pub did: String,
     /// Bare handle localpart (`alice` — never `@alice` or `alice:domain`).
     /// The domain half of the canonical `<localpart>:<domain>` handle is

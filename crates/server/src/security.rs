@@ -136,10 +136,8 @@ fn resolve_and_validate_url_for_egress(
     if addrs.is_empty() {
         return Err(format!("{purpose}: DNS resolution returned no addresses"));
     }
-    if !allow_private_networks {
-        for addr in &addrs {
-            validate_resolved_ip(addr.ip(), purpose)?;
-        }
+    for addr in &addrs {
+        validate_ip_for_egress(addr.ip(), purpose, allow_private_networks)?;
     }
     Ok(addrs)
 }
@@ -162,19 +160,18 @@ where
         .filter(|host| !host.trim().is_empty())
         .ok_or_else(|| format!("{purpose}: URL host is required"))?;
     validate_host_policy(host, purpose)?;
-    if allow_private_networks {
-        return Ok(());
-    }
-    if host.eq_ignore_ascii_case("localhost") || host.ends_with(".localhost") {
+    if !allow_private_networks
+        && (host.eq_ignore_ascii_case("localhost") || host.ends_with(".localhost"))
+    {
         return Err(format!("{purpose}: localhost egress target is not allowed"));
     }
     if let Ok(ip) = host.parse::<IpAddr>() {
-        return validate_resolved_ip(ip, purpose);
+        return validate_ip_for_egress(ip, purpose, allow_private_networks);
     }
 
     let port = url.port_or_known_default().unwrap_or(443);
     for ip in resolve_host(host, port)? {
-        validate_resolved_ip(ip, purpose)?;
+        validate_ip_for_egress(ip, purpose, allow_private_networks)?;
     }
     Ok(())
 }
@@ -240,6 +237,22 @@ fn validate_resolved_ip(ip: IpAddr, purpose: &str) -> Result<(), String> {
     Ok(())
 }
 
+fn validate_ip_for_egress(
+    ip: IpAddr,
+    purpose: &str,
+    allow_private_networks: bool,
+) -> Result<(), String> {
+    if let Some(reason) = hard_blocked_ip_reason(ip) {
+        return Err(format!(
+            "{purpose}: egress target resolved to {reason} address {ip}"
+        ));
+    }
+    if !allow_private_networks {
+        validate_resolved_ip(ip, purpose)?;
+    }
+    Ok(())
+}
+
 fn blocked_ip_reason(ip: IpAddr) -> Option<&'static str> {
     match ip {
         IpAddr::V4(ip) => blocked_ipv4_reason(ip),
@@ -252,6 +265,34 @@ fn blocked_ip_reason(ip: IpAddr) -> Option<&'static str> {
     }
 }
 
+fn hard_blocked_ip_reason(ip: IpAddr) -> Option<&'static str> {
+    match ip {
+        IpAddr::V4(ip) => {
+            let [a, b, c, d] = ip.octets();
+            if a == 169 && b == 254 && c == 169 && d == 254 {
+                Some("cloud_metadata")
+            } else if a == 169 && b == 254 {
+                Some("link_local")
+            } else {
+                None
+            }
+        }
+        IpAddr::V6(ip) => {
+            if let Some(v4) = ipv4_mapped(ip) {
+                return hard_blocked_ip_reason(IpAddr::V4(v4));
+            }
+            let segments = ip.segments();
+            if (segments[0] & 0xfe00) == 0xfc00 {
+                Some("private_network")
+            } else if (segments[0] & 0xffc0) == 0xfe80 {
+                Some("link_local")
+            } else {
+                None
+            }
+        }
+    }
+}
+
 fn egress_denial_reason(error: &str) -> &'static str {
     if error.contains("localhost") {
         "localhost"
@@ -259,6 +300,8 @@ fn egress_denial_reason(error: &str) -> &'static str {
         "private_network"
     } else if error.contains("loopback") {
         "loopback"
+    } else if error.contains("cloud_metadata") {
+        "cloud_metadata"
     } else if error.contains("link_local") {
         "link_local"
     } else if error.contains("multicast") {
@@ -483,6 +526,22 @@ mod tests {
         let _guard = env_lock().lock().expect("env test lock");
         let url = Url::parse("http://127.0.0.1:8080/x").unwrap();
         assert!(validate_url_for_egress(&url, "test", true).is_ok());
+    }
+
+    #[test]
+    fn egress_guard_rejects_metadata_even_when_private_allowed() {
+        let _guard = env_lock().lock().expect("env test lock");
+        for raw in [
+            "http://169.254.169.254/latest/meta-data",
+            "http://169.254.1.1/x",
+            "http://[fd00::1]/x",
+        ] {
+            let url = Url::parse(raw).unwrap();
+            assert!(
+                validate_url_for_egress(&url, "test", true).is_err(),
+                "{raw} should stay blocked"
+            );
+        }
     }
 
     #[test]

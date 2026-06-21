@@ -180,28 +180,24 @@ pub mod reasons {
     ];
 
     // Agent / pairing / session-grant reason codes.
-    pub const PROOF_INVALID: &str = core_error::ERROR_CODE_PROOF_INVALID;
-    pub const ACTOR_KIND_REDUCER_MANAGED: &str = core_error::ERROR_CODE_ACTOR_KIND_REDUCER_MANAGED;
+    pub const PROOF_INVALID: &str = "proof_invalid";
+    pub const ACTOR_KIND_REDUCER_MANAGED: &str = "actor_kind_reducer_managed";
     pub const EFFECTIVE_SCOPE_REDUCER_MANAGED: &str =
         core_error::REASON_EFFECTIVE_SCOPE_REDUCER_MANAGED;
 
     // Media binding reason codes.
-    pub const TOKEN_ISSUER_UNAUTHORISED: &str = core_error::ERROR_CODE_TOKEN_ISSUER_UNAUTHORISED;
-    pub const PARTICIPANT_BINDING_INVALID: &str =
-        core_error::ERROR_CODE_PARTICIPANT_BINDING_INVALID;
-    pub const PARTICIPANT_IDENTITY_UNRECOGNISED: &str =
-        core_error::ERROR_CODE_PARTICIPANT_IDENTITY_UNRECOGNISED;
-    pub const SESSION_FOCUS_ALREADY_COMMITTED: &str =
-        core_error::ERROR_CODE_SESSION_FOCUS_ALREADY_COMMITTED;
-    pub const E2EE_KEY_SOURCE_UNAUTHORISED: &str =
-        core_error::ERROR_CODE_E2EE_KEY_SOURCE_UNAUTHORISED;
-    pub const FOCUS_UNAVAILABLE_FOR_CLIENT: &str =
-        core_error::ERROR_CODE_FOCUS_UNAVAILABLE_FOR_CLIENT;
+    pub const UNKNOWN_FOCUS_TYPE: &str = "unknown_focus_type";
+    pub const FOCUS_MISMATCH: &str = "focus_mismatch";
+    pub const TOKEN_ISSUER_UNAUTHORISED: &str = core_error::REASON_TOKEN_ISSUER_UNAUTHORISED;
+    pub const PARTICIPANT_BINDING_INVALID: &str = "participant_binding_invalid";
+    pub const PARTICIPANT_IDENTITY_UNRECOGNISED: &str = "participant_identity_unrecognised";
+    pub const SESSION_FOCUS_ALREADY_COMMITTED: &str = "session_focus_already_committed";
+    pub const E2EE_KEY_SOURCE_UNAUTHORISED: &str = core_error::REASON_E2EE_KEY_SOURCE_UNAUTHORISED;
+    pub const FOCUS_UNAVAILABLE_FOR_CLIENT: &str = "focus_unavailable_for_client";
 
     // Call moderation reason codes (webrtc-signaling.md §3a).
-    pub const CALL_MODERATION_UNAUTHORISED: &str =
-        core_error::ERROR_CODE_CALL_MODERATION_UNAUTHORISED;
-    pub const CALL_PARTICIPANT_REMOVED: &str = core_error::ERROR_CODE_CALL_PARTICIPANT_REMOVED;
+    pub const CALL_MODERATION_UNAUTHORISED: &str = "call_moderation_unauthorised";
+    pub const CALL_PARTICIPANT_REMOVED: &str = "call_participant_removed";
 
     // Call capability gating reason codes (webrtc-signaling.md §3 / §8).
     pub const MEDIA_PERMISSION_DENIED: &str = core_error::ERROR_CODE_MEDIA_PERMISSION_DENIED;
@@ -209,19 +205,27 @@ pub mod reasons {
 
     // Call recording / transcription lifecycle reason codes
     // (call-state.md §5 / §5.1 / §5.2 / §7).
-    pub const RECORDING_CONSENT_REQUIRED: &str = core_error::ERROR_CODE_RECORDING_CONSENT_REQUIRED;
-    pub const TRANSCRIPTION_DENIED: &str = core_error::ERROR_CODE_TRANSCRIPTION_DENIED;
+    pub const RECORDING_CONSENT_REQUIRED: &str = core_error::REASON_RECORDING_CONSENT_REQUIRED;
+    pub const TRANSCRIPTION_DENIED: &str = "transcription_denied";
     pub const TRANSCRIPTION_ARTIFACT_PIPELINE_BYPASSED: &str =
-        core_error::ERROR_CODE_TRANSCRIPTION_ARTIFACT_PIPELINE_BYPASSED;
-    pub const CALL_SUMMARY_INVALID: &str = core_error::ERROR_CODE_CALL_SUMMARY_INVALID;
+        "transcription_artifact_pipeline_bypassed";
+    pub const CALL_SUMMARY_INVALID: &str = "call_summary_invalid";
+    pub const LEGAL_HOLD_ACTIVE: &str = core_error::REASON_LEGAL_HOLD_ACTIVE;
 
     // Recovery reason codes.
-    pub const RECOVERY_WITNESS_REVOKE_LAGGING: &str =
-        core_error::ERROR_CODE_RECOVERY_WITNESS_REVOKE_LAGGING;
+    pub const RECOVERY_WITNESS_REVOKE_LAGGING: &str = "recovery_witness_revoke_lagging";
 
     // MemberIdentity append-only replacement event reason codes.
-    pub const MEMBER_IDENTITY_UNKNOWN_SEGMENT: &str =
-        core_error::ERROR_CODE_MEMBER_IDENTITY_UNKNOWN_SEGMENT;
+    pub const MEMBER_IDENTITY_UNKNOWN_SEGMENT: &str = "member_identity_unknown_segment";
+
+    // Federation / admission reason codes that are not top-level SDK variants.
+    pub const CROSS_DOMAIN_REPLAY_REJECTED: &str = "cross_domain_replay_rejected";
+    pub const RESET_EVENT_ID_MISMATCH: &str = "reset_event_id_mismatch";
+    pub const E2EE_RELAXED_DISALLOWED_IN_COMPLIANCE_PROFILE: &str =
+        "e2ee_relaxed_disallowed_in_compliance_profile";
+    pub const MEDIA_PLAINTEXT_SERVICE_NOT_AUTHORISED: &str =
+        "media_plaintext_service_not_authorised";
+    pub const BLOB_REDACTED: &str = "blob_redacted";
 
     // MemberIdentity / handle-claim wire-shape reason codes.
     pub const MEMBER_IDENTITY_HANDLE_FIELD_FORBIDDEN: &str =
@@ -465,15 +469,33 @@ impl From<ErrorCode> for AppError {
 
 #[async_trait]
 impl Writer for AppError {
-    async fn write(self, _req: &mut Request, _depot: &mut Depot, res: &mut Response) {
+    async fn write(self, _req: &mut Request, depot: &mut Depot, res: &mut Response) {
         let status = self.http_status();
         let wire = self.wire_code().to_owned();
+        let development_mode = depot
+            .obtain::<crate::state::AppState>()
+            .map(|state| state.config.development_mode)
+            .unwrap_or(false);
+        let redact_internal = self.code == ErrorCode::InternalError && !development_mode;
+        if redact_internal {
+            tracing::error!(
+                status = status.as_u16(),
+                wire_code = %wire,
+                internal_message = %self.message,
+                "internal error response redacted"
+            );
+        }
+        let public_message = if redact_internal {
+            "internal error"
+        } else {
+            self.message.as_str()
+        };
         if let Some(reason) = self.top_level_reason.as_deref() {
             crate::routing::system::util::render_error_with_top_level_reason(
                 res,
                 status,
                 &wire,
-                &self.message,
+                public_message,
                 reason,
                 self.reason_detail.as_deref(),
             );
@@ -482,11 +504,11 @@ impl Writer for AppError {
                 res,
                 status,
                 &wire,
-                &self.message,
+                public_message,
                 reason_detail,
             );
         } else {
-            render_error(res, status, &wire, &self.message);
+            render_error(res, status, &wire, public_message);
         }
     }
 }

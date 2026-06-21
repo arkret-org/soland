@@ -1,9 +1,24 @@
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, OnceLock};
+
 use super::*;
 use crate::invite_claim_proofs::{
     invite_claim_proof_context_from_projection, verify_invite_claim_proofs_for_operation,
 };
 
 const MAX_ACTOR_SEQ_SIBLINGS: usize = 16;
+
+static ACTOR_SUBMIT_LOCKS: OnceLock<Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>> =
+    OnceLock::new();
+
+fn actor_submit_lock(actor_id: &str) -> Arc<tokio::sync::Mutex<()>> {
+    let locks = ACTOR_SUBMIT_LOCKS.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut guard = locks.lock().expect("actor submit lock map poisoned");
+    guard
+        .entry(actor_id.to_owned())
+        .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+        .clone()
+}
 
 #[derive(Debug)]
 pub(in crate::routing) struct ValidatedEventEnvelope {
@@ -579,6 +594,8 @@ pub(in crate::routing) async fn submit_event_value(
     }
 
     let parsed = validate_event_envelope(state, session, &envelope).await?;
+    let actor_lock = actor_submit_lock(&parsed.actor_id);
+    let _actor_submit_guard = actor_lock.lock().await;
     let received_at = now();
     let store = state.persistence.events();
     if let Ok(Some(existing)) = store.get(&parsed.event_id).await {

@@ -30,6 +30,7 @@ use cokret_sdk::{
     MimiSubmitMessageRequestBody, MimiUpdateConsentOutcome, MimiUpdateConsentRequestBody, RealmId,
     ReportId,
 };
+use salvo::http::StatusCode;
 use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
 use serde::Serialize;
@@ -64,6 +65,23 @@ pub(super) fn well_known_router() -> Router {
     Router::with_path(".well-known/mimi-protocol-directory").get(mimi_protocol_directory)
 }
 
+fn reject_mimi_write_without_verified_signature(req: &Request) -> Result<(), AppError> {
+    let has_http_signature = req.headers().contains_key("signature")
+        || req.headers().contains_key("signature-input")
+        || req.headers().contains_key("authorization");
+    if has_http_signature {
+        Err(AppError::unsupported_feature(
+            "MIMI HTTP Message Signature verification is not implemented",
+        )
+        .with_status(StatusCode::NOT_IMPLEMENTED))
+    } else {
+        Err(
+            AppError::unauthenticated("MIMI writes require HTTP Message Signatures")
+                .with_top_level_reason("http_signature_required"),
+        )
+    }
+}
+
 #[endpoint]
 #[tracing::instrument(skip_all, fields(op = "mimi_protocol_directory"))]
 async fn mimi_protocol_directory(depot: &mut Depot, res: &mut Response) {
@@ -91,7 +109,9 @@ async fn mimi_provider_directory(depot: &mut Depot, res: &mut Response) {
 async fn mimi_key_material(
     body: JsonBody<MimiKeyMaterialRequestBody>,
     depot: &mut Depot,
+    req: &mut Request,
 ) -> JsonResult<MimiKeyMaterialOutcome> {
+    reject_mimi_write_without_verified_signature(req)?;
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = typed_body_value(body.into_inner(), "mimi key material")?;
     if let Some(message) = unsupported_mimi_draft(&body) {
@@ -131,7 +151,9 @@ async fn mimi_room_update(
     strand_id: PathParam<String>,
     body: JsonBody<MimiRoomUpdateRequestBody>,
     depot: &mut Depot,
+    req: &mut Request,
 ) -> JsonResult<MimiRoomUpdateOutcome> {
+    reject_mimi_write_without_verified_signature(req)?;
     let state = depot.obtain::<AppState>().expect("state injected");
     let room_id = strand_id.into_inner();
     let body = typed_body_value(body.into_inner(), "mimi room update")?;
@@ -205,7 +227,9 @@ async fn mimi_notify(
     strand_id: PathParam<String>,
     body: JsonBody<MimiNotifyRequestBody>,
     depot: &mut Depot,
+    req: &mut Request,
 ) -> JsonResult<MimiNotifyOutcome> {
+    reject_mimi_write_without_verified_signature(req)?;
     let state = depot.obtain::<AppState>().expect("state injected");
     let room_id = strand_id.into_inner();
     let body = typed_body_value(body.into_inner(), "mimi notify")?;
@@ -274,7 +298,9 @@ async fn mimi_room_message(
     strand_id: PathParam<String>,
     body: JsonBody<MimiSubmitMessageRequestBody>,
     depot: &mut Depot,
+    req: &mut Request,
 ) -> JsonResult<MimiSubmitMessageOutcome> {
+    reject_mimi_write_without_verified_signature(req)?;
     let state = depot.obtain::<AppState>().expect("state injected");
     let room_id = strand_id.into_inner();
     let body = typed_body_value(body.into_inner(), "mimi submit message")?;
@@ -487,7 +513,9 @@ async fn mimi_group_info(
 async fn mimi_consent_request(
     body: JsonBody<MimiRequestConsentRequestBody>,
     depot: &mut Depot,
+    req: &mut Request,
 ) -> JsonResult<MimiRequestConsentOutcome> {
+    reject_mimi_write_without_verified_signature(req)?;
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = typed_body_value(body.into_inner(), "mimi consent request")?;
     if let Some(message) = unsupported_mimi_draft(&body) {
@@ -519,7 +547,9 @@ async fn mimi_consent_request(
 async fn mimi_consent_update(
     body: JsonBody<MimiUpdateConsentRequestBody>,
     depot: &mut Depot,
+    req: &mut Request,
 ) -> JsonResult<MimiUpdateConsentOutcome> {
+    reject_mimi_write_without_verified_signature(req)?;
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = typed_body_value(body.into_inner(), "mimi consent update")?;
     if let Some(message) = unsupported_mimi_draft(&body) {
@@ -556,7 +586,9 @@ async fn mimi_consent_update(
 async fn mimi_identifiers_query(
     body: JsonBody<MimiIdentifierQueryRequestBody>,
     depot: &mut Depot,
+    req: &mut Request,
 ) -> JsonResult<MimiIdentifierQueryOutcome> {
+    reject_mimi_write_without_verified_signature(req)?;
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = typed_body_value(body.into_inner(), "mimi identifiers query")?;
     if let Some(message) = unsupported_mimi_draft(&body) {
@@ -645,6 +677,7 @@ async fn mimi_report_abuse(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<MimiReportAbuseOutcome> {
+    reject_mimi_write_without_verified_signature(req)?;
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = typed_body_value(body.into_inner(), "mimi report abuse")?;
     if let Some(message) = unsupported_mimi_draft(&body) {
@@ -823,7 +856,9 @@ async fn mimi_report_abuse(
 async fn mimi_proxy_download(
     body: JsonBody<MimiProxyDownloadRequestBody>,
     depot: &mut Depot,
+    req: &mut Request,
 ) -> JsonResult<MimiProxyDownloadOutcome> {
+    reject_mimi_write_without_verified_signature(req)?;
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = typed_body_value(body.into_inner(), "mimi proxy download")?;
     if let Some(message) = unsupported_mimi_draft(&body) {

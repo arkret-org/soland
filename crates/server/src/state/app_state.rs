@@ -203,7 +203,7 @@ pub struct AppState {
     pub organization_realms: Arc<Mutex<BTreeMap<String, BTreeSet<String>>>>,
     /// Accepted Realm-level moderation-policy overrides keyed by Realm id.
     pub realm_moderation_policies: Arc<Mutex<BTreeMap<String, RealmModerationPolicyRecord>>>,
-    pub did_resolver: Arc<Mutex<CompositeDidResolver>>,
+    pub did_resolver: Arc<CompositeDidResolver>,
     /// Move/Seal/Lattice runtime stores.
     /// In-memory backends from the SDK; production deployments will
     /// swap these for Pg-backed implementations behind the same trait
@@ -380,11 +380,9 @@ impl AppState {
         // so we can still
         // borrow `&config` for the helper before `config` itself is
         // moved into `Self.config`.
-        let did_resolver = Arc::new(Mutex::new(
-            did_resolver_chain::build_did_resolver_chain_with_identity(
-                &config,
-                Some(persistence.clone()),
-            ),
+        let did_resolver = Arc::new(did_resolver_chain::build_did_resolver_chain_with_identity(
+            &config,
+            Some(persistence.clone()),
         ));
 
         // Derive the NotaryWorker's Ed25519 signing key.

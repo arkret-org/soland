@@ -2,7 +2,7 @@
 //! CRUD (soland product surface).
 //!
 //! Protocol surface (`/_cokret/self/...`):
-//! - `POST   /_cokret/self/policy/check`        â€” evaluate a `SolandPolicyCheckRequestBody`
+//! - `POST   /_cokret/self/policy/check`        - evaluate a `PolicyCheckRequestBody`
 //!
 //! Product surface (`/_soland/self/...`): owner-scoped policy document storage
 //! CRUD is deployment-local management, NOT a v1 protocol operation
@@ -24,21 +24,23 @@
 
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use cokret_sdk::RealmId;
+use cokret_sdk::{
+    AuthzDecision, Did, FreshnessState, Hash, PolicyCheckBoundTo, PolicyCheckOutcome,
+    PolicyCheckRequestBody, PolicyCheckSignature, RealmId,
+};
 use ed25519_dalek::Signer;
 use salvo::oapi::extract::{JsonBody, PathParam, QueryParam};
 use salvo::prelude::*;
 use serde_json::{Value, json};
 
-use super::{is_valid_sha256_digest, now, sha256_hex, validate_canonical_json_value, validate_did};
+use super::{now, validate_canonical_json_value, validate_did};
 use crate::error::AppError;
 use crate::ids;
 use crate::result::{JsonResult, json_ok};
 use crate::routing::system::extract::AuthArgs;
 use crate::state::{AppState, PolicyDocumentRecord};
 use crate::wire::{
-    OkOutcome, PolicyBinding, PolicyDocumentOutcome, PolicyDocumentsOutcome,
-    SolandPolicyCheckOutcome, SolandPolicyCheckRequestBody, UpsertPolicyDocumentRequestBody,
+    OkOutcome, PolicyDocumentOutcome, PolicyDocumentsOutcome, UpsertPolicyDocumentRequestBody,
 };
 
 /// Protocol surface (`/_cokret/self/...`): only the policy decision check is
@@ -258,29 +260,14 @@ async fn delete_policy_document(
 #[tracing::instrument(skip_all, fields(op = "ck.self.policy.query.check"))]
 async fn policy_check(
     aa: AuthArgs,
-    body: JsonBody<SolandPolicyCheckRequestBody>,
+    body: JsonBody<PolicyCheckRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<SolandPolicyCheckOutcome> {
+) -> JsonResult<PolicyCheckOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let _ = &session;
     let body = body.into_inner();
-    if validate_did(&body.actor_id).is_err() {
-        return Err(AppError::invalid_param("invalid actor_id"));
-    }
-    if let Some(realm_id) = &body.realm_id
-        && RealmId::new(realm_id.clone()).is_err()
-    {
-        return Err(AppError::invalid_param(
-            "invalid realm_id (must match ck:realm:<uuid>)",
-        ));
-    }
-    if !is_valid_sha256_digest(&body.request_canonical_digest) {
-        return Err(AppError::invalid_param(
-            "request_canonical_digest must be sha256:<64 lowercase hex>",
-        ));
-    }
     let policy_decision = matching_policy_decision(state, &body).await;
     let (decision, reason_code, policy_id, obligations) =
         if let Some(policy_decision) = policy_decision {
@@ -292,14 +279,14 @@ async fn policy_check(
             )
         } else if body.action.contains("delete") || body.action.contains("ban") {
             (
-                "require_review".to_owned(),
+                AuthzDecision::RequireReview,
                 "review_required".to_owned(),
                 None,
                 Vec::new(),
             )
         } else {
             (
-                "require_review".to_owned(),
+                AuthzDecision::RequireReview,
                 "review_required".to_owned(),
                 None,
                 Vec::new(),
@@ -312,20 +299,19 @@ async fn policy_check(
     // any auditor replaying the response) can detect a stale decision
     // once any of the four hashes move. All four hashes are sha256 hex
     // over canonical JSON per `canonical_json_bytes`.
-    let bound_realm_id = body.realm_id.clone().unwrap_or_default();
-    let resource_value = body.event_preview.clone().unwrap_or(Value::Null);
+    let resource_value = body.event_preview.clone();
     let auth_state_value = json!({
-        "actor_id": body.actor_id,
+        "actor_id": body.actor_id.as_str(),
         "action": body.action,
         "resource": resource_value,
-        "request_canonical_digest": body.request_canonical_digest,
+        "request_canonical_digest": body.request_canonical_digest.as_str(),
     });
-    let auth_state_digest = canonical_sha256_hex(&auth_state_value)?;
+    let auth_state_digest = canonical_hash(&auth_state_value)?;
 
     let mut policy_doc_ids: Vec<String> = state
         .persistence
         .policy_documents()
-        .list_for_owner(&body.actor_id)
+        .list_for_owner(body.actor_id.as_str())
         .await
         .unwrap_or_default()
         .into_iter()
@@ -339,95 +325,65 @@ async fn policy_check(
         .collect();
     policy_doc_ids.sort();
     let policy_frontier_value = json!({ "policy_documents": policy_doc_ids });
-    let policy_frontier_digest = canonical_sha256_hex(&policy_frontier_value)?;
+    let policy_frontier_digest = canonical_hash(&policy_frontier_value)?;
 
-    let membership_frontier_value = if let Some(realm_id) = body.realm_id.as_deref() {
-        let mut members = collect_realm_member_dids(state, realm_id);
-        members.sort();
-        json!({ "realm_id": realm_id, "members": members })
-    } else {
-        let empty: Vec<String> = Vec::new();
-        json!({ "realm_id": Value::Null, "members": empty })
-    };
-    let membership_frontier_digest = canonical_sha256_hex(&membership_frontier_value)?;
-
-    let binding_expires_at = now() + chrono::Duration::hours(1);
-    let bound_to = PolicyBinding {
-        realm_id: bound_realm_id.clone(),
-        auth_state_digest: auth_state_digest.clone(),
-        policy_frontier_digest: policy_frontier_digest.clone(),
-        membership_frontier_digest: membership_frontier_digest.clone(),
-        expires_at: binding_expires_at,
-    };
-
-    // â”€â”€ Detached JWS over canonical {decision, reason_code, bound_to,
-    // obligations} â”€â”€
-    let to_sign = json!({
-        "decision": decision,
-        "reason_code": reason_code,
-        "bound_to": {
-            "realm_id": bound_realm_id,
-            "auth_state_digest": auth_state_digest,
-            "policy_frontier_digest": policy_frontier_digest,
-            "membership_frontier_digest": membership_frontier_digest,
-            "expires_at": binding_expires_at.to_rfc3339(),
-        },
-        "obligations": obligations,
+    let mut members = collect_realm_member_dids(state, body.realm_id.as_str());
+    members.sort();
+    let membership_frontier_value = json!({
+        "realm_id": body.realm_id.as_str(),
+        "members": members
     });
-    let canonical_bytes = cokret_sdk::canonical::canonical_json_bytes(&to_sign)
-        .unwrap_or_else(|_| serde_json::to_vec(&to_sign).unwrap_or_default());
-    let protected_header =
-        br#"{"alg":"EdDSA","typ":"ck.policy.check.binding.v1","b64":false,"crit":["b64"]}"#;
-    let protected_b64u = URL_SAFE_NO_PAD.encode(protected_header);
-    let payload_b64u = URL_SAFE_NO_PAD.encode(&canonical_bytes);
-    let signing_input = format!("{protected_b64u}.{payload_b64u}");
-    let signature = state.notary_signing_key().sign(signing_input.as_bytes());
-    let signature_b64u = URL_SAFE_NO_PAD.encode(signature.to_bytes());
-    let jws_detached = format!("{protected_b64u}..{signature_b64u}");
+    let membership_frontier_digest = canonical_hash(&membership_frontier_value)?;
 
-    json_ok(SolandPolicyCheckOutcome {
+    let policy_server_id = Did::new(state.config.service_did.clone())
+        .map_err(|error| AppError::internal(format!("invalid service DID: {error}")))?;
+    let expires_at = now() + chrono::Duration::minutes(5);
+    let bound_to = PolicyCheckBoundTo {
+        realm_id: body.realm_id.clone(),
+        actor_id: body.actor_id.clone(),
+        action: body.action.clone(),
+        request_canonical_digest: body.request_canonical_digest.clone(),
+        policy_server_id,
+    };
+    let mut outcome = PolicyCheckOutcome {
+        request_id: body.request_id.clone(),
         decision,
-        reason_code,
-        policy_id: policy_id.clone(),
-        expires_at: now() + chrono::Duration::minutes(5),
-        obligations: obligations.clone(),
-        decision_trace: json!({
-            "request_id": body.request_id,
-            "actor_id": body.actor_id,
-            "action": body.action,
-            "realm_id": body.realm_id,
-            "matched_policy": policy_id,
-            "constraints": [],
-            "obligations": obligations,
-            "missing_proofs": [],
-            "cache": {
-                "mode": "in_memory",
-                "frontier": Value::Null
-            }
-        }),
         bound_to,
-        signature: json!({
-            "kid": format!("{}#policy-binding-key", state.config.service_did),
-            "alg": "EdDSA",
-            "typ": "ck.policy.check.binding.v1",
-            "scheme": "ed25519-detached-jws",
-            "payload_digest": cokret_sdk::canonical::sha256_digest(&canonical_bytes),
-            "jws": jws_detached,
-            "sig": sha256_hex(body.request_canonical_digest.as_bytes())
-        }),
-    })
+        reason_code,
+        freshness_state: FreshnessState::Fresh,
+        expires_at,
+        auth_state_digest,
+        policy_frontier_digest,
+        membership_frontier_digest,
+        signature: PolicyCheckSignature {
+            kid: format!("{}#policy-binding-key", state.config.service_did),
+            sig: String::new(),
+        },
+        next_retry_at: None,
+        obligations: obligations.clone(),
+    };
+    let transcript = crate::authz::policy_client::policy_decision_transcript_bytes(&body, &outcome)
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    let signature = state.notary_signing_key().sign(&transcript);
+    outcome.signature.sig = URL_SAFE_NO_PAD.encode(signature.to_bytes());
+    tracing::debug!(
+        matched_policy_id = policy_id.as_deref().unwrap_or(""),
+        "policy check decision signed"
+    );
+    json_ok(outcome)
 }
 
 /// Canonical-JSON sha256 digest helper used to build each of the four
-/// `PolicyBinding` frontier hashes. Delegates to the SDK
+/// Policy-check frontier hashes. Delegates to the SDK
 /// [`cokret_sdk::canonical::canonical_sha256`] so the digest is computed over
 /// canonical JSON bytes and emitted in the wire `sha256:<hex>` form. There is
 /// **no** non-canonical fallback: if canonicalization fails the error is
 /// surfaced to the caller rather than silently hashing a non-canonical
 /// `serde_json::to_vec` byte stream.
-fn canonical_sha256_hex(value: &Value) -> Result<String, AppError> {
-    cokret_sdk::canonical::canonical_sha256(value)
-        .map_err(|e| AppError::internal(format!("canonical digest failed: {e}")))
+fn canonical_hash(value: &Value) -> Result<Hash, AppError> {
+    let digest = cokret_sdk::canonical::canonical_sha256(value)
+        .map_err(|e| AppError::internal(format!("canonical digest failed: {e}")))?;
+    Hash::new(digest).map_err(|e| AppError::internal(format!("digest shape failed: {e}")))
 }
 
 /// Snapshot the current member DID list for `realm_id`. Returns an
@@ -466,7 +422,7 @@ pub fn policy_document_to_response(policy: &PolicyDocumentRecord) -> PolicyDocum
 }
 
 struct MatchedPolicyDecision {
-    decision: String,
+    decision: AuthzDecision,
     reason_code: String,
     policy_id: String,
     obligations: Vec<Value>,
@@ -474,7 +430,7 @@ struct MatchedPolicyDecision {
 
 async fn matching_policy_decision(
     state: &AppState,
-    request: &SolandPolicyCheckRequestBody,
+    request: &PolicyCheckRequestBody,
 ) -> Option<MatchedPolicyDecision> {
     state
         .persistence
@@ -490,20 +446,20 @@ async fn matching_policy_decision(
                 .payload
                 .get("effect")
                 .and_then(|value| value.as_str())
-                .unwrap_or("allow")
-                .to_owned();
+                .and_then(policy_effect_decision)
+                .unwrap_or(AuthzDecision::Allow);
             let obligations = policy
                 .payload
                 .get("obligations")
                 .and_then(|value| value.as_array())
                 .cloned()
                 .unwrap_or_default();
-            let reason_code = match decision.as_str() {
-                "hard_deny" => "policy_denied",
-                "soft_deny" => "policy_soft_denied",
-                "require_review" => "policy_review_required",
-                "quarantine" => "policy_quarantine",
-                _ => "policy_allowed",
+            let reason_code = match &decision {
+                AuthzDecision::HardDeny => "policy_denied",
+                AuthzDecision::SoftDeny => "policy_soft_denied",
+                AuthzDecision::RequireReview => "policy_review_required",
+                AuthzDecision::Quarantine => "policy_quarantine",
+                AuthzDecision::Allow => "policy_allowed",
             }
             .to_owned();
             MatchedPolicyDecision {
@@ -515,19 +471,16 @@ async fn matching_policy_decision(
         })
 }
 
-fn policy_matches_check(
-    policy: &PolicyDocumentRecord,
-    request: &SolandPolicyCheckRequestBody,
-) -> bool {
-    policy_scope_matches(&policy.scope, request.realm_id.as_deref())
-        && policy_subject_matches(&policy.subject_ref, &request.actor_id)
+fn policy_matches_check(policy: &PolicyDocumentRecord, request: &PolicyCheckRequestBody) -> bool {
+    policy_scope_matches(&policy.scope, request.realm_id.as_str())
+        && policy_subject_matches(&policy.subject_ref, request.actor_id.as_str())
         && (policy.policy_type == "*" || policy.policy_type == request.action)
         && policy_actions_match(&policy.payload["actions"], &request.action)
         && policy_resource_matches(&policy.payload["resource"], request)
 }
 
-fn policy_scope_matches(scope: &str, request_realm_id: Option<&str>) -> bool {
-    scope == "*" || request_realm_id == Some(scope)
+fn policy_scope_matches(scope: &str, request_realm_id: &str) -> bool {
+    scope == "*" || request_realm_id == scope
 }
 
 fn policy_subject_matches(subject_ref: &str, actor: &str) -> bool {
@@ -548,7 +501,7 @@ fn policy_actions_match(actions: &Value, action: &str) -> bool {
     })
 }
 
-fn policy_resource_matches(resource: &Value, request: &SolandPolicyCheckRequestBody) -> bool {
+fn policy_resource_matches(resource: &Value, request: &PolicyCheckRequestBody) -> bool {
     let Some(resource) = resource.as_object() else {
         return true;
     };
@@ -557,20 +510,27 @@ fn policy_resource_matches(resource: &Value, request: &SolandPolicyCheckRequestB
     }
     // Policy resources are Realm-scoped; constraints use `realm_id`.
     if let Some(constraint_realm_id) = resource.get("realm_id").and_then(|value| value.as_str())
-        && request.realm_id.as_deref() != Some(constraint_realm_id)
+        && request.realm_id.as_str() != constraint_realm_id
     {
         return false;
     }
     if let Some(kind) = resource.get("kind").and_then(|value| value.as_str())
-        && request
-            .source
-            .get("kind")
-            .and_then(|value| value.as_str())
-            .is_some_and(|source_kind| source_kind != kind)
+        && request.source.service_type != kind
     {
         return false;
     }
     true
+}
+
+fn policy_effect_decision(value: &str) -> Option<AuthzDecision> {
+    match value {
+        "allow" => Some(AuthzDecision::Allow),
+        "soft_deny" => Some(AuthzDecision::SoftDeny),
+        "hard_deny" => Some(AuthzDecision::HardDeny),
+        "require_review" => Some(AuthzDecision::RequireReview),
+        "quarantine" => Some(AuthzDecision::Quarantine),
+        _ => None,
+    }
 }
 
 pub fn is_valid_policy_scope(value: &str) -> bool {

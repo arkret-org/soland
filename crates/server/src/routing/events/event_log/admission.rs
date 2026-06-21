@@ -63,7 +63,7 @@ impl SolandEventsSubmitRequestBody {
         let actual_reducer_digest = binding.reducer_profile_digest.to_string();
         if actual_reducer_digest != expected_reducer_digest {
             return Err((
-                cokret_sdk::ERROR_CODE_REDUCER_PROFILE_MISMATCH,
+                cokret_sdk::REASON_REDUCER_PROFILE_MISMATCH,
                 format!(
                     "service_binding_ref.reducer_profile_digest mismatch: expected {expected_reducer_digest}, got {actual_reducer_digest}"
                 ),
@@ -107,7 +107,7 @@ pub fn events_submit_pre_admit_check(kind: &str) -> Option<(ErrorCode, &'static 
 /// Reject any non-audit-class write on a Realm whose lifecycle state is
 /// terminal (`ck.realm.tombstone` or `ck.realm.destroy` applied). Spec T07.
 ///
-/// Returns `Some((ErrorCode::RealmTerminalState, reason))` when the write
+/// Returns `Some((ErrorCode::FailedPrecondition, reason))` when the write
 /// MUST be rejected; `None` otherwise.
 pub fn terminal_realm_check(
     realm_in_terminal_state: bool,
@@ -115,7 +115,7 @@ pub fn terminal_realm_check(
 ) -> Option<(ErrorCode, &'static str)> {
     if realm_in_terminal_state && !crate::kinds::is_audit_kind(kind) {
         return Some((
-            ErrorCode::RealmTerminalState,
+            ErrorCode::FailedPrecondition,
             "Realm has reached ck.realm.tombstone or ck.realm.destroy \
              terminal state; only audit-class events are accepted",
         ));
@@ -161,7 +161,7 @@ pub fn cross_signing_reset_replay_check(
     }
     if payload_td != server_trust_domain {
         return Err((
-            ErrorCode::CrossDomainReplayRejected,
+            ErrorCode::Unauthenticated,
             "cross_signing.reset.trust_domain does not match this \
              Principal Server's configured trust_domain"
                 .to_owned(),
@@ -186,7 +186,7 @@ pub fn cross_signing_reset_replay_check(
     }
     if payload_reset_event_id != event_id {
         return Err((
-            ErrorCode::ResetEventIdMismatch,
+            ErrorCode::FailedPrecondition,
             "cross_signing.reset.reset_event_id must equal the enclosing \
              Event.event_id"
                 .to_owned(),
@@ -235,7 +235,7 @@ pub fn realm_policy_components_check(
         let window_u32 = u32::try_from(window).unwrap_or(u32::MAX);
         if cokret_sdk::validate_relaxed_window_ms(window_u32).is_err() {
             return Err((
-                ErrorCode::RelaxedWindowExceedsCeiling,
+                ErrorCode::FailedPrecondition,
                 format!(
                     "e2ee_relaxed.relaxed_window_max_ms={window} exceeds absolute \
                      hard ceiling of {}ms",
@@ -258,7 +258,7 @@ pub fn realm_policy_components_check(
         .any(|p| crate::kinds::AUDIT_COMPLIANCE_PROFILES.contains(&p.as_str()));
     if relaxed_active && compliance_active {
         return Err((
-            ErrorCode::E2eeRelaxedDisallowedInComplianceProfile,
+            ErrorCode::FailedPrecondition,
             "ck.profile.e2ee_relaxed.v1 is mutually exclusive with audit \
              compliance profiles (attested_audit.e2ee.v1 / \
              disclosed_audit.e2ee.v1)"
@@ -274,7 +274,7 @@ pub fn realm_policy_components_check(
     {
         if !media_plaintext_service_present {
             return Err((
-                ErrorCode::MediaPlaintextServiceNotAuthorised,
+                ErrorCode::FailedPrecondition,
                 "media_service_decrypts=true requires the SFU/MCU service DID \
                  to be listed in plaintext_visible_services[] with \
                  purpose=media_plaintext"
@@ -283,7 +283,7 @@ pub fn realm_policy_components_check(
         }
         if !mls_governance_binding_covers_policy_root {
             return Err((
-                ErrorCode::MlsGovernanceBindingStale,
+                ErrorCode::FailedPrecondition,
                 "media_service_decrypts=true requires the current MLS epoch \
                  governance binding's policy_root to cover the active media \
                  plaintext policy"
@@ -297,14 +297,14 @@ pub fn realm_policy_components_check(
         // one; absent it, check (3) above is the strongest server-side gate.
         if let Some(covered_digest) = binding_discussion_metadata_digest {
             let recomputed = recompute_media_decrypt_metadata_digest(payload).ok_or((
-                ErrorCode::MlsGovernanceBindingStale,
+                ErrorCode::FailedPrecondition,
                 "media_service_decrypts=true policy cell could not be canonicalised \
                  for discussion_metadata_digest recomputation"
                     .to_owned(),
             ))?;
             let covered = cokret_sdk::Hash::new(covered_digest.to_owned()).map_err(|_| {
                 (
-                    ErrorCode::MlsGovernanceBindingStale,
+                    ErrorCode::FailedPrecondition,
                     "governance binding discussion_metadata_digest is not a valid \
                      sha256 hash"
                         .to_owned(),
@@ -312,7 +312,7 @@ pub fn realm_policy_components_check(
             })?;
             if cokret_sdk::models::verify_media_decrypt_metadata(&covered, &recomputed).is_err() {
                 return Err((
-                    ErrorCode::MlsGovernanceBindingStale,
+                    ErrorCode::FailedPrecondition,
                     "media_service_decrypts=true fact recomputed from the policy \
                      cell value does not match the governance binding's \
                      discussion_metadata_digest (media-service-binding.md §8.2 rule 5)"

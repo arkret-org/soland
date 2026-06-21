@@ -14,7 +14,6 @@ pub(crate) mod contact_federation;
 pub(crate) mod cross_signing;
 pub(super) mod device_messages;
 pub(super) mod did;
-mod identity_link;
 pub(in crate::routing) mod key_backup;
 mod keys;
 // R3 spec-sync (cokret-spec b47ff6ec) — recovery policy / receipt

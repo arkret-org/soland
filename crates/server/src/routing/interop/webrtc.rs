@@ -466,9 +466,10 @@ impl MediaProviderKind {
             "livekit" => Ok(Self::LiveKit),
             "mediasoup" => Ok(Self::Mediasoup),
             _ => Err(AppError::new(
-                ErrorCode::UnknownFocusType,
+                ErrorCode::InvalidParam,
                 format!("unknown media focus provider `{value}`"),
-            )),
+            )
+            .with_wire_code(crate::error::reasons::UNKNOWN_FOCUS_TYPE)),
         }
     }
 
@@ -694,12 +695,13 @@ async fn handle_rtc_token(
     let session_focus = session_focus_for_call(&call_state, &media_epoch, body.focus_id.as_str())?;
     if body.focus_id != session_focus {
         return Err(AppError::new(
-            ErrorCode::FocusMismatch,
+            ErrorCode::FailedPrecondition,
             format!(
                 "focus_id `{}` does not match committed session_focus `{}`",
                 body.focus_id, session_focus
             ),
-        ));
+        )
+        .with_wire_code(crate::error::reasons::FOCUS_MISMATCH));
     }
     let focus = media_epoch.focus(&session_focus).ok_or_else(|| {
         focus_unavailable_error("selected focus is not present in media_service epoch")
@@ -1277,7 +1279,7 @@ fn issuer_kid_belongs_to_service(issuer_kid: &str, service_id: &str) -> bool {
 }
 
 fn token_issuer_unauthorised(message: impl Into<String>) -> AppError {
-    AppError::new(ErrorCode::TokenIssuerUnauthorised, message)
+    AppError::new(ErrorCode::FailedPrecondition, message)
         .with_wire_code(crate::error::reasons::TOKEN_ISSUER_UNAUTHORISED)
 }
 

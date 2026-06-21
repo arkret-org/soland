@@ -141,8 +141,6 @@ fn api_v1_router(conformance_harness_enabled: bool) -> Router {
                 .push(access::router())
                 // self/circles/* (ck.self.circle.*).
                 .push(circles::router())
-                // self/organizations/* (ck.self.organization.*).
-                .push(organizations::router())
                 // self/realms/{realm_id}/links* + effective-policy
                 // (ck.self.realm_link.*).
                 .push(realms::router())
@@ -218,6 +216,9 @@ fn soland_local_router() -> Router {
                 // the `/_cokret/...` protocol root per
                 // `service-http-binding.md` §1007.
                 .push(access::product_router())
+                // Organization governance CRUD is deployment-local product
+                // state; it must not occupy the `ck.self.*` protocol surface.
+                .push(organizations::router())
                 // The old soland-internal WebRTC session stack
                 // (`/_soland/self/webrtc/*`, `/_soland/self/calls/*`) is retired:
                 // media token / ICE config are served only from the spec

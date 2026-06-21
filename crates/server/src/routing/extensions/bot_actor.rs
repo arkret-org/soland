@@ -16,13 +16,9 @@
 //! `state.persistence` store is a follow-up — see TODO at module
 //! bottom.
 //!
-//! Deployment-local HTTP surface is mounted under
-//! `/_soland/self/extensions/bots*`; protocol clients should not call it.
-//!
-//! Reducer dispatch hooks are exposed via
-//! `apply_bot_register` / `apply_bot_revoke` so the central reducer
-//! registry can fan out `ck.extensions.bot_actor.{register,revoke}`
-//! event kinds through the same code path that the HTTP routes drive.
+//! Deployment-local HTTP handlers are intentionally not mounted in the
+//! production router until this registry has durable state and accountable
+//! provisioning semantics.
 //!
 //! TODO(G3.S9-followup): bind bot/ghost provisioning to the verified
 //! manifest's `applet_id`; persist the registry through
@@ -32,12 +28,11 @@
 
 use std::sync::Mutex;
 
-use cokret_sdk::{Did, Operation};
+use cokret_sdk::Did;
 use salvo::oapi::ToSchema;
 use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 
 use crate::error::AppError;
 use crate::result::{JsonResult, json_ok};
@@ -147,57 +142,6 @@ fn validate_extension_actor_did(did: &str) -> Result<(), AppError> {
         AppError::invalid_param(format!("bot or ghost actor DID is invalid: {error}"))
             .with_wire_code("schema_violation")
     })
-}
-
-// ── Reducer dispatch hooks ──────────────────────────────────────────
-
-/// Reducer adapter for `ck.extensions.bot_actor.register`.
-///
-/// The full reducer signature returns `ProjectionEffect`, but we keep
-/// this helper standalone (rather than going through `ProjectionState`)
-/// because the bot/ghost registry is module-local stub state. The
-/// adapter in `reducer.rs` calls into here and discards the result
-/// alongside `ProjectionEffect::Ignored`.
-pub fn apply_bot_register(op: &Operation) -> Option<BotActor> {
-    let payload = op.payload.as_object()?;
-    let did = payload.get("did").and_then(Value::as_str)?.to_owned();
-    validate_extension_actor_did(&did).ok()?;
-    let name = payload
-        .get("name")
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        .to_owned();
-    let kind = payload
-        .get("kind")
-        .and_then(Value::as_str)
-        .unwrap_or(KIND_BOT)
-        .to_owned();
-    if !(kind == KIND_BOT || kind == KIND_GHOST) {
-        return None;
-    }
-    let owner = payload
-        .get("owner_actor_id")
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        .to_owned();
-    let actor = BotActor {
-        did,
-        name,
-        kind,
-        owner_actor_id: owner,
-        created_at: op.created_at,
-        revoked_at: None,
-    };
-    Some(register_bot(actor))
-}
-
-/// Reducer adapter for `ck.extensions.bot_actor.revoke`.
-pub fn apply_bot_revoke(op: &Operation) -> bool {
-    op.payload
-        .get("did")
-        .and_then(Value::as_str)
-        .map(revoke_bot)
-        .unwrap_or(false)
 }
 
 // ── HTTP surface ────────────────────────────────────────────────────
