@@ -280,11 +280,12 @@ pub(crate) const STRAND_UPDATE_REQUIREMENTS: &[PayloadRequirement] = &[
     ),
     PayloadRequirement::Required("patch", "strand update operation requires patch"),
 ];
-// `ck.morph.archive` / `ck.morph.restore` payload: just `morph_id`.
+// `ck.morph.archive` / `ck.morph.restore` use the generic object lifecycle
+// payload shape: target_ref names the Morph.
 pub(crate) const MORPH_LIFECYCLE_REQUIREMENTS: &[PayloadRequirement] =
     &[PayloadRequirement::Required(
-        "morph_id",
-        "morph lifecycle operation requires morph_id",
+        "target_ref",
+        "morph lifecycle operation requires target_ref",
     )];
 pub(crate) const MORPH_CREATE_REQUIREMENTS: &[PayloadRequirement] =
     &[PayloadRequirement::Required(
@@ -293,7 +294,7 @@ pub(crate) const MORPH_CREATE_REQUIREMENTS: &[PayloadRequirement] =
     )];
 pub(crate) const MORPH_UPDATE_REQUIREMENTS: &[PayloadRequirement] = &[
     PayloadRequirement::AnyOf(
-        &["target_ref", "morph_id"],
+        &["target_ref"],
         "morph update operation requires target_ref",
     ),
     PayloadRequirement::Required("patch", "morph update operation requires patch"),

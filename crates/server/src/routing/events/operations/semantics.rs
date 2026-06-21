@@ -543,6 +543,10 @@ pub fn operation_schema_for_kind(kind: &str) -> Option<OperationPayloadSchema> {
             requirements: REALM_SEARCH_POLICY_REQUIREMENTS,
             validate: Some(validate_operation_payload_against_sdk_artifact),
         },
+        kinds::CK_REALM_MEDIA_SERVICE => OperationPayloadSchema {
+            requirements: &[],
+            validate: None,
+        },
         kinds::CK_REALM_HISTORY_SHARING_POLICY | kinds::CK_REALM_PREVIEW_POLICY => {
             OperationPayloadSchema {
                 requirements: REALM_POLICY_VALUE_REQUIREMENTS,

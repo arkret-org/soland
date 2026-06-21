@@ -113,6 +113,39 @@ mod invite_create_schema_tests {
     }
 }
 
+mod realm_media_service_schema_tests {
+    use cokret_sdk::Operation;
+    use serde_json::json;
+
+    use super::super::*;
+
+    #[test]
+    fn realm_media_service_is_registered_for_projection() {
+        let operation = Operation::create(
+            cokret_sdk::OperationId::new("ck:operation:01904100-0000-7000-8000-000000000901")
+                .unwrap(),
+            cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-000000000901".to_owned())
+                .unwrap(),
+            kinds::CK_REALM_MEDIA_SERVICE,
+            json!({
+                "media_service": {
+                    "service_id": "did:web:media.example",
+                    "foci": [{
+                        "focus_id": "ck:focus:livekit-lhr",
+                        "type": "livekit",
+                        "issuer_kid": "did:web:media.example#media-token",
+                        "connect_url": "wss://livekit.media.example"
+                    }]
+                }
+            }),
+        );
+        let schema = operation_schema_for_kind(kinds::CK_REALM_MEDIA_SERVICE)
+            .expect("media_service event kind must build a projection Operation");
+
+        validate_operation_schema(&operation, schema).unwrap();
+    }
+}
+
 mod message_projection_schema_tests {
     use cokret_sdk::Operation;
     use serde_json::json;
@@ -293,7 +326,7 @@ mod spec_sync_validator_tests {
         let update = op(
             kinds::CK_MORPH_UPDATE,
             json!({
-                "morph_id": "ck:morph:01904100-0000-7000-8000-000000000001",
+                "target_ref": "ck:morph:01904100-0000-7000-8000-000000000001",
                 "patch": {"schema_refs": ["ck.schema.new"]}
             }),
         );
@@ -610,7 +643,7 @@ mod derived_relation_and_morph_immutability_tests {
         let bare = op(
             kinds::CK_MORPH_UPDATE,
             json!({
-                "morph_id": "ck:morph:01904100-0000-7000-8000-00000000000c",
+                "target_ref": "ck:morph:01904100-0000-7000-8000-00000000000c",
                 "patch": {"morph_type": "task"}
             }),
         );
@@ -621,7 +654,7 @@ mod derived_relation_and_morph_immutability_tests {
         let enveloped = op(
             kinds::CK_MORPH_UPDATE,
             json!({
-                "morph_id": "ck:morph:01904100-0000-7000-8000-00000000000c",
+                "target_ref": "ck:morph:01904100-0000-7000-8000-00000000000c",
                 "patch": {"morph_type": {"$op": "set", "value": "task"}}
             }),
         );
@@ -639,7 +672,7 @@ mod derived_relation_and_morph_immutability_tests {
         let top_stage = op(
             kinds::CK_MORPH_UPDATE,
             json!({
-                "morph_id": "ck:morph:01904100-0000-7000-8000-00000000000d",
+                "target_ref": "ck:morph:01904100-0000-7000-8000-00000000000d",
                 "patch": {"stage": "done"}
             }),
         );
@@ -650,7 +683,7 @@ mod derived_relation_and_morph_immutability_tests {
         let dotted = op(
             kinds::CK_MORPH_UPDATE,
             json!({
-                "morph_id": "ck:morph:01904100-0000-7000-8000-00000000000d",
+                "target_ref": "ck:morph:01904100-0000-7000-8000-00000000000d",
                 "patch": {"fields.lifecycle": "archived"}
             }),
         );
@@ -661,7 +694,7 @@ mod derived_relation_and_morph_immutability_tests {
         let object_replace = op(
             kinds::CK_MORPH_UPDATE,
             json!({
-                "morph_id": "ck:morph:01904100-0000-7000-8000-00000000000d",
+                "target_ref": "ck:morph:01904100-0000-7000-8000-00000000000d",
                 "patch": {"fields": {"$op": "set", "value": {"stage_reason": "x"}}}
             }),
         );
@@ -676,7 +709,7 @@ mod derived_relation_and_morph_immutability_tests {
         let operation = op(
             kinds::CK_MORPH_UPDATE,
             json!({
-                "morph_id": "ck:morph:01904100-0000-7000-8000-00000000000e",
+                "target_ref": "ck:morph:01904100-0000-7000-8000-00000000000e",
                 "patch": {"fields.severity": "high", "fields": {"$op": "set", "value": {"status": "open"}}}
             }),
         );

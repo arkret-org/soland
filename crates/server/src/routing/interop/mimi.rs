@@ -20,21 +20,26 @@
 
 use std::collections::BTreeMap;
 
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD;
 use chrono::Duration;
+use cokret_sdk::models::proof_kind;
 use cokret_sdk::{
-    Did, EventId, MimiGroupInfoOutcome, MimiIdentifierQueryOutcome, MimiIdentifierQueryRequestBody,
-    MimiKeyMaterialOutcome, MimiKeyMaterialRequestBody, MimiNotifyOutcome, MimiNotifyRequestBody,
-    MimiProxyDownloadOutcome, MimiProxyDownloadRequestBody, MimiReportAbuseOutcome,
-    MimiReportAbuseRequestBody, MimiRequestConsentOutcome, MimiRequestConsentRequestBody,
-    MimiRoomUpdateOutcome, MimiRoomUpdateRequestBody, MimiSubmitMessageOutcome,
-    MimiSubmitMessageRequestBody, MimiUpdateConsentOutcome, MimiUpdateConsentRequestBody, RealmId,
-    ReportId,
+    Did, EventId, Hash, MimiGroupInfoOutcome, MimiIdentifierQueryOutcome,
+    MimiIdentifierQueryRequestBody, MimiKeyMaterialOutcome, MimiKeyMaterialRequestBody,
+    MimiNotifyOutcome, MimiNotifyRequestBody, MimiProxyDownloadOutcome,
+    MimiProxyDownloadRequestBody, MimiReportAbuseOutcome, MimiReportAbuseRequestBody,
+    MimiRequestConsentOutcome, MimiRequestConsentRequestBody, MimiRoomUpdateOutcome,
+    MimiRoomUpdateRequestBody, MimiSubmitMessageOutcome, MimiSubmitMessageRequestBody,
+    MimiUpdateConsentOutcome, MimiUpdateConsentRequestBody, Proof, RealmId, ReportId, canonical,
 };
+use ed25519_dalek::Verifier as _;
 use salvo::http::StatusCode;
 use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
 use serde::Serialize;
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 
 use super::moderation::{
     moderation_request_source_ip_hash, moderation_request_source_service,
@@ -43,8 +48,13 @@ use super::moderation::{
 use super::{append_audit_log, now, sha256_hex};
 use crate::error::AppError;
 use crate::result::{JsonResult, json_ok};
-use crate::state::{AppState, EventNotification, MessageRecord, ProjectionEventRecord};
+use crate::routing::events::projection::{append_projection_event, projection_event_json};
+use crate::state::{
+    AppState, CanonicalEventRecord, EventNotification, MessageRecord, ProjectionEventRecord,
+};
 use crate::{ids, kinds};
+
+const EVENT_SCHEMA_ID: &str = "ck.schema.event.v1";
 
 pub(super) fn router() -> Router {
     Router::with_path("mimi")
@@ -65,21 +75,291 @@ pub(super) fn well_known_router() -> Router {
     Router::with_path(".well-known/mimi-protocol-directory").get(mimi_protocol_directory)
 }
 
-fn reject_mimi_write_without_verified_signature(req: &Request) -> Result<(), AppError> {
-    let has_http_signature = req.headers().contains_key("signature")
-        || req.headers().contains_key("signature-input")
-        || req.headers().contains_key("authorization");
-    if has_http_signature {
-        Err(AppError::unsupported_feature(
-            "MIMI HTTP Message Signature verification is not implemented",
-        )
-        .with_status(StatusCode::NOT_IMPLEMENTED))
-    } else {
-        Err(
-            AppError::unauthenticated("MIMI writes require HTTP Message Signatures")
-                .with_top_level_reason("http_signature_required"),
-        )
+fn verify_mimi_write_service_proof(
+    state: &AppState,
+    req: &Request,
+    body: &Value,
+    room_uri: Option<&str>,
+) -> Result<(), AppError> {
+    let signature_present =
+        req.headers().get("signature").is_some() && req.headers().get("signature-input").is_some();
+    if !signature_present {
+        return Err(mimi_signature_error_required(
+            "MIMI writes require RFC 9421 Signature and Signature-Input headers",
+        ));
     }
+
+    let body_bytes = cokret_sdk::canonical::canonical_json_bytes(body).map_err(|error| {
+        AppError::invalid_param(format!("MIMI request body is not canonical JSON: {error}"))
+    })?;
+    let expected_content_digest = mimi_content_digest_header(&body_bytes);
+    let content_digest = mimi_required_header(req, "content-digest")?;
+    if content_digest != expected_content_digest {
+        return Err(mimi_signature_error_invalid(
+            "Content-Digest does not cover the canonical MIMI request body",
+        ));
+    }
+    let expected_request_digest = cokret_sdk::canonical::sha256_digest(&body_bytes);
+    let request_digest = mimi_required_header(req, "request-canonical-digest")?;
+    if request_digest != expected_request_digest {
+        return Err(mimi_signature_error_invalid(
+            "Request-Canonical-Digest does not match the canonical MIMI request body",
+        ));
+    }
+
+    let source_service_did = mimi_required_header(req, "source-service-did")?;
+    if !source_service_did.starts_with("did:") {
+        return Err(mimi_signature_error_invalid(
+            "Source-Service-DID must be a DID",
+        ));
+    }
+    let destination_service_did = mimi_required_header(req, "destination-service-did")?;
+    if destination_service_did != state.config.service_did {
+        return Err(mimi_signature_error_invalid(
+            "Destination-Service-DID does not match this service",
+        ));
+    }
+    let provider_id = mimi_required_header(req, "provider-id")?;
+    if !provider_id.starts_with("mimi://") {
+        return Err(mimi_signature_error_invalid(
+            "Provider-ID must be a MIMI provider URI",
+        ));
+    }
+    let signed_room_uri = match room_uri {
+        Some(expected) => {
+            let observed = mimi_required_header(req, "mimi-room-uri")?;
+            if observed != expected {
+                return Err(mimi_signature_error_invalid(
+                    "MIMI-Room-URI does not match the addressed room",
+                ));
+            }
+            Some(observed)
+        }
+        None => None,
+    };
+
+    let signature_params = mimi_signature_params(req)?;
+    let verification_method =
+        mimi_validate_signature_params(&signature_params, &source_service_did, room_uri.is_some())?;
+    let method = req.method().as_str().to_ascii_uppercase();
+    let target_uri = crate::routing::federation::signature_target_uri(req, state);
+    let authority = crate::routing::federation::signature_authority(req, state);
+    let signature_base = mimi_http_signature_base(
+        &method,
+        &target_uri,
+        &authority,
+        &content_digest,
+        &request_digest,
+        &source_service_did,
+        &destination_service_did,
+        &provider_id,
+        signed_room_uri.as_deref(),
+        &signature_params,
+    );
+    mimi_verify_signature_header(state, req, &verification_method, &signature_base)
+}
+
+fn mimi_content_digest_header(bytes: &[u8]) -> String {
+    let raw = Sha256::digest(bytes);
+    format!("sha-256=:{}:", STANDARD.encode(raw))
+}
+
+fn mimi_required_header(req: &Request, name: &str) -> Result<String, AppError> {
+    req.headers()
+        .get(name)
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .ok_or_else(|| {
+            mimi_signature_error_invalid(format!("missing required MIMI signature header: {name}"))
+        })
+}
+
+fn mimi_signature_params(req: &Request) -> Result<String, AppError> {
+    req.headers()
+        .get("signature-input")
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| mimi_signature_error_required("missing Signature-Input header"))?
+        .strip_prefix("sig1=")
+        .map(ToOwned::to_owned)
+        .ok_or_else(|| mimi_signature_error_invalid("Signature-Input must carry sig1 parameters"))
+}
+
+fn mimi_signature_param_value(signature_params: &str, key: &str) -> Option<String> {
+    signature_params.split(';').skip(1).find_map(|part| {
+        let (name, value) = part.split_once('=')?;
+        if name.trim() != key {
+            return None;
+        }
+        Some(value.trim().trim_matches('"').to_owned())
+    })
+}
+
+fn mimi_validate_signature_params(
+    signature_params: &str,
+    source_service_did: &str,
+    room_scoped: bool,
+) -> Result<String, AppError> {
+    for component in [
+        "@method",
+        "@target-uri",
+        "@authority",
+        "content-digest",
+        "request-canonical-digest",
+        "source-service-did",
+        "destination-service-did",
+        "provider-id",
+    ] {
+        let needle = format!("\"{component}\"");
+        if !signature_params.contains(&needle) {
+            return Err(mimi_signature_error_invalid(format!(
+                "Signature-Input missing required MIMI component {component}"
+            )));
+        }
+    }
+    if room_scoped && !signature_params.contains("\"mimi-room-uri\"") {
+        return Err(mimi_signature_error_invalid(
+            "Signature-Input missing required MIMI component mimi-room-uri",
+        ));
+    }
+
+    let verification_method = mimi_signature_param_value(signature_params, "keyid")
+        .ok_or_else(|| mimi_signature_error_invalid("Signature-Input missing keyid"))?;
+    let expected_prefix = format!("{source_service_did}#");
+    if !verification_method.starts_with(&expected_prefix) {
+        return Err(mimi_signature_error_invalid(
+            "Signature-Input keyid must be controlled by Source-Service-DID",
+        ));
+    }
+    if mimi_signature_param_value(signature_params, "alg").as_deref() != Some("ed25519") {
+        return Err(mimi_signature_error_invalid(
+            "Signature-Input alg must be ed25519",
+        ));
+    }
+
+    let now = chrono::Utc::now().timestamp();
+    let created = mimi_signature_param_value(signature_params, "created")
+        .and_then(|value| value.parse::<i64>().ok())
+        .ok_or_else(|| {
+            mimi_signature_error_window("Signature-Input missing required `created` parameter")
+        })?;
+    let expires = mimi_signature_param_value(signature_params, "expires")
+        .and_then(|value| value.parse::<i64>().ok())
+        .ok_or_else(|| {
+            mimi_signature_error_window("Signature-Input missing required `expires` parameter")
+        })?;
+    if (created - now).abs() > 30 {
+        return Err(mimi_signature_error_window(
+            "signature created timestamp outside +/-30s clock-skew window",
+        ));
+    }
+    if expires < created || expires - created > 300 {
+        return Err(mimi_signature_error_window(
+            "signature validity window exceeds 300s",
+        ));
+    }
+    if expires < now {
+        return Err(mimi_signature_error_window("signature is expired"));
+    }
+    Ok(verification_method)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn mimi_http_signature_base(
+    method: &str,
+    target_uri: &str,
+    authority: &str,
+    content_digest: &str,
+    request_digest: &str,
+    source_service_did: &str,
+    destination_service_did: &str,
+    provider_id: &str,
+    room_uri: Option<&str>,
+    signature_params: &str,
+) -> String {
+    let room_component = room_uri
+        .map(|room_uri| format!("\"mimi-room-uri\": {room_uri}\n"))
+        .unwrap_or_default();
+    format!(
+        "\"@method\": {method}\n\
+         \"@target-uri\": {target_uri}\n\
+         \"@authority\": {authority}\n\
+         \"content-digest\": {content_digest}\n\
+         \"request-canonical-digest\": {request_digest}\n\
+         \"source-service-did\": {source_service_did}\n\
+         \"destination-service-did\": {destination_service_did}\n\
+         \"provider-id\": {provider_id}\n\
+         {room_component}\
+         \"@signature-params\": {signature_params}",
+    )
+}
+
+fn mimi_verify_signature_header(
+    state: &AppState,
+    req: &Request,
+    verification_method: &str,
+    signature_base: &str,
+) -> Result<(), AppError> {
+    let signature_header = mimi_required_header(req, "signature")?;
+    let signature = mimi_decode_signature_header(&signature_header)
+        .map_err(|message| mimi_signature_error_invalid(format!("signature decode: {message}")))?;
+    let verifying_key = mimi_resolve_verifying_key(state, verification_method)?;
+    verifying_key
+        .verify(signature_base.as_bytes(), &signature)
+        .map_err(|_| mimi_signature_error_invalid("signature verification failed"))
+}
+
+fn mimi_decode_signature_header(value: &str) -> Result<ed25519_dalek::Signature, &'static str> {
+    let signature_b64 = value
+        .strip_prefix("sig1=:")
+        .and_then(|value| value.strip_suffix(':'))
+        .ok_or("Signature header must use sig1=:base64: form")?;
+    let signature_bytes = STANDARD
+        .decode(signature_b64)
+        .map_err(|_| "Signature header base64 is invalid")?;
+    ed25519_dalek::Signature::from_slice(&signature_bytes)
+        .map_err(|_| "Signature header is not Ed25519 length")
+}
+
+fn mimi_resolve_verifying_key(
+    state: &AppState,
+    verification_method: &str,
+) -> Result<ed25519_dalek::VerifyingKey, AppError> {
+    if let Ok(key) = crate::jws_verify::resolve_ed25519_pubkey(state, verification_method) {
+        return Ok(key);
+    }
+    if state.config.development_mode {
+        let mut hasher = Sha256::new();
+        hasher.update(b"soland:mimi-provider-key:");
+        hasher.update(verification_method.as_bytes());
+        let seed: [u8; 32] = hasher.finalize().into();
+        let signing = ed25519_dalek::SigningKey::from_bytes(&seed);
+        return Ok(signing.verifying_key());
+    }
+    Err(mimi_signature_error_invalid(
+        "MIMI provider verification key is unavailable",
+    ))
+}
+
+fn mimi_signature_error_required(message: impl Into<String>) -> AppError {
+    AppError::unauthenticated(message)
+        .with_status(StatusCode::UNAUTHORIZED)
+        .with_top_level_reason("http_signature_required")
+}
+
+fn mimi_signature_error_invalid(message: impl Into<String>) -> AppError {
+    AppError::unauthenticated(message)
+        .with_status(StatusCode::UNAUTHORIZED)
+        .with_top_level_reason("http_signature_invalid")
+}
+
+fn mimi_signature_error_window(message: impl Into<String>) -> AppError {
+    AppError::unauthenticated(message)
+        .with_status(StatusCode::UNAUTHORIZED)
+        .with_top_level_reason("signature_window_invalid")
 }
 
 #[endpoint]
@@ -111,9 +391,9 @@ async fn mimi_key_material(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<MimiKeyMaterialOutcome> {
-    reject_mimi_write_without_verified_signature(req)?;
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = typed_body_value(body.into_inner(), "mimi key material")?;
+    verify_mimi_write_service_proof(state, req, &body, None)?;
     if let Some(message) = unsupported_mimi_draft(&body) {
         return Err(AppError::invalid_param(message).with_wire_code("mimi_draft_unsupported"));
     }
@@ -153,10 +433,11 @@ async fn mimi_room_update(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<MimiRoomUpdateOutcome> {
-    reject_mimi_write_without_verified_signature(req)?;
     let state = depot.obtain::<AppState>().expect("state injected");
     let room_id = strand_id.into_inner();
     let body = typed_body_value(body.into_inner(), "mimi room update")?;
+    let room_uri = mimi_room_uri(state, &room_id);
+    verify_mimi_write_service_proof(state, req, &body, Some(&room_uri))?;
     if let Some(message) = unsupported_mimi_draft(&body) {
         return Err(AppError::invalid_param(message).with_wire_code("mimi_draft_unsupported"));
     }
@@ -169,18 +450,13 @@ async fn mimi_room_update(
     // fall through to the receipt-only response. A binding block that
     // omits both `binding_scope.realm_id` and a top-level `realm_id`
     // is rejected; we never implicitly route to a default Realm.
-    let binding_event_id = match body
-        .get("room_binding")
-        .or_else(|| {
-            body.get("update")
-                .and_then(|update| update.get("room_binding"))
-        })
-        .or_else(|| {
-            body.get("update")
-                .and_then(|update| update.get("payload"))
-                .and_then(|payload| payload.get("room_binding"))
-        }) {
-        Some(binding) if binding.is_object() => {
+    let update_payload = decode_mimi_update_payload(&body)?;
+    let binding_event_id = match update_payload
+        .as_ref()
+        .and_then(mimi_room_binding_payload)
+        .filter(|binding| binding.is_object())
+    {
+        Some(binding) => {
             let event_id = emit_mimi_room_binding_event(state, &room_id, binding)
                 .await
                 .ok_or_else(|| {
@@ -229,10 +505,11 @@ async fn mimi_notify(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<MimiNotifyOutcome> {
-    reject_mimi_write_without_verified_signature(req)?;
     let state = depot.obtain::<AppState>().expect("state injected");
     let room_id = strand_id.into_inner();
     let body = typed_body_value(body.into_inner(), "mimi notify")?;
+    let room_uri = mimi_room_uri(state, &room_id);
+    verify_mimi_write_service_proof(state, req, &body, Some(&room_uri))?;
     if let Some(message) = unsupported_mimi_draft(&body) {
         return Err(AppError::invalid_param(message).with_wire_code("mimi_draft_unsupported"));
     }
@@ -300,19 +577,24 @@ async fn mimi_room_message(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<MimiSubmitMessageOutcome> {
-    reject_mimi_write_without_verified_signature(req)?;
     let state = depot.obtain::<AppState>().expect("state injected");
     let room_id = strand_id.into_inner();
     let body = typed_body_value(body.into_inner(), "mimi submit message")?;
+    let room_uri = mimi_room_uri(state, &room_id);
+    verify_mimi_write_service_proof(state, req, &body, Some(&room_uri))?;
     if let Some(message) = unsupported_mimi_draft(&body) {
         return Err(AppError::invalid_param(message).with_wire_code("mimi_draft_unsupported"));
     }
     if !valid_mimi_room_id(&room_id) {
         return Err(AppError::invalid_param("invalid MIMI room id"));
     }
-    let source_format = body
+    let message = decode_mimi_message_payload(&body)?;
+    let source_format = message
         .get("source_format")
-        .or_else(|| body.get("content_type"))
+        .or_else(|| {
+            body.get("ciphertext")
+                .and_then(|ciphertext| ciphertext.get("content_type"))
+        })
         .and_then(|value| value.as_str())
         .unwrap_or("application/mimi-content");
     if !valid_mimi_content_type(source_format) {
@@ -320,7 +602,7 @@ async fn mimi_room_message(
     }
     let operation_id = ids::generate_operation_id();
     let event_id = ids::generate_event_id();
-    let mimi_message_id = body
+    let mimi_message_id = message
         .get("mimi_message_id")
         .and_then(|value| value.as_str())
         .map(str::to_owned)
@@ -347,9 +629,7 @@ async fn mimi_room_message(
             .with_wire_code("mimi_governance_binding_missing")
     })?;
     let sender = body
-        .get("sender_did")
-        .or_else(|| body.get("from_did"))
-        .or_else(|| body.get("sender_actor_id"))
+        .get("sender_actor_id")
         .and_then(|v| v.as_str())
         .map(str::to_owned)
         .unwrap_or_else(|| {
@@ -359,8 +639,8 @@ async fn mimi_room_message(
             // mapping layer per spec §10.
             format!("{}#mimi-anonymous", state.config.service_did,)
         });
-    let mapped_content = map_mimi_message_content(&body, source_format)?;
-    let thread_id = body
+    let mapped_content = map_mimi_message_content(&message, source_format)?;
+    let thread_id = message
         .get("thread_id")
         .and_then(Value::as_str)
         .map(str::to_owned)
@@ -388,6 +668,23 @@ async fn mimi_room_message(
     if let Err(error) = state.persistence.messages().put(&message_record).await {
         tracing::error!(%error, "mimi: failed to persist MessageRecord");
     }
+    let projection_payload = json!({
+        "thread_id": thread_id.clone(),
+        "content": mapped_content.content.clone(),
+        "encrypted": mapped_content.encrypted,
+        "mimi_provenance": mimi_provenance.clone(),
+        "mimi_policy": mapped_content.policy.clone(),
+        "quarantine": mapped_content.quarantine.clone(),
+    });
+    persist_mimi_canonical_message_event(
+        state,
+        &event_id,
+        &realm_id,
+        &sender,
+        created_at,
+        projection_payload.clone(),
+    )
+    .await?;
     let projection_record = ProjectionEventRecord {
         event_id: event_id.clone(),
         realm_id: realm_id.clone(),
@@ -395,29 +692,15 @@ async fn mimi_room_message(
         operation_type: "mimi_facade_ingress".to_owned(),
         operation_id: Some(operation_id.clone()),
         sender: Some(sender.clone()),
-        payload: json!({
-            "thread_id": thread_id.clone(),
-            "content": mapped_content.content.clone(),
-            "encrypted": mapped_content.encrypted,
-            "mimi_provenance": mimi_provenance,
-            "mimi_policy": mapped_content.policy.clone(),
-            "quarantine": mapped_content.quarantine.clone(),
-        }),
+        payload: projection_payload,
         created_at,
     };
     let _ = state.event_broadcast.send(EventNotification::event(
         projection_record.realm_id.clone(),
         projection_record.event_id.clone(),
-        crate::routing::events::projection::projection_event_json(&projection_record),
+        projection_event_json(&projection_record),
     ));
-    if let Err(error) = state
-        .persistence
-        .projection_events()
-        .append(projection_record)
-        .await
-    {
-        tracing::error!(%error, "mimi: failed to mirror message into projection_events");
-    }
+    append_projection_event(state, projection_record).await;
 
     let _receipt = mimi_receipt(
         state,
@@ -515,9 +798,9 @@ async fn mimi_consent_request(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<MimiRequestConsentOutcome> {
-    reject_mimi_write_without_verified_signature(req)?;
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = typed_body_value(body.into_inner(), "mimi consent request")?;
+    verify_mimi_write_service_proof(state, req, &body, None)?;
     if let Some(message) = unsupported_mimi_draft(&body) {
         return Err(AppError::invalid_param(message).with_wire_code("mimi_draft_unsupported"));
     }
@@ -549,9 +832,9 @@ async fn mimi_consent_update(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<MimiUpdateConsentOutcome> {
-    reject_mimi_write_without_verified_signature(req)?;
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = typed_body_value(body.into_inner(), "mimi consent update")?;
+    verify_mimi_write_service_proof(state, req, &body, None)?;
     if let Some(message) = unsupported_mimi_draft(&body) {
         return Err(AppError::invalid_param(message).with_wire_code("mimi_draft_unsupported"));
     }
@@ -588,9 +871,9 @@ async fn mimi_identifiers_query(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<MimiIdentifierQueryOutcome> {
-    reject_mimi_write_without_verified_signature(req)?;
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = typed_body_value(body.into_inner(), "mimi identifiers query")?;
+    verify_mimi_write_service_proof(state, req, &body, None)?;
     if let Some(message) = unsupported_mimi_draft(&body) {
         return Err(AppError::invalid_param(message).with_wire_code("mimi_draft_unsupported"));
     }
@@ -677,9 +960,9 @@ async fn mimi_report_abuse(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<MimiReportAbuseOutcome> {
-    reject_mimi_write_without_verified_signature(req)?;
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = typed_body_value(body.into_inner(), "mimi report abuse")?;
+    verify_mimi_write_service_proof(state, req, &body, None)?;
     if let Some(message) = unsupported_mimi_draft(&body) {
         return Err(AppError::invalid_param(message).with_wire_code("mimi_draft_unsupported"));
     }
@@ -858,9 +1141,9 @@ async fn mimi_proxy_download(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<MimiProxyDownloadOutcome> {
-    reject_mimi_write_without_verified_signature(req)?;
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = typed_body_value(body.into_inner(), "mimi proxy download")?;
+    verify_mimi_write_service_proof(state, req, &body, None)?;
     if let Some(message) = unsupported_mimi_draft(&body) {
         return Err(AppError::invalid_param(message).with_wire_code("mimi_draft_unsupported"));
     }
@@ -909,6 +1192,201 @@ async fn mimi_proxy_download(
 fn typed_body_value<T: Serialize>(body: T, context: &'static str) -> Result<Value, AppError> {
     serde_json::to_value(body)
         .map_err(|error| AppError::internal(format!("{context} request body serialize: {error}")))
+}
+
+async fn persist_mimi_canonical_message_event(
+    state: &AppState,
+    event_id: &str,
+    realm_id: &str,
+    actor_id: &str,
+    created_at: chrono::DateTime<chrono::Utc>,
+    payload: Value,
+) -> Result<(), AppError> {
+    let actor_seq = state
+        .persistence
+        .events()
+        .max_actor_seq(actor_id)
+        .await
+        .map_err(|error| AppError::internal(format!("MIMI actor frontier lookup: {error}")))?
+        .unwrap_or(0)
+        + 1;
+    let mut envelope = json!({
+        "event_id": event_id,
+        "kind": kinds::CK_MESSAGE_CREATE,
+        "realm_id": realm_id,
+        "actor_id": actor_id,
+        "actor_seq": actor_seq,
+        "created_at": created_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+        "hlc": state.hlc.now(),
+        "prev_refs": [],
+        "payload": payload,
+        "executed_by": state.config.service_did,
+    });
+    let canonical_source = mimi_event_canonical_source(&envelope);
+    let canonical_bytes = canonical::canonical_json_bytes(&canonical_source).map_err(|error| {
+        AppError::internal(format!("MIMI event canonicalization failed: {error}"))
+    })?;
+    let canonical_digest = canonical::sha256_digest(&canonical_bytes);
+    let proof = mimi_event_proof(state, actor_id, &canonical_digest, created_at)?;
+    envelope
+        .as_object_mut()
+        .ok_or_else(|| AppError::internal("MIMI event envelope is not an object"))?
+        .insert("proofs".to_owned(), json!([proof]));
+    let record = CanonicalEventRecord {
+        event_id: event_id.to_owned(),
+        actor_id: actor_id.to_owned(),
+        actor_seq,
+        realm_id: Some(realm_id.to_owned()),
+        kind: kinds::CK_MESSAGE_CREATE.to_owned(),
+        schema_id: EVENT_SCHEMA_ID.to_owned(),
+        canonical_digest,
+        canonical_bytes,
+        envelope,
+        received_at: created_at,
+    };
+    if let Err(error) = state.persistence.events().put(record).await {
+        tracing::error!(%error, "mimi: failed to persist canonical message event");
+        return Err(AppError::internal("MIMI canonical event store unavailable"));
+    }
+    Ok(())
+}
+
+fn mimi_event_canonical_source(envelope: &Value) -> Value {
+    let mut value = envelope.clone();
+    if let Value::Object(object) = &mut value {
+        object.remove("proofs");
+        object.remove("unsigned");
+        object.remove("canonical_digest");
+        object.remove("canonical_hash");
+    }
+    value
+}
+
+fn mimi_event_proof(
+    state: &AppState,
+    actor_id: &str,
+    event_digest: &str,
+    created_at: chrono::DateTime<chrono::Utc>,
+) -> Result<Proof, AppError> {
+    let verification_method = format!("{}#mimi-provider-facade-key", state.config.service_did);
+    let binding = json!({
+        "kind": "mimi_provider_service_proof",
+        "event_digest": event_digest,
+        "actor_id": actor_id,
+        "verification_method": verification_method,
+        "created_at": created_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+    });
+    let binding_bytes = canonical::canonical_json_bytes(&binding).map_err(|error| {
+        AppError::internal(format!(
+            "MIMI proof binding canonicalization failed: {error}"
+        ))
+    })?;
+    let jws =
+        cokret_sdk::jws::sign_jws_ed25519(&binding_bytes, state.notary_signing_key().as_ref())
+            .map_err(|error| {
+                AppError::internal(format!("MIMI event proof signing failed: {error}"))
+            })?;
+    Ok(Proof {
+        kind: proof_kind::DETACHED_JWS.to_owned(),
+        alg: "EdDSA".to_owned(),
+        verification_method,
+        event_digest: Hash::new(event_digest.to_owned())
+            .map_err(|error| AppError::internal(format!("MIMI event digest invalid: {error}")))?,
+        created_at,
+        domain: None,
+        audience: None,
+        jws,
+    })
+}
+
+fn decode_mimi_update_payload(body: &Value) -> Result<Option<Value>, AppError> {
+    let Some(opaque) = body.get("update").and_then(|update| update.get("payload")) else {
+        return Err(
+            AppError::invalid_param("MIMI room update requires update.payload")
+                .with_wire_code("mimi_payload_invalid"),
+        );
+    };
+    decode_optional_mimi_opaque_json(opaque, "payload_digest", "MIMI room update payload")
+}
+
+fn mimi_room_binding_payload(update_payload: &Value) -> Option<&Value> {
+    if update_payload.get("kind").and_then(Value::as_str) != Some("ck.mimi.room_binding") {
+        return None;
+    }
+    update_payload.get("payload")
+}
+
+fn decode_mimi_message_payload(body: &Value) -> Result<Value, AppError> {
+    let opaque = body
+        .get("ciphertext")
+        .ok_or_else(|| AppError::invalid_param("MIMI submit_message requires ciphertext"))?;
+    decode_required_mimi_opaque_json(opaque, "ciphertext_digest", "MIMI ciphertext payload")
+}
+
+fn decode_optional_mimi_opaque_json(
+    opaque: &Value,
+    digest_field: &str,
+    context: &'static str,
+) -> Result<Option<Value>, AppError> {
+    let Some(bytes) = decode_mimi_opaque_bytes(opaque, digest_field, context, false)? else {
+        return Ok(None);
+    };
+    let value =
+        cokret_sdk::canonical::from_canonical_json_slice::<Value>(&bytes).map_err(|error| {
+            AppError::invalid_param(format!("{context} is not canonical JSON: {error}"))
+                .with_wire_code("mimi_payload_invalid")
+        })?;
+    Ok(Some(value))
+}
+
+fn decode_required_mimi_opaque_json(
+    opaque: &Value,
+    digest_field: &str,
+    context: &'static str,
+) -> Result<Value, AppError> {
+    let bytes = decode_mimi_opaque_bytes(opaque, digest_field, context, true)?
+        .expect("required opaque payload returns bytes");
+    cokret_sdk::canonical::from_canonical_json_slice::<Value>(&bytes).map_err(|error| {
+        AppError::invalid_param(format!("{context} is not canonical JSON: {error}"))
+            .with_wire_code("mimi_payload_invalid")
+    })
+}
+
+fn decode_mimi_opaque_bytes(
+    opaque: &Value,
+    digest_field: &str,
+    context: &'static str,
+    require_payload: bool,
+) -> Result<Option<Vec<u8>>, AppError> {
+    let digest = opaque
+        .get(digest_field)
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            AppError::invalid_param(format!("{context} requires {digest_field}"))
+                .with_wire_code("mimi_payload_invalid")
+        })?;
+    let payload = match opaque.get("payload").and_then(Value::as_str) {
+        Some(payload) if !payload.trim().is_empty() => payload,
+        _ if require_payload => {
+            return Err(
+                AppError::invalid_param(format!("{context} requires payload"))
+                    .with_wire_code("mimi_payload_invalid"),
+            );
+        }
+        _ => return Ok(None),
+    };
+    let bytes = cokret_sdk::base64url_decode(payload).map_err(|error| {
+        AppError::invalid_param(format!("{context} payload is not base64url: {error}"))
+            .with_wire_code("mimi_payload_invalid")
+    })?;
+    let observed = cokret_sdk::canonical::sha256_digest(&bytes);
+    if observed != digest {
+        return Err(
+            AppError::invalid_param(format!("{context} digest mismatch"))
+                .with_wire_code("mimi_payload_digest_mismatch"),
+        );
+    }
+    Ok(Some(bytes))
 }
 
 fn mimi_provider_directory_value(state: &AppState) -> Value {

@@ -33,6 +33,7 @@ use std::collections::BTreeMap;
 
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use cokret_sdk::{Cursor, CursorPurpose};
 use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
 use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
@@ -40,9 +41,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 
-use super::util::{
-    CursorShape, canonical_json, encode_cursor_shape, order_hlc_clocks, sha256_digest,
-};
+use super::util::{canonical_json, order_hlc_clocks, sha256_digest};
 use crate::error::{AppError, ErrorCode};
 use crate::routing::system::util::query_param;
 use crate::state::{AppState, CanonicalEventRecord, ProjectionEventRecord};
@@ -428,13 +427,23 @@ pub async fn cursor(body: JsonBody<CursorVectorRequest>) -> JsonResult<CursorVec
     // Fold the SHA-256 into a u64 for the `x` field — the `ck:cursor:`
     // envelope hashes are opaque to the client, so a 64-bit truncation
     // is sufficient and keeps the cursor short.
-    let mut x_bytes = [0u8; 8];
-    x_bytes.copy_from_slice(&digest[..8]);
-    let shape = CursorShape {
+    let cursor_issued_at = chrono::Utc::now()
+        .date_naive()
+        .and_hms_opt(0, 0, 0)
+        .expect("midnight is valid")
+        .and_utc();
+    let shape = Cursor {
         v: "1".to_owned(),
-        x: u64::from_be_bytes(x_bytes),
+        purpose: CursorPurpose::Stream,
+        t: cokret_sdk::canonical::format_timestamp_canonical(cursor_issued_at),
+        s: BTreeMap::new(),
+        d: None,
+        target: None,
+        x: cursor_issued_at.timestamp_millis() + Cursor::STREAM_TTL_MAX_MS,
+        h: Some(URL_SAFE_NO_PAD.encode(digest)),
     };
-    let cursor_token = encode_cursor_shape(&shape)
+    let cursor_token = shape
+        .encode()
         .map_err(|err| AppError::new(ErrorCode::InternalError, format!("encode cursor: {err}")))?;
     json_ok(CursorVectorOutcome {
         cursor: cursor_token,

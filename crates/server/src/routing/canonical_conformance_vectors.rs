@@ -183,7 +183,7 @@ fn validator_accepts_dotted_patch_path_keys() {
     // event-and-patch.md §4.2.1: `patch` map keys are dotted snake_case
     // patch *paths*, not canonical JSON field names.
     let value = json!({
-        "morph_id": "ck:morph:01904100-0000-7000-8000-7191ddd787e5",
+        "target_ref": "ck:morph:01904100-0000-7000-8000-7191ddd787e5",
         "patch": {"metadata.title": "Backfill v2"},
     });
     assert!(validate_canonical_json_value(&value).is_ok());

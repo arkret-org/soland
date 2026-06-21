@@ -643,7 +643,6 @@ async fn circle_scoped_morph_update_requires_circle_membership() {
             kinds::CK_MORPH_UPDATE,
             json!({
                 "sender": sender,
-                "morph_id": morph_id,
                 "target_ref": morph_id,
                 "patch": {"fields.status": "done"}
             }),

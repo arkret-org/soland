@@ -177,11 +177,6 @@ pub(crate) fn projection_operation_from_event(
                 .entry("strand_id".to_owned())
                 .or_insert_with(|| Value::String(target_ref.clone()));
         }
-        if target_ref.starts_with("ck:morph:") {
-            payload_object
-                .entry("morph_id".to_owned())
-                .or_insert_with(|| Value::String(target_ref));
-        }
     }
     if !payload_object.contains_key("thread_id")
         && let Some(strand_id) = payload_object

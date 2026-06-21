@@ -5,58 +5,21 @@
 //! canonical protocol surface.
 
 use anyhow::Result;
-#[cfg(test)]
-use anyhow::anyhow;
-use base64::Engine;
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 /// SHA-256 digest of `bytes`, lowercase hex, prefixed with `sha256:`.
 ///
-/// Re-exported from the SDK canonical helper (the single digest-string
-/// source of truth for all downstream services) instead of carrying a
-/// third fork alongside `cotest::conformance::sha256_prefixed`.
+/// Re-exported from the SDK canonical helper instead of carrying a third fork
+/// alongside the conformance harness.
 pub use cokret_sdk::canonical::sha256_digest;
-use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 pub fn canonical_json(value: &Value) -> Result<String> {
     cokret_sdk::canonical::canonical_json_string(value).map_err(Into::into)
 }
 
-/// Opaque cursor shape used by `/conformance/cursor`.
-///
-/// Forked from `cotest::conformance::CursorShape`. `v` carries the protocol
-/// version, `x` is a monotonically-increasing opaque position counter.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct CursorShape {
-    pub v: String,
-    pub x: u64,
-}
-
-/// Encode a `CursorShape` into the spec-defined opaque token
-/// `ck:cursor:<base64url-no-pad(canonical_json)>`.
-pub fn encode_cursor_shape(shape: &CursorShape) -> Result<String> {
-    let canonical = canonical_json(&serde_json::to_value(shape)?)?;
-    Ok(format!(
-        "ck:cursor:{}",
-        URL_SAFE_NO_PAD.encode(canonical.as_bytes())
-    ))
-}
-
-/// Inverse of [`encode_cursor_shape`] — primarily for round-trip tests.
-#[cfg(test)]
-pub fn decode_cursor_shape(encoded: &str) -> Result<CursorShape> {
-    let payload = encoded
-        .strip_prefix("ck:cursor:")
-        .ok_or_else(|| anyhow!("cursor must start with ck:cursor:"))?;
-    let bytes = URL_SAFE_NO_PAD.decode(payload)?;
-    serde_json::from_slice(&bytes).map_err(Into::into)
-}
-
 /// Order a slice of HLC strings lexicographically with `actor_id` tiebreak.
 ///
-/// Each entry is `(hlc, actor)` — the conformance spec breaks ties on
-/// equal HLC values by the lexicographically smaller `actor`. The original
-/// inputs are preserved (we don't mutate the caller's clocks).
+/// Each entry is `(hlc, actor)`; the conformance spec breaks ties on equal HLC
+/// values by the lexicographically smaller `actor`.
 pub fn order_hlc_clocks<T: Clone>(clocks: &[(String, String, T)]) -> Vec<(String, String, T)> {
     let mut sorted = clocks.to_vec();
     sorted.sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
@@ -87,7 +50,6 @@ mod tests {
 
     #[test]
     fn canonical_json_basic_vector_matches_smoke_test() {
-        // The cotest e2e smoke test pins this exact byte-for-byte digest.
         let value = json!({ "b": 2, "a": 1 });
         let canonical = canonical_json(&value).unwrap();
         assert_eq!(canonical, r#"{"a":1,"b":2}"#);
@@ -120,15 +82,29 @@ mod tests {
     }
 
     #[test]
-    fn cursor_round_trip_preserves_shape() {
-        let shape = CursorShape {
+    fn cursor_round_trip_uses_sdk_shape() {
+        let issued_at = chrono::Utc::now()
+            .date_naive()
+            .and_hms_opt(0, 0, 0)
+            .expect("midnight is valid")
+            .and_utc();
+        let cursor = cokret_sdk::Cursor {
             v: "1".to_owned(),
-            x: 42,
+            purpose: cokret_sdk::CursorPurpose::Stream,
+            t: cokret_sdk::canonical::format_timestamp_canonical(issued_at),
+            s: Default::default(),
+            d: None,
+            target: None,
+            x: issued_at.timestamp_millis() + cokret_sdk::Cursor::STREAM_TTL_MAX_MS,
+            h: Some("abcdefghijklmnopqrstuv".to_owned()),
         };
-        let encoded = encode_cursor_shape(&shape).unwrap();
+        let encoded = cursor.encode().unwrap();
         assert!(encoded.starts_with("ck:cursor:"));
-        let decoded = decode_cursor_shape(&encoded).unwrap();
-        assert_eq!(decoded, shape);
+        let decoded = cokret_sdk::Cursor::decode(&encoded).unwrap();
+        assert_eq!(decoded.v, cursor.v);
+        assert_eq!(decoded.purpose, cursor.purpose);
+        assert_eq!(decoded.x, cursor.x);
+        assert_eq!(decoded.h, cursor.h);
     }
 
     #[test]

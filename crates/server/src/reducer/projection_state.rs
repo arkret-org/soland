@@ -874,7 +874,7 @@ impl ProjectionState {
             CK_MORPH_RESTORE => (&[ObjectLifecycleState::Archived], "morph_not_archived"),
             _ => return Ok(()),
         };
-        let Some(morph_id) = operation.payload.get("morph_id").and_then(|v| v.as_str()) else {
+        let Some(morph_id) = operation.payload.get("target_ref").and_then(|v| v.as_str()) else {
             return Ok(());
         };
         let Some(morph) = self.morphs.get(morph_id) else {

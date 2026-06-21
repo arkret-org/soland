@@ -341,7 +341,7 @@ async fn projection_morphs_endpoint_reports_lifecycle_state() {
         "ck:event:01904100-0000-7000-8000-d20ec0000002",
         2,
         "ck.morph.archive",
-        serde_json::json!({ "morph_id": morph_id }),
+        serde_json::json!({ "target_ref": morph_id }),
         vec!["ck:event:01904100-0000-7000-8000-d20ec0000001"],
     );
     let r: Value = TestClient::post("http://server/_cokret/self/events")
@@ -540,12 +540,18 @@ async fn projection_document_endpoint_reports_body_versions_relations_and_range_
         "ck:event:01904100-0000-7000-8000-d21ec0000002",
         2,
         serde_json::json!({
-            "relation_id": relation_id,
-            "kind": "references",
-            "from_ref": morph_id,
-            "to_ref": incident_ref,
-            "fields": {
-                "role": "postmortem_for"
+            "relation": {
+                "id": relation_id,
+                "schema": "ck.schema.relation.v1",
+                "realm_id": realm_id,
+                "relation_kind": "references",
+                "from_ref": morph_id,
+                "to_ref": incident_ref,
+                "fields": {
+                    "role": "postmortem_for"
+                },
+                "created_by": "did:web:alice.example",
+                "created_at": "2026-05-17T00:00:00Z"
             }
         }),
         vec!["ck:event:01904100-0000-7000-8000-d21ec0000001"],
@@ -599,7 +605,6 @@ async fn projection_document_endpoint_reports_body_versions_relations_and_range_
         20_000,
         "ck.morph.update",
         serde_json::json!({
-            "morph_id": morph_id,
             "target_ref": morph_id,
             "patch": {
                 "fields": {
@@ -1021,7 +1026,7 @@ async fn projection_persistence_write_through_mirrors_lifecycle_events() {
         "ck:event:01904100-0000-7000-8000-15a15a000005",
         6,
         "ck.morph.archive",
-        serde_json::json!({ "morph_id": morph_id }),
+        serde_json::json!({ "target_ref": morph_id }),
         vec!["ck:event:01904100-0000-7000-8000-15a15a000004"],
     );
     let r: Value = TestClient::post("http://server/_cokret/self/events")

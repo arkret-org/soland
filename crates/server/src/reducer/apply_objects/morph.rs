@@ -105,12 +105,12 @@ impl ProjectionState {
     ) -> ProjectionEffect {
         let Some(morph_id) = operation
             .payload
-            .get("morph_id")
+            .get("target_ref")
             .and_then(|v| v.as_str())
             .map(ToOwned::to_owned)
         else {
             return ProjectionEffect::Rejected {
-                reason: "morph_update_missing_morph_id".to_owned(),
+                reason: "morph_update_missing_target_ref".to_owned(),
             };
         };
         let Some(morph) = self.morphs.get_mut(&morph_id) else {
@@ -164,12 +164,12 @@ impl ProjectionState {
     ) -> ProjectionEffect {
         let Some(morph_id) = operation
             .payload
-            .get("morph_id")
+            .get("target_ref")
             .and_then(|v| v.as_str())
             .map(ToOwned::to_owned)
         else {
             return ProjectionEffect::Rejected {
-                reason: "missing_morph_id".to_owned(),
+                reason: "missing_target_ref".to_owned(),
             };
         };
         let Some(morph) = self.morphs.get_mut(&morph_id) else {

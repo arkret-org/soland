@@ -313,7 +313,7 @@ async fn strand_morph_lifecycle_state_machine_returns_412_for_illegal_transition
         "ck:event:01904100-0000-7000-8000-e20ec0000002",
         8,
         "ck.morph.restore",
-        serde_json::json!({ "morph_id": morph_id }),
+        serde_json::json!({ "target_ref": morph_id }),
         vec!["ck:event:01904100-0000-7000-8000-e20ec0000001"],
     );
     let mut resp = TestClient::post("http://server/_cokret/self/events")
@@ -330,7 +330,7 @@ async fn strand_morph_lifecycle_state_machine_returns_412_for_illegal_transition
         "ck:event:01904100-0000-7000-8000-e20ec0000003",
         9,
         "ck.morph.archive",
-        serde_json::json!({ "morph_id": morph_id }),
+        serde_json::json!({ "target_ref": morph_id }),
         vec!["ck:event:01904100-0000-7000-8000-e20ec0000001"],
     );
     let resp: Value = TestClient::post("http://server/_cokret/self/events")
@@ -350,7 +350,6 @@ async fn strand_morph_lifecycle_state_machine_returns_412_for_illegal_transition
         "ck.morph.update",
         serde_json::json!({
             "target_ref": morph_id,
-            "morph_id": morph_id,
             "patch": { "metadata": { "title": "Renamed" } }
         }),
         vec!["ck:event:01904100-0000-7000-8000-e20ec0000003"],

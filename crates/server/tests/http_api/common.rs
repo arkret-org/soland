@@ -93,6 +93,7 @@ pub(crate) fn test_config() -> AppConfig {
         compaction_prune_walk_per_realm_limit: 50,
         seed_demo_data: true,
         trust_domain: "ck:trust_domain:soland.local".to_owned(),
+        receive_policy_constraints: None,
         sovereign_enclave_enabled: false,
         sovereign_enclave_allowed_outbound_hosts: Vec::new(),
         erasure_propagation_window_ms: 604_800_000,
@@ -1203,31 +1204,6 @@ pub(crate) fn normalize_morph_payload(kind: &str, payload: &mut Value) {
                 .entry("schema_refs".to_owned())
                 .or_insert_with(|| serde_json::json!(["ck.schema.morph.v1"]));
         }
-    }
-    if matches!(
-        kind,
-        "ck.morph.archive" | "ck.morph.restore" | "ck.morph.tombstone"
-    ) {
-        if !object.contains_key("target_ref") {
-            if let Some(morph_id) = object.get("morph_id").and_then(Value::as_str) {
-                object.insert("target_ref".to_owned(), Value::String(morph_id.to_owned()));
-            } else if let Some(object_ref) = object.get("object_ref").and_then(Value::as_str) {
-                object.insert(
-                    "target_ref".to_owned(),
-                    Value::String(object_ref.to_owned()),
-                );
-            }
-        }
-        object.remove("morph_id");
-        object.remove("object_ref");
-    }
-    if kind == "ck.morph.update" {
-        if !object.contains_key("target_ref")
-            && let Some(morph_id) = object.get("morph_id").and_then(Value::as_str)
-        {
-            object.insert("target_ref".to_owned(), Value::String(morph_id.to_owned()));
-        }
-        object.remove("morph_id");
     }
 }
 

@@ -351,8 +351,9 @@ fn operation_target_scope_circle_id(
             relation_scope("relation_id").or_else(|| relation_scope("id"))
         }
         kinds::CK_MESSAGE_CREATE | kinds::CK_STRAND_UPDATE => strand_scope("strand_id"),
-        kinds::CK_MORPH_UPDATE => morph_scope("morph_id").or_else(|| morph_scope("target_ref")),
-        kinds::CK_MORPH_ARCHIVE | kinds::CK_MORPH_RESTORE => morph_scope("morph_id"),
+        kinds::CK_MORPH_UPDATE | kinds::CK_MORPH_ARCHIVE | kinds::CK_MORPH_RESTORE => {
+            morph_scope("target_ref")
+        }
         kinds::CK_STRAND_ARCHIVE
         | kinds::CK_STRAND_RESTORE
         | kinds::CK_STRAND_MOVE

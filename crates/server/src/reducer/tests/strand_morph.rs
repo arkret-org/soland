@@ -198,7 +198,7 @@ fn morph_lifecycle_round_trip() {
         &make_operation(
             crate::kinds::CK_MORPH_ARCHIVE,
             realm_id,
-            serde_json::json!({ "morph_id": morph_id }),
+            serde_json::json!({ "target_ref": morph_id }),
         ),
         &hlc,
     );
@@ -208,7 +208,7 @@ fn morph_lifecycle_round_trip() {
         &make_operation(
             crate::kinds::CK_MORPH_RESTORE,
             realm_id,
-            serde_json::json!({ "morph_id": morph_id }),
+            serde_json::json!({ "target_ref": morph_id }),
         ),
         &hlc,
     );
@@ -243,7 +243,7 @@ fn morph_lifecycle_preflight_rejects_illegal_transitions() {
     let restore_op = make_operation(
         crate::kinds::CK_MORPH_RESTORE,
         realm_id,
-        serde_json::json!({ "morph_id": morph_id }),
+        serde_json::json!({ "target_ref": morph_id }),
     );
     assert_eq!(
         state.check_morph_lifecycle_transition(&restore_op),
@@ -254,14 +254,14 @@ fn morph_lifecycle_preflight_rejects_illegal_transitions() {
         &make_operation(
             crate::kinds::CK_MORPH_ARCHIVE,
             realm_id,
-            serde_json::json!({ "morph_id": morph_id }),
+            serde_json::json!({ "target_ref": morph_id }),
         ),
         &hlc,
     );
     let archive_again = make_operation(
         crate::kinds::CK_MORPH_ARCHIVE,
         realm_id,
-        serde_json::json!({ "morph_id": morph_id }),
+        serde_json::json!({ "target_ref": morph_id }),
     );
     assert_eq!(
         state.check_morph_lifecycle_transition(&archive_again),
@@ -273,7 +273,7 @@ fn morph_lifecycle_preflight_rejects_illegal_transitions() {
         crate::kinds::CK_MORPH_UPDATE,
         realm_id,
         serde_json::json!({
-            "morph_id": morph_id,
+            "target_ref": morph_id,
             "patch": { "metadata.title": "Edit blocked" }
         }),
     );
@@ -289,7 +289,7 @@ fn morph_lifecycle_preflight_tolerates_unknown_morph() {
     let archive_unknown = make_operation(
         crate::kinds::CK_MORPH_ARCHIVE,
         "ck:realm:01904100-0000-7000-8000-cfc039892036",
-        serde_json::json!({ "morph_id": "ck:morph:nope-not-here" }),
+        serde_json::json!({ "target_ref": "ck:morph:nope-not-here" }),
     );
     assert_eq!(
         state.check_morph_lifecycle_transition(&archive_unknown),

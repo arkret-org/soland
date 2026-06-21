@@ -231,16 +231,16 @@ mod tests {
     #[test]
     fn selector_intent_is_exact_protocol_enum() {
         for intent in [
-            "lookup",
-            "mention",
-            "invite",
-            "member_add",
-            "contact_request",
+            DirectoryIntent::Lookup,
+            DirectoryIntent::Mention,
+            DirectoryIntent::Invite,
+            DirectoryIntent::MemberAdd,
+            DirectoryIntent::ContactRequest,
         ] {
             assert!(selector_intent_allowed(intent));
         }
         for intent in ["", "search", "mention_all", "Mention"] {
-            assert!(!selector_intent_allowed(intent));
+            assert!(intent.parse::<DirectoryIntent>().is_err());
         }
     }
 

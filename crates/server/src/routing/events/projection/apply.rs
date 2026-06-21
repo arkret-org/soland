@@ -331,15 +331,15 @@ async fn write_through_projection(state: &AppState, operation: &Operation) {
             .and_then(|v| v.get("id"))
             .and_then(|v| v.as_str())
             .map(ToOwned::to_owned);
-        let morph_id_from_payload = operation
-            .payload
-            .get("morph_id")
-            .and_then(|v| v.as_str())
-            .map(ToOwned::to_owned);
         let morph_id_from_object = operation
             .payload
             .get("object")
             .and_then(|v| v.get("id"))
+            .and_then(|v| v.as_str())
+            .map(ToOwned::to_owned);
+        let morph_id_from_target_ref = operation
+            .payload
+            .get("target_ref")
             .and_then(|v| v.as_str())
             .map(ToOwned::to_owned);
         let object_ref = operation
@@ -363,7 +363,11 @@ async fn write_through_projection(state: &AppState, operation: &Operation) {
             id.and_then(|i| proj.strands.get(&i))
                 .map(return_snapshot_strand)
         } else if is_morph_kind {
-            let id = morph_id_from_payload.or(morph_id_from_object);
+            let id = if kind == kinds::CK_MORPH_CREATE {
+                morph_id_from_object
+            } else {
+                morph_id_from_target_ref
+            };
             id.and_then(|i| proj.morphs.get(&i))
                 .map(return_snapshot_morph)
         } else if is_redaction {

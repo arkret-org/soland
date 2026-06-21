@@ -350,23 +350,23 @@ fn builtin_operation_conformance_vectors_cover_registry() {
         OperationVector {
             name: "morph update",
             kind: kinds::CK_MORPH_UPDATE,
-            payload: json!({"morph_id": "ck:morph:01904100-0000-7000-8000-7191ddd787e5", "patch": {"metadata.title": "Backfill v2"}}),
+            payload: json!({"target_ref": "ck:morph:01904100-0000-7000-8000-7191ddd787e5", "patch": {"metadata.title": "Backfill v2"}}),
             valid: true,
         },
         OperationVector {
             name: "morph archive",
             kind: kinds::CK_MORPH_ARCHIVE,
-            payload: json!({"morph_id": "ck:morph:01904100-0000-7000-8000-7191ddd787e5"}),
+            payload: json!({"target_ref": "ck:morph:01904100-0000-7000-8000-7191ddd787e5"}),
             valid: true,
         },
         OperationVector {
             name: "morph restore",
             kind: kinds::CK_MORPH_RESTORE,
-            payload: json!({"morph_id": "ck:morph:01904100-0000-7000-8000-7191ddd787e5"}),
+            payload: json!({"target_ref": "ck:morph:01904100-0000-7000-8000-7191ddd787e5"}),
             valid: true,
         },
         OperationVector {
-            name: "morph restore missing morph_id",
+            name: "morph restore missing target_ref",
             kind: kinds::CK_MORPH_RESTORE,
             payload: json!({"reason": "reopen"}),
             valid: false,
