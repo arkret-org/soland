@@ -311,6 +311,27 @@ fn roster_realm(public: bool, include_caller: bool) -> RealmDirectoryEntry {
     entry
 }
 
+fn insert_projected_membership(state: &AppState, actor: &str, membership: &str) {
+    let updated_at = now();
+    state
+        .projection
+        .lock()
+        .expect("projection lock")
+        .members
+        .insert(
+            (ROSTER_REALM.to_owned(), actor.to_owned()),
+            crate::reducer::SolandMembershipState {
+                member: actor.to_owned(),
+                realm_id: ROSTER_REALM.to_owned(),
+                state: membership.to_owned(),
+                role: "member".to_owned(),
+                invited_at: (membership == "invite").then_some(updated_at),
+                joined_at: updated_at,
+                updated_at,
+            },
+        );
+}
+
 fn insert_member_identity_subject(state: &AppState) {
     use crate::state::{MemberIdentityEventRecord, MemberIdentitySubjectKey};
     let identity_payload = json!({
@@ -412,6 +433,12 @@ fn roster_row(
         .expect("actor row")
 }
 
+fn roster_membership_for_actor<'a>(rows: &'a [Value], actor: &str) -> Option<&'a str> {
+    rows.iter()
+        .find(|row| row["actor_id"] == actor)
+        .and_then(|row| row["membership"].as_str())
+}
+
 fn canonical_value_digest(value: &Value) -> String {
     cokret_sdk::canonical::sha256_digest(
         cokret_sdk::canonical::canonical_json_bytes(value).unwrap(),
@@ -505,6 +532,50 @@ fn member_identity_projection_stores_typed_event_id_and_matches_event_replaces()
             .all(|entry| entry.event_id.starts_with("ck:event:")),
         "effective entries must live in the ck:event: id space"
     );
+}
+
+#[test]
+fn roster_includes_projected_members_and_directory_fallback() {
+    let state = test_state();
+    insert_projected_membership(&state, ROSTER_CALLER, "join");
+    insert_projected_membership(&state, "did:web:carol.example", "invite");
+    insert_projected_membership(&state, "did:web:dave.example", "knock");
+    let realm = roster_realm(false, false);
+    let body = roster_body(&state.config.service_did);
+    let session = roster_session(&state, ROSTER_ACTOR);
+
+    let rows = roster_members_for_realm(&state, &realm, Some(&session), &body);
+
+    assert_eq!(
+        roster_membership_for_actor(&rows, ROSTER_ACTOR),
+        Some("join"),
+        "directory creator is retained as a joined member fallback"
+    );
+    assert_eq!(
+        roster_membership_for_actor(&rows, ROSTER_CALLER),
+        Some("join"),
+        "accepted invitee from projected member FSM is emitted"
+    );
+    assert_eq!(
+        roster_membership_for_actor(&rows, "did:web:carol.example"),
+        Some("invite")
+    );
+    assert_eq!(
+        roster_membership_for_actor(&rows, "did:web:dave.example"),
+        Some("knock")
+    );
+}
+
+#[test]
+fn roster_suppresses_terminal_projected_membership_over_directory_fallback() {
+    let state = test_state();
+    insert_projected_membership(&state, ROSTER_ACTOR, "leave");
+    let realm = roster_realm(false, false);
+    let body = roster_body(&state.config.service_did);
+
+    let rows = roster_members_for_realm(&state, &realm, None, &body);
+
+    assert_eq!(roster_membership_for_actor(&rows, ROSTER_ACTOR), None);
 }
 
 #[test]

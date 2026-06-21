@@ -337,8 +337,9 @@ pub(crate) async fn build_sync_snapshot(
 }
 
 /// SYNC-MEM-1..4 + ROST-SOL-1..3 (cokret-spec @ b56cab1) — build the
-/// per-Realm `members[]` roster v2 projection from the in-memory
-/// `RealmDirectoryEntry` plus the MemberIdentity registry.
+/// per-Realm `members[]` roster v2 projection from the structured membership
+/// FSM, the legacy in-memory `RealmDirectoryEntry`, and the MemberIdentity
+/// registry.
 ///
 /// Schema source:
 /// `account-subscribe-frame.schema.json#/$defs/member_roster_entry`. Each
@@ -366,22 +367,19 @@ pub(super) fn roster_members_for_realm(
     session: Option<&SessionRecord>,
     body: &SyncRequestBody,
 ) -> Vec<Value> {
+    let membership_states = roster_membership_states_for_realm(state, realm_entry);
     let registry = state.member_identity_registry();
-    let context = RosterDisclosureContext::new(state, realm_entry, session, body);
-    realm_entry
-        .members
-        .iter()
-        .map(|did| {
-            let did_str = did.as_str();
+    let context =
+        RosterDisclosureContext::new(state, realm_entry, session, body, &membership_states);
+    membership_states
+        .into_iter()
+        .map(|(actor_id, membership)| {
+            let actor_id = actor_id.as_str();
             let mut entry = serde_json::Map::new();
-            entry.insert("actor_id".to_owned(), json!(did_str));
-            // Wire-side membership state. We do not currently project
-            // invite/knock distinct from join in `RealmDirectoryEntry`; the
-            // structured FSM lives in `ProjectionState::members` and
-            // bare-`members` set here represents "join" rows.
-            entry.insert("membership".to_owned(), json!("join"));
+            entry.insert("actor_id".to_owned(), json!(actor_id));
+            entry.insert("membership".to_owned(), json!(membership));
             if let Some(snapshot) =
-                registry.snapshot_for_actor(realm_entry.realm_id.as_str(), did_str)
+                registry.snapshot_for_actor(realm_entry.realm_id.as_str(), actor_id)
             {
                 if !snapshot.identity_event_ids.is_empty() {
                     entry.insert(
@@ -399,7 +397,7 @@ pub(super) fn roster_members_for_realm(
                 // holder DID. When disclosed, the gated companion fields MAY
                 // be populated; otherwise they MUST all be omitted (the SDK
                 // `MemberRosterEntry::validate` dependentRequired rule).
-                if subject_disclosed_to_caller(&context, did_str)
+                if subject_disclosed_to_caller(&context, actor_id)
                     && let Some(subject_id) = snapshot.subject_id.as_deref()
                 {
                     entry.insert("subject_id".to_owned(), json!(subject_id));
@@ -431,7 +429,7 @@ pub(super) fn roster_members_for_realm(
                             .collect();
                         if let Some(digest) = crate::state::display_state_digest(
                             realm_entry.realm_id.as_str(),
-                            did_str,
+                            actor_id,
                             &snapshot.effective_entries,
                             &digest_inputs,
                         ) {
@@ -461,11 +459,51 @@ pub(super) fn roster_members_for_realm(
         .collect()
 }
 
+fn roster_membership_states_for_realm(
+    state: &AppState,
+    realm_entry: &crate::state::RealmDirectoryEntry,
+) -> BTreeMap<String, String> {
+    let projected_states = {
+        let projection = state.projection.lock().expect("projection lock");
+        projection
+            .members
+            .iter()
+            .filter_map(|((realm_id, actor_id), membership)| {
+                if realm_id == realm_entry.realm_id.as_str() {
+                    Some((actor_id.clone(), membership.state.clone()))
+                } else {
+                    None
+                }
+            })
+            .collect::<BTreeMap<_, _>>()
+    };
+    let mut roster_states = projected_states
+        .iter()
+        .filter(|(_, membership)| roster_membership_is_visible(membership))
+        .map(|(actor_id, membership)| (actor_id.clone(), membership.clone()))
+        .collect::<BTreeMap<_, _>>();
+
+    for did in &realm_entry.members {
+        let actor_id = did.as_str().to_owned();
+        if !projected_states.contains_key(&actor_id) {
+            roster_states
+                .entry(actor_id)
+                .or_insert_with(|| "join".to_owned());
+        }
+    }
+
+    roster_states
+}
+
+fn roster_membership_is_visible(membership: &str) -> bool {
+    matches!(membership, "join" | "invite" | "knock")
+}
+
 struct RosterDisclosureContext<'a> {
     service_did: &'a str,
     realm_public: bool,
-    realm_members: &'a BTreeSet<cokret_sdk::Did>,
     caller: Option<&'a str>,
+    caller_is_realm_member: bool,
     audience: String,
     now: DateTime<Utc>,
 }
@@ -476,23 +514,25 @@ impl<'a> RosterDisclosureContext<'a> {
         realm_entry: &'a RealmDirectoryEntry,
         session: Option<&'a SessionRecord>,
         body: &SyncRequestBody,
+        membership_states: &BTreeMap<String, String>,
     ) -> Self {
+        let caller = session.map(|session| session.actor.as_str());
         Self {
             service_did: &state.config.service_did,
             realm_public: realm_entry.public,
-            realm_members: &realm_entry.members,
-            caller: session.map(|session| session.actor.as_str()),
+            caller,
+            caller_is_realm_member: caller.is_some_and(|actor_id| {
+                membership_states
+                    .get(actor_id)
+                    .is_some_and(|membership| membership == "join")
+            }),
             audience: roster_handle_claim_audience(state, session, body),
             now: now(),
         }
     }
 
     fn caller_is_realm_member(&self) -> bool {
-        self.caller.is_some_and(|caller| {
-            cokret_sdk::Did::new(caller.to_owned())
-                .ok()
-                .is_some_and(|did| self.realm_members.contains(&did))
-        })
+        self.caller_is_realm_member
     }
 }
 
