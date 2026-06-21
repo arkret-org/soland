@@ -19,10 +19,9 @@ pub async fn auth_or_render(
 }
 
 /// Look up the bearer-bound session and validate every gate. Development
-/// sessions are resolved from soland's local session store. In production,
-/// when `SOLAND_OAUTH_INTROSPECTION_URL` is configured, unknown local bearer
-/// tokens are treated as coauth OAuth access tokens and verified through the
-/// Matrix/Palpo-style introspection path.
+/// sessions are resolved from soland's local session store. Production clients
+/// present `ck.session.grant` with DPoP; unknown local bearer credentials fail
+/// closed instead of being sent through a second authentication model.
 pub async fn authenticated_session(
     state: &AppState,
     req: &Request,
@@ -51,16 +50,9 @@ pub async fn authenticated_session(
         "unauthenticated",
         "missing bearer token",
     ))?;
-    // §3.3 inbound credential discriminator. Three inbound credential types
-    // coexist on `/_cokret/self/*` (account-lifecycle.md §4.1 D6):
-    //   (a) ck.session.grant + DPoP — the default ② path: the Authorization
-    //       Bearer is a ck.session.grant and a `DPoP` holder proof accompanies
-    //       it. A grant presentation MUST carry DPoP, while neither the dev
-    //       bearer nor a coauth OAuth access token ever does, so the presence of
-    //       the `DPoP` header is the branch key.
-    //   (b) dev-login bearer — a local SessionRecord lookup hit.
-    //   (c) coauth OAuth access token — introspected when no local record hits.
-    // Branch (a) here so (b)/(c) below are byte-for-byte unchanged.
+    // §3.3 inbound credential discriminator. `ck.session.grant` presentation
+    // is request-scoped and always carries DPoP; dev-login credentials are
+    // local SessionRecord lookups.
     if super::super::auth_grant_dpop::is_grant_dpop_presentation(req) {
         // The presented credential is request-scoped: it is validated and used
         // for this request, never persisted as a local bearer. Writes and
@@ -81,7 +73,7 @@ pub async fn authenticated_session(
             "session grant requires DPoP proof",
         ));
     }
-    let token_hash = session_token_hash(token, &state.config.service_did);
+    let token_hash = session_credential_hash(token, &state.config.service_did);
     let session = state
         .persistence
         .sessions()
@@ -95,7 +87,11 @@ pub async fn authenticated_session(
             )
         })?;
     let Some(session) = session else {
-        return authenticated_oauth_session(state, token, token_hash).await;
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            "unauthenticated",
+            "invalid bearer token",
+        ));
     };
     if session.audience != state.config.service_did {
         return Err((
@@ -270,12 +266,12 @@ mod tests {
 
     #[test]
     fn non_grant_bearers_are_not_classified_as_session_grants() {
-        let oauth = compact_jwt(serde_json::json!({
-            "type": "access_token",
+        let other = compact_jwt(serde_json::json!({
+            "type": "other",
             "sub": "did:web:alice.example",
         }));
 
-        assert!(!bearer_looks_like_session_grant(&oauth));
+        assert!(!bearer_looks_like_session_grant(&other));
         assert!(!bearer_looks_like_session_grant("opaque-dev-bearer"));
         assert!(!bearer_looks_like_session_grant("not.valid.base64"));
     }
@@ -288,57 +284,4 @@ mod tests {
             .encode(serde_json::to_vec(&payload).expect("payload must serialize"));
         format!("{header}.{payload}.signature")
     }
-}
-
-async fn authenticated_oauth_session(
-    state: &AppState,
-    token: &str,
-    token_hash: String,
-) -> Result<SessionRecord, (StatusCode, &'static str, &'static str)> {
-    let Some(introspection_url) = state.config.oauth_introspection_url.as_deref() else {
-        return Err((
-            StatusCode::UNAUTHORIZED,
-            "unauthenticated",
-            "invalid bearer token",
-        ));
-    };
-    let Some(introspection_bearer) = state.config.oauth_introspection_bearer.as_deref() else {
-        tracing::error!(
-            "SOLAND_OAUTH_INTROSPECTION_URL is configured without SOLAND_OAUTH_INTROSPECTION_BEARER"
-        );
-        return Err((
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "auth_misconfigured",
-            "OAuth introspection bearer is not configured",
-        ));
-    };
-
-    let value = request_oauth_introspection(
-        introspection_url,
-        introspection_bearer,
-        token,
-        state.config.development_mode,
-    )
-    .await?;
-    let oauth = parse_oauth_introspection(&value)?;
-    ensure_oauth_account(state, &oauth).await?;
-    if let Some((status, code, _reason_detail, message)) =
-        account_new_session_tuple(state, &oauth.actor)
-    {
-        return Err((status, code, message));
-    }
-    ensure_oauth_device(state, &oauth).await?;
-
-    Ok(SessionRecord {
-        token_hash,
-        actor: oauth.actor,
-        device_id: oauth.device_id,
-        audience: state.config.service_did.clone(),
-        // OAuth-bridged sessions are bearer-only (no ck.session.grant PoP key).
-        session_public_key: None,
-        agent_session: None,
-        expires_at: oauth.expires_at,
-        created_at: now(),
-        revoked_at: None,
-    })
 }

@@ -12,7 +12,7 @@
 - capability grant:存于 cell `ck:cell:ck.component.capability.grant.v1:<capability_id>`,authz 经 `capability_grant_cells` / `grants_for_realm` 读取;`ck.capability.derived` 已注册 reducer(`apply_capability_derived_dispatch`)——capability 事件→cell 的先例。
 - 消息:`apply_message` 仅写 `MessageState`,无 fanout。
 - 通知:**无** NotificationStore / fanout / mention→notification。mention 仅在 `wire_validators/mention.rs` + `routing/events/operations.rs::validate_mentions` 做语法校验。
-- session:`routing/identity/auth.rs::exchange_session_grant` 返回 SDK `SessionLoginOutcome`,grant 验证委托 coauth;无 `agent_key_proof`、无 `scope_details`。
+- session:`routing/identity/auth.rs::authenticated_session` 直接验证 session grant + DPoP,成功后返回 SDK `SessionLoginOutcome`;无 `agent_key_proof`、无 `scope_details`。
 
 ---
 
@@ -165,12 +165,12 @@ pub(crate) async fn dispatch_message_notifications(
 
 ## S4 — Agent session grant `scope_details.participation` overlay
 
-**目标**:agent runtime 换 session 时拿到 resolved 参与契约。当前 `exchange_session_grant` 返回 SDK `SessionLoginOutcome`,无 scope_details、无 agent_key_proof 分支。
+**目标**:agent runtime 通过 `ck.session.grant` direct presentation 拿到 resolved 参与契约。当前 session-grant introspection outcome 需要覆盖 agent scope_details 与 agent_key_proof 分支。
 
 ### proof_kind 分支
-`SessionGrantExchangeRequestBody` 增 `proof_kind`(默认 human;`agent_key_proof` 时走 agent 分支)与 `agent_scope_request{realm_ids[], strand_ids[], track_names[]}`(`ck.profile.agent_auth.v1` overlay,见 CKP-0008 §4.6)。`exchange_session_grant`:
+`SessionGrantIntrospectRequestBody.proof` 携带 `proof_kind` 所需证明；`agent_key_proof` 时走 agent 分支并携带 `agent_scope_request{realm_ids[], strand_ids[], track_names[]}`(`ck.profile.agent_auth.v1` overlay,见 CKP-0008 §4.6)。session-grant introspection:
 - `agent_key_proof`:校验 key 被 active 未撤销 `ck.agent.key.authorize` 授权 + challenge/audience/digest/nonce/expiry binding(CKP-0008 §4.6 校验链),不走 coauth human 分支;TTL ≤ 15min。
-- 返回类型扩展:新增 `AgentSessionGrantOutcome`(或给 `SessionLoginOutcome` 加可选 `scope_details`),含 `granted_scope[]` 与:
+- 返回类型扩展:在 session-grant introspection outcome 中返回 `granted_scope[]` 与:
 
 ```jsonc
 "scope_details": {

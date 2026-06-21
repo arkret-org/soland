@@ -41,10 +41,7 @@ pub struct HealthOutcome {
     ///   - `"development"` — any authenticated session may call admin endpoints (dev mode lets
     ///     every session through)
     ///   - `"did_allowlist"` — production gate via `SOLAND_ADMIN_PRINCIPAL_DIDS`
-    ///   - `"oauth_introspection"` — bearer tokens are introspected against
-    ///     `SOLAND_OAUTH_INTROSPECTION_URL` (no admin allowlist configured)
-    ///   - `"closed"` — production mode with no admin principals AND no introspection configured;
-    ///     admin endpoints are effectively locked.
+    ///   - `"closed"` — production mode with no admin principals; admin endpoints are locked.
     pub admin_auth_mode: &'static str,
     /// T8.3 — non-sensitive production hardening checklist snapshot.
     /// Surfaced on `/health` so sodmin's `/hardening` dashboard can
@@ -99,8 +96,8 @@ pub struct AuthBridgeDescribeOutcome {
 #[derive(Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct AuthBridgeAuthDescriptor {
     pub dev_login_path: String,
-    pub session_grant_exchange_path: String,
-    pub bearer_auth_scheme: String,
+    pub session_grant_issuance_path: String,
+    pub session_grant_presentation: String,
     pub principal_id_body_field: String,
 }
 
@@ -115,7 +112,7 @@ pub struct AuthBridgePushDescriptor {
 
 #[derive(Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct AuthBridgeExamples {
-    pub session_grant_exchange_request: Value,
+    pub session_grant_issue_request: Value,
     pub register_device_request: Value,
     pub unregister_device_request: Value,
 }
@@ -793,32 +790,20 @@ pub fn describe(
     public_base_url: &str,
     storage: &'static str,
     development_mode: bool,
-    oauth_introspection_enabled: bool,
-    auth_server_url: Option<&str>,
+    account_authority_url: Option<&str>,
     oidc_client_id: Option<&str>,
     trust_domain: &str,
     resumable_upload_incomplete_ttl_seconds: u64,
     to_device_queue_capacity: usize,
 ) -> ServerDescription {
-    // Legacy alias list (`supported_auth_methods`) for pre-`methods[]` clients.
-    let mut supported_auth_methods = Vec::new();
-    if development_mode {
-        supported_auth_methods.push("dev_bearer_token".to_owned());
-    }
-    if oauth_introspection_enabled {
-        supported_auth_methods.push("oauth2_bearer_introspection".to_owned());
-    }
     // Account Authority discovery (service-surface §2.5.1): the client-visible
     // owner of the auth-side `/_cokret/gate/account/*` ops the client posts to
     // (session-grant issuance + hard logout). Those are served by the Auth
-    // Server (coauth), which DPoP-binds holder proofs to its OWN origin. So when
-    // an Auth Server is configured, advertise the Account Authority at the Auth
-    // Server origin: the client posts session-grants there directly (matching
-    // how session-grant refresh/logout already target the Auth Server) and the
-    // DPoP `htu` aligns with coauth's `public_base`. Fall back to the principal
-    // origin only for co-located personal deployments without a separate Auth
-    // Server.
-    let account_origin = auth_server_url
+    // Server (coauth), which DPoP-binds holder proofs to its OWN origin. When
+    // an external Account Authority is configured, clients post gate/account
+    // requests there directly and the DPoP `htu` aligns with that public base.
+    // Personal deployments may co-locate this role at the Principal origin.
+    let account_origin = account_authority_url
         .filter(|value| !value.trim().is_empty())
         .unwrap_or(public_base_url)
         .trim_end_matches('/')
@@ -830,12 +815,10 @@ pub fn describe(
     // the client uses standard OIDC discovery and submits an
     // `oidc_code_exchange` proof to the Account Authority's `session-grants`.
     let mut methods = Vec::new();
-    // Compatibility aliases for legacy clients (new clients read methods[]).
-    let mut legacy_auth_server_url = None;
-    let mut legacy_oauth_issuer = None;
-    let mut legacy_openid_configuration = None;
-    if let Some(auth_server_url) = auth_server_url.filter(|value| !value.trim().is_empty()) {
-        let issuer = auth_server_url.trim_end_matches('/').to_owned();
+    if let Some(account_authority_url) =
+        account_authority_url.filter(|value| !value.trim().is_empty())
+    {
+        let issuer = account_authority_url.trim_end_matches('/').to_owned();
         let openid_configuration = format!("{issuer}/.well-known/openid-configuration");
         methods.push(AuthMethod {
             method: AuthMethodKind::Oidc,
@@ -853,9 +836,6 @@ pub fn describe(
                 proof_kind: SessionGrantProofKind::OidcCodeExchange,
             },
         });
-        legacy_auth_server_url = Some(auth_server_url.to_owned());
-        legacy_oauth_issuer = Some(issuer);
-        legacy_openid_configuration = Some(openid_configuration);
     }
 
     let auth_metadata = AuthMetadata {
@@ -869,10 +849,6 @@ pub fn describe(
             gate_account_base,
         }),
         methods,
-        auth_server_url: legacy_auth_server_url,
-        oauth_issuer: legacy_oauth_issuer,
-        openid_configuration: legacy_openid_configuration,
-        supported_auth_methods,
         did_binding_methods: Vec::new(),
         read: None,
         extra: std::collections::BTreeMap::new(),
@@ -1292,7 +1268,6 @@ mod tests {
             "https://soland.example/",
             "memory",
             true,
-            false,
             None,
             None,
             "ck:trust_domain:soland.example",

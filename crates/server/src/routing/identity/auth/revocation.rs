@@ -101,10 +101,10 @@ pub async fn is_device_revoked(state: &AppState, actor: &str, device_id: &str) -
     }
 }
 
-// ── Token derivation ────────────────────────────────────────────────────────
+// ── Development Session Credential Derivation ───────────────────────────────
 
-/// Derive a single-use bearer token. The token is opaque to the client; what
-/// the server stores is its `session_token_hash`.
+/// Derive a single-use development session credential. The credential is opaque
+/// to the client; what the server stores is its `session_credential_hash`.
 pub fn token_for(actor: &str, device_id: &str, expires_ms: i64) -> String {
     let nonce = ids::generate("session");
     let mut hasher = Sha256::new();
@@ -119,9 +119,9 @@ pub fn token_for(actor: &str, device_id: &str, expires_ms: i64) -> String {
     format!("sx_{}", URL_SAFE_NO_PAD.encode(hasher.finalize()))
 }
 
-/// Service-DID bound hash of a bearer token, used as the persistence key so
-/// cross-service tokens can never collide.
-pub fn session_token_hash(token: &str, audience: &str) -> String {
+/// Service-DID bound hash of a session credential, used as the persistence key
+/// so cross-service credentials can never collide.
+pub fn session_credential_hash(token: &str, audience: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(audience.as_bytes());
     hasher.update(b":");

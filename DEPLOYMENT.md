@@ -41,8 +41,9 @@ SOLAND_EMBEDDED_WEBVH_REGISTRATION_BEARER=<shared-secret-configured-in-coauth>
 # Optional: use a standalone webvh provider instead of, or alongside, the embedded provider.
 # SOLAND_EXTERNAL_WEBVH_PROVIDER_URL=https://webvh.example
 # SOLAND_DEFAULT_WEBVH_PROVIDER_ID=soland.embedded
-SOLAND_OAUTH_INTROSPECTION_URL=https://coauth.example/oauth2/introspect
-SOLAND_OAUTH_INTROSPECTION_BEARER=<shared-secret-configured-in-coauth>
+SOLAND_ACCOUNT_AUTHORITY_URL=https://coauth.example
+SOLAND_SESSION_GRANT_INTROSPECTION_URL=https://coauth.example/_cokret/gate/account/session-grants/introspect
+SOLAND_SESSION_GRANT_INTROSPECTION_BEARER=<shared-secret-configured-in-coauth>
 SOLAND_OBJECT_STORAGE_BACKEND=s3-compatible
 SOLAND_OBJECT_STORAGE_S3_BUCKET=soland
 SOLAND_OBJECT_STORAGE_S3_REGION=us-east-1
@@ -158,8 +159,9 @@ docker run --name soland --restart=always -d \
   -e SOLAND_BIND=0.0.0.0:8698 \
   -e SOLAND_PUBLIC_BASE_URL=https://soland.example \
   -e SOLAND_SERVICE_DID=did:webvh:<scid>:soland.example:webvh:service \
-  -e SOLAND_OAUTH_INTROSPECTION_URL=https://coauth.example/oauth2/introspect \
-  -e SOLAND_OAUTH_INTROSPECTION_BEARER=<shared-secret-configured-in-coauth> \
+  -e SOLAND_ACCOUNT_AUTHORITY_URL=https://coauth.example \
+  -e SOLAND_SESSION_GRANT_INTROSPECTION_URL=https://coauth.example/_cokret/gate/account/session-grants/introspect \
+  -e SOLAND_SESSION_GRANT_INTROSPECTION_BEARER=<shared-secret-configured-in-coauth> \
   -e DATABASE_URL=postgres://soland:<password>@db:5432/soland?sslmode=verify-full \
   -e SOLAND_OBJECT_STORAGE_BACKEND=filesystem \
   -e SOLAND_OBJECT_STORAGE_LOCAL_ROOT=/var/lib/soland/objects \
@@ -184,9 +186,10 @@ helm template soland ./deploy/helm/soland \
   --set image.tag=<tag> \
   --set env.SOLAND_PUBLIC_BASE_URL=https://soland.example \
   --set env.SOLAND_SERVICE_DID=did:webvh:<scid>:soland.example:webvh:service \
+  --set env.SOLAND_ACCOUNT_AUTHORITY_URL=https://coauth.example \
   --set secretEnv.DATABASE_URL='postgres://soland:<password>@db.internal:5432/soland?sslmode=verify-full' \
-  --set secretEnv.SOLAND_OAUTH_INTROSPECTION_URL=https://coauth.example/oauth2/introspect \
-  --set secretEnv.SOLAND_OAUTH_INTROSPECTION_BEARER='<shared-secret-configured-in-coauth>'
+  --set secretEnv.SOLAND_SESSION_GRANT_INTROSPECTION_URL=https://coauth.example/_cokret/gate/account/session-grants/introspect \
+  --set secretEnv.SOLAND_SESSION_GRANT_INTROSPECTION_BEARER='<shared-secret-configured-in-coauth>'
 ```
 
 Install the same values with:
@@ -425,9 +428,11 @@ pre-upgrade backup if you need to roll back.
 ## 10. Hardening checklist
 
 - `SOLAND_DEVELOPMENT_MODE` is unset (or explicitly `false`).
-- `SOLAND_OAUTH_INTROSPECTION_URL` points at coauth's `/oauth2/introspect`,
-  and `SOLAND_OAUTH_INTROSPECTION_BEARER` matches the shared server-to-server
-  secret configured there.
+- `SOLAND_ACCOUNT_AUTHORITY_URL` points at coauth's public account authority.
+- `SOLAND_SESSION_GRANT_INTROSPECTION_URL` points at coauth's
+  `/_cokret/gate/account/session-grants/introspect`, and
+  `SOLAND_SESSION_GRANT_INTROSPECTION_BEARER` matches the shared
+  server-to-server secret configured there.
 - `DATABASE_URL` uses `sslmode=verify-full` and a password kept out of source
   control (Vault / Kubernetes Secret / systemd `LoadCredential`).
 - `SOLAND_CORS_ALLOW_ORIGIN` is the **single** browser origin you trust;

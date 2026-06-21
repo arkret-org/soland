@@ -1,9 +1,7 @@
 //! G3.S0 integration test — covers the `routing::federation::outbox`
 //! enqueue → background-dispatch → success-recording loop.
 //!
-//! The test spins up a tiny TCP mock peer (mirroring the pattern
-//! `tests/http_api.rs::spawn_oauth_introspection_server` uses for the
-//! introspection-mock case so we don't add a new dev dependency),
+//! The test spins up a tiny TCP mock peer so we don't add a new dev dependency,
 //! enqueues an outbox row directly, runs one dispatcher pass, then
 //! asserts:
 //!
@@ -94,11 +92,9 @@ fn outbox_test_config() -> AppConfig {
         ice: IceServersConfig::default(),
         livekit: LiveKitConfig::default(),
         cors_allow_origin: None,
-        auth_server_url: None,
+        account_authority_url: None,
         oidc_client_id: None,
         development_mode: true,
-        oauth_introspection_url: None,
-        oauth_introspection_bearer: None,
         session_grant_introspection_url: None,
         session_grant_introspection_bearer: None,
         did_resolver_allow_methods: vec!["web".to_owned(), "key".to_owned()],

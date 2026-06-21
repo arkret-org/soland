@@ -1,7 +1,7 @@
 //! `/_cokret/self/*` inbound credential: `ck.session.grant` + DPoP (RFC 9449).
 //!
 //! Per api-conventions.md §3.3 the Principal Server (soland) no longer mints a
-//! local bearer and no longer offers a grant→bearer exchange. The client
+//! local credential from a session grant. The client
 //! presents the `ck.session.grant` directly on every `/_cokret/self/*` request
 //! as `Authorization: Bearer <ck.session.grant>` plus a sender-constrained
 //! `DPoP` proof. soland validates and serves; the resulting `SessionRecord` is
@@ -445,8 +445,8 @@ fn string_claim(value: &Value, key: &str) -> Option<String> {
 /// Whether a `ck.session.grant` + DPoP credential is being presented: the
 /// request carries BOTH an `Authorization: Bearer` and a `DPoP` header. This is
 /// the discriminator §3.3 pins — a grant presentation MUST carry DPoP, while a
-/// dev-login bearer and a coauth OAuth access token never do. Branching on the
-/// `DPoP` header keeps the other two inbound paths byte-for-byte unchanged.
+/// dev-login session credential does not. Branching on the `DPoP` header keeps
+/// the local development path separate from production grant presentation.
 pub(crate) fn is_grant_dpop_presentation(req: &Request) -> bool {
     req.headers().contains_key("dpop")
 }
@@ -517,6 +517,86 @@ fn session_binding_from_introspection(
     Ok((device_id, None))
 }
 
+pub(crate) fn session_record_from_introspected_grant_for_logout(
+    state: &AppState,
+    grant_jwt: &str,
+    grant: &SessionGrantIntrospectGrant,
+) -> Result<SessionRecord, AuthError> {
+    if grant.audience != state.config.service_did {
+        return Err(unauthenticated(
+            "session grant audience does not match this principal server",
+        ));
+    }
+    let (device_id, agent_session) = session_binding_from_introspection(grant)?;
+    let token_hash = crate::routing::identity::auth::session_credential_hash(
+        grant_jwt,
+        &state.config.service_did,
+    );
+    Ok(SessionRecord {
+        token_hash,
+        actor: grant.subject.clone(),
+        device_id,
+        audience: state.config.service_did.clone(),
+        session_public_key: Some(grant.session_public_key.clone()),
+        agent_session,
+        expires_at: grant.expires_at,
+        created_at: crate::wire::now(),
+        revoked_at: None,
+    })
+}
+
+pub(crate) fn verify_grant_dpop_request(
+    req: &Request,
+    grant_jwt: &str,
+    cnf_jkt: Option<&str>,
+) -> Result<(), AuthError> {
+    let dpop = dpop_header(req).ok_or_else(|| unauthenticated("missing DPoP proof"))?;
+    let cnf_jkt = cnf_jkt.filter(|jkt| !jkt.is_empty()).ok_or_else(|| {
+        unauthenticated("session grant introspection omitted cnf_jkt; cannot bind DPoP")
+    })?;
+    let claims = verify_dpop_proof(&dpop)?;
+    if claims.jwk_thumbprint != cnf_jkt {
+        return Err(unauthenticated(
+            "DPoP proof key thumbprint does not match the grant's cnf.jkt",
+        ));
+    }
+
+    let method = req.method().as_str();
+    if !claims.htm.eq_ignore_ascii_case(method) {
+        return Err(unauthenticated(
+            "DPoP htm does not match the request method",
+        ));
+    }
+    if !htu_matches(&claims.htu, req) {
+        return Err(unauthenticated("DPoP htu does not match the request URL"));
+    }
+    let expected_ath = URL_SAFE_NO_PAD.encode(Sha256::digest(grant_jwt.as_bytes()));
+    if claims.ath != expected_ath {
+        return Err(unauthenticated(
+            "DPoP ath does not match the presented session grant",
+        ));
+    }
+
+    let now = crate::wire::now();
+    let iat = DateTime::<Utc>::from_timestamp(claims.iat, 0)
+        .ok_or_else(|| unauthenticated("DPoP iat is not a valid timestamp"))?;
+    if iat > now + Duration::seconds(DPOP_MAX_FUTURE_SKEW_SECONDS) {
+        return Err(unauthenticated("DPoP proof iat is in the future"));
+    }
+    if now - iat > Duration::seconds(DPOP_MAX_AGE_SECONDS) {
+        return Err(unauthenticated(
+            "DPoP proof iat is outside the freshness window",
+        ));
+    }
+    let jti_expiry = iat + Duration::seconds(DPOP_MAX_AGE_SECONDS + DPOP_MAX_FUTURE_SKEW_SECONDS);
+    if !register_dpop_jti(&claims.jti, jti_expiry) {
+        return Err(unauthenticated(
+            "DPoP proof jti has already been used (replay)",
+        ));
+    }
+    Ok(())
+}
+
 /// Validate a presented `ck.session.grant` + DPoP and synthesize a
 /// request-scoped `SessionRecord`. Not persisted as a local bearer.
 ///
@@ -528,7 +608,6 @@ pub(crate) async fn grant_dpop_session(
     grant_jwt: &str,
     force_fresh: bool,
 ) -> Result<SessionRecord, AuthError> {
-    let dpop = dpop_header(req).ok_or_else(|| unauthenticated("missing DPoP proof"))?;
     // The session-grant holder proof (challenge + proof_jwt) the client presents
     // alongside the grant; forwarded to coauth's introspection, which requires it.
     let introspection_proof = session_grant_introspection_proof(req);
@@ -564,62 +643,16 @@ pub(crate) async fn grant_dpop_session(
     }
 
     // 2. DPoP signature valid against the grant's cnf.jkt.
-    let claims = verify_dpop_proof(&dpop)?;
-    let cnf_jkt = grant
-        .cnf_jkt
-        .as_deref()
-        .filter(|jkt| !jkt.is_empty())
-        .ok_or_else(|| {
-            unauthenticated("session grant introspection omitted cnf_jkt; cannot bind DPoP")
-        })?;
-    if claims.jwk_thumbprint != cnf_jkt {
-        return Err(unauthenticated(
-            "DPoP proof key thumbprint does not match the grant's cnf.jkt",
-        ));
-    }
-
-    // 3. htm / htu / ath binding.
-    let method = req.method().as_str();
-    if !claims.htm.eq_ignore_ascii_case(method) {
-        return Err(unauthenticated(
-            "DPoP htm does not match the request method",
-        ));
-    }
-    if !htu_matches(&claims.htu, req) {
-        return Err(unauthenticated("DPoP htu does not match the request URL"));
-    }
-    let expected_ath = URL_SAFE_NO_PAD.encode(Sha256::digest(grant_jwt.as_bytes()));
-    if claims.ath != expected_ath {
-        return Err(unauthenticated(
-            "DPoP ath does not match the presented session grant",
-        ));
-    }
-
-    // 4. DPoP jti + iat freshness window for replay defense.
-    let now = crate::wire::now();
-    let iat = DateTime::<Utc>::from_timestamp(claims.iat, 0)
-        .ok_or_else(|| unauthenticated("DPoP iat is not a valid timestamp"))?;
-    if iat > now + Duration::seconds(DPOP_MAX_FUTURE_SKEW_SECONDS) {
-        return Err(unauthenticated("DPoP proof iat is in the future"));
-    }
-    if now - iat > Duration::seconds(DPOP_MAX_AGE_SECONDS) {
-        return Err(unauthenticated(
-            "DPoP proof iat is outside the freshness window",
-        ));
-    }
-    let jti_expiry = iat + Duration::seconds(DPOP_MAX_AGE_SECONDS + DPOP_MAX_FUTURE_SKEW_SECONDS);
-    if !register_dpop_jti(&claims.jti, jti_expiry) {
-        return Err(unauthenticated(
-            "DPoP proof jti has already been used (replay)",
-        ));
-    }
+    verify_grant_dpop_request(req, grant_jwt, grant.cnf_jkt.as_deref())?;
 
     // Synthesize the request-scoped session. `token_hash` carries a stable,
     // grant-derived value so downstream code that keys on it (e.g. self-path
     // session-revoke of the calling session) resolves to this grant; it is NOT
     // a persisted local bearer.
-    let token_hash =
-        crate::routing::identity::auth::session_token_hash(grant_jwt, &state.config.service_did);
+    let token_hash = crate::routing::identity::auth::session_credential_hash(
+        grant_jwt,
+        &state.config.service_did,
+    );
     Ok(SessionRecord {
         token_hash,
         actor: grant.subject,
@@ -628,7 +661,7 @@ pub(crate) async fn grant_dpop_session(
         session_public_key: Some(grant.session_public_key),
         agent_session,
         expires_at: grant.expires_at,
-        created_at: now,
+        created_at: crate::wire::now(),
         revoked_at: None,
     })
 }

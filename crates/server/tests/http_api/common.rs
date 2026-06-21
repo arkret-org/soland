@@ -52,11 +52,9 @@ pub(crate) fn test_config() -> AppConfig {
         },
         livekit: LiveKitConfig::default(),
         cors_allow_origin: None,
-        auth_server_url: None,
+        account_authority_url: None,
         oidc_client_id: None,
         development_mode: true,
-        oauth_introspection_url: None,
-        oauth_introspection_bearer: None,
         session_grant_introspection_url: None,
         session_grant_introspection_bearer: None,
         did_resolver_allow_methods: vec!["web".to_owned(), "key".to_owned(), "uuid".to_owned()],
@@ -312,7 +310,7 @@ pub(crate) async fn dev_token_for_device(
         .take_json()
         .await
         .unwrap();
-    login["access_token"].as_str().unwrap().to_owned()
+    login["session_credential"].as_str().unwrap().to_owned()
 }
 
 pub(crate) async fn seed_test_realm(
@@ -811,51 +809,7 @@ pub(crate) async fn register_account(
         .take_json()
         .await
         .unwrap();
-    login["access_token"].as_str().unwrap().to_owned()
-}
-
-pub(crate) fn spawn_oauth_introspection_server() -> (String, std::thread::JoinHandle<String>) {
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let url = format!("http://{}/oauth/introspect", listener.local_addr().unwrap());
-    let handle = std::thread::spawn(move || {
-        use std::io::{Read, Write};
-
-        let (mut stream, _) = listener.accept().unwrap();
-        stream
-            .set_read_timeout(Some(Duration::from_secs(5)))
-            .unwrap();
-        let mut buffer = [0_u8; 4096];
-        let read = stream.read(&mut buffer).unwrap();
-        let request = String::from_utf8_lossy(&buffer[..read]).to_string();
-        let request_lc = request.to_ascii_lowercase();
-        let accepted = request_lc.contains("authorization: bearer shared-secret")
-            && request.contains("token=coauth_access_token")
-            && request.contains("token_type_hint=access_token");
-        let (status, body) = if accepted {
-            (
-                "200 OK",
-                serde_json::json!({
-                    "active": true,
-                    "scope": "urn:cokret:principal-server:session.bind",
-                    "sub": "coauth-subject-1",
-                    "username": "OAuth Alice",
-                    "org.cokret.principal_did": "did:web:oauth.example",
-                    "org.cokret.device_id": "ck:device:01904100-0000-7000-8000-0a4a40000006",
-                    "exp": 4102444800_i64
-                })
-                .to_string(),
-            )
-        } else {
-            ("401 Unauthorized", "{}".to_owned())
-        };
-        let response = format!(
-            "HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
-            body.len()
-        );
-        stream.write_all(response.as_bytes()).unwrap();
-        request
-    });
-    (url, handle)
+    login["session_credential"].as_str().unwrap().to_owned()
 }
 
 // T6.1 — describe response partitioning, T1.4 — dev-mode posture surface,

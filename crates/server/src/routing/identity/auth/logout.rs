@@ -1,3 +1,5 @@
+use cokret_sdk::{AuthSessionLogoutOutcome, AuthSessionLogoutRequestBody};
+
 use super::*;
 
 /// `POST /_cokret/gate/account/logout` — spec `ck.gate.account.command.logout`,
@@ -11,16 +13,13 @@ use super::*;
 /// principal/device from the presented grant via coauth server-to-server
 /// introspection.
 ///
-/// Termination is two-sided:
-///  - **Principal-side (here, fully):** revoke the principal's local bearer sessions for the
-///    grant's device, mark the device session record revoked (so device-scoped writes fail closed
-///    on this Principal Server), remove the device's push registrations, and drop the device's
-///    queued to-device messages. It does NOT write `ck.account.status`, does NOT emit
-///    `ck.device.revoke`, and does NOT erase durable device authorization — re-login restores this
-///    device locally.
-///  - **Auth-side (trigger):** forward the grant bearer + the verbatim client DPoP proof to
-///    coauth's `session-grants/logout` so the grant rotation chain + browser session are terminated
-///    (§4.1 step 2, the durability-critical step).
+/// Termination is two-sided and ordered:
+///  - **Auth-side (first):** call the Auth Server S2S `auth-sessions/logout` sub-operation so the
+///    grant rotation chain + browser session are terminated (§4.1 step 2).
+///  - **Principal-side (after Auth-side success):** revoke the principal's local bearer sessions
+///    for the grant's device, mark the device session record revoked, remove push registrations,
+///    and drop queued to-device messages. It does NOT write `ck.account.status`, does NOT emit
+///    `ck.device.revoke`, and does NOT erase durable device authorization.
 #[endpoint(
     operation_id = "ck.gate.account.command.logout",
     tags("auth"),
@@ -41,8 +40,6 @@ pub(super) async fn logout(
     let grant_jwt = bearer_token(req)
         .map(str::to_owned)
         .ok_or_else(|| AppError::unauthenticated("missing session-grant bearer"))?;
-    let dpop_header = dpop_header_from_request(req);
-
     // Development fallback: with no Auth Server introspection wired (dev mode
     // dev-login mints plain soland bearers, not DPoP-bound grants), treat the
     // Authorization bearer as a local session bearer and perform the
@@ -52,7 +49,24 @@ pub(super) async fn logout(
         return json_ok(dev_mode_local_logout(state, &grant_jwt).await?);
     }
 
-    let introspected = introspect_session_grant_for_logout(state, &grant_jwt).await?;
+    let grant = introspect_session_grant_for_logout(state, &grant_jwt).await?;
+    super::super::auth_grant_dpop::verify_grant_dpop_request(
+        req,
+        &grant_jwt,
+        grant.cnf_jkt.as_deref(),
+    )
+    .map_err(auth_error_to_app_error)?;
+    let session = super::super::auth_grant_dpop::session_record_from_introspected_grant_for_logout(
+        state, &grant_jwt, &grant,
+    )
+    .map_err(auth_error_to_app_error)?;
+    if session.agent_session.is_some() {
+        return Err(AppError::unauthenticated(
+            "account logout requires a device-bound session grant",
+        ));
+    }
+
+    let auth_side_revoked = trigger_auth_side_auth_session_logout(state, &grant_jwt).await?;
 
     // §4.1 step 3 (Principal-side, local): invalidate this grant's cached
     // introspection so the next `/_cokret/self/*` request re-introspects against
@@ -62,50 +76,49 @@ pub(super) async fn logout(
     // together fail-close the device's subsequent requests.
     super::super::auth_grant_dpop::invalidate_cached_grant(state, &grant_jwt);
 
-    // Principal-side termination, keyed on the grant's (principal, device).
-    // `subject` is always present on an active grant; `device_id` is optional
-    // (a non-device-bound grant has no local device session to terminate).
-    let (principal_id, device_id) = match introspected {
-        Some(grant) => (Some(grant.subject), grant.device_id),
-        None => (None, None),
-    };
-
-    let mut revoked = false;
-    if let Some(principal_id) = principal_id.as_deref() {
-        if let Some(device_id) = device_id.as_deref() {
-            let revoked_count =
-                revoke_sessions_for_actor_device(state, principal_id, device_id).await?;
-            revoke_device_record(state, principal_id, device_id)
-                .await
-                .map_err(AppError::internal)?;
-            let delivery_purge = purge_device_delivery_state(state, principal_id, device_id).await;
-            revoked = revoked_count > 0;
-            append_audit_log(
-                state,
-                Some(principal_id),
-                "auth.logout",
-                json!({
-                    "device_id": device_id,
-                    "principal_side_sessions_revoked": revoked_count,
-                    "to_device_messages_dropped": delivery_purge.to_device_messages_dropped,
-                    "push_registrations_removed": delivery_purge.push_registrations_removed,
-                }),
-                "accepted",
-            )
-            .await;
-        }
-    }
-
-    // Auth-side trigger: terminate the grant rotation chain + browser session.
-    // The grant-chain revoke is the durability-critical step (§4.1 step 2);
-    // surface its outcome in `revoked`.
-    let auth_side_revoked =
-        trigger_auth_side_grant_logout(state, &grant_jwt, dpop_header.as_deref()).await?;
+    let revoked_count =
+        revoke_sessions_for_actor_device(state, &session.actor, &session.device_id).await?;
+    revoke_device_record(state, &session.actor, &session.device_id)
+        .await
+        .map_err(AppError::internal)?;
+    let delivery_purge =
+        purge_device_delivery_state(state, &session.actor, &session.device_id).await;
+    let revoked = revoked_count > 0;
+    append_audit_log(
+        state,
+        Some(&session.actor),
+        "auth.logout",
+        json!({
+            "device_id": session.device_id,
+            "principal_side_sessions_revoked": revoked_count,
+            "to_device_messages_dropped": delivery_purge.to_device_messages_dropped,
+            "push_registrations_removed": delivery_purge.push_registrations_removed,
+        }),
+        "accepted",
+    )
+    .await;
 
     json_ok(LogoutOutcome {
         ok: true,
         revoked: revoked || auth_side_revoked,
     })
+}
+
+fn auth_error_to_app_error(error: (StatusCode, &'static str, &'static str)) -> AppError {
+    let (status, code, message) = error;
+    if let Some(error_code) = ErrorCode::from_wire(code) {
+        return AppError::new(error_code, message);
+    }
+    match status {
+        StatusCode::SERVICE_UNAVAILABLE => {
+            AppError::new(ErrorCode::TemporarilyUnavailable, message)
+        }
+        StatusCode::INTERNAL_SERVER_ERROR => AppError::internal(message),
+        StatusCode::BAD_REQUEST | StatusCode::UNPROCESSABLE_ENTITY => {
+            AppError::invalid_param(message)
+        }
+        _ => AppError::unauthenticated(message),
+    }
 }
 
 /// Development-mode hard logout: with no Auth Server introspection wired,
@@ -116,7 +129,7 @@ pub(super) async fn logout(
 /// to-device), mirroring the production principal-side effects without an Auth
 /// Server round-trip.
 async fn dev_mode_local_logout(state: &AppState, token: &str) -> Result<LogoutOutcome, AppError> {
-    let token_hash = session_token_hash(token, &state.config.service_did);
+    let token_hash = session_credential_hash(token, &state.config.service_did);
     let revoked_session = match state
         .persistence
         .sessions()
@@ -201,29 +214,19 @@ async fn purge_device_delivery_state(
     }
 }
 
-/// Read the verbatim `DPoP` header off the request so it can be forwarded to
-/// the Auth Server's grant-logout endpoint unchanged (its `htu` is bound to the
-/// client-visible `/logout` URL, so it MUST NOT be re-minted by soland).
-fn dpop_header_from_request(req: &Request) -> Option<String> {
-    req.headers()
-        .get("dpop")
-        .and_then(|value| value.to_str().ok())
-        .map(str::to_owned)
-}
-
 /// Server-to-server introspection of a presented `ck.session.grant` for the
-/// logout path: returns the active grant's metadata (subject + device) so the
-/// Principal-side termination knows which local device session to revoke.
-/// Returns `Ok(None)` when introspection is not configured (dev mode) or the
-/// grant is not active — logout is idempotent, so an unknown / already-dead
-/// grant is not an error.
+/// logout path. Unlike ordinary protected requests, hard logout is authorized
+/// by the DPoP holder proof on the logout request itself, so this read only
+/// obtains grant metadata needed for local DPoP validation and Principal-side
+/// cleanup.
 async fn introspect_session_grant_for_logout(
     state: &AppState,
     grant_jwt: &str,
-) -> Result<Option<crate::wire::SessionGrantIntrospectGrant>, AppError> {
+) -> Result<crate::wire::SessionGrantIntrospectGrant, AppError> {
     let Some(introspection_url) = state.config.session_grant_introspection_url.as_deref() else {
-        // No Auth Server introspection wired (dev mode): nothing to look up.
-        return Ok(None);
+        return Err(AppError::unsupported_feature(
+            "session grant introspection requires SOLAND_SESSION_GRANT_INTROSPECTION_URL outside development mode",
+        ));
     };
     let Some(bearer) = state.config.session_grant_introspection_bearer.as_deref() else {
         return Err(AppError::unsupported_feature(
@@ -239,7 +242,7 @@ async fn introspect_session_grant_for_logout(
     let (introspection_url, client) =
         crate::security::validate_http_url_for_egress_with_pinned_client(
             introspection_url,
-            "session grant introspection",
+            "session grant logout introspection",
             state.config.development_mode,
             std::time::Duration::from_secs(10),
         )
@@ -253,13 +256,15 @@ async fn introspect_session_grant_for_logout(
         .map_err(|error| {
             AppError::new(
                 ErrorCode::TemporarilyUnavailable,
-                format!("session grant introspection request failed: {error}"),
+                format!("session grant logout introspection request failed: {error}"),
             )
         })?;
     if !response.status().is_success() {
-        // A grant the Auth Server no longer knows about is already dead;
-        // logout stays idempotent.
-        return Ok(None);
+        let status = response.status();
+        return Err(AppError::new(
+            ErrorCode::TemporarilyUnavailable,
+            format!("session grant logout introspection was rejected by the Auth Server: {status}"),
+        ));
     }
     let response = response
         .json::<SessionGrantIntrospectOutcome>()
@@ -267,98 +272,82 @@ async fn introspect_session_grant_for_logout(
         .map_err(|error| {
             AppError::new(
                 ErrorCode::TemporarilyUnavailable,
-                format!("invalid session grant introspection response: {error}"),
+                format!("invalid session grant logout introspection response: {error}"),
             )
         })?;
-    if !response.active || response.status != SessionGrantIntrospectStatus::Active {
-        return Ok(None);
-    }
-    Ok(response.grant)
+    response.grant.ok_or_else(|| {
+        AppError::unauthenticated("session grant introspection omitted grant metadata")
+    })
 }
 
-/// Auth-side trigger of the single hard logout: forward the grant bearer + the
-/// client's verbatim DPoP proof to coauth's
-/// `POST {gate_account_base}/session-grants/logout`
-/// (`revoke_session_grant_via_holder_proof`) so the grant rotation chain +
-/// browser session are terminated (account-lifecycle §4.1 step 2).
-///
-/// The Auth Server endpoint is derived from the configured introspection URL
-/// (`.../session-grants/introspect` → `.../session-grants/logout`): both live
-/// under the same Account Authority `gate_account_base`. The client's DPoP is
-/// forwarded UNCHANGED — its `htu` is bound to the client-visible `/logout`
-/// URL and cannot be re-minted by soland; this works when the Account Authority
-/// front presents a single `gate_account_base` origin (the spec's §2.5.1
-/// requirement) so coauth's own `htu` derivation matches.
-async fn trigger_auth_side_grant_logout(
+/// Auth-side trigger of the single hard logout: call the Auth Server's S2S
+/// `POST {gate_account_base}/auth-sessions/logout` sub-operation so the grant
+/// rotation chain + browser session are terminated (account-lifecycle §4.1
+/// step 2). The client DPoP proof is validated by soland before this call and
+/// is not forwarded to the Auth Server.
+async fn trigger_auth_side_auth_session_logout(
     state: &AppState,
     grant_jwt: &str,
-    dpop_header: Option<&str>,
 ) -> Result<bool, AppError> {
     let Some(introspection_url) = state.config.session_grant_introspection_url.as_deref() else {
         // Dev mode without an Auth Server: no rotation chain to terminate.
         return Ok(false);
     };
     let Some(logout_url) = introspection_url
-        .strip_suffix("/introspect")
-        .map(|base| format!("{base}/logout"))
+        .strip_suffix("/session-grants/introspect")
+        .map(|base| format!("{base}/auth-sessions/logout"))
     else {
         return Err(AppError::unsupported_feature(
-            "SOLAND_SESSION_GRANT_INTROSPECTION_URL must end in /session-grants/introspect so the \
-             Auth-side /session-grants/logout endpoint can be derived",
+            "SOLAND_SESSION_GRANT_INTROSPECTION_URL must end in /session-grants/introspect so the Auth-side /auth-sessions/logout endpoint can be derived",
         ));
     };
-    let Some(dpop_header) = dpop_header else {
-        // §4.1 requires the holder proof; without it the Auth Server cannot be
-        // driven to revoke the grant chain.
-        return Err(AppError::unauthenticated(
-            "DPoP holder proof is required for hard logout",
+    let Some(bearer) = state.config.session_grant_introspection_bearer.as_deref() else {
+        return Err(AppError::unsupported_feature(
+            "session grant Auth-side logout requires SOLAND_SESSION_GRANT_INTROSPECTION_BEARER",
         ));
     };
     let (logout_url, client) = crate::security::validate_http_url_for_egress_with_pinned_client(
         &logout_url,
-        "session grant logout",
+        "auth session logout",
         state.config.development_mode,
         std::time::Duration::from_secs(10),
     )
     .map_err(AppError::capability_denied)?;
-    // coauth's `revoke_session_grant_via_holder_proof` reads `grant_jwt` from
-    // the JSON body and the holder proof from the `DPoP` header; the grant is
-    // ALSO presented as the Authorization Bearer per §4.1.
+    let request = AuthSessionLogoutRequestBody {
+        grant_jwt: grant_jwt.to_owned(),
+        logout_request_digest: None,
+        validated_at: Some(now()),
+        reason_code: Some("account_logout".to_owned()),
+    };
     let response = client
         .post(logout_url)
-        .bearer_auth(grant_jwt)
-        .header("DPoP", dpop_header)
-        .json(&json!({ "grant_jwt": grant_jwt }))
+        .bearer_auth(bearer)
+        .json(&request)
         .send()
         .await
         .map_err(|error| {
             AppError::new(
                 ErrorCode::TemporarilyUnavailable,
-                format!("Auth-side session-grant logout request failed: {error}"),
+                format!("Auth-side session logout request failed: {error}"),
             )
         })?;
     if !response.status().is_success() {
-        // Surface a non-2xx (e.g. the DPoP `htu` did not match the Auth
-        // Server's view) instead of silently reporting success, so a broken
-        // deployment is visible rather than leaving the rotation chain alive.
         let status = response.status();
         return Err(AppError::new(
             ErrorCode::TemporarilyUnavailable,
-            format!("Auth-side session-grant logout was rejected by the Auth Server: {status}"),
+            format!("Auth-side session logout was rejected by the Auth Server: {status}"),
         ));
     }
-    // Body shape is coauth's RevokeSessionGrantOutcome `{revoked, browser_session_finished}`;
-    // either being true means the rotation chain is now terminated.
-    let body = response.json::<Value>().await.unwrap_or_else(|_| json!({}));
-    let revoked = body
-        .get("revoked")
-        .and_then(Value::as_bool)
-        .unwrap_or(false)
-        || body
-            .get("browser_session_finished")
-            .and_then(Value::as_bool)
-            .unwrap_or(false);
-    Ok(revoked)
+    let body = response
+        .json::<AuthSessionLogoutOutcome>()
+        .await
+        .map_err(|error| {
+            AppError::new(
+                ErrorCode::TemporarilyUnavailable,
+                format!("invalid Auth-side session logout response: {error}"),
+            )
+        })?;
+    Ok(body.ok && body.grant_chain_terminated && body.auth_session_logged_out)
 }
 
 /// Revoke every active soland bearer session for a specific (actor, device).

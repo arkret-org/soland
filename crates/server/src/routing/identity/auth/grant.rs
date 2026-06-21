@@ -5,21 +5,6 @@ use super::*;
 // `SessionGrantIntrospectStatus`), so this caller binds to the same strong
 // types the spec/OpenAPI declare instead of hand-rolled structs.
 
-#[derive(Debug, Serialize)]
-pub(crate) struct OAuthIntrospectionRequestBody<'a> {
-    pub token: &'a str,
-    pub token_type_hint: &'static str,
-}
-
-#[derive(Debug)]
-pub(crate) struct OAuthIntrospectionSession {
-    pub actor: String,
-    pub device_id: String,
-    pub display_name: Option<String>,
-    pub expires_at: DateTime<Utc>,
-    pub raw_device_id: Option<String>,
-}
-
 #[derive(Debug)]
 pub(crate) struct SessionGrantValidationInput<'a> {
     pub grant_jwt: &'a str,
@@ -46,7 +31,7 @@ pub(crate) async fn validate_session_grant_binding(
             return Ok(None);
         }
         return Err(AppError::unsupported_feature(
-            "session grant exchange requires SOLAND_SESSION_GRANT_INTROSPECTION_URL outside development mode",
+            "session grant introspection requires SOLAND_SESSION_GRANT_INTROSPECTION_URL outside development mode",
         ));
     };
     let bearer = state
@@ -55,7 +40,7 @@ pub(crate) async fn validate_session_grant_binding(
         .as_deref()
         .ok_or_else(|| {
             AppError::unsupported_feature(
-                "session grant exchange requires SOLAND_SESSION_GRANT_INTROSPECTION_BEARER",
+                "session grant introspection requires SOLAND_SESSION_GRANT_INTROSPECTION_BEARER",
             )
         })?;
     let request = SessionGrantIntrospectRequestBody {

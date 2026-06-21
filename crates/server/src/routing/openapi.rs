@@ -120,7 +120,7 @@ const SOLAND_EXTENSION_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &
         "org.cokret.soland.system.health",
         "health and liveness",
     ),
-    // ② (api-conventions.md §3.3): the grant→bearer exchange / issue endpoint
+    // ② (api-conventions.md §3.3): the local credential issuance endpoint
     // is removed. Clients present the ck.session.grant + DPoP directly to
     // `/_cokret/self/*`, so there is no `POST /_cokret/gate/account/session-grants`
     // issue operation to advertise here.

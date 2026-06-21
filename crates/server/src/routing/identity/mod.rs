@@ -7,7 +7,7 @@ pub(crate) mod auth;
 // api-conventions.md §3.3 — `/_cokret/self/*` inbound credential: a
 // `ck.session.grant` presented directly with a DPoP (RFC 9449) holder proof,
 // validated against a TTL-cached coauth introspection. The default ② session
-// path (no local bearer, no grant→bearer exchange).
+// path has no local credential issuance step.
 pub(crate) mod auth_grant_dpop;
 pub(crate) mod consent;
 pub(crate) mod contact_federation;

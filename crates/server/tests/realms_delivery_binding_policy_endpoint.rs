@@ -33,11 +33,9 @@ fn test_config() -> AppConfig {
         ice: IceServersConfig::default(),
         livekit: LiveKitConfig::default(),
         cors_allow_origin: None,
-        auth_server_url: None,
+        account_authority_url: None,
         oidc_client_id: None,
         development_mode: true,
-        oauth_introspection_url: None,
-        oauth_introspection_bearer: None,
         session_grant_introspection_url: None,
         session_grant_introspection_bearer: None,
         did_resolver_allow_methods: vec!["web".to_owned(), "key".to_owned(), "uuid".to_owned()],
@@ -97,7 +95,7 @@ async fn dev_token(svc: &salvo::Service) -> String {
         .take_json()
         .await
         .unwrap();
-    login["access_token"].as_str().unwrap().to_owned()
+    login["session_credential"].as_str().unwrap().to_owned()
 }
 
 /// R2.2 — happy path. Unset policy MUST still respond 200 with the

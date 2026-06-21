@@ -166,8 +166,9 @@ DATABASE_URL=postgres://soland:soland@localhost:5432/soland \
 docker run --rm -p 8698:8698 \
   -e SOLAND_PUBLIC_BASE_URL=https://soland.example \
   -e SOLAND_SERVICE_DID=did:webvh:<scid>:soland.example:webvh:service \
-  -e SOLAND_OAUTH_INTROSPECTION_URL=https://coauth.example/oauth2/introspect \
-  -e SOLAND_OAUTH_INTROSPECTION_BEARER=shared-secret-known-by-coauth \
+  -e SOLAND_ACCOUNT_AUTHORITY_URL=https://coauth.example \
+  -e SOLAND_SESSION_GRANT_INTROSPECTION_URL=https://coauth.example/_cokret/gate/account/session-grants/introspect \
+  -e SOLAND_SESSION_GRANT_INTROSPECTION_BEARER=shared-secret-known-by-coauth \
   -e DATABASE_URL=postgres://soland:soland@db:5432/soland \
   -e SOLAND_OBJECT_STORAGE_BACKEND=filesystem \
   -e SOLAND_OBJECT_STORAGE_LOCAL_ROOT=/var/lib/soland/objects \
@@ -194,8 +195,9 @@ All settings can be supplied via environment variables (preferred) or a
 | `SOLAND_EMBEDDED_WEBVH_REGISTRATION_BEARER` | unset | Shared bearer token coauth must present to write embedded `did:webvh` registrations |
 | `SOLAND_EXTERNAL_WEBVH_PROVIDER_URL` | unset | Optional external `did:webvh` provider, such as a standalone StarID service |
 | `SOLAND_DEFAULT_WEBVH_PROVIDER_ID` | unset | Optional coauth default provider id: `soland.embedded` or `external.webvh` |
-| `SOLAND_OAUTH_INTROSPECTION_URL` | unset | coauth OAuth introspection endpoint for direct bearer-token auth |
-| `SOLAND_OAUTH_INTROSPECTION_BEARER` | unset | Server-to-server bearer sent to the introspection endpoint |
+| `SOLAND_ACCOUNT_AUTHORITY_URL` | unset | Public Account Authority URL advertised at `/_cokret/describe.auth_metadata.account_authority` |
+| `SOLAND_SESSION_GRANT_INTROSPECTION_URL` | unset | coauth session-grant introspection endpoint used for `ck.session.grant + DPoP` |
+| `SOLAND_SESSION_GRANT_INTROSPECTION_BEARER` | unset | Server-to-server bearer sent to the session-grant introspection endpoint |
 | `DATABASE_URL` | unset | If set, enables PostgreSQL and runs migrations |
 | `SOLAND_OBJECT_STORAGE_BACKEND` | `filesystem` | Blob object backend: `filesystem`/`local` or `s3-compatible` |
 | `SOLAND_OBJECT_STORAGE_LOCAL_ROOT` | system temp + `/soland-objects` | Local filesystem root when using `filesystem`/`local` |
@@ -203,7 +205,6 @@ All settings can be supplied via environment variables (preferred) or a
 | `SOLAND_OBJECT_STORAGE_S3_BUCKET` | required for S3 | S3-compatible bucket name |
 | `SOLAND_OBJECT_STORAGE_S3_ENDPOINT` | region endpoint | Optional custom endpoint for MinIO/R2/etc. |
 | `SOLAND_CORS_ALLOW_ORIGIN` | unset | Single explicit CORS origin for browser clients |
-| `SOLAND_AUTH_SERVER_URL` | unset | Public Auth / Account Server URL advertised to browser clients; registration and recovery calls go there |
 | `SOLAND_DEVELOPMENT_MODE` | `false` | Enable dev-only endpoints (`dev_login`, admin snapshots, relaxed DID validation) |
 | `SOLAND_MAX_REQUEST_SIZE` | `1048576` | Maximum request body bytes Salvo will read before returning `413 Payload Too Large` |
 | `SOLAND_METRICS_BIND` | `127.0.0.1:9090` | Separate Prometheus listener; scrape `/metrics` |
@@ -289,8 +290,7 @@ SOLAND_BIND=127.0.0.1:8698
 SOLAND_PUBLIC_BASE_URL=https://local.host
 SOLAND_SERVICE_DID=did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:local.host:webvh:service
 SOLAND_DEVELOPMENT_MODE=true
-SOLAND_OAUTH_INTROSPECTION_URL=https://auth.local.host/oauth/introspect
-SOLAND_OAUTH_INTROSPECTION_BEARER=local-coauth-oauth-introspection
+SOLAND_ACCOUNT_AUTHORITY_URL=https://auth.local.host
 SOLAND_SESSION_GRANT_INTROSPECTION_URL=https://auth.local.host/_cokret/gate/account/session-grants/introspect
 SOLAND_SESSION_GRANT_INTROSPECTION_BEARER=local-coauth-session-grant-introspection
 SOLAND_EMBEDDED_WEBVH_REGISTRATION_BEARER=local-soland-webvh-registration
@@ -328,15 +328,13 @@ document and webvh log from `/webvh/{local_id}/did.json` and `.jsonl`. The
 embedded DID uses the public `did:webvh:<scid>:<host>:webvh:<local_id>` path
 rather than the internal registration API path.
 
-Production authentication follows the Matrix/Palpo delegated-auth shape. A
-client sends its coauth OAuth access token directly to soland as
-`Authorization: Bearer <access_token>`. If the token is not a local dev session,
-soland calls `SOLAND_OAUTH_INTROSPECTION_URL` with
-`Authorization: Bearer <SOLAND_OAUTH_INTROSPECTION_BEARER>`, requires an active
-token with `urn:cokret:principal-server:session.bind`, then maps
-`org.cokret.principal_did` and `org.cokret.device_id` into the local
-account/device view. The `/_cokret/gate/account/session-grants` bridge is
-kept as a scaffold, not the primary login path.
+Production authentication presents the coauth-issued `ck.session.grant`
+directly to soland as `Authorization: Bearer <ck.session.grant>` plus a DPoP
+proof. soland validates the grant through session-grant introspection, requires
+`urn:cokret:principal-server:session.bind`, and maps the introspection subject
+and device binding into the local request-scoped account/device view. soland no
+longer exposes a Principal-local credential issuance endpoint for production
+grants.
 
 Account subscribe and Events API cursors are structured `ck:cursor:` tokens
 bound to the principal, device, service DID, filter hash, stream positions, and
@@ -427,9 +425,9 @@ The same list is computed at runtime and surfaced on
 - [ ] PQ-hybrid TLS deployment probe verified (`SOLAND_PQ_TLS_DEPLOYMENT_PROBE=verified` after `X25519MLKEM768` is negotiated)
 - [ ] CSP header configured at the reverse proxy
 - [ ] CORS limited to the configured allowed origins (`SOLAND_CORS_ALLOW_ORIGIN`)
-- [ ] Secrets in a secret manager (`SOLAND_NOTARY_SIGNING_KEY`, OAuth introspection bearer)
+- [ ] Secrets in a secret manager (`SOLAND_NOTARY_SIGNING_KEY`, session-grant introspection bearer)
 - [ ] Log redaction enabled (default outside dev mode)
-- [ ] Admin auth in production mode (`SOLAND_ADMIN_PRINCIPAL_DIDS` and/or `SOLAND_OAUTH_INTROSPECTION_URL`)
+- [ ] Admin auth in production mode (`SOLAND_ADMIN_PRINCIPAL_DIDS`, with browser sessions backed by `SOLAND_SESSION_GRANT_INTROSPECTION_URL`)
 - [ ] Rate limit enabled (default; do not disable in production)
 - [ ] Provider credential rotation scheduled (KeyStore + `rotate-signing-key`)
 - [ ] `SOLAND_SEED_DEMO_DATA=false` (default — never on a federated production deployment)

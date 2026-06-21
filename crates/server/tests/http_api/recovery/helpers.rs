@@ -673,7 +673,7 @@ pub(crate) async fn seed_bearer_session_with_device_payload(
         .persistence
         .sessions()
         .put(&SessionRecord {
-            token_hash: test_session_token_hash(token, &state.config.service_did),
+            token_hash: test_session_credential_hash(token, &state.config.service_did),
             actor: actor.to_owned(),
             device_id: device_id.to_owned(),
             audience: state.config.service_did.clone(),
@@ -702,7 +702,7 @@ pub(crate) async fn seed_bearer_session_with_device_payload(
         .unwrap();
 }
 
-pub(crate) fn test_session_token_hash(token: &str, audience: &str) -> String {
+pub(crate) fn test_session_credential_hash(token: &str, audience: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(audience.as_bytes());
     hasher.update(b":");

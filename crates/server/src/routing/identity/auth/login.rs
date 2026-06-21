@@ -180,7 +180,7 @@ pub(super) async fn dev_login(
 
     let expires_at = now() + Duration::hours(12);
     let token = token_for(actor_str, device_id_str, expires_at.timestamp_millis());
-    let token_hash = session_token_hash(&token, &state.config.service_did);
+    let token_hash = session_credential_hash(&token, &state.config.service_did);
     let session = SessionRecord {
         token_hash,
         actor: actor_str.to_owned(),
@@ -241,7 +241,7 @@ pub(super) async fn dev_login(
     state.clear_failed_login(actor_str);
 
     json_ok(SessionLoginOutcome {
-        access_token: token,
+        session_credential: token,
         token_type: "Bearer".to_owned(),
         actor: actor.clone(),
         device_id: device_id.clone(),

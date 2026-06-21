@@ -27,11 +27,9 @@ fn test_config() -> AppConfig {
         ice: IceServersConfig::default(),
         livekit: LiveKitConfig::default(),
         cors_allow_origin: None,
-        auth_server_url: None,
+        account_authority_url: None,
         oidc_client_id: None,
         development_mode: true,
-        oauth_introspection_url: None,
-        oauth_introspection_bearer: None,
         session_grant_introspection_url: None,
         session_grant_introspection_bearer: None,
         did_resolver_allow_methods: vec!["web".to_owned(), "key".to_owned(), "uuid".to_owned()],
@@ -95,9 +93,9 @@ async fn dev_token(state: AppState, actor: &str, device_id: &str, display_name: 
         Some(StatusCode::OK),
         "dev-login failed for {actor} / {device_id}: {login}"
     );
-    login["access_token"]
+    login["session_credential"]
         .as_str()
-        .unwrap_or_else(|| panic!("dev-login response missing access_token: {login}"))
+        .unwrap_or_else(|| panic!("dev-login response missing session_credential: {login}"))
         .to_owned()
 }
 

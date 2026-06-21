@@ -21,11 +21,9 @@ fn test_config() -> AppConfig {
         ice: IceServersConfig::default(),
         livekit: LiveKitConfig::default(),
         cors_allow_origin: None,
-        auth_server_url: None,
+        account_authority_url: None,
         oidc_client_id: None,
         development_mode: true,
-        oauth_introspection_url: None,
-        oauth_introspection_bearer: None,
         session_grant_introspection_url: None,
         session_grant_introspection_bearer: None,
         did_resolver_allow_methods: vec!["web".to_owned(), "key".to_owned(), "peer".to_owned()],
@@ -95,7 +93,7 @@ async fn dev_token(app: &salvo::Service, actor: &str) -> String {
         .take_json()
         .await
         .unwrap();
-    login["access_token"].as_str().unwrap().to_owned()
+    login["session_credential"].as_str().unwrap().to_owned()
 }
 
 async fn request_contact(app: &salvo::Service, token: &str, target: &str, scope: &str) -> Value {
