@@ -216,6 +216,12 @@ async fn directory_resolve_handle_invite_accepts_canonical_handles_without_conta
         "ck:device:01904100-0000-7000-8000-b0b0b0000002",
     )
     .await;
+    seed_did_document_also_known_as(
+        &state,
+        "did:web:bob.example",
+        &["acct:bob-example@local.host"],
+    )
+    .await;
 
     let hidden_bob: Value = TestClient::post("http://server/_cokret/find/directory/search-users")
         .add_header("authorization", format!("Bearer {alice}"), true)
@@ -242,7 +248,7 @@ async fn directory_resolve_handle_invite_accepts_canonical_handles_without_conta
     let mut resolved = TestClient::post("http://server/_cokret/find/directory/resolve-handle")
         .add_header("authorization", format!("Bearer {alice}"), true)
         .json(&serde_json::json!({
-            "handle": "bob:local.host",
+            "handle": "bob-example:local.host",
             "intent": "invite",
             "requester": "did:web:alice.example",
             "realm_id": realm_id,
@@ -253,7 +259,7 @@ async fn directory_resolve_handle_invite_accepts_canonical_handles_without_conta
     assert_eq!(resolved.status_code.unwrap(), StatusCode::OK);
     let body: Value = resolved.take_json().await.unwrap();
     assert_eq!(body["did"], "did:web:bob.example");
-    assert_eq!(body["handle"], "bob:local.host");
+    assert_eq!(body["handle"], "bob-example:local.host");
     assert_eq!(body["audience"], realm_id);
     assert_eq!(
         body["member_delivery_binding"]["recipient_service_did"],
@@ -282,7 +288,7 @@ async fn directory_resolve_handle_invite_accepts_canonical_handles_without_conta
         TestClient::post("http://server/_cokret/find/directory/resolve-handle")
             .add_header("authorization", format!("Bearer {alice}"), true)
             .json(&serde_json::json!({
-                "handle": "bob:local.host",
+                "handle": "bob-example:local.host",
                 "intent": "invite",
                 "requester": "did:web:alice.example",
                 "realm_id": realm_id,

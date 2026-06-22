@@ -184,10 +184,27 @@ async fn resumable_chunked_upload_matches_canonical_blob_ref() {
     assert_eq!(outcome["content_digest"], expected_digest);
     assert_eq!(outcome["media_type"], "application/octet-stream");
     assert_eq!(outcome["size_bytes"], payload.len());
-    assert_eq!(outcome["upload_receipt"]["purpose"], "file_transfer");
-    assert_eq!(outcome["upload_receipt"]["upload_binding"], "tus");
+    assert_eq!(outcome["upload_receipt"]["content_digest"], expected_digest);
+    assert!(outcome["upload_receipt"].get("purpose").is_none());
+    assert!(outcome["upload_receipt"].get("upload_binding").is_none());
+    assert!(
+        outcome["upload_receipt"]
+            .get("encrypted_attachment")
+            .is_none()
+    );
+    let stored_resumable_blob = state
+        .persistence
+        .blobs()
+        .get(outcome["blob_ref"].as_str().unwrap())
+        .await
+        .unwrap()
+        .expect("finalized resumable blob metadata is stored");
+    let encrypted_attachment = stored_resumable_blob
+        .encryption
+        .as_ref()
+        .expect("resumable encrypted metadata is persisted");
     assert_eq!(
-        outcome["upload_receipt"]["encrypted_attachment"]["scheme"],
+        encrypted_attachment["scheme"],
         "ck.file_transfer.encrypted_blob.v1"
     );
 

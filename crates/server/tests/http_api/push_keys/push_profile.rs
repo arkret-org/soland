@@ -50,12 +50,33 @@ async fn file_transfer_blob_upload_uses_encrypted_metadata_and_blocks_presign() 
             .get("filename")
             .is_none()
     );
-    assert_eq!(
-        file_transfer_blob["upload_receipt"]["purpose"],
-        "file_transfer"
+    assert!(
+        file_transfer_blob["upload_receipt"]
+            .get("purpose")
+            .is_none()
     );
     assert_eq!(
-        file_transfer_blob["upload_receipt"]["encrypted_attachment"]["scheme"],
+        file_transfer_blob["upload_receipt"]["content_digest"],
+        file_transfer_digest
+    );
+    assert!(
+        file_transfer_blob["upload_receipt"]
+            .get("encrypted_attachment")
+            .is_none()
+    );
+    let stored_file_transfer_blob = state
+        .persistence
+        .blobs()
+        .get(file_transfer_blob["blob_ref"].as_str().unwrap())
+        .await
+        .unwrap()
+        .expect("uploaded file-transfer blob metadata is stored");
+    let encrypted_attachment = stored_file_transfer_blob
+        .encryption
+        .as_ref()
+        .expect("file-transfer encrypted metadata is persisted");
+    assert_eq!(
+        encrypted_attachment["scheme"],
         "ck.file_transfer.encrypted_blob.v1"
     );
 

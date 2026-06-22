@@ -22,7 +22,7 @@ pub(crate) use soland::db::Db;
 pub(crate) use soland::ratelimit::RateLimiterConfig;
 pub(crate) use soland::state::{
     AppState, EventNotification, MessageRecord, PresenceRecord, RealmDirectoryEntry,
-    RealmInviteRecord, RealmMetaRecord,
+    RealmInviteRecord, RealmMetaRecord, WebvhDocumentRecord,
 };
 pub(crate) use soland::{
     artifacts, service, service_with_rate_limiter_config, service_with_request_size_limit,
@@ -311,6 +311,40 @@ pub(crate) async fn dev_token_for_device(
         .await
         .unwrap();
     login["session_credential"].as_str().unwrap().to_owned()
+}
+
+pub(crate) async fn seed_did_document_also_known_as(state: &AppState, did: &str, aliases: &[&str]) {
+    let now = chrono::Utc::now();
+    let aliases = aliases
+        .iter()
+        .map(|alias| Value::String((*alias).to_owned()))
+        .collect::<Vec<_>>();
+    state
+        .persistence
+        .webvh()
+        .put_document(WebvhDocumentRecord {
+            did: did.to_owned(),
+            did_document: serde_json::json!({
+                "id": did,
+                "alsoKnownAs": aliases,
+                "verificationMethod": [],
+                "authentication": [],
+                "assertionMethod": [],
+                "service": [{
+                    "id": format!("{did}#soland"),
+                    "type": "CokretPrincipalServer",
+                    "serviceEndpoint": "/_cokret"
+                }]
+            }),
+            key_log_head: None,
+            seq: 0,
+            method_evidence: serde_json::json!({"mode": "test_fixture"}),
+            fetched_at: now,
+            expires_at: now + chrono::Duration::minutes(15),
+            updated_at: now,
+        })
+        .await
+        .unwrap();
 }
 
 pub(crate) async fn seed_test_realm(

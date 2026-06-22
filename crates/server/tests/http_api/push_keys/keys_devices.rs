@@ -459,12 +459,11 @@ async fn auth_keys_device_messages_and_blobs_work() {
         presigned_plaintext.take_string().await.unwrap(),
         "shared plaintext"
     );
-    let forged_presign_url =
-        plaintext_presign_url.replace("presign_token=", "presign_token=forged");
+    let forged_presign_url = plaintext_presign_url.replace("presign=", "presign=forged");
     let forged_plaintext = TestClient::get(forged_presign_url)
         .send(&app_from_state(state.clone()))
         .await;
-    assert_eq!(forged_plaintext.status_code.unwrap().as_u16(), 401);
+    assert_eq!(forged_plaintext.status_code.unwrap().as_u16(), 404);
 
     let mut bob_blob = TestClient::get(format!(
         "http://server/_cokret/self/blob/get?blob_ref={}&purpose=message_attachment",
@@ -556,11 +555,14 @@ async fn auth_keys_device_messages_and_blobs_work() {
             .await
             .unwrap();
     assert_eq!(push_registration["ok"], true);
+    let push_target_id = push_registration["registration_id"]
+        .as_str()
+        .expect("push registration returns push_target_id");
 
     let plaintext_push = TestClient::post("http://server/_cokret/edge/push/notify")
         .json(&serde_json::json!({
             "notification": {
-                "push_target_id": "ck:push_target:01904100-0000-7000-8000-000000000101",
+                "push_target_id": push_target_id,
                 "wakeup_kind": "message",
                 "devices": [{"device_id": "ck:device:01904100-0000-7000-8000-a11ce0000001"}],
                 "preview": "plaintext should not be sent to push gateway"
@@ -573,7 +575,7 @@ async fn auth_keys_device_messages_and_blobs_work() {
     let notify: Value = TestClient::post("http://server/_cokret/edge/push/notify")
         .json(&serde_json::json!({
             "notification": {
-                "push_target_id": "ck:push_target:01904100-0000-7000-8000-000000000102",
+                "push_target_id": push_target_id,
                 "wakeup_kind": "message",
                 "devices": [{"device_id": "ck:device:01904100-0000-7000-8000-a11ce0000001"}, {"device_id": "ck:device:01904100-0000-7000-8000-71551c000004"}]
             }
