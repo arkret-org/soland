@@ -1,6 +1,12 @@
 use std::collections::BTreeSet;
 
+use cokret_sdk::error::{
+    REASON_RELATION_CONFLICT_FANOUT_EXCEEDED, REASON_RELATION_KIND_WATCHES_DERIVED,
+};
+
 use super::*;
+
+const RELATION_CONFLICT_FANOUT_LIMIT: usize = 16;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum RelationCardinality {
@@ -162,6 +168,12 @@ impl ProjectionState {
             history_basis_seals: operation_history_basis_seals(operation),
             updated_at: now,
         };
+        let profile = self.relation_profile_for(&state);
+        if self.relation_conflict_fanout_exceeded(&state, &profile) {
+            return ProjectionEffect::Rejected {
+                reason: REASON_RELATION_CONFLICT_FANOUT_EXCEEDED.to_owned(),
+            };
+        }
         self.relations.insert(relation_id.clone(), state);
         self.enforce_relation_cardinality_for(&relation_id, now);
         ProjectionEffect::RelationCreated(
@@ -354,6 +366,32 @@ impl ProjectionState {
             .filter(|other| matches(other))
             .map(|other| other.relation_id.clone())
             .collect()
+    }
+
+    fn relation_conflict_fanout_exceeded(
+        &self,
+        relation: &SolandRelationState,
+        profile: &RelationProfile,
+    ) -> bool {
+        if profile.on_conflict != RelationConflictPolicy::DeterministicWinner
+            || profile.multi_edge
+            || !relation.is_active()
+        {
+            return false;
+        }
+        let mut candidate_ids = self
+            .relations
+            .values()
+            .filter(|other| other.is_active())
+            .filter(|other| other.realm_id == relation.realm_id)
+            .filter(|other| other.relation_kind == relation.relation_kind)
+            .filter(|other| other.scope_circle_id == relation.scope_circle_id)
+            .filter(|other| other.from_ref == relation.from_ref)
+            .filter(|other| other.to_ref == relation.to_ref)
+            .map(|other| other.relation_id.clone())
+            .collect::<BTreeSet<_>>();
+        candidate_ids.insert(relation.relation_id.clone());
+        candidate_ids.len() > RELATION_CONFLICT_FANOUT_LIMIT
     }
 
     fn enforce_relation_cardinality_for(
@@ -574,6 +612,9 @@ impl ProjectionState {
                 .or_else(|| operation.payload.get("kind"))
                 .and_then(Value::as_str)
                 .unwrap_or_default();
+            if relation_kind == "watches" {
+                return Err(REASON_RELATION_KIND_WATCHES_DERIVED);
+            }
             self.check_relation_cross_realm(operation)?;
             self.check_relation_effective_scope(operation, relation_kind)?;
             return Ok(());
@@ -586,6 +627,20 @@ impl ProjectionState {
                 .or_else(|| operation.payload.get("id"))
                 .and_then(Value::as_str)
                 .unwrap_or_default();
+            if operation
+                .payload
+                .get("relation_kind")
+                .or_else(|| operation.payload.get("kind"))
+                .and_then(Value::as_str)
+                == Some("watches")
+            {
+                return Err(REASON_RELATION_KIND_WATCHES_DERIVED);
+            }
+            if let Some(relation) = self.relations.get(relation_id)
+                && relation.relation_kind == "watches"
+            {
+                return Err(REASON_RELATION_KIND_WATCHES_DERIVED);
+            }
             if let Some(relation) = self.relations.get(relation_id)
                 && let Some(next_scope) = relation_scope_circle_id_from_payload(&operation.payload)
                 && relation.scope_circle_id.as_deref() != Some(next_scope.as_str())
@@ -625,6 +680,30 @@ impl ProjectionState {
                 merged_operation.payload = Value::Object(merged);
                 self.check_relation_effective_scope(&merged_operation, &relation_kind)?;
             }
+            return Ok(());
+        }
+
+        if kind == crate::kinds::CK_RELATION_DELETE {
+            if operation
+                .payload
+                .get("relation_kind")
+                .or_else(|| operation.payload.get("kind"))
+                .and_then(Value::as_str)
+                == Some("watches")
+            {
+                return Err(REASON_RELATION_KIND_WATCHES_DERIVED);
+            }
+            let relation_id = operation
+                .payload
+                .get("relation_id")
+                .or_else(|| operation.payload.get("id"))
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            if let Some(relation) = self.relations.get(relation_id)
+                && relation.relation_kind == "watches"
+            {
+                return Err(REASON_RELATION_KIND_WATCHES_DERIVED);
+            }
         }
         Ok(())
     }
@@ -653,9 +732,42 @@ impl ProjectionState {
         // Patch-merge on the existing relation. If the relation does not yet
         // exist locally (out-of-order replication), retain the update for
         // pending replay when the create is backfilled.
-        let Some(relation) = self.relations.get_mut(&relation_id) else {
+        let Some(existing_relation) = self.relations.get(&relation_id) else {
             return self.queue_pending_replay(relation_id, operation, "relation_unknown");
         };
+        let mut candidate_relation = existing_relation.clone();
+        if let Some(kind) = operation
+            .payload
+            .get("relation_kind")
+            .or_else(|| operation.payload.get("kind"))
+            .and_then(|v| v.as_str())
+        {
+            candidate_relation.relation_kind = kind.to_owned();
+        }
+        if let Some(value) = operation
+            .payload
+            .get("from")
+            .or_else(|| operation.payload.get("from_ref"))
+        {
+            candidate_relation.from_ref = value.as_str().map(ToOwned::to_owned);
+        }
+        if let Some(value) = operation
+            .payload
+            .get("to")
+            .or_else(|| operation.payload.get("to_ref"))
+        {
+            candidate_relation.to_ref = value.as_str().map(ToOwned::to_owned);
+        }
+        let profile = self.relation_profile_for(&candidate_relation);
+        if self.relation_conflict_fanout_exceeded(&candidate_relation, &profile) {
+            return ProjectionEffect::Rejected {
+                reason: REASON_RELATION_CONFLICT_FANOUT_EXCEEDED.to_owned(),
+            };
+        }
+        let relation = self
+            .relations
+            .get_mut(&relation_id)
+            .expect("relation state exists after immutable lookup");
         if let Some(scope_circle_id) = relation_scope_circle_id_from_payload(&operation.payload)
             && relation.scope_circle_id.as_deref() != Some(scope_circle_id.as_str())
         {
@@ -715,6 +827,11 @@ impl ProjectionState {
 
         if relation_id.is_empty() {
             return ProjectionEffect::Ignored;
+        }
+        if let Err(reason) = self.check_relation_invariants(operation) {
+            return ProjectionEffect::Rejected {
+                reason: reason.to_owned(),
+            };
         }
         let Some(relation) = self.relations.get_mut(&relation_id) else {
             return self.queue_pending_replay(relation_id, operation, "relation_unknown");
@@ -1033,6 +1150,114 @@ mod cross_realm_relation_tests {
             low_state.source_event_digest.as_deref(),
             Some("sha256:0000000000000000000000000000000000000000000000000000000000000001")
         );
+    }
+
+    #[test]
+    fn duplicate_relation_rejects_conflict_fanout_above_limit() {
+        let mut proj = proj();
+        let now = chrono::Utc::now();
+        for index in 1..=RELATION_CONFLICT_FANOUT_LIMIT {
+            let seed = format!("{index:012x}");
+            let relation_id = format!("ck:relation:01904100-0000-7000-8000-{seed}");
+            let digest = format!("sha256:{index:064x}");
+            let effect = proj.apply_relation_create(
+                &relation_op_with_id_digest(
+                    &seed,
+                    &relation_id,
+                    "references",
+                    STRAND_A,
+                    STRAND_A2,
+                    &digest,
+                ),
+                now,
+            );
+            assert!(
+                !matches!(effect, ProjectionEffect::Rejected { .. }),
+                "candidate {index} should stay within relation conflict fanout limit"
+            );
+        }
+
+        let overflow_index = RELATION_CONFLICT_FANOUT_LIMIT + 1;
+        let overflow_seed = format!("{overflow_index:012x}");
+        let overflow_id = format!("ck:relation:01904100-0000-7000-8000-{overflow_seed}");
+        let overflow_digest = format!("sha256:{overflow_index:064x}");
+        let overflow = relation_op_with_id_digest(
+            &overflow_seed,
+            &overflow_id,
+            "references",
+            STRAND_A,
+            STRAND_A2,
+            &overflow_digest,
+        );
+
+        assert!(matches!(
+            proj.apply_relation_create(&overflow, now),
+            ProjectionEffect::Rejected { reason }
+                if reason == REASON_RELATION_CONFLICT_FANOUT_EXCEEDED
+        ));
+        assert!(!proj.relations.contains_key(&overflow_id));
+        assert_eq!(
+            proj.relations
+                .values()
+                .filter(|relation| relation.relation_kind == "references")
+                .filter(|relation| relation.from_ref.as_deref() == Some(STRAND_A))
+                .filter(|relation| relation.to_ref.as_deref() == Some(STRAND_A2))
+                .count(),
+            RELATION_CONFLICT_FANOUT_LIMIT
+        );
+    }
+
+    #[test]
+    fn direct_watches_relation_writes_are_rejected_by_reducer() {
+        let mut proj = proj();
+        let now = chrono::Utc::now();
+        assert!(matches!(
+            proj.apply_relation_create(&relation_op("watches", "did:web:alice.example", STRAND_A), now),
+            ProjectionEffect::Rejected { reason } if reason == REASON_RELATION_KIND_WATCHES_DERIVED
+        ));
+
+        let relation_id = "ck:relation:01904100-0000-7000-8000-0000000000aa".to_owned();
+        proj.relations.insert(
+            relation_id.clone(),
+            SolandRelationState {
+                relation_id: relation_id.clone(),
+                realm_id: REALM_A.to_owned(),
+                relation_kind: "watches".to_owned(),
+                scope_circle_id: None,
+                from_ref: Some("did:web:alice.example".to_owned()),
+                to_ref: Some(STRAND_A.to_owned()),
+                fields: Default::default(),
+                state: "active".to_owned(),
+                source_event_id: None,
+                source_event_digest: None,
+                created_at: now,
+                history_basis_seals: Vec::new(),
+                updated_at: now,
+            },
+        );
+        let update = Operation::create(
+            cokret_sdk::OperationId::new("ck:operation:01904100-0000-7000-8000-0000000000ab")
+                .unwrap(),
+            cokret_sdk::RealmId::new(REALM_A.to_owned()).unwrap(),
+            crate::kinds::CK_RELATION_UPDATE,
+            json!({"relation_id": relation_id, "fields": {"level": "muted"}}),
+        );
+        assert!(matches!(
+            proj.apply_relation_update(&update, now, &ServerHlc::new("relation-test")),
+            ProjectionEffect::Rejected { reason } if reason == REASON_RELATION_KIND_WATCHES_DERIVED
+        ));
+
+        let delete = Operation::create(
+            cokret_sdk::OperationId::new("ck:operation:01904100-0000-7000-8000-0000000000ac")
+                .unwrap(),
+            cokret_sdk::RealmId::new(REALM_A.to_owned()).unwrap(),
+            crate::kinds::CK_RELATION_DELETE,
+            json!({"relation_id": "ck:relation:01904100-0000-7000-8000-0000000000aa"}),
+        );
+        assert!(matches!(
+            proj.apply_relation_delete(&delete),
+            ProjectionEffect::Rejected { reason } if reason == REASON_RELATION_KIND_WATCHES_DERIVED
+        ));
     }
 
     #[test]

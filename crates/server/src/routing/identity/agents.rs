@@ -22,11 +22,10 @@
 //! - `POST   /_cokret/self/agent-sidecar-threads:ensure`       —
 //!   `ck.self.agent.sidecar_thread.command.ensure`
 //!
-//! All endpoints accept controller-self bearer sessions (TODO(P2-impl):
-//! tighten to `controller-only` actor binding once the personal-agent
-//! relation index lands). Each handler appends an audit-log row matching
-//! the canonical event-kind name so the existing admin / federation
-//! projections stay in sync ahead of the reducer rewrite.
+//! Controller operations enforce the persisted `agent_principals.controller_did`
+//! binding before they mutate state or emit fan-out. Each handler appends an
+//! audit-log row matching the canonical event-kind name so the existing admin /
+//! federation projections stay in sync ahead of the reducer rewrite.
 
 use chrono::SecondsFormat;
 use cokret_sdk::models::{
@@ -115,6 +114,62 @@ fn validate_agent_principal_id(value: &str) -> Result<(), AppError> {
     if validate_did(value).is_err() {
         return Err(AppError::invalid_param(
             "agent_principal_id must be a DID scalar",
+        ));
+    }
+    Ok(())
+}
+
+fn ensure_agent_record_controller(
+    record: &Value,
+    agent_principal_id: &str,
+    session: &SessionRecord,
+) -> Result<(), AppError> {
+    if record.get("agent_principal_id").and_then(Value::as_str) != Some(agent_principal_id) {
+        return Err(AppError::capability_denied(
+            "agent principal record does not match the requested principal",
+        ));
+    }
+    let Some(controller_did) = record
+        .get("controller_did")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+    else {
+        return Err(AppError::capability_denied(
+            "agent principal has no controller binding",
+        ));
+    };
+    if controller_did != session.actor.as_str() {
+        return Err(AppError::capability_denied(
+            "agent principal is not controlled by the authenticated session",
+        ));
+    }
+    Ok(())
+}
+
+async fn require_agent_controller(
+    state: &AppState,
+    session: &SessionRecord,
+    agent_principal_id: &str,
+) -> Result<Value, AppError> {
+    validate_agent_principal_id(agent_principal_id)?;
+    let record = state
+        .persistence
+        .agents()
+        .get(agent_principal_id)
+        .await
+        .map_err(|err| AppError::internal(format!("agent controller lookup failed: {err}")))?
+        .ok_or_else(|| AppError::capability_denied("agent principal has no controller binding"))?;
+    ensure_agent_record_controller(&record, agent_principal_id, session)?;
+    Ok(record)
+}
+
+fn ensure_sidecar_controller_request(
+    body: &AgentSidecarThreadEnsureRequestBody,
+    session: &SessionRecord,
+) -> Result<(), AppError> {
+    if body.controller_principal_id.as_str() != session.actor.as_str() {
+        return Err(AppError::capability_denied(
+            "sidecar controller_principal_id must match the authenticated session",
         ));
     }
     Ok(())
@@ -283,7 +338,7 @@ async fn set_agent_participation(
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let agent_id = agent_id.into_inner();
-    validate_agent_principal_id(&agent_id)?;
+    require_agent_controller(state, &session, &agent_id).await?;
     let body = body.into_inner();
     let ceiling = resolve_effective_ceiling(state, &body.scope).await;
     validate_selection_within_ceiling(ceiling, body.selection)
@@ -468,9 +523,9 @@ async fn get_agent_participation(
     req: &mut Request,
 ) -> JsonResult<AgentParticipationResBody> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let _session = aa.authenticated_session(state, req).await?;
+    let session = aa.authenticated_session(state, req).await?;
     let agent_id = agent_id.into_inner();
-    validate_agent_principal_id(&agent_id)?;
+    require_agent_controller(state, &session, &agent_id).await?;
     let selections = state
         .persistence
         .agent_participation()
@@ -529,6 +584,7 @@ async fn agent_key_pair(
             "verification_method DID must match agent_principal_id",
         ));
     }
+    require_agent_controller(state, &session, agent_principal_id).await?;
     // The runtime-attestation verifier is not wired yet. Refuse every
     // supplied attestation fail-closed instead of accepting a shape-only
     // `self_asserted` placeholder as if it were a verified binding.
@@ -548,21 +604,7 @@ async fn agent_key_pair(
     // `effective_after_first_authorized_key` grants. Production submits this
     // from coauth/yougen and never enters this branch.
     let authorized_event_ref = if state.config.development_mode {
-        let controller_did = state
-            .persistence
-            .agents()
-            .get(agent_principal_id)
-            .await
-            .ok()
-            .flatten()
-            .and_then(|record| {
-                record
-                    .get("controller_did")
-                    .and_then(Value::as_str)
-                    .map(ToOwned::to_owned)
-            })
-            .unwrap_or_else(|| session.actor.clone());
-        let controller_session = controller_dev_session(&controller_did, state);
+        let controller_session = controller_dev_session(&session.actor, state);
         let realm = ensure_self_realm(state, &controller_session).await?;
         let key_id = dev_fanout::default_agent_key_id(agent_principal_id);
         let event_id = submit_durable_key_authorize(
@@ -897,25 +939,16 @@ async fn lifecycle_transition(
     sidecar_exposure_ack: Option<Value>,
 ) -> Result<AgentLifecycleOutcome, AppError> {
     let session = aa.authenticated_session(state, req).await?;
-    validate_agent_principal_id(&agent_id)?;
+    let record = require_agent_controller(state, &session, &agent_id).await?;
     let sidecar_exposure_ack =
         normalize_sidecar_exposure_ack(sidecar_exposure_ack, &session.actor)?;
     let status_changed_at = chrono::Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
     // Read the current persisted state so the durable transition carries the
     // accurate `previous_status` (resume comes from `paused`, etc.).
-    let previous_status = state
-        .persistence
-        .agents()
-        .get(&agent_id)
-        .await
-        .ok()
-        .flatten()
-        .and_then(|record| {
-            record
-                .get("state")
-                .and_then(Value::as_str)
-                .map(ToOwned::to_owned)
-        })
+    let previous_status = record
+        .get("state")
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned)
         .unwrap_or_else(|| "active".to_owned());
     // CKP-0008 §4.11 (dev option B): drive the FSM reducer with the durable
     // `ck.self.agent.{pause,resume,deactivate}` event authored by the
@@ -1113,7 +1146,7 @@ async fn rotate_agent_key(
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let agent_id = agent_id.into_inner();
-    validate_agent_principal_id(&agent_id)?;
+    require_agent_controller(state, &session, &agent_id).await?;
     let body = body.into_inner();
     // spec `agent_rotate_key_request_body` = `{replacement_key, proof_of_possession}`.
     let replacement_kid = body
@@ -1164,7 +1197,7 @@ async fn attach_agent_grant(
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let agent_id = agent_id.into_inner();
-    validate_agent_principal_id(&agent_id)?;
+    require_agent_controller(state, &session, &agent_id).await?;
     let body = body.into_inner();
     // spec `agent_grant_attach_request_body` = `{grant: object}`.
     if !body.grant.is_object() {
@@ -1224,7 +1257,7 @@ async fn detach_agent_grant(
     let session = aa.authenticated_session(state, req).await?;
     let agent_id = agent_id.into_inner();
     let grant_id = grant_id.into_inner();
-    validate_agent_principal_id(&agent_id)?;
+    require_agent_controller(state, &session, &agent_id).await?;
     if !grant_id.starts_with("ck:accountability_grant:") && !grant_id.starts_with("ck:grant:") {
         return Err(AppError::invalid_param(
             "grant_id must be a ck:accountability_grant:<uuidv7> or ck:grant:<uuidv7> typed id",
@@ -1265,6 +1298,8 @@ async fn ensure_sidecar_thread_impl(
 ) -> JsonResult<AgentSidecarThreadEnsureOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
+    ensure_sidecar_controller_request(&body, &session)?;
+    require_agent_controller(state, &session, body.agent_principal_id.as_str()).await?;
     // spec `agent_sidecar_thread_ensure_outcome` =
     // `{ok, private_circle_id, private_strand_id, private_relation_id,
     //   pending_member_reconciliations?}`. The private Circle / Strand / Relation
@@ -1318,6 +1353,30 @@ async fn ensure_sidecar_thread_canonical(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn test_session(actor: &str) -> SessionRecord {
+        SessionRecord {
+            token_hash: format!("test-session:{actor}"),
+            actor: actor.to_owned(),
+            device_id: "test-device".to_owned(),
+            audience: "did:web:soland.test".to_owned(),
+            session_public_key: None,
+            agent_session: None,
+            expires_at: now() + chrono::Duration::minutes(5),
+            created_at: now(),
+            revoked_at: None,
+        }
+    }
+
+    fn agent_record(agent_principal_id: &str, controller_did: &str) -> Value {
+        json!({
+            "agent_principal_id": agent_principal_id,
+            "controller_did": controller_did,
+            "agent_id": agent_principal_id,
+            "display_name": "Test Agent",
+            "state": "active",
+        })
+    }
 
     #[test]
     fn agent_principal_id_is_did_not_typed_id() {
@@ -1403,6 +1462,43 @@ mod tests {
             "did:web:controller.example",
         )
         .expect_err("ack by another controller must reject");
+
+        assert_eq!(err.wire_code(), "capability_denied");
+    }
+
+    #[test]
+    fn controller_binding_accepts_agent_controller() {
+        let session = test_session("did:web:controller.example");
+        let record = agent_record("did:web:agent.example", "did:web:controller.example");
+
+        ensure_agent_record_controller(&record, "did:web:agent.example", &session)
+            .expect("controller session must operate its agent");
+    }
+
+    #[test]
+    fn controller_binding_rejects_non_controller() {
+        let session = test_session("did:web:mallory.example");
+        let record = agent_record("did:web:agent.example", "did:web:controller.example");
+
+        let err = ensure_agent_record_controller(&record, "did:web:agent.example", &session)
+            .expect_err("non-controller session must be rejected");
+
+        assert_eq!(err.wire_code(), "capability_denied");
+    }
+
+    #[test]
+    fn sidecar_request_rejects_body_controller_mismatch() {
+        let session = test_session("did:web:controller.example");
+        let body = AgentSidecarThreadEnsureRequestBody {
+            realm_id: cokret_sdk::RealmId::new("ck:realm:0196419b-0000-7000-8000-000000000001")
+                .expect("realm id"),
+            agent_principal_id: cokret_sdk::Did::new("did:web:agent.example").expect("agent did"),
+            controller_principal_id: cokret_sdk::Did::new("did:web:mallory.example")
+                .expect("controller did"),
+        };
+
+        let err = ensure_sidecar_controller_request(&body, &session)
+            .expect_err("sidecar body controller must match session actor");
 
         assert_eq!(err.wire_code(), "capability_denied");
     }

@@ -180,6 +180,42 @@ async fn memory_federation_transaction_store_is_origin_scoped() {
     );
 }
 
+#[tokio::test]
+async fn memory_federation_frontier_exchange_marks_and_clears_stale_peer() {
+    let store = MemoryFederationFrontierExchangeStore::new();
+    let realm_id = "ck:realm:01904100-0000-7000-8000-cfc039892036";
+    let peer = "did:web:peer.example";
+
+    let first = store
+        .record_failure(realm_id, peer, "network_error", 10)
+        .await
+        .unwrap();
+    assert_eq!(first.status, FEDERATION_FRONTIER_STATUS_HEALTHY);
+    assert_eq!(first.consecutive_failures, 1);
+
+    store
+        .record_failure(realm_id, peer, "network_error", 20)
+        .await
+        .unwrap();
+    let stale = store
+        .record_failure(realm_id, peer, "frontier_root_mismatch", 30)
+        .await
+        .unwrap();
+    assert_eq!(stale.status, FEDERATION_FRONTIER_STATUS_STALE_PEER);
+    assert_eq!(
+        stale.consecutive_failures,
+        FEDERATION_FRONTIER_STALE_FAILURES
+    );
+
+    let healthy = store
+        .record_success(realm_id, peer, &format!("sha256:{}", "a".repeat(64)), 40)
+        .await
+        .unwrap();
+    assert_eq!(healthy.status, FEDERATION_FRONTIER_STATUS_HEALTHY);
+    assert_eq!(healthy.consecutive_failures, 0);
+    assert_eq!(healthy.last_error, None);
+}
+
 fn sync_cursor_record(handle: &str, issued_at_ms: i64) -> SyncCursorRecord {
     SyncCursorRecord {
         handle: handle.to_owned(),

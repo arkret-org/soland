@@ -558,7 +558,7 @@ mod derived_relation_and_morph_immutability_tests {
         );
         assert_eq!(
             validate_relation_operation_payload(&operation),
-            Err("relation_kind_watches_derived")
+            Err(cokret_sdk::error::REASON_RELATION_KIND_WATCHES_DERIVED)
         );
     }
 

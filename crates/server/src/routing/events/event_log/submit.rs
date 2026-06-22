@@ -319,6 +319,80 @@ pub(crate) async fn submit_federation_events(
     }
 
     let binding_realm = submit.service_binding_ref.realm_id.as_str().to_owned();
+    let source_service_did = req
+        .headers()
+        .get("source-service-did")
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or_default()
+        .to_owned();
+    match crate::routing::federation::frontier_exchange::inbound_peer_is_stale(
+        state,
+        &binding_realm,
+        &source_service_did,
+    )
+    .await
+    {
+        Ok(true) => {
+            let quarantine = submit
+                .events
+                .iter()
+                .filter_map(|envelope| event_string_field_from_value(envelope, "event_id"))
+                .collect::<Vec<_>>();
+            append_audit_log(
+                state,
+                None,
+                "peer.events.submit",
+                json!({
+                    "realm_id": binding_realm,
+                    "source_service_did": source_service_did,
+                    "reason": "stale_peer",
+                    "quarantine_count": quarantine.len()
+                }),
+                "quarantine",
+            )
+            .await;
+            res.render(Json(events_submit_outcome(
+                EventsSubmitStatus::Partial,
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                quarantine,
+                Some(super::super::sync::sync_token_for_state(state).await),
+            )));
+            return;
+        }
+        Ok(false) => {}
+        Err(error) => {
+            append_audit_log(
+                state,
+                None,
+                "peer.events.submit",
+                json!({
+                    "realm_id": binding_realm,
+                    "source_service_did": source_service_did,
+                    "reason": "stale_peer_state_unavailable",
+                    "error": error
+                }),
+                "reject",
+            )
+            .await;
+            render_error(
+                res,
+                StatusCode::SERVICE_UNAVAILABLE,
+                "stale_peer_state_unavailable",
+                "federation stale_peer state is unavailable",
+            );
+            return;
+        }
+    }
+    if let Err(reason) =
+        federation_service_binding_current_for_destination(state, &submit.service_binding_ref)
+    {
+        render_error(res, StatusCode::CONFLICT, reason, reason);
+        return;
+    }
     let mut accepted = Vec::new();
     let mut duplicate = Vec::new();
     let mut rejected = Vec::new();
@@ -464,6 +538,34 @@ async fn federation_actor_origin_acceptable(
         return true;
     }
     realm_has_member(state, binding_realm, actor).await
+}
+
+fn federation_service_binding_current_for_destination(
+    state: &AppState,
+    binding: &FederationServiceBindingRef,
+) -> Result<(), &'static str> {
+    let current_frontiers = {
+        let projection = state.projection.lock().expect("projection lock");
+        projection
+            .members_of_realm(binding.realm_id.as_str())
+            .into_iter()
+            .filter(|member| member.delivery_status.as_deref() == Some("routable"))
+            .filter(|member| {
+                member.recipient_service_did.as_deref() == Some(state.config.service_did.as_str())
+            })
+            .filter_map(|member| {
+                member
+                    .delivery_binding_frontier
+                    .as_deref()
+                    .or(member.membership_event_ref.as_deref())
+                    .map(ToOwned::to_owned)
+            })
+            .collect::<Vec<_>>()
+    };
+    federation_delivery_binding_frontier_is_current(
+        &binding.delivery_binding_frontier,
+        current_frontiers,
+    )
 }
 
 fn events_submit_status_label(status: EventsSubmitStatus) -> &'static str {
@@ -741,14 +843,15 @@ pub(in crate::routing) async fn submit_event_value(
                 reason,
             ));
         }
-        // CKP-0016 §5.2 — a native personal agent may only author messages
-        // where its effective participation `reply` bit is true. Per
-        // 0016-agent-participation-policy.md §6: an agent with no effective
-        // reply grant for the scope is rejected `failed_precondition` (the
-        // missing materialised `ck.message.create` grant is a precondition,
-        // not an authorization-context denial).
+        // CKP-0016 §5.2 / architecture §7 — native personal agent writes
+        // require an auditable agent_context plus the effective participation
+        // bit for the write mode. Per 0016-agent-participation-policy.md §6,
+        // missing materialised grants are preconditions, not auth-context
+        // denials.
+        let agent_policy_operation = operation_with_unsigned_agent_context(operation, &envelope);
         if let Err(reason) =
-            validate_agent_reply_participation(state, std::slice::from_ref(operation)).await
+            validate_agent_reply_participation(state, std::slice::from_ref(&agent_policy_operation))
+                .await
         {
             return Err(SubmitOneError::new(
                 StatusCode::PRECONDITION_FAILED,
@@ -1119,6 +1222,20 @@ pub(in crate::routing) async fn submit_event_value(
     )
     .await;
     Ok(event_submit_response(state, EventsSubmitStatus::Accepted, parsed.event_id).await)
+}
+
+fn operation_with_unsigned_agent_context(operation: &Operation, envelope: &Value) -> Operation {
+    let mut operation = operation.clone();
+    if let Some(object) = operation.payload.as_object_mut()
+        && !object.contains_key("agent_context")
+        && let Some(agent_context) = envelope
+            .get("unsigned")
+            .and_then(|unsigned| unsigned.get("agent_context"))
+            .filter(|value| value.is_object())
+    {
+        object.insert("agent_context".to_owned(), agent_context.clone());
+    }
+    operation
 }
 
 async fn record_rejected_invite_claim_effect(

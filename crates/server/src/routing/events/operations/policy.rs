@@ -1280,15 +1280,14 @@ fn ap_effective_for_mode(
     }
 }
 
-async fn native_agent_exists(state: &AppState, principal_id: &str) -> bool {
+async fn native_agent_exists(state: &AppState, principal_id: &str) -> Result<bool, &'static str> {
     state
         .persistence
         .agents()
         .get(principal_id)
         .await
-        .ok()
-        .flatten()
-        .is_some()
+        .map(|record| record.is_some())
+        .map_err(|_| "agent_principal_lookup_unavailable")
 }
 
 fn agent_participation_action(operation: &Operation) -> Option<&str> {
@@ -1310,7 +1309,7 @@ fn validate_agent_act_on_behalf_authorization_ref(
         return Err("agent_act_on_behalf_authorization_ref_invalid");
     }
     let Some(action) = agent_participation_action(operation) else {
-        return Ok(authorization_ref.to_owned());
+        return Err("agent_act_on_behalf_authorization_action_unsupported");
     };
     let resource = operation
         .object_id
@@ -1443,9 +1442,216 @@ fn validate_agent_act_on_behalf_approval(
     Ok(())
 }
 
-/// CKP-0016 §5.2 / CKP-0008 §4.10 enforcement (soland-native): a native
-/// personal agent may only author an Event where its effective participation
-/// bit is true. Reply-as-agent uses the `reply` bit; act-on-behalf uses
+fn operation_agent_context(operation: &Operation) -> Option<&Value> {
+    operation
+        .payload
+        .get("agent_context")
+        .or_else(|| {
+            operation
+                .payload
+                .get("provenance")
+                .and_then(|provenance| provenance.get("agent_context"))
+        })
+        .filter(|value| !value.is_null())
+}
+
+fn agent_context_string<'a>(
+    context: &'a Value,
+    field: &str,
+    missing_reason: &'static str,
+) -> Result<&'a str, &'static str> {
+    let object = context.as_object().ok_or("agent_context_invalid")?;
+    object
+        .get(field)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or(missing_reason)
+}
+
+fn agent_context_agent_id(operation: &Operation) -> Option<&str> {
+    operation_agent_context(operation).and_then(|context| {
+        context
+            .as_object()
+            .and_then(|object| object.get("agent_id"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+    })
+}
+
+fn operation_agent_provenance(operation: &Operation) -> Option<&Value> {
+    operation
+        .payload
+        .get("provenance")
+        .or_else(|| operation.payload.get("agent_provenance"))
+        .filter(|value| value.is_object())
+}
+
+fn operation_provenance_agent_id(operation: &Operation) -> Option<&str> {
+    operation_agent_provenance(operation).and_then(|provenance| {
+        provenance
+            .get("agent_id")
+            .or_else(|| provenance.get("executed_by"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+    })
+}
+
+fn operation_executed_by(operation: &Operation) -> Option<&str> {
+    operation
+        .payload
+        .get("executed_by")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .or_else(|| {
+            operation_agent_provenance(operation).and_then(|provenance| {
+                provenance
+                    .get("executed_by")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+            })
+        })
+}
+
+fn operation_provenance_marks_agent(operation: &Operation) -> bool {
+    let Some(provenance) = operation_agent_provenance(operation) else {
+        return false;
+    };
+    provenance
+        .get("actor_kind")
+        .and_then(Value::as_str)
+        .is_some_and(|value| value == "agent")
+        || provenance
+            .get("kind")
+            .and_then(Value::as_str)
+            .is_some_and(|value| value == "agent")
+        || operation_provenance_agent_id(operation).is_some()
+}
+
+async fn operation_agent_write_context(
+    state: &AppState,
+    operation: &Operation,
+) -> Result<Option<(String, AgentParticipationMode)>, &'static str> {
+    if let Some(executed_by) = operation_executed_by(operation) {
+        if agent_context_agent_id(operation) == Some(executed_by)
+            || operation_provenance_marks_agent(operation)
+            || native_agent_exists(state, executed_by).await?
+        {
+            return Ok(Some((
+                executed_by.to_owned(),
+                AgentParticipationMode::ActOnBehalf,
+            )));
+        }
+    }
+    if let Some(agent_id) = agent_context_agent_id(operation) {
+        let mode = if operation_executed_by(operation).is_some() {
+            AgentParticipationMode::ActOnBehalf
+        } else {
+            AgentParticipationMode::Reply
+        };
+        return Ok(Some((agent_id.to_owned(), mode)));
+    }
+    if operation_provenance_marks_agent(operation)
+        && let Some(agent_id) =
+            operation_provenance_agent_id(operation).or_else(|| operation_actor(operation))
+    {
+        let mode = if operation_executed_by(operation).is_some() {
+            AgentParticipationMode::ActOnBehalf
+        } else {
+            AgentParticipationMode::Reply
+        };
+        return Ok(Some((agent_id.to_owned(), mode)));
+    }
+    if let Some(sender) = operation_actor(operation)
+        && native_agent_exists(state, sender).await?
+    {
+        return Ok(Some((sender.to_owned(), AgentParticipationMode::Reply)));
+    }
+    Ok(None)
+}
+
+fn validate_agent_context_authorization_ref(
+    state: &AppState,
+    operation: &Operation,
+    agent_principal_id: &str,
+    authorization_ref: &str,
+) -> Result<(), &'static str> {
+    if !authorization_ref.starts_with("ck:grant:") {
+        return Err("agent_context_authorization_ref_invalid");
+    }
+    let Some(action) = agent_participation_action(operation) else {
+        return Err("agent_context_authorization_action_unsupported");
+    };
+    let resource = operation
+        .object_id
+        .as_deref()
+        .unwrap_or_else(|| operation.realm_id.as_str());
+    let grants = state
+        .authz
+        .grants_for_subject(agent_principal_id, operation.realm_id.as_str());
+    let Some(grant) = grants
+        .iter()
+        .find(|grant| grant.grant_id == authorization_ref)
+    else {
+        return Err("agent_context_authorization_ref_inactive");
+    };
+    let action_allowed = grant
+        .actions
+        .iter()
+        .any(|candidate| candidate == action || candidate == "*");
+    if !action_allowed || !crate::authz::resource_matches(&grant.resource, resource) {
+        return Err("agent_context_authorization_ref_scope");
+    }
+    Ok(())
+}
+
+fn validate_agent_context(
+    state: &AppState,
+    operation: &Operation,
+    agent_principal_id: &str,
+    envelope_authorization_ref: Option<&str>,
+) -> Result<(), &'static str> {
+    let context = operation_agent_context(operation).ok_or("agent_context_missing")?;
+    let agent_id = agent_context_string(context, "agent_id", "agent_context_agent_id_missing")?;
+    if agent_id != agent_principal_id {
+        return Err("agent_context_agent_mismatch");
+    }
+    agent_context_string(
+        context,
+        "operator_or_controller",
+        "agent_context_operator_or_controller_missing",
+    )?;
+    agent_context_string(
+        context,
+        "execution_purpose",
+        "agent_context_execution_purpose_missing",
+    )?;
+    let context_authorization_ref = agent_context_string(
+        context,
+        "authorization_ref",
+        "agent_context_authorization_ref_missing",
+    )?;
+    validate_agent_context_authorization_ref(
+        state,
+        operation,
+        agent_principal_id,
+        context_authorization_ref,
+    )?;
+    if let Some(envelope_authorization_ref) = envelope_authorization_ref
+        && context_authorization_ref != envelope_authorization_ref
+    {
+        return Err("agent_context_authorization_ref_mismatch");
+    }
+    Ok(())
+}
+
+/// CKP-0016 §5.2 / CKP-0008 §4.10 + architecture §7 enforcement
+/// (soland-native): every agent-originated Event carries auditable
+/// `agent_context`. Reply-as-agent uses the `reply` bit; act-on-behalf uses
 /// envelope-derived `executed_by`, requires a referenced active grant, and
 /// uses the `act_on_behalf` bit. Non-agent actors fall through to standard
 /// authz.
@@ -1455,19 +1661,9 @@ pub async fn validate_agent_reply_participation(
 ) -> Result<(), &'static str> {
     use cokret_sdk::models::AgentParticipation;
     for operation in operations {
-        let mut agent_context: Option<(String, AgentParticipationMode)> = None;
-        if let Some(executed_by) = operation.payload.get("executed_by").and_then(Value::as_str)
-            && native_agent_exists(state, executed_by).await
-        {
-            agent_context = Some((executed_by.to_owned(), AgentParticipationMode::ActOnBehalf));
-        }
-        if agent_context.is_none()
-            && let Some(sender) = operation.payload.get("sender").and_then(Value::as_str)
-            && native_agent_exists(state, sender).await
-        {
-            agent_context = Some((sender.to_owned(), AgentParticipationMode::Reply));
-        }
-        let Some((agent_principal_id, mode)) = agent_context else {
+        let Some((agent_principal_id, mode)) =
+            operation_agent_write_context(state, operation).await?
+        else {
             continue;
         };
         let authorization_ref = if mode == AgentParticipationMode::ActOnBehalf {
@@ -1479,6 +1675,12 @@ pub async fn validate_agent_reply_participation(
         } else {
             None
         };
+        validate_agent_context(
+            state,
+            operation,
+            &agent_principal_id,
+            authorization_ref.as_deref(),
+        )?;
         let realm_uuid = ap_uuid_part(operation.realm_id.as_str()).to_owned();
         let realm_key = format!("realm:{realm_uuid}");
         let strand_key = operation

@@ -178,6 +178,13 @@ async fn main() -> anyhow::Result<()> {
         enabled = state.config.federation_outbound_enabled,
         "background worker configured"
     );
+    let _federation_frontier_exchange =
+        soland::routing::federation::frontier_exchange::spawn(state.clone());
+    tracing::info!(
+        worker = "federation_frontier_exchange",
+        enabled = state.config.federation_outbound_enabled,
+        "background worker configured"
+    );
 
     // Stream-F (Wave 2C) — periodic erasure-receipt federation fanout
     // timeout sweep. Wakes every hour (the default sweep interval; the

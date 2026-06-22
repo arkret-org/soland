@@ -1,4 +1,5 @@
 use cokret_sdk::Operation;
+use cokret_sdk::error::REASON_RELATION_KIND_WATCHES_DERIVED;
 use serde_json::Value;
 
 use super::*;
@@ -646,7 +647,7 @@ pub(crate) fn validate_relation_operation_payload(
         return Ok(());
     };
     match relation_kind {
-        "watches" => Err("relation_kind_watches_derived"),
+        "watches" => Err(REASON_RELATION_KIND_WATCHES_DERIVED),
         "contains" => {
             let from_ref = ["from_ref", "from"]
                 .iter()

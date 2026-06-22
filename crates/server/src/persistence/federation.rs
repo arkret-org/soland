@@ -75,6 +75,83 @@ pub trait FederationOutboxStore: Send + Sync {
     ) -> PersistenceResult<Vec<FederationOutboxDeadLetterRecord>>;
 }
 
+pub const FEDERATION_FRONTIER_STALE_FAILURES: i32 = 3;
+pub const FEDERATION_FRONTIER_STATUS_HEALTHY: &str = "healthy";
+pub const FEDERATION_FRONTIER_STATUS_STALE_PEER: &str = "stale_peer";
+
+#[async_trait]
+pub trait FederationFrontierExchangeStore: Send + Sync {
+    async fn get(
+        &self,
+        realm_id: &str,
+        peer_service_did: &str,
+    ) -> PersistenceResult<Option<FederationFrontierExchangeRecord>>;
+    async fn record_success(
+        &self,
+        realm_id: &str,
+        peer_service_did: &str,
+        frontier_root: &str,
+        observed_at: i64,
+    ) -> PersistenceResult<FederationFrontierExchangeRecord>;
+    async fn record_failure(
+        &self,
+        realm_id: &str,
+        peer_service_did: &str,
+        reason: &str,
+        observed_at: i64,
+    ) -> PersistenceResult<FederationFrontierExchangeRecord>;
+    async fn snapshot_all(&self) -> PersistenceResult<Vec<FederationFrontierExchangeRecord>>;
+}
+
+fn frontier_exchange_success_record(
+    existing: Option<FederationFrontierExchangeRecord>,
+    realm_id: &str,
+    peer_service_did: &str,
+    frontier_root: &str,
+    observed_at: i64,
+) -> FederationFrontierExchangeRecord {
+    FederationFrontierExchangeRecord {
+        realm_id: realm_id.to_owned(),
+        peer_service_did: peer_service_did.to_owned(),
+        status: FEDERATION_FRONTIER_STATUS_HEALTHY.to_owned(),
+        consecutive_failures: 0,
+        last_success_at: Some(observed_at),
+        last_failure_at: existing.and_then(|record| record.last_failure_at),
+        last_frontier_root: Some(frontier_root.to_owned()),
+        last_error: None,
+        updated_at: observed_at,
+    }
+}
+
+fn frontier_exchange_failure_record(
+    existing: Option<FederationFrontierExchangeRecord>,
+    realm_id: &str,
+    peer_service_did: &str,
+    reason: &str,
+    observed_at: i64,
+) -> FederationFrontierExchangeRecord {
+    let failures = existing
+        .as_ref()
+        .map(|record| record.consecutive_failures.saturating_add(1))
+        .unwrap_or(1);
+    let status = if failures >= FEDERATION_FRONTIER_STALE_FAILURES {
+        FEDERATION_FRONTIER_STATUS_STALE_PEER
+    } else {
+        FEDERATION_FRONTIER_STATUS_HEALTHY
+    };
+    FederationFrontierExchangeRecord {
+        realm_id: realm_id.to_owned(),
+        peer_service_did: peer_service_did.to_owned(),
+        status: status.to_owned(),
+        consecutive_failures: failures,
+        last_success_at: existing.as_ref().and_then(|record| record.last_success_at),
+        last_failure_at: Some(observed_at),
+        last_frontier_root: existing.and_then(|record| record.last_frontier_root),
+        last_error: Some(reason.to_owned()),
+        updated_at: observed_at,
+    }
+}
+
 /// Replay log of federation operations the local service has accepted from
 /// peers (and emitted itself). Currently in-memory but the trait shape is
 /// what the durable Pg implementation will follow.
@@ -232,6 +309,77 @@ impl FederationOutboxStore for MemoryFederationOutboxStore {
 // The structs below back every former `Arc<Mutex<...>>` field on `AppState`.
 // The trait shape is the architectural contract; the Pg-backed
 // implementations land in T0-3.
+
+pub(crate) struct MemoryFederationFrontierExchangeStore {
+    data: Arc<Mutex<BTreeMap<(String, String), FederationFrontierExchangeRecord>>>,
+}
+
+impl MemoryFederationFrontierExchangeStore {
+    pub(crate) fn new() -> Self {
+        Self {
+            data: Arc::new(Mutex::new(BTreeMap::new())),
+        }
+    }
+}
+
+#[async_trait]
+impl FederationFrontierExchangeStore for MemoryFederationFrontierExchangeStore {
+    async fn get(
+        &self,
+        realm_id: &str,
+        peer_service_did: &str,
+    ) -> PersistenceResult<Option<FederationFrontierExchangeRecord>> {
+        let data = self.data.lock().expect("federation_frontier_exchange lock");
+        Ok(data
+            .get(&(realm_id.to_owned(), peer_service_did.to_owned()))
+            .cloned())
+    }
+
+    async fn record_success(
+        &self,
+        realm_id: &str,
+        peer_service_did: &str,
+        frontier_root: &str,
+        observed_at: i64,
+    ) -> PersistenceResult<FederationFrontierExchangeRecord> {
+        let mut data = self.data.lock().expect("federation_frontier_exchange lock");
+        let key = (realm_id.to_owned(), peer_service_did.to_owned());
+        let record = frontier_exchange_success_record(
+            data.get(&key).cloned(),
+            realm_id,
+            peer_service_did,
+            frontier_root,
+            observed_at,
+        );
+        data.insert(key, record.clone());
+        Ok(record)
+    }
+
+    async fn record_failure(
+        &self,
+        realm_id: &str,
+        peer_service_did: &str,
+        reason: &str,
+        observed_at: i64,
+    ) -> PersistenceResult<FederationFrontierExchangeRecord> {
+        let mut data = self.data.lock().expect("federation_frontier_exchange lock");
+        let key = (realm_id.to_owned(), peer_service_did.to_owned());
+        let record = frontier_exchange_failure_record(
+            data.get(&key).cloned(),
+            realm_id,
+            peer_service_did,
+            reason,
+            observed_at,
+        );
+        data.insert(key, record.clone());
+        Ok(record)
+    }
+
+    async fn snapshot_all(&self) -> PersistenceResult<Vec<FederationFrontierExchangeRecord>> {
+        let data = self.data.lock().expect("federation_frontier_exchange lock");
+        Ok(data.values().cloned().collect())
+    }
+}
 
 #[derive(Default)]
 pub(crate) struct MemoryFederationOperationsStore {
@@ -535,6 +683,123 @@ impl FederationOutboxStore for PgFederationOutboxStore {
     }
 }
 
+pub(crate) struct PgFederationFrontierExchangeStore {
+    pub(crate) pool: PgPool,
+}
+
+#[async_trait]
+impl FederationFrontierExchangeStore for PgFederationFrontierExchangeStore {
+    async fn get(
+        &self,
+        realm_id: &str,
+        peer_service_did: &str,
+    ) -> PersistenceResult<Option<FederationFrontierExchangeRecord>> {
+        let mut conn = pg_conn(&self.pool).await?;
+        let realm_id_uuid = ids::typed_uuid_part_or_panic(realm_id);
+        sql_query(
+            "SELECT realm_id, peer_service_did, status, consecutive_failures, \
+             last_success_at, last_failure_at, last_frontier_root, last_error, updated_at \
+             FROM federation_frontier_exchange \
+             WHERE realm_id = $1 AND peer_service_did = $2",
+        )
+        .bind::<SqlUuid, _>(realm_id_uuid)
+        .bind::<Text, _>(peer_service_did)
+        .get_result::<FederationFrontierExchangeRow>(&mut *conn)
+        .await
+        .optional()
+        .map(|row| row.map(FederationFrontierExchangeRecord::from))
+        .map_err(PersistenceError::from)
+    }
+
+    async fn record_success(
+        &self,
+        realm_id: &str,
+        peer_service_did: &str,
+        frontier_root: &str,
+        observed_at: i64,
+    ) -> PersistenceResult<FederationFrontierExchangeRecord> {
+        let existing = self.get(realm_id, peer_service_did).await?;
+        let record = frontier_exchange_success_record(
+            existing,
+            realm_id,
+            peer_service_did,
+            frontier_root,
+            observed_at,
+        );
+        self.put_record(&record).await?;
+        Ok(record)
+    }
+
+    async fn record_failure(
+        &self,
+        realm_id: &str,
+        peer_service_did: &str,
+        reason: &str,
+        observed_at: i64,
+    ) -> PersistenceResult<FederationFrontierExchangeRecord> {
+        let existing = self.get(realm_id, peer_service_did).await?;
+        let record = frontier_exchange_failure_record(
+            existing,
+            realm_id,
+            peer_service_did,
+            reason,
+            observed_at,
+        );
+        self.put_record(&record).await?;
+        Ok(record)
+    }
+
+    async fn snapshot_all(&self) -> PersistenceResult<Vec<FederationFrontierExchangeRecord>> {
+        let mut conn = pg_conn(&self.pool).await?;
+        let rows = sql_query(
+            "SELECT realm_id, peer_service_did, status, consecutive_failures, \
+             last_success_at, last_failure_at, last_frontier_root, last_error, updated_at \
+             FROM federation_frontier_exchange ORDER BY updated_at ASC, realm_id ASC, peer_service_did ASC",
+        )
+        .load::<FederationFrontierExchangeRow>(&mut *conn)
+        .await
+        .map_err(PersistenceError::from)?;
+        Ok(rows
+            .into_iter()
+            .map(FederationFrontierExchangeRecord::from)
+            .collect())
+    }
+}
+
+impl PgFederationFrontierExchangeStore {
+    async fn put_record(&self, record: &FederationFrontierExchangeRecord) -> PersistenceResult<()> {
+        let mut conn = pg_conn(&self.pool).await?;
+        let realm_id_uuid = ids::typed_uuid_part_or_panic(&record.realm_id);
+        sql_query(
+            "INSERT INTO federation_frontier_exchange \
+             (realm_id, peer_service_did, status, consecutive_failures, last_success_at, \
+              last_failure_at, last_frontier_root, last_error, updated_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) \
+             ON CONFLICT (realm_id, peer_service_did) DO UPDATE SET \
+             status = EXCLUDED.status, \
+             consecutive_failures = EXCLUDED.consecutive_failures, \
+             last_success_at = EXCLUDED.last_success_at, \
+             last_failure_at = EXCLUDED.last_failure_at, \
+             last_frontier_root = EXCLUDED.last_frontier_root, \
+             last_error = EXCLUDED.last_error, \
+             updated_at = EXCLUDED.updated_at",
+        )
+        .bind::<SqlUuid, _>(realm_id_uuid)
+        .bind::<Text, _>(&record.peer_service_did)
+        .bind::<Text, _>(&record.status)
+        .bind::<Integer, _>(record.consecutive_failures)
+        .bind::<Nullable<BigInt>, _>(record.last_success_at)
+        .bind::<Nullable<BigInt>, _>(record.last_failure_at)
+        .bind::<Nullable<Text>, _>(record.last_frontier_root.as_deref())
+        .bind::<Nullable<Text>, _>(record.last_error.as_deref())
+        .bind::<BigInt, _>(record.updated_at)
+        .execute(&mut *conn)
+        .await
+        .map(|_| ())
+        .map_err(PersistenceError::from)
+    }
+}
+
 pub(crate) struct PgFederationOperationsStore {
     pub(crate) pool: PgPool,
 }
@@ -629,6 +894,44 @@ impl FederationOperationsStore for PgFederationOperationsStore {
 // payload where applicable) plus the full canonical envelope in a JSONB
 // column. The trait surface itself is the architectural contract; the
 // Pg + Memory backends both implement it identically.
+
+#[derive(QueryableByName)]
+struct FederationFrontierExchangeRow {
+    #[diesel(sql_type = SqlUuid)]
+    realm_id: Uuid,
+    #[diesel(sql_type = Text)]
+    peer_service_did: String,
+    #[diesel(sql_type = Text)]
+    status: String,
+    #[diesel(sql_type = Integer)]
+    consecutive_failures: i32,
+    #[diesel(sql_type = Nullable<BigInt>)]
+    last_success_at: Option<i64>,
+    #[diesel(sql_type = Nullable<BigInt>)]
+    last_failure_at: Option<i64>,
+    #[diesel(sql_type = Nullable<Text>)]
+    last_frontier_root: Option<String>,
+    #[diesel(sql_type = Nullable<Text>)]
+    last_error: Option<String>,
+    #[diesel(sql_type = BigInt)]
+    updated_at: i64,
+}
+
+impl From<FederationFrontierExchangeRow> for FederationFrontierExchangeRecord {
+    fn from(row: FederationFrontierExchangeRow) -> Self {
+        Self {
+            realm_id: ids::format_typed_uuid("realm", &row.realm_id),
+            peer_service_did: row.peer_service_did,
+            status: row.status,
+            consecutive_failures: row.consecutive_failures,
+            last_success_at: row.last_success_at,
+            last_failure_at: row.last_failure_at,
+            last_frontier_root: row.last_frontier_root,
+            last_error: row.last_error,
+            updated_at: row.updated_at,
+        }
+    }
+}
 
 #[derive(QueryableByName)]
 struct FederationTransactionRow {

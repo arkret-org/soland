@@ -245,3 +245,28 @@ fn federation_binding_accepts_registry_reducer_profile_digest() {
     SolandEventsSubmitRequestBody::validate_federation_service_binding(&req.service_binding_ref)
         .unwrap();
 }
+
+#[test]
+fn federation_delivery_binding_frontier_rejects_empty_or_stale_basis() {
+    let event_id =
+        cokret_sdk::EventId::new("ck:event:01904100-0000-7000-8000-000000000001").unwrap();
+    let current = vec!["ck:event:01904100-0000-7000-8000-000000000001".to_owned()];
+
+    federation_delivery_binding_frontier_is_current(std::slice::from_ref(&event_id), current)
+        .unwrap();
+
+    let stale = cokret_sdk::EventId::new("ck:event:01904100-0000-7000-8000-000000000002").unwrap();
+    let err = federation_delivery_binding_frontier_is_current(
+        &[stale],
+        vec!["ck:event:01904100-0000-7000-8000-000000000001".to_owned()],
+    )
+    .unwrap_err();
+    assert_eq!(err, "delivery_binding_stale");
+
+    let err = federation_delivery_binding_frontier_is_current(
+        &[],
+        vec!["ck:event:01904100-0000-7000-8000-000000000001".to_owned()],
+    )
+    .unwrap_err();
+    assert_eq!(err, "schema_violation");
+}

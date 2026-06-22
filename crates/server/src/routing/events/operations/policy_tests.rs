@@ -175,6 +175,15 @@ async fn register_agent_selection(
         .expect("agent participation selection");
 }
 
+fn agent_context(agent_principal_id: &str, authorization_ref: &str) -> serde_json::Value {
+    json!({
+        "agent_id": agent_principal_id,
+        "operator_or_controller": "did:web:alice.example",
+        "authorization_ref": authorization_ref,
+        "execution_purpose": "test_action",
+    })
+}
+
 fn act_on_behalf_message(
     realm_id: cokret_sdk::RealmId,
     seed: &str,
@@ -188,10 +197,12 @@ fn act_on_behalf_message(
         "content": [{"type": "text", "text": "approved"}],
     });
     if let Some(authorization_ref) = authorization_ref {
-        payload
-            .as_object_mut()
-            .expect("payload object")
-            .insert("authorization_ref".to_owned(), json!(authorization_ref));
+        let object = payload.as_object_mut().expect("payload object");
+        object.insert("authorization_ref".to_owned(), json!(authorization_ref));
+        object.insert(
+            "agent_context".to_owned(),
+            agent_context(agent_principal_id, authorization_ref),
+        );
     }
     if let Some((request_id, approval_nonce)) = approval {
         let object = payload.as_object_mut().expect("payload object");
@@ -229,7 +240,7 @@ fn insert_approved_agent_action(
                 approval: Some(crate::reducer::AgentActionApprovalProjection {
                     approval_id: "ck:agent_approval:01904100-0000-7000-8000-0000000007aa"
                         .to_owned(),
-                    proposed_action: kinds::CK_MESSAGE_CREATE.to_owned(),
+                    proposed_action: kinds::canonical_kind_string(message),
                     target: json!({
                         "kind": "realm",
                         "realm_id": message.realm_id.as_str(),
@@ -430,6 +441,233 @@ async fn act_on_behalf_agent_non_message_write_requires_authorization_ref() {
             .await
             .unwrap_err(),
         "agent_act_on_behalf_authorization_ref_missing"
+    );
+}
+
+#[tokio::test]
+async fn act_on_behalf_agent_strand_write_requires_agent_context() {
+    let state = test_state();
+    let realm_id =
+        cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-0000000007c1".to_owned())
+            .unwrap();
+    let agent = "did:web:agent.example";
+    register_agent_selection(&state, &realm_id, agent, true, true).await;
+    let grant = state.authz.create_grant(
+        realm_id.to_string(),
+        "did:web:alice.example".to_owned(),
+        agent.to_owned(),
+        realm_id.to_string(),
+        vec![kinds::CK_STRAND_CREATE.to_owned()],
+        Vec::new(),
+    );
+    let operation = op(
+        realm_id,
+        "0000000007c1",
+        kinds::CK_STRAND_CREATE,
+        json!({
+            "sender": "did:web:alice.example",
+            "executed_by": agent,
+            "authorization_ref": grant.grant_id,
+            "object": {
+                "id": "ck:strand:01904100-0000-7000-8000-0000000007c1",
+                "metadata": {"title": "Work"}
+            }
+        }),
+    );
+
+    assert_eq!(
+        validate_agent_reply_participation(&state, &[operation])
+            .await
+            .unwrap_err(),
+        "agent_context_missing"
+    );
+}
+
+#[tokio::test]
+async fn act_on_behalf_agent_relation_write_rejects_context_authorization_mismatch() {
+    let state = test_state();
+    let realm_id =
+        cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-0000000007c2".to_owned())
+            .unwrap();
+    let agent = "did:web:agent.example";
+    register_agent_selection(&state, &realm_id, agent, true, true).await;
+    let envelope_grant = state.authz.create_grant(
+        realm_id.to_string(),
+        "did:web:alice.example".to_owned(),
+        agent.to_owned(),
+        realm_id.to_string(),
+        vec![kinds::CK_RELATION_CREATE.to_owned()],
+        Vec::new(),
+    );
+    let context_grant = state.authz.create_grant(
+        realm_id.to_string(),
+        "did:web:alice.example".to_owned(),
+        agent.to_owned(),
+        realm_id.to_string(),
+        vec![kinds::CK_RELATION_CREATE.to_owned()],
+        Vec::new(),
+    );
+    let operation = op(
+        realm_id,
+        "0000000007c2",
+        kinds::CK_RELATION_CREATE,
+        json!({
+            "sender": "did:web:alice.example",
+            "executed_by": agent,
+            "authorization_ref": envelope_grant.grant_id,
+            "agent_context": agent_context(agent, context_grant.grant_id.as_str()),
+            "relation_id": "ck:relation:01904100-0000-7000-8000-0000000007c2",
+            "relation_kind": "references",
+            "from_ref": "ck:strand:01904100-0000-7000-8000-0000000007c2",
+            "to_ref": "ck:strand:01904100-0000-7000-8000-0000000007c3"
+        }),
+    );
+
+    assert_eq!(
+        validate_agent_reply_participation(&state, &[operation])
+            .await
+            .unwrap_err(),
+        "agent_context_authorization_ref_mismatch"
+    );
+}
+
+#[tokio::test]
+async fn provenance_actor_kind_agent_requires_agent_context_for_non_message_write() {
+    let state = test_state();
+    let realm_id =
+        cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-0000000007c3".to_owned())
+            .unwrap();
+    let operation = op(
+        realm_id,
+        "0000000007c3",
+        kinds::CK_RELATION_CREATE,
+        json!({
+            "sender": "did:web:alice.example",
+            "provenance": {
+                "actor_kind": "agent"
+            },
+            "relation_id": "ck:relation:01904100-0000-7000-8000-0000000007c3",
+            "relation_kind": "references",
+            "from_ref": "ck:strand:01904100-0000-7000-8000-0000000007c4",
+            "to_ref": "ck:strand:01904100-0000-7000-8000-0000000007c5"
+        }),
+    );
+
+    assert_eq!(
+        validate_agent_reply_participation(&state, &[operation])
+            .await
+            .unwrap_err(),
+        "agent_context_missing"
+    );
+}
+
+#[tokio::test]
+async fn act_on_behalf_agent_view_write_allows_valid_agent_context_and_approval() {
+    let state = test_state();
+    let realm_id =
+        cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-0000000007c4".to_owned())
+            .unwrap();
+    let agent = "did:web:agent.example";
+    register_agent_selection(&state, &realm_id, agent, true, true).await;
+    let grant = state.authz.create_grant(
+        realm_id.to_string(),
+        "did:web:alice.example".to_owned(),
+        agent.to_owned(),
+        realm_id.to_string(),
+        vec![kinds::CK_VIEW_CREATE.to_owned()],
+        Vec::new(),
+    );
+    let grant_id = grant.grant_id.clone();
+    let operation = op(
+        realm_id,
+        "0000000007c4",
+        kinds::CK_VIEW_CREATE,
+        json!({
+            "sender": "did:web:alice.example",
+            "executed_by": agent,
+            "authorization_ref": grant_id.as_str(),
+            "agent_context": agent_context(agent, grant_id.as_str()),
+            "view_id": "ck:view:01904100-0000-7000-8000-0000000007c4",
+            "approval_request_id": "request-7c4",
+            "approval_nonce": "nonce-7c4"
+        }),
+    );
+    insert_approved_agent_action(&state, &operation, "request-7c4", agent, "nonce-7c4");
+
+    validate_agent_reply_participation(&state, &[operation])
+        .await
+        .expect("valid agent_context must allow non-message act-on-behalf writes");
+}
+
+#[tokio::test]
+async fn act_on_behalf_agent_unknown_kind_rejects_authorization_action() {
+    let state = test_state();
+    let realm_id =
+        cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-0000000007c5".to_owned())
+            .unwrap();
+    let agent = "did:web:agent.example";
+    register_agent_selection(&state, &realm_id, agent, true, true).await;
+    let grant = state.authz.create_grant(
+        realm_id.to_string(),
+        "did:web:alice.example".to_owned(),
+        agent.to_owned(),
+        realm_id.to_string(),
+        vec!["*".to_owned()],
+        Vec::new(),
+    );
+    let grant_id = grant.grant_id.clone();
+    let operation = op(
+        realm_id,
+        "0000000007c5",
+        "ck.agent.unknown.write",
+        json!({
+            "sender": "did:web:alice.example",
+            "executed_by": agent,
+            "authorization_ref": grant_id.as_str(),
+            "agent_context": agent_context(agent, grant_id.as_str()),
+        }),
+    );
+
+    assert_eq!(
+        validate_agent_reply_participation(&state, &[operation])
+            .await
+            .unwrap_err(),
+        "agent_act_on_behalf_authorization_action_unsupported"
+    );
+}
+
+#[tokio::test]
+async fn reply_agent_unknown_kind_rejects_context_authorization_action() {
+    let state = test_state();
+    let realm_id =
+        cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-0000000007c6".to_owned())
+            .unwrap();
+    let agent = "did:web:agent.example";
+    register_agent_selection(&state, &realm_id, agent, true, true).await;
+    let grant = state.authz.create_grant(
+        realm_id.to_string(),
+        "did:web:alice.example".to_owned(),
+        agent.to_owned(),
+        realm_id.to_string(),
+        vec!["*".to_owned()],
+        Vec::new(),
+    );
+    let grant_id = grant.grant_id.clone();
+    let operation = op(
+        realm_id,
+        "0000000007c6",
+        "ck.agent.unknown.reply",
+        json!({
+            "sender": agent,
+            "agent_context": agent_context(agent, grant_id.as_str()),
+        }),
+    );
+
+    assert_eq!(
+        validate_agent_reply_participation(&state, &[operation])
+            .await
+            .unwrap_err(),
+        "agent_context_authorization_action_unsupported"
     );
 }
 

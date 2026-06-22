@@ -454,6 +454,18 @@ CREATE TABLE public.federation_outbox_dead_letter (
     reason text NOT NULL
 );
 
+CREATE TABLE public.federation_frontier_exchange (
+    realm_id uuid NOT NULL,
+    peer_service_did text NOT NULL,
+    status text NOT NULL,
+    consecutive_failures integer DEFAULT 0 NOT NULL,
+    last_success_at bigint,
+    last_failure_at bigint,
+    last_frontier_root text,
+    last_error text,
+    updated_at bigint NOT NULL
+);
+
 CREATE TABLE public.federation_transactions (
     id uuid NOT NULL,
     source_service text NOT NULL,
@@ -1157,6 +1169,9 @@ ALTER TABLE ONLY public.federation_outbox_dead_letter
 ALTER TABLE ONLY public.federation_outbox
     ADD CONSTRAINT federation_outbox_pkey PRIMARY KEY (id);
 
+ALTER TABLE ONLY public.federation_frontier_exchange
+    ADD CONSTRAINT federation_frontier_exchange_pkey PRIMARY KEY (realm_id, peer_service_did);
+
 ALTER TABLE ONLY public.federation_transactions
     ADD CONSTRAINT federation_transactions_pkey PRIMARY KEY (id);
 
@@ -1407,6 +1422,8 @@ CREATE INDEX federation_outbox_dead_letter_failed_at ON public.federation_outbox
 CREATE UNIQUE INDEX federation_outbox_peer_idem ON public.federation_outbox USING btree (peer_id, idempotency_key);
 
 CREATE INDEX federation_outbox_pending ON public.federation_outbox USING btree (delivered_at, next_attempt_at);
+
+CREATE INDEX federation_frontier_exchange_status_idx ON public.federation_frontier_exchange USING btree (status, updated_at);
 
 CREATE INDEX federation_transactions_destination_received_idx ON public.federation_transactions USING btree (destination_service, received_at);
 

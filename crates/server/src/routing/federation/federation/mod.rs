@@ -85,6 +85,7 @@ pub(super) use endpoints::{
 // Local inbound write-rail guard, used by the parent module's Move/Seal
 // ingest handlers (`super::federation::ensure_private_inbound_write_rail_local`).
 pub(super) use inbound_policy::ensure_private_inbound_write_rail_local;
+pub(crate) use outbound::configured_peer_targets;
 #[cfg(test)]
 pub(crate) use outbound::test_app_state_with_peers;
 #[cfg(test)]

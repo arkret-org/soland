@@ -122,6 +122,7 @@ pub trait PersistenceStore: Send + Sync {
     fn devices(&self) -> &dyn DeviceInventoryStore;
     fn federation_transactions(&self) -> &dyn FederationTransactionStore;
     fn federation_outbox(&self) -> &dyn FederationOutboxStore;
+    fn federation_frontier_exchange(&self) -> &dyn FederationFrontierExchangeStore;
     fn handle_releases(&self) -> &dyn HandleReleaseStore;
     fn retention_policies(&self) -> &dyn RetentionPolicyStore;
     fn retention_tombstones(&self) -> &dyn RetentionTombstoneStore;

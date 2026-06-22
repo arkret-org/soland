@@ -9,12 +9,12 @@ use super::{now, sha256_hex};
 use crate::state::{AppState, FederationTransactionRecord};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct FederationPeerTarget {
-    pub(super) url: String,
-    pub(super) did: String,
+pub(crate) struct FederationPeerTarget {
+    pub(crate) url: String,
+    pub(crate) did: String,
 }
 
-pub(super) fn configured_peer_targets(state: &AppState) -> Vec<FederationPeerTarget> {
+pub(crate) fn configured_peer_targets(state: &AppState) -> Vec<FederationPeerTarget> {
     use crate::config::FederationPolicy;
     let entries: Vec<String> = match state.config.federation_policy {
         FederationPolicy::Mesh => state.config.federation_peers.clone(),

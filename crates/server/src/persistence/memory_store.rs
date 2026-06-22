@@ -18,6 +18,7 @@ pub struct SolandMemoryPersistenceStore {
     devices: MemoryDeviceInventoryStore,
     federation_transactions: MemoryFederationTransactionStore,
     federation_outbox: MemoryFederationOutboxStore,
+    federation_frontier_exchange: MemoryFederationFrontierExchangeStore,
     handle_releases: MemoryHandleReleaseStore,
     retention_policies: MemoryRetentionPolicyStore,
     retention_tombstones: MemoryRetentionTombstoneStore,
@@ -79,6 +80,7 @@ impl SolandMemoryPersistenceStore {
             devices: MemoryDeviceInventoryStore::new(),
             federation_transactions: MemoryFederationTransactionStore::new(),
             federation_outbox: MemoryFederationOutboxStore::new(),
+            federation_frontier_exchange: MemoryFederationFrontierExchangeStore::new(),
             handle_releases: MemoryHandleReleaseStore::new(),
             retention_policies: MemoryRetentionPolicyStore::new(),
             retention_tombstones: MemoryRetentionTombstoneStore::new(),
@@ -186,6 +188,10 @@ impl PersistenceStore for SolandMemoryPersistenceStore {
 
     fn federation_outbox(&self) -> &dyn FederationOutboxStore {
         &self.federation_outbox
+    }
+
+    fn federation_frontier_exchange(&self) -> &dyn FederationFrontierExchangeStore {
+        &self.federation_frontier_exchange
     }
 
     fn handle_releases(&self) -> &dyn HandleReleaseStore {

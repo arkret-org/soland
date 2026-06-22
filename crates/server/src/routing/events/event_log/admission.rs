@@ -73,6 +73,31 @@ impl SolandEventsSubmitRequestBody {
     }
 }
 
+pub fn federation_delivery_binding_frontier_is_current<I>(
+    request_frontier: &[EventId],
+    current_frontiers: I,
+) -> Result<(), &'static str>
+where
+    I: IntoIterator<Item = String>,
+{
+    if request_frontier.is_empty() {
+        return Err("schema_violation");
+    }
+    let current = current_frontiers
+        .into_iter()
+        .collect::<std::collections::BTreeSet<_>>();
+    if current.is_empty() {
+        return Err("delivery_binding_stale");
+    }
+    if request_frontier
+        .iter()
+        .any(|event_id| !current.contains(event_id.as_str()))
+    {
+        return Err("delivery_binding_stale");
+    }
+    Ok(())
+}
+
 /// Reject any event kind that is ephemeral or receipt-object-only at the
 /// `ck.self.events.command.submit` entrypoint. Spec T02 + T23.
 ///

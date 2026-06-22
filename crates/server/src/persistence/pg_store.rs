@@ -19,6 +19,7 @@ pub struct PgPersistenceStore {
     devices: PgDeviceInventoryStore,
     federation_transactions: PgFederationTransactionStore,
     federation_outbox: PgFederationOutboxStore,
+    federation_frontier_exchange: PgFederationFrontierExchangeStore,
     handle_releases: PgHandleReleaseStore,
     retention_policies: PgRetentionPolicyStore,
     retention_tombstones: PgRetentionTombstoneStore,
@@ -74,6 +75,7 @@ impl PgPersistenceStore {
             devices: PgDeviceInventoryStore { pool: pool.clone() },
             federation_transactions: PgFederationTransactionStore { pool: pool.clone() },
             federation_outbox: PgFederationOutboxStore { pool: pool.clone() },
+            federation_frontier_exchange: PgFederationFrontierExchangeStore { pool: pool.clone() },
             handle_releases: PgHandleReleaseStore { pool: pool.clone() },
             retention_policies: PgRetentionPolicyStore { pool: pool.clone() },
             retention_tombstones: PgRetentionTombstoneStore { pool: pool.clone() },
@@ -171,6 +173,10 @@ impl PersistenceStore for PgPersistenceStore {
 
     fn federation_outbox(&self) -> &dyn FederationOutboxStore {
         &self.federation_outbox
+    }
+
+    fn federation_frontier_exchange(&self) -> &dyn FederationFrontierExchangeStore {
+        &self.federation_frontier_exchange
     }
 
     fn handle_releases(&self) -> &dyn HandleReleaseStore {

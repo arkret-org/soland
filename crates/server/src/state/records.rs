@@ -679,6 +679,19 @@ pub struct FederationOutboxDeadLetterRecord {
     pub reason: String,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FederationFrontierExchangeRecord {
+    pub realm_id: String,
+    pub peer_service_did: String,
+    pub status: String,
+    pub consecutive_failures: i32,
+    pub last_success_at: Option<i64>,
+    pub last_failure_at: Option<i64>,
+    pub last_frontier_root: Option<String>,
+    pub last_error: Option<String>,
+    pub updated_at: i64,
+}
+
 #[derive(Clone, Debug)]
 pub struct PresenceRecord {
     pub actor: String,
