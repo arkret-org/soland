@@ -12,6 +12,8 @@ use super::wire::FederationTrustHeaders;
 use crate::error::AppError;
 use crate::state::AppState;
 
+pub(super) const FEDERATION_AUTH_FAILURE_MESSAGE: &str = "federation request authentication failed";
+
 pub(super) fn validate_federation_request_binding(
     trust_domain: &str,
     req: &Request,
@@ -37,21 +39,15 @@ pub(super) fn validate_federation_headers(
     headers
         .verify_destination(expected_destination)
         .map_err(|_| {
-            AppError::new(
-                crate::error::ErrorCode::Unauthenticated,
+            cross_domain_replay_error(
                 "federation Destination-Trust-Domain header does not match this service",
             )
-            .with_status(StatusCode::CONFLICT)
-            .with_wire_code(crate::error::reasons::CROSS_DOMAIN_REPLAY_REJECTED)
         })?;
     if request_hash != headers.request_canonical_digest.as_str() {
         crate::metrics::record_digest_mismatch("federation_request_binding");
-        return Err(AppError::new(
-            crate::error::ErrorCode::Unauthenticated,
+        return Err(cross_domain_replay_error(
             "Request-Canonical-Digest does not match the canonical request body",
-        )
-        .with_status(StatusCode::CONFLICT)
-        .with_wire_code(crate::error::reasons::CROSS_DOMAIN_REPLAY_REJECTED));
+        ));
     }
     Ok(())
 }
@@ -800,7 +796,26 @@ fn did_host_from_service_did(service_did: &str) -> Option<String> {
 }
 
 fn signature_error(message: impl Into<String>) -> AppError {
-    AppError::unauthenticated(message.into())
+    let detail = message.into();
+    tracing::warn!(
+        federation_auth_detail = %detail,
+        "federation request authentication failed"
+    );
+    AppError::unauthenticated(FEDERATION_AUTH_FAILURE_MESSAGE)
+}
+
+fn cross_domain_replay_error(message: impl Into<String>) -> AppError {
+    let detail = message.into();
+    tracing::warn!(
+        federation_auth_detail = %detail,
+        "federation cross-domain replay check failed"
+    );
+    AppError::new(
+        crate::error::ErrorCode::Unauthenticated,
+        FEDERATION_AUTH_FAILURE_MESSAGE,
+    )
+    .with_status(StatusCode::CONFLICT)
+    .with_wire_code(crate::error::reasons::CROSS_DOMAIN_REPLAY_REJECTED)
 }
 
 #[cfg(test)]
@@ -814,6 +829,18 @@ mod tests {
                 "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:local.host:webvh:service"
             ),
             "ck:trust_domain:local.host"
+        );
+    }
+
+    #[test]
+    fn federation_auth_errors_share_public_message() {
+        assert_eq!(
+            signature_error("missing required federation header: signature").message,
+            FEDERATION_AUTH_FAILURE_MESSAGE
+        );
+        assert_eq!(
+            cross_domain_replay_error("Destination-Trust-Domain mismatch").message,
+            FEDERATION_AUTH_FAILURE_MESSAGE
         );
     }
 }

@@ -25,8 +25,9 @@ use cokret_sdk::http::{
 use cokret_sdk::{
     ActorFrontierView, Audience, Did, Event, EventId, EventRef, EventsFrontierAccountClientState,
     EventsFrontierView, EventsSubmitFederationRequestBody, FederationServiceBindingRef, Hash, Hlc,
-    Operation, OperationId, Proof, RealmId, RealmSealFrontierView, TypedTrustDomainId, canonical,
-    proof_kind,
+    MAX_EVENT_ENVELOPE_BYTES, MAX_EVENT_PREV_REFS, MAX_EVENT_REFS, MAX_EVENT_RESOLVE,
+    MAX_EVENT_SUBMIT_BATCH, Operation, OperationId, Proof, RealmId, RealmSealFrontierView,
+    TypedTrustDomainId, canonical, proof_kind,
 };
 use ed25519_dalek::Verifier as _;
 use salvo::http::StatusCode;
@@ -51,17 +52,10 @@ use crate::state::{AppState, CanonicalEventRecord, SessionRecord};
 use crate::wire::describe;
 use crate::{artifacts, kinds};
 
-const MAX_EVENT_BYTES: usize = 64 * 1024;
 // scalability-constraints.md §2: prev_refs ≤ 128 (with MUST-dedup), refs[] total
 // ≤ 128, and the `authorized_by` role ≤ 64 within that total. These are the v1
 // interop maxima a conformant receiver MUST accept; a stricter local cap would
 // reject another node's valid wire object (spec §1).
-const MAX_EVENT_PREV_REFS: usize = 128;
-const MAX_EVENT_REFS: usize = 128;
-const MAX_AUTHORIZED_BY_REFS: usize = 64;
-const MAX_EVENT_RESOLVE: usize = 100;
-const MAX_EVENT_SUBMIT_BATCH: usize = 100;
-
 mod admission;
 use admission::policy_components_value_from_state_payload;
 pub use admission::{

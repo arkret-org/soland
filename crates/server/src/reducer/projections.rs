@@ -21,6 +21,13 @@ pub struct PushRouteSubject {
     pub push_route: String,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CallStateFieldHead {
+    pub basis: String,
+    pub operation_id: String,
+    pub value: String,
+}
+
 #[derive(Clone, Debug)]
 pub struct PendingReplayEntry {
     pub target_ref: String,

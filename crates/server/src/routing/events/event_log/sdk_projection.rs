@@ -15,7 +15,7 @@ pub(crate) fn event_semantic_refs(
         ));
     };
     // scalability-constraints.md §2 — total refs[] across all roles ≤ 128.
-    if values.len() > max_len {
+    if values.len() > max_len || cokret_sdk::validate_event_ref_count(values.len()).is_err() {
         return Err(event_validation_error(
             StatusCode::BAD_REQUEST,
             "refs_too_large",
@@ -59,7 +59,7 @@ pub(crate) fn event_semantic_refs(
     // scalability-constraints.md §2 — the `authorized_by` role is capped at 64
     // within the 128 total; authorized_by refs MUST be the minimal authorizing
     // state set (event-and-patch.md §2.2).
-    if authorized_refs.len() > MAX_AUTHORIZED_BY_REFS {
+    if cokret_sdk::validate_authorized_by_ref_count(authorized_refs.len()).is_err() {
         return Err(event_validation_error(
             StatusCode::BAD_REQUEST,
             "refs_too_large",
@@ -915,7 +915,7 @@ mod refs_limit_tests {
     // §2 — `authorized_by` role ≤ 64 within the 128 total.
     #[test]
     fn authorized_by_over_max_rejected_as_refs_too_large() {
-        let refs: Vec<Value> = (0..(MAX_AUTHORIZED_BY_REFS + 1))
+        let refs: Vec<Value> = (0..(cokret_sdk::MAX_AUTHORIZED_BY_REFS + 1))
             .map(|_| json!({"id": "ck:event:e1", "role": "authorized_by"}))
             .collect();
         let err = event_semantic_refs(&refs_object(json!(refs)), MAX_EVENT_REFS).unwrap_err();

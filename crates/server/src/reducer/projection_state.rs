@@ -183,6 +183,10 @@ pub struct ProjectionState {
     /// reducer rejects any subsequent write with
     /// `session_focus_already_committed` (REDU-3).
     pub call_session_focus: BTreeMap<String, String>,
+    /// Per-field heads for `ck.call.state` fsm dimensions. Keyed by
+    /// `(call_id, field_name)` and used only to detect same-basis sibling
+    /// writes that target the same fsm dimension with different values.
+    pub call_state_field_heads: BTreeMap<(String, String), CallStateFieldHead>,
     /// R3.1 — Realm-link projection. Outer key is the source
     /// `realm_id` (the envelope `realm_id` of a `ck.realm.link` event);
     /// the inner Vec accumulates every directed link the Realm has

@@ -2,7 +2,9 @@ use chrono::{DateTime, Utc};
 pub use cokret_sdk::ops_api::HardeningStatus;
 use cokret_sdk::{
     AccountAuthority, AuthGrantExchange, AuthMetadata, AuthMethod, AuthMethodKind,
-    ClaimedProfileEntry, ServerDescription, SessionGrantProofKind,
+    ClaimedProfileEntry, MAX_AUTHORIZED_BY_REFS, MAX_DELEGATION_CHAIN_DEPTH,
+    MAX_EVENT_ENVELOPE_BYTES, MAX_EVENT_PREV_REFS, MAX_EVENT_REFS, MAX_EVENT_SUBMIT_BATCH,
+    ServerDescription, SessionGrantProofKind,
 };
 pub use cokret_sdk::{
     ContactListRow, ContactState, DeviceMessageEnvelope, DeviceMessageTarget,
@@ -1139,14 +1141,15 @@ pub fn describe(
             },
             "scalability_constraints": {
                 "source": "cokret-spec/spec/v1/zh/conformance/scalability-constraints.md",
-                "max_event_bytes": 65536,
-                "max_events_batch_submit": 100,
+                "max_event_bytes": MAX_EVENT_ENVELOPE_BYTES,
+                "max_events_batch_submit": MAX_EVENT_SUBMIT_BATCH,
                 "max_federation_transaction_events": 500,
                 "max_page_items": 100,
-                "max_prev_refs": 32,
-                "max_auth_refs": 64,
+                "max_prev_refs": MAX_EVENT_PREV_REFS,
+                "max_refs": MAX_EVENT_REFS,
+                "max_auth_refs": MAX_AUTHORIZED_BY_REFS,
                 "max_relation_expansion_depth": 32,
-                "max_delegation_depth": 4,
+                "max_delegation_depth": MAX_DELEGATION_CHAIN_DEPTH,
                 "max_grants_per_decision": 1024,
                 "max_grant_constraints": 64,
                 "max_resource_selector_depth": 16,
@@ -1362,6 +1365,22 @@ mod tests {
         assert_eq!(
             value["limits"]["resumable_upload_max_bytes"],
             json!(10 * 1024 * 1024)
+        );
+        assert_eq!(
+            value["limits"]["scalability_constraints"]["max_event_bytes"],
+            json!(cokret_sdk::MAX_EVENT_ENVELOPE_BYTES)
+        );
+        assert_eq!(
+            value["limits"]["scalability_constraints"]["max_events_batch_submit"],
+            json!(cokret_sdk::MAX_EVENT_SUBMIT_BATCH)
+        );
+        assert_eq!(
+            value["limits"]["scalability_constraints"]["max_prev_refs"],
+            json!(cokret_sdk::MAX_EVENT_PREV_REFS)
+        );
+        assert_eq!(
+            value["limits"]["scalability_constraints"]["max_refs"],
+            json!(cokret_sdk::MAX_EVENT_REFS)
         );
         assert_eq!(
             value["limits"]["search"]["directory"]["returns_message_hits"],

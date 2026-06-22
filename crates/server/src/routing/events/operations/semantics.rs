@@ -694,12 +694,12 @@ pub fn operation_schema_for_kind(kind: &str) -> Option<OperationPayloadSchema> {
         // `project_device_authorize`, which persists the authoritative
         // `device_public_key` + verified state into the devices inventory
         // (without it the device row stays `unverified` with no key and the
-        // client falsely shows the "existing device approval" gate). The binding
-        // itself is already verified at ingest
-        // (`validate_device_authorize_binding`), so no extra payload validator.
+        // client falsely shows the "existing device approval" gate). The SDK
+        // validator owns payload shape and binding oneOf; policy validation then
+        // verifies any cross_signing_binding at ingest.
         kinds::CK_DEVICE_AUTHORIZE => OperationPayloadSchema {
             requirements: DEVICE_AUTHORIZE_REQUIREMENTS,
-            validate: None,
+            validate: Some(validate_device_authorize_payload),
         },
         _ => return None,
     };

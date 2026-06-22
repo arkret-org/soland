@@ -610,6 +610,9 @@ pub fn validate_device_authorize_binding(
     state: &AppState,
     payload: &Value,
 ) -> Result<(), &'static str> {
+    let payload_shape: cokret_sdk::DeviceAuthorizePayload = serde_json::from_value(payload.clone())
+        .map_err(|_| "ck.device.authorize payload violates SDK artifact schema")?;
+    payload_shape.validate_authorization_binding_one_of()?;
     let Some(binding) = payload
         .get("cross_signing_binding")
         .and_then(Value::as_object)

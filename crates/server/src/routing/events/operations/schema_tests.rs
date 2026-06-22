@@ -543,6 +543,35 @@ mod derived_relation_and_morph_immutability_tests {
         )
     }
 
+    #[test]
+    fn device_authorize_rejects_multiple_authorization_bindings() {
+        let operation = op(
+            kinds::CK_DEVICE_AUTHORIZE,
+            json!({
+                "principal_id": "did:web:alice.example",
+                "device_id": "ck:device:01904100-0000-7000-8000-000000000001",
+                "device_public_key": "z6MkDeviceKey",
+                "authorized_by": "did:web:alice.example",
+                "not_before": "2026-05-30T00:00:00Z",
+                "device_signature": "c2ln",
+                "cross_signing_binding": {
+                    "verification_method": "did:web:alice.example#ssk",
+                    "alg": "EdDSA",
+                    "ssk_generation": 1,
+                    "signature": "c2ln"
+                },
+                "bootstrap_binding": {
+                    "kind": "inception_key",
+                    "did_method_evidence_ref": "did:web:alice.example#inception"
+                }
+            }),
+        );
+        assert_eq!(
+            validate_device_authorize_payload(&operation),
+            Err(cokret_sdk::DEVICE_AUTHORIZE_BINDING_ONE_OF_REASON)
+        );
+    }
+
     // relation.md §3.2 — `watches` is always a derived edge; a direct
     // ck.relation.create MUST be rejected.
     #[test]
@@ -577,7 +606,7 @@ mod derived_relation_and_morph_immutability_tests {
         );
         assert_eq!(
             validate_relation_operation_payload(&operation),
-            Err("relation_kind_contains_derived")
+            Err(cokret_sdk::error::REASON_RELATION_KIND_CONTAINS_DERIVED)
         );
     }
 

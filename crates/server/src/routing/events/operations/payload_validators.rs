@@ -1,5 +1,4 @@
 use cokret_sdk::Operation;
-use cokret_sdk::error::REASON_RELATION_KIND_WATCHES_DERIVED;
 use serde_json::Value;
 
 use super::*;
@@ -646,21 +645,10 @@ pub(crate) fn validate_relation_operation_payload(
     let Some(relation_kind) = relation_kind else {
         return Ok(());
     };
-    match relation_kind {
-        "watches" => Err(REASON_RELATION_KIND_WATCHES_DERIVED),
-        "contains" => {
-            let from_ref = ["from_ref", "from"]
-                .iter()
-                .find_map(|field| operation.payload.get(*field).and_then(Value::as_str))
-                .unwrap_or_default();
-            if from_ref.starts_with("ck:space:") {
-                Err("relation_kind_contains_derived")
-            } else {
-                Ok(())
-            }
-        }
-        _ => Ok(()),
-    }
+    let from_ref = ["from_ref", "from"]
+        .iter()
+        .find_map(|field| operation.payload.get(*field).and_then(Value::as_str));
+    cokret_sdk::validate_relation_direct_write(relation_kind, from_ref)
 }
 
 pub(crate) fn validate_morph_update_payload(operation: &Operation) -> Result<(), &'static str> {
@@ -852,6 +840,13 @@ pub(crate) fn validate_cross_signing_reset_payload(
         return Err("cross_signing_reset_clock_skew_exceeded");
     }
     Ok(())
+}
+
+pub(crate) fn validate_device_authorize_payload(operation: &Operation) -> Result<(), &'static str> {
+    let payload: cokret_sdk::DeviceAuthorizePayload =
+        serde_json::from_value(operation.payload.clone())
+            .map_err(|_| "ck.device.authorize payload violates SDK artifact schema")?;
+    payload.validate_authorization_binding_one_of()
 }
 
 pub(crate) fn validate_cross_signing_reset_replay_batch(

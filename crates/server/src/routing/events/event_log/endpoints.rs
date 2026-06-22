@@ -35,7 +35,10 @@ async fn events_describe(depot: &mut Depot) -> JsonResult<cokret_sdk::ServerDesc
         state.verified_profiles.as_ref(),
     );
     if let Some(limits) = description.limits.as_object_mut() {
-        limits.insert("max_event_bytes".to_owned(), json!(MAX_EVENT_BYTES));
+        limits.insert(
+            "max_event_bytes".to_owned(),
+            json!(MAX_EVENT_ENVELOPE_BYTES),
+        );
         limits.insert("max_prev_refs".to_owned(), json!(MAX_EVENT_PREV_REFS));
         limits.insert("max_refs".to_owned(), json!(MAX_EVENT_REFS));
         limits.insert("max_batch_size".to_owned(), json!(MAX_EVENT_SUBMIT_BATCH));

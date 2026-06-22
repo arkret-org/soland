@@ -6,8 +6,6 @@ use crate::invite_claim_proofs::{
     invite_claim_proof_context_from_projection, verify_invite_claim_proofs_for_operation,
 };
 
-const MAX_ACTOR_SEQ_SIBLINGS: usize = 16;
-
 static ACTOR_SUBMIT_LOCKS: OnceLock<Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>> =
     OnceLock::new();
 
@@ -143,7 +141,7 @@ pub(super) async fn submit_event_batch(
         );
         return;
     }
-    if envelopes.len() > MAX_EVENT_SUBMIT_BATCH {
+    if cokret_sdk::validate_event_submit_batch_count(envelopes.len()).is_err() {
         render_submit_one_error(
             res,
             SubmitOneError::new(
@@ -308,7 +306,7 @@ pub(crate) async fn submit_federation_events(
         );
         return;
     }
-    if submit.events.len() > MAX_EVENT_SUBMIT_BATCH {
+    if cokret_sdk::validate_event_submit_batch_count(submit.events.len()).is_err() {
         render_error(
             res,
             StatusCode::PAYLOAD_TOO_LARGE,
@@ -653,7 +651,7 @@ async fn enforce_sibling_fork_limit(
         .filter_map(|record| stored_prev_frontier_digest(record).ok())
         .filter(|digest| digest == &prev_frontier_digest)
         .count();
-    if sibling_count < MAX_ACTOR_SEQ_SIBLINGS {
+    if sibling_count < cokret_sdk::MAX_ACTOR_SEQ_SIBLINGS {
         return Ok(());
     }
     append_audit_log(
@@ -667,7 +665,7 @@ async fn enforce_sibling_fork_limit(
             "actor_seq": parsed.actor_seq,
             "prev_frontier_digest": prev_frontier_digest,
             "accepted_sibling_count": sibling_count,
-            "max_actor_seq_siblings": MAX_ACTOR_SEQ_SIBLINGS,
+            "max_actor_seq_siblings": cokret_sdk::MAX_ACTOR_SEQ_SIBLINGS,
         }),
         "fork_quarantine",
     )
@@ -693,13 +691,7 @@ fn stored_prev_frontier_digest(record: &CanonicalEventRecord) -> Result<String, 
 }
 
 fn prev_frontier_digest(prev_refs: &[String]) -> Result<String, SubmitOneError> {
-    let mut sorted = prev_refs.to_vec();
-    sorted.sort();
-    sorted.dedup();
-    canonical::canonical_sha256(&Value::Array(
-        sorted.into_iter().map(Value::String).collect(),
-    ))
-    .map_err(|error| {
+    cokret_sdk::prev_frontier_digest(prev_refs).map_err(|error| {
         SubmitOneError::new(
             StatusCode::BAD_REQUEST,
             "schema_violation",
@@ -720,7 +712,7 @@ pub(in crate::routing) async fn submit_event_value(
             "event envelope cannot be encoded",
         )
     })?;
-    if raw_bytes.len() > MAX_EVENT_BYTES {
+    if cokret_sdk::validate_event_envelope_byte_len(raw_bytes.len()).is_err() {
         return Err(SubmitOneError::new(
             StatusCode::PAYLOAD_TOO_LARGE,
             "payload_too_large",

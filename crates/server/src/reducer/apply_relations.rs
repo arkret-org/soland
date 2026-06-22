@@ -567,9 +567,6 @@ impl ProjectionState {
             .or_else(|| operation.payload.get("kind"))
             .and_then(Value::as_str)
             .unwrap_or_default();
-        if !matches!(relation_kind, "contains" | "belongs_to") {
-            return Ok(());
-        }
         let relation_realm = operation.realm_id.as_str();
         let endpoints = [
             operation
@@ -581,14 +578,17 @@ impl ProjectionState {
                 .get("to")
                 .or_else(|| operation.payload.get("to_ref")),
         ];
-        for endpoint in endpoints.into_iter().flatten().filter_map(Value::as_str) {
-            if let Some(endpoint_realm) = self.resolve_object_realm(endpoint) {
-                if endpoint_realm != relation_realm {
-                    return Err("cross_realm_structural_relation");
-                }
-            }
-        }
-        Ok(())
+        let endpoint_realms = endpoints
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .filter_map(|endpoint| self.resolve_object_realm(endpoint))
+            .collect::<Vec<_>>();
+        cokret_sdk::validate_structural_relation_same_realm(
+            relation_kind,
+            relation_realm,
+            endpoint_realms,
+        )
     }
 
     pub fn check_relation_invariants(&self, operation: &Operation) -> Result<(), &'static str> {
@@ -1079,11 +1079,11 @@ mod cross_realm_relation_tests {
     fn structural_contains_across_realms_is_rejected() {
         assert_eq!(
             proj().check_relation_cross_realm(&relation_op("contains", STRAND_A, STRAND_B)),
-            Err("cross_realm_structural_relation")
+            Err(cokret_sdk::error::REASON_CROSS_REALM_STRUCTURAL_RELATION)
         );
         assert_eq!(
             proj().check_relation_cross_realm(&relation_op("belongs_to", STRAND_A, STRAND_B)),
-            Err("cross_realm_structural_relation")
+            Err(cokret_sdk::error::REASON_CROSS_REALM_STRUCTURAL_RELATION)
         );
     }
 

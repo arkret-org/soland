@@ -298,6 +298,104 @@ fn call_state_lifecycle_fsm_enforces_transition_table() {
 }
 
 #[test]
+fn call_state_same_basis_sibling_state_conflict_projects_bottom() {
+    let mut state = ProjectionState::new();
+    let hlc = ServerHlc::new("test");
+    let realm = "ck:realm:01904100-0000-7000-8000-cfc039892063";
+    let call_id = "ck:call:01904100-0000-7000-8000-c00000000f05";
+    let initial_basis =
+        "ck:seal:sha256:0000000000000000000000000000000000000000000000000000000000000001";
+    let sibling_basis =
+        "ck:seal:sha256:0000000000000000000000000000000000000000000000000000000000000002";
+
+    assert!(matches!(
+        state.apply(
+            &make_operation(
+                crate::kinds::CK_CALL_STATE,
+                realm,
+                serde_json::json!({
+                    "call_id": call_id,
+                    "state": "ringing",
+                    "seal_ref": initial_basis
+                }),
+            ),
+            &hlc,
+        ),
+        ProjectionEffect::CallStateProjected { .. }
+    ));
+
+    let first = make_operation(
+        crate::kinds::CK_CALL_STATE,
+        realm,
+        serde_json::json!({
+            "call_id": call_id,
+            "state": "connecting",
+            "seal_ref": sibling_basis
+        }),
+    );
+    let first_id = first.operation_id.as_str().to_owned();
+    assert!(matches!(
+        state.apply(&first, &hlc),
+        ProjectionEffect::CallStateProjected { .. }
+    ));
+
+    let second = make_operation(
+        crate::kinds::CK_CALL_STATE,
+        realm,
+        serde_json::json!({
+            "call_id": call_id,
+            "state": "active",
+            "seal_ref": sibling_basis
+        }),
+    );
+    let second_id = second.operation_id.as_str().to_owned();
+    assert!(matches!(
+        state.apply(&second, &hlc),
+        ProjectionEffect::CallStateProjected { .. }
+    ));
+
+    let cell_id =
+        cokret_sdk::CellRef::new(format!("ck:cell:ck.component.call.state.v1:{call_id}")).unwrap();
+    let bottom = match state.cell(&cell_id) {
+        Some(CellState::Bottom(bottom)) => bottom,
+        other => panic!("expected call state bottom, got {other:?}"),
+    };
+    assert_eq!(bottom.kind, cokret_sdk::BottomKind::Conflict);
+    assert_eq!(
+        bottom
+            .details
+            .as_ref()
+            .and_then(|details| details.get("reason")),
+        Some(&Value::String("call_state_sibling_conflict".to_owned()))
+    );
+    assert_eq!(
+        bottom
+            .details
+            .as_ref()
+            .and_then(|details| details.get("field")),
+        Some(&Value::String("state".to_owned()))
+    );
+    let head_ids: Vec<_> = bottom
+        .heads
+        .iter()
+        .filter_map(|head| head.get("move_id").and_then(Value::as_str))
+        .collect();
+    assert_eq!(head_ids, vec![first_id.as_str(), second_id.as_str()]);
+
+    assert!(matches!(
+        state.apply(
+            &make_operation(
+                crate::kinds::CK_CALL_STATE,
+                realm,
+                serde_json::json!({ "call_id": call_id, "state": "failed" }),
+            ),
+            &hlc,
+        ),
+        ProjectionEffect::Rejected { reason } if reason == "cell_bottom_state"
+    ));
+}
+
+#[test]
 fn call_state_rejects_recording_artifact_pipeline_bypass() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");

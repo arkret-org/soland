@@ -159,6 +159,16 @@ impl ProjectionState {
             };
         };
         let call_id = call_id.to_owned();
+        let call_state_cell_id =
+            cokret_sdk::CellRef::new(format!("ck:cell:ck.component.call.state.v1:{call_id}")).ok();
+        if call_state_cell_id
+            .as_ref()
+            .is_some_and(|cell_id| matches!(self.cells.get(cell_id), Some(CellState::Bottom(_))))
+        {
+            return ProjectionEffect::Rejected {
+                reason: "cell_bottom_state".to_owned(),
+            };
+        }
 
         // §4.2 — `state` lifecycle FSM. The controlled `state` enum is written
         // into `ck.component.call.state.v1` (`cell_subject = call_id`). Read the
@@ -276,16 +286,31 @@ impl ProjectionState {
             };
         }
 
+        let incoming_fsm_updates = call_state_fsm_updates(&value);
         if let Ok(cell_id) =
             cokret_sdk::CellRef::new(format!("ck:cell:ck.component.call.state.v1:{call_id}"))
         {
+            if matches!(self.cells.get(&cell_id), Some(CellState::Bottom(_))) {
+                return ProjectionEffect::Rejected {
+                    reason: "cell_bottom_state".to_owned(),
+                };
+            }
+            let mut value = call_state_candidate_value(self.cells.get(&cell_id), value);
+            if let Some(effect) = self.maybe_project_call_state_bottom(
+                &call_id,
+                &cell_id,
+                &incoming_fsm_updates,
+                &value,
+                operation,
+            ) {
+                return effect;
+            }
             // Monotonic ban/removal set (`webrtc-signaling.md` §3a). The cell is
             // overwritten wholesale on every `ck.call.state` event and
             // `removed_participants[]` gates media-token re-issue for banned
             // actors (see the `/rtc/token` issuer). A later event that omits or
             // shrinks the field MUST NOT silently clear bans, so union the new
             // event's rows with the committed set — removals only accumulate.
-            let mut value = value;
             let existing_removed: Vec<Value> = self
                 .cells
                 .get(&cell_id)
@@ -321,6 +346,7 @@ impl ProjectionState {
                     object.insert("removed_participants".to_owned(), Value::Array(merged));
                 }
             }
+            self.record_call_state_field_heads(&call_id, &incoming_fsm_updates, operation);
             self.cells.insert(cell_id, CellState::Value(value));
         }
         ProjectionEffect::CallStateProjected { call_id }
@@ -391,6 +417,98 @@ impl ProjectionState {
             self.cells.insert(cell_id, CellState::Value(value));
         }
         ProjectionEffect::CallSummaryProjected { call_id }
+    }
+
+    fn maybe_project_call_state_bottom(
+        &mut self,
+        call_id: &str,
+        cell_id: &CellRef,
+        incoming_fsm_updates: &[(&'static str, String)],
+        candidate_value: &Value,
+        operation: &Operation,
+    ) -> Option<ProjectionEffect> {
+        let basis = call_state_conflict_basis(operation);
+        for (field, to_value) in incoming_fsm_updates {
+            let key = (call_id.to_owned(), (*field).to_owned());
+            let conflict = self
+                .call_state_field_heads
+                .get(&key)
+                .filter(|head| head.basis == basis && head.value != *to_value)
+                .map(|head| {
+                    (
+                        head.operation_id.clone(),
+                        head.value.clone(),
+                        self.cells.get(cell_id).and_then(|cell| match cell {
+                            CellState::Value(value) => Some(value.clone()),
+                            _ => None,
+                        }),
+                    )
+                });
+            let Some((existing_operation_id, existing_to_value, existing_value)) = conflict else {
+                continue;
+            };
+            let bottom = cokret_sdk::Bottom {
+                kind: cokret_sdk::BottomKind::Conflict,
+                cells: vec![cell_id.clone()],
+                move_ids: Vec::new(),
+                seal_view: None,
+                heads: vec![
+                    serde_json::json!({
+                        "move_id": existing_operation_id,
+                        "field": *field,
+                        "to": existing_to_value,
+                        "basis": basis.as_str(),
+                        "value": existing_value.unwrap_or(Value::Null),
+                    }),
+                    serde_json::json!({
+                        "move_id": operation.operation_id.as_str(),
+                        "field": *field,
+                        "to": to_value,
+                        "basis": basis.as_str(),
+                        "value": candidate_value,
+                    }),
+                ],
+                details: Some(serde_json::json!({
+                    "reason": "call_state_sibling_conflict",
+                    "field": *field,
+                    "basis": basis.as_str(),
+                })),
+                escalated_at: None,
+            };
+            self.cells
+                .insert(cell_id.clone(), CellState::Bottom(bottom));
+            return Some(ProjectionEffect::CallStateProjected {
+                call_id: call_id.to_owned(),
+            });
+        }
+        None
+    }
+
+    fn record_call_state_field_heads(
+        &mut self,
+        call_id: &str,
+        incoming_fsm_updates: &[(&'static str, String)],
+        operation: &Operation,
+    ) {
+        let basis = call_state_conflict_basis(operation);
+        for (field, value) in incoming_fsm_updates {
+            let key = (call_id.to_owned(), (*field).to_owned());
+            if self
+                .call_state_field_heads
+                .get(&key)
+                .is_some_and(|head| head.basis == basis && head.value == *value)
+            {
+                continue;
+            }
+            self.call_state_field_heads.insert(
+                key,
+                CallStateFieldHead {
+                    basis: basis.clone(),
+                    operation_id: operation.operation_id.to_string(),
+                    value: value.clone(),
+                },
+            );
+        }
     }
 
     pub(crate) fn apply_realm_link(
@@ -863,6 +981,46 @@ fn validate_call_state_transition(from: Option<&str>, to: &str) -> Option<&'stat
     } else {
         Some(CALL_STATE_TRANSITION_INVALID)
     }
+}
+
+/// Return the sibling-conflict basis for one `ck.call.state` write.
+fn call_state_conflict_basis(operation: &Operation) -> String {
+    operation
+        .payload
+        .get("seal_ref")
+        .or_else(|| operation.payload.get("conflict_basis"))
+        .or_else(|| operation.payload.get("state_witness"))
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| operation.operation_id.as_str())
+        .to_owned()
+}
+
+fn call_state_fsm_updates(value: &Value) -> Vec<(&'static str, String)> {
+    ["state", "recording_state", "transcript_state"]
+        .into_iter()
+        .filter_map(|field| {
+            value
+                .get(field)
+                .and_then(Value::as_str)
+                .filter(|value| !value.is_empty())
+                .map(|value| (field, value.to_owned()))
+        })
+        .collect()
+}
+
+fn call_state_candidate_value(existing_cell: Option<&CellState>, incoming: Value) -> Value {
+    let Some(incoming_object) = incoming.as_object() else {
+        return incoming;
+    };
+    let mut merged = match existing_cell {
+        Some(CellState::Value(Value::Object(existing))) => existing.clone(),
+        _ => serde_json::Map::new(),
+    };
+    for (key, value) in incoming_object {
+        merged.insert(key.clone(), value.clone());
+    }
+    Value::Object(merged)
 }
 
 /// `call-state.md` §4.2 — controlled `recording_state` enum.

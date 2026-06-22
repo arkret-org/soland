@@ -51,7 +51,12 @@ pub(super) fn event_ref_list(
     } else {
         "refs_too_large"
     };
-    if values.len() > max_len {
+    let count_error = if key == "prev_refs" {
+        cokret_sdk::validate_event_prev_ref_count(values.len()).is_err()
+    } else {
+        cokret_sdk::validate_event_ref_count(values.len()).is_err()
+    };
+    if values.len() > max_len || count_error {
         return Err(event_validation_error(
             StatusCode::BAD_REQUEST,
             too_large_reason,
