@@ -1090,14 +1090,6 @@ pub(crate) fn normalize_strand_payload(kind: &str, payload: &mut Value) {
         object.remove("strand_id");
         object.remove("object_ref");
     }
-    if kind == "ck.strand.update" {
-        if !object.contains_key("target_ref")
-            && let Some(strand_id) = object.get("strand_id").and_then(Value::as_str)
-        {
-            object.insert("target_ref".to_owned(), Value::String(strand_id.to_owned()));
-        }
-        object.remove("strand_id");
-    }
 }
 
 /// Build a signed `ck.morph.*` event envelope.
@@ -1317,6 +1309,7 @@ pub(crate) async fn persist_test_message(
     let event_id = new_prefixed_uuid7("ck:event:");
     let record = MessageRecord {
         event_id: event_id.clone(),
+        message_id: event_id.replacen("ck:event:", "ck:message:", 1),
         realm_id: realm_id.to_owned(),
         sender: sender.to_owned(),
         thread_id: format!("ck:strand:test-{}", event_id),

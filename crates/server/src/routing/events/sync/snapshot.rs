@@ -1110,7 +1110,7 @@ fn sync_timeline_message_record_json(message: &crate::state::MessageRecord) -> s
     let mut event = json!({
         "kind": "ck.message.create",
         "event_id": message.event_id,
-        "message_id": super::super::message_id_from_event_id(&message.event_id),
+        "message_id": message.message_id,
         "strand_id": strand_id,
         "realm_id": message.realm_id,
         "track_name": default_discussion_track(&strand_id, &track_id),

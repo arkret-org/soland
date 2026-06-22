@@ -770,6 +770,7 @@ pub struct ProjectedMessageView {
 #[derive(Clone, Debug)]
 pub struct MessageState {
     pub event_id: String,
+    pub message_id: String,
     pub realm_id: String,
     pub sender: String,
     pub thread_id: String,

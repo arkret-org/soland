@@ -12,6 +12,7 @@ impl ProjectionState {
             .and_then(|v| v.as_str())
             .unwrap_or(operation.operation_id.as_str())
             .to_owned();
+        let message_id = message_id_from_payload_or_event_id(&operation.payload, &event_id);
         let sender = operation
             .payload
             .get("sender")
@@ -51,6 +52,7 @@ impl ProjectionState {
         let is_poll_create = content_kind(&content) == Some("ck.content.poll");
         let state = MessageState {
             event_id: event_id.clone(),
+            message_id,
             realm_id: operation.realm_id.to_string(),
             sender,
             thread_id,
@@ -175,20 +177,13 @@ impl ProjectionState {
     ) -> ProjectionEffect {
         let original_id = operation
             .payload
-            .get("target_event_id")
+            .get("message_id")
             .or_else(|| operation.payload.get("target_ref"))
             .or_else(|| operation.payload.get("revision_of"))
-            .or_else(|| operation.payload.get("event_id"))
             .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_owned();
-        let new_event_id = operation
-            .payload
-            .get("new_event_id")
-            .or_else(|| operation.payload.get("revised_event_id"))
-            .and_then(|v| v.as_str())
-            .unwrap_or(operation.operation_id.as_str())
-            .to_owned();
+            .map(message_event_id_from_ref)
+            .unwrap_or_default();
+        let new_event_id = operation.operation_id.to_string();
 
         if let Some(original) = self.messages.get(&original_id) {
             let mut revised = original.clone();
@@ -196,53 +191,12 @@ impl ProjectionState {
             revised.revision_of = Some(original_id.clone());
             revised.created_at = now;
             revised.operation_id = operation.operation_id.to_string();
-            if let Some(patch) = operation.payload.get("patch").and_then(Value::as_object) {
-                if let Some(obj) = revised.content.as_object_mut() {
-                    for (path, value) in patch {
-                        match value {
-                            Value::Object(op) if op.contains_key("$op") => {
-                                match op.get("$op").and_then(Value::as_str) {
-                                    Some("set") => {
-                                        if let Some(v) = op.get("value") {
-                                            obj.insert(path.clone(), v.clone());
-                                        }
-                                    }
-                                    Some("unset") => {
-                                        obj.remove(path);
-                                    }
-                                    // add/remove on arrays — best-effort
-                                    // shallow handling; reducer-side full
-                                    // grammar lives in
-                                    // `cokret_core::models::patch::Patch`.
-                                    Some("add") => {
-                                        if let Some(v) = op.get("value") {
-                                            if let Some(arr) = obj
-                                                .entry(path.clone())
-                                                .or_insert_with(|| Value::Array(Vec::new()))
-                                                .as_array_mut()
-                                            {
-                                                arr.push(v.clone());
-                                            }
-                                        }
-                                    }
-                                    Some("remove") => {
-                                        if let (Some(arr), Some(victim)) = (
-                                            obj.get_mut(path).and_then(Value::as_array_mut),
-                                            op.get("value"),
-                                        ) {
-                                            arr.retain(|v| v != victim);
-                                        }
-                                    }
-                                    _ => {}
-                                }
-                            }
-                            // Direct-value sugar = set.
-                            other => {
-                                obj.insert(path.clone(), other.clone());
-                            }
-                        }
-                    }
-                }
+            if let Some(content) = operation.payload.get("content") {
+                revised.content = content.clone();
+                revised.encrypted = false;
+            } else if let Some(encrypted_content) = operation.payload.get("encrypted_content") {
+                revised.content = encrypted_content.clone();
+                revised.encrypted = true;
             }
             let effect = ProjectionEffect::MessageRevised {
                 original_id: original_id.clone(),
@@ -271,8 +225,8 @@ impl ProjectionState {
     /// When the payload also carries `object_ref` / `target_object_ref`
     /// naming a `ck:strand:` or `ck:morph:` typed-id, the redaction
     /// additionally flips the corresponding projection's state to
-    /// `ObjectLifecycleState::Redacted` per spec common-fields.md §5.1.
-    /// Space containers are intentionally excluded — they have no Redacted
+    /// `ObjectLifecycleState::Redacted` per spec common-fields.md section 5.1.
+    /// Space containers are intentionally excluded: they have no Redacted
     /// terminal, and removal routes through `ck.space.tombstone` only.
     pub(crate) fn apply_redaction(&mut self, operation: &Operation) -> ProjectionEffect {
         let target = operation
@@ -332,7 +286,7 @@ impl ProjectionState {
         // carries an `object_ref` (or fallback `target_object_ref`)
         // naming a typed-id, push the projection to the Redacted terminal
         // state. State-machine guard against terminal source is policed
-        // by `check_redaction_target_transition` preflight — by the time
+        // by `check_redaction_target_transition` preflight; by the time
         // the reducer runs here, the source state is known-permissible.
         let updated_by = operation
             .payload

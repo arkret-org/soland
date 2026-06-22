@@ -346,6 +346,7 @@ pub(super) async fn append_portal_message(
     let content_with_portal = enrich_content_with_portal_metadata(content, applet, ghost);
     let message_record = MessageRecord {
         event_id: event_id.clone(),
+        message_id: crate::routing::events::strand::message_id_from_event_id(&event_id),
         realm_id: realm_id.to_owned(),
         sender: ghost.ghost_actor_id.clone(),
         thread_id: thread_id.clone(),
@@ -391,7 +392,7 @@ pub(super) async fn append_portal_message(
         return Err(AppError::internal("failed to persist portal projection"));
     }
     Ok(AppletPortalMessageOutcome {
-        message_id: crate::routing::events::strand::message_id_from_event_id(&event_id),
+        message_id: message_record.message_id.clone(),
         event_id,
         operation_id,
         realm_id: realm_id.to_owned(),

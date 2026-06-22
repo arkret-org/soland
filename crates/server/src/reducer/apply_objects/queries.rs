@@ -10,11 +10,13 @@ impl ProjectionState {
 
     /// Get all non-redacted messages for a Realm, sorted by creation time.
     pub fn messages_for_realm(&self, realm_id: &str) -> Vec<&MessageState> {
+        let superseded = self.superseded_message_ids();
         let mut msgs: Vec<_> = self
             .messages
             .values()
             .filter(|m| {
                 m.realm_id == realm_id
+                    && !superseded.contains(m.event_id.as_str())
                     && self
                         .redaction_cells
                         .get(&m.event_id)
@@ -28,11 +30,13 @@ impl ProjectionState {
 
     /// Get messages for a thread, sorted by creation time.
     pub fn messages_for_thread(&self, thread_id: &str) -> Vec<&MessageState> {
+        let superseded = self.superseded_message_ids();
         let mut msgs: Vec<_> = self
             .messages
             .values()
             .filter(|m| {
                 m.thread_id == thread_id
+                    && !superseded.contains(m.event_id.as_str())
                     && self
                         .redaction_cells
                         .get(&m.event_id)
@@ -42,6 +46,13 @@ impl ProjectionState {
             .collect();
         msgs.sort_by_key(|a| a.created_at);
         msgs
+    }
+
+    fn superseded_message_ids(&self) -> std::collections::BTreeSet<&str> {
+        self.messages
+            .values()
+            .filter_map(|message| message.revision_of.as_deref())
+            .collect()
     }
 
     /// Resolve a Message's `(created_at, sender, thread_id)` by target ref,

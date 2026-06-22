@@ -16,6 +16,22 @@ pub(crate) fn message_event_id_from_ref(value: &str) -> String {
         .unwrap_or_else(|| value.to_owned())
 }
 
+pub(crate) fn message_id_from_event_id(value: &str) -> String {
+    value
+        .strip_prefix("ck:event:")
+        .map(|suffix| format!("ck:message:{suffix}"))
+        .unwrap_or_else(|| format!("ck:message:{value}"))
+}
+
+pub(crate) fn message_id_from_payload_or_event_id(payload: &Value, event_id: &str) -> String {
+    payload
+        .get("message_id")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| message_id_from_event_id(event_id))
+}
+
 pub(crate) fn reaction_target_event_id(operation: &Operation) -> Option<String> {
     [
         "target_ref",

@@ -538,6 +538,7 @@ async fn circle_scoped_reaction_requires_circle_membership() {
             event_id.to_owned(),
             crate::reducer::MessageState {
                 event_id: event_id.to_owned(),
+                message_id: crate::reducer::message_id_from_event_id(event_id),
                 realm_id: realm_id.to_owned(),
                 sender: member.to_owned(),
                 thread_id: strand_id.to_owned(),
@@ -991,12 +992,12 @@ fn member_state_invite_accept_uses_canonical_invite_ref() {
 }
 
 #[test]
-fn event_payload_validator_enforces_strand_update_object_patch_schema() {
+fn event_payload_validator_enforces_strand_update_patch_schema() {
     let state = make_state(true);
     let strand_id = "ck:strand:01904100-0000-7000-8000-f10dc0000001";
     let valid = json!({
         "payload": {
-            "target_ref": strand_id,
+            "strand_id": strand_id,
             "patch": {
                 "fields.document": {
                     "$op": "set",
@@ -1012,11 +1013,11 @@ fn event_payload_validator_enforces_strand_update_object_patch_schema() {
         &valid,
         valid.as_object().unwrap(),
     )
-    .expect("canonical ck.strand.update object_patch_payload should validate");
+    .expect("canonical ck.strand.update strand_patch_payload should validate");
 
     let invalid_patch_op = json!({
         "payload": {
-            "target_ref": strand_id,
+            "strand_id": strand_id,
             "patch": {
                 "fields.document": {
                     "$op": "replace",
@@ -1056,49 +1057,87 @@ fn event_payload_validator_catalog_covers_active_standard_durable_events() {
 }
 
 #[test]
-fn event_payload_validator_enforces_object_patch_family_schema() {
+fn event_payload_validator_enforces_patch_family_schema() {
     let catalog = cokret_sdk::schema::event_payload_validator_catalog();
-    let object_patch_kinds = [
+    let patch_kinds = [
         "ck.realm.update",
         "ck.strand.update",
         "ck.morph.update",
         "ck.space.update",
         "ck.profile.update",
     ];
-    let missing = catalog.missing_payload_validators_for(object_patch_kinds);
+    let missing = catalog.missing_payload_validators_for(patch_kinds);
     assert!(
         missing.is_empty(),
-        "missing object_patch validators: {missing:?}"
+        "missing patch payload validators: {missing:?}"
     );
 
-    for event_kind in object_patch_kinds {
-        let patch = if matches!(event_kind, "ck.strand.update" | "ck.morph.update") {
-            json!({ "metadata.title": { "$op": "set", "value": "Roadmap" } })
-        } else {
-            json!({ "title": { "$op": "set", "value": "Roadmap" } })
-        };
+    let payloads = [
+        (
+            "ck.realm.update",
+            json!({
+                "target_ref": "ck:realm:01904100-0000-7000-8000-f10dc0000001",
+                "patch": { "title": { "$op": "set", "value": "Roadmap" } }
+            }),
+            json!({
+                "target_ref": "ck:realm:01904100-0000-7000-8000-f10dc0000001",
+                "patch": { "title": { "$op": "replace", "value": "Roadmap" } }
+            }),
+        ),
+        (
+            "ck.strand.update",
+            json!({
+                "strand_id": "ck:strand:01904100-0000-7000-8000-f10dc0000001",
+                "patch": { "metadata.title": { "$op": "set", "value": "Roadmap" } }
+            }),
+            json!({
+                "strand_id": "ck:strand:01904100-0000-7000-8000-f10dc0000001",
+                "patch": { "metadata.title": { "$op": "replace", "value": "Roadmap" } }
+            }),
+        ),
+        (
+            "ck.morph.update",
+            json!({
+                "target_ref": "ck:morph:01904100-0000-7000-8000-f10dc0000001",
+                "patch": { "metadata.title": { "$op": "set", "value": "Roadmap" } }
+            }),
+            json!({
+                "target_ref": "ck:morph:01904100-0000-7000-8000-f10dc0000001",
+                "patch": { "metadata.title": { "$op": "replace", "value": "Roadmap" } }
+            }),
+        ),
+        (
+            "ck.space.update",
+            json!({
+                "space_id": "ck:space:01904100-0000-7000-8000-f10dc0000001",
+                "patch": { "title": { "$op": "set", "value": "Roadmap" } }
+            }),
+            json!({
+                "space_id": "ck:space:01904100-0000-7000-8000-f10dc0000001",
+                "patch": { "title": { "$op": "replace", "value": "Roadmap" } }
+            }),
+        ),
+        (
+            "ck.profile.update",
+            json!({
+                "target_ref": "ck:actor_profile:01904100-0000-7000-8000-f10dc0000001",
+                "patch": { "title": { "$op": "set", "value": "Roadmap" } }
+            }),
+            json!({
+                "target_ref": "ck:actor_profile:01904100-0000-7000-8000-f10dc0000001",
+                "patch": { "title": { "$op": "replace", "value": "Roadmap" } }
+            }),
+        ),
+    ];
+    for (event_kind, valid_payload, invalid_payload) in payloads {
         catalog
-            .validate_payload(
-                event_kind,
-                &json!({
-                        "target_ref": "ck:strand:01904100-0000-7000-8000-f10dc0000001",
-                        "patch": patch
-                }),
-            )
+            .validate_payload(event_kind, &valid_payload)
             .unwrap_or_else(|err| {
-                panic!("{event_kind} must accept canonical object_patch_payload: {err}");
+                panic!("{event_kind} must accept canonical patch payload: {err}");
             });
         assert!(
             catalog
-                .validate_payload(
-                    event_kind,
-                    &json!({
-                        "target_ref": "ck:strand:01904100-0000-7000-8000-f10dc0000001",
-                        "patch": {
-                            "title": { "$op": "replace", "value": "Roadmap" }
-                        }
-                    }),
-                )
+                .validate_payload(event_kind, &invalid_payload)
                 .is_err(),
             "{event_kind} must reject patch ops outside ck.patch.v1"
         );

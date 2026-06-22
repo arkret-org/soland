@@ -1,8 +1,7 @@
 use super::*;
 
 pub(crate) const MESSAGE_CREATE_FIELDS: &[&str] = &["content", "encrypted_content"];
-pub(crate) const MESSAGE_TARGET_FIELDS: &[&str] =
-    &["target_ref", "target_event_id", "event_id", "target"];
+pub(crate) const MESSAGE_TARGET_FIELDS: &[&str] = &["message_id", "target_ref", "revision_of"];
 pub(crate) const MESSAGE_CONTENT_FIELDS: &[&str] = &["content", "encrypted_content"];
 pub(crate) const REDACTION_TARGET_FIELDS: &[&str] = &["target_event_id", "target", "redacts"];
 pub(crate) const REACTION_TARGET_FIELDS: &[&str] = &[
@@ -60,11 +59,11 @@ pub(crate) const MESSAGE_CREATE_REQUIREMENTS: &[PayloadRequirement] = &[PayloadR
 pub(crate) const MESSAGE_REVISE_REQUIREMENTS: &[PayloadRequirement] = &[
     PayloadRequirement::AnyOf(
         MESSAGE_TARGET_FIELDS,
-        "message revision requires target_event_id",
+        "message revision requires message_id, target_ref, or revision_of",
     ),
     PayloadRequirement::AnyOf(
         MESSAGE_CONTENT_FIELDS,
-        "message revision requires content or body",
+        "message revision requires content or encrypted_content",
     ),
 ];
 pub(crate) const REDACTION_REQUIREMENTS: &[PayloadRequirement] = &[PayloadRequirement::AnyOf(
@@ -257,12 +256,9 @@ pub(crate) const SPACE_CONTAINER_PARENT_REQUIREMENTS: &[PayloadRequirement] = &[
         "space parent operation requires expected_parent_space_id",
     ),
 ];
-// Strand / Morph lifecycle payload requirements. The spec
-// `event-payload.schema.json` `object_lifecycle_payload` shape requires one
-// of `target_ref` / `object_ref` / `status`. The first field present
-// (in spec-canonical order) names the target Strand; `apply_strand_lifecycle`
-// reads them with the same precedence.
-pub(crate) const STRAND_LIFECYCLE_ID_FIELDS: &[&str] = &["target_ref", "object_ref"];
+// Strand lifecycle uses the generic `object_lifecycle_payload`: target_ref is
+// the single source for the target Strand.
+pub(crate) const STRAND_LIFECYCLE_ID_FIELDS: &[&str] = &["target_ref"];
 pub(crate) const STRAND_LIFECYCLE_REQUIREMENTS: &[PayloadRequirement] =
     &[PayloadRequirement::AnyOf(
         STRAND_LIFECYCLE_ID_FIELDS,
@@ -274,10 +270,7 @@ pub(crate) const STRAND_CREATE_REQUIREMENTS: &[PayloadRequirement] =
         "strand create operation requires object",
     )];
 pub(crate) const STRAND_UPDATE_REQUIREMENTS: &[PayloadRequirement] = &[
-    PayloadRequirement::AnyOf(
-        &["target_ref"],
-        "strand update operation requires target_ref",
-    ),
+    PayloadRequirement::AnyOf(&["strand_id"], "strand update operation requires strand_id"),
     PayloadRequirement::Required("patch", "strand update operation requires patch"),
 ];
 // `ck.morph.archive` / `ck.morph.restore` use the generic object lifecycle

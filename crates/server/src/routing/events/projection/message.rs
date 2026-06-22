@@ -1,7 +1,6 @@
 use cokret_sdk::Operation;
 use serde_json::Value;
 
-use super::*;
 use crate::state::{AppState, MessageRecord};
 
 pub async fn project_federated_message(state: &AppState, origin: &str, operation: &Operation) {
@@ -16,6 +15,8 @@ pub async fn project_federated_message(state: &AppState, origin: &str, operation
                 operation.operation_id.as_str().replace(':', "")
             )
         });
+    let message_id =
+        crate::reducer::message_id_from_payload_or_event_id(&operation.payload, &event_id);
     let store = state.persistence.messages();
     if matches!(store.get(&event_id).await, Ok(Some(_))) {
         return;
@@ -60,6 +61,7 @@ pub async fn project_federated_message(state: &AppState, origin: &str, operation
     if let Err(error) = store
         .put(&MessageRecord {
             event_id,
+            message_id,
             realm_id: operation.realm_id.to_string(),
             sender,
             thread_id,

@@ -466,6 +466,7 @@ mod tests {
     fn expired_message(event_id: &str, realm_id: &str) -> MessageState {
         MessageState {
             event_id: event_id.to_owned(),
+            message_id: crate::reducer::message_id_from_event_id(event_id),
             realm_id: realm_id.to_owned(),
             sender: "did:web:alice.example".to_owned(),
             thread_id: realm_id.to_owned(),
@@ -699,6 +700,7 @@ mod tests {
             event_id.to_owned(),
             MessageState {
                 event_id: event_id.to_owned(),
+                message_id: crate::reducer::message_id_from_event_id(event_id),
                 realm_id: realm_id.to_owned(),
                 sender: "did:web:alice.example".to_owned(),
                 thread_id: realm_id.to_owned(),

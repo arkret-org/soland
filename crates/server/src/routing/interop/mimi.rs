@@ -658,6 +658,7 @@ async fn mimi_room_message(
     });
     let message_record = MessageRecord {
         event_id: event_id.clone(),
+        message_id: crate::routing::events::strand::message_id_from_event_id(&event_id),
         realm_id: realm_id.clone(),
         sender: sender.clone(),
         thread_id: thread_id.clone(),

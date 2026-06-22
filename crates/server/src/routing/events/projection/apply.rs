@@ -325,6 +325,11 @@ async fn write_through_projection(state: &AppState, operation: &Operation) {
             .get("strand_id")
             .and_then(|v| v.as_str())
             .map(ToOwned::to_owned);
+        let strand_id_from_target_ref = operation
+            .payload
+            .get("target_ref")
+            .and_then(|v| v.as_str())
+            .map(ToOwned::to_owned);
         let strand_id_from_object = operation
             .payload
             .get("object")
@@ -359,7 +364,13 @@ async fn write_through_projection(state: &AppState, operation: &Operation) {
                 None
             }
         } else if is_strand_kind {
-            let id = strand_id_from_payload.or(strand_id_from_object);
+            let id = if kind == kinds::CK_STRAND_CREATE {
+                strand_id_from_object
+            } else if matches!(kind, kinds::CK_STRAND_ARCHIVE | kinds::CK_STRAND_RESTORE) {
+                strand_id_from_target_ref
+            } else {
+                strand_id_from_payload
+            };
             id.and_then(|i| proj.strands.get(&i))
                 .map(return_snapshot_strand)
         } else if is_morph_kind {

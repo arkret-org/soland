@@ -360,25 +360,23 @@ fn message_revise_creates_chain() {
         &hlc,
     );
 
-    state.apply(
-        &make_operation(
-            crate::kinds::CK_MESSAGE_REVISE,
-            "ck:realm:01904100-0000-7000-8000-cfc039892036",
-            serde_json::json!({
-                "target_ref": "ck:event:01904100-0000-7000-8000-caaa6a15bce1",
-                "new_event_id": "ck:event:01904100-0000-7000-8000-c4daaba541fc",
-                "content": {"kind": "ck.content.text", "body": "revised"}
-            }),
-        ),
-        &hlc,
+    let revise = make_operation(
+        crate::kinds::CK_MESSAGE_REVISE,
+        "ck:realm:01904100-0000-7000-8000-cfc039892036",
+        serde_json::json!({
+            "target_ref": "ck:event:01904100-0000-7000-8000-caaa6a15bce1",
+            "content": {"kind": "ck.content.text", "body": "revised"}
+        }),
     );
+    let revision_id = revise.operation_id.to_string();
+    state.apply(&revise, &hlc);
 
     let msgs = state.messages_for_realm("ck:realm:01904100-0000-7000-8000-cfc039892036");
-    assert_eq!(msgs.len(), 2); // original + revision
-    let revision = msgs
-        .iter()
-        .find(|m| m.event_id == "ck:event:01904100-0000-7000-8000-c4daaba541fc")
-        .unwrap();
+    assert_eq!(msgs.len(), 1);
+    assert_eq!(msgs[0].event_id, revision_id);
+    assert_eq!(msgs[0].content["body"], "revised");
+    assert_eq!(state.messages.len(), 2);
+    let revision = state.messages.get(&revision_id).unwrap();
     assert_eq!(
         revision.revision_of.as_deref(),
         Some("ck:event:01904100-0000-7000-8000-caaa6a15bce1")

@@ -18,7 +18,7 @@ pub fn sync_timeline_message_json(message: &crate::reducer::MessageState) -> ser
     let mut event = json!({
         "kind": "ck.message.create",
         "event_id": message.event_id,
-        "message_id": message_id_from_event_id(&message.event_id),
+        "message_id": message.message_id,
         "strand_id": strand_id,
         "realm_id": message.realm_id,
         "track_name": default_discussion_track(&strand_id, &track_id),
@@ -243,5 +243,39 @@ pub fn projection_event_from_operation(
             .map(ToOwned::to_owned),
         payload: operation.payload.clone(),
         created_at: operation.created_at,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn timeline_projection_preserves_payload_message_id() {
+        let realm_id = "ck:realm:019e4fd4-4e26-7cc9-af7e-d7102d6f4a22";
+        let event_id = "ck:event:019e4fd4-4e26-7cc9-af7e-d7102d6f4a23";
+        let message_id = "ck:message:019e4fd4-4e26-7cc9-af7e-d7102d6f4a24";
+        let operation = Operation::create(
+            cokret_sdk::OperationId::new(
+                "ck:operation:019e4fd4-4e26-7cc9-af7e-d7102d6f4a25".to_owned(),
+            )
+            .unwrap(),
+            cokret_sdk::RealmId::new(realm_id.to_owned()).unwrap(),
+            kinds::CK_MESSAGE_CREATE,
+            json!({
+                "event_id": event_id,
+                "message_id": message_id,
+                "strand_id": "ck:strand:019e4fd4-4e26-7cc9-af7e-d7102d6f4a22",
+                "track_name": "discussion",
+                "content": {"kind": "ck.content.text", "body": "hello"}
+            }),
+        );
+        let mut projection = crate::reducer::ProjectionState::new();
+        projection.apply_message(&operation, chrono::Utc::now());
+        let message = projection.messages.get(event_id).expect("message");
+
+        let event = sync_timeline_message_json_with_projection(message, &projection);
+
+        assert_eq!(event["message_id"], message_id);
     }
 }

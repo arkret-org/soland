@@ -754,7 +754,16 @@ impl ProjectionState {
             CK_STRAND_RESTORE => (&[ObjectLifecycleState::Archived], "strand_not_archived"),
             _ => return Ok(()),
         };
-        let Some(strand_id) = strand_id_from_payload(&operation.payload) else {
+        let strand_id = match kind {
+            CK_STRAND_UPDATE => strand_id_from_payload(&operation.payload),
+            CK_STRAND_ARCHIVE | CK_STRAND_RESTORE => operation
+                .payload
+                .get("target_ref")
+                .and_then(Value::as_str)
+                .filter(|value| value.starts_with("ck:strand:")),
+            _ => None,
+        };
+        let Some(strand_id) = strand_id else {
             // Missing strand_id is caught upstream by the operation-schema
             // validator; preflight tolerates absence to keep responsibilities
             // separate.

@@ -248,7 +248,6 @@ async fn strand_morph_lifecycle_state_machine_returns_412_for_illegal_transition
         5,
         "ck.strand.update",
         serde_json::json!({
-            "target_ref": strand_id,
             "strand_id": strand_id,
             "patch": { "metadata": { "title": "Edit while archived" } }
         }),
@@ -442,7 +441,6 @@ async fn encrypted_realm_rejects_plaintext_strand_content_before_event_log_persi
         2,
         "ck.strand.update",
         serde_json::json!({
-            "target_ref": strand_id,
             "strand_id": strand_id,
             "patch": {
                 "content": {
@@ -509,7 +507,6 @@ async fn strand_update_status_fsm_rejects_skipped_terminal_transitions() {
         2,
         "ck.strand.update",
         serde_json::json!({
-            "target_ref": task_strand_id,
             "strand_id": task_strand_id,
             "patch": { "metadata": { "fields": { "status": "done" } } }
         }),
@@ -529,7 +526,6 @@ async fn strand_update_status_fsm_rejects_skipped_terminal_transitions() {
         3,
         "ck.strand.update",
         serde_json::json!({
-            "target_ref": task_strand_id,
             "strand_id": task_strand_id,
             "patch": { "metadata": { "fields": { "status": "in_progress" } } }
         }),
@@ -550,7 +546,6 @@ async fn strand_update_status_fsm_rejects_skipped_terminal_transitions() {
         4,
         "ck.strand.update",
         serde_json::json!({
-            "target_ref": task_strand_id,
             "strand_id": task_strand_id,
             "patch": { "metadata": { "fields": { "status": "done" } } }
         }),
@@ -595,7 +590,6 @@ async fn strand_update_status_fsm_rejects_skipped_terminal_transitions() {
         6,
         "ck.strand.update",
         serde_json::json!({
-            "target_ref": incident_strand_id,
             "strand_id": incident_strand_id,
             "patch": { "metadata": { "fields": { "status": "resolved" } } }
         }),

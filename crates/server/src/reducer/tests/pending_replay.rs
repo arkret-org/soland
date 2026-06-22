@@ -5,7 +5,6 @@ const SPACE: &str = "ck:space:01904100-0000-7000-8000-cfc039892037";
 const STRAND: &str = "ck:strand:01904100-0000-7000-8000-cfc039892038";
 const RELATION: &str = "ck:relation:01904100-0000-7000-8000-cfc039892039";
 const EVENT: &str = "ck:event:01904100-0000-7000-8000-cfc039892040";
-const REVISION: &str = "ck:event:01904100-0000-7000-8000-cfc039892041";
 
 fn space_create() -> Operation {
     make_operation(
@@ -158,10 +157,10 @@ fn message_revision_pending_replays_after_original_event() {
         REALM,
         serde_json::json!({
             "target_ref": EVENT,
-            "new_event_id": REVISION,
-            "patch": { "body": "revised" }
+            "content": { "kind": "ck.content.text", "body": "revised" }
         }),
     );
+    let revision_id = revise.operation_id.to_string();
 
     assert!(matches!(
         state.apply(&revise, &hlc),
@@ -181,7 +180,11 @@ fn message_revision_pending_replays_after_original_event() {
     state.apply(&create, &hlc);
 
     assert!(state.pending_replay.get(EVENT).is_none());
-    assert_eq!(state.messages[REVISION].revision_of.as_deref(), Some(EVENT));
+    assert_eq!(
+        state.messages[&revision_id].revision_of.as_deref(),
+        Some(EVENT)
+    );
+    assert_eq!(state.messages[&revision_id].content["body"], "revised");
 }
 
 #[test]
