@@ -507,7 +507,7 @@ async fn mls_lifecycle_end_to_end() {
             },
             "welcome_ref": welcome_ref,
             "ciphertext": "opaque-mls-welcome",
-            "expires_at": "2026-05-25T01:00:00Z",
+            "expires_at": "2100-01-01T00:00:00Z",
             "commit_ref": "ck:event:01904100-0000-7000-8000-00000000e2e3",
             "governance_binding": governance_binding
         }),
@@ -578,8 +578,49 @@ async fn mls_lifecycle_end_to_end() {
         1
     );
 
-    // ── 4. Bob drains his Welcome queue via the HTTP route ──────
+    // ── 4. Bob sees the Welcome on the standard to-device queue ─
     let bob_token = dev_token(state.clone(), bob_did, bob_device, "Bob").await;
+    let device_messages_resp = TestClient::get("http://server/_cokret/self/device_messages")
+        .add_header("authorization", format!("Bearer {bob_token}"), true)
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(device_messages_resp.status_code, Some(StatusCode::OK));
+    let mut device_messages_resp = device_messages_resp;
+    let device_messages_json: Value = device_messages_resp.take_json().await.unwrap();
+    let device_messages = device_messages_json["messages"]
+        .as_array()
+        .expect("device messages array");
+    assert_eq!(device_messages.len(), 1, "{device_messages_json}");
+    let device_message = &device_messages[0];
+    assert_eq!(device_message["kind"], json!("ck.mls.welcome"));
+    assert_eq!(device_message["sender_device_id"], json!(alice_device));
+    assert_eq!(device_message["recipient_principal_id"], json!(bob_did));
+    assert_eq!(device_message["recipient_device_id"], json!(bob_device));
+    assert_eq!(device_message["expires_at"], json!("2100-01-01T00:00:00Z"));
+    assert_eq!(device_message["content"]["group_id"], json!(group_id));
+    assert_eq!(device_message["content"]["epoch"], json!(1));
+    assert_eq!(
+        device_message["content"]["recipient_principal_id"],
+        json!(bob_did)
+    );
+    assert_eq!(
+        device_message["content"]["recipient_device_id"],
+        json!(bob_device)
+    );
+    assert_eq!(
+        device_message["content"]["welcome"],
+        json!(URL_SAFE_NO_PAD.encode(b"opaque-mls-welcome"))
+    );
+    assert_eq!(
+        device_message["content"]["welcome_hash"],
+        json!(cokret_sdk::canonical::sha256_digest(b"opaque-mls-welcome"))
+    );
+    assert_eq!(
+        device_message["unsigned"]["mls_welcome_id"],
+        json!(welcome_ref)
+    );
+
+    // ── 4b. Bob drains his legacy Welcome queue via the HTTP route ─
     let drain_resp =
         TestClient::get("http://server/_soland/self/keys/keypackages/welcomes/pending")
             .add_header("authorization", format!("Bearer {bob_token}"), true)

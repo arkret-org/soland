@@ -31,6 +31,7 @@ mod apply_key_backup;
 mod apply_messages;
 mod apply_moderation;
 mod apply_objects;
+mod apply_realm_key;
 mod apply_realm_lifecycle;
 mod apply_realm_policy;
 mod apply_relations;

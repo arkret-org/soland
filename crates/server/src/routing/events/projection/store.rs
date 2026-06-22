@@ -235,7 +235,7 @@ pub async fn project_federation_operation(state: &AppState, origin: &str, operat
         .ok()
         .map(|mut proj| apply_via_lattice_registry(state, &mut proj, operation));
     if let Some(effect) = reducer_effect {
-        mirror_mls_effect_to_persistence(state, operation, &effect).await;
+        mirror_mls_effect_to_persistence(state, origin, "", operation, &effect).await;
     }
     append_projection_event(
         state,
