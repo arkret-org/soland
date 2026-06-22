@@ -31,10 +31,11 @@ use cokret_sdk::models::{
     Handle as SdkHandle, HandleBindingState, HandleClaim as SdkHandleClaim, HandleVisibility,
 };
 use cokret_sdk::{
-    AGENT_SELECTOR_CLAIM_SCHEMA, ActorPreview, AgentSelectorClaim, Audience, DeliveryBindingHint,
-    DeliveryMode, Did, DirectoryActorSearchOutcome, DirectoryAgentSelectorResolutionOutcome,
-    DirectoryAnnounceOutcome, DirectoryAnnounceRequestBody, DirectoryDescription,
-    DirectoryHandleResolutionOutcome, DirectoryIntent, DirectoryListHandlesForSubjectRequestBody,
+    AGENT_SELECTOR_CLAIM_SCHEMA, ActorPreview, AgentSelectorClaim, Audience, BlobRef,
+    DeliveryBindingHint, DeliveryMode, Did, DirectoryActorSearchOutcome,
+    DirectoryAgentSelectorResolutionOutcome, DirectoryAnnounceOutcome,
+    DirectoryAnnounceRequestBody, DirectoryDescription, DirectoryHandleResolutionOutcome,
+    DirectoryIntent, DirectoryListHandlesForSubjectRequestBody,
     DirectoryOrganizationResolutionOutcome, DirectoryOrganizationSearchOutcome,
     DirectoryPrivateContactDiscoveryOutcome, DirectoryPrivateContactDiscoveryRequestBody,
     DirectoryPushRegisterOutcome, DirectoryPushRegisterRequestBody,

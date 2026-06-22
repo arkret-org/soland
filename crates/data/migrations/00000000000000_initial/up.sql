@@ -587,6 +587,8 @@ CREATE TABLE public.organizations (
     organization_did text NOT NULL,
     handle text,
     display_name text NOT NULL,
+    source_refs jsonb DEFAULT '[]'::jsonb NOT NULL,
+    policy_revision text DEFAULT 'local'::text NOT NULL,
     verified boolean DEFAULT true NOT NULL,
     members jsonb DEFAULT '[]'::jsonb NOT NULL,
     member_count bigint DEFAULT 0 NOT NULL,

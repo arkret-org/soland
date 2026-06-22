@@ -1164,7 +1164,7 @@ async fn circle_member_manage_rejects_forged_verdict_without_grant() {
         json!({
             "sender": "did:web:alice.example",
             "circle_id": "ck:circle:01904100-0000-7000-8000-000000000881",
-            "actor": "did:web:bob.example",
+            "actor_id": "did:web:bob.example",
             "membership": "join",
             "manage_capability_verified": true,
             "actor_capability": {
@@ -1204,7 +1204,7 @@ async fn circle_member_manage_allows_explicit_circle_scoped_grant() {
         json!({
             "sender": "did:web:alice.example",
             "circle_id": circle_id,
-            "actor": "did:web:bob.example",
+            "actor_id": "did:web:bob.example",
             "membership": "join",
             "manage_capability_verified": true,
             "actor_capability": {

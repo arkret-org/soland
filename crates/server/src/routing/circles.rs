@@ -46,7 +46,9 @@ use crate::ids;
 use crate::kinds::{
     CK_CIRCLE_ARCHIVE, CK_CIRCLE_CREATE, CK_CIRCLE_MEMBER_STATE, CK_CIRCLE_TOMBSTONE,
 };
-use crate::reducer::{CircleLifecycleState, CircleProjection, ProjectionState};
+use crate::reducer::{
+    CircleLifecycleState, CircleProjection, MlsRemoveObligation, ProjectionState,
+};
 use crate::result::{JsonResult, json_ok};
 use crate::routing::events::event_log::submit_event_value;
 use crate::state::AppState;
@@ -164,15 +166,23 @@ fn pending_mls_removals_from_projection(
                         .is_none_or(|expected| expected == group_ref)
                 })
         })
-        .filter_map(|obligation| {
-            Did::new(obligation.actor_id.clone())
-                .ok()
-                .map(|principal_id| CirclePendingMlsRemoval {
-                    principal_id,
-                    membership_frontier: Vec::new(),
-                })
-        })
+        .filter_map(circle_pending_mls_removal_from_obligation)
         .collect()
+}
+
+fn circle_pending_mls_removal_from_obligation(
+    obligation: &MlsRemoveObligation,
+) -> Option<CirclePendingMlsRemoval> {
+    let principal_id = Did::new(obligation.actor_id.clone()).ok()?;
+    let membership_frontier = obligation
+        .membership_frontier
+        .iter()
+        .filter_map(|event_ref| EventId::new(event_ref.clone()).ok())
+        .collect();
+    Some(CirclePendingMlsRemoval {
+        principal_id,
+        membership_frontier,
+    })
 }
 
 fn circle_membership_to_reducer_state(membership: CircleMembership) -> &'static str {
@@ -479,8 +489,18 @@ async fn post_circle_member(
     // the reducer's fail-closed second-line check can rely on it. A
     // self-service join (`actor == sender`) is left to the reducer's
     // `join_rule=open` gate.
-    let manage_required =
-        circle_member_manage_required(&session.actor, body.actor_id.as_str(), target_state);
+    let join_rule = {
+        let projection = state.projection.lock().expect("projection mutex");
+        projection
+            .circle(&circle_id)
+            .map(|circle| circle.join_rule.clone())
+    };
+    let manage_required = circle_member_manage_required(
+        &session.actor,
+        body.actor_id.as_str(),
+        target_state,
+        join_rule.as_deref(),
+    );
     let manage_verified = if manage_required {
         let realm_id = realm_scope.to_string();
         ensure_circle_capability(
@@ -498,7 +518,7 @@ async fn post_circle_member(
     };
     let payload = json!({
         "circle_id": circle_id,
-        "actor": body.actor_id,
+        "actor_id": body.actor_id,
         "membership": target_state,
         "sender": session.actor.clone(),
         "manage_capability_verified": manage_verified,
@@ -554,7 +574,7 @@ async fn delete_circle_member(
     }
     let payload = json!({
         "circle_id": circle_id,
-        "actor": actor_id,
+        "actor_id": actor_id,
         "membership": "leave",
         "sender": session.actor.clone(),
     });
@@ -742,8 +762,17 @@ async fn submit_circle_lifecycle(
     json_ok(response)
 }
 
-fn circle_member_manage_required(sender: &str, target: &str, membership: &str) -> bool {
-    target != sender || matches!(membership, "invite" | "invited" | "ban" | "banned")
+fn circle_member_manage_required(
+    sender: &str,
+    target: &str,
+    membership: &str,
+    join_rule: Option<&str>,
+) -> bool {
+    match membership {
+        "invite" | "ban" => true,
+        "join" if target == sender => join_rule.is_some_and(|rule| rule != "open"),
+        _ => target != sender,
+    }
 }
 
 async fn ensure_circle_capability(

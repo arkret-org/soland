@@ -79,7 +79,7 @@ pub(crate) async fn validate_read_receipt_policy_combination_write(
 fn read_receipt_policy_projection_from_payload(
     payload: &Value,
 ) -> Result<ReadReceiptPolicy, &'static str> {
-    serde_json::from_value(payload.clone())
+    serde_json::from_value(projection_context_stripped_payload(payload))
         .map_err(|_| "ck.realm.read_receipt_policy payload is invalid")
 }
 
@@ -776,4 +776,28 @@ pub(crate) fn validate_morph_schema_migrate_capability(
         return Err("ck.morph.schema_migrate requires ck.morph.schema.migrate capability");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    #[test]
+    fn read_receipt_policy_projection_ignores_projection_context() {
+        let policy = read_receipt_policy_projection_from_payload(&json!({
+            "disclosure": "required",
+            "event_id": "ck:event:01904100-0000-7000-8000-000000000702",
+            "sender": "did:web:alice.example",
+            "hlc": "2026-06-14T10:00:00Z/node/1",
+            "seal_ref": "ck:seal:sha256:1111111111111111111111111111111111111111111111111111111111111111"
+        }))
+        .unwrap();
+
+        assert_eq!(
+            policy.disclosure,
+            cokret_sdk::ReadReceiptDisclosure::Required
+        );
+    }
 }

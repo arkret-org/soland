@@ -354,6 +354,7 @@ pub struct MlsRemoveObligation {
     pub circle_id: Option<String>,
     pub mls_group_ref: Option<String>,
     pub actor_id: String,
+    pub membership_frontier: Vec<String>,
     pub trigger_membership: String,
     pub triggered_at: chrono::DateTime<chrono::Utc>,
 }

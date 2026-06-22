@@ -77,7 +77,7 @@ pub(in crate::routing) async fn identity_document_record(
             updated_at: now(),
         };
     }
-    state
+    let record = state
         .persistence
         .webvh()
         .get_document(did)
@@ -95,13 +95,15 @@ pub(in crate::routing) async fn identity_document_record(
             expires_at: now()
                 + chrono::Duration::seconds(crate::persistence::WEBVH_DOCUMENT_HIGH_RISK_TTL_SECS),
             updated_at: now(),
-        })
+        });
+    with_default_also_known_as(record, state, did)
 }
 
 pub(super) fn default_did_document(state: Option<&AppState>, did: &str) -> Value {
     let mut verification_methods = Vec::new();
     let mut authentication = Vec::new();
     let mut assertion_method = Vec::new();
+    let also_known_as = default_also_known_as(state, did);
     if let Some(state) = state
         && did == state.config.service_did
     {
@@ -122,11 +124,72 @@ pub(super) fn default_did_document(state: Option<&AppState>, did: &str) -> Value
     }
     json!({
         "id": did,
+        "alsoKnownAs": also_known_as,
         "verificationMethod": verification_methods,
         "authentication": authentication,
         "assertionMethod": assertion_method,
         "service": [{"id": "soland", "type": "CokretPrincipalServer", "serviceEndpoint": "/_cokret"}]
     })
+}
+
+fn default_also_known_as(state: Option<&AppState>, did: &str) -> Vec<String> {
+    let Some(state) = state else {
+        return Vec::new();
+    };
+    if !state.config.development_mode || did != "did:web:alice.example" {
+        return Vec::new();
+    }
+    let domain = reqwest::Url::parse(&state.config.public_base_url)
+        .ok()
+        .and_then(|url| url.host_str().and_then(valid_handle_domain_candidate))
+        .or_else(|| {
+            state
+                .config
+                .service_did
+                .strip_prefix("did:web:")
+                .and_then(|value| valid_handle_domain_candidate(&value.replace(':', ".")))
+        })
+        .unwrap_or_else(|| "soland.local".to_owned());
+    vec![format!("acct:alice@{domain}")]
+}
+
+fn valid_handle_domain_candidate(value: &str) -> Option<String> {
+    let domain = value.trim().trim_end_matches('.').to_ascii_lowercase();
+    if domain.is_empty() {
+        return None;
+    }
+    cokret_sdk::models::Handle::parse(&format!("alice:{domain}"))
+        .ok()
+        .map(|handle| handle.domain().to_owned())
+}
+
+fn with_default_also_known_as(
+    mut record: WebvhDocumentRecord,
+    state: &AppState,
+    did: &str,
+) -> WebvhDocumentRecord {
+    let aliases = default_also_known_as(Some(state), did);
+    if aliases.is_empty() {
+        return record;
+    }
+    let Some(object) = record.did_document.as_object_mut() else {
+        return record;
+    };
+    let entry = object
+        .entry("alsoKnownAs".to_owned())
+        .or_insert_with(|| Value::Array(Vec::new()));
+    let Some(array) = entry.as_array_mut() else {
+        return record;
+    };
+    for alias in aliases {
+        if !array
+            .iter()
+            .any(|value| value.as_str() == Some(alias.as_str()))
+        {
+            array.push(Value::String(alias));
+        }
+    }
+    record
 }
 
 pub(super) fn did_operation_from_body(body: &Value) -> Result<Value, AppError> {

@@ -97,6 +97,33 @@ pub(crate) async fn build_sync_snapshot(
     let is_incremental = body.after.is_some();
     let (invite_notifications, invite_positions) =
         pending_invite_notification_delta(state, session, after_cursor, is_incremental).await;
+    let (mut account_notifications, notification_positions) =
+        persisted_notification_delta(state, session, after_cursor, is_incremental, &projection)
+            .await;
+    account_notifications.extend(invite_notifications);
+    account_notifications.sort_by(|left, right| {
+        let left_timestamp = left
+            .get("timestamp")
+            .or_else(|| left.get("created_at"))
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let right_timestamp = right
+            .get("timestamp")
+            .or_else(|| right.get("created_at"))
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        left_timestamp.cmp(right_timestamp).then_with(|| {
+            left.get("notification_id")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .cmp(
+                    right
+                        .get("notification_id")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default(),
+                )
+        })
+    });
     for (realm_id, title, summary, tags, category, members) in visible_realms {
         let strand =
             strand_projection_for_realm(state, &realm_id, &title, summary.as_deref()).await;
@@ -219,6 +246,7 @@ pub(crate) async fn build_sync_snapshot(
     }
     drop(projection);
     merge_account_position_max(&mut account_positions, invite_positions);
+    merge_account_position_max(&mut account_positions, notification_positions);
 
     let mut to_device_position = after_cursor.to_device_position;
     let mut to_device_ack_token = None;
@@ -334,7 +362,7 @@ pub(crate) async fn build_sync_snapshot(
         device_lists,
         account_data,
         presence,
-        notifications: notifications_delta_value(invite_notifications),
+        notifications: notifications_delta_value(account_notifications),
         partial: false,
     }
 }
@@ -357,6 +385,224 @@ fn notifications_delta_value(events: Vec<Value>) -> Value {
     } else {
         json!({ "events": events })
     }
+}
+
+async fn persisted_notification_delta(
+    state: &AppState,
+    session: Option<&SessionRecord>,
+    after_cursor: &SyncCursor,
+    is_incremental: bool,
+    projection: &ProjectionState,
+) -> (Vec<Value>, BTreeMap<String, i64>) {
+    let Some(session) = session else {
+        return (Vec::new(), BTreeMap::new());
+    };
+    let mut positions: BTreeMap<String, i64> = BTreeMap::new();
+    let mut notifications = Vec::new();
+    let rows = state
+        .persistence
+        .notifications()
+        .list_for_recipient(&session.actor)
+        .await
+        .unwrap_or_default();
+    for row in rows {
+        let Some(realm_id) = row.get("realm_id").and_then(Value::as_str) else {
+            continue;
+        };
+        if !realm_id_accessible(state, realm_id, Some(session)).await {
+            continue;
+        }
+        let position = notification_projection_position(&row);
+        positions
+            .entry(realm_id.to_owned())
+            .and_modify(|current| *current = (*current).max(position))
+            .or_insert(position);
+        if is_incremental
+            && after_cursor
+                .account_positions
+                .get(realm_id)
+                .is_some_and(|after| position <= *after)
+        {
+            continue;
+        }
+        let Some(source_event_id) = row.get("source_event_id").and_then(Value::as_str) else {
+            continue;
+        };
+        let Some(source) = notification_source_message_value(
+            state,
+            projection,
+            realm_id,
+            source_event_id,
+            session,
+        )
+        .await
+        else {
+            continue;
+        };
+        if let Some(notification) = notification_value_from_row(&row, &source) {
+            notifications.push(notification);
+        }
+    }
+    (notifications, positions)
+}
+
+fn notification_projection_position(notification: &Value) -> i64 {
+    let notification_id = notification
+        .get("notification_id")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let created_at = notification
+        .get("created_at")
+        .and_then(Value::as_str)
+        .and_then(|value| {
+            DateTime::parse_from_rfc3339(value)
+                .ok()
+                .map(|dt| dt.with_timezone(&Utc))
+        })
+        .unwrap_or_else(now);
+    timestamp_position_with_tie_breaker(created_at, notification_id)
+}
+
+async fn notification_source_message_value(
+    state: &AppState,
+    projection: &ProjectionState,
+    realm_id: &str,
+    source_event_id: &str,
+    session: &SessionRecord,
+) -> Option<Value> {
+    if let Some(message) = projection.messages.get(source_event_id) {
+        if message.realm_id != realm_id {
+            return None;
+        }
+        if !realm_event_visible_to_session_with_projection(
+            state,
+            projection,
+            realm_id,
+            message.created_at,
+            Some(&message.sender),
+            Some(session),
+        )
+        .await
+        {
+            return None;
+        }
+        if !circle_scope_visible_to_session(
+            projection,
+            message_scope_circle_id(&message.content),
+            message.created_at,
+            Some(session),
+            Some(&message.sender),
+        ) {
+            return None;
+        }
+        let mut event = sync_timeline_message_json_with_projection(message, projection);
+        if let Some(tombstone) = retention_tombstone_for_event(state, &message.event_id) {
+            tombstone_timeline_event_for_retention(&mut event, &tombstone);
+        }
+        return Some(event);
+    }
+
+    let message = state
+        .persistence
+        .messages()
+        .get(source_event_id)
+        .await
+        .ok()
+        .flatten()?;
+    if message.realm_id != realm_id {
+        return None;
+    }
+    if !realm_event_visible_to_session_with_projection(
+        state,
+        projection,
+        realm_id,
+        message.created_at,
+        Some(&message.sender),
+        Some(session),
+    )
+    .await
+    {
+        return None;
+    }
+    if !circle_scope_visible_to_session(
+        projection,
+        message_scope_circle_id(&message.content),
+        message.created_at,
+        Some(session),
+        Some(&message.sender),
+    ) {
+        return None;
+    }
+    let mut event = sync_timeline_message_record_json_with_projection(&message, projection);
+    if let Some(tombstone) = retention_tombstone_for_event(state, &message.event_id) {
+        tombstone_timeline_event_for_retention(&mut event, &tombstone);
+    }
+    Some(event)
+}
+
+fn notification_value_from_row(notification: &Value, source: &Value) -> Option<Value> {
+    let notification_id = notification.get("notification_id")?.as_str()?;
+    let source_event_id = notification.get("source_event_id")?.as_str()?;
+    let notification_type = notification
+        .get("notification_type")
+        .and_then(Value::as_str)
+        .unwrap_or("message");
+    let realm_id = notification
+        .get("realm_id")
+        .and_then(Value::as_str)
+        .or_else(|| source.get("realm_id").and_then(Value::as_str))
+        .unwrap_or_default();
+    let strand_id = source.get("strand_id").and_then(Value::as_str);
+    let track_name = source.get("track_name").and_then(Value::as_str);
+    let actor_id = source.get("sender").and_then(Value::as_str);
+    let encrypted = source
+        .get("encrypted")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let timestamp = notification
+        .get("created_at")
+        .and_then(Value::as_str)
+        .or_else(|| source.get("created_at").and_then(Value::as_str))
+        .unwrap_or_default();
+    let mut value = json!({
+        "notification_id": notification_id,
+        "notification_kind": notification_type,
+        "notification_type": notification_type,
+        "kind": notification_type,
+        "event_kind": "ck.message.create",
+        "realm_id": realm_id,
+        "source_event_id": source_event_id,
+        "timestamp": timestamp,
+        "created_at": timestamp,
+        "read": false,
+        "state": "unread",
+        "encrypted": encrypted,
+        "local_decrypted": !encrypted,
+    });
+    if notification_type == "mention" {
+        value["title"] = json!("You were mentioned");
+        value["mentions_actor"] = json!(true);
+    }
+    if let Some(strand_id) = strand_id {
+        value["strand_id"] = json!(strand_id);
+    }
+    if let Some(track_name) = track_name {
+        value["track_name"] = json!(track_name);
+    }
+    if let Some(actor_id) = actor_id {
+        value["actor_id"] = json!(actor_id);
+    }
+    if !encrypted
+        && let Some(body) = source
+            .get("content")
+            .and_then(|content| content.get("body"))
+            .and_then(Value::as_str)
+            .filter(|body| !body.trim().is_empty())
+    {
+        value["body"] = json!(body);
+        value["preview"] = json!(body);
+    }
+    Some(value)
 }
 
 pub(crate) async fn pending_invite_notification_delta(
@@ -1090,7 +1336,7 @@ pub(crate) async fn projection_record_visible_to_session(
     event: &ProjectionEventRecord,
     session: Option<&SessionRecord>,
 ) -> bool {
-    realm_event_visible_to_session(
+    if !realm_event_visible_to_session(
         state,
         &event.realm_id,
         event.created_at,
@@ -1098,8 +1344,23 @@ pub(crate) async fn projection_record_visible_to_session(
         session,
     )
     .await
-        && !personal_blocklist_blocks_sender_for_session(state, session, event.sender.as_deref())
-            .await
+    {
+        return false;
+    }
+    if personal_blocklist_blocks_sender_for_session(state, session, event.sender.as_deref()).await {
+        return false;
+    }
+    let Ok(projection) = state.projection.lock() else {
+        return false;
+    };
+    let scope_circle_id = projection_event_scope_circle_id(&projection, event);
+    circle_scope_visible_to_session(
+        &projection,
+        scope_circle_id.as_deref(),
+        event.created_at,
+        session,
+        event.sender.as_deref(),
+    )
 }
 
 pub(crate) async fn projection_event_value_visible_to_session(
@@ -1179,6 +1440,48 @@ fn message_scope_circle_id(content: &Value) -> Option<&str> {
         .get("scope_circle_id")
         .and_then(Value::as_str)
         .filter(|value| value.starts_with("ck:circle:"))
+}
+
+fn projection_event_scope_circle_id(
+    projection: &ProjectionState,
+    event: &ProjectionEventRecord,
+) -> Option<String> {
+    if event.event_kind == crate::kinds::CK_MESSAGE_CREATE {
+        return event
+            .payload
+            .get("strand_id")
+            .and_then(Value::as_str)
+            .or_else(|| {
+                event
+                    .payload
+                    .get("thread_id")
+                    .and_then(Value::as_str)
+                    .filter(|value| value.starts_with("ck:strand:"))
+            })
+            .and_then(|strand_id| projection.strand_scope_circle_id(strand_id));
+    }
+    event
+        .payload
+        .get("scope_circle_id")
+        .and_then(Value::as_str)
+        .or_else(|| {
+            event
+                .payload
+                .get("object")
+                .and_then(Value::as_object)
+                .and_then(|object| object.get("scope_circle_id"))
+                .and_then(Value::as_str)
+        })
+        .or_else(|| {
+            event
+                .payload
+                .get("relation")
+                .and_then(Value::as_object)
+                .and_then(|relation| relation.get("scope_circle_id"))
+                .and_then(Value::as_str)
+        })
+        .filter(|value| value.starts_with("ck:circle:"))
+        .map(ToOwned::to_owned)
 }
 
 fn circle_scope_visible_to_session(

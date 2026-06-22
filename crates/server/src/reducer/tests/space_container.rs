@@ -733,9 +733,13 @@ fn child_scope_policy_requires_specific_circle_for_strand_placement() {
             crate::kinds::CK_REALM_CREATE,
             realm_id,
             serde_json::json!({
-                "owner": "did:web:alice.example",
-                "title": "Product",
-                "encryption_profile": "mls_rfc9420"
+                "object": {
+                    "id": realm_id,
+                    "schema": "ck.schema.realm.v1",
+                    "title": "Product",
+                    "created_by": "did:web:alice.example",
+                    "encryption_profile": "mls_rfc9420"
+                }
             }),
         ),
         &hlc,
@@ -750,8 +754,22 @@ fn child_scope_policy_requires_specific_circle_for_strand_placement() {
                     "realm_id": realm_id,
                     "title": "Private",
                     "created_by": "did:web:alice.example",
+                    "join_rule": "open",
                     "encryption_profile": "mls_rfc9420"
                 }
+            }),
+        ),
+        &hlc,
+    );
+    state.apply(
+        &make_operation(
+            crate::kinds::CK_CIRCLE_MEMBER_STATE,
+            realm_id,
+            serde_json::json!({
+                "circle_id": circle_id,
+                "actor_id": "did:web:alice.example",
+                "membership": "join",
+                "sender": "did:web:alice.example"
             }),
         ),
         &hlc,
@@ -851,9 +869,13 @@ fn child_scope_policy_gates_space_parent_edges() {
             crate::kinds::CK_REALM_CREATE,
             realm_id,
             serde_json::json!({
-                "owner": "did:web:alice.example",
-                "title": "Product",
-                "encryption_profile": "mls_rfc9420"
+                "object": {
+                    "id": realm_id,
+                    "schema": "ck.schema.realm.v1",
+                    "title": "Product",
+                    "created_by": "did:web:alice.example",
+                    "encryption_profile": "mls_rfc9420"
+                }
             }),
         ),
         &hlc,
@@ -868,8 +890,22 @@ fn child_scope_policy_gates_space_parent_edges() {
                     "realm_id": realm_id,
                     "title": "Private",
                     "created_by": "did:web:alice.example",
+                    "join_rule": "open",
                     "encryption_profile": "mls_rfc9420"
                 }
+            }),
+        ),
+        &hlc,
+    );
+    state.apply(
+        &make_operation(
+            crate::kinds::CK_CIRCLE_MEMBER_STATE,
+            realm_id,
+            serde_json::json!({
+                "circle_id": circle_id,
+                "actor_id": "did:web:alice.example",
+                "membership": "join",
+                "sender": "did:web:alice.example"
             }),
         ),
         &hlc,

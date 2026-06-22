@@ -37,6 +37,8 @@ pub fn demo_organization(realms: &[&RealmDirectoryEntry], service_did: &str) -> 
         "title": "Cokret Demo Organization",
         "display_name": "Cokret Demo Organization",
         "description": "Demo organization projected by soland",
+        "source_refs": ["ck:event:0196419b-0000-7000-8000-0000000000d0"],
+        "policy_revision": "local",
         "service_did": service_did,
         "realm_count": realms.len(),
         "actor_count": 1,

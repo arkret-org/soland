@@ -65,8 +65,8 @@ fn circle_history_uses_invite_and_join_boundaries() {
         REALM,
         serde_json::json!({
             "circle_id": CIRCLE,
-            "actor": BOB,
-            "state": "invite",
+            "actor_id": BOB,
+            "membership": "invite",
             "sender": ALICE,
         }),
     );
@@ -81,8 +81,8 @@ fn circle_history_uses_invite_and_join_boundaries() {
         REALM,
         serde_json::json!({
             "circle_id": CIRCLE,
-            "actor": BOB,
-            "state": "active",
+            "actor_id": BOB,
+            "membership": "join",
             "sender": ALICE,
             "manage_capability_verified": true,
         }),
@@ -111,8 +111,8 @@ fn realm_leave_cascades_to_circle_history_membership() {
         REALM,
         serde_json::json!({
             "circle_id": CIRCLE,
-            "actor": BOB,
-            "state": "active",
+            "actor_id": BOB,
+            "membership": "join",
             "sender": ALICE,
             "manage_capability_verified": true,
         }),
@@ -160,8 +160,8 @@ fn circle_member_leave_enqueues_mls_remove_obligation() {
         REALM,
         serde_json::json!({
             "circle_id": CIRCLE,
-            "actor": BOB,
-            "state": "active",
+            "actor_id": BOB,
+            "membership": "join",
             "sender": ALICE,
             "manage_capability_verified": true,
         }),
@@ -177,7 +177,7 @@ fn circle_member_leave_enqueues_mls_remove_obligation() {
         REALM,
         serde_json::json!({
             "circle_id": CIRCLE,
-            "actor": BOB,
+            "actor_id": BOB,
             "membership": "leave",
             "sender": BOB,
         }),

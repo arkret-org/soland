@@ -53,15 +53,23 @@ pub(crate) fn validate_invite_create_payload(operation: &Operation) -> Result<()
 }
 
 fn invite_create_wire_payload(payload: &Value) -> Value {
+    projection_context_stripped_payload(payload)
+}
+
+pub(crate) fn projection_context_stripped_payload(payload: &Value) -> Value {
     let mut wire_payload = payload.clone();
     if let Some(object) = wire_payload.as_object_mut() {
-        object.remove("event_id");
-        object.remove("sender");
-        object.remove("hlc");
-        object.remove("executed_by");
-        object.remove("authorization_ref");
-        object.remove("seal_ref");
-        object.remove("seal_basis");
+        for field in [
+            "event_id",
+            "sender",
+            "hlc",
+            "executed_by",
+            "authorization_ref",
+            "seal_ref",
+            "seal_basis",
+        ] {
+            object.remove(field);
+        }
     }
     wire_payload
 }
@@ -379,8 +387,8 @@ pub(crate) fn validate_account_data_set_payload(operation: &Operation) -> Result
 pub(crate) fn validate_read_receipt_policy_payload(
     operation: &Operation,
 ) -> Result<(), &'static str> {
-    let payload = operation
-        .payload
+    let wire_payload = projection_context_stripped_payload(&operation.payload);
+    let payload = wire_payload
         .as_object()
         .ok_or("ck.realm.read_receipt_policy payload must be an object")?;
     if payload.is_empty() {
@@ -861,17 +869,7 @@ pub(crate) fn validate_device_authorize_payload(operation: &Operation) -> Result
 }
 
 fn device_authorize_wire_payload(payload: &Value) -> Value {
-    let mut wire_payload = payload.clone();
-    if let Some(object) = wire_payload.as_object_mut() {
-        object.remove("event_id");
-        object.remove("sender");
-        object.remove("hlc");
-        object.remove("executed_by");
-        object.remove("authorization_ref");
-        object.remove("seal_ref");
-        object.remove("seal_basis");
-    }
-    wire_payload
+    projection_context_stripped_payload(payload)
 }
 
 pub(crate) fn validate_cross_signing_reset_replay_batch(

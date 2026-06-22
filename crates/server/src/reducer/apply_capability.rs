@@ -146,6 +146,28 @@ fn engine_resources_from_body(body: &Value, realm_id: &str) -> Vec<String> {
     resources
 }
 
+fn engine_constraints_from_body(body: &Value) -> Vec<crate::authz::Constraint> {
+    value_array_field(body, "constraints")
+        .into_iter()
+        .filter_map(|constraint| {
+            serde_json::from_value(constraint.clone()).ok().or_else(|| {
+                let mut canonical = constraint.as_object()?.clone();
+                if canonical.get("constraint_type").and_then(Value::as_str)
+                    != Some("scope_limitation")
+                    || !canonical.contains_key("allowed_circle_ids")
+                {
+                    return None;
+                }
+                canonical.insert(
+                    "constraint_type".to_owned(),
+                    Value::String("allowed_circle_ids".to_owned()),
+                );
+                serde_json::from_value(Value::Object(canonical)).ok()
+            })
+        })
+        .collect()
+}
+
 /// Build an engine-shaped `Grant` from a projected grant cell body. Returns
 /// `None` only when the body has no actions (a grant with no actions cannot
 /// authorize anything and must not enter the index).
@@ -176,11 +198,8 @@ fn engine_grant_from_cell_body(
     if actions.is_empty() {
         return None;
     }
-    let resource = engine_resource_from_body_or_wildcard(body, &realm_id);
-    let constraints = value_array_field(body, "constraints")
-        .into_iter()
-        .filter_map(|c| serde_json::from_value(c).ok())
-        .collect();
+    let resource = engine_resource_from_body(body, &realm_id);
+    let constraints = engine_constraints_from_body(body);
     let created_at = body
         .get("issued_at")
         .or_else(|| body.get("created_at"))

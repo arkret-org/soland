@@ -86,34 +86,11 @@ fn normalize_read_receipt_payload(
     realm_id: &str,
     envelope: &cokret_sdk::EphemeralEnvelope,
 ) -> Result<NormalizedReadReceipt, AppError> {
-    let mut payload = envelope.payload.clone();
+    let payload = envelope.payload.clone();
     let event_id = {
         let object = payload
-            .as_object_mut()
+            .as_object()
             .ok_or_else(|| AppError::invalid_param("ck.receipt.read payload must be an object"))?;
-
-        object
-            .entry("receipt_type".to_owned())
-            .or_insert_with(|| Value::String(cokret_sdk::READ_RECEIPT_TYPE.to_owned()));
-        object
-            .entry("schema".to_owned())
-            .or_insert_with(|| Value::String(cokret_sdk::READ_RECEIPT_SCHEMA.to_owned()));
-        object
-            .entry("realm_id".to_owned())
-            .or_insert_with(|| Value::String(realm_id.to_owned()));
-        object
-            .entry("actor_id".to_owned())
-            .or_insert_with(|| Value::String(envelope.actor_id.to_string()));
-        object.entry("created_at".to_owned()).or_insert_with(|| {
-            Value::String(
-                envelope
-                    .sent_at
-                    .to_rfc3339_opts(SecondsFormat::Millis, true),
-            )
-        });
-        object
-            .entry("read_scope".to_owned())
-            .or_insert_with(|| json!({"kind": "realm"}));
 
         require_string_field(object, "receipt_type", cokret_sdk::READ_RECEIPT_TYPE)?;
         require_string_field(object, "schema", cokret_sdk::READ_RECEIPT_SCHEMA)?;

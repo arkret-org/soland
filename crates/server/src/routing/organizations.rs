@@ -21,7 +21,7 @@ use crate::routing::system::util::validate_did;
 use crate::state::{
     AppState, OrganizationPolicyRecord, OrganizationRecord, RealmModerationPolicyRecord,
 };
-use crate::{JsonResult, json_ok};
+use crate::{JsonResult, ids, json_ok};
 
 #[derive(Debug, Deserialize, ToSchema)]
 struct UpsertOrganizationRequestBody {
@@ -52,6 +52,9 @@ pub(crate) struct OrganizationView {
     #[serde(skip_serializing_if = "Option::is_none")]
     handle: Option<String>,
     display_name: String,
+    #[serde(default)]
+    source_refs: Vec<String>,
+    policy_revision: String,
     verified: bool,
     verified_badge: bool,
     #[serde(default)]
@@ -315,6 +318,8 @@ async fn upsert_organization(
         organization_did: body.organization_did,
         handle: body.handle,
         display_name,
+        source_refs: vec![ids::generate_event_id()],
+        policy_revision: "local".to_owned(),
         verified: body.verified.unwrap_or(true),
         members,
         member_count,
@@ -792,6 +797,8 @@ async fn ensure_organization_placeholder(
         organization_did: organization_id.to_owned(),
         handle: None,
         display_name: display_name_from_organization_id(organization_id),
+        source_refs: vec![ids::generate_event_id()],
+        policy_revision: "local".to_owned(),
         verified: true,
         members: BTreeSet::new(),
         member_count: 0,
@@ -822,6 +829,8 @@ fn organization_record_view(state: &AppState, record: &OrganizationRecord) -> Or
         organization_did: record.organization_did.clone(),
         handle: record.handle.clone(),
         display_name: record.display_name.clone(),
+        source_refs: record.source_refs.clone(),
+        policy_revision: record.policy_revision.clone(),
         verified: record.verified,
         verified_badge: record.verified,
         members: record.members.iter().cloned().collect::<Vec<_>>(),

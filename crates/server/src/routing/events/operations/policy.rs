@@ -270,7 +270,7 @@ async fn validate_circle_management_policy(
         | kinds::CK_CIRCLE_ARCHIVE
         | kinds::CK_CIRCLE_RESTORE
         | kinds::CK_CIRCLE_TOMBSTONE => ("ck.circle.manage", "circle_manage_capability_required"),
-        kinds::CK_CIRCLE_MEMBER_STATE if circle_member_manage_required(operation) => (
+        kinds::CK_CIRCLE_MEMBER_STATE if circle_member_manage_required(state, operation) => (
             "ck.circle.member.manage",
             "circle_member_manage_capability_required",
         ),
@@ -316,25 +316,37 @@ fn operation_circle_id(operation: &Operation) -> Option<&str> {
         })
 }
 
-fn circle_member_manage_required(operation: &Operation) -> bool {
+fn circle_member_manage_required(state: &AppState, operation: &Operation) -> bool {
     let Some(actor) = operation_actor(operation) else {
         return false;
     };
-    let Some(target) = operation
-        .payload
-        .get("actor")
-        .or_else(|| operation.payload.get("actor_id"))
-        .and_then(Value::as_str)
-    else {
+    let Some(target) = operation.payload.get("actor_id").and_then(Value::as_str) else {
         return false;
     };
     let membership = operation
         .payload
-        .get("state")
-        .or_else(|| operation.payload.get("membership"))
+        .get("membership")
         .and_then(Value::as_str)
         .unwrap_or("join");
-    target != actor || matches!(membership, "invite" | "invited" | "ban" | "banned")
+    match membership {
+        "invite" | "ban" => true,
+        "join" if target == actor => {
+            let Some(circle_id) = operation_circle_id(operation) else {
+                return false;
+            };
+            state
+                .projection
+                .lock()
+                .ok()
+                .and_then(|projection| {
+                    projection
+                        .circle(circle_id)
+                        .map(|circle| circle.join_rule != "open")
+                })
+                .unwrap_or(false)
+        }
+        _ => target != actor,
+    }
 }
 
 fn policy_realm_member_joined(state: &AppState, realm_id: &str, actor: &str) -> bool {
@@ -1078,6 +1090,7 @@ fn validate_circle_scope_membership(
     let Some(scope_circle_id) = operation_target_scope_circle_id(&projection, operation) else {
         return Ok(());
     };
+    projection.validate_scope_circle_id(&scope_circle_id, operation.realm_id.as_str())?;
     let Some(actor) = operation_actor(operation) else {
         return Ok(());
     };

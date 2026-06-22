@@ -572,8 +572,9 @@ impl OrganizationStore for PgOrganizationStore {
     async fn get(&self, organization_id: &str) -> PersistenceResult<Option<OrganizationRecord>> {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(
-            "SELECT organization_id, organization_did, handle, display_name, verified, members, \
-                    member_count, created_by, created_at, updated_at \
+            "SELECT organization_id, organization_did, handle, display_name, source_refs, \
+                    policy_revision, verified, members, member_count, created_by, created_at, \
+                    updated_at \
              FROM organizations WHERE organization_id = $1",
         )
         .bind::<Text, _>(organization_id)
@@ -591,13 +592,16 @@ impl OrganizationStore for PgOrganizationStore {
         let member_count = i64::try_from(record.member_count).unwrap_or(i64::MAX);
         sql_query(
             "INSERT INTO organizations \
-             (organization_id, organization_did, handle, display_name, verified, members, \
-              member_count, created_by, created_at, updated_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) \
+             (organization_id, organization_did, handle, display_name, source_refs, \
+              policy_revision, verified, members, member_count, created_by, created_at, \
+              updated_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) \
              ON CONFLICT (organization_id) DO UPDATE SET \
                organization_did = EXCLUDED.organization_did, \
                handle = EXCLUDED.handle, \
                display_name = EXCLUDED.display_name, \
+               source_refs = EXCLUDED.source_refs, \
+               policy_revision = EXCLUDED.policy_revision, \
                verified = EXCLUDED.verified, \
                members = EXCLUDED.members, \
                member_count = EXCLUDED.member_count, \
@@ -607,6 +611,10 @@ impl OrganizationStore for PgOrganizationStore {
         .bind::<Text, _>(&record.organization_did)
         .bind::<Nullable<Text>, _>(&record.handle)
         .bind::<Text, _>(&record.display_name)
+        .bind::<Jsonb, _>(
+            &serde_json::to_value(&record.source_refs).unwrap_or_else(|_| Value::Array(Vec::new())),
+        )
+        .bind::<Text, _>(&record.policy_revision)
         .bind::<Bool, _>(record.verified)
         .bind::<Jsonb, _>(&members)
         .bind::<BigInt, _>(member_count)
@@ -622,8 +630,9 @@ impl OrganizationStore for PgOrganizationStore {
     async fn list(&self) -> PersistenceResult<Vec<OrganizationRecord>> {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(
-            "SELECT organization_id, organization_did, handle, display_name, verified, members, \
-                    member_count, created_by, created_at, updated_at \
+            "SELECT organization_id, organization_did, handle, display_name, source_refs, \
+                    policy_revision, verified, members, member_count, created_by, created_at, \
+                    updated_at \
              FROM organizations ORDER BY organization_id",
         )
         .load::<OrganizationRow>(&mut *conn)
@@ -643,6 +652,10 @@ struct OrganizationRow {
     handle: Option<String>,
     #[diesel(sql_type = Text)]
     display_name: String,
+    #[diesel(sql_type = Jsonb)]
+    source_refs: Value,
+    #[diesel(sql_type = Text)]
+    policy_revision: String,
     #[diesel(sql_type = Bool)]
     verified: bool,
     #[diesel(sql_type = Jsonb)]
@@ -667,6 +680,8 @@ impl From<OrganizationRow> for OrganizationRecord {
             organization_did: row.organization_did,
             handle: row.handle,
             display_name: row.display_name,
+            source_refs: json_string_array(row.source_refs),
+            policy_revision: row.policy_revision,
             verified: row.verified,
             member_count: usize::try_from(row.member_count.max(0)).unwrap_or(usize::MAX),
             members,

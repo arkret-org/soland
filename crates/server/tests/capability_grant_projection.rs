@@ -25,6 +25,8 @@ const ISSUER: &str = "did:web:owner.example";
 const SUBJECT: &str = "did:web:bob.example";
 const ACTION: &str = "ck.realm.admin";
 const STRAND_ID: &str = "ck:strand:01904100-0000-7000-8000-eeeeeeeeeeee";
+const CIRCLE_A: &str = "ck:circle:01904100-0000-7000-8000-c1c1c1c1c1c1";
+const CIRCLE_B: &str = "ck:circle:01904100-0000-7000-8000-c2c2c2c2c2c2";
 
 fn op(kind: &str, realm_id: &str, payload: Value) -> Operation {
     Operation::create(
@@ -144,6 +146,74 @@ fn grant_projects_cell_and_authorizes_check() {
 
     // Derived engine grant authorizes the subject for the action.
     assert!(check_allows(&state, GRANT_ID), "grant must authorize check");
+}
+
+#[test]
+fn canonical_circle_selector_and_constraint_project_to_narrow_runtime_grant() {
+    let mut state = ProjectionState::new();
+    seed_realm_owner(&mut state);
+    let hlc = ServerHlc::new("test");
+    let effect = state.apply(
+        &op(
+            soland::kinds::CK_CAPABILITY_GRANT,
+            REALM,
+            json!({
+                "grant_id": GRANT_ID,
+                "grant": {
+                    "id": GRANT_ID,
+                    "grant_id": GRANT_ID,
+                    "realm_id": REALM,
+                    "issuer": ISSUER,
+                    "subject": SUBJECT,
+                    "actions": ["ck.circle.member.manage"],
+                    "resources": [{ "kind": "circle", "realm_id": REALM, "circle_id": CIRCLE_A }],
+                    "constraints": [{
+                        "constraint_type": "scope_limitation",
+                        "effect": "allow",
+                        "allowed_circle_ids": [CIRCLE_A],
+                    }],
+                }
+            }),
+        ),
+        &hlc,
+    );
+    assert!(
+        matches!(effect, ProjectionEffect::CapabilityGrantProjected { .. }),
+        "canonical Circle grant should project, got {effect:?}"
+    );
+    let engine = SolandAuthzEngine::new();
+    let grant = state
+        .effective_engine_grant(GRANT_ID)
+        .expect("canonical Circle grant must map to runtime grant");
+    engine.upsert_projected_grant(grant);
+    assert!(
+        engine
+            .check(
+                SUBJECT,
+                "ck.circle.member.manage",
+                CIRCLE_A,
+                REALM,
+                Some(ISSUER),
+                &[],
+                &[]
+            )
+            .allowed,
+        "grant should authorize the allowed Circle"
+    );
+    assert!(
+        !engine
+            .check(
+                SUBJECT,
+                "ck.circle.member.manage",
+                CIRCLE_B,
+                REALM,
+                Some(ISSUER),
+                &[],
+                &[]
+            )
+            .allowed,
+        "grant must not authorize a different Circle"
+    );
 }
 
 #[test]

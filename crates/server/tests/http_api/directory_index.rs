@@ -77,12 +77,20 @@ async fn directory_product_endpoints_return_demo_projection_shapes() {
             .await
             .unwrap();
     assert_eq!(
-        organizations["organizations"][0]["preview"]["organization_id"],
-        "ck:org:demo"
-    );
-    assert_eq!(
         organizations["organizations"][0]["organization_did"],
         "did:web:soland.local"
+    );
+    assert_eq!(
+        organizations["organizations"][0]["display_name"],
+        "Cokret Demo Organization"
+    );
+    assert_eq!(
+        organizations["organizations"][0]["source_refs"][0],
+        "ck:event:0196419b-0000-7000-8000-0000000000d0"
+    );
+    assert_eq!(
+        organizations["organizations"][0]["policy_revision"],
+        "local"
     );
 
     let organization: Value =
@@ -98,11 +106,12 @@ async fn directory_product_endpoints_return_demo_projection_shapes() {
         "@cokret-demo"
     );
     assert_eq!(
-        organization["organization_preview"]["preview"]["spaces"]
-            .as_array()
-            .unwrap()
-            .len(),
-        1
+        organization["organization_preview"]["display_name"],
+        "Cokret Demo Organization"
+    );
+    assert_eq!(
+        organization["organization_preview"]["policy_revision"],
+        "local"
     );
 
     let actors: Value = TestClient::post("http://server/_cokret/find/directory/search-actors")
@@ -135,7 +144,7 @@ async fn directory_product_endpoints_return_demo_projection_shapes() {
     assert!(users["users"][0].get("organization_id").is_none());
 
     let handle: Value = TestClient::post("http://server/_cokret/find/directory/resolve-handle")
-        .json(&serde_json::json!({"handle": "alice"}))
+        .json(&serde_json::json!({"handle": "alice:soland.local"}))
         .send(&app())
         .await
         .take_json()

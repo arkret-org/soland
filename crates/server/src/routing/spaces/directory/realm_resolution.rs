@@ -363,6 +363,7 @@ pub(super) fn organization_preview_from_value(
         .get("organization_did")
         .and_then(Value::as_str)
         .unwrap_or(state.config.service_did.as_str());
+    let as_of = organization_timestamp(organization).unwrap_or_else(now);
     Ok(OrganizationPreview {
         organization_did: Did::new(organization_did.to_owned()).map_err(|error| {
             AppError::internal(format!("directory organization_did is invalid: {error}"))
@@ -371,30 +372,73 @@ pub(super) fn organization_preview_from_value(
             .get("handle")
             .and_then(Value::as_str)
             .map(ToOwned::to_owned),
-        preview: directory_organization_preview_payload(organization),
+        display_name: organization
+            .get("display_name")
+            .or_else(|| organization.get("title"))
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+        avatar_blob_ref: organization
+            .get("avatar_blob_ref")
+            .and_then(Value::as_str)
+            .map(|value| {
+                BlobRef::new(value.to_owned()).map_err(|error| {
+                    AppError::internal(format!(
+                        "directory organization avatar_blob_ref is invalid: {error}"
+                    ))
+                })
+            })
+            .transpose()?,
+        as_of,
+        source_refs: organization_source_refs(organization),
+        policy_revision: organization
+            .get("policy_revision")
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or("local")
+            .to_owned(),
+        stale: organization.get("stale").and_then(Value::as_bool),
+        divergent: organization.get("divergent").and_then(Value::as_bool),
     })
 }
 
-fn directory_organization_preview_payload(organization: &Value) -> Value {
-    let mut preview = organization.clone();
-    if let Value::Object(object) = &mut preview {
-        if let Some(name) = object.remove("name") {
-            object.entry("title".to_owned()).or_insert(name);
-        }
+fn organization_timestamp(organization: &Value) -> Option<DateTime<Utc>> {
+    ["as_of", "updated_at", "created_at"]
+        .into_iter()
+        .find_map(|field| {
+            organization
+                .get(field)
+                .and_then(Value::as_str)
+                .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
+                .map(|value| value.with_timezone(&Utc))
+        })
+}
+
+fn organization_source_refs(organization: &Value) -> Vec<String> {
+    let refs = organization
+        .get("source_refs")
+        .and_then(Value::as_array)
+        .map(|values| {
+            values
+                .iter()
+                .filter_map(Value::as_str)
+                .filter(|value| !value.trim().is_empty())
+                .map(ToOwned::to_owned)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    if refs.is_empty() {
+        vec![ids::generate_event_id()]
+    } else {
+        refs
     }
-    preview
 }
 
 pub(super) fn organization_preview_with_spaces(
     organization: &Value,
-    spaces: Vec<Value>,
+    _spaces: Vec<Value>,
     state: &AppState,
 ) -> Result<OrganizationPreview, AppError> {
-    let mut preview = organization.clone();
-    if let Value::Object(object) = &mut preview {
-        object.insert("spaces".to_owned(), Value::Array(spaces));
-    }
-    organization_preview_from_value(&preview, state)
+    organization_preview_from_value(organization, state)
 }
 
 pub(super) fn actor_preview_from_value(actor: &Value) -> Result<ActorPreview, AppError> {

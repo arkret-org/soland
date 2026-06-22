@@ -13,9 +13,13 @@ fn seed_scoped_message(state: &mut ProjectionState, hlc: &ServerHlc) {
             crate::kinds::CK_REALM_CREATE,
             REALM_ID,
             serde_json::json!({
-                "owner": "did:web:alice.example",
-                "title": "Product",
-                "encryption_profile": "mls_rfc9420"
+                "object": {
+                    "id": REALM_ID,
+                    "schema": "ck.schema.realm.v1",
+                    "title": "Product",
+                    "created_by": "did:web:alice.example",
+                    "encryption_profile": "mls_rfc9420"
+                }
             }),
         ),
         hlc,
@@ -30,8 +34,22 @@ fn seed_scoped_message(state: &mut ProjectionState, hlc: &ServerHlc) {
                     "realm_id": REALM_ID,
                     "title": "Private",
                     "created_by": "did:web:alice.example",
+                    "join_rule": "open",
                     "encryption_profile": "mls_rfc9420"
                 }
+            }),
+        ),
+        hlc,
+    );
+    state.apply(
+        &make_operation(
+            crate::kinds::CK_CIRCLE_MEMBER_STATE,
+            REALM_ID,
+            serde_json::json!({
+                "circle_id": CIRCLE_ID,
+                "actor_id": "did:web:alice.example",
+                "membership": "join",
+                "sender": "did:web:alice.example"
             }),
         ),
         hlc,

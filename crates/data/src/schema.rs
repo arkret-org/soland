@@ -24,6 +24,8 @@ diesel::table! {
         organization_did -> Text,
         handle -> Nullable<Text>,
         display_name -> Text,
+        source_refs -> Jsonb,
+        policy_revision -> Text,
         verified -> Bool,
         members -> Jsonb,
         member_count -> Int8,

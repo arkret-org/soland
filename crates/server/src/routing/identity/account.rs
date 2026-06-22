@@ -24,7 +24,7 @@ use cokret_sdk::http::{
 // `cokret_sdk::InviteReceivePolicy` also resolves at the crate root, but the
 // invite-addressing strong type lives under `model`; import it via the
 // `model` path to avoid binding the wrong same-named re-export.
-use cokret_sdk::models::InviteReceivePolicy;
+use cokret_sdk::models::{Handle as SdkHandle, InviteReceivePolicy};
 use cokret_sdk::{
     ACTOR_PROFILE_SCHEMA, AccountDeviceSummary, AccountRegisterOutcome, AccountRegisterRequestBody,
     AccountRegistrationAudit, AccountRegistrationAuditOutcome, AccountRegistrationEvidenceSummary,
@@ -82,14 +82,16 @@ pub(crate) async fn record_handle_release(
 /// handle domain.
 fn principal_handle_domain(state: &AppState) -> String {
     handle_domain_from_public_base_url(&state.config.public_base_url)
-        .or_else(|| did_host_candidate(&state.config.service_did))
+        .or_else(|| {
+            did_host_candidate(&state.config.service_did)
+                .and_then(|host| valid_handle_domain_candidate(&host))
+        })
         .unwrap_or_else(|| "soland.local".to_owned())
 }
 
 fn handle_domain_from_public_base_url(public_base_url: &str) -> Option<String> {
     let url = reqwest::Url::parse(public_base_url).ok()?;
-    let host = url.host_str()?.trim().trim_end_matches('.');
-    (!host.is_empty()).then(|| normalized_registration_policy_label(host))
+    valid_handle_domain_candidate(url.host_str()?)
 }
 
 /// Resolve the durable account localpart from a canonical registration handle
@@ -366,6 +368,16 @@ fn evidence_secret_matches(
 
 fn normalized_registration_policy_label(value: &str) -> String {
     value.trim().trim_end_matches('.').to_ascii_lowercase()
+}
+
+fn valid_handle_domain_candidate(value: &str) -> Option<String> {
+    let domain = normalized_registration_policy_label(value);
+    if domain.is_empty() {
+        return None;
+    }
+    SdkHandle::parse(&format!("alice:{domain}"))
+        .ok()
+        .map(|handle| handle.domain().to_owned())
 }
 
 fn did_host_candidate(did: &str) -> Option<String> {
@@ -753,6 +765,7 @@ async fn account_viewer(
         .map_err(|error| AppError::internal(format!("stored account DID is invalid: {error}")))?;
 
     let primary_handle_claim = account_primary_handle_claim(state, &account).await;
+    let profile = Some(actor_profile_from_account(&account, None, None)?);
     json_ok(AccountView {
         principal_id,
         state: state.account_lifecycle_status(&account.did),
@@ -760,7 +773,7 @@ async fn account_viewer(
         primary_handle_claim,
         primary_handle_claim_ref: None,
         handle_claim_digests: Vec::new(),
-        profile: None,
+        profile,
     })
 }
 
@@ -930,17 +943,11 @@ async fn update_profile(
     if let Some(value) = patch_string(&patch, "profile_fields.bio")? {
         current.bio = value.and_then(empty_to_none);
     }
-    if let Some(value) = patch_string(&patch, "profile_fields.avatar_url")? {
-        let normalized = value.and_then(empty_to_none);
-        if let Some(url) = &normalized
-            && !(url.starts_with("https://") || url.starts_with("http://"))
-        {
-            return Err(
-                AppError::invalid_param("avatar_url must be http:// or https://")
-                    .with_wire_code("invalid_avatar_url"),
-            );
-        }
-        current.avatar_url = normalized;
+    if patch.get("profile_fields.avatar_url").is_some() {
+        return Err(AppError::invalid_param(
+            "avatar_url is not accepted on the profile update protocol",
+        )
+        .with_wire_code("invalid_avatar_url"));
     }
     let avatar_blob_ref = patch_blob_ref(&patch, "avatar_blob_ref")?;
     accounts_store
@@ -954,7 +961,6 @@ async fn update_profile(
         json!({
             "display_name": current.display_name.clone(),
             "bio": current.bio.clone(),
-            "avatar_url": current.avatar_url.clone(),
         }),
         "accepted",
     )
@@ -1035,9 +1041,6 @@ fn actor_profile_from_account(
     let mut profile_fields = BTreeMap::new();
     if let Some(bio) = account.bio.clone() {
         profile_fields.insert("bio".to_owned(), Value::String(bio));
-    }
-    if let Some(avatar_url) = account.avatar_url.clone() {
-        profile_fields.insert("avatar_url".to_owned(), Value::String(avatar_url));
     }
     let id = ActorProfileId::new(cokret_sdk::new_prefixed_uuid7("ck:actor_profile:")).map_err(
         |error| AppError::internal(format!("actor profile id construction failed: {error}")),

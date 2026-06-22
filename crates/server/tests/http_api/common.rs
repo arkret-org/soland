@@ -456,11 +456,29 @@ pub(crate) async fn seed_test_realm(
 pub(crate) fn add_test_realm_member(state: &AppState, realm_id: &str, member: &str) -> Value {
     let typed_realm_id = RealmId::new(realm_id.to_owned()).unwrap();
     let member_did = Did::new(member.to_owned()).unwrap();
+    let now = chrono::Utc::now();
     let mut realms = state.realms.lock().unwrap();
     if let Some(mut entry) = realms.get(&typed_realm_id).cloned() {
         entry.members.insert(member_did);
         let members = realm_member_roster(&entry);
         realms.upsert(entry);
+        drop(realms);
+        state.projection.lock().unwrap().members.insert(
+            (realm_id.to_owned(), member.to_owned()),
+            soland::reducer::SolandMembershipState {
+                member: member.to_owned(),
+                realm_id: realm_id.to_owned(),
+                state: "join".to_owned(),
+                role: "member".to_owned(),
+                delivery_status: None,
+                recipient_service_did: None,
+                membership_event_ref: None,
+                delivery_binding_frontier: None,
+                invited_at: None,
+                joined_at: now,
+                updated_at: now,
+            },
+        );
         serde_json::json!({
             "ok": true,
             "realm_id": realm_id,
@@ -480,6 +498,13 @@ pub(crate) fn remove_test_realm_member(state: &AppState, realm_id: &str, member:
         entry.members.remove(&member_did);
         let members = realm_member_roster(&entry);
         realms.upsert(entry);
+        drop(realms);
+        state
+            .projection
+            .lock()
+            .unwrap()
+            .members
+            .remove(&(realm_id.to_owned(), member.to_owned()));
         serde_json::json!({
             "ok": true,
             "realm_id": realm_id,

@@ -99,6 +99,8 @@ struct UnsignedIceConfigOutcome {
 struct IceConfigSignature {
     pub alg: String,
     pub kid: String,
+    pub signature_input: String,
+    pub payload_digest: String,
     pub sig: String,
 }
 
@@ -124,7 +126,7 @@ impl SolandIceConfigOutcome {
         state: &AppState,
         unsigned: UnsignedIceConfigOutcome,
     ) -> Result<SolandIceConfigOutcome, AppError> {
-        let sig = ice_config_signature(state, &unsigned);
+        let (sig, payload_digest) = ice_config_signature(state, &unsigned);
         Ok(SolandIceConfigOutcome {
             realm_id: unsigned.realm_id,
             call_id: unsigned.call_id,
@@ -141,6 +143,8 @@ impl SolandIceConfigOutcome {
             signature: IceConfigSignature {
                 alg: "EdDSA".to_owned(),
                 kid: format!("{}#notary-key", state.config.service_did),
+                signature_input: ICE_CONFIG_SIGNING_LABEL.to_owned(),
+                payload_digest,
                 sig,
             },
         })
@@ -410,20 +414,25 @@ const ICE_CONFIG_SIGNING_LABEL: &str = "ck.media.ice_config.v1";
 /// input as `label || 0x00 || canonical_json(<response minus signature>)`. The
 /// `payload` is the unsigned outcome (the response object before the
 /// `signature` field is attached), serialized as RFC 8785 JCS canonical JSON.
-fn ice_config_signing_input<T: Serialize>(payload: &T) -> Vec<u8> {
-    let payload = cokret_sdk::canonical::canonical_json_bytes(payload)
-        .unwrap_or_else(|_| serde_json::to_vec(payload).unwrap_or_default());
+fn ice_config_payload_bytes<T: Serialize>(payload: &T) -> Vec<u8> {
+    cokret_sdk::canonical::canonical_json_bytes(payload)
+        .unwrap_or_else(|_| serde_json::to_vec(payload).unwrap_or_default())
+}
+
+fn ice_config_signing_input(payload: &[u8]) -> Vec<u8> {
     let mut signing_input = Vec::with_capacity(ICE_CONFIG_SIGNING_LABEL.len() + payload.len() + 1);
     signing_input.extend_from_slice(ICE_CONFIG_SIGNING_LABEL.as_bytes());
     signing_input.push(0);
-    signing_input.extend_from_slice(&payload);
+    signing_input.extend_from_slice(payload);
     signing_input
 }
 
-fn ice_config_signature<T: Serialize>(state: &AppState, payload: &T) -> String {
-    let signing_input = ice_config_signing_input(payload);
+fn ice_config_signature<T: Serialize>(state: &AppState, payload: &T) -> (String, String) {
+    let payload_bytes = ice_config_payload_bytes(payload);
+    let payload_digest = cokret_sdk::canonical::sha256_digest(&payload_bytes);
+    let signing_input = ice_config_signing_input(&payload_bytes);
     let signature = state.notary_signing_key().sign(&signing_input);
-    URL_SAFE_NO_PAD.encode(signature.to_bytes())
+    (URL_SAFE_NO_PAD.encode(signature.to_bytes()), payload_digest)
 }
 
 // ── CKP-0010 (R3 spec-sync 2026-05-27, cokret-spec b47ff6ec) — media

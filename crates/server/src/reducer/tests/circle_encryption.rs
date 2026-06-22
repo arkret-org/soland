@@ -70,8 +70,8 @@ fn circle_manage_pull_realm_member_succeeds() {
         &realm,
         serde_json::json!({
             "circle_id": circle,
-            "actor": "did:web:bob",
-            "state": "active",
+            "actor_id": "did:web:bob",
+            "membership": "join",
             "sender": "did:web:alice",
             "manage_capability_verified": true,
         }),
@@ -97,8 +97,8 @@ fn circle_pull_without_manage_rejected() {
         &realm,
         serde_json::json!({
             "circle_id": circle,
-            "actor": "did:web:bob",
-            "state": "active",
+            "actor_id": "did:web:bob",
+            "membership": "join",
             "sender": "did:web:alice",
         }),
     );
@@ -123,8 +123,8 @@ fn circle_pull_non_realm_member_rejected() {
         &realm,
         serde_json::json!({
             "circle_id": circle,
-            "actor": "did:web:mallory",
-            "state": "active",
+            "actor_id": "did:web:mallory",
+            "membership": "join",
             "sender": "did:web:alice",
             "manage_capability_verified": true,
         }),
@@ -141,15 +141,17 @@ fn circle_pull_non_realm_member_rejected() {
 
 #[test]
 fn circle_self_join_requires_open_rule() {
-    // bob self-joins an `invite`-rule Circle → rejected; an `open` Circle
-    // lets a joined Realm member add themselves with no manage capability.
+    // bob self-joins an `invite`-rule Circle without manage → rejected; an
+    // explicit manage verdict can authorize self-add on a non-open Circle; an
+    // `open` Circle lets a joined Realm member add themselves with no manage
+    // capability.
     let (mut state, hlc, realm, circle) = seed_circle_authz_state();
     let op_invite = make_operation(
         crate::kinds::CK_CIRCLE_MEMBER_STATE,
         &realm,
         serde_json::json!({
-            "circle_id": circle, "actor": "did:web:bob",
-            "state": "active", "sender": "did:web:bob",
+            "circle_id": circle, "actor_id": "did:web:bob",
+            "membership": "join", "sender": "did:web:bob",
         }),
     );
     assert!(
@@ -159,14 +161,31 @@ fn circle_self_join_requires_open_rule() {
         ),
         "self-join on a non-open Circle must be rejected"
     );
+    let op_invite_with_manage = make_operation(
+        crate::kinds::CK_CIRCLE_MEMBER_STATE,
+        &realm,
+        serde_json::json!({
+            "circle_id": circle, "actor_id": "did:web:alice",
+            "membership": "join", "sender": "did:web:alice",
+            "manage_capability_verified": true,
+        }),
+    );
+    assert!(
+        matches!(
+            state.apply(&op_invite_with_manage, &hlc),
+            ProjectionEffect::CircleMemberStateChanged { .. }
+        ),
+        "self-join on a non-open Circle must be accepted with explicit manage"
+    );
+    assert!(state.circles[&circle].members.contains("did:web:alice"));
     // Flip the Circle to open and retry.
     state.circles.get_mut(&circle).unwrap().join_rule = "open".to_owned();
     let op_open = make_operation(
         crate::kinds::CK_CIRCLE_MEMBER_STATE,
         &realm,
         serde_json::json!({
-            "circle_id": circle, "actor": "did:web:bob",
-            "state": "active", "sender": "did:web:bob",
+            "circle_id": circle, "actor_id": "did:web:bob",
+            "membership": "join", "sender": "did:web:bob",
         }),
     );
     assert!(

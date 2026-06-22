@@ -127,6 +127,38 @@ mod invite_create_schema_tests {
     }
 }
 
+mod read_receipt_policy_schema_tests {
+    use cokret_sdk::Operation;
+    use serde_json::json;
+
+    use super::super::*;
+
+    fn op(payload: serde_json::Value) -> Operation {
+        Operation::create(
+            cokret_sdk::OperationId::new("ck:operation:01904100-0000-7000-8000-000000000702")
+                .unwrap(),
+            cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-000000000702".to_owned())
+                .unwrap(),
+            kinds::CK_REALM_READ_RECEIPT_POLICY,
+            payload,
+        )
+    }
+
+    #[test]
+    fn accepts_projection_internal_fields() {
+        let schema = operation_schema_for_kind(kinds::CK_REALM_READ_RECEIPT_POLICY).unwrap();
+        let operation = op(json!({
+            "disclosure": "required",
+            "event_id": "ck:event:01904100-0000-7000-8000-000000000702",
+            "sender": "did:web:alice.example",
+            "hlc": "2026-06-14T10:00:00Z/node/1",
+            "seal_ref": "ck:seal:sha256:1111111111111111111111111111111111111111111111111111111111111111"
+        }));
+
+        assert!(validate_operation_schema(&operation, schema).is_ok());
+    }
+}
+
 mod realm_media_service_schema_tests {
     use cokret_sdk::Operation;
     use serde_json::json;

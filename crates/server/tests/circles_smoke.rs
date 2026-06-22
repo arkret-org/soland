@@ -8,8 +8,8 @@
 //! on the projection-side state machine surfaces immediately:
 //!
 //! 1. `ck.circle.create` writes a live Circle into the projection;
-//! 2. `ck.circle.member.state -> active` for a non-Realm member is rejected with the canonical
-//!    CKP-0007 reason `circle_member_must_be_realm_member`;
+//! 2. `ck.circle.member.state -> membership: join` for a non-Realm member is rejected with the
+//!    canonical CKP-0007 reason `circle_member_must_be_realm_member`;
 //! 3. After the actor joins the parent Realm, the same membership write is accepted and the Circle
 //!    members set is updated;
 //! 4. A Strand create with `scope_circle_id` pointing at a Circle in a different Realm is rejected
@@ -54,9 +54,14 @@ fn seed_realm(state: &mut ProjectionState, hlc: &ServerHlc, realm_id: &str, owne
             CK_REALM_CREATE,
             realm_id,
             json!({
-                "action": "create",
-                "owner": owner,
-                "public": true,
+                "object": {
+                    "id": realm_id,
+                    "schema": "ck.schema.realm.v1",
+                    "title": "Test Realm",
+                    "created_by": owner,
+                    "default_discoverability": "public",
+                    "encryption_profile": "none",
+                }
             }),
         ),
         hlc,
@@ -69,10 +74,14 @@ fn seed_encrypted_realm(state: &mut ProjectionState, hlc: &ServerHlc, realm_id: 
             CK_REALM_CREATE,
             realm_id,
             json!({
-                "action": "create",
-                "owner": owner,
-                "public": true,
-                "encryption_profile": "mls_rfc9420",
+                "object": {
+                    "id": realm_id,
+                    "schema": "ck.schema.realm.v1",
+                    "title": "Encrypted Test Realm",
+                    "created_by": owner,
+                    "default_discoverability": "public",
+                    "encryption_profile": "mls_rfc9420",
+                }
             }),
         ),
         hlc,
@@ -287,8 +296,8 @@ fn circle_member_must_be_realm_member() {
             REALM_A,
             json!({
                 "circle_id": CIRCLE_A,
-                "actor": BOB,
-                "state": "active",
+                "actor_id": BOB,
+                "membership": "join",
                 "sender": ALICE,
             }),
         ),
@@ -312,8 +321,8 @@ fn circle_member_must_be_realm_member() {
             REALM_A,
             json!({
                 "circle_id": CIRCLE_A,
-                "actor": BOB,
-                "state": "active",
+                "actor_id": BOB,
+                "membership": "join",
                 "sender": ALICE,
                 "manage_capability_verified": true,
             }),
@@ -323,7 +332,7 @@ fn circle_member_must_be_realm_member() {
     assert!(matches!(
         accepted,
         ProjectionEffect::CircleMemberStateChanged { ref member, ref target_state, .. }
-            if member == BOB && target_state == "active"
+            if member == BOB && target_state == "join"
     ));
     let circle = state.circle(CIRCLE_A).expect("circle live");
     assert!(circle.members.contains(BOB), "Bob is now a Circle member");
@@ -353,7 +362,7 @@ fn circle_member_remove_updates_active_set_and_scope_visibility() {
     );
     // Owner Alice adds Bob to a non-`open` Circle (authorised cross-actor add):
     // the payload carries the `sender` + manage stamp the HTTP authz gate would
-    // attach, so the §8 door passes and we reach the remove/active-set invariant
+    // attach, so the §8 door passes and we reach the remove/joined-set invariant
     // under test.
     state.apply(
         &op(
@@ -361,8 +370,8 @@ fn circle_member_remove_updates_active_set_and_scope_visibility() {
             REALM_A,
             json!({
                 "circle_id": CIRCLE_A,
-                "actor": BOB,
-                "state": "active",
+                "actor_id": BOB,
+                "membership": "join",
                 "sender": ALICE,
                 "manage_capability_verified": true,
             }),
@@ -371,7 +380,7 @@ fn circle_member_remove_updates_active_set_and_scope_visibility() {
     );
     assert!(
         state.circle_scope_visible_to_actor(CIRCLE_A, BOB),
-        "active Circle member should see Circle-scoped content"
+        "joined Circle member should see Circle-scoped content"
     );
 
     let removed = state.apply(
@@ -381,7 +390,7 @@ fn circle_member_remove_updates_active_set_and_scope_visibility() {
             json!({
                 "circle_id": CIRCLE_A,
                 "actor_id": BOB,
-                "membership": "left",
+                "membership": "leave",
                 "sender": ALICE,
             }),
         ),
@@ -390,10 +399,10 @@ fn circle_member_remove_updates_active_set_and_scope_visibility() {
     assert!(matches!(
         removed,
         ProjectionEffect::CircleMemberStateChanged { ref member, ref target_state, .. }
-            if member == BOB && target_state == "left"
+            if member == BOB && target_state == "leave"
     ));
     let circle = state.circle(CIRCLE_A).expect("circle live");
-    assert!(!circle.members.contains(BOB), "Bob left the active set");
+    assert!(!circle.members.contains(BOB), "Bob left the joined set");
     assert!(
         !state.circle_scope_visible_to_actor(CIRCLE_A, BOB),
         "removed Circle member must not see new Circle-scoped content"
@@ -430,8 +439,8 @@ fn assert_parent_membership_cascades_circle_membership(target_membership: &str) 
                 REALM_A,
                 json!({
                     "circle_id": circle_id,
-                    "actor": BOB,
-                    "state": "active",
+                    "actor_id": BOB,
+                    "membership": "join",
                     "sender": ALICE,
                     "manage_capability_verified": true,
                 }),
@@ -440,7 +449,7 @@ fn assert_parent_membership_cascades_circle_membership(target_membership: &str) 
         );
         assert!(
             state.circle_scope_visible_to_actor(circle_id, BOB),
-            "fixture should start with Bob active in {circle_id}"
+            "fixture should start with Bob joined in {circle_id}"
         );
     }
 
@@ -512,7 +521,7 @@ fn circle_scoped_message_preserves_scope_for_visibility_filtering() {
         ),
         &hlc,
     );
-    // Seed the Circle's active membership via authorised cross-actor adds: each
+    // Seed the Circle's joined membership via authorised cross-actor adds: each
     // payload carries a `sender` distinct from the target plus the manage stamp
     // the HTTP authz gate would attach, so the CKP-0007 §8 door passes on a
     // non-`open` Circle and we reach the scope/visibility invariant under test.
@@ -525,8 +534,8 @@ fn circle_scoped_message_preserves_scope_for_visibility_filtering() {
                 REALM_A,
                 json!({
                     "circle_id": CIRCLE_A,
-                    "actor": actor,
-                    "state": "active",
+                    "actor_id": actor,
+                    "membership": "join",
                     "sender": sender,
                     "manage_capability_verified": true,
                 }),
@@ -605,8 +614,22 @@ fn circle_scoped_morph_preserves_scope_for_update_gates() {
                     "id": CIRCLE_A,
                     "realm_id": REALM_A,
                     "title": "Private Ops",
+                    "join_rule": "open",
                     "created_by": ALICE,
                 }
+            }),
+        ),
+        &hlc,
+    );
+    state.apply(
+        &op(
+            CK_CIRCLE_MEMBER_STATE,
+            REALM_A,
+            json!({
+                "circle_id": CIRCLE_A,
+                "actor_id": ALICE,
+                "membership": "join",
+                "sender": ALICE,
             }),
         ),
         &hlc,

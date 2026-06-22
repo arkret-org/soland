@@ -31,9 +31,13 @@ fn seed_pin_target(state: &mut ProjectionState, hlc: &ServerHlc) {
             crate::kinds::CK_REALM_CREATE,
             REALM_ID,
             serde_json::json!({
-                "owner": "did:web:alice.example",
-                "title": "Product",
-                "encryption_profile": "mls_rfc9420"
+                "object": {
+                    "id": REALM_ID,
+                    "schema": "ck.schema.realm.v1",
+                    "title": "Product",
+                    "created_by": "did:web:alice.example",
+                    "encryption_profile": "mls_rfc9420"
+                }
             }),
         ),
         hlc,

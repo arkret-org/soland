@@ -112,6 +112,12 @@ impl ProjectionState {
             .payload
             .get("relation_id")
             .or_else(|| operation.payload.get("id"))
+            .or_else(|| {
+                operation
+                    .payload
+                    .get("relation")
+                    .and_then(|relation| relation.get("id"))
+            })
             .and_then(|v| v.as_str())
             .unwrap_or(operation.operation_id.as_str())
             .to_owned();
@@ -119,6 +125,12 @@ impl ProjectionState {
             .payload
             .get("relation_kind")
             .or_else(|| operation.payload.get("kind"))
+            .or_else(|| {
+                operation
+                    .payload
+                    .get("relation")
+                    .and_then(|relation| relation.get("kind"))
+            })
             .and_then(|v| v.as_str())
             .unwrap_or("unknown")
             .to_owned();
@@ -126,12 +138,36 @@ impl ProjectionState {
             .payload
             .get("from")
             .or_else(|| operation.payload.get("from_ref"))
+            .or_else(|| {
+                operation
+                    .payload
+                    .get("relation")
+                    .and_then(|relation| relation.get("from"))
+            })
+            .or_else(|| {
+                operation
+                    .payload
+                    .get("relation")
+                    .and_then(|relation| relation.get("from_ref"))
+            })
             .and_then(|v| v.as_str())
             .map(ToOwned::to_owned);
         let to_ref = operation
             .payload
             .get("to")
             .or_else(|| operation.payload.get("to_ref"))
+            .or_else(|| {
+                operation
+                    .payload
+                    .get("relation")
+                    .and_then(|relation| relation.get("to"))
+            })
+            .or_else(|| {
+                operation
+                    .payload
+                    .get("relation")
+                    .and_then(|relation| relation.get("to_ref"))
+            })
             .and_then(|v| v.as_str())
             .map(ToOwned::to_owned);
         if let Some(target_ref) =
@@ -142,6 +178,12 @@ impl ProjectionState {
         let fields = operation
             .payload
             .get("fields")
+            .or_else(|| {
+                operation
+                    .payload
+                    .get("relation")
+                    .and_then(|relation| relation.get("fields"))
+            })
             .and_then(|v| v.as_object())
             .map(|m| m.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
             .unwrap_or_default();

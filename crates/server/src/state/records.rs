@@ -861,6 +861,8 @@ pub struct OrganizationRecord {
     pub organization_did: String,
     pub handle: Option<String>,
     pub display_name: String,
+    pub source_refs: Vec<String>,
+    pub policy_revision: String,
     pub verified: bool,
     pub members: BTreeSet<String>,
     pub member_count: usize,

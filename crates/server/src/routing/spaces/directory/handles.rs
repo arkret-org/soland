@@ -15,14 +15,23 @@ pub(super) fn service_handle_domain(state: &AppState) -> String {
 
 fn handle_domain_from_public_base_url(public_base_url: &str) -> Option<String> {
     let url = reqwest::Url::parse(public_base_url).ok()?;
-    let host = url.host_str()?.trim().trim_end_matches('.');
-    (!host.is_empty()).then(|| host.to_ascii_lowercase())
+    valid_handle_domain_candidate(url.host_str()?)
 }
 
 fn service_did_handle_domain(service_did: &str) -> Option<String> {
     service_did
         .strip_prefix("did:web:")
-        .map(|value| value.replace(':', "."))
+        .and_then(|value| valid_handle_domain_candidate(&value.replace(':', ".")))
+}
+
+fn valid_handle_domain_candidate(value: &str) -> Option<String> {
+    let domain = value.trim().trim_end_matches('.').to_ascii_lowercase();
+    if domain.is_empty() {
+        return None;
+    }
+    SdkHandle::parse(&format!("alice:{domain}"))
+        .ok()
+        .map(|handle| handle.domain().to_owned())
 }
 
 pub(super) fn handle_lookup(input: &str, default_domain: &str) -> Option<HandleLookup> {

@@ -161,6 +161,13 @@ impl ProjectionState {
             } else {
                 None
             };
+        let remove_membership_frontier = matches!(new_state, "leave" | "ban").then(|| {
+            vec![
+                event_ref
+                    .clone()
+                    .unwrap_or_else(|| operation.operation_id.as_str().to_owned()),
+            ]
+        });
 
         // Update the structured cache with side-band + FSM state mirror.
         self.members.insert(
@@ -186,7 +193,12 @@ impl ProjectionState {
                 .and_then(Value::as_str)
                 .unwrap_or(member.as_str());
             self.cascade_realm_member_removal_to_circles(
-                &realm_id, &member, new_state, updated_by, now,
+                &realm_id,
+                &member,
+                new_state,
+                updated_by,
+                remove_membership_frontier.unwrap_or_default(),
+                now,
             );
         }
 
@@ -247,6 +259,7 @@ impl ProjectionState {
         member: &str,
         trigger_membership: &str,
         updated_by: &str,
+        membership_frontier: Vec<String>,
         now: chrono::DateTime<chrono::Utc>,
     ) {
         let mut removed_circle_ids = Vec::new();
@@ -267,6 +280,7 @@ impl ProjectionState {
                     circle_id: Some(circle.circle_id.clone()),
                     mls_group_ref: circle.mls_group_ref.clone(),
                     actor_id: member.to_owned(),
+                    membership_frontier: membership_frontier.clone(),
                     trigger_membership: trigger_membership.to_owned(),
                     triggered_at: now,
                 });
