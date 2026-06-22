@@ -610,8 +610,9 @@ pub fn validate_device_authorize_binding(
     state: &AppState,
     payload: &Value,
 ) -> Result<(), &'static str> {
-    let payload_shape: cokret_sdk::DeviceAuthorizePayload = serde_json::from_value(payload.clone())
-        .map_err(|_| "ck.device.authorize payload violates SDK artifact schema")?;
+    let payload_shape: cokret_sdk::DeviceAuthorizePayload =
+        serde_json::from_value(device_authorize_wire_payload(payload))
+            .map_err(|_| "ck.device.authorize payload violates SDK artifact schema")?;
     payload_shape.validate_authorization_binding_one_of()?;
     let Some(binding) = payload
         .get("cross_signing_binding")
@@ -632,6 +633,20 @@ pub fn validate_device_authorize_binding(
         .and_then(Value::as_str)
         .ok_or("device_authorize_missing_device_public_key")?;
     check_device_cross_signing_binding(state, principal_id, device_id, device_public_key, binding)
+}
+
+fn device_authorize_wire_payload(payload: &Value) -> Value {
+    let mut wire_payload = payload.clone();
+    if let Some(object) = wire_payload.as_object_mut() {
+        object.remove("event_id");
+        object.remove("sender");
+        object.remove("hlc");
+        object.remove("executed_by");
+        object.remove("authorization_ref");
+        object.remove("seal_ref");
+        object.remove("seal_basis");
+    }
+    wire_payload
 }
 
 pub(crate) fn verify_mls_welcome_claim_envelope_signature(
