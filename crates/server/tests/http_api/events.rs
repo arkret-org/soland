@@ -425,6 +425,62 @@ async fn events_describe_and_single_event_submit_work() {
 }
 
 #[tokio::test]
+async fn invite_create_accepts_locator_evidence_digest_without_local_consent() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let token = dev_token(state.clone()).await;
+    let realm_id = DEMO_REALM_ID;
+    let invite_id = new_prefixed_uuid7("ck:invite:");
+    let payload = serde_json::json!({
+        "invite_id": invite_id,
+        "invitee": "did:web:carol.example",
+        "invite_delivery_target": {
+            "recipient_service_did": "did:web:soland.local",
+            "recipient_service_type": "principal_server"
+        },
+        "introduction_evidence_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "expires_at": "2026-06-14T10:00:00Z"
+    });
+    let mut event = signed_event_envelope(
+        "ck:event:01904100-0000-7000-8000-1e0c1a7e0001",
+        TEST_EVENT_SEQ.fetch_add(1, Ordering::Relaxed),
+        Vec::new(),
+    );
+    event["kind"] = Value::String("ck.invite.create".to_owned());
+    event["schema_id"] = Value::String("ck.schema.invite.v1".to_owned());
+    event["realm_id"] = Value::String(realm_id.to_owned());
+    event["payload"] = payload.clone();
+    event["proofs"][0]["payload_digest"] = Value::String(sha256_json(&payload));
+    event["canonical_digest"] = Value::String(event_canonical_digest(&event));
+
+    let submitted: Value = TestClient::post("http://server/_cokret/self/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&event)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+
+    assert_eq!(
+        submitted["status"], "accepted",
+        "submit response: {submitted}"
+    );
+    let projected = state
+        .persistence
+        .realm_invites()
+        .get(payload["invite_id"].as_str().unwrap())
+        .await
+        .unwrap()
+        .expect("invite projected");
+    assert_eq!(projected.status, "pending");
+    assert_eq!(projected.invitee.as_deref(), Some("did:web:carol.example"));
+    assert_eq!(
+        projected.introduction_evidence_digest.as_deref(),
+        payload["introduction_evidence_digest"].as_str()
+    );
+}
+
+#[tokio::test]
 async fn scaffold_describe_surfaces_are_marked_limited_not_profile_claims() {
     let service = app();
     let authz: Value = TestClient::get("http://server/_soland/self/authz/describe")
