@@ -382,7 +382,6 @@ impl ProjectionState {
         let mut candidate_ids = self
             .relations
             .values()
-            .filter(|other| other.is_active())
             .filter(|other| other.realm_id == relation.realm_id)
             .filter(|other| other.relation_kind == relation.relation_kind)
             .filter(|other| other.scope_circle_id == relation.scope_circle_id)

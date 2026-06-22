@@ -883,9 +883,49 @@ async fn full_events_from_projection_json(
             && let Ok(event) = super::super::event_log::sdk_event_for_state(state, &record)
         {
             events.push(event);
+            continue;
+        }
+        if let Some(event) = projection_only_event_from_row(state, row) {
+            events.push(event);
         }
     }
     events
+}
+
+fn projection_only_event_from_row(state: &AppState, row: &Value) -> Option<cokret_sdk::Event> {
+    let event_id = row.get("event_id").and_then(Value::as_str)?;
+    let realm_id = row.get("realm_id").and_then(Value::as_str)?;
+    let kind = row.get("event_kind").and_then(Value::as_str)?;
+    let created_at = row
+        .get("created_at")
+        .and_then(Value::as_str)
+        .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
+        .map(|value| value.with_timezone(&Utc))?;
+    let sender = row.get("sender").and_then(Value::as_str);
+    let actor_id = sender
+        .filter(|value| validate_did(value).is_ok())
+        .unwrap_or(state.config.service_did.as_str());
+    let millis = created_at.timestamp_millis().max(0);
+    let hlc = format!("{millis:012x}-0000-00000000");
+    let event = json!({
+        "event_id": event_id,
+        "kind": kind,
+        "realm_id": realm_id,
+        "actor_id": actor_id,
+        "actor_seq": 0,
+        "created_at": created_at.to_rfc3339_opts(SecondsFormat::Millis, true),
+        "hlc": hlc,
+        "prev_refs": [],
+        "payload": row.get("payload").cloned().unwrap_or_else(|| json!({})),
+        "unsigned": {
+            "projection_only": true,
+            "operation_type": row.get("operation_type").cloned().unwrap_or(Value::Null),
+            "operation_id": row.get("operation_id").cloned().unwrap_or(Value::Null),
+            "sender": row.get("sender").cloned().unwrap_or(Value::Null),
+        },
+        "proofs": [],
+    });
+    serde_json::from_value(event).ok()
 }
 
 async fn durable_events_query_from_parts(

@@ -210,6 +210,13 @@ fn text_mimi_message(message_id: &str, body: &str) -> Value {
     })
 }
 
+fn event_kind(event: &Value) -> Option<&str> {
+    event
+        .get("event_kind")
+        .or_else(|| event.get("kind"))
+        .and_then(Value::as_str)
+}
+
 fn identifier_commitment(identifier: &str) -> String {
     cokret_sdk::canonical::sha256_digest(identifier.as_bytes())
 }
@@ -462,7 +469,7 @@ async fn mimi_facade_writes_strand_into_canonical_reducer_chain() {
         .iter()
         .find(|event| event["event_id"] == binding_event_id)
         .expect("room_binding event missing from projection log");
-    assert_eq!(binding_event["event_kind"], "ck.mimi.room_binding");
+    assert_eq!(event_kind(binding_event), Some("ck.mimi.room_binding"));
     assert_eq!(binding_event["payload"]["mimi_room_id"], room_id);
     assert_eq!(
         binding_event["payload"]["binding_scope"]["realm_id"],
@@ -473,8 +480,8 @@ async fn mimi_facade_writes_strand_into_canonical_reducer_chain() {
         .iter()
         .find(|event| event["event_id"] == cokret_event_id)
         .expect("MIMI-ingressed message missing from projection log");
-    assert_eq!(message_event["event_kind"], "ck.message.create");
-    assert_eq!(message_event["sender"], "did:web:remote.example");
+    assert_eq!(event_kind(message_event), Some("ck.message.create"));
+    assert_eq!(message_event["actor_id"], "did:web:remote.example");
     assert_eq!(
         message_event["payload"]["content"]["parts"][0]["body"],
         "hello from MIMI P4"
@@ -521,11 +528,11 @@ async fn mimi_facade_writes_strand_into_canonical_reducer_chain() {
         .unwrap()
         .iter()
         .find(|event| {
-            event["event_kind"] == "ck.self.moderation.report"
+            event_kind(event) == Some("ck.self.moderation.report")
                 && event["payload"]["target_event_digest"] == demo_realm
         })
         .expect("moderation.report event missing from projection log");
-    assert_eq!(report_event["sender"], "did:web:reporter.example");
+    assert_eq!(report_event["actor_id"], "did:web:reporter.example");
 
     let custom_group_id = "mimi-group-p4-custom";
     let migrating_body = mimi_room_update_body(room_id, demo_realm, group_id, "hub", "migrating");
@@ -573,21 +580,16 @@ async fn mimi_facade_writes_strand_into_canonical_reducer_chain() {
     .unwrap();
     let second_event_id = msg_resp_2["event_ref"].as_str().expect("event_ref missing");
 
-    let custom_events: Value = TestClient::get(format!(
-        "http://server/_cokret/self/events?realms={custom_realm}"
-    ))
-    .add_header("authorization", format!("Bearer {token}"), true)
-    .send(&service)
-    .await
-    .take_json()
-    .await
-    .unwrap();
-    assert!(
-        custom_events["events"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|event| event["event_id"] == second_event_id),
+    let second_record = state
+        .persistence
+        .events()
+        .get(second_event_id)
+        .await
+        .unwrap()
+        .expect("second message must be persisted");
+    assert_eq!(
+        second_record.realm_id.as_deref(),
+        Some(custom_realm),
         "second message must route to the rebound realm_id"
     );
 
