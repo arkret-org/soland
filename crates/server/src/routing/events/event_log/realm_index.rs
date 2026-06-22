@@ -247,6 +247,20 @@ pub(super) async fn bootstrap_realm_member_index(
                 .collect()
         })
         .unwrap_or_default();
+    let mut plaintext_visible_service_classes = object
+        .get("payload")
+        .map(crate::routing::events::projection::plaintext_service_classes_from_value)
+        .unwrap_or_default();
+    if let Some(create_object) = payload_object {
+        for (service, classes) in
+            crate::routing::events::projection::plaintext_service_classes_from_value(create_object)
+        {
+            plaintext_visible_service_classes
+                .entry(service)
+                .or_default()
+                .extend(classes);
+        }
+    }
     let minimal_metadata_realm =
         payload_object.is_some_and(crate::kinds::payload_declares_minimal_metadata_realm);
     let mut entry = crate::state::RealmDirectoryEntry::new(realm_id_typed.clone(), title);
@@ -269,6 +283,7 @@ pub(super) async fn bootstrap_realm_member_index(
         asset_privacy_policy_digest,
         encryption_profile,
         plaintext_visible_services,
+        plaintext_visible_service_classes,
         minimal_metadata_realm,
         created_at: super::now(),
         updated_at: super::now(),

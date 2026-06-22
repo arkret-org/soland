@@ -185,8 +185,7 @@ async fn health_and_describe_work() {
         serde_json::json!(["policy_unavailable"])
     );
     assert_eq!(
-        describe["limits"]["authz_policy"]["authz_check"]["policy_boundary"]
-            ["dynamic_or_auditable_decision_path"],
+        describe["limits"]["authz_policy"]["authz_check"]["policy_boundary"]["dynamic_or_auditable_decision_path"],
         "/_cokret/self/policy/check"
     );
     assert_eq!(

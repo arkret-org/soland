@@ -6,6 +6,11 @@
 use base64::Engine as _;
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use chrono::{Duration, SecondsFormat, Utc};
+use cokret_sdk::client_api::{
+    ThirdPartyInviteClaimOutcome, ThirdPartyInviteClaimRequestBody, ThirdPartyInviteIssueOutcome,
+    ThirdPartyInviteMedium, ThirdPartyInviteRequestBody, ThirdPartyInviteTokenHandoff,
+    ThirdPartyInviteTokenTransport,
+};
 // NOTE: `cokret_sdk::DisclosurePolicy` at the crate root resolves to the
 // auth/DID-proof type (re-exported explicitly), which shadows the
 // invite-addressing one from the `model::*` glob. Import the
@@ -17,14 +22,9 @@ use cokret_sdk::{
     Hash, IntroductionEvidence, InviteDeliveryOutcome, InviteDeliveryOutcomeStatus,
     InviteDeliveryRequest, InviteId, InviteLocatorResolveRequestBody, InviteReceiveAction,
     InviteReceivePolicy, MemberDeliveryBindingCandidate, PrincipalLocator,
-    PrincipalLocatorDisplayHint, PrincipalLocatorProof, PrincipalLocatorProofPurpose,
-    RealmId, ReceivePolicyConstraints, ReceivePolicySurface, ThirdPartyInviteOobKind,
-    UnknownInviteAction, canonical,
-};
-use cokret_sdk::client_api::{
-    ThirdPartyInviteClaimOutcome, ThirdPartyInviteClaimRequestBody, ThirdPartyInviteIssueOutcome,
-    ThirdPartyInviteMedium, ThirdPartyInviteRequestBody, ThirdPartyInviteTokenHandoff,
-    ThirdPartyInviteTokenTransport,
+    PrincipalLocatorDisplayHint, PrincipalLocatorProof, PrincipalLocatorProofPurpose, RealmId,
+    ReceivePolicyConstraints, ReceivePolicySurface, ThirdPartyInviteOobKind, UnknownInviteAction,
+    canonical,
 };
 use rand::RngExt;
 use salvo::http::StatusCode;
@@ -105,9 +105,13 @@ async fn issue_third_party_invite(
     }
 
     let issued_at = now();
-    let expires_at = body.expires_at.unwrap_or_else(|| issued_at + Duration::days(7));
+    let expires_at = body
+        .expires_at
+        .unwrap_or_else(|| issued_at + Duration::days(7));
     if expires_at <= issued_at {
-        return Err(AppError::invalid_param("third-party invite is already expired"));
+        return Err(AppError::invalid_param(
+            "third-party invite is already expired",
+        ));
     }
     let invite_id = match body.invite_id {
         Some(invite_id) => invite_id,
@@ -122,9 +126,9 @@ async fn issue_third_party_invite(
             AppError::internal(format!("configured service DID invalid: {error}"))
         })?,
     };
-    let verification_public_key = body.verification_public_key.unwrap_or_else(|| {
-        format!("{}#server-key-1", verification_service_did.as_str())
-    });
+    let verification_public_key = body
+        .verification_public_key
+        .unwrap_or_else(|| format!("{}#server-key-1", verification_service_did.as_str()));
     if verification_public_key.trim().is_empty() {
         return Err(AppError::invalid_param(
             "verification_public_key must not be empty",
@@ -193,7 +197,9 @@ async fn issue_third_party_invite(
         .map_err(|error| AppError::internal(format!("store third-party invite token: {error}")))?;
 
     let event_id = EventId::new(submitted).map_err(|error| {
-        AppError::internal(format!("submitted third-party invite event id invalid: {error}"))
+        AppError::internal(format!(
+            "submitted third-party invite event id invalid: {error}"
+        ))
     })?;
     json_ok(ThirdPartyInviteIssueOutcome {
         invite_id,
@@ -289,14 +295,14 @@ async fn claim_third_party_invite(
         );
         third_party_invite_claim_not_found()
     })?;
-    let invite_id = InviteId::new(record_invite_id)
-        .map_err(|_| third_party_invite_claim_not_found())?;
-    let realm_id = RealmId::new(record_realm_id)
-        .map_err(|_| third_party_invite_claim_not_found())?;
-    let invitee = Did::new(session.actor.clone())
-        .map_err(|_| third_party_invite_claim_not_found())?;
-    let claim_event_id = EventId::new(submitted)
-        .map_err(|_| third_party_invite_claim_not_found())?;
+    let invite_id =
+        InviteId::new(record_invite_id).map_err(|_| third_party_invite_claim_not_found())?;
+    let realm_id =
+        RealmId::new(record_realm_id).map_err(|_| third_party_invite_claim_not_found())?;
+    let invitee =
+        Did::new(session.actor.clone()).map_err(|_| third_party_invite_claim_not_found())?;
+    let claim_event_id =
+        EventId::new(submitted).map_err(|_| third_party_invite_claim_not_found())?;
     json_ok(ThirdPartyInviteClaimOutcome {
         invite_id,
         realm_id,
@@ -1719,13 +1725,12 @@ async fn dev_submit_invite_event(
         + 1;
     let event_id = format!("ck:event:{}", uuid::Uuid::now_v7());
     let operation_alias = format!("ck:operation:{}", uuid::Uuid::now_v7());
-    let payload_bytes = canonical::canonical_json_bytes(&payload).map_err(|error| {
-        InviteEventSubmitError {
+    let payload_bytes =
+        canonical::canonical_json_bytes(&payload).map_err(|error| InviteEventSubmitError {
             status: StatusCode::INTERNAL_SERVER_ERROR,
             code: "canonical_json_failed".to_owned(),
             message: format!("invite payload canonicalization failed: {error}"),
-        }
-    })?;
+        })?;
     let payload_digest = canonical::sha256_digest(&payload_bytes);
     let created_at = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
     let envelope = json!({

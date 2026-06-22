@@ -367,9 +367,26 @@ pub(crate) async fn seed_test_realm(
     entry.members.insert(owner_did);
     state.realms.lock().unwrap().upsert(entry);
 
-    let plaintext_visible_services = plaintext_visible_services
+    let plaintext_visible_services: std::collections::BTreeSet<String> = plaintext_visible_services
         .iter()
         .map(|value| (*value).to_owned())
+        .collect();
+    let plaintext_visible_service_classes = plaintext_visible_services
+        .iter()
+        .map(|service| {
+            (
+                service.clone(),
+                std::collections::BTreeSet::from([
+                    cokret_sdk::PlaintextDataClassKind::MessageContent,
+                    cokret_sdk::PlaintextDataClassKind::AttachmentPlaintext,
+                    cokret_sdk::PlaintextDataClassKind::AttachmentPreview,
+                    cokret_sdk::PlaintextDataClassKind::Thumbnail,
+                    cokret_sdk::PlaintextDataClassKind::FullTextIndex,
+                    cokret_sdk::PlaintextDataClassKind::NotificationSummary,
+                    cokret_sdk::PlaintextDataClassKind::MediaPlaintext,
+                ]),
+            )
+        })
         .collect();
     state
         .persistence
@@ -389,6 +406,7 @@ pub(crate) async fn seed_test_realm(
                 asset_privacy_policy_digest: None,
                 encryption_profile: None,
                 plaintext_visible_services,
+                plaintext_visible_service_classes,
                 minimal_metadata_realm: false,
                 created_at: now,
                 updated_at: now,

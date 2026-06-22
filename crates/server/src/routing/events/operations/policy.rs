@@ -1247,12 +1247,9 @@ async fn validate_message_edit_redact_window_policy(
     let grants = state.authz.grants_for_subject(actor, realm_id);
 
     // Admin override: a broader (non-`.own`) capability is not time-boxed.
-    let holds_broad = grants.iter().any(|grant| {
-        grant
-            .actions
-            .iter()
-            .any(|action| action == broad_action)
-    });
+    let holds_broad = grants
+        .iter()
+        .any(|grant| grant.actions.iter().any(|action| action == broad_action));
     if holds_broad {
         return Ok(());
     }
@@ -1655,10 +1652,7 @@ fn validate_agent_act_on_behalf_authorization_ref(
     else {
         return Err("agent_act_on_behalf_authorization_ref_inactive");
     };
-    let action_allowed = grant
-        .actions
-        .iter()
-        .any(|candidate| candidate == action);
+    let action_allowed = grant.actions.iter().any(|candidate| candidate == action);
     if !action_allowed || !crate::authz::resource_matches(&grant.resource, resource) {
         return Err("agent_act_on_behalf_authorization_ref_scope");
     }
@@ -1930,10 +1924,7 @@ fn validate_agent_context_authorization_ref(
     else {
         return Err("agent_context_authorization_ref_inactive");
     };
-    let action_allowed = grant
-        .actions
-        .iter()
-        .any(|candidate| candidate == action);
+    let action_allowed = grant.actions.iter().any(|candidate| candidate == action);
     if !action_allowed || !crate::authz::resource_matches(&grant.resource, resource) {
         return Err("agent_context_authorization_ref_scope");
     }

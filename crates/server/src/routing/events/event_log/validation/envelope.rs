@@ -445,10 +445,7 @@ fn data_event_state_at_seal_ref(
 }
 
 fn data_event_grants_from_state_at_ref(
-    state_at_ref: &std::collections::BTreeMap<
-        cokret_sdk::CellRef,
-        cokret_sdk::lattice::CellState,
-    >,
+    state_at_ref: &std::collections::BTreeMap<cokret_sdk::CellRef, cokret_sdk::lattice::CellState>,
 ) -> std::collections::BTreeMap<String, crate::authz::Grant> {
     let mut grants = std::collections::BTreeMap::new();
     const CAPABILITY_GRANT_CELL_PREFIX: &str = "ck:cell:ck.component.capability.grant.v1:";
@@ -472,10 +469,7 @@ fn validate_data_event_covered_seals(
     realm: &RealmId,
     seal_id: &cokret_sdk::SealId,
     object: &serde_json::Map<String, Value>,
-    state_at_ref: &std::collections::BTreeMap<
-        cokret_sdk::CellRef,
-        cokret_sdk::lattice::CellState,
-    >,
+    state_at_ref: &std::collections::BTreeMap<cokret_sdk::CellRef, cokret_sdk::lattice::CellState>,
 ) -> Result<(), EventValidationError> {
     if !data_event_payload_is_mls_e2ee(object) {
         return Ok(());
@@ -510,7 +504,9 @@ fn validate_data_event_covered_seals(
     )))
 }
 
-fn data_event_covered_seals_failed_precondition(message: impl Into<String>) -> EventValidationError {
+fn data_event_covered_seals_failed_precondition(
+    message: impl Into<String>,
+) -> EventValidationError {
     let code = cokret_sdk::ErrorCode::FailedPrecondition;
     event_validation_error(
         error_http_status(code),
@@ -542,10 +538,7 @@ fn encrypted_content_is_mls(value: Option<&Value>) -> bool {
 
 fn seal_view_declares_relaxed_e2ee(
     realm: &RealmId,
-    state_at_ref: &std::collections::BTreeMap<
-        cokret_sdk::CellRef,
-        cokret_sdk::lattice::CellState,
-    >,
+    state_at_ref: &std::collections::BTreeMap<cokret_sdk::CellRef, cokret_sdk::lattice::CellState>,
 ) -> bool {
     let Ok(policy_cell) = cokret_sdk::CellRef::new(format!(
         "ck:cell:ck.component.realm.policy_components.v1:{}",
@@ -565,7 +558,10 @@ fn seal_view_declares_relaxed_e2ee(
 
 fn policy_components_declare_relaxed_e2ee(policy_components: &Value) -> bool {
     profile_array_contains(policy_components.get("profiles"), E2EE_RELAXED_PROFILE)
-        || profile_array_contains(policy_components.get("active_profiles"), E2EE_RELAXED_PROFILE)
+        || profile_array_contains(
+            policy_components.get("active_profiles"),
+            E2EE_RELAXED_PROFILE,
+        )
         || profile_array_contains(
             policy_components.pointer("/components/profiles"),
             E2EE_RELAXED_PROFILE,
@@ -822,13 +818,16 @@ async fn validate_applet_registration_epoch_binding(
         )
     })?;
 
-    let evidence = package.registration_epoch_evidence.as_ref().ok_or_else(|| {
-        event_validation_error(
-            StatusCode::FORBIDDEN,
-            "applet_registration_epoch_evidence_missing",
-            "installed applet package is missing registration_epoch evidence",
-        )
-    })?;
+    let evidence = package
+        .registration_epoch_evidence
+        .as_ref()
+        .ok_or_else(|| {
+            event_validation_error(
+                StatusCode::FORBIDDEN,
+                "applet_registration_epoch_evidence_missing",
+                "installed applet package is missing registration_epoch evidence",
+            )
+        })?;
     let document =
         crate::jws_verify::resolve_did_document(state, &package.service_did).map_err(|reason| {
             tracing::debug!(%reason, %applet_id, "applet registration_epoch DID resolution failed");
@@ -1209,6 +1208,7 @@ pub(crate) async fn validate_event_envelope(
     require_object_field(object, "payload")?;
     validate_event_schema_and_payload(state, &kind, &schema_id, envelope, object)?;
     validate_data_event_capability_refs(state, &actor_id, &realm_id, &kind, object)?;
+    validate_control_move_seal_basis(object)?;
     if kind == kinds::CK_MEMBER_IDENTITY_UPDATE {
         validate_member_identity_proof(state, object.get("payload").unwrap_or(&Value::Null))?;
     }
@@ -1326,6 +1326,7 @@ pub(crate) async fn validate_event_envelope(
     )
     .await?;
     validate_event_proofs(object, state, session, &actor_id, &canonical_digest).await?;
+    reject_revoked_actor_device_signature(object, state, session, &actor_id).await?;
     let device_id =
         event_string_field(object, &["device_id"]).unwrap_or_else(|| session.device_id.clone());
 
@@ -1342,6 +1343,106 @@ pub(crate) async fn validate_event_envelope(
         canonical_digest,
         canonical_bytes,
     })
+}
+
+fn validate_control_move_seal_basis(
+    object: &serde_json::Map<String, Value>,
+) -> Result<(), EventValidationError> {
+    let has_effects = object
+        .get("effects")
+        .and_then(Value::as_array)
+        .is_some_and(|effects| !effects.is_empty());
+    if !has_effects {
+        return Ok(());
+    }
+    if object.contains_key("seal_ref") || object.contains_key("auth_context") {
+        return Ok(());
+    }
+    let leaves = object
+        .get("seal_basis")
+        .and_then(Value::as_object)
+        .and_then(|basis| basis.get("leaves"))
+        .and_then(Value::as_array)
+        .ok_or_else(|| {
+            event_validation_error(
+                StatusCode::FORBIDDEN,
+                "schema_violation",
+                "Control Move with effects requires seal_basis.leaves",
+            )
+        })?;
+    if leaves.is_empty() {
+        return Err(event_validation_error(
+            StatusCode::FORBIDDEN,
+            "schema_violation",
+            "Control Move seal_basis.leaves must be non-empty",
+        ));
+    }
+    Ok(())
+}
+
+async fn reject_revoked_actor_device_signature(
+    object: &serde_json::Map<String, Value>,
+    state: &AppState,
+    session: &SessionRecord,
+    actor_id: &str,
+) -> Result<(), EventValidationError> {
+    let proof_devices = object
+        .get("proofs")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_object)
+        .filter_map(|proof| event_string_field(proof, &["verification_method"]))
+        .filter_map(|vm| actor_device_id_from_verification_method(&vm, actor_id))
+        .collect::<std::collections::BTreeSet<_>>();
+
+    let mut candidate_devices = proof_devices;
+    candidate_devices.insert(session.device_id.clone());
+    if let Some(device_id) = event_string_field(object, &["device_id"]) {
+        candidate_devices.insert(device_id);
+    }
+
+    for device_id in candidate_devices {
+        let revoked = state
+            .persistence
+            .devices()
+            .get(actor_id, &device_id)
+            .await
+            .map_err(|error| {
+                event_validation_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal_error",
+                    format!("device revocation lookup failed: {error}"),
+                )
+            })?
+            .is_some_and(|device| device.revoked_at.is_some());
+        if revoked {
+            return Err(event_validation_error(
+                StatusCode::FORBIDDEN,
+                "actor_signature_revoked",
+                "event proof was signed by a revoked actor device",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn actor_device_id_from_verification_method(
+    verification_method: &str,
+    actor_id: &str,
+) -> Option<String> {
+    verification_method
+        .strip_prefix(actor_id)
+        .and_then(|suffix| suffix.strip_prefix('#'))
+        .map(str::trim)
+        .filter(|fragment| !fragment.is_empty())
+        .map(|fragment| {
+            if fragment.starts_with("ck:device:") {
+                fragment.to_owned()
+            } else {
+                format!("ck:device:{fragment}")
+            }
+        })
 }
 
 pub(crate) fn validate_event_critical_features(

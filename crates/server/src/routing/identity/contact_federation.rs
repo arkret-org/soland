@@ -477,7 +477,10 @@ async fn append_delivered_contact_fact_projection_event(
         object
             .entry("event_id".to_owned())
             .or_insert_with(|| Value::String(contact_event_id.to_owned()));
-        object.insert("original_issuer".to_owned(), Value::String(issuer.to_owned()));
+        object.insert(
+            "original_issuer".to_owned(),
+            Value::String(issuer.to_owned()),
+        );
     }
     crate::routing::events::projection::append_projection_event(
         state,

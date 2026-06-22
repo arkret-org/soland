@@ -1,6 +1,6 @@
-use super::*;
-
 use base64::Engine as _;
+
+use super::*;
 
 const CONTACT_MESSAGE_STUB: &str = "[message withheld until contact is accepted]";
 const CONTACT_CONSENT_ACTION_SCOPES: &[&str] = &[
@@ -464,8 +464,7 @@ pub(crate) async fn contact_respond(
             // Spec contact-and-direct-conversation.md §3 — each granted scope
             // writes a target-controlled `ck.consent.grant`; its event ref is
             // referenced from the `ck.contact.accepted` `consent_grant_refs[]`.
-            let previous =
-                consent_cell_snapshot(state, &session.actor, &contact.requester, &scope);
+            let previous = consent_cell_snapshot(state, &session.actor, &contact.requester, &scope);
             let (grant_ref, grant_cell) = grant_contact_managed_consent(
                 state,
                 &session.actor,
@@ -1227,17 +1226,18 @@ pub(crate) async fn ensure_direct_peer_resolvable(
     Ok(())
 }
 
-pub(crate) fn direct_pair_key(state: &AppState, left: &str, right: &str) -> Result<String, AppError> {
+pub(crate) fn direct_pair_key(
+    state: &AppState,
+    left: &str,
+    right: &str,
+) -> Result<String, AppError> {
     let trust_domain = cokret_sdk::TypedTrustDomainId::new(state.config.trust_domain.clone())
         .map_err(|error| AppError::internal(format!("configured trust_domain invalid: {error}")))?;
     let left = direct_pair_key_participant(left, "actor")?;
     let right = direct_pair_key_participant(right, "peer")?;
-    cokret_sdk::direct_conversation_pair_key(
-        trust_domain,
-        left,
-        right,
-    )
-    .map_err(|error| AppError::internal(format!("direct pair key construction failed: {error}")))
+    cokret_sdk::direct_conversation_pair_key(trust_domain, left, right).map_err(|error| {
+        AppError::internal(format!("direct pair key construction failed: {error}"))
+    })
 }
 
 fn direct_pair_key_participant(
@@ -1245,7 +1245,9 @@ fn direct_pair_key_participant(
     role: &str,
 ) -> Result<cokret_sdk::DirectConversationPairKeyParticipant, AppError> {
     let did = Did::new(did.to_owned()).map_err(|error| {
-        AppError::internal(format!("stored direct conversation {role} DID invalid: {error}"))
+        AppError::internal(format!(
+            "stored direct conversation {role} DID invalid: {error}"
+        ))
     })?;
     let did_str = did.as_str();
     if DIRECT_CONVERSATION_PAIRWISE_DID_METHOD_PREFIXES
@@ -1393,7 +1395,10 @@ pub(crate) async fn create_direct_binding_with_realm(
         )));
     }
 
-    let member_event_refs = vec![actor_member_event_ref.clone(), peer_member_event_ref.clone()];
+    let member_event_refs = vec![
+        actor_member_event_ref.clone(),
+        peer_member_event_ref.clone(),
+    ];
     let governance_binding =
         direct_mls_governance_binding(&realm_id, &mls_group_id, &member_event_refs);
     if let Err(error) = submit_direct_mls_genesis(
@@ -1744,9 +1749,12 @@ async fn submit_direct_mls_genesis(
         "created_at": now().to_rfc3339_opts(SecondsFormat::Secs, true),
     });
     let op = direct_mls_operation(realm_id, crate::kinds::CK_MLS_GENESIS, payload)?;
-    let effect = crate::reducer::mls::apply_group_genesis(&mut state.projection.lock().unwrap(), &op);
+    let effect =
+        crate::reducer::mls::apply_group_genesis(&mut state.projection.lock().unwrap(), &op);
     match &effect {
-        crate::reducer::ProjectionEffect::Mls(crate::reducer::MlsEffect::GroupGenesis { .. }) => {
+        crate::reducer::ProjectionEffect::Mls(crate::reducer::MlsEffect::GroupGenesis {
+            ..
+        }) => {
             crate::routing::events::projection::mirror_mls_effect_to_persistence(
                 state,
                 actor,
@@ -1776,8 +1784,11 @@ async fn submit_direct_mls_welcome(
     claim: &cokret_sdk::KeypackageClaimRecord,
     governance_binding: &Value,
 ) -> Result<(), AppError> {
-    let welcome_bytes = format!("direct-mls-welcome:{realm_id}:{mls_group_id}:{}", claim.claim_id)
-        .into_bytes();
+    let welcome_bytes = format!(
+        "direct-mls-welcome:{realm_id}:{mls_group_id}:{}",
+        claim.claim_id
+    )
+    .into_bytes();
     let welcome_digest = cokret_sdk::canonical::sha256_digest(&welcome_bytes);
     let created_at = now();
     let signature_seed = cokret_sdk::canonical::sha256_digest(format!(

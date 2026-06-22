@@ -205,8 +205,7 @@ pub(crate) async fn federation_transaction(
             let mut response_value = record.response.clone();
             let strict_cache_hit = record.origin_verification_method.as_deref()
                 == Some(origin_verification_method.as_str())
-                && record.service_binding_ref.as_deref()
-                == Some(body.service_binding_ref.as_str())
+                && record.service_binding_ref.as_deref() == Some(body.service_binding_ref.as_str())
                 && record.origin_key_state_digest.as_deref()
                     == Some(origin_key_state_digest.as_str())
                 && record.local_peer_policy_digest.as_deref()
@@ -355,10 +354,9 @@ fn local_peer_policy_digest_for_transaction(
             .collect::<Vec<_>>()
     };
     let moderation_policies = {
-        let policies = state
-            .realm_moderation_policies
-            .lock()
-            .map_err(|error| AppError::internal(format!("realm moderation policies lock: {error}")))?;
+        let policies = state.realm_moderation_policies.lock().map_err(|error| {
+            AppError::internal(format!("realm moderation policies lock: {error}"))
+        })?;
         realm_ids
             .iter()
             .filter_map(|realm_id| {
@@ -384,9 +382,12 @@ fn local_peer_policy_digest_for_transaction(
         "realm_policies": realm_policies,
         "realm_moderation_policies": moderation_policies,
     });
-    let canonical = cokret_sdk::canonical::canonical_json_bytes(&policy_state).map_err(|error| {
-        AppError::internal(format!("federation local peer policy digest canonicalization: {error}"))
-    })?;
+    let canonical =
+        cokret_sdk::canonical::canonical_json_bytes(&policy_state).map_err(|error| {
+            AppError::internal(format!(
+                "federation local peer policy digest canonicalization: {error}"
+            ))
+        })?;
     Ok(cokret_sdk::canonical::sha256_digest(&canonical))
 }
 

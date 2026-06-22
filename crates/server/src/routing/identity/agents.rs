@@ -54,6 +54,7 @@ use crate::error::{AppError, ErrorCode};
 use crate::ids;
 use crate::result::{JsonResult, json_ok};
 use crate::routing::accept_local_operations;
+use crate::routing::events::event_log::submit_event_value;
 use crate::state::{AppState, SessionRecord};
 
 mod dev_fanout;
@@ -318,12 +319,11 @@ async fn set_agent_participation(
     require_agent_controller(state, &session, &agent_id).await?;
     let body = body.into_inner();
     let ceiling = resolve_effective_ceiling(state, &body.scope).await;
-    validate_selection_within_ceiling(ceiling, body.selection)
-        .map_err(|_| {
-            agent_participation_failed_precondition(
-                cokret_sdk::error::REASON_AGENT_PARTICIPATION_EXCEEDS_CEILING,
-            )
-        })?;
+    validate_selection_within_ceiling(ceiling, body.selection).map_err(|_| {
+        agent_participation_failed_precondition(
+            cokret_sdk::error::REASON_AGENT_PARTICIPATION_EXCEEDS_CEILING,
+        )
+    })?;
     let effective = effective_participation(ceiling, body.selection);
     let scope_value = serde_json::to_value(&body.scope).unwrap_or(Value::Null);
     let selection_value = serde_json::to_value(body.selection).unwrap_or(Value::Null);
@@ -579,16 +579,16 @@ async fn agent_key_pair(
         )));
     }
     let authorized_at = chrono::Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
-    // CKP-0008 §4.5 / D3 (dev option B): submit the durable
-    // `ck.agent.key.authorize` event authored by the controller so the
-    // reducer projects the agent-key state and clears the agent's pending
-    // `effective_after_first_authorized_key` grants. Production submits this
-    // from coauth/yougen and never enters this branch.
-    let authorized_event_ref = if state.config.development_mode {
+    // CKP-0008 §4.5 / D3: the runtime key may become active only after a
+    // reducer-visible `ck.agent.key.authorize` event exists. Development mode
+    // still materializes the event with the local dev-proof path; production
+    // requires yougen/coauth to provide a controller-signed durable event and
+    // soland submits + rechecks it here.
+    let event_id = if state.config.development_mode {
         let controller_session = controller_dev_session(&session.actor, state);
         let realm = ensure_self_realm(state, &controller_session).await?;
         let key_id = dev_fanout::default_agent_key_id(agent_principal_id);
-        let event_id = submit_durable_key_authorize(
+        submit_durable_key_authorize(
             state,
             &controller_session,
             &realm,
@@ -596,26 +596,19 @@ async fn agent_key_pair(
             &body.verification_method,
             &key_id,
         )
-        .await?;
-        EventId::new(event_id)
-            .map_err(|err| AppError::internal(format!("authorize event id invalid: {err}")))?
+        .await?
     } else {
-        append_audit_log(
+        submit_production_key_authorize_event(
             state,
-            Some(&session.actor),
-            "ck.agent.key.authorize",
-            json!({
-                "agent_principal_id": agent_principal_id,
-                "verification_method": body.verification_method,
-            }),
-            "accepted",
+            &session,
+            &body.authorize_event,
+            agent_principal_id,
+            &body.verification_method,
         )
-        .await;
-        // Production option A: the durable event is submitted by coauth /
-        // yougen; soland mints the pin id the outcome MUST carry.
-        EventId::new(ids::generate_event_id())
-            .map_err(|err| AppError::internal(format!("generated event id invalid: {err}")))?
+        .await?
     };
+    let authorized_event_ref = EventId::new(event_id)
+        .map_err(|err| AppError::internal(format!("authorize event id invalid: {err}")))?;
     // Pairing semantics: a provisioned agent starts `pending_runtime_key`;
     // flip to `active` ONLY after the durable key authorization has been
     // accepted (a failed submit above propagates via `?` and MUST NOT leave
@@ -629,6 +622,69 @@ async fn agent_key_pair(
         ok: true,
         authorized_event_ref,
     })
+}
+
+async fn submit_production_key_authorize_event(
+    state: &AppState,
+    session: &SessionRecord,
+    authorize_event: &Option<Value>,
+    agent_principal_id: &str,
+    verification_method: &str,
+) -> Result<String, AppError> {
+    let envelope = authorize_event.as_ref().ok_or_else(|| {
+        AppError::missing_param(
+            "production agent key pairing requires authorize_event carrying ck.agent.key.authorize",
+        )
+    })?;
+    ensure_key_authorize_event_matches_request(
+        envelope,
+        &session.actor,
+        agent_principal_id,
+        verification_method,
+    )?;
+    let outcome = submit_event_value(state, session, envelope.clone())
+        .await
+        .map_err(|error| {
+            AppError::invalid_param(format!(
+                "ck.agent.key.authorize submit failed: {}",
+                error.message
+            ))
+            .with_status(error.status)
+            .with_wire_code(error.code)
+        })?;
+    Ok(outcome.event_id)
+}
+
+fn ensure_key_authorize_event_matches_request(
+    envelope: &Value,
+    controller: &str,
+    agent_principal_id: &str,
+    verification_method: &str,
+) -> Result<(), AppError> {
+    if envelope.get("kind").and_then(Value::as_str) != Some("ck.agent.key.authorize") {
+        return Err(AppError::invalid_param(
+            "authorize_event.kind must be ck.agent.key.authorize",
+        ));
+    }
+    if envelope.get("actor_id").and_then(Value::as_str) != Some(controller) {
+        return Err(AppError::capability_denied(
+            "authorize_event.actor_id must match the authenticated controller",
+        ));
+    }
+    let payload = envelope
+        .get("payload")
+        .ok_or_else(|| AppError::invalid_param("authorize_event.payload is required"))?;
+    if payload.get("agent_principal_id").and_then(Value::as_str) != Some(agent_principal_id) {
+        return Err(AppError::invalid_param(
+            "authorize_event.payload.agent_principal_id must match the pairing request",
+        ));
+    }
+    if payload.get("verification_method").and_then(Value::as_str) != Some(verification_method) {
+        return Err(AppError::invalid_param(
+            "authorize_event.payload.verification_method must match the pairing request",
+        ));
+    }
+    Ok(())
 }
 
 /// Generate a short human-relayable pairing code for the provision

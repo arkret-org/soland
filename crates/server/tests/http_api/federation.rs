@@ -525,12 +525,17 @@ async fn seed_peer_read_authorization(
             asset_privacy_policy_digest: None,
             encryption_profile: None,
             plaintext_visible_services: BTreeSet::new(),
+            plaintext_visible_service_classes: Default::default(),
             minimal_metadata_realm: false,
             created_at: now,
             updated_at: now,
         });
     meta.plaintext_visible_services
         .insert(source_service_did.to_owned());
+    meta.plaintext_visible_service_classes
+        .entry(source_service_did.to_owned())
+        .or_default()
+        .insert(cokret_sdk::PlaintextDataClassKind::MessageContent);
     meta.updated_at = now;
     state
         .persistence

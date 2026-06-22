@@ -1,7 +1,5 @@
 //! Contract tests for spec-canonical contacts and direct conversation resolve.
 
-use super::common::*;
-
 use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::Utc;
@@ -9,6 +7,8 @@ use cokret_sdk::{
     CrossSigningBinding, CrossSigningKeyRecord, CrossSigningPublishContent, SignedCrossSigningKey,
     TypedTrustDomainId,
 };
+
+use super::common::*;
 
 const BOB_DID: &str = "did:web:bob.example";
 const BOB_PAIRWISE_DID: &str = "did:peer:2.ezbobpairwise";
@@ -129,12 +129,8 @@ async fn direct_resolve_fails_closed_when_consent_missing() {
             target: BOB_DID.to_owned(),
             scope: "direct_message".to_owned(),
             status: "accepted".to_owned(),
-            request_event_ref: Some(
-                "ck:event:0196419b-0000-7000-8000-000000000211".to_owned(),
-            ),
-            response_event_ref: Some(
-                "ck:event:0196419b-0000-7000-8000-000000000212".to_owned(),
-            ),
+            request_event_ref: Some("ck:event:0196419b-0000-7000-8000-000000000211".to_owned()),
+            response_event_ref: Some("ck:event:0196419b-0000-7000-8000-000000000212".to_owned()),
             tombstone_event_ref: None,
             message: None,
             peer_service_did: None,
@@ -168,12 +164,8 @@ async fn direct_resolve_rejects_pairwise_did_without_stable_identity_link() {
             target: BOB_PAIRWISE_DID.to_owned(),
             scope: "direct_message".to_owned(),
             status: "accepted".to_owned(),
-            request_event_ref: Some(
-                "ck:event:0196419b-0000-7000-8000-000000000231".to_owned(),
-            ),
-            response_event_ref: Some(
-                "ck:event:0196419b-0000-7000-8000-000000000232".to_owned(),
-            ),
+            request_event_ref: Some("ck:event:0196419b-0000-7000-8000-000000000231".to_owned()),
+            response_event_ref: Some("ck:event:0196419b-0000-7000-8000-000000000232".to_owned()),
             tombstone_event_ref: None,
             message: None,
             peer_service_did: None,
@@ -338,11 +330,11 @@ async fn contacts_spec_path_projects_directional_scopes_and_resolve_is_idempoten
     let accepted: Value = TestClient::post("http://server/_cokret/self/contacts/respond")
         .add_header("authorization", format!("Bearer {bob}"), true)
         .json(&serde_json::json!({
-            "request_id": request_id,
-            "requester": "did:web:alice.example",
-            "action": "accept",
-            "granted_scopes": ["direct_message"]
-    }))
+                "request_id": request_id,
+                "requester": "did:web:alice.example",
+                "action": "accept",
+                "granted_scopes": ["direct_message"]
+        }))
         .send(&app_from_state(state.clone()))
         .await
         .take_json()
@@ -431,9 +423,11 @@ async fn contacts_spec_path_projects_directional_scopes_and_resolve_is_idempoten
         .list_after(BOB_DID, BOB_DEVICE, 0)
         .await
         .unwrap();
-    assert!(device_messages
-        .iter()
-        .any(|message| message.content["kind"] == "ck.mls.welcome"));
+    assert!(
+        device_messages
+            .iter()
+            .any(|message| message.content["kind"] == "ck.mls.welcome")
+    );
     let effective_scope = serde_json::json!({
         "kind": "realm",
         "realm_id": created["realm_id"].as_str().unwrap(),

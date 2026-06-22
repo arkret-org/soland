@@ -120,6 +120,9 @@ pub async fn ensure_projected_realm(state: &AppState, origin: &str, operation: &
                             .collect()
                     })
                     .unwrap_or_default(),
+                plaintext_visible_service_classes: plaintext_service_classes_from_operation(
+                    operation,
+                ),
                 minimal_metadata_realm: kinds::payload_declares_minimal_metadata_realm(
                     &operation.payload,
                 ),
@@ -177,6 +180,18 @@ pub async fn ensure_projected_realm(state: &AppState, origin: &str, operation: &
                     .any(|existing| existing == &service)
                 {
                     record.plaintext_visible_services.insert(service);
+                    changed = true;
+                }
+            }
+            for (service, classes) in plaintext_service_classes_from_operation(operation) {
+                record.plaintext_visible_services.insert(service.clone());
+                let existing = record
+                    .plaintext_visible_service_classes
+                    .entry(service)
+                    .or_default();
+                let before = existing.len();
+                existing.extend(classes);
+                if existing.len() != before {
                     changed = true;
                 }
             }

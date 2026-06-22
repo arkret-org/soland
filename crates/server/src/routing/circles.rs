@@ -29,9 +29,9 @@
 
 use cokret_sdk::{
     CircleCreateRequestBody, CircleDirectoryVisibility, CircleId, CircleList,
-    CircleMemberRequestBody, CircleMembership, CircleMembershipOutcome, CircleScopeRotateOutcome,
-    CircleScopeRotateRequestBody, CircleView, Did, EncryptionFloor, EncryptionProfile, Event,
-    EventId, HistoryVisibility, Operation, OperationId, RealmId,
+    CircleMemberRequestBody, CircleMembership, CircleMembershipOutcome, CirclePendingMlsRemoval,
+    CircleScopeRotateOutcome, CircleScopeRotateRequestBody, CircleView, Did, EncryptionFloor,
+    EncryptionProfile, Event, EventId, HistoryVisibility, Operation, OperationId, RealmId,
 };
 use salvo::http::StatusCode;
 use salvo::oapi::extract::{JsonBody, PathParam, QueryParam};
@@ -90,7 +90,7 @@ fn circle_view_from_projection(
 
 fn circle_view_from_with_pending(
     c: &CircleProjection,
-    pending_mls_removals: Vec<Did>,
+    pending_mls_removals: Vec<CirclePendingMlsRemoval>,
     include_member_details: bool,
 ) -> Result<CircleView, AppError> {
     Ok(CircleView {
@@ -150,7 +150,7 @@ fn circle_directory_visible_to_actor(
 fn pending_mls_removals_from_projection(
     projection: &ProjectionState,
     circle: &CircleProjection,
-) -> Vec<Did> {
+) -> Vec<CirclePendingMlsRemoval> {
     projection
         .pending_mls_removals
         .iter()
@@ -164,7 +164,14 @@ fn pending_mls_removals_from_projection(
                         .is_none_or(|expected| expected == group_ref)
                 })
         })
-        .filter_map(|obligation| Did::new(obligation.actor_id.clone()).ok())
+        .filter_map(|obligation| {
+            Did::new(obligation.actor_id.clone())
+                .ok()
+                .map(|principal_id| CirclePendingMlsRemoval {
+                    principal_id,
+                    membership_frontier: Vec::new(),
+                })
+        })
         .collect()
 }
 

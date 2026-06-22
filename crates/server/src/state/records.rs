@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use cokret_sdk::{BlobVisibility, FreshnessState};
+use cokret_sdk::{BlobVisibility, FreshnessState, PlaintextDataClassKind};
 use serde_json::Value;
 
 #[derive(Clone, Debug)]
@@ -525,6 +525,7 @@ pub struct RealmMetaRecord {
     /// incompatible with `world_readable` (realm-and-space.md §3.1.3).
     pub encryption_profile: Option<String>,
     pub plaintext_visible_services: BTreeSet<String>,
+    pub plaintext_visible_service_classes: BTreeMap<String, BTreeSet<PlaintextDataClassKind>>,
     /// SEC-08 — the Realm declared `ck.profile.mls.minimal_metadata_realm.v1`
     /// (`crypto-media/encryption-and-audit.md` §2.9). Projected from the
     /// `profiles[]` / `active_profiles[]` declaration on a `ck.realm.create` /
@@ -536,6 +537,24 @@ pub struct RealmMetaRecord {
     pub minimal_metadata_realm: bool,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
+}
+
+impl RealmMetaRecord {
+    pub fn allows_plaintext_data_class(
+        &self,
+        service_did: &str,
+        data_class: PlaintextDataClassKind,
+    ) -> bool {
+        self.plaintext_visible_service_classes
+            .get(service_did)
+            .is_some_and(|classes| classes.contains(&data_class))
+    }
+
+    pub fn allows_any_plaintext_data_class(&self, service_did: &str) -> bool {
+        self.plaintext_visible_service_classes
+            .get(service_did)
+            .is_some_and(|classes| !classes.is_empty())
+    }
 }
 
 #[derive(Clone, Debug)]

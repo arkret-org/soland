@@ -155,8 +155,7 @@ async fn validate_read_receipt_child_policy_write(
     child_policy: &ReadReceiptPolicy,
 ) -> Result<(), &'static str> {
     let realm_id = operation.realm_id.as_str();
-    let Some(parent_realm_id) =
-        read_receipt_policy_parent_realm_id(state, operations, realm_id)
+    let Some(parent_realm_id) = read_receipt_policy_parent_realm_id(state, operations, realm_id)
     else {
         return Ok(());
     };
@@ -167,9 +166,7 @@ async fn validate_read_receipt_child_policy_write(
         .map_err(read_receipt_child_violation_reason)
 }
 
-fn read_receipt_child_violation_reason(
-    violation: ReadReceiptPolicyChildViolation,
-) -> &'static str {
+fn read_receipt_child_violation_reason(violation: ReadReceiptPolicyChildViolation) -> &'static str {
     match violation {
         ReadReceiptPolicyChildViolation::ComplianceFloorViolated => {
             cokret_sdk::ERROR_CODE_READ_RECEIPT_COMPLIANCE_FLOOR_VIOLATED
@@ -219,7 +216,10 @@ fn pending_read_receipt_policy_source_realm(
             continue;
         }
         let policies = crate::reducer::inheritance_allowed_policies(&operation.payload);
-        if !policies.iter().any(|policy| policy == READ_RECEIPT_POLICY_RULE) {
+        if !policies
+            .iter()
+            .any(|policy| policy == READ_RECEIPT_POLICY_RULE)
+        {
             return Some(None);
         }
         return Some(

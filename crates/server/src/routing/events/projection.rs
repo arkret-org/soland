@@ -99,6 +99,35 @@ mod tests {
     }
 
     #[test]
+    fn plaintext_visible_services_projection_is_data_class_aware() {
+        let service = "did:web:soland.local";
+        let operation = op(
+            kinds::CK_REALM_CREATE,
+            json!({
+                "object": {
+                    "id": REALM_ID,
+                    "title": "Private Room",
+                    "services": [{
+                        "service_did": service,
+                        "service_type": "principal_server",
+                        "data_classes": ["message_content", "notification_summary"],
+                        "purposes": ["projection"],
+                        "visibility": "private_plaintext"
+                    }],
+                    "plaintext_visible_services": ["did:web:legacy.local"]
+                }
+            }),
+        );
+
+        let classes = plaintext_service_classes_from_operation(&operation);
+        assert!(classes[service].contains(&cokret_sdk::PlaintextDataClassKind::MessageContent));
+        assert!(
+            classes[service].contains(&cokret_sdk::PlaintextDataClassKind::NotificationSummary)
+        );
+        assert!(!classes.contains_key("did:web:legacy.local"));
+    }
+
+    #[test]
     fn retention_policy_ttl_reads_canonical_object_fields() {
         let operation = op(
             kinds::CK_REALM_CREATE,

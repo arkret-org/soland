@@ -34,18 +34,98 @@ use super::*;
 const RESOURCE_SELECTOR_MAX_ITEMS: usize = 256;
 const RESOURCE_SELECTOR_JSON_MAX_BYTES: usize = 64 * 1024;
 
-/// Map a cell grant body's resource selectors to the engine `Grant`'s single
-/// `resource` String.
-/// Precedence: an explicit string selector / `id` wins; a realm-kind
-/// selector resolves to its `id` (or the grant's realm); canonical wildcard
-/// selectors map to the legacy `*` sentinel. The current legacy engine treats
-/// that sentinel as fail-closed, so accepting the canonical shape here does not
-/// create an allow-all grant before the full selector evaluator lands.
+/// Map a cell grant body's resource selectors to the engine `Grant`'s
+/// comma-disjoined `resource` String.
 fn engine_resource_from_body(body: &Value, realm_id: &str) -> String {
     engine_resources_from_body(body, realm_id)
         .into_iter()
-        .next()
-        .unwrap_or_else(|| "*".to_owned())
+        .collect::<Vec<_>>()
+        .join(",")
+        .trim()
+        .to_owned()
+}
+
+fn engine_resource_from_body_or_wildcard(body: &Value, realm_id: &str) -> String {
+    let resource = engine_resource_from_body(body, realm_id);
+    if resource.is_empty() {
+        "*".to_owned()
+    } else {
+        resource
+    }
+}
+
+fn selector_string_field<'a>(selector: &'a Value, field: &str) -> Option<&'a str> {
+    selector
+        .get(field)
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+}
+
+fn selector_realm_id<'a>(selector: &'a Value, fallback: &'a str) -> &'a str {
+    selector_string_field(selector, "realm_id")
+        .or_else(|| selector_string_field(selector, "id").filter(|id| id.starts_with("ck:realm:")))
+        .unwrap_or(fallback)
+}
+
+fn normalize_selector_object(selector: &Value, realm_id: &str) -> Option<String> {
+    if let Some(id) = selector_string_field(selector, "id") {
+        return Some(id.to_owned());
+    }
+    if let Some(object_ref) = selector_string_field(selector, "object_ref") {
+        return Some(object_ref.to_owned());
+    }
+    let kind = selector.get("kind").and_then(Value::as_str)?;
+    let match_scope = selector
+        .get("match_scope")
+        .and_then(Value::as_str)
+        .unwrap_or("exact");
+    match kind {
+        "*" => Some("*".to_owned()),
+        "realm" => Some(selector_realm_id(selector, realm_id).to_owned()),
+        "space" => selector_string_field(selector, "space_id")
+            .map(ToOwned::to_owned)
+            .or_else(|| (match_scope == "realm_wide").then(|| "space".to_owned())),
+        "circle" => selector_string_field(selector, "circle_id")
+            .map(ToOwned::to_owned)
+            .or_else(|| (match_scope == "realm_wide").then(|| "circle".to_owned())),
+        "strand" => selector_string_field(selector, "strand_id")
+            .map(ToOwned::to_owned)
+            .or_else(|| Some("strand".to_owned())),
+        "message" => selector_string_field(selector, "message_id")
+            .map(ToOwned::to_owned)
+            .or_else(|| Some("message".to_owned())),
+        "morph" => selector_string_field(selector, "morph_id")
+            .map(ToOwned::to_owned)
+            .or_else(|| Some("morph".to_owned())),
+        "relation" => selector_string_field(selector, "relation_id")
+            .map(ToOwned::to_owned)
+            .or_else(|| Some("relation".to_owned())),
+        "view" => selector_string_field(selector, "view_id")
+            .map(ToOwned::to_owned)
+            .or_else(|| Some("view".to_owned())),
+        "event" => selector_string_field(selector, "event_id")
+            .map(ToOwned::to_owned)
+            .or_else(|| Some("event".to_owned())),
+        "actor" => selector_string_field(selector, "actor_id").map(ToOwned::to_owned),
+        "schema" => selector_string_field(selector, "schema_ref")
+            .map(ToOwned::to_owned)
+            .or_else(|| Some("schema".to_owned())),
+        "policy" => selector_string_field(selector, "policy_id")
+            .map(ToOwned::to_owned)
+            .or_else(|| Some("policy".to_owned())),
+        "invite" => selector_string_field(selector, "invite_id")
+            .map(ToOwned::to_owned)
+            .or_else(|| Some("invite".to_owned())),
+        "notification" => Some("notification".to_owned()),
+        "read_cursor" => Some("read_cursor".to_owned()),
+        "blob" => selector_string_field(selector, "blob_ref")
+            .map(ToOwned::to_owned)
+            .or_else(|| Some("blob".to_owned())),
+        "object" => selector_string_field(selector, "object_type")
+            .map(ToOwned::to_owned)
+            .or_else(|| Some("object".to_owned())),
+        _ => None,
+    }
 }
 
 fn engine_resources_from_body(body: &Value, realm_id: &str) -> Vec<String> {
@@ -56,21 +136,8 @@ fn engine_resources_from_body(body: &Value, realm_id: &str) -> Vec<String> {
         match selector {
             Value::String(s) if !s.is_empty() => resources.push(s.clone()),
             Value::Object(_) => {
-                if let Some(id) = selector.get("id").and_then(Value::as_str) {
-                    if !id.is_empty() {
-                        resources.push(id.to_owned());
-                        continue;
-                    }
-                }
-                match selector.get("kind").and_then(Value::as_str) {
-                    Some("*") => resources.push("*".to_owned()),
-                    Some("realm") => resources.push(realm_id.to_owned()),
-                    Some("space") => resources.push("space".to_owned()),
-                    Some("circle") => resources.push("circle".to_owned()),
-                    Some("strand") => resources.push("strand".to_owned()),
-                    Some("morph") => resources.push("morph".to_owned()),
-                    Some("actor") => resources.push("actor".to_owned()),
-                    _ => {}
+                if let Some(resource) = normalize_selector_object(selector, realm_id) {
+                    resources.push(resource);
                 }
             }
             _ => {}
@@ -109,7 +176,7 @@ fn engine_grant_from_cell_body(
     if actions.is_empty() {
         return None;
     }
-    let resource = engine_resource_from_body(body, &realm_id);
+    let resource = engine_resource_from_body_or_wildcard(body, &realm_id);
     let constraints = value_array_field(body, "constraints")
         .into_iter()
         .filter_map(|c| serde_json::from_value(c).ok())
@@ -285,6 +352,52 @@ fn grant_expires_at(body: &Value) -> Option<chrono::DateTime<chrono::Utc>> {
         .map(|dt| dt.with_timezone(&chrono::Utc))
 }
 
+fn body_effective_expires_at(body: &Value) -> Option<chrono::DateTime<chrono::Utc>> {
+    let top_level = grant_expires_at(body);
+    let constraint_expiry = value_array_field(body, "constraints")
+        .into_iter()
+        .filter_map(|constraint| {
+            let constraint_type = constraint
+                .get("constraint_type")
+                .and_then(Value::as_str)
+                .or_else(|| constraint.get("type").and_then(Value::as_str));
+            if constraint_type != Some("temporal") {
+                return None;
+            }
+            constraint
+                .get("expires_at")
+                .and_then(Value::as_str)
+                .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+                .map(|dt| dt.with_timezone(&chrono::Utc))
+        })
+        .min();
+    match (top_level, constraint_expiry) {
+        (Some(a), Some(b)) => Some(a.min(b)),
+        (Some(a), None) => Some(a),
+        (None, Some(b)) => Some(b),
+        (None, None) => None,
+    }
+}
+
+fn body_max_delegation_depth(body: &Value) -> Option<u32> {
+    value_array_field(body, "constraints")
+        .into_iter()
+        .filter_map(|constraint| {
+            let constraint_type = constraint
+                .get("constraint_type")
+                .and_then(Value::as_str)
+                .or_else(|| constraint.get("type").and_then(Value::as_str));
+            if constraint_type != Some("delegation_control") {
+                return None;
+            }
+            constraint
+                .get("max_delegation_depth")
+                .and_then(Value::as_u64)
+                .and_then(|value| u32::try_from(value).ok())
+        })
+        .min()
+}
+
 /// Build the canonical or_set item value stored under a grant cell. We keep
 /// the full grant body so the existing `grant_snapshot_from_value` reader
 /// (actions / resources / constraints / realm_id / expires_at / revoked)
@@ -424,8 +537,17 @@ impl ProjectionState {
                 return Err("grant_exceeds_issuer_authority");
             }
         }
-        let child_expires_at = grant_expires_at(body);
-        if let Some(parent_expires_at) = parent.expires_at {
+        if let Some(parent_depth) = crate::authz::max_delegation_depth(&parent) {
+            if parent_depth == 0 {
+                return Err("delegation_depth_exceeded");
+            }
+            match body_max_delegation_depth(body) {
+                Some(child_depth) if child_depth <= parent_depth.saturating_sub(1) => {}
+                _ => return Err("delegation_depth_exceeded"),
+            }
+        }
+        let child_expires_at = body_effective_expires_at(body);
+        if let Some(parent_expires_at) = crate::authz::grant_effective_expiry(&parent) {
             let Some(child_expires_at) = child_expires_at else {
                 return Err("grant_exceeds_issuer_authority");
             };
@@ -1155,6 +1277,14 @@ mod delegation_cycle_tests {
     const G_C: &str = "ck:grant:01970000-0000-7000-8000-00000000c003";
 
     fn delegate_op(grant_id: &str, parent_grant_id: &str) -> Operation {
+        delegate_op_with_constraints(grant_id, parent_grant_id, json!([]))
+    }
+
+    fn delegate_op_with_constraints(
+        grant_id: &str,
+        parent_grant_id: &str,
+        constraints: serde_json::Value,
+    ) -> Operation {
         Operation::create(
             OperationId::new("ck:operation:01970000-0000-7000-8000-0000000000fe").unwrap(),
             RealmId::new(REALM.to_owned()).unwrap(),
@@ -1166,12 +1296,22 @@ mod delegation_cycle_tests {
                     "parent_grant_id": parent_grant_id,
                     "actions": ["ck.message.create"],
                     "resources": [{ "kind": "realm", "realm_id": REALM }],
+                    "constraints": constraints,
                 }
             }),
         )
     }
 
     fn root_grant_op(grant_id: &str, issuer: &str, subject: &str) -> Operation {
+        root_grant_op_with_constraints(grant_id, issuer, subject, json!([]))
+    }
+
+    fn root_grant_op_with_constraints(
+        grant_id: &str,
+        issuer: &str,
+        subject: &str,
+        constraints: serde_json::Value,
+    ) -> Operation {
         Operation::create(
             OperationId::new("ck:operation:01970000-0000-7000-8000-0000000000fd").unwrap(),
             RealmId::new(REALM.to_owned()).unwrap(),
@@ -1183,6 +1323,7 @@ mod delegation_cycle_tests {
                     "subject": subject,
                     "actions": ["ck.message.create"],
                     "resources": [{ "kind": "realm", "realm_id": REALM }],
+                    "constraints": constraints,
                 }
             }),
         )
@@ -1246,5 +1387,67 @@ mod delegation_cycle_tests {
         // g_c delegated from g_b: chain g_b <- g_c over existing g_a <- g_b.
         let proj = proj_with_chain();
         assert!(proj.check_delegation_cycle(&delegate_op(G_C, G_B)).is_ok());
+    }
+
+    #[test]
+    fn delegated_grant_must_decrement_parent_depth() {
+        let mut proj = ProjectionState::default();
+        seed_realm_owner(&mut proj);
+        proj.apply_capability_grant(
+            &root_grant_op_with_constraints(
+                G_A,
+                "did:web:alice.example",
+                "did:web:alice.example",
+                json!([{ "constraint_type": "delegation_control", "max_delegation_depth": 1 }]),
+            ),
+            chrono::Utc::now(),
+        );
+        let rejected = proj.apply_capability_delegate(&delegate_op(G_B, G_A), chrono::Utc::now());
+        assert!(matches!(
+            rejected,
+            crate::reducer::ProjectionEffect::Rejected { reason }
+                if reason == "delegation_depth_exceeded"
+        ));
+
+        let allowed = proj.apply_capability_delegate(
+            &delegate_op_with_constraints(
+                G_C,
+                G_A,
+                json!([{ "constraint_type": "delegation_control", "max_delegation_depth": 0 }]),
+            ),
+            chrono::Utc::now(),
+        );
+        assert!(matches!(
+            allowed,
+            crate::reducer::ProjectionEffect::CapabilityDelegateProjected { .. }
+        ));
+    }
+
+    #[test]
+    fn delegated_grant_rejects_when_parent_depth_exhausted() {
+        let mut proj = ProjectionState::default();
+        seed_realm_owner(&mut proj);
+        proj.apply_capability_grant(
+            &root_grant_op_with_constraints(
+                G_A,
+                "did:web:alice.example",
+                "did:web:alice.example",
+                json!([{ "constraint_type": "delegation_control", "max_delegation_depth": 0 }]),
+            ),
+            chrono::Utc::now(),
+        );
+        let rejected = proj.apply_capability_delegate(
+            &delegate_op_with_constraints(
+                G_B,
+                G_A,
+                json!([{ "constraint_type": "delegation_control", "max_delegation_depth": 0 }]),
+            ),
+            chrono::Utc::now(),
+        );
+        assert!(matches!(
+            rejected,
+            crate::reducer::ProjectionEffect::Rejected { reason }
+                if reason == "delegation_depth_exceeded"
+        ));
     }
 }

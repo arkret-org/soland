@@ -28,7 +28,8 @@ use std::sync::{Arc, Mutex};
 pub use cokret_sdk::authz::delegation::{
     AppletDelegationBindingError, DelegationError, Grant, GrantConstraint as Constraint,
     GrantDecisionVerdict, GrantRequestDraft, delegation_chain_intact, grant_effective_expiry,
-    is_grant_expired, resource_within, revoke_with_cascade, validate_applet_delegation_binding,
+    is_grant_expired, max_delegation_depth, resource_within, revoke_with_cascade,
+    validate_applet_delegation_binding,
 };
 use serde::Serialize;
 use serde_json::{Map, Value};
@@ -41,7 +42,6 @@ const SELECTOR_DISJUNCTION_MAX: usize = 16;
 const SELECTOR_CONJUNCTION_MAX: usize = 64;
 const SELECTOR_TERM_MAX_BYTES: usize = 1024;
 const SELECTOR_JSON_MAX_BYTES: usize = 64 * 1024;
-const SELECTOR_UNKNOWN_FIELDS_MAX: usize = 256;
 const RESOURCE_SELECTOR_KNOWN_FIELDS: &[&str] = &[
     "kind",
     "realm_id",
@@ -63,6 +63,26 @@ const RESOURCE_SELECTOR_KNOWN_FIELDS: &[&str] = &[
     "invite_id",
     "blob_ref",
     "match_scope",
+];
+const RESOURCE_SELECTOR_KINDS: &[&str] = &[
+    "realm",
+    "space",
+    "circle",
+    "strand",
+    "message",
+    "morph",
+    "object",
+    "relation",
+    "view",
+    "event",
+    "actor",
+    "schema",
+    "policy",
+    "invite",
+    "notification",
+    "read_cursor",
+    "blob",
+    "*",
 ];
 pub(crate) const REASON_GRANT_REVOKED_UPSTREAM: &str = "grant_revoked_upstream";
 pub(crate) const REASON_CAPABILITY_ACTION_UNKNOWN: &str = "capability_action_unknown";
@@ -612,39 +632,70 @@ pub(crate) fn resource_matches(pattern: &str, resource: &str) -> bool {
     if pattern == "*" {
         return false;
     }
-    // Exact match
+    pattern.split(',').any(|alternative| {
+        let alternative = alternative.trim();
+        !alternative.is_empty()
+            && alternative
+                .split('+')
+                .map(str::trim)
+                .all(|term| !term.is_empty() && resource_term_matches(term, resource))
+    })
+}
+
+fn resource_term_matches(pattern: &str, resource: &str) -> bool {
+    if pattern == "*" {
+        return false;
+    }
     if pattern == resource {
         return true;
     }
-    // SEL-1 — selector-kind keyword form. `circle` matches any
-    // `ck:circle:<uuid>` resource (mirrors `realm` / `space` semantics
-    // expected by the resource selector enum). Also support the
-    // namespaced `circle:ck:circle:<uuid>` form for symmetry with the
-    // pre-existing `space:ck:space:<uuid>` pattern.
-    if pattern == "circle" {
-        return resource.starts_with("ck:circle:");
+    match pattern {
+        "realm" => return resource.starts_with("ck:realm:"),
+        "space" => return resource.starts_with("ck:space:"),
+        "circle" => return resource.starts_with("ck:circle:"),
+        "strand" => return resource.starts_with("ck:strand:"),
+        "message" => {
+            return resource.starts_with("ck:message:") || resource.starts_with("ck:event:");
+        }
+        "morph" => return resource.starts_with("ck:morph:"),
+        "object" => return is_canonical_object_ref(resource),
+        "relation" => return resource.starts_with("ck:relation:"),
+        "view" => return resource.starts_with("ck:view:"),
+        "event" => return resource.starts_with("ck:event:"),
+        "actor" => return resource.starts_with("did:") || resource.starts_with("ck:actor:"),
+        "schema" => {
+            return resource.starts_with("ck:schema:") || resource.starts_with("ck.schema.");
+        }
+        "policy" => return resource.starts_with("ck:policy:"),
+        "invite" => return resource.starts_with("ck:invite:"),
+        "notification" => return resource.starts_with("ck:notification:"),
+        "read_cursor" => return resource.starts_with("ck:read_cursor:"),
+        "blob" => return resource.starts_with("ck:blob:"),
+        _ => {}
     }
-    if pattern == "realm" {
-        return resource.starts_with("ck:realm:");
-    }
-    if pattern == "space" {
-        return resource.starts_with("ck:space:");
-    }
-    if pattern == "strand" {
-        return resource.starts_with("ck:strand:");
-    }
-    if pattern == "morph" {
-        return resource.starts_with("ck:morph:");
-    }
-    if pattern == "actor" {
-        return resource.starts_with("did:") || resource.starts_with("ck:actor:");
-    }
-    // Prefix match with wildcard: "space:ck:space:123:*" or
-    // "ck:circle:<uuid>:*".
     if let Some(prefix) = pattern.strip_suffix('*') {
         return resource.starts_with(prefix);
     }
     false
+}
+
+fn is_canonical_object_ref(value: &str) -> bool {
+    [
+        "ck:realm:",
+        "ck:space:",
+        "ck:circle:",
+        "ck:strand:",
+        "ck:message:",
+        "ck:morph:",
+        "ck:relation:",
+        "ck:view:",
+        "ck:event:",
+        "ck:policy:",
+        "ck:invite:",
+        "ck:blob:",
+    ]
+    .iter()
+    .any(|prefix| value.starts_with(prefix))
 }
 
 pub(crate) fn grant_scope_valid(grant: &Grant) -> Result<(), &'static str> {
@@ -775,8 +826,35 @@ pub(crate) fn validate_resource_selector_object(
         .keys()
         .filter(|key| !RESOURCE_SELECTOR_KNOWN_FIELDS.contains(&key.as_str()))
         .count();
-    if unknown_fields > SELECTOR_UNKNOWN_FIELDS_MAX {
-        return Err("selector_too_complex");
+    if unknown_fields > 0 {
+        return Err("capability_grant_resources_invalid");
+    }
+    let Some(kind) = map.get("kind").and_then(Value::as_str) else {
+        return Err("capability_grant_resources_invalid");
+    };
+    if !RESOURCE_SELECTOR_KINDS.contains(&kind) {
+        return Err("capability_grant_resources_invalid");
+    }
+    let match_scope = map
+        .get("match_scope")
+        .and_then(Value::as_str)
+        .unwrap_or("exact");
+    if !matches!(match_scope, "exact" | "children" | "subtree" | "realm_wide") {
+        return Err("capability_grant_resources_invalid");
+    }
+    if match_scope == "realm_wide" && map.get("realm_id").and_then(Value::as_str).is_none() {
+        return Err("capability_grant_resources_invalid");
+    }
+    if matches!(match_scope, "children" | "subtree") && kind != "space" {
+        return Err("capability_grant_resources_invalid");
+    }
+    if match_scope == "realm_wide" && !matches!(kind, "space" | "circle") {
+        return Err("capability_grant_resources_invalid");
+    }
+    if matches!(kind, "space" | "circle" | "notification" | "read_cursor")
+        && map.get("realm_id").and_then(Value::as_str).is_none()
+    {
+        return Err("capability_grant_resources_invalid");
     }
     if map.get("actor_id").and_then(Value::as_str) == Some("*") {
         return Err("selector_actor_wildcard_forbidden");
@@ -1561,7 +1639,9 @@ mod tests {
         assert!(!result.allowed);
         assert_eq!(result.reason, REASON_GRANT_REVOKED_UPSTREAM);
         assert!(
-            engine.get_grant(&child.grant_id).is_some_and(|grant| grant.revoked),
+            engine
+                .get_grant(&child.grant_id)
+                .is_some_and(|grant| grant.revoked),
             "cascade marks the child revoked in the index"
         );
     }

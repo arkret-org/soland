@@ -619,7 +619,10 @@ async fn consume_keypackages(
             }
             Ok(Some(_)) => {}
             Ok(None) => {
-                failures.push(keypackage_ref_failure(keypackage_id, "already_consumed_or_missing"));
+                failures.push(keypackage_ref_failure(
+                    keypackage_id,
+                    "already_consumed_or_missing",
+                ));
                 continue;
             }
             Err(error) => {
@@ -834,11 +837,7 @@ fn entry_string_list(entry: &Value, field: &'static str) -> Result<Vec<String>, 
 fn entry_bool(entry: &Value, field: &'static str) -> Result<bool, String> {
     entry
         .get(field)
-        .map(|value| {
-            value
-                .as_bool()
-                .ok_or_else(|| format!("{field}_invalid"))
-        })
+        .map(|value| value.as_bool().ok_or_else(|| format!("{field}_invalid")))
         .transpose()
         .map(|value| value.unwrap_or(false))
 }

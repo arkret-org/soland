@@ -676,7 +676,9 @@ fn federation_service_binding_check_from_members(
     match federation_delivery_binding_frontier_is_current(request_frontier, current_local_frontiers)
     {
         Ok(()) => return FederationServiceBindingCheck::Current,
-        Err("schema_violation") => return FederationServiceBindingCheck::Reject("schema_violation"),
+        Err("schema_violation") => {
+            return FederationServiceBindingCheck::Reject("schema_violation");
+        }
         Err(_) => {}
     }
 
@@ -754,17 +756,19 @@ async fn delivery_binding_handover_witness(
     });
 
     if let Some(frontier_event_id) = evidence.handover_frontier.first() {
-        match state.persistence.events().get(frontier_event_id.as_str()).await {
+        match state
+            .persistence
+            .events()
+            .get(frontier_event_id.as_str())
+            .await
+        {
             Ok(Some(record)) => {
                 if let Some(object) = witness.as_object_mut() {
                     object.insert(
                         "event_id".to_owned(),
                         Value::String(record.event_id.clone()),
                     );
-                    object.insert(
-                        "event_kind".to_owned(),
-                        Value::String(record.kind.clone()),
-                    );
+                    object.insert("event_kind".to_owned(), Value::String(record.kind.clone()));
                     object.insert(
                         "event_digest".to_owned(),
                         Value::String(record.canonical_digest.clone()),
@@ -803,10 +807,7 @@ async fn delivery_binding_handover_witness(
     ) {
         match state.cell_store.sealed_ops_for_cell(&realm_id, &cell_ref) {
             Ok(ops) => {
-                let move_ids = ops
-                    .iter()
-                    .map(|op| op.move_id.as_str())
-                    .collect::<Vec<_>>();
+                let move_ids = ops.iter().map(|op| op.move_id.as_str()).collect::<Vec<_>>();
                 if let Some(object) = witness.as_object_mut() {
                     object.insert("sealed_ops_count".to_owned(), json!(ops.len()));
                     object.insert("sealed_move_ids".to_owned(), json!(move_ids));
@@ -1810,10 +1811,7 @@ mod federation_delivery_binding_tests {
     use super::*;
 
     fn event_id(suffix: u32) -> EventId {
-        EventId::new(format!(
-            "ck:event:01904100-0000-7000-8000-{suffix:012x}"
-        ))
-        .unwrap()
+        EventId::new(format!("ck:event:01904100-0000-7000-8000-{suffix:012x}")).unwrap()
     }
 
     fn member_view(

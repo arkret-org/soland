@@ -186,22 +186,26 @@ async fn applet_install_package_registers_bot_projection_smoke() {
         .expect("applet record is durable");
     let execution = &stored_applet["install_execution"];
     assert_eq!(execution["status"], json!("completed"));
-    assert_eq!(execution["idempotency_key"], json!(format!("install-{suffix}")));
+    assert_eq!(
+        execution["idempotency_key"],
+        json!(format!("install-{suffix}"))
+    );
     assert_eq!(
         execution["produced_event_refs"][0],
         install["registration_event_ref"]
     );
     let steps = execution["steps"].as_array().unwrap();
-    assert_eq!(steps[0]["target_event_kind"], json!("ck.applet.registration"));
+    assert_eq!(
+        steps[0]["target_event_kind"],
+        json!("ck.applet.registration")
+    );
     assert_eq!(steps[0]["status"], json!("accepted"));
     assert_eq!(steps[0]["event_ref"], install["registration_event_ref"]);
-    assert!(
-        steps
-            .iter()
-            .any(|step| step["target_event_kind"] == json!("ck.capability.grant")
-                && step["grant_binding"]["registration_epoch"]
-                    == json!(package.registration_epoch.to_string()))
-    );
+    assert!(steps.iter().any(
+        |step| step["target_event_kind"] == json!("ck.capability.grant")
+            && step["grant_binding"]["registration_epoch"]
+                == json!(package.registration_epoch.to_string())
+    ));
 
     let bot_doc = canonical_did_document(&app, &bot_actor_id).await;
     assert_eq!(bot_doc["id"], json!(bot_actor_id));

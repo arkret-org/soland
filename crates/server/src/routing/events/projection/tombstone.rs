@@ -898,9 +898,7 @@ mod tests {
         assert!(event.get("push_snippet").is_none());
         assert!(event.get("search_index").is_none());
         assert!(event.get("blob_preview_key").is_none());
-        assert!(
-            invalidation_drop_values(&event).contains(&"push_snippet_cache")
-        );
+        assert!(invalidation_drop_values(&event).contains(&"push_snippet_cache"));
     }
 
     #[test]

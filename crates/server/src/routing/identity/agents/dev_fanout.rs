@@ -1,13 +1,10 @@
 //! CKP-0008 — development-mode server-authored fan-out for the personal
 //! agent provisioning / lifecycle surface (architecture option B).
 //!
-//! In `development_mode` soland materialises the durable sub-events that a
-//! production client (yougen, holding the controller key) would sign and
-//! submit itself (option A). Every event authored here uses the
-//! controller's own bearer session as the author, so the envelope passes
+//! Soland materialises the durable sub-events required by the personal-agent
+//! aggregate surfaces. Every event authored here uses the controller's own
+//! authenticated session as the author, so the envelope passes
 //! `actor_id == session.actor` and the controller realm-membership check.
-//! Production (`development_mode == false`) NEVER reaches this module: the
-//! callers gate every entry point on `state.config.development_mode`.
 //!
 //! The dev-proof envelope shape is the one accepted by
 //! `validate_event_proofs` (event_log/validation.rs): `type="dev-proof"`,
@@ -33,11 +30,11 @@ pub(super) fn self_realm_for_controller(controller_did: &str) -> String {
     crate::routing::identity::recovery::principal_control_realm_for_did(controller_did)
 }
 
-/// Build a dev-proof envelope authored by `session.actor` and submit it via
-/// the shared internal event API. `actor_seq` is taken as
+/// Build a server-authored envelope for `session.actor` and submit it via the
+/// shared internal event API. `actor_seq` is taken as
 /// `max_actor_seq(actor) + 1` so concurrent fan-out events stay strictly
 /// increasing.
-async fn dev_submit_event(
+pub(super) async fn submit_agent_fanout_event(
     state: &AppState,
     session: &SessionRecord,
     realm_id: &str,
@@ -84,7 +81,7 @@ async fn dev_submit_event(
         .await
         .map_err(|err| {
             AppError::internal(format!(
-                "dev fan-out submit failed for {kind}: {} ({})",
+                "agent fan-out submit failed for {kind}: {} ({})",
                 err.message, err.code
             ))
         })?;
@@ -104,7 +101,7 @@ pub(super) async fn ensure_self_realm(
         return Ok(realm_id);
     }
     let payload = self_realm_create_payload(&session.actor, &state.config.service_did, &realm_id);
-    dev_submit_event(state, session, &realm_id, "ck.realm.create", payload).await?;
+    submit_agent_fanout_event(state, session, &realm_id, "ck.realm.create", payload).await?;
     Ok(realm_id)
 }
 
@@ -173,7 +170,7 @@ pub(super) async fn fanout_provision_subevents(
             "status": "active",
         },
     });
-    let profile_event = dev_submit_event(
+    let profile_event = submit_agent_fanout_event(
         state,
         session,
         realm_id,
@@ -196,7 +193,7 @@ pub(super) async fn fanout_provision_subevents(
             "grant_status": "active",
         },
     });
-    let accountability_event = dev_submit_event(
+    let accountability_event = submit_agent_fanout_event(
         state,
         session,
         realm_id,
@@ -291,7 +288,7 @@ async fn materialize_grant(
     realm_id: &str,
     grant_payload: Value,
 ) -> Result<String, AppError> {
-    dev_submit_event(
+    submit_agent_fanout_event(
         state,
         session,
         realm_id,
@@ -381,7 +378,7 @@ pub(super) async fn submit_durable_key_authorize(
             "ref": format!("ck:event:{}", uuid::Uuid::now_v7()),
         },
     });
-    dev_submit_event(state, session, realm_id, "ck.agent.key.authorize", payload).await
+    submit_agent_fanout_event(state, session, realm_id, "ck.agent.key.authorize", payload).await
 }
 
 /// CKP-0016 — materialise a participation `effective=true` decision into a
@@ -430,7 +427,8 @@ pub(super) async fn revoke_capability_grant(
 ) -> Result<String, AppError> {
     let payload = json!({ "grant_id": grant_id });
     let event_id =
-        dev_submit_event(state, session, realm_id, "ck.capability.revoke", payload).await?;
+        submit_agent_fanout_event(state, session, realm_id, "ck.capability.revoke", payload)
+            .await?;
     // The durable reducer event is the source of truth; this mirrors the
     // same revoke into the in-memory authz read index before the HTTP command
     // returns so subsequent resource checks fail closed immediately.
@@ -484,7 +482,7 @@ pub(super) async fn submit_durable_agent_lifecycle(
             .expect("payload object")
             .insert("sidecar_exposure_ack".to_owned(), ack.clone());
     }
-    dev_submit_event(state, session, realm_id, event_kind, payload).await
+    submit_agent_fanout_event(state, session, realm_id, event_kind, payload).await
 }
 
 /// CKP-0008 §4.11 — on deactivate, fan-out `ck.agent.key.revoke` for the
@@ -511,7 +509,7 @@ pub(super) async fn submit_revoke_agent_keys(
             "revoked_by": session.actor.clone(),
             "revoked_at": revoked_at,
         });
-        dev_submit_event(state, session, realm_id, "ck.agent.key.revoke", payload).await?;
+        submit_agent_fanout_event(state, session, realm_id, "ck.agent.key.revoke", payload).await?;
     }
     Ok(())
 }

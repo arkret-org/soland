@@ -688,6 +688,7 @@ async fn public_read_receipt_rejected_for_world_readable_realm_without_opt_in() 
                 asset_privacy_policy_digest: None,
                 encryption_profile: Some("none".to_owned()),
                 plaintext_visible_services: Default::default(),
+                plaintext_visible_service_classes: Default::default(),
                 minimal_metadata_realm: false,
                 created_at: now,
                 updated_at: now,

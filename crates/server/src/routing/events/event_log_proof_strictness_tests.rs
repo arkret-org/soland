@@ -316,6 +316,12 @@ async fn policy_components_media_plaintext_reads_realm_meta() {
                     .config
                     .service_did
                     .clone()]),
+                plaintext_visible_service_classes: std::collections::BTreeMap::from([(
+                    state.config.service_did.clone(),
+                    std::collections::BTreeSet::from([
+                        cokret_sdk::PlaintextDataClassKind::MediaPlaintext,
+                    ]),
+                )]),
                 minimal_metadata_realm: false,
                 created_at: now,
                 updated_at: now,
@@ -354,6 +360,7 @@ async fn minimal_metadata_realm_rejects_non_hidden_aad() {
                 asset_privacy_policy_digest: None,
                 encryption_profile: Some("mls_rfc9420".to_owned()),
                 plaintext_visible_services: std::collections::BTreeSet::new(),
+                plaintext_visible_service_classes: Default::default(),
                 minimal_metadata_realm: true,
                 created_at: now,
                 updated_at: now,
@@ -748,6 +755,7 @@ async fn applet_registration_requires_realm_admin() {
                 asset_privacy_policy_digest: None,
                 encryption_profile: Some("mls_rfc9420".to_owned()),
                 plaintext_visible_services: std::collections::BTreeSet::new(),
+                plaintext_visible_service_classes: Default::default(),
                 minimal_metadata_realm: false,
                 created_at: now,
                 updated_at: now,
@@ -809,6 +817,7 @@ async fn non_minimal_metadata_realm_allows_any_aad() {
                 asset_privacy_policy_digest: None,
                 encryption_profile: Some("mls_rfc9420".to_owned()),
                 plaintext_visible_services: std::collections::BTreeSet::new(),
+                plaintext_visible_service_classes: Default::default(),
                 minimal_metadata_realm: false,
                 created_at: now,
                 updated_at: now,

@@ -78,6 +78,7 @@ pub struct AppletProtocolDescribeOutcome {
     pub contract: String,
     pub install: AppletInstallPaths,
     pub transaction_path: String,
+    pub transaction_auth: Value,
     pub package_schema: String,
 }
 

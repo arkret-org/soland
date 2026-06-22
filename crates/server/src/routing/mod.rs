@@ -46,10 +46,10 @@ use identity::did::validate_did_document_services;
 use spaces::directory::demo_actors;
 use spaces::space::{
     has_pending_call_signals_for_subscriber, invite_token_matches_realm, invite_token_realm_id,
-    is_realm_deleted, prune_expired_typing, realm_allows_plaintext_service, realm_discoverability,
-    realm_event_visible_to_session, realm_has_member, realm_history_visibility,
-    realm_id_accessible, realm_resolvable_to, realm_search_visible_to, realm_visible_to,
-    touch_realm, typing_ephemeral_for_realm,
+    is_realm_deleted, prune_expired_typing, realm_allows_plaintext_service_for_data_class,
+    realm_discoverability, realm_event_visible_to_session, realm_has_member,
+    realm_history_visibility, realm_id_accessible, realm_resolvable_to, realm_search_visible_to,
+    realm_visible_to, touch_realm, typing_ephemeral_for_realm,
 };
 use system::extract::AuthArgs;
 use system::util::{

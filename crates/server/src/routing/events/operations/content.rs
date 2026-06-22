@@ -240,10 +240,11 @@ pub async fn known_realm_denies_plaintext_service(state: &AppState, realm_id: &s
         .ok()
         .flatten()
         .is_some_and(|record| {
-            record.discoverability != "public"
-                && !record
-                    .plaintext_visible_services
-                    .contains(&state.config.service_did)
+            !(record.discoverability == "public" && record.history_visibility == "world_readable")
+                && !record.allows_plaintext_data_class(
+                    &state.config.service_did,
+                    cokret_sdk::PlaintextDataClassKind::MessageContent,
+                )
         })
 }
 

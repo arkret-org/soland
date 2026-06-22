@@ -746,8 +746,8 @@ async fn projection_document_relations_return_lazy_and_locked_stubs() {
     let locked_realm_id = locked_realm["realm_id"].as_str().unwrap().to_owned();
 
     let now = chrono::Utc::now();
-    let strand = |strand_id: &str, strand_realm_id: &str, title: &str| {
-        soland::reducer::StrandProjection {
+    let strand =
+        |strand_id: &str, strand_realm_id: &str, title: &str| soland::reducer::StrandProjection {
             strand_id: strand_id.to_owned(),
             realm_id: strand_realm_id.to_owned(),
             tracks: Default::default(),
@@ -762,8 +762,7 @@ async fn projection_document_relations_return_lazy_and_locked_stubs() {
             updated_by: None,
             updated_at: None,
             scope_circle_id: None,
-        }
-    };
+        };
     let relation =
         |relation_id: &str, target_ref: &str, role: &str| -> soland::reducer::SolandRelationState {
             let mut fields = std::collections::BTreeMap::new();
@@ -835,7 +834,11 @@ async fn projection_document_relations_return_lazy_and_locked_stubs() {
         );
         projection.relations.insert(
             lazy_relation_id.to_owned(),
-            relation(lazy_relation_id, lazy_target_ref, "Cross Realm Secret Title"),
+            relation(
+                lazy_relation_id,
+                lazy_target_ref,
+                "Cross Realm Secret Title",
+            ),
         );
         projection.relations.insert(
             locked_relation_id.to_owned(),
@@ -857,10 +860,7 @@ async fn projection_document_relations_return_lazy_and_locked_stubs() {
         .iter()
         .find(|relation| relation["relation_id"] == accessible_relation_id)
         .expect("same-Realm relation projected");
-    assert_eq!(
-        accessible["reference_projection"]["status"],
-        "accessible"
-    );
+    assert_eq!(accessible["reference_projection"]["status"], "accessible");
     assert_eq!(accessible["to"], same_target_ref);
     assert_eq!(accessible["fields"]["role"], "same_realm");
 

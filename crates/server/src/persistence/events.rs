@@ -202,8 +202,16 @@ impl EventStore for MemoryEventStore {
         query: &PeerEventsPageQuery,
     ) -> PersistenceResult<Vec<CanonicalEventRecord>> {
         let data = self.data.lock().expect("events lock");
-        let realms = query.realms.iter().map(String::as_str).collect::<BTreeSet<_>>();
-        let actors = query.actors.iter().map(String::as_str).collect::<BTreeSet<_>>();
+        let realms = query
+            .realms
+            .iter()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>();
+        let actors = query
+            .actors
+            .iter()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>();
         let cursor = query
             .cursor_event_id
             .as_deref()
@@ -475,7 +483,9 @@ impl EventStore for PgEventStore {
             .collect::<PersistenceResult<Vec<_>>>()?;
         let cursor_id = match query.cursor_event_id.as_deref() {
             Some(event_id) => ids::parse_typed_uuid(event_id, "event").ok_or_else(|| {
-                PersistenceError::Internal(format!("invalid peer events cursor event id: {event_id}"))
+                PersistenceError::Internal(format!(
+                    "invalid peer events cursor event id: {event_id}"
+                ))
             })?,
             None => Uuid::nil(),
         };
@@ -511,7 +521,8 @@ impl EventStore for PgEventStore {
             .bind::<Bool, _>(no_cursor)
             .bind::<SqlUuid, _>(cursor_id)
             .bind::<BigInt, _>(limit)
-            .load::<CanonicalEventRow>(&mut *conn).await
+            .load::<CanonicalEventRow>(&mut *conn)
+            .await
             .map(|rows| rows.into_iter().map(CanonicalEventRecord::from).collect())
             .map_err(PersistenceError::from)
     }

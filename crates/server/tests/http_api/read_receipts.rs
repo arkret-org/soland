@@ -40,6 +40,12 @@ async fn set_demo_realm_visibility(
                 .config
                 .service_did
                 .clone()]),
+            plaintext_visible_service_classes: std::collections::BTreeMap::from([(
+                state.config.service_did.clone(),
+                std::collections::BTreeSet::from([
+                    cokret_sdk::PlaintextDataClassKind::MessageContent,
+                ]),
+            )]),
             minimal_metadata_realm: false,
             created_at: now,
             updated_at: now,
@@ -49,6 +55,10 @@ async fn set_demo_realm_visibility(
     meta.encryption_profile = Some("none".to_owned());
     meta.plaintext_visible_services =
         std::collections::BTreeSet::from([state.config.service_did.clone()]);
+    meta.plaintext_visible_service_classes.insert(
+        state.config.service_did.clone(),
+        std::collections::BTreeSet::from([cokret_sdk::PlaintextDataClassKind::MessageContent]),
+    );
     meta.updated_at = now;
     state
         .persistence

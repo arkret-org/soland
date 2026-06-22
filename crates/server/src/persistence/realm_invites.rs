@@ -50,9 +50,10 @@ impl RealmInviteStore for MemoryRealmInviteStore {
         now: chrono::DateTime<Utc>,
     ) -> PersistenceResult<Option<RealmInviteRecord>> {
         let mut data = self.data.lock().expect("realm invites lock");
-        let Some(record) = data.values_mut().find(|record| {
-            record.third_party_id.is_some() && record.invite_token == token_digest
-        }) else {
+        let Some(record) = data
+            .values_mut()
+            .find(|record| record.third_party_id.is_some() && record.invite_token == token_digest)
+        else {
             return Ok(None);
         };
         if record.status != "pending" {
@@ -60,7 +61,10 @@ impl RealmInviteStore for MemoryRealmInviteStore {
             record.updated_at = Some(now);
             return Ok(None);
         }
-        if record.expires_at.is_some_and(|expires_at| expires_at <= now) {
+        if record
+            .expires_at
+            .is_some_and(|expires_at| expires_at <= now)
+        {
             record.status = "expired".to_owned();
             record.invite_token.clear();
             remove_third_party_active_material(&mut record.third_party_id, true);

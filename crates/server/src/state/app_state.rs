@@ -623,6 +623,7 @@ impl AppState {
                 asset_privacy_policy_digest: None,
                 encryption_profile: None,
                 plaintext_visible_services: BTreeSet::new(),
+                plaintext_visible_service_classes: BTreeMap::new(),
                 minimal_metadata_realm: false,
                 created_at: now,
                 updated_at: now,
@@ -1120,6 +1121,10 @@ impl AppState {
             buckets.push((
                 format!("source_service:{source_service}"),
                 MODERATION_REPORT_MAX_PER_SOURCE_SERVICE_WINDOW,
+            ));
+            buckets.push((
+                format!("reporter_source_service:{reporter}:{source_service}"),
+                MODERATION_REPORT_MAX_PER_REPORTER_REALM_WINDOW,
             ));
         }
 
@@ -1646,6 +1651,21 @@ async fn hydrate_realm_create_event(
                 .collect::<BTreeSet<_>>()
         })
         .unwrap_or_default();
+    let mut plaintext_visible_service_classes = record
+        .envelope
+        .get("payload")
+        .map(crate::routing::events::projection::plaintext_service_classes_from_value)
+        .unwrap_or_default();
+    if let Some(object) = payload_object {
+        for (service, classes) in
+            crate::routing::events::projection::plaintext_service_classes_from_value(object)
+        {
+            plaintext_visible_service_classes
+                .entry(service)
+                .or_default()
+                .extend(classes);
+        }
+    }
     let minimal_metadata_realm =
         payload_object.is_some_and(crate::kinds::payload_declares_minimal_metadata_realm);
 
@@ -1688,6 +1708,7 @@ async fn hydrate_realm_create_event(
         asset_privacy_policy_digest,
         encryption_profile,
         plaintext_visible_services,
+        plaintext_visible_service_classes,
         minimal_metadata_realm,
         created_at: record.received_at,
         updated_at: record.received_at,

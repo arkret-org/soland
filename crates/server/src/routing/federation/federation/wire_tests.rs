@@ -33,7 +33,11 @@ fn historical_only_marker_set() {
         Some(true)
     );
     assert_eq!(
-        response.get("accepted").and_then(Value::as_array).unwrap().len(),
+        response
+            .get("accepted")
+            .and_then(Value::as_array)
+            .unwrap()
+            .len(),
         0
     );
     assert_eq!(
@@ -99,8 +103,7 @@ fn delivery_binding_stale_response_carries_new_service_and_frontier() {
 
 #[test]
 fn delivery_binding_handed_over_response_carries_new_service() {
-    let response =
-        delivery_binding_handed_over_response(&Did::new("did:web:bob.example").unwrap());
+    let response = delivery_binding_handed_over_response(&Did::new("did:web:bob.example").unwrap());
     assert_eq!(
         response.pointer("/error/code").and_then(Value::as_str),
         Some(cokret_sdk::ERROR_CODE_DELIVERY_BINDING_HANDED_OVER)

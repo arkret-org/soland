@@ -24,6 +24,7 @@ const GRANT_ID: &str = "ck:grant:01904100-0000-7000-8000-dddddddddddd";
 const ISSUER: &str = "did:web:owner.example";
 const SUBJECT: &str = "did:web:bob.example";
 const ACTION: &str = "ck.realm.admin";
+const STRAND_ID: &str = "ck:strand:01904100-0000-7000-8000-eeeeeeeeeeee";
 
 fn op(kind: &str, realm_id: &str, payload: Value) -> Operation {
     Operation::create(
@@ -38,7 +39,7 @@ fn grant_op(grant_id: &str) -> Operation {
     grant_op_with(
         grant_id,
         vec![json!(ACTION)],
-        vec![json!({ "kind": "realm", "id": REALM })],
+        vec![json!({ "kind": "realm", "realm_id": REALM })],
     )
 }
 
@@ -94,12 +95,16 @@ fn seed_realm_owner(state: &mut ProjectionState) {
 /// Mirror the projection driver: derive the engine grant from the cell and
 /// fold it into a fresh engine, then run a check for the subject/action.
 fn check_allows(state: &ProjectionState, grant_id: &str) -> bool {
+    check_allows_for(state, grant_id, ACTION, REALM)
+}
+
+fn check_allows_for(state: &ProjectionState, grant_id: &str, action: &str, resource: &str) -> bool {
     let engine = SolandAuthzEngine::new();
     if let Some(grant) = state.effective_engine_grant(grant_id) {
         engine.upsert_projected_grant(grant);
     }
     engine
-        .check(SUBJECT, ACTION, REALM, REALM, None, &[], &[])
+        .check(SUBJECT, action, resource, REALM, None, &[], &[])
         .allowed
 }
 
@@ -263,4 +268,70 @@ fn selector_resource_count_limit_is_enforced() {
         other => panic!("expected Rejected, got {other:?}"),
     }
     assert!(grant_cell_items(&state, GRANT_ID).is_empty());
+}
+
+#[test]
+fn canonical_strand_selector_projects_to_exact_resource() {
+    let mut state = ProjectionState::new();
+    seed_realm_owner(&mut state);
+    let hlc = ServerHlc::new("test");
+    let effect = state.apply(
+        &grant_op_with(
+            GRANT_ID,
+            vec![json!("ck.strand.read")],
+            vec![json!({ "kind": "strand", "realm_id": REALM, "strand_id": STRAND_ID })],
+        ),
+        &hlc,
+    );
+    assert!(matches!(
+        effect,
+        ProjectionEffect::CapabilityGrantProjected { .. }
+    ));
+    assert!(check_allows_for(
+        &state,
+        GRANT_ID,
+        "ck.strand.read",
+        STRAND_ID
+    ));
+    assert!(!check_allows_for(
+        &state,
+        GRANT_ID,
+        "ck.strand.read",
+        "ck:strand:01904100-0000-7000-8000-ffffffffffff"
+    ));
+}
+
+#[test]
+fn multiple_resource_selectors_are_disjoined_in_engine_projection() {
+    let mut state = ProjectionState::new();
+    seed_realm_owner(&mut state);
+    let hlc = ServerHlc::new("test");
+    let other_strand = "ck:strand:01904100-0000-7000-8000-ffffffffffff";
+    let effect = state.apply(
+        &grant_op_with(
+            GRANT_ID,
+            vec![json!("ck.strand.read")],
+            vec![
+                json!({ "kind": "strand", "realm_id": REALM, "strand_id": STRAND_ID }),
+                json!({ "kind": "strand", "realm_id": REALM, "strand_id": other_strand }),
+            ],
+        ),
+        &hlc,
+    );
+    assert!(matches!(
+        effect,
+        ProjectionEffect::CapabilityGrantProjected { .. }
+    ));
+    assert!(check_allows_for(
+        &state,
+        GRANT_ID,
+        "ck.strand.read",
+        STRAND_ID
+    ));
+    assert!(check_allows_for(
+        &state,
+        GRANT_ID,
+        "ck.strand.read",
+        other_strand
+    ));
 }

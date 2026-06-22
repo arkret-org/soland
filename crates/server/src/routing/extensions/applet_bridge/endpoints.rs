@@ -132,6 +132,28 @@ async fn protocol_describe_endpoint() -> JsonResult<AppletProtocolDescribeOutcom
                 .to_owned(),
         },
         transaction_path: "/_cokret/edge/applet/transactions".to_owned(),
+        transaction_auth: json!({
+            "mode": "rfc9421_http_message_signature",
+            "required_headers": [
+                "Signature",
+                "Signature-Input",
+                "Content-Digest",
+                "Source-Service-DID",
+                "Destination-Service-DID",
+                "Idempotency-Key"
+            ],
+            "covered_components": [
+                "@method",
+                "@target-uri",
+                "@authority",
+                "content-digest",
+                "source-service-did",
+                "destination-service-did",
+                "idempotency-key"
+            ],
+            "source_signature_anchor": "ck.applet.source_signature_anchor.v1",
+            "bearer_only": false
+        }),
         package_schema: "ck.schema.applet_package.v1".to_owned(),
     })
 }

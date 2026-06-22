@@ -27,8 +27,8 @@ use subtle::ConstantTimeEq as _;
 
 use super::{
     append_audit_log, auth_or_render, authenticated_session, is_valid_sha256_digest,
-    is_valid_sha256_hex, now, query_param, realm_allows_plaintext_service, realm_has_member,
-    render_error, sha256_hex,
+    is_valid_sha256_hex, now, query_param, realm_allows_plaintext_service_for_data_class,
+    realm_has_member, render_error, sha256_hex,
 };
 use crate::error::{AppError, ErrorCode};
 use crate::result::{JsonResult, json_ok};
@@ -235,7 +235,12 @@ async fn blob_upload(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let plaintext_denied = if encrypted {
         false
     } else if let Some(realm_id) = realm_id.as_deref() {
-        !realm_allows_plaintext_service(state, realm_id).await
+        !realm_allows_plaintext_service_for_data_class(
+            state,
+            realm_id,
+            plaintext_blob_data_class(upload_purpose.as_deref()),
+        )
+        .await
     } else {
         false
     };
@@ -1160,6 +1165,19 @@ pub(super) fn encrypted_blob_encryption_metadata_for_purpose(
 
 pub(super) fn blob_purpose_requires_encryption(purpose: Option<&str>) -> bool {
     matches!(purpose, Some(BLOB_PURPOSE_SEARCH_INDEX_SHARD))
+}
+
+pub(super) fn plaintext_blob_data_class(
+    purpose: Option<&str>,
+) -> cokret_sdk::PlaintextDataClassKind {
+    match purpose {
+        Some("attachment_preview" | "blob_preview" | "preview") => {
+            cokret_sdk::PlaintextDataClassKind::AttachmentPreview
+        }
+        Some("thumbnail") => cokret_sdk::PlaintextDataClassKind::Thumbnail,
+        Some(BLOB_PURPOSE_SEARCH_INDEX_SHARD) => cokret_sdk::PlaintextDataClassKind::FullTextIndex,
+        _ => cokret_sdk::PlaintextDataClassKind::AttachmentPlaintext,
+    }
 }
 
 /// Spec `blob.schema.json#/$defs/encrypted_attachment` carries a `scheme`

@@ -80,7 +80,13 @@ pub(crate) async fn mirror_mls_effect_to_persistence(
             if let Err(error) = state
                 .persistence
                 .mls_key_packages()
-                .try_claim(keypackage_id, group_id, intended_realm_id.as_deref(), None, *consumed_at)
+                .try_claim(
+                    keypackage_id,
+                    group_id,
+                    intended_realm_id.as_deref(),
+                    None,
+                    *consumed_at,
+                )
                 .await
             {
                 tracing::warn!(%error, keypackage_id = %keypackage_id, "failed to mirror MLS KeyPackage claim");

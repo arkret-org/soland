@@ -46,10 +46,11 @@ use tokio::io::AsyncReadExt as _;
 use super::blob::{
     MAX_BLOB_UPLOAD_BYTES, blob_purpose_requires_encryption, blob_upload_outcome,
     encrypted_blob_encryption_metadata_for_purpose, enforce_blob_quota, is_valid_blob_purpose,
+    plaintext_blob_data_class,
 };
 use super::{
-    auth_or_render, is_valid_sha256_digest, now, realm_allows_plaintext_service, realm_has_member,
-    render_error,
+    auth_or_render, is_valid_sha256_digest, now, realm_allows_plaintext_service_for_data_class,
+    realm_has_member, render_error,
 };
 use crate::state::{AppState, BlobRecord};
 
@@ -787,7 +788,12 @@ async fn complete_resumable_upload(
     let plaintext_denied = if encrypted {
         false
     } else if let Some(realm_id) = realm_id.as_deref() {
-        !realm_allows_plaintext_service(state, realm_id).await
+        !realm_allows_plaintext_service_for_data_class(
+            state,
+            realm_id,
+            plaintext_blob_data_class(purpose.as_deref()),
+        )
+        .await
     } else {
         false
     };

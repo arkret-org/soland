@@ -622,6 +622,7 @@ version = "0.3.0"
 dependencies = [
  "chrono",
  "cokret-core",
+ "cokret-signatures",
  "futures-util",
  "reqwest 0.13.4",
  "serde",

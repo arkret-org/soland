@@ -513,9 +513,7 @@ fn realm_create_bootstraps_creator_member_and_rejects_duplicate_create() {
         first,
         ProjectionEffect::RealmLifecycle { action, .. } if action == "create"
     ));
-    let log = state
-        .realm_create_log(realm_id)
-        .unwrap();
+    let log = state.realm_create_log(realm_id).unwrap();
     assert_eq!(log.len(), 1, "realm.create should write one genesis entry");
     let member = state
         .member(realm_id, "did:web:alice")

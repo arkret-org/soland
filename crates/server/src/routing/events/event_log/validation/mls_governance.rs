@@ -6,7 +6,12 @@ pub(crate) async fn projected_media_plaintext_service_present(
     payload: &Value,
 ) -> bool {
     payload_declares_media_plaintext_service(payload, &state.config.service_did)
-        || realm_allows_plaintext_service(state, realm_id).await
+        || realm_allows_plaintext_service_for_data_class(
+            state,
+            realm_id,
+            cokret_sdk::PlaintextDataClassKind::MediaPlaintext,
+        )
+        .await
 }
 
 pub(crate) fn payload_declares_media_plaintext_service(payload: &Value, service_did: &str) -> bool {

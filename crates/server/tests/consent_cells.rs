@@ -853,7 +853,10 @@ async fn expired_contact_respond_revokes_requester_side_consent_and_fails_closed
         }))
         .send(&app)
         .await;
-    assert_eq!(response.status_code.unwrap(), StatusCode::PRECONDITION_FAILED);
+    assert_eq!(
+        response.status_code.unwrap(),
+        StatusCode::PRECONDITION_FAILED
+    );
     let body: Value = response.take_json().await.unwrap();
     assert_eq!(body["error"]["code"], "contact_request_expired");
 

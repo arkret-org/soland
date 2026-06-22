@@ -654,10 +654,7 @@ async fn memory_event_store_rejects_duplicate_realm_create() {
     };
 
     store.put(make("e1", "did:web:alice")).await.unwrap();
-    let err = store
-        .put(make("e2", "did:web:bob"))
-        .await
-        .unwrap_err();
+    let err = store.put(make("e2", "did:web:bob")).await.unwrap_err();
     assert!(matches!(
         err,
         PersistenceError::Conflict(message) if message.contains("realm_already_exists")

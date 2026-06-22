@@ -49,6 +49,9 @@ use super::{append_audit_log, now, sha256_hex};
 use crate::error::AppError;
 use crate::result::{JsonResult, json_ok};
 use crate::routing::events::projection::{append_projection_event, projection_event_json};
+use crate::routing::identity::consent::{
+    materialize_mimi_consent_request, materialize_mimi_consent_update_by_id,
+};
 use crate::state::{
     AppState, CanonicalEventRecord, EventNotification, MessageRecord, ProjectionEventRecord,
 };
@@ -822,14 +825,34 @@ async fn mimi_consent_request(
     if let Some(message) = unsupported_mimi_draft(&body) {
         return Err(AppError::invalid_param(message).with_wire_code("mimi_draft_unsupported"));
     }
-    let consent_id = ids::generate("mimi_consent");
+    let requester = body
+        .get("requester_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| AppError::invalid_param("mimi consent request requires requester_id"))?;
+    let target_holder = mimi_consent_target_holder(&body);
+    let scope = body
+        .get("purpose")
+        .and_then(Value::as_str)
+        .unwrap_or("direct_message");
+    let materialized = match target_holder {
+        Some(holder) => {
+            Some(materialize_mimi_consent_request(state, holder, requester, scope).await?)
+        }
+        None => None,
+    };
+    let consent_id = materialized
+        .as_ref()
+        .map(|cell| cell.cell_id.clone())
+        .unwrap_or_else(|| ids::generate("mimi_consent"));
     let _receipt = mimi_receipt(
         state,
         "ck.open.mimi.command.request_consent",
         &body,
         json!({
             "consent_grants_space_capability": false,
-            "privacy_state": "holder_private"
+            "privacy_state": "holder_private",
+            "holder_private_materialized": materialized.is_some(),
+            "identifier_mapping": if materialized.is_some() { "holder_did" } else { "pending_invite_or_pairwise" }
         }),
     );
     json_ok(MimiRequestConsentOutcome {
@@ -856,26 +879,60 @@ async fn mimi_consent_update(
     if let Some(message) = unsupported_mimi_draft(&body) {
         return Err(AppError::invalid_param(message).with_wire_code("mimi_draft_unsupported"));
     }
-    let state_value = body
-        .get("state")
-        .or_else(|| body.get("decision"))
+    let decision = body
+        .get("decision")
         .and_then(|value| value.as_str())
-        .unwrap_or("accepted");
+        .unwrap_or("accept");
+    let granted = matches!(decision, "accept" | "accepted" | "grant" | "granted");
+    let revoked = matches!(decision, "deny" | "denied" | "revoke" | "revoked");
+    if !granted && !revoked {
+        return Err(AppError::invalid_param("unsupported MIMI consent decision"));
+    }
+    let consent_id = body
+        .get("consent_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| AppError::invalid_param("mimi consent update requires consent_id"))?;
+    let actor_id = body
+        .get("actor_id")
+        .and_then(|value| value.as_str())
+        .ok_or_else(|| AppError::invalid_param("mimi consent update requires actor_id"))?;
+    let materialized =
+        materialize_mimi_consent_update_by_id(state, consent_id, actor_id, granted).await?;
     let updated_at = now();
+    let event_ref = materialized
+        .as_ref()
+        .and_then(|(_, event_ref)| event_ref.as_ref())
+        .and_then(|event_ref| EventId::new(event_ref.clone()).ok());
     let _receipt = mimi_receipt(
         state,
         "ck.open.mimi.command.update_consent",
         &body,
         json!({
             "consent_grants_space_capability": false,
-            "membership_still_required": true
+            "membership_still_required": true,
+            "holder_private_materialized": materialized.is_some(),
+            "mapped_event_kind": if granted { "ck.consent.grant" } else { "ck.consent.revoke" }
         }),
     );
     json_ok(MimiUpdateConsentOutcome {
-        status: state_value.to_owned(),
+        status: if granted { "accepted" } else { "revoked" }.to_owned(),
         updated_at,
-        event_ref: None,
+        event_ref,
     })
+}
+
+fn mimi_consent_target_holder(body: &Value) -> Option<&str> {
+    body.get("target")
+        .and_then(|target| {
+            target
+                .get("holder_did")
+                .or_else(|| target.get("principal_did"))
+                .or_else(|| target.get("did"))
+        })
+        .or_else(|| body.get("holder_did"))
+        .or_else(|| body.get("target_did"))
+        .and_then(Value::as_str)
+        .filter(|value| value.starts_with("did:"))
 }
 
 #[endpoint(
@@ -988,6 +1045,7 @@ async fn mimi_report_abuse(
         .or_else(|| body.get("reporter"))
         .and_then(Value::as_str)
         .ok_or_else(|| AppError::invalid_param("mimi report requires reporter"))?;
+    enforce_mimi_reporter_resolution(state, reporter, &body).await?;
     let target_ref = body
         .get("target_event_digest")
         .or_else(|| body.get("target_ref"))
@@ -1115,6 +1173,7 @@ async fn mimi_report_abuse(
             "routed_to": [format!("{}#moderation", state.config.service_did)],
             "moderation_event_emitted": true,
             "report_event_id": report_event_id,
+            "reporter_resolution": "holder_claim_or_consent",
         }),
     );
     let report_id = ReportId::new(report_id)
@@ -1124,6 +1183,43 @@ async fn mimi_report_abuse(
         status: "queued".to_owned(),
         routed_to,
     })
+}
+
+async fn enforce_mimi_reporter_resolution(
+    state: &AppState,
+    reporter: &str,
+    body: &Value,
+) -> Result<(), AppError> {
+    Did::new(reporter.to_owned())
+        .map_err(|error| AppError::invalid_param(format!("invalid reporter DID: {error}")))?;
+    if state
+        .persistence
+        .accounts()
+        .get(reporter)
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?
+        .is_some()
+    {
+        return Ok(());
+    }
+    let evidence = body.get("evidence_package").unwrap_or(&Value::Null);
+    let has_holder_claim = evidence
+        .get("reporter_holder_claim")
+        .or_else(|| body.get("reporter_holder_claim"))
+        .is_some_and(non_empty_json_value);
+    let has_consent_proof = evidence
+        .get("consent_proof")
+        .or_else(|| evidence.get("consent_ref"))
+        .or_else(|| body.get("consent_proof"))
+        .or_else(|| body.get("consent_ref"))
+        .is_some_and(non_empty_json_value);
+    if has_holder_claim || has_consent_proof {
+        return Ok(());
+    }
+    Err(AppError::capability_denied(
+        "MIMI abuse reporter requires local account, holder claim, or consent proof",
+    )
+    .with_wire_code("mimi_reporter_resolution_required"))
 }
 
 #[endpoint(

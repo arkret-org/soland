@@ -7,9 +7,7 @@ use salvo::http::StatusCode;
 use serde_json::{Value, json};
 
 use crate::authz::obligation_executor::{ObligationError, RequestContext};
-use crate::authz::policy_client::{
-    PolicyCheckRequestInput, PolicyClient, PolicyFrontierSnapshot,
-};
+use crate::authz::policy_client::{PolicyCheckRequestInput, PolicyClient, PolicyFrontierSnapshot};
 use crate::authz::{MergedAuthzDecision, check_with_policy_server};
 use crate::state::AppState;
 use crate::{ids, kinds};
@@ -177,12 +175,11 @@ async fn policy_request_for_operation(
     action: &str,
     surface: PolicyGateSurface,
 ) -> Result<PolicyCheckRequestInput, PolicyGateRejection> {
-    let realm_id = RealmId::new(operation.realm_id.to_string())
-        .map_err(|error| {
-            PolicyGateRejection::forbidden_request(format!(
-                "invalid realm_id for policy check: {error}"
-            ))
-        })?;
+    let realm_id = RealmId::new(operation.realm_id.to_string()).map_err(|error| {
+        PolicyGateRejection::forbidden_request(format!(
+            "invalid realm_id for policy check: {error}"
+        ))
+    })?;
     let actor_id = Did::new(actor_id.to_owned()).map_err(|error| {
         PolicyGateRejection::forbidden_request(format!("invalid actor DID: {error}"))
     })?;

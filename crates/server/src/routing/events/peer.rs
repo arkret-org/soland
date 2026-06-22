@@ -1161,12 +1161,8 @@ async fn peer_events_query_response(
         .map(String::as_str)
         .collect::<BTreeSet<_>>();
     let filter_digest = peer_events_query_scope_digest(&source_service_did, &parts);
-    let cursor_event_id = peer_events_query_cursor_event_id(
-        state,
-        parts.active_cursor(),
-        &filter_digest,
-    )
-    .await?;
+    let cursor_event_id =
+        peer_events_query_cursor_event_id(state, parts.active_cursor(), &filter_digest).await?;
     let authz_records = state
         .persistence
         .events()
@@ -1270,7 +1266,10 @@ fn peer_events_candidate_limit(page_limit: usize) -> usize {
         .min(MAX_PEER_EVENTS_QUERY_LIMIT * 5)
 }
 
-fn peer_events_query_scope_digest(source_service_did: &str, parts: &PeerEventsQueryParts) -> String {
+fn peer_events_query_scope_digest(
+    source_service_did: &str,
+    parts: &PeerEventsQueryParts,
+) -> String {
     let realms = parts
         .realms
         .iter()
@@ -1318,16 +1317,14 @@ async fn peer_events_query_cursor_event_id(
 
 fn peer_events_query_cursor_error(error: super::sync::SyncCursorError) -> AppError {
     match error {
-        super::sync::SyncCursorError::Expired => AppError::new(
-            crate::error::ErrorCode::CursorExpired,
-            "cursor has expired",
-        ),
+        super::sync::SyncCursorError::Expired => {
+            AppError::new(crate::error::ErrorCode::CursorExpired, "cursor has expired")
+        }
         super::sync::SyncCursorError::Invalid(message) => AppError::invalid_param(message),
         super::sync::SyncCursorError::Mismatch(message)
-        | super::sync::SyncCursorError::Integrity(message) => AppError::new(
-            crate::error::ErrorCode::CursorIntegrityInvalid,
-            message,
-        ),
+        | super::sync::SyncCursorError::Integrity(message) => {
+            AppError::new(crate::error::ErrorCode::CursorIntegrityInvalid, message)
+        }
         super::sync::SyncCursorError::Revoked => AppError::new(
             crate::error::ErrorCode::CursorRevoked,
             "cursor authority has been revoked",

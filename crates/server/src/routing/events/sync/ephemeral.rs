@@ -283,8 +283,8 @@ async fn admit_ephemeral_read_receipt(
         .with_status(StatusCode::FORBIDDEN));
     }
     match policy.visibility {
-        cokret_sdk::ReadReceiptVisibility::Private
-        | cokret_sdk::ReadReceiptVisibility::Members => {}
+        cokret_sdk::ReadReceiptVisibility::Private | cokret_sdk::ReadReceiptVisibility::Members => {
+        }
         cokret_sdk::ReadReceiptVisibility::Public => {
             let history_visibility = realm_history_visibility_for_id(state, realm_id).await;
             if history_visibility == "world_readable"
@@ -316,11 +316,7 @@ async fn admit_ephemeral_read_receipt(
         cokret_sdk::ReadReceiptVisibility::Private => "private",
     };
     crate::routing::events::read_receipts::relay_ephemeral_read_receipt(
-        state,
-        session,
-        realm_id,
-        visibility,
-        envelope,
+        state, session, realm_id, visibility, envelope,
     )
     .await?;
     Ok(())

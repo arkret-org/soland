@@ -774,7 +774,10 @@ async fn broader_protocol_surface_returns_contract_shapes() {
         .unwrap();
     assert_eq!(authz["decision"], "allow");
     assert!(authz["matched_grants"].is_array());
-    assert_eq!(authz["policy_results"][0]["actor_id"], "did:web:alice.example");
+    assert_eq!(
+        authz["policy_results"][0]["actor_id"],
+        "did:web:alice.example"
+    );
     assert_eq!(authz["policy_results"][0]["action"], "ck.strand.read");
     assert_eq!(authz["policy_results"][0]["realm_id"], DEMO_REALM_ID);
     assert_eq!(authz["policy_results"][0]["cache"]["mode"], "in_memory");

@@ -606,8 +606,7 @@ fn document_relation_snapshot(
         target_projection_visible,
         target_requires_projection,
         target_row_visibility,
-    ) =
-        target_info_for_relation_ref(projection, target_ref.as_deref(), session);
+    ) = target_info_for_relation_ref(projection, target_ref.as_deref(), session);
     DocumentRelationSnapshot {
         relation: relation.clone(),
         anchor_ref: morph_id.to_owned(),
@@ -783,7 +782,9 @@ async fn document_projection_relations(
                 relation.from_ref.as_deref() == Some(morph_id)
                     || relation.to_ref.as_deref() == Some(morph_id)
             })
-            .filter(|relation| document_relation_visible_to_session(&*projection, relation, session))
+            .filter(|relation| {
+                document_relation_visible_to_session(&*projection, relation, session)
+            })
             .map(|relation| {
                 parse_projection_id::<RelationId>(&relation.relation_id, "relations.relation_id")?;
                 Ok(document_relation_snapshot(

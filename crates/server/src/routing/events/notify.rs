@@ -338,10 +338,8 @@ mod tests {
                 .insert("strand_id".to_owned(), json!(strand_id));
         }
         cokret_sdk::Operation::create(
-            cokret_sdk::OperationId::new(format!(
-                "ck:operation:01904100-0000-7000-8000-{seed}"
-            ))
-            .unwrap(),
+            cokret_sdk::OperationId::new(format!("ck:operation:01904100-0000-7000-8000-{seed}"))
+                .unwrap(),
             cokret_sdk::RealmId::new(realm_id.to_owned()).unwrap(),
             crate::kinds::CK_MESSAGE_CREATE,
             payload,

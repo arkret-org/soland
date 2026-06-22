@@ -192,7 +192,9 @@ fn seed_read_receipt_inheritance(
         "ck:cell:ck.component.realm.read_receipt_policy.v1:{parent_realm_id}"
     ))
     .expect("valid read receipt policy cell ref");
-    projection.cells.insert(cell_id, CellState::Value(parent_policy));
+    projection
+        .cells
+        .insert(cell_id, CellState::Value(parent_policy));
     projection
         .realm_links
         .entry(child_realm_id.to_owned())
@@ -477,8 +479,8 @@ async fn strand_selection_is_capped_by_enclosing_circle_ceiling() {
         realm_id,
         strand_id,
     };
-    let ceiling = crate::routing::agent_participation::resolve_effective_ceiling(&state, &scope)
-        .await;
+    let ceiling =
+        crate::routing::agent_participation::resolve_effective_ceiling(&state, &scope).await;
     assert!(!ceiling.accept_third_party_mention);
     let selection = cokret_sdk::models::AgentParticipation {
         reply: true,

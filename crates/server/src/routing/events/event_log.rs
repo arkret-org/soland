@@ -41,10 +41,10 @@ use super::projection::{
 };
 use super::{
     append_audit_log, auth_or_render, is_valid_hash_digest, now, query_param, query_param_all,
-    realm_allows_plaintext_service, realm_event_visible_to_session, realm_has_member, render_error,
-    sha256_hex, validate_agent_participation_ceiling, validate_agent_reply_participation,
-    validate_content_encryption_floor, validate_did, validate_operation_policy,
-    validate_operation_semantics, validate_space_id,
+    realm_allows_plaintext_service_for_data_class, realm_event_visible_to_session,
+    realm_has_member, render_error, sha256_hex, validate_agent_participation_ceiling,
+    validate_agent_reply_participation, validate_content_encryption_floor, validate_did,
+    validate_operation_policy, validate_operation_semantics, validate_space_id,
 };
 use crate::error::{AppError, ErrorCode, error_http_status};
 use crate::result::{JsonResult, json_ok};
@@ -79,9 +79,9 @@ use inception::{
 mod realm_index;
 pub(in crate::routing) use realm_index::realm_is_indexed;
 use realm_index::{
-    bootstrap_realm_member_index, event_string_field, invite_create_actor_is_inviter,
-    invite_claim_actor_claims_pending_third_party_invite, member_join_accepts_pending_invite,
-    realm_create_actor_is_creator, realm_exists_in_index,
+    bootstrap_realm_member_index, event_string_field,
+    invite_claim_actor_claims_pending_third_party_invite, invite_create_actor_is_inviter,
+    member_join_accepts_pending_invite, realm_create_actor_is_creator, realm_exists_in_index,
 };
 
 mod submit;

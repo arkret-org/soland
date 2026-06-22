@@ -386,6 +386,7 @@ async fn encrypted_realm_rejects_plaintext_strand_content_before_event_log_persi
                 asset_privacy_policy_digest: None,
                 encryption_profile: Some("mls_rfc9420".to_owned()),
                 plaintext_visible_services: std::collections::BTreeSet::new(),
+                plaintext_visible_service_classes: Default::default(),
                 minimal_metadata_realm: false,
                 created_at: now,
                 updated_at: now,

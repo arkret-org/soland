@@ -145,6 +145,12 @@ async fn create_plaintext_realm(state: AppState, _token: &str, title: &str) -> S
                 plaintext_visible_services: std::collections::BTreeSet::from([
                     "did:web:soland.local".to_owned(),
                 ]),
+                plaintext_visible_service_classes: std::collections::BTreeMap::from([(
+                    "did:web:soland.local".to_owned(),
+                    std::collections::BTreeSet::from([
+                        cokret_sdk::PlaintextDataClassKind::MessageContent,
+                    ]),
+                )]),
                 minimal_metadata_realm: false,
                 created_at: now,
                 updated_at: now,

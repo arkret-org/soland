@@ -440,6 +440,78 @@ pub(crate) fn has_active_consent_for_scope(
     })
 }
 
+pub(crate) async fn materialize_mimi_consent_request(
+    state: &AppState,
+    holder: &str,
+    peer: &str,
+    scope: &str,
+) -> Result<ConsentCellRecord, AppError> {
+    validate_did(holder).map_err(|_| AppError::invalid_param("invalid holder DID"))?;
+    validate_did(peer).map_err(|_| AppError::invalid_param("invalid peer DID"))?;
+    let scope = normalize_scope(Some(scope))?;
+    let requested_at = now();
+    let previous = consent_cell_snapshot(state, holder, peer, &scope);
+    let cell = record_pending_request(state, holder, peer, &scope, requested_at);
+    persist_consent_cell(state, &cell, previous).await?;
+    Ok(cell)
+}
+
+pub(crate) async fn materialize_mimi_consent_update(
+    state: &AppState,
+    holder: &str,
+    peer: &str,
+    scope: &str,
+    granted: bool,
+) -> Result<(ConsentCellRecord, Option<String>), AppError> {
+    validate_did(holder).map_err(|_| AppError::invalid_param("invalid holder DID"))?;
+    validate_did(peer).map_err(|_| AppError::invalid_param("invalid peer DID"))?;
+    let scope = normalize_scope(Some(scope))?;
+    let updated_at = now();
+    let previous = consent_cell_snapshot(state, holder, peer, &scope);
+    let (cell, event_ref) = if granted {
+        let (event_ref, cell) =
+            grant_contact_managed_consent(state, holder, peer, &scope, updated_at);
+        (cell, Some(event_ref))
+    } else {
+        (revoke_cell(state, holder, peer, &scope, updated_at), None)
+    };
+    persist_consent_cell(state, &cell, previous).await?;
+    Ok((cell, event_ref))
+}
+
+pub(crate) async fn materialize_mimi_consent_update_by_id(
+    state: &AppState,
+    consent_id: &str,
+    actor_id: &str,
+    granted: bool,
+) -> Result<Option<(ConsentCellRecord, Option<String>)>, AppError> {
+    validate_did(actor_id).map_err(|_| AppError::invalid_param("invalid actor DID"))?;
+    let existing = state
+        .consent_cells
+        .lock()
+        .expect("consent_cells lock")
+        .values()
+        .find(|cell| cell.cell_id == consent_id)
+        .cloned();
+    let Some(existing) = existing else {
+        return Ok(None);
+    };
+    if existing.holder != actor_id {
+        return Err(AppError::capability_denied(
+            "MIMI consent update actor must be the holder of the consent cell",
+        ));
+    }
+    materialize_mimi_consent_update(
+        state,
+        &existing.holder,
+        &existing.peer,
+        &existing.scope,
+        granted,
+    )
+    .await
+    .map(Some)
+}
+
 /// Spec `sync/invite-addressing.md` §2 — verify a `consent_grant`
 /// introduction evidence. The `consent_grant_ref` (and optional
 /// `consent_id`) MUST resolve to an **active** grant dot in `subject`'s
@@ -592,9 +664,8 @@ pub(crate) fn project_contact_managed_consent_ref(
     granted_at: DateTime<Utc>,
 ) -> Result<ConsentCellRecord, AppError> {
     let scope = normalize_scope(Some(scope)).unwrap_or_else(|_| scope.to_owned());
-    let event_ref = EventId::new(grant_event_ref.to_owned()).map_err(|error| {
-        AppError::invalid_param(format!("invalid consent_grant_ref: {error}"))
-    })?;
+    let event_ref = EventId::new(grant_event_ref.to_owned())
+        .map_err(|error| AppError::invalid_param(format!("invalid consent_grant_ref: {error}")))?;
     let dot = format!("{}:0", event_ref.as_str());
     Ok(grant_cell_with_dot(
         state, holder, peer, &scope, dot, None, None, granted_at,

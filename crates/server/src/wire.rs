@@ -898,10 +898,46 @@ pub fn describe(
         "index.query.local_projection".to_owned(),
     ];
     let compat_surfaces = Vec::new();
-    // soland is a principal_server with an E2EE event store: it claims no
-    // plaintext / reversible-derived data classes. Canonical empty
-    // `plaintext_visibility` per service-describe.schema.json.
-    let plaintext_visibility = cokret_sdk::PlaintextVisibility::none();
+    let plaintext_visibility = cokret_sdk::PlaintextVisibility {
+        data_classes: vec![
+            cokret_sdk::PlaintextDataClassKind::MessageContent,
+            cokret_sdk::PlaintextDataClassKind::AttachmentPlaintext,
+            cokret_sdk::PlaintextDataClassKind::AttachmentPreview,
+            cokret_sdk::PlaintextDataClassKind::Thumbnail,
+            cokret_sdk::PlaintextDataClassKind::FullTextIndex,
+            cokret_sdk::PlaintextDataClassKind::NotificationSummary,
+            cokret_sdk::PlaintextDataClassKind::MediaPlaintext,
+        ],
+        max_visibility: Some(cokret_sdk::PlaintextMaxVisibility::PrivatePlaintext),
+        event_kinds: vec![
+            "ck.message.create".to_owned(),
+            "ck.realm.policy_components".to_owned(),
+            "ck.realm.plaintext_visible_services".to_owned(),
+        ],
+        payload_paths: vec![
+            "payload.content".to_owned(),
+            "payload.body".to_owned(),
+            "payload.media_service_decrypts".to_owned(),
+        ],
+        blob_purposes: vec![
+            "download".to_owned(),
+            "file_transfer".to_owned(),
+            "attachment_preview".to_owned(),
+            "thumbnail".to_owned(),
+            "search_index_shard".to_owned(),
+        ],
+        projection_outputs: vec![
+            "timeline.message_content".to_owned(),
+            "blob.upload".to_owned(),
+            "push.minimal_or_visible_notification".to_owned(),
+            "search.encrypted_or_authorized_index".to_owned(),
+        ],
+        notes: Some(
+            "Soland only accepts private plaintext when the current Realm policy lists this service DID with matching plaintext_visible_services.data_classes; otherwise it fails closed."
+                .to_owned(),
+        ),
+        extra: std::collections::BTreeMap::new(),
+    };
 
     ServerDescription {
         service_did: service_did.parse().expect("valid service DID"),
@@ -1062,10 +1098,17 @@ pub fn describe(
                 "supported": true,
                 "service_did": service_did,
                 "enforced_on": [
+                    "self.events.message_content",
                     "federation.push_operations",
                     "federation.transaction",
-                    "blob.upload"
-                ]
+                    "blob.upload.attachment_plaintext",
+                    "blob.upload.attachment_preview",
+                    "blob.upload.thumbnail",
+                    "blob.upload.full_text_index",
+                    "push.notify.visible_notification",
+                    "search.index.full_text_index"
+                ],
+                "requires_data_classes": true
             },
             "authz_policy": {
                 "surface": "authz_policy",
@@ -1487,8 +1530,7 @@ mod tests {
             json!(false)
         );
         assert_eq!(
-            value["limits"]["authz_policy"]["authz_check"]["policy_boundary"]
-                ["dynamic_or_auditable_decision_path"],
+            value["limits"]["authz_policy"]["authz_check"]["policy_boundary"]["dynamic_or_auditable_decision_path"],
             json!("/_cokret/self/policy/check")
         );
         assert_eq!(

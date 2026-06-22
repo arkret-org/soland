@@ -11,11 +11,11 @@
 use std::time::Duration;
 
 use chrono::Utc;
+use cokret_sdk::models::EffectiveScope;
 use cokret_sdk::{
     Did, EventId, FrankingProof, FrankingProofEventTimeAnchor, Hash,
     MODERATION_FRANKING_PROOF_KIND, RealmId,
 };
-use cokret_sdk::models::EffectiveScope;
 use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -103,7 +103,8 @@ pub(super) async fn validate_moderation_report_safety(
     }
     let evidence_package =
         validate_moderation_evidence_package(evidence_package, &effective_scope)?;
-    let franking_proof = validate_moderation_franking_proof(state, realm_id, franking_proof).await?;
+    let franking_proof =
+        validate_moderation_franking_proof(state, realm_id, franking_proof).await?;
     Ok(ModerationReportSafety {
         effective_scope,
         evidence_package,
@@ -425,16 +426,19 @@ async fn validate_franking_event_time_anchor(
         .get(proof.event_id.as_str())
         .await
         .map_err(|error| {
-            AppError::internal(format!("franking_proof event anchor lookup failed: {error}"))
+            AppError::internal(format!(
+                "franking_proof event anchor lookup failed: {error}"
+            ))
         })?
         .ok_or_else(|| {
             franking_proof_invalid(
                 "franking_proof.event_id does not reference an accepted local event anchor",
             )
         })?;
-    let record_realm_id = record.realm_id.as_deref().ok_or_else(|| {
-        franking_proof_invalid("franking_proof event anchor is missing realm_id")
-    })?;
+    let record_realm_id = record
+        .realm_id
+        .as_deref()
+        .ok_or_else(|| franking_proof_invalid("franking_proof event anchor is missing realm_id"))?;
     if record_realm_id != realm_id {
         return Err(franking_proof_invalid(
             "franking_proof event anchor realm_id does not match report realm_id",
@@ -1535,7 +1539,10 @@ mod report_safety_tests {
         let error = validate_moderation_franking_proof(&state, REALM, &proof)
             .await
             .unwrap_err();
-        assert_eq!(error.wire_code(), cokret_sdk::error::ERROR_CODE_PROOF_INVALID);
+        assert_eq!(
+            error.wire_code(),
+            cokret_sdk::error::ERROR_CODE_PROOF_INVALID
+        );
     }
 
     #[tokio::test]
@@ -1546,6 +1553,9 @@ mod report_safety_tests {
         let error = validate_moderation_franking_proof(&state, REALM, &proof)
             .await
             .unwrap_err();
-        assert_eq!(error.wire_code(), cokret_sdk::error::ERROR_CODE_PROOF_INVALID);
+        assert_eq!(
+            error.wire_code(),
+            cokret_sdk::error::ERROR_CODE_PROOF_INVALID
+        );
     }
 }

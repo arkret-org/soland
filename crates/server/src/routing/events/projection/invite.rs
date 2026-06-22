@@ -1,4 +1,8 @@
-use cokret_sdk::{Did, Operation, RealmId};
+use std::collections::{BTreeMap, BTreeSet};
+
+use cokret_sdk::{
+    Did, Operation, PlaintextDataClassKind, PlaintextVisibleServicesPayload, RealmId,
+};
 use serde_json::Value;
 
 use super::*;
@@ -579,14 +583,21 @@ fn introduction_evidence_digest_for_operation(operation: &Operation) -> Option<S
 
 pub(super) fn plaintext_services_from_operation(operation: &Operation) -> Vec<String> {
     let mut services = Vec::new();
+    collect_plaintext_services_from_value(&operation.payload, &mut services);
+    if let Some(object) = operation.payload.get("object") {
+        collect_plaintext_services_from_value(object, &mut services);
+    }
+    services
+}
+
+fn collect_plaintext_services_from_value(payload: &Value, services: &mut Vec<String>) {
     let mut push_service = |value: &str| {
         let service = value.trim();
         if !service.is_empty() && !services.iter().any(|existing| existing == service) {
             services.push(service.to_owned());
         }
     };
-    if let Some(items) = operation
-        .payload
+    if let Some(items) = payload
         .get("plaintext_visible_services")
         .and_then(|value| value.as_array())
     {
@@ -596,11 +607,7 @@ pub(super) fn plaintext_services_from_operation(operation: &Operation) -> Vec<St
             }
         }
     }
-    if let Some(items) = operation
-        .payload
-        .get("services")
-        .and_then(|value| value.as_array())
-    {
+    if let Some(items) = payload.get("services").and_then(|value| value.as_array()) {
         for item in items {
             if let Some(service) = item.as_str() {
                 push_service(service);
@@ -609,7 +616,81 @@ pub(super) fn plaintext_services_from_operation(operation: &Operation) -> Vec<St
             }
         }
     }
-    services
+}
+
+pub(super) fn plaintext_service_classes_from_operation(
+    operation: &Operation,
+) -> BTreeMap<String, BTreeSet<PlaintextDataClassKind>> {
+    let mut by_service = plaintext_service_classes_from_value(&operation.payload);
+    if let Some(object) = operation.payload.get("object") {
+        for (service, classes) in plaintext_service_classes_from_value(object) {
+            by_service.entry(service).or_default().extend(classes);
+        }
+    }
+    by_service
+}
+
+pub(crate) fn plaintext_service_classes_from_value(
+    payload: &Value,
+) -> BTreeMap<String, BTreeSet<PlaintextDataClassKind>> {
+    let mut by_service = BTreeMap::new();
+    if let Some(items) = payload.get("services").and_then(Value::as_array) {
+        merge_typed_plaintext_services(items, &mut by_service);
+    }
+    if let Some(items) = payload
+        .get("plaintext_visible_services")
+        .and_then(Value::as_array)
+    {
+        merge_typed_plaintext_services(items, &mut by_service);
+    }
+    by_service
+}
+
+fn merge_typed_plaintext_services(
+    items: &[Value],
+    by_service: &mut BTreeMap<String, BTreeSet<PlaintextDataClassKind>>,
+) {
+    let typed = serde_json::to_value(serde_json::json!({ "services": items }))
+        .ok()
+        .and_then(|value| serde_json::from_value::<PlaintextVisibleServicesPayload>(value).ok());
+    if let Some(typed) = typed {
+        for service in typed.services {
+            let classes = by_service
+                .entry(service.service_did.as_str().to_owned())
+                .or_default();
+            classes.extend(service.data_classes);
+        }
+        return;
+    }
+
+    for item in items {
+        let Some(object) = item.as_object() else {
+            continue;
+        };
+        let Some(service_did) = object
+            .get("service_did")
+            .or_else(|| object.get("did"))
+            .and_then(Value::as_str)
+            .filter(|value| Did::new((*value).to_owned()).is_ok())
+        else {
+            continue;
+        };
+        let classes = object
+            .get("data_classes")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|value| {
+                serde_json::from_value::<PlaintextDataClassKind>(value.clone()).ok()
+            })
+            .collect::<BTreeSet<_>>();
+        if !classes.is_empty() {
+            by_service
+                .entry(service_did.to_owned())
+                .or_default()
+                .extend(classes);
+        }
+    }
 }
 
 pub(super) async fn project_plaintext_visible_services_operation(
@@ -617,7 +698,8 @@ pub(super) async fn project_plaintext_visible_services_operation(
     operation: &Operation,
 ) {
     let services = plaintext_services_from_operation(operation);
-    if services.is_empty() {
+    let service_classes = plaintext_service_classes_from_operation(operation);
+    if services.is_empty() && service_classes.is_empty() {
         return;
     }
     let store = state.persistence.realm_meta();
@@ -632,6 +714,14 @@ pub(super) async fn project_plaintext_visible_services_operation(
         {
             record.plaintext_visible_services.insert(service);
         }
+    }
+    for (service, classes) in service_classes {
+        record.plaintext_visible_services.insert(service.clone());
+        record
+            .plaintext_visible_service_classes
+            .entry(service)
+            .or_default()
+            .extend(classes);
     }
     record.updated_at = operation.created_at;
     if let Err(error) = store.put(operation.realm_id.as_str(), &record).await {

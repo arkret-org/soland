@@ -6,8 +6,8 @@ use std::collections::BTreeSet;
 use cokret_sdk::{
     AppletPackage, AppletWireNamespaces, ApprovalRequest, ApprovedScope, EffectiveScope,
     InstallCapabilityConstraint, InstallCommitOutcome, InstallCommitRequestBody,
-    InstallDeniedScope, InstallE2eeEffect, InstallEventSubmission, InstallNamespaceConflict,
-    InstallPlan, InstallWidgetEffect, RealmId,
+    InstallDeniedScope, InstallE2eeEffect, InstallE2eePolicy, InstallEventSubmission,
+    InstallNamespaceConflict, InstallPlan, InstallWidgetEffect, RealmId,
 };
 use salvo::http::StatusCode;
 use salvo::prelude::*;
@@ -93,6 +93,8 @@ pub(super) async fn register_package_install(
         .iter()
         .map(|_| ids::generate_grant_id())
         .collect::<Vec<_>>();
+    let e2ee_authorization_refs =
+        e2ee_authorization_refs_for_install(&package, &commit.e2ee_policy)?;
     let effective_status = if approved_actions.is_empty() {
         "rejected"
     } else if approved_actions.len() < package.requested_scopes.len() {
@@ -110,7 +112,7 @@ pub(super) async fn register_package_install(
         bot_actor_id: package.bot_actor_id.clone(),
         capability_grant_refs,
         membership_event_refs: Vec::new(),
-        e2ee_authorization_refs: Vec::new(),
+        e2ee_authorization_refs,
         widget_policy_ref: None,
         effective_status: effective_status.to_owned(),
         rejected: denied_scope_values(&package, &approved_actions)
@@ -183,6 +185,8 @@ async fn recover_applet_install_fanout(
     update_applet_projection(state, record);
     ensure_applet_registration_projection(state, record, &response.registration_event_ref).await?;
     project_applet_install_grants(state, record, &response.capability_grant_refs);
+    ensure_applet_e2ee_authorization_projections(state, record, &response.e2ee_authorization_refs)
+        .await?;
     if record
         .install_execution
         .as_ref()
@@ -208,6 +212,34 @@ async fn recover_applet_install_fanout(
             true,
         )?);
         persist_applet_record(state, record).await?;
+    }
+    Ok(())
+}
+
+async fn ensure_applet_e2ee_authorization_projections(
+    state: &AppState,
+    record: &AppletRecord,
+    event_ids: &[String],
+) -> Result<(), AppError> {
+    if event_ids.is_empty() {
+        return Ok(());
+    }
+    let existing = state
+        .persistence
+        .projection_events()
+        .snapshot_all()
+        .await
+        .map_err(|error| {
+            tracing::error!(%error, "applet install: failed to inspect e2ee authorization projection recovery");
+            AppError::internal("failed to inspect applet e2ee authorization projection")
+        })?
+        .into_iter()
+        .map(|event| event.event_id)
+        .collect::<BTreeSet<_>>();
+    for event_id in event_ids {
+        if !existing.contains(event_id) {
+            append_applet_e2ee_authorization_projection(state, record, event_id).await?;
+        }
     }
     Ok(())
 }
@@ -347,7 +379,9 @@ fn install_execution_steps(
     let Some(package) = record.package.as_ref() else {
         return Ok(Vec::new());
     };
-    let mut steps = Vec::with_capacity(1 + response.capability_grant_refs.len());
+    let mut steps = Vec::with_capacity(
+        1 + response.capability_grant_refs.len() + response.e2ee_authorization_refs.len(),
+    );
     let registration_body = json!({
         "event_kind": kinds::CK_APPLET_REGISTRATION,
         "payload": registration_payload_from_package(package)?,
@@ -384,6 +418,25 @@ fn install_execution_steps(
                 "applet_id": record.applet_id.as_str(),
                 "executed_by": package.service_did.to_string(),
                 "registration_epoch": package.registration_epoch.to_string(),
+            })),
+        ));
+    }
+    let e2ee_start = 1 + response.capability_grant_refs.len();
+    for (offset, event_ref) in response.e2ee_authorization_refs.iter().enumerate() {
+        let body = json!({
+            "event_kind": "ck.member.state",
+            "payload": applet_e2ee_authorization_payload(record, package),
+        });
+        steps.push(install_execution_step(
+            e2ee_start + offset,
+            "ck.member.state",
+            event_ref,
+            canonical_digest(&body)?,
+            accepted,
+            Some(json!({
+                "applet_id": record.applet_id.as_str(),
+                "authorization_gate": "applet_e2ee_join",
+                "reason_code": "applet_e2ee_join_unauthorized",
             })),
         ));
     }
@@ -779,10 +832,13 @@ fn validate_registration_epoch_evidence(
     state: &AppState,
     package: &AppletPackage,
 ) -> Result<(), AppError> {
-    let evidence = package.registration_epoch_evidence.as_ref().ok_or_else(|| {
-        AppError::invalid_param("applet package registration_epoch_evidence is required")
-            .with_wire_code("applet_registration_epoch_evidence_missing")
-    })?;
+    let evidence = package
+        .registration_epoch_evidence
+        .as_ref()
+        .ok_or_else(|| {
+            AppError::invalid_param("applet package registration_epoch_evidence is required")
+                .with_wire_code("applet_registration_epoch_evidence_missing")
+        })?;
     let document =
         crate::jws_verify::resolve_did_document(state, &package.service_did).map_err(|reason| {
             AppError::invalid_param("applet service DID document could not be resolved")
@@ -799,12 +855,10 @@ fn validate_registration_epoch_evidence(
             .with_reason_detail(reason.to_string())
         })?;
     if !evidence.contains_signing_key(&package.webhook_auth.key_ref) {
-        return Err(
-            AppError::invalid_param(
-                "applet webhook_auth key_ref is outside registration_epoch evidence",
-            )
-            .with_wire_code("applet_registration_epoch_signing_key_mismatch"),
-        );
+        return Err(AppError::invalid_param(
+            "applet webhook_auth key_ref is outside registration_epoch evidence",
+        )
+        .with_wire_code("applet_registration_epoch_signing_key_mismatch"));
     }
     Ok(())
 }
@@ -969,6 +1023,84 @@ pub(super) fn e2ee_effect_for_package(package: &AppletPackage) -> InstallE2eeEff
         plaintext_access: "policy_declared".to_owned(),
         authorization_refs: Vec::new(),
     }
+}
+
+fn package_requests_mls_join(package: &AppletPackage) -> bool {
+    package
+        .e2ee_policy
+        .get("allow_mls_join")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+}
+
+fn e2ee_authorization_refs_for_install(
+    package: &AppletPackage,
+    e2ee_policy: &InstallE2eePolicy,
+) -> Result<Vec<String>, AppError> {
+    if !package_requests_mls_join(package) {
+        return Ok(Vec::new());
+    }
+    if !e2ee_policy.allow_mls_join {
+        return Err(AppError::capability_denied(
+            "applet E2EE MLS join requires independent authorization",
+        )
+        .with_wire_code("applet_e2ee_join_unauthorized"));
+    }
+    Ok(vec![ids::generate_event_id()])
+}
+
+fn applet_e2ee_authorization_payload(record: &AppletRecord, package: &AppletPackage) -> Value {
+    json!({
+        "membership": "join",
+        "realm_id": record.portal_realm_id.as_str(),
+        "actor_id": package.bot_actor_id.to_string(),
+        "applet_id": record.applet_id.as_str(),
+        "managed_by_applet": true,
+        "e2ee_join_authorization": {
+            "profile": "ck.profile.applet_e2ee_join.v1",
+            "authorization_gate": "applet_e2ee_join",
+            "authorized_by": record.owner_actor_id.as_str(),
+            "registration_epoch": package.registration_epoch.to_string(),
+            "service_did": package.service_did.to_string(),
+            "reason_code": "applet_e2ee_join_unauthorized",
+        },
+        "created_at": record.registered_at,
+    })
+}
+
+async fn append_applet_e2ee_authorization_projection(
+    state: &AppState,
+    record: &AppletRecord,
+    event_id: &str,
+) -> Result<(), AppError> {
+    let Some(package) = record.package.as_ref() else {
+        return Ok(());
+    };
+    let payload = applet_e2ee_authorization_payload(record, package);
+    let projection_record = ProjectionEventRecord {
+        event_id: event_id.to_owned(),
+        realm_id: record.portal_realm_id.clone(),
+        event_kind: "ck.member.state".to_owned(),
+        operation_type: "applet_e2ee_join_authorization".to_owned(),
+        operation_id: None,
+        sender: Some(record.owner_actor_id.clone()),
+        payload,
+        created_at: record.registered_at,
+    };
+    let _ = state.event_broadcast.send(EventNotification::event(
+        projection_record.realm_id.clone(),
+        projection_record.event_id.clone(),
+        projection_event_json(&projection_record),
+    ));
+    state
+        .persistence
+        .projection_events()
+        .append(projection_record)
+        .await
+        .map_err(|error| {
+            tracing::error!(%error, %event_id, "applet install: failed to append e2ee authorization projection");
+            AppError::internal("failed to append applet e2ee authorization projection")
+        })
 }
 
 pub(super) fn widget_effect_for_package(package: &AppletPackage) -> InstallWidgetEffect {
@@ -1174,8 +1306,9 @@ pub(super) fn capability_allows_message_create(capability: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use cokret_sdk::{AppletNamespaceEntry, Did, Hash};
+
+    use super::*;
 
     fn sample_package() -> AppletPackage {
         let registration_epoch = Hash::new(format!("sha256:{}", "11".repeat(32))).unwrap();
@@ -1270,10 +1403,18 @@ mod tests {
             pending["submitted_plan_digest"],
             json!(submitted_plan_digest.as_str())
         );
-        assert!(pending["produced_event_refs"].as_array().unwrap().is_empty());
+        assert!(
+            pending["produced_event_refs"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
         let pending_steps = pending["steps"].as_array().unwrap();
         assert_eq!(pending_steps.len(), 3);
-        assert_eq!(pending_steps[0]["target_event_kind"], json!(kinds::CK_APPLET_REGISTRATION));
+        assert_eq!(
+            pending_steps[0]["target_event_kind"],
+            json!(kinds::CK_APPLET_REGISTRATION)
+        );
         assert_eq!(pending_steps[0]["status"], json!("pending"));
         assert_eq!(pending_steps[0]["event_ref"], Value::Null);
         assert!(

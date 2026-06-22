@@ -15,9 +15,10 @@ use chrono::{DateTime, Utc};
 use cokret_sdk::{
     Did, HistoryRangeContext, HistoryReaderContext, HistoryReaderEventState,
     HistorySharingPolicyPayloadValue, HistorySharingRestrictedScopeRef, HistorySharingScopeKind,
-    HistoryVisibility, Operation, OperationId, RealmArchivePayload, RealmDestroyPayload,
-    RealmFreezePayload, RealmId, RealmLifecycleView, RealmModerationPolicyReplaceRequestBody,
-    RealmTombstonePayload, STRAND_TRACK_NAME_DISCUSSION, SpaceId, matching_restricted_rules,
+    HistoryVisibility, Operation, OperationId, PlaintextDataClassKind, RealmArchivePayload,
+    RealmDestroyPayload, RealmFreezePayload, RealmId, RealmLifecycleView,
+    RealmModerationPolicyReplaceRequestBody, RealmTombstonePayload, STRAND_TRACK_NAME_DISCUSSION,
+    SpaceId, matching_restricted_rules,
 };
 use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
@@ -673,6 +674,19 @@ pub async fn realm_allows_plaintext_service(state: &AppState, realm_or_internal_
     }
 }
 
+pub async fn realm_allows_plaintext_service_for_data_class(
+    state: &AppState,
+    realm_or_internal_id: &str,
+    data_class: PlaintextDataClassKind,
+) -> bool {
+    match realm_scope_to_realm_id(realm_or_internal_id) {
+        Some(realm_id) => {
+            realm_allows_plaintext_service_for_data_class_id(state, &realm_id, data_class).await
+        }
+        None => false,
+    }
+}
+
 pub async fn realm_meta_deleted(state: &AppState, realm_id: &str) -> bool {
     state
         .persistence
@@ -1069,7 +1083,36 @@ pub async fn realm_allows_plaintext_service_for_id(state: &AppState, realm_id: &
             .map(|realm| realm.realm_id.as_str().to_owned())
     };
     if let Some(directory_realm_id) = directory_realm_id {
-        if realm_discoverability_for_id(state, &directory_realm_id).await == "public" {
+        if realm_public_content_for_id(state, &directory_realm_id).await {
+            return true;
+        }
+    }
+    state
+        .persistence
+        .realm_meta()
+        .get(realm_id)
+        .await
+        .ok()
+        .flatten()
+        .is_some_and(|record| record.allows_any_plaintext_data_class(&state.config.service_did))
+}
+
+pub async fn realm_allows_plaintext_service_for_data_class_id(
+    state: &AppState,
+    realm_id: &str,
+    data_class: PlaintextDataClassKind,
+) -> bool {
+    let Ok(realm_id_typed) = RealmId::new(realm_id.to_owned()) else {
+        return false;
+    };
+    let directory_realm_id = {
+        let realms = state.realms.lock().expect("realms lock");
+        realms
+            .get(&realm_id_typed)
+            .map(|realm| realm.realm_id.as_str().to_owned())
+    };
+    if let Some(directory_realm_id) = directory_realm_id {
+        if realm_public_content_for_id(state, &directory_realm_id).await {
             return true;
         }
     }
@@ -1081,9 +1124,20 @@ pub async fn realm_allows_plaintext_service_for_id(state: &AppState, realm_id: &
         .ok()
         .flatten()
         .is_some_and(|record| {
-            record
-                .plaintext_visible_services
-                .contains(&state.config.service_did)
+            record.allows_plaintext_data_class(&state.config.service_did, data_class)
+        })
+}
+
+async fn realm_public_content_for_id(state: &AppState, realm_id: &str) -> bool {
+    state
+        .persistence
+        .realm_meta()
+        .get(realm_id)
+        .await
+        .ok()
+        .flatten()
+        .is_some_and(|record| {
+            record.discoverability == "public" && record.history_visibility == "world_readable"
         })
 }
 
