@@ -641,7 +641,12 @@ impl AppState {
         // a std::sync Mutex guard across `.await`), then merge under a short
         // synchronous critical section.
         let mut realm_updates = RealmDirectoryIndex::new();
-        hydrate_realms_from_canonical_events(self.persistence.as_ref(), &mut realm_updates).await;
+        hydrate_realms_from_canonical_events(
+            self.persistence.as_ref(),
+            &mut realm_updates,
+            &self.config.service_did,
+        )
+        .await;
         {
             let mut realms = self.realms.lock().expect("realms lock");
             for (_, entry) in realm_updates.entries_iter() {
@@ -1534,13 +1539,14 @@ fn hydrate_applet_install_grants(
 async fn hydrate_realms_from_canonical_events(
     persistence: &dyn crate::persistence::PersistenceStore,
     realms: &mut RealmDirectoryIndex,
+    service_did: &str,
 ) {
     let Ok(events) = persistence.events().snapshot_all().await else {
         return;
     };
     for record in events {
         if record.kind == "ck.realm.create" {
-            hydrate_realm_create_event(persistence, realms, &record).await;
+            hydrate_realm_create_event(persistence, realms, &record, service_did).await;
         } else if matches!(
             record.kind.as_str(),
             "ck.realm.history_visibility"
@@ -1557,6 +1563,7 @@ async fn hydrate_realm_create_event(
     persistence: &dyn crate::persistence::PersistenceStore,
     realms: &mut RealmDirectoryIndex,
     record: &CanonicalEventRecord,
+    service_did: &str,
 ) {
     let payload_object = record
         .envelope
@@ -1647,6 +1654,21 @@ async fn hydrate_realm_create_event(
     entry.policy_revision = preview_policy_digest
         .clone()
         .unwrap_or_else(|| record.canonical_digest.clone());
+    // Realm alias (object-addressing.md §3.3) — rebuild from the persisted
+    // create event so the alias survives restart, mirroring the live projection
+    // in routing/events/projection/realm.rs. First-writer-wins on conflict.
+    if let Some(canonical) = payload_object
+        .and_then(|object| object.get("alias"))
+        .and_then(Value::as_str)
+        .and_then(|raw| crate::realm_alias::canonical_realm_alias(service_did, raw))
+    {
+        let taken = realms.entries_iter().any(|(rid, existing)| {
+            rid != &realm_id && existing.alias.as_deref() == Some(canonical.as_str())
+        });
+        if !taken {
+            entry.alias = Some(canonical);
+        }
+    }
     realms.upsert(entry);
 
     let meta = RealmMetaRecord {

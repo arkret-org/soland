@@ -43,6 +43,12 @@ pub(super) fn operation_realm_summary(operation: &Operation) -> Option<&str> {
         .or_else(|| patch_string_field(operation, "summary"))
 }
 
+pub(super) fn operation_realm_alias_input(operation: &Operation) -> Option<&str> {
+    first_string_field(&operation.payload, &["realm_alias", "alias"])
+        .or_else(|| object_string_field(operation, &["alias"]))
+        .or_else(|| patch_string_field(operation, "alias"))
+}
+
 pub(super) fn operation_realm_discoverability(operation: &Operation) -> Option<&str> {
     first_string_field(&operation.payload, &["discoverability"])
         .or_else(|| object_string_field(operation, &["default_discoverability", "discoverability"]))

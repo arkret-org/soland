@@ -81,6 +81,13 @@ pub(super) async fn resolve_realm(
             .cloned()
             .collect()
     };
+    // Normalize the requested alias once under this deployment's authority
+    // domain; match against the entry's canonical alias (object-addressing.md
+    // §3.3) rather than the human-readable title.
+    let alias_query = body
+        .alias
+        .as_deref()
+        .and_then(|raw| crate::realm_alias::canonical_realm_alias(&state.config.service_did, raw));
     let mut matched_realm = None;
     for entry in candidates {
         let matches_query = body
@@ -90,10 +97,9 @@ pub(super) async fn resolve_realm(
             || invite_realm_id
                 .as_deref()
                 .is_some_and(|id| id == entry.realm_id.as_str())
-            || body
-                .alias
+            || alias_query
                 .as_deref()
-                .is_some_and(|alias| alias.eq_ignore_ascii_case(&entry.title));
+                .is_some_and(|want| entry.alias.as_deref() == Some(want));
         if matches_query
             && realm_resolvable_to(
                 state,
@@ -282,7 +288,7 @@ pub(super) fn realm_preview_from_directory_entry(entry: &RealmDirectoryEntry) ->
     };
     RealmPreview {
         realm_id: entry.realm_id.clone(),
-        alias: None,
+        alias: entry.alias.clone(),
         title: Some(entry.title.clone()),
         avatar_blob_ref: None,
         organization_did: None,

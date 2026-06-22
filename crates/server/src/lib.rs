@@ -22,6 +22,7 @@ pub mod otel;
 pub mod persistence;
 pub mod push_rule_core;
 pub mod ratelimit;
+pub mod realm_alias;
 pub mod reducer;
 pub mod result;
 pub mod routing;

@@ -19,11 +19,41 @@ pub async fn ensure_projected_realm(state: &AppState, origin: &str, operation: &
     let directory_public = {
         let mut realms = state.realms.lock().expect("realms lock");
         if let Some(existing) = realms.get(&realm_id) {
-            existing.public
+            let public = existing.public;
+            // Admin rename: a realm patch may carry a new alias. Re-normalize it
+            // under the deployment domain and update if the canonical alias is
+            // free (first-writer-wins, disjoint from the handle namespace).
+            if let Some(canonical) = operation_realm_alias_input(operation).and_then(|raw| {
+                crate::realm_alias::canonical_realm_alias(&state.config.service_did, raw)
+            }) {
+                let taken = realms.entries_iter().any(|(rid, existing)| {
+                    rid != &realm_id && existing.alias.as_deref() == Some(canonical.as_str())
+                });
+                if !taken && let Some(entry) = realms.get_mut(&realm_id) {
+                    entry.alias = Some(canonical);
+                }
+            }
+            public
         } else {
             let title = operation_realm_title(operation).unwrap_or_else(|| realm_id.as_str());
             let mut entry = RealmDirectoryEntry::new(realm_id.clone(), title);
             entry.description = operation_realm_summary(operation).map(ToOwned::to_owned);
+            // Realm alias (object-addressing.md §3.3): normalize the create-time
+            // input under this deployment's authority domain, then reject if the
+            // canonical alias is already taken by a different realm (first writer
+            // wins). Disjoint from the handle namespace — no cross-namespace check.
+            if let Some(alias) = operation_realm_alias_input(operation).and_then(|raw| {
+                crate::realm_alias::canonical_realm_alias(&state.config.service_did, raw)
+            }) {
+                let taken = realms.entries_iter().any(|(rid, existing)| {
+                    rid != &realm_id && existing.alias.as_deref() == Some(alias.as_str())
+                });
+                if taken {
+                    tracing::warn!(%realm_id, alias, "realm alias already taken; create-time alias ignored");
+                } else {
+                    entry.alias = Some(alias);
+                }
+            }
             let discoverability = explicit_discoverability.unwrap_or(if payload_public {
                 "public"
             } else {

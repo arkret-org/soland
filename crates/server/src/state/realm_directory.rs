@@ -21,6 +21,10 @@ pub struct RealmDirectoryQuery {
 pub struct RealmDirectoryEntry {
     pub realm_id: RealmId,
     pub title: String,
+    /// Canonical realm alias `<localpart>:<domain>` (object-addressing.md §3.3),
+    /// or `None` if the realm has no human-readable alias. The `#` share sigil is
+    /// a display-only affordance and is never stored here.
+    pub alias: Option<String>,
     pub description: Option<String>,
     pub tags: BTreeSet<String>,
     pub members: BTreeSet<Did>,
@@ -36,6 +40,7 @@ impl RealmDirectoryEntry {
         Self {
             realm_id,
             title: title.into(),
+            alias: None,
             description: None,
             tags: BTreeSet::new(),
             members: BTreeSet::new(),
@@ -64,6 +69,10 @@ impl RealmDirectoryIndex {
 
     pub fn get(&self, realm_id: &RealmId) -> Option<&RealmDirectoryEntry> {
         self.entries.get(realm_id)
+    }
+
+    pub fn get_mut(&mut self, realm_id: &RealmId) -> Option<&mut RealmDirectoryEntry> {
+        self.entries.get_mut(realm_id)
     }
 
     /// Iterate `(realm_id, entry)` pairs. Used by the erasure cascade
