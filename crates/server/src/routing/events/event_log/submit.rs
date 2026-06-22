@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use super::*;
@@ -475,6 +475,39 @@ fn events_submit_status_label(status: EventsSubmitStatus) -> &'static str {
     }
 }
 
+fn preflight_mls_welcome_claim_signature_reject(
+    state: &AppState,
+    actor_id: &str,
+    operation: &Operation,
+) -> Option<String> {
+    if kinds::canonical_kind_string(operation) != kinds::CK_MLS_WELCOME {
+        return None;
+    }
+    let envelope_value = match operation.payload.get("claim_envelope") {
+        Some(value) => value.clone(),
+        None => {
+            return Some(crate::error::reasons::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH.to_owned());
+        }
+    };
+    let envelope =
+        match serde_json::from_value::<cokret_sdk::MlsWelcomeClaimEnvelope>(envelope_value) {
+            Ok(envelope) => envelope,
+            Err(_) => {
+                return Some(
+                    crate::error::reasons::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH.to_owned(),
+                );
+            }
+        };
+    if envelope.requester_did.as_str() != actor_id {
+        return Some(crate::error::reasons::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH.to_owned());
+    }
+    crate::routing::identity::cross_signing::verify_mls_welcome_claim_envelope_signature(
+        state, &envelope,
+    )
+    .err()
+    .map(str::to_owned)
+}
+
 pub(super) fn events_submit_outcome(
     status: EventsSubmitStatus,
     accepted: Vec<String>,
@@ -744,6 +777,15 @@ pub(in crate::routing) async fn submit_event_value(
                 rejection.message,
             ));
         }
+        if let Some(reason) =
+            preflight_mls_welcome_claim_signature_reject(state, &parsed.actor_id, operation)
+        {
+            return Err(SubmitOneError::new(
+                StatusCode::PRECONDITION_FAILED,
+                reason.clone(),
+                reason,
+            ));
+        }
         let (invite_preflight_reject, invite_proof_context) = {
             // Admission checks below are mandatory and MUST NOT be skipped
             // (fail-closed). The projection lock is the poison-free
@@ -838,6 +880,14 @@ pub(in crate::routing) async fn submit_event_value(
                 return Err(SubmitOneError::new(
                     StatusCode::PRECONDITION_FAILED,
                     reason,
+                    reason,
+                ));
+            }
+            if let Some(reason) = preflight_calendar_projection_reject(&proj, operation, &state.hlc)
+            {
+                return Err(SubmitOneError::new(
+                    StatusCode::PRECONDITION_FAILED,
+                    reason.clone(),
                     reason,
                 ));
             }
@@ -1172,7 +1222,7 @@ async fn enqueue_peer_event_fanout(
     parsed: &ValidatedEventEnvelope,
     envelope: &Value,
 ) {
-    let peers = configured_peer_event_targets(state);
+    let peers = dynamic_peer_event_targets(state, parsed);
     if peers.is_empty() {
         return;
     }
@@ -1183,37 +1233,6 @@ async fn enqueue_peer_event_fanout(
         "event_id": event_id,
         "canonical_digest": parsed.canonical_digest,
     });
-    let service_binding_ref = match (
-        RealmId::new(parsed.realm_id.clone()),
-        Hash::new(canonical_json_hash(&binding_payload)),
-        EventId::new(event_id.to_owned()),
-        Hash::new(cokret_sdk::FEDERATION_MINIMAL_REDUCER_PROFILE_DIGEST.to_owned()),
-    ) {
-        (Ok(realm_id), Ok(realm_policy_digest), Ok(event_id), Ok(reducer_profile_digest)) => {
-            cokret_sdk::FederationServiceBindingRef {
-                realm_id,
-                realm_policy_digest,
-                membership_frontier: vec![event_id.clone()],
-                delivery_binding_frontier: vec![event_id],
-                destination_service_type: "principal_server".to_owned(),
-                reducer_profile_digest,
-            }
-        }
-        _ => {
-            tracing::warn!(
-                event_id,
-                "failed to build typed ck.peer.events.command.submit service binding"
-            );
-            return;
-        }
-    };
-    let mut hasher_input = Vec::new();
-    hasher_input.extend_from_slice(state.config.service_did.as_bytes());
-    hasher_input.extend_from_slice(b"|");
-    hasher_input.extend_from_slice(event_id.as_bytes());
-    hasher_input.extend_from_slice(b"|");
-    hasher_input.extend_from_slice(parsed.canonical_digest.as_bytes());
-    let idempotency_key = format!("ck:outbox:event:{}", sha256_hex(&hasher_input));
     let event = match serde_json::from_value::<Event>(envelope.clone()) {
         Ok(event) => event,
         Err(error) => {
@@ -1225,32 +1244,61 @@ async fn enqueue_peer_event_fanout(
             return;
         }
     };
-    let body = EventsSubmitFederationRequestBody {
-        service_binding_ref,
-        events: vec![event],
-        idempotency_key: Some(idempotency_key.clone()),
-    };
-    let payload = match canonical::canonical_json_bytes(&body)
-        .ok()
-        .and_then(|bytes| String::from_utf8(bytes).ok())
-    {
-        Some(payload) => payload,
-        None => {
-            tracing::warn!(
-                event_id,
-                "failed to encode ck.peer.events.command.submit body"
-            );
-            return;
+    for peer in peers {
+        let service_binding_ref = match service_binding_ref_for_target(
+            parsed,
+            &binding_payload,
+            &peer,
+        ) {
+            Some(value) => value,
+            None => {
+                tracing::warn!(
+                    event_id,
+                    peer_did = %peer.service_did,
+                    "failed to build typed dynamic ck.peer.events.command.submit service binding"
+                );
+                continue;
+            }
+        };
+        let mut hasher_input = Vec::new();
+        hasher_input.extend_from_slice(state.config.service_did.as_bytes());
+        hasher_input.extend_from_slice(b"|");
+        hasher_input.extend_from_slice(peer.service_did.as_bytes());
+        hasher_input.extend_from_slice(b"|");
+        hasher_input.extend_from_slice(event_id.as_bytes());
+        hasher_input.extend_from_slice(b"|");
+        hasher_input.extend_from_slice(parsed.canonical_digest.as_bytes());
+        for frontier in &peer.delivery_binding_frontier {
+            hasher_input.extend_from_slice(b"|");
+            hasher_input.extend_from_slice(frontier.as_bytes());
         }
-    };
-    for (peer_url, peer_did) in peers {
-        if peer_did == state.config.service_did {
+        let idempotency_key = format!("ck:outbox:event:{}", sha256_hex(&hasher_input));
+        let body = EventsSubmitFederationRequestBody {
+            service_binding_ref,
+            events: vec![event.clone()],
+            idempotency_key: Some(idempotency_key.clone()),
+        };
+        let payload = match canonical::canonical_json_bytes(&body)
+            .ok()
+            .and_then(|bytes| String::from_utf8(bytes).ok())
+        {
+            Some(payload) => payload,
+            None => {
+                tracing::warn!(
+                    event_id,
+                    peer_did = %peer.service_did,
+                    "failed to encode dynamic ck.peer.events.command.submit body"
+                );
+                continue;
+            }
+        };
+        if peer.service_did == state.config.service_did {
             continue;
         }
         if let Err(error) = crate::routing::federation::outbox::enqueue_outbound(
             state,
-            peer_url.as_str(),
-            peer_did.as_str(),
+            peer.url.as_str(),
+            peer.service_did.as_str(),
             "/_cokret/peer/events",
             &idempotency_key,
             &payload,
@@ -1260,37 +1308,116 @@ async fn enqueue_peer_event_fanout(
             tracing::warn!(
                 %error,
                 event_id,
-                peer = %peer_url,
-                peer_did = %peer_did,
-                "failed to enqueue ck.peer.events.command.submit fanout"
+                peer = %peer.url,
+                peer_did = %peer.service_did,
+                "failed to enqueue dynamic ck.peer.events.command.submit fanout"
             );
         }
     }
 }
 
-fn configured_peer_event_targets(state: &AppState) -> Vec<(String, String)> {
-    let entries = match state.config.federation_policy {
-        crate::config::FederationPolicy::Mesh => state.config.federation_peers.clone(),
-        crate::config::FederationPolicy::Hub => state
-            .config
-            .federation_peers
-            .first()
-            .cloned()
-            .into_iter()
-            .collect(),
-    };
-    entries
-        .into_iter()
-        .filter_map(|entry| {
-            let trimmed = entry.trim();
-            let (url, did) = trimmed.split_once('|')?;
-            let url = url.trim().trim_end_matches('/').to_owned();
-            let did = did.trim().to_owned();
-            if url.is_empty() || validate_did(&did).is_err() {
-                None
-            } else {
-                Some((url, did))
+struct DynamicPeerEventTarget {
+    url: String,
+    service_did: String,
+    membership_frontier: Vec<String>,
+    delivery_binding_frontier: Vec<String>,
+}
+
+fn dynamic_peer_event_targets(
+    state: &AppState,
+    parsed: &ValidatedEventEnvelope,
+) -> Vec<DynamicPeerEventTarget> {
+    let service_frontiers = {
+        let projection = state.projection.lock().expect("projection lock");
+        let mut service_frontiers: BTreeMap<String, (BTreeSet<String>, BTreeSet<String>)> =
+            BTreeMap::new();
+        for member in projection.members_of_realm(&parsed.realm_id) {
+            if member.delivery_status.as_deref() != Some("routable") {
+                continue;
             }
-        })
+            let Some(service_did) = member.recipient_service_did.as_deref() else {
+                continue;
+            };
+            if service_did == state.config.service_did {
+                continue;
+            }
+            let entry = service_frontiers.entry(service_did.to_owned()).or_default();
+            if let Some(frontier) = member.membership_event_ref.as_deref() {
+                entry.0.insert(frontier.to_owned());
+            }
+            if let Some(frontier) = member
+                .delivery_binding_frontier
+                .as_deref()
+                .or(member.membership_event_ref.as_deref())
+            {
+                entry.1.insert(frontier.to_owned());
+            }
+        }
+        service_frontiers
+    };
+
+    service_frontiers
+        .into_iter()
+        .filter_map(
+            |(service_did, (membership_frontier, delivery_binding_frontier))| {
+                let url = match crate::routing::federation::federation::peer_url_for_service_did(
+                    state,
+                    &service_did,
+                ) {
+                    Some(url) => url,
+                    None => {
+                        tracing::warn!(
+                            event_id = %parsed.event_id,
+                            realm_id = %parsed.realm_id,
+                            destination_service_did = %service_did,
+                            "dynamic peer event fanout target has no configured service URL"
+                        );
+                        return None;
+                    }
+                };
+                Some(DynamicPeerEventTarget {
+                    url,
+                    service_did,
+                    membership_frontier: membership_frontier.into_iter().collect(),
+                    delivery_binding_frontier: delivery_binding_frontier.into_iter().collect(),
+                })
+            },
+        )
         .collect()
+}
+
+fn service_binding_ref_for_target(
+    parsed: &ValidatedEventEnvelope,
+    binding_payload: &Value,
+    target: &DynamicPeerEventTarget,
+) -> Option<cokret_sdk::FederationServiceBindingRef> {
+    let membership_frontier =
+        typed_frontier_or_fallback(&target.membership_frontier, &parsed.event_id)?;
+    let delivery_binding_frontier =
+        typed_frontier_or_fallback(&target.delivery_binding_frontier, &parsed.event_id)?;
+    Some(cokret_sdk::FederationServiceBindingRef {
+        realm_id: RealmId::new(parsed.realm_id.clone()).ok()?,
+        realm_policy_digest: Hash::new(canonical_json_hash(binding_payload)).ok()?,
+        membership_frontier,
+        delivery_binding_frontier,
+        destination_service_type: "principal_server".to_owned(),
+        reducer_profile_digest: Hash::new(
+            cokret_sdk::FEDERATION_MINIMAL_REDUCER_PROFILE_DIGEST.to_owned(),
+        )
+        .ok()?,
+    })
+}
+
+fn typed_frontier_or_fallback(
+    frontier: &[String],
+    fallback_event_id: &str,
+) -> Option<Vec<EventId>> {
+    let mut typed = frontier
+        .iter()
+        .filter_map(|event_id| EventId::new(event_id.to_owned()).ok())
+        .collect::<Vec<_>>();
+    if typed.is_empty() {
+        typed.push(EventId::new(fallback_event_id.to_owned()).ok()?);
+    }
+    Some(typed)
 }

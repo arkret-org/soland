@@ -1,8 +1,9 @@
+use serde_json::json;
+
 use super::signature::{
     applet_content_digest_header, applet_http_signature_base, applet_source_signature_anchor,
     applet_validate_signature_params,
 };
-use serde_json::json;
 
 fn params(created: i64, expires: i64) -> String {
     format!(

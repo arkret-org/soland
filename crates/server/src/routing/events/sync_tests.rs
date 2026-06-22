@@ -178,7 +178,7 @@ fn presence_sync_event_marks_stale_online_offline() {
         updated_at: now() - ChronoDuration::seconds(PRESENCE_ONLINE_TTL_SECONDS + 1),
     };
 
-    let event = presence_sync_event_json(record);
+    let event = presence_sync_event_json(record, true);
 
     assert_eq!(event["user_id"], "did:web:alice.example");
     assert_eq!(event["presence"], "offline");
@@ -188,6 +188,20 @@ fn presence_sync_event_marks_stale_online_offline() {
         .as_str()
         .expect("stale online presence emits bucketed last_active_at");
     assert!(last_active_at.ends_with("/PT1H"));
+}
+
+#[test]
+fn presence_sync_event_hides_activity_detail_without_contact_visibility() {
+    let record = PresenceRecord {
+        actor: "did:web:alice.example".to_owned(),
+        status: "dnd".to_owned(),
+        updated_at: now(),
+    };
+
+    let event = presence_sync_event_json(record, false);
+
+    assert_eq!(event["presence"], "offline");
+    assert_eq!(event["status"], "offline");
 }
 
 fn test_config() -> crate::config::AppConfig {
@@ -323,6 +337,10 @@ fn insert_projected_membership(state: &AppState, actor: &str, membership: &str) 
                 realm_id: ROSTER_REALM.to_owned(),
                 state: membership.to_owned(),
                 role: "member".to_owned(),
+                delivery_status: None,
+                recipient_service_did: None,
+                membership_event_ref: None,
+                delivery_binding_frontier: None,
                 invited_at: (membership == "invite").then_some(updated_at),
                 joined_at: updated_at,
                 updated_at,

@@ -9,7 +9,7 @@ use serde::Serialize;
 use serde_json::Value;
 
 use super::{
-    is_realm_deleted, is_valid_sha256_digest, now, query_param, query_param_all, render_error,
+    is_realm_deleted, is_valid_hash_digest, now, query_param, query_param_all, render_error,
     validate_did,
 };
 use crate::error::AppError;
@@ -202,7 +202,7 @@ async fn peer_events_resolve(
         .with_wire_code("payload_too_large"));
     }
     for digest in &request.event_digests {
-        if !is_valid_sha256_digest(digest.as_str()) {
+        if !is_valid_hash_digest(digest.as_str()) {
             return Err(AppError::invalid_param(format!(
                 "invalid event digest: {digest}"
             )));

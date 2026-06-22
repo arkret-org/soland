@@ -45,6 +45,7 @@ pub fn validate_operation_semantics(
         // check so a removed `target_ref` payload is rejected with the
         // typed-shape reason rather than the generic SDK schema error.
         validate_typed_payload_shapes(kind, operation)?;
+        validate_operation_patch_semantics(operation)?;
         validate_reaction_target_kind(kind, operation)?;
         if let Some(schema) = operation_schema_for_kind(kind) {
             validate_operation_schema(operation, schema)?;

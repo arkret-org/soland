@@ -480,6 +480,24 @@ async fn blob_get(depot: &mut Depot, req: &mut Request, res: &mut Response) {
                     return;
                 }
             }
+            if presign_payload.is_some()
+                && let Some(reason) =
+                    realm_presign_policy_block(state, blob.realm_id.as_deref()).await
+            {
+                append_audit_log(
+                    state,
+                    None,
+                    reason,
+                    json!({
+                        "blob_ref": blob_ref,
+                        "realm_id": blob.realm_id.clone(),
+                    }),
+                    "rejected",
+                )
+                .await;
+                render_error(res, StatusCode::NOT_FOUND, "not_found", "not found");
+                return;
+            }
             // Response headers per T11.
             res.headers_mut().insert(
                 salvo::http::header::CACHE_CONTROL,
@@ -681,6 +699,20 @@ async fn blob_presign(
     let blob_value = presign_blob_policy_value(&blob);
     if let Some(block) = classify_presign_blob_block(&blob_value, "presigned") {
         return Err(block.as_error());
+    }
+    if let Some(reason) = realm_presign_policy_block(state, blob.realm_id.as_deref()).await {
+        append_audit_log(
+            state,
+            Some(&session.actor),
+            reason,
+            json!({
+                "blob_ref": blob_ref,
+                "realm_id": blob.realm_id.clone(),
+            }),
+            "rejected",
+        )
+        .await;
+        return Err(AppError::not_found("blob not found").with_wire_code(reason));
     }
     let ttl_seconds = u64::from(body.max_age_seconds.unwrap_or(300)).clamp(1, 300);
     let issued_at = now();
@@ -1280,6 +1312,32 @@ async fn blob_visible_to_session(
     realm_has_member(state, realm_id, &session.actor).await
 }
 
+async fn realm_presign_policy_block(
+    state: &AppState,
+    realm_id: Option<&str>,
+) -> Option<&'static str> {
+    let realm_id = realm_id?;
+    let meta = state.persistence.realm_meta().get(realm_id).await.ok()??;
+    if meta.minimal_metadata_realm {
+        return Some("minimal_metadata_presign_forbidden");
+    }
+    if asset_privacy_policy_disallows_direct_download(meta.asset_privacy_policy.as_ref()) {
+        return Some("direct_download_disallowed_presign_forbidden");
+    }
+    None
+}
+
+fn asset_privacy_policy_disallows_direct_download(policy: Option<&Value>) -> bool {
+    let Some(policy) = policy else {
+        return false;
+    };
+    let body = policy
+        .get("asset_privacy_policy")
+        .or_else(|| policy.get("value"))
+        .unwrap_or(policy);
+    body.get("direct_download_allowed").and_then(Value::as_bool) == Some(false)
+}
+
 // ────────────────────────────────────────────────────────────────────────
 // Presign blob fail-closed gating (spec T11).
 // ────────────────────────────────────────────────────────────────────────
@@ -1425,6 +1483,20 @@ mod presign_block_tests {
             classify_presign_blob_block(&blob, "did:web:alice.example"),
             Some(PresignBlobBlock::DeviceBound)
         );
+    }
+
+    #[test]
+    fn asset_privacy_policy_disallows_direct_download() {
+        assert!(super::asset_privacy_policy_disallows_direct_download(Some(
+            &json!({"direct_download_allowed": false})
+        )));
+        assert!(super::asset_privacy_policy_disallows_direct_download(Some(
+            &json!({"value": {"direct_download_allowed": false}})
+        )));
+        assert!(!super::asset_privacy_policy_disallows_direct_download(
+            Some(&json!({"direct_download_allowed": true}))
+        ));
+        assert!(!super::asset_privacy_policy_disallows_direct_download(None));
     }
 }
 

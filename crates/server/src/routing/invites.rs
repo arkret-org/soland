@@ -27,13 +27,21 @@ use sha2::{Digest, Sha256};
 
 use crate::error::{AppError, ErrorCode};
 use crate::result::{JsonResult, json_ok};
-use crate::state::{AppState, SessionRecord};
+use crate::routing::identity::device_messages::{
+    ACCOUNT_DATA_UPDATE_TYPE, fanout_actor_private_update,
+};
+use crate::routing::system::util::sha256_hex;
+use crate::state::{AccountDataRecord, AppState, SessionRecord};
 use crate::wire::now;
 
 const HEADER_CONTENT_DIGEST: &str = "content-digest";
 const HEADER_SOURCE_SERVICE_DID: &str = "source-service-did";
 const HEADER_DESTINATION_SERVICE_DID: &str = "destination-service-did";
+const ACCOUNT_DATA_TYPE_INVITE_QUARANTINE: &str = "ck.account.invite_quarantine";
 const DEFAULT_LOCATOR_TTL_MINUTES: i64 = 15;
+const INVITE_QUARANTINE_TTL_DAYS: i64 = 30;
+const MAX_INVITE_QUARANTINE_ENTRIES: usize = 200;
+const INVITE_QUARANTINE_ORIGIN_DEVICE: &str = "server:invite_quarantine";
 
 pub(crate) fn peer_router() -> Router {
     Router::new().push(Router::with_path("invites").post(peer_invites_submit))
@@ -106,6 +114,20 @@ async fn peer_invites_submit(
     );
 
     if decision.action != InviteReceiveAction::Notify {
+        let quarantine_persisted = if decision.action == InviteReceiveAction::Quarantine {
+            persist_invite_quarantine_entry(
+                state,
+                &subject,
+                &source_service_did,
+                &inviter,
+                &delivery,
+                &body,
+                &decision,
+            )
+            .await?
+        } else {
+            false
+        };
         super::append_audit_log(
             state,
             None,
@@ -118,6 +140,7 @@ async fn peer_invites_submit(
                 "effective_kind": decision.effective_kind,
                 "trust_tier": decision.trust_tier.as_str(),
                 "receive_action": receive_action_str(&decision.action),
+                "quarantine_persisted": quarantine_persisted,
             }),
             "deferred",
         )
@@ -344,6 +367,168 @@ fn receive_action_str(action: &InviteReceiveAction) -> &'static str {
         InviteReceiveAction::Quarantine => "quarantine",
         InviteReceiveAction::Notify => "notify",
     }
+}
+
+async fn persist_invite_quarantine_entry(
+    state: &AppState,
+    subject: &str,
+    source_service_did: &str,
+    inviter: &str,
+    delivery: &InviteDeliveryRequest,
+    body: &Value,
+    decision: &ReceiveDecision,
+) -> Result<bool, AppError> {
+    let subject_exists = state
+        .persistence
+        .accounts()
+        .get(subject)
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?
+        .is_some();
+    if !subject_exists {
+        super::append_audit_log(
+            state,
+            None,
+            "peer.invites.quarantine",
+            json!({
+                "invitee": subject,
+                "source_service_did": source_service_did,
+                "receive_action": receive_action_str(&decision.action),
+                "reason": "unknown_subject",
+            }),
+            "skipped",
+        )
+        .await;
+        return Ok(false);
+    }
+
+    let received_at = now();
+    let expires_at = received_at + Duration::days(INVITE_QUARANTINE_TTL_DAYS);
+    let invite_event_id = body
+        .pointer("/invite_event/event_id")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .map(ToOwned::to_owned);
+    let invite_event_digest =
+        canonical_digest_or_fallback(body.get("invite_event").unwrap_or(&Value::Null));
+    let request_digest = canonical_digest_or_fallback(body);
+    let idempotency_key_digest =
+        format!("sha256:{}", sha256_hex(delivery.idempotency_key.as_bytes()));
+    let quarantine_id = format!(
+        "ck:invite_quarantine:{}",
+        sha256_hex(
+            format!(
+                "{subject}|{source_service_did}|{}|{invite_event_digest}",
+                delivery.idempotency_key
+            )
+            .as_bytes()
+        )
+    );
+    let entry = json!({
+        "quarantine_id": quarantine_id.clone(),
+        "status": "pending_review",
+        "subject_id": subject,
+        "inviter": inviter,
+        "source_peer_did": inviter,
+        "source_service_did": source_service_did,
+        "recipient_service_did": delivery.invite_address.recipient_service_did.as_str(),
+        "consent_scope": "invite",
+        "introduction_kind": delivery.introduction_evidence.kind(),
+        "effective_kind": decision.effective_kind,
+        "trust_tier": decision.trust_tier.as_str(),
+        "invite_event_id": invite_event_id.clone(),
+        "invite_event_digest": invite_event_digest.clone(),
+        "request_digest": request_digest,
+        "idempotency_key_digest": idempotency_key_digest,
+        "received_at": received_at,
+        "expires_at": expires_at,
+    });
+
+    let account_data = state.persistence.account_data();
+    let existing = account_data
+        .get(subject, ACCOUNT_DATA_TYPE_INVITE_QUARANTINE)
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    let mut entries = existing
+        .as_ref()
+        .and_then(|record| record.payload.get("entries"))
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    entries.retain(|candidate| {
+        invite_quarantine_entry_active(candidate, received_at)
+            && candidate
+                .get("quarantine_id")
+                .and_then(Value::as_str)
+                .is_none_or(|existing_id| existing_id != quarantine_id.as_str())
+    });
+    entries.push(entry);
+    if entries.len() > MAX_INVITE_QUARANTINE_ENTRIES {
+        let excess = entries.len() - MAX_INVITE_QUARANTINE_ENTRIES;
+        entries.drain(0..excess);
+    }
+
+    let payload = json!({
+        "schema": "ck.account.invite_quarantine.v1",
+        "status": "pending_review",
+        "entries": entries,
+        "updated_at": received_at,
+    });
+    let record = AccountDataRecord {
+        actor: subject.to_owned(),
+        data_type: ACCOUNT_DATA_TYPE_INVITE_QUARANTINE.to_owned(),
+        payload,
+        updated_at: received_at,
+    };
+    account_data
+        .put(&record)
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    fanout_actor_private_update(
+        state,
+        subject,
+        INVITE_QUARANTINE_ORIGIN_DEVICE,
+        ACCOUNT_DATA_UPDATE_TYPE,
+        json!({
+            "operation": "put",
+            "data_type": ACCOUNT_DATA_TYPE_INVITE_QUARANTINE,
+            "content": record.payload.clone(),
+            "updated_at": record.updated_at,
+        }),
+    )
+    .await;
+    super::append_audit_log(
+        state,
+        Some(subject),
+        "peer.invites.quarantine",
+        json!({
+            "invitee": subject,
+            "source_service_did": source_service_did,
+            "inviter": inviter,
+            "invite_event_id": invite_event_id,
+            "invite_event_digest": invite_event_digest,
+            "expires_at": expires_at,
+        }),
+        "accepted",
+    )
+    .await;
+    Ok(true)
+}
+
+fn canonical_digest_or_fallback(value: &Value) -> String {
+    canonical::canonical_sha256(value).unwrap_or_else(|_| {
+        let bytes = serde_json::to_vec(value).unwrap_or_default();
+        canonical::sha256_digest(&bytes)
+    })
+}
+
+fn invite_quarantine_entry_active(entry: &Value, at: chrono::DateTime<chrono::Utc>) -> bool {
+    entry
+        .get("expires_at")
+        .and_then(Value::as_str)
+        .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+        .map(|value| value.with_timezone(&chrono::Utc) > at)
+        .unwrap_or(false)
 }
 
 /// Effective trust tier of an introduction evidence kind, *after* any

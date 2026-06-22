@@ -1,4 +1,9 @@
-use cokret_sdk::{AuthSessionLogoutOutcome, AuthSessionLogoutRequestBody};
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD;
+use cokret_sdk::{
+    AuthSessionLogoutOutcome, AuthSessionLogoutRequestBody, SESSION_REVOKE_LIFECYCLE_PROOF_KIND,
+};
+use ed25519_dalek::{Signature, Verifier as _};
 
 use super::*;
 
@@ -171,47 +176,6 @@ async fn dev_mode_local_logout(state: &AppState, token: &str) -> Result<LogoutOu
         .await;
     }
     Ok(LogoutOutcome { ok: true, revoked })
-}
-
-#[derive(Default)]
-struct DeviceDeliveryPurgeOutcome {
-    to_device_messages_dropped: usize,
-    push_registrations_removed: usize,
-}
-
-async fn purge_device_delivery_state(
-    state: &AppState,
-    actor: &str,
-    device_id: &str,
-) -> DeviceDeliveryPurgeOutcome {
-    let to_device_messages_dropped = match state
-        .persistence
-        .device_messages()
-        .purge(actor, device_id)
-        .await
-    {
-        Ok(count) => count,
-        Err(error) => {
-            tracing::error!(%error, actor, device_id, "failed to purge to-device messages on logout");
-            0
-        }
-    };
-    let push_registrations_removed = match state
-        .persistence
-        .push_devices()
-        .unregister(actor, device_id, None, None)
-        .await
-    {
-        Ok(count) => count,
-        Err(error) => {
-            tracing::error!(%error, actor, device_id, "failed to unregister push devices on logout");
-            0
-        }
-    };
-    DeviceDeliveryPurgeOutcome {
-        to_device_messages_dropped,
-        push_registrations_removed,
-    }
 }
 
 /// Server-to-server introspection of a presented `ck.session.grant` for the
@@ -390,9 +354,8 @@ async fn revoke_sessions_for_actor_device(
 /// belong to the calling principal. Revokes session grants / bearer
 /// sessions only — device authorization is NOT touched and no
 /// `ck.account.status` write happens implicitly. Cross-session selectors
-/// require a fresh lifecycle proof; cryptographic verification of that
-/// proof is future work (cf. the device-pairing scaffolds), presence is
-/// enforced here.
+/// require a fresh lifecycle proof whose request digest and Ed25519 signature
+/// verify against the caller DID.
 #[endpoint(
     operation_id = "ck.gate.account.command.revoke_session",
     tags("auth"),
@@ -440,6 +403,9 @@ pub(super) async fn session_revoke(
         return Err(AppError::capability_denied(
             "cross-session revoke requires a lifecycle proof",
         ));
+    }
+    if selector_count == 1 {
+        verify_cross_session_revoke_proof(state, &session, &body).await?;
     }
     let revoked_at = now();
     let revoked_count: usize = if body.all_sessions == Some(true) {
@@ -515,4 +481,106 @@ pub(super) async fn session_revoke(
         revoked_count: revoked_count as u64,
         revoked_grant_ids: Vec::new(),
     })
+}
+
+async fn verify_cross_session_revoke_proof(
+    state: &AppState,
+    session: &SessionRecord,
+    body: &SessionRevokeRequestBody,
+) -> Result<(), AppError> {
+    let proof = body.proof.as_ref().ok_or_else(|| {
+        AppError::capability_denied("cross-session revoke requires a lifecycle proof")
+    })?;
+    if proof.proof_kind != SESSION_REVOKE_LIFECYCLE_PROOF_KIND {
+        return Err(session_revoke_proof_invalid(
+            "unsupported session revoke lifecycle proof kind",
+        ));
+    }
+    if proof.audience != state.config.service_did {
+        return Err(session_revoke_proof_invalid(
+            "session revoke lifecycle proof audience does not match this service",
+        ));
+    }
+    if proof.challenge.trim().is_empty() {
+        return Err(session_revoke_proof_invalid(
+            "session revoke lifecycle proof challenge is required",
+        ));
+    }
+    let now = now();
+    if proof.expires_at <= now
+        || proof.issued_at > now + Duration::seconds(60)
+        || proof.expires_at <= proof.issued_at
+        || proof.expires_at - proof.issued_at > Duration::minutes(10)
+    {
+        return Err(session_revoke_proof_invalid(
+            "session revoke lifecycle proof timing window is invalid",
+        ));
+    }
+
+    let actor = cokret_sdk::Did::new(session.actor.clone())
+        .map_err(|_| AppError::invalid_param("session actor is not a valid DID"))?;
+    let service_did = cokret_sdk::Did::new(state.config.service_did.clone()).map_err(|error| {
+        AppError::internal(format!(
+            "configured service_did is not a valid DID: {error}"
+        ))
+    })?;
+    let session_device = DeviceId::new(session.device_id.clone())
+        .map_err(|_| AppError::invalid_param("session device_id is not a valid DeviceId"))?;
+    let expected_digest = cokret_sdk::AccountLifecycleProof::session_revoke_request_digest(
+        &actor,
+        &service_did,
+        &session_device,
+        body.target_grant_id.as_ref(),
+        body.target_device_id.as_ref(),
+        body.all_sessions == Some(true),
+    )
+    .map_err(|error| {
+        AppError::internal(format!(
+            "session revoke request digest canonicalization failed: {error}"
+        ))
+    })?;
+    if proof.request_canonical_digest != expected_digest {
+        return Err(session_revoke_proof_invalid(
+            "session revoke lifecycle proof request digest mismatch",
+        ));
+    }
+
+    let verification_method = proof
+        .verification_method
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| {
+            session_revoke_proof_invalid(
+                "session revoke lifecycle proof verification_method missing",
+            )
+        })?;
+    crate::jws_verify::validate_verification_method_controller(actor.as_str(), verification_method)
+        .map_err(|error| session_revoke_proof_invalid(error))?;
+    let public_key = crate::jws_verify::resolve_ed25519_pubkey(state, verification_method)
+        .map_err(|error| session_revoke_proof_invalid(error))?;
+    let signing_bytes = proof.canonical_signing_bytes().map_err(|error| {
+        AppError::internal(format!(
+            "session revoke lifecycle proof canonicalization failed: {error}"
+        ))
+    })?;
+    let signature = decode_lifecycle_signature(&proof.signature).ok_or_else(|| {
+        session_revoke_proof_invalid("session revoke lifecycle proof signature is not Ed25519")
+    })?;
+    public_key.verify(&signing_bytes, &signature).map_err(|_| {
+        session_revoke_proof_invalid("session revoke lifecycle proof signature invalid")
+    })
+}
+
+fn session_revoke_proof_invalid(message: impl Into<String>) -> AppError {
+    AppError::new(ErrorCode::InvalidSignature, message)
+        .with_status(StatusCode::UNAUTHORIZED)
+        .with_wire_code(crate::error::reasons::PROOF_INVALID)
+}
+
+fn decode_lifecycle_signature(signature: &str) -> Option<Signature> {
+    let bytes = STANDARD
+        .decode(signature)
+        .or_else(|_| URL_SAFE_NO_PAD.decode(signature))
+        .ok()?;
+    Signature::from_slice(&bytes).ok()
 }

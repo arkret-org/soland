@@ -139,6 +139,8 @@ async fn create_plaintext_realm(state: AppState, _token: &str, title: &str) -> S
                 history_sharing_policy_digest: None,
                 preview_policy: None,
                 preview_policy_digest: None,
+                asset_privacy_policy: None,
+                asset_privacy_policy_digest: None,
                 encryption_profile: None,
                 plaintext_visible_services: std::collections::BTreeSet::from([
                     "did:web:soland.local".to_owned(),

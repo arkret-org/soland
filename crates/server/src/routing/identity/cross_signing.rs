@@ -15,7 +15,7 @@ use base64::Engine as _;
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use cokret_sdk::{
     CrossSigningPublishContent, CrossSigningResetContent, CrossSigningResetProof, DeviceId,
-    DeviceQuorumSignature, DeviceStatus, DeviceTrustBinding, Did,
+    DeviceQuorumSignature, DeviceStatus, DeviceTrustBinding, Did, MlsWelcomeClaimEnvelope,
 };
 use ed25519_dalek::{Signature, Verifier as _, VerifyingKey};
 use serde_json::{Map, Value};
@@ -631,6 +631,42 @@ pub fn validate_device_authorize_binding(
     check_device_cross_signing_binding(state, principal_id, device_id, device_public_key, binding)
 }
 
+pub(crate) fn verify_mls_welcome_claim_envelope_signature(
+    state: &AppState,
+    envelope: &MlsWelcomeClaimEnvelope,
+) -> Result<(), &'static str> {
+    envelope.validate_signature_shape()?;
+    if let Some(alg) = envelope.signature.alg.as_deref()
+        && !matches!(alg, "EdDSA" | "Ed25519")
+    {
+        return Err(crate::error::reasons::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH);
+    }
+    let (accepted_generation, ssk_kid, ssk_public_key, ssk_key_format) = {
+        let mgr = state.cross_signing.lock().expect("cross_signing lock");
+        let publish = mgr
+            .current_cross_signing(&envelope.requester_did)
+            .ok_or(crate::error::reasons::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;
+        (
+            publish.generation,
+            publish.self_signing_key.key.kid.clone(),
+            publish.self_signing_key.key.public_key.clone(),
+            publish.self_signing_key.key.key_format.clone(),
+        )
+    };
+    if envelope.ssk_generation != accepted_generation || envelope.signature.kid != ssk_kid {
+        return Err(crate::error::reasons::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH);
+    }
+    let ssk = decode_ed25519_key(&ssk_public_key, &ssk_key_format)
+        .map_err(|_| crate::error::reasons::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;
+    let signing_bytes = envelope
+        .canonical_signing_bytes()
+        .map_err(|_| crate::error::reasons::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;
+    if !ed25519_verify(&ssk, &signing_bytes, &envelope.signature.sig) {
+        return Err(crate::error::reasons::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH);
+    }
+    Ok(())
+}
+
 /// Resolve the published PSK against the principal DID document (control-set
 /// membership) and confirm the published bytes match.
 fn resolve_psk_in_control_set(
@@ -777,7 +813,7 @@ pub(crate) fn decode_ed25519_key(material: &str, key_format: &str) -> Result<Ver
     VerifyingKey::from_bytes(&bytes).map_err(|e| format!("invalid Ed25519 public key: {e}"))
 }
 
-fn ed25519_verify(key: &VerifyingKey, message: &[u8], signature_b64: &str) -> bool {
+pub(crate) fn ed25519_verify(key: &VerifyingKey, message: &[u8], signature_b64: &str) -> bool {
     let Ok(raw) = URL_SAFE_NO_PAD
         .decode(signature_b64.as_bytes())
         .or_else(|_| STANDARD.decode(signature_b64.as_bytes()))

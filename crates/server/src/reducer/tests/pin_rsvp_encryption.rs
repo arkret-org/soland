@@ -46,7 +46,15 @@ fn seed_pin_target(state: &mut ProjectionState, hlc: &ServerHlc) {
                 "object": {
                     "id": STRAND_ID,
                     "realm_id": REALM_ID,
-                    "metadata": {"title": "Planning"},
+                    "metadata": {
+                        "title": "Planning",
+                        "fields": {
+                            "start": "2026-06-22T16:00:00Z",
+                            "end": "2026-06-22T17:00:00Z",
+                            "timezone": "America/Los_Angeles",
+                            "all_day": false
+                        }
+                    },
                     "created_by": "did:web:alice.example"
                 }
             }),
@@ -66,10 +74,14 @@ fn pin_payload(note: Value) -> Value {
 }
 
 fn rsvp_payload(comment: Value) -> Value {
+    rsvp_payload_for("accepted", Value::Null, comment)
+}
+
+fn rsvp_payload_for(status: &str, occurrence: Value, comment: Value) -> Value {
     serde_json::json!({
         "event_ref": STRAND_ID,
-        "status": "accepted",
-        "occurrence": null,
+        "status": status,
+        "occurrence": occurrence,
         "sender": "did:web:alice.example",
         "comment": comment
     })
@@ -148,6 +160,7 @@ fn rsvp_comment_rejects_plaintext_projection_payload() {
 fn rsvp_comment_accepts_encrypted_projection_payload() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
+    seed_pin_target(&mut state, &hlc);
     let comment = encrypted_payload(crate::kinds::CK_RSVP_SET);
 
     let effect = state.apply(
@@ -162,4 +175,46 @@ fn rsvp_comment_accepts_encrypted_projection_payload() {
     assert!(matches!(effect, ProjectionEffect::RsvpProjected { .. }));
     let rsvp = state.rsvps.values().next().expect("rsvp should project");
     assert_eq!(rsvp.comment.as_ref(), Some(&comment));
+}
+
+#[test]
+fn rsvp_occurrence_is_canonicalized_and_lww_by_hlc() {
+    let mut state = ProjectionState::new();
+    let hlc = ServerHlc::new("test");
+    seed_pin_target(&mut state, &hlc);
+    let comment = encrypted_payload(crate::kinds::CK_RSVP_SET);
+
+    let mut newer = make_operation(
+        crate::kinds::CK_RSVP_SET,
+        REALM_ID,
+        rsvp_payload_for(
+            "accepted",
+            serde_json::json!("2026-06-22T16:00:00Z"),
+            comment.clone(),
+        ),
+    );
+    newer.payload["hlc"] = serde_json::json!("01970e589d21-0002-a13f9c2e");
+    let effect = state.apply(&newer, &hlc);
+    assert!(matches!(effect, ProjectionEffect::RsvpProjected { .. }));
+    let rsvp = state.rsvps.values().next().expect("rsvp should project");
+    assert_eq!(
+        rsvp.occurrence.as_deref(),
+        Some("2026-06-22T09:00:00[America/Los_Angeles]")
+    );
+    assert_eq!(rsvp.updated_hlc, "01970e589d21-0002-a13f9c2e");
+
+    let mut stale = make_operation(
+        crate::kinds::CK_RSVP_SET,
+        REALM_ID,
+        rsvp_payload_for(
+            "declined",
+            serde_json::json!("2026-06-22T09:00:00[America/Los_Angeles]"),
+            comment,
+        ),
+    );
+    stale.payload["hlc"] = serde_json::json!("01970e589d21-0001-a13f9c2e");
+    let effect = state.apply(&stale, &hlc);
+    assert!(matches!(effect, ProjectionEffect::Ignored));
+    let rsvp = state.rsvps.values().next().expect("rsvp should remain");
+    assert_eq!(rsvp.status, "accepted");
 }

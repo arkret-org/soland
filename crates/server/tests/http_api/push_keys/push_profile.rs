@@ -653,6 +653,8 @@ async fn public_read_receipt_rejected_for_world_readable_realm_without_opt_in() 
                 history_sharing_policy_digest: None,
                 preview_policy: None,
                 preview_policy_digest: None,
+                asset_privacy_policy: None,
+                asset_privacy_policy_digest: None,
                 encryption_profile: Some("none".to_owned()),
                 plaintext_visible_services: Default::default(),
                 minimal_metadata_realm: false,

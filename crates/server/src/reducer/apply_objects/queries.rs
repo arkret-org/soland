@@ -606,6 +606,14 @@ impl ProjectionState {
             .map(ToOwned::to_owned)
     }
 
+    pub fn realm_digest_algorithm(&self, realm_id: &str) -> Option<String> {
+        self.realm_create_log(realm_id)
+            .and_then(|entries| entries.last())
+            .and_then(|entry| entry.get("digest_algorithm"))
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned)
+    }
+
     pub fn realm_requires_content_encryption(&self, realm_id: &str) -> bool {
         encryption_profile_requires_content_encryption(
             self.realm_encryption_profile(realm_id).as_deref(),

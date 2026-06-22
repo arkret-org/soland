@@ -30,6 +30,11 @@ pub fn operation_policy_reason_code(message: &str) -> (salvo::http::StatusCode, 
             salvo::http::StatusCode::PRECONDITION_FAILED,
             crate::error::reasons::ACCOUNTABILITY_GRANT_MISSING,
         )
+    } else if message == "interop_session_writer_unauthorized" {
+        (
+            salvo::http::StatusCode::FORBIDDEN,
+            "interop_session_writer_unauthorized",
+        )
     } else if matches!(
         message,
         "read_receipt_visibility_combination_invalid"
@@ -93,6 +98,7 @@ pub async fn validate_operation_policy(
         }
         validate_principal_control_realm_binding(operation)?;
         validate_accountability_profile_policy(state, operations, operation).await?;
+        validate_agent_interop_session_writer_policy(state, operations, operation).await?;
         if kinds::canonical_kind_string(operation) == "ck.cross_signing.publish" {
             crate::routing::identity::cross_signing::validate_cross_signing_publish(
                 state,
@@ -135,6 +141,142 @@ pub async fn validate_operation_policy(
         validate_disappearing_message_policy(state, operation)?;
     }
     Ok(())
+}
+
+async fn validate_agent_interop_session_writer_policy(
+    state: &AppState,
+    operations: &[Operation],
+    operation: &Operation,
+) -> Result<(), &'static str> {
+    let Some(kind) = kinds::canonical_kind_for_operation(operation) else {
+        return Ok(());
+    };
+    if !matches!(
+        kind,
+        kinds::CK_AGENT_INTEROP_SESSION_STATUS | kinds::CK_AGENT_INTEROP_SESSION_RESULT
+    ) {
+        return Ok(());
+    }
+    let Some(session_id) = agent_interop_session_id_from_payload(&operation.payload) else {
+        return Err("interop_session_writer_unauthorized");
+    };
+    let Some(actor) = operation_actor(operation) else {
+        return Err("interop_session_writer_unauthorized");
+    };
+    if agent_interop_session_start_actor(state, operations, operation.realm_id.as_str(), session_id)
+        .await
+        .as_deref()
+        == Some(actor)
+    {
+        return Ok(());
+    }
+    if agent_interop_session_delegate_allows(state, operation, actor, session_id) {
+        return Ok(());
+    }
+    Err("interop_session_writer_unauthorized")
+}
+
+fn agent_interop_session_id_from_payload(payload: &Value) -> Option<&str> {
+    payload
+        .get("session_id")
+        .and_then(Value::as_str)
+        .filter(|value| value.starts_with("ck:agent_interop_session:"))
+}
+
+async fn agent_interop_session_start_actor(
+    state: &AppState,
+    operations: &[Operation],
+    realm_id: &str,
+    session_id: &str,
+) -> Option<String> {
+    if let Some(actor) = operations.iter().find_map(|candidate| {
+        (kinds::canonical_kind_for_operation(candidate)
+            == Some(kinds::CK_AGENT_INTEROP_SESSION_START)
+            && candidate.realm_id.as_str() == realm_id
+            && agent_interop_session_id_from_payload(&candidate.payload) == Some(session_id))
+        .then(|| operation_actor(candidate).map(ToOwned::to_owned))
+        .flatten()
+    }) {
+        return Some(actor);
+    }
+    state
+        .persistence
+        .events()
+        .snapshot_all()
+        .await
+        .ok()?
+        .iter()
+        .find_map(|record| {
+            if record.kind != kinds::CK_AGENT_INTEROP_SESSION_START {
+                return None;
+            }
+            if record.realm_id.as_deref() != Some(realm_id) {
+                return None;
+            }
+            let payload = record.envelope.get("payload").unwrap_or(&record.envelope);
+            if agent_interop_session_id_from_payload(payload) != Some(session_id) {
+                return None;
+            }
+            Some(record.actor_id.clone())
+        })
+}
+
+fn agent_interop_session_delegate_allows(
+    state: &AppState,
+    operation: &Operation,
+    actor: &str,
+    session_id: &str,
+) -> bool {
+    let actions = agent_interop_session_delegate_actions(operation);
+    if actions.is_empty() {
+        return false;
+    }
+    state
+        .authz
+        .grants_for_subject(actor, operation.realm_id.as_str())
+        .iter()
+        .any(|grant| {
+            grant.actions.iter().any(|action| {
+                action == "*"
+                    || actions
+                        .iter()
+                        .any(|candidate| action.as_str() == *candidate)
+            }) && (crate::authz::resource_matches(&grant.resource, operation.realm_id.as_str())
+                || crate::authz::resource_matches(&grant.resource, session_id))
+                && !grant.constraints.iter().any(|constraint| {
+                    matches!(
+                        constraint,
+                        crate::authz::Constraint::Decision {
+                            decision: crate::authz::GrantDecisionVerdict::Deny
+                                | crate::authz::GrantDecisionVerdict::Quarantine
+                                | crate::authz::GrantDecisionVerdict::RequireReview
+                        }
+                    )
+                }) && grant.constraints.iter().any(|constraint| {
+                matches!(
+                    constraint,
+                    crate::authz::Constraint::AllowedSessionIds { allowed_session_ids }
+                        if allowed_session_ids.iter().any(|allowed| allowed.as_ref() == session_id)
+                )
+            })
+        })
+}
+
+fn agent_interop_session_delegate_actions(operation: &Operation) -> &'static [&'static str] {
+    let cancelled = operation.payload.get("status").and_then(Value::as_str) == Some("cancelled");
+    match kinds::canonical_kind_for_operation(operation) {
+        Some(kinds::CK_AGENT_INTEROP_SESSION_STATUS) if cancelled => {
+            &["ck.agent.interop_session.cancel"]
+        }
+        Some(kinds::CK_AGENT_INTEROP_SESSION_STATUS) => &["ck.agent.interop_session.stream_status"],
+        Some(kinds::CK_AGENT_INTEROP_SESSION_RESULT) if cancelled => {
+            &["ck.agent.interop_session.cancel"]
+        }
+        Some(kinds::CK_AGENT_INTEROP_SESSION_RESULT) => {
+            &["ck.agent.interop_session.attach_artifact"]
+        }
+        _ => &[],
+    }
 }
 
 fn validate_pin_scope_safety(state: &AppState, operation: &Operation) -> Result<(), &'static str> {
@@ -187,6 +329,9 @@ async fn validate_accountability_profile_policy(
                 return false;
             }
             if record.realm_id.as_deref() != Some(operation.realm_id.as_str()) {
+                return false;
+            }
+            if !accountability_grant_envelope_signed_by(record, &issuer) {
                 return false;
             }
             let payload = record.envelope.get("payload").unwrap_or(&record.envelope);
@@ -245,7 +390,29 @@ fn accountability_grant_operation_active_for(
 ) -> bool {
     kinds::canonical_kind_string(operation) == "ck.identity.accountability_grant"
         && operation.realm_id.as_str() == realm_id
+        && accountability_grant_operation_signed_by(operation, issuer)
         && accountability_grant_value_active_for(&operation.payload, issuer, subject, now)
+}
+
+fn accountability_grant_operation_signed_by(operation: &Operation, issuer: &str) -> bool {
+    operation
+        .payload
+        .get("executed_by")
+        .or_else(|| operation.payload.get("sender"))
+        .and_then(Value::as_str)
+        == Some(issuer)
+}
+
+fn accountability_grant_envelope_signed_by(
+    record: &crate::state::CanonicalEventRecord,
+    issuer: &str,
+) -> bool {
+    record
+        .envelope
+        .get("executed_by")
+        .and_then(Value::as_str)
+        .unwrap_or(record.actor_id.as_str())
+        == issuer
 }
 
 fn accountability_grant_body(value: &Value) -> &Value {

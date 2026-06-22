@@ -5,6 +5,8 @@
 //! OR-set-like cell per `(holder_did, peer_did, scope)`, and contact
 //! requests consult that projection before opening or accepting a request.
 
+use std::collections::BTreeSet;
+
 use chrono::{DateTime, Utc};
 use cokret_sdk::{
     ConsentCellList, ConsentCellView, ConsentRequestRequestBody, ConsentState,
@@ -17,11 +19,17 @@ use serde_json::{Value, json};
 
 use super::{AuthArgs, append_audit_log, now, query_param, sha256_hex, validate_did};
 use crate::error::AppError;
+use crate::routing::identity::device_messages::{
+    ACCOUNT_DATA_UPDATE_TYPE, fanout_actor_private_update,
+};
 use crate::state::{
-    AppState, ConsentCellKey, ConsentCellRecord, ConsentGrantDot, ContactRecord,
+    AccountDataRecord, AppState, ConsentCellKey, ConsentCellRecord, ConsentGrantDot, ContactRecord,
     ProjectionEventRecord,
 };
 use crate::{JsonResult, ids, json_ok};
+
+const ACCOUNT_DATA_TYPE_INVITE_QUARANTINE: &str = "ck.account.invite_quarantine";
+const INVITE_QUARANTINE_ORIGIN_DEVICE: &str = "server:consent_revoke";
 
 pub(super) fn router() -> Router {
     Router::with_path("consent")
@@ -708,6 +716,78 @@ pub(crate) fn revoke_contact_managed_consent(
     (revoked_refs, complete, mutated)
 }
 
+pub(super) async fn auto_revoke_requester_side_contact_consent(
+    state: &AppState,
+    requester: &str,
+    target: &str,
+    scopes: &[String],
+    revoked_at: DateTime<Utc>,
+    reason: &str,
+    contact_event_ref: Option<&str>,
+) -> Result<(Vec<String>, bool), AppError> {
+    let requester_exists = state
+        .persistence
+        .accounts()
+        .get(requester)
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?
+        .is_some();
+    if !requester_exists {
+        return Ok((Vec::new(), true));
+    }
+
+    let normalized_scopes = scopes
+        .iter()
+        .filter_map(|scope| normalize_scope(Some(scope)).ok())
+        .collect::<Vec<_>>();
+    let revoke_scopes = if normalized_scopes.is_empty() {
+        scopes.to_vec()
+    } else {
+        normalized_scopes.clone()
+    };
+    let (revoked_dots, complete, mutated_cells) =
+        revoke_contact_managed_consent(state, requester, target, &revoke_scopes, revoked_at);
+    for mutation in &mutated_cells {
+        persist_consent_cell(state, &mutation.updated, mutation.previous.clone()).await?;
+    }
+    if !mutated_cells.is_empty() {
+        let invalidation_scope = if revoke_scopes.len() == 1 {
+            revoke_scopes[0].as_str()
+        } else {
+            "any"
+        };
+        emit_consent_revoke_invalidation(
+            state,
+            requester,
+            target,
+            invalidation_scope,
+            revoked_at,
+            &mutated_cells,
+        )
+        .await;
+    }
+    if !revoked_dots.is_empty() || !complete {
+        append_audit_log(
+            state,
+            Some(requester),
+            "consent.requester_side.auto_revoke",
+            json!({
+                "requester": requester,
+                "target": target,
+                "scopes": revoke_scopes,
+                "reason": reason,
+                "contact_event_ref": contact_event_ref,
+                "revoked_dots": revoked_dots.clone(),
+                "partial_revoke": !complete,
+                "revoked_at": revoked_at,
+            }),
+            if complete { "accepted" } else { "partial" },
+        )
+        .await;
+    }
+    Ok((revoked_dots, complete))
+}
+
 fn grant_cell(
     state: &AppState,
     holder: &str,
@@ -1258,7 +1338,7 @@ fn effective_state(cell: &ConsentCellRecord, at: DateTime<Utc>) -> &'static str 
     "pending"
 }
 
-async fn emit_consent_revoke_invalidation(
+pub(super) async fn emit_consent_revoke_invalidation(
     state: &AppState,
     holder: &str,
     peer: &str,
@@ -1267,6 +1347,24 @@ async fn emit_consent_revoke_invalidation(
     mutations: &[ConsentCellMutation],
 ) {
     let invalidated_action_scopes = revoke_target_scopes(scope);
+    let target_peer_service_dids =
+        consent_invalidation_peer_service_dids(state, holder, peer).await;
+    let invalidated_quarantine_entries =
+        match invalidate_quarantined_invites_for_revoke(state, holder, peer, scope, revoked_at)
+            .await
+        {
+            Ok(count) => count,
+            Err(error) => {
+                tracing::warn!(
+                    %error,
+                    holder,
+                    peer,
+                    scope,
+                    "failed to invalidate invite quarantine entries for consent revoke"
+                );
+                0
+            }
+        };
     let invalidated_channels = ConsentRevokeInvalidationChannel::ALL
         .iter()
         .map(|channel| channel.as_str())
@@ -1290,6 +1388,9 @@ async fn emit_consent_revoke_invalidation(
         "invalidated_action_scopes": invalidated_action_scopes,
         "invalidated_cache_scopes": CONSENT_SCOPE_CASCADE,
         "invalidated_channels": invalidated_channels,
+        "target_peer_service_dids": target_peer_service_dids,
+        "local_quarantine_entries_invalidated": invalidated_quarantine_entries,
+        "eager_invalidation": true,
         "scope_cascade_marker": if scope == "any" {
             Some(SUPERSEDED_BY_ANY_REVOKE)
         } else {
@@ -1325,6 +1426,155 @@ async fn emit_consent_revoke_invalidation(
 // ────────────────────────────────────────────────────────────────────────
 // scope=any cascade.
 // ────────────────────────────────────────────────────────────────────────
+
+async fn consent_invalidation_peer_service_dids(
+    state: &AppState,
+    holder: &str,
+    peer: &str,
+) -> Vec<String> {
+    let mut services = BTreeSet::new();
+    for actor in [holder, peer] {
+        let records = match state.persistence.contacts().list_for_actor(actor).await {
+            Ok(records) => records,
+            Err(error) => {
+                tracing::warn!(
+                    %error,
+                    actor,
+                    holder,
+                    peer,
+                    "failed to list contacts for consent invalidation target discovery"
+                );
+                continue;
+            }
+        };
+        for record in records {
+            let same_pair = (record.requester == holder && record.target == peer)
+                || (record.requester == peer && record.target == holder);
+            if !same_pair {
+                continue;
+            }
+            if let Some(service_did) = record
+                .peer_service_did
+                .as_deref()
+                .filter(|value| *value != state.config.service_did)
+            {
+                services.insert(service_did.to_owned());
+            }
+        }
+    }
+    services.into_iter().collect()
+}
+
+async fn invalidate_quarantined_invites_for_revoke(
+    state: &AppState,
+    holder: &str,
+    peer: &str,
+    scope: &str,
+    revoked_at: DateTime<Utc>,
+) -> Result<usize, AppError> {
+    if !matches!(scope, "invite" | "any") {
+        return Ok(0);
+    }
+    let account_data = state.persistence.account_data();
+    let Some(existing) = account_data
+        .get(holder, ACCOUNT_DATA_TYPE_INVITE_QUARANTINE)
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?
+    else {
+        return Ok(0);
+    };
+    let Some(entries) = existing.payload.get("entries").and_then(Value::as_array) else {
+        return Ok(0);
+    };
+    let mut removed = 0usize;
+    let retained = entries
+        .iter()
+        .filter(|entry| {
+            let should_remove = quarantine_entry_matches_consent_revoke(entry, peer);
+            if should_remove {
+                removed += 1;
+            }
+            !should_remove
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    if removed == 0 {
+        return Ok(0);
+    }
+
+    let mut object = existing.payload.as_object().cloned().unwrap_or_default();
+    object.insert(
+        "schema".to_owned(),
+        Value::String("ck.account.invite_quarantine.v1".to_owned()),
+    );
+    object.insert("entries".to_owned(), Value::Array(retained));
+    object.insert("updated_at".to_owned(), json!(revoked_at));
+    object.insert(
+        "last_invalidation".to_owned(),
+        json!({
+            "reason": "consent_revoke",
+            "peer_did": peer,
+            "consent_scope": scope,
+            "revoked_at": revoked_at,
+            "removed_entries": removed,
+        }),
+    );
+    let record = AccountDataRecord {
+        actor: holder.to_owned(),
+        data_type: ACCOUNT_DATA_TYPE_INVITE_QUARANTINE.to_owned(),
+        payload: Value::Object(object),
+        updated_at: revoked_at,
+    };
+    account_data
+        .put(&record)
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    fanout_actor_private_update(
+        state,
+        holder,
+        INVITE_QUARANTINE_ORIGIN_DEVICE,
+        ACCOUNT_DATA_UPDATE_TYPE,
+        json!({
+            "operation": "put",
+            "data_type": ACCOUNT_DATA_TYPE_INVITE_QUARANTINE,
+            "content": record.payload.clone(),
+            "updated_at": record.updated_at,
+        }),
+    )
+    .await;
+    append_audit_log(
+        state,
+        Some(holder),
+        "consent.revoke.invite_quarantine_invalidation",
+        json!({
+            "holder_did": holder,
+            "peer_did": peer,
+            "consent_scope": scope,
+            "removed_entries": removed,
+            "revoked_at": revoked_at,
+        }),
+        "accepted",
+    )
+    .await;
+    Ok(removed)
+}
+
+fn quarantine_entry_matches_consent_revoke(entry: &Value, peer: &str) -> bool {
+    let pending = entry
+        .get("status")
+        .and_then(Value::as_str)
+        .is_none_or(|status| status == "pending_review");
+    let invite_scope = entry
+        .get("consent_scope")
+        .and_then(Value::as_str)
+        .is_none_or(|scope| scope == "invite");
+    let peer_matches = entry
+        .get("source_peer_did")
+        .or_else(|| entry.get("inviter"))
+        .and_then(Value::as_str)
+        == Some(peer);
+    pending && invite_scope && peer_matches
+}
 
 /// Concrete action scopes covered by `consent_scope=any`.
 pub const CONSENT_ACTION_SCOPE_CASCADE: &[&str] = &[

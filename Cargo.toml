@@ -22,9 +22,11 @@ arc-swap = "1.9.1"
 async-stream = "0.3.6"
 async-trait = "0.1.89"
 base64 = "0.22.1"
+blake3 = { version = "1.5.5", default-features = false }
 bs58 = "0.5.1"
 bytes = "1.11.1"
 chrono = "0.4.45"
+chrono-tz = { version = "0.10.4", default-features = false }
 cokret-core = { path = "../cokret-rust-sdk/crates/core", default-features = false }
 cokret-sdk = { package = "cokret", path = "../cokret-rust-sdk/crates/sdk" }
 deadpool = "0.13"

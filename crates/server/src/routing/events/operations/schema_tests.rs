@@ -715,4 +715,46 @@ mod derived_relation_and_morph_immutability_tests {
         );
         assert!(validate_morph_update_payload(&operation).is_ok());
     }
+
+    #[test]
+    fn object_patch_reducer_managed_path_is_rejected() {
+        let operation = op(
+            kinds::CK_STRAND_UPDATE,
+            json!({
+                "strand_id": "ck:strand:01904100-0000-7000-8000-00000000000e",
+                "patch": {"state": {"$op": "set", "value": "archived"}}
+            }),
+        );
+        assert_eq!(
+            validate_operation_patch_semantics(&operation),
+            Err(crate::error::reasons::PATCH_PATH_REDUCER_MANAGED)
+        );
+    }
+
+    #[test]
+    fn object_patch_redactable_unset_is_rejected() {
+        let operation = op(
+            kinds::CK_STRAND_UPDATE,
+            json!({
+                "strand_id": "ck:strand:01904100-0000-7000-8000-00000000000e",
+                "patch": {"metadata.summary": {"$op": "unset"}}
+            }),
+        );
+        assert_eq!(
+            validate_operation_patch_semantics(&operation),
+            Err(crate::error::reasons::PATCH_UNSET_REDACTABLE_FIELD)
+        );
+    }
+
+    #[test]
+    fn object_patch_non_redactable_metadata_unset_is_allowed() {
+        let operation = op(
+            kinds::CK_STRAND_UPDATE,
+            json!({
+                "strand_id": "ck:strand:01904100-0000-7000-8000-00000000000e",
+                "patch": {"metadata.title": {"$op": "unset"}}
+            }),
+        );
+        assert!(validate_operation_patch_semantics(&operation).is_ok());
+    }
 }

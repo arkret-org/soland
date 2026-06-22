@@ -240,6 +240,13 @@ impl MemberIdentityRegistry {
             .unwrap_or_default()
     }
 
+    pub fn invalidate_handle_claims_for_subject(&mut self, subject_id: &str) -> usize {
+        self.handle_claims_by_subject
+            .remove(subject_id)
+            .map(|claims| claims.len())
+            .unwrap_or(0)
+    }
+
     /// Snapshot every locally-cached handle-claim evidence record keyed by
     /// claim `subject`. Drives the operator handles admin surface
     /// (`GET /_soland/admin/handles`); the durable handle CRDT projection

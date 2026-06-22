@@ -111,10 +111,11 @@ pub(super) async fn resolve_realm(
     match matched_realm {
         Some(realm) => {
             let discoverability = realm_discoverability(state, realm.realm_id.as_str()).await;
+            let join_rule = realm_join_rule(state, realm.realm_id.as_str());
             json_ok(DirectoryRealmResolutionOutcome {
                 realm_preview: realm_preview_from_directory_entry(&realm),
                 stripped_state: Vec::new(),
-                join_rule: Some(join_rule_enum_for_discoverability(&discoverability)),
+                join_rule: Some(join_rule_enum(&join_rule)),
                 join_candidates: join_candidates_for_resolved_realm(
                     state,
                     realm.realm_id.as_str(),
@@ -205,6 +206,7 @@ pub(super) async fn resolve_target(
     }
 
     let discoverability = realm_discoverability(state, realm_entry.realm_id.as_str()).await;
+    let join_rule = realm_join_rule(state, realm_entry.realm_id.as_str());
     let target_kind = target_kind_for_address(&parsed);
     let realm_preview = realm_preview_for_policy_typed(state, &realm_entry).await?;
     let policy_revision = if parsed.link_type == LinkType::Preview
@@ -234,7 +236,7 @@ pub(super) async fn resolve_target(
         target_kind,
         realm_preview: Some(realm_preview),
         object_preview: object_preview_for_address(&parsed),
-        join_rule: Some(join_rule_enum_for_discoverability(&discoverability)),
+        join_rule: Some(join_rule_enum(&join_rule)),
         as_of: now(),
         source_refs: Vec::new(),
         join_candidates,
@@ -284,7 +286,7 @@ pub(super) fn realm_preview_from_directory_entry(entry: &RealmDirectoryEntry) ->
         title: Some(entry.title.clone()),
         avatar_blob_ref: None,
         organization_did: None,
-        join_rule: Some(join_rule_for_discoverability(discoverability).to_owned()),
+        join_rule: Some(default_join_rule().to_owned()),
         member_count_bucket: entry
             .public
             .then_some(entry.members.len())
@@ -304,19 +306,46 @@ pub(super) fn realm_preview_from_directory_entry(entry: &RealmDirectoryEntry) ->
     }
 }
 
-pub(super) fn join_rule_for_discoverability(discoverability: &str) -> &'static str {
-    if discoverability == "public" {
-        "public"
-    } else {
-        "invite_or_request"
-    }
+pub(super) fn default_join_rule() -> &'static str {
+    "invite"
 }
 
-pub(super) fn join_rule_enum_for_discoverability(discoverability: &str) -> JoinRule {
-    if discoverability == "public" {
-        JoinRule::Public
-    } else {
-        JoinRule::Invite
+pub(super) fn realm_join_rule(state: &AppState, realm_id: &str) -> String {
+    let Ok(projection) = state.projection.lock() else {
+        return default_join_rule().to_owned();
+    };
+    projection
+        .realm_join_policy_cell_value(realm_id)
+        .and_then(join_rule_from_value)
+        .or_else(|| {
+            projection
+                .realm_create_log(realm_id)
+                .and_then(|entries| entries.last())
+                .and_then(join_rule_from_value)
+        })
+        .unwrap_or(default_join_rule())
+        .to_owned()
+}
+
+fn join_rule_from_value(value: &Value) -> Option<&str> {
+    value.as_str().or_else(|| {
+        value
+            .get("default_join_rule")
+            .or_else(|| value.get("join_rule"))
+            .or_else(|| value.pointer("/object/default_join_rule"))
+            .or_else(|| value.pointer("/object/join_rule"))
+            .and_then(Value::as_str)
+    })
+}
+
+pub(super) fn join_rule_enum(join_rule: &str) -> JoinRule {
+    match join_rule {
+        "public" => JoinRule::Public,
+        "knock" => JoinRule::Knock,
+        "restricted" => JoinRule::Restricted,
+        "knock_restricted" => JoinRule::KnockRestricted,
+        "closed" => JoinRule::Closed,
+        _ => JoinRule::Invite,
     }
 }
 
@@ -414,10 +443,9 @@ pub(super) async fn realm_preview_for_policy(
         preview.insert("summary".to_owned(), json!(realm_entry.description));
     }
     if fields.contains(&"join_rule") {
-        let discoverability = realm_discoverability(state, realm_entry.realm_id.as_str()).await;
         preview.insert(
             "join_rule".to_owned(),
-            json!(join_rule_for_discoverability(&discoverability)),
+            json!(realm_join_rule(state, realm_entry.realm_id.as_str())),
         );
     }
     if fields.contains(&"history_visibility") {

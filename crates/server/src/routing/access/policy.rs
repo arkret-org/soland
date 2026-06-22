@@ -24,6 +24,8 @@
 
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use chrono::{DateTime, Utc};
+use cokret_sdk::schema::{CapabilityRiskTier, embedded_capability_action};
 use cokret_sdk::{
     AuthzDecision, Did, FreshnessState, Hash, PolicyCheckBoundTo, PolicyCheckOutcome,
     PolicyCheckRequestBody, PolicyCheckSignature, RealmId,
@@ -42,6 +44,13 @@ use crate::state::{AppState, PolicyDocumentRecord};
 use crate::wire::{
     OkOutcome, PolicyDocumentOutcome, PolicyDocumentsOutcome, UpsertPolicyDocumentRequestBody,
 };
+
+const POLICY_FRESHNESS_HIGH_REQUIRED_MS: i64 = 180_000;
+const POLICY_FRESHNESS_LOW_MEDIUM_REQUIRED_MS: i64 = 300_000;
+const POLICY_FRESHNESS_HARD_EXTRA_MS: i64 = 60_000;
+const POLICY_FRESHNESS_MIN_HARD_MS: i64 = 300_000;
+const POLICY_FRESHNESS_CLOCK_SKEW_MS: i64 = 60_000;
+const POLICY_FRESHNESS_RETRY_AFTER_SECONDS: i64 = 30;
 
 /// Protocol surface (`/_cokret/self/...`): only the policy decision check is
 /// a v1 protocol operation (`ck.self.policy.query.check`).
@@ -268,8 +277,17 @@ async fn policy_check(
     let session = aa.authenticated_session(state, req).await?;
     let _ = &session;
     let body = body.into_inner();
-    let policy_decision = matching_policy_decision(state, &body).await;
-    let (decision, reason_code, policy_id, obligations) =
+    let active_policy_documents = state
+        .persistence
+        .policy_documents()
+        .list_active()
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|policy| policy.active)
+        .collect::<Vec<_>>();
+    let policy_decision = matching_policy_decision(&active_policy_documents, &body);
+    let (mut decision, mut reason_code, policy_id, mut obligations) =
         if let Some(policy_decision) = policy_decision {
             (
                 policy_decision.decision,
@@ -302,20 +320,14 @@ async fn policy_check(
     let resource_value = body.event_preview.clone();
     let auth_state_value = json!({
         "actor_id": body.actor_id.as_str(),
-        "action": body.action,
+        "action": body.action.as_str(),
         "resource": resource_value,
         "request_canonical_digest": body.request_canonical_digest.as_str(),
     });
     let auth_state_digest = canonical_hash(&auth_state_value)?;
 
-    let mut policy_doc_ids: Vec<String> = state
-        .persistence
-        .policy_documents()
-        .list_for_owner(body.actor_id.as_str())
-        .await
-        .unwrap_or_default()
-        .into_iter()
-        .filter(|policy| policy.active)
+    let mut policy_doc_ids: Vec<String> = active_policy_documents
+        .iter()
         .map(|policy| {
             // Encode (policy_id, updated_at) so a policy mutation
             // (`PATCH /policies/{id}`) shifts the frontier even if the
@@ -334,6 +346,31 @@ async fn policy_check(
         "members": members
     });
     let membership_frontier_digest = canonical_hash(&membership_frontier_value)?;
+    let freshness_state = policy_revocation_freshness_state(
+        state,
+        body.realm_id.as_str(),
+        body.action.as_str(),
+        &active_policy_documents,
+    )
+    .await;
+    let mut next_retry_at = (freshness_state != FreshnessState::Fresh)
+        .then(|| now() + chrono::Duration::seconds(POLICY_FRESHNESS_RETRY_AFTER_SECONDS));
+    if matches!(decision, AuthzDecision::Allow)
+        && crate::authz::revocation_freshness_fail_closed(&body.action, freshness_state)
+    {
+        decision = AuthzDecision::HardDeny;
+        reason_code = "revocation_freshness_unknown".to_owned();
+        obligations.push(json!({
+            "kind": "audit_log",
+            "reason_code": "revocation_freshness_unknown",
+            "freshness_state": freshness_state,
+            "action": body.action.as_str(),
+        }));
+        if next_retry_at.is_none() {
+            next_retry_at =
+                Some(now() + chrono::Duration::seconds(POLICY_FRESHNESS_RETRY_AFTER_SECONDS));
+        }
+    }
 
     let policy_server_id = Did::new(state.config.service_did.clone())
         .map_err(|error| AppError::internal(format!("invalid service DID: {error}")))?;
@@ -350,7 +387,7 @@ async fn policy_check(
         decision,
         bound_to,
         reason_code,
-        freshness_state: FreshnessState::Fresh,
+        freshness_state,
         expires_at,
         auth_state_digest,
         policy_frontier_digest,
@@ -359,7 +396,7 @@ async fn policy_check(
             kid: format!("{}#policy-binding-key", state.config.service_did),
             sig: String::new(),
         },
-        next_retry_at: None,
+        next_retry_at,
         obligations: obligations.clone(),
     };
     let transcript = crate::authz::policy_client::policy_decision_transcript_bytes(&body, &outcome)
@@ -408,6 +445,87 @@ fn collect_realm_member_dids(state: &AppState, realm_id: &str) -> Vec<String> {
     }
 }
 
+async fn policy_revocation_freshness_state(
+    state: &AppState,
+    realm_id: &str,
+    action: &str,
+    active_policy_documents: &[PolicyDocumentRecord],
+) -> FreshnessState {
+    let required_ms = policy_revocation_required_ms(action);
+    let Some(updated_at) =
+        policy_control_frontier_updated_at(state, realm_id, active_policy_documents).await
+    else {
+        return FreshnessState::Unknown;
+    };
+    policy_freshness_from_updated_at(updated_at, now(), required_ms)
+}
+
+async fn policy_control_frontier_updated_at(
+    state: &AppState,
+    realm_id: &str,
+    active_policy_documents: &[PolicyDocumentRecord],
+) -> Option<DateTime<Utc>> {
+    let meta = state
+        .persistence
+        .realm_meta()
+        .get(realm_id)
+        .await
+        .ok()
+        .flatten()?;
+    let projection = state.projection.lock().ok()?;
+    let realm_state = projection.realm_states.get(realm_id)?;
+    let member_updated_at = projection
+        .members
+        .iter()
+        .filter(|((member_realm_id, _), _)| member_realm_id == realm_id)
+        .map(|(_, member)| member.updated_at)
+        .max()?;
+    active_policy_documents
+        .iter()
+        .map(|policy| policy.updated_at)
+        .chain([meta.updated_at, realm_state.updated_at, member_updated_at])
+        .max()
+}
+
+fn policy_freshness_from_updated_at(
+    updated_at: DateTime<Utc>,
+    now: DateTime<Utc>,
+    required_ms: i64,
+) -> FreshnessState {
+    let age = now.signed_duration_since(updated_at);
+    if age.num_milliseconds() < -POLICY_FRESHNESS_CLOCK_SKEW_MS {
+        return FreshnessState::Unknown;
+    }
+    let age_ms = age.num_milliseconds().max(0);
+    if age_ms <= required_ms {
+        FreshnessState::Fresh
+    } else if age_ms <= policy_revocation_hard_ms(required_ms) {
+        FreshnessState::Stale
+    } else {
+        FreshnessState::Unknown
+    }
+}
+
+fn policy_revocation_required_ms(action: &str) -> i64 {
+    match policy_action_risk_tier(action) {
+        Some(CapabilityRiskTier::Low | CapabilityRiskTier::Medium) => {
+            POLICY_FRESHNESS_LOW_MEDIUM_REQUIRED_MS
+        }
+        Some(CapabilityRiskTier::High) | None => POLICY_FRESHNESS_HIGH_REQUIRED_MS,
+    }
+}
+
+fn policy_revocation_hard_ms(required_ms: i64) -> i64 {
+    (required_ms + POLICY_FRESHNESS_HARD_EXTRA_MS).max(POLICY_FRESHNESS_MIN_HARD_MS)
+}
+
+fn policy_action_risk_tier(action: &str) -> Option<CapabilityRiskTier> {
+    embedded_capability_action(action)
+        .ok()
+        .flatten()
+        .map(|descriptor| descriptor.risk_tier)
+}
+
 pub fn policy_document_to_response(policy: &PolicyDocumentRecord) -> PolicyDocumentOutcome {
     PolicyDocumentOutcome {
         policy_id: policy.policy_id.clone(),
@@ -428,18 +546,12 @@ struct MatchedPolicyDecision {
     obligations: Vec<Value>,
 }
 
-async fn matching_policy_decision(
-    state: &AppState,
+fn matching_policy_decision(
+    active_policy_documents: &[PolicyDocumentRecord],
     request: &PolicyCheckRequestBody,
 ) -> Option<MatchedPolicyDecision> {
-    state
-        .persistence
-        .policy_documents()
-        .list_active()
-        .await
-        .ok()
-        .unwrap_or_default()
-        .into_iter()
+    active_policy_documents
+        .iter()
         .find(|policy| policy_matches_check(policy, request))
         .map(|policy| {
             let decision = policy

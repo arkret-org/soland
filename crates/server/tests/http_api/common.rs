@@ -351,6 +351,8 @@ pub(crate) async fn seed_test_realm(
                 history_sharing_policy_digest: None,
                 preview_policy: None,
                 preview_policy_digest: None,
+                asset_privacy_policy: None,
+                asset_privacy_policy_digest: None,
                 encryption_profile: None,
                 plaintext_visible_services,
                 minimal_metadata_realm: false,

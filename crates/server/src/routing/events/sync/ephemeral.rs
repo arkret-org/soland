@@ -223,13 +223,7 @@ async fn persist_ephemeral_presence(
         }
         return;
     }
-    let status = envelope
-        .payload
-        .get("status")
-        .or_else(|| envelope.payload.get("state"))
-        .and_then(Value::as_str)
-        .unwrap_or("online")
-        .to_owned();
+    let status = presence_status_from_payload(&envelope.payload);
     if let Err(error) = state
         .persistence
         .presence()
@@ -241,6 +235,19 @@ async fn persist_ephemeral_presence(
         .await
     {
         tracing::error!(%error, "failed to persist ephemeral presence");
+    }
+}
+
+fn presence_status_from_payload(payload: &Value) -> String {
+    let status = payload
+        .get("status")
+        .or_else(|| payload.get("state"))
+        .and_then(Value::as_str)
+        .unwrap_or("online")
+        .trim();
+    match status {
+        "online" | "offline" | "unavailable" | "dnd" | "idle" => status.to_owned(),
+        _ => "offline".to_owned(),
     }
 }
 

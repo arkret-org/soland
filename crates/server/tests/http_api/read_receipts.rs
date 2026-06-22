@@ -33,6 +33,8 @@ async fn set_demo_realm_visibility(
             history_sharing_policy_digest: None,
             preview_policy: None,
             preview_policy_digest: None,
+            asset_privacy_policy: None,
+            asset_privacy_policy_digest: None,
             encryption_profile: Some("none".to_owned()),
             plaintext_visible_services: std::collections::BTreeSet::from([state
                 .config

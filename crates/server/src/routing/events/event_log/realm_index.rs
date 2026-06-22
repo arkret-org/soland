@@ -187,6 +187,12 @@ pub(super) async fn bootstrap_realm_member_index(
         .and_then(|create_object| create_object.get("preview_policy"))
         .cloned();
     let preview_policy_digest = preview_policy.as_ref().and_then(canonical_value_digest);
+    let asset_privacy_policy = payload_object
+        .and_then(|create_object| create_object.get("asset_privacy_policy"))
+        .cloned();
+    let asset_privacy_policy_digest = asset_privacy_policy
+        .as_ref()
+        .and_then(canonical_value_digest);
     let plaintext_visible_services = object
         .get("payload")
         .and_then(|payload| payload.get("plaintext_visible_services"))
@@ -219,6 +225,8 @@ pub(super) async fn bootstrap_realm_member_index(
         history_sharing_policy_digest,
         preview_policy,
         preview_policy_digest,
+        asset_privacy_policy,
+        asset_privacy_policy_digest,
         encryption_profile,
         plaintext_visible_services,
         minimal_metadata_realm,

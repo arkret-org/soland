@@ -750,6 +750,15 @@ pub(crate) fn operation_touches_encryption_profile(operation: &Operation) -> boo
         || operation_patch_touches_field(&operation.payload, "encryption_profile")
 }
 
+pub(crate) fn operation_touches_digest_algorithm(operation: &Operation) -> bool {
+    operation.payload.get("digest_algorithm").is_some()
+        || operation
+            .payload
+            .get("object")
+            .is_some_and(|object| value_has_direct_field(object, "digest_algorithm"))
+        || operation_patch_touches_field(&operation.payload, "digest_algorithm")
+}
+
 pub(crate) fn value_has_direct_field(value: &Value, field: &str) -> bool {
     value
         .as_object()

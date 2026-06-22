@@ -516,6 +516,10 @@ pub struct RealmMetaRecord {
     /// Directory/object preview must fail closed when this is missing.
     pub preview_policy: Option<Value>,
     pub preview_policy_digest: Option<String>,
+    /// Effective `ck.realm.asset_privacy_policy.value` plus its canonical
+    /// digest. Blob presign/download re-checks this at response time.
+    pub asset_privacy_policy: Option<Value>,
+    pub asset_privacy_policy_digest: Option<String>,
     /// Optional encryption profile (`mls_rfc9420` / `plaintext`). Cross-checked
     /// against `history_visibility` at create time — `mls_rfc9420` is
     /// incompatible with `world_readable` (realm-and-space.md §3.1.3).

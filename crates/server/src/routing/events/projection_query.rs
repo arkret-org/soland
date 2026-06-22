@@ -32,17 +32,19 @@
 
 use chrono::{DateTime, Utc};
 use cokret_sdk::{
-    CellRef, Did, DocumentMorphProjectionOutcome, MorphId, ProjectionAssignedToRelation,
+    CellRef, Did, DocumentMorphProjectionOutcome, HistoryRangeContext, HistoryReaderContext,
+    HistoryReaderEventState, HistorySharingPolicyPayloadValue, HistorySharingRestrictedScopeRef,
+    HistorySharingScopeKind, HistoryVisibility, MorphId, ProjectionAssignedToRelation,
     ProjectionMorphList, ProjectionMorphRow, ProjectionObjectState, ProjectionSpaceList,
     ProjectionSpaceRow, ProjectionSpaceState, ProjectionStrandList, ProjectionStrandRow, RealmId,
-    RelationId, SealId, SpaceId, StrandId,
+    RelationId, SealId, SpaceId, StrandId, event_time_history_visible, matching_restricted_rules,
 };
 use salvo::http::StatusCode;
 use salvo::oapi::extract::{PathParam, QueryParam};
 use salvo::prelude::*;
 use serde_json::{Value, json};
 
-use super::{realm_discoverability, realm_history_visibility, realm_id_accessible};
+use super::{realm_history_visibility, realm_id_accessible};
 use crate::error::{AppError, ErrorCode};
 use crate::reducer::{
     MessageState, MorphProjection, ObjectLifecycleState, ProjectionState, SolandRelationState,
@@ -75,6 +77,23 @@ fn validate_realm_id(realm_id: String) -> Result<String, AppError> {
     RealmId::new(realm_id.clone())
         .map_err(|_| AppError::invalid_param("invalid realm_id format"))?;
     Ok(realm_id)
+}
+
+async fn realm_history_sharing_policy(
+    state: &AppState,
+    realm_id: &str,
+) -> Option<HistorySharingPolicyPayloadValue> {
+    let policy_value = state
+        .persistence
+        .realm_meta()
+        .get(realm_id)
+        .await
+        .ok()
+        .flatten()?
+        .history_sharing_policy?;
+    let policy = serde_json::from_value::<HistorySharingPolicyPayloadValue>(policy_value).ok()?;
+    cokret_sdk::validate_history_sharing_policy(&policy).ok()?;
+    Some(policy)
 }
 
 fn projection_space_state(state: SpaceContainerLifecycleState) -> ProjectionSpaceState {
@@ -117,7 +136,7 @@ fn projection_row_visible_to_session(
     history_basis_seals: &[String],
     scope_circle_id: Option<&str>,
     history_visibility: &str,
-    _discoverability: &str,
+    history_policy: Option<&HistorySharingPolicyPayloadValue>,
 ) -> bool {
     if sender == session.actor {
         return true;
@@ -128,7 +147,9 @@ fn projection_row_visible_to_session(
         realm_id,
         &session.actor,
         history_basis_seals,
+        scope_circle_id,
         history_visibility,
+        history_policy,
     ) {
         return false;
     }
@@ -143,18 +164,67 @@ fn projection_realm_history_allows(
     realm_id: &str,
     actor: &str,
     history_basis_seals: &[String],
+    scope_circle_id: Option<&str>,
     history_visibility: &str,
+    history_policy: Option<&HistorySharingPolicyPayloadValue>,
 ) -> bool {
-    match history_visibility {
-        "world_readable" => true,
-        "shared" => projection
+    let Ok(visibility) = history_visibility.parse::<HistoryVisibility>() else {
+        return false;
+    };
+    let member_state_at_t0 =
+        member_state_at_history_basis(state, realm_id, actor, history_basis_seals);
+    let event_state = history_reader_event_state(member_state_at_t0.as_deref());
+    let reader = HistoryReaderContext {
+        current_active_member: projection
             .member(realm_id, actor)
             .is_some_and(|member| member.state == "join"),
-        "invited" => member_state_at_history_basis(state, realm_id, actor, history_basis_seals)
-            .is_some_and(|member_state| matches!(member_state.as_str(), "invite" | "join")),
-        "joined" => member_state_at_history_basis(state, realm_id, actor, history_basis_seals)
-            .is_some_and(|member_state| member_state == "join"),
-        _ => false,
+        event_state,
+        has_discoverability: true,
+        has_preview_token: false,
+    };
+    let range = HistoryRangeContext::from_membership(
+        matches!(
+            event_state,
+            HistoryReaderEventState::Invited | HistoryReaderEventState::Joined
+        ),
+        event_state == HistoryReaderEventState::Joined,
+    );
+    if visibility != HistoryVisibility::Restricted {
+        return event_time_history_visible(visibility, reader, range, history_policy).allowed;
+    }
+    let Some(policy) = history_policy else {
+        return false;
+    };
+    let Some(receiver_class) = reader.receiver_class() else {
+        return false;
+    };
+    let scope = HistorySharingRestrictedScopeRef {
+        kind: if scope_circle_id.is_some() {
+            HistorySharingScopeKind::Circle
+        } else {
+            HistorySharingScopeKind::Realm
+        },
+        circle_id: scope_circle_id,
+    };
+    !matching_restricted_rules(
+        policy,
+        receiver_class,
+        visibility,
+        range,
+        None,
+        Some(&scope),
+    )
+    .is_empty()
+}
+
+fn history_reader_event_state(member_state: Option<&str>) -> HistoryReaderEventState {
+    match member_state {
+        Some("invite") => HistoryReaderEventState::Invited,
+        Some("join") => HistoryReaderEventState::Joined,
+        Some("leave" | "ban" | "remove" | "revoked" | "rejected" | "expired") => {
+            HistoryReaderEventState::Removed
+        }
+        _ => HistoryReaderEventState::None,
     }
 }
 
@@ -478,7 +548,7 @@ fn document_projection_comments(
     body: &Value,
     session: &SessionRecord,
     history_visibility: &str,
-    discoverability: &str,
+    history_policy: Option<&HistorySharingPolicyPayloadValue>,
 ) -> Vec<Value> {
     let mut comments = projection
         .messages
@@ -501,7 +571,7 @@ fn document_projection_comments(
                 &message.history_basis_seals,
                 message_scope_circle_id(message),
                 history_visibility,
-                discoverability,
+                history_policy,
             )
         })
         .map(|(message, anchor_range, body_text)| {
@@ -559,7 +629,7 @@ async fn list_space_container_projections(
         .with_status(StatusCode::FORBIDDEN));
     }
     let history_visibility = realm_history_visibility(state, &realm_id).await;
-    let discoverability = realm_discoverability(state, &realm_id).await;
+    let history_policy = realm_history_sharing_policy(state, &realm_id).await;
     let proj = state.projection.lock().map_err(|_| {
         AppError::new(
             ErrorCode::TemporarilyUnavailable,
@@ -582,7 +652,7 @@ async fn list_space_container_projections(
                 &p.history_basis_seals,
                 p.scope_circle_id.as_deref(),
                 &history_visibility,
-                &discoverability,
+                history_policy.as_ref(),
             )
         })
         .filter(|p| include_terminal || p.state != SpaceContainerLifecycleState::Tombstoned)
@@ -650,7 +720,7 @@ async fn list_strand_projections(
         .with_status(StatusCode::FORBIDDEN));
     }
     let history_visibility = realm_history_visibility(state, &realm_id).await;
-    let discoverability = realm_discoverability(state, &realm_id).await;
+    let history_policy = realm_history_sharing_policy(state, &realm_id).await;
     let proj = state.projection.lock().map_err(|_| {
         AppError::new(
             ErrorCode::TemporarilyUnavailable,
@@ -679,7 +749,7 @@ async fn list_strand_projections(
                 &f.history_basis_seals,
                 f.scope_circle_id.as_deref(),
                 &history_visibility,
-                &discoverability,
+                history_policy.as_ref(),
             )
         })
         .filter(|f| include_terminal || !is_object_terminal(f.state))
@@ -758,7 +828,7 @@ async fn get_document_projection(
         .with_status(StatusCode::FORBIDDEN));
     }
     let history_visibility = realm_history_visibility(state, &realm_id).await;
-    let discoverability = realm_discoverability(state, &realm_id).await;
+    let history_policy = realm_history_sharing_policy(state, &realm_id).await;
     let proj = state
         .projection
         .lock()
@@ -779,7 +849,7 @@ async fn get_document_projection(
         &morph.history_basis_seals,
         morph.scope_circle_id.as_deref(),
         &history_visibility,
-        &discoverability,
+        history_policy.as_ref(),
     ) {
         return Err(AppError::new(
             ErrorCode::CapabilityDenied,
@@ -798,7 +868,7 @@ async fn get_document_projection(
         &body,
         &session,
         &history_visibility,
-        &discoverability,
+        history_policy.as_ref(),
     );
     drop(proj);
     json_ok(DocumentMorphProjectionOutcome {
@@ -838,7 +908,7 @@ async fn list_morph_projections(
         .with_status(StatusCode::FORBIDDEN));
     }
     let history_visibility = realm_history_visibility(state, &realm_id).await;
-    let discoverability = realm_discoverability(state, &realm_id).await;
+    let history_policy = realm_history_sharing_policy(state, &realm_id).await;
     let proj = state.projection.lock().map_err(|_| {
         AppError::new(
             ErrorCode::TemporarilyUnavailable,
@@ -861,7 +931,7 @@ async fn list_morph_projections(
                 &m.history_basis_seals,
                 m.scope_circle_id.as_deref(),
                 &history_visibility,
-                &discoverability,
+                history_policy.as_ref(),
             )
         })
         .filter(|m| include_terminal || !is_object_terminal(m.state))

@@ -164,6 +164,12 @@ pub(crate) struct AccountLifecycleChange {
     pub changed_at: chrono::DateTime<chrono::Utc>,
     pub sessions_revoked: usize,
     pub devices_revoked: usize,
+    pub applet_delegated_sessions_revoked: usize,
+    pub keypackages_retired: usize,
+    pub push_routes_revoked: usize,
+    pub to_device_messages_dropped: usize,
+    pub identity_link_cache_invalidated: usize,
+    pub capability_cache_invalidated: usize,
 }
 
 pub(crate) async fn set_account_lifecycle_state(
@@ -215,6 +221,12 @@ pub(crate) async fn set_account_lifecycle_state(
     let changed_at = now();
     let mut sessions_revoked = 0;
     let mut devices_revoked = 0;
+    let mut applet_delegated_sessions_revoked = 0;
+    let mut keypackages_retired = 0;
+    let mut push_routes_revoked = 0;
+    let mut to_device_messages_dropped = 0;
+    let mut identity_link_cache_invalidated = 0;
+    let mut capability_cache_invalidated = 0;
     if previous_state != next_state {
         let record = AccountLifecycleRecord {
             state: next_state.to_owned(),
@@ -224,12 +236,20 @@ pub(crate) async fn set_account_lifecycle_state(
         };
         persist_account_lifecycle_record(state, did, &record).await?;
         state.set_account_lifecycle_record(did, record);
-        if matches!(next_state, "locked" | "deactivated") {
+        if next_state == "deactivated" {
+            let fanout = run_account_deactivation_fanout(state, did).await?;
+            sessions_revoked = fanout.sessions_revoked;
+            devices_revoked = fanout.devices_revoked;
+            applet_delegated_sessions_revoked = fanout.applet_delegated_sessions_revoked;
+            keypackages_retired = fanout.keypackages_retired;
+            push_routes_revoked = fanout.push_routes_revoked;
+            to_device_messages_dropped = fanout.to_device_messages_dropped;
+            identity_link_cache_invalidated = fanout.identity_link_cache_invalidated;
+            capability_cache_invalidated = fanout.capability_cache_invalidated;
+        } else if next_state == "locked" {
             sessions_revoked = revoke_sessions_for_actor(state, did)
                 .await
                 .map_err(AppError::internal)?;
-        }
-        if matches!(next_state, "locked" | "deactivated") {
             devices_revoked = revoke_devices_for_actor(state, did)
                 .await
                 .map_err(AppError::internal)?;
@@ -244,8 +264,32 @@ pub(crate) async fn set_account_lifecycle_state(
             changed_at,
             sessions_revoked,
             devices_revoked,
+            applet_delegated_sessions_revoked,
+            keypackages_retired,
+            push_routes_revoked,
+            to_device_messages_dropped,
+            identity_link_cache_invalidated,
+            capability_cache_invalidated,
         )
         .await;
+        if next_state == "deactivated" {
+            append_account_deactivation_propagation_state(
+                state,
+                did,
+                changed_by,
+                reason.clone(),
+                changed_at,
+                sessions_revoked,
+                devices_revoked,
+                applet_delegated_sessions_revoked,
+                keypackages_retired,
+                push_routes_revoked,
+                to_device_messages_dropped,
+                identity_link_cache_invalidated,
+                capability_cache_invalidated,
+            )
+            .await;
+        }
     }
 
     Ok(AccountLifecycleChange {
@@ -257,7 +301,107 @@ pub(crate) async fn set_account_lifecycle_state(
         changed_at,
         sessions_revoked,
         devices_revoked,
+        applet_delegated_sessions_revoked,
+        keypackages_retired,
+        push_routes_revoked,
+        to_device_messages_dropped,
+        identity_link_cache_invalidated,
+        capability_cache_invalidated,
     })
+}
+
+#[derive(Default)]
+struct AccountDeactivationFanout {
+    sessions_revoked: usize,
+    devices_revoked: usize,
+    applet_delegated_sessions_revoked: usize,
+    keypackages_retired: usize,
+    push_routes_revoked: usize,
+    to_device_messages_dropped: usize,
+    identity_link_cache_invalidated: usize,
+    capability_cache_invalidated: usize,
+}
+
+async fn run_account_deactivation_fanout(
+    state: &AppState,
+    did: &str,
+) -> Result<AccountDeactivationFanout, AppError> {
+    let applet_delegated_sessions_revoked = active_delegated_sessions_for_actor(state, did)
+        .await
+        .map_err(AppError::internal)?;
+    let sessions_revoked = revoke_sessions_for_actor(state, did)
+        .await
+        .map_err(AppError::internal)?;
+    let devices_revoked = revoke_devices_for_actor(state, did)
+        .await
+        .map_err(AppError::internal)?;
+    let (to_device_messages_dropped, push_routes_revoked) =
+        purge_delivery_state_for_actor(state, did).await?;
+    let keypackages_retired = retire_actor_keypackages(state, did).await?;
+    let identity_link_cache_invalidated = state
+        .member_identity
+        .lock()
+        .expect("member_identity lock")
+        .invalidate_handle_claims_for_subject(did);
+    let capability_cache_invalidated = state.authz.mark_projected_grants_revoked_for_subject(did);
+    Ok(AccountDeactivationFanout {
+        sessions_revoked,
+        devices_revoked,
+        applet_delegated_sessions_revoked,
+        keypackages_retired,
+        push_routes_revoked,
+        to_device_messages_dropped,
+        identity_link_cache_invalidated,
+        capability_cache_invalidated,
+    })
+}
+
+async fn purge_delivery_state_for_actor(
+    state: &AppState,
+    did: &str,
+) -> Result<(usize, usize), AppError> {
+    let devices = state
+        .persistence
+        .devices()
+        .list_for_actor_including_revoked(did)
+        .await
+        .map_err(|error| AppError::internal(format!("device inventory lookup failed: {error}")))?;
+    let mut to_device_messages_dropped = 0usize;
+    let mut push_routes_revoked = 0usize;
+    for device in devices {
+        let purge = purge_device_delivery_state(state, did, &device.device_id).await;
+        to_device_messages_dropped += purge.to_device_messages_dropped;
+        push_routes_revoked += purge.push_registrations_removed;
+    }
+    Ok((to_device_messages_dropped, push_routes_revoked))
+}
+
+async fn retire_actor_keypackages(state: &AppState, did: &str) -> Result<usize, AppError> {
+    let rows = state
+        .persistence
+        .mls_key_packages()
+        .snapshot_all()
+        .await
+        .map_err(|error| AppError::internal(format!("mls keypackage snapshot failed: {error}")))?;
+    let retired_at = now().timestamp();
+    let mut retired = 0usize;
+    for row in rows.into_iter().filter(|row| {
+        row.actor_id == did && row.claimed_by_mls_group_id.is_none() && row.consumed_at.is_none()
+    }) {
+        if state
+            .persistence
+            .mls_key_packages()
+            .try_claim(&row.id, "revoked", None, retired_at)
+            .await
+            .map_err(|error| {
+                AppError::internal(format!("mls keypackage retirement failed: {error}"))
+            })?
+            .is_some()
+        {
+            retired += 1;
+        }
+    }
+    Ok(retired)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -271,6 +415,12 @@ async fn append_account_state_change_audit(
     changed_at: chrono::DateTime<chrono::Utc>,
     sessions_revoked: usize,
     devices_revoked: usize,
+    applet_delegated_sessions_revoked: usize,
+    keypackages_retired: usize,
+    push_routes_revoked: usize,
+    to_device_messages_dropped: usize,
+    identity_link_cache_invalidated: usize,
+    capability_cache_invalidated: usize,
 ) {
     // Product-private audit actions must not occupy the protocol `ck.` prefix.
     let payload = json!({
@@ -284,6 +434,22 @@ async fn append_account_state_change_audit(
         "timestamp": changed_at.to_rfc3339_opts(SecondsFormat::Millis, true),
         "sessions_revoked": sessions_revoked,
         "devices_revoked": devices_revoked,
+        "applet_delegated_sessions_revoked": applet_delegated_sessions_revoked,
+        "keypackages_retired": keypackages_retired,
+        "push_routes_revoked": push_routes_revoked,
+        "to_device_messages_dropped": to_device_messages_dropped,
+        "identity_link_cache_invalidated": identity_link_cache_invalidated,
+        "capability_cache_invalidated": capability_cache_invalidated,
+        "fanout_domains": [
+            "bearer_sessions",
+            "applet_delegated_sessions",
+            "device_records",
+            "keypackages",
+            "push_routes",
+            "to_device_queue",
+            "identity_link_cache",
+            "capability_cache"
+        ],
     });
     append_audit_log(
         state,
@@ -303,6 +469,163 @@ async fn append_account_state_change_audit(
         )
         .await;
     }
+}
+
+async fn append_account_deactivation_propagation_state(
+    state: &AppState,
+    did: &str,
+    changed_by: &str,
+    reason: Option<String>,
+    changed_at: chrono::DateTime<chrono::Utc>,
+    sessions_revoked: usize,
+    devices_revoked: usize,
+    applet_delegated_sessions_revoked: usize,
+    keypackages_retired: usize,
+    push_routes_revoked: usize,
+    to_device_messages_dropped: usize,
+    identity_link_cache_invalidated: usize,
+    capability_cache_invalidated: usize,
+) {
+    let peer_targets = deactivation_peer_service_targets_for_actor(state, did);
+    let peer_service_dids = peer_targets
+        .iter()
+        .filter_map(|target| target.get("service_did").and_then(Value::as_str))
+        .map(ToOwned::to_owned)
+        .collect::<Vec<_>>();
+    let federation_incomplete = !peer_targets.is_empty();
+    let payload = json!({
+        "schema": "ck.account.status.v1",
+        "principal_id": did,
+        "status": "deactivated",
+        "reason_code": if federation_incomplete {
+            Some("deactivation_federation_incomplete")
+        } else {
+            None
+        },
+        "reason": reason,
+        "effective_at": changed_at,
+        "deactivation_federation_incomplete": federation_incomplete,
+        "fanout": {
+            "sessions_revoked": sessions_revoked,
+            "devices_revoked": devices_revoked,
+            "applet_delegated_sessions_revoked": applet_delegated_sessions_revoked,
+            "keypackages_retired": keypackages_retired,
+            "push_routes_revoked": push_routes_revoked,
+            "to_device_messages_dropped": to_device_messages_dropped,
+            "identity_link_cache_invalidated": identity_link_cache_invalidated,
+            "capability_cache_invalidated": capability_cache_invalidated,
+            "domains": [
+                "bearer_sessions",
+                "applet_delegated_sessions",
+                "device_records",
+                "keypackages",
+                "push_routes",
+                "to_device_queue",
+                "identity_link_cache",
+                "capability_cache"
+            ],
+        },
+        "propagation": {
+            "mode": "eager",
+            "requires_peer_ack": true,
+            "target_service_dids": peer_service_dids,
+            "targets": peer_targets,
+        },
+    });
+    crate::routing::events::projection::append_projection_event(
+        state,
+        crate::state::ProjectionEventRecord {
+            event_id: crate::ids::generate_event_id(),
+            realm_id: crate::routing::identity::recovery::principal_control_realm_for_did(did),
+            event_kind: "ck.account.status".to_owned(),
+            operation_type: "account_status_deactivation_propagation".to_owned(),
+            operation_id: None,
+            sender: Some(changed_by.to_owned()),
+            payload: payload.clone(),
+            created_at: changed_at,
+        },
+    )
+    .await;
+    append_audit_log(
+        state,
+        Some(did),
+        "org.cokret.soland.account.deactivation_propagation",
+        payload.clone(),
+        if federation_incomplete {
+            "pending_peer_ack"
+        } else {
+            "accepted"
+        },
+    )
+    .await;
+    if changed_by != did {
+        append_audit_log(
+            state,
+            Some(changed_by),
+            "org.cokret.soland.account.deactivation_propagation",
+            payload,
+            if federation_incomplete {
+                "pending_peer_ack"
+            } else {
+                "accepted"
+            },
+        )
+        .await;
+    }
+}
+
+fn deactivation_peer_service_targets_for_actor(state: &AppState, actor: &str) -> Vec<Value> {
+    let projection = state.projection.lock().expect("projection lock");
+    let actor_realms = projection
+        .members
+        .values()
+        .filter(|member| member.member == actor && member.state == "join")
+        .map(|member| member.realm_id.clone())
+        .collect::<std::collections::BTreeSet<_>>();
+    let mut targets: std::collections::BTreeMap<
+        String,
+        (
+            std::collections::BTreeSet<String>,
+            std::collections::BTreeSet<String>,
+            std::collections::BTreeSet<String>,
+        ),
+    > = std::collections::BTreeMap::new();
+    for realm_id in actor_realms {
+        for member in projection.members_of_realm(&realm_id) {
+            if member.delivery_status.as_deref() != Some("routable") {
+                continue;
+            }
+            let Some(service_did) = member.recipient_service_did.as_deref() else {
+                continue;
+            };
+            if service_did == state.config.service_did {
+                continue;
+            }
+            let entry = targets.entry(service_did.to_owned()).or_default();
+            entry.0.insert(realm_id.clone());
+            if let Some(frontier) = member.membership_event_ref.as_deref() {
+                entry.1.insert(frontier.to_owned());
+            }
+            if let Some(frontier) = member
+                .delivery_binding_frontier
+                .as_deref()
+                .or(member.membership_event_ref.as_deref())
+            {
+                entry.2.insert(frontier.to_owned());
+            }
+        }
+    }
+    targets
+        .into_iter()
+        .map(|(service_did, (realm_ids, membership_frontier, delivery_binding_frontier))| {
+            json!({
+                "service_did": service_did,
+                "realm_ids": realm_ids.into_iter().collect::<Vec<_>>(),
+                "membership_frontier": membership_frontier.into_iter().collect::<Vec<_>>(),
+                "delivery_binding_frontier": delivery_binding_frontier.into_iter().collect::<Vec<_>>(),
+            })
+        })
+        .collect()
 }
 
 #[endpoint(
@@ -337,6 +660,12 @@ pub(super) async fn deactivate_account(
             .to_rfc3339_opts(SecondsFormat::Millis, true),
         sessions_revoked: change.sessions_revoked,
         devices_revoked: change.devices_revoked,
+        applet_delegated_sessions_revoked: change.applet_delegated_sessions_revoked,
+        keypackages_retired: change.keypackages_retired,
+        push_routes_revoked: change.push_routes_revoked,
+        to_device_messages_dropped: change.to_device_messages_dropped,
+        identity_link_cache_invalidated: change.identity_link_cache_invalidated,
+        capability_cache_invalidated: change.capability_cache_invalidated,
     })
 }
 
@@ -348,6 +677,12 @@ struct AccountDeactivateOutcome {
     pub deactivated_at: String,
     pub sessions_revoked: usize,
     pub devices_revoked: usize,
+    pub applet_delegated_sessions_revoked: usize,
+    pub keypackages_retired: usize,
+    pub push_routes_revoked: usize,
+    pub to_device_messages_dropped: usize,
+    pub identity_link_cache_invalidated: usize,
+    pub capability_cache_invalidated: usize,
 }
 
 #[endpoint(
@@ -434,6 +769,12 @@ pub(super) async fn erase_account(
         changed_at,
         sessions_revoked,
         devices_revoked,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
     )
     .await;
 

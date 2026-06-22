@@ -33,33 +33,6 @@ use super::*;
 
 const RESOURCE_SELECTOR_MAX_ITEMS: usize = 256;
 const RESOURCE_SELECTOR_JSON_MAX_BYTES: usize = 64 * 1024;
-const RESOURCE_SELECTOR_FIELD_MAX_BYTES: usize = 1024;
-const RESOURCE_SELECTOR_UNKNOWN_FIELDS_MAX: usize = 256;
-
-const RESOURCE_SELECTOR_KNOWN_FIELDS: &[&str] = &[
-    "kind",
-    "realm_id",
-    "space_id",
-    "circle_id",
-    "object_type",
-    "object_ref",
-    "strand_id",
-    "message_id",
-    "morph_id",
-    "morph_type",
-    "relation_kind",
-    "relation_id",
-    "view_id",
-    "event_id",
-    "actor_id",
-    "schema_ref",
-    "policy_id",
-    "invite_id",
-    "blob_ref",
-    "match_scope",
-    // Legacy projection input accepted by existing soland tests.
-    "id",
-];
 
 /// Map a cell grant body's resource selectors to the engine `Grant`'s single
 /// `resource` String.
@@ -257,44 +230,8 @@ fn validate_grant_resources(body: &Value) -> Result<(), &'static str> {
 fn validate_resource_selector(selector: &Value) -> Result<(), &'static str> {
     match selector {
         Value::String(pattern) => crate::authz::validate_resource_pattern(pattern),
-        Value::Object(map) => {
-            let unknown_fields = map
-                .keys()
-                .filter(|key| !RESOURCE_SELECTOR_KNOWN_FIELDS.contains(&key.as_str()))
-                .count();
-            if unknown_fields > RESOURCE_SELECTOR_UNKNOWN_FIELDS_MAX {
-                return Err("selector_too_complex");
-            }
-            if map.get("actor_id").and_then(Value::as_str) == Some("*") {
-                return Err("capability_grant_resource_wildcard_forbidden");
-            }
-            for value in map.values() {
-                validate_selector_field_value(value)?;
-            }
-            Ok(())
-        }
+        Value::Object(map) => crate::authz::validate_resource_selector_object(map),
         _ => Err("capability_grant_resources_invalid"),
-    }
-}
-
-fn validate_selector_field_value(value: &Value) -> Result<(), &'static str> {
-    match value {
-        Value::String(value) if value.len() > RESOURCE_SELECTOR_FIELD_MAX_BYTES => {
-            Err("selector_too_complex")
-        }
-        Value::Array(values) => {
-            for value in values {
-                validate_selector_field_value(value)?;
-            }
-            Ok(())
-        }
-        Value::Object(map) => {
-            for value in map.values() {
-                validate_selector_field_value(value)?;
-            }
-            Ok(())
-        }
-        _ => Ok(()),
     }
 }
 

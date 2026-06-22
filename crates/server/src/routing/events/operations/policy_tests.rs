@@ -2,7 +2,7 @@ use serde_json::json;
 
 use super::*;
 use crate::db::Db;
-use crate::state::DirectConversationBindingRecord;
+use crate::state::{CanonicalEventRecord, DirectConversationBindingRecord};
 
 fn test_config() -> crate::config::AppConfig {
     crate::config::AppConfig {
@@ -242,6 +242,43 @@ fn insert_approved_agent_action(
         );
 }
 
+async fn insert_agent_interop_session_start(
+    state: &AppState,
+    realm_id: &cokret_sdk::RealmId,
+    seed: &str,
+    actor: &str,
+    session_id: &str,
+) {
+    state
+        .persistence
+        .events()
+        .put(CanonicalEventRecord {
+            event_id: format!("ck:event:01904100-0000-7000-8000-{seed}"),
+            actor_id: actor.to_owned(),
+            actor_seq: 1,
+            realm_id: Some(realm_id.to_string()),
+            kind: kinds::CK_AGENT_INTEROP_SESSION_START.to_owned(),
+            schema_id: "ck.schema.event.v1".to_owned(),
+            canonical_digest: "sha256:test".to_owned(),
+            canonical_bytes: Vec::new(),
+            envelope: json!({
+                "actor_id": actor,
+                "kind": kinds::CK_AGENT_INTEROP_SESSION_START,
+                "realm_id": realm_id.to_string(),
+                "payload": {
+                    "sender": actor,
+                    "session_id": session_id,
+                    "counterparty_agent": "did:web:remote-agent.example",
+                    "protocol": "mcp",
+                    "capability_grant": "ck:grant:01904100-0000-7000-8000-0000000000ff"
+                }
+            }),
+            received_at: chrono::Utc::now(),
+        })
+        .await
+        .expect("store agent interop session start");
+}
+
 #[tokio::test]
 async fn active_direct_conversation_rejects_invite_space_and_third_party_member() {
     let (state, realm_id) = state_with_direct_binding();
@@ -419,6 +456,260 @@ async fn profile_accountable_principal_requires_active_grant() {
             .unwrap_err(),
         crate::error::reasons::ACCOUNTABILITY_GRANT_MISSING
     );
+}
+
+#[tokio::test]
+async fn profile_accountable_principal_rejects_batch_grant_signed_by_other_actor() {
+    let state = test_state();
+    let realm_id =
+        cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-0000000007a4".to_owned())
+            .unwrap();
+    let profile = op(
+        realm_id.clone(),
+        "0000000007a4",
+        "ck.profile.create",
+        json!({
+            "sender": "did:web:agent.example",
+            "principal_id": "did:web:agent.example",
+            "display_name": "Agent",
+            "accountable_principal_ids": ["did:web:alice.example"]
+        }),
+    );
+    let fake_grant = op(
+        realm_id,
+        "0000000007a5",
+        "ck.identity.accountability_grant",
+        json!({
+            "sender": "did:web:mallory.example",
+            "issuer": "did:web:alice.example",
+            "subject": "did:web:agent.example",
+            "grant_status": "active",
+            "not_before": "2026-01-01T00:00:00Z",
+            "expires_at": "2099-01-01T00:00:00Z"
+        }),
+    );
+
+    assert_eq!(
+        validate_operation_policy(&state, &[fake_grant, profile])
+            .await
+            .unwrap_err(),
+        crate::error::reasons::ACCOUNTABILITY_GRANT_MISSING
+    );
+}
+
+#[tokio::test]
+async fn profile_accountable_principal_rejects_stored_grant_signed_by_other_actor() {
+    let state = test_state();
+    let realm_id =
+        cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-0000000007a6".to_owned())
+            .unwrap();
+    state
+        .persistence
+        .events()
+        .put(CanonicalEventRecord {
+            event_id: "ck:event:01904100-0000-7000-8000-0000000007a6".to_owned(),
+            actor_id: "did:web:mallory.example".to_owned(),
+            actor_seq: 1,
+            realm_id: Some(realm_id.to_string()),
+            kind: "ck.identity.accountability_grant".to_owned(),
+            schema_id: "ck.schema.event.v1".to_owned(),
+            canonical_digest: "sha256:test".to_owned(),
+            canonical_bytes: Vec::new(),
+            envelope: json!({
+                "actor_id": "did:web:mallory.example",
+                "kind": "ck.identity.accountability_grant",
+                "realm_id": realm_id.to_string(),
+                "payload": {
+                    "issuer": "did:web:alice.example",
+                    "subject": "did:web:agent.example",
+                    "grant_status": "active",
+                    "not_before": "2026-01-01T00:00:00Z",
+                    "expires_at": "2099-01-01T00:00:00Z"
+                }
+            }),
+            received_at: chrono::Utc::now(),
+        })
+        .await
+        .expect("store fake accountability grant");
+    let profile = op(
+        realm_id,
+        "0000000007a7",
+        "ck.profile.create",
+        json!({
+            "sender": "did:web:agent.example",
+            "principal_id": "did:web:agent.example",
+            "display_name": "Agent",
+            "accountable_principal_ids": ["did:web:alice.example"]
+        }),
+    );
+
+    assert_eq!(
+        validate_operation_policy(&state, &[profile])
+            .await
+            .unwrap_err(),
+        crate::error::reasons::ACCOUNTABILITY_GRANT_MISSING
+    );
+}
+
+#[tokio::test]
+async fn agent_interop_session_status_allows_start_actor_in_batch() {
+    let state = test_state();
+    let realm_id =
+        cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-0000000007b1".to_owned())
+            .unwrap();
+    let session_id = "ck:agent_interop_session:01904100-0000-7000-8000-0000000007b1";
+    let start = op(
+        realm_id.clone(),
+        "0000000007b1",
+        kinds::CK_AGENT_INTEROP_SESSION_START,
+        json!({
+            "sender": "did:web:alice.example",
+            "session_id": session_id,
+            "counterparty_agent": "did:web:remote-agent.example",
+            "protocol": "mcp",
+            "capability_grant": "ck:grant:01904100-0000-7000-8000-0000000007b1"
+        }),
+    );
+    let status = op(
+        realm_id,
+        "0000000007b2",
+        kinds::CK_AGENT_INTEROP_SESSION_STATUS,
+        json!({
+            "sender": "did:web:alice.example",
+            "session_id": session_id,
+            "status": "working"
+        }),
+    );
+
+    validate_operation_policy(&state, &[start, status])
+        .await
+        .expect("start actor can write status for its own session");
+}
+
+#[tokio::test]
+async fn agent_interop_session_status_rejects_other_actor() {
+    let state = test_state();
+    let realm_id =
+        cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-0000000007b3".to_owned())
+            .unwrap();
+    let session_id = "ck:agent_interop_session:01904100-0000-7000-8000-0000000007b3";
+    insert_agent_interop_session_start(
+        &state,
+        &realm_id,
+        "0000000007b3",
+        "did:web:alice.example",
+        session_id,
+    )
+    .await;
+    let status = op(
+        realm_id,
+        "0000000007b4",
+        kinds::CK_AGENT_INTEROP_SESSION_STATUS,
+        json!({
+            "sender": "did:web:bob.example",
+            "session_id": session_id,
+            "status": "working"
+        }),
+    );
+
+    assert_eq!(
+        validate_operation_policy(&state, &[status])
+            .await
+            .unwrap_err(),
+        "interop_session_writer_unauthorized"
+    );
+    assert_eq!(
+        operation_policy_reason_code("interop_session_writer_unauthorized"),
+        (
+            salvo::http::StatusCode::FORBIDDEN,
+            "interop_session_writer_unauthorized"
+        )
+    );
+}
+
+#[tokio::test]
+async fn agent_interop_session_status_rejects_realm_grant_without_session_scope() {
+    let state = test_state();
+    let realm_id =
+        cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-0000000007b5".to_owned())
+            .unwrap();
+    let session_id = "ck:agent_interop_session:01904100-0000-7000-8000-0000000007b5";
+    insert_agent_interop_session_start(
+        &state,
+        &realm_id,
+        "0000000007b5",
+        "did:web:alice.example",
+        session_id,
+    )
+    .await;
+    state.authz.create_grant(
+        realm_id.to_string(),
+        "did:web:alice.example".to_owned(),
+        "did:web:bob.example".to_owned(),
+        realm_id.to_string(),
+        vec!["ck.agent.interop_session.stream_status".to_owned()],
+        Vec::new(),
+    );
+    let status = op(
+        realm_id,
+        "0000000007b6",
+        kinds::CK_AGENT_INTEROP_SESSION_STATUS,
+        json!({
+            "sender": "did:web:bob.example",
+            "session_id": session_id,
+            "status": "working"
+        }),
+    );
+
+    assert_eq!(
+        validate_operation_policy(&state, &[status])
+            .await
+            .unwrap_err(),
+        "interop_session_writer_unauthorized"
+    );
+}
+
+#[tokio::test]
+async fn agent_interop_session_status_allows_session_scoped_delegate() {
+    let state = test_state();
+    let realm_id =
+        cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-0000000007b7".to_owned())
+            .unwrap();
+    let session_id = "ck:agent_interop_session:01904100-0000-7000-8000-0000000007b7";
+    insert_agent_interop_session_start(
+        &state,
+        &realm_id,
+        "0000000007b7",
+        "did:web:alice.example",
+        session_id,
+    )
+    .await;
+    let session = cokret_sdk::AgentInteropSessionId::new(session_id.to_owned())
+        .expect("valid agent interop session id");
+    state.authz.create_grant(
+        realm_id.to_string(),
+        "did:web:alice.example".to_owned(),
+        "did:web:bob.example".to_owned(),
+        realm_id.to_string(),
+        vec!["ck.agent.interop_session.stream_status".to_owned()],
+        vec![crate::authz::Constraint::AllowedSessionIds {
+            allowed_session_ids: std::collections::BTreeSet::from([session]),
+        }],
+    );
+    let status = op(
+        realm_id,
+        "0000000007b8",
+        kinds::CK_AGENT_INTEROP_SESSION_STATUS,
+        json!({
+            "sender": "did:web:bob.example",
+            "session_id": session_id,
+            "status": "working"
+        }),
+    );
+
+    validate_operation_policy(&state, &[status])
+        .await
+        .expect("session-scoped delegate can write status for listed session");
 }
 
 #[tokio::test]

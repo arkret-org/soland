@@ -8,6 +8,7 @@ const CONTACT_CONSENT_ACTION_SCOPES: &[&str] = &[
     "video_call",
     "presence",
 ];
+const CONTACT_REQUEST_PENDING_TTL_DAYS: i64 = 14;
 
 #[endpoint(
     operation_id = "ck.self.contact.command.request",
@@ -372,6 +373,18 @@ pub(crate) async fn contact_respond(
                     "contact request is no longer pending",
                 ));
             }
+            if requested_status == "rejected" {
+                auto_revoke_requester_side_contact_consent(
+                    state,
+                    &contact.requester,
+                    &contact.target,
+                    &[contact.scope.clone()],
+                    now(),
+                    "contact_rejected",
+                    contact.response_event_ref.as_deref(),
+                )
+                .await?;
+            }
             return json_ok(contact_respond_outcome(&contact, Vec::new())?);
         }
         return Err(AppError::new(
@@ -419,6 +432,18 @@ pub(crate) async fn contact_respond(
         .put(&contact)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
+    if body.action == "reject" {
+        auto_revoke_requester_side_contact_consent(
+            state,
+            &contact.requester,
+            &contact.target,
+            &[contact.scope.clone()],
+            now(),
+            "contact_rejected",
+            Some(response_event_ref.as_str()),
+        )
+        .await?;
+    }
 
     // Spec §4.1 — federate the accept / reject fact back to the original
     // requester's home Principal Server when the requester is remote. The
@@ -494,6 +519,22 @@ pub(crate) async fn contact_tombstone(
     for mutation in &revoked_cells {
         persist_consent_cell(state, &mutation.updated, mutation.previous.clone()).await?;
     }
+    if !revoked_cells.is_empty() {
+        let invalidation_scope = if body.revoke_scopes.len() == 1 {
+            normalize_scope(Some(&body.revoke_scopes[0])).unwrap_or_else(|_| "any".to_owned())
+        } else {
+            "any".to_owned()
+        };
+        emit_consent_revoke_invalidation(
+            state,
+            &holder,
+            &peer,
+            &invalidation_scope,
+            now,
+            &revoked_cells,
+        )
+        .await;
+    }
 
     // Flip every holder↔peer contact row this holder controls to
     // `tombstoned`. The holder's own outgoing rows are the authoritative
@@ -501,6 +542,7 @@ pub(crate) async fn contact_tombstone(
     let store = state.persistence.contacts();
     let mut tombstoned_any = false;
     let tombstone_event_ref = synthetic_contact_event_ref();
+    let mut requester_side_revoke_scopes = Vec::new();
     // Peer's home Principal Server learned from a stored holder↔peer row (set
     // on cross-PS contact deliveries). Used as the federation fallback when the
     // request body omits `peer_service_did`.
@@ -525,6 +567,12 @@ pub(crate) async fn contact_tombstone(
                 row_peer_service_did = Some(service_did);
             }
         }
+        if row.requester == peer
+            && row.target == holder
+            && !requester_side_revoke_scopes.contains(&row.scope)
+        {
+            requester_side_revoke_scopes.push(row.scope.clone());
+        }
         if row.status == "tombstoned" {
             continue;
         }
@@ -536,6 +584,18 @@ pub(crate) async fn contact_tombstone(
             .await
             .map_err(|error| AppError::internal(error.to_string()))?;
         tombstoned_any = true;
+    }
+    for scope in requester_side_revoke_scopes {
+        auto_revoke_requester_side_contact_consent(
+            state,
+            &peer,
+            &holder,
+            &[scope],
+            now,
+            "contact_tombstoned",
+            Some(tombstone_event_ref.as_str()),
+        )
+        .await?;
     }
     if !tombstoned_any && revoked_dots.is_empty() && !body.block_peer {
         return Err(AppError::not_found("not found"));
@@ -746,12 +806,44 @@ pub(crate) async fn list_contacts(
         .list_for_actor(&session.actor)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
+    let records =
+        auto_revoke_expired_pending_outgoing_contact_consents(state, &session.actor, records)
+            .await?;
     let contacts = contact_list_rows(state, &session.actor, records);
     json_ok(ContactList {
         contacts,
         has_more: false,
         next_cursor: None,
     })
+}
+
+async fn auto_revoke_expired_pending_outgoing_contact_consents(
+    state: &AppState,
+    actor: &str,
+    records: Vec<ContactRecord>,
+) -> Result<Vec<ContactRecord>, AppError> {
+    let observed_at = now();
+    for record in &records {
+        if record.requester != actor || record.status != "pending" {
+            continue;
+        }
+        if record.created_at + chrono::Duration::days(CONTACT_REQUEST_PENDING_TTL_DAYS)
+            > observed_at
+        {
+            continue;
+        }
+        auto_revoke_requester_side_contact_consent(
+            state,
+            actor,
+            &record.target,
+            &[record.scope.clone()],
+            observed_at,
+            "contact_request_pending_ttl",
+            record.request_event_ref.as_deref(),
+        )
+        .await?;
+    }
+    Ok(records)
 }
 
 fn contact_request_scope(body: &ContactRequestRequestBody) -> Result<String, AppError> {

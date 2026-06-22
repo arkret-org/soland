@@ -619,6 +619,8 @@ impl AppState {
                 history_sharing_policy_digest: None,
                 preview_policy: None,
                 preview_policy_digest: None,
+                asset_privacy_policy: None,
+                asset_privacy_policy_digest: None,
                 encryption_profile: None,
                 plaintext_visible_services: BTreeSet::new(),
                 minimal_metadata_realm: false,
@@ -1544,6 +1546,7 @@ async fn hydrate_realms_from_canonical_events(
             "ck.realm.history_visibility"
                 | "ck.realm.history_sharing_policy"
                 | "ck.realm.preview_policy"
+                | "ck.realm.asset_privacy_policy"
         ) {
             hydrate_realm_policy_event(persistence, &record).await;
         }
@@ -1613,6 +1616,12 @@ async fn hydrate_realm_create_event(
         .and_then(|object| object.get("preview_policy"))
         .cloned();
     let preview_policy_digest = preview_policy.as_ref().and_then(canonical_value_digest);
+    let asset_privacy_policy = payload_object
+        .and_then(|object| object.get("asset_privacy_policy"))
+        .cloned();
+    let asset_privacy_policy_digest = asset_privacy_policy
+        .as_ref()
+        .and_then(canonical_value_digest);
     let plaintext_visible_services = record
         .envelope
         .get("payload")
@@ -1649,6 +1658,8 @@ async fn hydrate_realm_create_event(
         history_sharing_policy_digest,
         preview_policy,
         preview_policy_digest,
+        asset_privacy_policy,
+        asset_privacy_policy_digest,
         encryption_profile,
         plaintext_visible_services,
         minimal_metadata_realm,
@@ -1689,6 +1700,12 @@ async fn hydrate_realm_policy_event(
             if let Some(value) = payload.get("value") {
                 meta.preview_policy = Some(value.clone());
                 meta.preview_policy_digest = canonical_value_digest(value);
+            }
+        }
+        "ck.realm.asset_privacy_policy" => {
+            if let Some(value) = payload.get("value") {
+                meta.asset_privacy_policy = Some(value.clone());
+                meta.asset_privacy_policy_digest = canonical_value_digest(value);
             }
         }
         _ => {}

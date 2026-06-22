@@ -181,7 +181,7 @@ pub mod reasons {
 
     // Agent / pairing / session-grant reason codes.
     pub const PROOF_INVALID: &str = "proof_invalid";
-    pub const ACTOR_KIND_REDUCER_MANAGED: &str = "actor_kind_reducer_managed";
+    pub const ACTOR_KIND_REDUCER_MANAGED: &str = core_error::REASON_ACTOR_KIND_REDUCER_MANAGED;
     pub const EFFECTIVE_SCOPE_REDUCER_MANAGED: &str =
         core_error::REASON_EFFECTIVE_SCOPE_REDUCER_MANAGED;
 

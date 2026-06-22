@@ -49,6 +49,11 @@ impl ProjectionState {
                     .collect::<BTreeMap<_, _>>()
             })
             .unwrap_or_default();
+        if cokret_sdk::validate_calendar_event_metadata_fields(&fields).is_err() {
+            return ProjectionEffect::Rejected {
+                reason: "schema_violation".to_owned(),
+            };
+        }
         let tracks = match strand_tracks_from_object(object) {
             Ok(tracks) => tracks,
             Err(reason) => {
@@ -177,9 +182,21 @@ impl ProjectionState {
         }
         let patch = operation.payload.get("patch").and_then(|v| v.as_object());
         if let Some(patch) = patch {
+            if let Err(reason) = validate_patch_semantic_safety(patch) {
+                return ProjectionEffect::Rejected {
+                    reason: reason.to_owned(),
+                };
+            }
             if patch.contains_key("scope_circle_id") {
                 return ProjectionEffect::Rejected {
                     reason: "scope_rebind_forbidden".to_owned(),
+                };
+            }
+            let mut next_fields = strand.fields.clone();
+            apply_strand_fields_patch(&mut next_fields, patch);
+            if cokret_sdk::validate_calendar_event_metadata_fields(&next_fields).is_err() {
+                return ProjectionEffect::Rejected {
+                    reason: "schema_violation".to_owned(),
                 };
             }
             if let Some(title) = patch_metadata_string_value(patch, "title") {
@@ -188,7 +205,7 @@ impl ProjectionState {
             if let Some(summary) = patch_metadata_string_value(patch, "summary") {
                 strand.summary = summary;
             }
-            apply_strand_fields_patch(&mut strand.fields, patch);
+            strand.fields = next_fields;
         }
         strand.updated_by = operation
             .payload

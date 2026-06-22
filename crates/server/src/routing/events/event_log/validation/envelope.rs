@@ -18,6 +18,54 @@ pub(crate) fn canonical_json_hash(value: &Value) -> String {
     })
 }
 
+fn event_digest_suite(
+    state: &AppState,
+    kind: &str,
+    realm_id: &str,
+    object: &serde_json::Map<String, Value>,
+) -> Result<String, EventValidationError> {
+    let suite = if kind == kinds::CK_REALM_CREATE {
+        realm_create_digest_algorithm(object)
+    } else {
+        state
+            .projection
+            .lock()
+            .expect("projection lock")
+            .realm_digest_algorithm(realm_id)
+    }
+    .unwrap_or_else(|| "sha256".to_owned());
+    cokret_sdk::canonical::digest_suite(&suite)
+        .map(|_| suite.clone())
+        .map_err(|_| unsupported_digest_algorithm_error(&suite))
+}
+
+fn realm_create_digest_algorithm(object: &serde_json::Map<String, Value>) -> Option<String> {
+    object
+        .get("payload")
+        .and_then(|payload| {
+            payload
+                .get("object")
+                .and_then(|object| object.get("digest_algorithm"))
+                .or_else(|| payload.get("digest_algorithm"))
+        })
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned)
+}
+
+fn event_digest_for_suite(bytes: &[u8], suite: &str) -> Result<String, EventValidationError> {
+    cokret_sdk::canonical::canonical_digest_with_suite(bytes, suite)
+        .map_err(|_| unsupported_digest_algorithm_error(suite))
+}
+
+fn unsupported_digest_algorithm_error(suite: &str) -> EventValidationError {
+    let code = cokret_sdk::ErrorCode::UnsupportedDigestAlgorithm;
+    event_validation_error(
+        error_http_status(code),
+        code.as_str(),
+        format!("unsupported digest algorithm: {suite}"),
+    )
+}
+
 pub(crate) fn preflight_mls_projection_reject(
     proj: &crate::reducer::ProjectionState,
     operation: &Operation,
@@ -114,6 +162,25 @@ pub(crate) fn preflight_invite_projection_reject(
     if !matches!(
         kind.as_str(),
         kinds::CK_INVITE_THIRD_PARTY | kinds::CK_INVITE_CLAIM
+    ) {
+        return None;
+    }
+    let mut snapshot = proj.clone();
+    match snapshot.apply(operation, hlc) {
+        crate::reducer::ProjectionEffect::Rejected { reason } => Some(reason),
+        _ => None,
+    }
+}
+
+pub(crate) fn preflight_calendar_projection_reject(
+    proj: &crate::reducer::ProjectionState,
+    operation: &Operation,
+    hlc: &crate::hlc::ServerHlc,
+) -> Option<String> {
+    let kind = kinds::canonical_kind_string(operation);
+    if !matches!(
+        kind.as_str(),
+        kinds::CK_STRAND_CREATE | kinds::CK_STRAND_UPDATE | kinds::CK_RSVP_SET
     ) {
         return None;
     }
@@ -1002,7 +1069,8 @@ pub(crate) async fn validate_event_envelope(
     let prev_refs = event_ref_list(object, "prev_refs", MAX_EVENT_PREV_REFS)?;
     let authorized_refs = event_semantic_refs(object, MAX_EVENT_REFS)?;
     let canonical_bytes = event_canonical_bytes(envelope)?;
-    let canonical_digest = event_digest(&canonical_bytes);
+    let digest_suite = event_digest_suite(state, &kind, &realm_id, object)?;
+    let canonical_digest = event_digest_for_suite(&canonical_bytes, &digest_suite)?;
     validate_strand_watch_audit_pair(
         state,
         &kind,
@@ -1513,12 +1581,18 @@ pub(crate) async fn validate_event_proofs(
                 )
             })?;
         // Production: the proof's event_digest MUST match the canonical
-        // envelope digest. Dev-only: also accept the payload-only sha256 form
-        // so test fixtures keep round-tripping. Production never falls back.
+        // envelope digest. Dev-only: also accept the payload-only form under
+        // the same digest suite so test fixtures keep round-tripping.
+        // Production never falls back.
         let payload_only_hash_accept = if is_dev_proof {
+            let expected_suite = expected_payload_digest
+                .split_once(':')
+                .map(|(suite, _)| suite)
+                .unwrap_or("sha256");
             object.get("payload").map(|payload| {
                 let bytes = canonical::canonical_json_bytes(payload).unwrap_or_default();
-                cokret_sdk::canonical::sha256_digest(&bytes)
+                cokret_sdk::canonical::digest_with_suite(expected_suite, &bytes)
+                    .unwrap_or_else(|_| cokret_sdk::canonical::sha256_digest(&bytes))
             })
         } else {
             None

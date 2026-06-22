@@ -437,7 +437,14 @@ async fn post_signed_applet_message_transaction(
     text: &str,
     idempotency_key: &str,
 ) -> Value {
-    let event = applet_message_event(package, applet_id, actor_id, realm_id, authorization_ref, text);
+    let event = applet_message_event(
+        package,
+        applet_id,
+        actor_id,
+        realm_id,
+        authorization_ref,
+        text,
+    );
     let body = json!({
         "source_service_did": package.service_did.to_string(),
         "events": [event],
@@ -604,11 +611,8 @@ async fn applet_bridge_register_ghost_route_revoke_smoke() {
     .await;
     assert_eq!(install["effective_status"], json!("installed"));
     let bot_actor_id = install["bot_actor_id"].as_str().unwrap().to_owned();
-    let message_grant_ref = capability_grant_ref_for_action(
-        &install,
-        &package.requested_scopes,
-        "ck.message.create",
-    );
+    let message_grant_ref =
+        capability_grant_ref_for_action(&install, &package.requested_scopes, "ck.message.create");
 
     let ghost_actor_id = format!(
         "did:web:{}.applet.example:ghost:ext-user-x",
@@ -647,7 +651,11 @@ async fn applet_bridge_register_ghost_route_revoke_smoke() {
         &format!("tx-{suffix}"),
     )
     .await;
-    assert_eq!(transaction["ok"], json!(true), "transaction response: {transaction}");
+    assert_eq!(
+        transaction["ok"],
+        json!(true),
+        "transaction response: {transaction}"
+    );
     let messages = state
         .persistence
         .messages()
@@ -734,8 +742,7 @@ async fn tsp_local_stub_routes_are_not_mounted() {
     let token = dev_token(state.clone()).await;
     let app = service(state);
 
-    let rejected: Value =
-        TestClient::post("http://server/_soland/self/extensions/tsp/transports")
+    let rejected: Value = TestClient::post("http://server/_soland/self/extensions/tsp/transports")
         .add_header("Authorization", format!("Bearer {token}"), true)
         .json(&json!({
             "transport_id": "tspt:alice-smoke",

@@ -50,6 +50,10 @@ pub async fn ensure_projected_realm(state: &AppState, origin: &str, operation: &
                 .and_then(canonical_value_digest);
             let preview_policy = operation_realm_preview_policy(operation);
             let preview_policy_digest = preview_policy.as_ref().and_then(canonical_value_digest);
+            let asset_privacy_policy = operation_realm_asset_privacy_policy(operation);
+            let asset_privacy_policy_digest = asset_privacy_policy
+                .as_ref()
+                .and_then(canonical_value_digest);
             let record = RealmMetaRecord {
                 owner: origin.to_owned(),
                 deleted: false,
@@ -71,6 +75,8 @@ pub async fn ensure_projected_realm(state: &AppState, origin: &str, operation: &
                 history_sharing_policy_digest,
                 preview_policy,
                 preview_policy_digest,
+                asset_privacy_policy,
+                asset_privacy_policy_digest,
                 encryption_profile: operation_realm_encryption_profile(operation)
                     .map(ToOwned::to_owned),
                 plaintext_visible_services: operation
@@ -120,6 +126,11 @@ pub async fn ensure_projected_realm(state: &AppState, origin: &str, operation: &
             if let Some(policy) = operation_realm_preview_policy(operation) {
                 record.preview_policy_digest = canonical_value_digest(&policy);
                 record.preview_policy = Some(policy);
+                changed = true;
+            }
+            if let Some(policy) = operation_realm_asset_privacy_policy(operation) {
+                record.asset_privacy_policy_digest = canonical_value_digest(&policy);
+                record.asset_privacy_policy = Some(policy);
                 changed = true;
             }
             if record.encryption_profile.is_none()

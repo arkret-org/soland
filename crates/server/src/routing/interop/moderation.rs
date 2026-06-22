@@ -1294,6 +1294,7 @@ mod report_safety_tests {
                 TARGET.replacen("ck:message:", "ck:event:", 1),
                 crate::reducer::MessageState {
                     event_id: TARGET.replacen("ck:message:", "ck:event:", 1),
+                    message_id: TARGET.to_owned(),
                     realm_id: REALM.to_owned(),
                     sender: REPORTER.to_owned(),
                     thread_id: REALM.to_owned(),

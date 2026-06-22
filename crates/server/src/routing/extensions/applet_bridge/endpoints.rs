@@ -32,10 +32,10 @@ use super::record::{
 use super::signature::verify_inbound_transaction_signature;
 use super::transaction::process_verified_transaction;
 use super::types::{
-    AppletGhostIngressOutcome, AppletGhostIngressRequestBody, AppletInstallPaths, AppletRecord,
+    AppletGhostIngressOutcome, AppletGhostIngressRequestBody, AppletInstallPaths,
     AppletManifestRegisterRequestBody, AppletPortalMessageOutcome, AppletPortalMessageRequestBody,
-    AppletProtocolDescribeOutcome, AppletRevokeRecordOutcome, AppletView, GhostActorRecord,
-    SOLAND_EDGE_APPLET_ID,
+    AppletProtocolDescribeOutcome, AppletRecord, AppletRevokeRecordOutcome, AppletView,
+    GhostActorRecord, SOLAND_EDGE_APPLET_ID,
 };
 use crate::error::AppError;
 use crate::result::{JsonResult, json_ok};

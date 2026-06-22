@@ -987,6 +987,7 @@ pub struct RsvpProjection {
     pub occurrence: Option<String>,
     pub comment: Option<Value>,
     pub actor_id: String,
+    pub updated_hlc: String,
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
 
@@ -1065,6 +1066,20 @@ pub struct SolandMembershipState {
     /// mirror updated on every membership transition.
     pub state: String,
     pub role: String,
+    /// Effective member delivery status from the accepted
+    /// `ck.member.state{membership=join}` payload. Only `routable` joins
+    /// participate in Realm-scoped service fanout.
+    pub delivery_status: Option<String>,
+    /// Principal Server service DID materialized from the member
+    /// `delivery_binding`. This is the single routing source for federated
+    /// Realm event delivery; senders must not re-resolve DID Documents.
+    pub recipient_service_did: Option<String>,
+    /// Event frontier that established the current member state.
+    pub membership_event_ref: Option<String>,
+    /// Event frontier used for the current delivery binding. Falls back to
+    /// the membership event when the binding does not carry a narrower
+    /// frontier.
+    pub delivery_binding_frontier: Option<String>,
     /// First effective invite frontier retained after a later join so
     /// `history_visibility=invited` can start at the invite boundary while
     /// `history_visibility=joined` starts at the join boundary.

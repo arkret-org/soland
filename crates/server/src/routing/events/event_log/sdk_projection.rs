@@ -164,6 +164,11 @@ pub(crate) fn projection_operation_from_event(
     payload_object
         .entry("sender".to_owned())
         .or_insert_with(|| Value::String(parsed.actor_id.clone()));
+    if let Some(hlc) = envelope.get("hlc").and_then(Value::as_str) {
+        payload_object
+            .entry("hlc".to_owned())
+            .or_insert_with(|| Value::String(hlc.to_owned()));
+    }
     if parsed.kind == kinds::CK_RELATION_CREATE {
         normalize_relation_create_payload(payload_object, parsed);
     }

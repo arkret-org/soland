@@ -65,9 +65,10 @@ pub(crate) use grant::{SessionGrantValidationInput, validate_session_grant_bindi
 pub(super) use login::account_existing_session_error;
 pub(self) use login::dev_login;
 pub(self) use logout::session_revoke;
+pub(crate) use revocation::purge_device_delivery_state;
 pub use revocation::{
-    is_device_revoked, revoke_device_record, revoke_devices_for_actor, revoke_sessions_for_actor,
-    session_credential_hash, token_for,
+    active_delegated_sessions_for_actor, is_device_revoked, revoke_device_record,
+    revoke_devices_for_actor, revoke_sessions_for_actor, session_credential_hash, token_for,
 };
 pub use sessions::{auth_or_render, authenticated_session};
 

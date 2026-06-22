@@ -178,7 +178,7 @@ fn sdk_encrypted_payload_value(value: &Value) -> bool {
         && envelope
             .get("payload_digest")
             .and_then(Value::as_str)
-            .is_some_and(is_valid_sha256_digest)
+            .is_some_and(is_valid_hash_digest)
 }
 
 fn patch_operation_value_is_plaintext_content(value: &Value) -> bool {
@@ -427,6 +427,88 @@ fn validate_patch_map_paths(
         validate_patch_path(path)?;
     }
     Ok(())
+}
+
+pub(crate) fn validate_operation_patch_semantics(
+    operation: &Operation,
+) -> Result<(), &'static str> {
+    let Some(patch) = operation.payload.get("patch").and_then(Value::as_object) else {
+        return Ok(());
+    };
+    validate_patch_semantic_safety(patch)
+}
+
+pub(crate) fn validate_patch_semantic_safety(
+    patch: &serde_json::Map<String, Value>,
+) -> Result<(), &'static str> {
+    for (path, value) in patch {
+        if patch_path_targets_reducer_managed(path) {
+            return Err(crate::error::reasons::PATCH_PATH_REDUCER_MANAGED);
+        }
+        if patch_op_removes_value(value) && patch_path_targets_redactable_unset(path) {
+            return Err(crate::error::reasons::PATCH_UNSET_REDACTABLE_FIELD);
+        }
+    }
+    Ok(())
+}
+
+fn patch_path_targets_reducer_managed(path: &str) -> bool {
+    const FIELDS: &[&str] = &[
+        "id",
+        "schema",
+        "realm_id",
+        "created_by",
+        "created_at",
+        "updated_by",
+        "updated_at",
+        "state",
+        "state_changed_at",
+        "stage_changed_at",
+        "deleted_at",
+        "effective_scope",
+        "actor_kind",
+    ];
+    let root = patch_segment_head(path.split('.').next().unwrap_or_default());
+    if root == Some("object") {
+        let second = path.split('.').nth(1).unwrap_or_default();
+        return patch_segment_head(second).is_some_and(|field| FIELDS.contains(&field));
+    }
+    root.is_some_and(|field| FIELDS.contains(&field))
+}
+
+fn patch_path_targets_redactable_unset(path: &str) -> bool {
+    const PATHS: &[&str] = &[
+        "content",
+        "encrypted_content",
+        "encrypted_metadata",
+        "encrypted_payload",
+        "body",
+        "attachments",
+        "summary",
+        "metadata.summary",
+        "metadata.fields.summary",
+    ];
+    if path == "metadata" {
+        return true;
+    }
+    PATHS
+        .iter()
+        .any(|redactable| path == *redactable || path.starts_with(&format!("{redactable}.")))
+}
+
+fn patch_segment_head(segment: &str) -> Option<&str> {
+    if segment.starts_with('`') {
+        return None;
+    }
+    let head = segment.split_once('[').map_or(segment, |(head, _)| head);
+    (!head.is_empty()).then_some(head)
+}
+
+fn patch_op_removes_value(value: &Value) -> bool {
+    value
+        .as_object()
+        .and_then(|object| object.get("$op").and_then(Value::as_str))
+        .is_some_and(|op| matches!(op, "unset" | "remove"))
 }
 
 /// Validate a single patch path against the §4.2.1 ABNF. Returns the canonical

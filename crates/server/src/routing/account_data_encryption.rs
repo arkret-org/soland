@@ -196,14 +196,23 @@ pub(crate) fn validate_encrypted_account_data_value(
     {
         return Ok(());
     }
+    let is_presence_visibility = data_type == ACCOUNT_DATA_TYPE_PRESENCE_VISIBILITY;
     if is_account_data_set_operation_payload(object) {
         reject_operation_plaintext_fields(object)?;
         for field in ["body", "encrypted_payload", "encrypted_content"] {
             if let Some(carrier) = object.get(field) {
+                if is_presence_visibility
+                    && validate_presence_visibility_projection(carrier).is_ok()
+                {
+                    return Ok(());
+                }
                 return validate_encrypted_carrier(carrier);
             }
         }
         return Err(AccountDataEncryptionError::MissingEncryptedCarrier);
+    }
+    if is_presence_visibility && validate_presence_visibility_projection(value).is_ok() {
+        return Ok(());
     }
     reject_content_plaintext_fields(object)?;
     if validate_encrypted_carrier(value).is_ok() {
@@ -218,6 +227,25 @@ pub(crate) fn validate_encrypted_account_data_value(
         return Err(AccountDataEncryptionError::InvalidEnvelopeMetadataOrMarker);
     }
     Err(AccountDataEncryptionError::MissingEncryptedCarrier)
+}
+
+fn validate_presence_visibility_projection(
+    value: &Value,
+) -> Result<(), AccountDataEncryptionError> {
+    let object = value
+        .as_object()
+        .ok_or(AccountDataEncryptionError::ValueMustBeObject)?;
+    if object.len() != 1 {
+        return Err(AccountDataEncryptionError::MissingEncryptedCarrier);
+    }
+    match object
+        .get("presence_visibility")
+        .and_then(Value::as_str)
+        .map(str::trim)
+    {
+        Some("public" | "contacts_only" | "nobody") => Ok(()),
+        _ => Err(AccountDataEncryptionError::InvalidEnvelopeMetadataOrMarker),
+    }
 }
 
 fn validate_agent_private_key_tail(rest: &str) -> Result<(), AccountDataEncryptionError> {
@@ -471,6 +499,36 @@ mod tests {
         let err = validate_encrypted_account_data_value(
             ACCOUNT_DATA_TYPE_INVITE_QUARANTINE,
             &json!({"invite_event_id": "ck:event:0196419b-0000-7000-8000-000000000000"}),
+        )
+        .unwrap_err();
+        assert_eq!(err, AccountDataEncryptionError::MissingEncryptedCarrier);
+    }
+
+    #[test]
+    fn presence_visibility_allows_minimal_plaintext_projection() {
+        validate_encrypted_account_data_value(
+            ACCOUNT_DATA_TYPE_PRESENCE_VISIBILITY,
+            &json!({"presence_visibility": "contacts_only"}),
+        )
+        .unwrap();
+
+        validate_encrypted_account_data_value(
+            ACCOUNT_DATA_TYPE_PRESENCE_VISIBILITY,
+            &json!({
+                "key": ACCOUNT_DATA_TYPE_PRESENCE_VISIBILITY,
+                "owner": "did:web:alice.example",
+                "body": {"presence_visibility": "nobody"},
+                "updated_at": "2026-06-18T00:00:00Z"
+            }),
+        )
+        .unwrap();
+
+        let err = validate_encrypted_account_data_value(
+            ACCOUNT_DATA_TYPE_PRESENCE_VISIBILITY,
+            &json!({
+                "presence_visibility": "contacts_only",
+                "status_message": "busy"
+            }),
         )
         .unwrap_err();
         assert_eq!(err, AccountDataEncryptionError::MissingEncryptedCarrier);

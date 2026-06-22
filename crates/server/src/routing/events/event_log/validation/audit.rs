@@ -51,7 +51,7 @@ fn encrypted_message_ciphertext_digest(envelope: &Value) -> Option<String> {
     if let Some(digest) = envelope
         .pointer("/payload/encrypted_content/payload_digest")
         .and_then(Value::as_str)
-        && is_valid_sha256_digest(digest)
+        && is_valid_hash_digest(digest)
     {
         return Some(digest.to_owned());
     }
@@ -194,7 +194,7 @@ pub(super) fn validate_audit_accessed_payload(
             for field in ["paired_event_id", "paired_event_digest"] {
                 let value = required_payload_string(payload, field)?;
                 if (field == "paired_event_id" && !is_valid_event_id(&value))
-                    || (field == "paired_event_digest" && !is_valid_sha256_digest(&value))
+                    || (field == "paired_event_digest" && !is_valid_hash_digest(&value))
                 {
                     return Err(event_validation_error(
                         StatusCode::BAD_REQUEST,
@@ -205,12 +205,12 @@ pub(super) fn validate_audit_accessed_payload(
             }
             for field in ["cell_head_before", "cell_head_after"] {
                 if !payload.get(field).is_some_and(|value| {
-                    value.is_null() || value.as_str().is_some_and(is_valid_sha256_digest)
+                    value.is_null() || value.as_str().is_some_and(is_valid_hash_digest)
                 }) {
                     return Err(event_validation_error(
                         StatusCode::BAD_REQUEST,
                         "schema_violation",
-                        "ck.audit.accessed cell heads must be null or sha256 digest",
+                        "ck.audit.accessed cell heads must be null or hash digest",
                     ));
                 }
             }

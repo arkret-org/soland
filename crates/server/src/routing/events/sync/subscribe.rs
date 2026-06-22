@@ -4,7 +4,8 @@
 
 use super::*;
 use crate::routing::spaces::space::{
-    PresenceVisibilityPolicy, presence_visibility_for_actor, presence_visible_to_session,
+    PresenceVisibilityPolicy, presence_activity_detail_visible_to_session,
+    presence_visibility_for_actor, presence_visible_to_session,
 };
 
 #[endpoint]
@@ -481,20 +482,25 @@ pub(crate) async fn presence_events_for_actors(
             continue;
         }
         if let Ok(Some(record)) = state.persistence.presence().get(&actor).await {
-            events.push(presence_sync_event_json(record));
+            let reveal_activity_detail =
+                presence_activity_detail_visible_to_session(state, &actor, session).await;
+            events.push(presence_sync_event_json(record, reveal_activity_detail));
         }
     }
     events
 }
 
-pub(crate) fn presence_sync_event_json(record: PresenceRecord) -> Value {
+pub(crate) fn presence_sync_event_json(
+    record: PresenceRecord,
+    reveal_activity_detail: bool,
+) -> Value {
     let is_stale_online = record.status == "online"
         && now().signed_duration_since(record.updated_at)
             > ChronoDuration::seconds(PRESENCE_ONLINE_TTL_SECONDS);
     let status = if is_stale_online {
         "offline".to_owned()
     } else {
-        record.status.clone()
+        presence_status_for_observer(&record.status, reveal_activity_detail)
     };
     let mut event = json!({
         "user_id": record.actor,
@@ -510,6 +516,13 @@ pub(crate) fn presence_sync_event_json(record: PresenceRecord) -> Value {
         );
     }
     event
+}
+
+fn presence_status_for_observer(status: &str, reveal_activity_detail: bool) -> String {
+    if !reveal_activity_detail && matches!(status, "dnd" | "idle") {
+        return "offline".to_owned();
+    }
+    status.to_owned()
 }
 
 fn presence_last_active_bucket_interval(updated_at: DateTime<Utc>) -> String {

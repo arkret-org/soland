@@ -567,7 +567,7 @@ pub(crate) const ACCOUNT_DATA_SET_REQUIREMENTS: &[PayloadRequirement] = &[
 pub(crate) const RSVP_SET_REQUIREMENTS: &[PayloadRequirement] = &[
     PayloadRequirement::Required("event_ref", "ck.rsvp.set requires event_ref"),
     PayloadRequirement::Required("status", "ck.rsvp.set requires status"),
-    PayloadRequirement::Required("occurrence", "ck.rsvp.set requires occurrence"),
+    PayloadRequirement::AnyKey(&["occurrence"], "ck.rsvp.set requires occurrence"),
 ];
 pub(crate) const PIN_ADD_REQUIREMENTS: &[PayloadRequirement] = &[
     PayloadRequirement::Required("pin_scope", "ck.pin.add requires pin_scope"),

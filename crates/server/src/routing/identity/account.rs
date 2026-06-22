@@ -40,9 +40,13 @@ use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use super::auth::{revoke_devices_for_actor, revoke_sessions_for_actor};
+use super::auth::{
+    active_delegated_sessions_for_actor, purge_device_delivery_state, revoke_devices_for_actor,
+    revoke_sessions_for_actor,
+};
 use super::consent::{
-    active_invite_consent_grant_ref, consent_cell_snapshot, grant_contact_managed_consent,
+    active_invite_consent_grant_ref, auto_revoke_requester_side_contact_consent,
+    consent_cell_snapshot, emit_consent_revoke_invalidation, grant_contact_managed_consent,
     has_active_consent_for_scope, normalize_scope, persist_consent_cell, record_pending_request,
     revoke_contact_managed_consent,
 };

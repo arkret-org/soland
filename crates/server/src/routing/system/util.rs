@@ -249,6 +249,11 @@ pub fn is_valid_sha256_digest(value: &str) -> bool {
     value.starts_with("sha256:") && cokret_sdk::Hash::new(value.to_owned()).is_ok()
 }
 
+/// Active `<digest-suite>:<64 lowercase hex>` hash shape.
+pub fn is_valid_hash_digest(value: &str) -> bool {
+    cokret_sdk::Hash::new(value.to_owned()).is_ok()
+}
+
 /// 64 lowercase hex characters.
 pub fn is_valid_sha256_hex(value: &str) -> bool {
     value.len() == 64

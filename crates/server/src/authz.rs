@@ -30,6 +30,7 @@ pub use cokret_sdk::authz::delegation::{
     revoke_with_cascade,
 };
 use serde::Serialize;
+use serde_json::{Map, Value};
 
 use crate::ids;
 
@@ -38,6 +39,30 @@ const SELECTOR_TOKEN_MAX: usize = 256;
 const SELECTOR_DISJUNCTION_MAX: usize = 16;
 const SELECTOR_CONJUNCTION_MAX: usize = 64;
 const SELECTOR_TERM_MAX_BYTES: usize = 1024;
+const SELECTOR_JSON_MAX_BYTES: usize = 64 * 1024;
+const SELECTOR_UNKNOWN_FIELDS_MAX: usize = 256;
+const RESOURCE_SELECTOR_KNOWN_FIELDS: &[&str] = &[
+    "kind",
+    "realm_id",
+    "space_id",
+    "circle_id",
+    "object_type",
+    "object_ref",
+    "strand_id",
+    "message_id",
+    "morph_id",
+    "morph_type",
+    "relation_kind",
+    "relation_id",
+    "view_id",
+    "event_id",
+    "actor_id",
+    "schema_ref",
+    "policy_id",
+    "invite_id",
+    "blob_ref",
+    "match_scope",
+];
 
 /// Result of an authorization check.
 #[derive(Clone, Debug, Serialize)]
@@ -255,6 +280,18 @@ impl SolandAuthzEngine {
         if let Some(grant) = self.grants.lock().expect("grants lock").get_mut(grant_id) {
             grant.revoked = true;
         }
+    }
+
+    pub fn mark_projected_grants_revoked_for_subject(&self, subject: &str) -> usize {
+        let mut count = 0usize;
+        let mut grants = self.grants.lock().expect("grants lock");
+        for grant in grants.values_mut() {
+            if grant.subject == subject && !grant.revoked {
+                grant.revoked = true;
+                count += 1;
+            }
+        }
+        count
     }
 
     /// Look up a grant by id. Returns `None` if unknown.
@@ -571,9 +608,7 @@ pub(crate) fn validate_resource_pattern(pattern: &str) -> Result<(), &'static st
             if term.len() > SELECTOR_TERM_MAX_BYTES {
                 return Err("selector_too_complex");
             }
-            if term == "*" || term == "actor:*" {
-                return Err("capability_grant_resource_wildcard_forbidden");
-            }
+            validate_resource_selector_term(term)?;
             term_count += 1;
         }
     }
@@ -586,6 +621,132 @@ pub(crate) fn validate_resource_pattern(pattern: &str) -> Result<(), &'static st
     }
 
     Ok(())
+}
+
+pub(crate) fn validate_resource_selector_object(
+    map: &Map<String, Value>,
+) -> Result<(), &'static str> {
+    let json_bytes = serde_json::to_vec(map).map_err(|_| "capability_grant_resources_invalid")?;
+    if json_bytes.len() > SELECTOR_JSON_MAX_BYTES {
+        return Err("selector_too_complex");
+    }
+    let unknown_fields = map
+        .keys()
+        .filter(|key| !RESOURCE_SELECTOR_KNOWN_FIELDS.contains(&key.as_str()))
+        .count();
+    if unknown_fields > SELECTOR_UNKNOWN_FIELDS_MAX {
+        return Err("selector_too_complex");
+    }
+    if map.get("actor_id").and_then(Value::as_str) == Some("*") {
+        return Err("selector_actor_wildcard_forbidden");
+    }
+    if map.get("kind").and_then(Value::as_str) == Some("actor")
+        && map.get("actor_id").and_then(Value::as_str).is_none()
+    {
+        return Err("selector_actor_wildcard_forbidden");
+    }
+    if selector_uses_governance_wildcard(map) {
+        return Err("selector_governance_wildcard_forbidden");
+    }
+    for value in map.values() {
+        validate_selector_field_value(value)?;
+    }
+    Ok(())
+}
+
+fn validate_selector_field_value(value: &Value) -> Result<(), &'static str> {
+    match value {
+        Value::String(value) if value.len() > SELECTOR_TERM_MAX_BYTES => {
+            Err("selector_too_complex")
+        }
+        Value::Array(values) => {
+            for value in values {
+                validate_selector_field_value(value)?;
+            }
+            Ok(())
+        }
+        Value::Object(object) => {
+            for value in object.values() {
+                validate_selector_field_value(value)?;
+            }
+            Ok(())
+        }
+        _ => Ok(()),
+    }
+}
+
+fn validate_resource_selector_term(term: &str) -> Result<(), &'static str> {
+    if term == "*" {
+        return Err("capability_grant_resource_wildcard_forbidden");
+    }
+    if term == "actor:*" {
+        return Err("selector_actor_wildcard_forbidden");
+    }
+    if selector_term_uses_governance_wildcard(term) {
+        return Err("selector_governance_wildcard_forbidden");
+    }
+    Ok(())
+}
+
+fn selector_term_uses_governance_wildcard(term: &str) -> bool {
+    if term == "policy:*" || (term.starts_with("policy:") && term.ends_with(":*")) {
+        return true;
+    }
+    if term == "schema:*" || (term.starts_with("schema:") && term.ends_with(":*")) {
+        return true;
+    }
+    let Some(tail) = object_selector_tail(term) else {
+        return false;
+    };
+    matches!(tail.as_str(), "policy" | "schema")
+}
+
+fn object_selector_tail(term: &str) -> Option<String> {
+    let remainder = term.strip_prefix("object:")?;
+    if remainder == "*" {
+        return None;
+    }
+    if let Some(tail) = remainder.strip_prefix("*:") {
+        return (!tail.is_empty()).then(|| tail.to_owned());
+    }
+    let parts = remainder.split(':').collect::<Vec<_>>();
+    if parts.len() <= 3 || parts[0] != "ck" || parts[1] != "realm" || parts[2].is_empty() {
+        return None;
+    }
+    let tail = parts[3..].join(":");
+    (!tail.is_empty()).then_some(tail)
+}
+
+fn selector_uses_governance_wildcard(map: &Map<String, Value>) -> bool {
+    match map.get("kind").and_then(Value::as_str) {
+        Some("policy") => {
+            selector_field_missing_or_wildcard(map, "policy_id")
+                || selector_field_missing_or_wildcard(map, "realm_id")
+        }
+        Some("schema") => {
+            selector_field_missing_or_wildcard(map, "schema_ref")
+                || selector_field_missing_or_wildcard(map, "realm_id")
+        }
+        Some("object") => {
+            let object_type = map.get("object_type").and_then(Value::as_str);
+            let object_ref = map.get("object_ref").and_then(Value::as_str);
+            let governance_type = matches!(object_type, Some("policy" | "schema"));
+            let governance_ref = object_ref.is_some_and(|value| {
+                value.starts_with("ck:policy:") || value.starts_with("ck:schema:")
+            });
+            (governance_type
+                && (selector_field_missing_or_wildcard(map, "object_ref")
+                    || selector_field_missing_or_wildcard(map, "realm_id")))
+                || (governance_ref && selector_field_missing_or_wildcard(map, "realm_id"))
+        }
+        _ => false,
+    }
+}
+
+fn selector_field_missing_or_wildcard(map: &Map<String, Value>, field: &str) -> bool {
+    map.get(field)
+        .and_then(Value::as_str)
+        .is_none_or(|value| value == "*")
 }
 
 /// Pick the resulting decision over a set of satisfied grants.
@@ -705,6 +866,29 @@ fn evaluate_constraint(
                 ))
             }
         }
+        Constraint::AllowedSessionIds {
+            allowed_session_ids,
+        } => {
+            if allowed_session_ids.is_empty() {
+                return Some(
+                    "allowed_session_ids constraint requires a non-empty allow list".to_owned(),
+                );
+            }
+            if !resource.starts_with("ck:agent_interop_session:") {
+                return None;
+            }
+            if allowed_session_ids
+                .iter()
+                .any(|session| session.as_ref() == resource)
+            {
+                None
+            } else {
+                let allowed: Vec<&str> = allowed_session_ids.iter().map(AsRef::as_ref).collect();
+                Some(format!(
+                    "allowed_session_ids constraint not satisfied: {resource:?} not in {allowed:?}"
+                ))
+            }
+        }
         Constraint::AllowedObjectFacets { facets: allowed } => {
             // Resource must carry at least one of the listed facets. When the
             // resource itself reports no facets, fail-closed — the grant is
@@ -800,6 +984,33 @@ impl MergedAuthzDecision {
 ///
 /// `realm_id` is the canonical Realm identifier the policy server
 /// keys decisions on (NOT the SDK `RealmId` newtype — pass the wire string).
+pub(crate) fn revocation_freshness_fail_closed(
+    action: &str,
+    freshness_state: cokret_sdk::FreshnessState,
+) -> bool {
+    use cokret_sdk::FreshnessState;
+    use cokret_sdk::schema::CapabilityRiskTier;
+
+    match freshness_state {
+        FreshnessState::Fresh => false,
+        FreshnessState::Stale => !matches!(
+            capability_action_risk_tier(action),
+            Some(CapabilityRiskTier::Low | CapabilityRiskTier::Medium)
+        ),
+        FreshnessState::Unknown => !matches!(
+            capability_action_risk_tier(action),
+            Some(CapabilityRiskTier::Low)
+        ),
+    }
+}
+
+fn capability_action_risk_tier(action: &str) -> Option<cokret_sdk::schema::CapabilityRiskTier> {
+    cokret_sdk::schema::embedded_capability_action(action)
+        .ok()
+        .flatten()
+        .map(|descriptor| descriptor.risk_tier)
+}
+
 #[allow(clippy::too_many_arguments)]
 pub async fn check_with_policy_server(
     engine: &SolandAuthzEngine,
@@ -861,6 +1072,9 @@ pub async fn check_with_policy_server(
     use cokret_sdk::models::AuthzDecision;
     let allow = matches!(remote.decision, AuthzDecision::Allow);
     if !allow {
+        return MergedAuthzDecision::RemoteDeny { local, remote };
+    }
+    if revocation_freshness_fail_closed(action, remote.freshness_state) {
         return MergedAuthzDecision::RemoteDeny { local, remote };
     }
 

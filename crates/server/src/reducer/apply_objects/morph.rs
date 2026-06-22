@@ -124,6 +124,11 @@ impl ProjectionState {
         }
         let patch = operation.payload.get("patch").and_then(|v| v.as_object());
         if let Some(patch) = patch {
+            if let Err(reason) = validate_patch_semantic_safety(patch) {
+                return ProjectionEffect::Rejected {
+                    reason: reason.to_owned(),
+                };
+            }
             if let Some(title) = patch_metadata_string_value(patch, "title") {
                 morph.title = title;
             }

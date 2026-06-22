@@ -424,6 +424,11 @@ impl ProjectionState {
                 reason: "rsvp_status_missing".to_owned(),
             };
         };
+        if !matches!(status, "accepted" | "declined" | "tentative") {
+            return ProjectionEffect::Rejected {
+                reason: "rsvp_status_invalid".to_owned(),
+            };
+        }
         if let Err(reason) = validate_encrypted_projection_field(
             operation,
             "comment",
@@ -433,17 +438,47 @@ impl ProjectionState {
                 reason: reason.to_owned(),
             };
         }
-        let occurrence = operation
-            .payload
-            .get("occurrence")
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned);
+        let Some(strand) = self.strands.get(event_ref) else {
+            return self.queue_pending_replay(
+                event_ref.to_owned(),
+                operation,
+                "rsvp_event_unknown",
+            );
+        };
+        if strand.state != ObjectLifecycleState::Active {
+            return ProjectionEffect::Rejected {
+                reason: "rsvp_event_not_active".to_owned(),
+            };
+        }
+        let occurrence_value = match operation.payload.get("occurrence") {
+            Some(Value::Null) | None => None,
+            Some(Value::String(value)) => Some(value.as_str()),
+            Some(_) => {
+                return ProjectionEffect::Rejected {
+                    reason: "rsvp_occurrence_invalid".to_owned(),
+                };
+            }
+        };
+        let occurrence_key = match cokret_sdk::canonical_calendar_rsvp_occurrence_key(
+            &strand.fields,
+            occurrence_value,
+        ) {
+            Ok(value) => value,
+            Err(_) => {
+                return ProjectionEffect::Rejected {
+                    reason: "rsvp_occurrence_invalid".to_owned(),
+                };
+            }
+        };
+        let occurrence = (occurrence_key != "series").then(|| occurrence_key.clone());
         let actor_id = operation_actor_id(operation);
-        let key = (
-            event_ref.to_owned(),
-            occurrence_key(operation.payload.get("occurrence")),
-            actor_id.clone(),
-        );
+        let key = (event_ref.to_owned(), occurrence_key, actor_id.clone());
+        let updated_hlc = rsvp_lww_hlc(operation);
+        if let Some(existing) = self.rsvps.get(&key) {
+            if existing.status == status || existing.updated_hlc >= updated_hlc {
+                return ProjectionEffect::Ignored;
+            }
+        }
         self.rsvps.insert(
             key,
             RsvpProjection {
@@ -452,6 +487,7 @@ impl ProjectionState {
                 occurrence: occurrence.clone(),
                 comment: operation.payload.get("comment").cloned(),
                 actor_id: actor_id.clone(),
+                updated_hlc,
                 updated_at: now,
             },
         );
@@ -997,6 +1033,24 @@ fn json_string_field(object: &serde_json::Map<String, Value>, field: &str) -> bo
 
 fn valid_hash_digest(value: &str) -> bool {
     cokret_sdk::Hash::new(value.to_owned()).is_ok()
+}
+
+fn rsvp_lww_hlc(operation: &Operation) -> String {
+    if let Some(hlc) = operation
+        .payload
+        .get("hlc")
+        .and_then(Value::as_str)
+        .filter(|value| cokret_sdk::Hlc::new((*value).to_owned()).is_ok())
+    {
+        return hlc.to_owned();
+    }
+    let millis = operation
+        .created_at
+        .timestamp_millis()
+        .clamp(0, 0xFFFF_FFFF_FFFF);
+    let operation_hash =
+        cokret_sdk::canonical::sha256_hex(operation.operation_id.as_str().as_bytes());
+    format!("{millis:012x}-0000-{}", &operation_hash[..8])
 }
 
 struct PinEffectiveScope {

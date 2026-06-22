@@ -84,6 +84,18 @@ pub(super) fn operation_realm_preview_policy(operation: &Operation) -> Option<Va
     }
 }
 
+pub(super) fn operation_realm_asset_privacy_policy(operation: &Operation) -> Option<Value> {
+    match kinds::canonical_kind_for_operation(operation) {
+        Some(kinds::CK_REALM_ASSET_PRIVACY_POLICY) => operation.payload.get("value").cloned(),
+        Some(kinds::CK_REALM_CREATE) => operation
+            .payload
+            .get("object")
+            .and_then(|object| object.get("asset_privacy_policy"))
+            .cloned(),
+        _ => None,
+    }
+}
+
 pub(super) fn canonical_value_digest(value: &Value) -> Option<String> {
     let bytes = cokret_sdk::canonical::canonical_json_bytes(value).ok()?;
     Some(cokret_sdk::canonical::sha256_digest(bytes))

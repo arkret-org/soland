@@ -13,8 +13,10 @@
 
 use chrono::{DateTime, Utc};
 use cokret_sdk::{
-    Did, RealmId, RealmLifecycleView, RealmModerationPolicyReplaceRequestBody,
-    STRAND_TRACK_NAME_DISCUSSION, SpaceId,
+    Did, HistoryRangeContext, HistoryReaderContext, HistoryReaderEventState,
+    HistorySharingPolicyPayloadValue, HistorySharingRestrictedScopeRef, HistorySharingScopeKind,
+    HistoryVisibility, RealmId, RealmLifecycleView, RealmModerationPolicyReplaceRequestBody,
+    STRAND_TRACK_NAME_DISCUSSION, SpaceId, matching_restricted_rules,
 };
 use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
@@ -451,18 +453,12 @@ pub async fn realm_event_visible_to_session(
         .as_str()
     {
         "world_readable" => true,
-        "shared" => {
-            if realm_discoverability(state, realm_or_internal_id).await == "public" {
-                return true;
+        "shared" => match session {
+            Some(session) => {
+                realm_active_member_at_read_time(state, realm_or_internal_id, &session.actor).await
             }
-            match session {
-                Some(session) => {
-                    realm_active_member_at_read_time(state, realm_or_internal_id, &session.actor)
-                        .await
-                }
-                None => false,
-            }
-        }
+            None => false,
+        },
         "invited" => {
             let Some(session) = session else {
                 return false;
@@ -838,57 +834,53 @@ async fn realm_restricted_history_policy_allows(
     else {
         return false;
     };
-    let Some(policy) = meta.history_sharing_policy.as_ref() else {
+    let Some(policy_value) = meta.history_sharing_policy else {
         return false;
     };
-    let Some(rules) = policy.get("restricted_rules").and_then(Value::as_array) else {
+    let Ok(policy) = serde_json::from_value::<HistorySharingPolicyPayloadValue>(policy_value)
+    else {
         return false;
     };
+    if cokret_sdk::validate_history_sharing_policy(&policy).is_err() {
+        return false;
+    }
     let active_member = realm_active_member_at_read_time(state, &realm_id, actor).await;
     let joined_at = realm_member_joined_at_for_id(state, &realm_id, actor).await;
     let invited_at = realm_member_invited_or_joined_at_for_id(state, &realm_id, actor).await;
-    rules.iter().any(|rule| {
-        restricted_rule_matches_actor(rule, actor, active_member)
-            && restricted_rule_matches_range(rule, event_created_at, invited_at, joined_at)
-    })
-}
-
-fn restricted_rule_matches_actor(rule: &Value, actor: &str, active_member: bool) -> bool {
-    let audiences: Vec<&str> = rule
-        .get("audiences")
-        .or_else(|| rule.get("audience"))
-        .and_then(Value::as_array)
-        .map(|items| items.iter().filter_map(Value::as_str).collect())
-        .unwrap_or_default();
-    if audiences.contains(&"realm_member") && active_member {
-        return true;
-    }
-    if audiences.contains(&"authenticated") {
-        return true;
-    }
-    rule.get("actors")
-        .or_else(|| rule.get("principals"))
-        .and_then(Value::as_array)
-        .is_some_and(|actors| actors.iter().any(|value| value.as_str() == Some(actor)))
-}
-
-fn restricted_rule_matches_range(
-    rule: &Value,
-    event_created_at: DateTime<Utc>,
-    invited_at: Option<DateTime<Utc>>,
-    joined_at: Option<DateTime<Utc>>,
-) -> bool {
-    match rule
-        .get("range")
-        .or_else(|| rule.get("event_range"))
-        .and_then(Value::as_str)
-        .unwrap_or("rule_only")
-    {
-        "all" | "event_time_visibility" => true,
-        "from_invite" => invited_at.is_some_and(|at| event_created_at >= at),
-        "from_join" => joined_at.is_some_and(|at| event_created_at >= at),
-        _ => false,
-    }
+    let since_invite = invited_at.is_some_and(|at| event_created_at >= at);
+    let since_join = joined_at.is_some_and(|at| event_created_at >= at);
+    let event_state = if active_member && since_join {
+        HistoryReaderEventState::Joined
+    } else if active_member && since_invite {
+        HistoryReaderEventState::Invited
+    } else if !active_member && (since_invite || since_join) {
+        HistoryReaderEventState::Removed
+    } else {
+        HistoryReaderEventState::None
+    };
+    let reader = HistoryReaderContext {
+        current_active_member: active_member,
+        event_state,
+        has_discoverability: true,
+        has_preview_token: false,
+    };
+    let Some(receiver_class) = reader.receiver_class() else {
+        return false;
+    };
+    let range = HistoryRangeContext::from_membership(since_invite, since_join);
+    let scope = HistorySharingRestrictedScopeRef {
+        kind: HistorySharingScopeKind::Realm,
+        circle_id: None,
+    };
+    !matching_restricted_rules(
+        &policy,
+        receiver_class,
+        HistoryVisibility::Restricted,
+        range,
+        None,
+        Some(&scope),
+    )
+    .is_empty()
 }
 
 pub async fn realm_allows_plaintext_service_for_id(state: &AppState, realm_id: &str) -> bool {
@@ -951,6 +943,7 @@ const ACCOUNT_DATA_TYPE_PRESENCE_VISIBILITY: &str = "ck.presence.visibility";
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum PresenceVisibilityPolicy {
     Public,
+    ContactsOnly,
     Nobody,
 }
 
@@ -965,16 +958,29 @@ pub(crate) async fn presence_visibility_for_actor(
         .await
     {
         Ok(None) => PresenceVisibilityPolicy::Public,
-        Ok(Some(_)) => {
-            // The stored value is encrypted actor-private account data. Without
-            // a trusted minimal policy projection, presence/typing fanout must
-            // fail closed instead of parsing plaintext fields from the payload.
-            PresenceVisibilityPolicy::Nobody
-        }
+        Ok(Some(record)) => presence_visibility_from_payload(&record.payload)
+            .unwrap_or(PresenceVisibilityPolicy::Nobody),
         Err(error) => {
             tracing::warn!(%error, actor = %actor, "failed to read presence visibility policy");
             PresenceVisibilityPolicy::Nobody
         }
+    }
+}
+
+fn presence_visibility_from_payload(payload: &Value) -> Option<PresenceVisibilityPolicy> {
+    let object = payload.as_object()?;
+    if object.len() != 1 {
+        return None;
+    }
+    match object
+        .get("presence_visibility")
+        .and_then(Value::as_str)
+        .map(str::trim)
+    {
+        Some("public") => Some(PresenceVisibilityPolicy::Public),
+        Some("contacts_only") => Some(PresenceVisibilityPolicy::ContactsOnly),
+        Some("nobody") => Some(PresenceVisibilityPolicy::Nobody),
+        _ => None,
     }
 }
 
@@ -988,10 +994,51 @@ pub(crate) async fn presence_visible_to_session(
     };
     match presence_visibility_for_actor(state, actor).await {
         PresenceVisibilityPolicy::Nobody => false,
+        PresenceVisibilityPolicy::ContactsOnly => {
+            personal_blocklist_allows_actor(state, session, actor).await
+                && accepted_contact_between(state, &session.actor, actor).await
+        }
         PresenceVisibilityPolicy::Public => {
             personal_blocklist_allows_actor(state, session, actor).await
         }
     }
+}
+
+pub(crate) async fn presence_activity_detail_visible_to_session(
+    state: &AppState,
+    actor: &str,
+    session: Option<&SessionRecord>,
+) -> bool {
+    let Some(session) = session else {
+        return false;
+    };
+    if actor == session.actor {
+        return true;
+    }
+    personal_blocklist_allows_actor(state, session, actor).await
+        && accepted_contact_between(state, &session.actor, actor).await
+}
+
+async fn accepted_contact_between(state: &AppState, left: &str, right: &str) -> bool {
+    if left == right {
+        return true;
+    }
+    for (requester, target) in [(left, right), (right, left)] {
+        match state.persistence.contacts().get(requester, target).await {
+            Ok(Some(contact)) if contact.status == "accepted" => return true,
+            Ok(_) => {}
+            Err(error) => {
+                tracing::warn!(
+                    %error,
+                    actor = %left,
+                    peer = %right,
+                    "failed to read contact relationship for presence policy"
+                );
+                return false;
+            }
+        }
+    }
+    false
 }
 
 pub async fn typing_scope_allows_actor(

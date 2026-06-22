@@ -29,8 +29,9 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 use super::consent::{
-    consent_cell_snapshot, grant_contact_managed_consent, has_active_consent_for_scope,
-    normalize_scope, persist_consent_cell,
+    auto_revoke_requester_side_contact_consent, consent_cell_snapshot,
+    grant_contact_managed_consent, has_active_consent_for_scope, normalize_scope,
+    persist_consent_cell,
 };
 use super::now;
 use crate::error::AppError;
@@ -615,6 +616,16 @@ async fn project_delivered_contact_fact(
                     updated_at: now(),
                 });
             if contact.status == "rejected" {
+                auto_revoke_requester_side_contact_consent(
+                    state,
+                    subject_id,
+                    issuer,
+                    &[scope.clone()],
+                    now(),
+                    "contact_rejected",
+                    Some(contact_event_id),
+                )
+                .await?;
                 return Ok("duplicate");
             }
             contact.status = "rejected".to_owned();
@@ -624,6 +635,16 @@ async fn project_delivered_contact_fact(
                 .put(&contact)
                 .await
                 .map_err(|error| AppError::internal(error.to_string()))?;
+            auto_revoke_requester_side_contact_consent(
+                state,
+                subject_id,
+                issuer,
+                &[scope.clone()],
+                now(),
+                "contact_rejected",
+                Some(contact_event_id),
+            )
+            .await?;
             Ok("accepted")
         }
         "ck.contact.tombstoned" => {
@@ -632,9 +653,17 @@ async fn project_delivered_contact_fact(
                 .list_for_actor(subject_id)
                 .await
                 .map_err(|error| AppError::internal(error.to_string()))?;
+            let mut requester_side_revoke_scopes = Vec::new();
             for mut row in rows {
                 let touches_issuer = (row.requester == subject_id && row.target == issuer)
                     || (row.requester == issuer && row.target == subject_id);
+                if touches_issuer
+                    && row.requester == subject_id
+                    && row.target == issuer
+                    && !requester_side_revoke_scopes.contains(&row.scope)
+                {
+                    requester_side_revoke_scopes.push(row.scope.clone());
+                }
                 if !touches_issuer || row.status == "tombstoned" {
                     continue;
                 }
@@ -645,6 +674,18 @@ async fn project_delivered_contact_fact(
                     .put(&row)
                     .await
                     .map_err(|error| AppError::internal(error.to_string()))?;
+            }
+            for scope in requester_side_revoke_scopes {
+                auto_revoke_requester_side_contact_consent(
+                    state,
+                    subject_id,
+                    issuer,
+                    &[scope],
+                    now(),
+                    "contact_tombstoned",
+                    Some(contact_event_id),
+                )
+                .await?;
             }
             Ok("accepted")
         }

@@ -228,6 +228,21 @@ pub(super) async fn owned_key_backup_snapshot(
         .collect())
 }
 
+pub(crate) async fn did_recovery_first_backup_gate_satisfied(
+    state: &AppState,
+    actor_id: &str,
+) -> Result<bool, AppError> {
+    for backup in owned_key_backup_snapshot(state, actor_id).await? {
+        let Ok(backup) = serde_json::from_value::<KeyBackup>(backup) else {
+            continue;
+        };
+        if backup.satisfies_first_did_recovery_backup_gate() {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 #[endpoint(
     operation_id = "ck.self.keys.backups.resource.replace",
     tags("keys"),
@@ -257,6 +272,13 @@ pub(super) async fn put_key_backup(
     })?;
     let backup = typed_key_backup_body(&backup.into_inner())?;
     validate_key_backup_body_typed(&typed_backup_id, &session.actor, &backup)?;
+    if backup.is_first_did_recovery_backup() && !backup.satisfies_first_did_recovery_backup_gate() {
+        return Err(AppError::new(
+            ErrorCode::FailedPrecondition,
+            "first did_recovery backup gate requires recovery policy, signed verified-device auth_data and non-empty backup contents",
+        )
+        .with_wire_code("first_backup_gate_unsatisfied"));
+    }
     if backup.backup_class == BackupClass::DidRecovery {
         ensure_key_backup_writer_device_authorized(
             state,
@@ -289,6 +311,22 @@ pub(super) async fn put_key_backup(
             .with_wire_code("series_seq_not_monotonic"),
             other => AppError::internal(other.to_string()),
         })?;
+    if backup.satisfies_first_did_recovery_backup_gate() {
+        append_audit_log(
+            state,
+            Some(&session.actor),
+            "key_backup.first_did_recovery_gate",
+            json!({
+                "backup_id": backup.backup_id.as_str(),
+                "series_id": backup.series_id.as_str(),
+                "series_seq": backup.series_seq,
+                "device_id": backup.device_id.as_ref().map(|device| device.as_str().to_owned()),
+                "duplicate": duplicate,
+            }),
+            "accepted",
+        )
+        .await;
+    }
     json_ok(KeysBackupsReplaceOutcome {
         status: if duplicate {
             KeyBackupPutStatus::Duplicate

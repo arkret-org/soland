@@ -119,6 +119,48 @@ impl ProjectionState {
             (_, Some(previous)) => previous.joined_at,
             _ => now,
         };
+        let event_ref = operation
+            .payload
+            .get("event_id")
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .map(ToOwned::to_owned);
+        let delivery_status = if new_state == "join" {
+            operation
+                .payload
+                .get("delivery_status")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned)
+        } else {
+            None
+        };
+        let recipient_service_did =
+            if new_state == "join" && delivery_status.as_deref() == Some("routable") {
+                operation
+                    .payload
+                    .get("delivery_binding")
+                    .and_then(Value::as_object)
+                    .and_then(|binding| binding.get("recipient_service_did"))
+                    .and_then(Value::as_str)
+                    .filter(|value| !value.trim().is_empty())
+                    .map(ToOwned::to_owned)
+            } else {
+                None
+            };
+        let delivery_binding_frontier =
+            if new_state == "join" && delivery_status.as_deref() == Some("routable") {
+                operation
+                    .payload
+                    .get("delivery_binding")
+                    .and_then(Value::as_object)
+                    .and_then(|binding| binding.get("delivery_binding_frontier"))
+                    .and_then(Value::as_str)
+                    .filter(|value| !value.trim().is_empty())
+                    .map(ToOwned::to_owned)
+                    .or_else(|| event_ref.clone())
+            } else {
+                None
+            };
 
         // Update the structured cache with side-band + FSM state mirror.
         self.members.insert(
@@ -128,6 +170,10 @@ impl ProjectionState {
                 realm_id: realm_id.clone(),
                 state: new_state.to_owned(),
                 role,
+                delivery_status,
+                recipient_service_did,
+                membership_event_ref: event_ref,
+                delivery_binding_frontier,
                 invited_at,
                 joined_at,
                 updated_at: now,
@@ -661,10 +707,27 @@ impl ProjectionState {
             .map(ToOwned::to_owned);
         let payload_encryption_profile =
             operation_encryption_profile(operation).map(ToOwned::to_owned);
+        let payload_digest_algorithm = operation
+            .payload
+            .get("digest_algorithm")
+            .or_else(|| payload_object.and_then(|object| object.get("digest_algorithm")))
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned)
+            .unwrap_or_else(|| "sha256".to_owned());
+        if cokret_sdk::canonical::digest_suite(&payload_digest_algorithm).is_err() {
+            return ProjectionEffect::Rejected {
+                reason: cokret_sdk::ERROR_CODE_UNSUPPORTED_DIGEST_ALGORITHM.to_owned(),
+            };
+        }
         if kind == crate::kinds::CK_REALM_UPDATE && operation_touches_encryption_profile(operation)
         {
             return ProjectionEffect::Rejected {
                 reason: REALM_ENCRYPTION_PROFILE_CREATE_LOCKED.to_owned(),
+            };
+        }
+        if kind == crate::kinds::CK_REALM_UPDATE && operation_touches_digest_algorithm(operation) {
+            return ProjectionEffect::Rejected {
+                reason: cokret_sdk::ERROR_CODE_SCHEMA_VIOLATION.to_owned(),
             };
         }
         if let Some(ref new_td) = payload_trust_domain {
@@ -843,6 +906,7 @@ impl ProjectionState {
                         "security_class": payload_security_class,
                         "federation_policy": payload_federation_policy,
                         "encryption_profile": payload_encryption_profile,
+                        "digest_algorithm": payload_digest_algorithm,
                         "created_at": now.to_rfc3339(),
                         "operation_id": operation.operation_id.as_str(),
                     });

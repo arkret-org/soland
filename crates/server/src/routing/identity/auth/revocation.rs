@@ -26,6 +26,26 @@ pub async fn revoke_sessions_for_actor(state: &AppState, actor: &str) -> Result<
     Ok(count)
 }
 
+pub async fn active_delegated_sessions_for_actor(
+    state: &AppState,
+    actor: &str,
+) -> Result<usize, String> {
+    let sessions = state
+        .persistence
+        .sessions()
+        .snapshot_all()
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(sessions
+        .into_iter()
+        .filter(|session| {
+            session.actor == actor
+                && session.revoked_at.is_none()
+                && session.agent_session.is_some()
+        })
+        .count())
+}
+
 /// Revoke every active device record for an actor.
 pub async fn revoke_devices_for_actor(state: &AppState, actor: &str) -> Result<usize, String> {
     let revoked_at = now();
@@ -102,6 +122,47 @@ pub async fn is_device_revoked(state: &AppState, actor: &str, device_id: &str) -
 }
 
 // ── Development Session Credential Derivation ───────────────────────────────
+
+#[derive(Default)]
+pub(crate) struct DeviceDeliveryPurgeOutcome {
+    pub to_device_messages_dropped: usize,
+    pub push_registrations_removed: usize,
+}
+
+pub(crate) async fn purge_device_delivery_state(
+    state: &AppState,
+    actor: &str,
+    device_id: &str,
+) -> DeviceDeliveryPurgeOutcome {
+    let to_device_messages_dropped = match state
+        .persistence
+        .device_messages()
+        .purge(actor, device_id)
+        .await
+    {
+        Ok(count) => count,
+        Err(error) => {
+            tracing::error!(%error, actor, device_id, "failed to purge to-device messages");
+            0
+        }
+    };
+    let push_registrations_removed = match state
+        .persistence
+        .push_devices()
+        .unregister(actor, device_id, None, None)
+        .await
+    {
+        Ok(count) => count,
+        Err(error) => {
+            tracing::error!(%error, actor, device_id, "failed to unregister push devices");
+            0
+        }
+    };
+    DeviceDeliveryPurgeOutcome {
+        to_device_messages_dropped,
+        push_registrations_removed,
+    }
+}
 
 /// Derive a single-use development session credential. The credential is opaque
 /// to the client; what the server stores is its `session_credential_hash`.

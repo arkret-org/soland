@@ -64,14 +64,6 @@ pub(crate) fn operation_actor_id(operation: &Operation) -> String {
         .unwrap_or_else(|| operation.operation_id.to_string())
 }
 
-pub(crate) fn occurrence_key(value: Option<&Value>) -> String {
-    value
-        .and_then(Value::as_str)
-        .filter(|value| !value.trim().is_empty())
-        .unwrap_or("series")
-        .to_owned()
-}
-
 pub(crate) fn pin_scope_key(pin_scope: &Value) -> Option<String> {
     let kind = pin_scope.get("kind").and_then(Value::as_str)?;
     let id = pin_scope.get("id").and_then(Value::as_str)?;

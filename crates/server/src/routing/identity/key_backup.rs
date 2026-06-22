@@ -30,6 +30,7 @@ mod unlock;
 mod validation;
 
 use delete::*;
+pub(in crate::routing) use handlers::did_recovery_first_backup_gate_satisfied as did_recovery_first_backup_gate_satisfied_for_actor;
 use handlers::*;
 use unlock::*;
 use validation::*;
