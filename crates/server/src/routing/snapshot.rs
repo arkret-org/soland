@@ -157,6 +157,9 @@ async fn persist_snapshot_chunk_blobs(
             filename: None,
             realm_id: Some(realm_id.to_owned()),
             encryption: None,
+            legal_hold: false,
+            redacted: false,
+            visibility: cokret_sdk::BlobVisibility::RealmBound,
             uploaded_by: state.config.service_did.clone(),
             created_at: now(),
         };

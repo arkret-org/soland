@@ -625,12 +625,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn digest_shape_uses_sdk_active_suites() {
+    fn critical_digest_shape_is_sha256_only() {
         let digest64 = "0".repeat(64);
         let digest128 = "0".repeat(128);
 
         assert!(is_sha_digest(&format!("sha256:{digest64}")));
-        assert!(is_sha_digest(&format!("blake3:{digest64}")));
+        assert!(!is_sha_digest(&format!("blake3:{digest64}")));
         assert!(!is_sha_digest(&format!("sha3_256:{digest64}")));
         assert!(!is_sha_digest(&format!("sha512:{digest128}")));
         assert!(!is_sha_digest(&format!("sha256:{}", "A".repeat(64))));

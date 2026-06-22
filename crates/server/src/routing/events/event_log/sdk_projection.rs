@@ -186,25 +186,18 @@ pub(crate) fn projection_operation_from_event(
     {
         payload_object.insert("thread_id".to_owned(), Value::String(strand_id));
     }
-    if matches!(
-        parsed.kind.as_str(),
-        kinds::CK_MESSAGE_CREATE | kinds::CK_REACTION_ADD
-    ) {
-        payload_object.remove("executed_by");
-        payload_object.remove("authorization_ref");
-        if let Some(executed_by) = envelope.get("executed_by").and_then(Value::as_str) {
+    payload_object.remove("executed_by");
+    payload_object.remove("authorization_ref");
+    if let Some(executed_by) = envelope.get("executed_by").and_then(Value::as_str) {
+        payload_object.insert(
+            "executed_by".to_owned(),
+            Value::String(executed_by.to_owned()),
+        );
+        if let Some(authorization_ref) = envelope.get("authorization_ref").and_then(Value::as_str) {
             payload_object.insert(
-                "executed_by".to_owned(),
-                Value::String(executed_by.to_owned()),
+                "authorization_ref".to_owned(),
+                Value::String(authorization_ref.to_owned()),
             );
-            if let Some(authorization_ref) =
-                envelope.get("authorization_ref").and_then(Value::as_str)
-            {
-                payload_object.insert(
-                    "authorization_ref".to_owned(),
-                    Value::String(authorization_ref.to_owned()),
-                );
-            }
         }
     }
     if matches!(
@@ -229,6 +222,11 @@ pub(crate) fn projection_operation_from_event(
         payload_object
             .entry("seal_ref".to_owned())
             .or_insert_with(|| Value::String(seal_ref.to_owned()));
+    }
+    if let Some(seal_basis) = envelope.get("seal_basis") {
+        payload_object
+            .entry("seal_basis".to_owned())
+            .or_insert_with(|| seal_basis.clone());
     }
 
     let Some(operation_id) = event_operation_id(envelope, &parsed.event_id) else {
@@ -774,11 +772,13 @@ fn circle_event_visible_to_session(
 /// Scan the durable Event store for the most
 /// recent `ck.realm.read_receipt_policy` event in `realm_id` and return
 /// `(disclosure, visibility, scope_overrides_allowed,
-/// allow_public_receipts_on_world_readable)` from its payload.
+/// allow_public_receipts_on_world_readable,
+/// allow_forced_public_world_readable_receipts)` from its payload.
 /// Returns `None` when no policy event has been written for this Realm —
 /// caller treats that as the spec default `Optional` / `Members` /
 /// `scope_overrides_allowed=true` /
-/// `allow_public_receipts_on_world_readable=false`.
+/// `allow_public_receipts_on_world_readable=false` /
+/// `allow_forced_public_world_readable_receipts=false`.
 ///
 /// Used by ephemeral `ck.receipt.read` admission and future receipt fanout
 /// handlers to enforce the Realm policy.
@@ -789,7 +789,7 @@ fn circle_event_visible_to_session(
 pub async fn effective_read_receipt_policy_for_realm(
     state: &AppState,
     realm_id: &str,
-) -> Option<(String, String, bool, bool)> {
+) -> Option<(String, String, bool, bool, bool)> {
     // Cell-keyed fast path. The Move/Seal pipeline writes the
     // `ck.component.realm.read_receipt_policy.v1` resolved CasRegister
     // value into `ProjectionState::cells` after every apply_seal; we
@@ -820,11 +820,16 @@ pub async fn effective_read_receipt_policy_for_realm(
                 .get("allow_public_receipts_on_world_readable")
                 .and_then(Value::as_bool)
                 .unwrap_or(false);
+            let allow_forced_public_world_readable_receipts = value
+                .get("allow_forced_public_world_readable_receipts")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
             return Some((
                 disclosure,
                 visibility,
                 scope_overrides_allowed,
                 allow_public_receipts_on_world_readable,
+                allow_forced_public_world_readable_receipts,
             ));
         }
     }
@@ -869,11 +874,16 @@ pub async fn effective_read_receipt_policy_for_realm(
         .get("allow_public_receipts_on_world_readable")
         .and_then(Value::as_bool)
         .unwrap_or(false);
+    let allow_forced_public_world_readable_receipts = payload
+        .get("allow_forced_public_world_readable_receipts")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     Some((
         disclosure,
         visibility,
         scope_overrides_allowed,
         allow_public_receipts_on_world_readable,
+        allow_forced_public_world_readable_receipts,
     ))
 }
 

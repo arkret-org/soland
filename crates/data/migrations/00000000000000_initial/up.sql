@@ -135,6 +135,16 @@ CREATE TABLE public.applet_registrations (
     CONSTRAINT applet_registrations_status_check CHECK ((status = ANY (ARRAY['registered'::text, 'installed'::text, 'partially_installed'::text, 'rejected'::text, 'revoked'::text])))
 );
 
+CREATE TABLE public.applet_transactions (
+    source_service_did text NOT NULL,
+    idempotency_key text NOT NULL,
+    source_signature_anchor text NOT NULL,
+    request_digest text NOT NULL,
+    outcome jsonb,
+    received_at timestamp with time zone DEFAULT now() NOT NULL,
+    completed_at timestamp with time zone
+);
+
 CREATE TABLE public.audit_logs (
     id uuid NOT NULL,
     actor_id text,
@@ -175,7 +185,10 @@ CREATE TABLE public.blobs (
     payload jsonb DEFAULT '{}'::jsonb NOT NULL,
     retention_expires_at timestamp with time zone,
     legal_hold boolean DEFAULT false NOT NULL,
-    created_at timestamp with time zone DEFAULT now() NOT NULL
+    redacted boolean DEFAULT false NOT NULL,
+    visibility text DEFAULT 'realm_bound'::text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT blobs_visibility_check CHECK ((visibility = ANY (ARRAY['public'::text, 'realm_bound'::text, 'actor_private'::text, 'device_bound'::text])))
 );
 
 -- Realm-broadcast relay for `ck.call.signal` ephemeral envelopes
@@ -739,6 +752,7 @@ CREATE TABLE public.projection_strands (
     state_changed_at timestamp with time zone,
     created_by_id text NOT NULL,
     created_at timestamp with time zone NOT NULL,
+    history_basis_seals jsonb DEFAULT '[]'::jsonb NOT NULL,
     updated_by_id text,
     updated_at timestamp with time zone,
     CONSTRAINT projection_strands_state_check CHECK ((state = ANY (ARRAY['active'::text, 'archived'::text, 'redacted'::text])))
@@ -753,6 +767,7 @@ CREATE TABLE public.projection_morphs (
     state_changed_at timestamp with time zone,
     created_by_id text NOT NULL,
     created_at timestamp with time zone NOT NULL,
+    history_basis_seals jsonb DEFAULT '[]'::jsonb NOT NULL,
     updated_by_id text,
     updated_at timestamp with time zone,
     fields jsonb DEFAULT '{}'::jsonb NOT NULL,
@@ -779,6 +794,7 @@ CREATE TABLE public.projection_spaces (
     state_changed_at timestamp with time zone,
     created_by_id text NOT NULL,
     created_at timestamp with time zone NOT NULL,
+    history_basis_seals jsonb DEFAULT '[]'::jsonb NOT NULL,
     updated_by_id text,
     updated_at timestamp with time zone,
     CONSTRAINT projection_spaces_child_scope_policy_check CHECK ((child_scope_policy = ANY (ARRAY['allow_any'::text, 'require_e2ee'::text, 'require_same_scope'::text, 'require_scope_circle_id'::text]))),
@@ -1041,6 +1057,9 @@ ALTER TABLE ONLY public.agent_sessions
 
 ALTER TABLE ONLY public.applet_registrations
     ADD CONSTRAINT applet_registrations_pkey PRIMARY KEY (id);
+
+ALTER TABLE ONLY public.applet_transactions
+    ADD CONSTRAINT applet_transactions_pkey PRIMARY KEY (source_service_did, idempotency_key);
 
 ALTER TABLE ONLY public.audit_logs
     ADD CONSTRAINT audit_logs_pkey PRIMARY KEY (id);
@@ -1318,6 +1337,8 @@ CREATE UNIQUE INDEX applet_registrations_active_namespace_idx ON public.applet_r
 CREATE INDEX applet_registrations_owner_idx ON public.applet_registrations USING btree (owner_actor_id);
 
 CREATE INDEX applet_registrations_status_idx ON public.applet_registrations USING btree (status);
+
+CREATE INDEX applet_transactions_received_idx ON public.applet_transactions USING btree (received_at);
 
 CREATE INDEX audit_logs_action_idx ON public.audit_logs USING btree (action);
 

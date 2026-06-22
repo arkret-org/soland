@@ -350,6 +350,18 @@ fn event_canonical_digest(event: &Value) -> String {
     sha256_json(&canonical)
 }
 
+fn encrypted_account_data_marker(hex_pair: &str, ciphertext: &str) -> Value {
+    json!({
+        "client_side_conformance": {
+            "encrypted_account_data": true,
+            "profile_id": "ck.profile.e2ee_client.v1",
+            "payload_digest": format!("sha256:{}", hex_pair.repeat(32))
+        },
+        "content_type": "application/vnd.cokret.account-data+json",
+        "ciphertext": ciphertext,
+    })
+}
+
 fn strand_id_for_realm(realm_id: &str) -> String {
     realm_id
         .strip_prefix("ck:realm:")
@@ -358,7 +370,7 @@ fn strand_id_for_realm(realm_id: &str) -> String {
 }
 
 #[tokio::test]
-async fn blocklist_account_data_fans_out_and_filters_notifications() {
+async fn blocklist_account_data_requires_encrypted_carrier_and_fans_out_opaque() {
     let state = AppState::new(test_config(), Db { pool: None });
     let alice_desktop = dev_token(
         state.clone(),
@@ -390,7 +402,7 @@ async fn blocklist_account_data_fans_out_and_filters_notifications() {
     )
     .await;
 
-    let blocklist = json!({
+    let plaintext_blocklist = json!({
         "version": 1,
         "entries": [{
             "target": {
@@ -410,14 +422,38 @@ async fn blocklist_account_data_fans_out_and_filters_notifications() {
         &realm_id,
         "ck.account_data.set",
         json!({
-            "key": "ck.account.blocklist.v1",
+            "key": "ck.account.blocklist",
             "owner": "did:web:alice.example",
-            "body": blocklist.clone(),
+            "body": plaintext_blocklist,
             "updated_at": "2026-05-21T00:00:00Z",
         }),
     )
     .await;
-    assert_eq!(put["status"], "accepted", "account_data event: {put}");
+    assert_ne!(
+        put["status"], "accepted",
+        "plaintext blocklist must be rejected: {put}"
+    );
+
+    let encrypted_blocklist = encrypted_account_data_marker("ab", "opaque-blocklist-v1");
+    let put = submit_actor_private_event(
+        state.clone(),
+        &alice_desktop,
+        "did:web:alice.example",
+        "ck:device:01904100-0000-7000-8000-a11ce0000001",
+        &realm_id,
+        "ck.account_data.set",
+        json!({
+            "key": "ck.account.blocklist",
+            "owner": "did:web:alice.example",
+            "body": encrypted_blocklist.clone(),
+            "updated_at": "2026-05-21T00:00:00Z",
+        }),
+    )
+    .await;
+    assert_eq!(
+        put["status"], "accepted",
+        "encrypted blocklist event: {put}"
+    );
     let stored_account_data = state
         .persistence
         .account_data()
@@ -427,8 +463,8 @@ async fn blocklist_account_data_fans_out_and_filters_notifications() {
     assert!(
         stored_account_data
             .iter()
-            .any(|record| record.data_type == "ck.account.blocklist.v1"),
-        "account_data projection must persist blocklist after accepted event: {stored_account_data:?}"
+            .any(|record| record.data_type == "ck.account.blocklist"),
+        "account_data projection must persist encrypted blocklist after accepted event: {stored_account_data:?}"
     );
 
     let phone_sync = account_subscribe_frame(
@@ -437,9 +473,9 @@ async fn blocklist_account_data_fans_out_and_filters_notifications() {
         "catchup=true&set_presence=online",
     )
     .await;
-    let phone_account_data = account_data_entry(&phone_sync, "ck.account.blocklist.v1")
+    let phone_account_data = account_data_entry(&phone_sync, "ck.account.blocklist")
         .expect("blocklist account_data visible to Alice's sibling device");
-    assert_eq!(phone_account_data["content"], blocklist);
+    assert_eq!(phone_account_data["content"], encrypted_blocklist);
 
     let phone_messages: Value = TestClient::get("http://server/_cokret/self/device_messages")
         .add_header("authorization", format!("Bearer {alice_phone}"), true)
@@ -455,12 +491,9 @@ async fn blocklist_account_data_fans_out_and_filters_notifications() {
         .expect("blocklist update fanout reaches Alice's sibling device");
     assert_eq!(
         blocklist_event["content"]["data_type"],
-        "ck.account.blocklist.v1"
+        "ck.account.blocklist"
     );
-    assert_eq!(
-        blocklist_event["content"]["content"]["entries"][0]["target"]["did"],
-        "did:web:bob.example"
-    );
+    assert_eq!(blocklist_event["content"]["content"], encrypted_blocklist);
 
     let bob_messages: Value = TestClient::get("http://server/_cokret/self/device_messages")
         .add_header("authorization", format!("Bearer {bob}"), true)
@@ -470,71 +503,6 @@ async fn blocklist_account_data_fans_out_and_filters_notifications() {
         .await
         .unwrap();
     assert!(bob_messages["messages"].as_array().unwrap().is_empty());
-
-    let blocked_message = send_plaintext_message(
-        state.clone(),
-        &bob,
-        "did:web:bob.example",
-        &realm_id,
-        "blocked notification",
-    )
-    .await;
-    let notifications: Value = TestClient::get(
-        "http://server/_soland/self/index/notifications?actor=did:web:alice.example",
-    )
-    .send(&app_from_state(state.clone()))
-    .await
-    .take_json()
-    .await
-    .unwrap();
-    assert!(
-        notifications["notifications"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .all(|notification| notification["event_ref"] != blocked_message["event_id"])
-    );
-
-    let unblock = submit_actor_private_event(
-        state.clone(),
-        &alice_desktop,
-        "did:web:alice.example",
-        "ck:device:01904100-0000-7000-8000-a11ce0000001",
-        &realm_id,
-        "ck.account_data.set",
-        json!({
-            "key": "ck.account.blocklist.v1",
-            "owner": "did:web:alice.example",
-            "body": {"version": 1, "entries": []},
-            "updated_at": "2026-05-21T00:01:00Z",
-        }),
-    )
-    .await;
-    assert_eq!(unblock["status"], "accepted", "unblock event: {unblock}");
-
-    let visible_message = send_plaintext_message(
-        state.clone(),
-        &bob,
-        "did:web:bob.example",
-        &realm_id,
-        "visible notification",
-    )
-    .await;
-    let notifications_after: Value = TestClient::get(
-        "http://server/_soland/self/index/notifications?actor=did:web:alice.example",
-    )
-    .send(&app_from_state(state.clone()))
-    .await
-    .take_json()
-    .await
-    .unwrap();
-    assert!(
-        notifications_after["notifications"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|notification| notification["event_ref"] == visible_message["event_id"])
-    );
 }
 
 #[tokio::test]
@@ -679,14 +647,18 @@ async fn push_blind_wakeup_rejects_e2ee_stable_identifiers() {
         .await
         .unwrap();
     assert_eq!(registered["ok"], true);
+    let push_target_id = registered["registration_id"]
+        .as_str()
+        .expect("register-device returns push target registration id");
 
     let rejected = TestClient::post("http://server/_cokret/edge/push/notify")
         .json(&json!({
             "notification": {
-                "type": "blind_wakeup",
+                "push_target_id": push_target_id,
+                "wakeup_kind": "message",
                 "event_id": "ck:event:01904100-0000-7000-8000-0000000000ee",
                 "realm_id": "ck:realm:0190419b-0000-7000-8000-0000000000ee",
-                "sender": "did:web:bob.example",
+                "sender_actor_id": "did:web:bob.example",
                 "devices": [{"device_id": "ck:device:01904100-0000-7000-8000-a11ce0000001"}]
             }
         }))
@@ -697,7 +669,7 @@ async fn push_blind_wakeup_rejects_e2ee_stable_identifiers() {
     let accepted: Value = TestClient::post("http://server/_cokret/edge/push/notify")
         .json(&json!({
             "notification": {
-                "type": "blind_wakeup",
+                "push_target_id": push_target_id,
                 "wakeup_kind": "message",
                 "devices": [{"device_id": "ck:device:01904100-0000-7000-8000-a11ce0000001"}]
             }

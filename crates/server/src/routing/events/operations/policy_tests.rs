@@ -367,6 +367,61 @@ async fn act_on_behalf_agent_requires_authorization_ref_covering_action() {
 }
 
 #[tokio::test]
+async fn act_on_behalf_agent_non_message_write_requires_authorization_ref() {
+    let state = test_state();
+    let realm_id =
+        cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-0000000007a2".to_owned())
+            .unwrap();
+    let agent = "did:web:agent.example";
+    register_agent_selection(&state, &realm_id, agent, true, true).await;
+    let operation = op(
+        realm_id,
+        "0000000007a2",
+        kinds::CK_STRAND_CREATE,
+        json!({
+            "sender": "did:web:alice.example",
+            "executed_by": agent,
+            "object": {
+                "id": "ck:strand:01904100-0000-7000-8000-0000000007a2",
+                "metadata": {"title": "Work"}
+            }
+        }),
+    );
+
+    assert_eq!(
+        validate_agent_reply_participation(&state, &[operation])
+            .await
+            .unwrap_err(),
+        "agent_act_on_behalf_authorization_ref_missing"
+    );
+}
+
+#[tokio::test]
+async fn profile_accountable_principal_requires_active_grant() {
+    let state = test_state();
+    let realm_id =
+        cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-0000000007a3".to_owned())
+            .unwrap();
+    let profile = op(
+        realm_id,
+        "0000000007a3",
+        "ck.profile.create",
+        json!({
+            "principal_id": "did:web:agent.example",
+            "display_name": "Agent",
+            "accountable_principal_ids": ["did:web:alice.example"]
+        }),
+    );
+
+    assert_eq!(
+        validate_operation_policy(&state, &[profile])
+            .await
+            .unwrap_err(),
+        crate::error::reasons::ACCOUNTABILITY_GRANT_MISSING
+    );
+}
+
+#[tokio::test]
 async fn act_on_behalf_agent_allows_effective_selection_and_active_grant() {
     let state = test_state();
     let realm_id =
@@ -517,6 +572,7 @@ async fn circle_scoped_relation_update_and_delete_require_circle_membership() {
                         .to_owned(),
                 ),
                 created_at: now,
+                history_basis_seals: Vec::new(),
                 updated_at: now,
             },
         );

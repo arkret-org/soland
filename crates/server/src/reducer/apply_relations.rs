@@ -159,6 +159,7 @@ impl ProjectionState {
             source_event_id,
             source_event_digest,
             created_at: now,
+            history_basis_seals: operation_history_basis_seals(operation),
             updated_at: now,
         };
         self.relations.insert(relation_id.clone(), state);
@@ -794,6 +795,7 @@ impl ProjectionState {
                 source_event_id: source_event_id.clone(),
                 source_event_digest: source_event_digest.clone(),
                 created_at: now,
+                history_basis_seals: operation_history_basis_seals(operation),
                 updated_at: now,
             });
         state.relation_kind = relation_kind;
@@ -877,6 +879,7 @@ mod cross_realm_relation_tests {
             state_changed_at: None,
             created_by: String::new(),
             created_at: chrono::Utc::now(),
+            history_basis_seals: Vec::new(),
             updated_by: None,
             updated_at: None,
             scope_circle_id: scope_circle_id.map(ToOwned::to_owned),

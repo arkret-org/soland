@@ -724,14 +724,16 @@ async fn typing_fanout_respects_receiver_blocklist() {
         DEMO_REALM_ID,
         "ck.account_data.set",
         serde_json::json!({
-            "key": "ck.account.blocklist.v1",
+            "key": "ck.account.blocklist",
             "owner": "did:web:bob.example",
             "body": {
-                "version": 1,
-                "entries": [{
-                    "target": {"kind": "actor", "did": "did:web:alice.example"},
-                    "mode": "block"
-                }]
+                "client_side_conformance": {
+                    "encrypted_account_data": true,
+                    "profile_id": "ck.profile.e2ee_client.v1",
+                    "payload_digest": "sha256:abababababababababababababababababababababababababababababababab"
+                },
+                "content_type": "application/vnd.cokret.account-data+json",
+                "ciphertext": "opaque-bob-blocklist"
             },
             "updated_at": "2026-05-21T00:00:00Z",
         }),
@@ -853,6 +855,7 @@ fn insert_typing_scope_strand(state: AppState, strand_id: &str, discussion_enabl
                 state_changed_at: None,
                 created_by: "did:web:alice.example".to_owned(),
                 created_at: now,
+                history_basis_seals: Vec::new(),
                 updated_by: None,
                 updated_at: None,
                 scope_circle_id: None,

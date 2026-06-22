@@ -37,6 +37,152 @@ pub(crate) async fn validate_history_visibility_policy(
     }
 }
 
+const READ_RECEIPT_VISIBILITY_COMBINATION_INVALID: &str =
+    "read_receipt_visibility_combination_invalid";
+const READ_RECEIPT_FORCED_PUBLIC_WORLD_READABLE_FORBIDDEN: &str =
+    "read_receipt_forced_public_world_readable_forbidden";
+
+struct ReadReceiptPolicyProjection {
+    disclosure: String,
+    visibility: String,
+    allow_public_receipts_on_world_readable: bool,
+    allow_forced_public_world_readable_receipts: bool,
+}
+
+pub(crate) async fn validate_read_receipt_policy_combination_write(
+    state: &AppState,
+    operations: &[Operation],
+    operation: &Operation,
+) -> Result<(), &'static str> {
+    match kinds::canonical_kind_for_operation(operation) {
+        Some(kinds::CK_REALM_READ_RECEIPT_POLICY) => {
+            let policy = read_receipt_policy_projection_from_payload(&operation.payload)?;
+            let history_visibility = intended_history_visibility_for_realm(
+                state,
+                operations,
+                operation.realm_id.as_str(),
+            )
+            .await;
+            validate_read_receipt_policy_against_history(&policy, &history_visibility)
+        }
+        Some(kinds::CK_REALM_HISTORY_VISIBILITY) => {
+            if operation.payload.get("value").and_then(Value::as_str) != Some("world_readable") {
+                return Ok(());
+            }
+            let policy = intended_read_receipt_policy_for_realm(
+                state,
+                operations,
+                operation.realm_id.as_str(),
+            )
+            .await?;
+            validate_read_receipt_policy_against_history(&policy, "world_readable")
+        }
+        _ => Ok(()),
+    }
+}
+
+fn read_receipt_policy_projection_from_payload(
+    payload: &Value,
+) -> Result<ReadReceiptPolicyProjection, &'static str> {
+    let object = payload
+        .as_object()
+        .ok_or("ck.realm.read_receipt_policy payload must be an object")?;
+    Ok(ReadReceiptPolicyProjection {
+        disclosure: object
+            .get("disclosure")
+            .and_then(Value::as_str)
+            .unwrap_or("optional")
+            .to_owned(),
+        visibility: object
+            .get("visibility")
+            .and_then(Value::as_str)
+            .unwrap_or("members")
+            .to_owned(),
+        allow_public_receipts_on_world_readable: object
+            .get("allow_public_receipts_on_world_readable")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        allow_forced_public_world_readable_receipts: object
+            .get("allow_forced_public_world_readable_receipts")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+    })
+}
+
+async fn intended_history_visibility_for_realm(
+    state: &AppState,
+    operations: &[Operation],
+    realm_id: &str,
+) -> String {
+    for operation in operations.iter().rev() {
+        if kinds::canonical_kind_for_operation(operation)
+            == Some(kinds::CK_REALM_HISTORY_VISIBILITY)
+            && operation.realm_id.as_str() == realm_id
+            && let Some(value) = operation.payload.get("value").and_then(Value::as_str)
+        {
+            return value.to_owned();
+        }
+    }
+    state
+        .persistence
+        .realm_meta()
+        .get(realm_id)
+        .await
+        .ok()
+        .flatten()
+        .map(|meta| meta.history_visibility)
+        .unwrap_or_else(|| "joined".to_owned())
+}
+
+async fn intended_read_receipt_policy_for_realm(
+    state: &AppState,
+    operations: &[Operation],
+    realm_id: &str,
+) -> Result<ReadReceiptPolicyProjection, &'static str> {
+    for operation in operations.iter().rev() {
+        if kinds::canonical_kind_for_operation(operation)
+            == Some(kinds::CK_REALM_READ_RECEIPT_POLICY)
+            && operation.realm_id.as_str() == realm_id
+        {
+            return read_receipt_policy_projection_from_payload(&operation.payload);
+        }
+    }
+    let policy =
+        crate::routing::events::event_log::effective_read_receipt_policy_for_realm(state, realm_id)
+            .await
+            .unwrap_or_else(|| {
+                (
+                    "optional".to_owned(),
+                    "members".to_owned(),
+                    true,
+                    false,
+                    false,
+                )
+            });
+    Ok(ReadReceiptPolicyProjection {
+        disclosure: policy.0,
+        visibility: policy.1,
+        allow_public_receipts_on_world_readable: policy.3,
+        allow_forced_public_world_readable_receipts: policy.4,
+    })
+}
+
+fn validate_read_receipt_policy_against_history(
+    policy: &ReadReceiptPolicyProjection,
+    history_visibility: &str,
+) -> Result<(), &'static str> {
+    if history_visibility != "world_readable" || policy.visibility != "public" {
+        return Ok(());
+    }
+    if !policy.allow_public_receipts_on_world_readable {
+        return Err(READ_RECEIPT_VISIBILITY_COMBINATION_INVALID);
+    }
+    if policy.disclosure == "required" && !policy.allow_forced_public_world_readable_receipts {
+        return Err(READ_RECEIPT_FORCED_PUBLIC_WORLD_READABLE_FORBIDDEN);
+    }
+    Ok(())
+}
+
 pub(crate) async fn validate_realm_key_share_policy(
     state: &AppState,
     operation: &Operation,

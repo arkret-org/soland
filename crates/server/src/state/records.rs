@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use cokret_sdk::FreshnessState;
+use cokret_sdk::{BlobVisibility, FreshnessState};
 use serde_json::Value;
 
 #[derive(Clone, Debug)]
@@ -593,6 +593,9 @@ pub struct BlobRecord {
     pub filename: Option<String>,
     pub realm_id: Option<String>,
     pub encryption: Option<Value>,
+    pub legal_hold: bool,
+    pub redacted: bool,
+    pub visibility: BlobVisibility,
     pub uploaded_by: String,
     pub created_at: chrono::DateTime<chrono::Utc>,
 }

@@ -192,13 +192,13 @@ pub(super) fn remote_handle_resolution(
 /// `handle` → `did` as a JSON value. Used by the account viewer / register
 /// outcome to expose the primary handle claim re-derived on demand from the
 /// account's durable localpart (the claim itself is never persisted).
-pub(crate) fn signed_handle_claim_value(
+pub(crate) async fn signed_handle_claim_value(
     state: &AppState,
     handle: &str,
     did: &str,
     audience: &str,
 ) -> Result<Value, AppError> {
-    let claim = signed_handle_claim(state, handle, did, audience, false)?;
+    let claim = signed_handle_claim(state, handle, did, audience, false).await?;
     claim
         .validate()
         .map_err(|err| AppError::internal(format!("handle claim validation failed: {err}")))?;
@@ -295,7 +295,7 @@ pub(super) async fn resolve_handle(
             let audience = resolve_handle_audience(&body, &state.config.service_did);
             let did = actor["did"].as_str().unwrap_or_default().to_owned();
             let handle_claim =
-                signed_handle_claim(state, &lookup.canonical, &did, &audience, true)?;
+                signed_handle_claim(state, &lookup.canonical, &did, &audience, true).await?;
             let recipient_service_did = handle_claim
                 .member_delivery_binding
                 .as_ref()
@@ -341,7 +341,34 @@ pub(super) async fn resolve_handle(
     }
 }
 
-pub(super) fn signed_handle_claim(
+async fn require_holder_also_known_as(
+    state: &AppState,
+    did: &str,
+    canonical_handle: &str,
+    service_domain: &str,
+) -> Result<(), AppError> {
+    let record = crate::routing::identity::did::identity_document_record(state, did).await;
+    let aliases = record
+        .did_document
+        .get("alsoKnownAs")
+        .and_then(Value::as_array)
+        .ok_or_else(handle_unverified_error)?;
+    let endorsed = aliases.iter().filter_map(Value::as_str).any(|alias| {
+        canonicalize_handle_for_service(alias, service_domain).as_deref() == Some(canonical_handle)
+    });
+    if endorsed {
+        Ok(())
+    } else {
+        Err(handle_unverified_error())
+    }
+}
+
+fn handle_unverified_error() -> AppError {
+    AppError::capability_denied("handle lacks holder DID Document alsoKnownAs endorsement")
+        .with_wire_code("handle_unverified")
+}
+
+pub(super) async fn signed_handle_claim(
     state: &AppState,
     handle: &str,
     did: &str,
@@ -357,17 +384,13 @@ pub(super) fn signed_handle_claim(
         ));
     }
     let service_did = state.config.service_did.clone();
-    let service_domain = service_did
-        .strip_prefix("did:web:")
-        .map(|value| value.replace(':', "."))
-        .unwrap_or_else(|| "soland.local".to_owned());
-    let localpart = handle
-        .trim_start_matches('@')
-        .split(':')
-        .next()
-        .unwrap_or(handle)
-        .to_ascii_lowercase();
-    let canonical_handle = format!("{localpart}:{service_domain}");
+    let default_domain = service_handle_domain(&service_did);
+    let canonical_handle = canonicalize_handle_for_service(handle, &default_domain)
+        .ok_or_else(|| AppError::invalid_param("handle must be canonicalizable"))?;
+    let (localpart, handle_domain) = canonical_handle
+        .split_once(':')
+        .ok_or_else(|| AppError::invalid_param("handle must be canonical <localpart>:<domain>"))?;
+    require_holder_also_known_as(state, did, &canonical_handle, handle_domain).await?;
     let handle = SdkHandle::parse(&canonical_handle).map_err(|err| {
         AppError::internal(format!("handle claim handle construction failed: {err}"))
     })?;
@@ -396,7 +419,7 @@ pub(super) fn signed_handle_claim(
     let mut claim = SdkHandleClaim {
         schema: cokret_sdk::HANDLE_CLAIM_SCHEMA.to_owned(),
         handle: Some(handle),
-        handle_aliases: vec![format!("acct:{localpart}@{service_domain}")],
+        handle_aliases: vec![format!("acct:{localpart}@{handle_domain}")],
         subject: Some(subject),
         issuer: Some(service_did.clone()),
         issuer_service_did: Some(signer_did.clone()),
@@ -498,9 +521,8 @@ pub(super) async fn list_handles_for_subject(
                 .map(RealmId::as_str)
                 .or_else(|| body.requester.as_ref().map(Did::as_str))
                 .unwrap_or(state.config.service_did.as_str());
-            generated_claim = Some(signed_handle_claim(
-                state, handle, &subject, audience, false,
-            )?);
+            generated_claim =
+                Some(signed_handle_claim(state, handle, &subject, audience, false).await?);
         }
         break;
     }

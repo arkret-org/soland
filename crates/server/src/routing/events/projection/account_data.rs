@@ -46,6 +46,10 @@ pub fn project_read_receipt_policy(state: &AppState, operation: &Operation) {
         .get("allow_public_receipts_on_world_readable")
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
+    let allow_forced_public_world_readable_receipts = payload
+        .get("allow_forced_public_world_readable_receipts")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
 
     // Synthesize a CellState::Value at the canonical cell ref. This lets
     // the cells-map fast-path serve reads without scanning the durable
@@ -62,6 +66,7 @@ pub fn project_read_receipt_policy(state: &AppState, operation: &Operation) {
         "visibility": visibility,
         "scope_overrides_allowed": scope_overrides_allowed,
         "allow_public_receipts_on_world_readable": allow_public_receipts_on_world_readable,
+        "allow_forced_public_world_readable_receipts": allow_forced_public_world_readable_receipts,
     });
     if let Ok(mut proj) = state.projection.lock() {
         proj.cells
@@ -70,10 +75,7 @@ pub fn project_read_receipt_policy(state: &AppState, operation: &Operation) {
 }
 
 fn account_data_update_type(data_type: &str) -> &'static str {
-    if matches!(
-        data_type,
-        "ck.account.blocklist" | "ck.account.blocklist.v1"
-    ) {
+    if data_type == "ck.account.blocklist" {
         BLOCKLIST_UPDATE_TYPE
     } else {
         ACCOUNT_DATA_UPDATE_TYPE

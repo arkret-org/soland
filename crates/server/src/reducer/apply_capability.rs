@@ -69,27 +69,41 @@ const RESOURCE_SELECTOR_KNOWN_FIELDS: &[&str] = &[
 /// that sentinel as fail-closed, so accepting the canonical shape here does not
 /// create an allow-all grant before the full selector evaluator lands.
 fn engine_resource_from_body(body: &Value, realm_id: &str) -> String {
+    engine_resources_from_body(body, realm_id)
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| "*".to_owned())
+}
+
+fn engine_resources_from_body(body: &Value, realm_id: &str) -> Vec<String> {
     let mut selectors = value_array_field(body, "resources");
     selectors.extend(value_array_field(body, "resource_selectors"));
+    let mut resources = Vec::new();
     for selector in &selectors {
         match selector {
-            Value::String(s) if !s.is_empty() => return s.clone(),
+            Value::String(s) if !s.is_empty() => resources.push(s.clone()),
             Value::Object(_) => {
                 if let Some(id) = selector.get("id").and_then(Value::as_str) {
                     if !id.is_empty() {
-                        return id.to_owned();
+                        resources.push(id.to_owned());
+                        continue;
                     }
                 }
                 match selector.get("kind").and_then(Value::as_str) {
-                    Some("*") => return "*".to_owned(),
-                    Some("realm") => return realm_id.to_owned(),
+                    Some("*") => resources.push("*".to_owned()),
+                    Some("realm") => resources.push(realm_id.to_owned()),
+                    Some("space") => resources.push("space".to_owned()),
+                    Some("circle") => resources.push("circle".to_owned()),
+                    Some("strand") => resources.push("strand".to_owned()),
+                    Some("morph") => resources.push("morph".to_owned()),
+                    Some("actor") => resources.push("actor".to_owned()),
                     _ => {}
                 }
             }
             _ => {}
         }
     }
-    "*".to_owned()
+    resources
 }
 
 /// Build an engine-shaped `Grant` from a projected grant cell body. Returns
@@ -310,6 +324,30 @@ fn grant_issuer(payload: &Value) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
+fn grant_parent_ref(payload: &Value) -> Option<&str> {
+    let body = grant_body(payload);
+    body.get("parent_grant_id")
+        .or_else(|| body.get("delegated_from"))
+        .or_else(|| payload.get("parent_grant_id"))
+        .or_else(|| payload.get("delegated_from"))
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+}
+
+fn grant_realm_id<'a>(body: &'a Value, operation: &'a Operation) -> &'a str {
+    body.get("realm_id")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| operation.realm_id.as_str())
+}
+
+fn grant_expires_at(body: &Value) -> Option<chrono::DateTime<chrono::Utc>> {
+    body.get("expires_at")
+        .and_then(Value::as_str)
+        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+        .map(|dt| dt.with_timezone(&chrono::Utc))
+}
+
 /// Build the canonical or_set item value stored under a grant cell. We keep
 /// the full grant body so the existing `grant_snapshot_from_value` reader
 /// (actions / resources / constraints / realm_id / expires_at / revoked)
@@ -359,6 +397,106 @@ impl ProjectionState {
             Some(CellState::Value(Value::Array(items))) => items.clone(),
             _ => Vec::new(),
         }
+    }
+
+    fn issuer_has_projected_capability(
+        &self,
+        issuer: &str,
+        realm_id: &str,
+        action: &str,
+        resource: &str,
+    ) -> bool {
+        if self
+            .realm_states
+            .get(realm_id)
+            .and_then(|realm| realm.owner.as_deref())
+            .is_some_and(|owner| owner == issuer)
+        {
+            return true;
+        }
+        const CELL_PREFIX: &str = "ck:cell:ck.component.capability.grant.v1:";
+        self.cells.iter().any(|(cell_ref, cell_state)| {
+            let Some(grant_id) = cell_ref.as_str().strip_prefix(CELL_PREFIX) else {
+                return false;
+            };
+            let Some(grant) = engine_grant_from_capability_cell_state(grant_id, cell_state) else {
+                return false;
+            };
+            grant.realm_id == realm_id
+                && grant.subject == issuer
+                && !grant.revoked
+                && grant
+                    .expires_at
+                    .is_none_or(|expires_at| expires_at > chrono::Utc::now())
+                && grant.actions.iter().any(|candidate| candidate == action)
+                && crate::authz::resource_matches(&grant.resource, resource)
+        })
+    }
+
+    fn validate_grant_issuer_upper_bound(&self, operation: &Operation) -> Result<(), &'static str> {
+        if let Some(parent_grant_id) = grant_parent_ref(&operation.payload) {
+            return self.validate_delegated_grant_issuer_upper_bound(operation, parent_grant_id);
+        }
+        let body = grant_body(&operation.payload);
+        let issuer = grant_issuer(&operation.payload).ok_or("capability_grant_issuer_missing")?;
+        let actions = validate_grant_actions(body)?;
+        let realm_id = grant_realm_id(body, operation);
+        let resources = engine_resources_from_body(body, realm_id);
+        if resources.is_empty() {
+            return Err("capability_grant_resources_empty");
+        }
+        for action in &actions {
+            for resource in &resources {
+                if !self.issuer_has_projected_capability(&issuer, realm_id, action, resource) {
+                    return Err("grant_exceeds_issuer_authority");
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_delegated_grant_issuer_upper_bound(
+        &self,
+        operation: &Operation,
+        parent_grant_id: &str,
+    ) -> Result<(), &'static str> {
+        let parent = self
+            .effective_engine_grant(parent_grant_id)
+            .ok_or("grant_revoked_upstream")?;
+        let body = grant_body(&operation.payload);
+        let issuer = grant_issuer(&operation.payload).ok_or("capability_grant_issuer_missing")?;
+        if issuer != parent.subject {
+            return Err("grant_exceeds_issuer_authority");
+        }
+        let realm_id = grant_realm_id(body, operation);
+        if realm_id != parent.realm_id {
+            return Err("grant_exceeds_issuer_authority");
+        }
+        let actions = validate_grant_actions(body)?;
+        for action in &actions {
+            if !parent.actions.iter().any(|candidate| candidate == action) {
+                return Err("grant_exceeds_issuer_authority");
+            }
+        }
+        let resources = engine_resources_from_body(body, realm_id);
+        if resources.is_empty() {
+            return Err("capability_grant_resources_empty");
+        }
+        for resource in &resources {
+            if !crate::authz::resource_matches(&parent.resource, resource) {
+                return Err("grant_exceeds_issuer_authority");
+            }
+        }
+        let child_expires_at = grant_expires_at(body);
+        if let Some(parent_expires_at) = parent.expires_at {
+            let Some(child_expires_at) = child_expires_at else {
+                return Err("grant_exceeds_issuer_authority");
+            };
+            if child_expires_at > parent_expires_at {
+                return Err("grant_exceeds_issuer_authority");
+            }
+        }
+        Ok(())
     }
 
     /// True when any existing or_set item for this cell is already
@@ -431,6 +569,11 @@ impl ProjectionState {
             };
         }
         if let Err(reason) = validate_grant_body_scope(grant_body(&operation.payload)) {
+            return ProjectionEffect::Rejected {
+                reason: reason.to_owned(),
+            };
+        }
+        if let Err(reason) = self.validate_grant_issuer_upper_bound(operation) {
             return ProjectionEffect::Rejected {
                 reason: reason.to_owned(),
             };
@@ -563,6 +706,11 @@ impl ProjectionState {
             };
         }
         if let Err(reason) = validate_grant_body_scope(body) {
+            return ProjectionEffect::Rejected {
+                reason: reason.to_owned(),
+            };
+        }
+        if let Err(reason) = self.validate_delegated_grant_issuer_upper_bound(operation, &parent) {
             return ProjectionEffect::Rejected {
                 reason: reason.to_owned(),
             };
@@ -853,11 +1001,13 @@ mod agent_key_flag_tests {
     use cokret_sdk::{OperationId, RealmId};
     use serde_json::json;
 
-    use crate::reducer::ProjectionState;
+    use crate::reducer::{ProjectionState, SolandRealmState};
 
     const AGENT: &str = "did:web:agent.example";
     const REALM: &str = "ck:realm:01970000-0000-7000-8000-000000000000";
     const GRANT: &str = "ck:grant:01970000-0000-7000-8000-0000000000a1";
+    const GRANT_2: &str = "ck:grant:01970000-0000-7000-8000-0000000000a2";
+    const GRANT_3: &str = "ck:grant:01970000-0000-7000-8000-0000000000a3";
 
     fn op(kind_object_type: &str, payload: serde_json::Value) -> Operation {
         Operation {
@@ -892,9 +1042,50 @@ mod agent_key_flag_tests {
         })
     }
 
+    fn grant_payload(
+        grant_id: &str,
+        issuer: &str,
+        subject: &str,
+        actions: serde_json::Value,
+        resources: serde_json::Value,
+    ) -> serde_json::Value {
+        json!({
+            "grant_id": grant_id,
+            "grant": {
+                "id": grant_id,
+                "schema": "ck.schema.capability_grant.v1",
+                "realm_id": REALM,
+                "issuer": issuer,
+                "subject": subject,
+                "actions": actions,
+                "resources": resources,
+            }
+        })
+    }
+
+    fn seed_realm_owner(state: &mut ProjectionState) {
+        let now = chrono::Utc::now();
+        state.realm_states.insert(
+            REALM.to_owned(),
+            SolandRealmState {
+                realm_id: REALM.to_owned(),
+                owner: Some("did:web:alice.example".to_owned()),
+                title: None,
+                deleted: false,
+                created_at: now,
+                updated_at: now,
+                trust_domain: None,
+                terminal_state: None,
+                successor_realm_id: None,
+                default_strand_id: None,
+            },
+        );
+    }
+
     #[test]
     fn pending_grant_is_fail_closed_until_key_authorize() {
         let mut state = ProjectionState::default();
+        seed_realm_owner(&mut state);
         let now = chrono::Utc::now();
         // Pending grant: flagged inactive ⇒ NOT in the engine index.
         state.apply_capability_grant(&op("capability_grant", pending_grant_payload()), now);
@@ -931,6 +1122,84 @@ mod agent_key_flag_tests {
         ));
         assert!(!state.agent_has_authorized_key(AGENT));
     }
+
+    #[test]
+    fn root_grant_without_issuer_upper_bound_is_rejected() {
+        let mut state = ProjectionState::default();
+        seed_realm_owner(&mut state);
+        let effect = state.apply_capability_grant(
+            &op(
+                "capability_grant",
+                grant_payload(
+                    GRANT_2,
+                    "did:web:bob.example",
+                    AGENT,
+                    json!(["ck.message.create"]),
+                    json!([{ "kind": "realm", "realm_id": REALM }]),
+                ),
+            ),
+            chrono::Utc::now(),
+        );
+        assert!(matches!(
+            effect,
+            crate::reducer::ProjectionEffect::Rejected { reason }
+                if reason == "grant_exceeds_issuer_authority"
+        ));
+    }
+
+    #[test]
+    fn root_grant_is_limited_to_issuer_effective_authority() {
+        let mut state = ProjectionState::default();
+        seed_realm_owner(&mut state);
+        state.apply_capability_grant(
+            &op(
+                "capability_grant",
+                grant_payload(
+                    GRANT,
+                    "did:web:alice.example",
+                    "did:web:bob.example",
+                    json!(["ck.message.create"]),
+                    json!([{ "kind": "realm", "realm_id": REALM }]),
+                ),
+            ),
+            chrono::Utc::now(),
+        );
+        let allowed = state.apply_capability_grant(
+            &op(
+                "capability_grant",
+                grant_payload(
+                    GRANT_2,
+                    "did:web:bob.example",
+                    AGENT,
+                    json!(["ck.message.create"]),
+                    json!([{ "kind": "realm", "realm_id": REALM }]),
+                ),
+            ),
+            chrono::Utc::now(),
+        );
+        assert!(matches!(
+            allowed,
+            crate::reducer::ProjectionEffect::CapabilityGrantProjected { .. }
+        ));
+        let denied = state.apply_capability_grant(
+            &op(
+                "capability_grant",
+                grant_payload(
+                    GRANT_3,
+                    "did:web:bob.example",
+                    AGENT,
+                    json!(["ck.reaction.add"]),
+                    json!([{ "kind": "realm", "realm_id": REALM }]),
+                ),
+            ),
+            chrono::Utc::now(),
+        );
+        assert!(matches!(
+            denied,
+            crate::reducer::ProjectionEffect::Rejected { reason }
+                if reason == "grant_exceeds_issuer_authority"
+        ));
+    }
 }
 
 #[cfg(test)]
@@ -938,7 +1207,7 @@ mod delegation_cycle_tests {
     use cokret_sdk::{Operation, OperationId, RealmId};
     use serde_json::json;
 
-    use crate::reducer::ProjectionState;
+    use crate::reducer::{ProjectionState, SolandRealmState};
 
     const REALM: &str = "ck:realm:01970000-0000-7000-8000-000000000000";
     const G_A: &str = "ck:grant:01970000-0000-7000-8000-00000000a001";
@@ -962,9 +1231,50 @@ mod delegation_cycle_tests {
         )
     }
 
+    fn root_grant_op(grant_id: &str, issuer: &str, subject: &str) -> Operation {
+        Operation::create(
+            OperationId::new("ck:operation:01970000-0000-7000-8000-0000000000fd").unwrap(),
+            RealmId::new(REALM.to_owned()).unwrap(),
+            crate::kinds::CK_CAPABILITY_GRANT,
+            json!({
+                "grant_id": grant_id,
+                "grant": {
+                    "issuer": issuer,
+                    "subject": subject,
+                    "actions": ["ck.message.create"],
+                    "resources": [{ "kind": "realm", "realm_id": REALM }],
+                }
+            }),
+        )
+    }
+
+    fn seed_realm_owner(state: &mut ProjectionState) {
+        let now = chrono::Utc::now();
+        state.realm_states.insert(
+            REALM.to_owned(),
+            SolandRealmState {
+                realm_id: REALM.to_owned(),
+                owner: Some("did:web:alice.example".to_owned()),
+                title: None,
+                deleted: false,
+                created_at: now,
+                updated_at: now,
+                trust_domain: None,
+                terminal_state: None,
+                successor_realm_id: None,
+                default_strand_id: None,
+            },
+        );
+    }
+
     fn proj_with_chain() -> ProjectionState {
         // Project g_b delegated from root g_a, so the chain is g_a <- g_b.
         let mut proj = ProjectionState::default();
+        seed_realm_owner(&mut proj);
+        proj.apply_capability_grant(
+            &root_grant_op(G_A, "did:web:alice.example", "did:web:alice.example"),
+            chrono::Utc::now(),
+        );
         proj.apply_capability_delegate(&delegate_op(G_B, G_A), chrono::Utc::now());
         proj
     }

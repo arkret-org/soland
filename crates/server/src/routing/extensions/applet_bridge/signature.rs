@@ -1,6 +1,7 @@
 //! Inbound transaction-push per-delivery RFC 9421 source-signature
 //! verification (`applet-integration.md` §7.3.1).
 
+use cokret_sdk::applet::WebhookSignatureAlg;
 use cokret_sdk::{AppletTransactionRequestBody, canonical};
 use salvo::http::StatusCode;
 use salvo::prelude::*;
@@ -9,6 +10,13 @@ use super::record::applet_records;
 use super::types::AppletRecord;
 use crate::error::AppError;
 use crate::state::AppState;
+
+#[derive(Clone, Debug)]
+pub(super) struct VerifiedInboundTransactionSignature {
+    pub(super) install: AppletRecord,
+    pub(super) request_digest: String,
+    pub(super) source_signature_anchor: String,
+}
 
 /// Inbound transaction-push per-delivery source-signature verification
 /// (`applet-integration.md` §7.3.1).
@@ -29,7 +37,7 @@ pub(super) async fn verify_inbound_transaction_signature(
     req: &Request,
     transaction: &AppletTransactionRequestBody,
     idempotency_key: &str,
-) -> Result<(), AppError> {
+) -> Result<VerifiedInboundTransactionSignature, AppError> {
     let source_service_did = transaction.source_service_did.as_str();
 
     // §7.3.1 ordering: a transaction push carrying only `Authorization: Bearer`
@@ -58,6 +66,7 @@ pub(super) async fn verify_inbound_transaction_signature(
             "applet transaction body is not canonical JSON: {error}"
         ))
     })?;
+    let request_digest = canonical::sha256_digest(&body_bytes);
     let expected_content_digest = applet_content_digest_header(&body_bytes);
     let content_digest = applet_required_header(req, "content-digest")?;
     if content_digest != expected_content_digest {
@@ -87,13 +96,15 @@ pub(super) async fn verify_inbound_transaction_signature(
         ));
     }
 
-    // §7.3.1 anchor: the signing key is the registration `source_service_did`'s
-    // current active verification method. Resolving it does not require a stored
-    // install — the active-install gate below is a separate authorisation check.
+    // §7.3.1 anchor: when an active install exists, the signing key must be
+    // the installed package webhook key controlled by `source_service_did`.
+    // The no-install branch keeps authentication failure ordering stable; the
+    // request still fails the active-install gate below.
     let install = active_install_for_service_did(state, source_service_did).await?;
     let verification_method = install
         .as_ref()
         .map(|install| applet_registration_verification_method(install, source_service_did))
+        .transpose()?
         .unwrap_or_else(|| format!("{source_service_did}#applet-service-key"));
 
     // Validate signature params (keyid / alg / freshness window). Window
@@ -119,15 +130,38 @@ pub(super) async fn verify_inbound_transaction_signature(
     // §7.3.1: a verified signature is not yet authorisation — the
     // `Source-Service-DID` MUST also hit an active effective install whose
     // registration service DID equals it (§4b.1). fail closed otherwise.
-    if install.is_none() {
+    let Some(install) = install else {
         return Err(AppError::capability_denied(
             "Source-Service-DID has no active effective install on this edge",
         )
         .with_status(StatusCode::FORBIDDEN)
         .with_wire_code("applet_registration_unauthorized")
         .with_top_level_reason("applet_registration_unauthorized"));
-    }
-    Ok(())
+    };
+    let package = install
+        .package
+        .as_ref()
+        .ok_or_else(|| AppError::internal("active applet install is missing its package record"))?;
+    let signature_header = applet_required_header(req, "signature")?;
+    let signature_alg = applet_signature_param_value(&signature_params, "alg").unwrap_or_default();
+    let source_signature_anchor = applet_source_signature_anchor(
+        source_service_did,
+        &destination_service_did,
+        idempotency_key,
+        &content_digest,
+        &request_digest,
+        &verification_method,
+        serde_json::to_value(&package.registration_epoch).unwrap_or(serde_json::Value::Null),
+        serde_json::to_value(&package.webhook_auth).unwrap_or(serde_json::Value::Null),
+        &signature_alg,
+        &signature_params,
+        &signature_header,
+    );
+    Ok(VerifiedInboundTransactionSignature {
+        install,
+        request_digest,
+        source_signature_anchor,
+    })
 }
 
 /// Find an active (non-revoked) effective install whose registration service
@@ -140,7 +174,7 @@ pub(super) async fn active_install_for_service_did(
 ) -> Result<Option<AppletRecord>, AppError> {
     Ok(applet_records(state).await?.into_iter().find(|record| {
         record.revoked_at.is_none()
-            && record.status != "revoked"
+            && matches!(record.status.as_str(), "installed" | "partially_installed")
             && record
                 .package
                 .as_ref()
@@ -151,22 +185,36 @@ pub(super) async fn active_install_for_service_did(
 
 /// Resolve the verification method to verify the inbound signature against.
 ///
-/// §7.3.1 anchor: the Applet registration `service_did`'s current active
-/// verification method. We prefer an explicit `webhook_auth.key_ref` on the
-/// installed package when it names the source service DID's method; otherwise
-/// fall back to the conventional `{source_service_did}#applet-service-key`.
+/// §7.3.1 anchor: the Applet registration `service_did`'s installed
+/// `webhook_auth.key_ref` must name the source service DID's method and the
+/// installed auth metadata must accept the algorithm this verifier implements.
 pub(super) fn applet_registration_verification_method(
     install: &AppletRecord,
     source_service_did: &str,
-) -> String {
-    if let Some(package) = install.package.as_ref()
-        && let key_ref = package.webhook_auth.key_ref.trim()
-        && !key_ref.is_empty()
-        && key_ref.starts_with(source_service_did)
+) -> Result<String, AppError> {
+    let package = install.package.as_ref().ok_or_else(|| {
+        applet_signature_error_invalid("active applet install is missing package webhook auth")
+    })?;
+    let key_ref = package.webhook_auth.key_ref.trim();
+    let expected_fragment_prefix = format!("{source_service_did}#");
+    if key_ref.is_empty()
+        || (key_ref != source_service_did && !key_ref.starts_with(&expected_fragment_prefix))
     {
-        return key_ref.to_owned();
+        return Err(applet_signature_error_invalid(
+            "Applet webhook_auth.key_ref must be controlled by Source-Service-DID",
+        ));
     }
-    format!("{source_service_did}#applet-service-key")
+    if !package
+        .webhook_auth
+        .accepted_algs
+        .iter()
+        .any(|alg| *alg == WebhookSignatureAlg::EdDsa)
+    {
+        return Err(applet_signature_error_invalid(
+            "Applet webhook_auth.accepted_algs must include EdDSA for inbound transaction signatures",
+        ));
+    }
+    Ok(key_ref.to_owned())
 }
 
 pub(super) fn applet_content_digest_header(bytes: &[u8]) -> String {
@@ -178,6 +226,42 @@ pub(super) fn applet_content_digest_header(bytes: &[u8]) -> String {
         "sha-256=:{}:",
         base64::engine::general_purpose::STANDARD.encode(raw)
     )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn applet_source_signature_anchor(
+    source_service_did: &str,
+    destination_service_did: &str,
+    idempotency_key: &str,
+    content_digest: &str,
+    request_digest: &str,
+    verification_method: &str,
+    registration_epoch: serde_json::Value,
+    webhook_auth: serde_json::Value,
+    signature_alg: &str,
+    signature_params: &str,
+    signature_header: &str,
+) -> String {
+    let anchor = serde_json::json!({
+        "profile": "ck.applet.source_signature_anchor.v1",
+        "operation_id": "ck.edge.applet.command.transaction",
+        "direction": "applet_to_cokret_inbound",
+        "source_service_did": source_service_did,
+        "destination_service_did": destination_service_did,
+        "idempotency_key": idempotency_key,
+        "content_digest": content_digest,
+        "request_digest": request_digest,
+        "verification_method": verification_method,
+        "signature_algorithm": signature_alg,
+        "registration_epoch": registration_epoch,
+        "webhook_auth": webhook_auth,
+        "signature_input": signature_params,
+        "signature": signature_header,
+    });
+    canonical::canonical_sha256(&anchor).unwrap_or_else(|_| {
+        let bytes = serde_json::to_vec(&anchor).unwrap_or_default();
+        canonical::sha256_digest(&bytes)
+    })
 }
 
 pub(super) fn applet_required_header(req: &Request, name: &str) -> Result<String, AppError> {

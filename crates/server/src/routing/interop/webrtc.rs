@@ -22,6 +22,7 @@ use cokret_sdk::{
     RealmId,
 };
 use ed25519_dalek::Signer as _;
+use salvo::http::HeaderValue;
 use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 use serde::Serialize;
@@ -85,7 +86,6 @@ struct UnsignedIceConfigOutcome {
     pub actor_id: Did,
     pub device_id: DeviceId,
     pub ice_servers: Vec<IceServerDescriptor>,
-    pub turn_servers: Vec<IceServerDescriptor>,
     pub ttl_seconds: u32,
     pub refresh_lead_seconds: u32,
     pub issued_at: DateTime<Utc>,
@@ -93,17 +93,13 @@ struct UnsignedIceConfigOutcome {
     pub bucket_seconds: u32,
     pub expires_at: DateTime<Utc>,
     pub force_turn: bool,
-    pub pairwise_pseudonym: String,
-    pub refreshed: bool,
 }
 
 #[derive(Clone, Debug, Serialize, salvo::oapi::ToSchema)]
 struct IceConfigSignature {
     pub alg: String,
     pub kid: String,
-    pub payload_digest: String,
     pub sig: String,
-    pub signature_input: String,
 }
 
 #[derive(Clone, Debug, Serialize, salvo::oapi::ToSchema)]
@@ -113,7 +109,6 @@ struct SolandIceConfigOutcome {
     pub actor_id: Did,
     pub device_id: DeviceId,
     pub ice_servers: Vec<IceServerDescriptor>,
-    pub turn_servers: Vec<IceServerDescriptor>,
     pub ttl_seconds: u32,
     pub refresh_lead_seconds: u32,
     pub issued_at: DateTime<Utc>,
@@ -121,8 +116,6 @@ struct SolandIceConfigOutcome {
     pub bucket_seconds: u32,
     pub expires_at: DateTime<Utc>,
     pub force_turn: bool,
-    pub pairwise_pseudonym: String,
-    pub refreshed: bool,
     pub signature: IceConfigSignature,
 }
 
@@ -131,7 +124,6 @@ impl SolandIceConfigOutcome {
         state: &AppState,
         unsigned: UnsignedIceConfigOutcome,
     ) -> Result<SolandIceConfigOutcome, AppError> {
-        let payload_digest = ice_config_payload_digest(&unsigned);
         let sig = ice_config_signature(state, &unsigned);
         Ok(SolandIceConfigOutcome {
             realm_id: unsigned.realm_id,
@@ -139,7 +131,6 @@ impl SolandIceConfigOutcome {
             actor_id: unsigned.actor_id,
             device_id: unsigned.device_id,
             ice_servers: unsigned.ice_servers,
-            turn_servers: unsigned.turn_servers,
             ttl_seconds: unsigned.ttl_seconds,
             refresh_lead_seconds: unsigned.refresh_lead_seconds,
             issued_at: unsigned.issued_at,
@@ -147,14 +138,10 @@ impl SolandIceConfigOutcome {
             bucket_seconds: unsigned.bucket_seconds,
             expires_at: unsigned.expires_at,
             force_turn: unsigned.force_turn,
-            pairwise_pseudonym: unsigned.pairwise_pseudonym,
-            refreshed: unsigned.refreshed,
             signature: IceConfigSignature {
                 alg: "EdDSA".to_owned(),
-                kid: format!("{}#media-ice", state.config.service_did),
-                payload_digest,
+                kid: format!("{}#notary-key", state.config.service_did),
                 sig,
-                signature_input: ICE_CONFIG_SIGNING_LABEL.to_owned(),
             },
         })
     }
@@ -171,7 +158,9 @@ async fn cokret_ice_config(
     body: JsonBody<MediaIceConfigRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
+    res: &mut Response,
 ) -> JsonResult<SolandIceConfigOutcome> {
+    set_ice_config_cache_headers(res);
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
@@ -288,7 +277,6 @@ async fn issue_ice_config(
         actor_id: body.actor_id,
         device_id: body.device_id,
         ice_servers,
-        turn_servers: vec![turn_server],
         ttl_seconds,
         refresh_lead_seconds,
         issued_at,
@@ -296,10 +284,17 @@ async fn issue_ice_config(
         bucket_seconds,
         expires_at,
         force_turn,
-        pairwise_pseudonym: pseudonym,
-        refreshed: false,
     };
     json_ok(SolandIceConfigOutcome::signed(state, response)?)
+}
+
+fn set_ice_config_cache_headers(res: &mut Response) {
+    res.headers_mut().insert(
+        "cache-control",
+        HeaderValue::from_static("private, no-store"),
+    );
+    res.headers_mut()
+        .insert("pragma", HeaderValue::from_static("no-cache"));
 }
 
 /// `webrtc-signaling.md` §4.1 — v1 fixes the TURN pseudonym bucket at 300s.
@@ -337,7 +332,7 @@ fn floor_to_bucket(timestamp: DateTime<Utc>, bucket_seconds: u32) -> DateTime<Ut
 /// identity segment is `ck_pseudonym_call_<16-hex>` and MUST NOT leak the
 /// principal DID / handle / a stable cross-call id to the TURN operator.
 ///
-/// Freshness (§4.1 第204/213 行): the pseudonym is HMAC-derived under the
+/// Freshness (§4.1 lines 204/213): the pseudonym is HMAC-derived under the
 /// media-service private key (the notary signing seed) — *not* a plain hash
 /// of stable ids — bound to `(realm_id, call_id, actor_id, device_id,
 /// issued_at_bucket)` plus a fresh per-bucket `nonce` derived from the same
@@ -403,12 +398,6 @@ fn turn_rest_credential(state: &AppState, username: &str) -> String {
     base64::engine::general_purpose::STANDARD.encode(hmac_sha256(secret, username.as_bytes()))
 }
 
-fn ice_config_payload_digest<T: Serialize>(payload: &T) -> String {
-    let bytes = cokret_sdk::canonical::canonical_json_bytes(payload)
-        .unwrap_or_else(|_| serde_json::to_vec(payload).unwrap_or_default());
-    cokret_sdk::canonical::sha256_digest(&bytes)
-}
-
 /// `media-service-binding.md` §3.1 / `webrtc-signaling.md` §4.1 — the ICE config
 /// response signature domain-separation label. MUST be byte-for-byte
 /// `ck.media.ice_config.v1` and MUST differ from
@@ -434,10 +423,7 @@ fn ice_config_signing_input<T: Serialize>(payload: &T) -> Vec<u8> {
 fn ice_config_signature<T: Serialize>(state: &AppState, payload: &T) -> String {
     let signing_input = ice_config_signing_input(payload);
     let signature = state.notary_signing_key().sign(&signing_input);
-    format!(
-        "eddsa-ed25519:{}",
-        URL_SAFE_NO_PAD.encode(signature.to_bytes())
-    )
+    URL_SAFE_NO_PAD.encode(signature.to_bytes())
 }
 
 // ── CKP-0010 (R3 spec-sync 2026-05-27, cokret-spec b47ff6ec) — media
@@ -639,7 +625,7 @@ async fn handle_rtc_token(
     if body.focus_id.trim().is_empty() {
         return Err(AppError::invalid_param("focus_id is required"));
     }
-    // Authz (`media-service-binding.md` §6 落账时序) — the token issuer does NOT
+    // Authz (`media-service-binding.md` §6 commit ordering) — the token issuer does NOT
     // depend on any ephemeral signaling session. Per `media-service-binding.md`
     // the client redeems the media token BEFORE it writes its own row into
     // `ck.call.state.participants[]` (the initiator may exchange a token when

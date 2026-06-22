@@ -689,7 +689,23 @@ pub(crate) fn evaluate_contact_receive(
                 "explicit_address"
             }
         }
-        ContactIntroductionEvidence::ConsentGrant { .. } => "explicit_address",
+        ContactIntroductionEvidence::ConsentGrant {
+            consent_grant_ref,
+            consent_id,
+        } => {
+            if crate::routing::identity::consent::has_active_consent_grant_evidence(
+                state,
+                subject,
+                requester,
+                consent_grant_ref.as_str(),
+                consent_id.as_deref(),
+                now,
+            ) {
+                "consent_grant"
+            } else {
+                "explicit_address"
+            }
+        }
         ContactIntroductionEvidence::SharedRealm { realm_id, .. } => {
             if policy.trusted_realm_ids.is_empty()
                 || policy

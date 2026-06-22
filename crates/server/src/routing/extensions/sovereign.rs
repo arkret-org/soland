@@ -11,20 +11,19 @@
 //!   - public DID resolution (the resolver only accepts DIDs whose method appears in
 //!     `allowed_did_methods`)
 //!
-//! Every outbound HTTP call from the enclave logs through
-//! [`audit_outbound_call`] with `target = "sovereign_boundary_audit"`.
-//! Call sites that need to make outbound HTTP MUST first check
-//! [`outbound_allowed`] and bail if false.
+//! Every outbound HTTP call from the enclave is checked by the shared
+//! `security` egress layer and logged with
+//! `target = "sovereign_boundary_audit"` before an HTTP client is built.
 //!
 //! Spec seal: `cokret-spec/spec/v1/zh/sync/sovereign-deployment.md`
 //! §2 (sovereign client + trust roots), §4 (controlled collaboration
 //! Realm / enclave deployment), §5 (enclave boundary — no escape to
 //! main), §6 (network outage + audit).
 //!
-//! TODO(G3.S9-followup): wire the [`outbound_allowed`] guard into the
-//! federation outbound worker, the DID resolver, and the directory
-//! search path; persist the enclave boundary audit log to
-//! `state.persistence`.
+//! Runtime outbound enforcement is wired at the shared `security`
+//! egress-validation layer, so federation, DID resolver, directory, and
+//! bridge call sites inherit the same deny-default boundary check before
+//! they build an HTTP client.
 
 use salvo::http::StatusCode;
 use salvo::oapi::ToSchema;

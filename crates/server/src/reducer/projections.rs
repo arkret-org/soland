@@ -365,6 +365,7 @@ pub struct SpaceContainerProjection {
     pub state_changed_at: Option<chrono::DateTime<chrono::Utc>>,
     pub created_by: String,
     pub created_at: chrono::DateTime<chrono::Utc>,
+    pub history_basis_seals: Vec<String>,
     pub updated_by: Option<String>,
     pub updated_at: Option<chrono::DateTime<chrono::Utc>>,
     /// Stream-F (Wave 1B) — `realm_destroyed_orphan` flag set by the
@@ -416,6 +417,33 @@ pub(crate) fn space_container_id_from_payload(payload: &Value) -> Option<String>
         .map(ToOwned::to_owned)
 }
 
+pub(crate) fn operation_history_basis_seals(operation: &Operation) -> Vec<String> {
+    let mut seals = Vec::new();
+    if let Some(seal_ref) = operation
+        .payload
+        .get("seal_ref")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+    {
+        seals.push(seal_ref.to_owned());
+    }
+    if let Some(seal_basis) = operation.payload.get("seal_basis") {
+        if let Some(seal_ref) = seal_basis.as_str().filter(|value| !value.trim().is_empty()) {
+            seals.push(seal_ref.to_owned());
+        }
+        if let Some(leaves) = seal_basis.get("leaves").and_then(Value::as_array) {
+            for leaf in leaves {
+                if let Some(seal_ref) = leaf.as_str().filter(|value| !value.trim().is_empty()) {
+                    seals.push(seal_ref.to_owned());
+                }
+            }
+        }
+    }
+    seals.sort();
+    seals.dedup();
+    seals
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum SpaceContainerLifecycleState {
     #[default]
@@ -449,6 +477,7 @@ pub struct StrandProjection {
     pub state_changed_at: Option<chrono::DateTime<chrono::Utc>>,
     pub created_by: String,
     pub created_at: chrono::DateTime<chrono::Utc>,
+    pub history_basis_seals: Vec<String>,
     pub updated_by: Option<String>,
     pub updated_at: Option<chrono::DateTime<chrono::Utc>>,
     /// CKP-0007 — the Circle this Strand is scoped to, if any (`ck:circle:…`).
@@ -562,6 +591,7 @@ pub struct MorphProjection {
     pub state_changed_at: Option<chrono::DateTime<chrono::Utc>>,
     pub created_by: String,
     pub created_at: chrono::DateTime<chrono::Utc>,
+    pub history_basis_seals: Vec<String>,
     pub updated_by: Option<String>,
     pub updated_at: Option<chrono::DateTime<chrono::Utc>>,
 }
@@ -748,6 +778,7 @@ pub struct MessageState {
     pub encrypted: bool,
     pub operation_id: String,
     pub created_at: chrono::DateTime<chrono::Utc>,
+    pub history_basis_seals: Vec<String>,
     /// If this is a revision, points to the original event_id.
     pub revision_of: Option<String>,
     /// If redacted, the tombstone timestamp.
@@ -1012,6 +1043,7 @@ pub struct SolandRelationState {
     pub source_event_id: Option<String>,
     pub source_event_digest: Option<String>,
     pub created_at: chrono::DateTime<chrono::Utc>,
+    pub history_basis_seals: Vec<String>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
 

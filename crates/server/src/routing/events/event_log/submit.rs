@@ -863,7 +863,7 @@ pub(in crate::routing) async fn submit_event_value(
                 ));
             }
             let invite_preflight_reject =
-                preflight_invite_projection_reject(&proj, operation, &state.hlc);
+                preflight_invite_projection_reject(state, &proj, operation, &state.hlc);
             let invite_proof_context = if invite_preflight_reject.is_none() {
                 invite_claim_proof_context_from_projection(&proj, operation).map_err(|reason| {
                     SubmitOneError::new(StatusCode::PRECONDITION_FAILED, reason, reason)

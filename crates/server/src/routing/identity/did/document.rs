@@ -49,7 +49,10 @@ pub(super) async fn run_webvh_resolution_checks(
     Ok(())
 }
 
-pub(super) async fn identity_document_record(state: &AppState, did: &str) -> WebvhDocumentRecord {
+pub(in crate::routing) async fn identity_document_record(
+    state: &AppState,
+    did: &str,
+) -> WebvhDocumentRecord {
     if let Some(did_document) =
         crate::routing::extensions::applet_bridge::did_document_for_extension_actor(state, did)
             .await

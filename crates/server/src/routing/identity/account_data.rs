@@ -78,6 +78,10 @@ const REGISTERED_ACCOUNT_DATA_TYPES: &[AccountDataTypeSpec] = &[
         controller_private: true,
     },
     AccountDataTypeSpec {
+        data_type: "ck.account.blocklist",
+        controller_private: true,
+    },
+    AccountDataTypeSpec {
         data_type: "ck.dnd_schedule",
         controller_private: true,
     },
@@ -153,10 +157,7 @@ fn entry_from(record: AccountDataRecord) -> AccountDataEntry {
 }
 
 fn account_data_update_type(data_type: &str) -> &'static str {
-    if matches!(
-        data_type,
-        "ck.account.blocklist" | "ck.account.blocklist.v1"
-    ) {
+    if data_type == "ck.account.blocklist" {
         BLOCKLIST_UPDATE_TYPE
     } else {
         ACCOUNT_DATA_UPDATE_TYPE
@@ -435,6 +436,13 @@ mod tests {
         );
         assert!(
             validate_private_account_data_content(
+                "ck.account.blocklist",
+                &json!({"encrypted_payload": encrypted_envelope()}),
+            )
+            .is_ok()
+        );
+        assert!(
+            validate_private_account_data_content(
                 "ck.push_rules",
                 &json!({"encrypted_payload": encrypted_envelope()}),
             )
@@ -444,6 +452,12 @@ mod tests {
         let err =
             validate_private_account_data_content("ck.dnd_schedule", &json!({"enabled": true}))
                 .unwrap_err();
+        assert!(err.to_string().contains("encrypted"));
+        let err = validate_private_account_data_content(
+            "ck.account.blocklist",
+            &json!({"entries": [{"target": "did:web:bob.example"}]}),
+        )
+        .unwrap_err();
         assert!(err.to_string().contains("encrypted"));
         let err = validate_private_account_data_content(
             key,

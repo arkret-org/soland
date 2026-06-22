@@ -484,6 +484,7 @@ mod tests {
             encrypted: false,
             operation_id: "ck:operation:01904100-0000-7000-8000-0000000000a2".to_owned(),
             created_at: fixed_time("2020-01-01T00:00:00Z"),
+            history_basis_seals: Vec::new(),
             revision_of: None,
             redacted_at: None,
         }
@@ -706,6 +707,7 @@ mod tests {
                 encrypted: false,
                 operation_id: "ck:operation:01904100-0000-7000-8000-0000000000a2".to_owned(),
                 created_at: now,
+                history_basis_seals: Vec::new(),
                 revision_of: None,
                 redacted_at: Some(now),
             },

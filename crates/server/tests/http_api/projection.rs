@@ -443,6 +443,7 @@ async fn projection_morphs_endpoint_filters_circle_scope() {
                     state_changed_at: None,
                     created_by: "did:web:alice.example".to_owned(),
                     created_at: now,
+                    history_basis_seals: Vec::new(),
                     updated_by: None,
                     updated_at: None,
                 },

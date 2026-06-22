@@ -577,6 +577,7 @@ impl ProjectionState {
                 source_event_id: None,
                 source_event_digest: None,
                 created_at: now,
+                history_basis_seals: Vec::new(),
                 updated_at: now,
             });
         relation.realm_id = realm_id.to_owned();

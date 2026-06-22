@@ -9,6 +9,9 @@ const SOLAND_EGRESS_DENYLIST: &str = "SOLAND_EGRESS_DENYLIST";
 const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const SOLAND_FEDERATION_DENYLIST: &str = "SOLAND_FEDERATION_DENYLIST";
 const SOLAND_FEDERATION_PEER_DENYLIST: &str = "SOLAND_FEDERATION_PEER_DENYLIST";
+const SOLAND_SOVEREIGN_ENCLAVE: &str = "SOLAND_SOVEREIGN_ENCLAVE";
+const SOLAND_SOVEREIGN_ENCLAVE_ALLOWED_OUTBOUND_HOSTS: &str =
+    "SOLAND_SOVEREIGN_ENCLAVE_ALLOWED_OUTBOUND_HOSTS";
 
 pub fn private_networks_allowed(development_mode: bool) -> bool {
     env_bool(SOLAND_EGRESS_ALLOW_PRIVATE_NETWORKS).unwrap_or(development_mode)
@@ -117,6 +120,7 @@ fn resolve_and_validate_url_for_egress(
         .host_str()
         .filter(|host| !host.trim().is_empty())
         .ok_or_else(|| format!("{purpose}: URL host is required"))?;
+    validate_sovereign_enclave_host_policy(host, purpose)?;
     validate_host_policy(host, purpose)?;
     if !allow_private_networks
         && (host.eq_ignore_ascii_case("localhost") || host.ends_with(".localhost"))
@@ -159,6 +163,7 @@ where
         .host_str()
         .filter(|host| !host.trim().is_empty())
         .ok_or_else(|| format!("{purpose}: URL host is required"))?;
+    validate_sovereign_enclave_host_policy(host, purpose)?;
     validate_host_policy(host, purpose)?;
     if !allow_private_networks
         && (host.eq_ignore_ascii_case("localhost") || host.ends_with(".localhost"))
@@ -189,6 +194,36 @@ fn record_egress_denial(url: &Url, purpose: &str, error: &str) {
         scheme,
         %error,
         "outbound HTTP request denied by egress policy"
+    );
+}
+
+fn validate_sovereign_enclave_host_policy(host: &str, purpose: &str) -> Result<(), String> {
+    if !env_bool(SOLAND_SOVEREIGN_ENCLAVE).unwrap_or(false) {
+        return Ok(());
+    }
+    let host = host.trim_end_matches('.').to_ascii_lowercase();
+    let allowed_hosts = host_policy_entries(SOLAND_SOVEREIGN_ENCLAVE_ALLOWED_OUTBOUND_HOSTS);
+    let allowed = allowed_hosts
+        .iter()
+        .any(|entry| host_policy_entry_matches(entry, &host));
+    audit_sovereign_enclave_egress(purpose, &host, allowed);
+    if allowed {
+        Ok(())
+    } else {
+        Err(format!(
+            "{purpose}: sovereign_enclave_outbound_not_allowed egress target {host}"
+        ))
+    }
+}
+
+fn audit_sovereign_enclave_egress(purpose: &str, host: &str, allowed: bool) {
+    let posture = if allowed { "allowed" } else { "denied" };
+    tracing::info!(
+        target = "sovereign_boundary_audit",
+        target_class = purpose,
+        host,
+        posture,
+        "sovereign enclave outbound call audit"
     );
 }
 
@@ -312,6 +347,8 @@ fn egress_denial_reason(error: &str) -> &'static str {
         "host_not_allowed"
     } else if error.contains("host_denied") {
         "host_denied"
+    } else if error.contains("sovereign_enclave_outbound_not_allowed") {
+        "sovereign_enclave_outbound_not_allowed"
     } else if error.contains("blocked") {
         "blocked_address"
     } else if error.contains("scheme") {

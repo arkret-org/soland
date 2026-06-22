@@ -1,5 +1,14 @@
 use super::*;
 
+const CONTACT_MESSAGE_STUB: &str = "[message withheld until contact is accepted]";
+const CONTACT_CONSENT_ACTION_SCOPES: &[&str] = &[
+    "invite",
+    "direct_message",
+    "voice_call",
+    "video_call",
+    "presence",
+];
+
 #[endpoint(
     operation_id = "ck.self.contact.command.request",
     tags("contacts"),
@@ -77,6 +86,20 @@ pub(crate) async fn contact_request(
         persist_consent_cell(state, &pending, pending_previous).await?;
         "pending"
     };
+    let stub_message = message.is_some()
+        && should_stub_local_contact_message(
+            state,
+            &session.actor,
+            &target,
+            contact_status,
+            is_remote_target,
+        )
+        .await?;
+    let record_message = if stub_message {
+        Some(CONTACT_MESSAGE_STUB.to_owned())
+    } else {
+        message.clone()
+    };
     let store = state.persistence.contacts();
     if let Some(mut existing) = store
         .get_scoped(&session.actor, &target, &scope)
@@ -93,17 +116,28 @@ pub(crate) async fn contact_request(
         let status_changed = existing.status != contact_status;
         // A re-sent request MAY refresh the greeting; keep the prior one
         // when the new request omits a message.
-        let message_changed = message.is_some() && existing.message != message;
+        let message_changed = record_message.is_some() && existing.message != record_message;
         if status_changed || message_changed {
             existing.status = contact_status.to_owned();
-            if message.is_some() {
-                existing.message = message.clone();
+            if record_message.is_some() {
+                existing.message = record_message.clone();
             }
             existing.updated_at = now();
             store
                 .put(&existing)
                 .await
                 .map_err(|error| AppError::internal(error.to_string()))?;
+            if stub_message && message_changed {
+                append_local_stubbed_contact_message_audit(
+                    state,
+                    &target,
+                    &session.actor,
+                    &scope,
+                    message.as_deref().unwrap_or_default(),
+                    existing.request_event_ref.as_deref().unwrap_or_default(),
+                )
+                .await;
+            }
         }
         return json_ok(contact_request_outcome(
             &existing,
@@ -131,7 +165,7 @@ pub(crate) async fn contact_request(
         request_event_ref: Some(request_event_ref.to_string()),
         response_event_ref: None,
         tombstone_event_ref: None,
-        message,
+        message: record_message,
         // Local (same-Principal-Server) request: peer's home server is this
         // service, so there is nothing cross-PS to address.
         peer_service_did: None,
@@ -155,6 +189,17 @@ pub(crate) async fn contact_request(
         .put(&contact)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
+    if stub_message {
+        append_local_stubbed_contact_message_audit(
+            state,
+            &contact.target,
+            &contact.requester,
+            &contact.scope,
+            message.as_deref().unwrap_or_default(),
+            request_event_ref.as_str(),
+        )
+        .await;
+    }
     // Spec §4.1 — federate the signed `ck.contact.requested` fact to the
     // target holder's home Principal Server when the target is remote.
     if let Some(recipient_service_did) = recipient_service_did.as_deref()
@@ -209,6 +254,72 @@ fn normalize_contact_message(raw: Option<&str>) -> Result<Option<String>, AppErr
         ));
     }
     Ok(Some(normalized))
+}
+
+async fn should_stub_local_contact_message(
+    state: &AppState,
+    requester: &str,
+    target: &str,
+    contact_status: &str,
+    is_remote_target: bool,
+) -> Result<bool, AppError> {
+    if is_remote_target || contact_status != "pending" {
+        return Ok(false);
+    }
+    if actor_has_active_consent_for_peer(state, target, requester) {
+        return Ok(false);
+    }
+    Ok(!has_accepted_contact_for_peer_any_scope(state, target, requester).await?)
+}
+
+fn actor_has_active_consent_for_peer(state: &AppState, holder: &str, peer: &str) -> bool {
+    CONTACT_CONSENT_ACTION_SCOPES
+        .iter()
+        .copied()
+        .any(|scope| has_active_consent_for_scope(state, holder, peer, scope, now()))
+}
+
+async fn has_accepted_contact_for_peer_any_scope(
+    state: &AppState,
+    actor: &str,
+    peer: &str,
+) -> Result<bool, AppError> {
+    let contacts = state
+        .persistence
+        .contacts()
+        .list_for_actor(actor)
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    Ok(contacts.iter().any(|record| {
+        record.status == "accepted"
+            && ((record.requester == actor && record.target == peer)
+                || (record.requester == peer && record.target == actor))
+    }))
+}
+
+async fn append_local_stubbed_contact_message_audit(
+    state: &AppState,
+    target: &str,
+    requester: &str,
+    scope: &str,
+    message: &str,
+    contact_event_id: &str,
+) {
+    append_audit_log(
+        state,
+        Some(target),
+        "contacts.message_stubbed",
+        json!({
+            "requester": requester,
+            "target": target,
+            "scope": scope,
+            "contact_event_id": contact_event_id,
+            "message_chars": message.chars().count(),
+            "message_digest": cokret_sdk::canonical::sha256_digest(message.as_bytes()),
+        }),
+        "accepted",
+    )
+    .await;
 }
 
 fn contact_introduction_evidence_digest(

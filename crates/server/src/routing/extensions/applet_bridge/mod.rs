@@ -11,6 +11,7 @@ mod ghost;
 mod install;
 mod record;
 mod signature;
+mod transaction;
 mod types;
 
 #[cfg(test)]

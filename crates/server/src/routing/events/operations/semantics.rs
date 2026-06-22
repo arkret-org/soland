@@ -303,30 +303,7 @@ fn validate_typed_payload_shapes(kind: &str, operation: &Operation) -> Result<()
             }
             Ok(())
         }
-        // REDU-6 — Actor Profile create/update with unverified
-        // `accountable_principal_ids[]` MUST reject the whole event with
-        // `failed_precondition reason=accountability_grant_missing`.
-        // TODO(R3.1): cross-check each accountable_principal_ids[] DID against the
-        // `ck.identity.accountability_grant` projection; for now we
-        // only enforce the wire-shape contract (presence of the
-        // accountable_principal_ids[] field implies verification must happen).
-        "ck.profile.create" | "ck.profile.update" => {
-            if operation
-                .payload
-                .get("accountable_principal_ids")
-                .and_then(|v| v.as_array())
-                .is_some_and(|arr| !arr.is_empty())
-                && operation
-                    .payload
-                    .get("accountability_grant_refs")
-                    .and_then(|v| v.as_array())
-                    .is_none_or(|arr| arr.is_empty())
-            {
-                return Err("accountability_grant_missing: profile requires \
-                     accountability_grant_refs[] when accountable_principal_ids[] is non-empty");
-            }
-            Ok(())
-        }
+        "ck.profile.create" | "ck.profile.update" => Ok(()),
         _ => Ok(()),
     }
 }
@@ -534,6 +511,10 @@ pub fn operation_schema_for_kind(kind: &str) -> Option<OperationPayloadSchema> {
         kinds::CK_REALM_HISTORY_VISIBILITY => OperationPayloadSchema {
             requirements: REALM_POLICY_VALUE_REQUIREMENTS,
             validate: Some(validate_history_visibility_payload),
+        },
+        kinds::CK_REALM_READ_RECEIPT_POLICY => OperationPayloadSchema {
+            requirements: &[],
+            validate: Some(validate_read_receipt_policy_payload),
         },
         kinds::CK_REALM_POLICY_COMPONENTS => OperationPayloadSchema {
             requirements: REALM_POLICY_VALUE_REQUIREMENTS,

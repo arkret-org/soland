@@ -93,6 +93,11 @@ pub(super) fn validate_moderation_report_safety(
     }
 
     let effective_scope = moderation_effective_scope_value(realm_id, effective_scope)?;
+    let target_scope =
+        moderation_target_effective_scope_value(state, realm_id, reporter, target_ref)?;
+    if target_scope != effective_scope {
+        return Err(moderation_target_not_found());
+    }
     let evidence_package =
         validate_moderation_evidence_package(evidence_package, &effective_scope)?;
     let franking_proof = validate_moderation_franking_proof(state, realm_id, franking_proof)?;
@@ -154,6 +159,83 @@ fn moderation_effective_scope_value(
             }))
         }
     }
+}
+
+fn moderation_target_not_found() -> AppError {
+    AppError::not_found("moderation target not found")
+}
+
+fn moderation_target_effective_scope_value(
+    state: &AppState,
+    realm_id: &str,
+    reporter: &str,
+    target_ref: &str,
+) -> Result<Value, AppError> {
+    if target_ref == realm_id {
+        return Ok(json!({"kind": "realm", "realm_id": realm_id}));
+    }
+    let projection = state
+        .projection
+        .lock()
+        .map_err(|_| AppError::internal("projection state unavailable"))?;
+    let scope_circle_id = if let Some(message) = moderation_target_message(&projection, target_ref)
+        .filter(|message| message.realm_id == realm_id)
+    {
+        message
+            .content
+            .get("scope_circle_id")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned)
+            .or_else(|| projection.strand_scope_circle_id(&message.thread_id))
+    } else if let Some(strand) = projection
+        .strands
+        .get(target_ref)
+        .filter(|strand| strand.realm_id == realm_id)
+    {
+        strand.scope_circle_id.clone()
+    } else if let Some(morph) = projection
+        .morphs
+        .get(target_ref)
+        .filter(|morph| morph.realm_id == realm_id)
+    {
+        morph.scope_circle_id.clone()
+    } else if let Some(space) = projection
+        .space_containers
+        .get(target_ref)
+        .filter(|space| space.realm_id == realm_id)
+    {
+        space.scope_circle_id.clone()
+    } else if let Some(relation) = projection
+        .relations
+        .get(target_ref)
+        .filter(|relation| relation.realm_id == realm_id)
+    {
+        relation.scope_circle_id.clone()
+    } else {
+        return Err(moderation_target_not_found());
+    };
+    if let Some(circle_id) = scope_circle_id {
+        if !projection.circle_scope_visible_to_actor(&circle_id, reporter) {
+            return Err(moderation_target_not_found());
+        }
+        return Ok(json!({
+            "kind": "circle",
+            "realm_id": realm_id,
+            "circle_id": circle_id,
+        }));
+    }
+    Ok(json!({"kind": "realm", "realm_id": realm_id}))
+}
+
+fn moderation_target_message<'a>(
+    projection: &'a crate::reducer::ProjectionState,
+    target_ref: &str,
+) -> Option<&'a crate::reducer::MessageState> {
+    projection.messages.get(target_ref).or_else(|| {
+        target_ref
+            .strip_prefix("ck:message:")
+            .and_then(|suffix| projection.messages.get(&format!("ck:event:{suffix}")))
+    })
 }
 
 fn validate_moderation_evidence_package(
@@ -545,26 +627,28 @@ async fn moderation_report(
         "submitted",
     )
     .await;
+    let audit_agent_principal_id =
+        notify_audit_agent_for_report(state, audit_policy.as_ref(), &report_payload).await;
     let mut routed_to = Vec::new();
-    match validate_did(&state.config.service_did) {
-        Ok(did) => routed_to.push(did),
-        Err(()) => tracing::warn!(
-            service_did = %state.config.service_did,
-            "service_did is not a valid bare DID; omitted from routed_to"
-        ),
-    }
-    if let Some(audit_agent_principal_id) =
-        notify_audit_agent_for_report(state, audit_policy.as_ref(), &report_payload).await
-    {
-        // `routed_to` is spec-constrained to bare DIDs; the audit-agent
-        // principal id may come from an external identity response, so it
-        // only rides the wire when it parses as a DID.
-        match validate_did(&audit_agent_principal_id) {
+    if moderation_routing_visible_to_actor(state, &realm_id, &session.actor).await {
+        match validate_did(&state.config.service_did) {
             Ok(did) => routed_to.push(did),
             Err(()) => tracing::warn!(
-                %audit_agent_principal_id,
-                "audit agent principal id is not a bare DID; omitted from routed_to"
+                service_did = %state.config.service_did,
+                "service_did is not a valid bare DID; omitted from routed_to"
             ),
+        }
+        if let Some(audit_agent_principal_id) = audit_agent_principal_id {
+            // `routed_to` is spec-constrained to bare DIDs; the audit-agent
+            // principal id may come from an external identity response, so it
+            // only rides the wire when it parses as a DID.
+            match validate_did(&audit_agent_principal_id) {
+                Ok(did) => routed_to.push(did),
+                Err(()) => tracing::warn!(
+                    %audit_agent_principal_id,
+                    "audit agent principal id is not a bare DID; omitted from routed_to"
+                ),
+            }
         }
     }
     json_ok(ModerationReportOutcome {
@@ -657,6 +741,61 @@ async fn realm_owner_matches(state: &AppState, realm_id: &str, actor: &str) -> b
         .ok()
         .flatten()
         .is_some_and(|meta| meta.owner == actor)
+}
+
+async fn moderation_routing_visible_to_actor(
+    state: &AppState,
+    realm_id: &str,
+    actor: &str,
+) -> bool {
+    if state.config.is_admin_principal(actor) {
+        return true;
+    }
+    let owner = state
+        .persistence
+        .realm_meta()
+        .get(realm_id)
+        .await
+        .ok()
+        .flatten()
+        .map(|meta| meta.owner);
+    if owner.as_deref() == Some(actor) {
+        return true;
+    }
+    let members = state
+        .realms
+        .lock()
+        .ok()
+        .map(|realms| {
+            if let Some(realm) = RealmId::new(realm_id.to_owned())
+                .ok()
+                .and_then(|id| realms.get(&id))
+            {
+                return realm.members.iter().map(ToString::to_string).collect();
+            }
+            Vec::new()
+        })
+        .unwrap_or_default();
+    [
+        "ck.moderation.decision",
+        "ck.realm.moderation_policy",
+        "ck.realm.admin",
+    ]
+    .into_iter()
+    .any(|action| {
+        state
+            .authz
+            .check(
+                actor,
+                action,
+                realm_id,
+                realm_id,
+                owner.as_deref(),
+                &members,
+                &[],
+            )
+            .allowed
+    })
 }
 
 async fn notify_audit_agent_for_report(
@@ -1084,7 +1223,7 @@ mod report_safety_tests {
     const REPORTER: &str = "did:web:alice.example";
 
     fn test_state() -> AppState {
-        AppState::new(
+        let state = AppState::new(
             AppConfig {
                 bind: "127.0.0.1:0".parse().unwrap(),
                 metrics_bind: "127.0.0.1:0".parse().unwrap(),
@@ -1145,7 +1284,30 @@ mod report_safety_tests {
                 log_format: crate::config::LogFormat::Plain,
             },
             Db { pool: None },
-        )
+        );
+        state
+            .projection
+            .lock()
+            .expect("projection")
+            .messages
+            .insert(
+                TARGET.replacen("ck:message:", "ck:event:", 1),
+                crate::reducer::MessageState {
+                    event_id: TARGET.replacen("ck:message:", "ck:event:", 1),
+                    realm_id: REALM.to_owned(),
+                    sender: REPORTER.to_owned(),
+                    thread_id: REALM.to_owned(),
+                    content: json!({ "kind": "ck.content.text", "body": "reported" }),
+                    expiry: None,
+                    encrypted: false,
+                    operation_id: "ck:operation:01904100-0000-7000-8000-000000000777".to_owned(),
+                    created_at: chrono::Utc::now(),
+                    history_basis_seals: Vec::new(),
+                    revision_of: None,
+                    redacted_at: None,
+                },
+            );
+        state
     }
 
     fn realm_scope() -> Value {

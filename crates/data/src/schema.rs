@@ -126,6 +126,18 @@ diesel::table! {
 }
 
 diesel::table! {
+    applet_transactions (source_service_did, idempotency_key) {
+        source_service_did -> Text,
+        idempotency_key -> Text,
+        source_signature_anchor -> Text,
+        request_digest -> Text,
+        outcome -> Nullable<Jsonb>,
+        received_at -> Timestamptz,
+        completed_at -> Nullable<Timestamptz>,
+    }
+}
+
+diesel::table! {
     push_bridge_cache (id) {
         id -> Text,
         push_gateway_url -> Text,
@@ -371,6 +383,8 @@ diesel::table! {
         payload -> Jsonb,
         retention_expires_at -> Nullable<Timestamptz>,
         legal_hold -> Bool,
+        redacted -> Bool,
+        visibility -> Text,
         created_at -> Timestamptz,
     }
 }
@@ -512,6 +526,7 @@ diesel::table! {
         state_changed_at -> Nullable<Timestamptz>,
         created_by_id -> Text,
         created_at -> Timestamptz,
+        history_basis_seals -> Jsonb,
         updated_by_id -> Nullable<Text>,
         updated_at -> Nullable<Timestamptz>,
     }
@@ -532,6 +547,7 @@ diesel::table! {
         state_changed_at -> Nullable<Timestamptz>,
         created_by_id -> Text,
         created_at -> Timestamptz,
+        history_basis_seals -> Jsonb,
         updated_by_id -> Nullable<Text>,
         updated_at -> Nullable<Timestamptz>,
     }
@@ -552,6 +568,7 @@ diesel::table! {
         state_changed_at -> Nullable<Timestamptz>,
         created_by_id -> Text,
         created_at -> Timestamptz,
+        history_basis_seals -> Jsonb,
         updated_by_id -> Nullable<Text>,
         updated_at -> Nullable<Timestamptz>,
     }
@@ -644,6 +661,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     sessions,
     devices,
     federation_transactions,
+    applet_transactions,
     push_bridge_cache,
     multisig_pending,
     audit_logs,

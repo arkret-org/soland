@@ -17,7 +17,10 @@ use serde_json::{Value, json};
 
 use super::{AuthArgs, append_audit_log, now, query_param, sha256_hex, validate_did};
 use crate::error::AppError;
-use crate::state::{AppState, ConsentCellKey, ConsentCellRecord, ConsentGrantDot, ContactRecord};
+use crate::state::{
+    AppState, ConsentCellKey, ConsentCellRecord, ConsentGrantDot, ContactRecord,
+    ProjectionEventRecord,
+};
 use crate::{JsonResult, ids, json_ok};
 
 pub(super) fn router() -> Router {
@@ -95,10 +98,28 @@ async fn project_consent_revoke_operation(
     validate_holder_update(&holder, &holder, &peer)?;
     let observed_dots = observed_dots(&operation.payload)?;
     let revoked_at = consent_revoked_at(&operation.payload)?.unwrap_or(operation.created_at);
-    let previous = consent_cell_snapshot(state, &holder, &peer, &scope);
-    let updated = revoke_cell_with_dots(state, &holder, &peer, &scope, &observed_dots, revoked_at);
-    persist_consent_cell(state, &updated, previous).await?;
-    upsert_contact_status_at(state, &peer, &holder, &scope, "pending", revoked_at).await
+    let mutations =
+        revoke_cells_with_observed_dots(state, &holder, &peer, &scope, &observed_dots, revoked_at);
+    for mutation in &mutations {
+        persist_consent_cell(state, &mutation.updated, mutation.previous.clone()).await?;
+        if mutation
+            .previous
+            .as_ref()
+            .is_some_and(consent_cell_had_projection_material)
+        {
+            upsert_contact_status_at(
+                state,
+                &peer,
+                &holder,
+                &mutation.updated.scope,
+                "pending",
+                revoked_at,
+            )
+            .await?;
+        }
+    }
+    emit_consent_revoke_invalidation(state, &holder, &peer, &scope, revoked_at, &mutations).await;
+    Ok(())
 }
 
 #[endpoint(
@@ -252,10 +273,39 @@ async fn revoke_consent_cell(
     let body = body.into_inner();
     validate_holder_update(&session.actor, &holder, body.peer_did.as_str())?;
     let scope = normalize_scope(body.consent_scope.as_deref())?;
-    let previous = consent_cell_snapshot(state, &holder, body.peer_did.as_str(), &scope);
-    let updated = revoke_cell(state, &holder, body.peer_did.as_str(), &scope, now());
-    persist_consent_cell(state, &updated, previous).await?;
-    upsert_contact_status(state, body.peer_did.as_str(), &holder, &scope, "pending").await?;
+    let revoked_at = now();
+    let mutations = revoke_cells(state, &holder, body.peer_did.as_str(), &scope, revoked_at);
+    let updated = mutations
+        .iter()
+        .find(|mutation| mutation.updated.scope == scope)
+        .map(|mutation| mutation.updated.clone())
+        .unwrap_or_else(|| empty_cell(&holder, body.peer_did.as_str(), &scope, revoked_at));
+    for mutation in &mutations {
+        persist_consent_cell(state, &mutation.updated, mutation.previous.clone()).await?;
+        if mutation
+            .previous
+            .as_ref()
+            .is_some_and(consent_cell_had_projection_material)
+        {
+            upsert_contact_status(
+                state,
+                body.peer_did.as_str(),
+                &holder,
+                &mutation.updated.scope,
+                "pending",
+            )
+            .await?;
+        }
+    }
+    emit_consent_revoke_invalidation(
+        state,
+        &holder,
+        body.peer_did.as_str(),
+        &scope,
+        revoked_at,
+        &mutations,
+    )
+    .await;
     append_audit_log(
         state,
         Some(&holder),
@@ -420,7 +470,7 @@ pub(super) fn record_pending_request(
     cell.clone()
 }
 
-pub(super) fn has_active_consent_for_scope(
+pub(crate) fn has_active_consent_for_scope(
     state: &AppState,
     holder: &str,
     peer: &str,
@@ -710,6 +760,102 @@ fn grant_cell_with_dot(
     cell.clone()
 }
 
+fn revoke_cells(
+    state: &AppState,
+    holder: &str,
+    peer: &str,
+    scope: &str,
+    revoked_at: DateTime<Utc>,
+) -> Vec<ConsentCellMutation> {
+    revoke_cells_inner(state, holder, peer, scope, None, revoked_at)
+}
+
+fn revoke_cells_with_observed_dots(
+    state: &AppState,
+    holder: &str,
+    peer: &str,
+    scope: &str,
+    observed_dots: &[String],
+    revoked_at: DateTime<Utc>,
+) -> Vec<ConsentCellMutation> {
+    revoke_cells_inner(state, holder, peer, scope, Some(observed_dots), revoked_at)
+}
+
+fn revoke_cells_inner(
+    state: &AppState,
+    holder: &str,
+    peer: &str,
+    scope: &str,
+    observed_dots: Option<&[String]>,
+    revoked_at: DateTime<Utc>,
+) -> Vec<ConsentCellMutation> {
+    revoke_target_scopes(scope)
+        .into_iter()
+        .map(|target_scope| {
+            let previous = consent_cell_snapshot(state, holder, peer, &target_scope);
+            let dots = if scope == "any" && target_scope != "any" {
+                grant_dots_for_cell(state, holder, peer, &target_scope)
+            } else {
+                observed_dots
+                    .map(|dots| dots.to_vec())
+                    .unwrap_or_else(|| grant_dots_for_cell(state, holder, peer, &target_scope))
+            };
+            let mut updated =
+                revoke_cell_with_dots(state, holder, peer, &target_scope, &dots, revoked_at);
+            if scope == "any" && target_scope != "any" {
+                updated = mark_cell_superseded_by_any_revoke(
+                    state,
+                    holder,
+                    peer,
+                    &target_scope,
+                    revoked_at,
+                );
+            }
+            ConsentCellMutation { previous, updated }
+        })
+        .collect()
+}
+
+fn revoke_target_scopes(scope: &str) -> Vec<String> {
+    if scope == "any" {
+        std::iter::once("any")
+            .chain(CONSENT_ACTION_SCOPE_CASCADE.iter().copied())
+            .map(ToOwned::to_owned)
+            .collect()
+    } else {
+        vec![scope.to_owned()]
+    }
+}
+
+fn grant_dots_for_cell(state: &AppState, holder: &str, peer: &str, scope: &str) -> Vec<String> {
+    state
+        .consent_cells
+        .lock()
+        .expect("consent_cells lock")
+        .get(&consent_key(holder, peer, scope))
+        .map(|cell| cell.grant_dots.keys().cloned().collect())
+        .unwrap_or_default()
+}
+
+fn mark_cell_superseded_by_any_revoke(
+    state: &AppState,
+    holder: &str,
+    peer: &str,
+    scope: &str,
+    revoked_at: DateTime<Utc>,
+) -> ConsentCellRecord {
+    let key = consent_key(holder, peer, scope);
+    let mut cells = state.consent_cells.lock().expect("consent_cells lock");
+    let cell = cells
+        .entry(key)
+        .or_insert_with(|| empty_cell(holder, peer, scope, revoked_at));
+    cell.revoked_dots
+        .insert(SUPERSEDED_BY_ANY_REVOKE.to_owned());
+    cell.revoked_at = Some(revoked_at);
+    cell.updated_at = revoked_at;
+    cell.clone()
+}
+
 fn revoke_cell(
     state: &AppState,
     holder: &str,
@@ -842,6 +988,13 @@ fn empty_cell(
         revoked_at: None,
         updated_at,
     }
+}
+
+fn consent_cell_had_projection_material(cell: &ConsentCellRecord) -> bool {
+    cell.requested_at.is_some()
+        || !cell.grant_dots.is_empty()
+        || !cell.revoked_dots.is_empty()
+        || cell.revoked_at.is_some()
 }
 
 fn consent_key(holder: &str, peer: &str, scope: &str) -> ConsentCellKey {
@@ -1105,14 +1258,86 @@ fn effective_state(cell: &ConsentCellRecord, at: DateTime<Utc>) -> &'static str 
     "pending"
 }
 
+async fn emit_consent_revoke_invalidation(
+    state: &AppState,
+    holder: &str,
+    peer: &str,
+    scope: &str,
+    revoked_at: DateTime<Utc>,
+    mutations: &[ConsentCellMutation],
+) {
+    let invalidated_action_scopes = revoke_target_scopes(scope);
+    let invalidated_channels = ConsentRevokeInvalidationChannel::ALL
+        .iter()
+        .map(|channel| channel.as_str())
+        .collect::<Vec<_>>();
+    let mutated_cells = mutations
+        .iter()
+        .map(|mutation| {
+            json!({
+                "cell_id": &mutation.updated.cell_id,
+                "consent_scope": &mutation.updated.scope,
+                "revoked_dots": mutation.updated.revoked_dots.iter().cloned().collect::<Vec<_>>(),
+                "revoked_at": mutation.updated.revoked_at.as_ref().map(|value| value.to_rfc3339()),
+            })
+        })
+        .collect::<Vec<_>>();
+    let payload = json!({
+        "schema": "ck.vector.consent.cache_invalidation.v1",
+        "holder_did": holder,
+        "peer_did": peer,
+        "consent_scope": scope,
+        "invalidated_action_scopes": invalidated_action_scopes,
+        "invalidated_cache_scopes": CONSENT_SCOPE_CASCADE,
+        "invalidated_channels": invalidated_channels,
+        "scope_cascade_marker": if scope == "any" {
+            Some(SUPERSEDED_BY_ANY_REVOKE)
+        } else {
+            None
+        },
+        "mutated_cells": mutated_cells,
+        "revoked_at": revoked_at.to_rfc3339(),
+    });
+    crate::routing::events::projection::append_projection_event(
+        state,
+        ProjectionEventRecord {
+            event_id: ids::generate_event_id(),
+            realm_id: super::recovery::principal_control_realm_for_did(holder),
+            event_kind: "ck.vector.consent.cache_invalidation.v1".to_owned(),
+            operation_type: "consent_revoke_cache_invalidation".to_owned(),
+            operation_id: None,
+            sender: Some(holder.to_owned()),
+            payload: payload.clone(),
+            created_at: revoked_at,
+        },
+    )
+    .await;
+    append_audit_log(
+        state,
+        Some(holder),
+        "consent.revoke.cache_invalidation",
+        payload,
+        "accepted",
+    )
+    .await;
+}
+
 // ────────────────────────────────────────────────────────────────────────
 // scope=any cascade.
 // ────────────────────────────────────────────────────────────────────────
 
-/// Spec T17 — child scopes that a `scope=any` revoke MUST cascade into.
+/// Concrete action scopes covered by `consent_scope=any`.
+pub const CONSENT_ACTION_SCOPE_CASCADE: &[&str] = &[
+    "invite",
+    "direct_message",
+    "voice_call",
+    "video_call",
+    "presence",
+];
+
+/// Spec T17 — downstream cache scopes that a `scope=any` revoke MUST invalidate.
 /// The full list is open-ended in spec; soland tracks the five that gate
 /// cross-service routing today.
-#[allow(dead_code)]
 pub const CONSENT_SCOPE_CASCADE: &[&str] = &[
     "directory_reachability",
     "mimi_consent",
@@ -1125,12 +1350,10 @@ pub const CONSENT_SCOPE_CASCADE: &[&str] = &[
 /// projection MUST mark every cascaded child scope with this marker so
 /// consumers can distinguish "explicitly revoked" from "swept by an
 /// any-revoke".
-#[allow(dead_code)]
 pub const SUPERSEDED_BY_ANY_REVOKE: &str = "superseded_by_any_revoke";
 
 /// Spec T17 — five cache-invalidation channels that an `any`-revoke MUST
 /// broadcast to cross-service consumers (teabay / floria / coauth).
-#[allow(dead_code)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ConsentRevokeInvalidationChannel {
     DirectoryReachability,
@@ -1140,7 +1363,6 @@ pub enum ConsentRevokeInvalidationChannel {
     InFlightInvite,
 }
 
-#[allow(dead_code)]
 impl ConsentRevokeInvalidationChannel {
     pub const ALL: &'static [Self] = &[
         Self::DirectoryReachability,

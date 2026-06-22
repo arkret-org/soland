@@ -92,11 +92,8 @@ mod tests {
             v: "1".to_owned(),
             purpose: cokret_sdk::CursorPurpose::Stream,
             t: cokret_sdk::canonical::format_timestamp_canonical(issued_at),
-            s: Default::default(),
-            d: None,
-            target: None,
             x: issued_at.timestamp_millis() + cokret_sdk::Cursor::STREAM_TTL_MAX_MS,
-            h: Some("abcdefghijklmnopqrstuv".to_owned()),
+            h: "abcdefghijklmnopqrstuv".to_owned(),
         };
         let encoded = cursor.encode().unwrap();
         assert!(encoded.starts_with("ck:cursor:"));

@@ -29,7 +29,8 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 use super::consent::{
-    consent_cell_snapshot, grant_contact_managed_consent, normalize_scope, persist_consent_cell,
+    consent_cell_snapshot, grant_contact_managed_consent, has_active_consent_for_scope,
+    normalize_scope, persist_consent_cell,
 };
 use super::now;
 use crate::error::AppError;
@@ -38,6 +39,7 @@ use crate::state::{AppState, ContactRecord};
 
 const HEADER_CONTENT_DIGEST: &str = "content-digest";
 const HEADER_SOURCE_SERVICE_DID: &str = "source-service-did";
+const CONTACT_MESSAGE_STUB: &str = "[message withheld until contact is accepted]";
 
 pub(crate) fn peer_router() -> Router {
     Router::new().push(Router::with_path("contacts").post(peer_contacts_submit))
@@ -398,6 +400,70 @@ fn disclosed_outcome_str(outcome: DisclosedOutcome) -> String {
     .to_owned()
 }
 
+async fn should_stub_incoming_contact_message(
+    state: &AppState,
+    requester: &str,
+    target: &str,
+    _scope: &str,
+) -> Result<bool, AppError> {
+    if target_has_active_consent_for_requester(state, target, requester) {
+        return Ok(false);
+    }
+    let contacts = state
+        .persistence
+        .contacts()
+        .list_for_actor(target)
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    let accepted_contact = contacts.iter().any(|record| {
+        record.status == "accepted"
+            && ((record.requester == requester && record.target == target)
+                || (record.requester == target && record.target == requester))
+    });
+    Ok(!accepted_contact)
+}
+
+fn target_has_active_consent_for_requester(
+    state: &AppState,
+    target: &str,
+    requester: &str,
+) -> bool {
+    [
+        "invite",
+        "direct_message",
+        "voice_call",
+        "video_call",
+        "presence",
+    ]
+    .into_iter()
+    .any(|scope| has_active_consent_for_scope(state, target, requester, scope, now()))
+}
+
+async fn append_stubbed_contact_message_audit(
+    state: &AppState,
+    target: &str,
+    requester: &str,
+    scope: &str,
+    message: &str,
+    contact_event_id: &str,
+) {
+    super::append_audit_log(
+        state,
+        Some(target),
+        "peer.contacts.message_stubbed",
+        json!({
+            "requester": requester,
+            "target": target,
+            "scope": scope,
+            "contact_event_id": contact_event_id,
+            "message_chars": message.chars().count(),
+            "message_digest": canonical::sha256_digest(message.as_bytes()),
+        }),
+        "accepted",
+    )
+    .await;
+}
+
 /// Project a delivered contact fact into the local `subject_id`'s contact
 /// projection. Returns the receive status (`accepted` / `duplicate`).
 async fn project_delivered_contact_fact(
@@ -429,10 +495,17 @@ async fn project_delivered_contact_fact(
         "ck.contact.requested" => {
             // requester = issuer, target = subject_id (this holder). Form a
             // pending_incoming row on the target side.
-            let message = payload
+            let raw_message = payload
                 .get("message")
                 .and_then(Value::as_str)
                 .map(ToOwned::to_owned);
+            let stub_message = raw_message.is_some()
+                && should_stub_incoming_contact_message(state, issuer, subject_id, &scope).await?;
+            let message = if stub_message {
+                Some(CONTACT_MESSAGE_STUB.to_owned())
+            } else {
+                raw_message.clone()
+            };
             if let Some(existing) = store
                 .get_scoped(issuer, subject_id, &scope)
                 .await
@@ -445,7 +518,7 @@ async fn project_delivered_contact_fact(
             let contact = ContactRecord {
                 requester: issuer.to_owned(),
                 target: subject_id.to_owned(),
-                scope,
+                scope: scope.clone(),
                 status: "pending".to_owned(),
                 request_event_ref: Some(contact_event_id.to_owned()),
                 response_event_ref: None,
@@ -463,6 +536,17 @@ async fn project_delivered_contact_fact(
                 .put(&contact)
                 .await
                 .map_err(|error| AppError::internal(error.to_string()))?;
+            if stub_message {
+                append_stubbed_contact_message_audit(
+                    state,
+                    subject_id,
+                    issuer,
+                    &scope,
+                    raw_message.as_deref().unwrap_or_default(),
+                    contact_event_id,
+                )
+                .await;
+            }
             Ok("accepted")
         }
         "ck.contact.accepted" => {

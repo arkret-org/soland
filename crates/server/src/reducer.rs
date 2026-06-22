@@ -95,7 +95,6 @@ pub(crate) use policy_validation::*;
 pub use projection_state::ProjectionState;
 // `space_container_id_from_payload` is private to the crate but used by
 // sibling `apply_*` modules via `super::*`.
-pub(crate) use projections::space_container_id_from_payload;
 pub use projections::{
     AgentActionApprovalProjection, AgentActionRequestProjection, AgentActionRequestStatus,
     AppletProjection, CapabilityDerivedState, ChildScopePolicy, CircleLifecycleState,
@@ -111,6 +110,7 @@ pub use projections::{
     SpaceContainerProjection, StrandProjection, message_expiry_projection_from_value,
     message_expiry_projection_from_value_with_anchor,
 };
+pub(crate) use projections::{operation_history_basis_seals, space_container_id_from_payload};
 
 #[cfg(test)]
 mod tests;

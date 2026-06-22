@@ -45,9 +45,12 @@ mod document;
 mod endpoints;
 mod webvh;
 
-// Used by routing::tests via identity::did::validate_did_document_services.
-pub(in crate::routing) use document::validate_did_document_services;
-use document::*;
+// Used by routing::tests and directory handle verification.
+use document::{
+    did_document_from_operation, did_operation_from_body, ensure_did_document_id,
+    render_json_bytes, run_webvh_resolution_checks, string_field,
+};
+pub(in crate::routing) use document::{identity_document_record, validate_did_document_services};
 use endpoints::*;
 // Wire types surfaced through the router / oapi schema.
 pub use endpoints::{

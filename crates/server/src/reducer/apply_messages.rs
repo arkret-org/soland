@@ -59,6 +59,7 @@ impl ProjectionState {
             encrypted,
             operation_id: operation.operation_id.to_string(),
             created_at: now,
+            history_basis_seals: operation_history_basis_seals(operation),
             revision_of: None,
             redacted_at: None,
         };

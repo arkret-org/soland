@@ -81,6 +81,7 @@ pub struct SpaceContainerProjectionRecord {
     pub state_changed_at: Option<chrono::DateTime<chrono::Utc>>,
     pub created_by: String,
     pub created_at: chrono::DateTime<chrono::Utc>,
+    pub history_basis_seals: Vec<String>,
     pub updated_by: Option<String>,
     pub updated_at: Option<chrono::DateTime<chrono::Utc>>,
 }
@@ -97,6 +98,7 @@ pub struct StrandProjectionRecord {
     pub state_changed_at: Option<chrono::DateTime<chrono::Utc>>,
     pub created_by: String,
     pub created_at: chrono::DateTime<chrono::Utc>,
+    pub history_basis_seals: Vec<String>,
     pub updated_by: Option<String>,
     pub updated_at: Option<chrono::DateTime<chrono::Utc>>,
     /// CKP-0007 — the Circle (`ck:circle:…`) this Strand is scoped to, if any.
@@ -119,6 +121,7 @@ pub struct MorphProjectionRecord {
     pub state_changed_at: Option<chrono::DateTime<chrono::Utc>>,
     pub created_by: String,
     pub created_at: chrono::DateTime<chrono::Utc>,
+    pub history_basis_seals: Vec<String>,
     pub updated_by: Option<String>,
     pub updated_at: Option<chrono::DateTime<chrono::Utc>>,
 }
@@ -382,6 +385,8 @@ struct SpaceContainerProjectionRow {
     created_by: String,
     #[diesel(sql_type = Timestamptz)]
     created_at: chrono::DateTime<chrono::Utc>,
+    #[diesel(sql_type = Jsonb)]
+    history_basis_seals: Value,
     #[diesel(sql_type = Nullable<Text>)]
     updated_by: Option<String>,
     #[diesel(sql_type = Nullable<Timestamptz>)]
@@ -413,6 +418,8 @@ impl From<SpaceContainerProjectionRow> for SpaceContainerProjectionRecord {
             state_changed_at: row.state_changed_at,
             created_by: row.created_by,
             created_at: row.created_at,
+            history_basis_seals: serde_json::from_value(row.history_basis_seals)
+                .unwrap_or_default(),
             updated_by: row.updated_by,
             updated_at: row.updated_at,
         }
@@ -422,7 +429,7 @@ impl From<SpaceContainerProjectionRow> for SpaceContainerProjectionRecord {
 const SPACE_CONTAINER_PROJECTION_COLUMNS: &str = "id AS container_space_id, realm_id, scope_circle_id, \
      default_scope_circle_id, child_scope_policy, child_scope_policy_scope_circle_id, \
      child_scope_policy_metadata_encryption_floor, kind, title, parent_ref, rank, state, \
-     state_changed_at, created_by_id AS created_by, created_at, updated_by_id AS updated_by, updated_at";
+     state_changed_at, created_by_id AS created_by, created_at, history_basis_seals, updated_by_id AS updated_by, updated_at";
 
 #[async_trait]
 impl SpaceContainerProjectionStore for PgSpaceContainerProjectionStore {
@@ -449,8 +456,8 @@ impl SpaceContainerProjectionStore for PgSpaceContainerProjectionStore {
              (id, realm_id, scope_circle_id, default_scope_circle_id, child_scope_policy, \
               child_scope_policy_scope_circle_id, child_scope_policy_metadata_encryption_floor, \
               kind, title, parent_ref, rank, state, state_changed_at, created_by_id, created_at, \
-              updated_by_id, updated_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17) \
+              history_basis_seals, updated_by_id, updated_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18) \
              ON CONFLICT (id) DO UPDATE SET \
                 realm_id = EXCLUDED.realm_id, \
                 scope_circle_id = EXCLUDED.scope_circle_id, \
@@ -464,6 +471,7 @@ impl SpaceContainerProjectionStore for PgSpaceContainerProjectionStore {
                 rank = EXCLUDED.rank, \
                 state = EXCLUDED.state, \
                 state_changed_at = EXCLUDED.state_changed_at, \
+                history_basis_seals = EXCLUDED.history_basis_seals, \
                 updated_by_id = EXCLUDED.updated_by_id, \
                 updated_at = EXCLUDED.updated_at",
         )
@@ -502,6 +510,7 @@ impl SpaceContainerProjectionStore for PgSpaceContainerProjectionStore {
         .bind::<Nullable<Timestamptz>, _>(record.state_changed_at)
         .bind::<Text, _>(&record.created_by)
         .bind::<Timestamptz, _>(record.created_at)
+        .bind::<Jsonb, _>(&serde_json::json!(record.history_basis_seals))
         .bind::<Nullable<Text>, _>(&record.updated_by)
         .bind::<Nullable<Timestamptz>, _>(record.updated_at)
         .execute(&mut *conn)
@@ -582,6 +591,8 @@ struct StrandProjectionRow {
     created_by: String,
     #[diesel(sql_type = Timestamptz)]
     created_at: chrono::DateTime<chrono::Utc>,
+    #[diesel(sql_type = Jsonb)]
+    history_basis_seals: Value,
     #[diesel(sql_type = Nullable<Text>)]
     updated_by: Option<String>,
     #[diesel(sql_type = Nullable<Timestamptz>)]
@@ -603,6 +614,8 @@ impl From<StrandProjectionRow> for StrandProjectionRecord {
             state_changed_at: row.state_changed_at,
             created_by: row.created_by,
             created_at: row.created_at,
+            history_basis_seals: serde_json::from_value(row.history_basis_seals)
+                .unwrap_or_default(),
             updated_by: row.updated_by,
             updated_at: row.updated_at,
         }
@@ -610,7 +623,7 @@ impl From<StrandProjectionRow> for StrandProjectionRecord {
 }
 
 const STRAND_PROJECTION_COLUMNS: &str = "id AS strand_id, realm_id, scope_circle_id, tracks, title, summary, state, \
-     state_changed_at, created_by_id AS created_by, created_at, updated_by_id AS updated_by, updated_at";
+     state_changed_at, created_by_id AS created_by, created_at, history_basis_seals, updated_by_id AS updated_by, updated_at";
 
 #[async_trait]
 impl StrandProjectionStore for PgStrandProjectionStore {
@@ -634,8 +647,8 @@ impl StrandProjectionStore for PgStrandProjectionStore {
         sql_query(
             "INSERT INTO projection_strands \
              (id, realm_id, scope_circle_id, tracks, title, summary, state, state_changed_at, \
-              created_by_id, created_at, updated_by_id, updated_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) \
+              created_by_id, created_at, history_basis_seals, updated_by_id, updated_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) \
              ON CONFLICT (id) DO UPDATE SET \
                 realm_id = EXCLUDED.realm_id, \
                 scope_circle_id = EXCLUDED.scope_circle_id, \
@@ -644,6 +657,7 @@ impl StrandProjectionStore for PgStrandProjectionStore {
                 summary = EXCLUDED.summary, \
                 state = EXCLUDED.state, \
                 state_changed_at = EXCLUDED.state_changed_at, \
+                history_basis_seals = EXCLUDED.history_basis_seals, \
                 updated_by_id = EXCLUDED.updated_by_id, \
                 updated_at = EXCLUDED.updated_at",
         )
@@ -662,6 +676,7 @@ impl StrandProjectionStore for PgStrandProjectionStore {
         .bind::<Nullable<Timestamptz>, _>(record.state_changed_at)
         .bind::<Text, _>(&record.created_by)
         .bind::<Timestamptz, _>(record.created_at)
+        .bind::<Jsonb, _>(&serde_json::json!(record.history_basis_seals))
         .bind::<Nullable<Text>, _>(&record.updated_by)
         .bind::<Nullable<Timestamptz>, _>(record.updated_at)
         .execute(&mut *conn)
@@ -740,6 +755,8 @@ struct MorphProjectionRow {
     created_by: String,
     #[diesel(sql_type = Timestamptz)]
     created_at: chrono::DateTime<chrono::Utc>,
+    #[diesel(sql_type = Jsonb)]
+    history_basis_seals: Value,
     #[diesel(sql_type = Nullable<Text>)]
     updated_by: Option<String>,
     #[diesel(sql_type = Nullable<Timestamptz>)]
@@ -764,6 +781,8 @@ impl From<MorphProjectionRow> for MorphProjectionRecord {
             state_changed_at: row.state_changed_at,
             created_by: row.created_by,
             created_at: row.created_at,
+            history_basis_seals: serde_json::from_value(row.history_basis_seals)
+                .unwrap_or_default(),
             updated_by: row.updated_by,
             updated_at: row.updated_at,
         }
@@ -772,7 +791,7 @@ impl From<MorphProjectionRow> for MorphProjectionRecord {
 
 const MORPH_PROJECTION_COLUMNS: &str = "id AS morph_id, realm_id, scope_circle_id, morph_type, title, fields, \
      schema_refs, facets, versions, state, state_changed_at, created_by_id AS created_by, created_at, updated_by_id AS updated_by, \
-     updated_at";
+     history_basis_seals, updated_at";
 
 #[async_trait]
 impl MorphProjectionStore for PgMorphProjectionStore {
@@ -794,8 +813,8 @@ impl MorphProjectionStore for PgMorphProjectionStore {
         sql_query(
             "INSERT INTO projection_morphs \
              (id, realm_id, scope_circle_id, morph_type, title, fields, schema_refs, facets, versions, \
-              state, state_changed_at, created_by_id, created_at, updated_by_id, updated_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) \
+              state, state_changed_at, created_by_id, created_at, updated_by_id, history_basis_seals, updated_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16) \
              ON CONFLICT (id) DO UPDATE SET \
                 realm_id = EXCLUDED.realm_id, \
                 scope_circle_id = EXCLUDED.scope_circle_id, \
@@ -808,6 +827,7 @@ impl MorphProjectionStore for PgMorphProjectionStore {
                 state = EXCLUDED.state, \
                 state_changed_at = EXCLUDED.state_changed_at, \
                 updated_by_id = EXCLUDED.updated_by_id, \
+                history_basis_seals = EXCLUDED.history_basis_seals, \
                 updated_at = EXCLUDED.updated_at",
         )
         .bind::<SqlUuid, _>(ids::typed_uuid_part_or_panic(&record.morph_id))
@@ -829,6 +849,7 @@ impl MorphProjectionStore for PgMorphProjectionStore {
         .bind::<Text, _>(&record.created_by)
         .bind::<Timestamptz, _>(record.created_at)
         .bind::<Nullable<Text>, _>(&record.updated_by)
+        .bind::<Jsonb, _>(&serde_json::json!(record.history_basis_seals))
         .bind::<Nullable<Timestamptz>, _>(record.updated_at)
         .execute(&mut *conn)
         .await

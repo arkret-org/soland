@@ -8,7 +8,8 @@ use sha2::{Digest, Sha256};
 use soland::config::{AppConfig, IceServersConfig, LiveKitConfig, ObjectStorageConfig};
 use soland::db::Db;
 use soland::reducer::{
-    CircleLifecycleState, CircleProjection, ObjectLifecycleState, StrandProjection,
+    CircleLifecycleState, CircleMembershipState, CircleProjection, ObjectLifecycleState,
+    StrandProjection,
 };
 use soland::service;
 use soland::state::{AppState, RealmDirectoryEntry, RealmMetaRecord};
@@ -165,6 +166,7 @@ async fn admit_member(
     realm_id: &str,
 ) {
     let payload = json!({
+        "realm_id": realm_id,
         "actor_id": new_member_did,
         "membership": "join",
         "delivery_status": "unroutable",
@@ -291,6 +293,28 @@ fn install_projected_circle_scope(
                 members,
             },
         );
+    let mut projection = state.projection.lock().expect("projection mutex");
+    for member in projection
+        .circles
+        .get(circle_id)
+        .expect("circle projection inserted")
+        .members
+        .iter()
+        .cloned()
+        .collect::<Vec<_>>()
+    {
+        projection.circle_memberships.insert(
+            (circle_id.to_owned(), member.clone()),
+            CircleMembershipState {
+                circle_id: circle_id.to_owned(),
+                member,
+                state: "join".to_owned(),
+                invited_at: Some(now),
+                joined_at: now,
+                updated_at: now,
+            },
+        );
+    }
 }
 
 /// CKP-0007 — bind a Strand to a Circle scope in the projection. A message
@@ -325,6 +349,7 @@ fn install_projected_strand_scope(
                 state_changed_at: None,
                 created_by: created_by.to_owned(),
                 created_at: now,
+                history_basis_seals: Vec::new(),
                 updated_by: None,
                 updated_at: None,
                 scope_circle_id: Some(circle_id.to_owned()),
@@ -724,10 +749,17 @@ async fn circle_scoped_encrypted_message_is_hidden_from_realm_member_outside_cir
         .await
         .unwrap();
     assert_eq!(bob_read["event"]["event_id"], event_id);
-    // The Circle scope is server-derived from the Strand and surfaced as the
-    // authoritative `effective_scope` — NOT carried inside the encrypted
-    // envelope's aad (spec: messages don't carry scope_circle_id).
-    assert_eq!(bob_read["event"]["effective_scope"], circle_id);
+    // The Circle scope is server-derived from the Strand and surfaced through
+    // the SDK Event `effective_scope` object — NOT carried inside the
+    // encrypted envelope's aad (spec: messages don't carry scope_circle_id).
+    assert_eq!(
+        bob_read["event"]["effective_scope"],
+        json!({
+            "kind": "circle",
+            "realm_id": realm_id,
+            "circle_id": circle_id,
+        })
+    );
     assert!(
         bob_read["event"]["payload"]["encrypted_content"]["aad"]
             .get("scope_circle_id")

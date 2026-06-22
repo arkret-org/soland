@@ -648,7 +648,12 @@ impl AppState {
         }
 
         let mut proj_updates = ProjectionState::new();
-        hydrate_projections_from_persistence(self.persistence.as_ref(), &mut proj_updates).await;
+        hydrate_projections_from_persistence(
+            self.persistence.as_ref(),
+            &mut proj_updates,
+            &self.authz,
+        )
+        .await;
         {
             let mut proj = self.projection.lock().expect("projection lock");
             proj.space_containers.extend(proj_updates.space_containers);
@@ -1260,6 +1265,7 @@ pub(crate) fn getrandom_seed(out: &mut [u8; 32]) {
 async fn hydrate_projections_from_persistence(
     persistence: &dyn crate::persistence::PersistenceStore,
     proj: &mut ProjectionState,
+    authz: &SolandAuthzEngine,
 ) {
     use crate::reducer::{
         AppletProjection, ChildScopePolicy, MorphProjection, ObjectLifecycleState,
@@ -1317,6 +1323,7 @@ async fn hydrate_projections_from_persistence(
                     state_changed_at: record.state_changed_at,
                     created_by: record.created_by,
                     created_at: record.created_at,
+                    history_basis_seals: record.history_basis_seals,
                     updated_by: record.updated_by,
                     updated_at: record.updated_at,
                     // Stream-F (Wave 1B): orphaned flag is reducer-only
@@ -1355,6 +1362,7 @@ async fn hydrate_projections_from_persistence(
                     state_changed_at: record.state_changed_at,
                     created_by: record.created_by,
                     created_at: record.created_at,
+                    history_basis_seals: record.history_basis_seals,
                     updated_by: record.updated_by,
                     updated_at: record.updated_at,
                     scope_circle_id: record.scope_circle_id,
@@ -1417,6 +1425,7 @@ async fn hydrate_projections_from_persistence(
                     state_changed_at: record.state_changed_at,
                     created_by: record.created_by,
                     created_at: record.created_at,
+                    history_basis_seals: record.history_basis_seals,
                     updated_by: record.updated_by,
                     updated_at: record.updated_at,
                 },
@@ -1464,7 +1473,59 @@ async fn hydrate_projections_from_persistence(
             if let Some(applet_id) = applet_id {
                 proj.applets.insert(applet_id, projection);
             }
+            hydrate_applet_install_grants(authz, &row, &package, registered_at);
         }
+    }
+}
+
+fn hydrate_applet_install_grants(
+    authz: &SolandAuthzEngine,
+    row: &Value,
+    package: &AppletPackage,
+    registered_at: chrono::DateTime<chrono::Utc>,
+) {
+    let status = row
+        .get("status")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if !matches!(status, "installed" | "partially_installed")
+        || row.get("revoked_at").is_some_and(|value| !value.is_null())
+    {
+        return;
+    }
+    let Some(owner_actor_id) = row.get("owner_actor_id").and_then(Value::as_str) else {
+        return;
+    };
+    let Some(portal_realm_id) = row.get("portal_realm_id").and_then(Value::as_str) else {
+        return;
+    };
+    let Some(grant_ids) = row
+        .get("install_response")
+        .and_then(|value| value.get("capability_grant_refs"))
+        .and_then(Value::as_array)
+    else {
+        return;
+    };
+    let Some(actions) = row.get("capabilities").and_then(Value::as_array) else {
+        return;
+    };
+    for (grant_id, action) in grant_ids.iter().zip(actions.iter()) {
+        let (Some(grant_id), Some(action)) = (grant_id.as_str(), action.as_str()) else {
+            continue;
+        };
+        authz.upsert_projected_grant(crate::authz::Grant {
+            grant_id: grant_id.to_owned(),
+            realm_id: portal_realm_id.to_owned(),
+            issuer: owner_actor_id.to_owned(),
+            subject: package.service_did.to_string(),
+            resource: portal_realm_id.to_owned(),
+            actions: vec![action.to_owned()],
+            constraints: Vec::new(),
+            revoked: false,
+            created_at: registered_at,
+            delegated_from: None,
+            expires_at: None,
+        });
     }
 }
 

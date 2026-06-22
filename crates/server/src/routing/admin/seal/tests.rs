@@ -19,7 +19,7 @@ fn notary_value_from_cell_defaults_to_service_did_when_absent() {
 #[test]
 fn notary_value_from_cell_reads_authoritative_single_did_form() {
     let v = json!({
-        "kind": "single_did",
+        "type": "single_did",
         "did": "did:web:alice.example",
         "revocation_freshness_window_ms": 60000,
         "paused": false,
@@ -39,7 +39,7 @@ fn notary_value_from_cell_reads_authoritative_single_did_form() {
 #[test]
 fn notary_value_from_cell_reads_authoritative_threshold_form() {
     let v = json!({
-        "kind": "threshold",
+        "type": "threshold",
         "k": 2,
         "n": 3,
         "members": ["did:ck:a", "did:ck:b", "did:ck:c"],
@@ -136,10 +136,11 @@ fn notary_reconfig_body_converts_to_sdk_authoritative_cell_value() {
     }))
     .unwrap();
     let cell_value = notary_value_object_from_body(&body).unwrap();
-    assert_eq!(cell_value["kind"], "threshold");
+    assert_eq!(cell_value["type"], "threshold");
     assert_eq!(cell_value["k"], 2);
     assert_eq!(cell_value["n"], 3);
     assert_eq!(cell_value["members"].as_array().unwrap().len(), 3);
+    assert!(cell_value.get("kind").is_none());
     assert!(cell_value.get("threshold_k").is_none());
     assert!(cell_value.get("threshold_dids").is_none());
 

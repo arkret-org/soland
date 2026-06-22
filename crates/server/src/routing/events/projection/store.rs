@@ -252,7 +252,47 @@ pub async fn accept_local_operations(
     validate_operation_semantics(state, operations)?;
     validate_content_encryption_floor(state, operations).await?;
     validate_operation_policy(state, operations).await?;
+    validate_invite_create_consent_gate(state, operations)?;
     project_accepted_operations(state, actor, operations).await;
+    Ok(())
+}
+
+fn validate_invite_create_consent_gate(
+    state: &AppState,
+    operations: &[Operation],
+) -> Result<(), &'static str> {
+    for operation in operations {
+        if kinds::canonical_kind_string(operation) != kinds::CK_INVITE_CREATE {
+            continue;
+        }
+        let Some(invitee) = operation
+            .payload
+            .get("invitee")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        else {
+            return Err(crate::error::reasons::CONTACT_CONSENT_MISSING);
+        };
+        let Some(inviter) = operation
+            .payload
+            .get("sender")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        else {
+            return Err(crate::error::reasons::CONTACT_CONSENT_MISSING);
+        };
+        if !crate::routing::identity::consent::has_active_consent_for_scope(
+            state,
+            invitee,
+            inviter,
+            "invite",
+            operation.created_at,
+        ) {
+            return Err(crate::error::reasons::CONTACT_CONSENT_MISSING);
+        }
+    }
     Ok(())
 }
 

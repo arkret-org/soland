@@ -27,11 +27,12 @@ use super::install::{
 };
 use super::record::{
     accountability_chain, applet_display_name, applet_id_param, applet_record, applet_records,
-    ensure_not_revoked, idempotency_key, query_value,
+    ensure_not_revoked, idempotency_key, persist_applet_record, query_value,
 };
 use super::signature::verify_inbound_transaction_signature;
+use super::transaction::process_verified_transaction;
 use super::types::{
-    AppletGhostIngressOutcome, AppletGhostIngressRequestBody, AppletInstallPaths,
+    AppletGhostIngressOutcome, AppletGhostIngressRequestBody, AppletInstallPaths, AppletRecord,
     AppletManifestRegisterRequestBody, AppletPortalMessageOutcome, AppletPortalMessageRequestBody,
     AppletProtocolDescribeOutcome, AppletRevokeRecordOutcome, AppletView, GhostActorRecord,
     SOLAND_EDGE_APPLET_ID,
@@ -333,6 +334,15 @@ async fn provision_ghost_actor_endpoint(
 
     persist_formal_applet_event(state, grant_event).await?;
     persist_formal_applet_event(state, profile_event.clone()).await?;
+    persist_formal_ghost_record(
+        state,
+        record,
+        &ghost_actor_id,
+        &provision.external_user_id,
+        provision.display_name.clone(),
+        now,
+    )
+    .await?;
 
     crate::routing::append_audit_log(
         state,
@@ -361,6 +371,31 @@ async fn provision_ghost_actor_endpoint(
     json_ok(outcome)
 }
 
+async fn persist_formal_ghost_record(
+    state: &AppState,
+    mut record: AppletRecord,
+    ghost_actor_id: &Did,
+    external_id: &str,
+    display_name: Option<String>,
+    created_at: chrono::DateTime<chrono::Utc>,
+) -> Result<(), AppError> {
+    if record
+        .ghosts
+        .iter()
+        .any(|ghost| ghost.ghost_actor_id == ghost_actor_id.as_str())
+    {
+        return Ok(());
+    }
+    record.ghosts.push(GhostActorRecord {
+        ghost_actor_id: ghost_actor_id.to_string(),
+        external_id: external_id.to_owned(),
+        display_name,
+        created_at,
+        revoked_at: None,
+    });
+    persist_applet_record(state, &record).await
+}
+
 #[endpoint(
     operation_id = "ck.edge.applet.command.transaction",
     tags("applet"),
@@ -369,13 +404,11 @@ async fn provision_ghost_actor_endpoint(
 )]
 #[tracing::instrument(skip_all, fields(op = "ck.edge.applet.command.transaction"))]
 async fn transaction_endpoint(
-    aa: AuthArgs,
     body: JsonBody<AppletTransactionRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<AppletTransactionOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let _session = aa.authenticated_session(state, req).await?;
     let idempotency_key = idempotency_key(req)
         .ok_or_else(|| AppError::missing_param("Idempotency-Key header is required"))?;
     if idempotency_key.len() > 128 {
@@ -396,12 +429,11 @@ async fn transaction_endpoint(
     // signing key anchor is the Applet registration `source_service_did`'s
     // current active verification method, and that service DID MUST hit an
     // active effective install (§4b.1).
-    verify_inbound_transaction_signature(state, req, &transaction, &idempotency_key).await?;
-    json_ok(AppletTransactionOutcome {
-        ok: true,
-        rejected: Vec::new(),
-        retry_after_ms: None,
-    })
+    let verified =
+        verify_inbound_transaction_signature(state, req, &transaction, &idempotency_key).await?;
+    let outcome =
+        process_verified_transaction(state, transaction, &idempotency_key, verified).await?;
+    json_ok(outcome)
 }
 
 #[endpoint(

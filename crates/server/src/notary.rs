@@ -373,7 +373,7 @@ impl NotaryWorker {
             return Ok(false);
         }
         // The cell value MUST be the SDK-authoritative `NotaryValue` wire
-        // shape (internal tag `kind`, fields `did|k|n|members|primary|
+        // shape (internal tag `type`, fields `did|k|n|members|primary|
         // recovery_members`). Anything else — including the pre-rename
         // alias spellings (`shape`/`kind_raw`/`threshold_dids`/...) — is
         // fail-closed: not authorized.
@@ -809,7 +809,7 @@ mod tests {
         // The authoritative `NotaryValue` form parses; envelope extras
         // (`paused`, `revocation_freshness_window_ms`) are tolerated.
         let v = json!({
-            "kind": "threshold",
+            "type": "threshold",
             "k": 2,
             "n": 3,
             "members": ["did:ck:a", "did:ck:b", "did:ck:c"],

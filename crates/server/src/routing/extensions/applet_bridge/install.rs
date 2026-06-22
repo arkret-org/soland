@@ -137,6 +137,7 @@ pub(super) async fn register_package_install(
     });
     update_applet_projection(state, &record);
     append_applet_registration_projection(state, &record, &registration_event_ref).await?;
+    project_applet_install_grants(state, &record, &response.capability_grant_refs);
     crate::routing::append_audit_log(
         state,
         Some(owner_actor_id),
@@ -154,6 +155,32 @@ pub(super) async fn register_package_install(
     .await;
     res.status_code(StatusCode::CREATED);
     Ok(response)
+}
+
+fn project_applet_install_grants(state: &AppState, record: &AppletRecord, grant_ids: &[String]) {
+    if record.revoked_at.is_some()
+        || !matches!(record.status.as_str(), "installed" | "partially_installed")
+    {
+        return;
+    }
+    let Some(package) = record.package.as_ref() else {
+        return;
+    };
+    for (grant_id, action) in grant_ids.iter().zip(record.capabilities.iter()) {
+        state.authz.upsert_projected_grant(crate::authz::Grant {
+            grant_id: grant_id.clone(),
+            realm_id: record.portal_realm_id.clone(),
+            issuer: record.owner_actor_id.clone(),
+            subject: package.service_did.to_string(),
+            resource: record.portal_realm_id.clone(),
+            actions: vec![action.clone()],
+            constraints: Vec::new(),
+            revoked: false,
+            created_at: record.registered_at,
+            delegated_from: None,
+            expires_at: None,
+        });
+    }
 }
 
 pub(super) async fn append_applet_registration_projection(

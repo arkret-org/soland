@@ -423,6 +423,7 @@ async fn write_through_projection(state: &AppState, operation: &Operation) {
             state_changed_at: p.state_changed_at,
             created_by: p.created_by.clone(),
             created_at: p.created_at,
+            history_basis_seals: p.history_basis_seals.clone(),
             updated_by: p.updated_by.clone(),
             updated_at: p.updated_at,
         }))
@@ -439,6 +440,7 @@ async fn write_through_projection(state: &AppState, operation: &Operation) {
             state_changed_at: f.state_changed_at,
             created_by: f.created_by.clone(),
             created_at: f.created_at,
+            history_basis_seals: f.history_basis_seals.clone(),
             updated_by: f.updated_by.clone(),
             updated_at: f.updated_at,
             scope_circle_id: f.scope_circle_id.clone(),
@@ -465,6 +467,7 @@ async fn write_through_projection(state: &AppState, operation: &Operation) {
             state_changed_at: m.state_changed_at,
             created_by: m.created_by.clone(),
             created_at: m.created_at,
+            history_basis_seals: m.history_basis_seals.clone(),
             updated_by: m.updated_by.clone(),
             updated_at: m.updated_at,
         })

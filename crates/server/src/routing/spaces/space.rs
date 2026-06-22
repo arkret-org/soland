@@ -983,12 +983,14 @@ pub(crate) async fn presence_visible_to_session(
     actor: &str,
     session: Option<&SessionRecord>,
 ) -> bool {
-    if session.is_none() {
+    let Some(session) = session else {
         return false;
-    }
+    };
     match presence_visibility_for_actor(state, actor).await {
         PresenceVisibilityPolicy::Nobody => false,
-        PresenceVisibilityPolicy::Public => true,
+        PresenceVisibilityPolicy::Public => {
+            personal_blocklist_allows_actor(state, session, actor).await
+        }
     }
 }
 
@@ -1123,9 +1125,6 @@ async fn typing_record_visible_to_session(
     if !presence_visible_to_session(state, &record.actor, Some(session)).await {
         return false;
     }
-    if personal_blocklist_blocks_actor(state, session, &record.actor).await {
-        return false;
-    }
     typing_scope_allows_actor(
         state,
         &record.realm_id,
@@ -1136,82 +1135,37 @@ async fn typing_record_visible_to_session(
     .is_ok()
 }
 
-async fn personal_blocklist_blocks_actor(
+const ACCOUNT_DATA_TYPE_BLOCKLIST: &str = "ck.account.blocklist";
+
+async fn personal_blocklist_allows_actor(
     state: &AppState,
     session: &SessionRecord,
     sender: &str,
 ) -> bool {
     if sender == session.actor {
-        return false;
+        return true;
     }
-    for data_type in ["ck.account.blocklist", "ck.account.blocklist.v1"] {
-        let blocked = state
-            .persistence
-            .account_data()
-            .get(&session.actor, data_type)
-            .await
-            .ok()
-            .flatten()
-            .is_some_and(|record| blocklist_payload_blocks_sender(&record.payload, sender));
-        if blocked {
-            return true;
+    match state
+        .persistence
+        .account_data()
+        .get(&session.actor, ACCOUNT_DATA_TYPE_BLOCKLIST)
+        .await
+    {
+        Ok(None) => true,
+        Ok(Some(record)) => record
+            .payload
+            .get("tombstone")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        Err(error) => {
+            tracing::warn!(
+                %error,
+                actor = %session.actor,
+                "failed to read personal blocklist policy"
+            );
+            false
         }
     }
-    false
-}
-
-fn blocklist_payload_blocks_sender(payload: &Value, sender: &str) -> bool {
-    if let Some(entries) = payload.get("entries").and_then(Value::as_array) {
-        return entries
-            .iter()
-            .any(|entry| blocklist_entry_blocks_sender(entry, sender));
-    }
-    if let Some(entries) = payload.get("blocked").and_then(Value::as_array) {
-        return entries
-            .iter()
-            .any(|entry| blocklist_entry_blocks_sender(entry, sender));
-    }
-    blocklist_entry_blocks_sender(payload, sender)
-}
-
-fn blocklist_entry_blocks_sender(entry: &Value, sender: &str) -> bool {
-    match entry {
-        Value::String(_) => blocklist_value_is_sender(entry, sender),
-        Value::Object(object) => {
-            let mode = object
-                .get("mode")
-                .or_else(|| object.get("kind"))
-                .or_else(|| object.get("action"))
-                .or_else(|| object.get("status"))
-                .and_then(Value::as_str)
-                .unwrap_or("block");
-            if matches!(mode, "allow" | "unblock" | "removed" | "deleted") {
-                return false;
-            }
-            object
-                .get("target")
-                .or_else(|| object.get("did"))
-                .or_else(|| object.get("actor"))
-                .is_some_and(|target| blocklist_entry_target_matches_sender(target, sender))
-        }
-        _ => false,
-    }
-}
-
-fn blocklist_entry_target_matches_sender(target: &Value, sender: &str) -> bool {
-    match target {
-        Value::String(_) => blocklist_value_is_sender(target, sender),
-        Value::Object(object) => object
-            .get("did")
-            .or_else(|| object.get("actor"))
-            .or_else(|| object.get("id"))
-            .is_some_and(|value| blocklist_value_is_sender(value, sender)),
-        _ => false,
-    }
-}
-
-fn blocklist_value_is_sender(value: &Value, sender: &str) -> bool {
-    value.as_str().is_some_and(|value| value == sender)
 }
 
 /// `webrtc-signaling.md` §5 / §7 — relayed `ck.call.signal` records a given

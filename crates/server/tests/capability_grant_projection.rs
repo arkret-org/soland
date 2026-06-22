@@ -17,7 +17,7 @@ use cokret_sdk::{Operation, OperationId, RealmId};
 use serde_json::{Value, json};
 use soland::authz::SolandAuthzEngine;
 use soland::hlc::ServerHlc;
-use soland::reducer::{ProjectionEffect, ProjectionState};
+use soland::reducer::{ProjectionEffect, ProjectionState, SolandRealmState};
 
 const REALM: &str = "ck:realm:01904100-0000-7000-8000-cccccccccccc";
 const GRANT_ID: &str = "ck:grant:01904100-0000-7000-8000-dddddddddddd";
@@ -69,6 +69,25 @@ fn revoke_op(grant_id: &str) -> Operation {
     )
 }
 
+fn seed_realm_owner(state: &mut ProjectionState) {
+    let now = chrono::Utc::now();
+    state.realm_states.insert(
+        REALM.to_owned(),
+        SolandRealmState {
+            realm_id: REALM.to_owned(),
+            owner: Some(ISSUER.to_owned()),
+            title: None,
+            deleted: false,
+            created_at: now,
+            updated_at: now,
+            trust_domain: None,
+            terminal_state: None,
+            successor_realm_id: None,
+            default_strand_id: None,
+        },
+    );
+}
+
 /// Mirror the projection driver: derive the engine grant from the cell and
 /// fold it into a fresh engine, then run a check for the subject/action.
 fn check_allows(state: &ProjectionState, grant_id: &str) -> bool {
@@ -100,6 +119,7 @@ fn item_revoked(item: &Value) -> bool {
 #[test]
 fn grant_projects_cell_and_authorizes_check() {
     let mut state = ProjectionState::new();
+    seed_realm_owner(&mut state);
     let hlc = ServerHlc::new("test");
     let effect = state.apply(&grant_op(GRANT_ID), &hlc);
     match effect {
@@ -121,6 +141,7 @@ fn grant_projects_cell_and_authorizes_check() {
 #[test]
 fn revoke_observed_removes_and_denies_check() {
     let mut state = ProjectionState::new();
+    seed_realm_owner(&mut state);
     let hlc = ServerHlc::new("test");
     state.apply(&grant_op(GRANT_ID), &hlc);
     assert!(check_allows(&state, GRANT_ID));
@@ -144,6 +165,7 @@ fn revoke_observed_removes_and_denies_check() {
 #[test]
 fn re_grant_after_revoke_stays_denied_terminal() {
     let mut state = ProjectionState::new();
+    seed_realm_owner(&mut state);
     let hlc = ServerHlc::new("test");
     state.apply(&grant_op(GRANT_ID), &hlc);
     state.apply(&revoke_op(GRANT_ID), &hlc);
@@ -165,6 +187,7 @@ fn re_grant_after_revoke_stays_denied_terminal() {
 #[test]
 fn repeated_revoke_is_idempotent() {
     let mut state = ProjectionState::new();
+    seed_realm_owner(&mut state);
     let hlc = ServerHlc::new("test");
     state.apply(&grant_op(GRANT_ID), &hlc);
     state.apply(&revoke_op(GRANT_ID), &hlc);

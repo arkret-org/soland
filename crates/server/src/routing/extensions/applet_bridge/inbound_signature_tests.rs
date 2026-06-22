@@ -1,6 +1,8 @@
 use super::signature::{
-    applet_content_digest_header, applet_http_signature_base, applet_validate_signature_params,
+    applet_content_digest_header, applet_http_signature_base, applet_source_signature_anchor,
+    applet_validate_signature_params,
 };
+use serde_json::json;
 
 fn params(created: i64, expires: i64) -> String {
     format!(
@@ -96,4 +98,59 @@ fn overwide_window_is_window_invalid() {
         err.top_level_reason.as_deref(),
         Some("signature_window_invalid")
     );
+}
+
+#[test]
+fn source_signature_anchor_binds_registration_epoch_and_webhook_auth() {
+    let webhook_auth = json!({
+        "type": "http_message_signature",
+        "key_ref": "did:web:app#applet-service-key",
+        "accepted_algs": ["EdDSA"]
+    });
+    let base = applet_source_signature_anchor(
+        "did:web:app",
+        "did:web:edge",
+        "idem-1",
+        "sha-256=:abc=:",
+        "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "did:web:app#applet-service-key",
+        json!("sha256:2222222222222222222222222222222222222222222222222222222222222222"),
+        webhook_auth.clone(),
+        "ed25519",
+        &params(1, 60),
+        "sig1=:abc:",
+    );
+    let epoch_rotated = applet_source_signature_anchor(
+        "did:web:app",
+        "did:web:edge",
+        "idem-1",
+        "sha-256=:abc=:",
+        "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "did:web:app#applet-service-key",
+        json!("sha256:3333333333333333333333333333333333333333333333333333333333333333"),
+        webhook_auth,
+        "ed25519",
+        &params(1, 60),
+        "sig1=:abc:",
+    );
+    let key_rotated = applet_source_signature_anchor(
+        "did:web:app",
+        "did:web:edge",
+        "idem-1",
+        "sha-256=:abc=:",
+        "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "did:web:app#rotated",
+        json!("sha256:2222222222222222222222222222222222222222222222222222222222222222"),
+        json!({
+            "type": "http_message_signature",
+            "key_ref": "did:web:app#rotated",
+            "accepted_algs": ["EdDSA"]
+        }),
+        "ed25519",
+        &params(1, 60),
+        "sig1=:abc:",
+    );
+
+    assert_ne!(base, epoch_rotated);
+    assert_ne!(base, key_rotated);
 }

@@ -62,19 +62,13 @@ async fn set_read_receipt_policy(
     visibility: &str,
     allow_public_world_readable: bool,
 ) {
-    let response = submit_actor_private_event(
+    let response = submit_read_receipt_policy(
         state,
         token,
-        ALICE,
-        ALICE_DEVICE,
-        DEMO_REALM_ID,
-        "ck.realm.read_receipt_policy",
-        serde_json::json!({
-            "disclosure": "optional",
-            "visibility": visibility,
-            "scope_overrides_allowed": true,
-            "allow_public_receipts_on_world_readable": allow_public_world_readable
-        }),
+        "optional",
+        visibility,
+        allow_public_world_readable,
+        false,
     )
     .await;
     assert!(
@@ -83,6 +77,86 @@ async fn set_read_receipt_policy(
                 .as_array()
                 .is_some_and(|events| !events.is_empty()),
         "read receipt policy event: {response}"
+    );
+}
+
+async fn submit_read_receipt_policy(
+    state: AppState,
+    token: &str,
+    disclosure: &str,
+    visibility: &str,
+    allow_public_world_readable: bool,
+    allow_forced_public_world_readable: bool,
+) -> Value {
+    submit_actor_private_event(
+        state,
+        token,
+        ALICE,
+        ALICE_DEVICE,
+        DEMO_REALM_ID,
+        "ck.realm.read_receipt_policy",
+        serde_json::json!({
+            "disclosure": disclosure,
+            "visibility": visibility,
+            "scope_overrides_allowed": true,
+            "allow_public_receipts_on_world_readable": allow_public_world_readable,
+            "allow_forced_public_world_readable_receipts": allow_forced_public_world_readable
+        }),
+    )
+    .await
+}
+
+#[tokio::test]
+async fn read_receipt_policy_rejects_public_world_readable_without_opt_in() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let alice_token = dev_token(state.clone()).await;
+    set_demo_realm_visibility(&state, "public", "world_readable").await;
+
+    let response = submit_read_receipt_policy(
+        state.clone(),
+        &alice_token,
+        "optional",
+        "public",
+        false,
+        false,
+    )
+    .await;
+
+    assert_ne!(
+        response["status"], "accepted",
+        "public world_readable policy must be rejected: {response}"
+    );
+    let encoded = serde_json::to_string(&response).unwrap();
+    assert!(
+        encoded.contains("read_receipt_visibility_combination_invalid"),
+        "response must include read_receipt_visibility_combination_invalid: {response}"
+    );
+}
+
+#[tokio::test]
+async fn read_receipt_policy_rejects_forced_public_world_readable_without_second_opt_in() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let alice_token = dev_token(state.clone()).await;
+    set_demo_realm_visibility(&state, "public", "world_readable").await;
+
+    let response = submit_read_receipt_policy(
+        state.clone(),
+        &alice_token,
+        "required",
+        "public",
+        true,
+        false,
+    )
+    .await;
+
+    assert_ne!(
+        response["status"], "accepted",
+        "forced public world_readable policy must be rejected: {response}"
+    );
+    let encoded = serde_json::to_string(&response).unwrap();
+    assert!(
+        encoded.contains("read_receipt_forced_public_world_readable_forbidden"),
+        "response must include read_receipt_forced_public_world_readable_forbidden: {response}"
     );
 }
 

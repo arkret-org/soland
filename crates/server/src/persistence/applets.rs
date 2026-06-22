@@ -5,16 +5,45 @@ pub trait AppletStore: Send + Sync {
     async fn get(&self, applet_id: &str) -> PersistenceResult<Option<Value>>;
     async fn put(&self, applet_id: &str, record: Value) -> PersistenceResult<()>;
     async fn list(&self) -> PersistenceResult<Vec<Value>>;
+    async fn begin_transaction_replay(
+        &self,
+        record: AppletTransactionReplayRecord,
+    ) -> PersistenceResult<AppletTransactionReplayBegin>;
+    async fn complete_transaction_replay(
+        &self,
+        source_service_did: &str,
+        idempotency_key: &str,
+        outcome: Value,
+    ) -> PersistenceResult<()>;
+}
+
+#[derive(Clone, Debug)]
+pub struct AppletTransactionReplayRecord {
+    pub source_service_did: String,
+    pub idempotency_key: String,
+    pub source_signature_anchor: String,
+    pub request_digest: String,
+    pub outcome: Option<Value>,
+    pub received_at: chrono::DateTime<chrono::Utc>,
+    pub completed_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+#[derive(Clone, Debug)]
+pub enum AppletTransactionReplayBegin {
+    Fresh,
+    Existing(AppletTransactionReplayRecord),
 }
 
 pub(crate) struct MemoryAppletStore {
     records: Mutex<BTreeMap<String, Value>>,
+    transactions: Mutex<BTreeMap<(String, String), AppletTransactionReplayRecord>>,
 }
 
 impl MemoryAppletStore {
     pub(crate) fn new() -> Self {
         Self {
             records: Mutex::new(BTreeMap::new()),
+            transactions: Mutex::new(BTreeMap::new()),
         }
     }
 }
@@ -46,6 +75,40 @@ impl AppletStore for MemoryAppletStore {
             .values()
             .cloned()
             .collect())
+    }
+
+    async fn begin_transaction_replay(
+        &self,
+        record: AppletTransactionReplayRecord,
+    ) -> PersistenceResult<AppletTransactionReplayBegin> {
+        let key = (
+            record.source_service_did.clone(),
+            record.idempotency_key.clone(),
+        );
+        let mut transactions = self.transactions.lock().expect("applet transaction lock");
+        if let Some(existing) = transactions.get(&key) {
+            return Ok(AppletTransactionReplayBegin::Existing(existing.clone()));
+        }
+        transactions.insert(key, record);
+        Ok(AppletTransactionReplayBegin::Fresh)
+    }
+
+    async fn complete_transaction_replay(
+        &self,
+        source_service_did: &str,
+        idempotency_key: &str,
+        outcome: Value,
+    ) -> PersistenceResult<()> {
+        let key = (source_service_did.to_owned(), idempotency_key.to_owned());
+        let mut transactions = self.transactions.lock().expect("applet transaction lock");
+        let Some(record) = transactions.get_mut(&key) else {
+            return Err(PersistenceError::NotFound(format!(
+                "applet transaction replay missing for {source_service_did}/{idempotency_key}"
+            )));
+        };
+        record.outcome = Some(outcome);
+        record.completed_at = Some(chrono::Utc::now());
+        Ok(())
     }
 }
 
@@ -91,6 +154,24 @@ struct AppletRegistrationRow {
     ghosts: Value,
 }
 
+#[derive(QueryableByName)]
+struct AppletTransactionReplayRow {
+    #[diesel(sql_type = Text)]
+    source_service_did: String,
+    #[diesel(sql_type = Text)]
+    idempotency_key: String,
+    #[diesel(sql_type = Text)]
+    source_signature_anchor: String,
+    #[diesel(sql_type = Text)]
+    request_digest: String,
+    #[diesel(sql_type = Nullable<Jsonb>)]
+    outcome: Option<Value>,
+    #[diesel(sql_type = Timestamptz)]
+    received_at: chrono::DateTime<chrono::Utc>,
+    #[diesel(sql_type = Nullable<Timestamptz>)]
+    completed_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
 impl From<AppletRegistrationRow> for Value {
     fn from(row: AppletRegistrationRow) -> Self {
         serde_json::json!({
@@ -114,6 +195,20 @@ impl From<AppletRegistrationRow> for Value {
             "install_response": row.install_response,
             "ghosts": row.ghosts,
         })
+    }
+}
+
+impl From<AppletTransactionReplayRow> for AppletTransactionReplayRecord {
+    fn from(row: AppletTransactionReplayRow) -> Self {
+        Self {
+            source_service_did: row.source_service_did,
+            idempotency_key: row.idempotency_key,
+            source_signature_anchor: row.source_signature_anchor,
+            request_digest: row.request_digest,
+            outcome: row.outcome,
+            received_at: row.received_at,
+            completed_at: row.completed_at,
+        }
     }
 }
 
@@ -228,6 +323,76 @@ impl AppletStore for PgAppletStore {
             .map(|rows| rows.into_iter().map(Value::from).collect())
             .map_err(PersistenceError::from)
     }
+
+    async fn begin_transaction_replay(
+        &self,
+        record: AppletTransactionReplayRecord,
+    ) -> PersistenceResult<AppletTransactionReplayBegin> {
+        let mut conn = pg_conn(&self.pool).await?;
+        let inserted = sql_query(
+            "INSERT INTO applet_transactions \
+             (source_service_did, idempotency_key, source_signature_anchor, request_digest, \
+              outcome, received_at, completed_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7) \
+             ON CONFLICT (source_service_did, idempotency_key) DO NOTHING",
+        )
+        .bind::<Text, _>(&record.source_service_did)
+        .bind::<Text, _>(&record.idempotency_key)
+        .bind::<Text, _>(&record.source_signature_anchor)
+        .bind::<Text, _>(&record.request_digest)
+        .bind::<Nullable<Jsonb>, _>(&record.outcome)
+        .bind::<Timestamptz, _>(record.received_at)
+        .bind::<Nullable<Timestamptz>, _>(record.completed_at)
+        .execute(&mut *conn)
+        .await
+        .map_err(PersistenceError::from)?;
+        if inserted == 1 {
+            return Ok(AppletTransactionReplayBegin::Fresh);
+        }
+        sql_query(applet_transaction_replay_select_sql())
+            .bind::<Text, _>(&record.source_service_did)
+            .bind::<Text, _>(&record.idempotency_key)
+            .get_result::<AppletTransactionReplayRow>(&mut *conn)
+            .await
+            .optional()
+            .map_err(PersistenceError::from)?
+            .map(AppletTransactionReplayRecord::from)
+            .map(AppletTransactionReplayBegin::Existing)
+            .ok_or_else(|| {
+                PersistenceError::Internal(
+                    "applet transaction conflict row disappeared after insert".to_owned(),
+                )
+            })
+    }
+
+    async fn complete_transaction_replay(
+        &self,
+        source_service_did: &str,
+        idempotency_key: &str,
+        outcome: Value,
+    ) -> PersistenceResult<()> {
+        let mut conn = pg_conn(&self.pool).await?;
+        sql_query(
+            "UPDATE applet_transactions \
+             SET outcome = $3, completed_at = NOW() \
+             WHERE source_service_did = $1 AND idempotency_key = $2",
+        )
+        .bind::<Text, _>(source_service_did)
+        .bind::<Text, _>(idempotency_key)
+        .bind::<Jsonb, _>(&outcome)
+        .execute(&mut *conn)
+        .await
+        .map_err(PersistenceError::from)
+        .and_then(|updated| {
+            if updated == 0 {
+                Err(PersistenceError::NotFound(format!(
+                    "applet transaction replay missing for {source_service_did}/{idempotency_key}"
+                )))
+            } else {
+                Ok(())
+            }
+        })
+    }
 }
 
 fn applet_registration_select_sql(suffix: &str) -> String {
@@ -237,6 +402,13 @@ fn applet_registration_select_sql(suffix: &str) -> String {
          registered_at, revoked_at, idempotency_key, install_body_digest, install_id, \
          install_response, ghosts FROM applet_registrations {suffix}"
     )
+}
+
+fn applet_transaction_replay_select_sql() -> &'static str {
+    "SELECT source_service_did, idempotency_key, source_signature_anchor, request_digest, \
+     outcome, received_at, completed_at \
+     FROM applet_transactions \
+     WHERE source_service_did = $1 AND idempotency_key = $2"
 }
 
 fn required_record_str(record: &Value, key: &str) -> PersistenceResult<String> {

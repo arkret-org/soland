@@ -25,6 +25,28 @@ pub fn operation_policy_reason_code(message: &str) -> (salvo::http::StatusCode, 
             salvo::http::StatusCode::FORBIDDEN,
             crate::error::reasons::TRANSCRIPTION_DENIED,
         )
+    } else if message == crate::error::reasons::ACCOUNTABILITY_GRANT_MISSING {
+        (
+            salvo::http::StatusCode::PRECONDITION_FAILED,
+            crate::error::reasons::ACCOUNTABILITY_GRANT_MISSING,
+        )
+    } else if matches!(
+        message,
+        "read_receipt_visibility_combination_invalid"
+            | "read_receipt_forced_public_world_readable_forbidden"
+    ) {
+        (
+            salvo::http::StatusCode::FORBIDDEN,
+            match message {
+                "read_receipt_visibility_combination_invalid" => {
+                    "read_receipt_visibility_combination_invalid"
+                }
+                "read_receipt_forced_public_world_readable_forbidden" => {
+                    "read_receipt_forced_public_world_readable_forbidden"
+                }
+                _ => "capability_denied",
+            },
+        )
     } else if matches!(
         message,
         "history_sharing_policy_missing"
@@ -70,6 +92,7 @@ pub async fn validate_operation_policy(
             validate_morph_schema_migrate_capability(operation)?;
         }
         validate_principal_control_realm_binding(operation)?;
+        validate_accountability_profile_policy(state, operations, operation).await?;
         if kinds::canonical_kind_string(operation) == "ck.cross_signing.publish" {
             crate::routing::identity::cross_signing::validate_cross_signing_publish(
                 state,
@@ -101,6 +124,7 @@ pub async fn validate_operation_policy(
         validate_moderation_event_policy(state, operation).await?;
         validate_set_default_strand_policy(state, operation).await?;
         validate_history_visibility_policy(state, operation).await?;
+        validate_read_receipt_policy_combination_write(state, operations, operation).await?;
         validate_realm_key_share_policy(state, operation).await?;
         validate_realm_moderation_policy(state, operation).await?;
         validate_poll_operation_policy(state, operation)?;
@@ -121,6 +145,162 @@ fn validate_pin_scope_safety(state: &AppState, operation: &Operation) -> Result<
         return Err("pin_scope_safety_unavailable");
     };
     projection.check_pin_scope_safety(operation)
+}
+
+async fn validate_accountability_profile_policy(
+    state: &AppState,
+    operations: &[Operation],
+    operation: &Operation,
+) -> Result<(), &'static str> {
+    if !matches!(
+        kinds::canonical_kind_string(operation).as_str(),
+        "ck.profile.create" | "ck.profile.update"
+    ) {
+        return Ok(());
+    }
+    let accountable_principal_ids = profile_accountable_principal_ids(operation);
+    if accountable_principal_ids.is_empty() {
+        return Ok(());
+    }
+    let Some(principal_id) = profile_principal_id(operation) else {
+        return Err(crate::error::reasons::ACCOUNTABILITY_GRANT_MISSING);
+    };
+    let now = chrono::Utc::now();
+    let accepted_events = state
+        .persistence
+        .events()
+        .snapshot_all()
+        .await
+        .unwrap_or_default();
+    for issuer in accountable_principal_ids {
+        let in_batch = operations.iter().any(|candidate| {
+            accountability_grant_operation_active_for(
+                candidate,
+                operation.realm_id.as_str(),
+                &issuer,
+                &principal_id,
+                now,
+            )
+        });
+        let accepted = accepted_events.iter().any(|record| {
+            if record.kind != "ck.identity.accountability_grant" {
+                return false;
+            }
+            if record.realm_id.as_deref() != Some(operation.realm_id.as_str()) {
+                return false;
+            }
+            let payload = record.envelope.get("payload").unwrap_or(&record.envelope);
+            accountability_grant_value_active_for(payload, &issuer, &principal_id, now)
+        });
+        if !in_batch && !accepted {
+            return Err(crate::error::reasons::ACCOUNTABILITY_GRANT_MISSING);
+        }
+    }
+    Ok(())
+}
+
+fn profile_body_value(operation: &Operation) -> &Value {
+    operation
+        .payload
+        .get("profile")
+        .or_else(|| operation.payload.get("object"))
+        .or_else(|| operation.payload.get("value"))
+        .unwrap_or(&operation.payload)
+}
+
+fn profile_principal_id(operation: &Operation) -> Option<String> {
+    let body = profile_body_value(operation);
+    body.get("principal_id")
+        .or_else(|| body.get("actor_id"))
+        .or_else(|| operation.payload.get("principal_id"))
+        .or_else(|| operation.payload.get("actor_id"))
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn profile_accountable_principal_ids(operation: &Operation) -> Vec<String> {
+    let body = profile_body_value(operation);
+    body.get("accountable_principal_ids")
+        .or_else(|| operation.payload.get("accountable_principal_ids"))
+        .and_then(Value::as_array)
+        .map(|values| {
+            values
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn accountability_grant_operation_active_for(
+    operation: &Operation,
+    realm_id: &str,
+    issuer: &str,
+    subject: &str,
+    now: chrono::DateTime<chrono::Utc>,
+) -> bool {
+    kinds::canonical_kind_string(operation) == "ck.identity.accountability_grant"
+        && operation.realm_id.as_str() == realm_id
+        && accountability_grant_value_active_for(&operation.payload, issuer, subject, now)
+}
+
+fn accountability_grant_body(value: &Value) -> &Value {
+    value
+        .get("grant")
+        .filter(|grant| grant.is_object())
+        .or_else(|| value.get("value").filter(|grant| grant.is_object()))
+        .or_else(|| value.get("object").filter(|grant| grant.is_object()))
+        .unwrap_or(value)
+}
+
+fn accountability_grant_value_active_for(
+    value: &Value,
+    issuer: &str,
+    subject: &str,
+    now: chrono::DateTime<chrono::Utc>,
+) -> bool {
+    let body = accountability_grant_body(value);
+    if body.get("issuer").and_then(Value::as_str) != Some(issuer) {
+        return false;
+    }
+    if body
+        .get("subject")
+        .or_else(|| body.get("subject_id"))
+        .or_else(|| body.get("principal_id"))
+        .and_then(Value::as_str)
+        != Some(subject)
+    {
+        return false;
+    }
+    if body
+        .get("grant_status")
+        .or_else(|| body.get("status"))
+        .and_then(Value::as_str)
+        .is_some_and(|status| !matches!(status, "active" | "granted"))
+    {
+        return false;
+    }
+    let Some(not_before) = accountability_grant_time(body, "not_before")
+        .or_else(|| accountability_grant_time(body, "issued_at"))
+    else {
+        return false;
+    };
+    let Some(expires_at) = accountability_grant_time(body, "expires_at") else {
+        return false;
+    };
+    not_before <= now && now <= expires_at
+}
+
+fn accountability_grant_time(value: &Value, field: &str) -> Option<chrono::DateTime<chrono::Utc>> {
+    value
+        .get(field)
+        .and_then(Value::as_str)
+        .and_then(|raw| chrono::DateTime::parse_from_rfc3339(raw).ok())
+        .map(|parsed| parsed.with_timezone(&chrono::Utc))
 }
 
 /// SEC-08 — server-side defence-in-depth for `ck.profile.mls.minimal_metadata_realm.v1`
@@ -944,12 +1124,8 @@ async fn native_agent_exists(state: &AppState, principal_id: &str) -> bool {
         .is_some()
 }
 
-fn agent_participation_action(operation: &Operation) -> Option<&'static str> {
-    match kinds::canonical_kind_for_operation(operation) {
-        Some(kinds::CK_MESSAGE_CREATE) => Some(kinds::CK_MESSAGE_CREATE),
-        Some(kinds::CK_REACTION_ADD) => Some(kinds::CK_REACTION_ADD),
-        _ => None,
-    }
+fn agent_participation_action(operation: &Operation) -> Option<&str> {
+    kinds::canonical_kind_for_operation(operation)
 }
 
 fn validate_agent_act_on_behalf_authorization_ref(
@@ -1101,21 +1277,17 @@ fn validate_agent_act_on_behalf_approval(
 }
 
 /// CKP-0016 §5.2 / CKP-0008 §4.10 enforcement (soland-native): a native
-/// personal agent may only author `ck.message.create` / `ck.reaction.add`
-/// where its effective participation bit is true. Reply-as-agent uses the
-/// `reply` bit; act-on-behalf uses envelope-derived `executed_by`, requires a
-/// referenced active grant, and uses the `act_on_behalf` bit. Non-agent actors
-/// fall through to standard authz.
+/// personal agent may only author an Event where its effective participation
+/// bit is true. Reply-as-agent uses the `reply` bit; act-on-behalf uses
+/// envelope-derived `executed_by`, requires a referenced active grant, and
+/// uses the `act_on_behalf` bit. Non-agent actors fall through to standard
+/// authz.
 pub async fn validate_agent_reply_participation(
     state: &AppState,
     operations: &[Operation],
 ) -> Result<(), &'static str> {
     use cokret_sdk::models::AgentParticipation;
     for operation in operations {
-        match kinds::canonical_kind_for_operation(operation) {
-            Some(kinds::CK_MESSAGE_CREATE) | Some(kinds::CK_REACTION_ADD) => {}
-            _ => continue,
-        }
         let mut agent_context: Option<(String, AgentParticipationMode)> = None;
         if let Some(executed_by) = operation.payload.get("executed_by").and_then(Value::as_str)
             && native_agent_exists(state, executed_by).await

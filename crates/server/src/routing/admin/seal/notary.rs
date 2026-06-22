@@ -16,7 +16,7 @@ use crate::{JsonResult, app_error, json_ok};
 // ── Helpers ──────────────────────────────────────────────────────────────
 
 /// Wire discriminator string for a [`NotaryValue`] profile (the value the
-/// internal `kind` tag serializes to).
+/// internal `type` tag serializes to).
 fn notary_kind_str(value: &SdkNotaryValue) -> &'static str {
     match value {
         SdkNotaryValue::SingleDid { .. } => "single_did",
@@ -108,7 +108,7 @@ pub(super) fn notary_value_object_from_body(
 
 /// Project a JSON cell value into the typed [`NotaryValue`]. The
 /// on-wire notary cell value MUST be the SDK-authoritative `NotaryValue`
-/// shape (internal tag `kind`, fields `did|k|n|members|primary|
+/// shape (internal tag `type`, fields `did|k|n|members|primary|
 /// recovery_members`); removed alias spellings (`shape`/`kind_raw`/
 /// `single_did`/`threshold_dids`/...) are rejected.
 ///

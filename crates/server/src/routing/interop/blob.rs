@@ -14,8 +14,9 @@
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use cokret_sdk::{
-    BlobPresignOutcome, BlobPresignRequestBody, BlobRef, BlobUploadOutcome, Did, Hash, RealmId,
-    SignatureValue, UploadReceipt, canonical,
+    BlobPresignAccessScope, BlobPresignDetachedJwsProof, BlobPresignEnvelope, BlobPresignOutcome,
+    BlobPresignPayload, BlobPresignRequestBody, BlobRef, BlobUploadOutcome, BlobVisibility, Did,
+    Hash, RealmId, SignatureValue, UploadReceipt, canonical,
 };
 use ed25519_dalek::Signer;
 use salvo::http::{Method, StatusCode};
@@ -303,6 +304,13 @@ async fn blob_upload(depot: &mut Depot, req: &mut Request, res: &mut Response) {
         filename: filename.clone(),
         realm_id: realm_id.clone(),
         encryption: encryption.clone(),
+        legal_hold: false,
+        redacted: false,
+        visibility: if realm_id.is_some() {
+            BlobVisibility::RealmBound
+        } else {
+            BlobVisibility::Public
+        },
         uploaded_by: session.actor,
         created_at: received_at,
     };
@@ -372,18 +380,45 @@ async fn blob_get(depot: &mut Depot, req: &mut Request, res: &mut Response) {
         );
         return;
     }
-    let presigned = validate_presign_query(state, req, &blob_ref, &purpose);
-    let session = match authenticated_session(state, req).await {
-        Ok(session) => Some(session),
-        Err(_) if presigned => None,
-        Err(_) => {
-            render_error(
-                res,
-                StatusCode::UNAUTHORIZED,
-                "unauthenticated",
-                "missing bearer token",
-            );
-            return;
+    let presign_present = query_param(req, "presign").is_some();
+    if presign_present
+        && req
+            .headers()
+            .contains_key(salvo::http::header::AUTHORIZATION)
+    {
+        render_error(
+            res,
+            StatusCode::BAD_REQUEST,
+            "invalid_param",
+            "Authorization and presign are mutually exclusive",
+        );
+        return;
+    }
+    let presign_payload = if presign_present {
+        match validate_presign_query(state, req, &blob_ref, &purpose) {
+            Ok(payload) => Some(payload),
+            Err(()) => {
+                render_error(res, StatusCode::NOT_FOUND, "not_found", "not found");
+                return;
+            }
+        }
+    } else {
+        None
+    };
+    let session = if presign_payload.is_some() {
+        None
+    } else {
+        match authenticated_session(state, req).await {
+            Ok(session) => Some(session),
+            Err(_) => {
+                render_error(
+                    res,
+                    StatusCode::UNAUTHORIZED,
+                    "unauthenticated",
+                    "missing bearer token",
+                );
+                return;
+            }
         }
     };
     let mut blob = state
@@ -401,6 +436,12 @@ async fn blob_get(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     }
     match blob.as_ref() {
         Some(blob) => {
+            if let Some(payload) = presign_payload.as_ref()
+                && !presign_payload_matches_blob(blob, payload)
+            {
+                render_error(res, StatusCode::NOT_FOUND, "not_found", "not found");
+                return;
+            }
             let denied = if let Some(session) = session.as_ref() {
                 !blob_visible_to_session(
                     state,
@@ -586,6 +627,9 @@ async fn try_recover_profile_avatar_blob(
         filename: None,
         realm_id: None,
         encryption: None,
+        legal_hold: false,
+        redacted: false,
+        visibility: BlobVisibility::Public,
         uploaded_by: uploaded_by.to_owned(),
         created_at: now(),
     };
@@ -635,73 +679,196 @@ async fn blob_presign(
         return Err(AppError::not_found("blob not found"));
     }
     let blob_value = presign_blob_policy_value(&blob);
-    if let Some(block) = classify_presign_blob_block(&blob_value, &session.actor) {
+    if let Some(block) = classify_presign_blob_block(&blob_value, "presigned") {
         return Err(block.as_error());
     }
     let ttl_seconds = u64::from(body.max_age_seconds.unwrap_or(300)).clamp(1, 300);
-    let expires_at = now() + chrono::Duration::seconds(ttl_seconds as i64);
-    let token = presign_token(state, blob_ref, purpose, expires_at.timestamp());
+    let issued_at = now();
+    let expires_at = issued_at + chrono::Duration::seconds(ttl_seconds as i64);
+    let presign = issue_presign_envelope(
+        state,
+        blob_ref,
+        blob.realm_id.as_deref(),
+        purpose,
+        &session.actor,
+        issued_at,
+        expires_at,
+    )?;
     let base = state.config.public_base_url.trim_end_matches('/');
     let url = format!(
-        "{base}/_cokret/self/blob/get?blob_ref={}&purpose={}&expires_at={}&presign_token={}",
+        "{base}/_cokret/self/blob/get?blob_ref={}&purpose={}&presign={}",
         query_escape(blob_ref),
         query_escape(purpose),
-        expires_at.timestamp(),
-        token,
+        query_escape(&presign.token),
     );
     json_ok(BlobPresignOutcome {
         url,
         expires_at,
         purpose: Some(purpose.to_owned()),
+        realm_id: presign.payload.realm_id,
+        nonce: presign.payload.nonce,
+        access_scope: presign.payload.access_scope,
     })
 }
 
-fn validate_presign_query(state: &AppState, req: &Request, blob_ref: &str, purpose: &str) -> bool {
-    let Some(expires_at) =
-        query_param(req, "expires_at").and_then(|value| value.parse::<i64>().ok())
-    else {
-        return false;
-    };
-    if expires_at <= now().timestamp() {
-        return false;
-    }
-    let Some(token) = query_param(req, "presign_token") else {
-        return false;
-    };
-    // SOL-03-004: the presign token is the sole access-control credential on
-    // this path (it bypasses `blob_visible_to_session`). Compare it in constant
-    // time so a timing oracle cannot recover a valid token byte by byte.
-    let expected = presign_token(state, blob_ref, purpose, expires_at);
-    let token_bytes = token.as_bytes();
-    let expected_bytes = expected.as_bytes();
-    token_bytes.len() == expected_bytes.len() && bool::from(token_bytes.ct_eq(expected_bytes))
+const BLOB_PRESIGN_SCHEME: &str = "ck.blob.presign.v1";
+const BLOB_PRESIGN_PROOF_KIND: &str = "detached_jws";
+const BLOB_PRESIGN_PROOF_ALG: &str = "EdDSA";
+const BLOB_PRESIGN_KID_FRAGMENT: &str = "notary-key";
+const BLOB_PRESIGN_MAX_TTL_SECONDS: i64 = 300;
+const BLOB_PRESIGN_CLOCK_SKEW_SECONDS: i64 = 30;
+
+struct IssuedBlobPresign {
+    token: String,
+    payload: BlobPresignPayload,
 }
 
-fn presign_token(state: &AppState, blob_ref: &str, purpose: &str, expires_at: i64) -> String {
-    let signing_input = presign_signing_input(state, blob_ref, purpose, expires_at);
-    let signature = state.notary_signing_key().sign(signing_input.as_bytes());
-    URL_SAFE_NO_PAD.encode(signature.to_bytes())
-}
-
-fn presign_signing_input(
+fn issue_presign_envelope(
     state: &AppState,
     blob_ref: &str,
+    realm_id: Option<&str>,
     purpose: &str,
-    expires_at: i64,
-) -> String {
-    format!(
-        "soland.blob.presign.v1\nservice_did={}\ntrust_domain={}\nblob_ref={}\npurpose={}\nexpires_at={}",
-        state.config.service_did, state.config.trust_domain, blob_ref, purpose, expires_at
-    )
+    actor: &str,
+    issued_at: chrono::DateTime<chrono::Utc>,
+    expires_at: chrono::DateTime<chrono::Utc>,
+) -> Result<IssuedBlobPresign, AppError> {
+    let issuer_service_did = Did::new(state.config.service_did.clone())
+        .map_err(|error| AppError::internal(format!("service DID is invalid: {error}")))?;
+    let realm_id = realm_id
+        .map(|value| {
+            RealmId::new(value.to_owned())
+                .map_err(|error| AppError::internal(format!("blob realm_id is invalid: {error}")))
+        })
+        .transpose()?;
+    let audience_hint = Did::new(actor.to_owned()).ok();
+    let mut nonce_bytes = [0u8; 16];
+    {
+        use rand::RngExt;
+        rand::rng().fill(&mut nonce_bytes[..]);
+    }
+    let payload = BlobPresignPayload {
+        scheme: BLOB_PRESIGN_SCHEME.to_owned(),
+        blob_ref: blob_ref.to_owned(),
+        realm_id,
+        issuer_service_did: issuer_service_did.clone(),
+        issued_at,
+        expires_at,
+        purpose: purpose.to_owned(),
+        nonce: URL_SAFE_NO_PAD.encode(nonce_bytes),
+        access_scope: BlobPresignAccessScope {
+            method: vec!["GET".to_owned(), "HEAD".to_owned()],
+            byte_range: None,
+        },
+        audience_hint,
+    };
+    let canonical_payload = canonical::canonical_json_bytes(&payload).map_err(|error| {
+        AppError::internal(format!(
+            "blob presign payload canonicalization failed: {error}"
+        ))
+    })?;
+    let jws =
+        cokret_sdk::jws::sign_jws_ed25519(&canonical_payload, state.notary_signing_key().as_ref())
+            .map_err(|error| AppError::internal(format!("blob presign signing failed: {error}")))?;
+    let envelope = BlobPresignEnvelope {
+        payload: payload.clone(),
+        proof: BlobPresignDetachedJwsProof {
+            kind: BLOB_PRESIGN_PROOF_KIND.to_owned(),
+            alg: BLOB_PRESIGN_PROOF_ALG.to_owned(),
+            kid: blob_presign_kid(state),
+            jws,
+        },
+    };
+    let envelope_bytes = canonical::canonical_json_bytes(&envelope).map_err(|error| {
+        AppError::internal(format!(
+            "blob presign envelope canonicalization failed: {error}"
+        ))
+    })?;
+    Ok(IssuedBlobPresign {
+        token: URL_SAFE_NO_PAD.encode(envelope_bytes),
+        payload,
+    })
+}
+
+fn validate_presign_query(
+    state: &AppState,
+    req: &Request,
+    blob_ref: &str,
+    purpose: &str,
+) -> Result<BlobPresignPayload, ()> {
+    let encoded = query_param(req, "presign").ok_or(())?;
+    let bytes = URL_SAFE_NO_PAD.decode(encoded.as_bytes()).map_err(|_| ())?;
+    let envelope: BlobPresignEnvelope = serde_json::from_slice(&bytes).map_err(|_| ())?;
+    let expected_kid = blob_presign_kid(state);
+    if envelope.proof.kind != BLOB_PRESIGN_PROOF_KIND
+        || envelope.proof.alg != BLOB_PRESIGN_PROOF_ALG
+        || envelope.proof.kid != expected_kid
+        || envelope.proof.jws.trim().is_empty()
+    {
+        return Err(());
+    }
+    let payload = envelope.payload;
+    if payload.scheme != BLOB_PRESIGN_SCHEME
+        || payload.blob_ref != blob_ref
+        || payload.purpose != purpose
+        || payload.issuer_service_did.as_str() != state.config.service_did.as_str()
+        || payload.nonce.len() < 16
+    {
+        return Err(());
+    }
+    let method = req.method().as_str();
+    if payload.access_scope.method.is_empty()
+        || payload
+            .access_scope
+            .method
+            .iter()
+            .any(|method| method.as_str() != "GET" && method.as_str() != "HEAD")
+        || !payload
+            .access_scope
+            .method
+            .iter()
+            .any(|allowed| allowed.as_str() == method)
+    {
+        return Err(());
+    }
+    let now = now();
+    let skew = chrono::Duration::seconds(BLOB_PRESIGN_CLOCK_SKEW_SECONDS);
+    if payload.expires_at <= payload.issued_at
+        || payload.issued_at - skew > now
+        || payload.expires_at + skew < now
+        || (payload.expires_at - payload.issued_at).num_seconds() > BLOB_PRESIGN_MAX_TTL_SECONDS
+    {
+        return Err(());
+    }
+    let canonical_payload = canonical::canonical_json_bytes(&payload).map_err(|_| ())?;
+    let expected_jws =
+        cokret_sdk::jws::sign_jws_ed25519(&canonical_payload, state.notary_signing_key().as_ref())
+            .map_err(|_| ())?;
+    let expected = expected_jws.as_bytes();
+    let actual = envelope.proof.jws.as_bytes();
+    if expected.len() != actual.len() || !bool::from(expected.ct_eq(actual)) {
+        return Err(());
+    }
+    Ok(payload)
+}
+
+fn blob_presign_kid(state: &AppState) -> String {
+    format!("{}#{BLOB_PRESIGN_KID_FRAGMENT}", state.config.service_did)
+}
+
+fn presign_payload_matches_blob(blob: &BlobRecord, payload: &BlobPresignPayload) -> bool {
+    match blob.realm_id.as_deref() {
+        Some(realm_id) => payload.realm_id.as_ref().map(|value| value.as_str()) == Some(realm_id),
+        None => payload.realm_id.is_none() && blob.visibility == BlobVisibility::Public,
+    }
 }
 
 fn presign_blob_policy_value(blob: &BlobRecord) -> Value {
     json!({
         "encryption": blob.encryption.clone(),
         "uploaded_by": blob.uploaded_by.clone(),
-        "legal_hold": false,
-        "redacted": false,
-        "visibility": null,
+        "legal_hold": blob.legal_hold,
+        "redacted": blob.redacted,
+        "visibility": blob.visibility.as_str(),
     })
 }
 
@@ -1129,6 +1296,8 @@ pub enum PresignBlobBlock {
     Redacted,
     /// Blob is actor_private and the requester is not the owner.
     ActorPrivate,
+    /// Blob is device_bound and this path has no bound-device verifier.
+    DeviceBound,
 }
 
 impl PresignBlobBlock {
@@ -1151,6 +1320,10 @@ impl PresignBlobBlock {
             Self::ActorPrivate => AppError::new(
                 ErrorCode::CapabilityDenied,
                 "blob is actor_private; only the owner may request a presign URL",
+            ),
+            Self::DeviceBound => AppError::new(
+                ErrorCode::CapabilityDenied,
+                "blob is device_bound; direct download is refused fail-closed",
             ),
         }
     }
@@ -1178,15 +1351,18 @@ pub fn classify_presign_blob_block(
     if blob.get("redacted").and_then(Value::as_bool) == Some(true) {
         return Some(PresignBlobBlock::Redacted);
     }
-    // actor_private visibility class.
-    if blob.get("visibility").and_then(Value::as_str) == Some("actor_private") {
-        let owner = blob
-            .get("uploaded_by")
-            .and_then(Value::as_str)
-            .unwrap_or("");
-        if owner != requester_actor {
-            return Some(PresignBlobBlock::ActorPrivate);
+    match blob.get("visibility").and_then(Value::as_str) {
+        Some("actor_private") => {
+            let owner = blob
+                .get("uploaded_by")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            if owner != requester_actor {
+                return Some(PresignBlobBlock::ActorPrivate);
+            }
         }
+        Some("device_bound") => return Some(PresignBlobBlock::DeviceBound),
+        _ => {}
     }
     None
 }
@@ -1241,6 +1417,15 @@ mod presign_block_tests {
             None
         );
     }
+
+    #[test]
+    fn presign_blob_device_bound_blocked() {
+        let blob = json!({"visibility": "device_bound", "uploaded_by": "did:web:alice.example"});
+        assert_eq!(
+            classify_presign_blob_block(&blob, "did:web:alice.example"),
+            Some(PresignBlobBlock::DeviceBound)
+        );
+    }
 }
 
 #[cfg(test)]
@@ -1257,6 +1442,9 @@ mod tests {
             filename: filename.map(ToOwned::to_owned),
             realm_id: Some("ck:realm:0196419b-0000-7000-8000-000000000000".to_owned()),
             encryption: None,
+            legal_hold: false,
+            redacted: false,
+            visibility: BlobVisibility::RealmBound,
             uploaded_by: "did:web:alice.example".to_owned(),
             created_at: now(),
         }

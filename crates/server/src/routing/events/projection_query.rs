@@ -32,10 +32,10 @@
 
 use chrono::{DateTime, Utc};
 use cokret_sdk::{
-    Did, DocumentMorphProjectionOutcome, MorphId, ProjectionAssignedToRelation,
+    CellRef, Did, DocumentMorphProjectionOutcome, MorphId, ProjectionAssignedToRelation,
     ProjectionMorphList, ProjectionMorphRow, ProjectionObjectState, ProjectionSpaceList,
     ProjectionSpaceRow, ProjectionSpaceState, ProjectionStrandList, ProjectionStrandRow, RealmId,
-    RelationId, SpaceId, StrandId,
+    RelationId, SealId, SpaceId, StrandId,
 };
 use salvo::http::StatusCode;
 use salvo::oapi::extract::{PathParam, QueryParam};
@@ -108,25 +108,27 @@ fn total_count(len: usize) -> Result<u64, AppError> {
 }
 
 fn projection_row_visible_to_session(
+    state: &AppState,
     projection: &ProjectionState,
     realm_id: &str,
     session: &SessionRecord,
     sender: &str,
     created_at: DateTime<Utc>,
+    history_basis_seals: &[String],
     scope_circle_id: Option<&str>,
     history_visibility: &str,
-    discoverability: &str,
+    _discoverability: &str,
 ) -> bool {
     if sender == session.actor {
         return true;
     }
     if !projection_realm_history_allows(
+        state,
         projection,
         realm_id,
         &session.actor,
-        created_at,
+        history_basis_seals,
         history_visibility,
-        discoverability,
     ) {
         return false;
     }
@@ -136,34 +138,61 @@ fn projection_row_visible_to_session(
 }
 
 fn projection_realm_history_allows(
+    state: &AppState,
     projection: &ProjectionState,
     realm_id: &str,
     actor: &str,
-    created_at: DateTime<Utc>,
+    history_basis_seals: &[String],
     history_visibility: &str,
-    discoverability: &str,
 ) -> bool {
     match history_visibility {
         "world_readable" => true,
-        "shared" => {
-            discoverability == "public"
-                || projection
-                    .member(realm_id, actor)
-                    .is_some_and(|member| member.state == "join")
-        }
-        "invited" => projection
+        "shared" => projection
             .member(realm_id, actor)
-            .and_then(|member| {
-                member.invited_at.or_else(|| {
-                    matches!(member.state.as_str(), "invite" | "join").then_some(member.updated_at)
-                })
-            })
-            .is_some_and(|visible_at| created_at >= visible_at),
-        "joined" => projection
-            .member(realm_id, actor)
-            .filter(|member| member.state == "join")
-            .is_some_and(|member| created_at >= member.joined_at),
+            .is_some_and(|member| member.state == "join"),
+        "invited" => member_state_at_history_basis(state, realm_id, actor, history_basis_seals)
+            .is_some_and(|member_state| matches!(member_state.as_str(), "invite" | "join")),
+        "joined" => member_state_at_history_basis(state, realm_id, actor, history_basis_seals)
+            .is_some_and(|member_state| member_state == "join"),
         _ => false,
+    }
+}
+
+fn member_state_at_history_basis(
+    state: &AppState,
+    realm_id: &str,
+    actor: &str,
+    history_basis_seals: &[String],
+) -> Option<String> {
+    if history_basis_seals.is_empty() {
+        return None;
+    }
+    let realm = RealmId::new(realm_id.to_owned()).ok()?;
+    let seals = history_basis_seals
+        .iter()
+        .filter_map(|seal| SealId::new(seal.clone()).ok())
+        .collect::<Vec<_>>();
+    if seals.is_empty() {
+        return None;
+    }
+    let cell = CellRef::new(format!("ck:cell:ck.component.member.state.v1:{actor}")).ok()?;
+    let state_at_basis = cokret_sdk::state_res::effective_state_at(
+        &seals,
+        &realm,
+        state.seal_store.as_ref(),
+        state.cell_store.as_ref(),
+        state.cell_registry.as_ref(),
+    )
+    .ok()?;
+    match state_at_basis.get(&cell) {
+        Some(cokret_sdk::lattice::CellState::Value(Value::String(member_state))) => {
+            Some(member_state.clone())
+        }
+        Some(cokret_sdk::lattice::CellState::Value(Value::Object(object))) => object
+            .get("state")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+        _ => None,
     }
 }
 
@@ -443,6 +472,7 @@ fn message_scope_circle_id(message: &MessageState) -> Option<&str> {
 }
 
 fn document_projection_comments(
+    state: &AppState,
     projection: &ProjectionState,
     morph: &MorphProjection,
     body: &Value,
@@ -462,11 +492,13 @@ fn document_projection_comments(
         })
         .filter(|(message, ..)| {
             projection_row_visible_to_session(
+                state,
                 projection,
                 &morph.realm_id,
                 session,
                 &message.sender,
                 message.created_at,
+                &message.history_basis_seals,
                 message_scope_circle_id(message),
                 history_visibility,
                 discoverability,
@@ -541,11 +573,13 @@ async fn list_space_container_projections(
         .filter(|p| p.realm_id == realm_id)
         .filter(|p| {
             projection_row_visible_to_session(
+                state,
                 &proj,
                 &realm_id,
                 &session,
                 &p.created_by,
                 p.created_at,
+                &p.history_basis_seals,
                 p.scope_circle_id.as_deref(),
                 &history_visibility,
                 &discoverability,
@@ -636,11 +670,13 @@ async fn list_strand_projections(
         .filter(|f| f.realm_id == realm_id)
         .filter(|f| {
             projection_row_visible_to_session(
+                state,
                 &proj,
                 &realm_id,
                 &session,
                 &f.created_by,
                 f.created_at,
+                &f.history_basis_seals,
                 f.scope_circle_id.as_deref(),
                 &history_visibility,
                 &discoverability,
@@ -734,11 +770,13 @@ async fn get_document_projection(
         return Err(AppError::not_found("document Morph not found"));
     }
     if !projection_row_visible_to_session(
+        state,
         &proj,
         &realm_id,
         &session,
         &morph.created_by,
         morph.created_at,
+        &morph.history_basis_seals,
         morph.scope_circle_id.as_deref(),
         &history_visibility,
         &discoverability,
@@ -754,6 +792,7 @@ async fn get_document_projection(
     let versions = document_projection_versions(morph);
     let relations = document_projection_relations(&proj, &morph_id, &realm_id, &session)?;
     let comments = document_projection_comments(
+        state,
         &proj,
         morph,
         &body,
@@ -813,11 +852,13 @@ async fn list_morph_projections(
         .filter(|m| m.realm_id == realm_id)
         .filter(|m| {
             projection_row_visible_to_session(
+                state,
                 &proj,
                 &realm_id,
                 &session,
                 &m.created_by,
                 m.created_at,
+                &m.history_basis_seals,
                 m.scope_circle_id.as_deref(),
                 &history_visibility,
                 &discoverability,

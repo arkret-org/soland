@@ -304,6 +304,45 @@ async fn encrypted_account_data_requires_envelope_metadata_or_marker() {
 }
 
 #[tokio::test]
+async fn encrypted_realm_remark_rejects_plaintext_carrier() {
+    const ALICE_DEVICE: &str = "ck:device:01904100-0000-7000-8000-a11ce0000001";
+
+    let state = AppState::new(test_config(), Db { pool: None });
+    let alice = dev_token_for_device(
+        state.clone(),
+        "did:web:alice.example",
+        ALICE_DEVICE,
+        "Alice",
+    )
+    .await;
+    let key = format!("ck.contacts.realm.{DEMO_REALM_ID}");
+
+    let rejected = submit_actor_private_event(
+        state.clone(),
+        &alice,
+        "did:web:alice.example",
+        ALICE_DEVICE,
+        DEMO_REALM_ID,
+        "ck.account_data.set",
+        serde_json::json!({
+            "key": key,
+            "owner": "did:web:alice.example",
+            "encrypted_payload": {
+                "local_name": "Acme",
+                "note": "plaintext remark"
+            },
+            "updated_at": "2026-06-18T00:01:00Z"
+        }),
+    )
+    .await;
+
+    assert_eq!(
+        rejected["error"]["code"], "schema_violation",
+        "plaintext realm remark carrier must be rejected: {rejected}"
+    );
+}
+
+#[tokio::test]
 async fn account_data_requires_auth() {
     let event = signed_actor_private_event_envelope(
         "did:web:alice.example",

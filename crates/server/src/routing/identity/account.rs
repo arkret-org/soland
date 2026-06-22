@@ -133,15 +133,15 @@ async fn resolve_registration_localpart(
 /// demand from the durable localpart (identity-handles.md §3.7.1). `None` when
 /// the account still carries the synthetic DID-derived bootstrap localpart
 /// (no real handle registered), so the client renders "not published".
-fn account_primary_handle_claim(state: &AppState, account: &AccountRecord) -> Option<Value> {
-    account_primary_handle_claim_for(state, account, state.config.service_did.as_str())
+async fn account_primary_handle_claim(state: &AppState, account: &AccountRecord) -> Option<Value> {
+    account_primary_handle_claim_for(state, account, state.config.service_did.as_str()).await
 }
 
 /// Re-derive `account`'s Principal-Server-signed primary handle claim
 /// (identity-handles.md §3.7.1) bound to `audience`. `None` when the account
 /// still carries the synthetic DID-derived bootstrap localpart (no real handle
 /// registered), so the client renders "not published".
-pub(crate) fn account_primary_handle_claim_for(
+pub(crate) async fn account_primary_handle_claim_for(
     state: &AppState,
     account: &AccountRecord,
     audience: &str,
@@ -155,7 +155,9 @@ pub(crate) fn account_primary_handle_claim_for(
         &account.handle(),
         &account.did,
         audience,
-    ) {
+    )
+    .await
+    {
         Ok(value) => Some(value),
         Err(error) => {
             tracing::warn!(%error, did = %account.did, "failed to derive primary handle claim");
@@ -182,7 +184,7 @@ pub(crate) async fn local_account_primary_handle_claim(
         .await
         .ok()
         .flatten()?;
-    account_primary_handle_claim_for(state, &account, audience)
+    account_primary_handle_claim_for(state, &account, audience).await
 }
 use crate::{JsonResult, json_ok};
 
@@ -746,7 +748,7 @@ async fn account_viewer(
     let principal_id = Did::new(account.did.clone())
         .map_err(|error| AppError::internal(format!("stored account DID is invalid: {error}")))?;
 
-    let primary_handle_claim = account_primary_handle_claim(state, &account);
+    let primary_handle_claim = account_primary_handle_claim(state, &account).await;
     json_ok(AccountView {
         principal_id,
         state: state.account_lifecycle_status(&account.did),
@@ -875,7 +877,7 @@ async fn gate_account_register(
     append_account_registration_audit(state, &did, Some(&account.handle()), &registration_audit)
         .await;
     let devices = account_device_summaries(state, &did).await?;
-    let primary_handle_claim = account_primary_handle_claim(state, &account);
+    let primary_handle_claim = account_primary_handle_claim(state, &account).await;
     json_ok(AccountRegisterOutcome {
         principal_id: body.principal_id,
         state: AccountStatus::Active,
@@ -1050,7 +1052,7 @@ fn actor_profile_from_account(
         agent_slug: None,
         avatar_blob_ref,
         status: None,
-        accountable_principal_ids: Vec::new(),
+        accountable_principal_ids: vec![principal_id.clone()],
         profile_fields,
         created_at: account.created_at,
         updated_by: Some(principal_id),

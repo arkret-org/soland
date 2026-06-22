@@ -863,7 +863,7 @@ async fn mimi_consent_update(
 #[endpoint(
     operation_id = "ck.open.mimi.query.identifiers",
     tags("mimi"),
-    summary = "Resolve a MIMI / DID identifier to a reachable Cokret actor"
+    summary = "Query opaque MIMI / DID identifier commitments"
 )]
 #[tracing::instrument(skip_all, fields(op = "ck.open.mimi.query.identifiers"))]
 async fn mimi_identifiers_query(
@@ -877,74 +877,51 @@ async fn mimi_identifiers_query(
     if let Some(message) = unsupported_mimi_draft(&body) {
         return Err(AppError::invalid_param(message).with_wire_code("mimi_draft_unsupported"));
     }
-    let query = body
-        .get("query")
-        .or_else(|| body.get("target_identifier"))
-        .and_then(|value| value.as_str())
-        .unwrap_or_default()
-        .to_owned();
-    if query.is_empty() {
-        let matches = body
-            .get("identifiers")
-            .and_then(Value::as_array)
-            .map(|identifiers| {
-                identifiers
-                    .iter()
-                    .map(|identifier| {
-                        json!({
-                            "identifier": identifier,
-                            "reachable": false,
-                            "reason_code": "identifier_mapping_not_available",
-                        })
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
-        let _receipt = mimi_receipt(
-            state,
-            "ck.open.mimi.query.identifiers",
-            &body,
-            json!({
-                "contact_graph_exposed": false,
-                "connection_identifier_separated": true
-            }),
-        );
-        return json_ok(MimiIdentifierQueryOutcome {
-            matches,
-            proofs: Vec::new(),
-            has_more: false,
-        });
+    let identifiers = body
+        .get("identifiers")
+        .and_then(Value::as_array)
+        .filter(|values| !values.is_empty())
+        .ok_or_else(|| AppError::missing_param("identifiers is required"))?;
+    let mut matches = Vec::with_capacity(identifiers.len());
+    for identifier in identifiers {
+        let kind = identifier
+            .get("kind")
+            .and_then(Value::as_str)
+            .ok_or_else(|| AppError::invalid_param("identifier entries require kind"))?;
+        if !matches!(
+            kind,
+            "mimi_uri" | "did" | "handle" | "phone" | "email" | "opaque"
+        ) {
+            return Err(AppError::invalid_param("identifier kind is unsupported"));
+        }
+        let commitment = identifier
+            .get("identifier_commitment")
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| {
+                AppError::invalid_param("identifier entries require identifier_commitment")
+            })?;
+        Hash::new(commitment.to_owned())
+            .map_err(|_| AppError::invalid_param("identifier_commitment must be a hash"))?;
+        matches.push(json!({
+            "identifier_commitment": commitment,
+            "matched": false,
+        }));
     }
-    if !(query.starts_with("mimi://") || query.starts_with("did:")) {
-        return Err(AppError::invalid_param(
-            "identifier query must be a MIMI URI or DID",
-        ));
-    }
-    let mapped_did = query
-        .contains("alice")
-        .then(|| "did:web:alice.example".to_owned());
-    let proof = json!({
-            "type": "time_bound_reachability",
-            "privacy_mode": "private_contact_discovery",
-            "expires_at": now() + Duration::minutes(5)
-    });
     let _receipt = mimi_receipt(
         state,
         "ck.open.mimi.query.identifiers",
         &body,
         json!({
             "contact_graph_exposed": false,
-            "connection_identifier_separated": true
+            "connection_identifier_separated": true,
+            "reachability_proof_returned": false,
+            "mapping_policy": "opaque_fail_closed"
         }),
     );
     json_ok(MimiIdentifierQueryOutcome {
-        matches: vec![json!({
-            "identifier": query,
-            "reachable": mapped_did.is_some(),
-            "mapped_did": mapped_did,
-            "provider_id": mimi_provider_id(state),
-        })],
-        proofs: vec![proof],
+        matches,
+        proofs: Vec::new(),
         has_more: false,
     })
 }
@@ -1147,25 +1124,27 @@ async fn mimi_proxy_download(
     if let Some(message) = unsupported_mimi_draft(&body) {
         return Err(AppError::invalid_param(message).with_wire_code("mimi_draft_unsupported"));
     }
-    let blob_ref = body
-        .get("blob_ref")
-        .or_else(|| body.get("asset_ref"))
+    let asset_ref = body
+        .get("asset_ref")
         .and_then(|value| value.as_str())
         .ok_or_else(|| AppError::missing_param("asset_ref is required"))?;
+    enforce_mimi_proxy_download_egress_policy(state, asset_ref)?;
     let asset_policy = body
         .get("asset_privacy_policy")
         .and_then(|value| value.as_str())
         .unwrap_or("provider_proxy");
-    let blob = state.persistence.blobs().get(blob_ref).await.ok().flatten();
+    let blob = state
+        .persistence
+        .blobs()
+        .get(asset_ref)
+        .await
+        .ok()
+        .flatten();
     let proxy_required = matches!(asset_policy, "provider_proxy" | "ohttp_relay");
     let download_ref = if proxy_required {
-        format!(
-            "{}/proxy-download?blob_ref={}",
-            mimi_base_url(state),
-            blob_ref
-        )
+        mimi_proxy_download_ref(state, asset_ref)?
     } else {
-        blob_ref.to_owned()
+        asset_ref.to_owned()
     };
     let mut headers = BTreeMap::new();
     if let Some(blob) = blob.as_ref() {
@@ -1187,6 +1166,54 @@ async fn mimi_proxy_download(
         headers,
         expires_at: Some(now() + Duration::minutes(5)),
     })
+}
+
+fn mimi_proxy_download_ref(state: &AppState, asset_ref: &str) -> Result<String, AppError> {
+    let mut url = reqwest::Url::parse(&format!("{}/proxy-download", mimi_base_url(state)))
+        .map_err(|error| AppError::internal(format!("MIMI proxy download URL invalid: {error}")))?;
+    url.query_pairs_mut().append_pair("asset_ref", asset_ref);
+    Ok(url.to_string())
+}
+
+fn enforce_mimi_proxy_download_egress_policy(
+    state: &AppState,
+    asset_ref: &str,
+) -> Result<(), AppError> {
+    if asset_ref.trim() != asset_ref || asset_ref.is_empty() {
+        return Err(mimi_proxy_download_egress_denied(
+            "mimi proxy download: asset_ref must be a non-empty canonical reference",
+        ));
+    }
+    let asset_ref = asset_ref.trim();
+    if asset_ref.starts_with("ck:blob:") {
+        return Ok(());
+    }
+    if asset_ref.starts_with("//") || asset_ref.contains('\\') {
+        return Err(mimi_proxy_download_egress_denied(
+            "mimi proxy download: URL-like asset_ref is not allowed without an explicit http(s) scheme",
+        ));
+    }
+    if asset_ref.contains("://") {
+        return crate::security::validate_http_url_for_egress(
+            asset_ref,
+            "mimi proxy download",
+            state.config.development_mode,
+        )
+        .map(|_| ())
+        .map_err(mimi_proxy_download_egress_denied);
+    }
+    if asset_ref.contains(':') {
+        return Err(mimi_proxy_download_egress_denied(
+            "mimi proxy download: non-blob URI scheme is not allowed",
+        ));
+    }
+    Ok(())
+}
+
+fn mimi_proxy_download_egress_denied(error: impl Into<String>) -> AppError {
+    AppError::capability_denied("MIMI proxy download asset_ref is denied by egress policy")
+        .with_wire_code("egress_policy_denied")
+        .with_reason_detail(error)
 }
 
 fn typed_body_value<T: Serialize>(body: T, context: &'static str) -> Result<Value, AppError> {

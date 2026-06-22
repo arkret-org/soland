@@ -8,12 +8,17 @@
 
 use std::net::SocketAddr;
 
+use base64::Engine as _;
+use cokret_sdk::applet::WebhookSignatureAlg;
 use cokret_sdk::{
     AppletNamespaceEntry, AppletPackage, AppletWireNamespaces, Did, Ed25519MoveSigner, Hash,
+    WebhookAuth,
 };
+use ed25519_dalek::{Signer, SigningKey};
 use salvo::http::StatusCode;
 use salvo::test::{ResponseExt, TestClient};
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use soland::config::{
     AppConfig, FederationPolicy, IceServersConfig, LiveKitConfig, ObjectStorageConfig,
 };
@@ -414,7 +419,169 @@ async fn canonical_did_document(app: &salvo::Service, did: &str) -> Value {
     .take_json()
     .await
     .unwrap();
-    body["did_document"].clone()
+    body.pointer("/did_document/document")
+        .or_else(|| body.get("did_document"))
+        .cloned()
+        .filter(|value| !value.is_null())
+        .filter(|value| value.get("id").is_some())
+        .unwrap_or(body)
+}
+
+async fn post_signed_applet_message_transaction(
+    app: &salvo::Service,
+    package: &AppletPackage,
+    applet_id: &str,
+    actor_id: &str,
+    realm_id: &str,
+    authorization_ref: &str,
+    text: &str,
+    idempotency_key: &str,
+) -> Value {
+    let event = applet_message_event(package, applet_id, actor_id, realm_id, authorization_ref, text);
+    let body = json!({
+        "source_service_did": package.service_did.to_string(),
+        "events": [event],
+    });
+    let body_bytes = cokret_sdk::canonical::canonical_json_bytes(&body).unwrap();
+    let content_digest = content_digest_header(&body_bytes);
+    let verification_method = format!("{}#applet-service-key", package.service_did);
+    let created = chrono::Utc::now().timestamp();
+    let signature_params = format!(
+        "(\"@method\" \"@target-uri\" \"@authority\" \"content-digest\" \
+         \"source-service-did\" \"destination-service-did\" \"idempotency-key\");\
+         created={created};expires={};keyid=\"{verification_method}\";alg=\"ed25519\"",
+        created + 60
+    );
+    let signature_base = applet_signature_base(
+        &content_digest,
+        package.service_did.as_str(),
+        "did:web:soland.local",
+        idempotency_key,
+        &signature_params,
+    );
+    let signing_key = applet_service_signing_key(&verification_method);
+    let signature = signing_key.sign(signature_base.as_bytes());
+    let signature_header = format!(
+        "sig1=:{}:",
+        base64::engine::general_purpose::STANDARD.encode(signature.to_bytes())
+    );
+    TestClient::post("http://server/_cokret/edge/applet/transactions")
+        .add_header("Content-Digest", content_digest, true)
+        .add_header("Source-Service-DID", package.service_did.to_string(), true)
+        .add_header("Destination-Service-DID", "did:web:soland.local", true)
+        .add_header("Idempotency-Key", idempotency_key.to_owned(), true)
+        .add_header("Signature-Input", format!("sig1={signature_params}"), true)
+        .add_header("Signature", signature_header, true)
+        .json(&body)
+        .send(app)
+        .await
+        .take_json()
+        .await
+        .unwrap()
+}
+
+fn applet_message_event(
+    package: &AppletPackage,
+    applet_id: &str,
+    actor_id: &str,
+    realm_id: &str,
+    authorization_ref: &str,
+    text: &str,
+) -> Value {
+    let now = chrono::Utc::now();
+    let created_at = now.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let payload = json!({
+        "strand_id": strand_id_for_realm(realm_id),
+        "track_name": "discussion",
+        "content": {
+            "kind": "ck.content.text",
+            "body": text,
+        },
+    });
+    let mut event = json!({
+        "event_id": cokret_sdk::new_prefixed_uuid7("ck:event:"),
+        "kind": "ck.message.create",
+        "realm_id": realm_id,
+        "actor_id": actor_id,
+        "actor_seq": 1,
+        "created_at": created_at,
+        "hlc": format!("{:012x}-0000-00000000", now.timestamp_millis().max(0) as u64),
+        "prev_refs": [],
+        "refs": [],
+        "payload": payload,
+        "executed_by": package.service_did.to_string(),
+        "authorization_ref": authorization_ref,
+        "applet_id": applet_id,
+        "external_ref": {
+            "protocol": "smoke",
+            "external_id": actor_id,
+        },
+        "proofs": [],
+    });
+    let event_digest = canonical_event_digest(&event);
+    event["proofs"] = json!([{
+        "kind": "detached_jws",
+        "alg": "EdDSA",
+        "verification_method": format!("{}#applet-service-key", package.service_did),
+        "event_digest": event_digest,
+        "created_at": created_at,
+        "jws": "dev-mode-fixture"
+    }]);
+    event
+}
+
+fn canonical_event_digest(event: &Value) -> String {
+    let mut canonical = event.clone();
+    if let Value::Object(object) = &mut canonical {
+        object.remove("proofs");
+        object.remove("unsigned");
+        object.remove("canonical_digest");
+        object.remove("canonical_hash");
+    }
+    let bytes = cokret_sdk::canonical::canonical_json_bytes(&canonical).unwrap();
+    cokret_sdk::canonical::sha256_digest(&bytes)
+}
+
+fn content_digest_header(bytes: &[u8]) -> String {
+    let raw = Sha256::digest(bytes);
+    format!(
+        "sha-256=:{}:",
+        base64::engine::general_purpose::STANDARD.encode(raw)
+    )
+}
+
+fn applet_signature_base(
+    content_digest: &str,
+    source_service_did: &str,
+    destination_service_did: &str,
+    idempotency_key: &str,
+    signature_params: &str,
+) -> String {
+    format!(
+        "\"@method\": POST\n\
+         \"@target-uri\": http://server/_cokret/edge/applet/transactions\n\
+         \"@authority\": server\n\
+         \"content-digest\": {content_digest}\n\
+         \"source-service-did\": {source_service_did}\n\
+         \"destination-service-did\": {destination_service_did}\n\
+         \"idempotency-key\": {idempotency_key}\n\
+         \"@signature-params\": {signature_params}",
+    )
+}
+
+fn applet_service_signing_key(verification_method: &str) -> SigningKey {
+    let mut hasher = Sha256::new();
+    hasher.update(b"soland:applet-service-key:");
+    hasher.update(verification_method.as_bytes());
+    let seed: [u8; 32] = hasher.finalize().into();
+    SigningKey::from_bytes(&seed)
+}
+
+fn strand_id_for_realm(realm_id: &str) -> String {
+    realm_id
+        .strip_prefix("ck:realm:")
+        .map(|suffix| format!("ck:strand:{suffix}"))
+        .unwrap_or_else(|| "ck:strand:01904100-0000-7000-8000-f10dc0000001".to_owned())
 }
 
 #[tokio::test]
@@ -437,37 +604,50 @@ async fn applet_bridge_register_ghost_route_revoke_smoke() {
     .await;
     assert_eq!(install["effective_status"], json!("installed"));
     let bot_actor_id = install["bot_actor_id"].as_str().unwrap().to_owned();
+    let message_grant_ref = capability_grant_ref_for_action(
+        &install,
+        &package.requested_scopes,
+        "ck.message.create",
+    );
 
-    let ghost: Value = TestClient::post(format!(
-        "http://server/_soland/self/applets/{applet_id}/ghosts"
+    let ghost_actor_id = format!(
+        "did:web:{}.applet.example:ghost:ext-user-x",
+        safe_did_token(&namespace)
+    );
+    let mut provision_response = TestClient::post(format!(
+        "http://server/_cokret/self/applets/{applet_id}/ghosts/provision"
     ))
     .add_header("Authorization", format!("Bearer {token}"), true)
     .json(&json!({
+        "schema": "ck.applet.ghost_actor.provision_request.v1",
+        "applet_id": applet_id,
+        "service_did": package.service_did.to_string(),
+        "ghost_actor_id": ghost_actor_id,
+        "protocol": "smoke",
+        "tenant": "T-smoke",
+        "external_user_id": "ext-user-x",
+        "display_name": "External X",
         "realm_id": realm_id,
-        "external_user": {"id": "ext-user-x", "display_name": "External X"},
-        "payload": {"kind": "message", "text": format!("hi from outside {suffix}")},
+        "external_ref": {"tenant": "T-smoke", "user_id": "ext-user-x"}
     }))
     .send(&app)
-    .await
-    .take_json()
-    .await
-    .unwrap();
-    assert_eq!(ghost["ok"], json!(true), "transaction response: {ghost}");
-    let ghost_actor_id = ghost["ghost_actor_id"].as_str().unwrap().to_owned();
-    assert!(ghost_actor_id.starts_with("did:web:ghost-ext-user-x-"));
-    assert!(
-        ghost["message_id"]
-            .as_str()
-            .unwrap()
-            .starts_with("ck:message:")
-    );
-    assert!(
-        ghost["accountability"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|entry| entry["kind"] == "bot_actor" && entry["did"] == bot_actor_id)
-    );
+    .await;
+    assert_eq!(provision_response.status_code.unwrap(), StatusCode::CREATED);
+    let provision: Value = provision_response.take_json().await.unwrap();
+    assert_eq!(provision["ghost_actor_id"], json!(ghost_actor_id));
+
+    let transaction = post_signed_applet_message_transaction(
+        &app,
+        &package,
+        &applet_id,
+        &ghost_actor_id,
+        &realm_id,
+        &message_grant_ref,
+        &format!("hi from outside {suffix}"),
+        &format!("tx-{suffix}"),
+    )
+    .await;
+    assert_eq!(transaction["ok"], json!(true), "transaction response: {transaction}");
     let messages = state
         .persistence
         .messages()
@@ -477,8 +657,8 @@ async fn applet_bridge_register_ghost_route_revoke_smoke() {
     assert_eq!(messages.len(), 1);
     assert_eq!(messages[0].sender, ghost_actor_id);
     assert_eq!(
-        messages[0].content["portal"]["bot_actor_id"],
-        json!(bot_actor_id)
+        messages[0].content["body"],
+        json!(format!("hi from outside {suffix}"))
     );
 
     let ghost_doc = canonical_did_document(&app, &ghost_actor_id).await;
@@ -509,52 +689,53 @@ async fn applet_bridge_register_ghost_route_revoke_smoke() {
     .unwrap();
     assert_eq!(revoke["ok"], json!(true));
 
-    let rejected: Value = TestClient::post(format!(
-        "http://server/_soland/self/applets/{applet_id}/ghosts"
-    ))
-    .add_header("Authorization", format!("Bearer {token}"), true)
-    .json(&json!({
-        "realm_id": realm_id,
-        "external_id": "ext-user-x",
-        "payload": {"kind": "message", "text": "after revoke"},
-    }))
-    .send(&app)
-    .await
-    .take_json()
-    .await
-    .unwrap();
-    assert_eq!(rejected["error"]["code"], json!("applet_revoked"));
+    let rejected = post_signed_applet_message_transaction(
+        &app,
+        &package,
+        &applet_id,
+        &ghost_actor_id,
+        &realm_id,
+        &message_grant_ref,
+        "after revoke",
+        &format!("tx-after-revoke-{suffix}"),
+    )
+    .await;
+    assert_eq!(
+        rejected["error"]["code"],
+        json!("applet_registration_unauthorized")
+    );
 
     let revoked_doc = canonical_did_document(&app, &ghost_actor_id).await;
     assert_eq!(revoked_doc["status"], json!("revoked"));
+    assert!(bot_actor_id.starts_with("did:web:bot-"));
+}
 
-    let bot_rejected: Value = TestClient::post(format!(
-        "http://server/_soland/self/applets/{applet_id}/bot/messages"
-    ))
-    .add_header("Authorization", format!("Bearer {token}"), true)
-    .json(&json!({
-        "realm_id": realm_id,
-        "payload": {"kind": "message", "text": "bot after revoke"},
-    }))
-    .send(&app)
-    .await
-    .take_json()
-    .await
-    .unwrap();
-    assert_eq!(bot_rejected["error"]["code"], json!("bot_actor_revoked"));
+fn capability_grant_ref_for_action(
+    install: &Value,
+    approved_actions: &[String],
+    action: &str,
+) -> String {
+    let mut actions = approved_actions.to_vec();
+    actions.sort();
+    actions.dedup();
+    let index = actions
+        .iter()
+        .position(|candidate| candidate == action)
+        .expect("approved action exists");
+    install["capability_grant_refs"][index]
+        .as_str()
+        .expect("grant ref exists")
+        .to_owned()
 }
 
 #[tokio::test]
-async fn tsp_transport_route_audit_smoke() {
-    // Smoke test uses unique transport_id / route_id strings
-    // (`tspt:alice-smoke`, `rt:alice-bob-smoke`) so it doesn't
-    // collide with parallel test binaries.
+async fn tsp_local_stub_routes_are_not_mounted() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
     let app = service(state);
 
-    // 1) declare a transport
-    let transport: Value = TestClient::post("http://server/_soland/self/extensions/tsp/transports")
+    let rejected: Value =
+        TestClient::post("http://server/_soland/self/extensions/tsp/transports")
         .add_header("Authorization", format!("Bearer {token}"), true)
         .json(&json!({
             "transport_id": "tspt:alice-smoke",
@@ -567,57 +748,7 @@ async fn tsp_transport_route_audit_smoke() {
         .take_json()
         .await
         .unwrap();
-    assert_eq!(transport["transport_id"], json!("tspt:alice-smoke"));
-
-    // 2) list transports
-    let list: Value = TestClient::get("http://server/_soland/self/extensions/tsp/transports")
-        .add_header("Authorization", format!("Bearer {token}"), true)
-        .send(&app)
-        .await
-        .take_json()
-        .await
-        .unwrap();
-    assert!(
-        list["transports"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|t| t["transport_id"] == json!("tspt:alice-smoke")),
-        "smoke transport should appear in listing, got: {list}"
-    );
-
-    // 3) establish a route
-    let route: Value = TestClient::post("http://server/_soland/self/extensions/tsp/routes")
-        .add_header("Authorization", format!("Bearer {token}"), true)
-        .json(&json!({
-            "route_id": "rt:alice-bob-smoke",
-            "destination_actor_id": "did:web:bob.example",
-            "via_transports": ["tspt:alice-smoke"]
-        }))
-        .send(&app)
-        .await
-        .take_json()
-        .await
-        .unwrap();
-    assert_eq!(route["route_id"], json!("rt:alice-bob-smoke"));
-    assert_eq!(route["destination_actor_id"], json!("did:web:bob.example"));
-
-    // 4) fetch the audit chain — establish_route auto-appends one entry
-    let audit: Value = TestClient::get(
-        "http://server/_soland/self/extensions/tsp/routes/rt:alice-bob-smoke/audit",
-    )
-    .add_header("Authorization", format!("Bearer {token}"), true)
-    .send(&app)
-    .await
-    .take_json()
-    .await
-    .unwrap();
-    let entries = audit["entries"].as_array().unwrap();
-    assert!(
-        !entries.is_empty(),
-        "audit chain should have at least the route_established entry"
-    );
-    assert_eq!(entries[0]["event_kind"], json!("route_established"));
+    assert_eq!(rejected["error"]["code"], json!("unrecognized_endpoint"));
 }
 
 fn signed_applet_package(applet_id: &str, namespace: &str) -> AppletPackage {
@@ -650,6 +781,10 @@ fn signed_applet_package(applet_id: &str, namespace: &str) -> AppletPackage {
             ..Default::default()
         },
         registration_epoch,
+    );
+    package.webhook_auth = WebhookAuth::http_message_signature(
+        format!("{}#applet-service-key", package.service_did),
+        vec![WebhookSignatureAlg::EdDsa],
     );
     package.requested_scopes = vec![
         "ck.message.create".to_owned(),

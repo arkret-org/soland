@@ -912,6 +912,13 @@ async fn complete_resumable_upload(
         filename: None,
         realm_id: realm_id.clone(),
         encryption: encryption.clone(),
+        legal_hold: false,
+        redacted: false,
+        visibility: if realm_id.is_some() {
+            cokret_sdk::BlobVisibility::RealmBound
+        } else {
+            cokret_sdk::BlobVisibility::Public
+        },
         uploaded_by: actor.to_owned(),
         created_at: received_at,
     };

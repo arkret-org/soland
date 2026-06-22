@@ -67,6 +67,45 @@ fn development_egress_can_allow_loopback() {
     assert!(soland::security::validate_url_for_egress(&url, "test", true).is_ok());
 }
 
+#[test]
+fn sovereign_enclave_egress_denies_by_default() {
+    let _env = clean_egress_env();
+    unsafe {
+        std::env::set_var("SOLAND_SOVEREIGN_ENCLAVE", "1");
+    }
+    let url = Url::parse("https://relay.example/federation").unwrap();
+    let error = soland::security::validate_url_for_egress_with_resolved_ips(
+        &url,
+        "federation",
+        false,
+        &[IpAddr::V4(Ipv4Addr::new(93, 184, 216, 34))],
+    )
+    .unwrap_err();
+    assert!(error.contains("sovereign_enclave_outbound_not_allowed"));
+}
+
+#[test]
+fn sovereign_enclave_egress_allows_configured_host() {
+    let _env = clean_egress_env();
+    unsafe {
+        std::env::set_var("SOLAND_SOVEREIGN_ENCLAVE", "1");
+        std::env::set_var(
+            "SOLAND_SOVEREIGN_ENCLAVE_ALLOWED_OUTBOUND_HOSTS",
+            "relay.example",
+        );
+    }
+    let url = Url::parse("https://relay.example/federation").unwrap();
+    assert!(
+        soland::security::validate_url_for_egress_with_resolved_ips(
+            &url,
+            "federation",
+            false,
+            &[IpAddr::V4(Ipv4Addr::new(93, 184, 216, 34))],
+        )
+        .is_ok()
+    );
+}
+
 struct CleanEgressEnvGuard {
     _lock: MutexGuard<'static, ()>,
     saved: Vec<(&'static str, Option<OsString>)>,
@@ -95,6 +134,8 @@ fn clean_egress_env() -> CleanEgressEnvGuard {
         "SOLAND_EGRESS_ALLOW_PRIVATE_NETWORKS",
         "SOLAND_EGRESS_ALLOWED_HOSTS",
         "SOLAND_EGRESS_DENYLIST",
+        "SOLAND_SOVEREIGN_ENCLAVE",
+        "SOLAND_SOVEREIGN_ENCLAVE_ALLOWED_OUTBOUND_HOSTS",
     ];
     let saved = vars
         .iter()

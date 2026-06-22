@@ -57,6 +57,7 @@ impl BlobStore for PgBlobStore {
         sql_query(
             "SELECT sha256, size_bytes, storage_backend, storage_key, media_type, filename, \
              realm_id, NULLIF(payload->'encryption', 'null'::jsonb) AS encryption, \
+             legal_hold, redacted, visibility, \
              uploaded_by_id AS uploaded_by, created_at \
              FROM blobs WHERE id = $1",
         )
@@ -80,8 +81,8 @@ impl BlobStore for PgBlobStore {
         sql_query(
             "INSERT INTO blobs \
              (id, sha256, media_type, filename, uploaded_by_id, realm_id, size_bytes, \
-              storage_backend, storage_key, payload, created_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) \
+              storage_backend, storage_key, payload, legal_hold, redacted, visibility, created_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) \
              ON CONFLICT (id) DO UPDATE SET \
              sha256 = EXCLUDED.sha256, \
              media_type = EXCLUDED.media_type, \
@@ -92,6 +93,9 @@ impl BlobStore for PgBlobStore {
              storage_backend = EXCLUDED.storage_backend, \
              storage_key = EXCLUDED.storage_key, \
              payload = EXCLUDED.payload, \
+             legal_hold = EXCLUDED.legal_hold, \
+             redacted = EXCLUDED.redacted, \
+             visibility = EXCLUDED.visibility, \
              created_at = EXCLUDED.created_at",
         )
         .bind::<Text, _>(blob_ref)
@@ -104,6 +108,9 @@ impl BlobStore for PgBlobStore {
         .bind::<Text, _>(&record.storage_backend)
         .bind::<Text, _>(&record.storage_key)
         .bind::<Jsonb, _>(&payload)
+        .bind::<Bool, _>(record.legal_hold)
+        .bind::<Bool, _>(record.redacted)
+        .bind::<Text, _>(record.visibility.as_str())
         .bind::<Timestamptz, _>(record.created_at)
         .execute(&mut *conn)
         .await
@@ -126,6 +133,7 @@ impl BlobStore for PgBlobStore {
         sql_query(
             "SELECT sha256, size_bytes, storage_backend, storage_key, media_type, filename, \
              realm_id, NULLIF(payload->'encryption', 'null'::jsonb) AS encryption, \
+             legal_hold, redacted, visibility, \
              uploaded_by_id AS uploaded_by, created_at \
              FROM blobs ORDER BY created_at ASC, id ASC",
         )
@@ -154,6 +162,12 @@ struct BlobRow {
     realm_id: Option<Uuid>,
     #[diesel(sql_type = Nullable<Jsonb>)]
     encryption: Option<Value>,
+    #[diesel(sql_type = Bool)]
+    legal_hold: bool,
+    #[diesel(sql_type = Bool)]
+    redacted: bool,
+    #[diesel(sql_type = Text)]
+    visibility: String,
     #[diesel(sql_type = Text)]
     uploaded_by: String,
     #[diesel(sql_type = Timestamptz)]
@@ -174,6 +188,10 @@ impl From<BlobRow> for BlobRecord {
                 .as_ref()
                 .map(|uuid| ids::format_typed_uuid("realm", uuid)),
             encryption: row.encryption,
+            legal_hold: row.legal_hold,
+            redacted: row.redacted,
+            visibility: serde_json::from_value(Value::String(row.visibility))
+                .expect("database enforces blob visibility"),
             uploaded_by: row.uploaded_by,
             created_at: row.created_at,
         }

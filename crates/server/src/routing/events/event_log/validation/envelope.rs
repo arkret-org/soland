@@ -102,11 +102,15 @@ pub(crate) fn preflight_moderation_projection_reject(
 }
 
 pub(crate) fn preflight_invite_projection_reject(
+    state: &AppState,
     proj: &crate::reducer::ProjectionState,
     operation: &Operation,
     hlc: &crate::hlc::ServerHlc,
 ) -> Option<String> {
     let kind = kinds::canonical_kind_string(operation);
+    if kind == kinds::CK_INVITE_CREATE {
+        return preflight_invite_create_consent_reject(state, operation);
+    }
     if !matches!(
         kind.as_str(),
         kinds::CK_INVITE_THIRD_PARTY | kinds::CK_INVITE_CLAIM
@@ -117,6 +121,41 @@ pub(crate) fn preflight_invite_projection_reject(
     match snapshot.apply(operation, hlc) {
         crate::reducer::ProjectionEffect::Rejected { reason } => Some(reason),
         _ => None,
+    }
+}
+
+fn preflight_invite_create_consent_reject(
+    state: &AppState,
+    operation: &Operation,
+) -> Option<String> {
+    let Some(invitee) = operation
+        .payload
+        .get("invitee")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return Some(crate::error::reasons::CONTACT_CONSENT_MISSING.to_owned());
+    };
+    let Some(inviter) = operation
+        .payload
+        .get("sender")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return Some(crate::error::reasons::CONTACT_CONSENT_MISSING.to_owned());
+    };
+    if crate::routing::identity::consent::has_active_consent_for_scope(
+        state,
+        invitee,
+        inviter,
+        "invite",
+        operation.created_at,
+    ) {
+        None
+    } else {
+        Some(crate::error::reasons::CONTACT_CONSENT_MISSING.to_owned())
     }
 }
 
@@ -428,6 +467,224 @@ fn effect_resource_candidates(cell: &str, realm_id: &str) -> Vec<String> {
     resources
 }
 
+async fn validate_applet_delegated_authorization_chain(
+    state: &AppState,
+    object: &serde_json::Map<String, Value>,
+    kind: &str,
+    actor_id: &str,
+    realm_id: &str,
+) -> Result<(), EventValidationError> {
+    let Some(applet_id) = event_string_field(object, &["applet_id"]) else {
+        return Ok(());
+    };
+    let executed_by = event_string_field(object, &["executed_by"]).ok_or_else(|| {
+        event_validation_error(
+            StatusCode::BAD_REQUEST,
+            crate::error::reasons::EXECUTED_BY_MISSING,
+            "applet-originated delegated Event requires executed_by",
+        )
+    })?;
+    let authorization_ref =
+        event_string_field(object, &["authorization_ref"]).ok_or_else(|| {
+            event_validation_error(
+                StatusCode::BAD_REQUEST,
+                "authorization_ref_missing",
+                "applet-originated Event requires authorization_ref",
+            )
+        })?;
+    if !authorization_ref.starts_with("ck:grant:") {
+        return Err(event_validation_error(
+            StatusCode::FORBIDDEN,
+            "authorization_ref_invalid",
+            "applet-originated Event authorization_ref must reference an accepted capability grant",
+        ));
+    }
+
+    let record_value = state
+        .persistence
+        .applets()
+        .get(&applet_id)
+        .await
+        .map_err(|error| {
+            tracing::error!(%error, %applet_id, "failed to read applet record for delegated event");
+            event_validation_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                "applet authorization store unavailable",
+            )
+        })?
+        .ok_or_else(|| {
+            event_validation_error(
+                StatusCode::FORBIDDEN,
+                "applet_registration_unauthorized",
+                "applet_id does not identify an active installed applet",
+            )
+        })?;
+    let record: crate::routing::extensions::applet_bridge::AppletRecord =
+        serde_json::from_value(record_value).map_err(|error| {
+            tracing::error!(%error, %applet_id, "stored applet record is invalid");
+            event_validation_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                "stored applet record is invalid",
+            )
+        })?;
+    if record.revoked_at.is_some()
+        || !matches!(record.status.as_str(), "installed" | "partially_installed")
+    {
+        return Err(event_validation_error(
+            StatusCode::FORBIDDEN,
+            "applet_revoked",
+            "applet install has been revoked",
+        ));
+    }
+    if record.portal_realm_id != realm_id {
+        return Err(event_validation_error(
+            StatusCode::FORBIDDEN,
+            "applet_effective_scope_mismatch",
+            "applet Event realm_id is outside the installed effective scope",
+        ));
+    }
+    let package = record.package.as_ref().ok_or_else(|| {
+        event_validation_error(
+            StatusCode::FORBIDDEN,
+            "applet_install_required",
+            "applet delegated Event requires a package install",
+        )
+    })?;
+    if !applet_executor_in_subject_set(&record, package.service_did.as_str(), &executed_by) {
+        return Err(event_validation_error(
+            StatusCode::FORBIDDEN,
+            "applet_namespace_mismatch",
+            "executed_by is outside the installed applet subject set",
+        ));
+    }
+    let actor_is_managed = applet_actor_is_managed(&record, actor_id);
+    if !actor_is_managed && !applet_actor_matches_exact_namespace(&record, actor_id) {
+        return Err(event_validation_error(
+            StatusCode::FORBIDDEN,
+            "applet_namespace_mismatch",
+            "actor_id is outside the installed applet actor namespace",
+        ));
+    }
+
+    let grants = state.authz.grants_for_subject(&executed_by, realm_id);
+    let grant = grants
+        .iter()
+        .find(|grant| grant.grant_id.as_str() == authorization_ref.as_str())
+        .ok_or_else(|| {
+            event_validation_error(
+                StatusCode::FORBIDDEN,
+                "authorization_ref_inactive",
+                "authorization_ref does not identify an active grant for executed_by",
+            )
+        })?;
+    if !grant.actions.iter().any(|action| action == kind) {
+        return Err(event_validation_error(
+            StatusCode::FORBIDDEN,
+            "authorization_ref_scope",
+            "authorization_ref grant does not cover this Event kind",
+        ));
+    }
+    let event_id = event_string_field(object, &["event_id"]).unwrap_or_default();
+    let resources = delegated_applet_resource_candidates(object, realm_id, actor_id, &event_id);
+    if !resources
+        .iter()
+        .any(|resource| crate::authz::resource_matches(&grant.resource, resource))
+    {
+        return Err(event_validation_error(
+            StatusCode::FORBIDDEN,
+            "authorization_ref_scope",
+            "authorization_ref grant does not cover this Event resource",
+        ));
+    }
+    if !actor_is_managed && grant.issuer.as_str() != actor_id {
+        return Err(event_validation_error(
+            StatusCode::FORBIDDEN,
+            "authorization_ref_scope",
+            "native-principal applet delegation must be issued by the acted-for actor_id",
+        ));
+    }
+    Ok(())
+}
+
+fn applet_executor_in_subject_set(
+    record: &crate::routing::extensions::applet_bridge::AppletRecord,
+    service_did: &str,
+    executed_by: &str,
+) -> bool {
+    executed_by == service_did
+        || executed_by == record.bot_actor_id
+        || record
+            .ghosts
+            .iter()
+            .any(|ghost| ghost.ghost_actor_id == executed_by && ghost.revoked_at.is_none())
+        || applet_actor_matches_exact_namespace(record, executed_by)
+}
+
+fn applet_actor_is_managed(
+    record: &crate::routing::extensions::applet_bridge::AppletRecord,
+    actor_id: &str,
+) -> bool {
+    actor_id == record.bot_actor_id
+        || record
+            .ghosts
+            .iter()
+            .any(|ghost| ghost.ghost_actor_id == actor_id && ghost.revoked_at.is_none())
+}
+
+fn applet_actor_matches_exact_namespace(
+    record: &crate::routing::extensions::applet_bridge::AppletRecord,
+    actor_id: &str,
+) -> bool {
+    record.namespaces.as_ref().is_some_and(|namespaces| {
+        namespaces.actors.iter().any(|entry| {
+            !applet_namespace_pattern_is_wildcard(&entry.pattern)
+                && cokret_sdk::namespace_pattern_matches(
+                    cokret_sdk::AppletNamespaceDomain::Actors,
+                    &entry.pattern,
+                    actor_id,
+                )
+        })
+    })
+}
+
+fn applet_namespace_pattern_is_wildcard(pattern: &str) -> bool {
+    pattern.contains('*') || pattern.ends_with(':') || pattern.ends_with('/')
+}
+
+fn delegated_applet_resource_candidates(
+    object: &serde_json::Map<String, Value>,
+    realm_id: &str,
+    actor_id: &str,
+    event_id: &str,
+) -> Vec<String> {
+    let mut resources = vec![
+        realm_id.to_owned(),
+        actor_id.to_owned(),
+        event_id.to_owned(),
+    ];
+    if let Some(redacts) = event_string_field(object, &["redacts"]) {
+        resources.push(redacts);
+    }
+    if let Some(payload) = object.get("payload").and_then(Value::as_object) {
+        for field in [
+            "strand_id",
+            "thread_id",
+            "message_id",
+            "object_id",
+            "target_ref",
+        ] {
+            if let Some(value) = event_string_field(payload, &[field]) {
+                resources.push(value);
+            }
+        }
+    }
+    resources.sort();
+    resources.dedup();
+    resources
+}
+
 pub(crate) async fn validate_event_envelope(
     state: &AppState,
     session: &SessionRecord,
@@ -581,6 +838,9 @@ pub(crate) async fn validate_event_envelope(
     validate_event_time_fields(state, object)?;
 
     let realm_id = event_realm_id(object)?;
+    let is_applet_delegated = object.get("applet_id").is_some();
+    validate_applet_delegated_authorization_chain(state, object, &kind, &actor_id, &realm_id)
+        .await?;
     // Round R2/R3 (T07) + Stream-F (Wave 1B) — Realm in terminal state
     // (`ck.realm.tombstone` OR `ck.realm.destroy` applied) refuses every
     // non-audit-class write. Spec `realm-and-space.md` §2.5 / §2.5.1.
@@ -625,6 +885,7 @@ pub(crate) async fn validate_event_envelope(
     if !is_realm_create_bootstrap
         && !is_invite_acceptance_join
         && !is_foreign_invite_delivery
+        && !is_applet_delegated
         && !realm_has_member(state, &realm_id, &session.actor).await
     {
         return Err(event_validation_error(

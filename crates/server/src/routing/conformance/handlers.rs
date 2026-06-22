@@ -437,11 +437,8 @@ pub async fn cursor(body: JsonBody<CursorVectorRequest>) -> JsonResult<CursorVec
         v: "1".to_owned(),
         purpose: CursorPurpose::Stream,
         t: cokret_sdk::canonical::format_timestamp_canonical(cursor_issued_at),
-        s: BTreeMap::new(),
-        d: None,
-        target: None,
         x: cursor_issued_at.timestamp_millis() + Cursor::STREAM_TTL_MAX_MS,
-        h: Some(URL_SAFE_NO_PAD.encode(digest)),
+        h: URL_SAFE_NO_PAD.encode(digest),
     };
     let cursor_token = shape
         .encode()

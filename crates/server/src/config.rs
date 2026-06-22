@@ -258,8 +258,8 @@ pub struct AppConfig {
     /// on `/server/describe` and enforces the enclave invariants
     /// (`routing::extensions::sovereign::assert_enclave_invariants`):
     /// outbound federation OFF, DID resolver method allow-list
-    /// non-empty, every outbound HTTP call gated through
-    /// [`crate::routing::extensions::sovereign::outbound_allowed`].
+    /// non-empty, every outbound HTTP call gated through the shared
+    /// [`crate::security`] egress validation layer.
     /// Env: `SOLAND_SOVEREIGN_ENCLAVE` (default false).
     pub sovereign_enclave_enabled: bool,
     /// G3.S9 — host allow-list for outbound HTTP when the enclave
