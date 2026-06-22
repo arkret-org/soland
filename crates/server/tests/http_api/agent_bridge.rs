@@ -17,9 +17,29 @@ async fn admin_applets_agents_endpoints_reflect_submitted_registry_events() {
     // schema in the spec registry (applet payload is free-form per
     // spec extensions/applet-integration.md).
     let registration_payload = serde_json::json!({
+        "applet_id": "ck:applet:01904100-0000-7000-8000-ab10de000000",
         "service_did": service_did,
-        "namespace": "com.example.applet",
-        "capabilities": ["read", "write"],
+        "controller_did": "did:web:alice.example",
+        "base_url": "https://applet.example",
+        "bot_actor_id": "did:web:applet.example:bot",
+        "protocols": ["http"],
+        "namespaces": {
+            "realms": [{"pattern": "com.example.applet", "exclusive": true}],
+            "actors": [],
+            "handles": []
+        },
+        "receive_events": true,
+        "receive_ephemeral": false,
+        "rate_limited": true,
+        "requested_scopes": ["read", "write"],
+        "registration_epoch": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "webhook_auth": {
+            "type": "http_message_signature",
+            "key_ref": "did:web:applet.example#key-1",
+            "accepted_algs": ["EdDSA"]
+        },
+        "proof": {"kind": "dev-proof"},
+        "created_at": "2026-06-22T00:00:00Z",
     });
     let mut registration_event = signed_event_envelope(
         "ck:event:01904100-0000-7000-8000-ab10de000001",
@@ -41,7 +61,7 @@ async fn admin_applets_agents_endpoints_reflect_submitted_registry_events() {
         .take_json()
         .await
         .unwrap();
-    assert_eq!(resp["status"], "accepted");
+    assert_eq!(resp["status"], "accepted", "registration response: {resp}");
 
     // Discovery — adds a manifest to the same applet.
     let discovery_payload = serde_json::json!({
@@ -148,7 +168,7 @@ async fn applet_bridge_emits_synthetic_status_for_session_start() {
     });
     let mut start_event = serde_json::json!({
         "event_id": "ck:event:01904100-0000-7000-8000-d3d3d3d3d3d3",
-        "kind": "ck.applet.protocol_session.start",
+        "kind": "ck.applet.interop_session.start",
         "schema_id": "ck.schema.applet.v1",
         "actor_id": "did:web:alice.example",
         "actor_seq": 1u64,
@@ -197,11 +217,11 @@ async fn applet_bridge_emits_synthetic_status_for_session_start() {
     let status_event = list
         .iter()
         .find(|e| {
-            e["event_kind"] == "ck.applet.protocol_session.status"
+            e["event_kind"] == "ck.applet.interop_session.status"
                 && e["payload"]["session_id"] == session_id
         })
         .expect("synthetic status event missing from projection log");
-    assert_eq!(status_event["payload"]["status"], "completed");
+    assert_eq!(status_event["payload"]["runtime_status"], "completed");
     assert_eq!(status_event["payload"]["detail"]["echo"]["op"], "ping");
     assert_eq!(status_event["payload"]["detail"]["echo"]["tag"], "b3-e2e");
     assert_eq!(
@@ -217,7 +237,7 @@ async fn agent_bridge_emits_status_and_result_for_session_start() {
     // Use the seeded demo Realm — dev_token's actor is a member of
     // `ck:realm:0196419b-0000-7000-8000-000000000000` so the events
     // surface accepts writes against it (mirror of the B3 test).
-    let session_id = "ck:agent_session:01904100-0000-7000-8000-b4b4b4b4b4b4";
+    let session_id = "ck:agent_interop_session:01904100-0000-7000-8000-b4b4b4b4b4b4";
     let agent_id = "did:web:agent.example";
 
     // Register the agent first so B4c's dispatch lookup succeeds.
@@ -271,7 +291,7 @@ async fn agent_bridge_emits_status_and_result_for_session_start() {
     });
     let mut start_event = serde_json::json!({
         "event_id": "ck:event:01904100-0000-7000-8000-d4d4d4d4d4d4",
-        "kind": "ck.agent.protocol_session.start",
+        "kind": "ck.agent.interop_session.start",
         "schema_id": "ck.schema.agent.v1",
         "actor_id": "did:web:alice.example",
         "actor_seq": 2u64,
@@ -318,7 +338,7 @@ async fn agent_bridge_emits_status_and_result_for_session_start() {
     let status_event = list
         .iter()
         .find(|e| {
-            e["event_kind"] == "ck.agent.protocol_session.status"
+            e["event_kind"] == "ck.agent.interop_session.status"
                 && e["payload"]["session_id"] == session_id
         })
         .expect("synthetic agent status event missing from projection log");
@@ -331,7 +351,7 @@ async fn agent_bridge_emits_status_and_result_for_session_start() {
     let result_event = list
         .iter()
         .find(|e| {
-            e["event_kind"] == "ck.agent.protocol_session.result"
+            e["event_kind"] == "ck.agent.interop_session.result"
                 && e["payload"]["session_id"] == session_id
         })
         .expect("synthetic agent result event missing from projection log");
@@ -378,7 +398,7 @@ async fn agent_bridge_emits_status_and_result_for_session_start() {
 async fn agent_bridge_fails_closed_on_unknown_agent() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
-    let session_id = "ck:agent_session:01904100-0000-7000-8000-deaddeaddead";
+    let session_id = "ck:agent_interop_session:01904100-0000-7000-8000-deaddeaddead";
     let agent_id = "did:web:unregistered-agent.example";
 
     // Intentionally skip the ck.agent.endpoint step — this is the
@@ -391,7 +411,7 @@ async fn agent_bridge_fails_closed_on_unknown_agent() {
     });
     let mut start_event = serde_json::json!({
         "event_id": "ck:event:01904100-0000-7000-8000-deadbeefdead",
-        "kind": "ck.agent.protocol_session.start",
+        "kind": "ck.agent.interop_session.start",
         "schema_id": "ck.schema.agent.v1",
         "actor_id": "did:web:alice.example",
         "actor_seq": 1u64,
@@ -438,7 +458,7 @@ async fn agent_bridge_fails_closed_on_unknown_agent() {
     // No status(working) event should be present.
     assert!(
         !list.iter().any(|e| {
-            e["event_kind"] == "ck.agent.protocol_session.status"
+            e["event_kind"] == "ck.agent.interop_session.status"
                 && e["payload"]["session_id"] == session_id
         }),
         "B4c failed-closed dispatch must skip the status(working) event"
@@ -447,7 +467,7 @@ async fn agent_bridge_fails_closed_on_unknown_agent() {
     let result_event = list
         .iter()
         .find(|e| {
-            e["event_kind"] == "ck.agent.protocol_session.result"
+            e["event_kind"] == "ck.agent.interop_session.result"
                 && e["payload"]["session_id"] == session_id
         })
         .expect("error result event missing from projection log");
@@ -470,7 +490,7 @@ async fn agent_bridge_fails_closed_on_unknown_agent() {
 async fn agent_bridge_plumbs_endpoint_url_through_session_envelopes() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
-    let session_id = "ck:agent_session:01904100-0000-7000-8000-c0c0c0c0c0c0";
+    let session_id = "ck:agent_interop_session:01904100-0000-7000-8000-c0c0c0c0c0c0";
     let agent_id = "did:web:b4d-agent.example";
     let endpoint_url = "https://b4d-agent.example/_cokret/self/agent";
 
@@ -525,7 +545,7 @@ async fn agent_bridge_plumbs_endpoint_url_through_session_envelopes() {
     });
     let mut start_event = serde_json::json!({
         "event_id": "ck:event:01904100-0000-7000-8000-c2c2c2c2c2c2",
-        "kind": "ck.agent.protocol_session.start",
+        "kind": "ck.agent.interop_session.start",
         "schema_id": "ck.schema.agent.v1",
         "actor_id": "did:web:alice.example",
         "actor_seq": 2u64,
@@ -578,7 +598,7 @@ async fn agent_bridge_plumbs_endpoint_url_through_session_envelopes() {
             .unwrap();
             if let Some(arr) = events["events"].as_array() {
                 if let Some(e) = arr.iter().find(|e| {
-                    e["event_kind"] == "ck.agent.protocol_session.result"
+                    e["event_kind"] == "ck.agent.interop_session.result"
                         && e["payload"]["session_id"] == session_id
                 }) {
                     found = Some(e.clone());
@@ -603,7 +623,7 @@ async fn agent_bridge_plumbs_endpoint_url_through_session_envelopes() {
     let status_event = list
         .iter()
         .find(|e| {
-            e["event_kind"] == "ck.agent.protocol_session.status"
+            e["event_kind"] == "ck.agent.interop_session.status"
                 && e["payload"]["session_id"] == session_id
         })
         .expect("status event missing");

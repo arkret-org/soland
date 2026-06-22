@@ -15,19 +15,10 @@ async fn account_data_accepts_fresh_principal_control_realm() {
     let fresh = dev_token_for_device(state.clone(), FRESH_DID, FRESH_DEVICE, "Fresh").await;
     let bob = dev_token_for_device(state.clone(), "did:web:bob.example", BOB_DEVICE, "Bob").await;
 
-    let principal: Value = TestClient::get(format!(
-        "http://server/_soland/self/account/{FRESH_DID}/principal-realm"
-    ))
-    .add_header("authorization", format!("Bearer {fresh}"), true)
-    .send(&app_from_state(state.clone()))
-    .await
-    .take_json()
-    .await
-    .unwrap();
-    let principal_realm = principal["realm_id"].as_str().unwrap();
+    let principal_realm = soland::test_support::principal_control_realm_for_did(FRESH_DID);
     assert!(
         principal_realm.starts_with("ck:realm:"),
-        "principal realm response: {principal}"
+        "principal realm response: {principal_realm}"
     );
 
     let body = serde_json::json!({
@@ -39,7 +30,7 @@ async fn account_data_accepts_fresh_principal_control_realm() {
         &fresh,
         FRESH_DID,
         FRESH_DEVICE,
-        principal_realm,
+        &principal_realm,
         "ck.account_data.set",
         serde_json::json!({
             "key": "client.ui",
@@ -68,7 +59,7 @@ async fn account_data_accepts_fresh_principal_control_realm() {
         &bob,
         "did:web:bob.example",
         BOB_DEVICE,
-        principal_realm,
+        &principal_realm,
         "ck.account_data.set",
         serde_json::json!({
             "key": "client.ui",

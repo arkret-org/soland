@@ -120,11 +120,11 @@ pub async fn maybe_emit_echo_status_for_session_start(
     // No bridge URL -> in-process echo reference path.
     let synthetic_event_id = ids::generate("event");
     let payload = json!({
+        "applet_id": applet_id,
         "session_id": session_id,
-        "status": "completed",
+        "runtime_status": "completed",
         "detail": {
             "echo": params,
-            "applet_id": applet_id,
             "bridge": "soland.reference.echo",
         },
     });
@@ -237,10 +237,10 @@ async fn emit_applet_outcome_event(
         AppletBridgeOutcome::UpstreamSuccess { response_body } => (
             kinds::CK_APPLET_INTEROP_SESSION_STATUS,
             json!({
+                "applet_id": applet_id,
                 "session_id": session_id,
-                "status": "completed",
+                "runtime_status": "completed",
                 "detail": {
-                    "applet_id": applet_id,
                     "bridge": "soland.applet.http",
                     "bridge_url": bridge_url,
                     "response": response_body,

@@ -4,6 +4,26 @@
 
 use super::*;
 
+fn applet_projection_namespace(payload: &serde_json::Value) -> String {
+    if let Some(namespace) = payload.get("namespace").and_then(|v| v.as_str()) {
+        return namespace.to_owned();
+    }
+    payload
+        .get("namespaces")
+        .and_then(|namespaces| {
+            ["realms", "actors", "handles"].iter().find_map(|domain| {
+                namespaces
+                    .get(*domain)
+                    .and_then(|entries| entries.as_array())
+                    .and_then(|entries| entries.first())
+                    .and_then(|entry| entry.get("pattern"))
+                    .and_then(|pattern| pattern.as_str())
+            })
+        })
+        .unwrap_or("")
+        .to_owned()
+}
+
 impl ProjectionState {
     /// Apply `ck.applet.registration`. Upserts the
     /// AppletProjection keyed by `service_did`. Re-registration with
@@ -25,13 +45,12 @@ impl ProjectionState {
                 reason: "applet_registration_missing_service_did".to_owned(),
             };
         };
-        let namespace = operation
+        let namespace = applet_projection_namespace(&operation.payload);
+        let capabilities = operation
             .payload
-            .get("namespace")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_owned();
-        let capabilities = operation.payload.get("capabilities").cloned();
+            .get("requested_scopes")
+            .cloned()
+            .or_else(|| operation.payload.get("capabilities").cloned());
         let existing_manifest = self
             .applets
             .get(&service_did)
