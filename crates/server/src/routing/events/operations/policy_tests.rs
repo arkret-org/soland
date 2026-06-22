@@ -109,6 +109,31 @@ fn test_state() -> AppState {
     AppState::new(test_config(), Db { pool: None })
 }
 
+#[test]
+fn service_attested_device_authorize_binding_accepts_projection_metadata() {
+    let state = test_state();
+    let payload = json!({
+        "principal_id": "did:webvh:zQmZcDaFwUR8yQCZRkXoYEBi9hdzMSCCLASUVdwT1J4Qyc6:local.host:webvh:01kvqwpxssfq3bqm15rcd0g99x",
+        "device_id": "ck:device:019eefcb-5882-7861-bc30-3033fa32dcf6",
+        "device_public_key": "z6MkjHNtpwuhc2QSXzkf4DWoWp7eSMKB9PzfdnvaLB7kb3dG",
+        "authorized_by": "did:key:z6MknBuwKMPAzbhp6EwCnaxsEDk4G2KFeWRu273gYVuTY5jw",
+        "not_before": "2026-06-22T14:45:51Z",
+        "enrollment_authority_binding": {
+            "kind": "service_attested",
+            "authority_did": "did:key:z6MknBuwKMPAzbhp6EwCnaxsEDk4G2KFeWRu273gYVuTY5jw",
+            "authorization_ref": "did:webvh:zQmZcDaFwUR8yQCZRkXoYEBi9hdzMSCCLASUVdwT1J4Qyc6:local.host:webvh:01kvqwpxssfq3bqm15rcd0g99x#enrollment-authority"
+        },
+        "event_id": "ck:event:019eefcb-7fb2-7890-bffd-1f2035356fbf",
+        "sender": "did:webvh:zQmZcDaFwUR8yQCZRkXoYEBi9hdzMSCCLASUVdwT1J4Qyc6:local.host:webvh:01kvqwpxssfq3bqm15rcd0g99x",
+        "hlc": "019eefcb7d18-0000-8adcfdb5",
+        "executed_by": "did:key:z6MknBuwKMPAzbhp6EwCnaxsEDk4G2KFeWRu273gYVuTY5jw",
+        "authorization_ref": "did:webvh:zQmZcDaFwUR8yQCZRkXoYEBi9hdzMSCCLASUVdwT1J4Qyc6:local.host:webvh:01kvqwpxssfq3bqm15rcd0g99x#enrollment-authority"
+    });
+
+    crate::routing::identity::cross_signing::validate_device_authorize_binding(&state, &payload)
+        .unwrap();
+}
+
 fn grant_circle_action(
     state: &AppState,
     realm_id: &cokret_sdk::RealmId,

@@ -149,7 +149,7 @@ pub(super) async fn resolve_agent_selector(
     let body = body.into_inner();
     validate_agent_slug(&body.agent_slug).map_err(|_| selector_not_found())?;
     let session = authenticated_session(state, req).await.ok();
-    let service_domain = service_handle_domain(&state.config.service_did);
+    let service_domain = service_handle_domain(state);
     let Some(lookup) = handle_lookup(&body.controller_handle.to_string(), &service_domain) else {
         return Err(selector_not_found());
     };

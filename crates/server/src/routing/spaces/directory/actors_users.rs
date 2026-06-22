@@ -101,7 +101,7 @@ pub(super) fn project_search_users_row(
     state: &AppState,
     actor: &Value,
 ) -> Result<UserSearchOutcome, AppError> {
-    let service_domain = service_handle_domain(&state.config.service_did);
+    let service_domain = service_handle_domain(state);
     let canonical = actor
         .get("handle")
         .and_then(Value::as_str)

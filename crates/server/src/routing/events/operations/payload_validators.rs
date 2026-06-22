@@ -855,9 +855,23 @@ pub(crate) fn validate_cross_signing_reset_payload(
 
 pub(crate) fn validate_device_authorize_payload(operation: &Operation) -> Result<(), &'static str> {
     let payload: cokret_sdk::DeviceAuthorizePayload =
-        serde_json::from_value(operation.payload.clone())
+        serde_json::from_value(device_authorize_wire_payload(&operation.payload))
             .map_err(|_| "ck.device.authorize payload violates SDK artifact schema")?;
     payload.validate_authorization_binding_one_of()
+}
+
+fn device_authorize_wire_payload(payload: &Value) -> Value {
+    let mut wire_payload = payload.clone();
+    if let Some(object) = wire_payload.as_object_mut() {
+        object.remove("event_id");
+        object.remove("sender");
+        object.remove("hlc");
+        object.remove("executed_by");
+        object.remove("authorization_ref");
+        object.remove("seal_ref");
+        object.remove("seal_basis");
+    }
+    wire_payload
 }
 
 pub(crate) fn validate_cross_signing_reset_replay_batch(
