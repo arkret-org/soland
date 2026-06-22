@@ -1,14 +1,9 @@
 //! CKP-0007 — Circle administration HTTP surface.
 //!
-//! Hosts the `/_soland/self/circles/*` admin/CRUD layer (mounted under the
-//! `/_soland/self` product surface; see `routing/mod.rs`). The Circle *data
-//! model* `ck.circle.*` is spec-canonical; this HTTP surface is the self
-//! convenience wrapper that builds the canonical operations.
-//!
-//! Namespace rule from CKP-0014 §5: circles are candidate operations. Until
-//! they enter the formal catalog they MUST mount under `/_soland` (product
-//! surface) and MUST NOT mount under `/_cokret` (protocol surface). Once
-//! circles enter the catalog, this surface moves to `/_cokret/self/circles/*`.
+//! Hosts the `/_cokret/self/circles/*` admin/CRUD layer (mounted under the
+//! protocol self surface; see `routing/mod.rs`). The Circle *data model*
+//! `ck.circle.*` is spec-canonical; this HTTP surface is the self convenience
+//! wrapper that builds the canonical operations.
 //!
 //! Each handler builds a `ck.circle.*` Operation and routes it through the standard
 //! `accept_local_operations` pipeline so the reducer's invariants
@@ -18,15 +13,15 @@
 //!
 //! Routes (mirror of `/_soland/self/realms` / `/_soland/self/spaces` style):
 //!
-//! - `POST   /_soland/self/circles`                              create Circle
-//! - `GET    /_soland/self/circles`                              list Circles (filtered by
+//! - `POST   /_cokret/self/circles`                              create Circle
+//! - `GET    /_cokret/self/circles`                              list Circles (filtered by
 //!   `realm_id` query)
-//! - `GET    /_soland/self/circles/{circle_id}`                  read Circle
-//! - `POST   /_soland/self/circles/{circle_id}/members`          add member
-//! - `DELETE /_soland/self/circles/{circle_id}/members/{actor}`  remove member
-//! - `POST   /_soland/self/circles/{circle_id}/scope-rotate`     rotate MLS scope (501 until wired)
-//! - `POST   /_soland/self/circles/{circle_id}/archive`          archive Circle
-//! - `POST   /_soland/self/circles/{circle_id}/tombstone`        tombstone Circle
+//! - `GET    /_cokret/self/circles/{circle_id}`                  read Circle
+//! - `POST   /_cokret/self/circles/{circle_id}/members`          add member
+//! - `DELETE /_cokret/self/circles/{circle_id}/members/{actor}`  remove member
+//! - `POST   /_cokret/self/circles/{circle_id}/scope-rotate`     rotate MLS scope (501 until wired)
+//! - `POST   /_cokret/self/circles/{circle_id}/archive`          archive Circle
+//! - `POST   /_cokret/self/circles/{circle_id}/tombstone`        tombstone Circle
 //!
 //! `scope-rotate` intentionally returns `501 unsupported_feature` until the
 //! MLS genesis / commit / welcome cascade is wired end-to-end. It must not
@@ -82,13 +77,21 @@ where
 fn circle_view_from_projection(
     projection: &ProjectionState,
     c: &CircleProjection,
+    actor: &str,
 ) -> Result<CircleView, AppError> {
-    circle_view_from_with_pending(c, pending_mls_removals_from_projection(projection, c))
+    let include_member_details = c.members.contains(actor);
+    let pending_mls_removals = if include_member_details {
+        pending_mls_removals_from_projection(projection, c)
+    } else {
+        Vec::new()
+    };
+    circle_view_from_with_pending(c, pending_mls_removals, include_member_details)
 }
 
 fn circle_view_from_with_pending(
     c: &CircleProjection,
     pending_mls_removals: Vec<Did>,
+    include_member_details: bool,
 ) -> Result<CircleView, AppError> {
     Ok(CircleView {
         circle_id: parse_sdk_field("circle_id", &c.circle_id)?,
@@ -113,11 +116,14 @@ fn circle_view_from_with_pending(
         mls_group_ref: c.mls_group_ref.clone(),
         pending_mls_removals,
         state: parse_sdk_field("state", c.state.as_str())?,
-        members: c
-            .members
-            .iter()
-            .map(|member| parse_sdk_field::<Did>("member", member))
-            .collect::<Result<Vec<_>, _>>()?,
+        members: if include_member_details {
+            c.members
+                .iter()
+                .map(|member| parse_sdk_field::<Did>("member", member))
+                .collect::<Result<Vec<_>, _>>()?
+        } else {
+            Vec::new()
+        },
         created_by: parse_sdk_field("created_by", &c.created_by)?,
         created_at: c.created_at,
         updated_by: c
@@ -127,6 +133,18 @@ fn circle_view_from_with_pending(
             .transpose()?,
         updated_at: c.updated_at,
     })
+}
+
+fn circle_directory_visible_to_actor(
+    projection: &ProjectionState,
+    circle: &CircleProjection,
+    actor: &str,
+) -> bool {
+    circle.members.contains(actor)
+        || (circle.directory_visibility == "realm_members"
+            && projection
+                .member(&circle.realm_id, actor)
+                .is_some_and(|member| member.state == "join"))
 }
 
 fn pending_mls_removals_from_projection(
@@ -310,14 +328,15 @@ async fn list_circles(
     req: &mut Request,
 ) -> JsonResult<CircleList> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let _session = aa.authenticated_session(state, req).await?;
+    let session = aa.authenticated_session(state, req).await?;
     let realm_id = RealmId::new(realm_id.into_inner())
         .map_err(|e| AppError::invalid_param(format!("realm_id: {e}")))?;
     let projection = state.projection.lock().expect("projection mutex");
     let circles = projection
         .circles_for_realm(realm_id.as_str())
         .iter()
-        .map(|c| circle_view_from_projection(&projection, c))
+        .filter(|c| circle_directory_visible_to_actor(&projection, c, &session.actor))
+        .map(|c| circle_view_from_projection(&projection, c, &session.actor))
         .collect::<Result<Vec<_>, _>>()?;
     json_ok(CircleList { realm_id, circles })
 }
@@ -335,13 +354,20 @@ async fn get_circle(
     req: &mut Request,
 ) -> JsonResult<CircleView> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let _session = aa.authenticated_session(state, req).await?;
+    let session = aa.authenticated_session(state, req).await?;
     let circle_id = circle_id.into_inner();
     let projection = state.projection.lock().expect("projection mutex");
     let circle = projection
         .circle(&circle_id)
         .ok_or_else(|| AppError::not_found("circle not found"))?;
-    json_ok(circle_view_from_projection(&projection, circle)?)
+    if !circle_directory_visible_to_actor(&projection, circle, &session.actor) {
+        return Err(AppError::not_found("circle not found"));
+    }
+    json_ok(circle_view_from_projection(
+        &projection,
+        circle,
+        &session.actor,
+    )?)
 }
 
 #[endpoint(
@@ -386,7 +412,11 @@ async fn post_circle(
     let circle = projection
         .circle(circle_id.as_str())
         .ok_or_else(|| AppError::internal("circle create accepted but not projected"))?;
-    json_ok(circle_view_from_projection(&projection, circle)?)
+    json_ok(circle_view_from_projection(
+        &projection,
+        circle,
+        &session.actor,
+    )?)
 }
 
 #[endpoint(
@@ -442,25 +472,19 @@ async fn post_circle_member(
     // the reducer's fail-closed second-line check can rely on it. A
     // self-service join (`actor == sender`) is left to the reducer's
     // `join_rule=open` gate.
-    let pulling_other = body.actor_id.as_str() != session.actor;
-    let manage_verified = if membership == CircleMembership::Join && pulling_other {
+    let manage_required =
+        circle_member_manage_required(&session.actor, body.actor_id.as_str(), target_state);
+    let manage_verified = if manage_required {
         let realm_id = realm_scope.to_string();
-        let (owner, members) = circle_authz_principals(state, &realm_id).await;
-        let verdict = state.authz.check(
+        ensure_circle_capability(
+            state,
             &session.actor,
             "ck.circle.member.manage",
             &circle_id,
             &realm_id,
-            owner.as_deref(),
-            &members,
-            &[],
-        );
-        if !verdict.allowed {
-            return Err(AppError::capability_denied(
-                "ck.circle.member.manage required to add another actor to this Circle",
-            )
-            .with_wire_code(CIRCLE_MEMBER_MANAGE_CAPABILITY_REQUIRED));
-        }
+            CIRCLE_MEMBER_MANAGE_CAPABILITY_REQUIRED,
+        )
+        .await?;
         true
     } else {
         false
@@ -509,6 +533,18 @@ async fn delete_circle_member(
     let circle_id = circle_id.into_inner();
     let actor_id = actor_id.into_inner();
     let realm_scope = circle_realm_scope(state, &circle_id)?;
+    if actor_id != session.actor {
+        let realm_id = realm_scope.to_string();
+        ensure_circle_capability(
+            state,
+            &session.actor,
+            "ck.circle.member.manage",
+            &circle_id,
+            &realm_id,
+            CIRCLE_MEMBER_MANAGE_CAPABILITY_REQUIRED,
+        )
+        .await?;
+    }
     let payload = json!({
         "circle_id": circle_id,
         "actor": actor_id,
@@ -668,6 +704,16 @@ async fn submit_circle_lifecycle(
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let realm_scope = circle_realm_scope(state, &circle_id)?;
+    let realm_id = realm_scope.to_string();
+    ensure_circle_capability(
+        state,
+        &session.actor,
+        "ck.circle.manage",
+        &circle_id,
+        &realm_id,
+        CIRCLE_MANAGE_CAPABILITY_REQUIRED,
+    )
+    .await?;
     let payload = json!({
         "circle_id": circle_id,
         "sender": session.actor.clone(),
@@ -685,8 +731,40 @@ async fn submit_circle_lifecycle(
         .circle(&circle_id)
         .or_else(|| projection.circles.get(&circle_id))
         .ok_or_else(|| AppError::not_found("circle not found"))?;
-    let response = circle_view_from_projection(&projection, circle)?;
+    let response = circle_view_from_projection(&projection, circle, &session.actor)?;
     json_ok(response)
+}
+
+fn circle_member_manage_required(sender: &str, target: &str, membership: &str) -> bool {
+    target != sender || matches!(membership, "invite" | "invited" | "ban" | "banned")
+}
+
+async fn ensure_circle_capability(
+    state: &AppState,
+    actor: &str,
+    action: &str,
+    circle_id: &str,
+    realm_id: &str,
+    reason_code: &'static str,
+) -> Result<(), AppError> {
+    let (owner, members) = circle_authz_principals(state, realm_id).await;
+    let verdict = state.authz.check(
+        actor,
+        action,
+        circle_id,
+        realm_id,
+        owner.as_deref(),
+        &members,
+        &[],
+    );
+    if verdict.allowed {
+        Ok(())
+    } else {
+        Err(
+            AppError::capability_denied(format!("{action} required for this Circle"))
+                .with_wire_code(reason_code),
+        )
+    }
 }
 
 /// CKP-0007 §8 — canonical reducer reason code when the requester lacks
@@ -694,6 +772,8 @@ async fn submit_circle_lifecycle(
 /// reducer constant of the same name so the HTTP 403 and the reducer 422
 /// surface the same wire code.
 const CIRCLE_MEMBER_MANAGE_CAPABILITY_REQUIRED: &str = "circle_member_manage_capability_required";
+
+const CIRCLE_MANAGE_CAPABILITY_REQUIRED: &str = "circle_manage_capability_required";
 
 /// CKP-0007 strict-subset invariant reason code (`Circle.members ⊆
 /// Realm.members`). Kept in sync with the reducer constant of the same name so

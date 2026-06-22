@@ -54,6 +54,16 @@ pub fn operation_policy_reason_code(message: &str) -> (salvo::http::StatusCode, 
         )
     } else if message == "sidecar_create_denied" {
         (salvo::http::StatusCode::FORBIDDEN, "sidecar_create_denied")
+    } else if message == "circle_manage_capability_required" {
+        (
+            salvo::http::StatusCode::FORBIDDEN,
+            "circle_manage_capability_required",
+        )
+    } else if message == "circle_member_manage_capability_required" {
+        (
+            salvo::http::StatusCode::FORBIDDEN,
+            "circle_member_manage_capability_required",
+        )
     } else if message == "realm_terminal_state" {
         (salvo::http::StatusCode::FORBIDDEN, "realm_terminal_state")
     } else if message == cokret_sdk::ERROR_CODE_REALM_FROZEN {
@@ -133,6 +143,7 @@ pub async fn validate_operation_policy(
         }
         validate_direct_conversation_realm_policy(state, operation)?;
         validate_circle_create_policy(state, operation).await?;
+        validate_circle_management_policy(state, operation).await?;
         validate_member_state_policy(state, operation).await?;
         validate_circle_scope_membership(state, operation)?;
         validate_pin_scope_safety(state, operation)?;
@@ -240,6 +251,85 @@ async fn validate_circle_create_policy(
         return Ok(());
     }
     Err("missing_capability")
+}
+
+async fn validate_circle_management_policy(
+    state: &AppState,
+    operation: &Operation,
+) -> Result<(), &'static str> {
+    let Some(kind) = kinds::canonical_kind_for_operation(operation) else {
+        return Ok(());
+    };
+    let (action, reason) = match kind {
+        kinds::CK_CIRCLE_UPDATE
+        | kinds::CK_CIRCLE_ARCHIVE
+        | kinds::CK_CIRCLE_RESTORE
+        | kinds::CK_CIRCLE_TOMBSTONE => ("ck.circle.manage", "circle_manage_capability_required"),
+        kinds::CK_CIRCLE_MEMBER_STATE if circle_member_manage_required(operation) => (
+            "ck.circle.member.manage",
+            "circle_member_manage_capability_required",
+        ),
+        _ => return Ok(()),
+    };
+    let Some(actor) = operation_actor(operation) else {
+        return Ok(());
+    };
+    let Some(circle_id) = operation_circle_id(operation) else {
+        return Ok(());
+    };
+    let realm_id = operation.realm_id.as_str();
+    let (owner, members) = realm_owner_and_members(state, realm_id).await;
+    if state
+        .authz
+        .check(
+            actor,
+            action,
+            circle_id,
+            realm_id,
+            owner.as_deref(),
+            &members,
+            &[],
+        )
+        .allowed
+    {
+        return Ok(());
+    }
+    Err(reason)
+}
+
+fn operation_circle_id(operation: &Operation) -> Option<&str> {
+    operation
+        .payload
+        .get("circle_id")
+        .and_then(Value::as_str)
+        .or_else(|| {
+            operation
+                .payload
+                .get("object")
+                .and_then(|object| object.get("id"))
+                .and_then(Value::as_str)
+        })
+}
+
+fn circle_member_manage_required(operation: &Operation) -> bool {
+    let Some(actor) = operation_actor(operation) else {
+        return false;
+    };
+    let Some(target) = operation
+        .payload
+        .get("actor")
+        .or_else(|| operation.payload.get("actor_id"))
+        .and_then(Value::as_str)
+    else {
+        return false;
+    };
+    let membership = operation
+        .payload
+        .get("state")
+        .or_else(|| operation.payload.get("membership"))
+        .and_then(Value::as_str)
+        .unwrap_or("join");
+    target != actor || matches!(membership, "invite" | "invited" | "ban" | "banned")
 }
 
 fn policy_realm_member_joined(state: &AppState, realm_id: &str, actor: &str) -> bool {

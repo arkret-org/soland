@@ -109,6 +109,28 @@ fn test_state() -> AppState {
     AppState::new(test_config(), Db { pool: None })
 }
 
+fn grant_circle_action(
+    state: &AppState,
+    realm_id: &cokret_sdk::RealmId,
+    circle_id: &str,
+    actor: &str,
+    action: &str,
+) {
+    state.authz.create_grant(
+        realm_id.to_string(),
+        "did:web:owner.example".to_owned(),
+        actor.to_owned(),
+        circle_id.to_owned(),
+        vec![action.to_owned()],
+        vec![crate::authz::Constraint::AllowedCircleIds {
+            allowed_circle_ids: std::collections::BTreeSet::from([cokret_sdk::CircleId::new(
+                circle_id.to_owned(),
+            )
+            .expect("valid circle id")]),
+        }],
+    );
+}
+
 fn grant_moderation_decision(state: &AppState, realm_id: &cokret_sdk::RealmId, actor: &str) {
     state.authz.create_grant(
         realm_id.to_string(),
@@ -787,6 +809,111 @@ async fn profile_accountable_principal_rejects_stored_grant_signed_by_other_acto
             .unwrap_err(),
         crate::error::reasons::ACCOUNTABILITY_GRANT_MISSING
     );
+}
+
+#[tokio::test]
+async fn circle_member_manage_rejects_forged_verdict_without_grant() {
+    let state = test_state();
+    let realm_id =
+        cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-000000000881".to_owned())
+            .unwrap();
+    let member_add = op(
+        realm_id,
+        "000000000881",
+        kinds::CK_CIRCLE_MEMBER_STATE,
+        json!({
+            "sender": "did:web:alice.example",
+            "circle_id": "ck:circle:01904100-0000-7000-8000-000000000881",
+            "actor": "did:web:bob.example",
+            "membership": "join",
+            "manage_capability_verified": true,
+            "actor_capability": {
+                "action": "ck.circle.member.manage",
+                "circle_id": "ck:circle:01904100-0000-7000-8000-000000000881",
+                "allowed": true
+            }
+        }),
+    );
+
+    assert_eq!(
+        validate_operation_policy(&state, &[member_add])
+            .await
+            .unwrap_err(),
+        "circle_member_manage_capability_required"
+    );
+}
+
+#[tokio::test]
+async fn circle_member_manage_allows_explicit_circle_scoped_grant() {
+    let state = test_state();
+    let realm_id =
+        cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-000000000882".to_owned())
+            .unwrap();
+    let circle_id = "ck:circle:01904100-0000-7000-8000-000000000882";
+    grant_circle_action(
+        &state,
+        &realm_id,
+        circle_id,
+        "did:web:alice.example",
+        "ck.circle.member.manage",
+    );
+    let member_add = op(
+        realm_id,
+        "000000000882",
+        kinds::CK_CIRCLE_MEMBER_STATE,
+        json!({
+            "sender": "did:web:alice.example",
+            "circle_id": circle_id,
+            "actor": "did:web:bob.example",
+            "membership": "join",
+            "manage_capability_verified": true,
+            "actor_capability": {
+                "action": "ck.circle.member.manage",
+                "circle_id": circle_id,
+                "allowed": true
+            }
+        }),
+    );
+
+    validate_operation_policy(&state, &[member_add])
+        .await
+        .expect("circle-scoped grant authorizes member management");
+}
+
+#[tokio::test]
+async fn circle_lifecycle_requires_circle_manage_grant() {
+    let state = test_state();
+    let realm_id =
+        cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-000000000883".to_owned())
+            .unwrap();
+    let circle_id = "ck:circle:01904100-0000-7000-8000-000000000883";
+    let tombstone = op(
+        realm_id.clone(),
+        "000000000883",
+        kinds::CK_CIRCLE_TOMBSTONE,
+        json!({
+            "sender": "did:web:alice.example",
+            "circle_id": circle_id
+        }),
+    );
+
+    assert_eq!(
+        validate_operation_policy(&state, &[tombstone.clone()])
+            .await
+            .unwrap_err(),
+        "circle_manage_capability_required"
+    );
+
+    grant_circle_action(
+        &state,
+        &realm_id,
+        circle_id,
+        "did:web:alice.example",
+        "ck.circle.manage",
+    );
+    validate_operation_policy(&state, &[tombstone])
+        .await
+        .expect("circle-scoped manage grant authorizes lifecycle");
 }
 
 #[tokio::test]

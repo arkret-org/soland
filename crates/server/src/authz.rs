@@ -2,7 +2,8 @@
 //!
 //! Evaluates grants to determine whether an actor may perform an action
 //! on a resource within a scope. Default rules:
-//! - Owner gets all actions
+//! - Owner gets ordinary Realm-level actions
+//! - Circle-local management actions require explicit Circle-scoped grants
 //! - Explicit grants authorize non-owner actors
 //!
 //! ## G3.S2 — policy server integration
@@ -457,7 +458,17 @@ impl SolandAuthzEngine {
             };
         }
 
-        // Default rules
+        // Default rules. Circle-local management deliberately does not use the
+        // owner shortcut: Realm ownership/admin handoff must not imply
+        // membership, audit, or management over existing Circle scopes.
+        if circle_local_management_action_requires_explicit_grant(action) {
+            return AuthzResult {
+                allowed: false,
+                reason: default_deny_reason(action).to_owned(),
+                reason_detail: None,
+                grants: Vec::new(),
+            };
+        }
         if owner.is_some_and(|o| o == actor) {
             return AuthzResult {
                 allowed: true,
@@ -489,6 +500,16 @@ fn default_deny_reason(action: &str) -> &'static str {
         "ck.message.create" => "no_strand_track_message_grant",
         _ => "capability_denied",
     }
+}
+
+fn circle_local_management_action_requires_explicit_grant(action: &str) -> bool {
+    matches!(
+        action,
+        "ck.circle.manage"
+            | "ck.circle.member.manage"
+            | "ck.circle.member.add.others"
+            | "ck.circle.audit"
+    )
 }
 
 /// Check if a grant resource pattern matches the requested resource.
@@ -1111,6 +1132,29 @@ mod tests {
         );
         assert!(result.allowed);
         assert_eq!(result.reason, "owner");
+    }
+
+    #[test]
+    fn owner_does_not_get_circle_local_management_by_default() {
+        let engine = SolandAuthzEngine::new();
+        for action in [
+            "ck.circle.manage",
+            "ck.circle.member.manage",
+            "ck.circle.member.add.others",
+            "ck.circle.audit",
+        ] {
+            let result = engine.check(
+                "did:web:alice",
+                action,
+                "ck:circle:01904100-0000-7000-8000-000000000001",
+                "ck:realm:01904100-0000-7000-8000-000000000001",
+                Some("did:web:alice"),
+                &[],
+                &[],
+            );
+            assert!(!result.allowed, "{action} should require an explicit grant");
+            assert_eq!(result.reason, "capability_denied");
+        }
     }
 
     #[test]
