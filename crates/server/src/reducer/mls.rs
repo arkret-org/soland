@@ -246,7 +246,7 @@ pub fn apply_keypackage_claim(state: &mut ProjectionState, op: &Operation) -> Pr
 ///   "group_id":               "ck:mls_group:<uuid>",
 ///   "recipient_actor_id":     "did:web:bob.example",
 ///   "recipient_device_id":    "ck:device:<uuid>",
-///   "welcome_bytes_b64":      "<base64url(opaque MLS Welcome)>",
+///   "ciphertext":             "<base64url(opaque MLS Welcome)>",
 ///   "key_package_id":         "ck:mls_keypackage:<uuid>"
 /// }
 /// ```
@@ -304,7 +304,11 @@ pub fn apply_welcome_enqueue(state: &mut ProjectionState, op: &Operation) -> Pro
             Ok(_) => return reject("mls_welcome_bytes_empty"),
             Err(_) => return reject("mls_welcome_bytes_invalid_b64"),
         },
-        (None, Some(ciphertext)) if !ciphertext.is_empty() => ciphertext.as_bytes().to_vec(),
+        (None, Some(ciphertext)) if !ciphertext.is_empty() => match decode_base64_loose(ciphertext)
+        {
+            Ok(bytes) if !bytes.is_empty() => bytes,
+            _ => ciphertext.as_bytes().to_vec(),
+        },
         _ => return reject("mls_welcome_bytes_missing"),
     };
     if let Err(reason) = validate_welcome_trust_binding(
@@ -1394,6 +1398,31 @@ mod tests {
             .filter(|r| r.delivered_at.is_none())
             .collect();
         assert!(still_pending.is_empty());
+    }
+
+    #[test]
+    fn welcome_enqueue_decodes_schema_ciphertext_base64_to_raw_welcome_bytes() {
+        let mut state = ProjectionState::default();
+        let raw_welcome = b"real-openmls-welcome-bytes";
+        let mut payload = welcome_payload("ck:mls_welcome:w-ciphertext");
+        let object = payload.as_object_mut().unwrap();
+        object.remove("welcome_bytes_b64");
+        object.remove("key_package_id");
+        object.insert("ciphertext".to_owned(), Value::String(b64(raw_welcome)));
+        payload["claim_envelope"]["welcome_digest"] =
+            Value::String(cokret_sdk::canonical::sha256_digest(raw_welcome));
+
+        let enqueue = op_at(300, "ck.mls.welcome", payload);
+        let effect = apply_welcome_enqueue(&mut state, &enqueue);
+
+        assert!(matches!(
+            effect,
+            ProjectionEffect::Mls(MlsEffect::WelcomeEnqueued { .. })
+        ));
+        let key = MlsWelcomeQueueKey::new("did:web:bob.example", "ck:device:bob-phone");
+        let queue = state.mls_welcomes.get(&key).unwrap();
+        assert_eq!(queue[0].welcome_bytes, raw_welcome);
+        assert_eq!(queue[0].key_package_id, "ck:mls_keypackage:01");
     }
 
     #[test]

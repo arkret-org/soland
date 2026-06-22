@@ -7,11 +7,22 @@ pub(super) struct HandleLookup {
     pub(super) authority: String,
 }
 
-pub(super) fn service_handle_domain(service_did: &str) -> String {
+pub(super) fn service_handle_domain(state: &AppState) -> String {
+    handle_domain_from_public_base_url(&state.config.public_base_url)
+        .or_else(|| service_did_handle_domain(&state.config.service_did))
+        .unwrap_or_else(|| "soland.local".to_owned())
+}
+
+fn handle_domain_from_public_base_url(public_base_url: &str) -> Option<String> {
+    let url = reqwest::Url::parse(public_base_url).ok()?;
+    let host = url.host_str()?.trim().trim_end_matches('.');
+    (!host.is_empty()).then(|| host.to_ascii_lowercase())
+}
+
+fn service_did_handle_domain(service_did: &str) -> Option<String> {
     service_did
         .strip_prefix("did:web:")
         .map(|value| value.replace(':', "."))
-        .unwrap_or_else(|| "soland.local".to_owned())
 }
 
 pub(super) fn handle_lookup(input: &str, default_domain: &str) -> Option<HandleLookup> {
@@ -201,7 +212,7 @@ pub(super) async fn resolve_handle(
     if body.handle.trim().is_empty() {
         return Err(AppError::missing_param("handle is required"));
     }
-    let service_domain = service_handle_domain(&state.config.service_did);
+    let service_domain = service_handle_domain(state);
     let Some(lookup) = handle_lookup(&body.handle, &service_domain) else {
         return Err(AppError::not_found("not found"));
     };
@@ -314,7 +325,7 @@ pub(super) async fn signed_handle_claim(
         ));
     }
     let service_did = state.config.service_did.clone();
-    let default_domain = service_handle_domain(&service_did);
+    let default_domain = service_handle_domain(state);
     let lookup = handle_lookup(handle, &default_domain)
         .ok_or_else(|| AppError::invalid_param("handle must be canonicalizable"))?;
     let canonical_handle = lookup.canonical;
@@ -462,7 +473,6 @@ pub(super) async fn list_handles_for_subject(
         .lock()
         .expect("member_identity lock")
         .handle_claims_for_subject(&subject);
-    let as_of = requested_as_of.unwrap_or_else(now);
     let mut claims = Vec::new();
     let mut seen = BTreeSet::new();
     // No demo actor matched — surface a registered local account's primary
@@ -486,6 +496,7 @@ pub(super) async fn list_handles_for_subject(
             .await
         }
     };
+    let as_of = requested_as_of.unwrap_or_else(now);
     if let Some(claim) = generated_claim_value {
         push_visible_subject_handle_claim(
             state,

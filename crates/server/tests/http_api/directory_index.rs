@@ -203,6 +203,66 @@ async fn directory_product_endpoints_return_demo_projection_shapes() {
 }
 
 #[tokio::test]
+async fn account_primary_handle_claim_is_listed_for_webvh_service_did() {
+    let mut config = test_config();
+    config.public_base_url = "https://local.host".to_owned();
+    config.service_did = "did:webvh:zqmsolandlocal".to_owned();
+    config.trust_domain = trust_domain_from_service_did(&config.service_did);
+    let state = AppState::new(config, Db { pool: None });
+    let did = "did:web:registered-handle.example";
+    let device = "ck:device:01904100-0000-7000-8000-00000000a11c";
+    seed_did_document_also_known_as(&state, did, &["acct:alice@local.host"]).await;
+
+    let registered: Value = TestClient::post("http://server/_cokret/gate/account/register")
+        .json(&serde_json::json!({
+            "principal_id": did,
+            "handle": "alice:local.host",
+            "display_name": "Alice",
+            "device_id": device,
+        }))
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(
+        registered["primary_handle_claim"]["handle"],
+        "alice:local.host"
+    );
+    assert_eq!(registered["primary_handle_claim"]["subject"], did);
+
+    let token = dev_token_for_device(state.clone(), did, device, "Alice").await;
+    let viewer: Value = TestClient::get("http://server/_cokret/self/account/viewer")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(viewer["primary_handle_claim"]["handle"], "alice:local.host");
+    assert_eq!(viewer["primary_handle_claim"]["subject"], did);
+
+    let subject_handles: Value =
+        TestClient::post("http://server/_cokret/find/directory/list-handles-for-subject")
+            .json(&serde_json::json!({
+                "subject": did,
+                "intent": "display",
+                "limit": 10
+            }))
+            .send(&app_from_state(state))
+            .await
+            .take_json()
+            .await
+            .unwrap();
+    assert_eq!(subject_handles["subject"], did);
+    assert_eq!(subject_handles["primary_handle"], "alice:local.host");
+    let claims = subject_handles["claims"].as_array().unwrap();
+    assert_eq!(claims.len(), 1);
+    assert_eq!(claims[0]["subject"], did);
+    assert_eq!(claims[0]["handle"], "alice:local.host");
+}
+
+#[tokio::test]
 async fn directory_resolve_handle_invite_accepts_canonical_handles_without_contact() {
     let state = AppState::new(
         test_config_with_service_did("did:web:local.host"),
