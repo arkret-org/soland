@@ -106,10 +106,50 @@ pub(super) async fn member_join_accepts_pending_invite(
     invite.realm_id == realm_id
 }
 
+pub(super) async fn invite_claim_actor_claims_pending_third_party_invite(
+    state: &AppState,
+    object: &serde_json::Map<String, Value>,
+    actor: &str,
+    realm_id: &str,
+) -> bool {
+    if object.get("kind").and_then(Value::as_str) != Some("ck.invite.claim") {
+        return false;
+    }
+    let Some(payload) = object.get("payload") else {
+        return false;
+    };
+    if payload.get("subject_id").and_then(Value::as_str) != Some(actor) {
+        return false;
+    }
+    let Some(invite_id) = payload.get("invite_id").and_then(Value::as_str) else {
+        return false;
+    };
+    if crate::ids::parse_typed_uuid(invite_id, "invite").is_none() {
+        return false;
+    }
+    let Ok(Some(invite)) = state.persistence.realm_invites().get(invite_id).await else {
+        return false;
+    };
+    if invite.realm_id != realm_id || invite.status != "pending" || invite.third_party_id.is_none()
+    {
+        return false;
+    }
+    if invite
+        .expires_at
+        .is_some_and(|expires_at| expires_at <= now())
+    {
+        return false;
+    }
+    invite
+        .invitee
+        .as_deref()
+        .is_none_or(|invitee| invitee == actor)
+}
+
 /// Quick existence probe against the in-memory `state.realms` index used
-/// by the regular `realm_has_member` check. Used to gate the
-/// `ck.realm.create` bootstrap path so a duplicate-create attempt (where
-/// the Realm already has members) falls back to the normal member check.
+/// by the regular `realm_has_member` check. The envelope validator uses it
+/// to fail duplicate `ck.realm.create` with `realm_already_exists` before
+/// applying the genesis-member bootstrap exception.
 pub(super) fn realm_exists_in_index(state: &AppState, realm_id: &str) -> bool {
     let Ok(realm_id_typed) = cokret_sdk::RealmId::new(realm_id.to_owned()) else {
         return false;

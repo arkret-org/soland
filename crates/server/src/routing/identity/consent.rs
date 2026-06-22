@@ -10,7 +10,7 @@ use std::collections::BTreeSet;
 use chrono::{DateTime, Utc};
 use cokret_sdk::{
     ConsentCellList, ConsentCellView, ConsentRequestRequestBody, ConsentState,
-    ConsentUpdateRequestBody, Did, Operation,
+    ConsentUpdateRequestBody, Did, EventId, Operation,
 };
 use salvo::http::StatusCode;
 use salvo::oapi::extract::{JsonBody, PathParam};
@@ -23,7 +23,7 @@ use crate::routing::identity::device_messages::{
     ACCOUNT_DATA_UPDATE_TYPE, fanout_actor_private_update,
 };
 use crate::state::{
-    AccountDataRecord, AppState, ConsentCellKey, ConsentCellRecord, ConsentGrantDot, ContactRecord,
+    AccountDataRecord, AppState, ConsentCellKey, ConsentCellRecord, ConsentGrantDot,
     ProjectionEventRecord,
 };
 use crate::{JsonResult, ids, json_ok};
@@ -79,21 +79,7 @@ async fn project_consent_grant_operation(
         expires_at,
         operation.created_at,
     );
-    persist_consent_cell(state, &updated, previous).await?;
-    let contact_status = if effective_state(&updated, operation.created_at) == "granted" {
-        "accepted"
-    } else {
-        "pending"
-    };
-    upsert_contact_status_at(
-        state,
-        &peer,
-        &holder,
-        &scope,
-        contact_status,
-        operation.created_at,
-    )
-    .await
+    persist_consent_cell(state, &updated, previous).await
 }
 
 async fn project_consent_revoke_operation(
@@ -110,21 +96,6 @@ async fn project_consent_revoke_operation(
         revoke_cells_with_observed_dots(state, &holder, &peer, &scope, &observed_dots, revoked_at);
     for mutation in &mutations {
         persist_consent_cell(state, &mutation.updated, mutation.previous.clone()).await?;
-        if mutation
-            .previous
-            .as_ref()
-            .is_some_and(consent_cell_had_projection_material)
-        {
-            upsert_contact_status_at(
-                state,
-                &peer,
-                &holder,
-                &mutation.updated.scope,
-                "pending",
-                revoked_at,
-            )
-            .await?;
-        }
     }
     emit_consent_revoke_invalidation(state, &holder, &peer, &scope, revoked_at, &mutations).await;
     Ok(())
@@ -232,19 +203,6 @@ async fn grant_consent_cell(
         now(),
     );
     persist_consent_cell(state, &updated, previous).await?;
-    let contact_status = if effective_state(&updated, now()) == "granted" {
-        "accepted"
-    } else {
-        "pending"
-    };
-    upsert_contact_status(
-        state,
-        body.peer_did.as_str(),
-        &holder,
-        &scope,
-        contact_status,
-    )
-    .await?;
     append_audit_log(
         state,
         Some(&holder),
@@ -290,20 +248,6 @@ async fn revoke_consent_cell(
         .unwrap_or_else(|| empty_cell(&holder, body.peer_did.as_str(), &scope, revoked_at));
     for mutation in &mutations {
         persist_consent_cell(state, &mutation.updated, mutation.previous.clone()).await?;
-        if mutation
-            .previous
-            .as_ref()
-            .is_some_and(consent_cell_had_projection_material)
-        {
-            upsert_contact_status(
-                state,
-                body.peer_did.as_str(),
-                &holder,
-                &mutation.updated.scope,
-                "pending",
-            )
-            .await?;
-        }
     }
     emit_consent_revoke_invalidation(
         state,
@@ -637,6 +581,24 @@ pub(crate) fn grant_contact_managed_consent(
     let dot = format!("{event_id}:0");
     let updated = grant_cell_with_dot(state, holder, peer, &scope, dot, None, None, granted_at);
     (event_id, updated)
+}
+
+pub(crate) fn project_contact_managed_consent_ref(
+    state: &AppState,
+    holder: &str,
+    peer: &str,
+    scope: &str,
+    grant_event_ref: &str,
+    granted_at: DateTime<Utc>,
+) -> Result<ConsentCellRecord, AppError> {
+    let scope = normalize_scope(Some(scope)).unwrap_or_else(|_| scope.to_owned());
+    let event_ref = EventId::new(grant_event_ref.to_owned()).map_err(|error| {
+        AppError::invalid_param(format!("invalid consent_grant_ref: {error}"))
+    })?;
+    let dot = format!("{}:0", event_ref.as_str());
+    Ok(grant_cell_with_dot(
+        state, holder, peer, &scope, dot, None, None, granted_at,
+    ))
 }
 
 pub(crate) struct ConsentCellMutation {
@@ -977,50 +939,6 @@ fn revoke_cell_with_dots(
     cell.clone()
 }
 
-async fn upsert_contact_status(
-    state: &AppState,
-    requester: &str,
-    target: &str,
-    scope: &str,
-    status: &str,
-) -> Result<(), AppError> {
-    upsert_contact_status_at(state, requester, target, scope, status, now()).await
-}
-
-async fn upsert_contact_status_at(
-    state: &AppState,
-    requester: &str,
-    target: &str,
-    scope: &str,
-    status: &str,
-    updated_at: DateTime<Utc>,
-) -> Result<(), AppError> {
-    let store = state.persistence.contacts();
-    let mut contact = store
-        .get_scoped(requester, target, scope)
-        .await
-        .map_err(|error| AppError::internal(error.to_string()))?
-        .unwrap_or_else(|| ContactRecord {
-            requester: requester.to_owned(),
-            target: target.to_owned(),
-            scope: scope.to_owned(),
-            status: status.to_owned(),
-            request_event_ref: None,
-            response_event_ref: None,
-            tombstone_event_ref: None,
-            message: None,
-            peer_service_did: None,
-            created_at: updated_at,
-            updated_at,
-        });
-    contact.status = status.to_owned();
-    contact.updated_at = updated_at;
-    store
-        .put(&contact)
-        .await
-        .map_err(|error| AppError::internal(error.to_string()))
-}
-
 fn validate_holder_update(session_actor: &str, holder: &str, peer: &str) -> Result<(), AppError> {
     if validate_did(holder).is_err() {
         return Err(AppError::invalid_param("invalid holder DID"));
@@ -1068,13 +986,6 @@ fn empty_cell(
         revoked_at: None,
         updated_at,
     }
-}
-
-fn consent_cell_had_projection_material(cell: &ConsentCellRecord) -> bool {
-    cell.requested_at.is_some()
-        || !cell.grant_dots.is_empty()
-        || !cell.revoked_dots.is_empty()
-        || cell.revoked_at.is_some()
 }
 
 fn consent_key(holder: &str, peer: &str, scope: &str) -> ConsentCellKey {

@@ -17,6 +17,8 @@ pub struct MlsKeyPackageRow {
     pub capabilities: Vec<String>,
     pub capabilities_digest: String,
     pub device_signature: Value,
+    pub last_resort: bool,
+    pub last_resort_realm_id: Option<String>,
     pub lifetime_not_before: i64,
     pub lifetime_not_after: i64,
     /// MLS group id that claimed this row. `None` while claimable.
@@ -73,6 +75,7 @@ pub trait MlsKeyPackageStore: Send + Sync {
         &self,
         id: &str,
         mls_group_id: &str,
+        intended_realm_id: Option<&str>,
         ssk_generation: Option<u64>,
         consumed_at: i64,
     ) -> PersistenceResult<Option<MlsKeyPackageRow>>;
@@ -168,6 +171,7 @@ impl MlsKeyPackageStore for MemoryMlsKeyPackageStore {
         &self,
         id: &str,
         group_id: &str,
+        intended_realm_id: Option<&str>,
         ssk_generation: Option<u64>,
         consumed_at: i64,
     ) -> PersistenceResult<Option<MlsKeyPackageRow>> {
@@ -175,7 +179,7 @@ impl MlsKeyPackageStore for MemoryMlsKeyPackageStore {
         let Some(row) = rows.get_mut(id) else {
             return Ok(None);
         };
-        if row.claimed_by_mls_group_id.is_some() {
+        if row.claimed_by_mls_group_id.is_some() && !(row.last_resort && group_id != "revoked") {
             // Already claimed — CAS loser path.
             return Ok(None);
         }
@@ -183,6 +187,22 @@ impl MlsKeyPackageStore for MemoryMlsKeyPackageStore {
             && row.ssk_generation != Some(generation)
         {
             return Ok(None);
+        }
+        if row.last_resort && group_id != "revoked" {
+            let Some(realm_id) = intended_realm_id else {
+                return Ok(None);
+            };
+            if row
+                .last_resort_realm_id
+                .as_deref()
+                .is_some_and(|bound_realm_id| bound_realm_id != realm_id)
+            {
+                return Ok(None);
+            }
+            if row.last_resort_realm_id.is_none() {
+                row.last_resort_realm_id = Some(realm_id.to_owned());
+            }
+            return Ok(Some(row.clone()));
         }
         row.claimed_by_mls_group_id = Some(group_id.to_owned());
         row.consumed_at = Some(consumed_at);
@@ -484,10 +504,10 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
         let inserted = sql_query(
             "INSERT INTO mls_key_packages \
              (id, keypackage_ref, keypackage_digest, actor_id, device_id, key_package_bytes, \
-              capabilities, capabilities_digest, device_signature, lifetime_not_before, \
-              lifetime_not_after, claimed_by_mls_group_id, ssk_generation, consumed_at, \
-              created_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) \
+              capabilities, capabilities_digest, device_signature, last_resort, \
+              last_resort_realm_id, lifetime_not_before, lifetime_not_after, \
+              claimed_by_mls_group_id, ssk_generation, consumed_at, created_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17) \
              ON CONFLICT (id) DO NOTHING",
         )
         .bind::<Text, _>(&record.id)
@@ -499,6 +519,8 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
         .bind::<Jsonb, _>(serde_json::json!(record.capabilities))
         .bind::<Text, _>(&record.capabilities_digest)
         .bind::<Jsonb, _>(&record.device_signature)
+        .bind::<Bool, _>(record.last_resort)
+        .bind::<Nullable<Text>, _>(&record.last_resort_realm_id)
         .bind::<BigInt, _>(record.lifetime_not_before)
         .bind::<BigInt, _>(record.lifetime_not_after)
         .bind::<Nullable<Text>, _>(&record.claimed_by_mls_group_id)
@@ -515,8 +537,8 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
         sql_query(
             "SELECT id, keypackage_ref, keypackage_digest, actor_id, device_id, \
              key_package_bytes, capabilities, capabilities_digest, device_signature, \
-             lifetime_not_before, lifetime_not_after, claimed_by_mls_group_id, ssk_generation, \
-             consumed_at, created_at \
+             last_resort, last_resort_realm_id, lifetime_not_before, lifetime_not_after, \
+             claimed_by_mls_group_id, ssk_generation, consumed_at, created_at \
              FROM mls_key_packages WHERE id = $1",
         )
         .bind::<Text, _>(id)
@@ -531,6 +553,7 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
         &self,
         id: &str,
         group_id: &str,
+        intended_realm_id: Option<&str>,
         ssk_generation: Option<u64>,
         consumed_at: i64,
     ) -> PersistenceResult<Option<MlsKeyPackageRow>> {
@@ -538,17 +561,22 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
         let ssk_generation = db_ssk_generation(ssk_generation)?;
         sql_query(
             "UPDATE mls_key_packages \
-             SET claimed_by_mls_group_id = $2, ssk_generation = COALESCE($3, ssk_generation), \
-                 consumed_at = $4 \
-             WHERE id = $1 AND claimed_by_mls_group_id IS NULL \
-               AND ($3 IS NULL OR ssk_generation = $3) \
+             SET claimed_by_mls_group_id = CASE WHEN last_resort AND $2 <> 'revoked' THEN claimed_by_mls_group_id ELSE $2 END, \
+                 last_resort_realm_id = CASE WHEN last_resort AND $2 <> 'revoked' THEN COALESCE(last_resort_realm_id, $3) ELSE last_resort_realm_id END, \
+                 ssk_generation = COALESCE($4, ssk_generation), \
+                 consumed_at = CASE WHEN last_resort AND $2 <> 'revoked' THEN consumed_at ELSE $5 END \
+             WHERE id = $1 \
+               AND (claimed_by_mls_group_id IS NULL OR (last_resort AND $2 <> 'revoked')) \
+               AND ($4 IS NULL OR ssk_generation = $4) \
+               AND ((NOT last_resort) OR $2 = 'revoked' OR (last_resort_realm_id IS NULL AND $3 IS NOT NULL) OR last_resort_realm_id = $3) \
              RETURNING id, keypackage_ref, keypackage_digest, actor_id, device_id, \
              key_package_bytes, capabilities, capabilities_digest, device_signature, \
-             lifetime_not_before, lifetime_not_after, claimed_by_mls_group_id, ssk_generation, \
-             consumed_at, created_at",
+             last_resort, last_resort_realm_id, lifetime_not_before, lifetime_not_after, \
+             claimed_by_mls_group_id, ssk_generation, consumed_at, created_at",
         )
         .bind::<Text, _>(id)
         .bind::<Text, _>(group_id)
+        .bind::<Nullable<Text>, _>(intended_realm_id)
         .bind::<Nullable<BigInt>, _>(ssk_generation)
         .bind::<BigInt, _>(consumed_at)
         .get_result::<MlsKeyPackagePgRow>(&mut *conn)
@@ -563,8 +591,8 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
         sql_query(
             "SELECT id, keypackage_ref, keypackage_digest, actor_id, device_id, \
              key_package_bytes, capabilities, capabilities_digest, device_signature, \
-             lifetime_not_before, lifetime_not_after, claimed_by_mls_group_id, ssk_generation, \
-             consumed_at, created_at \
+             last_resort, last_resort_realm_id, lifetime_not_before, lifetime_not_after, \
+             claimed_by_mls_group_id, ssk_generation, consumed_at, created_at \
              FROM mls_key_packages ORDER BY created_at ASC, id ASC",
         )
         .load::<MlsKeyPackagePgRow>(&mut *conn)
@@ -797,6 +825,10 @@ struct MlsKeyPackagePgRow {
     capabilities_digest: String,
     #[diesel(sql_type = Jsonb)]
     device_signature: Value,
+    #[diesel(sql_type = Bool)]
+    last_resort: bool,
+    #[diesel(sql_type = Nullable<Text>)]
+    last_resort_realm_id: Option<String>,
     #[diesel(sql_type = BigInt)]
     lifetime_not_before: i64,
     #[diesel(sql_type = BigInt)]
@@ -823,6 +855,8 @@ impl From<MlsKeyPackagePgRow> for MlsKeyPackageRow {
             capabilities: json_string_array(row.capabilities),
             capabilities_digest: row.capabilities_digest,
             device_signature: row.device_signature,
+            last_resort: row.last_resort,
+            last_resort_realm_id: row.last_resort_realm_id,
             lifetime_not_before: row.lifetime_not_before,
             lifetime_not_after: row.lifetime_not_after,
             claimed_by_mls_group_id: row.claimed_by_mls_group_id,

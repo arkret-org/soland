@@ -1010,7 +1010,8 @@ async fn mimi_report_abuse(
         franking_proof,
         source_service.as_deref(),
         &source_ip_hash,
-    )?;
+    )
+    .await?;
     let report_id = ids::generate_report_id();
     let mut report_fields = serde_json::Map::new();
     report_fields.insert("report_id".to_owned(), json!(report_id));

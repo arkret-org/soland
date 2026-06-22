@@ -1,0 +1,153 @@
+use cokret_sdk::models::{
+    AgentParticipation, AgentParticipationScope, effective_participation,
+};
+use serde_json::Value;
+
+use crate::state::AppState;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct ResolvedAgentParticipation {
+    pub(crate) effective: AgentParticipation,
+}
+
+pub(crate) fn uuid_tail(typed_id: &str) -> &str {
+    typed_id.rsplit(':').next().unwrap_or(typed_id)
+}
+
+pub(crate) fn realm_scope_key(realm_id: &str) -> String {
+    format!("realm:{}", uuid_tail(realm_id))
+}
+
+pub(crate) fn circle_scope_key(realm_id: &str, circle_id: &str) -> String {
+    format!("circle:{}:{}", uuid_tail(realm_id), uuid_tail(circle_id))
+}
+
+pub(crate) fn strand_scope_key(realm_id: &str, strand_id: &str) -> String {
+    format!("strand:{}:{}", uuid_tail(realm_id), uuid_tail(strand_id))
+}
+
+pub(crate) fn participation_from_value(row: &Value) -> AgentParticipation {
+    AgentParticipation {
+        reply: row.get("reply").and_then(Value::as_bool).unwrap_or(false),
+        accept_third_party_mention: row
+            .get("accept_third_party_mention")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        act_on_behalf: row
+            .get("act_on_behalf")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+    }
+}
+
+fn projected_strand_circle_id(state: &AppState, strand_id: &str) -> Option<Option<String>> {
+    state
+        .projection
+        .lock()
+        .ok()
+        .and_then(|projection| {
+            projection.strands.get(strand_id).map(|strand| {
+                strand
+                    .scope_circle_id
+                    .clone()
+                    .filter(|scope| scope.starts_with("ck:circle:"))
+            })
+        })
+}
+
+pub(crate) fn scope_keys_for_message(
+    state: &AppState,
+    realm_id: &str,
+    strand_id: Option<&str>,
+) -> Option<Vec<String>> {
+    let mut keys = vec![realm_scope_key(realm_id)];
+    let Some(strand_id) = strand_id.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Some(keys);
+    };
+    if !strand_id.starts_with("ck:strand:") {
+        return Some(keys);
+    }
+    if let Some(circle_id) = projected_strand_circle_id(state, strand_id)? {
+        keys.push(circle_scope_key(realm_id, &circle_id));
+    }
+    keys.push(strand_scope_key(realm_id, strand_id));
+    Some(keys)
+}
+
+pub(crate) fn scope_keys_for_scope(
+    state: &AppState,
+    scope: &AgentParticipationScope,
+) -> Option<Vec<String>> {
+    match scope {
+        AgentParticipationScope::Realm { realm_id } => {
+            Some(vec![realm_scope_key(realm_id.as_str())])
+        }
+        AgentParticipationScope::Circle {
+            realm_id,
+            circle_id,
+        } => Some(vec![
+            realm_scope_key(realm_id.as_str()),
+            circle_scope_key(realm_id.as_str(), circle_id.as_str()),
+        ]),
+        AgentParticipationScope::Strand {
+            realm_id,
+            strand_id,
+        } => scope_keys_for_message(state, realm_id.as_str(), Some(strand_id.as_str())),
+    }
+}
+
+pub(crate) async fn resolve_effective_ceiling_for_scope_keys(
+    state: &AppState,
+    scope_keys: &[String],
+) -> AgentParticipation {
+    let Ok(rows) = state
+        .persistence
+        .agent_participation()
+        .ceilings_for_scope_keys(scope_keys)
+        .await
+    else {
+        return AgentParticipation::NONE;
+    };
+    rows.iter()
+        .map(participation_from_value)
+        .fold(AgentParticipation::ALL, |acc, row| acc.intersect(row))
+}
+
+pub(crate) async fn resolve_effective_ceiling(
+    state: &AppState,
+    scope: &AgentParticipationScope,
+) -> AgentParticipation {
+    let Some(scope_keys) = scope_keys_for_scope(state, scope) else {
+        return AgentParticipation::NONE;
+    };
+    resolve_effective_ceiling_for_scope_keys(state, &scope_keys).await
+}
+
+fn selection_for_scope_keys<'a>(
+    selections: &'a [Value],
+    scope_keys: &[String],
+) -> Option<&'a Value> {
+    scope_keys.iter().rev().find_map(|scope_key| {
+        selections
+            .iter()
+            .find(|row| row.get("scope_key").and_then(Value::as_str) == Some(scope_key.as_str()))
+    })
+}
+
+pub(crate) async fn resolve_agent_participation_for_scope_keys(
+    state: &AppState,
+    agent_principal_id: &str,
+    scope_keys: &[String],
+) -> Option<ResolvedAgentParticipation> {
+    let selections = state
+        .persistence
+        .agent_participation()
+        .list_selections(agent_principal_id)
+        .await
+        .unwrap_or_default();
+    let selection = participation_from_value(selection_for_scope_keys(&selections, scope_keys)?);
+    let ceiling = resolve_effective_ceiling_for_scope_keys(state, scope_keys).await;
+    Some(ResolvedAgentParticipation {
+        effective: effective_participation(ceiling, selection),
+    })
+}

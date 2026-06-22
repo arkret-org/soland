@@ -11,7 +11,10 @@
 use std::time::Duration;
 
 use chrono::Utc;
-use cokret_sdk::RealmId;
+use cokret_sdk::{
+    Did, EventId, FrankingProof, FrankingProofEventTimeAnchor, Hash,
+    MODERATION_FRANKING_PROOF_KIND, RealmId,
+};
 use cokret_sdk::models::EffectiveScope;
 use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
@@ -59,7 +62,7 @@ pub(super) fn moderation_request_source_service(req: &Request) -> Option<String>
         .map(ToOwned::to_owned)
 }
 
-pub(super) fn validate_moderation_report_safety(
+pub(super) async fn validate_moderation_report_safety(
     state: &AppState,
     realm_id: &str,
     reporter: &str,
@@ -100,7 +103,7 @@ pub(super) fn validate_moderation_report_safety(
     }
     let evidence_package =
         validate_moderation_evidence_package(evidence_package, &effective_scope)?;
-    let franking_proof = validate_moderation_franking_proof(state, realm_id, franking_proof)?;
+    let franking_proof = validate_moderation_franking_proof(state, realm_id, franking_proof).await?;
     Ok(ModerationReportSafety {
         effective_scope,
         evidence_package,
@@ -326,7 +329,7 @@ fn validate_moderation_evidence_package(
     Ok(Some(evidence_package.clone()))
 }
 
-fn validate_moderation_franking_proof(
+async fn validate_moderation_franking_proof(
     state: &AppState,
     realm_id: &str,
     franking_proof: &Value,
@@ -337,7 +340,7 @@ fn validate_moderation_franking_proof(
     let object = franking_proof
         .as_object()
         .ok_or_else(|| AppError::invalid_param("franking_proof must be an object"))?;
-    if object.get("kind").and_then(Value::as_str) != Some("ck.moderation.franking_proof") {
+    if object.get("kind").and_then(Value::as_str) != Some(MODERATION_FRANKING_PROOF_KIND) {
         return Err(AppError::invalid_param(
             "franking_proof.kind must be ck.moderation.franking_proof",
         ));
@@ -396,6 +399,11 @@ fn validate_moderation_franking_proof(
             "franking_proof contains forbidden key `{key}`"
         )));
     }
+    let typed_proof: FrankingProof =
+        serde_json::from_value(franking_proof.clone()).map_err(|error| {
+            franking_proof_invalid(format!("franking_proof typed validation failed: {error}"))
+        })?;
+    validate_franking_event_time_anchor(state, realm_id, &typed_proof).await?;
     if !state.remember_moderation_franking_nonce(realm_id, received_by, replay_nonce) {
         return Err(AppError::new(
             ErrorCode::DuplicateConflict,
@@ -404,6 +412,68 @@ fn validate_moderation_franking_proof(
         .with_status(StatusCode::CONFLICT));
     }
     Ok(Some(franking_proof.clone()))
+}
+
+async fn validate_franking_event_time_anchor(
+    state: &AppState,
+    realm_id: &str,
+    proof: &FrankingProof,
+) -> Result<(), AppError> {
+    let record = state
+        .persistence
+        .events()
+        .get(proof.event_id.as_str())
+        .await
+        .map_err(|error| {
+            AppError::internal(format!("franking_proof event anchor lookup failed: {error}"))
+        })?
+        .ok_or_else(|| {
+            franking_proof_invalid(
+                "franking_proof.event_id does not reference an accepted local event anchor",
+            )
+        })?;
+    let record_realm_id = record.realm_id.as_deref().ok_or_else(|| {
+        franking_proof_invalid("franking_proof event anchor is missing realm_id")
+    })?;
+    if record_realm_id != realm_id {
+        return Err(franking_proof_invalid(
+            "franking_proof event anchor realm_id does not match report realm_id",
+        ));
+    }
+    let ciphertext_digest = encrypted_event_payload_digest(&record).ok_or_else(|| {
+        franking_proof_invalid(
+            "franking_proof event anchor is not an accepted encrypted v1 message event",
+        )
+    })?;
+    let anchor = FrankingProofEventTimeAnchor::new(
+        EventId::new(record.event_id.clone())
+            .map_err(|error| franking_proof_invalid(format!("invalid event anchor id: {error}")))?,
+        RealmId::new(record_realm_id.to_owned()).map_err(|error| {
+            franking_proof_invalid(format!("invalid event anchor realm_id: {error}"))
+        })?,
+        Did::new(state.config.service_did.clone()).map_err(|error| {
+            franking_proof_invalid(format!("invalid local franking service DID: {error}"))
+        })?,
+        record.received_at,
+        Hash::new(ciphertext_digest.to_owned()).map_err(|error| {
+            franking_proof_invalid(format!("invalid event anchor ciphertext digest: {error}"))
+        })?,
+    );
+    proof
+        .validate_event_time_anchor(&anchor)
+        .map_err(|error| franking_proof_invalid(error.to_string()))
+}
+
+fn encrypted_event_payload_digest(record: &crate::state::CanonicalEventRecord) -> Option<&str> {
+    record
+        .envelope
+        .pointer("/payload/encrypted_content/payload_digest")
+        .and_then(Value::as_str)
+        .filter(|value| is_valid_report_hash(value))
+}
+
+fn franking_proof_invalid(message: impl Into<String>) -> AppError {
+    AppError::invalid_param(message).with_wire_code(cokret_sdk::error::ERROR_CODE_PROOF_INVALID)
 }
 
 fn validate_franking_sender_claim(object: &serde_json::Map<String, Value>) -> Result<(), AppError> {
@@ -544,7 +614,8 @@ async fn moderation_report(
         &body.franking_proof,
         source_service.as_deref(),
         &source_ip_hash,
-    )?;
+    )
+    .await?;
     let report_id = ids::generate_report_id();
     // Internal assignment keeps the `<did>#moderation` role form; the wire
     // `routed_to` carries bare DIDs only (spec pattern forbids fragments).
@@ -1220,6 +1291,8 @@ mod report_safety_tests {
 
     const REALM: &str = "ck:realm:01904100-0000-7000-8000-d0d0d0d0d0d0";
     const TARGET: &str = "ck:message:01904100-0000-7000-8000-000000000777";
+    const FRANKING_EVENT: &str = "ck:event:01904100-0000-7000-8000-000000000222";
+    const FRANKING_RECEIVED_AT: &str = "2026-04-30T00:00:00Z";
     const REPORTER: &str = "did:web:alice.example";
 
     fn test_state() -> AppState {
@@ -1319,6 +1392,35 @@ mod report_safety_tests {
         format!("sha256:{}", ch.to_string().repeat(64))
     }
 
+    async fn seed_franking_event_anchor(state: &AppState, received_at: &str) {
+        let received_at = chrono::DateTime::parse_from_rfc3339(received_at)
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        state
+            .persistence
+            .events()
+            .put(crate::state::CanonicalEventRecord {
+                event_id: FRANKING_EVENT.to_owned(),
+                actor_id: REPORTER.to_owned(),
+                actor_seq: 1,
+                realm_id: Some(REALM.to_owned()),
+                kind: "ck.message.create".to_owned(),
+                schema_id: "ck.schema.event.v1".to_owned(),
+                canonical_digest: hash('9'),
+                canonical_bytes: b"{}".to_vec(),
+                envelope: json!({
+                    "payload": {
+                        "encrypted_content": {
+                            "payload_digest": hash('d')
+                        }
+                    }
+                }),
+                received_at,
+            })
+            .await
+            .unwrap();
+    }
+
     fn valid_evidence(scope: Value) -> Value {
         json!({
             "encryption": "xchacha20poly1305",
@@ -1334,7 +1436,7 @@ mod report_safety_tests {
             "kind": "ck.moderation.franking_proof",
             "franking_proof_id": "ck:franking_proof:01904100-0000-7000-8000-000000000111",
             "realm_id": REALM,
-            "event_id": "ck:event:01904100-0000-7000-8000-000000000222",
+            "event_id": FRANKING_EVENT,
             "routing_metadata_digest": hash('c'),
             "ciphertext_digest": hash('d'),
             "aad_digest": hash('e'),
@@ -1344,7 +1446,7 @@ mod report_safety_tests {
                 "mls_group_id_digest": hash('f'),
             },
             "received_by": "did:web:soland.local",
-            "received_at": "2026-04-30T00:00:00Z",
+            "received_at": FRANKING_RECEIVED_AT,
             "replay_nonce": "nonce_0123456789",
             "signature": "sig",
         })
@@ -1377,8 +1479,8 @@ mod report_safety_tests {
         assert_eq!(error.code, ErrorCode::PayloadTooLarge);
     }
 
-    #[test]
-    fn duplicate_target_report_hits_layered_rate_limit() {
+    #[tokio::test]
+    async fn duplicate_target_report_hits_layered_rate_limit() {
         let state = test_state();
         let first = validate_moderation_report_safety(
             &state,
@@ -1390,7 +1492,8 @@ mod report_safety_tests {
             &Value::Null,
             None,
             "source-ip-hash",
-        );
+        )
+        .await;
         assert!(first.is_ok());
 
         let second = validate_moderation_report_safety(
@@ -1404,16 +1507,45 @@ mod report_safety_tests {
             None,
             "source-ip-hash",
         )
+        .await
         .unwrap_err();
         assert_eq!(second.code, ErrorCode::RateLimited);
     }
 
-    #[test]
-    fn franking_replay_nonce_is_rejected_within_window() {
+    #[tokio::test]
+    async fn franking_replay_nonce_is_rejected_within_window() {
+        let state = test_state();
+        seed_franking_event_anchor(&state, FRANKING_RECEIVED_AT).await;
+        let proof = valid_franking();
+        assert!(
+            validate_moderation_franking_proof(&state, REALM, &proof)
+                .await
+                .is_ok()
+        );
+        let replay = validate_moderation_franking_proof(&state, REALM, &proof)
+            .await
+            .unwrap_err();
+        assert_eq!(replay.code, ErrorCode::DuplicateConflict);
+    }
+
+    #[tokio::test]
+    async fn franking_without_event_time_anchor_is_rejected() {
         let state = test_state();
         let proof = valid_franking();
-        assert!(validate_moderation_franking_proof(&state, REALM, &proof).is_ok());
-        let replay = validate_moderation_franking_proof(&state, REALM, &proof).unwrap_err();
-        assert_eq!(replay.code, ErrorCode::DuplicateConflict);
+        let error = validate_moderation_franking_proof(&state, REALM, &proof)
+            .await
+            .unwrap_err();
+        assert_eq!(error.wire_code(), cokret_sdk::error::ERROR_CODE_PROOF_INVALID);
+    }
+
+    #[tokio::test]
+    async fn franking_backdated_outside_event_anchor_is_rejected() {
+        let state = test_state();
+        seed_franking_event_anchor(&state, "2026-04-30T00:10:01Z").await;
+        let proof = valid_franking();
+        let error = validate_moderation_franking_proof(&state, REALM, &proof)
+            .await
+            .unwrap_err();
+        assert_eq!(error.wire_code(), cokret_sdk::error::ERROR_CODE_PROOF_INVALID);
     }
 }

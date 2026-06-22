@@ -153,6 +153,319 @@ fn grant_call_action(state: &AppState, realm_id: &cokret_sdk::RealmId, actor: &s
     );
 }
 
+fn seed_read_receipt_inheritance(
+    state: &AppState,
+    parent_realm_id: &str,
+    child_realm_id: &str,
+    parent_policy: serde_json::Value,
+) {
+    use cokret_sdk::lattice::CellState;
+
+    let now = chrono::Utc::now();
+    let mut projection = state.projection.lock().expect("projection mutex");
+    let cell_id = cokret_sdk::CellRef::new(format!(
+        "ck:cell:ck.component.realm.read_receipt_policy.v1:{parent_realm_id}"
+    ))
+    .expect("valid read receipt policy cell ref");
+    projection.cells.insert(cell_id, CellState::Value(parent_policy));
+    projection
+        .realm_links
+        .entry(child_realm_id.to_owned())
+        .or_default()
+        .push(crate::reducer::RealmLinkState {
+            realm_id: child_realm_id.to_owned(),
+            target_realm_id: parent_realm_id.to_owned(),
+            link_kind: "governed_by".to_owned(),
+            status: "active".to_owned(),
+            label: None,
+            commitment: None,
+            created_at: now,
+            updated_at: now,
+        });
+    projection.realm_inheritance_policies.insert(
+        child_realm_id.to_owned(),
+        crate::reducer::RealmInheritancePolicyState {
+            realm_id: child_realm_id.to_owned(),
+            operation_id: "ck:operation:01904100-0000-7000-8000-000000009901".to_owned(),
+            source_realm_id: parent_realm_id.to_owned(),
+            allowed_policies: vec!["ck.realm.read_receipt_policy".to_owned()],
+            allowed_capability_bundles: Vec::new(),
+            max_depth: 1,
+            updated_at: now,
+        },
+    );
+}
+
+#[tokio::test]
+async fn read_receipt_child_policy_rejects_visibility_loosening() {
+    let state = test_state();
+    let parent_realm = "ck:realm:01904100-0000-7000-8000-000000009911";
+    let child_realm =
+        cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-000000009912".to_owned())
+            .unwrap();
+    seed_read_receipt_inheritance(
+        &state,
+        parent_realm,
+        child_realm.as_str(),
+        json!({
+            "disclosure": "optional",
+            "visibility": "private",
+            "scope_overrides_allowed": true
+        }),
+    );
+
+    let child_policy = op(
+        child_realm,
+        "000000009913",
+        kinds::CK_REALM_READ_RECEIPT_POLICY,
+        json!({
+            "disclosure": "optional",
+            "visibility": "public"
+        }),
+    );
+    assert_eq!(
+        validate_operation_policy(&state, &[child_policy])
+            .await
+            .unwrap_err(),
+        "policy_denied"
+    );
+}
+
+#[tokio::test]
+async fn read_receipt_child_policy_rejects_required_floor_without_escape() {
+    let state = test_state();
+    let parent_realm = "ck:realm:01904100-0000-7000-8000-000000009921";
+    let child_realm =
+        cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-000000009922".to_owned())
+            .unwrap();
+    seed_read_receipt_inheritance(
+        &state,
+        parent_realm,
+        child_realm.as_str(),
+        json!({
+            "disclosure": "required",
+            "visibility": "members",
+            "scope_overrides_allowed": true
+        }),
+    );
+
+    let child_policy = op(
+        child_realm,
+        "000000009923",
+        kinds::CK_REALM_READ_RECEIPT_POLICY,
+        json!({
+            "disclosure": "disabled",
+            "visibility": "private"
+        }),
+    );
+    assert_eq!(
+        validate_operation_policy(&state, &[child_policy])
+            .await
+            .unwrap_err(),
+        cokret_sdk::ERROR_CODE_READ_RECEIPT_COMPLIANCE_FLOOR_VIOLATED
+    );
+}
+
+#[tokio::test]
+async fn read_receipt_child_policy_allows_required_floor_escape() {
+    let state = test_state();
+    let parent_realm = "ck:realm:01904100-0000-7000-8000-000000009931";
+    let child_realm =
+        cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-000000009932".to_owned())
+            .unwrap();
+    seed_read_receipt_inheritance(
+        &state,
+        parent_realm,
+        child_realm.as_str(),
+        json!({
+            "disclosure": "required",
+            "visibility": "members",
+            "scope_overrides_allowed": true,
+            "allow_child_privacy_tightening_against_required": true
+        }),
+    );
+
+    let child_policy = op(
+        child_realm,
+        "000000009933",
+        kinds::CK_REALM_READ_RECEIPT_POLICY,
+        json!({
+            "disclosure": "disabled",
+            "visibility": "private"
+        }),
+    );
+    validate_operation_policy(&state, &[child_policy])
+        .await
+        .expect("parent escape allows compliance-floor privacy tightening");
+}
+
+#[tokio::test]
+async fn read_receipt_child_policy_rejects_any_change_when_overrides_disabled() {
+    let state = test_state();
+    let parent_realm = "ck:realm:01904100-0000-7000-8000-000000009941";
+    let child_realm =
+        cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-000000009942".to_owned())
+            .unwrap();
+    seed_read_receipt_inheritance(
+        &state,
+        parent_realm,
+        child_realm.as_str(),
+        json!({
+            "disclosure": "optional",
+            "visibility": "members",
+            "scope_overrides_allowed": false
+        }),
+    );
+
+    let child_policy = op(
+        child_realm,
+        "000000009943",
+        kinds::CK_REALM_READ_RECEIPT_POLICY,
+        json!({
+            "disclosure": "disabled",
+            "visibility": "private"
+        }),
+    );
+    assert_eq!(
+        validate_operation_policy(&state, &[child_policy])
+            .await
+            .unwrap_err(),
+        "policy_denied"
+    );
+}
+
+async fn put_agent_participation_ceiling(
+    state: &AppState,
+    scope_kind: &str,
+    scope_key: String,
+    realm_id: &str,
+    reply: bool,
+    accept_third_party_mention: bool,
+    act_on_behalf: bool,
+) {
+    state
+        .persistence
+        .agent_participation()
+        .put_ceiling(json!({
+            "scope_kind": scope_kind,
+            "scope_key": scope_key,
+            "realm_id": realm_id,
+            "reply": reply,
+            "accept_third_party_mention": accept_third_party_mention,
+            "act_on_behalf": act_on_behalf,
+        }))
+        .await
+        .expect("agent participation ceiling");
+}
+
+#[tokio::test]
+async fn strand_agent_participation_ceiling_cannot_widen_circle_parent() {
+    let state = test_state();
+    let realm_id =
+        cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-000000009951".to_owned())
+            .unwrap();
+    let circle_id = "ck:circle:01904100-0000-7000-8000-000000009952";
+    let strand_id = "ck:strand:01904100-0000-7000-8000-000000009953";
+    put_agent_participation_ceiling(
+        &state,
+        "circle",
+        crate::routing::agent_participation::circle_scope_key(realm_id.as_str(), circle_id),
+        realm_id.as_str(),
+        true,
+        false,
+        false,
+    )
+    .await;
+
+    let strand_create = op(
+        realm_id,
+        "000000009954",
+        kinds::CK_STRAND_CREATE,
+        json!({
+            "sender": "did:web:alice.example",
+            "object": {
+                "id": strand_id,
+                "realm_id": "ck:realm:01904100-0000-7000-8000-000000009951",
+                "scope_circle_id": circle_id,
+                "metadata": {"title": "Scoped"},
+                "agent_participation": {
+                    "reply": true,
+                    "accept_third_party_mention": true,
+                    "act_on_behalf": false
+                }
+            }
+        }),
+    );
+
+    assert_eq!(
+        validate_agent_participation_ceiling(&state, &[strand_create])
+            .await
+            .unwrap_err(),
+        "agent_participation_ceiling_widen"
+    );
+}
+
+#[tokio::test]
+async fn strand_selection_is_capped_by_enclosing_circle_ceiling() {
+    let state = test_state();
+    let realm_id =
+        cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-000000009961".to_owned())
+            .unwrap();
+    let circle_id = "ck:circle:01904100-0000-7000-8000-000000009962";
+    let strand_id =
+        cokret_sdk::StrandId::new("ck:strand:01904100-0000-7000-8000-000000009963".to_owned())
+            .unwrap();
+    {
+        let mut projection = state.projection.lock().expect("projection mutex");
+        projection.strands.insert(
+            strand_id.as_str().to_owned(),
+            crate::reducer::StrandProjection {
+                strand_id: strand_id.as_str().to_owned(),
+                realm_id: realm_id.to_string(),
+                tracks: Default::default(),
+                title: "Scoped".to_owned(),
+                summary: None,
+                fields: Default::default(),
+                state: crate::reducer::ObjectLifecycleState::Active,
+                state_changed_at: None,
+                created_by: "did:web:alice.example".to_owned(),
+                created_at: chrono::Utc::now(),
+                history_basis_seals: Vec::new(),
+                updated_by: None,
+                updated_at: None,
+                scope_circle_id: Some(circle_id.to_owned()),
+            },
+        );
+    }
+    put_agent_participation_ceiling(
+        &state,
+        "circle",
+        crate::routing::agent_participation::circle_scope_key(realm_id.as_str(), circle_id),
+        realm_id.as_str(),
+        true,
+        false,
+        false,
+    )
+    .await;
+
+    let scope = cokret_sdk::models::AgentParticipationScope::Strand {
+        realm_id,
+        strand_id,
+    };
+    let ceiling = crate::routing::agent_participation::resolve_effective_ceiling(&state, &scope)
+        .await;
+    assert!(!ceiling.accept_third_party_mention);
+    let selection = cokret_sdk::models::AgentParticipation {
+        reply: true,
+        accept_third_party_mention: true,
+        act_on_behalf: false,
+    };
+    assert!(matches!(
+        cokret_sdk::models::validate_selection_within_ceiling(ceiling, selection),
+        Err(cokret_sdk::models::AgentParticipationError::ExceedsCeiling { .. })
+    ));
+}
+
 async fn register_agent_selection(
     state: &AppState,
     realm_id: &cokret_sdk::RealmId,

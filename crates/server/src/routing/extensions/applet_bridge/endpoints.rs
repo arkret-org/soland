@@ -152,7 +152,7 @@ async fn install_preview_endpoint(
     let state = depot.obtain::<AppState>().expect("state injected");
     let _session = aa.authenticated_session(state, req).await?;
     let preview = body.into_inner();
-    validate_applet_package(&preview.applet_package)?;
+    validate_applet_package(state, &preview.applet_package)?;
     let approved_scopes = approved_scopes_from_approval_request(
         &preview.applet_package,
         &preview.effective_scope,
@@ -195,7 +195,7 @@ async fn install_endpoint(
     let body = serde_json::to_value(&commit)
         .map_err(|error| AppError::internal(format!("install commit serialize: {error}")))?;
     let body_digest = super::install::canonical_digest(&body)?;
-    validate_applet_package(&commit.applet_package)?;
+    validate_applet_package(state, &commit.applet_package)?;
     let recomputed_plan = build_install_plan(
         state,
         &commit.applet_package,

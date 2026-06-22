@@ -537,9 +537,36 @@ async fn projection_document_endpoint_reports_body_versions_relations_and_range_
         panic!("create document morph response: {create_response}");
     }
 
+    let incident_event = signed_strand_event(
+        "ck:event:01904100-0000-7000-8000-d21ec0000004",
+        2,
+        "ck.strand.create",
+        serde_json::json!({
+            "object": {
+                "id": incident_ref,
+                "realm_id": realm_id,
+                "metadata": { "title": "Incident target" },
+                "created_by": "did:web:alice.example",
+            }
+        }),
+        vec!["ck:event:01904100-0000-7000-8000-d21ec0000001"],
+    );
+    let incident_response: Value = TestClient::post("http://server/_cokret/self/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&incident_event)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(
+        incident_response["status"], "accepted",
+        "create incident strand response: {incident_response}"
+    );
+
     let relation_event = signed_relation_event(
         "ck:event:01904100-0000-7000-8000-d21ec0000002",
-        2,
+        3,
         serde_json::json!({
             "relation": {
                 "id": relation_id,
@@ -555,7 +582,10 @@ async fn projection_document_endpoint_reports_body_versions_relations_and_range_
                 "created_at": "2026-05-17T00:00:00Z"
             }
         }),
-        vec!["ck:event:01904100-0000-7000-8000-d21ec0000001"],
+        vec![
+            "ck:event:01904100-0000-7000-8000-d21ec0000001",
+            "ck:event:01904100-0000-7000-8000-d21ec0000004",
+        ],
     );
     let relation_response: Value = TestClient::post("http://server/_cokret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -664,6 +694,7 @@ async fn projection_document_endpoint_reports_body_versions_relations_and_range_
     assert_eq!(relation["from"], morph_id);
     assert_eq!(relation["to"], incident_ref);
     assert_eq!(relation["fields"]["role"], "postmortem_for");
+    assert_eq!(relation["reference_projection"]["status"], "accessible");
 
     let comment = body["comments"]
         .as_array()
@@ -675,6 +706,189 @@ async fn projection_document_endpoint_reports_body_versions_relations_and_range_
     assert_eq!(comment["anchor_range"]["end"], 9);
     assert_eq!(comment["state"], "orphaned");
     assert_eq!(body["cursor_presence"].as_array().unwrap().len(), 0);
+}
+
+#[tokio::test]
+async fn projection_document_relations_return_lazy_and_locked_stubs() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let token = dev_token(state.clone()).await;
+    let realm_id = DEMO_REALM_ID;
+    let morph_id = "ck:morph:01904100-0000-7000-8000-d22dc0000001";
+    let same_target_ref = "ck:strand:01904100-0000-7000-8000-d22dc0000101";
+    let lazy_target_ref = "ck:strand:01904100-0000-7000-8000-d22dc0000201";
+    let locked_target_ref = "ck:strand:01904100-0000-7000-8000-d22dc0000301";
+    let accessible_relation_id = "ck:relation:01904100-0000-7000-8000-d22dc0000a01";
+    let lazy_relation_id = "ck:relation:01904100-0000-7000-8000-d22dc0000a02";
+    let locked_relation_id = "ck:relation:01904100-0000-7000-8000-d22dc0000a03";
+
+    let lazy_realm = seed_test_realm(
+        &state,
+        "did:web:bob.example",
+        "Lazy target Realm",
+        None,
+        "invite_only",
+        &[],
+        &[],
+    )
+    .await;
+    let lazy_realm_id = lazy_realm["realm_id"].as_str().unwrap().to_owned();
+    add_test_realm_member(&state, &lazy_realm_id, "did:web:alice.example");
+    let locked_realm = seed_test_realm(
+        &state,
+        "did:web:bob.example",
+        "Locked target Realm",
+        None,
+        "secret",
+        &[],
+        &[],
+    )
+    .await;
+    let locked_realm_id = locked_realm["realm_id"].as_str().unwrap().to_owned();
+
+    let now = chrono::Utc::now();
+    let strand = |strand_id: &str, strand_realm_id: &str, title: &str| {
+        soland::reducer::StrandProjection {
+            strand_id: strand_id.to_owned(),
+            realm_id: strand_realm_id.to_owned(),
+            tracks: Default::default(),
+            title: title.to_owned(),
+            summary: None,
+            fields: Default::default(),
+            state: soland::reducer::ObjectLifecycleState::Active,
+            state_changed_at: None,
+            created_by: "did:web:alice.example".to_owned(),
+            created_at: now,
+            history_basis_seals: Vec::new(),
+            updated_by: None,
+            updated_at: None,
+            scope_circle_id: None,
+        }
+    };
+    let relation =
+        |relation_id: &str, target_ref: &str, role: &str| -> soland::reducer::SolandRelationState {
+            let mut fields = std::collections::BTreeMap::new();
+            fields.insert("role".to_owned(), serde_json::json!(role));
+            fields.insert("preview_title".to_owned(), serde_json::json!(role));
+            soland::reducer::SolandRelationState {
+                relation_id: relation_id.to_owned(),
+                realm_id: realm_id.to_owned(),
+                relation_kind: "references".to_owned(),
+                scope_circle_id: None,
+                from_ref: Some(morph_id.to_owned()),
+                to_ref: Some(target_ref.to_owned()),
+                fields,
+                state: "active".to_owned(),
+                source_event_id: None,
+                source_event_digest: Some(format!("sha256:{}", "1".repeat(64))),
+                created_at: now,
+                history_basis_seals: Vec::new(),
+                updated_at: now,
+            }
+        };
+
+    {
+        let mut projection = state.projection.lock().unwrap();
+        let mut fields = std::collections::BTreeMap::new();
+        fields.insert(
+            "document".to_owned(),
+            serde_json::json!({
+                "schema_version": 1,
+                "blocks": []
+            }),
+        );
+        projection.morphs.insert(
+            morph_id.to_owned(),
+            soland::reducer::MorphProjection {
+                morph_id: morph_id.to_owned(),
+                realm_id: realm_id.to_owned(),
+                scope_circle_id: None,
+                morph_type: "document".to_owned(),
+                title: Some("Reference audit".to_owned()),
+                fields,
+                schema_refs: Vec::new(),
+                facets: Vec::new(),
+                versions: Vec::new(),
+                state: soland::reducer::ObjectLifecycleState::Active,
+                state_changed_at: None,
+                created_by: "did:web:alice.example".to_owned(),
+                created_at: now,
+                history_basis_seals: Vec::new(),
+                updated_by: None,
+                updated_at: None,
+            },
+        );
+        projection.strands.insert(
+            same_target_ref.to_owned(),
+            strand(same_target_ref, realm_id, "Same Realm Target"),
+        );
+        projection.strands.insert(
+            lazy_target_ref.to_owned(),
+            strand(lazy_target_ref, &lazy_realm_id, "Cross Realm Secret Title"),
+        );
+        projection.strands.insert(
+            locked_target_ref.to_owned(),
+            strand(locked_target_ref, &locked_realm_id, "Locked Secret Title"),
+        );
+        projection.relations.insert(
+            accessible_relation_id.to_owned(),
+            relation(accessible_relation_id, same_target_ref, "same_realm"),
+        );
+        projection.relations.insert(
+            lazy_relation_id.to_owned(),
+            relation(lazy_relation_id, lazy_target_ref, "Cross Realm Secret Title"),
+        );
+        projection.relations.insert(
+            locked_relation_id.to_owned(),
+            relation(locked_relation_id, locked_target_ref, "Locked Secret Title"),
+        );
+    }
+
+    let body: Value = TestClient::get(format!(
+        "http://server/_cokret/self/projection/documents/{morph_id}"
+    ))
+    .add_header("authorization", format!("Bearer {token}"), true)
+    .send(&app_from_state(state.clone()))
+    .await
+    .take_json()
+    .await
+    .unwrap();
+    let relations = body["relations"].as_array().expect("relations array");
+    let accessible = relations
+        .iter()
+        .find(|relation| relation["relation_id"] == accessible_relation_id)
+        .expect("same-Realm relation projected");
+    assert_eq!(
+        accessible["reference_projection"]["status"],
+        "accessible"
+    );
+    assert_eq!(accessible["to"], same_target_ref);
+    assert_eq!(accessible["fields"]["role"], "same_realm");
+
+    let lazy = relations
+        .iter()
+        .find(|relation| relation["relation_id"] == lazy_relation_id)
+        .expect("cross-Realm relation projected");
+    assert_eq!(lazy["reference_projection"]["status"], "lazy_link");
+    assert_eq!(lazy["lazy_link"], true);
+    assert!(lazy.get("to").is_none());
+    assert!(lazy.get("fields").is_none());
+    let lazy_wire = serde_json::to_string(lazy).unwrap();
+    assert!(!lazy_wire.contains(lazy_target_ref));
+    assert!(!lazy_wire.contains(&lazy_realm_id));
+    assert!(!lazy_wire.contains("Cross Realm Secret Title"));
+
+    let locked = relations
+        .iter()
+        .find(|relation| relation["relation_id"] == locked_relation_id)
+        .expect("locked relation projected");
+    assert_eq!(locked["reference_projection"]["status"], "locked");
+    assert_eq!(locked["locked"], true);
+    assert!(locked.get("to").is_none());
+    assert!(locked.get("fields").is_none());
+    let locked_wire = serde_json::to_string(locked).unwrap();
+    assert!(!locked_wire.contains(locked_target_ref));
+    assert!(!locked_wire.contains(&locked_realm_id));
+    assert!(!locked_wire.contains("Locked Secret Title"));
 }
 
 #[tokio::test]

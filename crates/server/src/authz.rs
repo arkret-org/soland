@@ -26,9 +26,9 @@ use std::sync::{Arc, Mutex};
 // live in the SDK so yougen and sodmin admin can call them client-side. See
 // `cokret_sdk::authz::delegation` (crates/sdk/src/authz/delegation.rs).
 pub use cokret_sdk::authz::delegation::{
-    DelegationError, Grant, GrantConstraint as Constraint, GrantDecisionVerdict, GrantRequestDraft,
-    delegation_chain_intact, grant_effective_expiry, is_grant_expired, resource_within,
-    revoke_with_cascade,
+    AppletDelegationBindingError, DelegationError, Grant, GrantConstraint as Constraint,
+    GrantDecisionVerdict, GrantRequestDraft, delegation_chain_intact, grant_effective_expiry,
+    is_grant_expired, resource_within, revoke_with_cascade, validate_applet_delegation_binding,
 };
 use serde::Serialize;
 use serde_json::{Map, Value};
@@ -64,6 +64,13 @@ const RESOURCE_SELECTOR_KNOWN_FIELDS: &[&str] = &[
     "blob_ref",
     "match_scope",
 ];
+pub(crate) const REASON_GRANT_REVOKED_UPSTREAM: &str = "grant_revoked_upstream";
+pub(crate) const REASON_CAPABILITY_ACTION_UNKNOWN: &str = "capability_action_unknown";
+pub(crate) const REASON_CAPABILITY_ACTION_REGISTRY_UNAVAILABLE: &str =
+    "capability_action_registry_unavailable";
+const REASON_CAPABILITY_ACTION_INVALID: &str = "capability_action_invalid";
+const REASON_CAPABILITY_ACTION_WILDCARD_FORBIDDEN: &str = "capability_action_wildcard_forbidden";
+const REASON_CAPABILITY_GRANT_ACTION_UNKNOWN: &str = "capability_grant_action_unknown";
 
 /// Result of an authorization check.
 #[derive(Clone, Debug, Serialize)]
@@ -304,8 +311,8 @@ impl SolandAuthzEngine {
             .cloned()
     }
 
-    /// Get all grants for a subject in a space. Filters out revoked,
-    /// expired, and cascade-broken grants so callers see only the
+    /// Get all grants for a subject in a space. Filters out invalid,
+    /// revoked, expired, and cascade-broken grants so callers see only the
     /// *effective* set (capabilities.md §11).
     pub fn grants_for_subject(&self, subject: &str, realm_id: &str) -> Vec<Grant> {
         let snapshot: Vec<Grant> = self
@@ -321,6 +328,7 @@ impl SolandAuthzEngine {
             .filter(|g| {
                 g.subject == subject
                     && g.realm_id == realm_id
+                    && grant_scope_valid(g).is_ok()
                     && !g.revoked
                     && !is_grant_expired(g, now)
                     && delegation_chain_intact(&snapshot, &g.grant_id, now)
@@ -329,7 +337,7 @@ impl SolandAuthzEngine {
             .collect()
     }
 
-    /// Get all (non-revoked, non-expired, chain-intact) grants in a space.
+    /// Get all valid, non-revoked, non-expired, chain-intact grants in a space.
     pub fn grants_in_realm(&self, realm_id: &str) -> Vec<Grant> {
         let snapshot: Vec<Grant> = self
             .grants
@@ -343,6 +351,7 @@ impl SolandAuthzEngine {
             .iter()
             .filter(|g| {
                 g.realm_id == realm_id
+                    && grant_scope_valid(g).is_ok()
                     && !g.revoked
                     && !is_grant_expired(g, now)
                     && delegation_chain_intact(&snapshot, &g.grant_id, now)
@@ -354,7 +363,7 @@ impl SolandAuthzEngine {
     /// Check if an actor can perform an action on a resource.
     ///
     /// Default rules (when no explicit grants exist):
-    /// - Owner of the realm → all actions allowed
+    /// - Owner of the realm → all registered Realm-level actions allowed
     /// - Everyone else → denied
     #[allow(clippy::too_many_arguments)]
     pub fn check(
@@ -367,6 +376,15 @@ impl SolandAuthzEngine {
         members: &[String],
         resource_facets: &[String],
     ) -> AuthzResult {
+        if let Err(reason) = validate_runtime_capability_action(action) {
+            return AuthzResult {
+                allowed: false,
+                reason: reason.to_owned(),
+                reason_detail: None,
+                grants: Vec::new(),
+            };
+        }
+
         // Check explicit grants first. Delegated grants drop out if any
         // ancestor in the chain is revoked or expired (capabilities.md §3.3
         // cascade + §10 delegation chain integrity).
@@ -457,11 +475,22 @@ impl SolandAuthzEngine {
                 grants: Vec::new(),
             };
         }
+        let has_revoked_upstream_grant = matching_request_has_revoked_upstream_grant(
+            &snapshot, actor, action, resource, realm_id, now,
+        );
 
         // Default rules. Circle-local management deliberately does not use the
         // owner shortcut: Realm ownership/admin handoff must not imply
         // membership, audit, or management over existing Circle scopes.
         if circle_local_management_action_requires_explicit_grant(action) {
+            if has_revoked_upstream_grant {
+                return AuthzResult {
+                    allowed: false,
+                    reason: REASON_GRANT_REVOKED_UPSTREAM.to_owned(),
+                    reason_detail: None,
+                    grants: Vec::new(),
+                };
+            }
             return AuthzResult {
                 allowed: false,
                 reason: default_deny_reason(action).to_owned(),
@@ -473,6 +502,14 @@ impl SolandAuthzEngine {
             return AuthzResult {
                 allowed: true,
                 reason: "owner".to_owned(),
+                reason_detail: None,
+                grants: Vec::new(),
+            };
+        }
+        if has_revoked_upstream_grant {
+            return AuthzResult {
+                allowed: false,
+                reason: REASON_GRANT_REVOKED_UPSTREAM.to_owned(),
                 reason_detail: None,
                 grants: Vec::new(),
             };
@@ -500,6 +537,56 @@ fn default_deny_reason(action: &str) -> &'static str {
         "ck.message.create" => "no_strand_track_message_grant",
         _ => "capability_denied",
     }
+}
+
+pub(crate) fn grant_revoked_upstream(
+    snapshot: &[Grant],
+    grant_id: &str,
+    now: chrono::DateTime<chrono::Utc>,
+) -> bool {
+    let map: BTreeMap<&str, &Grant> = snapshot
+        .iter()
+        .map(|grant| (grant.grant_id.as_str(), grant))
+        .collect();
+    let Some(grant) = map.get(grant_id).copied() else {
+        return false;
+    };
+    let Some(mut current) = grant.delegated_from.as_deref() else {
+        return false;
+    };
+    let mut visited = 0usize;
+    while let Some(parent) = map.get(current).copied() {
+        if visited >= 64 {
+            return false;
+        }
+        visited += 1;
+        if parent.revoked || is_grant_expired(parent, now) {
+            return true;
+        }
+        let Some(next) = parent.delegated_from.as_deref() else {
+            return false;
+        };
+        current = next;
+    }
+    false
+}
+
+fn matching_request_has_revoked_upstream_grant(
+    snapshot: &[Grant],
+    actor: &str,
+    action: &str,
+    resource: &str,
+    realm_id: &str,
+    now: chrono::DateTime<chrono::Utc>,
+) -> bool {
+    snapshot.iter().any(|grant| {
+        grant.realm_id == realm_id
+            && grant.subject == actor
+            && grant_scope_valid(grant).is_ok()
+            && grant.actions.iter().any(|candidate| candidate == action)
+            && resource_matches(&grant.resource, resource)
+            && grant_revoked_upstream(snapshot, &grant.grant_id, now)
+    })
 }
 
 fn circle_local_management_action_requires_explicit_grant(action: &str) -> bool {
@@ -576,12 +663,34 @@ pub(crate) fn validate_capability_actions(actions: &[String]) -> Result<(), &'st
 }
 
 fn validate_capability_action(action: &str) -> Result<(), &'static str> {
+    validate_capability_action_shape(
+        action,
+        "capability_grant_action_wildcard_forbidden",
+        "capability_grant_action_invalid",
+    )?;
+    validate_registered_capability_action(action, REASON_CAPABILITY_GRANT_ACTION_UNKNOWN)
+}
+
+fn validate_runtime_capability_action(action: &str) -> Result<(), &'static str> {
+    validate_capability_action_shape(
+        action,
+        REASON_CAPABILITY_ACTION_WILDCARD_FORBIDDEN,
+        REASON_CAPABILITY_ACTION_INVALID,
+    )?;
+    validate_registered_capability_action(action, REASON_CAPABILITY_ACTION_UNKNOWN)
+}
+
+fn validate_capability_action_shape(
+    action: &str,
+    wildcard_reason: &'static str,
+    invalid_reason: &'static str,
+) -> Result<(), &'static str> {
     if action.contains('*') {
-        return Err("capability_grant_action_wildcard_forbidden");
+        return Err(wildcard_reason);
     }
     let mut segments = action.split('.');
     if segments.next() != Some("ck") {
-        return Err("capability_grant_action_invalid");
+        return Err(invalid_reason);
     }
     let mut saw_segment = false;
     for segment in segments {
@@ -591,13 +700,24 @@ fn validate_capability_action(action: &str) -> Result<(), &'static str> {
                 .bytes()
                 .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
         {
-            return Err("capability_grant_action_invalid");
+            return Err(invalid_reason);
         }
     }
     if !saw_segment {
-        return Err("capability_grant_action_invalid");
+        return Err(invalid_reason);
     }
     Ok(())
+}
+
+fn validate_registered_capability_action(
+    action: &str,
+    unknown_reason: &'static str,
+) -> Result<(), &'static str> {
+    match cokret_sdk::schema::embedded_capability_action(action) {
+        Ok(Some(_)) => Ok(()),
+        Ok(None) => Err(unknown_reason),
+        Err(_) => Err(REASON_CAPABILITY_ACTION_REGISTRY_UNAVAILABLE),
+    }
 }
 
 pub(crate) fn validate_resource_pattern(pattern: &str) -> Result<(), &'static str> {
@@ -937,6 +1057,11 @@ fn evaluate_constraint(
             // Check delegation depth
             None // v1: always pass (depth enforced at chain-walk level)
         }
+        Constraint::AppletDelegationBinding { .. } => {
+            // Applet binding is checked by the Applet event reducer, where the
+            // installed package and registration epoch evidence are available.
+            None
+        }
         Constraint::RateLimiting {
             max_operations,
             period,
@@ -1123,7 +1248,7 @@ mod tests {
         let engine = SolandAuthzEngine::new();
         let result = engine.check(
             "did:web:alice",
-            "ck.space.manage",
+            "ck.message.create",
             "ck:space:1",
             "ck:space:1",
             Some("did:web:alice"),
@@ -1132,6 +1257,52 @@ mod tests {
         );
         assert!(result.allowed);
         assert_eq!(result.reason, "owner");
+    }
+
+    #[test]
+    fn unknown_action_denied_before_owner_default_allow() {
+        let engine = SolandAuthzEngine::new();
+        let result = engine.check(
+            "did:web:alice",
+            "ck.future.action",
+            "ck:space:1",
+            "ck:space:1",
+            Some("did:web:alice"),
+            &[],
+            &[],
+        );
+        assert!(!result.allowed);
+        assert_eq!(result.reason, REASON_CAPABILITY_ACTION_UNKNOWN);
+    }
+
+    #[test]
+    fn unknown_action_grant_is_fail_closed() {
+        let engine = SolandAuthzEngine::new();
+        let grant = engine.create_grant(
+            "ck:space:1".to_owned(),
+            "did:web:alice".to_owned(),
+            "did:web:bob".to_owned(),
+            "ck:space:1".to_owned(),
+            vec!["ck.future.action".to_owned()],
+            vec![],
+        );
+        assert!(engine.get_grant(&grant.grant_id).is_none());
+        assert_eq!(
+            validate_capability_actions(&grant.actions),
+            Err(REASON_CAPABILITY_GRANT_ACTION_UNKNOWN)
+        );
+
+        let result = engine.check(
+            "did:web:bob",
+            "ck.future.action",
+            "ck:space:1",
+            "ck:space:1",
+            None,
+            &[],
+            &[],
+        );
+        assert!(!result.allowed);
+        assert_eq!(result.reason, REASON_CAPABILITY_ACTION_UNKNOWN);
     }
 
     #[test]
@@ -1219,12 +1390,12 @@ mod tests {
             "did:web:alice".to_owned(),
             "did:web:bob".to_owned(),
             "ck:space:1".to_owned(),
-            vec!["ck.space.manage".to_owned()],
+            vec!["ck.message.create".to_owned()],
             vec![],
         );
         let result = engine.check(
             "did:web:bob",
-            "ck.space.manage",
+            "ck.message.create",
             "ck:space:1",
             "ck:space:1",
             Some("did:web:alice"),
@@ -1339,13 +1510,13 @@ mod tests {
             "did:web:alice".to_owned(),
             "did:web:bob".to_owned(),
             "ck:space:1".to_owned(),
-            vec!["ck.space.manage".to_owned()],
+            vec!["ck.message.create".to_owned()],
             vec![],
         );
         engine.revoke_grant_with_cascade(&grant.grant_id);
         let result = engine.check(
             "did:web:bob",
-            "ck.space.manage",
+            "ck.message.create",
             "ck:space:1",
             "ck:space:1",
             Some("did:web:alice"),
@@ -1353,6 +1524,46 @@ mod tests {
             &[],
         );
         assert!(!result.allowed);
+    }
+
+    #[test]
+    fn delegated_child_denied_with_upstream_revocation_reason() {
+        let engine = SolandAuthzEngine::new();
+        let parent = engine.create_grant(
+            "ck:space:1".to_owned(),
+            "did:web:alice".to_owned(),
+            "did:web:bob".to_owned(),
+            "ck:space:1".to_owned(),
+            vec!["ck.message.create".to_owned()],
+            vec![],
+        );
+        let child = engine
+            .create_delegated_grant(
+                &parent.grant_id,
+                "did:web:bob".to_owned(),
+                "did:web:carol".to_owned(),
+                "ck:space:1".to_owned(),
+                vec!["ck.message.create".to_owned()],
+                vec![],
+                None,
+            )
+            .expect("child grant should be valid before parent revoke");
+        engine.revoke_grant_with_cascade(&parent.grant_id);
+        let result = engine.check(
+            "did:web:carol",
+            "ck.message.create",
+            "ck:space:1",
+            "ck:space:1",
+            Some("did:web:alice"),
+            &[],
+            &[],
+        );
+        assert!(!result.allowed);
+        assert_eq!(result.reason, REASON_GRANT_REVOKED_UPSTREAM);
+        assert!(
+            engine.get_grant(&child.grant_id).is_some_and(|grant| grant.revoked),
+            "cascade marks the child revoked in the index"
+        );
     }
 
     #[test]

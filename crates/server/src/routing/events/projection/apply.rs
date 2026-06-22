@@ -27,7 +27,7 @@ pub(super) fn apply_via_lattice_registry(
     proj.apply_via_lattice_registry(operation, &state.hlc, &registry)
 }
 
-pub(super) async fn mirror_mls_effect_to_persistence(
+pub(crate) async fn mirror_mls_effect_to_persistence(
     state: &AppState,
     origin: &str,
     source_device_id: &str,
@@ -55,6 +55,8 @@ pub(super) async fn mirror_mls_effect_to_persistence(
                     capabilities: kp.capabilities,
                     capabilities_digest: kp.capabilities_digest,
                     device_signature: kp.device_signature,
+                    last_resort: kp.last_resort,
+                    last_resort_realm_id: kp.last_resort_realm_id,
                     lifetime_not_before: kp.lifetime.not_before,
                     lifetime_not_after: kp.lifetime.not_after,
                     claimed_by_mls_group_id: kp.claimed_by,
@@ -71,12 +73,14 @@ pub(super) async fn mirror_mls_effect_to_persistence(
         crate::reducer::MlsEffect::KeyPackageClaimed {
             keypackage_id,
             group_id,
+            intended_realm_id,
             consumed_at,
+            ..
         } => {
             if let Err(error) = state
                 .persistence
                 .mls_key_packages()
-                .try_claim(keypackage_id, group_id, None, *consumed_at)
+                .try_claim(keypackage_id, group_id, intended_realm_id.as_deref(), None, *consumed_at)
                 .await
             {
                 tracing::warn!(%error, keypackage_id = %keypackage_id, "failed to mirror MLS KeyPackage claim");

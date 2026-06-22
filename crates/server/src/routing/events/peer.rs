@@ -6,13 +6,14 @@ use cokret_sdk::{Did, EventId, EventsQueryPostRequestBody, Hash, RealmId, canoni
 use salvo::http::StatusCode;
 use salvo::prelude::*;
 use serde::Serialize;
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use super::{
     is_realm_deleted, is_valid_hash_digest, now, query_param, query_param_all, render_error,
     validate_did,
 };
 use crate::error::AppError;
+use crate::persistence::PeerEventsPageQuery;
 use crate::result::{JsonResult, json_ok};
 use crate::state::{AppState, CanonicalEventRecord, RealmMetaRecord};
 
@@ -428,7 +429,22 @@ impl PeerEventsQueryParts {
                 actors.push(actor);
             }
         }
-        let kind_filter = query_param(req, "kind")
+        let kind = query_param(req, "kind");
+        let kinds = query_param_all(req, "kinds");
+        if kinds.len() > 1 {
+            return Err(AppError::unsupported_feature(
+                "multiple peer events kind filters are not supported",
+            ));
+        }
+        if let (Some(kind), Some(kinds)) = (kind.as_deref(), kinds.first().map(String::as_str))
+            && kind != kinds
+        {
+            return Err(AppError::invalid_param(
+                "kind and kinds filters must match when both are present",
+            ));
+        }
+        let kind_filter = kind
+            .or_else(|| kinds.into_iter().next())
             .or_else(|| query_param(req, "filters.kind"))
             .or_else(|| query_param(req, "filters[kind]"));
         let parts = Self {
@@ -510,7 +526,24 @@ impl PeerEventsQueryParts {
     }
 
     fn backward(&self) -> bool {
-        self.order == "descending" || (self.order == "default" && self.before.is_some())
+        if self.before.is_some() {
+            true
+        } else if self.after.is_some() {
+            false
+        } else {
+            self.order != "ascending"
+        }
+    }
+
+    fn active_cursor(&self) -> Option<&str> {
+        self.before.as_deref().or(self.after.as_deref())
+    }
+
+    fn filters_for_digest(&self) -> Value {
+        match self.kind_filter.as_deref() {
+            Some(kind) => json!({ "kind": kind }),
+            None => json!({}),
+        }
     }
 }
 
@@ -652,6 +685,25 @@ impl PeerReadAuthz {
                 .realm_endpoints
                 .get(realm_id)
                 .is_some_and(|endpoints| !endpoints.is_empty())
+    }
+
+    fn source_scoped_realms(&self) -> Vec<String> {
+        let realms = self
+            .realm_members
+            .keys()
+            .chain(self.realm_endpoints.keys())
+            .filter(|realm_id| {
+                self.realm_meta
+                    .get(realm_id.as_str())
+                    .is_some_and(|meta| !meta.deleted)
+            })
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        realms
+            .iter()
+            .filter(|realm_id| self.source_has_realm_scope(realm_id.as_str()))
+            .cloned()
+            .collect()
     }
 
     fn realm_record_visible(
@@ -1108,60 +1160,96 @@ async fn peer_events_query_response(
         .iter()
         .map(String::as_str)
         .collect::<BTreeSet<_>>();
-    let records = state
+    let filter_digest = peer_events_query_scope_digest(&source_service_did, &parts);
+    let cursor_event_id = peer_events_query_cursor_event_id(
+        state,
+        parts.active_cursor(),
+        &filter_digest,
+    )
+    .await?;
+    let authz_records = state
         .persistence
         .events()
-        .snapshot_all()
+        .peer_authz_state_records()
         .await
         .map_err(|error| AppError::internal(format!("peer events query: {error}")))?;
-    let authz = PeerReadAuthz::build(state, &source_service_did, &records).await?;
-    let mut records = records
-        .into_iter()
-        .filter(|record| {
-            peer_record_matches(
-                record,
+    let authz = PeerReadAuthz::build(state, &source_service_did, &authz_records).await?;
+    let backward = parts.backward();
+    let query_realms = if parts.realms.is_empty() {
+        authz.source_scoped_realms()
+    } else {
+        parts.realms.clone()
+    };
+    if query_realms.is_empty() {
+        return json_ok(EventsQueryOutcome {
+            events: Vec::new(),
+            snapshot_bootstrap: None,
+            next_cursor: None,
+            prev_cursor: None,
+            has_more: false,
+            range_completeness: Value::Null,
+        });
+    }
+    let candidate_limit = peer_events_candidate_limit(parts.limit);
+    let mut scan_cursor_event_id = cursor_event_id;
+    let mut visible = Vec::new();
+    loop {
+        let candidates = state
+            .persistence
+            .events()
+            .peer_events_query_page(&PeerEventsPageQuery {
+                realms: query_realms.clone(),
+                actors: parts.actors.clone(),
+                kind_filter: parts.kind_filter.clone(),
+                cursor_event_id: scan_cursor_event_id.clone(),
+                backward,
+                limit: candidate_limit,
+            })
+            .await
+            .map_err(|error| AppError::internal(format!("peer events query page: {error}")))?;
+        let candidate_count = candidates.len();
+        let next_scan_cursor = candidates.last().map(|record| record.event_id.clone());
+        for record in candidates {
+            if peer_record_matches(
+                &record,
                 &realms_set,
                 &actors_set,
                 parts.kind_filter.as_deref(),
-            ) && authz.record_visible(record)
-        })
-        .collect::<Vec<_>>();
-    records.sort_by(|left, right| {
-        left.received_at
-            .cmp(&right.received_at)
-            .then_with(|| left.event_id.cmp(&right.event_id))
-    });
-    let backward = parts.backward();
-    if backward {
-        records.reverse();
+            ) && authz.record_visible(&record)
+            {
+                visible.push(record);
+                if visible.len() > parts.limit {
+                    break;
+                }
+            }
+        }
+        if visible.len() > parts.limit || candidate_count < candidate_limit {
+            break;
+        }
+        let Some(next_scan_cursor) = next_scan_cursor else {
+            break;
+        };
+        scan_cursor_event_id = Some(next_scan_cursor);
     }
-    let cursor = if backward {
-        parts.before.as_deref()
-    } else {
-        parts.after.as_deref()
-    };
-    let start = cursor
-        .and_then(|cursor| records.iter().position(|record| record.event_id == cursor))
-        .map(|index| index + 1)
-        .unwrap_or(0);
-    let mut page = records
-        .into_iter()
-        .skip(start)
-        .take(parts.limit + 1)
-        .collect::<Vec<_>>();
-    let has_more = page.len() > parts.limit;
+    let has_more = visible.len() > parts.limit;
     if has_more {
-        page.truncate(parts.limit);
+        visible.truncate(parts.limit);
     }
-    let page_cursor = has_more
-        .then(|| page.last().map(|record| record.event_id.clone()))
+    let page_cursor_event_id = has_more
+        .then(|| visible.last().map(|record| record.event_id.clone()))
         .flatten();
+    let page_cursor = match page_cursor_event_id {
+        Some(event_id) => Some(
+            super::sync::sync_token_for_events_query(state, None, &filter_digest, &event_id).await,
+        ),
+        None => None,
+    };
     let (next_cursor, prev_cursor) = if backward {
         (None, page_cursor)
     } else {
         (page_cursor, None)
     };
-    let events = page
+    let events = visible
         .iter()
         .map(|record| super::event_log::sdk_event_for_state(state, record))
         .collect::<Result<Vec<_>, _>>()?;
@@ -1173,6 +1261,78 @@ async fn peer_events_query_response(
         has_more,
         range_completeness: Value::Null,
     })
+}
+
+fn peer_events_candidate_limit(page_limit: usize) -> usize {
+    page_limit
+        .saturating_mul(4)
+        .max(MAX_PEER_EVENTS_QUERY_LIMIT)
+        .min(MAX_PEER_EVENTS_QUERY_LIMIT * 5)
+}
+
+fn peer_events_query_scope_digest(source_service_did: &str, parts: &PeerEventsQueryParts) -> String {
+    let realms = parts
+        .realms
+        .iter()
+        .cloned()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    let actors = parts
+        .actors
+        .iter()
+        .cloned()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    let binding = json!({
+        "operation_id": "ck.peer.events.query.scan",
+        "source_service_did": source_service_did,
+        "realms": realms,
+        "actors": actors,
+        "filters": parts.filters_for_digest(),
+        "order": parts.order.as_str(),
+    });
+    super::sync::sync_filter_digest(Some(&binding))
+}
+
+async fn peer_events_query_cursor_event_id(
+    state: &AppState,
+    cursor: Option<&str>,
+    filter_digest: &str,
+) -> Result<Option<String>, AppError> {
+    let Some(cursor) = cursor else {
+        return Ok(None);
+    };
+    super::sync::parse_and_validate_events_query_cursor(
+        cursor,
+        state,
+        None,
+        filter_digest,
+        Utc::now().timestamp_millis(),
+    )
+    .await
+    .map(|cursor| Some(cursor.event_id))
+    .map_err(peer_events_query_cursor_error)
+}
+
+fn peer_events_query_cursor_error(error: super::sync::SyncCursorError) -> AppError {
+    match error {
+        super::sync::SyncCursorError::Expired => AppError::new(
+            crate::error::ErrorCode::CursorExpired,
+            "cursor has expired",
+        ),
+        super::sync::SyncCursorError::Invalid(message) => AppError::invalid_param(message),
+        super::sync::SyncCursorError::Mismatch(message)
+        | super::sync::SyncCursorError::Integrity(message) => AppError::new(
+            crate::error::ErrorCode::CursorIntegrityInvalid,
+            message,
+        ),
+        super::sync::SyncCursorError::Revoked => AppError::new(
+            crate::error::ErrorCode::CursorRevoked,
+            "cursor authority has been revoked",
+        ),
+    }
 }
 
 fn peer_record_matches(

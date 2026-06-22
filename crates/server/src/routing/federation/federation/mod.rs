@@ -101,9 +101,9 @@ pub(in crate::routing) use signature::{
 #[cfg(test)]
 use signature::{validate_federation_headers, validate_signature_params};
 pub(crate) use wire::{
-    FederationIdempotencyKey, FederationIdempotencyServiceBinding, FederationTrustHeaders,
-    HISTORICAL_ONLY_MARKER, HeaderViolation, delivery_binding_handed_over_response,
-    delivery_binding_stale_response, mark_response_historical_only,
+    FederationIdempotencyKey, FederationTrustHeaders, HISTORICAL_ONLY_MARKER, HeaderViolation,
+    delivery_binding_handed_over_response, delivery_binding_stale_response,
+    mark_response_historical_only,
 };
 
 #[cfg(test)]

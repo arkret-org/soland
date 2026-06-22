@@ -35,7 +35,10 @@ use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
 use serde_json::{Value, json};
 
-use super::projection::{retention_tombstone_for_event, retention_tombstone_payload_value};
+use super::projection::{
+    retention_risk_audit_flag, retention_risk_reason, retention_risk_ui_flag,
+    retention_tombstone_for_event, retention_tombstone_payload_value,
+};
 use super::{
     append_audit_log, auth_or_render, is_valid_hash_digest, now, query_param, query_param_all,
     realm_allows_plaintext_service, realm_event_visible_to_session, realm_has_member, render_error,
@@ -77,7 +80,8 @@ mod realm_index;
 pub(in crate::routing) use realm_index::realm_is_indexed;
 use realm_index::{
     bootstrap_realm_member_index, event_string_field, invite_create_actor_is_inviter,
-    member_join_accepts_pending_invite, realm_create_actor_is_creator, realm_exists_in_index,
+    invite_claim_actor_claims_pending_third_party_invite, member_join_accepts_pending_invite,
+    realm_create_actor_is_creator, realm_exists_in_index,
 };
 
 mod submit;

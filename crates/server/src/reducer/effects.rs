@@ -342,6 +342,8 @@ pub enum MlsEffect {
     KeyPackageClaimed {
         keypackage_id: String,
         group_id: String,
+        intended_realm_id: Option<String>,
+        last_resort: bool,
         consumed_at: i64,
     },
     /// `apply_welcome_enqueue` — a Welcome envelope was appended to the

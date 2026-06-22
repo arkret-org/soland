@@ -768,11 +768,11 @@ fn reject_morph_metadata_business_fields(
 pub(crate) fn validate_morph_schema_migrate_payload(
     operation: &Operation,
 ) -> Result<(), &'static str> {
-    validate_nonempty_unique_string_array(
+    let from_schema_refs = collect_nonempty_unique_string_array(
         operation.payload.get("from_schema_refs"),
         "from_schema_refs",
     )?;
-    validate_nonempty_unique_string_array(
+    let to_schema_refs = collect_nonempty_unique_string_array(
         operation.payload.get("to_schema_refs"),
         "to_schema_refs",
     )?;
@@ -781,16 +781,25 @@ pub(crate) fn validate_morph_schema_migrate_payload(
         .get("compatibility_class")
         .and_then(serde_json::Value::as_str)
     {
-        Some("additive") => Ok(()),
+        Some("additive") => {
+            let empty_fields = cokret_sdk::MorphSchemaFieldSet::new();
+            cokret_sdk::morph_schema_refs_additive_only(
+                &from_schema_refs,
+                &to_schema_refs,
+                &empty_fields,
+                &empty_fields,
+            )
+            .map_err(|_| "morph_schema_refs_transformation_unsupported")
+        }
         Some("breaking" | "transformation") => Err("morph_schema_refs_transformation_unsupported"),
         _ => Err("morph schema_migrate compatibility_class is invalid"),
     }
 }
 
-fn validate_nonempty_unique_string_array(
+fn collect_nonempty_unique_string_array(
     value: Option<&serde_json::Value>,
     field: &'static str,
-) -> Result<(), &'static str> {
+) -> Result<Vec<String>, &'static str> {
     let Some(items) = value.and_then(serde_json::Value::as_array) else {
         return Err(match field {
             "from_schema_refs" => "from_schema_refs must be a non-empty string array",
@@ -806,6 +815,7 @@ fn validate_nonempty_unique_string_array(
         });
     }
     let mut seen = std::collections::BTreeSet::new();
+    let mut values = Vec::with_capacity(items.len());
     for item in items {
         let Some(text) = item.as_str().filter(|text| !text.trim().is_empty()) else {
             return Err(match field {
@@ -821,8 +831,9 @@ fn validate_nonempty_unique_string_array(
                 _ => "field must be unique",
             });
         }
+        values.push(text.to_owned());
     }
-    Ok(())
+    Ok(values)
 }
 
 pub(crate) fn validate_cross_signing_reset_payload(

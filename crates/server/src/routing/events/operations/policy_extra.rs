@@ -1,4 +1,4 @@
-use cokret_sdk::Operation;
+use cokret_sdk::{Operation, ReadReceiptPolicy, ReadReceiptPolicyChildViolation};
 use serde_json::Value;
 
 use super::*;
@@ -41,13 +41,7 @@ const READ_RECEIPT_VISIBILITY_COMBINATION_INVALID: &str =
     "read_receipt_visibility_combination_invalid";
 const READ_RECEIPT_FORCED_PUBLIC_WORLD_READABLE_FORBIDDEN: &str =
     "read_receipt_forced_public_world_readable_forbidden";
-
-struct ReadReceiptPolicyProjection {
-    disclosure: String,
-    visibility: String,
-    allow_public_receipts_on_world_readable: bool,
-    allow_forced_public_world_readable_receipts: bool,
-}
+const READ_RECEIPT_POLICY_RULE: &str = "ck.realm.read_receipt_policy";
 
 pub(crate) async fn validate_read_receipt_policy_combination_write(
     state: &AppState,
@@ -63,7 +57,8 @@ pub(crate) async fn validate_read_receipt_policy_combination_write(
                 operation.realm_id.as_str(),
             )
             .await;
-            validate_read_receipt_policy_against_history(&policy, &history_visibility)
+            validate_read_receipt_policy_against_history(&policy, &history_visibility)?;
+            validate_read_receipt_child_policy_write(state, operations, operation, &policy).await
         }
         Some(kinds::CK_REALM_HISTORY_VISIBILITY) => {
             if operation.payload.get("value").and_then(Value::as_str) != Some("world_readable") {
@@ -83,30 +78,9 @@ pub(crate) async fn validate_read_receipt_policy_combination_write(
 
 fn read_receipt_policy_projection_from_payload(
     payload: &Value,
-) -> Result<ReadReceiptPolicyProjection, &'static str> {
-    let object = payload
-        .as_object()
-        .ok_or("ck.realm.read_receipt_policy payload must be an object")?;
-    Ok(ReadReceiptPolicyProjection {
-        disclosure: object
-            .get("disclosure")
-            .and_then(Value::as_str)
-            .unwrap_or("optional")
-            .to_owned(),
-        visibility: object
-            .get("visibility")
-            .and_then(Value::as_str)
-            .unwrap_or("members")
-            .to_owned(),
-        allow_public_receipts_on_world_readable: object
-            .get("allow_public_receipts_on_world_readable")
-            .and_then(Value::as_bool)
-            .unwrap_or(false),
-        allow_forced_public_world_readable_receipts: object
-            .get("allow_forced_public_world_readable_receipts")
-            .and_then(Value::as_bool)
-            .unwrap_or(false),
-    })
+) -> Result<ReadReceiptPolicy, &'static str> {
+    serde_json::from_value(payload.clone())
+        .map_err(|_| "ck.realm.read_receipt_policy payload is invalid")
 }
 
 async fn intended_history_visibility_for_realm(
@@ -138,7 +112,7 @@ async fn intended_read_receipt_policy_for_realm(
     state: &AppState,
     operations: &[Operation],
     realm_id: &str,
-) -> Result<ReadReceiptPolicyProjection, &'static str> {
+) -> Result<ReadReceiptPolicy, &'static str> {
     for operation in operations.iter().rev() {
         if kinds::canonical_kind_for_operation(operation)
             == Some(kinds::CK_REALM_READ_RECEIPT_POLICY)
@@ -150,37 +124,163 @@ async fn intended_read_receipt_policy_for_realm(
     let policy =
         crate::routing::events::event_log::effective_read_receipt_policy_for_realm(state, realm_id)
             .await
-            .unwrap_or_else(|| {
-                (
-                    "optional".to_owned(),
-                    "members".to_owned(),
-                    true,
-                    false,
-                    false,
-                )
-            });
-    Ok(ReadReceiptPolicyProjection {
-        disclosure: policy.0,
-        visibility: policy.1,
-        allow_public_receipts_on_world_readable: policy.3,
-        allow_forced_public_world_readable_receipts: policy.4,
-    })
+            .unwrap_or_default();
+    Ok(policy)
 }
 
 fn validate_read_receipt_policy_against_history(
-    policy: &ReadReceiptPolicyProjection,
+    policy: &ReadReceiptPolicy,
     history_visibility: &str,
 ) -> Result<(), &'static str> {
-    if history_visibility != "world_readable" || policy.visibility != "public" {
+    if history_visibility != "world_readable"
+        || policy.visibility != cokret_sdk::ReadReceiptVisibility::Public
+    {
         return Ok(());
     }
     if !policy.allow_public_receipts_on_world_readable {
         return Err(READ_RECEIPT_VISIBILITY_COMBINATION_INVALID);
     }
-    if policy.disclosure == "required" && !policy.allow_forced_public_world_readable_receipts {
+    if policy.disclosure == cokret_sdk::ReadReceiptDisclosure::Required
+        && !policy.allow_forced_public_world_readable_receipts
+    {
         return Err(READ_RECEIPT_FORCED_PUBLIC_WORLD_READABLE_FORBIDDEN);
     }
     Ok(())
+}
+
+async fn validate_read_receipt_child_policy_write(
+    state: &AppState,
+    operations: &[Operation],
+    operation: &Operation,
+    child_policy: &ReadReceiptPolicy,
+) -> Result<(), &'static str> {
+    let realm_id = operation.realm_id.as_str();
+    let Some(parent_realm_id) =
+        read_receipt_policy_parent_realm_id(state, operations, realm_id)
+    else {
+        return Ok(());
+    };
+    let parent_policy =
+        intended_read_receipt_policy_for_realm(state, operations, &parent_realm_id).await?;
+    parent_policy
+        .validate_child_policy(child_policy)
+        .map_err(read_receipt_child_violation_reason)
+}
+
+fn read_receipt_child_violation_reason(
+    violation: ReadReceiptPolicyChildViolation,
+) -> &'static str {
+    match violation {
+        ReadReceiptPolicyChildViolation::ComplianceFloorViolated => {
+            cokret_sdk::ERROR_CODE_READ_RECEIPT_COMPLIANCE_FLOOR_VIOLATED
+        }
+        ReadReceiptPolicyChildViolation::ScopeOverridesDisabled
+        | ReadReceiptPolicyChildViolation::DisclosurePrivacyLoosened
+        | ReadReceiptPolicyChildViolation::VisibilityLoosened => "policy_denied",
+    }
+}
+
+fn read_receipt_policy_parent_realm_id(
+    state: &AppState,
+    operations: &[Operation],
+    realm_id: &str,
+) -> Option<String> {
+    if let Some(pending) = pending_read_receipt_policy_source_realm(operations, realm_id) {
+        return pending.and_then(|source_realm_id| {
+            active_read_receipt_parent_link(state, operations, realm_id, &source_realm_id)
+                .then_some(source_realm_id)
+        });
+    }
+    let policy = state
+        .projection
+        .lock()
+        .ok()
+        .and_then(|projection| projection.realm_inheritance_policy(realm_id).cloned())?;
+    if !policy
+        .allowed_policies
+        .iter()
+        .any(|policy| policy == READ_RECEIPT_POLICY_RULE)
+    {
+        return None;
+    }
+    active_read_receipt_parent_link(state, operations, realm_id, &policy.source_realm_id)
+        .then_some(policy.source_realm_id)
+}
+
+fn pending_read_receipt_policy_source_realm(
+    operations: &[Operation],
+    realm_id: &str,
+) -> Option<Option<String>> {
+    for operation in operations.iter().rev() {
+        if kinds::canonical_kind_for_operation(operation)
+            != Some(kinds::CK_REALM_INHERITANCE_POLICY)
+            || operation.realm_id.as_str() != realm_id
+        {
+            continue;
+        }
+        let policies = crate::reducer::inheritance_allowed_policies(&operation.payload);
+        if !policies.iter().any(|policy| policy == READ_RECEIPT_POLICY_RULE) {
+            return Some(None);
+        }
+        return Some(
+            operation
+                .payload
+                .get("source_realm_id")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned),
+        );
+    }
+    None
+}
+
+fn active_read_receipt_parent_link(
+    state: &AppState,
+    operations: &[Operation],
+    realm_id: &str,
+    source_realm_id: &str,
+) -> bool {
+    if realm_id == source_realm_id {
+        return false;
+    }
+    for operation in operations.iter().rev() {
+        if kinds::canonical_kind_for_operation(operation) != Some(kinds::CK_REALM_LINK)
+            || operation.realm_id.as_str() != realm_id
+            || operation
+                .payload
+                .get("target_realm_id")
+                .and_then(Value::as_str)
+                != Some(source_realm_id)
+        {
+            continue;
+        }
+        return operation
+            .payload
+            .get("status")
+            .and_then(Value::as_str)
+            .unwrap_or("active")
+            == "active"
+            && operation
+                .payload
+                .get("link_kind")
+                .and_then(Value::as_str)
+                .is_some_and(read_receipt_parent_link_kind);
+    }
+    state
+        .projection
+        .lock()
+        .ok()
+        .and_then(|projection| projection.realm_links.get(realm_id).cloned())
+        .is_some_and(|links| {
+            links.iter().any(|link| {
+                link.target_realm_id == source_realm_id
+                    && link.status == "active"
+                    && read_receipt_parent_link_kind(&link.link_kind)
+            })
+        })
+}
+
+fn read_receipt_parent_link_kind(link_kind: &str) -> bool {
+    matches!(link_kind, "governed_by" | "inherits_policy_from")
 }
 
 pub(crate) async fn validate_realm_key_share_policy(

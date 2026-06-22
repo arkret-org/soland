@@ -4,10 +4,12 @@ use std::time::Duration;
 use cokret_sdk::identity::{CompositeDidResolver, DidDocument, DidResolver};
 use cokret_sdk::{Did, Hash, Operation, RealmId};
 use salvo::http::StatusCode;
-use serde_json::json;
+use serde_json::{Value, json};
 
 use crate::authz::obligation_executor::{ObligationError, RequestContext};
-use crate::authz::policy_client::{PolicyCheckRequestInput, PolicyClient};
+use crate::authz::policy_client::{
+    PolicyCheckRequestInput, PolicyClient, PolicyFrontierSnapshot,
+};
 use crate::authz::{MergedAuthzDecision, check_with_policy_server};
 use crate::state::AppState;
 use crate::{ids, kinds};
@@ -84,8 +86,8 @@ pub(crate) async fn enforce_operation_policy_server(
         .as_deref()
         .unwrap_or_else(|| operation.realm_id.as_str())
         .to_owned();
-    let policy_request = policy_request_for_operation(state, actor_id, operation, &action, surface)
-        .map_err(PolicyGateRejection::forbidden_request)?;
+    let policy_request =
+        policy_request_for_operation(state, actor_id, operation, &action, surface).await?;
     let mut request_ctx = RequestContext {
         realm_id: realm_id.to_owned(),
         actor_id: actor_id.to_owned(),
@@ -168,36 +170,57 @@ fn policy_client_for_state(state: &AppState) -> Result<PolicyClient, PolicyGateR
         })))
 }
 
-fn policy_request_for_operation(
+async fn policy_request_for_operation(
     state: &AppState,
     actor_id: &str,
     operation: &Operation,
     action: &str,
     surface: PolicyGateSurface,
-) -> Result<PolicyCheckRequestInput, String> {
+) -> Result<PolicyCheckRequestInput, PolicyGateRejection> {
     let realm_id = RealmId::new(operation.realm_id.to_string())
-        .map_err(|error| format!("invalid realm_id for policy check: {error}"))?;
-    let actor_id =
-        Did::new(actor_id.to_owned()).map_err(|error| format!("invalid actor DID: {error}"))?;
-    let source_service_did = Did::new(state.config.service_did.clone())
-        .map_err(|error| format!("invalid local service DID: {error}"))?;
-    let event_preview = serde_json::to_value(operation)
-        .map_err(|error| format!("operation preview serialization failed: {error}"))?;
+        .map_err(|error| {
+            PolicyGateRejection::forbidden_request(format!(
+                "invalid realm_id for policy check: {error}"
+            ))
+        })?;
+    let actor_id = Did::new(actor_id.to_owned()).map_err(|error| {
+        PolicyGateRejection::forbidden_request(format!("invalid actor DID: {error}"))
+    })?;
+    let source_service_did = Did::new(state.config.service_did.clone()).map_err(|error| {
+        PolicyGateRejection::internal(format!("invalid local service DID: {error}"))
+    })?;
+    let event_preview = serde_json::to_value(operation).map_err(|error| {
+        PolicyGateRejection::forbidden_request(format!(
+            "operation preview serialization failed: {error}"
+        ))
+    })?;
     let surface_value = match surface {
         PolicyGateSurface::LocalSubmit => json!({"surface": "local_submit"}),
         PolicyGateSurface::FederationInbound { origin_service_did } => {
             json!({"surface": "federation_inbound", "origin_service_did": origin_service_did})
         }
     };
+    let mut policy_doc_ids = state
+        .persistence
+        .policy_documents()
+        .list_active()
+        .await
+        .map_err(|error| PolicyGateRejection::internal(format!("policy documents: {error}")))?
+        .into_iter()
+        .filter(|policy| policy.active)
+        .map(|policy| format!("{}@{}", policy.policy_id, policy.updated_at.to_rfc3339()))
+        .collect::<Vec<_>>();
+    policy_doc_ids.sort();
 
-    Ok(PolicyCheckRequestInput {
+    let mut request = PolicyCheckRequestInput {
         request_id: format!("ck:policy_request:{}", ids::generate_event_id()),
         realm_id,
         actor_id,
         action: action.to_owned(),
         source_service_did,
         source_service_type: "soland".to_owned(),
-        source_ip_digest: digest_value("policy-gate:no-source-ip")?,
+        source_ip_digest: digest_value("policy-gate:no-source-ip")
+            .map_err(PolicyGateRejection::forbidden_request)?,
         signed_transport: true,
         event_preview,
         auth_context: json!({
@@ -205,11 +228,75 @@ fn policy_request_for_operation(
             "operation_id": operation.operation_id.as_str(),
             "object_type": operation.object_type.as_str(),
         }),
+        expected_frontiers: zero_frontiers(),
         bypass_cache: false,
-    })
+    };
+    request.expected_frontiers =
+        policy_frontier_snapshot_for_operation(state, &request, &policy_doc_ids)?;
+    Ok(request)
 }
 
 fn digest_value(value: &str) -> Result<Hash, String> {
     Hash::new(cokret_sdk::canonical::sha256_digest(value.as_bytes()))
         .map_err(|error| error.to_string())
+}
+
+fn zero_frontiers() -> PolicyFrontierSnapshot {
+    let zero = Hash::new(format!("sha256:{}", "0".repeat(64))).expect("zero hash shape");
+    PolicyFrontierSnapshot::new(zero.clone(), zero.clone(), zero)
+}
+
+fn policy_frontier_snapshot_for_operation(
+    state: &AppState,
+    request: &PolicyCheckRequestInput,
+    policy_doc_ids: &[String],
+) -> Result<PolicyFrontierSnapshot, PolicyGateRejection> {
+    let request_canonical_digest = request.canonical_request_hash();
+    let auth_state_value = json!({
+        "actor_id": request.actor_id.as_str(),
+        "action": request.action.as_str(),
+        "resource": request.event_preview.clone(),
+        "request_canonical_digest": request_canonical_digest.as_str(),
+    });
+    let auth_state_digest = canonical_policy_hash(&auth_state_value)?;
+
+    let policy_frontier_digest =
+        canonical_policy_hash(&json!({ "policy_documents": policy_doc_ids }))?;
+
+    let mut members = collect_realm_member_dids(state, request.realm_id.as_str());
+    members.sort();
+    let membership_frontier_digest = canonical_policy_hash(&json!({
+        "realm_id": request.realm_id.as_str(),
+        "members": members
+    }))?;
+
+    Ok(PolicyFrontierSnapshot::new(
+        auth_state_digest,
+        policy_frontier_digest,
+        membership_frontier_digest,
+    ))
+}
+
+fn canonical_policy_hash(value: &Value) -> Result<Hash, PolicyGateRejection> {
+    let digest = cokret_sdk::canonical::canonical_sha256(value)
+        .map_err(|error| PolicyGateRejection::internal(format!("canonical digest: {error}")))?;
+    Hash::new(digest).map_err(|error| PolicyGateRejection::internal(format!("hash shape: {error}")))
+}
+
+fn collect_realm_member_dids(state: &AppState, realm_id: &str) -> Vec<String> {
+    let Ok(realm_id_typed) = RealmId::new(realm_id.to_owned()) else {
+        return Vec::new();
+    };
+    let realms = match state.realms.lock() {
+        Ok(guard) => guard,
+        Err(_) => return Vec::new(),
+    };
+    match realms.get(&realm_id_typed) {
+        Some(space) => space
+            .members
+            .iter()
+            .map(|did| did.as_str().to_owned())
+            .collect(),
+        None => Vec::new(),
+    }
 }

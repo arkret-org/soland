@@ -130,6 +130,7 @@ CREATE TABLE public.applet_registrations (
     install_body_digest text,
     install_id text,
     install_response jsonb,
+    install_execution jsonb,
     ghosts jsonb DEFAULT '[]'::jsonb NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT applet_registrations_status_check CHECK ((status = ANY (ARRAY['registered'::text, 'installed'::text, 'partially_installed'::text, 'rejected'::text, 'revoked'::text])))
@@ -474,6 +475,10 @@ CREATE TABLE public.federation_transactions (
     realm_id uuid,
     status text NOT NULL,
     content_digest text NOT NULL,
+    origin_verification_method text,
+    service_binding_ref text,
+    origin_key_state_digest text,
+    local_peer_policy_digest text,
     payload jsonb NOT NULL,
     received_at timestamp with time zone DEFAULT now() NOT NULL,
     processed_at timestamp with time zone
@@ -536,6 +541,8 @@ CREATE TABLE public.mls_key_packages (
     capabilities jsonb DEFAULT '[]'::jsonb NOT NULL,
     capabilities_digest text NOT NULL,
     device_signature jsonb DEFAULT '{}'::jsonb NOT NULL,
+    last_resort boolean DEFAULT false NOT NULL,
+    last_resort_realm_id text,
     lifetime_not_before bigint NOT NULL,
     lifetime_not_after bigint NOT NULL,
     claimed_by_mls_group_id text,
@@ -1383,9 +1390,21 @@ CREATE INDEX read_receipt_relay_expires_idx ON public.read_receipt_relay USING b
 
 CREATE INDEX canonical_events_actor_idx ON public.canonical_events USING btree (actor_id, actor_seq DESC);
 
+CREATE INDEX canonical_events_actor_received_idx ON public.canonical_events USING btree (actor_id, received_at, id);
+
 CREATE INDEX canonical_events_kind_idx ON public.canonical_events USING btree (kind);
 
+CREATE INDEX canonical_events_kind_received_idx ON public.canonical_events USING btree (kind, received_at, id);
+
+CREATE INDEX canonical_events_peer_sync_endpoints_idx ON public.canonical_events USING btree (received_at, id) WHERE (((envelope #> '{payload,sync_endpoints}'::text[]) IS NOT NULL) OR ((envelope #> '{payload,object,sync_endpoints}'::text[]) IS NOT NULL) OR ((envelope #> '{payload,patch,sync_endpoints}'::text[]) IS NOT NULL));
+
+CREATE INDEX canonical_events_received_idx ON public.canonical_events USING btree (received_at, id);
+
+CREATE UNIQUE INDEX canonical_events_realm_create_unique_idx ON public.canonical_events USING btree (realm_id) WHERE (kind = 'ck.realm.create'::text);
+
 CREATE INDEX canonical_events_space_idx ON public.canonical_events USING btree (realm_id);
+
+CREATE INDEX canonical_events_space_received_idx ON public.canonical_events USING btree (realm_id, received_at, id);
 
 CREATE INDEX state_moves_pending_idx ON public.state_moves USING btree (realm_id, inserted_at, id) WHERE (sealed_by IS NULL);
 

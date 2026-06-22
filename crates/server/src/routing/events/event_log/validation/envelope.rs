@@ -11,6 +11,13 @@ use super::payload_shape::{
     validate_space_container_lifecycle_payload,
 };
 
+const E2EE_RELAXED_PROFILE: &str = "ck.profile.e2ee_relaxed.v1";
+const LOCAL_EVENT_CRITICAL_FEATURES: [&str; 3] = [
+    "ck.event_envelope.v1",
+    "ck.profile.core_event_store.v1",
+    "ck.proof.event_digest.v1",
+];
+
 pub(crate) fn canonical_json_hash(value: &Value) -> String {
     canonical::canonical_sha256(value).unwrap_or_else(|_| {
         let bytes = serde_json::to_vec(value).unwrap_or_default();
@@ -294,8 +301,12 @@ pub(in crate::routing::events::event_log) fn validate_data_event_capability_refs
         ));
     }
 
-    let historical_grants = data_event_grants_at_seal_ref(state, &realm, &seal_id)?;
+    let state_at_ref = data_event_state_at_seal_ref(state, &realm, &seal_id)?;
+    validate_data_event_covered_seals(&realm, &seal_id, object, &state_at_ref)?;
+    let historical_grants = data_event_grants_from_state_at_ref(&state_at_ref);
     let auth_time = data_event_auth_time(object);
+    let historical_snapshot: Vec<crate::authz::Grant> =
+        historical_grants.values().cloned().collect();
     let effective_by_id =
         effective_historical_grants_for_subject(&historical_grants, actor_id, realm_id, auth_time);
     let mut referenced = Vec::with_capacity(refs.len());
@@ -321,6 +332,13 @@ pub(in crate::routing::events::event_log) fn validate_data_event_capability_refs
                 format!("DataEvent capability_ref {grant_id} is not projected at seal_ref"),
             )
         })?;
+        if crate::authz::grant_revoked_upstream(&historical_snapshot, grant_id, auth_time) {
+            return Err(event_validation_error(
+                StatusCode::FORBIDDEN,
+                crate::authz::REASON_GRANT_REVOKED_UPSTREAM,
+                format!("DataEvent capability_ref {grant_id} was revoked upstream"),
+            ));
+        }
         if stored.revoked {
             return Err(event_validation_error(
                 StatusCode::FORBIDDEN,
@@ -376,11 +394,14 @@ pub(in crate::routing::events::event_log) fn validate_data_event_capability_refs
     Ok(())
 }
 
-fn data_event_grants_at_seal_ref(
+fn data_event_state_at_seal_ref(
     state: &AppState,
     realm: &RealmId,
     seal_id: &cokret_sdk::SealId,
-) -> Result<std::collections::BTreeMap<String, crate::authz::Grant>, EventValidationError> {
+) -> Result<
+    std::collections::BTreeMap<cokret_sdk::CellRef, cokret_sdk::lattice::CellState>,
+    EventValidationError,
+> {
     let seal = cokret_sdk::state_res::SealStore::get(state.seal_store.as_ref(), seal_id).map_err(
         |error| {
             event_validation_error(
@@ -420,6 +441,15 @@ fn data_event_grants_at_seal_ref(
         )
     })?;
 
+    Ok(state_at_ref)
+}
+
+fn data_event_grants_from_state_at_ref(
+    state_at_ref: &std::collections::BTreeMap<
+        cokret_sdk::CellRef,
+        cokret_sdk::lattice::CellState,
+    >,
+) -> std::collections::BTreeMap<String, crate::authz::Grant> {
     let mut grants = std::collections::BTreeMap::new();
     const CAPABILITY_GRANT_CELL_PREFIX: &str = "ck:cell:ck.component.capability.grant.v1:";
     for (cell_ref, cell_state) in state_at_ref {
@@ -435,7 +465,131 @@ fn data_event_grants_at_seal_ref(
             grants.insert(grant_id.to_owned(), grant);
         }
     }
-    Ok(grants)
+    grants
+}
+
+fn validate_data_event_covered_seals(
+    realm: &RealmId,
+    seal_id: &cokret_sdk::SealId,
+    object: &serde_json::Map<String, Value>,
+    state_at_ref: &std::collections::BTreeMap<
+        cokret_sdk::CellRef,
+        cokret_sdk::lattice::CellState,
+    >,
+) -> Result<(), EventValidationError> {
+    if !data_event_payload_is_mls_e2ee(object) {
+        return Ok(());
+    }
+    if seal_view_declares_relaxed_e2ee(realm, state_at_ref) {
+        return Ok(());
+    }
+
+    let covered_cell = cokret_sdk::mls_move::covered_seals_cell_id(realm).map_err(|error| {
+        event_validation_error(
+            StatusCode::BAD_REQUEST,
+            "schema_violation",
+            format!("DataEvent covered_seals cell id failed: {error}"),
+        )
+    })?;
+    let Some(cokret_sdk::lattice::CellState::Value(cell_value)) = state_at_ref.get(&covered_cell)
+    else {
+        return Err(data_event_covered_seals_failed_precondition(
+            "covered_seals_cell is missing at seal_ref",
+        ));
+    };
+    let required_governance_seals = std::slice::from_ref(seal_id);
+    if required_governance_seals
+        .iter()
+        .all(|required| cokret_sdk::mls_move::covered_seals_contains(cell_value, required))
+    {
+        return Ok(());
+    }
+    Err(data_event_covered_seals_failed_precondition(format!(
+        "covered_seals_cell does not contain DataEvent seal_ref {}",
+        seal_id.as_str()
+    )))
+}
+
+fn data_event_covered_seals_failed_precondition(message: impl Into<String>) -> EventValidationError {
+    let code = cokret_sdk::ErrorCode::FailedPrecondition;
+    event_validation_error(
+        error_http_status(code),
+        code.as_str(),
+        format!(
+            "{}: {}",
+            cokret_sdk::REASON_MLS_GOVERNANCE_BINDING_STALE,
+            message.into()
+        ),
+    )
+}
+
+fn data_event_payload_is_mls_e2ee(object: &serde_json::Map<String, Value>) -> bool {
+    let Some(payload) = object.get("payload") else {
+        return false;
+    };
+    encrypted_content_is_mls(payload.get("encrypted_content"))
+        || payload
+            .get("object")
+            .is_some_and(|object| encrypted_content_is_mls(object.get("encrypted_content")))
+}
+
+fn encrypted_content_is_mls(value: Option<&Value>) -> bool {
+    value
+        .and_then(|value| value.get("scheme"))
+        .and_then(Value::as_str)
+        == Some("mls-rfc9420")
+}
+
+fn seal_view_declares_relaxed_e2ee(
+    realm: &RealmId,
+    state_at_ref: &std::collections::BTreeMap<
+        cokret_sdk::CellRef,
+        cokret_sdk::lattice::CellState,
+    >,
+) -> bool {
+    let Ok(policy_cell) = cokret_sdk::CellRef::new(format!(
+        "ck:cell:ck.component.realm.policy_components.v1:{}",
+        realm.as_str()
+    )) else {
+        return false;
+    };
+    let Some(cokret_sdk::lattice::CellState::Value(policy_components)) =
+        state_at_ref.get(&policy_cell)
+    else {
+        return false;
+    };
+    policy_components_declare_relaxed_e2ee(policy_components_value_from_state_payload(
+        policy_components,
+    ))
+}
+
+fn policy_components_declare_relaxed_e2ee(policy_components: &Value) -> bool {
+    profile_array_contains(policy_components.get("profiles"), E2EE_RELAXED_PROFILE)
+        || profile_array_contains(policy_components.get("active_profiles"), E2EE_RELAXED_PROFILE)
+        || profile_array_contains(
+            policy_components.pointer("/components/profiles"),
+            E2EE_RELAXED_PROFILE,
+        )
+        || profile_array_contains(
+            policy_components.pointer("/components/active_profiles"),
+            E2EE_RELAXED_PROFILE,
+        )
+        || policy_components
+            .pointer("/e2ee_relaxed/profile")
+            .and_then(Value::as_str)
+            == Some(E2EE_RELAXED_PROFILE)
+        || policy_components
+            .pointer("/components/e2ee_relaxed/profile")
+            .and_then(Value::as_str)
+            == Some(E2EE_RELAXED_PROFILE)
+}
+
+fn profile_array_contains(value: Option<&Value>, profile: &str) -> bool {
+    value.and_then(Value::as_array).is_some_and(|profiles| {
+        profiles
+            .iter()
+            .any(|candidate| candidate.as_str() == Some(profile))
+    })
 }
 
 fn effective_historical_grants_for_subject(
@@ -634,7 +788,97 @@ async fn validate_applet_delegated_authorization_chain(
             "native-principal applet delegation must be issued by the acted-for actor_id",
         ));
     }
+    validate_applet_registration_epoch_binding(
+        state,
+        object,
+        package,
+        grant,
+        &applet_id,
+        &executed_by,
+    )
+    .await?;
     Ok(())
+}
+
+async fn validate_applet_registration_epoch_binding(
+    state: &AppState,
+    object: &serde_json::Map<String, Value>,
+    package: &cokret_sdk::AppletPackage,
+    grant: &crate::authz::Grant,
+    applet_id: &str,
+    executed_by: &str,
+) -> Result<(), EventValidationError> {
+    crate::authz::validate_applet_delegation_binding(
+        grant,
+        applet_id,
+        executed_by,
+        package.registration_epoch.as_str(),
+    )
+    .map_err(|error| {
+        event_validation_error(
+            StatusCode::FORBIDDEN,
+            applet_delegation_binding_reason(error),
+            "authorization_ref grant is not bound to the installed applet registration epoch",
+        )
+    })?;
+
+    let evidence = package.registration_epoch_evidence.as_ref().ok_or_else(|| {
+        event_validation_error(
+            StatusCode::FORBIDDEN,
+            "applet_registration_epoch_evidence_missing",
+            "installed applet package is missing registration_epoch evidence",
+        )
+    })?;
+    let document =
+        crate::jws_verify::resolve_did_document(state, &package.service_did).map_err(|reason| {
+            tracing::debug!(%reason, %applet_id, "applet registration_epoch DID resolution failed");
+            event_validation_error(
+                StatusCode::FORBIDDEN,
+                "applet_registration_epoch_evidence_mismatch",
+                "installed applet service DID document could not be resolved",
+            )
+        })?;
+    evidence
+        .validate_against_did_document(&document)
+        .map_err(|reason| {
+            tracing::debug!(%reason, %applet_id, "applet registration_epoch evidence mismatch");
+            event_validation_error(
+                StatusCode::FORBIDDEN,
+                "applet_registration_epoch_evidence_mismatch",
+                "installed applet registration_epoch evidence does not match the current service DID document",
+            )
+        })?;
+
+    if executed_by == package.service_did.as_str()
+        && let Some(verification_method) = first_event_proof_verification_method(object)
+        && !evidence.contains_signing_key(&verification_method)
+    {
+        return Err(event_validation_error(
+            StatusCode::FORBIDDEN,
+            "applet_registration_epoch_signing_key_mismatch",
+            "event proof signing key is outside the applet registration_epoch evidence",
+        ));
+    }
+    Ok(())
+}
+
+fn applet_delegation_binding_reason(
+    error: crate::authz::AppletDelegationBindingError,
+) -> &'static str {
+    match error {
+        crate::authz::AppletDelegationBindingError::Missing => {
+            "applet_registration_epoch_binding_missing"
+        }
+        crate::authz::AppletDelegationBindingError::AppletIdMismatch => {
+            "applet_registration_epoch_binding_mismatch"
+        }
+        crate::authz::AppletDelegationBindingError::ExecutedByMismatch => {
+            "applet_registration_epoch_binding_mismatch"
+        }
+        crate::authz::AppletDelegationBindingError::RegistrationEpochMismatch => {
+            "applet_registration_epoch_mismatch"
+        }
+    }
 }
 
 fn applet_executor_in_subject_set(
@@ -714,6 +958,17 @@ fn delegated_applet_resource_candidates(
     resources
 }
 
+fn first_event_proof_verification_method(
+    object: &serde_json::Map<String, Value>,
+) -> Option<String> {
+    object
+        .get("proofs")
+        .and_then(Value::as_array)
+        .and_then(|proofs| proofs.first())
+        .and_then(Value::as_object)
+        .and_then(|proof| event_string_field(proof, &["verification_method"]))
+}
+
 pub(crate) async fn validate_event_envelope(
     state: &AppState,
     session: &SessionRecord,
@@ -726,7 +981,7 @@ pub(crate) async fn validate_event_envelope(
             "Event Envelope must be a JSON object",
         )
     })?;
-    validate_event_critical_features(object)?;
+    validate_event_critical_features(state, object)?;
 
     let event_id = event_string_field(object, &["event_id"]).ok_or_else(|| {
         event_validation_error(
@@ -909,11 +1164,26 @@ pub(crate) async fn validate_event_envelope(
     // materialises the member set in state.realms immediately after
     // store.put succeeds, so any follow-up facet event in the same
     // session naturally passes the regular realm_has_member check.
+    let realm_exists = realm_exists_in_index(state, &realm_id);
+    if kind == kinds::CK_REALM_CREATE && realm_exists {
+        return Err(event_validation_error(
+            StatusCode::CONFLICT,
+            "realm_already_exists",
+            "realm already exists",
+        ));
+    }
     let is_realm_create_bootstrap = kind == "ck.realm.create"
         && realm_create_actor_is_creator(object, &session.actor)
-        && !realm_exists_in_index(state, &realm_id);
+        && !realm_exists;
     let is_invite_acceptance_join =
         member_join_accepts_pending_invite(state, object, &session.actor, &realm_id).await;
+    let is_third_party_invite_claim = invite_claim_actor_claims_pending_third_party_invite(
+        state,
+        object,
+        &session.actor,
+        &realm_id,
+    )
+    .await;
     // A private cross-PS invite delivery (`POST /_cokret/peer/invites`) submits
     // the inviter-signed `ck.invite.create` on the *recipient* PS so the local
     // subject can list + accept it. That realm lives on the inviter's PS, so the
@@ -922,9 +1192,10 @@ pub(crate) async fn validate_event_envelope(
     // inviter into a realm this PS does not host (spec invite-addressing.md §5).
     let is_foreign_invite_delivery = kind == "ck.invite.create"
         && invite_create_actor_is_inviter(object, &session.actor)
-        && !realm_exists_in_index(state, &realm_id);
+        && !realm_exists;
     if !is_realm_create_bootstrap
         && !is_invite_acceptance_join
+        && !is_third_party_invite_claim
         && !is_foreign_invite_delivery
         && !is_applet_delegated
         && !realm_has_member(state, &realm_id, &session.actor).await
@@ -1074,13 +1345,10 @@ pub(crate) async fn validate_event_envelope(
 }
 
 pub(crate) fn validate_event_critical_features(
+    state: &AppState,
     object: &serde_json::Map<String, Value>,
 ) -> Result<(), EventValidationError> {
-    let supported = [
-        "ck.event_envelope.v1",
-        "ck.profile.core_event_store.v1",
-        "ck.proof.event_digest.v1",
-    ];
+    let supported_features = service_declared_event_requirement_features(state);
     for key in ["crit", "critical", "critical_features"] {
         let Some(value) = object.get(key) else {
             continue;
@@ -1101,11 +1369,39 @@ pub(crate) fn validate_event_critical_features(
             )
         })?;
         for feature in features {
-            if !supported.contains(&feature.as_str()) {
+            if !LOCAL_EVENT_CRITICAL_FEATURES.contains(&feature.as_str()) {
                 return Err(event_validation_error(
                     StatusCode::BAD_REQUEST,
                     "unsupported_critical_feature",
                     "unknown critical Event feature is not supported",
+                ));
+            }
+        }
+    }
+    if let Some(features) = object
+        .get("requirements")
+        .and_then(|requirements| requirements.get("features"))
+    {
+        let Some(features) = features.as_array() else {
+            return Err(event_validation_error(
+                StatusCode::BAD_REQUEST,
+                "schema_violation",
+                "requirements.features must be an array",
+            ));
+        };
+        for feature in features {
+            let Some(feature) = feature.as_str() else {
+                return Err(event_validation_error(
+                    StatusCode::BAD_REQUEST,
+                    "schema_violation",
+                    "requirements.features entries must be strings",
+                ));
+            };
+            if !supported_features.contains(feature) {
+                return Err(event_validation_error(
+                    StatusCode::NOT_IMPLEMENTED,
+                    "unsupported_feature",
+                    "unknown requirements.features entry is not supported",
                 ));
             }
         }
@@ -1148,7 +1444,10 @@ pub(crate) fn validate_event_critical_features(
                 ));
             }
         };
-        if fail_closed && !supported.contains(&id) {
+        if fail_closed
+            && !LOCAL_EVENT_CRITICAL_FEATURES.contains(&id)
+            && !supported_features.contains(id)
+        {
             return Err(event_validation_error(
                 StatusCode::NOT_IMPLEMENTED,
                 "unsupported_feature",
@@ -1157,6 +1456,36 @@ pub(crate) fn validate_event_critical_features(
         }
     }
     Ok(())
+}
+
+fn service_declared_event_requirement_features(
+    state: &AppState,
+) -> std::collections::BTreeSet<String> {
+    let mut declared = std::collections::BTreeSet::new();
+    declared.extend(
+        LOCAL_EVENT_CRITICAL_FEATURES
+            .iter()
+            .map(|feature| (*feature).to_owned()),
+    );
+    let mut description = crate::wire::describe(
+        &state.config.service_did,
+        &state.config.public_base_url,
+        state.db.mode(),
+        state.config.development_mode,
+        state.config.account_authority_url.as_deref(),
+        state.config.oidc_client_id.as_deref(),
+        &state.config.trust_domain,
+        state.config.resumable_upload_incomplete_ttl_seconds,
+        state.config.to_device_queue_capacity,
+    );
+    crate::routing::system::describe::apply_claim_level_partition(
+        &mut description,
+        state.verified_profiles.as_ref(),
+    );
+    declared.extend(description.supported_features);
+    declared.extend(description.implemented_features);
+    declared.extend(description.experimental_features);
+    declared
 }
 
 pub(crate) fn validate_event_time_fields(

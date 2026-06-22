@@ -40,6 +40,8 @@ pub struct AppletRecord {
     #[serde(default)]
     pub install_response: Option<InstallCommitOutcome>,
     #[serde(default)]
+    pub install_execution: Option<Value>,
+    #[serde(default)]
     pub ghosts: Vec<GhostActorRecord>,
 }
 

@@ -1,5 +1,7 @@
 use super::*;
 
+use base64::Engine as _;
+
 const CONTACT_MESSAGE_STUB: &str = "[message withheld until contact is accepted]";
 const CONTACT_CONSENT_ACTION_SCOPES: &[&str] = &[
     "invite",
@@ -9,6 +11,9 @@ const CONTACT_CONSENT_ACTION_SCOPES: &[&str] = &[
     "presence",
 ];
 const CONTACT_REQUEST_PENDING_TTL_DAYS: i64 = 14;
+const DIRECT_CONVERSATION_PAIRWISE_DID_METHOD_PREFIXES: &[&str] = &["did:peer:", "did:key:"];
+const DIRECT_BINDING_PENDING_POLL_ATTEMPTS: usize = 100;
+const DIRECT_BINDING_PENDING_POLL_DELAY_MS: u64 = 25;
 
 #[endpoint(
     operation_id = "ck.self.contact.command.request",
@@ -74,19 +79,12 @@ pub(crate) async fn contact_request(
         .ok()
         .into_iter()
         .collect::<Vec<_>>();
-    let contact_status = if is_remote_target {
-        // Remote target: the requester only forms `pending_outgoing` locally.
-        // `pending_incoming` (and any accept) is projected on the target's PS
-        // once the federated fact lands there.
-        "pending"
-    } else if has_active_consent_for_scope(state, &target, &session.actor, &scope, now()) {
-        "accepted"
-    } else {
+    let contact_status = "pending";
+    if !is_remote_target {
         let pending_previous = consent_cell_snapshot(state, &target, &session.actor, &scope);
         let pending = record_pending_request(state, &target, &session.actor, &scope, now());
         persist_consent_cell(state, &pending, pending_previous).await?;
-        "pending"
-    };
+    }
     let stub_message = message.is_some()
         && should_stub_local_contact_message(
             state,
@@ -114,12 +112,12 @@ pub(crate) async fn contact_request(
                 Vec::new(),
             )?);
         }
-        let status_changed = existing.status != contact_status;
         // A re-sent request MAY refresh the greeting; keep the prior one
         // when the new request omits a message.
-        let message_changed = record_message.is_some() && existing.message != record_message;
-        if status_changed || message_changed {
-            existing.status = contact_status.to_owned();
+        let message_changed = existing.status == "pending"
+            && record_message.is_some()
+            && existing.message != record_message;
+        if message_changed {
             if record_message.is_some() {
                 existing.message = record_message.clone();
             }
@@ -173,16 +171,28 @@ pub(crate) async fn contact_request(
         created_at: now(),
         updated_at: now(),
     };
+    let request_fact_payload = json!({
+        "request_id": request_event_ref.as_str(),
+        "requester": contact.requester.clone(),
+        "target": contact.target.clone(),
+        "requested_scopes": [contact.scope.clone()],
+        "requester_consent_refs": requester_consent_refs.clone(),
+        "message": contact.message.clone(),
+    });
+    append_contact_fact_projection_event(
+        state,
+        &request_event_ref,
+        "ck.contact.requested",
+        &contact.requester,
+        request_fact_payload.clone(),
+        contact.created_at,
+    )
+    .await;
     append_audit_log(
         state,
         Some(&contact.requester),
         "ck.contact.requested",
-        json!({
-            "requester": contact.requester,
-            "target": contact.target,
-            "requested_scopes": [contact.scope.clone()],
-            "message": contact.message,
-        }),
+        request_fact_payload,
         "accepted",
     )
     .await;
@@ -334,6 +344,35 @@ fn contact_introduction_evidence_digest(
     })
 }
 
+async fn append_contact_fact_projection_event(
+    state: &AppState,
+    event_ref: &EventId,
+    event_kind: &str,
+    issuer: &str,
+    mut payload: Value,
+    created_at: chrono::DateTime<chrono::Utc>,
+) {
+    if let Value::Object(object) = &mut payload {
+        object
+            .entry("event_id".to_owned())
+            .or_insert_with(|| Value::String(event_ref.to_string()));
+    }
+    crate::routing::events::projection::append_projection_event(
+        state,
+        ProjectionEventRecord {
+            event_id: event_ref.to_string(),
+            realm_id: super::super::recovery::principal_control_realm_for_did(issuer),
+            event_kind: event_kind.to_owned(),
+            operation_type: "contact_fact".to_owned(),
+            operation_id: None,
+            sender: Some(issuer.to_owned()),
+            payload,
+            created_at,
+        },
+    )
+    .await;
+}
+
 #[endpoint(
     operation_id = "ck.self.contact.command.respond",
     tags("contacts"),
@@ -399,6 +438,23 @@ pub(crate) async fn contact_respond(
             "contact request_id does not match the pending request",
         ));
     }
+    let observed_at = now();
+    if contact_request_is_expired(&contact, observed_at) {
+        auto_revoke_requester_side_contact_consent(
+            state,
+            &contact.requester,
+            &contact.target,
+            &[contact.scope.clone()],
+            observed_at,
+            "contact_request_pending_ttl",
+            contact.request_event_ref.as_deref(),
+        )
+        .await?;
+        return Err(contact_failed_precondition(
+            cokret_sdk::ERROR_CODE_CONTACT_REQUEST_EXPIRED,
+            "contact request expired",
+        ));
+    }
     let mut consent_grant_refs = Vec::new();
     let mut granted_scope_wire = Vec::new();
     let response_event_ref = synthetic_contact_event_ref();
@@ -408,7 +464,8 @@ pub(crate) async fn contact_respond(
             // Spec contact-and-direct-conversation.md §3 — each granted scope
             // writes a target-controlled `ck.consent.grant`; its event ref is
             // referenced from the `ck.contact.accepted` `consent_grant_refs[]`.
-            let previous = consent_cell_snapshot(state, &session.actor, &contact.requester, &scope);
+            let previous =
+                consent_cell_snapshot(state, &session.actor, &contact.requester, &scope);
             let (grant_ref, grant_cell) = grant_contact_managed_consent(
                 state,
                 &session.actor,
@@ -444,6 +501,28 @@ pub(crate) async fn contact_respond(
         )
         .await?;
     }
+    let response_fact_kind = if contact.status == "accepted" {
+        "ck.contact.accepted"
+    } else {
+        "ck.contact.rejected"
+    };
+    let response_fact_payload = json!({
+        "request_id": request_event_ref.as_str(),
+        "requester": contact.requester.clone(),
+        "target": session.actor.clone(),
+        "scope": contact.scope.clone(),
+        "granted_scopes": granted_scope_wire.clone(),
+        "consent_grant_refs": consent_grant_refs.clone(),
+    });
+    append_contact_fact_projection_event(
+        state,
+        &response_event_ref,
+        response_fact_kind,
+        &session.actor,
+        response_fact_payload.clone(),
+        contact.updated_at,
+    )
+    .await;
 
     // Spec §4.1 — federate the accept / reject fact back to the original
     // requester's home Principal Server when the requester is remote. The
@@ -455,26 +534,14 @@ pub(crate) async fn contact_respond(
         .map(|did| did.as_str().trim().to_owned())
         .filter(|did| !did.is_empty() && did != &state.config.service_did)
     {
-        let fact_kind = if contact.status == "accepted" {
-            "ck.contact.accepted"
-        } else {
-            "ck.contact.rejected"
-        };
         super::super::contact_federation::federate_contact_fact(
             state,
-            fact_kind,
+            response_fact_kind,
             &session.actor,
             &contact.requester,
             &requester_service_did,
             None,
-            json!({
-                "request_id": request_event_ref.as_str(),
-                "requester": contact.requester.clone(),
-                "target": session.actor.clone(),
-                "scope": contact.scope.clone(),
-                "granted_scopes": granted_scope_wire,
-                "consent_grant_refs": consent_grant_refs.clone(),
-            }),
+            response_fact_payload,
             response_event_ref.as_str(),
         )
         .await?;
@@ -622,19 +689,29 @@ pub(crate) async fn contact_tombstone(
         }
     }
 
+    let tombstone_fact_payload = json!({
+        "holder": holder.clone(),
+        "peer": peer.clone(),
+        "revoke_scopes": body.revoke_scopes.clone(),
+        "consent_revoke_refs": revoked_dots.clone(),
+        "full_peer_revoke": body.full_peer_revoke,
+        "block_peer": body.block_peer,
+        "partial_revoke": !complete,
+    });
+    append_contact_fact_projection_event(
+        state,
+        &tombstone_event_ref,
+        "ck.contact.tombstoned",
+        &holder,
+        tombstone_fact_payload.clone(),
+        now,
+    )
+    .await;
     append_audit_log(
         state,
         Some(&holder),
         "ck.contact.tombstoned",
-        json!({
-            "holder": holder,
-            "peer": peer,
-            "revoke_scopes": body.revoke_scopes,
-            "consent_revoke_refs": revoked_dots,
-            "full_peer_revoke": body.full_peer_revoke,
-            "block_peer": body.block_peer,
-            "partial_revoke": !complete,
-        }),
+        tombstone_fact_payload.clone(),
         "accepted",
     )
     .await;
@@ -660,13 +737,7 @@ pub(crate) async fn contact_tombstone(
             &peer,
             &peer_service_did,
             None,
-            json!({
-                "holder": holder,
-                "peer": peer,
-                "revoke_scopes": body.revoke_scopes,
-                "full_peer_revoke": body.full_peer_revoke,
-                "block_peer": body.block_peer,
-            }),
+            tombstone_fact_payload,
             tombstone_event_ref.as_str(),
         )
         .await?;
@@ -827,9 +898,7 @@ async fn auto_revoke_expired_pending_outgoing_contact_consents(
         if record.requester != actor || record.status != "pending" {
             continue;
         }
-        if record.created_at + chrono::Duration::days(CONTACT_REQUEST_PENDING_TTL_DAYS)
-            > observed_at
-        {
+        if !contact_request_is_expired(record, observed_at) {
             continue;
         }
         auto_revoke_requester_side_contact_consent(
@@ -844,6 +913,13 @@ async fn auto_revoke_expired_pending_outgoing_contact_consents(
         .await?;
     }
     Ok(records)
+}
+
+fn contact_request_is_expired(
+    contact: &ContactRecord,
+    observed_at: chrono::DateTime<chrono::Utc>,
+) -> bool {
+    contact.created_at + chrono::Duration::days(CONTACT_REQUEST_PENDING_TTL_DAYS) <= observed_at
 }
 
 fn contact_request_scope(body: &ContactRequestRequestBody) -> Result<String, AppError> {
@@ -992,9 +1068,10 @@ fn contact_list_rows(
             row.invite_consent_grant_ref =
                 active_invite_consent_grant_ref(state, row.peer.as_str(), actor, now())
                     .and_then(|event_ref| EventId::new(event_ref).ok());
-            row.direct_conversation =
-                active_direct_binding(state, &direct_pair_key(actor, row.peer.as_str()))
-                    .map(direct_summary);
+            row.direct_conversation = direct_pair_key(state, actor, row.peer.as_str())
+                .ok()
+                .and_then(|pair_key| active_direct_binding(state, &pair_key))
+                .map(direct_summary);
             row
         })
         .collect::<Vec<_>>();
@@ -1068,11 +1145,39 @@ pub(crate) async fn accepted_contact_for_pair(
             .await
             .map_err(|error| AppError::internal(error.to_string()))?
             && contact.status == "accepted"
+            && accepted_contact_has_fact_refs(&contact)
         {
             return Ok(Some(contact));
         }
     }
     Ok(None)
+}
+
+fn accepted_contact_has_fact_refs(contact: &ContactRecord) -> bool {
+    contact
+        .request_event_ref
+        .as_deref()
+        .is_some_and(valid_contact_event_ref)
+        && contact
+            .response_event_ref
+            .as_deref()
+            .is_some_and(valid_contact_event_ref)
+        && contact.tombstone_event_ref.is_none()
+}
+
+fn contact_fact_refs(contact: &ContactRecord) -> Vec<String> {
+    [
+        contact.request_event_ref.as_ref(),
+        contact.response_event_ref.as_ref(),
+    ]
+    .into_iter()
+    .flatten()
+    .cloned()
+    .collect()
+}
+
+fn valid_contact_event_ref(event_ref: &str) -> bool {
+    EventId::new(event_ref.to_owned()).is_ok()
 }
 
 pub(crate) fn direct_resolve_precondition(reason: &'static str, message: &'static str) -> AppError {
@@ -1085,10 +1190,76 @@ fn contact_failed_precondition(reason: &'static str, message: &'static str) -> A
         .with_wire_code(reason)
 }
 
-pub(crate) fn direct_pair_key(left: &str, right: &str) -> String {
-    let mut participants = [left.to_owned(), right.to_owned()];
-    participants.sort();
-    participants.join("\0")
+pub(crate) async fn ensure_direct_peer_resolvable(
+    state: &AppState,
+    peer: &str,
+) -> Result<(), AppError> {
+    let account = state
+        .persistence
+        .accounts()
+        .get(peer)
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    if account.is_none() {
+        return Err(direct_resolve_precondition(
+            crate::error::reasons::PEER_UNRESOLVABLE,
+            "direct conversation peer is not resolvable on this Principal Server",
+        ));
+    }
+    let peer_did = Did::new(peer.to_owned()).map_err(|_| {
+        direct_resolve_precondition(
+            crate::error::reasons::PEER_UNRESOLVABLE,
+            "direct conversation peer DID is invalid",
+        )
+    })?;
+    let has_cross_signing_control = state
+        .cross_signing
+        .lock()
+        .expect("cross_signing lock")
+        .current_cross_signing(&peer_did)
+        .is_some_and(|publish| publish.generation >= 1);
+    if !has_cross_signing_control {
+        return Err(direct_resolve_precondition(
+            crate::error::reasons::PEER_UNRESOLVABLE,
+            "direct conversation peer has no accepted cross-signing control state",
+        ));
+    }
+    Ok(())
+}
+
+pub(crate) fn direct_pair_key(state: &AppState, left: &str, right: &str) -> Result<String, AppError> {
+    let trust_domain = cokret_sdk::TypedTrustDomainId::new(state.config.trust_domain.clone())
+        .map_err(|error| AppError::internal(format!("configured trust_domain invalid: {error}")))?;
+    let left = direct_pair_key_participant(left, "actor")?;
+    let right = direct_pair_key_participant(right, "peer")?;
+    cokret_sdk::direct_conversation_pair_key(
+        trust_domain,
+        left,
+        right,
+    )
+    .map_err(|error| AppError::internal(format!("direct pair key construction failed: {error}")))
+}
+
+fn direct_pair_key_participant(
+    did: &str,
+    role: &str,
+) -> Result<cokret_sdk::DirectConversationPairKeyParticipant, AppError> {
+    let did = Did::new(did.to_owned()).map_err(|error| {
+        AppError::internal(format!("stored direct conversation {role} DID invalid: {error}"))
+    })?;
+    let did_str = did.as_str();
+    if DIRECT_CONVERSATION_PAIRWISE_DID_METHOD_PREFIXES
+        .iter()
+        .any(|prefix| did_str.starts_with(prefix))
+    {
+        return Err(direct_resolve_precondition(
+            crate::error::reasons::PEER_UNRESOLVABLE,
+            "direct conversation pairwise DID requires a verified stable-subject identity link",
+        ));
+    }
+    Ok(cokret_sdk::DirectConversationPairKeyParticipant::unmapped(
+        did,
+    ))
 }
 
 pub(crate) fn active_direct_binding(
@@ -1100,7 +1271,9 @@ pub(crate) fn active_direct_binding(
         .lock()
         .expect("direct_conversation_bindings lock")
         .get(pair_key)
-        .filter(|binding| binding.state == "active")
+        .filter(|binding| {
+            binding.state == "active" && valid_contact_event_ref(&binding.binding_event_ref)
+        })
         .cloned()
 }
 
@@ -1113,41 +1286,96 @@ pub(crate) fn active_direct_binding(
 /// directory entry. Reuses soland's existing local operation acceptance +
 /// projection path (`accept_local_operations`); it does NOT build a parallel
 /// realm-materialization path.
+enum DirectBindingReservation {
+    Existing(DirectConversationBindingRecord),
+    Pending(String),
+    Reserved {
+        realm_id: String,
+        main_strand_id: String,
+        actor_member_event_ref: String,
+        peer_member_event_ref: String,
+        main_strand_create_ref: String,
+        mls_group_id: String,
+        reserved: DirectConversationBindingRecord,
+    },
+}
+
 pub(crate) async fn create_direct_binding_with_realm(
     state: &AppState,
     pair_key: &str,
     actor: &str,
+    actor_device_id: &str,
     peer: &str,
+    contact: &ContactRecord,
 ) -> Result<(DirectConversationBindingRecord, bool), AppError> {
     // Reserve the canonical binding under lock so concurrent resolves for the
     // same pair collapse onto a single realm. The reservation holds the
     // generated realm/strand ids; we release the lock before the (async) event
     // submission so projection writes don't deadlock against the guard.
-    let (realm_id, main_strand_id, binding_event_ref, reserved) = {
+    let reservation = {
         let mut guard = state
             .direct_conversation_bindings
             .lock()
             .expect("direct_conversation_bindings lock");
-        if let Some(existing) = guard
-            .get(pair_key)
-            .filter(|binding| binding.state == "active")
-        {
-            return Ok((existing.clone(), false));
+        if let Some(existing) = guard.get(pair_key) {
+            if existing.state == "active" && valid_contact_event_ref(&existing.binding_event_ref) {
+                DirectBindingReservation::Existing(existing.clone())
+            } else if existing.state == "pending" {
+                DirectBindingReservation::Pending(existing.binding_event_ref.clone())
+            } else {
+                reserve_direct_binding(pair_key, actor, peer, &mut guard)
+            }
+        } else {
+            reserve_direct_binding(pair_key, actor, peer, &mut guard)
         }
-        let realm_id = crate::ids::generate_realm_id();
-        let main_strand_id = crate::ids::generate("strand");
-        let binding_event_ref = crate::ids::generate_event_id();
-        let binding = DirectConversationBindingRecord {
-            participants_unordered: sorted_participants(actor, peer),
-            realm_id: realm_id.clone(),
-            main_strand_id: main_strand_id.clone(),
-            binding_event_ref: binding_event_ref.clone(),
-            state: "active".to_owned(),
-            created_at: now(),
-            updated_at: now(),
-        };
-        guard.insert(pair_key.to_owned(), binding.clone());
-        (realm_id, main_strand_id, binding_event_ref, binding)
+    };
+    let (
+        realm_id,
+        main_strand_id,
+        actor_member_event_ref,
+        peer_member_event_ref,
+        main_strand_create_ref,
+        mls_group_id,
+        reserved,
+    ) = match reservation {
+        DirectBindingReservation::Existing(binding) => return Ok((binding, false)),
+        DirectBindingReservation::Pending(binding_event_ref) => {
+            return wait_for_pending_direct_binding(state, pair_key, &binding_event_ref).await;
+        }
+        DirectBindingReservation::Reserved {
+            realm_id,
+            main_strand_id,
+            actor_member_event_ref,
+            peer_member_event_ref,
+            main_strand_create_ref,
+            mls_group_id,
+            reserved,
+        } => (
+            realm_id,
+            main_strand_id,
+            actor_member_event_ref,
+            peer_member_event_ref,
+            main_strand_create_ref,
+            mls_group_id,
+            reserved,
+        ),
+    };
+
+    let claim = match claim_direct_keypackage(
+        state,
+        actor,
+        peer,
+        &realm_id,
+        &main_strand_id,
+        &mls_group_id,
+    )
+    .await
+    {
+        Ok(claim) => claim,
+        Err(error) => {
+            rollback_reserved_direct_binding(state, pair_key, &reserved).await;
+            return Err(error);
+        }
     };
 
     // Submit the genesis events that turn the reserved ids into a real
@@ -1159,41 +1387,53 @@ pub(crate) async fn create_direct_binding_with_realm(
     if let Err(error) =
         submit_direct_realm_genesis(state, &realm_id, &main_strand_id, actor, peer).await
     {
-        let removed = {
-            let mut guard = state
-                .direct_conversation_bindings
-                .lock()
-                .expect("direct_conversation_bindings lock");
-            let removed = guard
-                .get(pair_key)
-                .is_some_and(|binding| binding.binding_event_ref == reserved.binding_event_ref);
-            if removed {
-                guard.remove(pair_key);
-            }
-            removed
-        };
-        // Mirror the in-memory rollback into durable storage so a restart
-        // mid-failure doesn't resurrect a binding pointing at an orphan realm.
-        if removed
-            && let Err(error) = state
-                .persistence
-                .direct_conversation_bindings()
-                .delete(pair_key)
-                .await
-        {
-            tracing::warn!(%error, pair_key, "failed to delete rolled-back direct binding");
-        }
+        rollback_reserved_direct_binding(state, pair_key, &reserved).await;
         return Err(AppError::internal(format!(
             "direct conversation realm genesis failed: {error}"
         )));
     }
 
+    let member_event_refs = vec![actor_member_event_ref.clone(), peer_member_event_ref.clone()];
+    let governance_binding =
+        direct_mls_governance_binding(&realm_id, &mls_group_id, &member_event_refs);
+    if let Err(error) = submit_direct_mls_genesis(
+        state,
+        actor,
+        actor_device_id,
+        &realm_id,
+        &mls_group_id,
+        &member_event_refs,
+        &governance_binding,
+    )
+    .await
+    {
+        rollback_reserved_direct_binding(state, pair_key, &reserved).await;
+        return Err(error);
+    }
+    if let Err(error) = submit_direct_mls_welcome(
+        state,
+        actor,
+        actor_device_id,
+        peer,
+        &realm_id,
+        &mls_group_id,
+        &claim,
+        &governance_binding,
+    )
+    .await
+    {
+        rollback_reserved_direct_binding(state, pair_key, &reserved).await;
+        return Err(error);
+    }
+
     // Genesis succeeded — write the binding through to durable storage so the
     // canonical pair → (realm_id, main_strand_id) projection survives restart.
+    let active_binding = activate_reserved_direct_binding(state, pair_key, &reserved)?;
+
     if let Err(error) = state
         .persistence
         .direct_conversation_bindings()
-        .put(pair_key, &reserved)
+        .put(pair_key, &active_binding)
         .await
     {
         let removed = {
@@ -1219,7 +1459,46 @@ pub(crate) async fn create_direct_binding_with_realm(
             "failed to persist direct binding: {error}"
         )));
     }
+    if let Err(error) = publish_reserved_direct_binding(state, pair_key, &active_binding) {
+        if let Err(delete_error) = state
+            .persistence
+            .direct_conversation_bindings()
+            .delete(pair_key)
+            .await
+        {
+            tracing::warn!(
+                %delete_error,
+                pair_key,
+                "failed to delete direct binding after publish failure"
+            );
+        }
+        return Err(error);
+    }
 
+    let binding_fact_payload = json!({
+        "pair_key": pair_key,
+        "participants_unordered": active_binding.participants_unordered.clone(),
+        "realm_id": realm_id,
+        "main_strand_id": main_strand_id,
+        "contact_refs": contact_fact_refs(contact),
+        "member_event_refs": member_event_refs,
+        "main_strand_create_ref": main_strand_create_ref,
+        "created_at": active_binding.created_at.to_rfc3339(),
+    });
+    crate::routing::events::projection::append_projection_event(
+        state,
+        ProjectionEventRecord {
+            event_id: reserved.binding_event_ref.clone(),
+            realm_id: super::super::recovery::principal_control_realm_for_did(actor),
+            event_kind: "ck.direct_conversation.bound".to_owned(),
+            operation_type: "direct_conversation_binding_fact".to_owned(),
+            operation_id: None,
+            sender: Some(actor.to_owned()),
+            payload: binding_fact_payload.clone(),
+            created_at: active_binding.created_at,
+        },
+    )
+    .await;
     // Binding fact (spec §6) — the canonical pair → (realm_id, main_strand_id)
     // signed fact / projection. Recorded after the realm + membership + main
     // Strand are all live so it only ever references a verifiable realm.
@@ -1227,18 +1506,382 @@ pub(crate) async fn create_direct_binding_with_realm(
         state,
         Some(actor),
         "ck.direct_conversation.bound",
-        json!({
-            "participants_unordered": reserved.participants_unordered,
-            "realm_id": realm_id,
-            "main_strand_id": main_strand_id,
-            "binding_event_ref": binding_event_ref,
-            "created_at": reserved.created_at.to_rfc3339(),
-        }),
+        binding_fact_payload,
         "accepted",
     )
     .await;
 
-    Ok((reserved, true))
+    Ok((active_binding, true))
+}
+
+fn reserve_direct_binding(
+    pair_key: &str,
+    actor: &str,
+    peer: &str,
+    guard: &mut BTreeMap<String, DirectConversationBindingRecord>,
+) -> DirectBindingReservation {
+    let realm_id = crate::ids::generate_realm_id();
+    let main_strand_id = crate::ids::generate("strand");
+    let binding_event_ref = crate::ids::generate_event_id();
+    let actor_member_event_ref = crate::ids::generate_event_id();
+    let peer_member_event_ref = crate::ids::generate_event_id();
+    let main_strand_create_ref = crate::ids::generate_event_id();
+    let mls_group_id = crate::ids::generate("mls_group");
+    let binding = DirectConversationBindingRecord {
+        participants_unordered: sorted_participants(actor, peer),
+        realm_id: realm_id.clone(),
+        main_strand_id: main_strand_id.clone(),
+        binding_event_ref,
+        state: "pending".to_owned(),
+        created_at: now(),
+        updated_at: now(),
+    };
+    guard.insert(pair_key.to_owned(), binding.clone());
+    DirectBindingReservation::Reserved {
+        realm_id,
+        main_strand_id,
+        actor_member_event_ref,
+        peer_member_event_ref,
+        main_strand_create_ref,
+        mls_group_id,
+        reserved: binding,
+    }
+}
+
+fn activate_reserved_direct_binding(
+    state: &AppState,
+    pair_key: &str,
+    reserved: &DirectConversationBindingRecord,
+) -> Result<DirectConversationBindingRecord, AppError> {
+    let mut active = reserved.clone();
+    active.state = "active".to_owned();
+    active.updated_at = now();
+    let guard = state
+        .direct_conversation_bindings
+        .lock()
+        .expect("direct_conversation_bindings lock");
+    let still_reserved = guard
+        .get(pair_key)
+        .is_some_and(|binding| binding.binding_event_ref == reserved.binding_event_ref);
+    if !still_reserved {
+        return Err(AppError::new(
+            ErrorCode::TemporarilyUnavailable,
+            "direct conversation binding reservation was superseded",
+        ));
+    }
+    Ok(active)
+}
+
+fn publish_reserved_direct_binding(
+    state: &AppState,
+    pair_key: &str,
+    active: &DirectConversationBindingRecord,
+) -> Result<(), AppError> {
+    let mut guard = state
+        .direct_conversation_bindings
+        .lock()
+        .expect("direct_conversation_bindings lock");
+    let still_reserved = guard
+        .get(pair_key)
+        .is_some_and(|binding| binding.binding_event_ref == active.binding_event_ref);
+    if !still_reserved {
+        return Err(AppError::new(
+            ErrorCode::TemporarilyUnavailable,
+            "direct conversation binding reservation was superseded before publish",
+        ));
+    }
+    guard.insert(pair_key.to_owned(), active.clone());
+    Ok(())
+}
+
+async fn wait_for_pending_direct_binding(
+    state: &AppState,
+    pair_key: &str,
+    binding_event_ref: &str,
+) -> Result<(DirectConversationBindingRecord, bool), AppError> {
+    for _ in 0..DIRECT_BINDING_PENDING_POLL_ATTEMPTS {
+        tokio::time::sleep(std::time::Duration::from_millis(
+            DIRECT_BINDING_PENDING_POLL_DELAY_MS,
+        ))
+        .await;
+        let observed = state
+            .direct_conversation_bindings
+            .lock()
+            .expect("direct_conversation_bindings lock")
+            .get(pair_key)
+            .cloned();
+        match observed {
+            Some(binding)
+                if binding.binding_event_ref == binding_event_ref && binding.state == "active" =>
+            {
+                return Ok((binding, false));
+            }
+            Some(binding) if binding.binding_event_ref == binding_event_ref => {}
+            _ => {
+                return Err(AppError::new(
+                    ErrorCode::TemporarilyUnavailable,
+                    "direct conversation binding reservation did not complete",
+                ));
+            }
+        }
+    }
+    Err(AppError::new(
+        ErrorCode::TemporarilyUnavailable,
+        "direct conversation binding reservation is still pending",
+    ))
+}
+
+async fn rollback_reserved_direct_binding(
+    state: &AppState,
+    pair_key: &str,
+    reserved: &DirectConversationBindingRecord,
+) {
+    let removed = {
+        let mut guard = state
+            .direct_conversation_bindings
+            .lock()
+            .expect("direct_conversation_bindings lock");
+        let removed = guard
+            .get(pair_key)
+            .is_some_and(|binding| binding.binding_event_ref == reserved.binding_event_ref);
+        if removed {
+            guard.remove(pair_key);
+        }
+        removed
+    };
+    if removed
+        && let Err(error) = state
+            .persistence
+            .direct_conversation_bindings()
+            .delete(pair_key)
+            .await
+    {
+        tracing::warn!(%error, pair_key, "failed to delete rolled-back direct binding");
+    }
+}
+
+async fn claim_direct_keypackage(
+    state: &AppState,
+    actor: &str,
+    peer: &str,
+    realm_id: &str,
+    main_strand_id: &str,
+    mls_group_id: &str,
+) -> Result<cokret_sdk::KeypackageClaimRecord, AppError> {
+    let target_principal_id = Did::new(peer.to_owned()).map_err(|_| {
+        direct_resolve_precondition(
+            crate::error::reasons::PEER_UNRESOLVABLE,
+            "direct conversation peer DID is invalid",
+        )
+    })?;
+    let requester = Did::new(actor.to_owned()).map_err(|_| {
+        direct_resolve_precondition(
+            crate::error::reasons::PEER_UNRESOLVABLE,
+            "direct conversation requester DID is invalid",
+        )
+    })?;
+    let body = cokret_sdk::KeyPackagesClaimRequestBody {
+        target_principal_id,
+        intended_realm_id: RealmId::new(realm_id.to_owned())
+            .map_err(|error| AppError::internal(format!("generated realm_id invalid: {error}")))?,
+        requester,
+        required_capabilities: vec!["ck.mls.rfc9420".to_owned()],
+        claim_nonce: URL_SAFE_NO_PAD.encode(format!("direct:{realm_id}:{mls_group_id}").as_bytes()),
+        expires_at: now() + chrono::Duration::minutes(5),
+        target_device_ids: Vec::new(),
+        minimal_metadata_allowed: Some(true),
+        timeout_ms: Some(5_000),
+        strand_id: Some(StrandId::new(main_strand_id.to_owned()).map_err(|error| {
+            AppError::internal(format!("generated main_strand_id invalid: {error}"))
+        })?),
+        mls_group_id: Some(mls_group_id.to_owned()),
+        proofs: Vec::new(),
+    };
+    let outcome = crate::routing::mls::claim_keypackages_for_request(state, &body)
+        .await
+        .map_err(|error| match error.wire_code_override.as_deref() {
+            Some("claim_generation_mismatch") => direct_resolve_precondition(
+                crate::error::reasons::PEER_UNRESOLVABLE,
+                "direct conversation peer has no accepted cross-signing control state",
+            ),
+            _ => error,
+        })?;
+    outcome
+        .claims
+        .into_iter()
+        .next()
+        .ok_or_else(direct_keypackage_unknown)
+}
+
+fn direct_keypackage_unknown() -> AppError {
+    direct_resolve_precondition(
+        crate::error::reasons::KEYPACKAGE_UNKNOWN,
+        "direct conversation peer has no claimable KeyPackage",
+    )
+}
+
+async fn submit_direct_mls_genesis(
+    state: &AppState,
+    actor: &str,
+    actor_device_id: &str,
+    realm_id: &str,
+    mls_group_id: &str,
+    member_event_refs: &[String],
+    governance_binding: &Value,
+) -> Result<(), AppError> {
+    let effective_scope = json!({"kind": "realm", "realm_id": realm_id});
+    let payload = json!({
+        "mls_group_id": mls_group_id,
+        "effective_scope": effective_scope,
+        "epoch": 0,
+        "creator_principal_id": actor,
+        "creator_device_id": actor_device_id,
+        "cipher_suite": "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
+        "group_info_digest": cokret_sdk::canonical::sha256_digest(format!("direct-group-info:{realm_id}:{mls_group_id}")),
+        "ratchet_tree_digest": cokret_sdk::canonical::sha256_digest(format!("direct-ratchet-tree:{realm_id}:{mls_group_id}")),
+        "covered_seals": member_event_refs,
+        "governance_binding": governance_binding,
+        "created_at": now().to_rfc3339_opts(SecondsFormat::Secs, true),
+    });
+    let op = direct_mls_operation(realm_id, crate::kinds::CK_MLS_GENESIS, payload)?;
+    let effect = crate::reducer::mls::apply_group_genesis(&mut state.projection.lock().unwrap(), &op);
+    match &effect {
+        crate::reducer::ProjectionEffect::Mls(crate::reducer::MlsEffect::GroupGenesis { .. }) => {
+            crate::routing::events::projection::mirror_mls_effect_to_persistence(
+                state,
+                actor,
+                actor_device_id,
+                &op,
+                &effect,
+            )
+            .await;
+            Ok(())
+        }
+        crate::reducer::ProjectionEffect::Rejected { reason } => Err(AppError::internal(format!(
+            "direct conversation MLS genesis rejected: {reason}"
+        ))),
+        other => Err(AppError::internal(format!(
+            "unexpected direct conversation MLS genesis effect: {other:?}"
+        ))),
+    }
+}
+
+async fn submit_direct_mls_welcome(
+    state: &AppState,
+    actor: &str,
+    actor_device_id: &str,
+    peer: &str,
+    realm_id: &str,
+    mls_group_id: &str,
+    claim: &cokret_sdk::KeypackageClaimRecord,
+    governance_binding: &Value,
+) -> Result<(), AppError> {
+    let welcome_bytes = format!("direct-mls-welcome:{realm_id}:{mls_group_id}:{}", claim.claim_id)
+        .into_bytes();
+    let welcome_digest = cokret_sdk::canonical::sha256_digest(&welcome_bytes);
+    let created_at = now();
+    let signature_seed = cokret_sdk::canonical::sha256_digest(format!(
+        "direct-welcome-signature:{realm_id}:{mls_group_id}:{}",
+        claim.claim_id
+    ));
+    let payload = json!({
+        "mls_group_id": mls_group_id,
+        "epoch": 1,
+        "recipient_principal_id": peer,
+        "recipient_device_id": claim.device_id.as_str(),
+        "keypackage_ref": claim.keypackage_ref.as_str(),
+        "keypackage_digest": claim.keypackage_digest.as_str(),
+        "claim_id": claim.claim_id.as_str(),
+        "claim_ref": {
+            "claim_id": claim.claim_id.as_str(),
+            "keypackage_ref": claim.keypackage_ref.as_str(),
+            "keypackage_digest": claim.keypackage_digest.as_str(),
+            "capabilities_digest": claim.capabilities_digest.as_str(),
+            "ssk_generation": claim.ssk_generation,
+        },
+        "claim_envelope": {
+            "keypackage_ref": claim.keypackage_ref.as_str(),
+            "keypackage_digest": claim.keypackage_digest.as_str(),
+            "intended_realm_id": realm_id,
+            "claim_id": claim.claim_id.as_str(),
+            "requester_did": actor,
+            "ssk_generation": claim.ssk_generation,
+            "nonce": URL_SAFE_NO_PAD.encode(format!("direct-welcome:{realm_id}:{mls_group_id}:{}", claim.claim_id).as_bytes()),
+            "welcome_digest": welcome_digest,
+            "created_at": created_at.to_rfc3339_opts(SecondsFormat::Secs, true),
+            "signature": {
+                "kid": format!("{actor}#self-signing"),
+                "alg": "EdDSA",
+                "sig": URL_SAFE_NO_PAD.encode(signature_seed.as_bytes()),
+            }
+        },
+        "welcome_ref": format!("ck:blob:{}", cokret_sdk::canonical::sha256_digest(&welcome_bytes)),
+        "welcome_bytes_b64": URL_SAFE_NO_PAD.encode(&welcome_bytes),
+        "expires_at": (created_at + chrono::Duration::days(1)).to_rfc3339_opts(SecondsFormat::Secs, true),
+        "governance_binding": governance_binding,
+    });
+    let op = direct_mls_operation(realm_id, crate::kinds::CK_MLS_WELCOME, payload)?;
+    let effect =
+        crate::reducer::mls::apply_welcome_enqueue(&mut state.projection.lock().unwrap(), &op);
+    match &effect {
+        crate::reducer::ProjectionEffect::Mls(crate::reducer::MlsEffect::WelcomeEnqueued {
+            ..
+        }) => {
+            crate::routing::events::projection::mirror_mls_effect_to_persistence(
+                state,
+                actor,
+                actor_device_id,
+                &op,
+                &effect,
+            )
+            .await;
+            Ok(())
+        }
+        crate::reducer::ProjectionEffect::Rejected { reason } => Err(AppError::internal(format!(
+            "direct conversation MLS welcome rejected: {reason}"
+        ))),
+        other => Err(AppError::internal(format!(
+            "unexpected direct conversation MLS welcome effect: {other:?}"
+        ))),
+    }
+}
+
+fn direct_mls_governance_binding(
+    realm_id: &str,
+    mls_group_id: &str,
+    member_event_refs: &[String],
+) -> Value {
+    let effective_scope = json!({"kind": "realm", "realm_id": realm_id});
+    json!({
+        "binding_version": 1,
+        "encoding_profile": "cbor-deterministic-rfc8949-v1",
+        "realm_id": realm_id,
+        "effective_scope": effective_scope,
+        "mls_group_id": mls_group_id,
+        "previous_epoch": 0,
+        "next_epoch": 0,
+        "membership_frontier": member_event_refs,
+        "policy_root": cokret_sdk::canonical::sha256_digest(format!("direct-policy:{realm_id}:{mls_group_id}")),
+        "binding_profile": crate::kinds::MLS_GOVERNANCE_BINDING_FULL_PROFILE,
+        "reducer_profile": crate::kinds::MLS_REDUCER_PROFILE_V1,
+    })
+}
+
+fn direct_mls_operation(
+    realm_id: &str,
+    object_type: &str,
+    payload: Value,
+) -> Result<cokret_sdk::Operation, AppError> {
+    let operation_id = direct_operation_id()
+        .map_err(|error| AppError::internal(format!("direct MLS operation id failed: {error}")))?;
+    let realm_id = RealmId::new(realm_id.to_owned())
+        .map_err(|error| AppError::internal(format!("direct MLS realm id failed: {error}")))?;
+    Ok(cokret_sdk::Operation::create(
+        operation_id,
+        realm_id,
+        object_type,
+        payload,
+    ))
 }
 
 fn sorted_participants(actor: &str, peer: &str) -> Vec<String> {
@@ -1296,7 +1939,7 @@ fn direct_realm_create_operation(
             "id": realm_id,
             "schema": "ck.schema.realm.v1",
             "title": "Direct conversation",
-            "trust_domain": "ck:trust_domain:soland.local",
+            "trust_domain": state.config.trust_domain.clone(),
             "created_by": creator,
             "schema_refs": ["ck.schema.realm.v1"],
             "default_discoverability": "invite",

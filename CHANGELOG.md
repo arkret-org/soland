@@ -176,9 +176,9 @@ below. Producers on the old wire MUST upgrade.
   4-condition accept gate (membership / policy / key-share-origin /
   audit-emit-queued) and `late_recovery_rejected_membership` reject for
   revoked actors (T16).
-- **Federation idempotency service-key binding** struct
-  (`FederationIdempotencyServiceBinding`) + `historical_only=true`
-  marker for post-key-revoke replays (T14).
+- **Federation idempotency service-key binding** persisted on transaction
+  records (`origin_key_state_digest`, `local_peer_policy_digest`) +
+  `historical_only=true` marker for post-key-revoke replays (T14).
 - **Identity_link cache `policy_frontier_digest`** helper +
   `IdentityLinkInvalidationTrigger` enum for the five eager-invalidation
   classes (T13).

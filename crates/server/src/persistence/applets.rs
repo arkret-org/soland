@@ -150,6 +150,8 @@ struct AppletRegistrationRow {
     install_id: Option<String>,
     #[diesel(sql_type = Nullable<Jsonb>)]
     install_response: Option<Value>,
+    #[diesel(sql_type = Nullable<Jsonb>)]
+    install_execution: Option<Value>,
     #[diesel(sql_type = Jsonb)]
     ghosts: Value,
 }
@@ -193,6 +195,7 @@ impl From<AppletRegistrationRow> for Value {
             "install_body_digest": row.install_body_digest,
             "install_id": row.install_id,
             "install_response": row.install_response,
+            "install_execution": row.install_execution,
             "ghosts": row.ghosts,
         })
     }
@@ -256,6 +259,7 @@ impl AppletStore for PgAppletStore {
         let install_body_digest = optional_record_str(&record, "install_body_digest");
         let install_id = optional_record_str(&record, "install_id");
         let install_response = optional_record_value(&record, "install_response");
+        let install_execution = optional_record_value(&record, "install_execution");
         let ghosts = record
             .get("ghosts")
             .cloned()
@@ -266,9 +270,9 @@ impl AppletStore for PgAppletStore {
              (id, namespace, owner_actor_id, registry_did, bot_actor_id, portal_realm_id, \
               capabilities, manifest, package, namespaces, allow_ghost_actors, status, \
               registered_at, revoked_at, idempotency_key, install_body_digest, install_id, \
-              install_response, ghosts, updated_at) \
+              install_response, install_execution, ghosts, updated_at) \
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, \
-                     $16, $17, $18, $19, NOW()) \
+                     $16, $17, $18, $19, $20, NOW()) \
              ON CONFLICT (id) DO UPDATE SET \
               namespace = EXCLUDED.namespace, \
               owner_actor_id = EXCLUDED.owner_actor_id, \
@@ -287,6 +291,7 @@ impl AppletStore for PgAppletStore {
               install_body_digest = EXCLUDED.install_body_digest, \
               install_id = EXCLUDED.install_id, \
               install_response = EXCLUDED.install_response, \
+              install_execution = EXCLUDED.install_execution, \
               ghosts = EXCLUDED.ghosts, \
               updated_at = NOW()",
         )
@@ -308,6 +313,7 @@ impl AppletStore for PgAppletStore {
         .bind::<Nullable<Text>, _>(&install_body_digest)
         .bind::<Nullable<Text>, _>(&install_id)
         .bind::<Nullable<Jsonb>, _>(&install_response)
+        .bind::<Nullable<Jsonb>, _>(&install_execution)
         .bind::<Jsonb, _>(&ghosts)
         .execute(&mut *conn)
         .await
@@ -400,7 +406,7 @@ fn applet_registration_select_sql(suffix: &str) -> String {
         "SELECT id, namespace, owner_actor_id, registry_did, bot_actor_id, portal_realm_id, \
          capabilities, manifest, package, namespaces, allow_ghost_actors, status, \
          registered_at, revoked_at, idempotency_key, install_body_digest, install_id, \
-         install_response, ghosts FROM applet_registrations {suffix}"
+         install_response, install_execution, ghosts FROM applet_registrations {suffix}"
     )
 }
 

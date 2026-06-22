@@ -165,6 +165,8 @@ pub mod reasons {
     pub const REACTION_SCOPE_MISMATCH: &str = core_error::REASON_REACTION_SCOPE_MISMATCH;
     pub const CONTACT_NOT_ACCEPTED: &str = core_error::REASON_CONTACT_NOT_ACCEPTED;
     pub const CONTACT_CONSENT_MISSING: &str = core_error::REASON_CONTACT_CONSENT_MISSING;
+    pub const PEER_UNRESOLVABLE: &str = core_error::REASON_PEER_UNRESOLVABLE;
+    pub const KEYPACKAGE_UNKNOWN: &str = core_error::REASON_KEYPACKAGE_UNKNOWN;
 
     /// CKP-0007 reason codes registered in this round. Test scaffolding
     /// uses this slice to assert the full set is surfaced through

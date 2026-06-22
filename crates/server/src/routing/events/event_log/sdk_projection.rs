@@ -450,6 +450,18 @@ fn sdk_event_from_record(
             json!(tombstone.sealed),
         );
         unsigned.insert("physical_delete".to_owned(), json!(false));
+        unsigned.insert(
+            "retention_risk_ui".to_owned(),
+            json!(retention_risk_ui_flag(&tombstone)),
+        );
+        unsigned.insert(
+            "retention_risk_audit".to_owned(),
+            json!(retention_risk_audit_flag(&tombstone)),
+        );
+        unsigned.insert(
+            "retention_risk_reason".to_owned(),
+            json!(retention_risk_reason(&tombstone)),
+        );
     }
     Ok(Event {
         event_id,
@@ -532,6 +544,9 @@ fn event_visibility_metadata(state: &AppState, record: &CanonicalEventRecord) ->
         metadata["retention_tombstoned_at"] = json!(tombstone.tombstoned_at.to_rfc3339());
         metadata["retention_seal_preserved"] = json!(tombstone.sealed);
         metadata["physical_delete"] = json!(false);
+        metadata["retention_risk_ui"] = json!(retention_risk_ui_flag(&tombstone));
+        metadata["retention_risk_audit"] = json!(retention_risk_audit_flag(&tombstone));
+        metadata["retention_risk_reason"] = json!(retention_risk_reason(&tombstone));
     }
     metadata
 }
@@ -774,16 +789,10 @@ fn circle_event_visible_to_session(
         .circle_scope_visible_to_actor_at(&scope_circle_id, &session.actor, record.received_at)
 }
 
-/// Scan the durable Event store for the most
-/// recent `ck.realm.read_receipt_policy` event in `realm_id` and return
-/// `(disclosure, visibility, scope_overrides_allowed,
-/// allow_public_receipts_on_world_readable,
-/// allow_forced_public_world_readable_receipts)` from its payload.
-/// Returns `None` when no policy event has been written for this Realm —
-/// caller treats that as the spec default `Optional` / `Members` /
-/// `scope_overrides_allowed=true` /
-/// `allow_public_receipts_on_world_readable=false` /
-/// `allow_forced_public_world_readable_receipts=false`.
+/// Scan the projected cell or durable Event store for the most recent
+/// `ck.realm.read_receipt_policy` event in `realm_id` and return its typed
+/// SDK policy payload. Returns `None` when no policy event has been written
+/// for this Realm; callers use `ReadReceiptPolicy::default()`.
 ///
 /// Used by ephemeral `ck.receipt.read` admission and future receipt fanout
 /// handlers to enforce the Realm policy.
@@ -794,7 +803,7 @@ fn circle_event_visible_to_session(
 pub async fn effective_read_receipt_policy_for_realm(
     state: &AppState,
     realm_id: &str,
-) -> Option<(String, String, bool, bool, bool)> {
+) -> Option<cokret_sdk::ReadReceiptPolicy> {
     // Cell-keyed fast path. The Move/Seal pipeline writes the
     // `ck.component.realm.read_receipt_policy.v1` resolved CasRegister
     // value into `ProjectionState::cells` after every apply_seal; we
@@ -807,35 +816,7 @@ pub async fn effective_read_receipt_policy_for_realm(
         ))
         .ok()?;
         if let Some(value) = proj.cell_value(&cell_id) {
-            let disclosure = value
-                .get("disclosure")
-                .and_then(Value::as_str)
-                .unwrap_or("optional")
-                .to_owned();
-            let visibility = value
-                .get("visibility")
-                .and_then(Value::as_str)
-                .unwrap_or("members")
-                .to_owned();
-            let scope_overrides_allowed = value
-                .get("scope_overrides_allowed")
-                .and_then(Value::as_bool)
-                .unwrap_or(true);
-            let allow_public_receipts_on_world_readable = value
-                .get("allow_public_receipts_on_world_readable")
-                .and_then(Value::as_bool)
-                .unwrap_or(false);
-            let allow_forced_public_world_readable_receipts = value
-                .get("allow_forced_public_world_readable_receipts")
-                .and_then(Value::as_bool)
-                .unwrap_or(false);
-            return Some((
-                disclosure,
-                visibility,
-                scope_overrides_allowed,
-                allow_public_receipts_on_world_readable,
-                allow_forced_public_world_readable_receipts,
-            ));
+            return read_receipt_policy_from_value(value);
         }
     }
     // Cold-path fallback: linear scan of the durable Event store. Used at
@@ -860,36 +841,12 @@ pub async fn effective_read_receipt_policy_for_realm(
     let record = latest?;
     // The policy state lives on the envelope payload; CanonicalEventRecord
     // stores the full envelope, so we drill down to `envelope.payload`.
-    let payload = record.envelope.get("payload").and_then(Value::as_object)?;
-    let disclosure = payload
-        .get("disclosure")
-        .and_then(Value::as_str)
-        .unwrap_or("optional")
-        .to_owned();
-    let visibility = payload
-        .get("visibility")
-        .and_then(Value::as_str)
-        .unwrap_or("members")
-        .to_owned();
-    let scope_overrides_allowed = payload
-        .get("scope_overrides_allowed")
-        .and_then(Value::as_bool)
-        .unwrap_or(true);
-    let allow_public_receipts_on_world_readable = payload
-        .get("allow_public_receipts_on_world_readable")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    let allow_forced_public_world_readable_receipts = payload
-        .get("allow_forced_public_world_readable_receipts")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    Some((
-        disclosure,
-        visibility,
-        scope_overrides_allowed,
-        allow_public_receipts_on_world_readable,
-        allow_forced_public_world_readable_receipts,
-    ))
+    let payload = record.envelope.get("payload")?;
+    read_receipt_policy_from_value(payload)
+}
+
+fn read_receipt_policy_from_value(value: &Value) -> Option<cokret_sdk::ReadReceiptPolicy> {
+    serde_json::from_value(value.clone()).ok()
 }
 
 #[cfg(test)]

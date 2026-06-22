@@ -488,23 +488,66 @@ fn audit_erasure_receipt_records_scope_realm_id_and_pending_fanout() {
 }
 
 #[test]
-fn realm_create_log_appends_on_repeated_create_events() {
+fn realm_create_bootstraps_creator_member_and_rejects_duplicate_create() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
-    for owner in ["did:web:alice", "did:web:bob"] {
-        state.apply(
-            &make_operation(
-                crate::kinds::CK_REALM_CREATE,
-                "ck:realm:01904100-0000-7000-8000-cfc039892036",
-                serde_json::json!({"action": "create", "owner": owner}),
-            ),
-            &hlc,
-        );
-    }
+    let realm_id = "ck:realm:01904100-0000-7000-8000-cfc039892036";
+    let first = state.apply(
+        &make_operation(
+            crate::kinds::CK_REALM_CREATE,
+            realm_id,
+            serde_json::json!({
+                "object": {
+                    "created_by": "did:web:alice",
+                    "title": "Spec Realm",
+                    "trust_domain": "ck:trust_domain:example.net",
+                    "encryption_profile": "none",
+                    "notary_profile": "single_did",
+                    "notary": {"type": "single_did", "did": "did:web:notary.example"}
+                }
+            }),
+        ),
+        &hlc,
+    );
+    assert!(matches!(
+        first,
+        ProjectionEffect::RealmLifecycle { action, .. } if action == "create"
+    ));
     let log = state
-        .realm_create_log("ck:realm:01904100-0000-7000-8000-cfc039892036")
+        .realm_create_log(realm_id)
         .unwrap();
-    assert_eq!(log.len(), 2, "ordered-log should accumulate entries");
+    assert_eq!(log.len(), 1, "realm.create should write one genesis entry");
+    let member = state
+        .member(realm_id, "did:web:alice")
+        .expect("creator should be projected as a joined member");
+    assert_eq!(member.state, "join");
+    assert_eq!(
+        state.member_fsm_state("did:web:alice").as_deref(),
+        Some("join")
+    );
+
+    let duplicate = state.apply(
+        &make_operation(
+            crate::kinds::CK_REALM_CREATE,
+            realm_id,
+            serde_json::json!({
+                "object": {
+                    "created_by": "did:web:bob",
+                    "title": "Duplicate Realm",
+                    "trust_domain": "ck:trust_domain:example.net",
+                    "encryption_profile": "none",
+                    "notary_profile": "single_did",
+                    "notary": {"type": "single_did", "did": "did:web:notary.example"}
+                }
+            }),
+        ),
+        &hlc,
+    );
+    assert!(matches!(
+        duplicate,
+        ProjectionEffect::Rejected { reason } if reason == "realm_already_exists"
+    ));
+    assert_eq!(state.realm_create_log(realm_id).unwrap().len(), 1);
 }
 
 #[test]

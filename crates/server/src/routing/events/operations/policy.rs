@@ -35,6 +35,11 @@ pub fn operation_policy_reason_code(message: &str) -> (salvo::http::StatusCode, 
             salvo::http::StatusCode::FORBIDDEN,
             "interop_session_writer_unauthorized",
         )
+    } else if message == cokret_sdk::ERROR_CODE_READ_RECEIPT_COMPLIANCE_FLOOR_VIOLATED {
+        (
+            salvo::http::StatusCode::UNPROCESSABLE_ENTITY,
+            cokret_sdk::ERROR_CODE_READ_RECEIPT_COMPLIANCE_FLOOR_VIOLATED,
+        )
     } else if matches!(
         message,
         "read_receipt_visibility_combination_invalid"
@@ -518,29 +523,32 @@ fn agent_interop_session_delegate_allows(
         .grants_for_subject(actor, operation.realm_id.as_str())
         .iter()
         .any(|grant| {
-            grant.actions.iter().any(|action| {
-                action == "*"
-                    || actions
-                        .iter()
-                        .any(|candidate| action.as_str() == *candidate)
-            }) && (crate::authz::resource_matches(&grant.resource, operation.realm_id.as_str())
-                || crate::authz::resource_matches(&grant.resource, session_id))
-                && !grant.constraints.iter().any(|constraint| {
-                    matches!(
-                        constraint,
-                        crate::authz::Constraint::Decision {
-                            decision: crate::authz::GrantDecisionVerdict::Deny
-                                | crate::authz::GrantDecisionVerdict::Quarantine
-                                | crate::authz::GrantDecisionVerdict::RequireReview
-                        }
-                    )
-                }) && grant.constraints.iter().any(|constraint| {
+            let action_allowed = grant.actions.iter().any(|action| {
+                actions
+                    .iter()
+                    .any(|candidate| action.as_str() == *candidate)
+            });
+            let resource_allowed =
+                crate::authz::resource_matches(&grant.resource, operation.realm_id.as_str())
+                    || crate::authz::resource_matches(&grant.resource, session_id);
+            let has_blocking_decision = grant.constraints.iter().any(|constraint| {
+                matches!(
+                    constraint,
+                    crate::authz::Constraint::Decision {
+                        decision: crate::authz::GrantDecisionVerdict::Deny
+                            | crate::authz::GrantDecisionVerdict::Quarantine
+                            | crate::authz::GrantDecisionVerdict::RequireReview
+                    }
+                )
+            });
+            let session_allowed = grant.constraints.iter().any(|constraint| {
                 matches!(
                     constraint,
                     crate::authz::Constraint::AllowedSessionIds { allowed_session_ids }
                         if allowed_session_ids.iter().any(|allowed| allowed.as_ref() == session_id)
                 )
-            })
+            });
+            action_allowed && resource_allowed && !has_blocking_decision && session_allowed
         })
 }
 
@@ -1243,7 +1251,7 @@ async fn validate_message_edit_redact_window_policy(
         grant
             .actions
             .iter()
-            .any(|action| action == broad_action || action == "*")
+            .any(|action| action == broad_action)
     });
     if holds_broad {
         return Ok(());
@@ -1482,17 +1490,65 @@ fn agent_participation_ceiling_change(
 /// `agent_participation` ceiling MUST NOT widen its parent ceiling. The
 /// parent ceiling is the deployment default (`ALL` in dev) intersected
 /// with any persisted parent-scope ceiling rows.
+fn agent_participation_parent_scope_keys(
+    state: &AppState,
+    operation: &Operation,
+    scope_kind: &str,
+    fallback_parent_keys: Vec<String>,
+) -> Vec<String> {
+    if scope_kind != "strand" {
+        return fallback_parent_keys;
+    }
+    let realm_uuid = ap_uuid_part(operation.realm_id.as_str()).to_owned();
+    let mut parent_keys = vec![format!("realm:{realm_uuid}")];
+    let scope_circle_id = operation
+        .payload
+        .pointer("/object/scope_circle_id")
+        .or_else(|| operation.payload.get("scope_circle_id"))
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned)
+        .or_else(|| {
+            let strand_id = operation
+                .payload
+                .get("strand_id")
+                .and_then(Value::as_str)
+                .or_else(|| {
+                    operation
+                        .payload
+                        .get("object")
+                        .and_then(|object| object.get("id"))
+                        .and_then(Value::as_str)
+                })?;
+            state
+                .projection
+                .lock()
+                .ok()
+                .and_then(|projection| projection.strand_scope_circle_id(strand_id))
+        });
+    if let Some(circle_id) = scope_circle_id {
+        parent_keys.push(crate::routing::agent_participation::circle_scope_key(
+            operation.realm_id.as_str(),
+            &circle_id,
+        ));
+    }
+    parent_keys
+}
+
+/// Admission gate (CKP-0016): an inner-scope `agent_participation` ceiling
+/// must not widen its parent ceiling.
 pub async fn validate_agent_participation_ceiling(
     state: &AppState,
     operations: &[Operation],
 ) -> Result<(), &'static str> {
     use cokret_sdk::models::{AgentParticipation, validate_agent_participation_tightens};
     for operation in operations {
-        let Some((_scope_kind, _scope_key, child, parent_keys)) =
+        let Some((scope_kind, _scope_key, child, parent_keys)) =
             agent_participation_ceiling_change(operation)
         else {
             continue;
         };
+        let parent_keys =
+            agent_participation_parent_scope_keys(state, operation, scope_kind, parent_keys);
         let mut parent = AgentParticipation::ALL;
         if !parent_keys.is_empty() {
             let rows = state
@@ -1530,10 +1586,6 @@ pub(crate) fn agent_participation_ceiling_record(operation: &Operation) -> Optio
     }))
 }
 
-fn ap_effective_reply(selection: &Value, ceiling: cokret_sdk::models::AgentParticipation) -> bool {
-    ap_bool(selection, "reply") && ceiling.reply
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum AgentParticipationMode {
     Reply,
@@ -1551,14 +1603,11 @@ impl AgentParticipationMode {
 
 fn ap_effective_for_mode(
     mode: AgentParticipationMode,
-    selection: &Value,
-    ceiling: cokret_sdk::models::AgentParticipation,
+    effective: cokret_sdk::models::AgentParticipation,
 ) -> bool {
     match mode {
-        AgentParticipationMode::Reply => ap_effective_reply(selection, ceiling),
-        AgentParticipationMode::ActOnBehalf => {
-            ap_bool(selection, "act_on_behalf") && ceiling.act_on_behalf
-        }
+        AgentParticipationMode::Reply => effective.reply,
+        AgentParticipationMode::ActOnBehalf => effective.act_on_behalf,
     }
 }
 
@@ -1609,7 +1658,7 @@ fn validate_agent_act_on_behalf_authorization_ref(
     let action_allowed = grant
         .actions
         .iter()
-        .any(|candidate| candidate == action || candidate == "*");
+        .any(|candidate| candidate == action);
     if !action_allowed || !crate::authz::resource_matches(&grant.resource, resource) {
         return Err("agent_act_on_behalf_authorization_ref_scope");
     }
@@ -1884,7 +1933,7 @@ fn validate_agent_context_authorization_ref(
     let action_allowed = grant
         .actions
         .iter()
-        .any(|candidate| candidate == action || candidate == "*");
+        .any(|candidate| candidate == action);
     if !action_allowed || !crate::authz::resource_matches(&grant.resource, resource) {
         return Err("agent_context_authorization_ref_scope");
     }
@@ -1941,7 +1990,6 @@ pub async fn validate_agent_reply_participation(
     state: &AppState,
     operations: &[Operation],
 ) -> Result<(), &'static str> {
-    use cokret_sdk::models::AgentParticipation;
     for operation in operations {
         let Some((agent_principal_id, mode)) =
             operation_agent_write_context(state, operation).await?
@@ -1963,53 +2011,29 @@ pub async fn validate_agent_reply_participation(
             &agent_principal_id,
             authorization_ref.as_deref(),
         )?;
-        let realm_uuid = ap_uuid_part(operation.realm_id.as_str()).to_owned();
-        let realm_key = format!("realm:{realm_uuid}");
-        let strand_key = operation
+        let strand_id = operation
             .payload
             .get("strand_id")
             .and_then(Value::as_str)
-            .or_else(|| operation.payload.get("thread_id").and_then(Value::as_str))
-            .map(|f| format!("strand:{realm_uuid}:{}", ap_uuid_part(f)));
-        let selections = state
-            .persistence
-            .agent_participation()
-            .list_selections(&agent_principal_id)
-            .await
-            .unwrap_or_default();
-        let find = |key: &str| {
-            selections
-                .iter()
-                .find(|r| r.get("scope_key").and_then(Value::as_str) == Some(key))
-                .cloned()
-        };
-        let selection = strand_key
-            .as_deref()
-            .and_then(find)
-            .or_else(|| find(&realm_key));
-        let Some(selection) = selection else {
+            .or_else(|| operation.payload.get("thread_id").and_then(Value::as_str));
+        let Some(scope_keys) = crate::routing::agent_participation::scope_keys_for_message(
+            state,
+            operation.realm_id.as_str(),
+            strand_id,
+        ) else {
             return Err(mode.rejection_reason());
         };
-        let selection_scope_key = selection
-            .get("scope_key")
-            .and_then(Value::as_str)
-            .unwrap_or(realm_key.as_str())
-            .to_owned();
-        let ceiling_rows = state
-            .persistence
-            .agent_participation()
-            .ceilings_for_scope_keys(&[realm_key.clone(), selection_scope_key])
+        let Some(resolved) =
+            crate::routing::agent_participation::resolve_agent_participation_for_scope_keys(
+                state,
+                &agent_principal_id,
+                &scope_keys,
+            )
             .await
-            .unwrap_or_default();
-        let mut ceiling = AgentParticipation::ALL;
-        for row in &ceiling_rows {
-            ceiling = ceiling.intersect(AgentParticipation {
-                reply: ap_bool(row, "reply"),
-                accept_third_party_mention: ap_bool(row, "accept_third_party_mention"),
-                act_on_behalf: ap_bool(row, "act_on_behalf"),
-            });
-        }
-        if !ap_effective_for_mode(mode, &selection, ceiling) {
+        else {
+            return Err(mode.rejection_reason());
+        };
+        if !ap_effective_for_mode(mode, resolved.effective) {
             return Err(mode.rejection_reason());
         }
         if let Some(authorization_ref) = authorization_ref {

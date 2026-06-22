@@ -6,9 +6,9 @@
 //! - `GET  /_cokret/self/authz/invites`           — pending invites visible to the actor
 //!
 //! The actual authorisation engine lives in `src/authz.rs` (the
-//! `state.authz` field is shared). Still-open work: schema alignment,
-//! the missing constraint types, the condition.kind types, the
-//! capability lattice, and grant/invite/policy lifecycle integration.
+//! `state.authz` field is shared). This surface is a local preflight/read
+//! projection. Dynamic, signed, or obligation-bearing decisions are served by
+//! `/_cokret/self/policy/check`.
 
 use cokret_sdk::models::{
     AuthzDecision, CapabilityGrant, CapabilitySubject, GrantList, Invite, InviteDeliveryTarget,
@@ -209,6 +209,14 @@ async fn effective_grants(
     let session = aa.authenticated_session(state, req).await?;
     let subject = query_param(req, "subject").unwrap_or_else(|| session.actor.clone());
     let realm_id = query_param(req, "realm_id").unwrap_or_else(|| "*".to_owned());
+    let subject_is_self = subject.as_str() == session.actor.as_str();
+    let caller_can_query_subject = subject_is_self
+        || (realm_id != "*" && session_owns_realm(state, session.actor.as_str(), &realm_id).await);
+    if !caller_can_query_subject {
+        return Err(AppError::capability_denied(
+            "effective-grants subject requires self or realm owner scope",
+        ));
+    }
     let grants = if realm_id == "*" {
         // Return grants across all Realms.
         state
@@ -231,17 +239,8 @@ async fn effective_grants(
             .map(capability_grant_from_authz_grant)
             .collect::<Result<Vec<_>, _>>()?
     };
-    // Include default member grants if the user is a member of any Realm.
-    let default_grants = if grants.is_empty()
-        && let Ok(default_grant) = default_member_grant(&subject)
-    {
-        vec![default_grant]
-    } else {
-        Vec::new()
-    };
-    let all_grants = [grants, default_grants].concat();
     crate::result::json_ok(GrantList {
-        grants: all_grants,
+        grants,
         state_digest: Some(
             Hash::new("sha256:0000000000000000000000000000000000000000000000000000000000000000")
                 .map_err(|error| AppError::internal(error.to_string()))?,
@@ -260,6 +259,7 @@ fn capability_grant_from_authz_grant(
     let subject = Did::new(grant.subject.clone())
         .map(CapabilitySubject::Did)
         .unwrap_or_else(|_| CapabilitySubject::Selector(json!(grant.subject)));
+    let resource_selector = capability_resource_selector(&grant.realm_id, &grant.resource);
     let constraints = grant
         .constraints
         .into_iter()
@@ -270,16 +270,12 @@ fn capability_grant_from_authz_grant(
     Ok(CapabilityGrant {
         id: GrantId::new(grant.grant_id.clone())
             .map_err(|error| AppError::internal(error.to_string()))?,
-        schema: "ck.schema.capability_grant.v1".to_owned(),
+        schema: "ck.schema.capability.v1".to_owned(),
         realm_id: Some(realm_id),
         issuer,
         subject,
         actions: grant.actions,
-        resources: vec![json!({
-            "kind": "realm",
-            "realm_id": grant.realm_id,
-            "resource": grant.resource,
-        })],
+        resources: vec![resource_selector],
         constraints,
         parent_grant_id: grant
             .delegated_from
@@ -298,32 +294,48 @@ fn capability_grant_from_authz_grant(
     })
 }
 
-fn default_member_grant(subject: &str) -> Result<CapabilityGrant, AppError> {
-    let subject = Did::new(subject.to_owned())
-        .map(CapabilitySubject::Did)
-        .unwrap_or_else(|_| CapabilitySubject::Selector(json!(subject)));
-    Ok(CapabilityGrant {
-        id: GrantId::new("ck:grant:01904100-0000-7000-8000-000000000001")
-            .map_err(|error| AppError::internal(error.to_string()))?,
-        schema: "ck.schema.capability_grant.v1".to_owned(),
-        realm_id: None,
-        issuer: Did::new("did:web:soland.local".to_owned())
-            .map_err(|error| AppError::internal(error.to_string()))?,
-        subject,
-        actions: vec!["realm.read".to_owned(), "directory.search".to_owned()],
-        resources: vec![json!({"kind": "realm", "realm_id": "*"})],
-        constraints: Vec::new(),
-        parent_grant_id: None,
-        issued_at: now(),
-        not_before: None,
-        expires_at: None,
-        effective_after_first_authorized_key: None,
-        updated_by: None,
-        updated_at: None,
-        revoked_by: None,
-        revoked_at: None,
-        proofs: Vec::new(),
-    })
+async fn session_owns_realm(state: &AppState, actor: &str, realm_id: &str) -> bool {
+    state
+        .persistence
+        .realm_meta()
+        .get(realm_id)
+        .await
+        .ok()
+        .flatten()
+        .is_some_and(|meta| meta.owner.as_str() == actor)
+}
+
+fn capability_resource_selector(realm_id: &str, resource: &str) -> Value {
+    if resource == "*" {
+        json!({
+            "kind": "realm",
+            "realm_id": realm_id,
+        })
+    } else if resource == realm_id || resource.starts_with("ck:realm:") {
+        json!({
+            "kind": "realm",
+            "realm_id": realm_id,
+            "id": resource,
+        })
+    } else if resource.starts_with("ck:circle:") {
+        json!({
+            "kind": "circle",
+            "realm_id": realm_id,
+            "id": resource,
+        })
+    } else if resource.starts_with("ck:strand:") {
+        json!({
+            "kind": "strand",
+            "realm_id": realm_id,
+            "id": resource,
+        })
+    } else {
+        json!({
+            "kind": "object",
+            "realm_id": realm_id,
+            "id": resource,
+        })
+    }
 }
 
 #[endpoint(
@@ -339,6 +351,16 @@ async fn invites(
 ) -> crate::result::JsonResult<AuthzInviteList> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
+    let subject = query_param(req, "subject").unwrap_or_else(|| session.actor.clone());
+    let realm_filter = query_param(req, "realm_id");
+    let subject_is_self = subject.as_str() == session.actor.as_str();
+    let caller_owns_realm = if subject_is_self {
+        false
+    } else if let Some(realm_id) = realm_filter.as_deref() {
+        session_owns_realm(state, session.actor.as_str(), realm_id).await
+    } else {
+        false
+    };
     let now = now();
     let invite_list = state
         .persistence
@@ -349,10 +371,16 @@ async fn invites(
         .into_iter()
         .filter(|invite| {
             matches!(invite.status.as_str(), "pending" | "claimed")
+                && realm_filter
+                    .as_deref()
+                    .is_none_or(|realm_id| invite.realm_id.as_str() == realm_id)
                 && invite
                     .invitee
                     .as_deref()
-                    .is_some_and(|invitee| invitee == session.actor)
+                    .is_some_and(|invitee| invitee == subject.as_str())
+                && (subject_is_self
+                    || invite.inviter.as_str() == session.actor.as_str()
+                    || caller_owns_realm)
                 && invite.expires_at.is_none_or(|expires_at| expires_at > now)
         })
         .map(invite_record_to_sdk)

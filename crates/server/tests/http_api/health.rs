@@ -157,6 +157,46 @@ async fn health_and_describe_work() {
             .iter()
             .any(|operation| operation == "ck.self.keys.backups.resource.replace")
     );
+    for operation_id in [
+        "ck.self.authz.query.check",
+        "ck.self.authz.grants.query.effective",
+        "ck.self.authz.invites.query.list",
+        "ck.self.policy.query.check",
+    ] {
+        assert!(
+            describe["supported_operations"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|operation| operation == operation_id),
+            "describe must advertise authz_policy operation {operation_id}"
+        );
+    }
+    assert_eq!(
+        describe["limits"]["authz_policy"]["self_surface_status"],
+        "standard_self_supported"
+    );
+    assert_eq!(
+        describe["limits"]["authz_policy"]["authz_check"]["path"],
+        "/_cokret/self/authz/check"
+    );
+    assert_eq!(
+        describe["limits"]["authz_policy"]["authz_check"]["operation_specific_error_codes"],
+        serde_json::json!(["policy_unavailable"])
+    );
+    assert_eq!(
+        describe["limits"]["authz_policy"]["authz_check"]["policy_boundary"]
+            ["dynamic_or_auditable_decision_path"],
+        "/_cokret/self/policy/check"
+    );
+    assert_eq!(
+        describe["limits"]["authz_policy"]["effective_grants"]["path"],
+        "/_cokret/self/authz/effective-grants"
+    );
+    assert_eq!(
+        describe["limits"]["authz_policy"]["invites"]["response_schema_ref"],
+        "schemas/authz-operations.schema.json#/$defs/authz_invite_list"
+    );
     for operation in describe["supported_operations"].as_array().unwrap() {
         let operation = operation.as_str().expect("operation id string");
         assert!(
@@ -183,6 +223,13 @@ async fn health_and_describe_work() {
             .any(|surface| surface == "events_sync")
     );
     assert!(
+        describe["limits"]["profile_status"]["implemented_surfaces"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|surface| surface == "authz_policy")
+    );
+    assert!(
         !describe["limits"]["profile_status"]["full_profiles_not_claimed"]
             .as_array()
             .unwrap()
@@ -202,7 +249,8 @@ async fn health_and_describe_work() {
         .iter()
         .filter_map(|limitation| limitation["area"].as_str())
         .collect::<Vec<_>>();
-    assert!(limitation_areas.contains(&"authz.describe"));
+    assert!(!limitation_areas.contains(&"authz.describe"));
+    assert!(limitation_areas.contains(&"authz.capability_engine_depth"));
     assert!(limitation_areas.contains(&"policies.describe"));
     assert!(limitation_areas.contains(&"admin.bottom.manual_repair"));
     assert!(limitation_areas.contains(&"index.query"));

@@ -652,9 +652,10 @@ fn profile_limitations() -> Vec<Value> {
             "reason": "outbound Move/Seal fanout persists a signed intent and retry boundary per peer; actual RFC 9421 HTTP delivery is still not claimed"
         }),
         json!({
-            "area": "authz.describe",
-            "status": "scaffold_contract",
-            "reason": "authz/describe publishes examples and current local evaluator boundaries; it is not a complete generated authorization profile"
+            "area": "authz.capability_engine_depth",
+            "status": "partial",
+            "standard_self_surface": "implemented",
+            "reason": "standard /_cokret/self/authz/check, effective-grants, and invites are advertised and SDK-backed; deeper selector, constraint, delegation, and policy lifecycle semantics are tracked by dedicated AUTHZ audit items"
         }),
         json!({
             "area": "policies.describe",
@@ -982,6 +983,8 @@ pub fn describe(
             "org.cokret.soland.feature.directory.search_realms".to_owned(),
             "org.cokret.soland.feature.directory.resolve_realm".to_owned(),
             "org.cokret.soland.feature.authz.check".to_owned(),
+            "org.cokret.soland.feature.authz.effective_grants".to_owned(),
+            "org.cokret.soland.feature.authz.invites".to_owned(),
             "org.cokret.soland.feature.policy.check_signed_decision".to_owned(),
             "org.cokret.soland.feature.profile.presence".to_owned(),
             "org.cokret.soland.feature.push.register_device".to_owned(),
@@ -993,6 +996,7 @@ pub fn describe(
             // of ck.self.blob.upload. Pairs with the `kind="tus"` entry in
             // supported_bindings below.
             "ck.feature.blob.resumable_upload.tus.v1".to_owned(),
+            "ck.feature.mls_last_resort_keypackage.v1".to_owned(),
             "org.cokret.soland.feature.blob.authenticated_download".to_owned(),
             "org.cokret.soland.feature.file_transfer".to_owned(),
             "org.cokret.soland.feature.blob.presigned_download.local_direct_serve".to_owned(),
@@ -1064,17 +1068,67 @@ pub fn describe(
                 ]
             },
             "authz_policy": {
+                "surface": "authz_policy",
+                "tier": "extension",
+                "self_surface_status": "standard_self_supported",
+                "operation_registry_source": "cokret-spec/spec/v1/artifacts/registry/operation-registry.json",
+                "error_mapping_source": "cokret-spec/spec/v1/artifacts/registry/operations-error-mapping.json",
+                "universal_error_codes_inherited": true,
+                "supported_operations": [
+                    "ck.self.authz.query.check",
+                    "ck.self.authz.grants.query.effective",
+                    "ck.self.authz.invites.query.list",
+                    "ck.self.policy.query.check"
+                ],
                 "authz_check": {
                     "operation_id": "ck.self.authz.query.check",
+                    "method": "POST",
                     "path": "/_cokret/self/authz/check",
+                    "request_shape": "AuthzCheckRequestBody",
+                    "response_shape": "AuthzCheckOutcome",
+                    "operation_specific_error_codes": ["policy_unavailable"],
                     "decision_source": "local_projection_preflight_diagnostic",
                     "signed_decision": false,
                     "emits_dynamic_obligations": false,
-                    "usable_as_event_auth_context": false
+                    "usable_as_event_auth_context": false,
+                    "explain_fields": [
+                        "matched_grants",
+                        "applied_constraints",
+                        "policy_results",
+                        "missing_proofs",
+                        "reason_code"
+                    ],
+                    "policy_boundary": {
+                        "dynamic_claim_or_approval": false,
+                        "usable_as_policy_obligation_proof": false,
+                        "cross_service_signed_authorization_fact": false,
+                        "dynamic_or_auditable_decision_operation": "ck.self.policy.query.check",
+                        "dynamic_or_auditable_decision_path": "/_cokret/self/policy/check"
+                    }
+                },
+                "effective_grants": {
+                    "operation_id": "ck.self.authz.grants.query.effective",
+                    "method": "GET",
+                    "path": "/_cokret/self/authz/effective-grants",
+                    "query": ["realm_id", "subject", "at"],
+                    "response_shape": "GrantList",
+                    "subject_scope": "authenticated_actor_or_realm_owner_for_realm_scoped_queries",
+                    "operation_specific_error_codes": []
+                },
+                "invites": {
+                    "operation_id": "ck.self.authz.invites.query.list",
+                    "method": "GET",
+                    "path": "/_cokret/self/authz/invites",
+                    "query": ["realm_id", "subject", "cursor"],
+                    "response_schema_ref": "schemas/authz-operations.schema.json#/$defs/authz_invite_list",
+                    "subject_scope": "authenticated_actor_or_inviter_or_realm_owner",
+                    "operation_specific_error_codes": []
                 },
                 "policy_check": {
                     "operation_id": "ck.self.policy.query.check",
+                    "method": "POST",
                     "path": "/_cokret/self/policy/check",
+                    "operation_specific_error_codes": ["policy_unavailable", "policy_stale"],
                     "decision_source": "policy_server_signed_decision",
                     "signed_decision": true,
                     "emits_dynamic_obligations": true,
@@ -1185,6 +1239,7 @@ pub fn describe(
                     "events_api_minimal",
                     "sync",
                     "index",
+                    "authz_policy",
                     "identity_registry_local_dev",
                     "blob_node_local",
                     "directory_service",
@@ -1399,8 +1454,29 @@ mod tests {
             json!(false)
         );
         assert_eq!(
+            value["limits"]["authz_policy"]["self_surface_status"],
+            json!("standard_self_supported")
+        );
+        assert_eq!(
+            value["limits"]["authz_policy"]["supported_operations"],
+            json!([
+                "ck.self.authz.query.check",
+                "ck.self.authz.grants.query.effective",
+                "ck.self.authz.invites.query.list",
+                "ck.self.policy.query.check"
+            ])
+        );
+        assert_eq!(
             value["limits"]["authz_policy"]["authz_check"]["decision_source"],
             json!("local_projection_preflight_diagnostic")
+        );
+        assert_eq!(
+            value["limits"]["authz_policy"]["authz_check"]["path"],
+            json!("/_cokret/self/authz/check")
+        );
+        assert_eq!(
+            value["limits"]["authz_policy"]["authz_check"]["operation_specific_error_codes"],
+            json!(["policy_unavailable"])
         );
         assert_eq!(
             value["limits"]["authz_policy"]["authz_check"]["signed_decision"],
@@ -1411,8 +1487,33 @@ mod tests {
             json!(false)
         );
         assert_eq!(
+            value["limits"]["authz_policy"]["authz_check"]["policy_boundary"]
+                ["dynamic_or_auditable_decision_path"],
+            json!("/_cokret/self/policy/check")
+        );
+        assert_eq!(
+            value["limits"]["authz_policy"]["effective_grants"]["path"],
+            json!("/_cokret/self/authz/effective-grants")
+        );
+        assert_eq!(
+            value["limits"]["authz_policy"]["effective_grants"]["subject_scope"],
+            json!("authenticated_actor_or_realm_owner_for_realm_scoped_queries")
+        );
+        assert_eq!(
+            value["limits"]["authz_policy"]["invites"]["path"],
+            json!("/_cokret/self/authz/invites")
+        );
+        assert_eq!(
+            value["limits"]["authz_policy"]["invites"]["response_schema_ref"],
+            json!("schemas/authz-operations.schema.json#/$defs/authz_invite_list")
+        );
+        assert_eq!(
             value["limits"]["authz_policy"]["policy_check"]["decision_source"],
             json!("policy_server_signed_decision")
+        );
+        assert_eq!(
+            value["limits"]["authz_policy"]["policy_check"]["operation_specific_error_codes"],
+            json!(["policy_unavailable", "policy_stale"])
         );
         assert_eq!(
             value["limits"]["authz_policy"]["policy_check"]["signed_decision"],

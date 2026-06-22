@@ -224,9 +224,10 @@ pub struct KeyPackageLifetime {
 
 /// G3.S1 — published MLS KeyPackage row.
 ///
-/// One per `(actor_id, device_id, keypackage_id)`. The atomic CAS claim
-/// flips `claimed_by` from `None` to `Some(group_id)` and sets
-/// `consumed_at`; a second claim against the same `id` is rejected.
+/// One per `(actor_id, device_id, keypackage_id)`. Ordinary packages use
+/// an atomic CAS claim that flips `claimed_by` from `None` to `Some(group_id)`
+/// and sets `consumed_at`; last-resort packages keep the row published and
+/// bind reuse to a single Realm.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MlsKeyPackage {
     /// Canonical `ck:mls_keypackage:<uuid>` identifier.
@@ -243,6 +244,8 @@ pub struct MlsKeyPackage {
     pub capabilities: Vec<String>,
     pub capabilities_digest: String,
     pub device_signature: serde_json::Value,
+    pub last_resort: bool,
+    pub last_resort_realm_id: Option<String>,
     /// `None` while the KeyPackage is still claimable; `Some(group_id)`
     /// after a successful CAS claim. The CAS guarantees at-most-one
     /// claim across concurrent Welcomes.

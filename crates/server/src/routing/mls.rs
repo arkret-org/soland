@@ -59,6 +59,8 @@ use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;
 use crate::wire::now;
 
+const LAST_RESORT_KEYPACKAGE_MAX_LIFETIME_SECS: i64 = 30 * 24 * 60 * 60;
+
 /// Mount the `/keys/keypackages/*` sub-router. Mounted under
 /// `/_cokret/self` from `routing::mod::api_v1_router`.
 ///
@@ -232,6 +234,23 @@ async fn upload_keypackage(
                 continue;
             }
         };
+        let last_resort = match entry_bool(&entry, "last_resort") {
+            Ok(value) => value,
+            Err(reason) => {
+                rejected.push(keypackage_failure(&entry, &device_id, reason));
+                continue;
+            }
+        };
+        if last_resort
+            && expires_at.saturating_sub(created_at) > LAST_RESORT_KEYPACKAGE_MAX_LIFETIME_SECS
+        {
+            rejected.push(keypackage_failure(
+                &entry,
+                &device_id,
+                "last_resort_keypackage_lifetime_too_long",
+            ));
+            continue;
+        }
 
         // Run the reducer's projection update first so the in-process
         // projection carries the same metadata we mirror into the store.
@@ -246,6 +265,7 @@ async fn upload_keypackage(
             "capabilities": capabilities,
             "capabilities_digest": capabilities_digest,
             "device_signature": device_signature,
+            "last_resort": last_resort,
             "ssk_generation": ssk_generation,
             "created_at": created_at,
             "lifetime": {
@@ -301,6 +321,7 @@ async fn upload_keypackage(
             &actor_id,
             None,
             Some(ssk_generation),
+            None,
         )),
     })
 }
@@ -336,6 +357,21 @@ async fn claim_keypackage(
         )
         .with_wire_code("mls_keypackage_claim_request_expired"));
     }
+
+    json_ok(claim_keypackages_for_request(state, &body).await?)
+}
+
+pub(crate) async fn claim_keypackages_for_request(
+    state: &AppState,
+    body: &KeyPackagesClaimRequestBody,
+) -> Result<KeyPackagesClaimOutcome, AppError> {
+    if body.expires_at <= Utc::now() {
+        return Err(AppError::new(
+            ErrorCode::FailedPrecondition,
+            "KeyPackage claim request expired",
+        )
+        .with_wire_code("mls_keypackage_claim_request_expired"));
+    }
     let required_capabilities = required_capability_set(&body.required_capabilities)?;
 
     let target_principal_did = body.target_principal_id.clone();
@@ -345,6 +381,7 @@ async fn claim_keypackage(
         .iter()
         .map(ToString::to_string)
         .collect::<BTreeSet<_>>();
+    let intended_realm_id = body.intended_realm_id.to_string();
     let ssk_generation = current_accepted_ssk_generation(state, &target_principal_did)?;
     let available_before = available_keypackage_count(
         state,
@@ -355,23 +392,47 @@ async fn claim_keypackage(
             None
         },
         Some(ssk_generation),
+        Some(&intended_realm_id),
     );
     let now_secs = now().timestamp();
     let keypackage_id = {
         let projection = state.projection.lock().unwrap();
-        projection
+        let ordinary = projection
             .mls_key_packages
             .values()
-            .filter(|kp| kp.actor_id == target_principal_id)
-            .filter(|kp| {
-                target_device_ids.is_empty() || target_device_ids.contains(kp.device_id.as_str())
-            })
+            .filter(|kp| !kp.last_resort)
             .filter(|kp| kp.claimed_by.is_none())
-            .filter(|kp| kp.ssk_generation == Some(ssk_generation))
-            .filter(|kp| kp.lifetime.not_after > now_secs)
-            .filter(|kp| capabilities_satisfy(&kp.capabilities, &required_capabilities))
+            .filter(|kp| {
+                keypackage_matches_claim(
+                    kp,
+                    &target_principal_id,
+                    &target_device_ids,
+                    ssk_generation,
+                    now_secs,
+                    &required_capabilities,
+                )
+            })
             .min_by_key(|kp| (kp.created_at, kp.id.as_str()))
-            .map(|kp| kp.id.clone())
+            .map(|kp| kp.id.clone());
+        ordinary.or_else(|| {
+            projection
+                .mls_key_packages
+                .values()
+                .filter(|kp| kp.last_resort)
+                .filter(|kp| last_resort_matches_realm(kp, &intended_realm_id))
+                .filter(|kp| {
+                    keypackage_matches_claim(
+                        kp,
+                        &target_principal_id,
+                        &target_device_ids,
+                        ssk_generation,
+                        now_secs,
+                        &required_capabilities,
+                    )
+                })
+                .min_by_key(|kp| (kp.created_at, kp.id.as_str()))
+                .map(|kp| kp.id.clone())
+        })
     };
     let Some(keypackage_id) = keypackage_id else {
         let reason_code = if available_before > 0 {
@@ -379,7 +440,7 @@ async fn claim_keypackage(
         } else {
             reducer::mls::REASON_KEYPACKAGE_NOT_FOUND
         };
-        return json_ok(KeyPackagesClaimOutcome {
+        return Ok(KeyPackagesClaimOutcome {
             claims: Vec::new(),
             failures: vec![KeypackageFailure {
                 keypackage_ref: None,
@@ -405,16 +466,19 @@ async fn claim_keypackage(
         "action": "claim",
         "keypackage_id": keypackage_id,
         "group_id": mls_group_ref,
+        "intended_realm_id": intended_realm_id.clone(),
         "ssk_generation": ssk_generation,
     });
     let op = build_op(crate::kinds::CK_MLS_KEYPACKAGE, payload);
     let effect = reducer::mls::apply_keypackage_claim(&mut state.projection.lock().unwrap(), &op);
-    let (consumed_at, claimed_keypackage_id, claimed_group_id) = match effect {
+    let (consumed_at, claimed_keypackage_id, claimed_group_id, claimed_realm_id) = match effect {
         ProjectionEffect::Mls(MlsEffect::KeyPackageClaimed {
             keypackage_id,
             group_id,
+            intended_realm_id: claimed_realm_id,
+            last_resort: _,
             consumed_at,
-        }) => (consumed_at, keypackage_id, group_id),
+        }) => (consumed_at, keypackage_id, group_id, claimed_realm_id),
         ProjectionEffect::Rejected { reason } => {
             // Two reject paths land here:
             //   - mls_keypackage_already_claimed  → 409 cas_conflict
@@ -438,6 +502,11 @@ async fn claim_keypackage(
                     "KeyPackage cross-signing generation mismatch",
                 )
                 .with_wire_code(reason),
+                reducer::mls::REASON_KEYPACKAGE_REALM_MISMATCH => AppError::new(
+                    ErrorCode::FailedPrecondition,
+                    "KeyPackage Realm affinity mismatch",
+                )
+                .with_wire_code(reason),
                 _ => AppError::new(ErrorCode::SchemaViolation, reason),
             };
             return Err(err);
@@ -459,6 +528,7 @@ async fn claim_keypackage(
         .try_claim(
             &claimed_keypackage_id,
             &claimed_group_id,
+            claimed_realm_id.as_deref(),
             Some(ssk_generation),
             consumed_at,
         )
@@ -478,7 +548,7 @@ async fn claim_keypackage(
         return Err(AppError::internal("claimed KeyPackage row missing"));
     };
 
-    json_ok(KeyPackagesClaimOutcome {
+    Ok(KeyPackagesClaimOutcome {
         claims: vec![keypackage_claim_record(&claimed_record, &body.claim_nonce)?],
         failures: Vec::new(),
         available_count: Some(available_keypackage_count(
@@ -486,6 +556,7 @@ async fn claim_keypackage(
             &target_principal_id,
             None,
             Some(ssk_generation),
+            Some(&intended_realm_id),
         )),
     })
 }
@@ -512,6 +583,7 @@ async fn consume_keypackages(
     }
     let refs = non_empty_keypackage_refs(&body.key_package_refs)?;
     let group_id = consume_group_ref(&body);
+    let consume_realm_id = body.realm_id.as_ref().map(ToString::to_string);
     let consumed_at = now().timestamp();
     let mut consumed = Vec::new();
     let mut failures = Vec::new();
@@ -519,7 +591,52 @@ async fn consume_keypackages(
         match state
             .persistence
             .mls_key_packages()
-            .try_claim(&keypackage_id, &group_id, None, consumed_at)
+            .get(&keypackage_id)
+            .await
+        {
+            Ok(Some(record))
+                if record.last_resort
+                    && record.claimed_by_mls_group_id.as_deref() != Some("revoked") =>
+            {
+                if record
+                    .last_resort_realm_id
+                    .as_deref()
+                    .zip(consume_realm_id.as_deref())
+                    .is_some_and(|(bound, requested)| bound != requested)
+                {
+                    failures.push(keypackage_ref_failure(
+                        keypackage_id,
+                        reducer::mls::REASON_KEYPACKAGE_REALM_MISMATCH,
+                    ));
+                    continue;
+                }
+                if record.last_resort_realm_id.is_none() {
+                    failures.push(keypackage_ref_failure(keypackage_id, "claim_missing"));
+                    continue;
+                }
+                consumed.push(keypackage_id);
+                continue;
+            }
+            Ok(Some(_)) => {}
+            Ok(None) => {
+                failures.push(keypackage_ref_failure(keypackage_id, "already_consumed_or_missing"));
+                continue;
+            }
+            Err(error) => {
+                failures.push(keypackage_ref_failure(keypackage_id, error.to_string()));
+                continue;
+            }
+        }
+        match state
+            .persistence
+            .mls_key_packages()
+            .try_claim(
+                &keypackage_id,
+                &group_id,
+                consume_realm_id.as_deref(),
+                None,
+                consumed_at,
+            )
             .await
         {
             Ok(Some(_)) => consumed.push(keypackage_id),
@@ -579,7 +696,7 @@ async fn revoke_keypackages(
                 match state
                     .persistence
                     .mls_key_packages()
-                    .try_claim(&keypackage_id, "revoked", None, revoked_at)
+                    .try_claim(&keypackage_id, "revoked", None, None, revoked_at)
                     .await
                 {
                     Ok(Some(_)) => revoked.push(keypackage_id),
@@ -712,6 +829,18 @@ fn entry_string_list(entry: &Value, field: &'static str) -> Result<Vec<String>, 
         out.push(item.to_owned());
     }
     Ok(out)
+}
+
+fn entry_bool(entry: &Value, field: &'static str) -> Result<bool, String> {
+    entry
+        .get(field)
+        .map(|value| {
+            value
+                .as_bool()
+                .ok_or_else(|| format!("{field}_invalid"))
+        })
+        .transpose()
+        .map(|value| value.unwrap_or(false))
 }
 
 fn entry_timestamp(entry: &Value, field: &'static str) -> Result<i64, String> {
@@ -862,6 +991,7 @@ fn available_keypackage_count(
     actor_id: &str,
     device_id: Option<&str>,
     ssk_generation: Option<u64>,
+    intended_realm_id: Option<&str>,
 ) -> u64 {
     let now_secs = now().timestamp();
     let projection = state.projection.lock().unwrap();
@@ -871,9 +1001,40 @@ fn available_keypackage_count(
         .filter(|kp| kp.actor_id == actor_id)
         .filter(|kp| device_id.is_none_or(|device_id| kp.device_id == device_id))
         .filter(|kp| ssk_generation.is_none_or(|generation| kp.ssk_generation == Some(generation)))
-        .filter(|kp| kp.claimed_by.is_none())
+        .filter(|kp| {
+            if kp.last_resort {
+                intended_realm_id
+                    .map(|realm_id| last_resort_matches_realm(kp, realm_id))
+                    .unwrap_or_else(|| kp.last_resort_realm_id.is_none())
+            } else {
+                kp.claimed_by.is_none()
+            }
+        })
         .filter(|kp| kp.lifetime.not_after > now_secs)
         .count() as u64
+}
+
+fn keypackage_matches_claim(
+    kp: &MlsKeyPackage,
+    actor_id: &str,
+    target_device_ids: &BTreeSet<String>,
+    ssk_generation: u64,
+    now_secs: i64,
+    required_capabilities: &BTreeSet<String>,
+) -> bool {
+    kp.actor_id == actor_id
+        && (target_device_ids.is_empty() || target_device_ids.contains(kp.device_id.as_str()))
+        && kp.ssk_generation == Some(ssk_generation)
+        && kp.lifetime.not_after > now_secs
+        && capabilities_satisfy(&kp.capabilities, required_capabilities)
+}
+
+fn last_resort_matches_realm(kp: &MlsKeyPackage, intended_realm_id: &str) -> bool {
+    kp.last_resort
+        && kp
+            .last_resort_realm_id
+            .as_deref()
+            .is_none_or(|realm_id| realm_id == intended_realm_id)
 }
 
 fn keypackage_claim_record(
@@ -905,7 +1066,7 @@ fn keypackage_claim_record(
         device_signature: serde_json::from_value::<Signature2>(record.device_signature.clone())
             .map_err(|error| AppError::internal(format!("invalid device_signature: {error}")))?,
         revocation_status: Some("active".to_owned()),
-        last_resort: None,
+        last_resort: record.last_resort.then_some(true),
     })
 }
 
@@ -940,6 +1101,8 @@ fn key_package_to_record(kp: &MlsKeyPackage) -> MlsKeyPackageRow {
         capabilities: kp.capabilities.clone(),
         capabilities_digest: kp.capabilities_digest.clone(),
         device_signature: kp.device_signature.clone(),
+        last_resort: kp.last_resort,
+        last_resort_realm_id: kp.last_resort_realm_id.clone(),
         lifetime_not_before: kp.lifetime.not_before,
         lifetime_not_after: kp.lifetime.not_after,
         claimed_by_mls_group_id: kp.claimed_by.clone(),

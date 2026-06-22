@@ -483,20 +483,29 @@ async fn invite_create_accepts_locator_evidence_digest_without_local_consent() {
 #[tokio::test]
 async fn scaffold_describe_surfaces_are_marked_limited_not_profile_claims() {
     let service = app();
-    let authz: Value = TestClient::get("http://server/_soland/self/authz/describe")
+    let describe: Value = TestClient::get("http://server/_cokret/describe")
         .send(&service)
         .await
         .take_json()
         .await
         .unwrap();
-    assert_eq!(authz["stability"], "scaffold_contract");
-    assert_eq!(authz["profile_claim"], "not_claimed");
+    assert_eq!(
+        describe["limits"]["authz_policy"]["self_surface_status"],
+        "standard_self_supported"
+    );
     assert!(
-        authz["limitations"]
+        describe["limits"]["authz_policy"]["supported_operations"]
             .as_array()
             .unwrap()
             .iter()
-            .any(|item| item.as_str().unwrap().contains("not complete profile"))
+            .any(|operation| operation == "ck.self.authz.query.check")
+    );
+    assert!(
+        describe["limits"]["profile_status"]["limitations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|limitation| limitation["area"] != "authz.describe")
     );
 
     let policies: Value = TestClient::get("http://server/_soland/self/policies/describe")

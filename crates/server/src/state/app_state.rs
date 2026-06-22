@@ -1527,7 +1527,11 @@ fn hydrate_applet_install_grants(
             subject: package.service_did.to_string(),
             resource: portal_realm_id.to_owned(),
             actions: vec![action.to_owned()],
-            constraints: Vec::new(),
+            constraints: vec![crate::authz::Constraint::AppletDelegationBinding {
+                applet_id: package.applet_id.clone(),
+                executed_by: package.service_did.to_string(),
+                registration_epoch: package.registration_epoch.to_string(),
+            }],
             revoked: false,
             created_at: registered_at,
             delegated_from: None,

@@ -5,7 +5,7 @@
 
 use base64::Engine as _;
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
-use chrono::Duration;
+use chrono::{Duration, SecondsFormat, Utc};
 // NOTE: `cokret_sdk::DisclosurePolicy` at the crate root resolves to the
 // auth/DID-proof type (re-exported explicitly), which shadows the
 // invite-addressing one from the `model::*` glob. Import the
@@ -13,13 +13,20 @@ use chrono::Duration;
 use cokret_sdk::models::{DisclosurePolicy, HandleClaim};
 use cokret_sdk::{
     CandidateIntent, CandidateValidationContext, ContactIntroductionEvidence, DetachedPayloadProof,
-    Did, DirectoryIntent, DisclosedOutcome, DisclosureLevel, Handle, HandleBindingState, Hash,
-    IntroductionEvidence, InviteDeliveryOutcome, InviteDeliveryOutcomeStatus,
-    InviteDeliveryRequest, InviteLocatorResolveRequestBody, InviteReceiveAction,
+    Did, DirectoryIntent, DisclosedOutcome, DisclosureLevel, EventId, Handle, HandleBindingState,
+    Hash, IntroductionEvidence, InviteDeliveryOutcome, InviteDeliveryOutcomeStatus,
+    InviteDeliveryRequest, InviteId, InviteLocatorResolveRequestBody, InviteReceiveAction,
     InviteReceivePolicy, MemberDeliveryBindingCandidate, PrincipalLocator,
     PrincipalLocatorDisplayHint, PrincipalLocatorProof, PrincipalLocatorProofPurpose,
-    ReceivePolicyConstraints, ReceivePolicySurface, UnknownInviteAction, canonical,
+    RealmId, ReceivePolicyConstraints, ReceivePolicySurface, ThirdPartyInviteOobKind,
+    UnknownInviteAction, canonical,
 };
+use cokret_sdk::client_api::{
+    ThirdPartyInviteClaimOutcome, ThirdPartyInviteClaimRequestBody, ThirdPartyInviteIssueOutcome,
+    ThirdPartyInviteMedium, ThirdPartyInviteRequestBody, ThirdPartyInviteTokenHandoff,
+    ThirdPartyInviteTokenTransport,
+};
+use rand::RngExt;
 use salvo::http::StatusCode;
 use salvo::prelude::*;
 use serde_json::{Value, json};
@@ -30,6 +37,7 @@ use crate::result::{JsonResult, json_ok};
 use crate::routing::identity::device_messages::{
     ACCOUNT_DATA_UPDATE_TYPE, fanout_actor_private_update,
 };
+use crate::routing::system::extract::AuthArgs;
 use crate::routing::system::util::sha256_hex;
 use crate::state::{AccountDataRecord, AppState, SessionRecord};
 use crate::wire::now;
@@ -47,8 +55,255 @@ pub(crate) fn peer_router() -> Router {
     Router::new().push(Router::with_path("invites").post(peer_invites_submit))
 }
 
+pub(crate) fn self_router() -> Router {
+    Router::new()
+        .push(Router::with_path("invites/third-party").post(issue_third_party_invite))
+        .push(Router::with_path("invites/third-party/claim").post(claim_third_party_invite))
+}
+
 pub(crate) fn open_router() -> Router {
     Router::new().push(Router::with_path("invite-locators/resolve").post(resolve_invite_locator))
+}
+
+#[endpoint(
+    operation_id = "ck.self.invites.third_party.command.issue",
+    tags("invites"),
+    summary = "Issue a third-party invite with fragment-only token handoff"
+)]
+#[tracing::instrument(skip_all, fields(op = "ck.self.invites.third_party.command.issue"))]
+async fn issue_third_party_invite(
+    aa: AuthArgs,
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<ThirdPartyInviteIssueOutcome> {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let session = aa.authenticated_session(state, req).await?;
+    let body = req
+        .parse_json::<ThirdPartyInviteRequestBody>()
+        .await
+        .map_err(|_| AppError::bad_json("invalid third-party invite issue request body"))?;
+    if !matches!(body.oob_code_kind, ThirdPartyInviteOobKind::OfflineToken) {
+        return Err(AppError::unsupported_feature(
+            "third-party invite lookup mode is not wired on this endpoint",
+        ));
+    }
+    let _medium = match &body.medium {
+        ThirdPartyInviteMedium::Email => "email",
+        ThirdPartyInviteMedium::Phone => "phone",
+    };
+    let token_entropy_bits = body.token_entropy_bits.unwrap_or(192);
+    if !(128..=192).contains(&token_entropy_bits) {
+        return Err(AppError::invalid_param(
+            "token_entropy_bits must be between 128 and 192",
+        ));
+    }
+    let max_claims = body.max_claims.unwrap_or(1);
+    if max_claims != 1 {
+        return Err(AppError::invalid_param(
+            "third-party invite token handoff supports max_claims=1",
+        ));
+    }
+
+    let issued_at = now();
+    let expires_at = body.expires_at.unwrap_or_else(|| issued_at + Duration::days(7));
+    if expires_at <= issued_at {
+        return Err(AppError::invalid_param("third-party invite is already expired"));
+    }
+    let invite_id = match body.invite_id {
+        Some(invite_id) => invite_id,
+        None => InviteId::new(format!("ck:invite:{}", uuid::Uuid::now_v7())).map_err(|error| {
+            AppError::internal(format!("generated third-party invite id invalid: {error}"))
+        })?,
+    };
+    let realm_id = body.realm_id;
+    let verification_service_did = match body.verification_service_did {
+        Some(did) => did,
+        None => Did::new(state.config.service_did.clone()).map_err(|error| {
+            AppError::internal(format!("configured service DID invalid: {error}"))
+        })?,
+    };
+    let verification_public_key = body.verification_public_key.unwrap_or_else(|| {
+        format!("{}#server-key-1", verification_service_did.as_str())
+    });
+    if verification_public_key.trim().is_empty() {
+        return Err(AppError::invalid_param(
+            "verification_public_key must not be empty",
+        ));
+    }
+    let join_rule_snapshot = body
+        .join_rule_snapshot
+        .unwrap_or_else(|| json!({"join_rule": "invite"}));
+    let display_name_hint = body.display_name_hint.and_then(|value| {
+        let trimmed = value.trim();
+        (!trimmed.is_empty()).then(|| trimmed.to_owned())
+    });
+
+    let (invite_token, token_commitment, token_salt_id, private_token_digest) =
+        mint_third_party_invite_token();
+    let created_at_wire = issued_at.to_rfc3339_opts(SecondsFormat::Secs, true);
+    let expires_at_wire = expires_at.to_rfc3339_opts(SecondsFormat::Secs, true);
+    let mut third_party_id = json!({
+        "oob_code_kind": ThirdPartyInviteOobKind::OfflineToken,
+        "token_commitment": token_commitment,
+        "token_salt_id": token_salt_id,
+        "token_entropy_bits": token_entropy_bits,
+        "max_claims": max_claims,
+        "verification_service_did": verification_service_did.as_str(),
+        "verification_public_key": verification_public_key,
+    });
+    if let Some(display_name_hint) = display_name_hint
+        && let Some(object) = third_party_id.as_object_mut()
+    {
+        object.insert("display_name_hint".to_owned(), json!(display_name_hint));
+    }
+    let payload = json!({
+        "invite": {
+            "id": invite_id.as_str(),
+            "schema": cokret_sdk::INVITE_SCHEMA,
+            "realm_id": realm_id.as_str(),
+            "inviter": session.actor.as_str(),
+            "third_party_id": third_party_id,
+            "join_rule_snapshot": join_rule_snapshot,
+            "state": "pending",
+            "expires_at": expires_at_wire,
+            "created_at": created_at_wire,
+        }
+    });
+    let submitted = dev_submit_invite_event(
+        state,
+        &session,
+        realm_id.as_str(),
+        "ck.invite.third_party",
+        payload,
+    )
+    .await
+    .map_err(submit_invite_event_error)?;
+
+    let invites = state.persistence.realm_invites();
+    let mut record = invites
+        .get(invite_id.as_str())
+        .await
+        .map_err(|error| AppError::internal(format!("load third-party invite: {error}")))?
+        .ok_or_else(|| AppError::internal("third-party invite projection missing"))?;
+    record.invite_token = private_token_digest;
+    record.updated_at = Some(issued_at);
+    invites
+        .put(record)
+        .await
+        .map_err(|error| AppError::internal(format!("store third-party invite token: {error}")))?;
+
+    let event_id = EventId::new(submitted).map_err(|error| {
+        AppError::internal(format!("submitted third-party invite event id invalid: {error}"))
+    })?;
+    json_ok(ThirdPartyInviteIssueOutcome {
+        invite_id,
+        realm_id,
+        state: "pending".to_owned(),
+        event_id,
+        expires_at: Some(expires_at),
+        token_handoff: ThirdPartyInviteTokenHandoff {
+            transport: ThirdPartyInviteTokenTransport::UrlFragment,
+            url: third_party_invite_fragment_url(&state.config.public_base_url, &invite_token),
+        },
+    })
+}
+
+#[endpoint(
+    operation_id = "ck.self.invites.third_party.command.claim",
+    tags("invites"),
+    summary = "Claim a third-party invite token from the JSON body"
+)]
+#[tracing::instrument(skip_all, fields(op = "ck.self.invites.third_party.command.claim"))]
+async fn claim_third_party_invite(
+    aa: AuthArgs,
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<ThirdPartyInviteClaimOutcome> {
+    if third_party_invite_token_appears_in_url(req) {
+        return Err(AppError::invalid_param(
+            "third-party invite token must be sent in the JSON body, never in URL path or query",
+        )
+        .with_status(StatusCode::BAD_REQUEST)
+        .with_wire_code(crate::error::reasons::THIRD_PARTY_INVITE_TOKEN_IN_QUERY));
+    }
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let session = aa.authenticated_session(state, req).await?;
+    let body = req
+        .parse_json::<ThirdPartyInviteClaimRequestBody>()
+        .await
+        .map_err(|_| third_party_invite_claim_not_found())?;
+    let invite_token = body.invite_token.trim();
+    if !is_third_party_invite_token_shape(invite_token) {
+        return Err(third_party_invite_claim_not_found());
+    }
+    let private_token_digest = third_party_invite_private_token_digest(invite_token);
+    let Some(record) = state
+        .persistence
+        .realm_invites()
+        .consume_third_party_token(&private_token_digest, now())
+        .await
+        .map_err(|_| third_party_invite_claim_not_found())?
+    else {
+        return Err(third_party_invite_claim_not_found());
+    };
+    if body
+        .subject_id
+        .as_ref()
+        .is_some_and(|subject_id| subject_id.as_str() != session.actor)
+    {
+        return Err(third_party_invite_claim_not_found());
+    }
+    let Some(token_commitment) = record
+        .third_party_id
+        .as_ref()
+        .and_then(|value| value.get("token_commitment"))
+        .and_then(Value::as_str)
+        .filter(|value| Hash::new((*value).to_owned()).is_ok())
+        .map(ToOwned::to_owned)
+    else {
+        return Err(third_party_invite_claim_not_found());
+    };
+    let record_invite_id = record.invite_id.clone();
+    let record_realm_id = record.realm_id.clone();
+    let claim_payload = json!({
+        "invite_id": record_invite_id.as_str(),
+        "subject_id": session.actor.as_str(),
+        "token_commitment": token_commitment,
+        "claim_nonce": body.claim_nonce,
+        "binding_proof": body.binding_proof,
+        "subject_proof": body.subject_proof,
+    });
+    let submitted = dev_submit_invite_event(
+        state,
+        &session,
+        &record_realm_id,
+        "ck.invite.claim",
+        claim_payload,
+    )
+    .await
+    .map_err(|error| {
+        tracing::debug!(
+            code = %error.code,
+            status = ?error.status,
+            "third-party invite claim failed closed"
+        );
+        third_party_invite_claim_not_found()
+    })?;
+    let invite_id = InviteId::new(record_invite_id)
+        .map_err(|_| third_party_invite_claim_not_found())?;
+    let realm_id = RealmId::new(record_realm_id)
+        .map_err(|_| third_party_invite_claim_not_found())?;
+    let invitee = Did::new(session.actor.clone())
+        .map_err(|_| third_party_invite_claim_not_found())?;
+    let claim_event_id = EventId::new(submitted)
+        .map_err(|_| third_party_invite_claim_not_found())?;
+    json_ok(ThirdPartyInviteClaimOutcome {
+        invite_id,
+        realm_id,
+        state: "claimed".to_owned(),
+        invitee,
+        claim_event_id,
+    })
 }
 
 #[endpoint(
@@ -1436,6 +1691,130 @@ fn required_header(req: &Request, name: &'static str) -> Result<String, AppError
                 "required federation header {name} missing"
             ))
         })
+}
+
+#[derive(Debug)]
+struct InviteEventSubmitError {
+    status: StatusCode,
+    code: String,
+    message: String,
+}
+
+async fn dev_submit_invite_event(
+    state: &AppState,
+    session: &SessionRecord,
+    realm_id: &str,
+    kind: &str,
+    payload: Value,
+) -> Result<String, InviteEventSubmitError> {
+    let actor = session.actor.clone();
+    let next_seq = state
+        .persistence
+        .events()
+        .max_actor_seq(&actor)
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or(0)
+        + 1;
+    let event_id = format!("ck:event:{}", uuid::Uuid::now_v7());
+    let operation_alias = format!("ck:operation:{}", uuid::Uuid::now_v7());
+    let payload_bytes = canonical::canonical_json_bytes(&payload).map_err(|error| {
+        InviteEventSubmitError {
+            status: StatusCode::INTERNAL_SERVER_ERROR,
+            code: "canonical_json_failed".to_owned(),
+            message: format!("invite payload canonicalization failed: {error}"),
+        }
+    })?;
+    let payload_digest = canonical::sha256_digest(&payload_bytes);
+    let created_at = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
+    let envelope = json!({
+        "event_id": event_id,
+        "kind": kind,
+        "realm_id": realm_id,
+        "actor_id": actor,
+        "actor_seq": next_seq,
+        "created_at": created_at,
+        "hlc": state.hlc.now(),
+        "prev_refs": [],
+        "refs": [],
+        "requirements": {"schema": ["ck.schema.event.v1"]},
+        "payload": payload,
+        "unsigned": {"local_operation_idempotency_alias": operation_alias},
+        "proofs": [{
+            "type": "dev-proof",
+            "verification_method": session.actor.as_str(),
+            "payload_digest": payload_digest,
+        }],
+    });
+    super::events::event_log::submit_event_value(state, session, envelope)
+        .await
+        .map(|outcome| outcome.event_id)
+        .map_err(|error| InviteEventSubmitError {
+            status: error.status,
+            code: error.code,
+            message: error.message,
+        })
+}
+
+fn submit_invite_event_error(error: InviteEventSubmitError) -> AppError {
+    AppError::new(ErrorCode::SchemaViolation, error.message)
+        .with_status(error.status)
+        .with_wire_code(error.code)
+}
+
+fn mint_third_party_invite_token() -> (String, String, String, String) {
+    let mut token_bytes = [0u8; 24];
+    rand::rng().fill(&mut token_bytes[..]);
+    let invite_token = URL_SAFE_NO_PAD.encode(token_bytes);
+    let mut salt = [0u8; 32];
+    rand::rng().fill(&mut salt[..]);
+    let mut commitment_material = Vec::with_capacity(invite_token.len() + salt.len());
+    commitment_material.extend_from_slice(invite_token.as_bytes());
+    commitment_material.extend_from_slice(&salt);
+    let token_commitment = canonical::sha256_digest(&commitment_material);
+    let salt_digest = sha256_hex(&salt);
+    let token_salt_id = format!("salt-{}", &salt_digest[..16]);
+    let private_token_digest = third_party_invite_private_token_digest(&invite_token);
+    (
+        invite_token,
+        token_commitment,
+        token_salt_id,
+        private_token_digest,
+    )
+}
+
+fn third_party_invite_private_token_digest(invite_token: &str) -> String {
+    canonical::sha256_digest(invite_token.as_bytes())
+}
+
+fn third_party_invite_fragment_url(public_base_url: &str, invite_token: &str) -> String {
+    format!(
+        "{}/_cokret/open/invites/third-party#token={invite_token}",
+        public_base_url.trim_end_matches('/')
+    )
+}
+
+fn third_party_invite_token_appears_in_url(req: &Request) -> bool {
+    req.uri().query().is_some_and(|query| {
+        query.split('&').any(|part| {
+            part == "token"
+                || part.starts_with("token=")
+                || part == "invite_token"
+                || part.starts_with("invite_token=")
+        })
+    })
+}
+
+fn is_third_party_invite_token_shape(value: &str) -> bool {
+    (22..=512).contains(&value.len())
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+}
+
+fn third_party_invite_claim_not_found() -> AppError {
+    AppError::not_found("third-party invite claim not found")
 }
 
 fn locator_token_appears_in_url(req: &Request) -> bool {

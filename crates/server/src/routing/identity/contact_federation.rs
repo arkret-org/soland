@@ -30,13 +30,13 @@ use sha2::{Digest, Sha256};
 
 use super::consent::{
     auto_revoke_requester_side_contact_consent, consent_cell_snapshot,
-    grant_contact_managed_consent, has_active_consent_for_scope, normalize_scope,
-    persist_consent_cell,
+    has_active_consent_for_scope, normalize_scope, persist_consent_cell,
+    project_contact_managed_consent_ref,
 };
 use super::now;
 use crate::error::AppError;
 use crate::result::{JsonResult, json_ok};
-use crate::state::{AppState, ContactRecord};
+use crate::state::{AppState, ContactRecord, ProjectionEventRecord};
 
 const HEADER_CONTENT_DIGEST: &str = "content-digest";
 const HEADER_SOURCE_SERVICE_DID: &str = "source-service-did";
@@ -465,6 +465,36 @@ async fn append_stubbed_contact_message_audit(
     .await;
 }
 
+async fn append_delivered_contact_fact_projection_event(
+    state: &AppState,
+    fact_kind: &str,
+    issuer: &str,
+    payload: &Value,
+    contact_event_id: &str,
+) {
+    let mut payload = payload.clone();
+    if let Value::Object(object) = &mut payload {
+        object
+            .entry("event_id".to_owned())
+            .or_insert_with(|| Value::String(contact_event_id.to_owned()));
+        object.insert("original_issuer".to_owned(), Value::String(issuer.to_owned()));
+    }
+    crate::routing::events::projection::append_projection_event(
+        state,
+        ProjectionEventRecord {
+            event_id: contact_event_id.to_owned(),
+            realm_id: super::recovery::principal_control_realm_for_did(issuer),
+            event_kind: fact_kind.to_owned(),
+            operation_type: "delivered_contact_fact".to_owned(),
+            operation_id: None,
+            sender: Some(issuer.to_owned()),
+            payload,
+            created_at: now(),
+        },
+    )
+    .await;
+}
+
 /// Project a delivered contact fact into the local `subject_id`'s contact
 /// projection. Returns the receive status (`accepted` / `duplicate`).
 async fn project_delivered_contact_fact(
@@ -548,39 +578,65 @@ async fn project_delivered_contact_fact(
                 )
                 .await;
             }
+            append_delivered_contact_fact_projection_event(
+                state,
+                fact_kind,
+                issuer,
+                payload,
+                contact_event_id,
+            )
+            .await;
             Ok("accepted")
         }
         "ck.contact.accepted" => {
             // Travelling back to the original requester (subject_id). The
             // target (issuer) accepted: flip the requester-side row to accepted
-            // and materialize the issuer -> requester consent grant so the
-            // requester's row surfaces invite_consent_grant_ref / bidirectional
-            // scopes, mirroring the local accept path.
-            for granted in granted_scopes(payload) {
-                let previous = consent_cell_snapshot(state, issuer, subject_id, &granted);
-                let (_grant_ref, grant_cell) =
-                    grant_contact_managed_consent(state, issuer, subject_id, &granted, now());
-                persist_consent_cell(state, &grant_cell, previous).await?;
-            }
-            let mut contact = store
+            // and project the issuer -> requester consent grants by their
+            // original event refs, so the requester's row surfaces
+            // invite_consent_grant_ref / bidirectional scopes without
+            // re-minting target-controlled grant facts locally.
+            let Some(mut contact) = store
                 .get_scoped(subject_id, issuer, &scope)
                 .await
                 .map_err(|error| AppError::internal(error.to_string()))?
-                .unwrap_or_else(|| ContactRecord {
-                    requester: subject_id.to_owned(),
-                    target: issuer.to_owned(),
-                    scope: scope.clone(),
-                    status: "accepted".to_owned(),
-                    request_event_ref: None,
-                    response_event_ref: Some(contact_event_id.to_owned()),
-                    tombstone_event_ref: None,
-                    message: None,
-                    peer_service_did: None,
-                    created_at: now(),
-                    updated_at: now(),
-                });
+            else {
+                return Err(super::super::events::peer::schema_violation(
+                    "ck.contact.accepted references no local pending request",
+                ));
+            };
             if contact.status == "accepted" {
                 return Ok("duplicate");
+            }
+            if contact.status != "pending" || contact.request_event_ref.is_none() {
+                return Err(super::super::events::peer::schema_violation(
+                    "ck.contact.accepted references a non-pending or unverifiable request",
+                ));
+            }
+            if payload.get("request_id").and_then(Value::as_str)
+                != contact.request_event_ref.as_deref()
+            {
+                return Err(super::super::events::peer::schema_violation(
+                    "ck.contact.accepted request_id does not match the pending request",
+                ));
+            }
+            let granted_scopes = granted_scopes(payload);
+            let consent_grant_refs = event_ref_strings(payload, "consent_grant_refs");
+            if !granted_scopes.is_empty() && consent_grant_refs.len() < granted_scopes.len() {
+                return Err(super::super::events::peer::schema_violation(
+                    "ck.contact.accepted requires one consent_grant_ref per granted scope",
+                ));
+            }
+            for (granted, grant_ref) in granted_scopes.iter().zip(consent_grant_refs.iter()) {
+                let previous = consent_cell_snapshot(state, issuer, subject_id, granted);
+                let grant_cell = project_contact_managed_consent_ref(
+                    state,
+                    issuer,
+                    subject_id,
+                    granted,
+                    grant_ref,
+                    now(),
+                )?;
+                persist_consent_cell(state, &grant_cell, previous).await?;
             }
             contact.status = "accepted".to_owned();
             contact.response_event_ref = Some(contact_event_id.to_owned());
@@ -595,26 +651,26 @@ async fn project_delivered_contact_fact(
                 .put(&contact)
                 .await
                 .map_err(|error| AppError::internal(error.to_string()))?;
+            append_delivered_contact_fact_projection_event(
+                state,
+                fact_kind,
+                issuer,
+                payload,
+                contact_event_id,
+            )
+            .await;
             Ok("accepted")
         }
         "ck.contact.rejected" => {
-            let mut contact = store
+            let Some(mut contact) = store
                 .get_scoped(subject_id, issuer, &scope)
                 .await
                 .map_err(|error| AppError::internal(error.to_string()))?
-                .unwrap_or_else(|| ContactRecord {
-                    requester: subject_id.to_owned(),
-                    target: issuer.to_owned(),
-                    scope: scope.clone(),
-                    status: "rejected".to_owned(),
-                    request_event_ref: None,
-                    response_event_ref: Some(contact_event_id.to_owned()),
-                    tombstone_event_ref: None,
-                    message: None,
-                    peer_service_did: source_service_did.map(ToOwned::to_owned),
-                    created_at: now(),
-                    updated_at: now(),
-                });
+            else {
+                return Err(super::super::events::peer::schema_violation(
+                    "ck.contact.rejected references no local pending request",
+                ));
+            };
             if contact.status == "rejected" {
                 auto_revoke_requester_side_contact_consent(
                     state,
@@ -627,6 +683,18 @@ async fn project_delivered_contact_fact(
                 )
                 .await?;
                 return Ok("duplicate");
+            }
+            if contact.status != "pending" || contact.request_event_ref.is_none() {
+                return Err(super::super::events::peer::schema_violation(
+                    "ck.contact.rejected references a non-pending or unverifiable request",
+                ));
+            }
+            if payload.get("request_id").and_then(Value::as_str)
+                != contact.request_event_ref.as_deref()
+            {
+                return Err(super::super::events::peer::schema_violation(
+                    "ck.contact.rejected request_id does not match the pending request",
+                ));
             }
             contact.status = "rejected".to_owned();
             contact.response_event_ref = Some(contact_event_id.to_owned());
@@ -645,6 +713,14 @@ async fn project_delivered_contact_fact(
                 Some(contact_event_id),
             )
             .await?;
+            append_delivered_contact_fact_projection_event(
+                state,
+                fact_kind,
+                issuer,
+                payload,
+                contact_event_id,
+            )
+            .await;
             Ok("accepted")
         }
         "ck.contact.tombstoned" => {
@@ -687,6 +763,14 @@ async fn project_delivered_contact_fact(
                 )
                 .await?;
             }
+            append_delivered_contact_fact_projection_event(
+                state,
+                fact_kind,
+                issuer,
+                payload,
+                contact_event_id,
+            )
+            .await;
             Ok("accepted")
         }
         other => Err(super::super::events::peer::schema_violation(format!(
@@ -704,6 +788,23 @@ fn granted_scopes(payload: &Value) -> Vec<String> {
                 .iter()
                 .filter_map(Value::as_str)
                 .filter_map(|scope| normalize_scope(Some(scope)).ok())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn event_ref_strings(payload: &Value, field: &str) -> Vec<String> {
+    payload
+        .get(field)
+        .and_then(Value::as_array)
+        .map(|refs| {
+            refs.iter()
+                .filter_map(|value| {
+                    value
+                        .as_str()
+                        .filter(|event_ref| EventId::new((*event_ref).to_owned()).is_ok())
+                        .map(ToOwned::to_owned)
+                })
                 .collect()
         })
         .unwrap_or_default()

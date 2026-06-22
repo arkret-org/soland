@@ -5,6 +5,11 @@ use super::*;
 pub trait RealmInviteStore: Send + Sync {
     async fn get(&self, invite_id: &str) -> PersistenceResult<Option<RealmInviteRecord>>;
     async fn put(&self, record: RealmInviteRecord) -> PersistenceResult<()>;
+    async fn consume_third_party_token(
+        &self,
+        token_digest: &str,
+        now: chrono::DateTime<Utc>,
+    ) -> PersistenceResult<Option<RealmInviteRecord>>;
     async fn snapshot_all(&self) -> PersistenceResult<Vec<RealmInviteRecord>>;
 }
 
@@ -37,6 +42,34 @@ impl RealmInviteStore for MemoryRealmInviteStore {
             .expect("realm invites lock")
             .insert(id, record);
         Ok(())
+    }
+
+    async fn consume_third_party_token(
+        &self,
+        token_digest: &str,
+        now: chrono::DateTime<Utc>,
+    ) -> PersistenceResult<Option<RealmInviteRecord>> {
+        let mut data = self.data.lock().expect("realm invites lock");
+        let Some(record) = data.values_mut().find(|record| {
+            record.third_party_id.is_some() && record.invite_token == token_digest
+        }) else {
+            return Ok(None);
+        };
+        if record.status != "pending" {
+            record.invite_token.clear();
+            record.updated_at = Some(now);
+            return Ok(None);
+        }
+        if record.expires_at.is_some_and(|expires_at| expires_at <= now) {
+            record.status = "expired".to_owned();
+            record.invite_token.clear();
+            remove_third_party_active_material(&mut record.third_party_id, true);
+            record.updated_at = Some(now);
+            return Ok(None);
+        }
+        record.invite_token.clear();
+        record.updated_at = Some(now);
+        Ok(Some(record.clone()))
     }
 
     async fn snapshot_all(&self) -> PersistenceResult<Vec<RealmInviteRecord>> {
@@ -166,6 +199,52 @@ impl RealmInviteStore for PgRealmInviteStore {
         .map_err(PersistenceError::from)
     }
 
+    async fn consume_third_party_token(
+        &self,
+        token_digest: &str,
+        now: chrono::DateTime<Utc>,
+    ) -> PersistenceResult<Option<RealmInviteRecord>> {
+        let mut conn = pg_conn(&self.pool).await?;
+        let consumed = sql_query(
+            "UPDATE realm_invites \
+             SET invite_token = '', updated_at = $2 \
+             WHERE invite_token = $1 \
+               AND third_party_id IS NOT NULL \
+               AND status = 'pending' \
+               AND (expires_at IS NULL OR expires_at > $2) \
+             RETURNING id, realm_id, inviter_id AS inviter, invitee_id AS invitee, invite_delivery_target, introduction_evidence_digest, third_party_id, join_rule_snapshot, invite_token, status, claim_nonces, expires_at, created_at, updated_at",
+        )
+        .bind::<Text, _>(token_digest)
+        .bind::<Timestamptz, _>(now)
+        .get_result::<RealmInviteRow>(&mut *conn)
+        .await
+        .optional()
+        .map(|row| row.map(RealmInviteRecord::from))
+        .map_err(PersistenceError::from)?;
+        if consumed.is_some() {
+            return Ok(consumed);
+        }
+        sql_query(
+            "UPDATE realm_invites \
+             SET status = 'expired', \
+                 invite_token = '', \
+                 third_party_id = ((((((third_party_id - 'token_salt') - 'token_salt_id') - 'lookup_table_ref') - 'pepper') - 'pepper_id') - 'token_commitment'), \
+                 updated_at = $2 \
+             WHERE invite_token = $1 \
+               AND third_party_id IS NOT NULL \
+               AND status = 'pending' \
+               AND expires_at IS NOT NULL \
+               AND expires_at <= $2",
+        )
+        .bind::<Text, _>(token_digest)
+        .bind::<Timestamptz, _>(now)
+        .execute(&mut *conn)
+        .await
+        .map(|_| ())
+        .map_err(PersistenceError::from)?;
+        Ok(None)
+    }
+
     async fn snapshot_all(&self) -> PersistenceResult<Vec<RealmInviteRecord>> {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(
@@ -176,6 +255,27 @@ impl RealmInviteStore for PgRealmInviteStore {
         .await
         .map(|rows| rows.into_iter().map(RealmInviteRecord::from).collect())
         .map_err(PersistenceError::from)
+    }
+}
+
+fn remove_third_party_active_material(third_party_id: &mut Option<Value>, remove_commitment: bool) {
+    let Some(value) = third_party_id.as_mut() else {
+        return;
+    };
+    let Some(object) = value.as_object_mut() else {
+        return;
+    };
+    for key in [
+        "token_salt",
+        "token_salt_id",
+        "lookup_table_ref",
+        "pepper",
+        "pepper_id",
+    ] {
+        object.remove(key);
+    }
+    if remove_commitment {
+        object.remove("token_commitment");
     }
 }
 

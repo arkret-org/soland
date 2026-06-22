@@ -57,7 +57,7 @@ use crate::error::AppError;
 use crate::routing::validate_device_id;
 use crate::state::{
     AccountLifecycleRecord, AccountRecord, AppState, ContactRecord, DeviceInventoryRecord,
-    DirectConversationBindingRecord,
+    DirectConversationBindingRecord, ProjectionEventRecord,
 };
 use crate::wire::SolandAccountRegisterOutcome;
 
@@ -1091,7 +1091,7 @@ async fn direct_conversation_resolve(
     // the accepted-contact precondition below is the real gate (a stranger
     // pair has no accepted row and fails closed there).
     let scope = normalize_scope(Some("direct_message"))?;
-    let Some(_contact) = accepted_contact_for_pair(state, &session.actor, &peer, &scope).await?
+    let Some(contact) = accepted_contact_for_pair(state, &session.actor, &peer, &scope).await?
     else {
         return Err(direct_resolve_precondition(
             crate::error::reasons::CONTACT_NOT_ACCEPTED,
@@ -1104,7 +1104,7 @@ async fn direct_conversation_resolve(
             "direct conversation requires peer direct_message consent",
         ));
     }
-    let pair_key = direct_pair_key(&session.actor, &peer);
+    let pair_key = direct_pair_key(state, &session.actor, &peer)?;
     if let Some(binding) = active_direct_binding(state, &pair_key) {
         return json_ok(direct_resolve_response(
             binding,
@@ -1121,8 +1121,16 @@ async fn direct_conversation_resolve(
             created: Some(false),
         });
     }
-    let (binding, created) =
-        create_direct_binding_with_realm(state, &pair_key, &session.actor, &peer).await?;
+    ensure_direct_peer_resolvable(state, &peer).await?;
+    let (binding, created) = create_direct_binding_with_realm(
+        state,
+        &pair_key,
+        &session.actor,
+        &session.device_id,
+        &peer,
+        &contact,
+    )
+    .await?;
     let resolve_state = if created {
         DirectConversationResolveState::Created
     } else {

@@ -26,6 +26,11 @@ pub trait EventStore: Send + Sync {
     async fn contains(&self, event_id: &str) -> PersistenceResult<bool>;
     async fn max_actor_seq(&self, actor_id: &str) -> PersistenceResult<Option<u64>>;
     async fn snapshot_all(&self) -> PersistenceResult<Vec<CanonicalEventRecord>>;
+    async fn peer_authz_state_records(&self) -> PersistenceResult<Vec<CanonicalEventRecord>>;
+    async fn peer_events_query_page(
+        &self,
+        query: &PeerEventsPageQuery,
+    ) -> PersistenceResult<Vec<CanonicalEventRecord>>;
     /// Events for a single Realm, newest first. Pushes the `realm_id` filter
     /// and `received_at DESC` ordering into the query so hot-path latest-policy
     /// lookups do not full-scan the whole `canonical_events` table.
@@ -33,6 +38,16 @@ pub trait EventStore: Send + Sync {
         &self,
         realm_id: &str,
     ) -> PersistenceResult<Vec<CanonicalEventRecord>>;
+}
+
+#[derive(Clone, Debug)]
+pub struct PeerEventsPageQuery {
+    pub realms: Vec<String>,
+    pub actors: Vec<String>,
+    pub kind_filter: Option<String>,
+    pub cursor_event_id: Option<String>,
+    pub backward: bool,
+    pub limit: usize,
 }
 
 // In-memory message store
@@ -116,7 +131,18 @@ impl MemoryEventStore {
 impl EventStore for MemoryEventStore {
     async fn put(&self, record: CanonicalEventRecord) -> PersistenceResult<()> {
         let id = record.event_id.clone();
-        self.data.lock().expect("events lock").insert(id, record);
+        let mut data = self.data.lock().expect("events lock");
+        if record.kind == "ck.realm.create"
+            && record.realm_id.is_some()
+            && data.values().any(|existing| {
+                existing.kind == "ck.realm.create" && existing.realm_id == record.realm_id
+            })
+        {
+            return Err(PersistenceError::Conflict(
+                "realm_already_exists".to_owned(),
+            ));
+        }
+        data.insert(id, record);
         Ok(())
     }
 
@@ -158,6 +184,49 @@ impl EventStore for MemoryEventStore {
             .collect())
     }
 
+    async fn peer_authz_state_records(&self) -> PersistenceResult<Vec<CanonicalEventRecord>> {
+        let mut records = self
+            .data
+            .lock()
+            .expect("events lock")
+            .values()
+            .filter(|record| record_is_peer_authz_state_record(record))
+            .cloned()
+            .collect::<Vec<_>>();
+        records.sort_by(|left, right| event_position_cmp(left, right));
+        Ok(records)
+    }
+
+    async fn peer_events_query_page(
+        &self,
+        query: &PeerEventsPageQuery,
+    ) -> PersistenceResult<Vec<CanonicalEventRecord>> {
+        let data = self.data.lock().expect("events lock");
+        let realms = query.realms.iter().map(String::as_str).collect::<BTreeSet<_>>();
+        let actors = query.actors.iter().map(String::as_str).collect::<BTreeSet<_>>();
+        let cursor = query
+            .cursor_event_id
+            .as_deref()
+            .and_then(|event_id| data.get(event_id));
+        if query.cursor_event_id.is_some() && cursor.is_none() {
+            return Ok(Vec::new());
+        }
+        let mut records = data
+            .values()
+            .filter(|record| {
+                peer_page_record_matches(record, &realms, &actors, query.kind_filter.as_deref())
+                    && peer_page_record_after_cursor(record, cursor, query.backward)
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        records.sort_by(|left, right| event_position_cmp(left, right));
+        if query.backward {
+            records.reverse();
+        }
+        records.truncate(query.limit);
+        Ok(records)
+    }
+
     async fn realm_events_newest_first(
         &self,
         realm_id: &str,
@@ -180,8 +249,78 @@ impl EventStore for MemoryEventStore {
     }
 }
 
+fn event_position_cmp(
+    left: &CanonicalEventRecord,
+    right: &CanonicalEventRecord,
+) -> std::cmp::Ordering {
+    left.received_at
+        .cmp(&right.received_at)
+        .then_with(|| left.event_id.cmp(&right.event_id))
+}
+
+fn peer_page_record_after_cursor(
+    record: &CanonicalEventRecord,
+    cursor: Option<&CanonicalEventRecord>,
+    backward: bool,
+) -> bool {
+    let Some(cursor) = cursor else {
+        return true;
+    };
+    let order = event_position_cmp(record, cursor);
+    if backward {
+        order.is_lt()
+    } else {
+        order.is_gt()
+    }
+}
+
+fn peer_page_record_matches(
+    record: &CanonicalEventRecord,
+    realms: &BTreeSet<&str>,
+    actors: &BTreeSet<&str>,
+    kind_filter: Option<&str>,
+) -> bool {
+    if let Some(kind) = kind_filter
+        && record.kind != kind
+    {
+        return false;
+    }
+    let realm_match = realms.is_empty()
+        || record
+            .realm_id
+            .as_deref()
+            .is_some_and(|realm_id| realms.contains(realm_id));
+    let actor_match = actors.is_empty() || actors.contains(record.actor_id.as_str());
+    realm_match && actor_match
+}
+
+fn record_is_peer_authz_state_record(record: &CanonicalEventRecord) -> bool {
+    matches!(
+        record.kind.as_str(),
+        crate::kinds::CK_MEMBER_STATE | crate::kinds::CK_CIRCLE_MEMBER_STATE
+    ) || event_payload_field(&record.envelope, "sync_endpoints").is_some()
+}
+
+fn event_payload_field<'a>(envelope: &'a Value, field: &str) -> Option<&'a Value> {
+    let payload = envelope.get("payload")?;
+    payload
+        .get(field)
+        .or_else(|| payload.get("object").and_then(|object| object.get(field)))
+        .or_else(|| payload.get("patch").and_then(|patch| patch.get(field)))
+}
+
 pub(crate) struct PgEventStore {
     pub(crate) pool: PgPool,
+}
+
+fn map_canonical_event_put_error(error: diesel::result::Error) -> PersistenceError {
+    use diesel::result::{DatabaseErrorKind, Error as DieselError};
+    if let DieselError::DatabaseError(DatabaseErrorKind::UniqueViolation, info) = &error {
+        if info.constraint_name() == Some("canonical_events_realm_create_unique_idx") {
+            return PersistenceError::Conflict("realm_already_exists".to_owned());
+        }
+    }
+    PersistenceError::from(error)
 }
 
 #[derive(QueryableByName)]
@@ -255,7 +394,7 @@ impl EventStore for PgEventStore {
         .bind::<Timestamptz, _>(record.received_at)
         .execute(&mut *conn).await
         .map(|_| ())
-        .map_err(PersistenceError::from)
+        .map_err(map_canonical_event_put_error)
     }
 
     async fn get(&self, event_id: &str) -> PersistenceResult<Option<CanonicalEventRecord>> {
@@ -302,6 +441,79 @@ impl EventStore for PgEventStore {
         .load::<CanonicalEventRow>(&mut *conn).await
         .map(|rows| rows.into_iter().map(CanonicalEventRecord::from).collect())
         .map_err(PersistenceError::from)
+    }
+
+    async fn peer_authz_state_records(&self) -> PersistenceResult<Vec<CanonicalEventRecord>> {
+        let mut conn = pg_conn(&self.pool).await?;
+        sql_query(
+            "SELECT id, actor_id, actor_seq, realm_id, kind, schema_id, canonical_digest, canonical_bytes, envelope, received_at \
+             FROM canonical_events \
+             WHERE kind IN ('ck.member.state', 'ck.circle.member.state') \
+                OR (envelope #> '{payload,sync_endpoints}') IS NOT NULL \
+                OR (envelope #> '{payload,object,sync_endpoints}') IS NOT NULL \
+                OR (envelope #> '{payload,patch,sync_endpoints}') IS NOT NULL \
+             ORDER BY received_at ASC, id ASC",
+        )
+        .load::<CanonicalEventRow>(&mut *conn).await
+        .map(|rows| rows.into_iter().map(CanonicalEventRecord::from).collect())
+        .map_err(PersistenceError::from)
+    }
+
+    async fn peer_events_query_page(
+        &self,
+        query: &PeerEventsPageQuery,
+    ) -> PersistenceResult<Vec<CanonicalEventRecord>> {
+        let mut conn = pg_conn(&self.pool).await?;
+        let realm_ids = query
+            .realms
+            .iter()
+            .map(|realm_id| {
+                ids::parse_typed_uuid(realm_id, "realm").ok_or_else(|| {
+                    PersistenceError::Internal(format!("invalid peer events realm id: {realm_id}"))
+                })
+            })
+            .collect::<PersistenceResult<Vec<_>>>()?;
+        let cursor_id = match query.cursor_event_id.as_deref() {
+            Some(event_id) => ids::parse_typed_uuid(event_id, "event").ok_or_else(|| {
+                PersistenceError::Internal(format!("invalid peer events cursor event id: {event_id}"))
+            })?,
+            None => Uuid::nil(),
+        };
+        let no_cursor = query.cursor_event_id.is_none();
+        let kind_filter = query.kind_filter.as_deref().unwrap_or_default();
+        let limit = query.limit.min(i64::MAX as usize) as i64;
+        let page_sql = if query.backward {
+            "SELECT id, actor_id, actor_seq, realm_id, kind, schema_id, canonical_digest, canonical_bytes, envelope, received_at \
+             FROM canonical_events \
+             WHERE ($1 OR realm_id = ANY($2)) \
+               AND ($3 OR actor_id = ANY($4)) \
+               AND ($5 OR kind = $6) \
+               AND ($7 OR (received_at, id) < (SELECT received_at, id FROM canonical_events WHERE id = $8)) \
+             ORDER BY received_at DESC, id DESC \
+             LIMIT $9"
+        } else {
+            "SELECT id, actor_id, actor_seq, realm_id, kind, schema_id, canonical_digest, canonical_bytes, envelope, received_at \
+             FROM canonical_events \
+             WHERE ($1 OR realm_id = ANY($2)) \
+               AND ($3 OR actor_id = ANY($4)) \
+               AND ($5 OR kind = $6) \
+               AND ($7 OR (received_at, id) > (SELECT received_at, id FROM canonical_events WHERE id = $8)) \
+             ORDER BY received_at ASC, id ASC \
+             LIMIT $9"
+        };
+        sql_query(page_sql)
+            .bind::<Bool, _>(realm_ids.is_empty())
+            .bind::<Array<SqlUuid>, _>(realm_ids)
+            .bind::<Bool, _>(query.actors.is_empty())
+            .bind::<Array<Text>, _>(query.actors.clone())
+            .bind::<Bool, _>(query.kind_filter.is_none())
+            .bind::<Text, _>(kind_filter)
+            .bind::<Bool, _>(no_cursor)
+            .bind::<SqlUuid, _>(cursor_id)
+            .bind::<BigInt, _>(limit)
+            .load::<CanonicalEventRow>(&mut *conn).await
+            .map(|rows| rows.into_iter().map(CanonicalEventRecord::from).collect())
+            .map_err(PersistenceError::from)
     }
 
     async fn realm_events_newest_first(

@@ -364,6 +364,22 @@ mod spec_sync_validator_tests {
         assert!(validate_operation_schema(&migrate, migrate_schema).is_ok());
         assert!(validate_morph_schema_migrate_capability(&migrate).is_ok());
 
+        let non_additive = op(
+            kinds::CK_MORPH_SCHEMA_MIGRATE,
+            json!({
+                "morph_id": "ck:morph:01904100-0000-7000-8000-000000000001",
+                "from_schema_refs": ["ck.schema.old"],
+                "to_schema_refs": ["ck.schema.new"],
+                "compatibility_class": "additive",
+                "authorization_ref": "ck:event:01904100-0000-7000-8000-aaaaaaaaaaaa",
+                "capability_action": "ck.morph.schema.migrate"
+            }),
+        );
+        assert_eq!(
+            validate_operation_schema(&non_additive, migrate_schema),
+            Err("morph_schema_refs_transformation_unsupported")
+        );
+
         let missing_gate = op(
             kinds::CK_MORPH_SCHEMA_MIGRATE,
             json!({

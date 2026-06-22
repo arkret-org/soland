@@ -9,11 +9,13 @@
 //! ## Cache
 //!
 //! Keyed by the canonical request hash (see
-//! [`PolicyCheckRequestInput::canonical_request_hash`]). The cache is
-//! a flat in-memory map; entries expire after `cache_ttl_seconds` from
-//! the realm config in effect at insert time. A request with
-//! `bypass_cache=true` skips the lookup and the resulting decision is
-//! NOT inserted.
+//! [`PolicyCheckRequestInput::canonical_request_hash`]) and guarded by
+//! the caller's accepted authorization / policy / membership frontiers.
+//! The cache is a flat in-memory map; entries expire after
+//! `cache_ttl_seconds` from the realm config in effect at insert time
+//! and are also rejected once the signed decision's own `expires_at`
+//! has passed. A request with `bypass_cache=true` skips the lookup and
+//! the resulting decision is NOT inserted.
 //!
 //! ## Timeout fail-closed
 //!
@@ -44,12 +46,37 @@ use cokret_sdk::{
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use serde::Serialize;
 use serde_json::Value;
+use subtle::ConstantTimeEq as _;
 
 use crate::reducer::RealmPolicyServerConfig;
 
 type VerificationKeyResolver =
     Arc<dyn Fn(&str) -> Result<VerifyingKey, String> + Send + Sync + 'static>;
 const POLICY_CACHE_MAX_ENTRIES: usize = 4096;
+
+/// Accepted local frontiers captured when the policy request is built.
+/// The signed response must echo these digests exactly before it can be
+/// accepted or cached.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PolicyFrontierSnapshot {
+    pub auth_state_digest: Hash,
+    pub policy_frontier_digest: Hash,
+    pub membership_frontier_digest: Hash,
+}
+
+impl PolicyFrontierSnapshot {
+    pub fn new(
+        auth_state_digest: Hash,
+        policy_frontier_digest: Hash,
+        membership_frontier_digest: Hash,
+    ) -> Self {
+        Self {
+            auth_state_digest,
+            policy_frontier_digest,
+            membership_frontier_digest,
+        }
+    }
+}
 
 /// Inputs needed to build a [`PolicyCheckRequestBody`] plus a
 /// per-request control surface (cache bypass).
@@ -65,6 +92,7 @@ pub struct PolicyCheckRequestInput {
     pub signed_transport: bool,
     pub event_preview: Value,
     pub auth_context: Value,
+    pub expected_frontiers: PolicyFrontierSnapshot,
     /// When `true`, the cache lookup is skipped and the result is NOT
     /// inserted into the cache.
     pub bypass_cache: bool,
@@ -143,13 +171,21 @@ impl PolicyCache {
         Self::default()
     }
 
-    fn lookup(&self, realm_id: &str, canonical_hash: &str) -> Option<PolicyCheckOutcome> {
+    fn lookup(
+        &self,
+        realm_id: &str,
+        canonical_hash: &str,
+        expected_frontiers: &PolicyFrontierSnapshot,
+    ) -> Option<PolicyCheckOutcome> {
         let now = Instant::now();
+        let wall_now = chrono::Utc::now();
         let mut guard = self.inner.lock().expect("policy cache mutex");
         prune_policy_cache_locked(&mut guard, now);
         let key = (realm_id.to_owned(), canonical_hash.to_owned());
         if let Some(entry) = guard.get(&key)
             && entry.expires_at > now
+            && policy_decision_unexpired(&entry.response, wall_now)
+            && policy_frontiers_match(&entry.response, expected_frontiers)
         {
             return Some(entry.response.clone());
         }
@@ -192,6 +228,34 @@ fn prune_policy_cache_locked(
     now: Instant,
 ) {
     guard.retain(|_, entry| entry.expires_at > now);
+}
+
+fn policy_decision_unexpired(
+    response: &PolicyCheckOutcome,
+    now: chrono::DateTime<chrono::Utc>,
+) -> bool {
+    response.expires_at > now
+}
+
+fn policy_frontiers_match(
+    response: &PolicyCheckOutcome,
+    expected: &PolicyFrontierSnapshot,
+) -> bool {
+    constant_time_hash_eq(&response.auth_state_digest, &expected.auth_state_digest)
+        && constant_time_hash_eq(
+            &response.policy_frontier_digest,
+            &expected.policy_frontier_digest,
+        )
+        && constant_time_hash_eq(
+            &response.membership_frontier_digest,
+            &expected.membership_frontier_digest,
+        )
+}
+
+fn constant_time_hash_eq(left: &Hash, right: &Hash) -> bool {
+    let left = left.as_str().as_bytes();
+    let right = right.as_str().as_bytes();
+    left.len() == right.len() && bool::from(left.ct_eq(right))
 }
 
 /// Errors the outbound client may surface to callers. The handler-level
@@ -283,8 +347,11 @@ impl PolicyClient {
 
         let canonical_hash = input.canonical_request_hash();
         let bypass_cache = input.bypass_cache;
+        let expected_frontiers = input.expected_frontiers.clone();
         if !bypass_cache
-            && let Some(hit) = self.cache.lookup(&realm_id_str, canonical_hash.as_str())
+            && let Some(hit) =
+                self.cache
+                    .lookup(&realm_id_str, canonical_hash.as_str(), &expected_frontiers)
         {
             return Ok(hit);
         }
@@ -300,6 +367,36 @@ impl PolicyClient {
         {
             Ok(Ok(response)) => {
                 self.verify_signature(&config, &wire_request, &response)?;
+                if !policy_decision_unexpired(&response, chrono::Utc::now()) {
+                    tracing::warn!(
+                        realm_id = %realm_id_str,
+                        request_id = %wire_request.request_id,
+                        "policy_client: expired policy decision replay rejected"
+                    );
+                    return Ok(self.frontier_fail_closed_response(
+                        &wire_request,
+                        &expected_frontiers,
+                        "snapshot_risk",
+                    ));
+                }
+                if !policy_frontiers_match(&response, &expected_frontiers) {
+                    tracing::warn!(
+                        realm_id = %realm_id_str,
+                        request_id = %wire_request.request_id,
+                        expected_auth_state_digest = %expected_frontiers.auth_state_digest.as_str(),
+                        response_auth_state_digest = %response.auth_state_digest.as_str(),
+                        expected_policy_frontier_digest = %expected_frontiers.policy_frontier_digest.as_str(),
+                        response_policy_frontier_digest = %response.policy_frontier_digest.as_str(),
+                        expected_membership_frontier_digest = %expected_frontiers.membership_frontier_digest.as_str(),
+                        response_membership_frontier_digest = %response.membership_frontier_digest.as_str(),
+                        "policy_client: policy decision frontier mismatch rejected"
+                    );
+                    return Ok(self.frontier_fail_closed_response(
+                        &wire_request,
+                        &expected_frontiers,
+                        "fork_risk",
+                    ));
+                }
                 if !bypass_cache {
                     let ttl = Duration::from_secs(config.cache_ttl_seconds);
                     self.cache.insert(
@@ -331,6 +428,45 @@ impl PolicyClient {
                 );
                 Ok(self.fail_closed_response(&config, &wire_request, "policy_server_timeout"))
             }
+        }
+    }
+
+    fn frontier_fail_closed_response(
+        &self,
+        request: &PolicyCheckRequestBody,
+        expected_frontiers: &PolicyFrontierSnapshot,
+        reason_code: &str,
+    ) -> PolicyCheckOutcome {
+        let policy_server_id =
+            Did::new(self.local_service_did.clone()).unwrap_or_else(|_| request.actor_id.clone());
+        let bound_to = PolicyCheckBoundTo {
+            realm_id: request.realm_id.clone(),
+            actor_id: request.actor_id.clone(),
+            action: request.action.clone(),
+            request_canonical_digest: request.request_canonical_digest.clone(),
+            policy_server_id,
+        };
+        let now = chrono::Utc::now();
+        let signature = PolicyCheckSignature {
+            kid: format!("{}#proxy-{}", self.local_service_did, reason_code),
+            sig: "proxy".to_owned(),
+        };
+        PolicyCheckOutcome {
+            request_id: request.request_id.clone(),
+            decision: AuthzDecision::HardDeny,
+            bound_to,
+            reason_code: reason_code.to_owned(),
+            expires_at: now,
+            freshness_state: FreshnessState::Unknown,
+            auth_state_digest: expected_frontiers.auth_state_digest.clone(),
+            policy_frontier_digest: expected_frontiers.policy_frontier_digest.clone(),
+            membership_frontier_digest: expected_frontiers.membership_frontier_digest.clone(),
+            signature,
+            next_retry_at: Some(now),
+            obligations: vec![serde_json::json!({
+                "kind": "log_to_audit",
+                "fields": {"decision_proxy": true, "reason_code": reason_code}
+            })],
         }
     }
 
@@ -665,6 +801,14 @@ mod tests {
         }
     }
 
+    fn hash_with(ch: char) -> Hash {
+        Hash::new(format!("sha256:{}", ch.to_string().repeat(64))).unwrap()
+    }
+
+    fn frontiers(auth: char, policy: char, membership: char) -> PolicyFrontierSnapshot {
+        PolicyFrontierSnapshot::new(hash_with(auth), hash_with(policy), hash_with(membership))
+    }
+
     fn sample_input(bypass_cache: bool) -> PolicyCheckRequestInput {
         PolicyCheckRequestInput {
             request_id: "req-1".to_owned(),
@@ -677,6 +821,7 @@ mod tests {
             signed_transport: true,
             event_preview: Value::Null,
             auth_context: Value::Null,
+            expected_frontiers: frontiers('0', '0', '0'),
             bypass_cache,
         }
     }
@@ -745,8 +890,7 @@ mod tests {
         signing: &SigningKey,
     ) -> PolicyCheckOutcome {
         let wire_request = input.clone().into_wire();
-        let zero = Hash::new(format!("sha256:{}", "0".repeat(64))).unwrap();
-        let mut response = PolicyCheckOutcome {
+        let response = PolicyCheckOutcome {
             request_id: wire_request.request_id.clone(),
             decision: AuthzDecision::Allow,
             bound_to: PolicyCheckBoundTo {
@@ -757,9 +901,9 @@ mod tests {
                 policy_server_id: Did::new("did:web:policy.example.com").unwrap(),
             },
             freshness_state: FreshnessState::Fresh,
-            auth_state_digest: zero.clone(),
-            policy_frontier_digest: zero.clone(),
-            membership_frontier_digest: zero,
+            auth_state_digest: input.expected_frontiers.auth_state_digest.clone(),
+            policy_frontier_digest: input.expected_frontiers.policy_frontier_digest.clone(),
+            membership_frontier_digest: input.expected_frontiers.membership_frontier_digest.clone(),
             signature: PolicyCheckSignature {
                 kid: "did:web:policy.example.com#key-1".to_owned(),
                 sig: String::new(),
@@ -769,6 +913,16 @@ mod tests {
             next_retry_at: None,
             obligations: Vec::new(),
         };
+        sign_policy_response(input, signing, response)
+    }
+
+    fn sign_policy_response(
+        input: &PolicyCheckRequestInput,
+        signing: &SigningKey,
+        mut response: PolicyCheckOutcome,
+    ) -> PolicyCheckOutcome {
+        response.signature.sig.clear();
+        let wire_request = input.clone().into_wire();
         let transcript =
             policy_decision_transcript_bytes(&wire_request, &response).expect("transcript bytes");
         response.signature.sig = URL_SAFE_NO_PAD.encode(signing.sign(&transcript).to_bytes());
@@ -796,6 +950,50 @@ mod tests {
         let resp = client.check(input, move |_| Some(cfg_clone)).await.unwrap();
         assert!(matches!(resp.decision, AuthzDecision::Allow));
         assert_eq!(resp.reason_code, "ok");
+    }
+
+    #[tokio::test]
+    async fn check_cache_hit_requires_current_frontiers() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let hit_count = Arc::new(AtomicUsize::new(0));
+        let hit_count_clone = hit_count.clone();
+        let signing = signing_key();
+        let mut input = sample_input(false);
+        input.expected_frontiers = frontiers('1', '2', '3');
+        let stale_key = input.canonical_request_hash();
+        let resp_body = serde_json::to_string(&signed_sample_response(&input, &signing)).unwrap();
+        tokio::spawn(async move {
+            if let Ok((mut sock, _)) = listener.accept().await {
+                hit_count_clone.fetch_add(1, Ordering::SeqCst);
+                let _ = tokio::io::AsyncReadExt::read(&mut sock, &mut [0u8; 4096]).await;
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+                    resp_body.len(),
+                    resp_body
+                );
+                let _ = tokio::io::AsyncWriteExt::write_all(&mut sock, response.as_bytes()).await;
+            }
+        });
+
+        let url = format!("http://{addr}/_cokret/self/policy/check");
+        let cfg = realm_config(&url);
+        let client = client_with_policy_key(&signing);
+        client.cache.insert(
+            input.realm_id.as_str(),
+            stale_key.as_str(),
+            sample_response(),
+            Duration::from_secs(60),
+        );
+
+        let cfg_clone = cfg.clone();
+        let resp = client.check(input, move |_| Some(cfg_clone)).await.unwrap();
+        assert!(matches!(resp.decision, AuthzDecision::Allow));
+        assert_eq!(
+            hit_count.load(Ordering::SeqCst),
+            1,
+            "stale frontier cache entry must be bypassed"
+        );
     }
 
     #[tokio::test]
@@ -831,6 +1029,73 @@ mod tests {
         let resp = client.check(input, move |_| Some(cfg_clone)).await.unwrap();
         assert!(matches!(resp.decision, AuthzDecision::Allow));
         assert_eq!(hit_count.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn check_rejects_expired_signed_decision() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let signing = signing_key();
+        let input = sample_input(true);
+        let mut expired = signed_sample_response(&input, &signing);
+        expired.expires_at = Utc::now() - chrono::Duration::seconds(1);
+        let expired = sign_policy_response(&input, &signing, expired);
+        let resp_body = serde_json::to_string(&expired).unwrap();
+        tokio::spawn(async move {
+            if let Ok((mut sock, _)) = listener.accept().await {
+                let _ = tokio::io::AsyncReadExt::read(&mut sock, &mut [0u8; 4096]).await;
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+                    resp_body.len(),
+                    resp_body
+                );
+                let _ = tokio::io::AsyncWriteExt::write_all(&mut sock, response.as_bytes()).await;
+            }
+        });
+
+        let url = format!("http://{addr}/_cokret/self/policy/check");
+        let cfg = realm_config(&url);
+        let client = client_with_policy_key(&signing);
+
+        let cfg_clone = cfg.clone();
+        let resp = client.check(input, move |_| Some(cfg_clone)).await.unwrap();
+        assert!(matches!(resp.decision, AuthzDecision::HardDeny));
+        assert_eq!(resp.reason_code, "snapshot_risk");
+        assert!(resp.signature.kid.ends_with("#proxy-snapshot_risk"));
+    }
+
+    #[tokio::test]
+    async fn check_rejects_signed_frontier_mismatch() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let signing = signing_key();
+        let input = sample_input(true);
+        let mut mismatched = signed_sample_response(&input, &signing);
+        mismatched.policy_frontier_digest = hash_with('a');
+        let mismatched = sign_policy_response(&input, &signing, mismatched);
+        let resp_body = serde_json::to_string(&mismatched).unwrap();
+        tokio::spawn(async move {
+            if let Ok((mut sock, _)) = listener.accept().await {
+                let _ = tokio::io::AsyncReadExt::read(&mut sock, &mut [0u8; 4096]).await;
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+                    resp_body.len(),
+                    resp_body
+                );
+                let _ = tokio::io::AsyncWriteExt::write_all(&mut sock, response.as_bytes()).await;
+            }
+        });
+
+        let url = format!("http://{addr}/_cokret/self/policy/check");
+        let cfg = realm_config(&url);
+        let client = client_with_policy_key(&signing);
+
+        let cfg_clone = cfg.clone();
+        let resp = client.check(input, move |_| Some(cfg_clone)).await.unwrap();
+        assert!(matches!(resp.decision, AuthzDecision::HardDeny));
+        assert_eq!(resp.reason_code, "fork_risk");
+        assert!(resp.signature.kid.ends_with("#proxy-fork_risk"));
+        assert_eq!(resp.policy_frontier_digest, hash_with('0'));
     }
 
     #[tokio::test]

@@ -40,6 +40,7 @@ pub(super) async fn register_package_install(
     body_digest: String,
     res: &mut Response,
 ) -> Result<InstallCommitOutcome, AppError> {
+    let submitted_plan_digest = commit.plan_digest.to_string();
     let package = commit.applet_package;
     let applet_id = package.applet_id.clone();
     let namespace = package_namespace(&package);
@@ -53,6 +54,21 @@ pub(super) async fn register_package_install(
             if existing.install_body_digest.as_deref() == Some(body_digest.as_str())
                 && let Some(response) = &existing.install_response
             {
+                let mut recovered = existing.clone();
+                if recovered.install_execution.is_none() {
+                    recovered.install_execution = Some(build_install_execution_record(
+                        &state.config.service_did,
+                        owner_actor_id,
+                        &idempotency_key,
+                        &body_digest,
+                        &submitted_plan_digest,
+                        &recovered,
+                        response,
+                        false,
+                    )?);
+                    persist_applet_record(state, &recovered).await?;
+                }
+                recover_applet_install_fanout(state, &mut recovered, response).await?;
                 res.status_code(StatusCode::OK);
                 return Ok(response.clone());
             }
@@ -105,7 +121,7 @@ pub(super) async fn register_package_install(
             })
             .collect::<Result<Vec<_>, _>>()?,
     };
-    let record = AppletRecord {
+    let mut record = AppletRecord {
         applet_id: package.applet_id.clone(),
         namespace,
         owner_actor_id: owner_actor_id.to_owned(),
@@ -124,20 +140,21 @@ pub(super) async fn register_package_install(
         install_body_digest: Some(body_digest),
         install_id: Some(response.install_id.clone()),
         install_response: Some(response.clone()),
+        install_execution: None,
         ghosts: Vec::new(),
     };
+    record.install_execution = Some(build_install_execution_record(
+        &state.config.service_did,
+        owner_actor_id,
+        record.idempotency_key.as_deref().unwrap_or_default(),
+        record.install_body_digest.as_deref().unwrap_or_default(),
+        &submitted_plan_digest,
+        &record,
+        &response,
+        false,
+    )?);
     persist_applet_record(state, &record).await?;
-    bot_actor::register_bot(BotActor {
-        did: record.bot_actor_id.clone(),
-        name: applet_display_name(&record.manifest).unwrap_or_else(|| record.namespace.clone()),
-        kind: KIND_BOT.to_owned(),
-        owner_actor_id: owner_actor_id.to_owned(),
-        created_at: now,
-        revoked_at: None,
-    });
-    update_applet_projection(state, &record);
-    append_applet_registration_projection(state, &record, &registration_event_ref).await?;
-    project_applet_install_grants(state, &record, &response.capability_grant_refs);
+    recover_applet_install_fanout(state, &mut record, &response).await?;
     crate::routing::append_audit_log(
         state,
         Some(owner_actor_id),
@@ -157,6 +174,77 @@ pub(super) async fn register_package_install(
     Ok(response)
 }
 
+async fn recover_applet_install_fanout(
+    state: &AppState,
+    record: &mut AppletRecord,
+    response: &InstallCommitOutcome,
+) -> Result<(), AppError> {
+    register_applet_install_bot(record);
+    update_applet_projection(state, record);
+    ensure_applet_registration_projection(state, record, &response.registration_event_ref).await?;
+    project_applet_install_grants(state, record, &response.capability_grant_refs);
+    if record
+        .install_execution
+        .as_ref()
+        .and_then(|execution| execution.get("status"))
+        .and_then(Value::as_str)
+        != Some("completed")
+    {
+        let submitted_plan_digest = record
+            .install_execution
+            .as_ref()
+            .and_then(|execution| execution.get("submitted_plan_digest"))
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned();
+        record.install_execution = Some(build_install_execution_record(
+            &state.config.service_did,
+            &record.owner_actor_id,
+            record.idempotency_key.as_deref().unwrap_or_default(),
+            record.install_body_digest.as_deref().unwrap_or_default(),
+            &submitted_plan_digest,
+            record,
+            response,
+            true,
+        )?);
+        persist_applet_record(state, record).await?;
+    }
+    Ok(())
+}
+
+fn register_applet_install_bot(record: &AppletRecord) {
+    bot_actor::register_bot(BotActor {
+        did: record.bot_actor_id.clone(),
+        name: applet_display_name(&record.manifest).unwrap_or_else(|| record.namespace.clone()),
+        kind: KIND_BOT.to_owned(),
+        owner_actor_id: record.owner_actor_id.clone(),
+        created_at: record.registered_at,
+        revoked_at: None,
+    });
+}
+
+async fn ensure_applet_registration_projection(
+    state: &AppState,
+    record: &AppletRecord,
+    event_id: &str,
+) -> Result<(), AppError> {
+    let exists = state
+        .persistence
+        .projection_events()
+        .snapshot_all()
+        .await
+        .map_err(|error| {
+            tracing::error!(%error, %event_id, "applet install: failed to inspect registration projection recovery");
+            AppError::internal("failed to inspect applet registration projection")
+        })?
+        .into_iter()
+        .any(|event| event.event_id == event_id);
+    if exists {
+        return Ok(());
+    }
+    append_applet_registration_projection(state, record, event_id).await
+}
+
 fn project_applet_install_grants(state: &AppState, record: &AppletRecord, grant_ids: &[String]) {
     if record.revoked_at.is_some()
         || !matches!(record.status.as_str(), "installed" | "partially_installed")
@@ -167,20 +255,169 @@ fn project_applet_install_grants(state: &AppState, record: &AppletRecord, grant_
         return;
     };
     for (grant_id, action) in grant_ids.iter().zip(record.capabilities.iter()) {
-        state.authz.upsert_projected_grant(crate::authz::Grant {
-            grant_id: grant_id.clone(),
-            realm_id: record.portal_realm_id.clone(),
-            issuer: record.owner_actor_id.clone(),
-            subject: package.service_did.to_string(),
-            resource: record.portal_realm_id.clone(),
-            actions: vec![action.clone()],
-            constraints: Vec::new(),
-            revoked: false,
-            created_at: record.registered_at,
-            delegated_from: None,
-            expires_at: None,
-        });
+        state
+            .authz
+            .upsert_projected_grant(applet_install_grant(record, package, grant_id, action));
     }
+}
+
+fn applet_install_grant(
+    record: &AppletRecord,
+    package: &AppletPackage,
+    grant_id: &str,
+    action: &str,
+) -> crate::authz::Grant {
+    crate::authz::Grant {
+        grant_id: grant_id.to_owned(),
+        realm_id: record.portal_realm_id.clone(),
+        issuer: record.owner_actor_id.clone(),
+        subject: package.service_did.to_string(),
+        resource: record.portal_realm_id.clone(),
+        actions: vec![action.to_owned()],
+        constraints: applet_delegation_constraints(record, package),
+        revoked: false,
+        created_at: record.registered_at,
+        delegated_from: None,
+        expires_at: None,
+    }
+}
+
+fn applet_delegation_constraints(
+    record: &AppletRecord,
+    package: &AppletPackage,
+) -> Vec<crate::authz::Constraint> {
+    vec![crate::authz::Constraint::AppletDelegationBinding {
+        applet_id: record.applet_id.clone(),
+        executed_by: package.service_did.to_string(),
+        registration_epoch: package.registration_epoch.to_string(),
+    }]
+}
+
+fn build_install_execution_record(
+    principal_service_id: &str,
+    admin_actor_id: &str,
+    idempotency_key: &str,
+    body_digest: &str,
+    submitted_plan_digest: &str,
+    record: &AppletRecord,
+    response: &InstallCommitOutcome,
+    accepted: bool,
+) -> Result<Value, AppError> {
+    let status = if accepted { "completed" } else { "pending" };
+    let produced_event_refs = if accepted {
+        install_produced_event_refs(response)
+    } else {
+        Vec::new()
+    };
+    Ok(json!({
+        "principal_service_id": principal_service_id,
+        "admin_actor_id": admin_actor_id,
+        "idempotency_key": idempotency_key,
+        "body_hash": body_digest,
+        "submitted_plan_digest": submitted_plan_digest,
+        "status": status,
+        "effective_status": record.status.as_str(),
+        "produced_event_refs": produced_event_refs,
+        "steps": install_execution_steps(record, response, accepted)?,
+    }))
+}
+
+fn install_produced_event_refs(response: &InstallCommitOutcome) -> Vec<String> {
+    let mut refs = Vec::with_capacity(
+        1 + response.capability_grant_refs.len()
+            + response.membership_event_refs.len()
+            + response.e2ee_authorization_refs.len()
+            + usize::from(response.widget_policy_ref.is_some()),
+    );
+    refs.push(response.registration_event_ref.clone());
+    refs.extend(response.capability_grant_refs.iter().cloned());
+    refs.extend(response.membership_event_refs.iter().cloned());
+    refs.extend(response.e2ee_authorization_refs.iter().cloned());
+    if let Some(widget_policy_ref) = &response.widget_policy_ref {
+        refs.push(widget_policy_ref.clone());
+    }
+    refs
+}
+
+fn install_execution_steps(
+    record: &AppletRecord,
+    response: &InstallCommitOutcome,
+    accepted: bool,
+) -> Result<Vec<Value>, AppError> {
+    let Some(package) = record.package.as_ref() else {
+        return Ok(Vec::new());
+    };
+    let mut steps = Vec::with_capacity(1 + response.capability_grant_refs.len());
+    let registration_body = json!({
+        "event_kind": kinds::CK_APPLET_REGISTRATION,
+        "payload": registration_payload_from_package(package)?,
+    });
+    steps.push(install_execution_step(
+        0,
+        kinds::CK_APPLET_REGISTRATION,
+        &response.registration_event_ref,
+        canonical_digest(&registration_body)?,
+        accepted,
+        None,
+    ));
+    for (offset, (grant_id, action)) in response
+        .capability_grant_refs
+        .iter()
+        .zip(record.capabilities.iter())
+        .enumerate()
+    {
+        let grant = applet_install_grant(record, package, grant_id, action);
+        let grant_body = json!({
+            "event_kind": kinds::CK_CAPABILITY_GRANT,
+            "payload": {
+                "grant_id": grant_id,
+                "grant": grant,
+            },
+        });
+        steps.push(install_execution_step(
+            offset + 1,
+            kinds::CK_CAPABILITY_GRANT,
+            grant_id,
+            canonical_digest(&grant_body)?,
+            accepted,
+            Some(json!({
+                "applet_id": record.applet_id.as_str(),
+                "executed_by": package.service_did.to_string(),
+                "registration_epoch": package.registration_epoch.to_string(),
+            })),
+        ));
+    }
+    Ok(steps)
+}
+
+fn install_execution_step(
+    step_index: usize,
+    target_event_kind: &str,
+    planned_event_ref: &str,
+    canonical_event_body_hash: String,
+    accepted: bool,
+    grant_binding: Option<Value>,
+) -> Value {
+    let status = if accepted { "accepted" } else { "pending" };
+    let event_ref = if accepted {
+        Value::String(planned_event_ref.to_owned())
+    } else {
+        Value::Null
+    };
+    let mut step = json!({
+        "step_index": step_index,
+        "target_event_kind": target_event_kind,
+        "canonical_event_body_hash": canonical_event_body_hash,
+        "status": status,
+        "planned_event_ref": planned_event_ref,
+        "event_ref": event_ref,
+    });
+    if let Some(grant_binding) = grant_binding
+        && let Some(object) = step.as_object_mut()
+    {
+        object.insert("grant_binding".to_owned(), grant_binding);
+    }
+    step
 }
 
 pub(super) async fn append_applet_registration_projection(
@@ -294,6 +531,7 @@ pub(super) async fn register_verified_applet(
         install_body_digest: None,
         install_id: None,
         install_response: None,
+        install_execution: None,
         ghosts: Vec::new(),
     };
     persist_applet_record(state, &record).await?;
@@ -491,7 +729,10 @@ pub(super) fn applet_response(record: &AppletRecord) -> AppletView {
     }
 }
 
-pub(super) fn validate_applet_package(package: &AppletPackage) -> Result<(), AppError> {
+pub(super) fn validate_applet_package(
+    state: &AppState,
+    package: &AppletPackage,
+) -> Result<(), AppError> {
     package
         .validate()
         .map_err(|error| AppError::invalid_param(format!("applet package invalid: {error}")))?;
@@ -528,6 +769,41 @@ pub(super) fn validate_applet_package(package: &AppletPackage) -> Result<(), App
         return Err(
             AppError::invalid_param("applet package proof payload_digest mismatch")
                 .with_wire_code("proof_invalid"),
+        );
+    }
+    validate_registration_epoch_evidence(state, package)?;
+    Ok(())
+}
+
+fn validate_registration_epoch_evidence(
+    state: &AppState,
+    package: &AppletPackage,
+) -> Result<(), AppError> {
+    let evidence = package.registration_epoch_evidence.as_ref().ok_or_else(|| {
+        AppError::invalid_param("applet package registration_epoch_evidence is required")
+            .with_wire_code("applet_registration_epoch_evidence_missing")
+    })?;
+    let document =
+        crate::jws_verify::resolve_did_document(state, &package.service_did).map_err(|reason| {
+            AppError::invalid_param("applet service DID document could not be resolved")
+                .with_wire_code("applet_registration_epoch_evidence_mismatch")
+                .with_reason_detail(reason)
+        })?;
+    evidence
+        .validate_against_did_document(&document)
+        .map_err(|reason| {
+            AppError::invalid_param(
+                "applet registration_epoch evidence does not match service DID document",
+            )
+            .with_wire_code("applet_registration_epoch_evidence_mismatch")
+            .with_reason_detail(reason.to_string())
+        })?;
+    if !evidence.contains_signing_key(&package.webhook_auth.key_ref) {
+        return Err(
+            AppError::invalid_param(
+                "applet webhook_auth key_ref is outside registration_epoch evidence",
+            )
+            .with_wire_code("applet_registration_epoch_signing_key_mismatch"),
         );
     }
     Ok(())
@@ -894,4 +1170,166 @@ pub(super) fn allow_ghost_actors_for_install(
 
 pub(super) fn capability_allows_message_create(capability: &str) -> bool {
     capability == "ck.message.create"
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cokret_sdk::{AppletNamespaceEntry, Did, Hash};
+
+    fn sample_package() -> AppletPackage {
+        let registration_epoch = Hash::new(format!("sha256:{}", "11".repeat(32))).unwrap();
+        AppletPackage::new(
+            "package:ck:applet:test".to_owned(),
+            "ck:applet:01974100-0000-7000-8000-000000000001".to_owned(),
+            Did::new("did:web:test-applet.example".to_owned()).unwrap(),
+            Did::new("did:web:test-registry.example".to_owned()).unwrap(),
+            "https://test-applet.example".to_owned(),
+            Did::new("did:web:bot-test-applet.soland.local".to_owned()).unwrap(),
+            vec!["cokret.portal".to_owned()],
+            AppletWireNamespaces {
+                handles: vec![AppletNamespaceEntry::exclusive("bridge.test".to_owned())],
+                ..Default::default()
+            },
+            registration_epoch,
+        )
+    }
+
+    fn sample_response(package: &AppletPackage) -> InstallCommitOutcome {
+        InstallCommitOutcome {
+            ok: true,
+            install_id: "ck:install:01974100-0000-7000-8000-000000000001".to_owned(),
+            applet_id: package.applet_id.clone(),
+            registration_event_ref: "ck:event:01974100-0000-7000-8000-000000000010".to_owned(),
+            registration_epoch: package.registration_epoch.clone(),
+            bot_actor_id: package.bot_actor_id.clone(),
+            capability_grant_refs: vec![
+                "ck:grant:01974100-0000-7000-8000-000000000020".to_owned(),
+                "ck:grant:01974100-0000-7000-8000-000000000021".to_owned(),
+            ],
+            membership_event_refs: Vec::new(),
+            e2ee_authorization_refs: Vec::new(),
+            widget_policy_ref: None,
+            effective_status: "installed".to_owned(),
+            rejected: Vec::new(),
+        }
+    }
+
+    fn sample_record(package: &AppletPackage, response: &InstallCommitOutcome) -> AppletRecord {
+        AppletRecord {
+            applet_id: package.applet_id.clone(),
+            namespace: "bridge.test".to_owned(),
+            owner_actor_id: "did:web:alice.example".to_owned(),
+            registry_did: package.controller_did.to_string(),
+            bot_actor_id: package.bot_actor_id.to_string(),
+            portal_realm_id: "ck:realm:01974100-0000-7000-8000-000000000001".to_owned(),
+            capabilities: vec![
+                "ck.message.create".to_owned(),
+                GHOST_PROVISION_ACTION.to_owned(),
+            ],
+            manifest: manifest_from_package(package),
+            package: Some(package.clone()),
+            namespaces: Some(package.namespaces.clone()),
+            allow_ghost_actors: true,
+            status: "installed".to_owned(),
+            registered_at: chrono::DateTime::parse_from_rfc3339("2026-06-22T00:00:00Z")
+                .unwrap()
+                .with_timezone(&chrono::Utc),
+            revoked_at: None,
+            idempotency_key: Some("install-idem-1".to_owned()),
+            install_body_digest: Some(format!("sha256:{}", "22".repeat(32))),
+            install_id: Some(response.install_id.clone()),
+            install_response: Some(response.clone()),
+            install_execution: None,
+            ghosts: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn install_execution_record_tracks_pending_and_accepted_steps() {
+        let package = sample_package();
+        let response = sample_response(&package);
+        let record = sample_record(&package, &response);
+        let body_digest = record.install_body_digest.as_deref().unwrap();
+        let submitted_plan_digest = format!("sha256:{}", "33".repeat(32));
+
+        let pending = build_install_execution_record(
+            "did:web:soland.local",
+            &record.owner_actor_id,
+            record.idempotency_key.as_deref().unwrap(),
+            body_digest,
+            &submitted_plan_digest,
+            &record,
+            &response,
+            false,
+        )
+        .unwrap();
+        assert_eq!(pending["status"], json!("pending"));
+        assert_eq!(pending["body_hash"], json!(body_digest));
+        assert_eq!(
+            pending["submitted_plan_digest"],
+            json!(submitted_plan_digest.as_str())
+        );
+        assert!(pending["produced_event_refs"].as_array().unwrap().is_empty());
+        let pending_steps = pending["steps"].as_array().unwrap();
+        assert_eq!(pending_steps.len(), 3);
+        assert_eq!(pending_steps[0]["target_event_kind"], json!(kinds::CK_APPLET_REGISTRATION));
+        assert_eq!(pending_steps[0]["status"], json!("pending"));
+        assert_eq!(pending_steps[0]["event_ref"], Value::Null);
+        assert!(
+            pending_steps[0]["canonical_event_body_hash"]
+                .as_str()
+                .unwrap()
+                .starts_with("sha256:")
+        );
+        assert_eq!(
+            pending_steps[1]["grant_binding"]["registration_epoch"],
+            json!(package.registration_epoch.to_string())
+        );
+
+        let accepted = build_install_execution_record(
+            "did:web:soland.local",
+            &record.owner_actor_id,
+            record.idempotency_key.as_deref().unwrap(),
+            body_digest,
+            &submitted_plan_digest,
+            &record,
+            &response,
+            true,
+        )
+        .unwrap();
+        assert_eq!(accepted["status"], json!("completed"));
+        let produced_refs = accepted["produced_event_refs"].as_array().unwrap();
+        assert_eq!(produced_refs.len(), 3);
+        assert!(produced_refs.contains(&json!(response.registration_event_ref.as_str())));
+        assert!(produced_refs.contains(&json!(response.capability_grant_refs[0].as_str())));
+        let accepted_steps = accepted["steps"].as_array().unwrap();
+        assert!(
+            accepted_steps
+                .iter()
+                .all(|step| step["status"] == json!("accepted"))
+        );
+        assert_eq!(
+            accepted_steps[0]["event_ref"],
+            json!(response.registration_event_ref.as_str())
+        );
+        assert_eq!(
+            accepted_steps[1]["event_ref"],
+            json!(response.capability_grant_refs[0].as_str())
+        );
+        assert_eq!(
+            accepted,
+            build_install_execution_record(
+                "did:web:soland.local",
+                &record.owner_actor_id,
+                record.idempotency_key.as_deref().unwrap(),
+                body_digest,
+                &submitted_plan_digest,
+                &record,
+                &response,
+                true,
+            )
+            .unwrap()
+        );
+    }
 }

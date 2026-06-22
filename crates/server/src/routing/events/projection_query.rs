@@ -37,7 +37,8 @@ use cokret_sdk::{
     HistorySharingScopeKind, HistoryVisibility, MorphId, ProjectionAssignedToRelation,
     ProjectionMorphList, ProjectionMorphRow, ProjectionObjectState, ProjectionSpaceList,
     ProjectionSpaceRow, ProjectionSpaceState, ProjectionStrandList, ProjectionStrandRow, RealmId,
-    RelationId, SealId, SpaceId, StrandId, event_time_history_visible, matching_restricted_rules,
+    ReferenceProjectionStatus, RelationId, SealId, SpaceId, StrandId, event_time_history_visible,
+    matching_restricted_rules,
 };
 use salvo::http::StatusCode;
 use salvo::oapi::extract::{PathParam, QueryParam};
@@ -437,40 +438,372 @@ fn document_relation_visible_to_session(
     })
 }
 
-fn document_projection_relations(
+#[derive(Clone, Debug)]
+struct DocumentRelationSnapshot {
+    relation: SolandRelationState,
+    anchor_ref: String,
+    direction: &'static str,
+    target_home_realm_id: Option<String>,
+    target_row_visibility: Option<TargetRowVisibilitySnapshot>,
+    target_projection_visible: bool,
+    target_requires_projection: bool,
+}
+
+#[derive(Clone, Debug)]
+struct TargetRowVisibilitySnapshot {
+    sender: String,
+    created_at: DateTime<Utc>,
+    history_basis_seals: Vec<String>,
+    scope_circle_id: Option<String>,
+}
+
+fn projection_ref_requires_lookup(ref_id: &str) -> bool {
+    ref_id.starts_with("ck:realm:")
+        || ref_id.starts_with("ck:space:")
+        || ref_id.starts_with("ck:strand:")
+        || ref_id.starts_with("ck:morph:")
+        || ref_id.starts_with("ck:relation:")
+        || ref_id.starts_with("ck:event:")
+        || ref_id.starts_with("ck:message:")
+}
+
+fn message_event_id_from_projection_ref(ref_id: &str) -> String {
+    ref_id
+        .strip_prefix("ck:message:")
+        .map(|suffix| format!("ck:event:{suffix}"))
+        .unwrap_or_else(|| ref_id.to_owned())
+}
+
+fn target_info_for_relation_ref(
     projection: &ProjectionState,
+    target_ref: Option<&str>,
+    session: &SessionRecord,
+) -> (
+    Option<String>,
+    bool,
+    bool,
+    Option<TargetRowVisibilitySnapshot>,
+) {
+    let Some(target_ref) = target_ref else {
+        return (None, true, false, None);
+    };
+    if target_ref.starts_with("ck:realm:") {
+        return (Some(target_ref.to_owned()), true, true, None);
+    }
+    if let Some(space) = projection.space_containers.get(target_ref) {
+        return (
+            Some(space.realm_id.clone()),
+            space.state != SpaceContainerLifecycleState::Tombstoned
+                && space.scope_circle_id.as_deref().is_none_or(|circle_id| {
+                    projection.circle_scope_visible_to_actor_at(
+                        circle_id,
+                        &session.actor,
+                        space.created_at,
+                    )
+                }),
+            true,
+            Some(TargetRowVisibilitySnapshot {
+                sender: space.created_by.clone(),
+                created_at: space.created_at,
+                history_basis_seals: space.history_basis_seals.clone(),
+                scope_circle_id: space.scope_circle_id.clone(),
+            }),
+        );
+    }
+    if let Some(strand) = projection.strands.get(target_ref) {
+        return (
+            Some(strand.realm_id.clone()),
+            !strand.state.is_terminal()
+                && strand.scope_circle_id.as_deref().is_none_or(|circle_id| {
+                    projection.circle_scope_visible_to_actor_at(
+                        circle_id,
+                        &session.actor,
+                        strand.created_at,
+                    )
+                }),
+            true,
+            Some(TargetRowVisibilitySnapshot {
+                sender: strand.created_by.clone(),
+                created_at: strand.created_at,
+                history_basis_seals: strand.history_basis_seals.clone(),
+                scope_circle_id: strand.scope_circle_id.clone(),
+            }),
+        );
+    }
+    if let Some(morph) = projection.morphs.get(target_ref) {
+        return (
+            Some(morph.realm_id.clone()),
+            !morph.state.is_terminal()
+                && morph.scope_circle_id.as_deref().is_none_or(|circle_id| {
+                    projection.circle_scope_visible_to_actor_at(
+                        circle_id,
+                        &session.actor,
+                        morph.created_at,
+                    )
+                }),
+            true,
+            Some(TargetRowVisibilitySnapshot {
+                sender: morph.created_by.clone(),
+                created_at: morph.created_at,
+                history_basis_seals: morph.history_basis_seals.clone(),
+                scope_circle_id: morph.scope_circle_id.clone(),
+            }),
+        );
+    }
+    if let Some(relation) = projection.relations.get(target_ref) {
+        return (
+            Some(relation.realm_id.clone()),
+            relation.is_active()
+                && document_relation_visible_to_session(projection, relation, session),
+            true,
+            None,
+        );
+    }
+    if target_ref.starts_with("ck:event:") || target_ref.starts_with("ck:message:") {
+        let event_id = message_event_id_from_projection_ref(target_ref);
+        if let Some(message) = projection
+            .messages
+            .get(target_ref)
+            .or_else(|| projection.messages.get(&event_id))
+        {
+            return (
+                Some(message.realm_id.clone()),
+                !projection.redactions.contains(&message.event_id)
+                    && message_scope_circle_id(message).is_none_or(|circle_id| {
+                        projection.circle_scope_visible_to_actor_at(
+                            circle_id,
+                            &session.actor,
+                            message.created_at,
+                        )
+                    }),
+                true,
+                Some(TargetRowVisibilitySnapshot {
+                    sender: message.sender.clone(),
+                    created_at: message.created_at,
+                    history_basis_seals: message.history_basis_seals.clone(),
+                    scope_circle_id: message_scope_circle_id(message).map(ToOwned::to_owned),
+                }),
+            );
+        }
+        return (None, false, true, None);
+    }
+    (None, true, projection_ref_requires_lookup(target_ref), None)
+}
+
+fn document_relation_snapshot(
+    projection: &ProjectionState,
+    relation: &SolandRelationState,
+    morph_id: &str,
+    session: &SessionRecord,
+) -> DocumentRelationSnapshot {
+    let (target_ref, direction) = if relation.from_ref.as_deref() == Some(morph_id) {
+        (relation.to_ref.clone(), "outgoing")
+    } else {
+        (relation.from_ref.clone(), "incoming")
+    };
+    let (
+        target_home_realm_id,
+        target_projection_visible,
+        target_requires_projection,
+        target_row_visibility,
+    ) =
+        target_info_for_relation_ref(projection, target_ref.as_deref(), session);
+    DocumentRelationSnapshot {
+        relation: relation.clone(),
+        anchor_ref: morph_id.to_owned(),
+        direction,
+        target_home_realm_id,
+        target_row_visibility,
+        target_projection_visible,
+        target_requires_projection,
+    }
+}
+
+async fn document_relation_reference_status(
+    state: &AppState,
+    snapshot: &DocumentRelationSnapshot,
+    realm_id: &str,
+    session: &SessionRecord,
+) -> ReferenceProjectionStatus {
+    if !snapshot.target_projection_visible {
+        return ReferenceProjectionStatus::Locked;
+    }
+    let Some(target_home_realm_id) = snapshot.target_home_realm_id.as_deref() else {
+        return if snapshot.target_requires_projection {
+            ReferenceProjectionStatus::Locked
+        } else {
+            ReferenceProjectionStatus::Accessible
+        };
+    };
+    if target_home_realm_id == realm_id {
+        return if document_relation_target_row_visible(
+            state,
+            snapshot,
+            target_home_realm_id,
+            session,
+        )
+        .await
+        {
+            ReferenceProjectionStatus::Accessible
+        } else {
+            ReferenceProjectionStatus::Locked
+        };
+    }
+    if realm_id_accessible(state, target_home_realm_id, Some(session)).await
+        && document_relation_target_row_visible(state, snapshot, target_home_realm_id, session)
+            .await
+    {
+        ReferenceProjectionStatus::LazyLink
+    } else {
+        ReferenceProjectionStatus::Locked
+    }
+}
+
+async fn document_relation_target_row_visible(
+    state: &AppState,
+    snapshot: &DocumentRelationSnapshot,
+    target_realm_id: &str,
+    session: &SessionRecord,
+) -> bool {
+    let Some(row) = snapshot.target_row_visibility.as_ref() else {
+        return true;
+    };
+    let history_visibility = realm_history_visibility(state, target_realm_id).await;
+    let history_policy = realm_history_sharing_policy(state, target_realm_id).await;
+    let Ok(projection) = state.projection.lock() else {
+        return false;
+    };
+    projection_row_visible_to_session(
+        state,
+        &projection,
+        target_realm_id,
+        session,
+        &row.sender,
+        row.created_at,
+        &row.history_basis_seals,
+        row.scope_circle_id.as_deref(),
+        &history_visibility,
+        history_policy.as_ref(),
+    )
+}
+
+fn document_relation_reference_projection(
+    status: ReferenceProjectionStatus,
+    relation: &SolandRelationState,
+) -> Value {
+    let mut projection = serde_json::Map::new();
+    projection.insert("status".to_owned(), json!(status));
+    if matches!(status, ReferenceProjectionStatus::LazyLink)
+        && let Some(source_event_digest) = relation.source_event_digest.as_deref()
+    {
+        projection.insert(
+            "source_event_digest".to_owned(),
+            Value::String(source_event_digest.to_owned()),
+        );
+    }
+    Value::Object(projection)
+}
+
+fn document_relation_row(
+    snapshot: &DocumentRelationSnapshot,
+    status: ReferenceProjectionStatus,
+) -> Result<Value, AppError> {
+    parse_projection_id::<RelationId>(&snapshot.relation.relation_id, "relations.relation_id")?;
+    let reference_projection = document_relation_reference_projection(status, &snapshot.relation);
+    if status == ReferenceProjectionStatus::Accessible {
+        return Ok(json!({
+            "relation_id": snapshot.relation.relation_id.clone(),
+            "relation_kind": snapshot.relation.relation_kind.clone(),
+            "from": snapshot.relation.from_ref.clone().unwrap_or_default(),
+            "to": snapshot.relation.to_ref.clone().unwrap_or_default(),
+            "fields": snapshot.relation.fields.clone(),
+            "state": snapshot.relation.state.clone(),
+            "created_at": snapshot.relation.created_at,
+            "updated_at": snapshot.relation.updated_at,
+            "reference_projection": reference_projection,
+        }));
+    }
+    let mut row = serde_json::Map::new();
+    row.insert(
+        "relation_id".to_owned(),
+        Value::String(snapshot.relation.relation_id.clone()),
+    );
+    row.insert(
+        "relation_kind".to_owned(),
+        Value::String(snapshot.relation.relation_kind.clone()),
+    );
+    row.insert(
+        "anchor_ref".to_owned(),
+        Value::String(snapshot.anchor_ref.clone()),
+    );
+    row.insert(
+        "direction".to_owned(),
+        Value::String(snapshot.direction.to_owned()),
+    );
+    row.insert(
+        "state".to_owned(),
+        Value::String(snapshot.relation.state.clone()),
+    );
+    row.insert("reference_projection".to_owned(), reference_projection);
+    match status {
+        ReferenceProjectionStatus::LazyLink => {
+            row.insert("lazy_link".to_owned(), Value::Bool(true));
+            if let Some(source_event_id) = snapshot.relation.source_event_id.as_deref() {
+                row.insert(
+                    "source_event_id".to_owned(),
+                    Value::String(source_event_id.to_owned()),
+                );
+            }
+        }
+        ReferenceProjectionStatus::Locked => {
+            row.insert("locked".to_owned(), Value::Bool(true));
+        }
+        ReferenceProjectionStatus::Accessible => {}
+    }
+    Ok(Value::Object(row))
+}
+
+async fn document_projection_relations(
+    state: &AppState,
     morph_id: &str,
     realm_id: &str,
     session: &SessionRecord,
 ) -> Result<Vec<Value>, AppError> {
-    let mut relations = projection
-        .relations
-        .values()
-        .filter(|relation| relation.realm_id == realm_id)
-        .filter(|relation| relation.is_active())
-        .filter(|relation| {
-            relation.from_ref.as_deref() == Some(morph_id)
-                || relation.to_ref.as_deref() == Some(morph_id)
-        })
-        .filter(|relation| document_relation_visible_to_session(projection, relation, session))
-        .map(|relation| {
-            parse_projection_id::<RelationId>(&relation.relation_id, "relations.relation_id")?;
-            Ok((
-                relation.relation_kind.clone(),
-                relation.relation_id.clone(),
-                json!({
-                    "relation_id": relation.relation_id,
-                    "relation_kind": relation.relation_kind,
-                    "from": relation.from_ref.clone().unwrap_or_default(),
-                    "to": relation.to_ref.clone().unwrap_or_default(),
-                    "fields": relation.fields,
-                    "state": relation.state,
-                    "created_at": relation.created_at,
-                    "updated_at": relation.updated_at,
-                }),
-            ))
-        })
-        .collect::<Result<Vec<_>, AppError>>()?;
+    let snapshots = {
+        let projection = state
+            .projection
+            .lock()
+            .map_err(|_| projection_state_unavailable())?;
+        projection
+            .relations
+            .values()
+            .filter(|relation| relation.realm_id == realm_id)
+            .filter(|relation| relation.is_active())
+            .filter(|relation| {
+                relation.from_ref.as_deref() == Some(morph_id)
+                    || relation.to_ref.as_deref() == Some(morph_id)
+            })
+            .filter(|relation| document_relation_visible_to_session(&*projection, relation, session))
+            .map(|relation| {
+                parse_projection_id::<RelationId>(&relation.relation_id, "relations.relation_id")?;
+                Ok(document_relation_snapshot(
+                    &*projection,
+                    relation,
+                    morph_id,
+                    session,
+                ))
+            })
+            .collect::<Result<Vec<_>, AppError>>()?
+    };
+    let mut relations = Vec::with_capacity(snapshots.len());
+    for snapshot in snapshots {
+        let status = document_relation_reference_status(state, &snapshot, realm_id, session).await;
+        relations.push((
+            snapshot.relation.relation_kind.clone(),
+            snapshot.relation.relation_id.clone(),
+            document_relation_row(&snapshot, status)?,
+        ));
+    }
     relations.sort_by(|left, right| left.0.cmp(&right.0).then(left.1.cmp(&right.1)));
     Ok(relations
         .into_iter()
@@ -829,48 +1162,50 @@ async fn get_document_projection(
     }
     let history_visibility = realm_history_visibility(state, &realm_id).await;
     let history_policy = realm_history_sharing_policy(state, &realm_id).await;
-    let proj = state
-        .projection
-        .lock()
-        .map_err(|_| projection_state_unavailable())?;
-    let Some(morph) = proj.morphs.get(&morph_id) else {
-        return Err(AppError::not_found("document Morph not found"));
+    let (document, versions, comments) = {
+        let proj = state
+            .projection
+            .lock()
+            .map_err(|_| projection_state_unavailable())?;
+        let Some(morph) = proj.morphs.get(&morph_id).cloned() else {
+            return Err(AppError::not_found("document Morph not found"));
+        };
+        if morph.morph_type != "document" {
+            return Err(AppError::not_found("document Morph not found"));
+        }
+        if !projection_row_visible_to_session(
+            state,
+            &proj,
+            &realm_id,
+            &session,
+            &morph.created_by,
+            morph.created_at,
+            &morph.history_basis_seals,
+            morph.scope_circle_id.as_deref(),
+            &history_visibility,
+            history_policy.as_ref(),
+        ) {
+            return Err(AppError::new(
+                ErrorCode::CapabilityDenied,
+                "Document not visible to this actor",
+            )
+            .with_status(StatusCode::FORBIDDEN));
+        }
+        let body = morph_document_body(&morph.fields).unwrap_or(Value::Null);
+        let document = document_projection_document(&morph, body.clone())?;
+        let versions = document_projection_versions(&morph);
+        let comments = document_projection_comments(
+            state,
+            &proj,
+            &morph,
+            &body,
+            &session,
+            &history_visibility,
+            history_policy.as_ref(),
+        );
+        (document, versions, comments)
     };
-    if morph.morph_type != "document" {
-        return Err(AppError::not_found("document Morph not found"));
-    }
-    if !projection_row_visible_to_session(
-        state,
-        &proj,
-        &realm_id,
-        &session,
-        &morph.created_by,
-        morph.created_at,
-        &morph.history_basis_seals,
-        morph.scope_circle_id.as_deref(),
-        &history_visibility,
-        history_policy.as_ref(),
-    ) {
-        return Err(AppError::new(
-            ErrorCode::CapabilityDenied,
-            "Document not visible to this actor",
-        )
-        .with_status(StatusCode::FORBIDDEN));
-    }
-    let body = morph_document_body(&morph.fields).unwrap_or(Value::Null);
-    let document = document_projection_document(morph, body.clone())?;
-    let versions = document_projection_versions(morph);
-    let relations = document_projection_relations(&proj, &morph_id, &realm_id, &session)?;
-    let comments = document_projection_comments(
-        state,
-        &proj,
-        morph,
-        &body,
-        &session,
-        &history_visibility,
-        history_policy.as_ref(),
-    );
-    drop(proj);
+    let relations = document_projection_relations(state, &morph_id, &realm_id, &session).await?;
     json_ok(DocumentMorphProjectionOutcome {
         document,
         versions,

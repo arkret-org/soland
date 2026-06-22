@@ -10,7 +10,12 @@ use crate::state::{AppState, ProjectionEventRecord, RetentionTombstoneRecord};
 
 const EXPIRY_DERIVED_FIELD_KEYS: &[&str] = &[
     "attachment_preview",
+    "attachment_preview_key",
     "attachments",
+    "blob_preview",
+    "blob_preview_bytes",
+    "blob_preview_key",
+    "blob_preview_key_ref",
     "blob_refs",
     "comment_summary",
     "content",
@@ -20,9 +25,12 @@ const EXPIRY_DERIVED_FIELD_KEYS: &[&str] = &[
     "mention_routing_hint",
     "mention_sidecar_hash",
     "mentions",
+    "message_key",
+    "message_key_ref",
     "poll",
     "preview",
     "push_snippet",
+    "push_snippet_plaintext",
     "reaction_summary",
     "reactions",
     "redacted_at",
@@ -32,6 +40,9 @@ const EXPIRY_DERIVED_FIELD_KEYS: &[&str] = &[
     "reply_to",
     "search_terms",
     "search_tokens",
+    "search_index",
+    "search_index_entries",
+    "search_index_manifest",
     "snippet",
     "thumbnails",
 ];
@@ -262,6 +273,7 @@ pub fn tombstone_timeline_event_for_retention(
     let Some(object) = event.as_object_mut() else {
         return;
     };
+    strip_expiry_derived_fields(object);
     object.insert("retention_tombstone".to_owned(), json!(true));
     object.insert("retention_state".to_owned(), json!("tombstoned"));
     object.insert(
@@ -281,6 +293,11 @@ pub fn tombstone_timeline_event_for_retention(
         json!(tombstone.sealed),
     );
     object.insert("physical_delete".to_owned(), json!(false));
+    object.insert(
+        "cache_invalidation".to_owned(),
+        message_expiry_cache_invalidation_value(),
+    );
+    insert_retention_risk_markers(object, tombstone);
     object.insert(
         "content".to_owned(),
         json!({
@@ -357,8 +374,13 @@ pub fn retention_tombstone_payload_value(
             "retention_tombstoned_at": tombstone.tombstoned_at.to_rfc3339(),
             "retention_seal_preserved": tombstone.sealed,
             "physical_delete": false,
+            "cache_invalidation": message_expiry_cache_invalidation_value(),
+            "retention_risk_ui": tombstone.sealed,
+            "retention_risk_audit": tombstone.sealed,
+            "retention_risk_reason": retention_risk_reason(tombstone),
         });
     };
+    strip_expiry_derived_fields(object);
     object.insert("retention_tombstone".to_owned(), json!(true));
     object.insert("retention_state".to_owned(), json!("tombstoned"));
     object.insert(
@@ -378,6 +400,11 @@ pub fn retention_tombstone_payload_value(
         json!(tombstone.sealed),
     );
     object.insert("physical_delete".to_owned(), json!(false));
+    object.insert(
+        "cache_invalidation".to_owned(),
+        message_expiry_cache_invalidation_value(),
+    );
+    insert_retention_risk_markers(object, tombstone);
     object.insert(
         "content".to_owned(),
         json!({
@@ -402,13 +429,60 @@ fn message_expiry_cache_invalidation_value() -> Value {
             "plaintext_render_cache",
             "message_preview_cache",
             "attachment_preview_cache",
+            "blob_preview_cache",
+            "blob_preview_key_cache",
+            "blob_preview_bytes_cache",
             "blob_presign_cache",
             "blob_bytes_cache",
             "message_key_cache",
             "search_index_cache",
             "push_snippet_cache"
+        ],
+        "shred": [
+            "per_message_content_key",
+            "short_epoch_exporter_secret",
+            "decryption_cache",
+            "attachment_preview_key",
+            "blob_preview_key",
+            "blob_preview_bytes",
+            "search_index_plaintext",
+            "push_snippet_plaintext"
         ]
     })
+}
+
+fn insert_retention_risk_markers(
+    object: &mut serde_json::Map<String, Value>,
+    tombstone: &RetentionTombstoneRecord,
+) {
+    object.insert(
+        "retention_risk_ui".to_owned(),
+        json!(retention_risk_ui_flag(tombstone)),
+    );
+    object.insert(
+        "retention_risk_audit".to_owned(),
+        json!(retention_risk_audit_flag(tombstone)),
+    );
+    object.insert(
+        "retention_risk_reason".to_owned(),
+        json!(retention_risk_reason(tombstone)),
+    );
+}
+
+pub fn retention_risk_ui_flag(tombstone: &RetentionTombstoneRecord) -> bool {
+    tombstone.sealed
+}
+
+pub fn retention_risk_audit_flag(tombstone: &RetentionTombstoneRecord) -> bool {
+    tombstone.sealed
+}
+
+pub fn retention_risk_reason(tombstone: &RetentionTombstoneRecord) -> &'static str {
+    if tombstone.sealed {
+        "sealed_history_or_backup_may_retain_ciphertext"
+    } else {
+        "none"
+    }
 }
 
 fn tombstone_payload_value(payload: &Value) -> Value {
@@ -491,6 +565,40 @@ mod tests {
         }
     }
 
+    fn retention_tombstone(
+        event_id: &str,
+        realm_id: &str,
+        sealed: bool,
+    ) -> RetentionTombstoneRecord {
+        RetentionTombstoneRecord {
+            event_id: event_id.to_owned(),
+            realm_id: realm_id.to_owned(),
+            reason: "retention_policy.ttl".to_owned(),
+            policy_ttl_seconds: 60,
+            expired_at: fixed_time("2020-01-01T00:01:00Z"),
+            tombstoned_at: fixed_time("2020-01-01T00:02:00Z"),
+            sealed,
+        }
+    }
+
+    fn invalidation_drop_values(value: &Value) -> Vec<&str> {
+        value["cache_invalidation"]["drop"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|value| value.as_str().unwrap())
+            .collect()
+    }
+
+    fn invalidation_shred_values(value: &Value) -> Vec<&str> {
+        value["cache_invalidation"]["shred"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|value| value.as_str().unwrap())
+            .collect()
+    }
+
     #[test]
     fn expired_message_timeline_uses_expiry_stub_without_redaction_or_derived_fields() {
         let event_id = "ck:event:01904100-0000-7000-8000-0000000000a1";
@@ -516,18 +624,19 @@ mod tests {
         assert!(event.get("mentions").is_none());
         assert!(event.get("reply_to").is_none());
         assert!(event.get("reaction_summary").is_none());
-        assert!(
-            event["cache_invalidation"]["drop"]
-                .as_array()
-                .unwrap()
-                .contains(&json!("blob_presign_cache"))
-        );
-        assert!(
-            event["cache_invalidation"]["drop"]
-                .as_array()
-                .unwrap()
-                .contains(&json!("message_key_cache"))
-        );
+        let drop = invalidation_drop_values(&event);
+        assert!(drop.contains(&"blob_presign_cache"));
+        assert!(drop.contains(&"blob_preview_key_cache"));
+        assert!(drop.contains(&"blob_preview_bytes_cache"));
+        assert!(drop.contains(&"message_preview_cache"));
+        assert!(drop.contains(&"message_key_cache"));
+        assert!(drop.contains(&"search_index_cache"));
+        assert!(drop.contains(&"push_snippet_cache"));
+        let shred = invalidation_shred_values(&event);
+        assert!(shred.contains(&"blob_preview_key"));
+        assert!(shred.contains(&"blob_preview_bytes"));
+        assert!(shred.contains(&"search_index_plaintext"));
+        assert!(shred.contains(&"push_snippet_plaintext"));
     }
 
     #[test]
@@ -668,6 +777,12 @@ mod tests {
                 "mentions": [{"actor_id": "did:web:bob.example"}],
                 "reply_to": "ck:event:01904100-0000-7000-8000-0000000000ff",
                 "redaction_ref": "ck:event:should-not-survive",
+                "search_index": {"terms": ["secret"]},
+                "search_tokens": ["secret-token"],
+                "push_snippet": "secret push",
+                "blob_preview_key": "secret-preview-key",
+                "blob_preview_bytes": "secret-preview-bytes",
+                "blob_preview": {"caption": "secret"},
                 "expiry": {
                     "ttl_ms": 1,
                     "trigger": "on_send",
@@ -692,6 +807,100 @@ mod tests {
         assert!(event.payload.get("mentions").is_none());
         assert!(event.payload.get("reply_to").is_none());
         assert!(event.payload.get("redaction_ref").is_none());
+        assert!(event.payload.get("search_index").is_none());
+        assert!(event.payload.get("search_tokens").is_none());
+        assert!(event.payload.get("push_snippet").is_none());
+        assert!(event.payload.get("blob_preview_key").is_none());
+        assert!(event.payload.get("blob_preview_bytes").is_none());
+        assert!(event.payload.get("blob_preview").is_none());
+        let drop = invalidation_drop_values(&event.payload);
+        assert!(drop.contains(&"search_index_cache"));
+        assert!(drop.contains(&"push_snippet_cache"));
+        assert!(drop.contains(&"blob_preview_key_cache"));
+        assert!(drop.contains(&"blob_preview_bytes_cache"));
+        assert!(drop.contains(&"message_key_cache"));
+        let shred = invalidation_shred_values(&event.payload);
+        assert!(shred.contains(&"search_index_plaintext"));
+        assert!(shred.contains(&"push_snippet_plaintext"));
+        assert!(shred.contains(&"blob_preview_key"));
+        assert!(shred.contains(&"blob_preview_bytes"));
+    }
+
+    #[test]
+    fn retention_tombstone_strips_derived_surfaces_and_marks_risk() {
+        let event_id = "ck:event:01904100-0000-7000-8000-0000000000c2";
+        let realm_id = "ck:realm:01904100-0000-7000-8000-cfc039892036";
+        let tombstone = retention_tombstone(event_id, realm_id, true);
+        let payload = json!({
+            "content": {"kind": "ck.content.text", "body": "secret"},
+            "search_index": {"terms": ["secret"]},
+            "push_snippet": "secret push",
+            "blob_preview_key": "secret-preview-key",
+            "blob_preview_bytes": "secret-preview-bytes",
+            "blob_preview": {"caption": "secret"},
+            "message_key": "secret-message-key",
+        });
+
+        let payload = retention_tombstone_payload_value(&payload, &tombstone);
+
+        assert_eq!(payload["retention_tombstone"], json!(true));
+        assert_eq!(payload["retention_state"], json!("tombstoned"));
+        assert_eq!(payload["retention_risk_ui"], json!(true));
+        assert_eq!(payload["retention_risk_audit"], json!(true));
+        assert_eq!(
+            payload["retention_risk_reason"],
+            json!("sealed_history_or_backup_may_retain_ciphertext")
+        );
+        assert_eq!(
+            payload["content"]["body"],
+            json!(RETENTION_EXPIRED_PLACEHOLDER)
+        );
+        assert!(payload.get("search_index").is_none());
+        assert!(payload.get("push_snippet").is_none());
+        assert!(payload.get("blob_preview_key").is_none());
+        assert!(payload.get("blob_preview_bytes").is_none());
+        assert!(payload.get("blob_preview").is_none());
+        assert!(payload.get("message_key").is_none());
+        let drop = invalidation_drop_values(&payload);
+        assert!(drop.contains(&"message_preview_cache"));
+        assert!(drop.contains(&"blob_preview_cache"));
+        assert!(drop.contains(&"blob_preview_key_cache"));
+        assert!(drop.contains(&"blob_preview_bytes_cache"));
+        assert!(drop.contains(&"message_key_cache"));
+        assert!(drop.contains(&"search_index_cache"));
+        assert!(drop.contains(&"push_snippet_cache"));
+        let shred = invalidation_shred_values(&payload);
+        assert!(shred.contains(&"per_message_content_key"));
+        assert!(shred.contains(&"attachment_preview_key"));
+        assert!(shred.contains(&"blob_preview_key"));
+        assert!(shred.contains(&"blob_preview_bytes"));
+        assert!(shred.contains(&"search_index_plaintext"));
+        assert!(shred.contains(&"push_snippet_plaintext"));
+    }
+
+    #[test]
+    fn retention_timeline_tombstone_marks_no_risk_when_unsealed() {
+        let event_id = "ck:event:01904100-0000-7000-8000-0000000000c3";
+        let realm_id = "ck:realm:01904100-0000-7000-8000-cfc039892036";
+        let tombstone = retention_tombstone(event_id, realm_id, false);
+        let mut event = json!({
+            "content": {"kind": "ck.content.text", "body": "secret"},
+            "push_snippet": "secret push",
+            "search_index": {"terms": ["secret"]},
+            "blob_preview_key": "secret-preview-key",
+        });
+
+        tombstone_timeline_event_for_retention(&mut event, &tombstone);
+
+        assert_eq!(event["retention_risk_ui"], json!(false));
+        assert_eq!(event["retention_risk_audit"], json!(false));
+        assert_eq!(event["retention_risk_reason"], json!("none"));
+        assert!(event.get("push_snippet").is_none());
+        assert!(event.get("search_index").is_none());
+        assert!(event.get("blob_preview_key").is_none());
+        assert!(
+            invalidation_drop_values(&event).contains(&"push_snippet_cache")
+        );
     }
 
     #[test]

@@ -65,7 +65,6 @@ use super::{
 use crate::error::AppError;
 use crate::ids;
 use crate::result::{JsonResult, json_ok};
-use crate::routing::admin::audit::append_audit_log;
 use crate::routing::organizations;
 use crate::state::{AppState, RealmDirectoryEntry, RealmDirectoryQuery, SessionRecord};
 
@@ -110,7 +109,6 @@ const DIRECTORY_SUPPORTED_OPERATIONS: &[&str] = &[
     "ck.find.directory.query.resolve_handle",
     "ck.find.directory.query.resolve_agent_selector",
     "ck.find.directory.query.list_handles_for_subject",
-    "ck.find.directory.query.private_contact_discovery",
     "ck.find.directory.command.announce",
     "ck.find.directory.command.withdraw",
     "ck.find.directory.push.command.register",

@@ -42,6 +42,10 @@ pub fn project_read_receipt_policy(state: &AppState, operation: &Operation) {
         .get("scope_overrides_allowed")
         .and_then(|v| v.as_bool())
         .unwrap_or(true);
+    let allow_child_privacy_tightening_against_required = payload
+        .get("allow_child_privacy_tightening_against_required")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
     let allow_public_receipts_on_world_readable = payload
         .get("allow_public_receipts_on_world_readable")
         .and_then(|v| v.as_bool())
@@ -65,6 +69,7 @@ pub fn project_read_receipt_policy(state: &AppState, operation: &Operation) {
         "disclosure": disclosure,
         "visibility": visibility,
         "scope_overrides_allowed": scope_overrides_allowed,
+        "allow_child_privacy_tightening_against_required": allow_child_privacy_tightening_against_required,
         "allow_public_receipts_on_world_readable": allow_public_receipts_on_world_readable,
         "allow_forced_public_world_readable_receipts": allow_forced_public_world_readable_receipts,
     });

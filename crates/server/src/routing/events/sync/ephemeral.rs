@@ -269,24 +269,11 @@ async fn admit_ephemeral_read_receipt(
         ));
     }
 
-    let (
-        disclosure,
-        visibility,
-        _scope_overrides_allowed,
-        allow_public_world_readable,
-        allow_forced_public_world_readable,
-    ) = crate::routing::events::event_log::effective_read_receipt_policy_for_realm(state, realm_id)
-        .await
-        .unwrap_or_else(|| {
-            (
-                "optional".to_owned(),
-                "members".to_owned(),
-                true,
-                false,
-                false,
-            )
-        });
-    if disclosure == "disabled" {
+    let policy =
+        crate::routing::events::event_log::effective_read_receipt_policy_for_realm(state, realm_id)
+            .await
+            .unwrap_or_default();
+    if policy.disclosure == cokret_sdk::ReadReceiptDisclosure::Disabled {
         return Err(crate::error::AppError::new(
             crate::error::ErrorCode::PolicyViolation,
             format!(
@@ -295,11 +282,14 @@ async fn admit_ephemeral_read_receipt(
         )
         .with_status(StatusCode::FORBIDDEN));
     }
-    match visibility.as_str() {
-        "private" | "members" => {}
-        "public" => {
+    match policy.visibility {
+        cokret_sdk::ReadReceiptVisibility::Private
+        | cokret_sdk::ReadReceiptVisibility::Members => {}
+        cokret_sdk::ReadReceiptVisibility::Public => {
             let history_visibility = realm_history_visibility_for_id(state, realm_id).await;
-            if history_visibility == "world_readable" && !allow_public_world_readable {
+            if history_visibility == "world_readable"
+                && !policy.allow_public_receipts_on_world_readable
+            {
                 return Err(crate::error::AppError::new(
                     crate::error::ErrorCode::PolicyViolation,
                     "read_receipt_policy.visibility=public is rejected for world_readable history unless allow_public_receipts_on_world_readable=true",
@@ -308,8 +298,8 @@ async fn admit_ephemeral_read_receipt(
                 .with_wire_code("read_receipt_visibility_combination_invalid"));
             }
             if history_visibility == "world_readable"
-                && disclosure == "required"
-                && !allow_forced_public_world_readable
+                && policy.disclosure == cokret_sdk::ReadReceiptDisclosure::Required
+                && !policy.allow_forced_public_world_readable_receipts
             {
                 return Err(crate::error::AppError::new(
                     crate::error::ErrorCode::PolicyViolation,
@@ -319,19 +309,17 @@ async fn admit_ephemeral_read_receipt(
                 .with_wire_code("read_receipt_forced_public_world_readable_forbidden"));
             }
         }
-        _ => {
-            return Err(crate::error::AppError::new(
-                crate::error::ErrorCode::PolicyViolation,
-                "read_receipt_policy.visibility is unsupported",
-            )
-            .with_status(StatusCode::FORBIDDEN));
-        }
     }
+    let visibility = match policy.visibility {
+        cokret_sdk::ReadReceiptVisibility::Public => "public",
+        cokret_sdk::ReadReceiptVisibility::Members => "members",
+        cokret_sdk::ReadReceiptVisibility::Private => "private",
+    };
     crate::routing::events::read_receipts::relay_ephemeral_read_receipt(
         state,
         session,
         realm_id,
-        &visibility,
+        visibility,
         envelope,
     )
     .await?;

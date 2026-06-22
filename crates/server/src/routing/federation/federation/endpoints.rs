@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use chrono::Duration;
 use cokret_sdk::{Did, RealmId};
 use salvo::http::StatusCode;
@@ -15,17 +17,15 @@ use super::backfill::{
     operation_frontier_outcome, pull_operations_page,
 };
 use super::inbound_policy::{
-    enforce_inbound_operation_batch_policy, ensure_private_inbound_write_rail_local,
+    MAX_INBOUND_FEDERATION_OPERATIONS, enforce_inbound_operation_batch_policy,
+    ensure_private_inbound_write_rail_local,
 };
 use super::signature::{
     origin_key_state_digest_for_service, validate_federation_headers,
     validate_federation_request_binding, verify_inbound_push_http_signature,
     verify_inbound_transaction_http_signature,
 };
-use super::wire::{
-    FederationIdempotencyKey, FederationIdempotencyServiceBinding, FederationTrustHeaders,
-    mark_response_historical_only,
-};
+use super::wire::{FederationTrustHeaders, mark_response_historical_only};
 use super::{
     federation_destination_matches, ingest_federation_operations, now, operation_is_visible,
     redaction_targets_from_operations, sync_token, verify_federation_origin,
@@ -136,29 +136,9 @@ pub(crate) async fn federation_transaction(
     // service verification key that passed the HTTP Message Signature
     // check, so idempotency no longer falls back to placeholder material.
     let origin_key_state_digest = origin_key_state_digest_for_service(state, body.origin.as_str())?;
-    let idem_key = Some(FederationIdempotencyKey {
-        source_did: body.origin.to_string(),
-        dest_did: body.destination.to_string(),
-        request_canonical_digest: trust_headers.request_canonical_digest.as_str().to_owned(),
-        idempotency_key: txn_id.clone(),
-        origin_key_state_digest,
-    });
-    let _service_binding = FederationIdempotencyServiceBinding {
-        source_service_did: body.origin.to_string(),
-        verification_method: idem_key
-            .as_ref()
-            .expect("federation idempotency key")
-            .strict(),
-        service_binding_ref: idem_key
-            .as_ref()
-            .expect("federation idempotency key")
-            .canonical_replay(),
-        origin_key_state_digest: idem_key
-            .as_ref()
-            .expect("federation idempotency key")
-            .origin_key_state_digest
-            .clone(),
-    };
+    let origin_verification_method = format!("{}#federation-fanout-key", body.origin.as_str());
+    let local_peer_policy_digest =
+        local_peer_policy_digest_for_transaction(state, body.origin.as_str(), &body)?;
     // Whether this request is taking over a stale `processing` claim left by
     // a worker that crashed between `try_begin` and the finalising `put`.
     let mut stale_claim_takeover = false;
@@ -211,27 +191,27 @@ pub(crate) async fn federation_transaction(
                      (cache re-verification)",
                 ));
             }
+            enforce_inbound_operation_batch_policy(
+                state,
+                body.origin.as_str(),
+                body.operations.as_slice(),
+            )
+            .await?;
             // Round 4 (B1.8) — detect a canonical-replay hit (txn_id +
             // request_canonical_digest match, but origin_key_state_digest
             // has rotated since the cached entry was minted). Such a
-            // hit MUST be marked `reason_code=historical_only` and
-            // MUST NOT trigger fresh side effects. We approximate the
-            // detection here by checking whether the `record.status`
-            // already names the cached origin's key generation —
-            // soland doesn't yet persist `origin_key_state_digest` on
-            // the federation_transactions row, so for now we only
-            // mark when the headers carry an explicit `historical_only`
-            // hint. TODO(federation-historical-key-rotation): persist the
-            // origin's key state hash on the cached record so a real
-            // rotation triggers historical_only automatically.
+            // hit is marked historical_only after reauthorization and
+            // never repeats side effects.
             let mut response_value = record.response.clone();
-            let request_signals_historical = req
-                .headers()
-                .get("X-Cokret-Origin-Key-Rotated")
-                .and_then(|v| v.to_str().ok())
-                .map(|s| matches!(s, "true" | "1" | "yes"))
-                .unwrap_or(false);
-            if request_signals_historical {
+            let strict_cache_hit = record.origin_verification_method.as_deref()
+                == Some(origin_verification_method.as_str())
+                && record.service_binding_ref.as_deref()
+                == Some(body.service_binding_ref.as_str())
+                && record.origin_key_state_digest.as_deref()
+                    == Some(origin_key_state_digest.as_str())
+                && record.local_peer_policy_digest.as_deref()
+                    == Some(local_peer_policy_digest.as_str());
+            if !strict_cache_hit {
                 response_value = mark_response_historical_only(response_value);
             }
             let response: cokret_sdk::FederationTransactionOutcome =
@@ -285,6 +265,10 @@ pub(crate) async fn federation_transaction(
             destination: destination.clone(),
             realm_id: None,
             content_digest: content_digest.clone(),
+            origin_verification_method: Some(origin_verification_method.clone()),
+            service_binding_ref: Some(body.service_binding_ref.clone()),
+            origin_key_state_digest: Some(origin_key_state_digest.clone()),
+            local_peer_policy_digest: Some(local_peer_policy_digest.clone()),
             status: super::FEDERATION_TXN_STATUS_PROCESSING.to_owned(),
             response: Value::Null,
             received_at: now(),
@@ -309,6 +293,9 @@ pub(crate) async fn federation_transaction(
         accepted: ingest.accepted,
         rejected: ingest.rejected,
         next_retry_at: None,
+        historical_only: false,
+        reason_code: None,
+        original_outcome: None,
     };
     let response_value =
         serde_json::to_value(&response).map_err(|error| AppError::internal(error.to_string()))?;
@@ -319,6 +306,10 @@ pub(crate) async fn federation_transaction(
         destination,
         realm_id: None,
         content_digest,
+        origin_verification_method: Some(origin_verification_method),
+        service_binding_ref: Some(body.service_binding_ref),
+        origin_key_state_digest: Some(origin_key_state_digest),
+        local_peer_policy_digest: Some(local_peer_policy_digest),
         status: "accepted".to_owned(),
         response: response_value,
         received_at: now,
@@ -331,6 +322,72 @@ pub(crate) async fn federation_transaction(
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
     json_ok(response)
+}
+
+fn local_peer_policy_digest_for_transaction(
+    state: &AppState,
+    origin_service_did: &str,
+    body: &cokret_sdk::FederationTransactionRequestBody,
+) -> Result<String, AppError> {
+    let mut federation_peers = state.config.federation_peers.clone();
+    federation_peers.sort();
+    federation_peers.dedup();
+    let realm_ids = body
+        .operations
+        .iter()
+        .map(|operation| operation.realm_id.as_str().to_owned())
+        .collect::<BTreeSet<_>>();
+    let realm_policies = {
+        let projection = state
+            .projection
+            .lock()
+            .map_err(|error| AppError::internal(format!("projection lock: {error}")))?;
+        realm_ids
+            .iter()
+            .map(|realm_id| {
+                json!({
+                    "realm_id": realm_id,
+                    "federation_policy": projection
+                        .realm_federation_policy(realm_id)
+                        .unwrap_or_else(|| "open".to_owned()),
+                })
+            })
+            .collect::<Vec<_>>()
+    };
+    let moderation_policies = {
+        let policies = state
+            .realm_moderation_policies
+            .lock()
+            .map_err(|error| AppError::internal(format!("realm moderation policies lock: {error}")))?;
+        realm_ids
+            .iter()
+            .filter_map(|realm_id| {
+                policies.get(realm_id).map(|record| {
+                    json!({
+                        "realm_id": record.realm_id.as_str(),
+                        "payload": record.payload.clone(),
+                        "updated_at": record.updated_at.to_rfc3339(),
+                    })
+                })
+            })
+            .collect::<Vec<_>>()
+    };
+    let policy_state = json!({
+        "schema": "ck.federation.local_peer_policy_digest.v1",
+        "source_service_did": origin_service_did,
+        "destination_service_did": body.destination.as_str(),
+        "service_binding_ref": body.service_binding_ref.as_str(),
+        "federation_policy": state.config.federation_policy.as_str(),
+        "federation_peers": federation_peers,
+        "source_denied": crate::security::federation_origin_denied(origin_service_did),
+        "max_inbound_operations": MAX_INBOUND_FEDERATION_OPERATIONS,
+        "realm_policies": realm_policies,
+        "realm_moderation_policies": moderation_policies,
+    });
+    let canonical = cokret_sdk::canonical::canonical_json_bytes(&policy_state).map_err(|error| {
+        AppError::internal(format!("federation local peer policy digest canonicalization: {error}"))
+    })?;
+    Ok(cokret_sdk::canonical::sha256_digest(&canonical))
 }
 
 #[endpoint(

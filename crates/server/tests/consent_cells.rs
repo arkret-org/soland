@@ -177,6 +177,49 @@ async fn get_cell(
     .unwrap()
 }
 
+async fn assert_requester_consent_revoked(
+    app: &salvo::Service,
+    token: &str,
+    holder: &str,
+    peer: &str,
+    scope: &str,
+) {
+    let cell = get_cell(app, token, holder, peer, scope).await;
+    assert_eq!(cell["state"], "revoked", "cell revoked: {cell}");
+    assert!(
+        cell["active_grant_dots"].as_array().unwrap().is_empty(),
+        "no active requester-side dots remain: {cell}"
+    );
+    let grant_dots = cell["grant_dots"].as_array().unwrap();
+    assert!(
+        !grant_dots.is_empty(),
+        "requester-side grant dots existed before revoke: {cell}"
+    );
+    let revoked_dots = cell["revoked_dots"].as_array().unwrap();
+    for dot in grant_dots {
+        assert!(
+            revoked_dots.contains(dot),
+            "grant dot must be enumerated in revoked_dots: {cell}"
+        );
+    }
+}
+
+async fn assert_auto_revoke_audit(state: &AppState, actor: &str, reason: &str) {
+    let entries = state
+        .persistence
+        .audit()
+        .list_for_actor(actor)
+        .await
+        .unwrap();
+    assert!(
+        entries.iter().any(|entry| {
+            entry["action"].as_str() == Some("consent.requester_side.auto_revoke")
+                && entry["payload"]["reason"].as_str() == Some(reason)
+        }),
+        "auto revoke audit reason {reason} missing from {entries:?}"
+    );
+}
+
 async fn grant_cell(
     app: &salvo::Service,
     token: &str,
@@ -720,4 +763,100 @@ async fn contact_accept_grants_event_backed_invite_consent_ref() {
         surfaced_ref.unwrap().starts_with("ck:event:"),
         "the surfaced ref is a canonical event id"
     );
+}
+
+#[tokio::test]
+async fn contact_reject_revokes_requester_side_consent_ref() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let app = service(state.clone());
+    let alice = "did:web:crrscr-alice.example";
+    let bob = "did:web:crrscr-bob.example";
+    let alice_token = dev_token(&app, alice).await;
+    let bob_token = dev_token(&app, bob).await;
+
+    let requested = request_contact(&app, &alice_token, bob, "invite").await;
+    let request_id = requested["request_event_ref"].as_str().unwrap();
+    assert_eq!(
+        get_cell(&app, &alice_token, alice, bob, "invite").await["state"],
+        "active"
+    );
+
+    let rejected = respond_contact(&app, &bob_token, alice, request_id, "reject", &[]).await;
+    assert_eq!(rejected["state"], "rejected");
+
+    assert_requester_consent_revoked(&app, &alice_token, alice, bob, "invite").await;
+    assert_auto_revoke_audit(&state, alice, "contact_rejected").await;
+}
+
+#[tokio::test]
+async fn pending_contact_tombstone_revokes_requester_side_consent_ref() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let app = service(state.clone());
+    let alice = "did:web:pctrrscr-alice.example";
+    let bob = "did:web:pctrrscr-bob.example";
+    let alice_token = dev_token(&app, alice).await;
+    let bob_token = dev_token(&app, bob).await;
+
+    request_contact(&app, &alice_token, bob, "invite").await;
+    assert_eq!(
+        get_cell(&app, &alice_token, alice, bob, "invite").await["state"],
+        "active"
+    );
+
+    let mut response = TestClient::post("http://server/_cokret/self/contacts/tombstone")
+        .add_header("Authorization", format!("Bearer {bob_token}"), true)
+        .json(&serde_json::json!({
+            "contact": alice,
+            "revoke_scopes": [],
+            "full_peer_revoke": false,
+            "block_peer": false,
+        }))
+        .send(&app)
+        .await;
+    assert_eq!(response.status_code.unwrap(), StatusCode::OK);
+    let tombstoned: Value = response.take_json().await.unwrap();
+    assert_eq!(tombstoned["state"], "tombstoned");
+
+    assert_requester_consent_revoked(&app, &alice_token, alice, bob, "invite").await;
+    assert_auto_revoke_audit(&state, alice, "contact_tombstoned").await;
+}
+
+#[tokio::test]
+async fn expired_contact_respond_revokes_requester_side_consent_and_fails_closed() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let app = service(state.clone());
+    let alice = "did:web:ecrrrscafc-alice.example";
+    let bob = "did:web:ecrrrscafc-bob.example";
+    let alice_token = dev_token(&app, alice).await;
+    let bob_token = dev_token(&app, bob).await;
+
+    let requested = request_contact(&app, &alice_token, bob, "invite").await;
+    let request_id = requested["request_event_ref"].as_str().unwrap();
+    let mut contact = state
+        .persistence
+        .contacts()
+        .get_scoped(alice, bob, "invite")
+        .await
+        .unwrap()
+        .expect("stored contact request");
+    contact.created_at = Utc::now() - Duration::days(15);
+    contact.updated_at = contact.created_at;
+    state.persistence.contacts().put(&contact).await.unwrap();
+
+    let mut response = TestClient::post("http://server/_cokret/self/contacts/respond")
+        .add_header("Authorization", format!("Bearer {bob_token}"), true)
+        .json(&serde_json::json!({
+            "request_id": request_id,
+            "requester": alice,
+            "action": "accept",
+            "granted_scopes": ["invite"],
+        }))
+        .send(&app)
+        .await;
+    assert_eq!(response.status_code.unwrap(), StatusCode::PRECONDITION_FAILED);
+    let body: Value = response.take_json().await.unwrap();
+    assert_eq!(body["error"]["code"], "contact_request_expired");
+
+    assert_requester_consent_revoked(&app, &alice_token, alice, bob, "invite").await;
+    assert_auto_revoke_audit(&state, alice, "contact_request_pending_ttl").await;
 }

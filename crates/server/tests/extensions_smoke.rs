@@ -6,6 +6,7 @@
 //! `cotest/e2e/mocks/mock-tsp-endpoint.mjs`). The integration test
 //! posts to each route and verifies the spec-shaped envelope.
 
+use std::collections::BTreeMap;
 use std::net::SocketAddr;
 
 use base64::Engine as _;
@@ -146,6 +147,7 @@ async fn applet_install_package_registers_bot_projection_smoke() {
     let applet_id = cokret_sdk::new_prefixed_uuid7("ck:applet:");
     let namespace = format!("bridge.install.{suffix}");
     let package = signed_applet_package(&applet_id, &namespace);
+    ingest_applet_service_did_document(&state, &package).await;
 
     let install = install_applet_package(
         &app,
@@ -175,6 +177,32 @@ async fn applet_install_package_registers_bot_projection_smoke() {
         "install must append ck.applet.registration projection"
     );
 
+    let stored_applet = state
+        .persistence
+        .applets()
+        .get(&applet_id)
+        .await
+        .unwrap()
+        .expect("applet record is durable");
+    let execution = &stored_applet["install_execution"];
+    assert_eq!(execution["status"], json!("completed"));
+    assert_eq!(execution["idempotency_key"], json!(format!("install-{suffix}")));
+    assert_eq!(
+        execution["produced_event_refs"][0],
+        install["registration_event_ref"]
+    );
+    let steps = execution["steps"].as_array().unwrap();
+    assert_eq!(steps[0]["target_event_kind"], json!("ck.applet.registration"));
+    assert_eq!(steps[0]["status"], json!("accepted"));
+    assert_eq!(steps[0]["event_ref"], install["registration_event_ref"]);
+    assert!(
+        steps
+            .iter()
+            .any(|step| step["target_event_kind"] == json!("ck.capability.grant")
+                && step["grant_binding"]["registration_epoch"]
+                    == json!(package.registration_epoch.to_string()))
+    );
+
     let bot_doc = canonical_did_document(&app, &bot_actor_id).await;
     assert_eq!(bot_doc["id"], json!(bot_actor_id));
     assert_eq!(bot_doc["status"], json!("active"));
@@ -190,6 +218,7 @@ async fn applet_ghost_actor_provision_writes_durable_profile_and_grant_events() 
     let applet_id = cokret_sdk::new_prefixed_uuid7("ck:applet:");
     let namespace = format!("bridge.provision.{suffix}");
     let package = signed_applet_package(&applet_id, &namespace);
+    ingest_applet_service_did_document(&state, &package).await;
     let realm_id = DEMO_REALM_ID;
     let install = install_applet_package(
         &app,
@@ -320,11 +349,12 @@ async fn applet_ghost_actor_provision_writes_durable_profile_and_grant_events() 
 async fn applet_ghost_actor_provision_requires_approved_ghost_scope() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
-    let app = service(state);
+    let app = service(state.clone());
     let suffix = uuid::Uuid::now_v7().simple().to_string();
     let applet_id = cokret_sdk::new_prefixed_uuid7("ck:applet:");
     let namespace = format!("bridge.no-ghost-scope.{suffix}");
     let package = signed_applet_package(&applet_id, &namespace);
+    ingest_applet_service_did_document(&state, &package).await;
     let realm_id = DEMO_REALM_ID;
     let install = install_applet_package_with_approved_actions(
         &app,
@@ -368,11 +398,12 @@ async fn applet_ghost_actor_provision_requires_approved_ghost_scope() {
 async fn applet_ghost_actor_provision_rejects_actor_namespace_mismatch() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
-    let app = service(state);
+    let app = service(state.clone());
     let suffix = uuid::Uuid::now_v7().simple().to_string();
     let applet_id = cokret_sdk::new_prefixed_uuid7("ck:applet:");
     let namespace = format!("bridge.namespace.{suffix}");
     let package = signed_applet_package(&applet_id, &namespace);
+    ingest_applet_service_did_document(&state, &package).await;
     let realm_id = DEMO_REALM_ID;
     let install = install_applet_package(
         &app,
@@ -600,6 +631,7 @@ async fn applet_bridge_register_ghost_route_revoke_smoke() {
     let applet_id = cokret_sdk::new_prefixed_uuid7("ck:applet:");
     let namespace = format!("bridge.smoke.{suffix}");
     let package = signed_applet_package(&applet_id, &namespace);
+    ingest_applet_service_did_document(&state, &package).await;
     let realm_id = DEMO_REALM_ID;
     let install = install_applet_package(
         &app,
@@ -793,6 +825,11 @@ fn signed_applet_package(applet_id: &str, namespace: &str) -> AppletPackage {
         format!("{}#applet-service-key", package.service_did),
         vec![WebhookSignatureAlg::EdDsa],
     );
+    let service_document = applet_service_did_document(&package);
+    package.registration_epoch_evidence = Some(
+        cokret_sdk::AppletRegistrationEpochEvidence::from_did_document(&service_document, None)
+            .unwrap(),
+    );
     package.requested_scopes = vec![
         "ck.message.create".to_owned(),
         "ck.applet.ghost.provision".to_owned(),
@@ -814,6 +851,38 @@ fn signed_applet_package(applet_id: &str, namespace: &str) -> AppletPackage {
         Ed25519MoveSigner::from_did_key_seed([13u8; 32], controller_did, &verification_method);
     package.sign(&signer, &verification_method).unwrap();
     package
+}
+
+fn applet_service_did_document(package: &AppletPackage) -> cokret_sdk::identity::DidDocument {
+    cokret_sdk::identity::DidDocument {
+        id: package.service_did.clone(),
+        verification_methods: BTreeMap::from([(
+            package.webhook_auth.key_ref.clone(),
+            "dev-applet-service-key-material".to_owned(),
+        )]),
+        also_known_as: Vec::new(),
+        updated_at: package.created_at,
+    }
+}
+
+async fn ingest_applet_service_did_document(state: &AppState, package: &AppletPackage) {
+    let now = chrono::Utc::now();
+    let document = applet_service_did_document(package);
+    state
+        .persistence
+        .webvh()
+        .put_document(soland::state::WebvhDocumentRecord {
+            did: package.service_did.to_string(),
+            did_document: serde_json::to_value(document).unwrap(),
+            key_log_head: Some(package.registration_epoch.to_string()),
+            seq: 1,
+            method_evidence: json!({ "mode": "test_fixture" }),
+            fetched_at: now,
+            expires_at: now + chrono::Duration::minutes(15),
+            updated_at: now,
+        })
+        .await
+        .unwrap();
 }
 
 async fn install_applet_package(

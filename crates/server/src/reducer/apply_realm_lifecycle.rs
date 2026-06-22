@@ -210,6 +210,37 @@ impl ProjectionState {
         }
     }
 
+    fn bootstrap_realm_creator_member(
+        &mut self,
+        realm_id: &str,
+        creator: &str,
+        operation: &Operation,
+        now: chrono::DateTime<chrono::Utc>,
+    ) {
+        self.members.insert(
+            (realm_id.to_owned(), creator.to_owned()),
+            SolandMembershipState {
+                member: creator.to_owned(),
+                realm_id: realm_id.to_owned(),
+                state: "join".to_owned(),
+                role: "member".to_owned(),
+                delivery_status: None,
+                recipient_service_did: None,
+                membership_event_ref: Some(operation.operation_id.as_str().to_owned()),
+                delivery_binding_frontier: None,
+                invited_at: None,
+                joined_at: now,
+                updated_at: now,
+            },
+        );
+        if let Ok(cell_id) =
+            cokret_sdk::CellRef::new(format!("ck:cell:ck.component.member.state.v1:{creator}"))
+        {
+            self.cells
+                .insert(cell_id, CellState::Value(Value::String("join".to_owned())));
+        }
+    }
+
     fn cascade_realm_member_removal_to_circles(
         &mut self,
         realm_id: &str,
@@ -633,7 +664,7 @@ impl ProjectionState {
         //
         // Per spec event-kind-registry, each ck.realm.* lifecycle event
         // writes a distinct cell family with its own lattice:
-        //   ck.realm.create     → ck.component.realm.create.v1  (ordered-log, singleton)
+        //   ck.realm.create     → ck.component.realm.create.v1  (genesis singleton)
         //   ck.realm.update     → ck.component.realm.organization.v1 (cas-register, singleton)
         //   ck.realm.archive    → ck.component.realm.archive.v1 (cas-register, singleton)
         //   ck.realm.freeze     → ck.component.realm.freeze.v1 (cas-register, singleton)
@@ -645,6 +676,21 @@ impl ProjectionState {
         // terminal-state write rejects with `realm_already_terminal`.
         let payload_object = operation.payload.get("object").and_then(Value::as_object);
         let realm_id = operation.realm_id.to_string();
+        let creator = if kind == crate::kinds::CK_REALM_CREATE {
+            let Some(creator) = payload_object
+                .and_then(|object| object.get("created_by"))
+                .and_then(Value::as_str)
+                .filter(|value| !value.trim().is_empty())
+                .map(ToOwned::to_owned)
+            else {
+                return ProjectionEffect::Rejected {
+                    reason: cokret_sdk::ERROR_CODE_SCHEMA_VIOLATION.to_owned(),
+                };
+            };
+            Some(creator)
+        } else {
+            None
+        };
         let owner = operation
             .payload
             .get("owner")
@@ -847,6 +893,11 @@ impl ProjectionState {
         {
             return effect;
         }
+        if kind == crate::kinds::CK_REALM_CREATE && self.realm_create_log(&realm_id).is_some() {
+            return ProjectionEffect::Rejected {
+                reason: "realm_already_exists".to_owned(),
+            };
+        }
 
         // Structured cache mirror.
         let realm = self
@@ -918,11 +969,6 @@ impl ProjectionState {
         // for this canonical kind.
         match kind {
             k if k == crate::kinds::CK_REALM_CREATE => {
-                // ordered-log: append entries. We model the log here as
-                // an array of envelopes; each create event appends. For
-                // most Realms there's exactly one create entry, but the
-                // spec lattice allows multiple (e.g. spec changes,
-                // re-genesis under recovery).
                 if let Ok(cell_id) = cokret_sdk::CellRef::new(format!(
                     "ck:cell:ck.component.realm.create.v1:{realm_id}"
                 )) {
@@ -936,15 +982,11 @@ impl ProjectionState {
                         "created_at": now.to_rfc3339(),
                         "operation_id": operation.operation_id.as_str(),
                     });
-                    let new_log = match self.cells.get(&cell_id) {
-                        Some(CellState::Value(Value::Array(existing))) => {
-                            let mut log = existing.clone();
-                            log.push(entry);
-                            CellState::Value(Value::Array(log))
-                        }
-                        _ => CellState::Value(Value::Array(vec![entry])),
-                    };
-                    self.cells.insert(cell_id, new_log);
+                    self.cells
+                        .insert(cell_id, CellState::Value(Value::Array(vec![entry])));
+                }
+                if let Some(creator) = creator.as_deref() {
+                    self.bootstrap_realm_creator_member(&realm_id, creator, operation, now);
                 }
             }
             k if k == crate::kinds::CK_REALM_UPDATE => {

@@ -135,6 +135,8 @@ fn api_v1_router(conformance_harness_enabled: bool) -> Router {
                 .push(spaces::router())
                 // self/events/*.
                 .push(events::router())
+                // self/invites/third-party*.
+                .push(invites::self_router())
                 // self/authz/* + self/policy/check. (Owner-scoped policy
                 // document CRUD lives on the product surface at
                 // `/_soland/self/policies*`, see `soland_local_router`.)

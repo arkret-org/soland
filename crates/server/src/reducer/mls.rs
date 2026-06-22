@@ -45,6 +45,7 @@ pub const REASON_KEYPACKAGE_EXPIRED: &str = "mls_keypackage_expired";
 /// Reason code emitted when a KeyPackage publish/claim is missing the
 /// accepted cross-signing generation or attempts to consume an older one.
 pub const REASON_KEYPACKAGE_CLAIM_GENERATION_MISMATCH: &str = "claim_generation_mismatch";
+pub const REASON_KEYPACKAGE_REALM_MISMATCH: &str = "mls_keypackage_realm_mismatch";
 /// Reason code emitted when a commit's `expected_prev_epoch` does not
 /// match the group's stored epoch (out-of-order / stale / replay).
 pub const REASON_COMMIT_EPOCH_SKEW: &str = "mls_epoch_skew";
@@ -141,6 +142,15 @@ pub fn apply_keypackage_publish(
         .get("device_signature")
         .cloned()
         .unwrap_or(Value::Null);
+    let last_resort = payload
+        .get("last_resort")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let last_resort_realm_id = payload
+        .get("last_resort_realm_id")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
 
     let created_at =
         parse_timestamp(payload.get("created_at")).unwrap_or_else(|| op.created_at.timestamp());
@@ -162,6 +172,8 @@ pub fn apply_keypackage_publish(
         capabilities,
         capabilities_digest,
         device_signature,
+        last_resort,
+        last_resort_realm_id,
         claimed_by: None,
         ssk_generation: Some(ssk_generation),
         consumed_at: None,
@@ -210,7 +222,7 @@ pub fn apply_keypackage_claim(state: &mut ProjectionState, op: &Operation) -> Pr
         return reject(REASON_KEYPACKAGE_NOT_FOUND);
     };
     // CAS check — refuse if anyone has already claimed this row.
-    if row.claimed_by.is_some() {
+    if !row.last_resort && row.claimed_by.is_some() {
         return reject(REASON_KEYPACKAGE_ALREADY_CLAIMED);
     }
     // Lifetime check — RFC 9420 §10. Stale KeyPackages can't be claimed.
@@ -227,12 +239,35 @@ pub fn apply_keypackage_claim(state: &mut ProjectionState, op: &Operation) -> Pr
     if row.ssk_generation != Some(claim_generation) {
         return reject(REASON_KEYPACKAGE_CLAIM_GENERATION_MISMATCH);
     }
-    row.claimed_by = Some(group_id.to_owned());
-    row.consumed_at = Some(consumed_at);
+    let intended_realm_id = payload
+        .get("intended_realm_id")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
+    if row.last_resort {
+        let Some(realm_id) = intended_realm_id.as_deref() else {
+            return reject(REASON_KEYPACKAGE_REALM_MISMATCH);
+        };
+        if row
+            .last_resort_realm_id
+            .as_deref()
+            .is_some_and(|bound_realm_id| bound_realm_id != realm_id)
+        {
+            return reject(REASON_KEYPACKAGE_REALM_MISMATCH);
+        }
+        if row.last_resort_realm_id.is_none() {
+            row.last_resort_realm_id = Some(realm_id.to_owned());
+        }
+    } else {
+        row.claimed_by = Some(group_id.to_owned());
+        row.consumed_at = Some(consumed_at);
+    }
 
     ProjectionEffectOut::Mls(MlsEffect::KeyPackageClaimed {
         keypackage_id: id.to_owned(),
         group_id: group_id.to_owned(),
+        intended_realm_id,
+        last_resort: row.last_resort,
         consumed_at,
     })
 }
@@ -1248,6 +1283,7 @@ mod tests {
                 keypackage_id,
                 group_id,
                 consumed_at,
+                ..
             }) => {
                 assert_eq!(keypackage_id, "ck:mls_keypackage:01");
                 assert_eq!(group_id, "ck:mls_group:abc");
@@ -1314,6 +1350,67 @@ mod tests {
         let row = state.mls_key_packages.get("ck:mls_keypackage:02").unwrap();
         assert_eq!(row.claimed_by.as_deref(), Some("ck:mls_group:first"));
         assert_eq!(row.consumed_at, Some(200));
+    }
+
+    #[test]
+    fn last_resort_keypackage_reuses_within_realm_only() {
+        let mut state = ProjectionState::default();
+        let mut payload = publish_payload(
+            "ck:mls_keypackage:last-resort",
+            "did:web:alice.example",
+            "ck:device:alice-desktop",
+            1_000_000,
+        );
+        payload["last_resort"] = json!(true);
+        let publish = op_at(100, "ck.mls.keypackage", payload);
+        let _ = apply_keypackage_publish(&mut state, &publish);
+
+        for group_id in ["ck:mls_group:first", "ck:mls_group:second"] {
+            let claim = op_at(
+                200,
+                "ck.mls.keypackage",
+                json!({
+                    "action": "claim",
+                    "keypackage_id": "ck:mls_keypackage:last-resort",
+                    "group_id": group_id,
+                    "intended_realm_id": "ck:realm:alpha",
+                    "ssk_generation": 7
+                }),
+            );
+            assert!(matches!(
+                apply_keypackage_claim(&mut state, &claim),
+                ProjectionEffect::Mls(MlsEffect::KeyPackageClaimed {
+                    last_resort: true,
+                    ..
+                })
+            ));
+        }
+
+        let row = state
+            .mls_key_packages
+            .get("ck:mls_keypackage:last-resort")
+            .unwrap();
+        assert!(row.claimed_by.is_none());
+        assert!(row.consumed_at.is_none());
+        assert_eq!(row.last_resort_realm_id.as_deref(), Some("ck:realm:alpha"));
+
+        let cross_realm = op_at(
+            201,
+            "ck.mls.keypackage",
+            json!({
+                "action": "claim",
+                "keypackage_id": "ck:mls_keypackage:last-resort",
+                "group_id": "ck:mls_group:other",
+                "intended_realm_id": "ck:realm:beta",
+                "ssk_generation": 7
+            }),
+        );
+        match apply_keypackage_claim(&mut state, &cross_realm) {
+            ProjectionEffect::Rejected { reason } => {
+                assert_eq!(reason, REASON_KEYPACKAGE_REALM_MISMATCH);
+            }
+            other => panic!("expected Rejected, got {other:?}"),
+        }
     }
 
     #[test]

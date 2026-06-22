@@ -1,5 +1,6 @@
+use std::collections::BTreeMap;
+
 use cokret_sdk::Did;
-use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 // ════════════════════════════════════════════════════════════════════════
@@ -136,17 +137,6 @@ impl FederationIdempotencyKey {
     }
 }
 
-/// Spec T14 — fields added to the federation idempotency cache key so a
-/// replay after key revoke is recognised as a stale historical request
-/// rather than a fresh one.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub(crate) struct FederationIdempotencyServiceBinding {
-    pub source_service_did: String,
-    pub verification_method: String,
-    pub service_binding_ref: String,
-    pub origin_key_state_digest: String,
-}
-
 /// Spec T14 — marker set on a cached federation response that is replayed
 /// after the source service rotated its verification key.
 pub(crate) const HISTORICAL_ONLY_MARKER: &str = "historical_only";
@@ -156,12 +146,15 @@ pub(crate) const HISTORICAL_ONLY_MARKER: &str = "historical_only";
 /// cache hit was a canonical-replay (post-key-rotation) rather than a
 /// strict-key hit.
 pub(crate) fn mark_response_historical_only(mut response: Value) -> Value {
+    let original_outcome = response.clone();
     if let Some(object) = response.as_object_mut() {
+        object.insert("accepted".to_owned(), Value::Array(Vec::new()));
         object.insert(
             "reason_code".to_owned(),
             Value::String(cokret_sdk::ERROR_CODE_HISTORICAL_ONLY.to_owned()),
         );
         object.insert(HISTORICAL_ONLY_MARKER.to_owned(), Value::Bool(true));
+        object.insert("original_outcome".to_owned(), original_outcome);
     }
     response
 }
@@ -173,22 +166,37 @@ pub(crate) fn mark_response_historical_only(mut response: Value) -> Value {
 #[allow(dead_code)]
 pub(crate) fn delivery_binding_stale_response(
     new_recipient_service_did: &Did,
+    actor_id: &Did,
     handover_frontier: &[cokret_sdk::EventId],
+    witness: Value,
 ) -> Value {
-    json!({
-        "ok": false,
-        "error": {
-            "code": cokret_sdk::ERROR_CODE_DELIVERY_BINDING_STALE,
-            "message": "delivery binding is stale; rebind to the new recipient service",
-            "details": {
-                "new_recipient_service_did": new_recipient_service_did.as_str(),
-                "handover_frontier": handover_frontier
-                    .iter()
-                    .map(|e| e.as_str())
-                    .collect::<Vec<_>>(),
-            }
-        }
-    })
+    let handover_frontier = Value::Array(
+        handover_frontier
+            .iter()
+            .map(|event_id| Value::String(event_id.as_str().to_owned()))
+            .collect(),
+    );
+    let witness = match witness {
+        Value::Object(object) => object.into_iter().collect::<BTreeMap<_, _>>(),
+        other => BTreeMap::from([("value".to_owned(), other)]),
+    };
+    let details = cokret_sdk::DeliveryBindingStale {
+        new_recipient_service_did: Value::String(new_recipient_service_did.as_str().to_owned()),
+        handover_frontier: handover_frontier.clone(),
+        handover_proof: cokret_sdk::DeliveryBindingStaleHandoverProof {
+            frontier: handover_frontier,
+            recipient_service_did: Value::String(new_recipient_service_did.as_str().to_owned()),
+            actor_id: Value::String(actor_id.as_str().to_owned()),
+            witness,
+            extra: BTreeMap::new(),
+        },
+        extra: BTreeMap::new(),
+    };
+    error_envelope_with_details(
+        cokret_sdk::ERROR_CODE_DELIVERY_BINDING_STALE,
+        "delivery binding is stale; rebind to the new recipient service",
+        details,
+    )
 }
 
 /// Spec B1.9 — emit-shape for `delivery_binding_handed_over` (409).
@@ -196,15 +204,37 @@ pub(crate) fn delivery_binding_stale_response(
 /// already been handed over to the new recipient.
 #[allow(dead_code)]
 pub(crate) fn delivery_binding_handed_over_response(new_recipient_service_did: &Did) -> Value {
-    json!({
-        "ok": false,
-        "error": {
-            "code": cokret_sdk::ERROR_CODE_DELIVERY_BINDING_HANDED_OVER,
-            "message": "delivery binding has already been handed over to the new recipient",
-            "details": {
-                "new_recipient_service_did": new_recipient_service_did.as_str(),
-            }
+    error_envelope_with_details(
+        cokret_sdk::ERROR_CODE_DELIVERY_BINDING_HANDED_OVER,
+        "delivery binding has already been handed over to the new recipient",
+        json!({
+            "new_recipient_service_did": new_recipient_service_did.as_str(),
+        }),
+    )
+}
+
+fn error_envelope_with_details(
+    code: &'static str,
+    message: &'static str,
+    details: impl serde::Serialize,
+) -> Value {
+    let details =
+        serde_json::to_value(details).unwrap_or_else(|_| Value::Object(Default::default()));
+    let mut envelope = cokret_sdk::ErrorEnvelope::new(code, message);
+    if let Some(object) = details.as_object() {
+        for (key, value) in object {
+            envelope = envelope.with_detail(key.clone(), value.clone());
         }
+    }
+    serde_json::to_value(envelope).unwrap_or_else(|_| {
+        json!({
+            "ok": false,
+            "error": {
+                "code": code,
+                "message": message,
+            },
+            "request_id": "unknown",
+        })
     })
 }
 

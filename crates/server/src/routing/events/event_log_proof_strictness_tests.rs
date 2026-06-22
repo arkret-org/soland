@@ -224,6 +224,7 @@ fn member_identity_encrypted_payload_is_unsupported_fail_closed() {
 
 #[test]
 fn unknown_fail_closed_critical_extension_is_not_implemented() {
+    let state = make_state(true);
     let envelope = json!({
         "requirements": {
             "critical_extensions": [{
@@ -234,7 +235,7 @@ fn unknown_fail_closed_critical_extension_is_not_implemented() {
     });
     let object = envelope.as_object().unwrap();
 
-    let err = validate_event_critical_features(object)
+    let err = validate_event_critical_features(&state, object)
         .expect_err("unknown fail-closed extensions must reject writes");
 
     assert_eq!(err.status, StatusCode::NOT_IMPLEMENTED);
@@ -243,6 +244,7 @@ fn unknown_fail_closed_critical_extension_is_not_implemented() {
 
 #[test]
 fn unknown_advisory_critical_extension_is_ignored() {
+    let state = make_state(true);
     let envelope = json!({
         "requirements": {
             "critical_extensions": [{
@@ -253,8 +255,39 @@ fn unknown_advisory_critical_extension_is_ignored() {
     });
     let object = envelope.as_object().unwrap();
 
-    validate_event_critical_features(object)
+    validate_event_critical_features(&state, object)
         .expect("non-fail-closed extensions are advisory and may be ignored");
+}
+
+#[test]
+fn unknown_required_feature_is_unsupported_feature() {
+    let state = make_state(true);
+    let envelope = json!({
+        "requirements": {
+            "features": ["ck.feature.mimi_room_passthrough.v1"]
+        }
+    });
+    let object = envelope.as_object().unwrap();
+
+    let err = validate_event_critical_features(&state, object)
+        .expect_err("unknown requirements.features entries must fail closed");
+
+    assert_eq!(err.status, StatusCode::NOT_IMPLEMENTED);
+    assert_eq!(err.code, "unsupported_feature");
+}
+
+#[test]
+fn declared_required_feature_is_accepted() {
+    let state = make_state(true);
+    let envelope = json!({
+        "requirements": {
+            "features": ["ck.feature.blob.resumable_upload.tus.v1"]
+        }
+    });
+    let object = envelope.as_object().unwrap();
+
+    validate_event_critical_features(&state, object)
+        .expect("declared ServiceDescribe features may be required by events");
 }
 
 #[tokio::test]
@@ -1509,6 +1542,34 @@ fn data_event_grant(grant_id: &str, action: &str, revoked: bool) -> crate::authz
     }
 }
 
+fn historical_data_event_grant_value(
+    grant_id: &str,
+    action: &str,
+    subject: &str,
+    issuer: &str,
+    revoked: bool,
+    parent_grant_id: Option<&str>,
+) -> Value {
+    let mut value = json!({
+        "grant_id": grant_id,
+        "schema": "ck.schema.capability_grant.v1",
+        "realm_id": DATA_EVENT_REALM,
+        "issuer": issuer,
+        "subject": subject,
+        "actions": [action],
+        "resources": [DATA_EVENT_STRAND],
+        "issued_at": "2026-05-08T00:00:00Z"
+    });
+    if let Some(parent_grant_id) = parent_grant_id {
+        value["delegated_from"] = Value::String(parent_grant_id.to_owned());
+    }
+    if revoked {
+        value["revoked"] = Value::Bool(true);
+        value["revoked_at"] = Value::String("2026-05-08T00:01:00Z".to_owned());
+    }
+    value
+}
+
 fn insert_historical_data_event_grant(
     state: &AppState,
     grant_id: &str,
@@ -1522,20 +1583,14 @@ fn insert_historical_data_event_grant(
         "ck:cell:ck.component.capability.grant.v1:{grant_id}"
     ))
     .unwrap();
-    let mut value = json!({
-        "grant_id": grant_id,
-        "schema": "ck.schema.capability_grant.v1",
-        "realm_id": DATA_EVENT_REALM,
-        "issuer": "did:web:owner.example",
-        "subject": DATA_EVENT_ACTOR,
-        "actions": [action],
-        "resources": [DATA_EVENT_STRAND],
-        "issued_at": "2026-05-08T00:00:00Z"
-    });
-    if revoked {
-        value["revoked"] = Value::Bool(true);
-        value["revoked_at"] = Value::String("2026-05-08T00:01:00Z".to_owned());
-    }
+    let value = historical_data_event_grant_value(
+        grant_id,
+        action,
+        DATA_EVENT_ACTOR,
+        "did:web:owner.example",
+        revoked,
+        None,
+    );
     let op = cokret_sdk::LatticeOp {
         op_type: cokret_sdk::LatticeOpType::Add,
         tag: Some("ck:operation:01904100-0000-7000-8000-000000000999".to_owned()),
@@ -1556,6 +1611,172 @@ fn insert_historical_data_event_grant(
     )
     .unwrap();
     insert_data_event_seal(state, vec![move_id])
+}
+
+fn insert_historical_data_event_delegated_grant_with_revoked_parent(
+    state: &AppState,
+    parent_grant_id: &str,
+    child_grant_id: &str,
+    action: &str,
+) -> String {
+    let realm = cokret_sdk::RealmId::new(DATA_EVENT_REALM.to_owned()).unwrap();
+    let seal_id = data_event_seal_id();
+    let parent_move_id = data_event_move_id(0xac);
+    let child_move_id = data_event_move_id(0xad);
+    let parent_cell = cokret_sdk::CellRef::new(format!(
+        "ck:cell:ck.component.capability.grant.v1:{parent_grant_id}"
+    ))
+    .unwrap();
+    let child_cell = cokret_sdk::CellRef::new(format!(
+        "ck:cell:ck.component.capability.grant.v1:{child_grant_id}"
+    ))
+    .unwrap();
+    let parent_value = historical_data_event_grant_value(
+        parent_grant_id,
+        action,
+        "did:web:delegate.example",
+        "did:web:owner.example",
+        true,
+        None,
+    );
+    let child_value = historical_data_event_grant_value(
+        child_grant_id,
+        action,
+        DATA_EVENT_ACTOR,
+        "did:web:delegate.example",
+        false,
+        Some(parent_grant_id),
+    );
+    let parent_op = cokret_sdk::LatticeOp {
+        op_type: cokret_sdk::LatticeOpType::Add,
+        tag: Some("ck:operation:01904100-0000-7000-8000-000000000991".to_owned()),
+        value: Some(parent_value),
+        from: None,
+        to: None,
+        reason: None,
+        issuer_seq: None,
+    };
+    let child_op = cokret_sdk::LatticeOp {
+        op_type: cokret_sdk::LatticeOpType::Add,
+        tag: Some("ck:operation:01904100-0000-7000-8000-000000000992".to_owned()),
+        value: Some(child_value),
+        from: None,
+        to: None,
+        reason: None,
+        issuer_seq: None,
+    };
+    cokret_sdk::state_res::CellStore::append_sealed_effects(
+        state.cell_store.as_ref(),
+        &realm,
+        &seal_id,
+        &[
+            (
+                parent_cell,
+                cokret_sdk::lattice::SealedOp::new(parent_move_id.clone(), parent_op),
+            ),
+            (
+                child_cell,
+                cokret_sdk::lattice::SealedOp::new(child_move_id.clone(), child_op),
+            ),
+        ],
+    )
+    .unwrap();
+    insert_data_event_seal(state, vec![parent_move_id, child_move_id])
+}
+
+fn insert_historical_data_event_grant_with_e2ee_state(
+    state: &AppState,
+    grant_id: &str,
+    include_covered_seal: bool,
+    include_relaxed_policy: bool,
+) -> String {
+    let realm = cokret_sdk::RealmId::new(DATA_EVENT_REALM.to_owned()).unwrap();
+    let seal_id = data_event_seal_id();
+    let mut move_ids = Vec::new();
+    let mut ops = Vec::new();
+
+    let grant_move_id = data_event_move_id(0xb0);
+    let grant_cell = cokret_sdk::CellRef::new(format!(
+        "ck:cell:ck.component.capability.grant.v1:{grant_id}"
+    ))
+    .unwrap();
+    let grant_op = cokret_sdk::LatticeOp {
+        op_type: cokret_sdk::LatticeOpType::Add,
+        tag: Some("ck:operation:01904100-0000-7000-8000-0000000009b0".to_owned()),
+        value: Some(historical_data_event_grant_value(
+            grant_id,
+            "ck.message.create",
+            DATA_EVENT_ACTOR,
+            "did:web:owner.example",
+            false,
+            None,
+        )),
+        from: None,
+        to: None,
+        reason: None,
+        issuer_seq: None,
+    };
+    move_ids.push(grant_move_id.clone());
+    ops.push((
+        grant_cell,
+        cokret_sdk::lattice::SealedOp::new(grant_move_id, grant_op),
+    ));
+
+    if include_covered_seal {
+        let covered_move_id = data_event_move_id(0xb1);
+        let covered_cell = cokret_sdk::mls_move::covered_seals_cell_id(&realm).unwrap();
+        let covered_op = cokret_sdk::LatticeOp {
+            op_type: cokret_sdk::LatticeOpType::Add,
+            tag: Some(seal_id.as_str().to_owned()),
+            value: Some(Value::String(seal_id.as_str().to_owned())),
+            from: None,
+            to: None,
+            reason: None,
+            issuer_seq: None,
+        };
+        move_ids.push(covered_move_id.clone());
+        ops.push((
+            covered_cell,
+            cokret_sdk::lattice::SealedOp::new(covered_move_id, covered_op),
+        ));
+    }
+
+    if include_relaxed_policy {
+        let policy_move_id = data_event_move_id(0xb2);
+        let policy_cell = cokret_sdk::CellRef::new(format!(
+            "ck:cell:ck.component.realm.policy_components.v1:{DATA_EVENT_REALM}"
+        ))
+        .unwrap();
+        let policy_op = cokret_sdk::LatticeOp {
+            op_type: cokret_sdk::LatticeOpType::Set,
+            tag: None,
+            value: Some(json!({
+                "profiles": ["ck.profile.e2ee_relaxed.v1"],
+                "e2ee_relaxed": {
+                    "profile": "ck.profile.e2ee_relaxed.v1",
+                    "relaxed_window_max_ms": 30000
+                }
+            })),
+            from: None,
+            to: None,
+            reason: None,
+            issuer_seq: None,
+        };
+        move_ids.push(policy_move_id.clone());
+        ops.push((
+            policy_cell,
+            cokret_sdk::lattice::SealedOp::new(policy_move_id, policy_op),
+        ));
+    }
+
+    cokret_sdk::state_res::CellStore::append_sealed_effects(
+        state.cell_store.as_ref(),
+        &realm,
+        &seal_id,
+        &ops,
+    )
+    .unwrap();
+    insert_data_event_seal(state, move_ids)
 }
 
 fn data_event_object_with_refs(
@@ -1579,6 +1800,32 @@ fn data_event_object_with_refs(
     .as_object()
     .unwrap()
     .clone()
+}
+
+fn data_event_e2ee_object_with_refs(
+    seal_ref: &str,
+    refs: Vec<String>,
+) -> serde_json::Map<String, Value> {
+    let mut object = data_event_object_with_refs(seal_ref, refs);
+    object.insert(
+        "payload".to_owned(),
+        json!({
+            "strand_id": DATA_EVENT_STRAND,
+            "track_name": "main",
+            "encrypted_content": {
+                "scheme": "mls-rfc9420",
+                "version": "1.0",
+                "group_id": "group.01js0mls0000000000000000",
+                "epoch": 7,
+                "content_type": "application/json",
+                "ciphertext": "base64url",
+                "aad_visibility_event_id": "hidden",
+                "payload_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+                "aad_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+            }
+        }),
+    );
+    object
 }
 
 #[test]
@@ -1658,6 +1905,32 @@ fn data_event_capability_ref_must_not_be_revoked() {
 }
 
 #[test]
+fn data_event_capability_ref_reports_upstream_revoked_parent() {
+    let state = make_state(true);
+    let parent_grant_id = "ck:grant:01904100-0000-7000-8000-000000000116";
+    let child_grant_id = "ck:grant:01904100-0000-7000-8000-000000000117";
+    let seal_ref = insert_historical_data_event_delegated_grant_with_revoked_parent(
+        &state,
+        parent_grant_id,
+        child_grant_id,
+        "ck.message.create",
+    );
+    let object = data_event_object_with_refs(&seal_ref, vec![child_grant_id.to_owned()]);
+
+    let err = validate_data_event_capability_refs(
+        &state,
+        DATA_EVENT_ACTOR,
+        DATA_EVENT_REALM,
+        "ck.message.create",
+        &object,
+    )
+    .expect_err("child capability_ref with revoked parent must reject");
+
+    assert_eq!(err.code, crate::authz::REASON_GRANT_REVOKED_UPSTREAM);
+    assert!(err.message.contains("revoked upstream"));
+}
+
+#[test]
 fn data_event_uses_seal_ref_pre_state_not_live_authz_index() {
     let state = make_state(true);
     let grant_id = "ck:grant:01904100-0000-7000-8000-000000000115";
@@ -1675,6 +1948,64 @@ fn data_event_uses_seal_ref_pre_state_not_live_authz_index() {
         &object,
     )
     .expect("DataEvent authz must evaluate the seal_ref pre-state, not the live authz index");
+}
+
+#[test]
+fn e2ee_data_event_requires_covered_seals_cell_contains_seal_ref() {
+    let state = make_state(true);
+    let grant_id = "ck:grant:01904100-0000-7000-8000-000000000118";
+    let seal_ref =
+        insert_historical_data_event_grant_with_e2ee_state(&state, grant_id, false, false);
+    let object = data_event_e2ee_object_with_refs(&seal_ref, vec![grant_id.to_owned()]);
+
+    let err = validate_data_event_capability_refs(
+        &state,
+        DATA_EVENT_ACTOR,
+        DATA_EVENT_REALM,
+        "ck.message.create",
+        &object,
+    )
+    .expect_err("E2EE DataEvent without covered_seals coverage must fail closed");
+
+    assert_eq!(err.code, "failed_precondition");
+    assert!(err.message.contains("mls_governance_binding_stale"));
+    assert!(err.message.contains("covered_seals_cell"));
+}
+
+#[test]
+fn e2ee_data_event_accepts_when_covered_seals_contains_seal_ref() {
+    let state = make_state(true);
+    let grant_id = "ck:grant:01904100-0000-7000-8000-000000000119";
+    let seal_ref =
+        insert_historical_data_event_grant_with_e2ee_state(&state, grant_id, true, false);
+    let object = data_event_e2ee_object_with_refs(&seal_ref, vec![grant_id.to_owned()]);
+
+    validate_data_event_capability_refs(
+        &state,
+        DATA_EVENT_ACTOR,
+        DATA_EVENT_REALM,
+        "ck.message.create",
+        &object,
+    )
+    .expect("covered E2EE DataEvent should pass the covered_seals gate");
+}
+
+#[test]
+fn relaxed_e2ee_data_event_keeps_capability_gate_without_covered_seals_gate() {
+    let state = make_state(true);
+    let grant_id = "ck:grant:01904100-0000-7000-8000-00000000011a";
+    let seal_ref =
+        insert_historical_data_event_grant_with_e2ee_state(&state, grant_id, false, true);
+    let object = data_event_e2ee_object_with_refs(&seal_ref, vec![grant_id.to_owned()]);
+
+    validate_data_event_capability_refs(
+        &state,
+        DATA_EVENT_ACTOR,
+        DATA_EVENT_REALM,
+        "ck.message.create",
+        &object,
+    )
+    .expect("relaxed E2EE profile should not require the full covered_seals gate");
 }
 
 // ----------------------------------------------------------------------------

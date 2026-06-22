@@ -154,6 +154,10 @@ async fn memory_federation_transaction_store_is_origin_scoped() {
         destination: "did:web:soland.local".to_owned(),
         realm_id: Some("ck:realm:01904100-0000-7000-8000-cfc039892036".to_owned()),
         content_digest: "sha256:first".to_owned(),
+        origin_verification_method: Some("did:web:remote.example#federation-fanout-key".to_owned()),
+        service_binding_ref: Some("ck:binding:remote".to_owned()),
+        origin_key_state_digest: Some("sha256:key-state".to_owned()),
+        local_peer_policy_digest: Some("sha256:peer-policy".to_owned()),
         status: "accepted".to_owned(),
         response: serde_json::json!({"ok": true}),
         received_at: now,
@@ -162,14 +166,23 @@ async fn memory_federation_transaction_store_is_origin_scoped() {
 
     store.put(&record).await.unwrap();
 
+    let stored = store
+        .get("did:web:remote.example", "txn1")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored.content_digest, "sha256:first");
     assert_eq!(
-        store
-            .get("did:web:remote.example", "txn1")
-            .await
-            .unwrap()
-            .unwrap()
-            .content_digest,
-        "sha256:first"
+        stored.origin_verification_method.as_deref(),
+        Some("did:web:remote.example#federation-fanout-key")
+    );
+    assert_eq!(
+        stored.origin_key_state_digest.as_deref(),
+        Some("sha256:key-state")
+    );
+    assert_eq!(
+        stored.local_peer_policy_digest.as_deref(),
+        Some("sha256:peer-policy")
     );
     assert!(
         store
@@ -621,6 +634,35 @@ async fn memory_event_store_round_trip_with_actor_seq() {
     assert_eq!(store.max_actor_seq("bob").await.unwrap(), Some(1));
     assert_eq!(store.max_actor_seq("nobody").await.unwrap(), None);
     assert_eq!(store.snapshot_all().await.unwrap().len(), 3);
+}
+
+#[tokio::test]
+async fn memory_event_store_rejects_duplicate_realm_create() {
+    let store = MemoryEventStore::new();
+    let now = Utc::now();
+    let make = |event_id: &str, actor: &str| CanonicalEventRecord {
+        event_id: event_id.to_owned(),
+        actor_id: actor.to_owned(),
+        actor_seq: 1,
+        realm_id: Some("ck:realm:0196419b-0000-7000-8000-000000000000".to_owned()),
+        kind: "ck.realm.create".to_owned(),
+        schema_id: "ck.schema.event.realm.v1".to_owned(),
+        canonical_digest: format!("sha256:{event_id}"),
+        canonical_bytes: event_id.as_bytes().to_vec(),
+        envelope: serde_json::json!({"event_id": event_id}),
+        received_at: now,
+    };
+
+    store.put(make("e1", "did:web:alice")).await.unwrap();
+    let err = store
+        .put(make("e2", "did:web:bob"))
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        PersistenceError::Conflict(message) if message.contains("realm_already_exists")
+    ));
+    assert_eq!(store.snapshot_all().await.unwrap().len(), 1);
 }
 
 // ── Memory parity tests for the FederationOperationsStore + the

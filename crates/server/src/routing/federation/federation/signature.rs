@@ -1,3 +1,6 @@
+use std::cell::RefCell;
+use std::time::{Duration as StdDuration, Instant};
+
 use base64::Engine as _;
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use chrono::Utc;
@@ -13,6 +16,32 @@ use crate::error::AppError;
 use crate::state::AppState;
 
 pub(super) const FEDERATION_AUTH_FAILURE_MESSAGE: &str = "federation request authentication failed";
+const FEDERATION_AUTH_FAILURE_TIMING_BUCKET: StdDuration = StdDuration::from_millis(80);
+
+thread_local! {
+    static FEDERATION_AUTH_TIMING_STARTED_AT: RefCell<Option<Instant>> = RefCell::new(None);
+}
+
+struct FederationAuthTimingGuard {
+    previous: Option<Instant>,
+}
+
+impl FederationAuthTimingGuard {
+    fn enter() -> Self {
+        let now = Instant::now();
+        let previous =
+            FEDERATION_AUTH_TIMING_STARTED_AT.with(|started_at| started_at.replace(Some(now)));
+        Self { previous }
+    }
+}
+
+impl Drop for FederationAuthTimingGuard {
+    fn drop(&mut self) {
+        FEDERATION_AUTH_TIMING_STARTED_AT.with(|started_at| {
+            started_at.replace(self.previous.take());
+        });
+    }
+}
 
 pub(super) fn validate_federation_request_binding(
     trust_domain: &str,
@@ -20,11 +49,10 @@ pub(super) fn validate_federation_request_binding(
     request_hash: &str,
 ) -> Result<(), AppError> {
     let headers = FederationTrustHeaders::from_salvo_request(req).map_err(|violation| {
-        AppError::new(
-            crate::error::ErrorCode::SchemaViolation,
-            violation.message(),
-        )
-        .with_status(StatusCode::BAD_REQUEST)
+        signature_error(format!(
+            "federation trust header validation failed: {}",
+            violation.message()
+        ))
     })?;
     let expected_destination = cokret_sdk::TypedTrustDomainId::new(trust_domain.to_owned())
         .map_err(|error| AppError::internal(format!("configured trust_domain invalid: {error}")))?;
@@ -100,6 +128,7 @@ fn verify_inbound_federation_http_signature(
     body_destination: &str,
     metric_label: &'static str,
 ) -> Result<(), AppError> {
+    let _timing_bucket = FederationAuthTimingGuard::enter();
     let body_bytes = cokret_sdk::canonical::canonical_json_bytes(body_value).map_err(|error| {
         AppError::new(
             crate::error::ErrorCode::SchemaViolation,
@@ -212,6 +241,7 @@ pub(in crate::routing) fn verify_inbound_peer_http_signature(
     req: &Request,
     body: Option<&Value>,
 ) -> Result<(), AppError> {
+    let _timing_bucket = FederationAuthTimingGuard::enter();
     let body_digests = match body {
         Some(value) => {
             let body_bytes =
@@ -260,18 +290,6 @@ pub(in crate::routing) fn verify_inbound_peer_http_signature(
     let source_trust_domain = required_header(req, "source-trust-domain")?;
     let destination_trust_domain = required_header(req, "destination-trust-domain")?;
 
-    // federation.md §5: `deny` MUST be evaluated before `allow` and machine-level
-    // defederation MUST take effect on inbound as well as outbound. Run it after
-    // the source DID is parsed but before the (fail-closed) signature check.
-    if crate::security::federation_origin_denied(&source_service_did) {
-        return Err(AppError::new(
-            crate::error::ErrorCode::CapabilityDenied,
-            "peer is denied by local federation policy",
-        )
-        .with_status(StatusCode::FORBIDDEN)
-        .with_wire_code("federation_peer_denied"));
-    }
-
     if destination_service_did != state.config.service_did {
         return Err(signature_error(
             "Destination-Service-DID does not match this service",
@@ -316,7 +334,13 @@ pub(in crate::routing) fn verify_inbound_peer_http_signature(
         &source_service_did,
         &outer_base,
         "outer",
-    )
+    )?;
+
+    if crate::security::federation_origin_denied(&source_service_did) {
+        return Err(signature_error("peer is denied by local federation policy"));
+    }
+
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -801,6 +825,7 @@ fn signature_error(message: impl Into<String>) -> AppError {
         federation_auth_detail = %detail,
         "federation request authentication failed"
     );
+    normalize_federation_auth_failure_delay();
     AppError::unauthenticated(FEDERATION_AUTH_FAILURE_MESSAGE)
 }
 
@@ -810,12 +835,21 @@ fn cross_domain_replay_error(message: impl Into<String>) -> AppError {
         federation_auth_detail = %detail,
         "federation cross-domain replay check failed"
     );
-    AppError::new(
-        crate::error::ErrorCode::Unauthenticated,
-        FEDERATION_AUTH_FAILURE_MESSAGE,
-    )
-    .with_status(StatusCode::CONFLICT)
-    .with_wire_code(crate::error::reasons::CROSS_DOMAIN_REPLAY_REJECTED)
+    normalize_federation_auth_failure_delay();
+    AppError::unauthenticated(FEDERATION_AUTH_FAILURE_MESSAGE)
+}
+
+fn normalize_federation_auth_failure_delay() {
+    let started_at =
+        FEDERATION_AUTH_TIMING_STARTED_AT.with(|started_at| started_at.borrow().clone());
+    let remaining = started_at
+        .and_then(|started_at| {
+            FEDERATION_AUTH_FAILURE_TIMING_BUCKET.checked_sub(started_at.elapsed())
+        })
+        .unwrap_or(FEDERATION_AUTH_FAILURE_TIMING_BUCKET);
+    if remaining.as_nanos() > 0 {
+        std::thread::sleep(remaining);
+    }
 }
 
 #[cfg(test)]
@@ -842,5 +876,12 @@ mod tests {
             cross_domain_replay_error("Destination-Trust-Domain mismatch").message,
             FEDERATION_AUTH_FAILURE_MESSAGE
         );
+    }
+
+    #[test]
+    fn federation_auth_errors_use_timing_bucket() {
+        let started_at = Instant::now();
+        let _ = signature_error("fast auth failure");
+        assert!(started_at.elapsed() >= FEDERATION_AUTH_FAILURE_TIMING_BUCKET);
     }
 }

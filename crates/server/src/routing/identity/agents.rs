@@ -258,34 +258,11 @@ fn agent_view_from_record(record: &Value) -> AgentView {
 // this surface.
 // ─────────────────────────────────────────────────────────────────────
 
-/// Deployment-default participation ceiling. Default / dev deployments
-/// allow all three bits; production tightens via the
-/// sovereign-deployment profile + per-Realm `agent_participation` policy
-/// component (CKP-0010 §3 invariant 3).
-fn deployment_default_ceiling() -> AgentParticipation {
-    AgentParticipation::ALL
-}
-
 fn participation_scope_kind(scope: &AgentParticipationScope) -> &'static str {
     match scope {
         AgentParticipationScope::Realm { .. } => "realm",
         AgentParticipationScope::Circle { .. } => "circle",
         AgentParticipationScope::Strand { .. } => "strand",
-    }
-}
-
-/// The enclosing scope_key chain for ceiling resolution: the Realm key
-/// always applies; Circle / Strand additionally contribute their own key.
-fn enclosing_scope_keys(scope: &AgentParticipationScope) -> Vec<String> {
-    let realm_key = AgentParticipationScope::Realm {
-        realm_id: scope.realm_id().clone(),
-    }
-    .scope_key();
-    match scope {
-        AgentParticipationScope::Realm { .. } => vec![realm_key],
-        AgentParticipationScope::Circle { .. } | AgentParticipationScope::Strand { .. } => {
-            vec![realm_key, scope.scope_key()]
-        }
     }
 }
 
@@ -312,18 +289,13 @@ async fn resolve_effective_ceiling(
     state: &AppState,
     scope: &AgentParticipationScope,
 ) -> AgentParticipation {
-    let scope_keys = enclosing_scope_keys(scope);
-    let rows = state
-        .persistence
-        .agent_participation()
-        .ceilings_for_scope_keys(&scope_keys)
-        .await
-        .unwrap_or_default();
-    let mut ceiling = deployment_default_ceiling();
-    for row in &rows {
-        ceiling = ceiling.intersect(participation_from_value(row));
-    }
-    ceiling
+    crate::routing::agent_participation::resolve_effective_ceiling(state, scope).await
+}
+
+fn agent_participation_failed_precondition(reason: &'static str) -> AppError {
+    AppError::new(ErrorCode::FailedPrecondition, reason)
+        .with_status(StatusCode::PRECONDITION_FAILED)
+        .with_wire_code(reason)
 }
 
 #[endpoint(
@@ -347,7 +319,11 @@ async fn set_agent_participation(
     let body = body.into_inner();
     let ceiling = resolve_effective_ceiling(state, &body.scope).await;
     validate_selection_within_ceiling(ceiling, body.selection)
-        .map_err(|err| AppError::capability_denied(err.to_string()))?;
+        .map_err(|_| {
+            agent_participation_failed_precondition(
+                cokret_sdk::error::REASON_AGENT_PARTICIPATION_EXCEEDS_CEILING,
+            )
+        })?;
     let effective = effective_participation(ceiling, body.selection);
     let scope_value = serde_json::to_value(&body.scope).unwrap_or(Value::Null);
     let selection_value = serde_json::to_value(body.selection).unwrap_or(Value::Null);

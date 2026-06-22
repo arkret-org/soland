@@ -4,7 +4,10 @@ use std::str::FromStr;
 use super::*;
 use crate::config::{AppConfig, FederationPolicy};
 use crate::db::Db;
+use crate::error::AppError;
 use crate::state::AppState;
+
+const FEDERATION_AUTH_FAILURE_MESSAGE_FOR_TEST: &str = "federation request authentication failed";
 
 fn config_with_policy(policy: FederationPolicy, peers: Vec<String>) -> AppConfig {
     AppConfig {
@@ -128,11 +131,9 @@ fn verify_actor_headers_reject_digest_mismatch() {
     .expect_err("mismatched digest rejected");
 
     assert_eq!(error.code, crate::error::ErrorCode::Unauthenticated);
-    assert_eq!(
-        error.wire_code(),
-        crate::error::reasons::CROSS_DOMAIN_REPLAY_REJECTED
-    );
-    assert_eq!(error.http_status(), StatusCode::CONFLICT);
+    assert_eq!(error.wire_code(), "unauthenticated");
+    assert_eq!(error.http_status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(error.message, FEDERATION_AUTH_FAILURE_MESSAGE_FOR_TEST);
 }
 
 #[test]
@@ -149,11 +150,9 @@ fn verify_actor_headers_reject_destination_mismatch() {
     .expect_err("wrong destination rejected");
 
     assert_eq!(error.code, crate::error::ErrorCode::Unauthenticated);
-    assert_eq!(
-        error.wire_code(),
-        crate::error::reasons::CROSS_DOMAIN_REPLAY_REJECTED
-    );
-    assert_eq!(error.http_status(), StatusCode::CONFLICT);
+    assert_eq!(error.wire_code(), "unauthenticated");
+    assert_eq!(error.http_status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(error.message, FEDERATION_AUTH_FAILURE_MESSAGE_FOR_TEST);
 }
 
 #[test]
@@ -495,7 +494,7 @@ fn validate_signature_params_rejects_missing_created() {
     let params = sig_params(&format!(";expires={}", now + 120));
     let err = validate_signature_params(&params, SIG_TEST_DID, "test")
         .expect_err("missing `created` must fail closed");
-    assert!(format!("{err:?}").contains("created"));
+    assert_signature_param_rejection_is_minimal(err);
 }
 
 #[test]
@@ -504,7 +503,7 @@ fn validate_signature_params_rejects_missing_expires() {
     let params = sig_params(&format!(";created={now}"));
     let err = validate_signature_params(&params, SIG_TEST_DID, "test")
         .expect_err("missing `expires` must fail closed");
-    assert!(format!("{err:?}").contains("expires"));
+    assert_signature_param_rejection_is_minimal(err);
 }
 
 #[test]
@@ -512,24 +511,27 @@ fn validate_signature_params_rejects_past_clock_skew() {
     let now = Utc::now().timestamp();
     // created 60s in the past exceeds the ±30s window.
     let params = sig_params(&format!(";created={};expires={}", now - 60, now + 120));
-    validate_signature_params(&params, SIG_TEST_DID, "test")
+    let err = validate_signature_params(&params, SIG_TEST_DID, "test")
         .expect_err("created beyond -30s skew must fail closed");
+    assert_signature_param_rejection_is_minimal(err);
 }
 
 #[test]
 fn validate_signature_params_rejects_future_clock_skew() {
     let now = Utc::now().timestamp();
     let params = sig_params(&format!(";created={};expires={}", now + 60, now + 120));
-    validate_signature_params(&params, SIG_TEST_DID, "test")
+    let err = validate_signature_params(&params, SIG_TEST_DID, "test")
         .expect_err("created beyond +30s skew must fail closed");
+    assert_signature_param_rejection_is_minimal(err);
 }
 
 #[test]
 fn validate_signature_params_rejects_window_over_300s() {
     let now = Utc::now().timestamp();
     let params = sig_params(&format!(";created={now};expires={}", now + 400));
-    validate_signature_params(&params, SIG_TEST_DID, "test")
+    let err = validate_signature_params(&params, SIG_TEST_DID, "test")
         .expect_err("validity window over 300s must fail closed");
+    assert_signature_param_rejection_is_minimal(err);
 }
 
 #[test]
@@ -537,6 +539,14 @@ fn validate_signature_params_rejects_already_expired() {
     let now = Utc::now().timestamp();
     // created within skew but expires already past.
     let params = sig_params(&format!(";created={};expires={}", now - 20, now - 1));
-    validate_signature_params(&params, SIG_TEST_DID, "test")
+    let err = validate_signature_params(&params, SIG_TEST_DID, "test")
         .expect_err("already-expired signature must fail closed");
+    assert_signature_param_rejection_is_minimal(err);
+}
+
+fn assert_signature_param_rejection_is_minimal(err: AppError) {
+    assert_eq!(err.code, crate::error::ErrorCode::Unauthenticated);
+    assert_eq!(err.wire_code(), "unauthenticated");
+    assert_eq!(err.http_status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(err.message, FEDERATION_AUTH_FAILURE_MESSAGE_FOR_TEST);
 }

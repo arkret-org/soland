@@ -63,6 +63,38 @@ struct RawFederationEventsSubmitBody {
     idempotency_key: Option<String>,
 }
 
+const DELIVERY_BINDING_HANDOVER_GRACE_SECONDS: i64 = 86_400;
+
+#[derive(Debug, Clone)]
+struct DeliveryBindingMemberView {
+    member: String,
+    realm_id: String,
+    recipient_service_did: String,
+    membership_event_ref: Option<String>,
+    delivery_binding_frontier_ref: String,
+    updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone)]
+struct DeliveryBindingHandoverEvidence {
+    realm_id: String,
+    actor_id: Did,
+    new_recipient_service_did: Did,
+    handover_frontier: Vec<EventId>,
+    membership_event_ref: Option<String>,
+    delivery_binding_frontier_ref: String,
+    updated_at: DateTime<Utc>,
+    witness: Value,
+}
+
+#[derive(Debug, Clone)]
+enum FederationServiceBindingCheck {
+    Current,
+    Reject(&'static str),
+    Stale(DeliveryBindingHandoverEvidence),
+    HandedOver(DeliveryBindingHandoverEvidence),
+}
+
 impl SubmitOneError {
     pub(in crate::routing) fn new(
         status: StatusCode,
@@ -89,6 +121,22 @@ impl SubmitOneError {
             quarantine_event_id: Some(event_id.into()),
         }
     }
+}
+
+fn realm_already_exists_error() -> SubmitOneError {
+    SubmitOneError::new(
+        StatusCode::CONFLICT,
+        "realm_already_exists",
+        "realm already exists",
+    )
+}
+
+fn persistence_error_is_realm_already_exists(error: &crate::persistence::PersistenceError) -> bool {
+    matches!(
+        error,
+        crate::persistence::PersistenceError::Conflict(message)
+            if message.contains("realm_already_exists")
+    )
 }
 
 impl From<EventValidationError> for SubmitOneError {
@@ -385,11 +433,35 @@ pub(crate) async fn submit_federation_events(
             return;
         }
     }
-    if let Err(reason) =
-        federation_service_binding_current_for_destination(state, &submit.service_binding_ref)
+    match federation_service_binding_current_for_destination(state, &submit.service_binding_ref)
+        .await
     {
-        render_error(res, StatusCode::CONFLICT, reason, reason);
-        return;
+        FederationServiceBindingCheck::Current => {}
+        FederationServiceBindingCheck::Reject(reason) => {
+            render_error(res, StatusCode::CONFLICT, reason, reason);
+            return;
+        }
+        FederationServiceBindingCheck::Stale(evidence) => {
+            res.status_code(StatusCode::CONFLICT);
+            res.render(Json(
+                crate::routing::federation::federation::delivery_binding_stale_response(
+                    &evidence.new_recipient_service_did,
+                    &evidence.actor_id,
+                    &evidence.handover_frontier,
+                    evidence.witness,
+                ),
+            ));
+            return;
+        }
+        FederationServiceBindingCheck::HandedOver(evidence) => {
+            res.status_code(StatusCode::CONFLICT);
+            res.render(Json(
+                crate::routing::federation::federation::delivery_binding_handed_over_response(
+                    &evidence.new_recipient_service_did,
+                ),
+            ));
+            return;
+        }
     }
     let mut accepted = Vec::new();
     let mut duplicate = Vec::new();
@@ -538,32 +610,221 @@ async fn federation_actor_origin_acceptable(
     realm_has_member(state, binding_realm, actor).await
 }
 
-fn federation_service_binding_current_for_destination(
+async fn federation_service_binding_current_for_destination(
     state: &AppState,
     binding: &FederationServiceBindingRef,
-) -> Result<(), &'static str> {
-    let current_frontiers = {
+) -> FederationServiceBindingCheck {
+    let members = {
         let projection = state.projection.lock().expect("projection lock");
         projection
             .members_of_realm(binding.realm_id.as_str())
             .into_iter()
-            .filter(|member| member.delivery_status.as_deref() == Some("routable"))
-            .filter(|member| {
-                member.recipient_service_did.as_deref() == Some(state.config.service_did.as_str())
-            })
-            .filter_map(|member| {
-                member
-                    .delivery_binding_frontier
-                    .as_deref()
-                    .or(member.membership_event_ref.as_deref())
-                    .map(ToOwned::to_owned)
-            })
+            .filter_map(delivery_binding_member_view)
             .collect::<Vec<_>>()
     };
-    federation_delivery_binding_frontier_is_current(
+    let result = federation_service_binding_check_from_members(
+        state.config.service_did.as_str(),
+        now(),
         &binding.delivery_binding_frontier,
-        current_frontiers,
-    )
+        members,
+    );
+    match result {
+        FederationServiceBindingCheck::Stale(mut evidence) => {
+            evidence.witness = delivery_binding_handover_witness(state, &evidence).await;
+            FederationServiceBindingCheck::Stale(evidence)
+        }
+        FederationServiceBindingCheck::HandedOver(mut evidence) => {
+            evidence.witness = delivery_binding_handover_witness(state, &evidence).await;
+            FederationServiceBindingCheck::HandedOver(evidence)
+        }
+        other => other,
+    }
+}
+
+fn delivery_binding_member_view(
+    member: &crate::reducer::SolandMembershipState,
+) -> Option<DeliveryBindingMemberView> {
+    if member.delivery_status.as_deref() != Some("routable") {
+        return None;
+    }
+    let recipient_service_did = member.recipient_service_did.clone()?;
+    let delivery_binding_frontier_ref = member
+        .delivery_binding_frontier
+        .clone()
+        .or_else(|| member.membership_event_ref.clone())?;
+    Some(DeliveryBindingMemberView {
+        member: member.member.clone(),
+        realm_id: member.realm_id.clone(),
+        recipient_service_did,
+        membership_event_ref: member.membership_event_ref.clone(),
+        delivery_binding_frontier_ref,
+        updated_at: member.updated_at,
+    })
+}
+
+fn federation_service_binding_check_from_members(
+    local_service_did: &str,
+    now: DateTime<Utc>,
+    request_frontier: &[EventId],
+    members: Vec<DeliveryBindingMemberView>,
+) -> FederationServiceBindingCheck {
+    let current_local_frontiers = members
+        .iter()
+        .filter(|member| member.recipient_service_did == local_service_did)
+        .map(|member| member.delivery_binding_frontier_ref.clone())
+        .collect::<Vec<_>>();
+    match federation_delivery_binding_frontier_is_current(request_frontier, current_local_frontiers)
+    {
+        Ok(()) => return FederationServiceBindingCheck::Current,
+        Err("schema_violation") => return FederationServiceBindingCheck::Reject("schema_violation"),
+        Err(_) => {}
+    }
+
+    let request_set = request_frontier
+        .iter()
+        .map(|event_id| event_id.as_str().to_owned())
+        .collect::<BTreeSet<_>>();
+    let candidates = members
+        .into_iter()
+        .filter(|member| !request_set.contains(member.delivery_binding_frontier_ref.as_str()))
+        .filter_map(delivery_binding_handover_evidence_from_member)
+        .map(|evidence| {
+            (
+                (
+                    evidence.actor_id.as_str().to_owned(),
+                    evidence.new_recipient_service_did.as_str().to_owned(),
+                    evidence.delivery_binding_frontier_ref.clone(),
+                ),
+                evidence,
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    if candidates.len() != 1 {
+        return FederationServiceBindingCheck::Reject("delivery_binding_stale");
+    }
+    let evidence = candidates
+        .into_values()
+        .next()
+        .expect("one handover evidence candidate");
+    let grace_expired = evidence.new_recipient_service_did.as_str() != local_service_did
+        && now.signed_duration_since(evidence.updated_at)
+            > Duration::seconds(DELIVERY_BINDING_HANDOVER_GRACE_SECONDS);
+    if grace_expired {
+        FederationServiceBindingCheck::HandedOver(evidence)
+    } else {
+        FederationServiceBindingCheck::Stale(evidence)
+    }
+}
+
+fn delivery_binding_handover_evidence_from_member(
+    member: DeliveryBindingMemberView,
+) -> Option<DeliveryBindingHandoverEvidence> {
+    let actor_id = Did::new(member.member.clone()).ok()?;
+    let new_recipient_service_did = Did::new(member.recipient_service_did.clone()).ok()?;
+    let handover_frontier = vec![EventId::new(member.delivery_binding_frontier_ref.clone()).ok()?];
+    Some(DeliveryBindingHandoverEvidence {
+        realm_id: member.realm_id,
+        actor_id,
+        new_recipient_service_did,
+        handover_frontier,
+        membership_event_ref: member.membership_event_ref,
+        delivery_binding_frontier_ref: member.delivery_binding_frontier_ref,
+        updated_at: member.updated_at,
+        witness: Value::Null,
+    })
+}
+
+async fn delivery_binding_handover_witness(
+    state: &AppState,
+    evidence: &DeliveryBindingHandoverEvidence,
+) -> Value {
+    let frontier = evidence
+        .handover_frontier
+        .iter()
+        .map(|event_id| event_id.as_str())
+        .collect::<Vec<_>>();
+    let mut witness = json!({
+        "kind": "member_delivery_binding_projection",
+        "realm_id": evidence.realm_id.as_str(),
+        "actor_id": evidence.actor_id.as_str(),
+        "recipient_service_did": evidence.new_recipient_service_did.as_str(),
+        "delivery_binding_frontier": frontier,
+        "membership_event_ref": evidence.membership_event_ref.as_deref(),
+        "projection_updated_at": evidence.updated_at.to_rfc3339(),
+    });
+
+    if let Some(frontier_event_id) = evidence.handover_frontier.first() {
+        match state.persistence.events().get(frontier_event_id.as_str()).await {
+            Ok(Some(record)) => {
+                if let Some(object) = witness.as_object_mut() {
+                    object.insert(
+                        "event_id".to_owned(),
+                        Value::String(record.event_id.clone()),
+                    );
+                    object.insert(
+                        "event_kind".to_owned(),
+                        Value::String(record.kind.clone()),
+                    );
+                    object.insert(
+                        "event_digest".to_owned(),
+                        Value::String(record.canonical_digest.clone()),
+                    );
+                    object.insert(
+                        "event_received_at".to_owned(),
+                        Value::String(record.received_at.to_rfc3339()),
+                    );
+                }
+            }
+            Ok(None) => {
+                if let Some(object) = witness.as_object_mut() {
+                    object.insert(
+                        "event_lookup".to_owned(),
+                        Value::String("missing".to_owned()),
+                    );
+                }
+            }
+            Err(_) => {
+                if let Some(object) = witness.as_object_mut() {
+                    object.insert(
+                        "event_lookup".to_owned(),
+                        Value::String("unavailable".to_owned()),
+                    );
+                }
+            }
+        }
+    }
+
+    if let (Ok(realm_id), Ok(cell_ref)) = (
+        RealmId::new(evidence.realm_id.clone()),
+        cokret_sdk::CellRef::new(format!(
+            "ck:cell:ck.component.member.state.v1:{}",
+            evidence.actor_id.as_str()
+        )),
+    ) {
+        match state.cell_store.sealed_ops_for_cell(&realm_id, &cell_ref) {
+            Ok(ops) => {
+                let move_ids = ops
+                    .iter()
+                    .map(|op| op.move_id.as_str())
+                    .collect::<Vec<_>>();
+                if let Some(object) = witness.as_object_mut() {
+                    object.insert("sealed_ops_count".to_owned(), json!(ops.len()));
+                    object.insert("sealed_move_ids".to_owned(), json!(move_ids));
+                    object.insert("seal_backed".to_owned(), json!(!ops.is_empty()));
+                }
+            }
+            Err(_) => {
+                if let Some(object) = witness.as_object_mut() {
+                    object.insert(
+                        "seal_lookup".to_owned(),
+                        Value::String("unavailable".to_owned()),
+                    );
+                }
+            }
+        }
+    }
+
+    witness
 }
 
 fn events_submit_status_label(status: EventsSubmitStatus) -> &'static str {
@@ -759,6 +1020,14 @@ pub(in crate::routing) async fn submit_event_value(
             format!("events store unavailable: {error}"),
         )
     })?;
+    if parsed.kind == kinds::CK_REALM_CREATE
+        && existing_records.iter().any(|record| {
+            record.kind == kinds::CK_REALM_CREATE
+                && record.realm_id.as_deref() == Some(parsed.realm_id.as_str())
+        })
+    {
+        return Err(realm_already_exists_error());
+    }
     if let Some(max_seq) = existing_records
         .iter()
         .filter(|record| record.actor_id == parsed.actor_id)
@@ -1158,6 +1427,11 @@ pub(in crate::routing) async fn submit_event_value(
         })
         .await
     {
+        if parsed.kind == kinds::CK_REALM_CREATE
+            && persistence_error_is_realm_already_exists(&error)
+        {
+            return Err(realm_already_exists_error());
+        }
         tracing::error!(%error, "failed to persist canonical event");
         return Err(SubmitOneError::new(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -1529,4 +1803,152 @@ fn typed_frontier_or_fallback(
         typed.push(EventId::new(fallback_event_id.to_owned()).ok()?);
     }
     Some(typed)
+}
+
+#[cfg(test)]
+mod federation_delivery_binding_tests {
+    use super::*;
+
+    fn event_id(suffix: u32) -> EventId {
+        EventId::new(format!(
+            "ck:event:01904100-0000-7000-8000-{suffix:012x}"
+        ))
+        .unwrap()
+    }
+
+    fn member_view(
+        actor: &str,
+        recipient_service_did: &str,
+        frontier: &EventId,
+        updated_at: DateTime<Utc>,
+    ) -> DeliveryBindingMemberView {
+        DeliveryBindingMemberView {
+            member: actor.to_owned(),
+            realm_id: "ck:realm:01904100-0000-7000-8000-000000000001".to_owned(),
+            recipient_service_did: recipient_service_did.to_owned(),
+            membership_event_ref: Some(frontier.as_str().to_owned()),
+            delivery_binding_frontier_ref: frontier.as_str().to_owned(),
+            updated_at,
+        }
+    }
+
+    #[test]
+    fn federation_service_binding_check_accepts_current_local_frontier() {
+        let now = Utc::now();
+        let frontier = event_id(1);
+        let result = federation_service_binding_check_from_members(
+            "did:web:local.example",
+            now,
+            std::slice::from_ref(&frontier),
+            vec![member_view(
+                "did:web:alice.example",
+                "did:web:local.example",
+                &frontier,
+                now,
+            )],
+        );
+
+        assert!(matches!(result, FederationServiceBindingCheck::Current));
+    }
+
+    #[test]
+    fn federation_service_binding_check_rejects_empty_frontier_as_schema_violation() {
+        let now = Utc::now();
+        let result = federation_service_binding_check_from_members(
+            "did:web:local.example",
+            now,
+            &[],
+            vec![member_view(
+                "did:web:alice.example",
+                "did:web:local.example",
+                &event_id(1),
+                now,
+            )],
+        );
+
+        assert!(matches!(
+            result,
+            FederationServiceBindingCheck::Reject("schema_violation")
+        ));
+    }
+
+    #[test]
+    fn federation_service_binding_check_emits_stale_handover_before_grace_expires() {
+        let now = Utc::now();
+        let old_frontier = event_id(1);
+        let new_frontier = event_id(2);
+        let result = federation_service_binding_check_from_members(
+            "did:web:old.example",
+            now,
+            std::slice::from_ref(&old_frontier),
+            vec![member_view(
+                "did:web:alice.example",
+                "did:web:new.example",
+                &new_frontier,
+                now - Duration::seconds(60),
+            )],
+        );
+
+        match result {
+            FederationServiceBindingCheck::Stale(evidence) => {
+                assert_eq!(
+                    evidence.new_recipient_service_did.as_str(),
+                    "did:web:new.example"
+                );
+                assert_eq!(evidence.actor_id.as_str(), "did:web:alice.example");
+                assert_eq!(evidence.handover_frontier, vec![new_frontier]);
+            }
+            other => panic!("expected stale handover evidence, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn federation_service_binding_check_emits_handed_over_after_grace_expires() {
+        let now = Utc::now();
+        let result = federation_service_binding_check_from_members(
+            "did:web:old.example",
+            now,
+            &[event_id(1)],
+            vec![member_view(
+                "did:web:alice.example",
+                "did:web:new.example",
+                &event_id(2),
+                now - Duration::seconds(DELIVERY_BINDING_HANDOVER_GRACE_SECONDS + 1),
+            )],
+        );
+
+        assert!(matches!(
+            result,
+            FederationServiceBindingCheck::HandedOver(_)
+        ));
+    }
+
+    #[test]
+    fn federation_service_binding_check_rejects_ambiguous_handover_targets() {
+        let now = Utc::now();
+        let result = federation_service_binding_check_from_members(
+            "did:web:old.example",
+            now,
+            &[event_id(1)],
+            vec![
+                member_view(
+                    "did:web:alice.example",
+                    "did:web:new.example",
+                    &event_id(2),
+                    now,
+                ),
+                member_view(
+                    "did:web:bob.example",
+                    "did:web:other.example",
+                    &event_id(3),
+                    now,
+                ),
+            ],
+        );
+
+        assert!(matches!(
+            result,
+            FederationServiceBindingCheck::Reject("delivery_binding_stale")
+        ));
+    }
 }

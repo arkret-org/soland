@@ -438,7 +438,9 @@ impl FederationTransactionStore for PgFederationTransactionStore {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(
             "SELECT source_service AS origin, txn_id, destination_service AS destination, \
-             realm_id, content_digest, status, payload AS response, received_at, processed_at \
+             realm_id, content_digest, origin_verification_method, service_binding_ref, \
+             origin_key_state_digest, local_peer_policy_digest, status, payload AS response, \
+             received_at, processed_at \
              FROM federation_transactions WHERE source_service = $1 AND txn_id = $2",
         )
         .bind::<Text, _>(origin)
@@ -458,8 +460,10 @@ impl FederationTransactionStore for PgFederationTransactionStore {
             .map(ids::typed_uuid_part_or_panic);
         let inserted = sql_query(
             "INSERT INTO federation_transactions \
-             (id, txn_id, source_service, destination_service, realm_id, status, content_digest, payload, received_at, processed_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) \
+             (id, txn_id, source_service, destination_service, realm_id, status, \
+              content_digest, origin_verification_method, service_binding_ref, \
+              origin_key_state_digest, local_peer_policy_digest, payload, received_at, processed_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) \
              ON CONFLICT (source_service, txn_id) DO NOTHING",
         )
         .bind::<diesel::sql_types::Uuid, _>(uuid::Uuid::now_v7())
@@ -469,6 +473,10 @@ impl FederationTransactionStore for PgFederationTransactionStore {
         .bind::<Nullable<SqlUuid>, _>(realm_id_uuid)
         .bind::<Text, _>(&record.status)
         .bind::<Text, _>(&record.content_digest)
+        .bind::<Nullable<Text>, _>(&record.origin_verification_method)
+        .bind::<Nullable<Text>, _>(&record.service_binding_ref)
+        .bind::<Nullable<Text>, _>(&record.origin_key_state_digest)
+        .bind::<Nullable<Text>, _>(&record.local_peer_policy_digest)
         .bind::<Jsonb, _>(&record.response)
         .bind::<Timestamptz, _>(record.received_at)
         .bind::<Nullable<Timestamptz>, _>(record.processed_at)
@@ -486,13 +494,19 @@ impl FederationTransactionStore for PgFederationTransactionStore {
             .map(ids::typed_uuid_part_or_panic);
         sql_query(
             "INSERT INTO federation_transactions \
-             (id, txn_id, source_service, destination_service, realm_id, status, content_digest, payload, received_at, processed_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) \
+             (id, txn_id, source_service, destination_service, realm_id, status, \
+              content_digest, origin_verification_method, service_binding_ref, \
+              origin_key_state_digest, local_peer_policy_digest, payload, received_at, processed_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) \
              ON CONFLICT (source_service, txn_id) DO UPDATE SET \
              destination_service = EXCLUDED.destination_service, \
              realm_id = EXCLUDED.realm_id, \
              status = EXCLUDED.status, \
              content_digest = EXCLUDED.content_digest, \
+             origin_verification_method = EXCLUDED.origin_verification_method, \
+             service_binding_ref = EXCLUDED.service_binding_ref, \
+             origin_key_state_digest = EXCLUDED.origin_key_state_digest, \
+             local_peer_policy_digest = EXCLUDED.local_peer_policy_digest, \
              payload = EXCLUDED.payload, \
              received_at = EXCLUDED.received_at, \
              processed_at = EXCLUDED.processed_at",
@@ -504,6 +518,10 @@ impl FederationTransactionStore for PgFederationTransactionStore {
         .bind::<Nullable<SqlUuid>, _>(realm_id_uuid)
         .bind::<Text, _>(&record.status)
         .bind::<Text, _>(&record.content_digest)
+        .bind::<Nullable<Text>, _>(&record.origin_verification_method)
+        .bind::<Nullable<Text>, _>(&record.service_binding_ref)
+        .bind::<Nullable<Text>, _>(&record.origin_key_state_digest)
+        .bind::<Nullable<Text>, _>(&record.local_peer_policy_digest)
         .bind::<Jsonb, _>(&record.response)
         .bind::<Timestamptz, _>(record.received_at)
         .bind::<Nullable<Timestamptz>, _>(record.processed_at)
@@ -516,7 +534,9 @@ impl FederationTransactionStore for PgFederationTransactionStore {
         let mut conn = pg_conn(&self.pool).await?;
         let rows = sql_query(
             "SELECT source_service AS origin, txn_id, destination_service AS destination, \
-             realm_id, content_digest, status, payload AS response, received_at, processed_at \
+             realm_id, content_digest, origin_verification_method, service_binding_ref, \
+             origin_key_state_digest, local_peer_policy_digest, status, payload AS response, \
+             received_at, processed_at \
              FROM federation_transactions ORDER BY received_at ASC, txn_id ASC",
         )
         .load::<FederationTransactionRow>(&mut *conn)
@@ -945,6 +965,14 @@ struct FederationTransactionRow {
     realm_id: Option<Uuid>,
     #[diesel(sql_type = Text)]
     content_digest: String,
+    #[diesel(sql_type = Nullable<Text>)]
+    origin_verification_method: Option<String>,
+    #[diesel(sql_type = Nullable<Text>)]
+    service_binding_ref: Option<String>,
+    #[diesel(sql_type = Nullable<Text>)]
+    origin_key_state_digest: Option<String>,
+    #[diesel(sql_type = Nullable<Text>)]
+    local_peer_policy_digest: Option<String>,
     #[diesel(sql_type = Text)]
     status: String,
     #[diesel(sql_type = Jsonb)]
@@ -966,6 +994,10 @@ impl From<FederationTransactionRow> for FederationTransactionRecord {
                 .as_ref()
                 .map(|u| ids::format_typed_uuid("space", u)),
             content_digest: row.content_digest,
+            origin_verification_method: row.origin_verification_method,
+            service_binding_ref: row.service_binding_ref,
+            origin_key_state_digest: row.origin_key_state_digest,
+            local_peer_policy_digest: row.local_peer_policy_digest,
             status: row.status,
             response: row.response,
             received_at: row.received_at,

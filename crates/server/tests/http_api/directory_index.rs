@@ -174,6 +174,13 @@ async fn directory_product_endpoints_return_demo_projection_shapes() {
             .iter()
             .any(|operation| operation == "ck.find.directory.query.list_handles_for_subject")
     );
+    assert!(
+        !describe["supported_operations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|operation| operation == "ck.find.directory.query.private_contact_discovery")
+    );
 
     let subject_handles: Value =
         TestClient::post("http://server/_cokret/find/directory/list-handles-for-subject")
@@ -347,7 +354,10 @@ async fn directory_demo_projection_rejects_outside_development_mode() {
         ),
         (
             "private-contact-discovery",
-            serde_json::json!({"contacts": [{"handle": "@alice"}]}),
+            serde_json::json!({
+                "requester": "did:web:alice.example",
+                "contacts": [{"handle": "@alice"}]
+            }),
         ),
     ];
 
@@ -377,6 +387,37 @@ async fn directory_demo_projection_rejects_outside_development_mode() {
         let body: Value = response.take_json().await.unwrap();
         assert!(body["organizations"].as_array().unwrap().is_empty());
     }
+}
+
+#[tokio::test]
+async fn private_contact_discovery_rejects_plaintext_identifier_matching() {
+    let service = app();
+    let mut response =
+        TestClient::post("http://server/_cokret/find/directory/private-contact-discovery")
+            .json(&serde_json::json!({
+                "requester": "did:web:alice.example",
+                "contacts": [
+                    {"ref": "did", "identifier": "did:web:alice.example"},
+                    {"ref": "handle", "handle": "@alice"},
+                    {"ref": "email", "identifier": "alice@example.com"},
+                    {"ref": "phone", "identifier": "+15550101010"}
+                ],
+                "privacy_profile": "ck.private_contact_discovery.v1"
+            }))
+            .send(&service)
+            .await;
+
+    assert_eq!(response.status_code.unwrap(), StatusCode::NOT_IMPLEMENTED);
+    let body: Value = response.take_json().await.unwrap();
+    assert_eq!(body["error"]["code"], "unsupported_feature");
+    assert!(
+        body.get("matches").is_none(),
+        "private contact discovery must not return plaintext matches: {body}"
+    );
+    assert!(
+        !body.to_string().contains("did:web:alice.example"),
+        "private contact discovery error must not echo matched account identifiers: {body}"
+    );
 }
 
 #[tokio::test]
@@ -663,7 +704,7 @@ async fn broader_protocol_surface_returns_contract_shapes() {
     let authz: Value = TestClient::post("http://server/_cokret/self/authz/check")
         .json(&serde_json::json!({
             "actor_id": "did:web:alice.example",
-            "action": "realm.read",
+            "action": "ck.strand.read",
             "resource": {"kind": "realm", "realm_id": DEMO_REALM_ID}
         }))
         .send(&app())
@@ -671,12 +712,12 @@ async fn broader_protocol_surface_returns_contract_shapes() {
         .take_json()
         .await
         .unwrap();
-    assert_eq!(authz["allowed"], true);
-    assert_eq!(authz["decision_trace"]["actor_id"], "did:web:alice.example");
-    assert_eq!(authz["decision_trace"]["action"], "realm.read");
-    assert_eq!(authz["decision_trace"]["realm_id"], DEMO_REALM_ID);
-    assert!(authz["decision_trace"]["matched_grants"].is_array());
-    assert_eq!(authz["decision_trace"]["cache"]["mode"], "in_memory");
+    assert_eq!(authz["decision"], "allow");
+    assert!(authz["matched_grants"].is_array());
+    assert_eq!(authz["policy_results"][0]["actor_id"], "did:web:alice.example");
+    assert_eq!(authz["policy_results"][0]["action"], "ck.strand.read");
+    assert_eq!(authz["policy_results"][0]["realm_id"], DEMO_REALM_ID);
+    assert_eq!(authz["policy_results"][0]["cache"]["mode"], "in_memory");
 
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;

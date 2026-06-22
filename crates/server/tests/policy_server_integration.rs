@@ -32,7 +32,9 @@ use ed25519_dalek::{Signer, SigningKey};
 use serde::Serialize;
 use serde_json::Value;
 use soland::authz::obligation_executor::RequestContext;
-use soland::authz::policy_client::{PolicyCheckRequestInput, PolicyClient};
+use soland::authz::policy_client::{
+    PolicyCheckRequestInput, PolicyClient, PolicyFrontierSnapshot,
+};
 use soland::authz::{MergedAuthzDecision, SolandAuthzEngine, check_with_policy_server};
 use soland::reducer::RealmPolicyServerConfig;
 
@@ -63,8 +65,14 @@ fn input(bypass_cache: bool) -> PolicyCheckRequestInput {
         signed_transport: true,
         event_preview: Value::Null,
         auth_context: Value::Null,
+        expected_frontiers: zero_frontiers(),
         bypass_cache,
     }
+}
+
+fn zero_frontiers() -> PolicyFrontierSnapshot {
+    let zero = Hash::new(format!("sha256:{}", "0".repeat(64))).unwrap();
+    PolicyFrontierSnapshot::new(zero.clone(), zero.clone(), zero)
 }
 
 fn policy_signing_key() -> SigningKey {
@@ -113,7 +121,6 @@ fn mock_allow_response(
     signing: &SigningKey,
 ) -> PolicyCheckOutcome {
     let request = wire_request(input);
-    let zero = Hash::new(format!("sha256:{}", "0".repeat(64))).unwrap();
     let now = chrono::Utc::now();
     let expires_at =
         chrono::DateTime::<chrono::Utc>::from_timestamp(now.timestamp() + 60, 0).unwrap();
@@ -128,9 +135,9 @@ fn mock_allow_response(
             policy_server_id: Did::new(POLICY_SERVER_DID).unwrap(),
         },
         freshness_state: FreshnessState::Fresh,
-        auth_state_digest: zero.clone(),
-        policy_frontier_digest: zero.clone(),
-        membership_frontier_digest: zero,
+        auth_state_digest: input.expected_frontiers.auth_state_digest.clone(),
+        policy_frontier_digest: input.expected_frontiers.policy_frontier_digest.clone(),
+        membership_frontier_digest: input.expected_frontiers.membership_frontier_digest.clone(),
         signature: PolicyCheckSignature {
             kid: format!("{POLICY_SERVER_DID}#key-1"),
             sig: String::new(),

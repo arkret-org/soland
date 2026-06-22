@@ -16,98 +16,11 @@ pub(super) async fn private_contact_discovery(
 ) -> JsonResult<DirectoryPrivateContactDiscoveryOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     require_demo_directory_provider(state)?;
-    let session = authenticated_session(state, req).await.ok();
-    let body = body.into_inner();
-    let contacts = body.contacts;
-    let mut visible: Vec<Value> = Vec::new();
-    for actor in demo_actors(state).await {
-        if actor_visible_to(state, &actor, session.as_ref()).await {
-            visible.push(actor);
-        }
-    }
-    // SEC-09 — the probing requester for the (requester, holder) rate limit /
-    // audit dimension. Unauthenticated probes share a single conservative
-    // `anonymous` bucket.
-    let requester = session
-        .as_ref()
-        .map(|s| s.actor.clone())
-        .unwrap_or_else(|| "anonymous".to_owned());
-    let mut matches = Vec::new();
-    // SEC-09 — max client backoff across all rate-limited (requester, holder)
-    // pairs in this batch.
-    let mut retry_after_ms: u64 = 0;
-    for contact in contacts {
-        let needle = contact
-            .get("identifier")
-            .or_else(|| contact.get("handle"))
-            .or_else(|| contact.get("did"))
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_ascii_lowercase();
-        if needle.is_empty() {
-            continue;
-        }
-        if let Some(actor) = visible.iter().find(|actor| {
-            actor
-                .get("did")
-                .and_then(Value::as_str)
-                .is_some_and(|did| did.eq_ignore_ascii_case(&needle))
-                || actor
-                    .get("handle")
-                    .and_then(Value::as_str)
-                    .is_some_and(|handle| handle.eq_ignore_ascii_case(&needle))
-        }) {
-            let holder = actor
-                .get("did")
-                .and_then(Value::as_str)
-                .unwrap_or(&needle)
-                .to_owned();
-            // SEC-09 — rate-limit this (requester, holder) probe and record it
-            // in the holder-auditable access log so the holder can later detect
-            // repeated probing.
-            let outcome = state.record_psi_probe(&requester, &holder);
-            append_audit_log(
-                state,
-                Some(&holder),
-                "psi_contact_discovery_probe",
-                json!({
-                    "requester": requester,
-                    "probe_count": outcome.count,
-                    "rate_limited": outcome.rate_limited,
-                }),
-                if outcome.rate_limited {
-                    "rate_limited"
-                } else {
-                    "ok"
-                },
-            )
-            .await;
-            // SEC-09 — once a pair exceeds the window cap, withhold the fresh
-            // match result (so high-frequency probing cannot read the holder's
-            // hit-bit flip timing) and surface a backoff.
-            if outcome.rate_limited {
-                retry_after_ms = retry_after_ms.max(outcome.retry_after_ms.max(0) as u64);
-                continue;
-            }
-            matches.push(json!({
-                "contact_ref": contact.get("ref").cloned().unwrap_or(Value::Null),
-                "did": actor.get("did").cloned().unwrap_or(Value::Null),
-                "handle": actor.get("handle").cloned().unwrap_or(Value::Null),
-                "proof": {
-                    "type": "directory_private_contact_discovery_dev",
-                    // SEC-09 — coarse hit bucket: the moment a holder's
-                    // reachability bit flipped is floored to PSI_HIT_BUCKET_SECS
-                    // rather than exposed at second resolution.
-                    "issued_at": AppState::psi_bucket_timestamp(now()),
-                }
-            }));
-        }
-    }
-    json_ok(DirectoryPrivateContactDiscoveryOutcome {
-        matches,
-        proofs: Vec::new(),
-        retry_after_ms: (retry_after_ms > 0).then_some(retry_after_ms),
-    })
+    let _ = authenticated_session(state, req).await.ok();
+    let _ = body.into_inner();
+    Err(AppError::unsupported_feature(
+        "private contact discovery requires ck.private_contact_discovery.v1 two-round VOPRF set-membership PSI; plaintext identifier matching is disabled",
+    ))
 }
 
 #[endpoint(
@@ -218,11 +131,6 @@ pub(super) fn directory_resource_kind_str(kind: DirectoryResourceKind) -> &'stat
         DirectoryResourceKind::Handle => "handle",
     }
 }
-
-// ── Helpers shared with the rest of `crate::routing` ───────────────────────
-//
-// These remain public for sibling routing modules that share directory
-// authorization and visibility checks.
 
 pub async fn has_accepted_contact(state: &AppState, left: &str, right: &str) -> bool {
     state
