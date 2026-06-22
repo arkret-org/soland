@@ -23,6 +23,7 @@ use super::device_messages::{
 };
 use super::{AuthArgs, now};
 use crate::error::AppError;
+use crate::persistence::AgentStore;
 use crate::state::{AccountDataRecord, AppState};
 use crate::{JsonResult, json_ok};
 
@@ -164,6 +165,17 @@ fn account_data_update_type(data_type: &str) -> &'static str {
     }
 }
 
+async fn session_actor_is_agent_runtime(
+    agent_store: &dyn AgentStore,
+    actor: &str,
+) -> Result<bool, AppError> {
+    agent_store
+        .get(actor)
+        .await
+        .map(|record| record.is_some())
+        .map_err(|error| AppError::internal(format!("agent principal lookup failed: {error}")))
+}
+
 #[endpoint(
     operation_id = "ck.self.account_data.resource.replace",
     tags("account_data"),
@@ -185,17 +197,11 @@ async fn put_account_data(
     validate_data_type(&data_type)?;
     validate_registered_account_data_key(&data_type)?;
 
-    // CKP-0008 / CKP-0009 — enforce controller-only writes on the
-    // registered personal-agent account-data types.
-    // TODO(P2-impl): replace the `did:web:agent.` heuristic with a proper
-    // controller-vs-agent classifier sourced from the agent_principal
-    // projection (the bearer session record carries the actor DID; once
-    // the projection lands we can ask the projection "is this session an
-    // agent runtime acting on behalf of a controller?" instead).
+    // CKP-0008 / CKP-0009: registered personal-agent account-data types are
+    // controller-private; native agent principals cannot write them directly.
     if let Some(spec) = registered_account_data_type(&data_type) {
         if spec.controller_private
-            && (session.actor.starts_with("did:web:agent.")
-                || session.actor.starts_with("did:agent:"))
+            && session_actor_is_agent_runtime(state.persistence.agents(), &session.actor).await?
         {
             return Err(AppError::capability_denied(format!(
                 "{} is controller-private; agent runtimes cannot write it",
@@ -380,6 +386,7 @@ mod tests {
     use serde_json::{Value, json};
 
     use super::*;
+    use crate::persistence::{PersistenceStore, SolandMemoryPersistenceStore};
 
     fn encrypted_envelope() -> Value {
         json!({
@@ -473,5 +480,40 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.to_string().contains("plaintext"));
+    }
+
+    #[tokio::test]
+    async fn controller_private_writer_classifier_uses_agent_principal_projection() {
+        let store = SolandMemoryPersistenceStore::new();
+        let agent_principal_id = "did:web:agent.alice.example";
+
+        assert!(
+            !session_actor_is_agent_runtime(store.agents(), agent_principal_id)
+                .await
+                .unwrap()
+        );
+
+        store
+            .agents()
+            .put(json!({
+                "agent_principal_id": agent_principal_id,
+                "controller_did": "did:web:alice.example",
+                "agent_id": "ck:agent:0196419b-0000-7000-8000-000000000001",
+                "display_name": "Alice Assistant",
+                "state": "active"
+            }))
+            .await
+            .unwrap();
+
+        assert!(
+            session_actor_is_agent_runtime(store.agents(), agent_principal_id)
+                .await
+                .unwrap()
+        );
+        assert!(
+            !session_actor_is_agent_runtime(store.agents(), "did:web:alice.example")
+                .await
+                .unwrap()
+        );
     }
 }

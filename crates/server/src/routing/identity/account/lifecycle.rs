@@ -185,14 +185,8 @@ pub(crate) async fn set_account_lifecycle_state(
     if validate_did(changed_by).is_err() {
         return Err(AppError::invalid_param("invalid state-change actor DID"));
     }
-    if !matches!(
-        next_state,
-        "active" | "locked" | "suspended" | "deactivated"
-    ) {
-        return Err(AppError::invalid_param(
-            "state must be active, locked, suspended, or deactivated",
-        ));
-    }
+    let next_status = parse_account_lifecycle_target_state(next_state)?;
+    let next_state = next_status.as_str();
     if state
         .persistence
         .accounts()
@@ -308,6 +302,20 @@ pub(crate) async fn set_account_lifecycle_state(
         identity_link_cache_invalidated,
         capability_cache_invalidated,
     })
+}
+
+fn parse_account_lifecycle_target_state(next_state: &str) -> Result<AccountStatus, AppError> {
+    let Some(status) = AccountStatus::from_wire(next_state) else {
+        return Err(AppError::invalid_param(
+            "state must be active, soft_logged_out, locked, suspended, or deactivated",
+        ));
+    };
+    if matches!(status, AccountStatus::ErasurePending) {
+        return Err(AppError::invalid_param(
+            "erasure_pending must use the account erasure flow",
+        ));
+    }
+    Ok(status)
 }
 
 #[derive(Default)]
@@ -1155,4 +1163,27 @@ fn short_actor_tag(did: &str) -> String {
     use sha2::{Digest as _, Sha256};
     let digest = Sha256::digest(did.as_bytes());
     digest.iter().take(4).map(|b| format!("{b:02x}")).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lifecycle_target_accepts_soft_logged_out() {
+        assert_eq!(
+            parse_account_lifecycle_target_state("soft_logged_out").unwrap(),
+            AccountStatus::SoftLoggedOut
+        );
+    }
+
+    #[test]
+    fn lifecycle_target_rejects_erasure_pending() {
+        assert!(parse_account_lifecycle_target_state("erasure_pending").is_err());
+    }
+
+    #[test]
+    fn lifecycle_target_rejects_unknown_state() {
+        assert!(parse_account_lifecycle_target_state("pending_deletion").is_err());
+    }
 }

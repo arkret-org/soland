@@ -108,6 +108,7 @@ fn circle_view_from_with_pending(
             .as_ref()
             .map(|floor| parse_sdk_field::<EncryptionFloor>("metadata_encryption_floor", floor))
             .transpose()?,
+        agent_participation: None,
         encryption_profile: parse_sdk_field("encryption_profile", &c.encryption_profile)?,
         mls_group_ref: c.mls_group_ref.clone(),
         pending_mls_removals,

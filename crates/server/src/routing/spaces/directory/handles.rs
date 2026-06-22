@@ -385,12 +385,12 @@ pub(super) async fn signed_handle_claim(
     }
     let service_did = state.config.service_did.clone();
     let default_domain = service_handle_domain(&service_did);
-    let canonical_handle = canonicalize_handle_for_service(handle, &default_domain)
+    let lookup = handle_lookup(handle, &default_domain)
         .ok_or_else(|| AppError::invalid_param("handle must be canonicalizable"))?;
-    let (localpart, handle_domain) = canonical_handle
-        .split_once(':')
-        .ok_or_else(|| AppError::invalid_param("handle must be canonical <localpart>:<domain>"))?;
-    require_holder_also_known_as(state, did, &canonical_handle, handle_domain).await?;
+    let canonical_handle = lookup.canonical;
+    let localpart = lookup.localpart;
+    let handle_domain = lookup.authority;
+    require_holder_also_known_as(state, did, &canonical_handle, &handle_domain).await?;
     let handle = SdkHandle::parse(&canonical_handle).map_err(|err| {
         AppError::internal(format!("handle claim handle construction failed: {err}"))
     })?;
@@ -768,5 +768,34 @@ pub(super) fn primary_handle_from_subject_claims(claims: &[Value]) -> Option<Str
         handles.into_iter().next()
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn handle_lookup_preserves_colon_authority() {
+        let lookup = handle_lookup("Alice:Remote.Example", "local.example").unwrap();
+        assert_eq!(lookup.canonical, "alice:remote.example");
+        assert_eq!(lookup.localpart, "alice");
+        assert_eq!(lookup.authority, "remote.example");
+    }
+
+    #[test]
+    fn handle_lookup_preserves_acct_authority() {
+        let lookup = handle_lookup("acct:Alice@Remote.Example", "local.example").unwrap();
+        assert_eq!(lookup.canonical, "alice:remote.example");
+        assert_eq!(lookup.localpart, "alice");
+        assert_eq!(lookup.authority, "remote.example");
+    }
+
+    #[test]
+    fn handle_lookup_uses_default_domain_only_for_bare_localpart() {
+        let lookup = handle_lookup("@Alice", "local.example").unwrap();
+        assert_eq!(lookup.canonical, "alice:local.example");
+        assert_eq!(lookup.localpart, "alice");
+        assert_eq!(lookup.authority, "local.example");
     }
 }
