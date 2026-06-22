@@ -42,6 +42,20 @@ mod invite_create_schema_tests {
         let mut payload = invite_payload();
         payload["event_id"] = json!("ck:event:01904100-0000-7000-8000-000000000701");
         payload["sender"] = json!("did:web:alice.example");
+        payload["hlc"] = json!("2026-06-14T10:00:00Z/node/1");
+        payload["seal_ref"] = json!(
+            "ck:seal:sha256:1111111111111111111111111111111111111111111111111111111111111111"
+        );
+        let operation = op(payload);
+
+        assert!(validate_operation_schema(&operation, schema).is_ok());
+    }
+
+    #[test]
+    fn invite_create_accepts_spec_reason_field() {
+        let schema = operation_schema_for_kind(kinds::CK_INVITE_CREATE).unwrap();
+        let mut payload = invite_payload();
+        payload["reason"] = json!("review_accept");
         let operation = op(payload);
 
         assert!(validate_operation_schema(&operation, schema).is_ok());

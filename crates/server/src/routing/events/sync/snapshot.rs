@@ -95,6 +95,8 @@ pub(crate) async fn build_sync_snapshot(
     let mut timeline_positions = BTreeMap::new();
     let mut account_positions = BTreeMap::new();
     let is_incremental = body.after.is_some();
+    let (invite_notifications, invite_positions) =
+        pending_invite_notification_delta(state, session, after_cursor, is_incremental).await;
     for (realm_id, title, summary, tags, category, members) in visible_realms {
         let strand =
             strand_projection_for_realm(state, &realm_id, &title, summary.as_deref()).await;
@@ -216,6 +218,7 @@ pub(crate) async fn build_sync_snapshot(
         );
     }
     drop(projection);
+    merge_account_position_max(&mut account_positions, invite_positions);
 
     let mut to_device_position = after_cursor.to_device_position;
     let mut to_device_ack_token = None;
@@ -331,9 +334,123 @@ pub(crate) async fn build_sync_snapshot(
         device_lists,
         account_data,
         presence,
-        notifications: serde_json::Value::Null,
+        notifications: notifications_delta_value(invite_notifications),
         partial: false,
     }
+}
+
+fn merge_account_position_max(
+    account_positions: &mut BTreeMap<String, i64>,
+    incoming: BTreeMap<String, i64>,
+) {
+    for (realm_id, position) in incoming {
+        account_positions
+            .entry(realm_id)
+            .and_modify(|current| *current = (*current).max(position))
+            .or_insert(position);
+    }
+}
+
+fn notifications_delta_value(events: Vec<Value>) -> Value {
+    if events.is_empty() {
+        Value::Null
+    } else {
+        json!({ "events": events })
+    }
+}
+
+pub(crate) async fn pending_invite_notification_delta(
+    state: &AppState,
+    session: Option<&SessionRecord>,
+    after_cursor: &SyncCursor,
+    is_incremental: bool,
+) -> (Vec<Value>, BTreeMap<String, i64>) {
+    let Some(session) = session else {
+        return (Vec::new(), BTreeMap::new());
+    };
+    let now = now();
+    let mut positions: BTreeMap<String, i64> = BTreeMap::new();
+    let mut notifications = Vec::new();
+    for invite in state
+        .persistence
+        .realm_invites()
+        .snapshot_all()
+        .await
+        .unwrap_or_default()
+    {
+        if !matches!(invite.status.as_str(), "pending" | "claimed")
+            || invite.invitee.as_deref() != Some(session.actor.as_str())
+            || invite
+                .expires_at
+                .is_some_and(|expires_at| expires_at <= now)
+        {
+            continue;
+        }
+        let position = invite_projection_position(&invite);
+        positions
+            .entry(invite.realm_id.clone())
+            .and_modify(|current| *current = (*current).max(position))
+            .or_insert(position);
+        if is_incremental
+            && after_cursor
+                .account_positions
+                .get(&invite.realm_id)
+                .is_some_and(|after| position <= *after)
+        {
+            continue;
+        }
+        notifications.push(invite_notification_value(&invite));
+    }
+    notifications.sort_by(|left, right| {
+        let left_timestamp = left
+            .get("timestamp")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let right_timestamp = right
+            .get("timestamp")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        left_timestamp.cmp(right_timestamp).then_with(|| {
+            left.get("invite_id")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .cmp(
+                    right
+                        .get("invite_id")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default(),
+                )
+        })
+    });
+    (notifications, positions)
+}
+
+fn invite_projection_position(invite: &crate::state::RealmInviteRecord) -> i64 {
+    timestamp_position_with_tie_breaker(
+        invite.updated_at.unwrap_or(invite.created_at),
+        &invite.invite_id,
+    )
+}
+
+fn invite_notification_value(invite: &crate::state::RealmInviteRecord) -> Value {
+    let timestamp = invite
+        .updated_at
+        .unwrap_or(invite.created_at)
+        .to_rfc3339_opts(SecondsFormat::Millis, true);
+    json!({
+        "notification_id": format!("invite:{}", invite.invite_id),
+        "invite_id": invite.invite_id,
+        "notification_kind": "invite",
+        "notification_type": "invite",
+        "kind": "invite",
+        "title": "Realm invite",
+        "body": "You were invited to join a Realm.",
+        "realm_id": invite.realm_id,
+        "inviter": invite.inviter,
+        "timestamp": timestamp,
+        "created_at": invite.created_at,
+        "read": false,
+    })
 }
 
 /// SYNC-MEM-1..4 + ROST-SOL-1..3 (cokret-spec @ b56cab1) — build the

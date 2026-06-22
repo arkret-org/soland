@@ -1,5 +1,4 @@
 use cokret_sdk::Operation;
-use cokret_sdk::schema::event_payload_validator_catalog;
 use serde_json::Value;
 
 use super::*;
@@ -48,8 +47,7 @@ pub(crate) fn validate_invite_create_payload(operation: &Operation) -> Result<()
     if cokret_sdk::canonical::validate_timestamp_canonical(expires_at).is_err() {
         return Err("expires_at must be a canonical timestamp");
     }
-    event_payload_validator_catalog()
-        .validate_payload(kinds::CK_INVITE_CREATE, &wire_payload)
+    cokret_sdk::InviteCreatePayload::from_wire_value(&wire_payload)
         .map_err(|_| "operation payload violates SDK artifact schema")?;
     Ok(())
 }
@@ -59,6 +57,11 @@ fn invite_create_wire_payload(payload: &Value) -> Value {
     if let Some(object) = wire_payload.as_object_mut() {
         object.remove("event_id");
         object.remove("sender");
+        object.remove("hlc");
+        object.remove("executed_by");
+        object.remove("authorization_ref");
+        object.remove("seal_ref");
+        object.remove("seal_basis");
     }
     wire_payload
 }
@@ -76,7 +79,8 @@ fn validate_invite_create_known_fields(payload: &Value) -> Result<(), &'static s
             | "invitee"
             | "invite_delivery_target"
             | "introduction_evidence_digest"
-            | "expires_at" => {}
+            | "expires_at"
+            | "reason" => {}
             "inviter" => {
                 return Err(
                     "ck.invite.create payload must not carry inviter; use envelope.actor_id",

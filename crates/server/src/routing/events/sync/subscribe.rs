@@ -258,7 +258,14 @@ pub(super) async fn account_subscribe(depot: &mut Depot, req: &mut Request, res:
                             // For non-event notifications (epoch/frontier/etc.)
                             // we still rebuild so the client picks up control
                             // state on its next delta if it surfaces there.
-                            if !realm_id_accessible(&state, &notification.realm_id, session.as_ref()).await {
+                            if !account_subscribe_notification_should_wake(
+                                &state,
+                                &notification,
+                                session.as_ref(),
+                                &after_cursor,
+                            )
+                            .await
+                            {
                                 continue;
                             }
                             // SOL-02-005 debounce: drain notifications that
@@ -367,6 +374,39 @@ fn delta_is_empty(response: &cokret_sdk::models::SyncOutcome) -> bool {
         && response.to_device.is_empty()
         && response.to_device_lost != Some(true)
         && response.presence.is_empty()
+        && notifications_delta_is_empty(&response.notifications)
+}
+
+async fn account_subscribe_notification_should_wake(
+    state: &AppState,
+    notification: &crate::state::EventNotification,
+    session: Option<&SessionRecord>,
+    after_cursor: &SyncCursor,
+) -> bool {
+    if realm_id_accessible(state, &notification.realm_id, session).await {
+        return true;
+    }
+    let (invite_notifications, _) =
+        pending_invite_notification_delta(state, session, after_cursor, true).await;
+    invite_notifications.iter().any(|invite| {
+        invite
+            .get("realm_id")
+            .and_then(Value::as_str)
+            .is_some_and(|realm_id| realm_id == notification.realm_id)
+    })
+}
+
+fn notifications_delta_is_empty(value: &Value) -> bool {
+    if value.is_null() {
+        return true;
+    }
+    if let Some(events) = value.get("events").and_then(Value::as_array) {
+        return events.is_empty();
+    }
+    if let Some(items) = value.get("items").and_then(Value::as_array) {
+        return items.is_empty();
+    }
+    value.as_array().is_some_and(Vec::is_empty)
 }
 
 fn account_subscribe_query(req: &mut Request) -> SyncRequestBody {
