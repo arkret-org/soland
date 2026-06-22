@@ -888,6 +888,18 @@ pub(crate) async fn validate_event_envelope(
             reason,
         ));
     }
+    let realm_frozen = state
+        .projection
+        .lock()
+        .expect("projection lock")
+        .realm_is_frozen_at(&realm_id, chrono::Utc::now());
+    if let Some(reason) = frozen_realm_check(realm_frozen, &kind) {
+        return Err(event_validation_error(
+            StatusCode::FORBIDDEN,
+            cokret_sdk::ERROR_CODE_REALM_FROZEN,
+            reason,
+        ));
+    }
     // Spec realm-and-space.md §2.6 — `ck.realm.create` is the genesis
     // event for both the Realm metadata cell AND the creator's first
     // member-state cell. The reducer MUST treat `created_by`

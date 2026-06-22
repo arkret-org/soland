@@ -148,6 +148,27 @@ pub fn terminal_realm_check(
     None
 }
 
+fn frozen_realm_write_exempt(kind: &str) -> bool {
+    crate::kinds::is_audit_kind(kind)
+        || matches!(
+            kind,
+            crate::kinds::CK_REALM_ARCHIVE
+                | crate::kinds::CK_REALM_FREEZE
+                | crate::kinds::CK_REALM_TOMBSTONE
+                | crate::kinds::CK_REALM_DESTROY
+        )
+}
+
+/// Reject ordinary writes on a Realm with the reversible `ck.realm.freeze`
+/// facet set. Lifecycle/admin escape hatches remain admissible so an
+/// authorized actor can unfreeze, tombstone, or destroy the Realm.
+pub fn frozen_realm_check(realm_frozen: bool, kind: &str) -> Option<&'static str> {
+    if realm_frozen && !frozen_realm_write_exempt(kind) {
+        return Some("Realm is frozen; ordinary writes are not accepted");
+    }
+    None
+}
+
 pub(super) fn policy_components_value_from_state_payload(payload: &Value) -> &Value {
     payload.get("value").unwrap_or(payload)
 }

@@ -52,6 +52,15 @@ fn terminal_realm_blocks_non_audit_kind() {
 }
 
 #[test]
+fn frozen_realm_blocks_ordinary_write_but_allows_lifecycle_escape() {
+    assert!(frozen_realm_check(true, "ck.message.create").is_some());
+    assert!(frozen_realm_check(true, crate::kinds::CK_REALM_FREEZE).is_none());
+    assert!(frozen_realm_check(true, crate::kinds::CK_REALM_DESTROY).is_none());
+    assert!(frozen_realm_check(true, "ck.audit.accessed").is_none());
+    assert!(frozen_realm_check(false, "ck.message.create").is_none());
+}
+
+#[test]
 fn cross_signing_reset_replay_rejects_wrong_trust_domain() {
     let payload = json!({
         "trust_domain": "ck:trust_domain:other.example",

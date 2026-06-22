@@ -52,6 +52,15 @@ pub fn operation_policy_reason_code(message: &str) -> (salvo::http::StatusCode, 
                 _ => "capability_denied",
             },
         )
+    } else if message == "sidecar_create_denied" {
+        (salvo::http::StatusCode::FORBIDDEN, "sidecar_create_denied")
+    } else if message == "realm_terminal_state" {
+        (salvo::http::StatusCode::FORBIDDEN, "realm_terminal_state")
+    } else if message == cokret_sdk::ERROR_CODE_REALM_FROZEN {
+        (
+            salvo::http::StatusCode::FORBIDDEN,
+            cokret_sdk::ERROR_CODE_REALM_FROZEN,
+        )
     } else if matches!(
         message,
         "history_sharing_policy_missing"
@@ -85,6 +94,7 @@ pub async fn validate_operation_policy(
     operations: &[Operation],
 ) -> Result<(), &'static str> {
     for operation in operations {
+        validate_realm_lifecycle_write_gate(state, operation)?;
         if kinds::operation_is_message_create(operation)
             && !message_operation_is_encrypted(operation)
             && known_realm_denies_plaintext_service(state, operation.realm_id.as_str()).await
@@ -122,6 +132,7 @@ pub async fn validate_operation_policy(
             )?;
         }
         validate_direct_conversation_realm_policy(state, operation)?;
+        validate_circle_create_policy(state, operation).await?;
         validate_member_state_policy(state, operation).await?;
         validate_circle_scope_membership(state, operation)?;
         validate_pin_scope_safety(state, operation)?;
@@ -141,6 +152,187 @@ pub async fn validate_operation_policy(
         validate_disappearing_message_policy(state, operation)?;
     }
     Ok(())
+}
+
+fn realm_frozen_operation_exempt(kind: &str) -> bool {
+    kinds::is_audit_kind(kind)
+        || matches!(
+            kind,
+            kinds::CK_REALM_ARCHIVE
+                | kinds::CK_REALM_FREEZE
+                | kinds::CK_REALM_TOMBSTONE
+                | kinds::CK_REALM_DESTROY
+        )
+}
+
+fn validate_realm_lifecycle_write_gate(
+    state: &AppState,
+    operation: &Operation,
+) -> Result<(), &'static str> {
+    let kind = kinds::canonical_kind_string(operation);
+    let realm_id = operation.realm_id.as_str();
+    let projection = state
+        .projection
+        .lock()
+        .map_err(|_| "projection_unavailable")?;
+    if projection.realm_is_in_terminal_state(realm_id) && !kinds::is_audit_kind(&kind) {
+        return Err("realm_terminal_state");
+    }
+    if projection.realm_is_frozen_at(realm_id, chrono::Utc::now())
+        && !realm_frozen_operation_exempt(&kind)
+    {
+        return Err(cokret_sdk::ERROR_CODE_REALM_FROZEN);
+    }
+    Ok(())
+}
+
+async fn validate_circle_create_policy(
+    state: &AppState,
+    operation: &Operation,
+) -> Result<(), &'static str> {
+    if kinds::canonical_kind_for_operation(operation) != Some(kinds::CK_CIRCLE_CREATE) {
+        return Ok(());
+    }
+    if payload_asserts_agent_sidecar_ensure(&operation.payload) {
+        let Some(actor) = operation_actor(operation) else {
+            return Err("sidecar_create_denied");
+        };
+        if !sidecar_circle_create_shape_is_constrained(&operation.payload, operation, actor) {
+            return Err("sidecar_create_denied");
+        }
+        let realm_id = operation.realm_id.as_str();
+        let (owner, members) = realm_owner_and_members(state, realm_id).await;
+        let verdict = state.authz.check(
+            actor,
+            cokret_sdk::CAP_ACTION_AGENT_SIDECAR_THREAD_ENSURE,
+            realm_id,
+            realm_id,
+            owner.as_deref(),
+            &members,
+            &[],
+        );
+        if verdict.allowed
+            || members.iter().any(|member| member == actor)
+            || policy_realm_member_joined(state, realm_id, actor)
+        {
+            return Ok(());
+        }
+        return Err("sidecar_create_denied");
+    }
+    let Some(actor) = operation_actor(operation) else {
+        return Ok(());
+    };
+    let realm_id = operation.realm_id.as_str();
+    let (owner, members) = realm_owner_and_members(state, realm_id).await;
+    if state
+        .authz
+        .check(
+            actor,
+            cokret_sdk::CAP_ACTION_CIRCLE_CREATE,
+            realm_id,
+            realm_id,
+            owner.as_deref(),
+            &members,
+            &[],
+        )
+        .allowed
+    {
+        return Ok(());
+    }
+    Err("missing_capability")
+}
+
+fn policy_realm_member_joined(state: &AppState, realm_id: &str, actor: &str) -> bool {
+    state
+        .projection
+        .lock()
+        .ok()
+        .and_then(|projection| {
+            projection
+                .member(realm_id, actor)
+                .map(|membership| membership.state == "join")
+        })
+        .unwrap_or(false)
+}
+
+fn payload_asserts_agent_sidecar_ensure(payload: &Value) -> bool {
+    let profile_matches = payload.get("profile").and_then(Value::as_str).or_else(|| {
+        payload
+            .get("object")
+            .and_then(|object| object.get("sidecar_profile"))
+            .and_then(Value::as_str)
+    }) == Some(cokret_sdk::PROFILE_AGENT_SIDECAR_THREAD);
+    if !profile_matches {
+        return false;
+    }
+    if payload
+        .get("sidecar_ensure_capability_verified")
+        .and_then(Value::as_bool)
+        == Some(true)
+    {
+        return true;
+    }
+    payload
+        .get("actor_capability")
+        .and_then(Value::as_object)
+        .is_some_and(|cap| {
+            cap.get("action").and_then(Value::as_str)
+                == Some(cokret_sdk::CAP_ACTION_AGENT_SIDECAR_THREAD_ENSURE)
+                && cap.get("allowed").and_then(Value::as_bool) == Some(true)
+        })
+}
+
+fn sidecar_circle_create_shape_is_constrained(
+    payload: &Value,
+    operation: &Operation,
+    actor: &str,
+) -> bool {
+    let Some(object) = payload.get("object").and_then(Value::as_object) else {
+        return false;
+    };
+    let realm_id = operation.realm_id.as_str();
+    let controller = object
+        .get("controller_principal_id")
+        .and_then(Value::as_str)
+        .unwrap_or(actor);
+    if controller != actor {
+        return false;
+    }
+    if object.get("realm_id").and_then(Value::as_str) != Some(realm_id) {
+        return false;
+    }
+    if object.get("created_by").and_then(Value::as_str) != Some(actor) {
+        return false;
+    }
+    if object.get("sidecar_profile").and_then(Value::as_str)
+        != Some(cokret_sdk::PROFILE_AGENT_SIDECAR_THREAD)
+    {
+        return false;
+    }
+    if object.get("directory_visibility").and_then(Value::as_str) != Some("members") {
+        return false;
+    }
+    if object.get("join_rule").and_then(Value::as_str) != Some("invite") {
+        return false;
+    }
+    if object.get("history_visibility").and_then(Value::as_str) != Some("joined") {
+        return false;
+    }
+    let expected_key = cokret_sdk::agent_sidecar_circle_key(realm_id, actor);
+    if object
+        .get("controller_agent_circle_key")
+        .and_then(Value::as_str)
+        != Some(expected_key.as_str())
+    {
+        return false;
+    }
+    let expected_short_name = cokret_sdk::agent_sidecar_short_name(&expected_key);
+    object.get("title").and_then(Value::as_str) == Some(expected_short_name.as_str())
+        && object
+            .get("display")
+            .and_then(|display| display.get("short_name"))
+            .and_then(Value::as_str)
+            == Some(expected_short_name.as_str())
 }
 
 async fn validate_agent_interop_session_writer_policy(
@@ -2112,4 +2304,60 @@ fn active_direct_conversation_binding_for_realm(
         .values()
         .find(|binding| binding.state == "active" && binding.realm_id == realm_id)
         .cloned()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn circle_create_with_payload(payload: Value) -> Operation {
+        Operation::create(
+            cokret_sdk::OperationId::new("ck:operation:01964137-0000-7000-8000-000000000040")
+                .unwrap(),
+            cokret_sdk::RealmId::new("ck:realm:01964137-0000-7000-8000-000000000030").unwrap(),
+            kinds::CK_CIRCLE_CREATE,
+            payload,
+        )
+    }
+
+    #[test]
+    fn sidecar_circle_create_shape_requires_derived_short_name() {
+        let actor = "did:web:example.com:users:alice";
+        let realm_id = "ck:realm:01964137-0000-7000-8000-000000000030";
+        let key = cokret_sdk::agent_sidecar_circle_key(realm_id, actor);
+        let short_name = cokret_sdk::agent_sidecar_short_name(&key);
+        let valid_payload = serde_json::json!({
+            "profile": cokret_sdk::PROFILE_AGENT_SIDECAR_THREAD,
+            "sidecar_ensure_capability_verified": true,
+            "object": {
+                "id": "ck:circle:01964137-0000-7000-8000-000000000041",
+                "realm_id": realm_id,
+                "title": short_name,
+                "display": { "short_name": short_name },
+                "directory_visibility": "members",
+                "join_rule": "invite",
+                "history_visibility": "joined",
+                "sidecar_profile": cokret_sdk::PROFILE_AGENT_SIDECAR_THREAD,
+                "created_by": actor,
+                "controller_principal_id": actor,
+                "controller_agent_circle_key": key,
+            },
+        });
+        let op = circle_create_with_payload(valid_payload.clone());
+        assert!(payload_asserts_agent_sidecar_ensure(&valid_payload));
+        assert!(sidecar_circle_create_shape_is_constrained(
+            &valid_payload,
+            &op,
+            actor
+        ));
+
+        let mut invalid_payload = valid_payload;
+        invalid_payload["object"]["title"] = Value::String("general".to_owned());
+        let invalid_op = circle_create_with_payload(invalid_payload.clone());
+        assert!(!sidecar_circle_create_shape_is_constrained(
+            &invalid_payload,
+            &invalid_op,
+            actor
+        ));
+    }
 }

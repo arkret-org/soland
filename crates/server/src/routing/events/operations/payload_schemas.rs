@@ -178,6 +178,11 @@ pub(crate) const REALM_ARCHIVE_REQUIREMENTS: &[PayloadRequirement] =
         "archived",
         "ck.realm.archive operation requires archived",
     )];
+pub(crate) const REALM_FREEZE_REQUIREMENTS: &[PayloadRequirement] =
+    &[PayloadRequirement::Required(
+        "frozen",
+        "ck.realm.freeze operation requires frozen",
+    )];
 pub(crate) const REALM_TERMINAL_REQUIREMENTS: &[PayloadRequirement] = &[];
 pub(crate) const REALM_MODERATION_POLICY_REQUIREMENTS: &[PayloadRequirement] = &[];
 pub(crate) const REALM_POLICY_VALUE_REQUIREMENTS: &[PayloadRequirement] =

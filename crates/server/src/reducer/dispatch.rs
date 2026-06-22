@@ -201,6 +201,13 @@ fn apply_realm_archive_dispatch(
 ) -> ProjectionEffect {
     s.apply_realm_lifecycle(op, op.created_at, crate::kinds::CK_REALM_ARCHIVE)
 }
+fn apply_realm_freeze_dispatch(
+    s: &mut ProjectionState,
+    op: &Operation,
+    _hlc: &ServerHlc,
+) -> ProjectionEffect {
+    s.apply_realm_lifecycle(op, op.created_at, crate::kinds::CK_REALM_FREEZE)
+}
 fn apply_realm_tombstone_dispatch(
     s: &mut ProjectionState,
     op: &Operation,
@@ -863,6 +870,7 @@ pub fn default_apply_registry() -> std::collections::HashMap<&'static str, Apply
     m.insert(CK_REALM_CREATE, apply_realm_create_dispatch);
     m.insert(CK_REALM_UPDATE, apply_realm_update_dispatch);
     m.insert(CK_REALM_ARCHIVE, apply_realm_archive_dispatch);
+    m.insert(CK_REALM_FREEZE, apply_realm_freeze_dispatch);
     m.insert(CK_REALM_TOMBSTONE, apply_realm_tombstone_dispatch);
     m.insert(CK_REALM_DESTROY, apply_realm_destroy_dispatch);
     // COT-06-004 — Realm default-Strand pointer.

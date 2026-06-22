@@ -347,6 +347,103 @@ fn realm_destroy_writes_destroy_cell_and_marks_cache_deleted() {
     assert!(realm.deleted);
 }
 
+#[test]
+fn realm_tombstone_writes_tombstone_cell_and_successor() {
+    use cokret_sdk::lattice::CellState;
+    use serde_json::Value;
+
+    let mut state = ProjectionState::new();
+    let hlc = ServerHlc::new("test");
+    let realm_id = "ck:realm:01904100-0000-7000-8000-cfc039892036";
+    let successor = "ck:realm:01904100-0000-7000-8000-cfc039892037";
+    state.apply(
+        &make_operation(
+            crate::kinds::CK_REALM_CREATE,
+            realm_id,
+            serde_json::json!({"action": "create", "owner": "did:web:alice"}),
+        ),
+        &hlc,
+    );
+    state.apply(
+        &make_operation(
+            crate::kinds::CK_REALM_TOMBSTONE,
+            realm_id,
+            serde_json::json!({
+                "reason": "migrated",
+                "successor_realm_id": successor
+            }),
+        ),
+        &hlc,
+    );
+
+    let tombstone_cell = cokret_sdk::CellRef::new(format!(
+        "ck:cell:ck.component.realm.tombstone.v1:{realm_id}"
+    ))
+    .unwrap();
+    assert!(matches!(
+        state.cells.get(&tombstone_cell),
+        Some(CellState::Value(value))
+            if value.get("successor_realm_id").and_then(Value::as_str) == Some(successor)
+    ));
+    assert!(state.realm_is_tombstoned(realm_id));
+    assert!(state.realm_is_in_terminal_state(realm_id));
+    assert!(!state.realm_is_destroyed(realm_id));
+}
+
+#[test]
+fn realm_freeze_writes_freeze_cell_and_blocks_until_expiry() {
+    use cokret_sdk::lattice::CellState;
+    use serde_json::Value;
+
+    let mut state = ProjectionState::new();
+    let hlc = ServerHlc::new("test");
+    let realm_id = "ck:realm:01904100-0000-7000-8000-cfc039892036";
+    state.apply(
+        &make_operation(
+            crate::kinds::CK_REALM_CREATE,
+            realm_id,
+            serde_json::json!({"action": "create", "owner": "did:web:alice"}),
+        ),
+        &hlc,
+    );
+    state.apply(
+        &make_operation(
+            crate::kinds::CK_REALM_FREEZE,
+            realm_id,
+            serde_json::json!({
+                "frozen": true,
+                "reason": "incident hold",
+                "freeze_expires_at": "2026-06-22T10:00:00Z"
+            }),
+        ),
+        &hlc,
+    );
+
+    let cell_id =
+        cokret_sdk::CellRef::new(format!("ck:cell:ck.component.realm.freeze.v1:{realm_id}"))
+            .unwrap();
+    assert!(matches!(
+        state.cells.get(&cell_id),
+        Some(CellState::Value(value)) if value.get("frozen").and_then(Value::as_bool) == Some(true)
+    ));
+    assert!(
+        state.realm_is_frozen_at(
+            realm_id,
+            chrono::DateTime::parse_from_rfc3339("2026-06-22T09:59:59Z")
+                .unwrap()
+                .with_timezone(&chrono::Utc)
+        )
+    );
+    assert!(
+        !state.realm_is_frozen_at(
+            realm_id,
+            chrono::DateTime::parse_from_rfc3339("2026-06-22T10:00:00Z")
+                .unwrap()
+                .with_timezone(&chrono::Utc)
+        )
+    );
+}
+
 /// Stream-F (Wave 2C) — `ck.audit.erasure_receipt` reducer pass
 /// extracts `scope.realm_id`, seeds an empty `peer_status` map,
 /// and stamps `fanout_status = "pending"`. The federation outbox

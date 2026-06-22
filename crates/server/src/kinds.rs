@@ -99,12 +99,11 @@ pub const CK_REALM_SET_DEFAULT_STRAND: &str = "ck.realm.set_default_strand";
 // dispatch lives in `reducer::apply_member_identity_update`; persistence
 // is in `state::MemberIdentityRegistry`.
 // Realm security-boundary lifecycle (`ck.realm.*`). Spec
-// `cokret-spec/spec/v1/zh/models/realm-and-space.md` §1 + §4.
+// `cokret-spec/spec/v1/zh/models/realm-and-space.md` §2.6.
 //
-// `ck.realm.tombstone` is the irreversible terminal-state event that
-// freezes the Realm and triggers the erasure-receipt fanout chain via
-// `ck.audit.erasure_receipt`. Distinct from `ck.realm.destroy`, which
-// is the GDPR-grade hard-delete request that retains a `retained_stub_digest`.
+// `ck.realm.freeze` is reversible read-only hold. `ck.realm.tombstone` is a
+// terminal migration to a successor Realm. `ck.realm.destroy` is terminal
+// no-successor retirement ("dissolve/close Realm" at product level).
 pub use cokret_sdk::events::kinds::{
     ACCOUNT_DATA_SET as CK_ACCOUNT_DATA_SET, CONTAINER_MOVE_ITEM as CK_CONTAINER_MOVE_ITEM,
     CONTAINER_REBALANCE as CK_CONTAINER_REBALANCE, INVITE_ACCEPT as CK_INVITE_ACCEPT,
@@ -117,6 +116,7 @@ pub use cokret_sdk::events::kinds::{
     READ_CURSOR_ADVANCE as CK_READ_MARKER, REALM_ARCHIVE as CK_REALM_ARCHIVE,
     REALM_ASSET_PRIVACY_POLICY as CK_REALM_ASSET_PRIVACY_POLICY, REALM_CREATE as CK_REALM_CREATE,
     REALM_DESTROY as CK_REALM_DESTROY, REALM_DISAPPEARING_POLICY as CK_REALM_DISAPPEARING_POLICY,
+    REALM_FREEZE as CK_REALM_FREEZE,
     REALM_HISTORY_SHARING_POLICY as CK_REALM_HISTORY_SHARING_POLICY,
     REALM_HISTORY_VISIBILITY as CK_REALM_HISTORY_VISIBILITY, REALM_KEY_SHARE as CK_REALM_KEY_SHARE,
     REALM_MEDIA_SERVICE as CK_REALM_MEDIA_SERVICE,
@@ -428,10 +428,11 @@ fn canonical_registered_kind(object_type: &str) -> Option<&str> {
         CK_INVITE_REVOKE => Some(CK_INVITE_REVOKE),
         CK_INVITE_THIRD_PARTY => Some(CK_INVITE_THIRD_PARTY),
         CK_READ_MARKER => Some(CK_READ_MARKER),
-        CK_REALM_CREATE | CK_REALM_UPDATE | CK_REALM_ARCHIVE | CK_REALM_DESTROY
-        | CK_REALM_TOMBSTONE => Some(match object_type {
+        CK_REALM_CREATE | CK_REALM_UPDATE | CK_REALM_ARCHIVE | CK_REALM_FREEZE
+        | CK_REALM_DESTROY | CK_REALM_TOMBSTONE => Some(match object_type {
             CK_REALM_CREATE => CK_REALM_CREATE,
             CK_REALM_ARCHIVE => CK_REALM_ARCHIVE,
+            CK_REALM_FREEZE => CK_REALM_FREEZE,
             CK_REALM_DESTROY => CK_REALM_DESTROY,
             CK_REALM_TOMBSTONE => CK_REALM_TOMBSTONE,
             _ => CK_REALM_UPDATE,
@@ -643,6 +644,7 @@ pub fn is_realm_lifecycle_kind(kind: &str) -> bool {
         CK_REALM_CREATE
             | CK_REALM_UPDATE
             | CK_REALM_ARCHIVE
+            | CK_REALM_FREEZE
             | CK_REALM_DESTROY
             | CK_REALM_TOMBSTONE
     )

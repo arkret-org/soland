@@ -338,6 +338,9 @@ impl ProjectionState {
                 owner: None,
                 title: None,
                 deleted: false,
+                archived: false,
+                frozen: false,
+                freeze_expires_at: None,
                 created_at: now,
                 updated_at: now,
                 trust_domain: None,
@@ -568,6 +571,9 @@ impl ProjectionState {
                         owner: None,
                         title: Some(title.to_owned()),
                         deleted: false,
+                        archived: false,
+                        frozen: false,
+                        freeze_expires_at: None,
                         created_at: now,
                         updated_at: now,
                         trust_domain: None,
@@ -616,6 +622,7 @@ impl ProjectionState {
                 crate::kinds::CK_REALM_CREATE
                     | crate::kinds::CK_REALM_UPDATE
                     | crate::kinds::CK_REALM_ARCHIVE
+                    | crate::kinds::CK_REALM_FREEZE
                     | crate::kinds::CK_REALM_TOMBSTONE
                     | crate::kinds::CK_REALM_DESTROY
             ),
@@ -629,15 +636,13 @@ impl ProjectionState {
         //   ck.realm.create     → ck.component.realm.create.v1  (ordered-log, singleton)
         //   ck.realm.update     → ck.component.realm.organization.v1 (cas-register, singleton)
         //   ck.realm.archive    → ck.component.realm.archive.v1 (cas-register, singleton)
-        //   ck.realm.tombstone  → ck.component.realm.destroy.v1 (cas-register, singleton)
+        //   ck.realm.freeze     → ck.component.realm.freeze.v1 (cas-register, singleton)
+        //   ck.realm.tombstone  → ck.component.realm.tombstone.v1 (cas-register, singleton)
         //   ck.realm.destroy    → ck.component.realm.destroy.v1 (cas-register, singleton)
         //
-        // Stream-F (Wave 1B): tombstone and destroy write the SAME cell
-        // family — both are terminal — but with different value shapes
-        // distinguished by the `terminal_kind` field and the presence
-        // (or absence) of `successor_realm_id`. Bottom = reject; a
-        // second terminal-state write rejects with
-        // `realm_already_terminal`.
+        // Stream-F (Wave 1B): tombstone and destroy are both terminal but
+        // write distinct cell families. Bottom = reject; a second
+        // terminal-state write rejects with `realm_already_terminal`.
         let payload_object = operation.payload.get("object").and_then(Value::as_object);
         let realm_id = operation.realm_id.to_string();
         let owner = operation
@@ -852,6 +857,9 @@ impl ProjectionState {
                 owner: owner.clone(),
                 title: title.clone(),
                 deleted: false,
+                archived: false,
+                frozen: false,
+                freeze_expires_at: None,
                 created_at: now,
                 updated_at: now,
                 trust_domain: payload_trust_domain.clone(),
@@ -879,6 +887,24 @@ impl ProjectionState {
         } else if kind == crate::kinds::CK_REALM_DESTROY {
             realm.terminal_state = Some("destroyed".to_owned());
             realm.successor_realm_id = None;
+        } else if kind == crate::kinds::CK_REALM_ARCHIVE {
+            realm.archived = operation
+                .payload
+                .get("archived")
+                .and_then(Value::as_bool)
+                .unwrap_or(true);
+        } else if kind == crate::kinds::CK_REALM_FREEZE {
+            realm.frozen = operation
+                .payload
+                .get("frozen")
+                .and_then(Value::as_bool)
+                .unwrap_or(true);
+            realm.freeze_expires_at = operation
+                .payload
+                .get("freeze_expires_at")
+                .and_then(Value::as_str)
+                .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+                .map(|value| value.with_timezone(&chrono::Utc));
         }
         if owner.is_some() {
             realm.owner.clone_from(&owner);
@@ -981,19 +1007,46 @@ impl ProjectionState {
                         .insert(cell_id, CellState::Value(Value::Object(value)));
                 }
             }
-            k if k == crate::kinds::CK_REALM_TOMBSTONE => {
-                // Stream-F (Wave 1B): tombstone writes the same cell
-                // family as destroy but with `terminal_kind=tombstoned`
-                // + `successor_realm_id` so peers hydrating from cells
-                // alone can distinguish the two terminal flavours.
-                // Bottom = reject (the structured-cache preflight above
-                // mirrors that).
+            k if k == crate::kinds::CK_REALM_FREEZE => {
                 if let Ok(cell_id) = cokret_sdk::CellRef::new(format!(
-                    "ck:cell:ck.component.realm.destroy.v1:{realm_id}"
+                    "ck:cell:ck.component.realm.freeze.v1:{realm_id}"
+                )) {
+                    let mut value = serde_json::Map::new();
+                    value.insert(
+                        "frozen".to_owned(),
+                        operation
+                            .payload
+                            .get("frozen")
+                            .cloned()
+                            .unwrap_or(Value::Bool(true)),
+                    );
+                    if let Some(reason) = operation.payload.get("reason").cloned() {
+                        value.insert("reason".to_owned(), reason);
+                    }
+                    if let Some(freeze_expires_at) =
+                        operation.payload.get("freeze_expires_at").cloned()
+                    {
+                        value.insert("freeze_expires_at".to_owned(), freeze_expires_at);
+                    }
+                    value.insert("updated_at".to_owned(), Value::String(utc_timestamp_z(now)));
+                    value.insert(
+                        "operation_id".to_owned(),
+                        Value::String(operation.operation_id.as_str().to_owned()),
+                    );
+                    self.cells
+                        .insert(cell_id, CellState::Value(Value::Object(value)));
+                }
+            }
+            k if k == crate::kinds::CK_REALM_TOMBSTONE => {
+                // Stream-F (Wave 1B): tombstone writes its own terminal
+                // cell with `successor_realm_id` so peers hydrating from
+                // cells alone can distinguish migration from destroy.
+                if let Ok(cell_id) = cokret_sdk::CellRef::new(format!(
+                    "ck:cell:ck.component.realm.tombstone.v1:{realm_id}"
                 )) {
                     let value = serde_json::json!({
                         "terminal_kind": "tombstoned",
-                        "destroyed": true,
+                        "tombstoned": true,
                         "successor_realm_id": payload_successor_realm_id,
                         "at": now.to_rfc3339(),
                         "operation_id": operation.operation_id.as_str(),

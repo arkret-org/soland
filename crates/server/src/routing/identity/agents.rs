@@ -27,6 +27,8 @@
 //! audit-log row matching the canonical event-kind name so the existing admin /
 //! federation projections stay in sync ahead of the reducer rewrite.
 
+use std::collections::BTreeSet;
+
 use chrono::SecondsFormat;
 use cokret_sdk::models::{
     AgentDeactivateRequestBody, AgentGrantAttachOutcome, AgentGrantAttachRequestBody,
@@ -35,20 +37,23 @@ use cokret_sdk::models::{
     AgentParticipationOutcome as AgentParticipationResBody, AgentParticipationScope,
     AgentParticipationSetRequestBody as AgentParticipationSetReqBody, AgentPauseRequestBody,
     AgentProvisionOutcome, AgentProvisionRequestBody, AgentResumeRequestBody,
-    AgentRotateKeyOutcome, AgentRotateKeyRequestBody, AgentSidecarExposureAck,
-    AgentSidecarThreadEnsureOutcome, AgentSidecarThreadEnsureRequestBody, AgentView,
-    effective_participation, validate_agent_slug, validate_selection_within_ceiling,
+    AgentRotateKeyOutcome, AgentRotateKeyRequestBody, AgentSidecarContextRef,
+    AgentSidecarExposureAck, AgentSidecarThreadEnsureOutcome, AgentSidecarThreadEnsureRequestBody,
+    AgentView, effective_participation, validate_agent_slug, validate_selection_within_ceiling,
 };
-use cokret_sdk::{EventId, GrantId};
+use cokret_sdk::{
+    CircleId, Did, EventId, GrantId, Operation, OperationId, RealmId, RelationId, StrandId,
+};
 use salvo::http::StatusCode;
 use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
 use serde_json::{Value, json};
 
 use super::{AuthArgs, append_audit_log, now, validate_did};
-use crate::error::AppError;
+use crate::error::{AppError, ErrorCode};
 use crate::ids;
 use crate::result::{JsonResult, json_ok};
+use crate::routing::accept_local_operations;
 use crate::state::{AppState, SessionRecord};
 
 mod dev_fanout;
@@ -168,7 +173,7 @@ fn ensure_sidecar_controller_request(
     session: &SessionRecord,
 ) -> Result<(), AppError> {
     if body.controller_principal_id.as_str() != session.actor.as_str() {
-        return Err(AppError::capability_denied(
+        return Err(sidecar_create_denied(
             "sidecar controller_principal_id must match the authenticated session",
         ));
     }
@@ -1290,6 +1295,615 @@ async fn detach_agent_grant(
     })
 }
 
+const SIDECAR_CREATE_DENIED: &str = "sidecar_create_denied";
+const ADDRESSED_AGENT_NOT_ELIGIBLE: &str = "addressed_agent_not_eligible";
+const CONTROLLER_IN_ADDRESSED_AGENTS: &str = "controller_in_addressed_agents";
+
+fn sidecar_create_denied(message: impl Into<String>) -> AppError {
+    AppError::capability_denied(message).with_wire_code(SIDECAR_CREATE_DENIED)
+}
+
+fn sidecar_failed_precondition(reason: &'static str, message: impl Into<String>) -> AppError {
+    AppError::new(ErrorCode::FailedPrecondition, message.into())
+        .with_status(StatusCode::PRECONDITION_FAILED)
+        .with_wire_code(reason)
+}
+
+fn sidecar_reducer_reject_to_app_error(reason: &'static str) -> AppError {
+    AppError::new(
+        ErrorCode::FailedPrecondition,
+        format!("agent sidecar reducer rejected: {reason}"),
+    )
+    .with_status(StatusCode::PRECONDITION_FAILED)
+    .with_wire_code(reason)
+}
+
+async fn authorize_sidecar_ensure(
+    state: &AppState,
+    controller: &str,
+    realm_id: &str,
+) -> Result<(), AppError> {
+    let owner = state
+        .persistence
+        .realm_meta()
+        .get(realm_id)
+        .await
+        .ok()
+        .flatten()
+        .map(|meta| meta.owner);
+    let members = realm_members_for_authz(state, realm_id);
+    let verdict = state.authz.check(
+        controller,
+        cokret_sdk::CAP_ACTION_AGENT_SIDECAR_THREAD_ENSURE,
+        realm_id,
+        realm_id,
+        owner.as_deref(),
+        &members,
+        &[],
+    );
+    if verdict.allowed {
+        return Ok(());
+    }
+    if matches!(
+        verdict.reason.as_str(),
+        "explicit_deny" | "quarantine" | "require_review" | "constraints_not_satisfied"
+    ) {
+        return Err(sidecar_create_denied(
+            "ck.self.agent.sidecar_thread.command.ensure denied by policy",
+        ));
+    }
+    if realm_member_joined(state, realm_id, controller) {
+        return Ok(());
+    }
+    Err(sidecar_create_denied(
+        "ck.self.agent.sidecar_thread.command.ensure requires a Realm member controller",
+    ))
+}
+
+fn realm_members_for_authz(state: &AppState, realm_id: &str) -> Vec<String> {
+    state
+        .realms
+        .lock()
+        .ok()
+        .and_then(|realms| {
+            RealmId::new(realm_id.to_owned())
+                .ok()
+                .and_then(|id| realms.get(&id).cloned())
+        })
+        .map(|realm| {
+            realm
+                .members
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default()
+}
+
+fn realm_member_joined(state: &AppState, realm_id: &str, actor: &str) -> bool {
+    let in_realm_directory = state
+        .realms
+        .lock()
+        .ok()
+        .and_then(|realms| {
+            RealmId::new(realm_id.to_owned())
+                .ok()
+                .and_then(|id| realms.get(&id).cloned())
+        })
+        .and_then(|realm| {
+            Did::new(actor.to_owned())
+                .ok()
+                .map(|did| realm.members.contains(&did))
+        })
+        .unwrap_or(false);
+    if in_realm_directory {
+        return true;
+    }
+    state
+        .projection
+        .lock()
+        .ok()
+        .and_then(|projection| {
+            projection
+                .member(realm_id, actor)
+                .map(|membership| membership.state == "join")
+        })
+        .unwrap_or(false)
+}
+
+fn normalize_sidecar_context_ref(context_ref: &AgentSidecarContextRef) -> Result<Value, AppError> {
+    let has_strand = context_ref.strand_id.is_some();
+    let has_relation = context_ref.relation_id.is_some();
+    if has_relation
+        && (has_strand || context_ref.message_id.is_some() || context_ref.track_name.is_some())
+    {
+        return Err(AppError::invalid_param(
+            "context_ref with relation_id must not include strand_id, message_id, or track_name",
+        ));
+    }
+    if !has_relation && !has_strand {
+        return Err(AppError::invalid_param(
+            "context_ref must include either strand_id or relation_id",
+        ));
+    }
+    if context_ref.message_id.is_some() && !has_strand {
+        return Err(AppError::invalid_param(
+            "context_ref.message_id requires strand_id",
+        ));
+    }
+    serde_json::to_value(context_ref)
+        .map_err(|err| AppError::internal(format!("context_ref serialization failed: {err}")))
+}
+
+fn sidecar_context_target_ref(context_ref: &AgentSidecarContextRef) -> String {
+    if let Some(relation_id) = &context_ref.relation_id {
+        return relation_id.to_string();
+    }
+    if let Some(message_id) = &context_ref.message_id {
+        return message_id.to_string();
+    }
+    context_ref
+        .strand_id
+        .as_ref()
+        .expect("context_ref validated")
+        .to_string()
+}
+
+fn validate_sidecar_context_projection(
+    state: &AppState,
+    context_ref: &AgentSidecarContextRef,
+) -> Result<(), AppError> {
+    let projection = state
+        .projection
+        .lock()
+        .map_err(|_| AppError::internal("projection lock poisoned"))?;
+    let realm_id = context_ref.realm_id.as_str();
+    if let Some(relation_id) = &context_ref.relation_id {
+        let relation = projection
+            .relations
+            .get(relation_id.as_str())
+            .ok_or_else(|| AppError::not_found("context_ref.relation_id not found"))?;
+        if relation.realm_id != realm_id {
+            return Err(sidecar_failed_precondition(
+                "context_ref_realm_mismatch",
+                "context_ref.relation_id belongs to another Realm",
+            ));
+        }
+        if relation.state != "active" {
+            return Err(sidecar_failed_precondition(
+                "relation_not_active",
+                "context_ref.relation_id is not active",
+            ));
+        }
+        return Ok(());
+    }
+    let Some(strand_id) = &context_ref.strand_id else {
+        return Err(AppError::invalid_param(
+            "context_ref must include strand_id or relation_id",
+        ));
+    };
+    let strand = projection
+        .strands
+        .get(strand_id.as_str())
+        .ok_or_else(|| AppError::not_found("context_ref.strand_id not found"))?;
+    if strand.realm_id != realm_id {
+        return Err(sidecar_failed_precondition(
+            "context_ref_realm_mismatch",
+            "context_ref.strand_id belongs to another Realm",
+        ));
+    }
+    if let Some(message_id) = &context_ref.message_id {
+        let message = projection
+            .messages
+            .get(message_id.as_str())
+            .ok_or_else(|| AppError::not_found("context_ref.message_id not found"))?;
+        if message.realm_id != realm_id || message.thread_id != strand_id.as_str() {
+            return Err(sidecar_failed_precondition(
+                "context_ref_realm_mismatch",
+                "context_ref.message_id does not belong to the referenced Strand",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn normalize_addressed_agents(
+    controller: &str,
+    body: &AgentSidecarThreadEnsureRequestBody,
+) -> Result<Vec<String>, AppError> {
+    let mut seen = BTreeSet::new();
+    let mut out = Vec::new();
+    for agent in &body.addressed_agent_principal_ids {
+        let agent = agent.as_str().trim();
+        if agent == controller {
+            return Err(sidecar_failed_precondition(
+                CONTROLLER_IN_ADDRESSED_AGENTS,
+                "addressed_agent_principal_ids must not contain the controller",
+            ));
+        }
+        if seen.insert(agent.to_owned()) {
+            out.push(agent.to_owned());
+        }
+    }
+    Ok(out)
+}
+
+async fn eligible_sidecar_agents(
+    state: &AppState,
+    realm_id: &str,
+    controller: &str,
+    addressed_agents: &[String],
+) -> Result<Vec<String>, AppError> {
+    let records = state
+        .persistence
+        .agents()
+        .list_for_controller(controller)
+        .await
+        .map_err(|err| AppError::internal(format!("agent list failed: {err}")))?;
+    let mut eligible = BTreeSet::new();
+    for record in records {
+        if let Some(agent_id) = record.get("agent_principal_id").and_then(Value::as_str)
+            && agent_record_is_sidecar_eligible(state, realm_id, controller, &record)
+        {
+            eligible.insert(agent_id.to_owned());
+        }
+    }
+    for addressed in addressed_agents {
+        if !eligible.contains(addressed) {
+            return Err(sidecar_failed_precondition(
+                ADDRESSED_AGENT_NOT_ELIGIBLE,
+                "addressed agent is not eligible for this sidecar Realm",
+            ));
+        }
+    }
+    Ok(eligible.into_iter().collect())
+}
+
+fn agent_record_is_sidecar_eligible(
+    state: &AppState,
+    realm_id: &str,
+    controller: &str,
+    record: &Value,
+) -> bool {
+    let Some(agent_id) = record.get("agent_principal_id").and_then(Value::as_str) else {
+        return false;
+    };
+    if record.get("controller_did").and_then(Value::as_str) != Some(controller) {
+        return false;
+    }
+    if record
+        .get("state")
+        .and_then(Value::as_str)
+        .is_some_and(|state| state != "active")
+    {
+        return false;
+    }
+    if !realm_member_joined(state, realm_id, agent_id) {
+        return false;
+    }
+    state.projection.lock().ok().is_some_and(|projection| {
+        !matches!(
+            projection.agent_lifecycles.get(agent_id),
+            Some(AgentLifecycleState::Paused | AgentLifecycleState::Deactivated)
+        ) && projection.agent_has_authorized_key(agent_id)
+    })
+}
+
+fn controller_agent_circle_key(realm_id: &str, controller: &str) -> String {
+    cokret_sdk::agent_sidecar_circle_key(realm_id, controller)
+}
+
+fn sidecar_short_name(controller_agent_circle_key: &str) -> String {
+    cokret_sdk::agent_sidecar_short_name(controller_agent_circle_key)
+}
+
+fn find_sidecar_circle(
+    state: &AppState,
+    realm_id: &str,
+    controller: &str,
+    short_name: &str,
+) -> Option<CircleId> {
+    let projection = state.projection.lock().ok()?;
+    projection
+        .circles
+        .values()
+        .find(|circle| {
+            circle.realm_id == realm_id
+                && circle.created_by == controller
+                && circle.title == short_name
+                && circle.directory_visibility == "members"
+                && circle.state == crate::reducer::CircleLifecycleState::Active
+        })
+        .and_then(|circle| CircleId::new(circle.circle_id.clone()).ok())
+}
+
+fn sidecar_actor_capability(circle_id: Option<&str>) -> Value {
+    let mut value = json!({
+        "action": cokret_sdk::CAP_ACTION_AGENT_SIDECAR_THREAD_ENSURE,
+        "allowed": true,
+    });
+    if let Some(circle_id) = circle_id
+        && let Some(object) = value.as_object_mut()
+    {
+        object.insert("circle_id".to_owned(), Value::String(circle_id.to_owned()));
+    }
+    value
+}
+
+fn new_sidecar_operation(
+    realm_id: &RealmId,
+    kind: &'static str,
+    payload: Value,
+) -> Result<Operation, AppError> {
+    let operation_id = OperationId::new(ids::generate_operation_id())
+        .map_err(|err| AppError::internal(format!("generated operation id invalid: {err}")))?;
+    Ok(Operation::create(
+        operation_id,
+        realm_id.clone(),
+        kind,
+        payload,
+    ))
+}
+
+async fn ensure_sidecar_circle(
+    state: &AppState,
+    controller: &str,
+    realm_id: &RealmId,
+    controller_agent_circle_key: &str,
+    short_name: &str,
+) -> Result<CircleId, AppError> {
+    if let Some(circle_id) = find_sidecar_circle(state, realm_id.as_str(), controller, short_name) {
+        return Ok(circle_id);
+    }
+    let circle_id = CircleId::new(ids::generate_circle_id())
+        .map_err(|err| AppError::internal(format!("generated circle id invalid: {err}")))?;
+    let object = json!({
+        "id": circle_id,
+        "realm_id": realm_id,
+        "title": short_name,
+        "summary": "Controller-private AI sidecar scope",
+        "display": {
+            "short_name": short_name,
+        },
+        "directory_visibility": "members",
+        "join_rule": "invite",
+        "history_visibility": "joined",
+        "content_encryption_floor": "e2ee_required",
+        "metadata_encryption_floor": "e2ee_required",
+        "encryption_profile": "mls_rfc9420",
+        "created_by": controller,
+        "sidecar_profile": cokret_sdk::PROFILE_AGENT_SIDECAR_THREAD,
+        "controller_principal_id": controller,
+        "controller_agent_circle_key": controller_agent_circle_key,
+    });
+    let payload = json!({
+        "object": object,
+        "sender": controller,
+        "profile": cokret_sdk::PROFILE_AGENT_SIDECAR_THREAD,
+        "sidecar_ensure_capability_verified": true,
+        "actor_capability": sidecar_actor_capability(None),
+    });
+    let operation = new_sidecar_operation(realm_id, crate::kinds::CK_CIRCLE_CREATE, payload)?;
+    accept_local_operations(state, controller, std::slice::from_ref(&operation))
+        .await
+        .map_err(sidecar_reducer_reject_to_app_error)?;
+    find_sidecar_circle(state, realm_id.as_str(), controller, short_name)
+        .ok_or_else(|| AppError::internal("sidecar Circle accepted but not projected"))
+}
+
+fn circle_has_member(state: &AppState, circle_id: &str, actor: &str) -> bool {
+    state
+        .projection
+        .lock()
+        .ok()
+        .and_then(|projection| {
+            projection
+                .circles
+                .get(circle_id)
+                .map(|circle| circle.members.contains(actor))
+        })
+        .unwrap_or(false)
+}
+
+async fn ensure_sidecar_member(
+    state: &AppState,
+    controller: &str,
+    realm_id: &RealmId,
+    circle_id: &CircleId,
+    actor: &str,
+) -> Result<(), AppError> {
+    if circle_has_member(state, circle_id.as_str(), actor) {
+        return Ok(());
+    }
+    let payload = json!({
+        "circle_id": circle_id,
+        "actor": actor,
+        "actor_id": actor,
+        "membership": "join",
+        "sender": controller,
+        "manage_capability_verified": true,
+        "profile": cokret_sdk::PROFILE_AGENT_SIDECAR_THREAD,
+        "sidecar_ensure_capability_verified": true,
+        "actor_capability": {
+            "action": "ck.circle.member.manage",
+            "circle_id": circle_id,
+            "allowed": true,
+        },
+    });
+    let operation = new_sidecar_operation(realm_id, crate::kinds::CK_CIRCLE_MEMBER_STATE, payload)?;
+    accept_local_operations(state, controller, std::slice::from_ref(&operation))
+        .await
+        .map_err(sidecar_reducer_reject_to_app_error)
+}
+
+fn find_sidecar_strand(
+    state: &AppState,
+    realm_id: &str,
+    controller: &str,
+    circle_id: &str,
+    normalized_context_ref_digest: &str,
+) -> Option<StrandId> {
+    let projection = state.projection.lock().ok()?;
+    projection
+        .strands
+        .values()
+        .find(|strand| {
+            strand.realm_id == realm_id
+                && strand.scope_circle_id.as_deref() == Some(circle_id)
+                && strand.fields.get("sidecar_profile").and_then(Value::as_str)
+                    == Some(cokret_sdk::PROFILE_AGENT_SIDECAR_THREAD)
+                && strand
+                    .fields
+                    .get("controller_principal_id")
+                    .and_then(Value::as_str)
+                    == Some(controller)
+                && strand
+                    .fields
+                    .get("normalized_context_ref_digest")
+                    .and_then(Value::as_str)
+                    == Some(normalized_context_ref_digest)
+        })
+        .and_then(|strand| StrandId::new(strand.strand_id.clone()).ok())
+}
+
+async fn ensure_sidecar_strand(
+    state: &AppState,
+    controller: &str,
+    realm_id: &RealmId,
+    circle_id: &CircleId,
+    normalized_context_ref: &Value,
+    normalized_context_ref_digest: &str,
+) -> Result<StrandId, AppError> {
+    if let Some(strand_id) = find_sidecar_strand(
+        state,
+        realm_id.as_str(),
+        controller,
+        circle_id.as_str(),
+        normalized_context_ref_digest,
+    ) {
+        return Ok(strand_id);
+    }
+    let strand_id = StrandId::new(ids::generate("strand"))
+        .map_err(|err| AppError::internal(format!("generated strand id invalid: {err}")))?;
+    let object = json!({
+        "id": strand_id,
+        "realm_id": realm_id,
+        "metadata": {
+            "title": "AI sidecar",
+            "summary": "Controller-private AI sidecar thread",
+            "fields": {
+                "sidecar_profile": cokret_sdk::PROFILE_AGENT_SIDECAR_THREAD,
+                "controller_principal_id": controller,
+                "normalized_context_ref": normalized_context_ref,
+                "normalized_context_ref_digest": normalized_context_ref_digest,
+            },
+        },
+        "scope_circle_id": circle_id,
+        "created_by": controller,
+    });
+    let payload = json!({
+        "object": object,
+        "sender": controller,
+        "profile": cokret_sdk::PROFILE_AGENT_SIDECAR_THREAD,
+        "sidecar_ensure_capability_verified": true,
+        "actor_capability": sidecar_actor_capability(Some(circle_id.as_str())),
+    });
+    let operation = new_sidecar_operation(realm_id, crate::kinds::CK_STRAND_CREATE, payload)?;
+    accept_local_operations(state, controller, std::slice::from_ref(&operation))
+        .await
+        .map_err(sidecar_reducer_reject_to_app_error)?;
+    find_sidecar_strand(
+        state,
+        realm_id.as_str(),
+        controller,
+        circle_id.as_str(),
+        normalized_context_ref_digest,
+    )
+    .ok_or_else(|| AppError::internal("sidecar Strand accepted but not projected"))
+}
+
+fn find_sidecar_relation(
+    state: &AppState,
+    realm_id: &str,
+    circle_id: &str,
+    private_strand_id: &str,
+    target_ref: &str,
+) -> Option<RelationId> {
+    let projection = state.projection.lock().ok()?;
+    projection
+        .relations
+        .values()
+        .find(|relation| {
+            relation.realm_id == realm_id
+                && relation.relation_kind == "agent_sidecar_of"
+                && relation.scope_circle_id.as_deref() == Some(circle_id)
+                && relation.from_ref.as_deref() == Some(private_strand_id)
+                && relation.to_ref.as_deref() == Some(target_ref)
+                && relation.state == "active"
+        })
+        .and_then(|relation| RelationId::new(relation.relation_id.clone()).ok())
+}
+
+async fn ensure_sidecar_relation(
+    state: &AppState,
+    controller: &str,
+    realm_id: &RealmId,
+    circle_id: &CircleId,
+    private_strand_id: &StrandId,
+    target_ref: &str,
+    normalized_context_ref_digest: &str,
+    track_name: Option<&str>,
+) -> Result<RelationId, AppError> {
+    if let Some(relation_id) = find_sidecar_relation(
+        state,
+        realm_id.as_str(),
+        circle_id.as_str(),
+        private_strand_id.as_str(),
+        target_ref,
+    ) {
+        return Ok(relation_id);
+    }
+    let relation_id = RelationId::new(ids::generate_relation_id())
+        .map_err(|err| AppError::internal(format!("generated relation id invalid: {err}")))?;
+    let mut fields = json!({
+        "sidecar_profile": cokret_sdk::PROFILE_AGENT_SIDECAR_THREAD,
+        "controller_principal_id": controller,
+        "normalized_context_ref_digest": normalized_context_ref_digest,
+    });
+    if let Some(track_name) = track_name
+        && let Some(object) = fields.as_object_mut()
+    {
+        object.insert(
+            "context_track_name".to_owned(),
+            Value::String(track_name.to_owned()),
+        );
+    }
+    let payload = json!({
+        "relation_id": relation_id,
+        "relation_kind": "agent_sidecar_of",
+        "from_ref": private_strand_id,
+        "to_ref": target_ref,
+        "scope_circle_id": circle_id,
+        "fields": fields,
+        "sender": controller,
+        "profile": cokret_sdk::PROFILE_AGENT_SIDECAR_THREAD,
+        "sidecar_ensure_capability_verified": true,
+        "actor_capability": sidecar_actor_capability(Some(circle_id.as_str())),
+    });
+    let operation = new_sidecar_operation(realm_id, crate::kinds::CK_RELATION_CREATE, payload)?;
+    accept_local_operations(state, controller, std::slice::from_ref(&operation))
+        .await
+        .map_err(sidecar_reducer_reject_to_app_error)?;
+    find_sidecar_relation(
+        state,
+        realm_id.as_str(),
+        circle_id.as_str(),
+        private_strand_id.as_str(),
+        target_ref,
+    )
+    .ok_or_else(|| AppError::internal("sidecar Relation accepted but not projected"))
+}
+
 async fn ensure_sidecar_thread_impl(
     aa: AuthArgs,
     body: AgentSidecarThreadEnsureRequestBody,
@@ -1299,28 +1913,64 @@ async fn ensure_sidecar_thread_impl(
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     ensure_sidecar_controller_request(&body, &session)?;
-    require_agent_controller(state, &session, body.agent_principal_id.as_str()).await?;
-    // spec `agent_sidecar_thread_ensure_outcome` =
-    // `{ok, private_circle_id, private_strand_id, private_relation_id,
-    //   pending_member_reconciliations?}`. The private Circle / Strand / Relation
-    // ids are minted here; P2-impl: derive the deterministic
-    // controller_agent_circle_key for true idempotent creation and enforce the
-    // context-realm-preferred sidecar home policy.
-    let private_circle_id = cokret_sdk::CircleId::new(ids::generate_circle_id())
-        .map_err(|err| AppError::internal(format!("generated circle id invalid: {err}")))?;
-    let private_strand_id = cokret_sdk::StrandId::new(ids::generate("strand"))
-        .map_err(|err| AppError::internal(format!("generated strand id invalid: {err}")))?;
-    let private_relation_id = cokret_sdk::RelationId::new(ids::generate_relation_id())
-        .map_err(|err| AppError::internal(format!("generated relation id invalid: {err}")))?;
+    let controller = body.controller_principal_id.as_str();
+    let realm_id = body.context_ref.realm_id.clone();
+    authorize_sidecar_ensure(state, controller, realm_id.as_str()).await?;
+    let normalized_context_ref = normalize_sidecar_context_ref(&body.context_ref)?;
+    validate_sidecar_context_projection(state, &body.context_ref)?;
+    let normalized_context_ref_digest =
+        cokret_sdk::canonical::canonical_sha256(&normalized_context_ref)
+            .map_err(|err| AppError::internal(format!("context_ref digest failed: {err}")))?;
+    let target_ref = sidecar_context_target_ref(&body.context_ref);
+    let addressed_agents = normalize_addressed_agents(controller, &body)?;
+    let eligible_agents =
+        eligible_sidecar_agents(state, realm_id.as_str(), controller, &addressed_agents).await?;
+    let controller_agent_circle_key = controller_agent_circle_key(realm_id.as_str(), controller);
+    let short_name = sidecar_short_name(&controller_agent_circle_key);
+    let private_circle_id = ensure_sidecar_circle(
+        state,
+        controller,
+        &realm_id,
+        &controller_agent_circle_key,
+        &short_name,
+    )
+    .await?;
+    ensure_sidecar_member(state, controller, &realm_id, &private_circle_id, controller).await?;
+    for agent in &eligible_agents {
+        ensure_sidecar_member(state, controller, &realm_id, &private_circle_id, agent).await?;
+    }
+    let private_strand_id = ensure_sidecar_strand(
+        state,
+        controller,
+        &realm_id,
+        &private_circle_id,
+        &normalized_context_ref,
+        &normalized_context_ref_digest,
+    )
+    .await?;
+    let private_relation_id = ensure_sidecar_relation(
+        state,
+        controller,
+        &realm_id,
+        &private_circle_id,
+        &private_strand_id,
+        &target_ref,
+        &normalized_context_ref_digest,
+        body.context_ref.track_name.as_deref(),
+    )
+    .await?;
     append_audit_log(
         state,
         Some(&session.actor),
         "ck.self.agent.sidecar_thread.command.ensure",
         json!({
-            "agent_principal_id": body.agent_principal_id,
             "controller_principal_id": body.controller_principal_id,
-            "realm_id": body.realm_id,
+            "addressed_agent_principal_ids": addressed_agents,
+            "context_ref": normalized_context_ref,
+            "normalized_context_ref_digest": normalized_context_ref_digest,
             "private_circle_id": private_circle_id,
+            "private_strand_id": private_strand_id,
+            "private_relation_id": private_relation_id,
         }),
         "accepted",
     )
@@ -1490,16 +2140,47 @@ mod tests {
     fn sidecar_request_rejects_body_controller_mismatch() {
         let session = test_session("did:web:controller.example");
         let body = AgentSidecarThreadEnsureRequestBody {
-            realm_id: cokret_sdk::RealmId::new("ck:realm:0196419b-0000-7000-8000-000000000001")
-                .expect("realm id"),
-            agent_principal_id: cokret_sdk::Did::new("did:web:agent.example").expect("agent did"),
-            controller_principal_id: cokret_sdk::Did::new("did:web:mallory.example")
-                .expect("controller did"),
+            controller_principal_id: Did::new("did:web:mallory.example").expect("controller did"),
+            addressed_agent_principal_ids: Vec::new(),
+            context_ref: AgentSidecarContextRef::strand(
+                RealmId::new("ck:realm:0196419b-0000-7000-8000-000000000001").expect("realm id"),
+                StrandId::new("ck:strand:0196419b-0000-7000-8000-000000000002").expect("strand id"),
+            ),
         };
 
         let err = ensure_sidecar_controller_request(&body, &session)
             .expect_err("sidecar body controller must match session actor");
 
-        assert_eq!(err.wire_code(), "capability_denied");
+        assert_eq!(err.wire_code(), SIDECAR_CREATE_DENIED);
+    }
+
+    #[test]
+    fn sidecar_context_ref_requires_strand_or_relation() {
+        let context_ref = AgentSidecarContextRef {
+            realm_id: RealmId::new("ck:realm:01964137-0000-7000-8000-000000000030").unwrap(),
+            strand_id: None,
+            track_name: None,
+            message_id: None,
+            relation_id: None,
+        };
+        let err = normalize_sidecar_context_ref(&context_ref)
+            .expect_err("context_ref without a target must reject");
+        assert_eq!(err.wire_code(), "invalid_param");
+    }
+
+    #[test]
+    fn sidecar_addressed_agents_rejects_controller() {
+        let controller = Did::new("did:web:example.com:users:alice").unwrap();
+        let body = AgentSidecarThreadEnsureRequestBody {
+            controller_principal_id: controller.clone(),
+            addressed_agent_principal_ids: vec![controller.clone()],
+            context_ref: AgentSidecarContextRef::strand(
+                RealmId::new("ck:realm:01964137-0000-7000-8000-000000000030").unwrap(),
+                StrandId::new("ck:strand:01964137-0000-7000-8000-000000000031").unwrap(),
+            ),
+        };
+        let err = normalize_addressed_agents(controller.as_str(), &body)
+            .expect_err("controller must not be addressable as an agent");
+        assert_eq!(err.wire_code(), CONTROLLER_IN_ADDRESSED_AGENTS);
     }
 }

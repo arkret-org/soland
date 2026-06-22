@@ -66,8 +66,8 @@ mod admission;
 use admission::policy_components_value_from_state_payload;
 pub use admission::{
     SolandEventsSubmitRequestBody, cross_signing_reset_replay_check, events_submit_pre_admit_check,
-    federation_delivery_binding_frontier_is_current, realm_policy_components_check,
-    terminal_realm_check,
+    federation_delivery_binding_frontier_is_current, frozen_realm_check,
+    realm_policy_components_check, terminal_realm_check,
 };
 
 mod endpoints;

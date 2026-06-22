@@ -252,20 +252,21 @@ impl ProjectionState {
         }
     }
 
-    /// True when the `ck.component.realm.destroy.v1` cell has a Value
-    /// (any non-Bottom value indicates a terminal-state commit landed).
-    /// Equivalent to checking `realm_states[realm_id].deleted` but reads
-    /// from the protocol-canonical cells map source.
-    ///
-    /// Stream-F (Wave 1B) note: this returns true for BOTH
-    /// `ck.realm.tombstone` and `ck.realm.destroy` because they share
-    /// the same cell family (`ck.component.realm.destroy.v1`). Callers
-    /// that need to distinguish the two should consult
-    /// [`Self::realm_is_in_terminal_state`] / [`SolandRealmState::terminal_state`].
+    /// True when the `ck.component.realm.destroy.v1` cell has a Value.
     pub fn realm_is_destroyed(&self, realm_id: &str) -> bool {
         let Ok(cell_id) =
             cokret_sdk::CellRef::new(format!("ck:cell:ck.component.realm.destroy.v1:{realm_id}"))
         else {
+            return false;
+        };
+        matches!(self.cells.get(&cell_id), Some(CellState::Value(_)))
+    }
+
+    /// True when the `ck.component.realm.tombstone.v1` cell has a Value.
+    pub fn realm_is_tombstoned(&self, realm_id: &str) -> bool {
+        let Ok(cell_id) = cokret_sdk::CellRef::new(format!(
+            "ck:cell:ck.component.realm.tombstone.v1:{realm_id}"
+        )) else {
             return false;
         };
         matches!(self.cells.get(&cell_id), Some(CellState::Value(_)))
@@ -282,10 +283,23 @@ impl ProjectionState {
         {
             return true;
         }
-        // Fall back to the cell-presence check so peers that hydrate
-        // from cells without rebuilding `realm_states` still see the
-        // terminal state.
-        self.realm_is_destroyed(realm_id)
+        // Fall back to cell-presence checks so peers that hydrate from
+        // cells without rebuilding `realm_states` still see terminal state.
+        self.realm_is_tombstoned(realm_id) || self.realm_is_destroyed(realm_id)
+    }
+
+    /// True when the Realm's reversible freeze facet is active at `now`.
+    pub fn realm_is_frozen_at(&self, realm_id: &str, now: chrono::DateTime<chrono::Utc>) -> bool {
+        let Some(state) = self.realm_states.get(realm_id) else {
+            return false;
+        };
+        if !state.frozen {
+            return false;
+        }
+        match state.freeze_expires_at {
+            Some(expires_at) => expires_at > now,
+            None => true,
+        }
     }
 
     /// Read the projected `ck.component.realm.delivery_binding_policy.v1`

@@ -467,6 +467,10 @@ pub fn operation_schema_for_kind(kind: &str) -> Option<OperationPayloadSchema> {
             requirements: REALM_ARCHIVE_REQUIREMENTS,
             validate: None,
         },
+        kinds::CK_REALM_FREEZE => OperationPayloadSchema {
+            requirements: REALM_FREEZE_REQUIREMENTS,
+            validate: None,
+        },
         // Circle lifecycle. Structure is owned by the registered
         // `ck.schema.circle.v1` payload schema (applied via validate_payload);
         // registering here only builds the projection Operation so the

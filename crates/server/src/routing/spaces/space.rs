@@ -15,21 +15,23 @@ use chrono::{DateTime, Utc};
 use cokret_sdk::{
     Did, HistoryRangeContext, HistoryReaderContext, HistoryReaderEventState,
     HistorySharingPolicyPayloadValue, HistorySharingRestrictedScopeRef, HistorySharingScopeKind,
-    HistoryVisibility, RealmId, RealmLifecycleView, RealmModerationPolicyReplaceRequestBody,
-    STRAND_TRACK_NAME_DISCUSSION, SpaceId, matching_restricted_rules,
+    HistoryVisibility, Operation, OperationId, RealmArchivePayload, RealmDestroyPayload,
+    RealmFreezePayload, RealmId, RealmLifecycleView, RealmModerationPolicyReplaceRequestBody,
+    RealmTombstonePayload, STRAND_TRACK_NAME_DISCUSSION, SpaceId, matching_restricted_rules,
 };
 use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
 use serde::Serialize;
 use serde_json::{Value, json};
 
-use super::AuthArgs;
-use crate::error::AppError;
+use super::{AuthArgs, accept_local_operations};
+use crate::error::{AppError, ErrorCode};
 use crate::reducer::{CHILD_ORDER_CELL_FAMILY, ObjectLifecycleState};
+use crate::routing::events::operations::operation_policy_reason_code;
 use crate::routing::organizations;
 use crate::state::{AppState, RealmDirectoryEntry, SessionRecord, TypingRecord};
 use crate::wire::now;
-use crate::{JsonResult, json_ok};
+use crate::{JsonResult, ids, json_ok, kinds};
 
 /// Spec `realm_read` operation group (`ck.self.realm.*`): Realm lifecycle read,
 /// full export, and Realm moderation-policy effective/set. Canonical path
@@ -43,6 +45,10 @@ pub(super) fn protocol_router() -> Router {
                     .get(get_realm_effective_moderation_policy),
             )
             .push(Router::with_path("moderation-policy").put(upsert_realm_moderation_policy))
+            .push(Router::with_path("archive").post(archive_realm))
+            .push(Router::with_path("freeze").post(freeze_realm))
+            .push(Router::with_path("tombstone").post(tombstone_realm))
+            .push(Router::with_path("destroy").post(destroy_realm))
             .push(Router::with_path("export").get(export_realm)),
     )
 }
@@ -117,6 +123,151 @@ async fn get_realm(
     realm_lifecycle_response(state, &realm_id)
         .await
         .map(salvo::prelude::Json)
+}
+
+fn operation_reject_to_app_error(reason: &'static str) -> AppError {
+    let (status, wire_code) = operation_policy_reason_code(reason);
+    AppError::new(ErrorCode::FailedPrecondition, reason.to_owned())
+        .with_status(status)
+        .with_wire_code(wire_code)
+}
+
+async fn submit_realm_lifecycle_command(
+    state: &AppState,
+    actor: &str,
+    realm_id: String,
+    kind: &'static str,
+    payload: Value,
+) -> Result<RealmLifecycleView, AppError> {
+    let realm_scope = RealmId::new(realm_id.clone())
+        .map_err(|e| AppError::invalid_param(format!("realm_id: {e}")))?;
+    let op_id = OperationId::new(ids::generate_operation_id())
+        .map_err(|e| AppError::invalid_param(format!("operation_id: {e}")))?;
+    let operation = Operation::create(op_id, realm_scope, kind, payload);
+    accept_local_operations(state, actor, std::slice::from_ref(&operation))
+        .await
+        .map_err(operation_reject_to_app_error)?;
+    realm_lifecycle_response(state, &realm_id).await
+}
+
+#[endpoint(
+    operation_id = "ck.self.realm.command.archive",
+    tags("realms"),
+    summary = "Set or clear the Realm archived facet"
+)]
+#[tracing::instrument(skip_all, fields(op = "ck.self.realm.command.archive"))]
+async fn archive_realm(
+    aa: AuthArgs,
+    depot: &mut Depot,
+    req: &mut Request,
+    realm_id: PathParam<String>,
+    body: JsonBody<RealmArchivePayload>,
+) -> JsonResult<RealmLifecycleView> {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let session = aa.authenticated_session(state, req).await?;
+    let payload = body
+        .into_inner()
+        .to_value()
+        .map_err(|error| AppError::invalid_param(format!("realm archive payload: {error}")))?;
+    submit_realm_lifecycle_command(
+        state,
+        &session.actor,
+        realm_id.into_inner(),
+        kinds::CK_REALM_ARCHIVE,
+        payload,
+    )
+    .await
+    .map(salvo::prelude::Json)
+}
+
+#[endpoint(
+    operation_id = "ck.self.realm.command.freeze",
+    tags("realms"),
+    summary = "Set or clear the Realm frozen read-only facet"
+)]
+#[tracing::instrument(skip_all, fields(op = "ck.self.realm.command.freeze"))]
+async fn freeze_realm(
+    aa: AuthArgs,
+    depot: &mut Depot,
+    req: &mut Request,
+    realm_id: PathParam<String>,
+    body: JsonBody<RealmFreezePayload>,
+) -> JsonResult<RealmLifecycleView> {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let session = aa.authenticated_session(state, req).await?;
+    let payload = body
+        .into_inner()
+        .to_value()
+        .map_err(|error| AppError::invalid_param(format!("realm freeze payload: {error}")))?;
+    submit_realm_lifecycle_command(
+        state,
+        &session.actor,
+        realm_id.into_inner(),
+        kinds::CK_REALM_FREEZE,
+        payload,
+    )
+    .await
+    .map(salvo::prelude::Json)
+}
+
+#[endpoint(
+    operation_id = "ck.self.realm.command.tombstone",
+    tags("realms"),
+    summary = "Terminally tombstone a Realm in favor of a successor Realm"
+)]
+#[tracing::instrument(skip_all, fields(op = "ck.self.realm.command.tombstone"))]
+async fn tombstone_realm(
+    aa: AuthArgs,
+    depot: &mut Depot,
+    req: &mut Request,
+    realm_id: PathParam<String>,
+    body: JsonBody<RealmTombstonePayload>,
+) -> JsonResult<RealmLifecycleView> {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let session = aa.authenticated_session(state, req).await?;
+    let payload = body
+        .into_inner()
+        .to_value()
+        .map_err(|error| AppError::invalid_param(format!("realm tombstone payload: {error}")))?;
+    submit_realm_lifecycle_command(
+        state,
+        &session.actor,
+        realm_id.into_inner(),
+        kinds::CK_REALM_TOMBSTONE,
+        payload,
+    )
+    .await
+    .map(salvo::prelude::Json)
+}
+
+#[endpoint(
+    operation_id = "ck.self.realm.command.destroy",
+    tags("realms"),
+    summary = "Terminally destroy a Realm without a successor"
+)]
+#[tracing::instrument(skip_all, fields(op = "ck.self.realm.command.destroy"))]
+async fn destroy_realm(
+    aa: AuthArgs,
+    depot: &mut Depot,
+    req: &mut Request,
+    realm_id: PathParam<String>,
+    body: JsonBody<RealmDestroyPayload>,
+) -> JsonResult<RealmLifecycleView> {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let session = aa.authenticated_session(state, req).await?;
+    let payload = body
+        .into_inner()
+        .to_value()
+        .map_err(|error| AppError::invalid_param(format!("realm destroy payload: {error}")))?;
+    submit_realm_lifecycle_command(
+        state,
+        &session.actor,
+        realm_id.into_inner(),
+        kinds::CK_REALM_DESTROY,
+        payload,
+    )
+    .await
+    .map(salvo::prelude::Json)
 }
 
 #[endpoint(
@@ -337,6 +488,25 @@ pub async fn realm_lifecycle_response(
             .map(|realm| realm.members.iter().cloned().collect())
             .unwrap_or_default()
     };
+    let (archived, frozen, terminal_state, successor_realm_id, freeze_expires_at) = {
+        let projection = state.projection.lock().expect("projection lock");
+        projection
+            .realm_states
+            .get(realm_id)
+            .map(|realm| {
+                (
+                    realm.archived,
+                    projection.realm_is_frozen_at(realm_id, now()),
+                    realm.terminal_state.clone(),
+                    realm
+                        .successor_realm_id
+                        .as_ref()
+                        .and_then(|id| RealmId::new(id.clone()).ok()),
+                    realm.freeze_expires_at,
+                )
+            })
+            .unwrap_or((false, false, None, None, None))
+    };
     let record = state
         .persistence
         .realm_meta()
@@ -353,6 +523,11 @@ pub async fn realm_lifecycle_response(
         owner,
         members,
         deleted: record.deleted,
+        archived,
+        frozen,
+        terminal_state,
+        successor_realm_id,
+        freeze_expires_at,
     })
 }
 

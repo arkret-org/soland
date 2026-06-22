@@ -13,7 +13,7 @@
 
 use std::collections::BTreeMap;
 
-use cokret_sdk::{Operation, OperationId, RealmId};
+use cokret_sdk::{Operation, OperationId, RealmDestroyPayload, RealmId};
 use salvo::oapi::extract::{JsonBody, PathParam, QueryParam};
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -437,9 +437,9 @@ pub(super) async fn admin_delete_realm(
     let realm_scope = RealmId::new(realm_id.clone())
         .map_err(|error| AppError::invalid_param(format!("realm_id: {error}")))?;
     admin_get_realm_item(state, &realm_id).await?;
-    let payload = json!({
-        "sender": session.actor.clone(),
-    });
+    let payload = RealmDestroyPayload::new("admin requested realm destroy")
+        .to_value()
+        .map_err(|error| AppError::invalid_param(format!("realm destroy payload: {error}")))?;
     let op_id = OperationId::new(ids::generate_operation_id())
         .map_err(|error| AppError::invalid_param(format!("operation_id: {error}")))?;
     let operation = Operation::create(op_id, realm_scope, kinds::CK_REALM_DESTROY, payload);
