@@ -159,20 +159,26 @@ async fn auth_keys_device_messages_and_blobs_work() {
         "duplicate send must not re-queue messages: {duplicate}"
     );
 
+    let (bad_blob_content_type, bad_blob_body) =
+        multipart_blob_upload_body("encrypted-bytes", "application/octet-stream");
     let bad_blob = TestClient::post("http://server/_cokret/self/blob/upload")
         .add_header("authorization", format!("Bearer {token}"), true)
+        .add_header("content-type", bad_blob_content_type, true)
         .add_header(
             "x-cokret-content-digest",
             "sha256:deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
             true,
         )
-        .body("encrypted-bytes")
+        .body(bad_blob_body)
         .send(&app_from_state(state.clone()))
         .await;
     assert_eq!(bad_blob.status_code.unwrap().as_u16(), 409);
 
+    let (bad_attachment_content_type, bad_attachment_body) =
+        multipart_blob_upload_body("encrypted-bytes", "application/octet-stream");
     let bad_attachment = TestClient::post("http://server/_cokret/self/blob/upload")
         .add_header("authorization", format!("Bearer {token}"), true)
+        .add_header("content-type", bad_attachment_content_type, true)
         .add_header(
             "x-cokret-attachment-envelope",
             serde_json::json!({
@@ -184,24 +190,29 @@ async fn auth_keys_device_messages_and_blobs_work() {
             .to_string(),
             true,
         )
-        .body("encrypted-bytes")
+        .body(bad_attachment_body)
         .send(&app_from_state(state.clone()))
         .await;
     assert_eq!(bad_attachment.status_code.unwrap().as_u16(), 400);
 
+    let (missing_envelope_content_type, missing_envelope_body) =
+        multipart_blob_upload_body("encrypted-bytes", "application/octet-stream");
     let missing_envelope = TestClient::post("http://server/_cokret/self/blob/upload")
         .add_header("authorization", format!("Bearer {token}"), true)
+        .add_header("content-type", missing_envelope_content_type, true)
         .add_header("x-cokret-blob-encrypted", "true", true)
-        .body("encrypted-bytes")
+        .body(missing_envelope_body)
         .send(&app_from_state(state.clone()))
         .await;
     assert_eq!(missing_envelope.status_code.unwrap().as_u16(), 400);
 
     let large_plaintext = "a".repeat(96 * 1024);
+    let (large_content_type, large_body) =
+        multipart_blob_upload_body(large_plaintext.as_bytes(), "image/jpeg");
     let large_blob: Value = TestClient::post("http://server/_cokret/self/blob/upload")
         .add_header("authorization", format!("Bearer {token}"), true)
-        .add_header("content-type", "image/jpeg", true)
-        .body(large_plaintext.clone())
+        .add_header("content-type", large_content_type, true)
+        .body(large_body)
         .send(&app_from_state(state.clone()))
         .await
         .take_json()
@@ -220,23 +231,28 @@ async fn auth_keys_device_messages_and_blobs_work() {
         &[],
     )
     .await;
+    let (private_plaintext_content_type, private_plaintext_body) =
+        multipart_blob_upload_body("plaintext-private", "text/plain");
     let plaintext_private_blob = TestClient::post("http://server/_cokret/self/blob/upload")
         .add_header("authorization", format!("Bearer {token}"), true)
+        .add_header("content-type", private_plaintext_content_type, true)
         .add_header(
             "x-cokret-realm-id",
             locked_realm["realm_id"].as_str().unwrap(),
             true,
         )
-        .body("plaintext-private")
+        .body(private_plaintext_body)
         .send(&app_from_state(state.clone()))
         .await;
     assert_eq!(plaintext_private_blob.status_code.unwrap().as_u16(), 403);
 
     let encrypted_bytes = b"encrypted-bytes";
     let ciphertext_digest = format!("sha256:{}", hex::encode(Sha256::digest(encrypted_bytes)));
+    let (encrypted_content_type, encrypted_body) =
+        multipart_blob_upload_body(encrypted_bytes, "text/plain");
     let blob: Value = TestClient::post("http://server/_cokret/self/blob/upload")
         .add_header("authorization", format!("Bearer {token}"), true)
-        .add_header("content-type", "Text/Plain; charset=utf-8", true)
+        .add_header("content-type", encrypted_content_type, true)
         .add_header("x-cokret-filename", "..\\danger<script>.txt", true)
         .add_header("x-cokret-blob-encrypted", "true", true)
         .add_header(
@@ -261,7 +277,7 @@ async fn auth_keys_device_messages_and_blobs_work() {
             .to_string(),
             true,
         )
-        .body("encrypted-bytes")
+        .body(encrypted_body)
         .send(&app_from_state(state.clone()))
         .await
         .take_json()
@@ -366,16 +382,18 @@ async fn auth_keys_device_messages_and_blobs_work() {
         shared_plaintext_realm["realm_id"].as_str().unwrap(),
         "did:web:blob-bob.example",
     );
+    let (plaintext_content_type, plaintext_body) =
+        multipart_blob_upload_body("shared plaintext", "text/plain");
     let plaintext_blob: Value = TestClient::post("http://server/_cokret/self/blob/upload")
         .add_header("authorization", format!("Bearer {token}"), true)
-        .add_header("content-type", "text/plain; charset=utf-8", true)
+        .add_header("content-type", plaintext_content_type, true)
         .add_header("x-cokret-filename", "report final.txt", true)
         .add_header(
             "x-cokret-realm-id",
             shared_plaintext_realm["realm_id"].as_str().unwrap(),
             true,
         )
-        .body("shared plaintext")
+        .body(plaintext_body)
         .send(&app_from_state(state.clone()))
         .await
         .take_json()

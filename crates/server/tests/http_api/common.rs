@@ -496,6 +496,32 @@ pub(crate) fn sha256_json(value: &Value) -> String {
     format!("sha256:{}", hex::encode(hasher.finalize()))
 }
 
+pub(crate) fn multipart_blob_upload_body(
+    content: impl AsRef<[u8]>,
+    media_type: &str,
+) -> (String, Vec<u8>) {
+    let content = content.as_ref();
+    let boundary = format!(
+        "cokret-test-{}",
+        hex::encode(Sha256::digest(content))
+            .chars()
+            .take(16)
+            .collect::<String>()
+    );
+    let mut body = Vec::new();
+    body.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
+    body.extend_from_slice(b"Content-Disposition: form-data; name=\"size_bytes\"\r\n\r\n");
+    body.extend_from_slice(content.len().to_string().as_bytes());
+    body.extend_from_slice(format!("\r\n--{boundary}\r\n").as_bytes());
+    body.extend_from_slice(
+        b"Content-Disposition: form-data; name=\"content\"; filename=\"blob\"\r\n",
+    );
+    body.extend_from_slice(format!("Content-Type: {media_type}\r\n\r\n").as_bytes());
+    body.extend_from_slice(content);
+    body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+    (format!("multipart/form-data; boundary={boundary}"), body)
+}
+
 pub(crate) fn expected_strand_id_for_scope(scope_id: &str) -> String {
     scope_id
         .strip_prefix("ck:realm:")

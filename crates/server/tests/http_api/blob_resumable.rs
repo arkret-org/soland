@@ -194,11 +194,14 @@ async fn resumable_chunked_upload_matches_canonical_blob_ref() {
     // Content-addressing invariant (spec §2.1): the resumable path MUST
     // produce the same blob_ref the canonical single-shot upload yields
     // for the same bytes.
+    let (canonical_content_type, canonical_body) =
+        multipart_blob_upload_body(&payload, "application/octet-stream");
     let canonical: Value = TestClient::post("http://server/_cokret/self/blob/upload")
         .add_header("authorization", format!("Bearer {token}"), true)
+        .add_header("content-type", canonical_content_type, true)
         .add_header("x-cokret-blob-encrypted", "true", true)
         .add_header("x-cokret-blob-purpose", "file_transfer", true)
-        .body(payload.clone())
+        .body(canonical_body)
         .send(&app_from_state(state.clone()))
         .await
         .take_json()

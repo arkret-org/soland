@@ -19,7 +19,7 @@ use cokret_sdk::{
     Hash, RealmId, SignatureValue, UploadReceipt, canonical,
 };
 use ed25519_dalek::Signer;
-use salvo::http::{Method, StatusCode};
+use salvo::http::{Method, ParseError, StatusCode};
 use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 use serde_json::{Value, json};
@@ -95,27 +95,18 @@ async fn blob_upload(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let Some(session) = auth_or_render(state, req, res).await else {
         return;
     };
-    req.set_secure_max_size(MAX_BLOB_UPLOAD_BYTES);
-    let bytes = match req.payload().await {
-        Ok(bytes) => bytes.to_vec(),
-        Err(_) => {
-            render_error(
-                res,
-                StatusCode::BAD_REQUEST,
-                "bad_json",
-                "invalid blob body",
-            );
+    req.set_secure_max_size(MAX_BLOB_UPLOAD_FORM_BYTES);
+    let upload_body = match blob_upload_body(req).await {
+        Ok(body) => body,
+        Err(error) => {
+            render_error(res, error.status, error.code, error.message.as_str());
             return;
         }
     };
-    let requested_media_type = req
-        .headers()
-        .get("content-type")
-        .and_then(|value| value.to_str().ok())
-        .and_then(sanitize_media_type)
-        .unwrap_or_else(|| "application/octet-stream".to_owned());
+    let bytes = upload_body.bytes;
+    let requested_media_type = upload_body.media_type;
     let requested_filename = match sanitized_blob_filename(req) {
-        Ok(filename) => filename,
+        Ok(filename) => filename.or(upload_body.filename),
         Err(message) => {
             render_error(res, StatusCode::BAD_REQUEST, "invalid_param", message);
             return;
@@ -151,6 +142,15 @@ async fn blob_upload(depot: &mut Depot, req: &mut Request, res: &mut Response) {
         None => None,
     };
     let size = bytes.len();
+    if size != upload_body.declared_size {
+        render_error(
+            res,
+            StatusCode::BAD_REQUEST,
+            "invalid_param",
+            "multipart size_bytes must match content length",
+        );
+        return;
+    }
     if size > MAX_BLOB_UPLOAD_BYTES {
         render_error(
             res,
@@ -962,6 +962,149 @@ fn expected_blob_content_digest(req: &Request) -> Result<Option<String>, &'stati
     Ok(None)
 }
 
+struct BlobUploadBody {
+    bytes: Vec<u8>,
+    declared_size: usize,
+    media_type: String,
+    filename: Option<String>,
+}
+
+struct BlobUploadBodyError {
+    status: StatusCode,
+    code: &'static str,
+    message: String,
+}
+
+impl BlobUploadBodyError {
+    fn invalid(message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::BAD_REQUEST,
+            code: "invalid_param",
+            message: message.into(),
+        }
+    }
+
+    fn too_large(message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::PAYLOAD_TOO_LARGE,
+            code: "payload_too_large",
+            message: message.into(),
+        }
+    }
+
+    fn internal(message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::INTERNAL_SERVER_ERROR,
+            code: "internal_error",
+            message: message.into(),
+        }
+    }
+}
+
+async fn blob_upload_body(req: &mut Request) -> Result<BlobUploadBody, BlobUploadBodyError> {
+    if !request_is_multipart_form_data(req) {
+        return Err(BlobUploadBodyError::invalid(
+            "blob uploads require multipart/form-data",
+        ));
+    }
+
+    let form_data = req
+        .form_data_max_size(MAX_BLOB_UPLOAD_FORM_BYTES)
+        .await
+        .map_err(blob_form_parse_error)?;
+
+    let (path, part_size, declared_size, media_type, filename) = {
+        let content_parts = form_data
+            .files
+            .get_vec("content")
+            .ok_or_else(|| BlobUploadBodyError::invalid("multipart content part is required"))?;
+        if content_parts.len() != 1 {
+            return Err(BlobUploadBodyError::invalid(
+                "multipart content part must appear exactly once",
+            ));
+        }
+
+        let size_values = form_data
+            .fields
+            .get_vec("size_bytes")
+            .ok_or_else(|| BlobUploadBodyError::invalid("multipart size_bytes field is required"))?;
+        if size_values.len() != 1 {
+            return Err(BlobUploadBodyError::invalid(
+                "multipart size_bytes field must appear exactly once",
+            ));
+        }
+        let declared_size = size_values[0]
+            .trim()
+            .parse::<usize>()
+            .map_err(|_| BlobUploadBodyError::invalid("multipart size_bytes must be an integer"))?;
+
+        let content_part = &content_parts[0];
+        let part_size = usize::try_from(content_part.size()).map_err(|_| {
+            BlobUploadBodyError::too_large("blob exceeds maximum size")
+        })?;
+        if declared_size != part_size {
+            return Err(BlobUploadBodyError::invalid(
+                "multipart size_bytes must match content part size",
+            ));
+        }
+
+        let media_type = content_part
+            .headers()
+            .get(salvo::http::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .and_then(sanitize_media_type)
+            .unwrap_or_else(|| "application/octet-stream".to_owned());
+        let filename = content_part
+            .name()
+            .map(sanitize_blob_filename_value)
+            .transpose()
+            .map_err(BlobUploadBodyError::invalid)?;
+
+        (
+            content_part.path().clone(),
+            part_size,
+            declared_size,
+            media_type,
+            filename,
+        )
+    };
+
+    let bytes = tokio::fs::read(&path)
+        .await
+        .map_err(|error| BlobUploadBodyError::internal(format!("failed to read blob upload: {error}")))?;
+    if bytes.len() != part_size {
+        return Err(BlobUploadBodyError::invalid(
+            "multipart content length does not match parsed file size",
+        ));
+    }
+    Ok(BlobUploadBody {
+        bytes,
+        declared_size,
+        media_type,
+        filename,
+    })
+}
+
+fn request_is_multipart_form_data(req: &Request) -> bool {
+    req.headers()
+        .get(salvo::http::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(';').next())
+        .is_some_and(|value| value.trim().eq_ignore_ascii_case("multipart/form-data"))
+}
+
+fn blob_form_parse_error(error: ParseError) -> BlobUploadBodyError {
+    match error {
+        ParseError::PayloadTooLarge => {
+            BlobUploadBodyError::too_large("blob exceeds maximum size")
+        }
+        ParseError::InvalidContentType | ParseError::NotMultipart | ParseError::NotFormData => {
+            BlobUploadBodyError::invalid("blob uploads require multipart/form-data")
+        }
+        _ => BlobUploadBodyError::invalid("invalid multipart blob upload body"),
+    }
+}
+
 fn encrypted_attachment_metadata(req: &Request) -> Result<Option<serde_json::Value>, &'static str> {
     let Some(value) = req
         .headers()
@@ -1149,6 +1292,7 @@ fn parse_range(req: &Request, total_len: usize) -> Option<Result<(usize, usize),
 }
 
 pub(crate) const MAX_BLOB_UPLOAD_BYTES: usize = 10 * 1024 * 1024;
+const MAX_BLOB_UPLOAD_FORM_BYTES: usize = MAX_BLOB_UPLOAD_BYTES + 64 * 1024;
 const MAX_BLOB_ACCOUNT_BYTES: usize = 50 * 1024 * 1024;
 const MAX_BLOB_REALM_BYTES: usize = 100 * 1024 * 1024;
 

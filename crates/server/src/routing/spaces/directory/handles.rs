@@ -119,75 +119,6 @@ pub(super) async fn contact_request_resolve_allowed(
     )
 }
 
-pub(super) fn did_web_authority(authority: &str) -> String {
-    match authority.rsplit_once(':') {
-        Some((host, port)) if !host.is_empty() && port.chars().all(|ch| ch.is_ascii_digit()) => {
-            format!("{host}%3A{port}")
-        }
-        _ => authority.to_owned(),
-    }
-}
-
-pub(super) fn remote_handle_resolution(
-    lookup: &HandleLookup,
-    audience: String,
-) -> JsonResult<DirectoryHandleResolutionOutcome> {
-    let did_authority = did_web_authority(&lookup.authority);
-    let recipient_service_did = format!("did:web:{did_authority}");
-    let subject = format!("{recipient_service_did}:users:{}", lookup.localpart);
-    Did::new(recipient_service_did.clone()).map_err(|err| {
-        AppError::invalid_param(format!(
-            "resolved handle recipient service DID is invalid: {err}"
-        ))
-    })?;
-    Did::new(subject.clone()).map_err(|err| {
-        AppError::invalid_param(format!("resolved handle subject DID is invalid: {err}"))
-    })?;
-    let binding = DeliveryBindingHint {
-        recipient_service_did: Did::new(recipient_service_did.clone()).map_err(|err| {
-            AppError::invalid_param(format!(
-                "resolved handle recipient service DID is invalid: {err}"
-            ))
-        })?,
-        recipient_service_type: RecipientServiceType::PrincipalServer,
-        binding_source: HandleHintBindingSource::Explicit,
-        delivery_modes: BTreeSet::from([
-            DeliveryMode::Events,
-            DeliveryMode::Sync,
-            DeliveryMode::ToDevice,
-            DeliveryMode::Push,
-            DeliveryMode::KeyPackages,
-        ]),
-        service_acceptance_ref: None,
-        policy_event_ref: None,
-    };
-    json_ok(DirectoryHandleResolutionOutcome {
-        did: Did::new(subject.clone()).map_err(|err| {
-            AppError::invalid_param(format!("resolved handle subject DID is invalid: {err}"))
-        })?,
-        handle: lookup.canonical.clone(),
-        verified: false,
-        claims: json!({
-            "actor": {
-                "did": subject,
-                "handle": lookup.canonical,
-                "display_name": lookup.canonical,
-                "verified": false,
-                "source": "remote_handle"
-            }
-        }),
-        audience: Some(audience),
-        handle_claim: None,
-        member_delivery_binding: Some(binding),
-        as_of: Some(now()),
-        source_refs: Vec::new(),
-        policy_revision: None,
-        stale: false,
-        divergent: false,
-        via_services: vec![recipient_service_did],
-    })
-}
-
 /// Issue a Principal-Server-signed, SDK-validated handle claim for
 /// `handle` → `did` as a JSON value. Used by the account viewer / register
 /// outcome to expose the primary handle claim re-derived on demand from the
@@ -334,8 +265,7 @@ pub(super) async fn resolve_handle(
         None if membership_builder_resolve_allowed(state, session.as_ref(), &body).await
             || contact_request_resolve_allowed(session.as_ref(), &body).await =>
         {
-            let audience = resolve_handle_audience(&body, &state.config.service_did);
-            remote_handle_resolution(&lookup, audience)
+            Err(AppError::not_found("not found"))
         }
         None => Err(AppError::not_found("not found")),
     }

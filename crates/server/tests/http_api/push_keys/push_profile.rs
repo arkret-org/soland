@@ -15,9 +15,19 @@ async fn file_transfer_blob_upload_uses_encrypted_metadata_and_blocks_presign() 
         "sha256:{}",
         hex::encode(Sha256::digest(file_transfer_bytes))
     );
+    let raw_upload = TestClient::post("http://server/_cokret/self/blob/upload")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .add_header("content-type", "application/octet-stream", true)
+        .body(file_transfer_bytes.as_slice())
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(raw_upload.status_code.unwrap().as_u16(), 400);
+
+    let (file_transfer_content_type, file_transfer_body) =
+        multipart_blob_upload_body(file_transfer_bytes, "text/plain");
     let file_transfer_blob: Value = TestClient::post("http://server/_cokret/self/blob/upload")
         .add_header("authorization", format!("Bearer {token}"), true)
-        .add_header("content-type", "text/plain", true)
+        .add_header("content-type", file_transfer_content_type, true)
         .add_header("x-cokret-filename", "private.txt", true)
         .add_header("x-cokret-blob-encrypted", "true", true)
         .add_header("x-cokret-blob-purpose", "file_transfer", true)
@@ -26,7 +36,7 @@ async fn file_transfer_blob_upload_uses_encrypted_metadata_and_blocks_presign() 
             file_transfer_digest.clone(),
             true,
         )
-        .body(file_transfer_bytes.as_slice())
+        .body(file_transfer_body)
         .send(&app_from_state(state.clone()))
         .await
         .take_json()

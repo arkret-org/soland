@@ -306,7 +306,7 @@ async fn directory_resolve_handle_invite_accepts_canonical_handles_without_conta
         StatusCode::NOT_FOUND
     );
 
-    let mut remote = TestClient::post("http://server/_cokret/find/directory/resolve-handle")
+    let remote = TestClient::post("http://server/_cokret/find/directory/resolve-handle")
         .add_header("authorization", format!("Bearer {alice}"), true)
         .json(&serde_json::json!({
             "handle": "bob:remote.example",
@@ -317,16 +317,7 @@ async fn directory_resolve_handle_invite_accepts_canonical_handles_without_conta
         }))
         .send(&app_from_state(state.clone()))
         .await;
-    assert_eq!(remote.status_code.unwrap(), StatusCode::OK);
-    let remote_body: Value = remote.take_json().await.unwrap();
-    assert_eq!(remote_body["did"], "did:web:remote.example:users:bob");
-    assert_eq!(remote_body["handle"], "bob:remote.example");
-    assert_eq!(remote_body["audience"], realm_id);
-    assert_eq!(
-        remote_body["member_delivery_binding"]["recipient_service_did"],
-        "did:web:remote.example"
-    );
-    assert!(remote_body.get("handle_claim").is_none());
+    assert_eq!(remote.status_code.unwrap(), StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]
