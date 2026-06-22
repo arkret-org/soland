@@ -150,15 +150,12 @@ pub(crate) fn preflight_moderation_projection_reject(
 }
 
 pub(crate) fn preflight_invite_projection_reject(
-    state: &AppState,
+    _state: &AppState,
     proj: &crate::reducer::ProjectionState,
     operation: &Operation,
     hlc: &crate::hlc::ServerHlc,
 ) -> Option<String> {
     let kind = kinds::canonical_kind_string(operation);
-    if kind == kinds::CK_INVITE_CREATE {
-        return preflight_invite_create_consent_reject(state, operation);
-    }
     if !matches!(
         kind.as_str(),
         kinds::CK_INVITE_THIRD_PARTY | kinds::CK_INVITE_CLAIM
@@ -188,41 +185,6 @@ pub(crate) fn preflight_calendar_projection_reject(
     match snapshot.apply(operation, hlc) {
         crate::reducer::ProjectionEffect::Rejected { reason } => Some(reason),
         _ => None,
-    }
-}
-
-fn preflight_invite_create_consent_reject(
-    state: &AppState,
-    operation: &Operation,
-) -> Option<String> {
-    let Some(invitee) = operation
-        .payload
-        .get("invitee")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    else {
-        return Some(crate::error::reasons::CONTACT_CONSENT_MISSING.to_owned());
-    };
-    let Some(inviter) = operation
-        .payload
-        .get("sender")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    else {
-        return Some(crate::error::reasons::CONTACT_CONSENT_MISSING.to_owned());
-    };
-    if crate::routing::identity::consent::has_active_consent_for_scope(
-        state,
-        invitee,
-        inviter,
-        "invite",
-        operation.created_at,
-    ) {
-        None
-    } else {
-        Some(crate::error::reasons::CONTACT_CONSENT_MISSING.to_owned())
     }
 }
 
