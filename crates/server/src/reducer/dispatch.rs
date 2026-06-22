@@ -789,6 +789,14 @@ fn apply_mls_commit_dispatch(
     mls::apply_commit_epoch(s, op)
 }
 
+fn apply_realm_key_share_dispatch(
+    s: &mut ProjectionState,
+    op: &Operation,
+    _hlc: &ServerHlc,
+) -> ProjectionEffect {
+    s.apply_realm_key_share(op)
+}
+
 // G3.S2: dispatch adapter for `ck.realm.policy_server`. The reducer
 // helper lives in the dedicated `reducer::realm_policy_server` module;
 // this adapter normalises its `(state, op) -> effect` signature to the
@@ -1015,6 +1023,7 @@ pub fn default_apply_registry() -> std::collections::HashMap<&'static str, Apply
     m.insert(CK_MLS_WELCOME, apply_mls_welcome_dispatch);
     m.insert(CK_MLS_GENESIS, apply_mls_genesis_dispatch);
     m.insert(CK_MLS_COMMIT, apply_mls_commit_dispatch);
+    m.insert(CK_REALM_KEY_SHARE, apply_realm_key_share_dispatch);
     // G3.S2: policy server cell
     m.insert(CK_REALM_POLICY_SERVER, apply_realm_policy_server_dispatch);
     m

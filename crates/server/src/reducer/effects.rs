@@ -259,6 +259,15 @@ pub enum ProjectionEffect {
     /// so the routing layer can dispatch on `MlsEffect` without
     /// growing four near-identical `ProjectionEffect` arms.
     Mls(MlsEffect),
+    /// `ck.realm_key.share` accepted by the reducer. Routing projection uses
+    /// this effect to enqueue the share onto the recipient device's to-device
+    /// queue after the share payload and key scope have passed fail-closed
+    /// checks.
+    RealmKeyShareProjected {
+        realm_id: String,
+        recipient_principal_id: String,
+        recipient_device_id: String,
+    },
     /// G3.S2 — `ck.realm.policy_server` projected into the
     /// `ck.component.realm.policy_server.v1` cas-register cell + the
     /// `realm_policy_servers` structured cache.

@@ -11,6 +11,7 @@ mod moderation;
 mod pending_replay;
 mod pin_rsvp_encryption;
 mod pin_scope_safety;
+mod realm_key_share;
 mod redaction_message;
 mod space_container;
 mod strand_morph;

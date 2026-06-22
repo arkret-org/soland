@@ -1,3 +1,5 @@
+use base64::Engine as _;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use cokret_sdk::Operation;
 use serde_json::{Value, json};
 
@@ -27,6 +29,8 @@ pub(super) fn apply_via_lattice_registry(
 
 pub(super) async fn mirror_mls_effect_to_persistence(
     state: &AppState,
+    origin: &str,
+    source_device_id: &str,
     operation: &Operation,
     effect: &crate::reducer::ProjectionEffect,
 ) {
@@ -112,6 +116,15 @@ pub(super) async fn mirror_mls_effect_to_persistence(
                 if let Err(error) = state.persistence.mls_welcomes().enqueue(&record).await {
                     tracing::warn!(%error, welcome_id = %welcome_id, "failed to mirror MLS Welcome enqueue");
                 }
+                project_mls_welcome_to_device(
+                    state,
+                    origin,
+                    source_device_id,
+                    operation,
+                    &record,
+                    welcome_id,
+                )
+                .await;
             }
         }
         crate::reducer::MlsEffect::GroupGenesis {
@@ -593,9 +606,6 @@ async fn project_accepted_operations_inner(
         if kinds::canonical_kind_string(operation) == kinds::CK_DEVICE_AUTHORIZE {
             project_device_authorize(state, &operation.payload).await;
         }
-        if kinds::canonical_kind_for_operation(operation) == Some(kinds::CK_REALM_KEY_SHARE) {
-            project_realm_key_share_to_device(state, origin, operation).await;
-        }
         // Also apply to the deterministic reducer.
         let reducer_effect =
             if actor_private_read_cursor_matches_origin(origin, source_device_id, operation) {
@@ -608,8 +618,15 @@ async fn project_accepted_operations_inner(
                 None
             };
         if let Some(effect) = reducer_effect {
+            if matches!(
+                &effect,
+                crate::reducer::ProjectionEffect::RealmKeyShareProjected { .. }
+            ) {
+                project_realm_key_share_to_device(state, origin, source_device_id, operation).await;
+            }
             fanout_projection_effect_private_update(state, origin, source_device_id, &effect).await;
-            mirror_mls_effect_to_persistence(state, operation, &effect).await;
+            mirror_mls_effect_to_persistence(state, origin, source_device_id, operation, &effect)
+                .await;
             // P1 — fold the projected capability grant cell back into the
             // SolandAuthzEngine read index. The cell is the source of truth;
             // the engine map is a read-side index maintained by projection
@@ -685,14 +702,108 @@ async fn project_accepted_operations_inner(
     }
 }
 
-async fn project_realm_key_share_to_device(state: &AppState, origin: &str, operation: &Operation) {
+async fn project_mls_welcome_to_device(
+    state: &AppState,
+    origin: &str,
+    source_device_id: &str,
+    operation: &Operation,
+    record: &MlsWelcomeRecord,
+    welcome_id: &str,
+) {
+    let sender_device_id = source_device_id
+        .trim()
+        .is_empty()
+        .then(|| {
+            operation
+                .payload
+                .get("sender_device_id")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+        })
+        .unwrap_or(source_device_id)
+        .trim();
+    if sender_device_id.is_empty() {
+        tracing::warn!(
+            %welcome_id,
+            operation_id = %operation.operation_id,
+            "cannot enqueue MLS Welcome device message without sender device id"
+        );
+        return;
+    }
+
+    let epoch = operation
+        .payload
+        .get("epoch")
+        .and_then(Value::as_u64)
+        .unwrap_or_default();
+    let expires_at = operation
+        .payload
+        .get("expires_at")
+        .cloned()
+        .unwrap_or_else(|| json!(operation.created_at + chrono::Duration::hours(1)));
+    let content = json!({
+        "kind": "ck.mls.welcome",
+        "sender_device_id": sender_device_id,
+        "expires_at": expires_at,
+        "content": {
+            "group_id": record.group_id,
+            "epoch": epoch,
+            "recipient_principal_id": record.recipient_actor_id,
+            "recipient_device_id": record.recipient_device_id,
+            "welcome": URL_SAFE_NO_PAD.encode(&record.welcome_bytes),
+            "welcome_hash": cokret_sdk::canonical::sha256_digest(&record.welcome_bytes),
+        },
+        "unsigned": {
+            "source_event_id": operation.operation_id,
+            "mls_welcome_id": welcome_id,
+            "key_package_id": record.key_package_id,
+        }
+    });
+    let message = DeviceMessageRecord {
+        idempotency_key: format!("mls_welcome:{welcome_id}"),
+        sender: origin.to_owned(),
+        recipient: record.recipient_actor_id.clone(),
+        device_id: record.recipient_device_id.clone(),
+        position: state.next_to_device_position(),
+        content,
+        created_at: operation.created_at,
+    };
+    if let Err(error) = state.persistence.device_messages().append(message).await {
+        tracing::warn!(
+            %error,
+            %welcome_id,
+            operation_id = %operation.operation_id,
+            "failed to enqueue MLS Welcome to-device message"
+        );
+    }
+}
+
+async fn project_realm_key_share_to_device(
+    state: &AppState,
+    origin: &str,
+    source_device_id: &str,
+    operation: &Operation,
+) {
     let Ok(share) =
         serde_json::from_value::<cokret_sdk::RealmKeySharePayload>(operation.payload.clone())
     else {
         return;
     };
+    let sender_device_id = if source_device_id.trim().is_empty() {
+        share.sender_device_id.trim()
+    } else {
+        source_device_id.trim()
+    };
+    if sender_device_id.is_empty() {
+        tracing::warn!(
+            operation_id = %operation.operation_id,
+            "cannot enqueue realm key share device message without sender device id"
+        );
+        return;
+    }
     let content = json!({
         "kind": kinds::CK_REALM_KEY_SHARE,
+        "sender_device_id": sender_device_id,
         "realm_id": operation.realm_id,
         "operation_id": operation.operation_id,
         "payload": operation.payload,
