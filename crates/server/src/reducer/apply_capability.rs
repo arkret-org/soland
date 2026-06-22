@@ -45,15 +45,6 @@ fn engine_resource_from_body(body: &Value, realm_id: &str) -> String {
         .to_owned()
 }
 
-fn engine_resource_from_body_or_wildcard(body: &Value, realm_id: &str) -> String {
-    let resource = engine_resource_from_body(body, realm_id);
-    if resource.is_empty() {
-        "*".to_owned()
-    } else {
-        resource
-    }
-}
-
 fn selector_string_field<'a>(selector: &'a Value, field: &str) -> Option<&'a str> {
     selector
         .get(field)
