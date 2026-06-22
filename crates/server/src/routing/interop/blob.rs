@@ -1013,65 +1013,62 @@ async fn blob_upload_body(req: &mut Request) -> Result<BlobUploadBody, BlobUploa
         .await
         .map_err(blob_form_parse_error)?;
 
-    let (path, part_size, declared_size, media_type, filename) = {
-        let content_parts = form_data
-            .files
-            .get_vec("content")
-            .ok_or_else(|| BlobUploadBodyError::invalid("multipart content part is required"))?;
-        if content_parts.len() != 1 {
-            return Err(BlobUploadBodyError::invalid(
-                "multipart content part must appear exactly once",
-            ));
-        }
+    let (path, part_size, declared_size, media_type, filename) =
+        {
+            let content_parts = form_data.files.get_vec("content").ok_or_else(|| {
+                BlobUploadBodyError::invalid("multipart content part is required")
+            })?;
+            if content_parts.len() != 1 {
+                return Err(BlobUploadBodyError::invalid(
+                    "multipart content part must appear exactly once",
+                ));
+            }
 
-        let size_values = form_data
-            .fields
-            .get_vec("size_bytes")
-            .ok_or_else(|| BlobUploadBodyError::invalid("multipart size_bytes field is required"))?;
-        if size_values.len() != 1 {
-            return Err(BlobUploadBodyError::invalid(
-                "multipart size_bytes field must appear exactly once",
-            ));
-        }
-        let declared_size = size_values[0]
-            .trim()
-            .parse::<usize>()
-            .map_err(|_| BlobUploadBodyError::invalid("multipart size_bytes must be an integer"))?;
+            let size_values = form_data.fields.get_vec("size_bytes").ok_or_else(|| {
+                BlobUploadBodyError::invalid("multipart size_bytes field is required")
+            })?;
+            if size_values.len() != 1 {
+                return Err(BlobUploadBodyError::invalid(
+                    "multipart size_bytes field must appear exactly once",
+                ));
+            }
+            let declared_size = size_values[0].trim().parse::<usize>().map_err(|_| {
+                BlobUploadBodyError::invalid("multipart size_bytes must be an integer")
+            })?;
 
-        let content_part = &content_parts[0];
-        let part_size = usize::try_from(content_part.size()).map_err(|_| {
-            BlobUploadBodyError::too_large("blob exceeds maximum size")
-        })?;
-        if declared_size != part_size {
-            return Err(BlobUploadBodyError::invalid(
-                "multipart size_bytes must match content part size",
-            ));
-        }
+            let content_part = &content_parts[0];
+            let part_size = usize::try_from(content_part.size())
+                .map_err(|_| BlobUploadBodyError::too_large("blob exceeds maximum size"))?;
+            if declared_size != part_size {
+                return Err(BlobUploadBodyError::invalid(
+                    "multipart size_bytes must match content part size",
+                ));
+            }
 
-        let media_type = content_part
-            .headers()
-            .get(salvo::http::header::CONTENT_TYPE)
-            .and_then(|value| value.to_str().ok())
-            .and_then(sanitize_media_type)
-            .unwrap_or_else(|| "application/octet-stream".to_owned());
-        let filename = content_part
-            .name()
-            .map(sanitize_blob_filename_value)
-            .transpose()
-            .map_err(BlobUploadBodyError::invalid)?;
+            let media_type = content_part
+                .headers()
+                .get(salvo::http::header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok())
+                .and_then(sanitize_media_type)
+                .unwrap_or_else(|| "application/octet-stream".to_owned());
+            let filename = content_part
+                .name()
+                .map(sanitize_blob_filename_value)
+                .transpose()
+                .map_err(BlobUploadBodyError::invalid)?;
 
-        (
-            content_part.path().clone(),
-            part_size,
-            declared_size,
-            media_type,
-            filename,
-        )
-    };
+            (
+                content_part.path().clone(),
+                part_size,
+                declared_size,
+                media_type,
+                filename,
+            )
+        };
 
-    let bytes = tokio::fs::read(&path)
-        .await
-        .map_err(|error| BlobUploadBodyError::internal(format!("failed to read blob upload: {error}")))?;
+    let bytes = tokio::fs::read(&path).await.map_err(|error| {
+        BlobUploadBodyError::internal(format!("failed to read blob upload: {error}"))
+    })?;
     if bytes.len() != part_size {
         return Err(BlobUploadBodyError::invalid(
             "multipart content length does not match parsed file size",
@@ -1095,9 +1092,7 @@ fn request_is_multipart_form_data(req: &Request) -> bool {
 
 fn blob_form_parse_error(error: ParseError) -> BlobUploadBodyError {
     match error {
-        ParseError::PayloadTooLarge => {
-            BlobUploadBodyError::too_large("blob exceeds maximum size")
-        }
+        ParseError::PayloadTooLarge => BlobUploadBodyError::too_large("blob exceeds maximum size"),
         ParseError::InvalidContentType | ParseError::NotMultipart | ParseError::NotFormData => {
             BlobUploadBodyError::invalid("blob uploads require multipart/form-data")
         }
