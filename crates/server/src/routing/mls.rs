@@ -745,13 +745,16 @@ fn entry_signature(entry: &Value, default_signature: &Value) -> Result<Value, St
     let object = signature
         .as_object()
         .ok_or_else(|| "device_signature_missing".to_owned())?;
-    let has_required = ["kid", "sig"].into_iter().all(|field| {
-        object
-            .get(field)
-            .and_then(Value::as_str)
-            .is_some_and(|value| !value.is_empty())
-    });
-    if !has_required {
+    let has_kid = object
+        .get("kid")
+        .and_then(Value::as_str)
+        .is_some_and(|value| !value.is_empty());
+    let has_signature = object
+        .get("jws")
+        .or_else(|| object.get("sig"))
+        .and_then(Value::as_str)
+        .is_some_and(|value| !value.is_empty());
+    if !has_kid || !has_signature {
         return Err("device_signature_invalid".to_owned());
     }
     if object
