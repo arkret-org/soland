@@ -366,7 +366,10 @@ pub(crate) const STRAND_CREATE_REQUIREMENTS: &[PayloadRequirement] =
         "strand create operation requires object",
     )];
 pub(crate) const STRAND_UPDATE_REQUIREMENTS: &[PayloadRequirement] = &[
-    PayloadRequirement::AnyOf(&["strand_id"], "strand update operation requires strand_id"),
+    PayloadRequirement::AnyOf(
+        &["target_ref"],
+        "strand update operation requires target_ref",
+    ),
     PayloadRequirement::Required("patch", "strand update operation requires patch"),
 ];
 // `ck.morph.archive` / `ck.morph.restore` use the generic object lifecycle

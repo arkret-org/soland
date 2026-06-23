@@ -391,7 +391,10 @@ async fn write_through_projection(state: &AppState, operation: &Operation) {
         } else if is_strand_kind {
             let id = if kind == kinds::CK_STRAND_CREATE {
                 strand_id_from_object
-            } else if matches!(kind, kinds::CK_STRAND_ARCHIVE | kinds::CK_STRAND_RESTORE) {
+            } else if matches!(
+                kind,
+                kinds::CK_STRAND_UPDATE | kinds::CK_STRAND_ARCHIVE | kinds::CK_STRAND_RESTORE
+            ) {
                 strand_id_from_target_ref
             } else {
                 strand_id_from_payload

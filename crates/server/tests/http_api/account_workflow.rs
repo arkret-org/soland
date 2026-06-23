@@ -50,11 +50,13 @@ async fn account_erasure_projects_erasure_pending_state() {
         "erasure_pending"
     );
 
-    let viewer = TestClient::get("http://server/_cokret/self/account/viewer")
+    let mut viewer = TestClient::get("http://server/_cokret/self/account/viewer")
         .add_header("authorization", format!("Bearer {token}"), true)
         .send(&app_from_state(state.clone()))
         .await;
     assert_eq!(viewer.status_code.unwrap().as_u16(), 401);
+    let viewer_body: Value = viewer.take_json().await.unwrap();
+    assert_eq!(viewer_body["error"]["code"], "account_erased");
 }
 
 #[tokio::test]
@@ -87,6 +89,128 @@ async fn local_account_register_duplicate_conflict_and_me_reads_state() {
         .unwrap();
     assert_eq!(me["did"], "did:web:bob.example");
     assert_eq!(me["state"], "active");
+}
+
+#[tokio::test]
+async fn account_lifecycle_errors_surface_specific_codes() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let admin = dev_token(state.clone()).await;
+    let bob = register_account(
+        state.clone(),
+        "did:web:bob.example",
+        "@bob",
+        "ck:device:01904100-0000-7000-8000-b0b0b0000002",
+    )
+    .await;
+
+    let lock: Value =
+        TestClient::post("http://server/_soland/admin/accounts/did:web:bob.example/lock")
+            .add_header("authorization", format!("Bearer {admin}"), true)
+            .json(&serde_json::json!({"reason": "suspicious_login"}))
+            .send(&app_from_state(state.clone()))
+            .await
+            .take_json()
+            .await
+            .unwrap();
+    assert_eq!(lock["state"], "locked");
+
+    let mut old_me = TestClient::get("http://server/_soland/self/account/me")
+        .add_header("authorization", format!("Bearer {bob}"), true)
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(old_me.status_code.unwrap().as_u16(), 401);
+    let old_me_body: Value = old_me.take_json().await.unwrap();
+    assert_eq!(old_me_body["error"]["code"], "account_locked");
+
+    let mut login = TestClient::post("http://server/_soland/gate/auth/dev-login")
+        .json(&serde_json::json!({
+            "actor": "did:web:bob.example",
+            "device_id": "ck:device:01904100-0000-7000-8000-b0b0b0000002",
+            "display_name": "bob"
+        }))
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(login.status_code.unwrap().as_u16(), 403);
+    let login_body: Value = login.take_json().await.unwrap();
+    assert_eq!(login_body["error"]["code"], "account_locked");
+
+    let carol = register_account(
+        state.clone(),
+        "did:web:carol.example",
+        "@carol",
+        "ck:device:01904100-0000-7000-8000-ca2010000003",
+    )
+    .await;
+    let suspend: Value =
+        TestClient::post("http://server/_soland/admin/accounts/did:web:carol.example/suspend")
+            .add_header("authorization", format!("Bearer {admin}"), true)
+            .json(&serde_json::json!({"reason": "abuse"}))
+            .send(&app_from_state(state.clone()))
+            .await
+            .take_json()
+            .await
+            .unwrap();
+    assert_eq!(suspend["state"], "suspended");
+
+    let suspended_me: Value = TestClient::get("http://server/_soland/self/account/me")
+        .add_header("authorization", format!("Bearer {carol}"), true)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(suspended_me["state"], "suspended");
+
+    let mut suspended_login = TestClient::post("http://server/_soland/gate/auth/dev-login")
+        .json(&serde_json::json!({
+            "actor": "did:web:carol.example",
+            "device_id": "ck:device:01904100-0000-7000-8000-ca2010000003",
+            "display_name": "carol"
+        }))
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(suspended_login.status_code.unwrap().as_u16(), 403);
+    let suspended_login_body: Value = suspended_login.take_json().await.unwrap();
+    assert_eq!(suspended_login_body["error"]["code"], "account_suspended");
+
+    let dave = register_account(
+        state.clone(),
+        "did:web:dave.example",
+        "@dave",
+        "ck:device:01904100-0000-7000-8000-da4e00000004",
+    )
+    .await;
+    let deactivate: Value = TestClient::post("http://server/_soland/self/account/deactivate")
+        .add_header("authorization", format!("Bearer {dave}"), true)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(deactivate["state"], "deactivated");
+
+    let mut deactivated_me = TestClient::get("http://server/_soland/self/account/me")
+        .add_header("authorization", format!("Bearer {dave}"), true)
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(deactivated_me.status_code.unwrap().as_u16(), 401);
+    let deactivated_me_body: Value = deactivated_me.take_json().await.unwrap();
+    assert_eq!(deactivated_me_body["error"]["code"], "account_deactivated");
+
+    let mut deactivated_login = TestClient::post("http://server/_soland/gate/auth/dev-login")
+        .json(&serde_json::json!({
+            "actor": "did:web:dave.example",
+            "device_id": "ck:device:01904100-0000-7000-8000-da4e00000004",
+            "display_name": "dave"
+        }))
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(deactivated_login.status_code.unwrap().as_u16(), 403);
+    let deactivated_login_body: Value = deactivated_login.take_json().await.unwrap();
+    assert_eq!(
+        deactivated_login_body["error"]["code"],
+        "account_deactivated"
+    );
 }
 
 #[tokio::test]

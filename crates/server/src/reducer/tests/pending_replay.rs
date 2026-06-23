@@ -71,7 +71,7 @@ fn strand_update_pending_replays_after_create() {
         crate::kinds::CK_STRAND_UPDATE,
         REALM,
         serde_json::json!({
-            "strand_id": STRAND,
+            "target_ref": STRAND,
             "patch": { "metadata.title": "Backfilled title" }
         }),
     );

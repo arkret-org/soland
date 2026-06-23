@@ -136,7 +136,7 @@ fn strand_lifecycle_preflight_rejects_illegal_transitions() {
         crate::kinds::CK_STRAND_UPDATE,
         realm_id,
         serde_json::json!({
-            "strand_id": strand_id,
+            "target_ref": strand_id,
             "patch": { "title": "Edit while archived" }
         }),
     );

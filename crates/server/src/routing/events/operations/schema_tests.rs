@@ -1009,7 +1009,7 @@ mod derived_relation_and_morph_immutability_tests {
         let operation = op(
             kinds::CK_STRAND_UPDATE,
             json!({
-                "strand_id": "ck:strand:01904100-0000-7000-8000-00000000000e",
+                "target_ref": "ck:strand:01904100-0000-7000-8000-00000000000e",
                 "patch": {"state": {"$op": "set", "value": "archived"}}
             }),
         );
@@ -1024,7 +1024,7 @@ mod derived_relation_and_morph_immutability_tests {
         let operation = op(
             kinds::CK_STRAND_UPDATE,
             json!({
-                "strand_id": "ck:strand:01904100-0000-7000-8000-00000000000e",
+                "target_ref": "ck:strand:01904100-0000-7000-8000-00000000000e",
                 "patch": {"metadata.summary": {"$op": "unset"}}
             }),
         );
@@ -1039,7 +1039,7 @@ mod derived_relation_and_morph_immutability_tests {
         let operation = op(
             kinds::CK_STRAND_UPDATE,
             json!({
-                "strand_id": "ck:strand:01904100-0000-7000-8000-00000000000e",
+                "target_ref": "ck:strand:01904100-0000-7000-8000-00000000000e",
                 "patch": {"metadata.title": {"$op": "unset"}}
             }),
         );

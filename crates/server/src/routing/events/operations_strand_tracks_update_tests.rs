@@ -71,7 +71,7 @@ fn encrypted_realm_strand_content_detector_matches_content_only_boundary() {
     let content_update = strand_position_op(
         kinds::CK_STRAND_UPDATE,
         json!({
-            "strand_id": strand_id,
+            "target_ref": strand_id,
             "patch": {
                 "content": {"$op": "set", "value": {"kind": "ck.content.text", "body": "private description"}}
             }
@@ -84,7 +84,7 @@ fn encrypted_realm_strand_content_detector_matches_content_only_boundary() {
     let summary_update = strand_position_op(
         kinds::CK_STRAND_UPDATE,
         json!({
-            "strand_id": strand_id,
+            "target_ref": strand_id,
             "patch": {
                 "metadata": {"$op": "set", "value": {"summary": "wire metadata"}}
             }
@@ -97,7 +97,7 @@ fn encrypted_realm_strand_content_detector_matches_content_only_boundary() {
     let sdk_encrypted_content_update = strand_position_op(
         kinds::CK_STRAND_UPDATE,
         json!({
-            "strand_id": strand_id,
+            "target_ref": strand_id,
             "patch": {
                 "content": {
                     "$op": "set",
@@ -120,7 +120,7 @@ fn encrypted_realm_strand_content_detector_matches_content_only_boundary() {
     let ciphertext_label_content_update = strand_position_op(
         kinds::CK_STRAND_UPDATE,
         json!({
-            "strand_id": strand_id,
+            "target_ref": strand_id,
             "patch": {
                 "content": {
                     "$op": "set",

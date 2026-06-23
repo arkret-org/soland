@@ -283,7 +283,7 @@ fn builtin_operation_conformance_vectors_cover_registry() {
         OperationVector {
             name: "strand update",
             kind: kinds::CK_STRAND_UPDATE,
-            payload: json!({"strand_id": "ck:strand:01904100-0000-7000-8000-ca33616973bb", "patch": {"metadata.title": { "$op": "set", "value": "Launch v2" }}}),
+            payload: json!({"target_ref": "ck:strand:01904100-0000-7000-8000-ca33616973bb", "patch": {"metadata.title": { "$op": "set", "value": "Launch v2" }}}),
             valid: true,
         },
         OperationVector {

@@ -162,7 +162,7 @@ impl ProjectionState {
         let Some(strand_id) = strand_id_from_payload(&operation.payload).map(ToOwned::to_owned)
         else {
             return ProjectionEffect::Rejected {
-                reason: "strand_update_missing_strand_id".to_owned(),
+                reason: "strand_update_missing_target_ref".to_owned(),
             };
         };
         // CKP-0007: Strand scope is set at create time; `scope_circle_id`

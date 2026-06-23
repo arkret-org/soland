@@ -1496,11 +1496,10 @@ async fn submit_event_value_with_context(
     let scope_strand_id: Option<String> = envelope
         .get("payload")
         .and_then(|payload| match parsed.kind.as_str() {
-            kinds::CK_MESSAGE_CREATE
-            | kinds::CK_STRAND_UPDATE
-            | kinds::CK_STRAND_MOVE
-            | kinds::CK_STRAND_REORDER => payload.get("strand_id").and_then(Value::as_str),
-            kinds::CK_STRAND_ARCHIVE | kinds::CK_STRAND_RESTORE => {
+            kinds::CK_MESSAGE_CREATE | kinds::CK_STRAND_MOVE | kinds::CK_STRAND_REORDER => {
+                payload.get("strand_id").and_then(Value::as_str)
+            }
+            kinds::CK_STRAND_UPDATE | kinds::CK_STRAND_ARCHIVE | kinds::CK_STRAND_RESTORE => {
                 payload.get("target_ref").and_then(Value::as_str)
             }
             _ => None,

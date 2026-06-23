@@ -10,11 +10,8 @@ fn account_new_session_error(state: &AppState, actor: &str) -> Option<AppError> 
 }
 
 /// Lifecycle gate for new session issuance. Wire codes come from the spec
-/// error-code-registry: `locked` / `suspended` deny by account policy →
-/// `policy_denied` (403); `deactivated` / `erasure_pending` hit the
-/// account-lifecycle.md §7.1 write barrier → `failed_precondition` with
-/// reason `principal_deactivated`. The pre-rename lifecycle word is kept in
-/// `error.details.reason_detail` for operators.
+/// error-code-registry. These are account-lifecycle denials rather than
+/// generic policy denials, so the stable wire code names the lifecycle state.
 pub(crate) fn account_new_session_tuple(
     state: &AppState,
     actor: &str,
@@ -22,26 +19,26 @@ pub(crate) fn account_new_session_tuple(
     match state.account_lifecycle_state(actor).as_str() {
         "locked" => Some((
             StatusCode::FORBIDDEN,
-            "policy_denied",
+            ErrorCode::AccountLocked.as_str(),
             "account_status=locked",
             "account is locked",
         )),
         "suspended" => Some((
             StatusCode::FORBIDDEN,
-            "policy_denied",
+            ErrorCode::AccountSuspended.as_str(),
             "account_status=suspended",
             "account is suspended",
         )),
         "deactivated" => Some((
-            StatusCode::CONFLICT,
-            "failed_precondition",
-            "principal_deactivated (account_status=deactivated)",
+            StatusCode::FORBIDDEN,
+            ErrorCode::AccountDeactivated.as_str(),
+            "account_status=deactivated",
             "account has been deactivated",
         )),
         "erasure_pending" => Some((
-            StatusCode::CONFLICT,
-            "failed_precondition",
-            "principal_deactivated (account_status=erasure_pending)",
+            StatusCode::UNAUTHORIZED,
+            ErrorCode::AccountErased.as_str(),
+            "account_status=erasure_pending",
             "account erasure is pending",
         )),
         _ => None,
@@ -71,26 +68,23 @@ pub(crate) fn account_existing_session_error(
     state: &AppState,
     actor: &str,
 ) -> Option<(StatusCode, &'static str, &'static str)> {
-    // Spec: C.3.8 — 401 means "not authenticated"; 403 means
-    // "authenticated, policy denies". A session-bearing request whose
-    // backing account is `locked` / `deactivated` carries a valid
-    // bearer (so the request IS authenticated); the lifecycle gate is
-    // a policy denial and MUST surface as 403 with the registry code
-    // `policy_denied`.
-    //
-    // `erasure_pending` is the exception kept at 401: erasure invalidates the
-    // bearer itself, so re-auth is the right signal — registry code
-    // `unauthenticated` ("authentication material is missing or invalid").
+    // account-lifecycle.md §3: locked, deactivated, and erasure_pending
+    // invalidate existing session grants. Preserve the lifecycle-specific code
+    // instead of collapsing to generic unauthenticated.
     match state.account_lifecycle_state(actor).as_str() {
-        "locked" => Some((StatusCode::FORBIDDEN, "policy_denied", "account is locked")),
+        "locked" => Some((
+            StatusCode::UNAUTHORIZED,
+            ErrorCode::AccountLocked.as_str(),
+            "account is locked",
+        )),
         "deactivated" => Some((
-            StatusCode::FORBIDDEN,
-            "policy_denied",
+            StatusCode::UNAUTHORIZED,
+            ErrorCode::AccountDeactivated.as_str(),
             "account has been deactivated",
         )),
         "erasure_pending" => Some((
             StatusCode::UNAUTHORIZED,
-            "unauthenticated",
+            ErrorCode::AccountErased.as_str(),
             "account erasure is pending",
         )),
         _ => None,

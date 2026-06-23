@@ -1047,7 +1047,7 @@ fn event_payload_validator_enforces_strand_update_patch_schema() {
     let strand_id = "ck:strand:01904100-0000-7000-8000-f10dc0000001";
     let valid = json!({
         "payload": {
-            "strand_id": strand_id,
+            "target_ref": strand_id,
             "patch": {
                 "fields.document": {
                     "$op": "set",
@@ -1067,7 +1067,7 @@ fn event_payload_validator_enforces_strand_update_patch_schema() {
 
     let invalid_patch_op = json!({
         "payload": {
-            "strand_id": strand_id,
+            "target_ref": strand_id,
             "patch": {
                 "fields.document": {
                     "$op": "replace",
@@ -1137,11 +1137,11 @@ fn event_payload_validator_enforces_patch_family_schema() {
         (
             "ck.strand.update",
             json!({
-                "strand_id": "ck:strand:01904100-0000-7000-8000-f10dc0000001",
+                "target_ref": "ck:strand:01904100-0000-7000-8000-f10dc0000001",
                 "patch": { "metadata.title": { "$op": "set", "value": "Roadmap" } }
             }),
             json!({
-                "strand_id": "ck:strand:01904100-0000-7000-8000-f10dc0000001",
+                "target_ref": "ck:strand:01904100-0000-7000-8000-f10dc0000001",
                 "patch": { "metadata.title": { "$op": "replace", "value": "Roadmap" } }
             }),
         ),

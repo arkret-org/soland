@@ -376,7 +376,7 @@ pub(crate) fn strand_status_transition_allowed(current: &str, next: &str) -> boo
 
 pub(crate) fn strand_id_from_payload(payload: &Value) -> Option<&str> {
     payload
-        .get("strand_id")
+        .get("target_ref")
         .and_then(Value::as_str)
         .filter(|value| value.starts_with("ck:strand:"))
 }
