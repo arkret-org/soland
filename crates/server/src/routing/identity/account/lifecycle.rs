@@ -438,7 +438,7 @@ async fn append_account_state_change_audit(
     // Product-private audit actions must not occupy the protocol `ck.` prefix.
     let payload = json!({
         "schema": "org.cokret.soland.account.state_change.v1",
-        "actor": did,
+        "actor": changed_by,
         "subject": did,
         "from": previous_state,
         "to": next_state,

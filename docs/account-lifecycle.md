@@ -123,7 +123,7 @@ body with `[redacted]` while preserving `audit_id`, `created_at`, and
 
 ## v1 export scope
 
-The `POST /_soland/self/account/export` bundle in v1 is authoritative only
+The `GET /_soland/self/account/export` bundle in v1 is authoritative only
 for `{ account, devices, audit_log }` (plus the already-empty
 `messages` and `spaces` collections). The following fields are
 reserved on the response envelope so downstream consumers can compile
