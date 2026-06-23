@@ -637,6 +637,47 @@ async fn typing_submit_rejects_unknown_strand_scope() {
 }
 
 #[tokio::test]
+async fn typing_submit_accepts_default_realm_strand_scope() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let token = dev_token(state.clone()).await;
+    let default_strand_id = DEMO_REALM_ID.replacen("ck:realm:", "ck:strand:", 1);
+    let sent_at = chrono::Utc::now();
+    let expires_at = sent_at + chrono::Duration::seconds(30);
+
+    let typing: Value = TestClient::post("http://server/_cokret/self/ephemeral")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&serde_json::json!({
+            "kind": "ck.typing",
+            "realm_id": DEMO_REALM_ID,
+            "actor_id": "did:web:alice.example",
+            "sent_at": sent_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+            "expires_at": expires_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+            "payload": {
+                "strand_id": default_strand_id,
+                "typing": true
+            }
+        }))
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(typing["accepted"], true);
+
+    let active_typing = state
+        .persistence
+        .typing()
+        .list_for_realm(DEMO_REALM_ID)
+        .await
+        .unwrap();
+    assert_eq!(active_typing.len(), 1);
+    assert_eq!(
+        active_typing[0].scope_id.as_deref(),
+        Some(default_strand_id.as_str())
+    );
+}
+
+#[tokio::test]
 async fn typing_submit_rejects_disabled_discussion_strand_scope() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;

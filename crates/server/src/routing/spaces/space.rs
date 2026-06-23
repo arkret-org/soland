@@ -1262,6 +1262,9 @@ pub async fn typing_scope_allows_actor(
         .lock()
         .map_err(|_| AppError::internal("projection state unavailable"))?;
     let Some(strand) = projection.strands.get(strand_id) else {
+        if strand_id == crate::routing::events::strand::strand_id_from_realm_id(realm_id) {
+            return Ok(());
+        }
         return Err(AppError::capability_denied(
             "ck.typing strand is not visible",
         ));
