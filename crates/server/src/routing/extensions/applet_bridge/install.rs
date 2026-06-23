@@ -81,7 +81,8 @@ pub(super) async fn register_package_install(
             .with_wire_code("applet_already_registered"));
     }
 
-    let namespace_conflicts = namespace_conflicts_for(state, &package.namespaces).await?;
+    let namespace_conflicts =
+        namespace_conflicts_for(state, &applet_id, &package.namespaces).await?;
     if !namespace_conflicts.is_empty() {
         return Err(AppError::conflict("applet namespace is already claimed")
             .with_wire_code("applet_namespace_conflict"));
@@ -912,7 +913,8 @@ pub(super) async fn build_install_plan(
     scope: &EffectiveScope,
     approved_scopes: Vec<ApprovedScope>,
 ) -> Result<InstallPlan, AppError> {
-    let namespace_conflicts = namespace_conflicts_for(state, &package.namespaces).await?;
+    let namespace_conflicts =
+        namespace_conflicts_for(state, &package.applet_id, &package.namespaces).await?;
     if !namespace_conflicts.is_empty() {
         return Err(AppError::conflict("applet namespace is already claimed")
             .with_wire_code("applet_namespace_conflict"));
@@ -1147,13 +1149,14 @@ pub(super) fn denied_scope_values(
 
 pub(super) async fn namespace_conflicts_for(
     state: &AppState,
+    applet_id: &str,
     namespaces: &AppletWireNamespaces,
 ) -> Result<Vec<Value>, AppError> {
     let mut conflicts = Vec::new();
     for record in applet_records(state)
         .await?
         .into_iter()
-        .filter(|record| record.revoked_at.is_none())
+        .filter(|record| record.revoked_at.is_none() && record.applet_id != applet_id)
     {
         let Some(existing) = record.namespaces.as_ref() else {
             continue;
@@ -1291,7 +1294,7 @@ pub(super) fn allow_ghost_actors_for_install(
 ) -> bool {
     let package_allows = package
         .ghost_policy
-        .get("allow_ghost_actors")
+        .get("enabled")
         .and_then(Value::as_bool)
         .unwrap_or(false);
     let scope_approved = approved_actions
@@ -1346,6 +1349,34 @@ mod tests {
             effective_status: "installed".to_owned(),
             rejected: Vec::new(),
         }
+    }
+
+    #[test]
+    fn allow_ghost_actors_uses_package_ghost_policy_enabled() {
+        let mut package = sample_package();
+        package.ghost_policy = json!({
+            "enabled": true,
+            "accountability_template": "bot_actor_and_applet_registry"
+        });
+        let actor_policy = cokret_sdk::ActorPolicy {
+            bot_membership: "join".to_owned(),
+            ghost_actor_mode: "policy_declared".to_owned(),
+        };
+        assert!(allow_ghost_actors_for_install(
+            &package,
+            &[GHOST_PROVISION_ACTION.to_owned()],
+            &actor_policy
+        ));
+
+        package.ghost_policy = json!({
+            "enabled": false,
+            "accountability_template": "bot_actor_and_applet_registry"
+        });
+        assert!(!allow_ghost_actors_for_install(
+            &package,
+            &[GHOST_PROVISION_ACTION.to_owned()],
+            &actor_policy
+        ));
     }
 
     fn sample_record(package: &AppletPackage, response: &InstallCommitOutcome) -> AppletRecord {
