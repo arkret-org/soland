@@ -19,6 +19,12 @@ async fn soland_admin_openapi_uses_product_namespace() {
     );
     assert_product_admin_tags(server_status);
 
+    let circle_restore = &spec["paths"]["/_cokret/self/circles/{circle_id}/restore"]["post"];
+    assert_eq!(
+        circle_restore["operationId"],
+        "ck.self.circle.command.restore"
+    );
+
     let mut checked_admin_operations = 0;
     let paths = spec["paths"].as_object().expect("paths object");
     for (path, path_item) in paths {

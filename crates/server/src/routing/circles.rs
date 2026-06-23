@@ -21,6 +21,7 @@
 //! - `DELETE /_cokret/self/circles/{circle_id}/members/{actor}`  remove member
 //! - `POST   /_cokret/self/circles/{circle_id}/scope-rotate`     rotate MLS scope (501 until wired)
 //! - `POST   /_cokret/self/circles/{circle_id}/archive`          archive Circle
+//! - `POST   /_cokret/self/circles/{circle_id}/restore`          restore Circle
 //! - `POST   /_cokret/self/circles/{circle_id}/tombstone`        tombstone Circle
 //!
 //! `scope-rotate` intentionally returns `501 unsupported_feature` until the
@@ -44,7 +45,8 @@ use super::{AuthArgs, accept_local_operations};
 use crate::error::{AppError, ErrorCode};
 use crate::ids;
 use crate::kinds::{
-    CK_CIRCLE_ARCHIVE, CK_CIRCLE_CREATE, CK_CIRCLE_MEMBER_STATE, CK_CIRCLE_TOMBSTONE,
+    CK_CIRCLE_ARCHIVE, CK_CIRCLE_CREATE, CK_CIRCLE_MEMBER_STATE, CK_CIRCLE_RESTORE,
+    CK_CIRCLE_TOMBSTONE,
 };
 use crate::reducer::{
     CircleLifecycleState, CircleProjection, MlsRemoveObligation, ProjectionState,
@@ -65,6 +67,7 @@ pub(crate) fn router() -> Router {
         )
         .push(Router::with_path("{circle_id}/scope-rotate").post(post_scope_rotate))
         .push(Router::with_path("{circle_id}/archive").post(post_circle_archive))
+        .push(Router::with_path("{circle_id}/restore").post(post_circle_restore))
         .push(Router::with_path("{circle_id}/tombstone").post(post_circle_tombstone))
 }
 
@@ -707,6 +710,21 @@ async fn post_circle_archive(
 }
 
 #[endpoint(
+    operation_id = "ck.self.circle.command.restore",
+    tags("circles"),
+    summary = "Restore a Circle (ck.circle.restore)"
+)]
+#[tracing::instrument(skip_all, fields(op = "ck.self.circle.command.restore"))]
+async fn post_circle_restore(
+    aa: AuthArgs,
+    circle_id: PathParam<String>,
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<CircleView> {
+    submit_circle_lifecycle(depot, req, aa, circle_id.into_inner(), CK_CIRCLE_RESTORE).await
+}
+
+#[endpoint(
     operation_id = "ck.self.circle.command.tombstone",
     tags("circles"),
     summary = "Tombstone a Circle (ck.circle.tombstone)"
@@ -741,6 +759,7 @@ async fn submit_circle_lifecycle(
         CIRCLE_MANAGE_CAPABILITY_REQUIRED,
     )
     .await?;
+    preflight_circle_lifecycle(state, &circle_id, kind)?;
     let payload = json!({
         "circle_id": circle_id,
         "sender": session.actor.clone(),
@@ -760,6 +779,38 @@ async fn submit_circle_lifecycle(
         .ok_or_else(|| AppError::not_found("circle not found"))?;
     let response = circle_view_from_projection(&projection, circle, &session.actor)?;
     json_ok(response)
+}
+
+fn preflight_circle_lifecycle(
+    state: &AppState,
+    circle_id: &str,
+    kind: &'static str,
+) -> Result<(), AppError> {
+    let projection = state.projection.lock().expect("projection mutex");
+    let circle = projection
+        .circles
+        .get(circle_id)
+        .ok_or_else(|| AppError::not_found("circle not found"))?;
+    let reason = match kind {
+        CK_CIRCLE_ARCHIVE if circle.state == CircleLifecycleState::Active => None,
+        CK_CIRCLE_ARCHIVE => Some("circle_not_active"),
+        CK_CIRCLE_RESTORE if circle.state == CircleLifecycleState::Archived => None,
+        CK_CIRCLE_RESTORE => Some("circle_not_archived"),
+        CK_CIRCLE_TOMBSTONE
+            if matches!(
+                circle.state,
+                CircleLifecycleState::Active | CircleLifecycleState::Archived
+            ) =>
+        {
+            None
+        }
+        CK_CIRCLE_TOMBSTONE => Some("circle_already_terminal"),
+        _ => None,
+    };
+    match reason {
+        Some(reason) => Err(reducer_reject_to_app_error(reason)),
+        None => Ok(()),
+    }
 }
 
 fn circle_member_manage_required(

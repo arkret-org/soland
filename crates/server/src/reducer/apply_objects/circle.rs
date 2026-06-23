@@ -544,6 +544,18 @@ impl ProjectionState {
         if circle.realm_id != operation_realm_id {
             return Err("circle_realm_mismatch");
         }
+        if self.pending_mls_removals.iter().any(|obligation| {
+            obligation.realm_id == operation_realm_id
+                && obligation.circle_id.as_deref() == Some(scope_circle_id)
+                && obligation.mls_group_ref.as_deref().is_none_or(|group_ref| {
+                    circle
+                        .mls_group_ref
+                        .as_deref()
+                        .is_none_or(|expected| expected == group_ref)
+                })
+        }) {
+            return Err("circle_not_active");
+        }
         Ok(())
     }
 

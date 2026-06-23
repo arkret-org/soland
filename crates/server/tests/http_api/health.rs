@@ -157,6 +157,13 @@ async fn health_and_describe_work() {
             .iter()
             .any(|operation| operation == "ck.self.keys.backups.resource.replace")
     );
+    assert!(
+        describe["supported_operations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|operation| operation == "ck.self.circle.command.restore")
+    );
     for operation_id in [
         "ck.self.authz.query.check",
         "ck.self.authz.grants.query.effective",
@@ -222,11 +229,25 @@ async fn health_and_describe_work() {
             .any(|surface| surface == "events_sync")
     );
     assert!(
+        describe["limits"]["profile_status"]["supported_operation_catalog"]["derived_surface_groups"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|surface| surface == "circle_management")
+    );
+    assert!(
         describe["limits"]["profile_status"]["implemented_surfaces"]
             .as_array()
             .unwrap()
             .iter()
             .any(|surface| surface == "authz_policy")
+    );
+    assert!(
+        describe["limits"]["profile_status"]["implemented_surfaces"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|surface| surface == "circle_management")
     );
     assert!(
         !describe["limits"]["profile_status"]["full_profiles_not_claimed"]
