@@ -1242,58 +1242,55 @@ pub async fn typing_scope_allows_actor(
     state: &AppState,
     realm_id: &str,
     actor: &str,
-    scope_id: Option<&str>,
+    strand_id: Option<&str>,
 ) -> Result<(), AppError> {
-    let Some(scope_id) = scope_id.map(str::trim).filter(|value| !value.is_empty()) else {
+    let Some(strand_id) = strand_id.map(str::trim).filter(|value| !value.is_empty()) else {
         return Ok(());
     };
-    if scope_id == realm_id {
-        return Ok(());
-    }
-    if scope_id.starts_with("ck:realm:") {
+    if strand_id.starts_with("ck:realm:") || strand_id == realm_id {
         return Err(AppError::capability_denied(
-            "ck.typing scope_id names a different realm",
+            "ck.typing strand_id must name a visible ck:strand",
         ));
     }
-    if !scope_id.starts_with("ck:strand:") {
+    if !strand_id.starts_with("ck:strand:") {
         return Err(AppError::invalid_param(
-            "ck.typing scope_id must be the realm_id or a visible ck:strand",
+            "ck.typing strand_id must name a visible ck:strand",
         ));
     }
     let projection = state
         .projection
         .lock()
         .map_err(|_| AppError::internal("projection state unavailable"))?;
-    let Some(strand) = projection.strands.get(scope_id) else {
+    let Some(strand) = projection.strands.get(strand_id) else {
         return Err(AppError::capability_denied(
-            "ck.typing scope strand is not visible",
+            "ck.typing strand is not visible",
         ));
     };
     if strand.realm_id != realm_id {
         return Err(AppError::capability_denied(
-            "ck.typing scope strand belongs to another realm",
+            "ck.typing strand belongs to another realm",
         ));
     }
     if strand.state != ObjectLifecycleState::Active {
         return Err(AppError::capability_denied(
-            "ck.typing scope strand is not active",
+            "ck.typing strand is not active",
         ));
     }
     let Some(discussion_track) = strand.tracks.get(STRAND_TRACK_NAME_DISCUSSION) else {
         return Err(AppError::capability_denied(
-            "ck.typing scope discussion track is disabled",
+            "ck.typing discussion track is disabled",
         ));
     };
     if discussion_track.enabled == Some(false) {
         return Err(AppError::capability_denied(
-            "ck.typing scope discussion track is disabled",
+            "ck.typing discussion track is disabled",
         ));
     }
     if let Some(scope_circle_id) = strand.scope_circle_id.as_deref()
         && !projection.circle_scope_visible_to_actor(scope_circle_id, actor)
     {
         return Err(AppError::capability_denied(
-            "ck.typing scope circle is not visible",
+            "ck.typing circle is not visible",
         ));
     }
     Ok(())
@@ -1322,11 +1319,10 @@ pub async fn typing_ephemeral_for_realm(
         if !typing_record_visible_to_session(state, record, session).await {
             continue;
         }
-        let scope_id = record
-            .scope_id
-            .clone()
-            .unwrap_or_else(|| record.realm_id.clone());
-        by_scope.entry(scope_id).or_default().push(json!({
+        let Some(strand_id) = record.scope_id.clone() else {
+            continue;
+        };
+        by_scope.entry(strand_id).or_default().push(json!({
             "actor": record.actor.clone(),
             "expires_at": record.expires_at,
             "updated_at": record.updated_at,
@@ -1334,11 +1330,11 @@ pub async fn typing_ephemeral_for_realm(
     }
     let mut ephemeral: Vec<serde_json::Value> = by_scope
         .into_iter()
-        .map(|(scope_id, actors)| {
+        .map(|(strand_id, actors)| {
             json!({
                 "type": "ck.typing",
                 "realm_id": realm_id,
-                "scope_id": scope_id,
+                "strand_id": strand_id,
                 "actors": actors,
             })
         })

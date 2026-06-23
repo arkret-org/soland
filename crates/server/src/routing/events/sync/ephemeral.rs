@@ -184,21 +184,23 @@ async fn persist_ephemeral_typing(
             let _ = state.persistence.typing().remove(actor, realm_id).await;
             return Ok(());
         }
-        let scope_id = envelope
+        let strand_id = envelope
             .payload
-            .get("scope_id")
-            .or_else(|| envelope.payload.get("strand_id"))
+            .get("strand_id")
             .and_then(Value::as_str)
             .filter(|value| !value.trim().is_empty())
-            .map(ToOwned::to_owned);
-        typing_scope_allows_actor(state, realm_id, actor, scope_id.as_deref()).await?;
+            .map(ToOwned::to_owned)
+            .ok_or_else(|| {
+                crate::error::AppError::invalid_param("ck.typing payload requires strand_id")
+            })?;
+        typing_scope_allows_actor(state, realm_id, actor, Some(strand_id.as_str())).await?;
         if let Err(error) = state
             .persistence
             .typing()
             .put(TypingRecord {
                 actor: actor.to_owned(),
                 realm_id: realm_id.to_owned(),
-                scope_id,
+                scope_id: Some(strand_id),
                 expires_at: envelope.expires_at,
                 updated_at: chrono::Utc::now(),
             })

@@ -213,6 +213,9 @@ async fn push_profile_and_moderation_contracts_work() {
     assert!(last_active_at.ends_with("/PT1H"));
     assert!(stale_profile.get("last_active").is_none());
 
+    let typing_strand_id = "ck:strand:01904100-0000-7000-8000-7a1c00000003";
+    insert_typing_scope_strand(state.clone(), typing_strand_id, Some(true));
+
     let unauth_typing = TestClient::post("http://server/_cokret/self/ephemeral")
         .json(&serde_json::json!({
             "kind": "ck.typing",
@@ -221,6 +224,7 @@ async fn push_profile_and_moderation_contracts_work() {
             "sent_at": sent_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
             "expires_at": expires_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
             "payload": {
+                "strand_id": typing_strand_id,
                 "typing": true
             }
         }))
@@ -237,6 +241,7 @@ async fn push_profile_and_moderation_contracts_work() {
             "sent_at": sent_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
             "expires_at": expires_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
             "payload": {
+                "strand_id": typing_strand_id,
                 "typing": true
             }
         }))
@@ -256,7 +261,7 @@ async fn push_profile_and_moderation_contracts_work() {
         .unwrap();
     assert_eq!(active_typing.len(), 1);
     assert_eq!(active_typing[0].actor, "did:web:alice.example");
-    assert_eq!(active_typing[0].scope_id.as_deref(), None);
+    assert_eq!(active_typing[0].scope_id.as_deref(), Some(typing_strand_id));
 
     let stop_sent_at = chrono::Utc::now();
     let stop_expires_at = stop_sent_at + chrono::Duration::seconds(30);
@@ -615,7 +620,7 @@ async fn typing_submit_rejects_unknown_strand_scope() {
             "sent_at": sent_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
             "expires_at": expires_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
             "payload": {
-                "scope_id": new_prefixed_uuid7("ck:strand:"),
+                "strand_id": new_prefixed_uuid7("ck:strand:"),
                 "typing": true
             }
         }))
@@ -649,7 +654,7 @@ async fn typing_submit_rejects_disabled_discussion_strand_scope() {
             "sent_at": sent_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
             "expires_at": expires_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
             "payload": {
-                "scope_id": strand_id,
+                "strand_id": strand_id,
                 "typing": true
             }
         }))
