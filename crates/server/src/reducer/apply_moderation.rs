@@ -419,14 +419,16 @@ impl ProjectionState {
         let current = self.moderation_appeal_state(&appeal_id);
 
         // FSM transition guard. (none)→submitted, submitted→under_review,
-        // under_review→decided, {submitted,under_review,decided}→closed.
+        // under_review→decided, decided→closed. The only early close is
+        // appellant withdrawal from submitted/under_review.
         let transition_ok = match (current.as_deref(), target_state) {
             (None, "submitted") => true,
             (Some("submitted"), "under_review") => true,
             (Some("under_review"), "decided") => true,
-            (Some("submitted"), "closed")
-            | (Some("under_review"), "closed")
-            | (Some("decided"), "closed") => true,
+            (Some("submitted"), "closed") | (Some("under_review"), "closed") => {
+                self.is_appellant_withdrawal_close(&appeal_id, operation)
+            }
+            (Some("decided"), "closed") => true,
             _ => false,
         };
         if !transition_ok {
@@ -493,6 +495,10 @@ impl ProjectionState {
     ) -> Result<(), &'static str> {
         let appeal_id = payload_str(operation, "appeal_id").unwrap_or_default();
         match target_state {
+            "submitted" => {
+                self.enforce_no_active_duplicate_appeal(&appeal_id, operation)?;
+                Ok(())
+            }
             // review: reviewer ≠ original decision issuer (separation of duties).
             "under_review" => {
                 self.enforce_appeal_separation_of_duties(&appeal_id, operation)?;
@@ -537,12 +543,55 @@ impl ProjectionState {
                 }
             }
             // close: reviewer close OR appellant withdrawal. Withdrawal is
-            // authorized by closer == appellant; otherwise the capability gate
-            // (policy.rs) covers reviewer authority. No SoD restriction on
-            // close per §5.5.2 (appellant may close their own appeal).
+            // authorized by closer == appellant and close_reason, otherwise
+            // the capability gate (policy.rs) covers reviewer authority after
+            // decided. No SoD restriction on close per §5.5.2.
             "closed" => Ok(()),
             _ => Ok(()),
         }
+    }
+
+    fn is_appellant_withdrawal_close(&self, appeal_id: &str, operation: &Operation) -> bool {
+        if payload_str(operation, "close_reason").as_deref() != Some("appellant_withdrawn") {
+            return false;
+        }
+        let Some(closer) = payload_str(operation, "closer") else {
+            return false;
+        };
+        self.moderation_appeal_appellant(appeal_id).as_deref() == Some(closer.as_str())
+    }
+
+    fn enforce_no_active_duplicate_appeal(
+        &self,
+        appeal_id: &str,
+        operation: &Operation,
+    ) -> Result<(), &'static str> {
+        let Some(decision_ref) = payload_str(operation, "decision_ref") else {
+            return Ok(());
+        };
+        let Some(appellant) = payload_str(operation, "appellant") else {
+            return Ok(());
+        };
+        for cell in self.cells.values() {
+            let Some(value) = (match cell {
+                CellState::Value(Value::Object(value)) => Some(value),
+                _ => None,
+            }) else {
+                continue;
+            };
+            if value.get("appeal_id").and_then(Value::as_str) == Some(appeal_id) {
+                continue;
+            }
+            if value.get("decision_ref").and_then(Value::as_str) != Some(decision_ref.as_str())
+                || value.get("appellant").and_then(Value::as_str) != Some(appellant.as_str())
+            {
+                continue;
+            }
+            if value.get("state").and_then(Value::as_str) != Some("closed") {
+                return Err("moderation_appeal_duplicate_active");
+            }
+        }
+        Ok(())
     }
 
     /// Read the `decision_ref` anchored on the appeal cell at submit time.

@@ -88,7 +88,7 @@ async fn did_recovery_backup_rejects_unverified_session_device() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn key_backup_delete_rejects_active_did_recovery_backup() {
+async fn key_backup_delete_allows_active_did_recovery_tail_backup() {
     let state = shared_recovery_state(Arc::new(SolandMemoryPersistenceStore::new()));
     let signing = SigningKey::from_bytes(&[122u8; 32]);
     let (principal_id, vm) = did_key_principal(&signing);
@@ -105,15 +105,8 @@ async fn key_backup_delete_rejects_active_did_recovery_backup() {
     let backup = did_recovery_backup_body(&principal_id, backup_id, &policy_id);
     put_key_backup(state.clone(), &token, backup_id, &backup, StatusCode::OK).await;
 
-    let body = delete_key_backup(
-        state,
-        &token,
-        &principal_id,
-        backup_id,
-        StatusCode::CONFLICT,
-    )
-    .await;
-    assert_eq!(body["error"]["code"], "key_backup_delete_not_retired");
+    let body = delete_key_backup(state, &token, &principal_id, backup_id, StatusCode::OK).await;
+    assert_eq!(body["deleted"], true);
 }
 
 #[tokio::test(flavor = "multi_thread")]

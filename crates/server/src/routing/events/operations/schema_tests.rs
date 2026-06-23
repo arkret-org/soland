@@ -192,6 +192,116 @@ mod realm_media_service_schema_tests {
     }
 }
 
+mod realm_plaintext_visible_services_schema_tests {
+    use cokret_sdk::Operation;
+    use serde_json::json;
+
+    use super::super::*;
+
+    #[test]
+    fn realm_plaintext_visible_services_is_registered_for_projection() {
+        let operation = Operation::create(
+            cokret_sdk::OperationId::new("ck:operation:01904100-0000-7000-8000-000000000902")
+                .unwrap(),
+            cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-000000000902".to_owned())
+                .unwrap(),
+            kinds::CK_REALM_PLAINTEXT_VISIBLE_SERVICES,
+            json!({
+                "services": [{
+                    "service_did": "did:web:soland.local",
+                    "service_type": "principal_server",
+                    "data_classes": ["message_content", "notification_summary"],
+                    "purposes": ["message_index", "notification_fanout"],
+                    "visibility": "private_plaintext"
+                }]
+            }),
+        );
+        let schema = operation_schema_for_kind(kinds::CK_REALM_PLAINTEXT_VISIBLE_SERVICES)
+            .expect("plaintext_visible_services event kind must build a projection Operation");
+
+        validate_operation_schema(&operation, schema).unwrap();
+    }
+
+    #[test]
+    fn moderation_control_kinds_are_registered_for_projection() {
+        let realm_id =
+            cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-000000000903".to_owned())
+                .unwrap();
+        let cases = [
+            (
+                kinds::CK_MODERATION_DECISION,
+                json!({
+                    "target_ref": "ck:message:01904100-0000-7000-8000-000000000903",
+                    "decision": "quarantine",
+                    "issuer": "did:web:moderator.example",
+                    "request_canonical_digest": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+                }),
+            ),
+            (
+                kinds::CK_MODERATION_DECISION_LIFT,
+                json!({
+                    "target_ref": "ck:message:01904100-0000-7000-8000-000000000903",
+                    "decision_ref": "ck:event:01904100-0000-7000-8000-000000000903"
+                }),
+            ),
+            (
+                kinds::CK_MODERATION_APPEAL_SUBMIT,
+                json!({
+                    "appeal_id": "ck:appeal:01904100-0000-7000-8000-000000000903",
+                    "realm_id": realm_id.as_str(),
+                    "decision_ref": "ck:event:01904100-0000-7000-8000-000000000903",
+                    "target_ref": "ck:message:01904100-0000-7000-8000-000000000903",
+                    "appellant": "did:web:appellant.example",
+                    "reason_text_ref": "appeal",
+                    "created_at": "2026-06-23T00:00:00Z"
+                }),
+            ),
+            (
+                kinds::CK_MODERATION_APPEAL_REVIEW,
+                json!({
+                    "appeal_id": "ck:appeal:01904100-0000-7000-8000-000000000903",
+                    "realm_id": realm_id.as_str(),
+                    "reviewer": "did:web:reviewer.example",
+                    "reviewed_at": "2026-06-23T00:00:00Z"
+                }),
+            ),
+            (
+                kinds::CK_MODERATION_APPEAL_DECISION,
+                json!({
+                    "appeal_id": "ck:appeal:01904100-0000-7000-8000-000000000903",
+                    "realm_id": realm_id.as_str(),
+                    "reviewer": "did:web:reviewer.example",
+                    "verdict": "uphold",
+                    "reason_text_ref": "reviewed",
+                    "decided_at": "2026-06-23T00:00:00Z"
+                }),
+            ),
+            (
+                kinds::CK_MODERATION_APPEAL_CLOSE,
+                json!({
+                    "appeal_id": "ck:appeal:01904100-0000-7000-8000-000000000903",
+                    "realm_id": realm_id.as_str(),
+                    "closer": "did:web:reviewer.example",
+                    "closed_at": "2026-06-23T00:00:00Z"
+                }),
+            ),
+        ];
+
+        for (kind, payload) in cases {
+            let operation = Operation::create(
+                cokret_sdk::OperationId::new("ck:operation:01904100-0000-7000-8000-000000000903")
+                    .unwrap(),
+                realm_id.clone(),
+                kind,
+                payload,
+            );
+            let schema =
+                operation_schema_for_kind(kind).expect("moderation kind must build Operation");
+            validate_operation_schema(&operation, schema).unwrap();
+        }
+    }
+}
+
 mod message_projection_schema_tests {
     use cokret_sdk::Operation;
     use serde_json::json;
@@ -458,6 +568,68 @@ mod sdk_artifact_schema_tests {
             "ck.cross_signing.reset",
             payload,
         )
+    }
+
+    fn cross_signing_publish(payload: serde_json::Value) -> Operation {
+        Operation::create(
+            cokret_sdk::OperationId::new("ck:operation:01904100-0000-7000-8000-57d7d85564c6")
+                .unwrap(),
+            cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-668e2181b41d").unwrap(),
+            "ck.cross_signing.publish",
+            payload,
+        )
+    }
+
+    #[test]
+    fn artifact_backed_kind_and_payload_validator_cover_cross_signing_publish() {
+        let issued_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        let operation = cross_signing_publish(json!({
+            "principal_id": "did:web:alice.example",
+            "trust_domain": "ck:trust_domain:soland.local",
+            "principal_signing_key": {
+                "kid": "did:web:alice.example#ck_principal_signing_v1",
+                "alg": "EdDSA",
+                "public_key": "z6MkPrincipalAlice",
+                "key_format": "multibase"
+            },
+            "self_signing_key": {
+                "kid": "did:web:alice.example#ck_self_signing_v1",
+                "alg": "EdDSA",
+                "public_key": "z6MkSelfAlice",
+                "key_format": "multibase",
+                "binding": {
+                    "verification_method": "did:web:alice.example#ck_principal_signing_v1",
+                    "alg": "EdDSA",
+                    "signature": "c2ln"
+                }
+            },
+            "user_signing_key": {
+                "kid": "did:web:alice.example#ck_user_signing_v1",
+                "alg": "EdDSA",
+                "public_key": "z6MkUserAlice",
+                "key_format": "multibase",
+                "binding": {
+                    "verification_method": "did:web:alice.example#ck_principal_signing_v1",
+                    "alg": "EdDSA",
+                    "signature": "c2ln"
+                }
+            },
+            "expected_previous_generation": 0,
+            "generation": 1,
+            "issued_at": issued_at
+        }));
+        assert_eq!(
+            kinds::canonical_kind_for_operation(&operation),
+            Some("ck.cross_signing.publish")
+        );
+        assert!(operation_schema_for_kind("ck.cross_signing.publish").is_some());
+        validate_operation_schema_from_sdk_artifact("ck.cross_signing.publish", &operation)
+            .unwrap();
+        validate_operation_schema(
+            &operation,
+            operation_schema_for_kind("ck.cross_signing.publish").unwrap(),
+        )
+        .unwrap();
     }
 
     #[test]

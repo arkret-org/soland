@@ -425,6 +425,92 @@ async fn events_describe_and_single_event_submit_work() {
 }
 
 #[tokio::test]
+async fn realm_create_with_bootstrap_effects_does_not_require_seal_basis() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let token = dev_token(state.clone()).await;
+    let realm_id = new_prefixed_uuid7("ck:realm:");
+    let created_at = "2026-05-17T00:00:00Z";
+    let payload = serde_json::json!({
+        "object": {
+            "id": realm_id,
+            "schema": "ck.schema.realm.v1",
+            "title": "Bootstrap effects realm",
+            "summary": "Realm create carries its genesis cell write",
+            "created_by": "did:web:alice.example",
+            "trust_domain": "ck:trust_domain:soland.local",
+            "schema_refs": ["ck.schema.realm.v1"],
+            "default_discoverability": "listed",
+            "default_join_rule": "invite",
+            "history_visibility": "shared",
+            "encryption_profile": "none",
+            "plaintext_visible_services": ["did:web:soland.local"],
+            "security_class": "standard",
+            "federation_policy": "restricted",
+            "notary_profile": "single_did",
+            "digest_algorithm": "sha256",
+            "notary": {
+                "type": "single_did",
+                "did": "did:web:alice.example",
+                "recovery_members": ["did:web:recovery.soland.local"],
+                "controller_organization": "did:web:organization.primary.soland.local",
+                "recovery_controller_organizations": ["did:web:organization.recovery.soland.local"]
+            },
+            "created_at": created_at
+        }
+    });
+    let cell = format!("ck:cell:ck.component.realm.create.v1:{realm_id}");
+    let mut event = signed_event_envelope(
+        "ck:event:01904100-0000-7000-8000-c7ea7e000001",
+        1,
+        Vec::new(),
+    );
+    event["kind"] = Value::String("ck.realm.create".to_owned());
+    event["schema_id"] = Value::String("ck.schema.realm.v1".to_owned());
+    event["realm_id"] = Value::String(realm_id.clone());
+    event["created_at"] = Value::String(created_at.to_owned());
+    event["payload"] = payload.clone();
+    event["preconditions"] = serde_json::json!([{
+        "cell": cell.clone(),
+        "predicate": {
+            "op": "head_eq",
+            "value": null
+        }
+    }]);
+    event["effects"] = serde_json::json!([{
+        "cell": cell,
+        "op": {
+            "kind": "set",
+            "value": payload["object"].clone()
+        }
+    }]);
+    event["proofs"][0]["payload_digest"] = Value::String(sha256_json(&payload));
+    event["canonical_digest"] = Value::String(event_canonical_digest(&event));
+
+    let mut response = TestClient::post("http://server/_cokret/self/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&event)
+        .send(&app_from_state(state.clone()))
+        .await;
+    let status = response.status_code.expect("submit status");
+    let body: Value = response.take_json().await.expect("submit json body");
+
+    assert!(
+        matches!(status, StatusCode::OK | StatusCode::CREATED),
+        "realm create with bootstrap effects rejected with {status}: {body}"
+    );
+    assert_eq!(body["status"], "accepted");
+    assert_eq!(body["accepted"][0], event["event_id"]);
+    assert!(
+        state
+            .projection
+            .lock()
+            .expect("projection lock")
+            .member(&realm_id, "did:web:alice.example")
+            .is_some_and(|member| member.state == "join")
+    );
+}
+
+#[tokio::test]
 async fn invite_create_accepts_locator_evidence_digest_without_local_consent() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;

@@ -637,6 +637,7 @@ async fn project_accepted_operations_inner(
             fanout_projection_effect_private_update(state, origin, source_device_id, &effect).await;
             mirror_mls_effect_to_persistence(state, origin, source_device_id, operation, &effect)
                 .await;
+            mirror_moderation_effect_to_persistence(state, operation, &effect).await;
             // P1 — fold the projected capability grant cell back into the
             // SolandAuthzEngine read index. The cell is the source of truth;
             // the engine map is a read-side index maintained by projection
@@ -709,6 +710,50 @@ async fn project_accepted_operations_inner(
             state, origin, operation,
         )
         .await;
+    }
+}
+
+pub(crate) async fn mirror_moderation_effect_to_persistence(
+    state: &AppState,
+    operation: &Operation,
+    effect: &crate::reducer::ProjectionEffect,
+) {
+    let crate::reducer::ProjectionEffect::ModerationAppealProjected {
+        appeal_id,
+        new_state,
+        ..
+    } = effect
+    else {
+        return;
+    };
+
+    let mut record = match operation.payload.clone() {
+        Value::Object(map) => map,
+        _ => serde_json::Map::new(),
+    };
+    record
+        .entry("appeal_id".to_owned())
+        .or_insert_with(|| Value::String(appeal_id.clone()));
+    record.insert(
+        "event_kind".to_owned(),
+        Value::String(kinds::canonical_kind_string(operation)),
+    );
+    record.insert("appeal_state".to_owned(), Value::String(new_state.clone()));
+    record
+        .entry("projected_at".to_owned())
+        .or_insert_with(|| Value::String(operation.created_at.to_rfc3339()));
+    if let Err(error) = state
+        .persistence
+        .moderation()
+        .append_appeal(Value::Object(record))
+        .await
+    {
+        tracing::warn!(
+            %error,
+            appeal_id = %appeal_id,
+            operation_id = %operation.operation_id,
+            "failed to mirror moderation appeal event"
+        );
     }
 }
 

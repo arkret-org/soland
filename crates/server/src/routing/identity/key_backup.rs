@@ -17,9 +17,7 @@ use super::append_audit_log;
 use crate::error::{AppError, ErrorCode};
 use crate::result::{JsonResult, json_ok};
 use crate::routing::system::extract::AuthArgs;
-use crate::state::{
-    AppState, RecoveryPolicyRecord, RecoverySessionRecord, key_backup_daily_download_limit,
-};
+use crate::state::{AppState, RecoverySessionRecord, key_backup_daily_download_limit};
 use crate::wire::{
     KeyBackupPutStatus, KeysBackupsDeleteOutcome, KeysBackupsList, KeysBackupsReplaceOutcome,
 };
@@ -496,23 +494,6 @@ mod tests {
         );
     }
 
-    fn active_policy(policy_id: &str, version: u32) -> RecoveryPolicyRecord {
-        let now = chrono::Utc::now();
-        RecoveryPolicyRecord {
-            policy_id: policy_id.to_owned(),
-            principal_id: ACTOR.to_owned(),
-            version,
-            trust_domain: "https://local.host".to_owned(),
-            allowed_proof_kinds: vec!["recovery_key".to_owned()],
-            supersedes: None,
-            expires_at: None,
-            issued_at: now,
-            raw_payload: json!({}),
-            accepted_at: now,
-            verification_method: format!("{ACTOR}#device"),
-        }
-    }
-
     fn did_recovery_delete_candidate(policy_id: &str, policy_version: u64) -> Value {
         let mut body = key_backup_body(
             "did_recovery",
@@ -526,61 +507,12 @@ mod tests {
     }
 
     #[test]
-    fn delete_rejects_current_policy_did_recovery_backup() {
-        let policy = active_policy(POLICY_REF, 1);
+    fn delete_allows_tail_even_when_policy_bound() {
         let body = did_recovery_delete_candidate(POLICY_REF, 1);
+        let owned = vec![body.clone()];
 
-        let err = ensure_key_backup_delete_is_retired_or_redundant(&body, Some(&policy))
-            .expect_err("current did_recovery backup must be protected");
-
-        assert_eq!(err.http_status(), StatusCode::CONFLICT);
-        assert_eq!(
-            err.wire_code_override.as_deref(),
-            Some("key_backup_delete_not_retired")
-        );
-    }
-
-    #[test]
-    fn delete_allows_stale_policy_bound_backup() {
-        let policy = active_policy("ck:policy:01964137-0000-7000-8000-0000000000bb", 2);
-        let body = did_recovery_delete_candidate(POLICY_REF, 1);
-
-        ensure_key_backup_delete_is_retired_or_redundant(&body, Some(&policy))
-            .expect("non-active policy backup is provably stale");
-    }
-
-    #[test]
-    fn delete_rejects_unclassified_mls_history_tail() {
-        let body = key_backup_body(
-            "mls_history",
-            "mls_group_state",
-            secret_storage_key_encryption(),
-        );
-
-        let err = ensure_key_backup_delete_is_retired_or_redundant(&body, None)
-            .expect_err("server cannot prove this mls_history backup is useless");
-
-        assert_eq!(err.http_status(), StatusCode::CONFLICT);
-        assert_eq!(
-            err.wire_code_override.as_deref(),
-            Some("key_backup_delete_not_retired")
-        );
-    }
-
-    #[test]
-    fn delete_allows_retention_expired_backup() {
-        let mut body = key_backup_body(
-            "mls_history",
-            "mls_group_state",
-            secret_storage_key_encryption(),
-        );
-        body["retention"] = json!({
-            "delete_after": "2020-01-01T00:00:00Z",
-            "legal_hold": false
-        });
-
-        ensure_key_backup_delete_is_retired_or_redundant(&body, None)
-            .expect("expired non-held backup may be deleted");
+        ensure_key_backup_delete_is_series_tail(ACTOR, &body, &owned)
+            .expect("tail envelope may be deleted after high-risk proof verification");
     }
 
     #[test]

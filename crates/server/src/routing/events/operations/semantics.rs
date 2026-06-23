@@ -529,7 +529,35 @@ pub fn operation_schema_for_kind(kind: &str) -> Option<OperationPayloadSchema> {
             requirements: REALM_SEARCH_POLICY_REQUIREMENTS,
             validate: Some(validate_operation_payload_against_sdk_artifact),
         },
+        kinds::CK_MODERATION_DECISION => OperationPayloadSchema {
+            requirements: MODERATION_DECISION_REQUIREMENTS,
+            validate: None,
+        },
+        kinds::CK_MODERATION_DECISION_LIFT => OperationPayloadSchema {
+            requirements: MODERATION_DECISION_LIFT_REQUIREMENTS,
+            validate: None,
+        },
+        kinds::CK_MODERATION_APPEAL_SUBMIT => OperationPayloadSchema {
+            requirements: MODERATION_APPEAL_SUBMIT_REQUIREMENTS,
+            validate: None,
+        },
+        kinds::CK_MODERATION_APPEAL_REVIEW => OperationPayloadSchema {
+            requirements: MODERATION_APPEAL_REVIEW_REQUIREMENTS,
+            validate: None,
+        },
+        kinds::CK_MODERATION_APPEAL_DECISION => OperationPayloadSchema {
+            requirements: MODERATION_APPEAL_DECISION_REQUIREMENTS,
+            validate: None,
+        },
+        kinds::CK_MODERATION_APPEAL_CLOSE => OperationPayloadSchema {
+            requirements: MODERATION_APPEAL_CLOSE_REQUIREMENTS,
+            validate: None,
+        },
         kinds::CK_REALM_MEDIA_SERVICE => OperationPayloadSchema {
+            requirements: &[],
+            validate: None,
+        },
+        kinds::CK_REALM_PLAINTEXT_VISIBLE_SERVICES => OperationPayloadSchema {
             requirements: &[],
             validate: None,
         },
@@ -682,6 +710,10 @@ pub fn operation_schema_for_kind(kind: &str) -> Option<OperationPayloadSchema> {
         },
         kinds::CK_AGENT_ACTION_REJECT => OperationPayloadSchema {
             requirements: AGENT_ACTION_REJECT_REQUIREMENTS,
+            validate: Some(validate_operation_payload_against_sdk_artifact),
+        },
+        kinds::CK_CROSS_SIGNING_PUBLISH => OperationPayloadSchema {
+            requirements: CROSS_SIGNING_PUBLISH_REQUIREMENTS,
             validate: Some(validate_operation_payload_against_sdk_artifact),
         },
         kinds::CK_CROSS_SIGNING_RESET => OperationPayloadSchema {

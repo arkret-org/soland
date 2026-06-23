@@ -55,6 +55,12 @@ pub(in crate::routing) struct SubmittedEventOutcome {
     pub outcome: EventsSubmitOutcome,
 }
 
+#[derive(Debug, Clone)]
+pub(in crate::routing) struct RealmBootstrapBatchContext {
+    pub(in crate::routing) realm_id: String,
+    pub(in crate::routing) actor_id: String,
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 struct RawFederationEventsSubmitBody {
     service_binding_ref: FederationServiceBindingRef,
@@ -212,6 +218,7 @@ pub(super) async fn submit_event_batch(
     let mut duplicate = Vec::new();
     let mut rejected = Vec::new();
     let mut quarantine = Vec::new();
+    let mut realm_bootstrap_contexts: Vec<RealmBootstrapBatchContext> = Vec::new();
 
     for envelope in envelopes {
         let envelope = match serde_json::to_value(envelope) {
@@ -227,11 +234,23 @@ pub(super) async fn submit_event_batch(
         };
         let id = event_string_field_from_value(&envelope, "event_id")
             .unwrap_or_else(|| "unknown".to_owned());
-        match submit_event_value(state, session, envelope).await {
+        let kind = event_string_field_from_value(&envelope, "kind");
+        let realm_id = event_string_field_from_value(&envelope, "realm_id");
+        let actor_id = event_string_field_from_value(&envelope, "actor_id");
+        match submit_event_value_with_context(state, session, envelope, &realm_bootstrap_contexts)
+            .await
+        {
             Ok(response) => {
                 accepted.push(response.event_id.clone());
                 if response.duplicate {
                     duplicate.push(response.event_id);
+                }
+                if !response.duplicate
+                    && kind.as_deref() == Some(kinds::CK_REALM_CREATE)
+                    && let (Some(realm_id), Some(actor_id)) = (realm_id, actor_id)
+                {
+                    realm_bootstrap_contexts
+                        .push(RealmBootstrapBatchContext { realm_id, actor_id });
                 }
             }
             Err(error) => {
@@ -1032,7 +1051,16 @@ fn prev_frontier_digest(prev_refs: &[String]) -> Result<String, SubmitOneError> 
 pub(in crate::routing) async fn submit_event_value(
     state: &AppState,
     session: &SessionRecord,
+    envelope: Value,
+) -> Result<SubmittedEventOutcome, SubmitOneError> {
+    submit_event_value_with_context(state, session, envelope, &[]).await
+}
+
+async fn submit_event_value_with_context(
+    state: &AppState,
+    session: &SessionRecord,
     mut envelope: Value,
+    realm_bootstrap_contexts: &[RealmBootstrapBatchContext],
 ) -> Result<SubmittedEventOutcome, SubmitOneError> {
     let raw_bytes = serde_json::to_vec(&envelope).map_err(|_| {
         SubmitOneError::new(
@@ -1049,7 +1077,9 @@ pub(in crate::routing) async fn submit_event_value(
         ));
     }
 
-    let parsed = validate_event_envelope(state, session, &envelope).await?;
+    let parsed =
+        validate_event_envelope_with_context(state, session, &envelope, realm_bootstrap_contexts)
+            .await?;
     let actor_lock = actor_submit_lock(&parsed.actor_id);
     let _actor_submit_guard = actor_lock.lock().await;
     let received_at = now();

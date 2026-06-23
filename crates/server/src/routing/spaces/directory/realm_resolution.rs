@@ -364,6 +364,24 @@ pub(super) fn organization_preview_from_value(
         .and_then(Value::as_str)
         .unwrap_or(state.config.service_did.as_str());
     let as_of = organization_timestamp(organization).unwrap_or_else(now);
+    let realms = organization
+        .get("realms")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(|value| {
+            RealmId::new(value.to_owned()).map_err(|error| {
+                AppError::internal(format!(
+                    "directory organization realm id is invalid: {error}"
+                ))
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let realm_count = organization
+        .get("realm_count")
+        .and_then(Value::as_u64)
+        .or_else(|| (!realms.is_empty()).then_some(realms.len() as u64));
     Ok(OrganizationPreview {
         organization_did: Did::new(organization_did.to_owned()).map_err(|error| {
             AppError::internal(format!("directory organization_did is invalid: {error}"))
@@ -388,6 +406,13 @@ pub(super) fn organization_preview_from_value(
                 })
             })
             .transpose()?,
+        verified_badge: organization
+            .get("verified_badge")
+            .or_else(|| organization.get("verified"))
+            .and_then(Value::as_bool),
+        member_count: organization.get("member_count").and_then(Value::as_u64),
+        realms,
+        realm_count,
         as_of,
         source_refs: organization_source_refs(organization),
         policy_revision: organization

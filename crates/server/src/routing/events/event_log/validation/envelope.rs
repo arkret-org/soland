@@ -1040,10 +1040,20 @@ fn first_event_proof_verification_method(
         .and_then(|proof| event_string_field(proof, &["verification_method"]))
 }
 
+#[cfg(test)]
 pub(crate) async fn validate_event_envelope(
     state: &AppState,
     session: &SessionRecord,
     envelope: &Value,
+) -> Result<ValidatedEventEnvelope, EventValidationError> {
+    validate_event_envelope_with_context(state, session, envelope, &[]).await
+}
+
+pub(crate) async fn validate_event_envelope_with_context(
+    state: &AppState,
+    session: &SessionRecord,
+    envelope: &Value,
+    realm_bootstrap_contexts: &[RealmBootstrapBatchContext],
 ) -> Result<ValidatedEventEnvelope, EventValidationError> {
     let object = envelope.as_object().ok_or_else(|| {
         event_validation_error(
@@ -1226,7 +1236,7 @@ pub(crate) async fn validate_event_envelope(
             reason,
         ));
     }
-    // Spec realm-and-space.md §2.6 — `ck.realm.create` is the genesis
+    // Spec realm-and-space.md §2.5 — `ck.realm.create` is the genesis
     // event for both the Realm metadata cell AND the creator's first
     // member-state cell. The reducer MUST treat `created_by`
     // as already-a-member when admitting this event; otherwise spec-
@@ -1264,6 +1274,10 @@ pub(crate) async fn validate_event_envelope(
     let is_foreign_invite_delivery = kind == "ck.invite.create"
         && invite_create_actor_is_inviter(object, &session.actor)
         && !realm_exists;
+    let is_realm_bootstrap_followup = is_realm_bootstrap_followup_kind(&kind)
+        && realm_bootstrap_contexts
+            .iter()
+            .any(|context| context.realm_id == realm_id && context.actor_id == actor_id);
     if !is_realm_create_bootstrap
         && !is_invite_acceptance_join
         && !is_third_party_invite_claim
@@ -1281,7 +1295,7 @@ pub(crate) async fn validate_event_envelope(
     validate_event_schema_and_payload(state, &kind, &schema_id, envelope, object)?;
     validate_data_event_capability_refs(state, &actor_id, &realm_id, &kind, object)?;
     validate_cba_effect_planes(object)?;
-    validate_control_move_seal_basis(object)?;
+    validate_control_move_seal_basis(object, is_realm_bootstrap_followup)?;
     if kind == kinds::CK_MEMBER_IDENTITY_UPDATE {
         validate_member_identity_proof(state, object.get("payload").unwrap_or(&Value::Null))?;
     }
@@ -1420,12 +1434,33 @@ pub(crate) async fn validate_event_envelope(
 
 fn validate_control_move_seal_basis(
     object: &serde_json::Map<String, Value>,
+    allow_realm_bootstrap_followup_without_basis: bool,
 ) -> Result<(), EventValidationError> {
     let has_effects = object
         .get("effects")
         .and_then(Value::as_array)
         .is_some_and(|effects| !effects.is_empty());
+    if object.get("kind").and_then(Value::as_str) == Some(kinds::CK_REALM_CREATE) {
+        if object.contains_key("seal_ref")
+            || object.contains_key("auth_context")
+            || object.contains_key("seal_basis")
+        {
+            return Err(event_validation_error(
+                StatusCode::FORBIDDEN,
+                "schema_violation",
+                "ck.realm.create genesis bootstrap must not carry seal_ref, auth_context, or seal_basis",
+            ));
+        }
+        return Ok(());
+    }
     if !has_effects {
+        return Ok(());
+    }
+    if allow_realm_bootstrap_followup_without_basis
+        && !object.contains_key("seal_ref")
+        && !object.contains_key("auth_context")
+        && !object.contains_key("seal_basis")
+    {
         return Ok(());
     }
     if object.contains_key("seal_ref") || object.contains_key("auth_context") {
@@ -1549,6 +1584,18 @@ fn cba_cell_family_plane(family: &str) -> Result<CbaEffectPlane, EventValidation
         "schema_violation",
         format!("effects[].cell references unknown cell family {family}"),
     ))
+}
+
+fn is_realm_bootstrap_followup_kind(kind: &str) -> bool {
+    matches!(
+        kind,
+        kinds::CK_MEMBER_STATE
+            | kinds::CK_REALM_HISTORY_VISIBILITY
+            | kinds::CK_REALM_POLICY_COMPONENTS
+            | cokret_sdk::events::kinds::REALM_DISCOVERY
+            | cokret_sdk::events::kinds::REALM_JOIN_RULE
+            | cokret_sdk::events::kinds::REALM_PLAINTEXT_VISIBLE_SERVICES
+    )
 }
 
 async fn reject_revoked_actor_device_signature(

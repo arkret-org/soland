@@ -215,6 +215,93 @@ pub(crate) const REALM_SEARCH_POLICY_REQUIREMENTS: &[PayloadRequirement] = &[
         "ck.realm.search_policy requires data_classes",
     ),
 ];
+pub(crate) const MODERATION_DECISION_REQUIREMENTS: &[PayloadRequirement] = &[
+    PayloadRequirement::Required("target_ref", "ck.moderation.decision requires target_ref"),
+    PayloadRequirement::Required("decision", "ck.moderation.decision requires decision"),
+    PayloadRequirement::Required("issuer", "ck.moderation.decision requires issuer"),
+    PayloadRequirement::Required(
+        "request_canonical_digest",
+        "ck.moderation.decision requires request_canonical_digest",
+    ),
+];
+pub(crate) const MODERATION_DECISION_LIFT_REQUIREMENTS: &[PayloadRequirement] = &[
+    PayloadRequirement::Required(
+        "target_ref",
+        "ck.moderation.decision.lift requires target_ref",
+    ),
+    PayloadRequirement::Required(
+        "decision_ref",
+        "ck.moderation.decision.lift requires decision_ref",
+    ),
+];
+pub(crate) const MODERATION_APPEAL_SUBMIT_REQUIREMENTS: &[PayloadRequirement] = &[
+    PayloadRequirement::Required(
+        "appeal_id",
+        "ck.moderation.appeal.submit requires appeal_id",
+    ),
+    PayloadRequirement::Required("realm_id", "ck.moderation.appeal.submit requires realm_id"),
+    PayloadRequirement::Required(
+        "decision_ref",
+        "ck.moderation.appeal.submit requires decision_ref",
+    ),
+    PayloadRequirement::Required(
+        "target_ref",
+        "ck.moderation.appeal.submit requires target_ref",
+    ),
+    PayloadRequirement::Required(
+        "appellant",
+        "ck.moderation.appeal.submit requires appellant",
+    ),
+    PayloadRequirement::Required(
+        "reason_text_ref",
+        "ck.moderation.appeal.submit requires reason_text_ref",
+    ),
+    PayloadRequirement::Required(
+        "created_at",
+        "ck.moderation.appeal.submit requires created_at",
+    ),
+];
+pub(crate) const MODERATION_APPEAL_REVIEW_REQUIREMENTS: &[PayloadRequirement] = &[
+    PayloadRequirement::Required(
+        "appeal_id",
+        "ck.moderation.appeal.review requires appeal_id",
+    ),
+    PayloadRequirement::Required("realm_id", "ck.moderation.appeal.review requires realm_id"),
+    PayloadRequirement::Required("reviewer", "ck.moderation.appeal.review requires reviewer"),
+    PayloadRequirement::Required(
+        "reviewed_at",
+        "ck.moderation.appeal.review requires reviewed_at",
+    ),
+];
+pub(crate) const MODERATION_APPEAL_DECISION_REQUIREMENTS: &[PayloadRequirement] = &[
+    PayloadRequirement::Required(
+        "appeal_id",
+        "ck.moderation.appeal.decision requires appeal_id",
+    ),
+    PayloadRequirement::Required(
+        "realm_id",
+        "ck.moderation.appeal.decision requires realm_id",
+    ),
+    PayloadRequirement::Required(
+        "reviewer",
+        "ck.moderation.appeal.decision requires reviewer",
+    ),
+    PayloadRequirement::Required("verdict", "ck.moderation.appeal.decision requires verdict"),
+    PayloadRequirement::Required(
+        "reason_text_ref",
+        "ck.moderation.appeal.decision requires reason_text_ref",
+    ),
+    PayloadRequirement::Required(
+        "decided_at",
+        "ck.moderation.appeal.decision requires decided_at",
+    ),
+];
+pub(crate) const MODERATION_APPEAL_CLOSE_REQUIREMENTS: &[PayloadRequirement] = &[
+    PayloadRequirement::Required("appeal_id", "ck.moderation.appeal.close requires appeal_id"),
+    PayloadRequirement::Required("realm_id", "ck.moderation.appeal.close requires realm_id"),
+    PayloadRequirement::Required("closer", "ck.moderation.appeal.close requires closer"),
+    PayloadRequirement::Required("closed_at", "ck.moderation.appeal.close requires closed_at"),
+];
 pub(crate) const CONFLICT_REPAIR_REQUIREMENTS: &[PayloadRequirement] = &[
     PayloadRequirement::Required("cell_id", "conflict repair requires cell_id"),
     PayloadRequirement::Required("conflict_heads", "conflict repair requires conflict_heads"),
@@ -540,6 +627,35 @@ pub(crate) const CROSS_SIGNING_RESET_REQUIREMENTS: &[PayloadRequirement] = &[
         "reset_event_id",
         "cross_signing reset requires reset_event_id (Round R2/R3 wire-break)",
     ),
+];
+
+pub(crate) const CROSS_SIGNING_PUBLISH_REQUIREMENTS: &[PayloadRequirement] = &[
+    PayloadRequirement::Required(
+        "principal_id",
+        "cross_signing publish requires principal_id",
+    ),
+    PayloadRequirement::Required(
+        "trust_domain",
+        "cross_signing publish requires trust_domain",
+    ),
+    PayloadRequirement::Required(
+        "principal_signing_key",
+        "cross_signing publish requires principal_signing_key",
+    ),
+    PayloadRequirement::Required(
+        "self_signing_key",
+        "cross_signing publish requires self_signing_key",
+    ),
+    PayloadRequirement::Required(
+        "user_signing_key",
+        "cross_signing publish requires user_signing_key",
+    ),
+    PayloadRequirement::Required("generation", "cross_signing publish requires generation"),
+    PayloadRequirement::Required(
+        "expected_previous_generation",
+        "cross_signing publish requires expected_previous_generation",
+    ),
+    PayloadRequirement::Required("issued_at", "cross_signing publish requires issued_at"),
 ];
 
 pub(crate) const DEVICE_AUTHORIZE_REQUIREMENTS: &[PayloadRequirement] = &[

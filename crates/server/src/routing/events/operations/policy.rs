@@ -2265,6 +2265,9 @@ async fn validate_moderation_event_policy(
         return Ok(());
     }
     let (owner, members) = realm_owner_and_members(state, realm_id).await;
+    if kind == kinds::CK_MODERATION_APPEAL_SUBMIT && members.iter().any(|member| member == actor) {
+        return Ok(());
+    }
     if actions.iter().any(|action| {
         state
             .authz
@@ -2388,12 +2391,21 @@ fn moderation_actor<'a>(
 }
 
 /// True when an `appeal.close` is an appellant self-withdrawal: the closer
-/// equals the appellant anchored on the projected appeal cell at submit time.
+/// equals the appellant anchored on the projected appeal cell at submit time
+/// and the close reason is the canonical withdrawal reason.
 fn moderation_close_is_appellant_withdrawal(
     state: &AppState,
     operation: &Operation,
     actor: &str,
 ) -> bool {
+    if operation
+        .payload
+        .get("close_reason")
+        .and_then(Value::as_str)
+        != Some("appellant_withdrawn")
+    {
+        return false;
+    }
     let Some(appeal_id) = operation.payload.get("appeal_id").and_then(Value::as_str) else {
         return false;
     };

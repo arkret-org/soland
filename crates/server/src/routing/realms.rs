@@ -35,6 +35,7 @@ use crate::kinds::CK_REALM_LINK;
 use crate::reducer::RealmLinkState;
 use crate::reducer::realm_links::{check_realm_link_admissible, effective_policy_for_realm};
 use crate::result::{JsonResult, json_ok};
+use crate::routing::organizations;
 use crate::state::AppState;
 
 pub(crate) fn router() -> Router {
@@ -284,7 +285,11 @@ async fn delete_realm_link(
 /// ```json
 /// {
 ///   "realm_id": "ck:realm:...",
-///   "effective_policy": { "allowed_policies": [...], "allowed_capability_bundles": [...] },
+///   "effective_policy": {
+///     "allowed_policies": [...],
+///     "allowed_capability_bundles": [...],
+///     "organization_policy_layers": [...]
+///   },
 ///   "inheritance_chain": ["ck:space:...parent...", "ck:space:...grandparent..."],
 ///   "inheritance_mode": "explicit" | "none"
 /// }
@@ -309,9 +314,14 @@ async fn get_effective_policy(
     let state = depot.obtain::<AppState>().expect("state injected");
     let _session = aa.authenticated_session(state, req).await?;
     let realm_id = realm_id.into_inner();
+    organizations::refresh_organization_projection(state)
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    let organization_policy = organizations::effective_policy_value_for_realm(state, &realm_id)
+        .map_err(|error| AppError::internal(format!("organization effective policy: {error}")))?;
     let projection = state.projection.lock().expect("projection mutex");
     let ep = effective_policy_for_realm(&projection, &realm_id);
-    let effective_policy = match ep.effective_policy {
+    let mut effective_policy = match ep.effective_policy {
         Value::Object(map) => map.into_iter().collect::<BTreeMap<_, _>>(),
         _ => {
             return Err(AppError::internal(
@@ -319,6 +329,7 @@ async fn get_effective_policy(
             ));
         }
     };
+    merge_organization_effective_policy(&mut effective_policy, organization_policy);
     let inheritance_mode = match ep.inheritance_mode.as_str() {
         "explicit" => RealmEffectivePolicyInheritanceMode::Explicit,
         "none" => RealmEffectivePolicyInheritanceMode::None,
@@ -342,4 +353,33 @@ async fn get_effective_policy(
             .collect::<Result<Vec<_>, _>>()?,
         inheritance_mode,
     })
+}
+
+fn merge_organization_effective_policy(
+    effective_policy: &mut BTreeMap<String, Value>,
+    organization_policy: Value,
+) {
+    let Value::Object(mut map) = organization_policy else {
+        return;
+    };
+    let has_organization_layers = map
+        .get("organization_policy_layers")
+        .and_then(Value::as_array)
+        .is_some_and(|layers| !layers.is_empty());
+    if !has_organization_layers {
+        return;
+    }
+    for (source, target) in [
+        ("organization_policy_layers", "organization_policy_layers"),
+        ("effective_rules", "organization_effective_rules"),
+        (
+            "override_requires_organization_approval",
+            "override_requires_organization_approval",
+        ),
+        ("fanout", "organization_policy_fanout"),
+    ] {
+        if let Some(value) = map.remove(source) {
+            effective_policy.insert(target.to_owned(), value);
+        }
+    }
 }

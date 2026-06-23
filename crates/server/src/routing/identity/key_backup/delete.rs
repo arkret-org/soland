@@ -173,93 +173,11 @@ pub(super) fn ensure_key_backup_delete_is_series_tail(
     Ok(())
 }
 
-pub(super) fn backup_recovery_policy_ref(backup: &Value) -> Option<(&str, u64)> {
-    let policy_ref = backup.get("recovery_policy_ref")?.as_object()?;
-    let policy_id = policy_ref.get("policy_id")?.as_str()?;
-    let policy_version = policy_ref.get("policy_version")?.as_u64()?;
-    Some((policy_id, policy_version))
-}
-
-pub(super) fn backup_retention_delete_after_passed(backup: &Value) -> bool {
-    let Some(retention) = backup.get("retention").and_then(Value::as_object) else {
-        return false;
-    };
-    if retention
-        .get("legal_hold")
-        .and_then(Value::as_bool)
-        .unwrap_or(false)
-    {
-        return false;
-    }
-    let Some(delete_after) = retention.get("delete_after").and_then(Value::as_str) else {
-        return false;
-    };
-    chrono::DateTime::parse_from_rfc3339(delete_after)
-        .map(|instant| instant.with_timezone(&chrono::Utc) <= chrono::Utc::now())
-        .unwrap_or(false)
-}
-
-pub(super) fn backup_policy_ref_matches_active(
-    backup: &Value,
-    active_policy: Option<&RecoveryPolicyRecord>,
-) -> Option<bool> {
-    let (policy_id, policy_version) = backup_recovery_policy_ref(backup)?;
-    Some(match active_policy {
-        Some(active) => {
-            policy_id == active.policy_id.as_str() && policy_version == active.version as u64
-        }
-        None => false,
-    })
-}
-
-pub(super) fn deny_key_backup_delete(message: impl Into<String>) -> AppError {
-    AppError::conflict(message)
-        .with_wire_code("key_backup_delete_not_retired")
-        .with_reason_detail(
-            "only backups stale relative to the active recovery policy or retention-expired backups may be deleted",
-        )
-}
-
-pub(super) fn ensure_key_backup_delete_is_retired_or_redundant(
-    backup: &Value,
-    active_policy: Option<&RecoveryPolicyRecord>,
-) -> Result<(), AppError> {
-    let backup_class = backup
-        .get("backup_class")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-
-    if backup_retention_delete_after_passed(backup) {
-        return Ok(());
-    }
-
-    match backup_policy_ref_matches_active(backup, active_policy) {
-        Some(false) => return Ok(()),
-        Some(true) => {
-            return Err(deny_key_backup_delete(format!(
-                "{backup_class} backup is still bound to the active recovery policy"
-            )));
-        }
-        None => {}
-    }
-
-    Err(deny_key_backup_delete(format!(
-        "{backup_class} backup is not provably retired; delete refused"
-    )))
-}
-
 pub(super) async fn ensure_key_backup_delete_allowed(
     state: &AppState,
     actor_id: &str,
     backup: &Value,
 ) -> Result<(), AppError> {
     let owned_backups = owned_key_backup_snapshot(state, actor_id).await?;
-    ensure_key_backup_delete_is_series_tail(actor_id, backup, &owned_backups)?;
-    let active_policy = state
-        .persistence
-        .recovery_policies()
-        .get_active_for_principal(actor_id)
-        .await
-        .map_err(|error| AppError::internal(format!("recovery policy lookup failed: {error}")))?;
-    ensure_key_backup_delete_is_retired_or_redundant(backup, active_policy.as_ref())
+    ensure_key_backup_delete_is_series_tail(actor_id, backup, &owned_backups)
 }

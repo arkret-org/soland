@@ -88,8 +88,9 @@ mod submit;
 pub(in crate::routing) use submit::submit_event_value;
 pub(super) use submit::submit_federation_events;
 use submit::{
-    EventValidationError, SubmitOneError, SubmittedEventOutcome, ValidatedEventEnvelope,
-    event_validation_error, events_submit_outcome, render_submit_one_error, submit_event_batch,
+    EventValidationError, RealmBootstrapBatchContext, SubmitOneError, SubmittedEventOutcome,
+    ValidatedEventEnvelope, event_validation_error, events_submit_outcome, render_submit_one_error,
+    submit_event_batch,
 };
 
 mod validation;

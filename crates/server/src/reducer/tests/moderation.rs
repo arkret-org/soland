@@ -186,6 +186,67 @@ fn moderation_appeal_invalid_transition_rejected() {
 }
 
 #[test]
+fn moderation_appeal_reviewer_close_before_decision_rejected() {
+    let mut state = ProjectionState::new();
+    let hlc = ServerHlc::new("did:web:test.soland");
+    seed_decision(&mut state, &hlc, "did:web:mod.example");
+    submit_appeal(&mut state, &hlc, "did:web:appellant.example");
+    let review = make_operation(
+        crate::kinds::CK_MODERATION_APPEAL_REVIEW,
+        MOD_REALM,
+        serde_json::json!({
+            "appeal_id": MOD_APPEAL_ID,
+            "realm_id": MOD_REALM,
+            "reviewer": "did:web:reviewer.example",
+        }),
+    );
+    assert!(matches!(
+        state.apply(&review, &hlc),
+        ProjectionEffect::ModerationAppealProjected { .. }
+    ));
+
+    let close = make_operation(
+        crate::kinds::CK_MODERATION_APPEAL_CLOSE,
+        MOD_REALM,
+        serde_json::json!({
+            "appeal_id": MOD_APPEAL_ID,
+            "realm_id": MOD_REALM,
+            "closer": "did:web:reviewer.example",
+            "close_reason": "reviewer_closed",
+        }),
+    );
+    assert!(matches!(
+        state.apply(&close, &hlc),
+        ProjectionEffect::Rejected { ref reason }
+            if reason.starts_with("moderation_appeal_invalid_transition")
+    ));
+}
+
+#[test]
+fn moderation_appeal_appellant_withdrawal_before_decision_allowed() {
+    let mut state = ProjectionState::new();
+    let hlc = ServerHlc::new("did:web:test.soland");
+    seed_decision(&mut state, &hlc, "did:web:mod.example");
+    submit_appeal(&mut state, &hlc, "did:web:appellant.example");
+
+    let close = make_operation(
+        crate::kinds::CK_MODERATION_APPEAL_CLOSE,
+        MOD_REALM,
+        serde_json::json!({
+            "appeal_id": MOD_APPEAL_ID,
+            "realm_id": MOD_REALM,
+            "closer": "did:web:appellant.example",
+            "close_reason": "appellant_withdrawn",
+        }),
+    );
+    assert!(matches!(
+        state.apply(&close, &hlc),
+        ProjectionEffect::ModerationAppealProjected { ref new_state, .. }
+            if new_state == "closed"
+    ));
+}
+
+#[test]
 fn moderation_appeal_self_review_forbidden() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("did:web:test.soland");
@@ -264,5 +325,32 @@ fn moderation_appeal_overturn_missing_lift_rejected() {
         state.apply(&decide, &hlc),
         ProjectionEffect::ModerationAppealProjected { ref new_state, .. }
             if new_state == "decided"
+    ));
+}
+
+#[test]
+fn moderation_appeal_duplicate_active_rejected() {
+    let mut state = ProjectionState::new();
+    let hlc = ServerHlc::new("did:web:test.soland");
+    seed_decision(&mut state, &hlc, "did:web:mod.example");
+    submit_appeal(&mut state, &hlc, "did:web:appellant.example");
+
+    let duplicate = make_operation(
+        crate::kinds::CK_MODERATION_APPEAL_SUBMIT,
+        MOD_REALM,
+        serde_json::json!({
+            "appeal_id": "ck:appeal:01904100-0000-7000-8000-0a0a0a0a0a02",
+            "realm_id": MOD_REALM,
+            "decision_ref": MOD_DECISION_ID,
+            "target_ref": MOD_TARGET_REF,
+            "appellant": "did:web:appellant.example",
+            "reason_text_ref": "duplicate appeal text",
+        }),
+    );
+
+    assert!(matches!(
+        state.apply(&duplicate, &hlc),
+        ProjectionEffect::Rejected { ref reason }
+            if reason == "moderation_appeal_duplicate_active"
     ));
 }

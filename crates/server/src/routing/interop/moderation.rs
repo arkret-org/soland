@@ -3,10 +3,10 @@
 //! - `POST /_cokret/self/moderation/report` (`ck.self.moderation.command.report`) — file a report.
 //!   Persists both the report record and a derived queue item (`ModerationQueueItem`) per the
 //!   spec's triage architecture.
-//! - `POST /_cokret/self/moderation/appeal` (`ck.moderation.appeal.submit`) — file an appeal
-//!   against a moderation decision. The four-state appeal FSM and separation-of-duties enforcement
-//!   are authoritative in the reducer (`crate::reducer::apply_moderation`), surfaced at ingest by
-//!   the moderation projection preflight.
+//! - moderation appeals are durable `ck.moderation.appeal.*` events submitted through `POST
+//!   /_cokret/self/events`. The four-state appeal FSM and separation-of-duties enforcement are
+//!   authoritative in the reducer (`crate::reducer::apply_moderation`), surfaced at ingest by the
+//!   moderation projection preflight.
 
 use std::time::Duration;
 
@@ -758,7 +758,7 @@ async fn moderation_reports(
         reports: reports.clone(),
         items: reports,
         total,
-        visibility: "reporter_owner_admin".to_owned(),
+        visibility: "moderator_owner_admin".to_owned(),
     })
 }
 
@@ -794,28 +794,14 @@ pub(crate) async fn moderation_report_visible_to_actor(
     if state.config.is_admin_principal(actor) {
         return true;
     }
-    if report.get("reporter").and_then(Value::as_str) == Some(actor) {
-        return true;
-    }
     match report_realm_id(report) {
-        Some(realm_id) => realm_owner_matches(state, realm_id, actor).await,
+        Some(realm_id) => moderation_routing_visible_to_actor(state, realm_id, actor).await,
         None => false,
     }
 }
 
 fn report_realm_id(report: &Value) -> Option<&str> {
     report.get("realm_id").and_then(Value::as_str)
-}
-
-async fn realm_owner_matches(state: &AppState, realm_id: &str, actor: &str) -> bool {
-    state
-        .persistence
-        .realm_meta()
-        .get(realm_id)
-        .await
-        .ok()
-        .flatten()
-        .is_some_and(|meta| meta.owner == actor)
 }
 
 async fn moderation_routing_visible_to_actor(

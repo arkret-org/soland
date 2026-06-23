@@ -351,14 +351,14 @@ async fn get_organization(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
-    organization_id: PathParam<String>,
+    organization_did: PathParam<String>,
 ) -> JsonResult<OrganizationView> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let _session = aa.authenticated_session(state, req).await?;
     refresh_organization_projection(state)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
-    let organization_id = normalized_organization_id(&organization_id.into_inner())?;
+    let organization_id = normalized_organization_id(&organization_did.into_inner())?;
     let record = state
         .organizations
         .lock()
@@ -382,14 +382,14 @@ async fn get_organization_policy(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
-    organization_id: PathParam<String>,
+    organization_did: PathParam<String>,
 ) -> JsonResult<OrganizationPolicyView> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let _session = aa.authenticated_session(state, req).await?;
     refresh_organization_projection(state)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
-    let organization_id = normalized_organization_id(&organization_id.into_inner())?;
+    let organization_id = normalized_organization_id(&organization_did.into_inner())?;
     let policy = state
         .organization_policies
         .lock()
@@ -413,12 +413,12 @@ async fn upsert_organization_policy(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
-    organization_id: PathParam<String>,
+    organization_did: PathParam<String>,
     body: JsonBody<OrganizationModerationPolicyReplaceRequestBody>,
 ) -> JsonResult<OrganizationPolicyView> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
-    let organization_id = normalized_organization_id(&organization_id.into_inner())?;
+    let organization_id = normalized_organization_id(&organization_did.into_inner())?;
     ensure_organization_placeholder(state, &organization_id, &session.actor)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
@@ -507,12 +507,12 @@ async fn link_organization_realm(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
-    organization_id: PathParam<String>,
+    organization_did: PathParam<String>,
     body: JsonBody<LinkOrganizationRealmRequestBody>,
 ) -> JsonResult<OrganizationRealmLinkOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
-    let organization_id = normalized_organization_id(&organization_id.into_inner())?;
+    let organization_id = normalized_organization_id(&organization_did.into_inner())?;
     let body = body.into_inner();
     ensure_organization_placeholder(state, &organization_id, &session.actor)
         .await
@@ -658,6 +658,13 @@ pub(crate) fn effective_policy_for_realm(
             rewrites_realm_policy: false,
         },
     }
+}
+
+pub(crate) fn effective_policy_value_for_realm(
+    state: &AppState,
+    realm_id: &str,
+) -> Result<Value, serde_json::Error> {
+    serde_json::to_value(effective_policy_for_realm(state, realm_id))
 }
 
 pub(crate) async fn organization_policy_blocks_join(
