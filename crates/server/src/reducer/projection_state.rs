@@ -315,6 +315,63 @@ impl ProjectionState {
         false
     }
 
+    pub(crate) fn authz_resource_expr(&self, realm_id: &str, resource: &str) -> String {
+        let mut resources = BTreeSet::new();
+        for token in resource.split(',').map(str::trim) {
+            if token.is_empty() {
+                continue;
+            }
+            resources.insert(token.to_owned());
+            self.append_space_hierarchy_authz_aliases(realm_id, token, &mut resources);
+        }
+        resources.into_iter().collect::<Vec<_>>().join(",")
+    }
+
+    fn append_space_hierarchy_authz_aliases(
+        &self,
+        realm_id: &str,
+        resource: &str,
+        resources: &mut BTreeSet<String>,
+    ) {
+        if !resource.starts_with("ck:space:") {
+            return;
+        }
+        let Some(space) = self.space_containers.get(resource) else {
+            return;
+        };
+        if space.realm_id != realm_id {
+            return;
+        }
+
+        let mut cursor = resource.to_owned();
+        let mut visited = BTreeSet::new();
+        for depth in 0..64 {
+            if !visited.insert(cursor.clone()) {
+                break;
+            }
+            let Some(space) = self.space_containers.get(&cursor) else {
+                break;
+            };
+            if space.realm_id != realm_id || space.parent_ref_locked {
+                break;
+            }
+            let Some(parent_id) = space.parent_ref.as_deref() else {
+                break;
+            };
+            let Some(parent) = self.space_containers.get(parent_id) else {
+                break;
+            };
+            if parent.realm_id != realm_id {
+                break;
+            }
+            if depth == 0 {
+                resources.insert(format!("space_child_of:{parent_id}"));
+            }
+            resources.insert(format!("space_subtree_of:{parent_id}"));
+            cursor = parent_id.to_owned();
+        }
+    }
+
     pub fn replay_resolved_pending(&mut self, hlc: &ServerHlc) -> usize {
         let mut replayed = 0usize;
         for _ in 0..128 {

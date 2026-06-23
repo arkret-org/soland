@@ -119,10 +119,16 @@ async fn authz_check(
             .unwrap_or_default();
         (owner, members)
     };
+    let resource_expr = state
+        .projection
+        .lock()
+        .ok()
+        .map(|projection| projection.authz_resource_expr(&realm_id, &resource_str))
+        .unwrap_or_else(|| resource_str.clone());
     let result = state.authz.check(
         body.actor_id.as_str(),
         &body.action,
-        &resource_str,
+        &resource_expr,
         &realm_id,
         owner.as_deref(),
         &members,
@@ -155,7 +161,7 @@ async fn authz_check(
     let policy_results = vec![json!({
         "actor_id": body.actor_id.as_str(),
         "action": body.action,
-        "resource": resource_str,
+        "resource": resource_expr,
         "realm_id": realm_id,
         "reason_detail": result.reason_detail,
         "constraints": [],

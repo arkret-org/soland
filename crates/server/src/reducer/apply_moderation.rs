@@ -232,6 +232,14 @@ impl ProjectionState {
                 reason: "moderation_decision_kind_missing".to_owned(),
             };
         };
+        if !matches!(
+            decision_kind.as_str(),
+            "hard_deny" | "quarantine" | "require_review"
+        ) {
+            return ProjectionEffect::Rejected {
+                reason: "moderation_decision_kind_invalid".to_owned(),
+            };
+        }
         // Structural acceptance: a sealed decision MUST name its issuer so the
         // appeal separation-of-duties reverse lookup is well-defined. Missing
         // issuer ⇒ fail closed.

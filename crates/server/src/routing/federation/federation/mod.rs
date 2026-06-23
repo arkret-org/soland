@@ -20,6 +20,7 @@ mod backfill;
 mod endpoints;
 mod inbound_policy;
 mod outbound;
+mod profile_intersection;
 mod signature;
 mod wire;
 
@@ -90,6 +91,7 @@ pub(crate) use outbound::configured_peer_targets;
 pub(crate) use outbound::test_app_state_with_peers;
 #[cfg(test)]
 use outbound::{OutboundFanoutRetryReport, next_retry_at, run_outbound_fanout_retry_pass_at};
+pub(crate) use profile_intersection::federation_profile_intersection_for_peer;
 #[cfg(test)]
 use salvo::http::StatusCode;
 #[cfg(test)]

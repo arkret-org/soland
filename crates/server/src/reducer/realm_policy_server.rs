@@ -17,6 +17,7 @@
 
 use cokret_sdk::lattice::CellState;
 use cokret_sdk::{CellRef, Operation};
+use reqwest::Url;
 use serde_json::Value;
 
 use crate::reducer::{ProjectionEffect, ProjectionState, RealmPolicyServerConfig};
@@ -85,6 +86,11 @@ pub fn apply_realm_policy_server(
             reason: "policy_server_url_invalid_scheme".to_owned(),
         };
     }
+    if let Err(reason) = validate_policy_server_url(policy_server_url) {
+        return ProjectionEffect::Rejected {
+            reason: reason.to_owned(),
+        };
+    }
 
     let cache_ttl_seconds = payload
         .get("cache_ttl_seconds")
@@ -145,6 +151,26 @@ pub fn apply_realm_policy_server(
         realm_id,
         policy_server_did: policy_server_did.to_owned(),
     }
+}
+
+fn validate_policy_server_url(raw_url: &str) -> Result<(), &'static str> {
+    let Ok(url) = Url::parse(raw_url) else {
+        return Err("policy_server_url_invalid");
+    };
+    if !matches!(url.scheme(), "http" | "https") {
+        return Err("policy_server_url_invalid_scheme");
+    }
+    if !url.username().is_empty()
+        || url.password().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        return Err("policy_server_url_auth_material_forbidden");
+    }
+    if url.path() != "/_cokret/self/policy/check" {
+        return Err("policy_server_url_invalid_path");
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -301,7 +327,7 @@ mod tests {
                 REALM_CHILD,
                 json!({
                     "policy_server_did": "did:web:p.example",
-                    "policy_server_url": "https://p.example/policy/check",
+                    "policy_server_url": "https://p.example/_cokret/self/policy/check",
                     "on_timeout": "soft_pass",
                 }),
             ),
@@ -318,7 +344,7 @@ mod tests {
                 REALM_CHILD,
                 json!({
                     "policy_server_did": "did:web:p.example",
-                    "policy_server_url": "https://p.example/policy/check",
+                    "policy_server_url": "https://p.example/_cokret/self/policy/check",
                     "timeout_ms": 0,
                 }),
             ),

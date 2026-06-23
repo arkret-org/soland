@@ -131,6 +131,14 @@ fn realm_already_exists_error() -> SubmitOneError {
     )
 }
 
+fn cba_bottom_reject(reason: &'static str) -> (&'static str, &'static str) {
+    if reason == "cell_bottom_state" {
+        ("failed_bottom", "cell_in_bottom_state")
+    } else {
+        (reason, reason)
+    }
+}
+
 fn persistence_error_is_realm_already_exists(error: &crate::persistence::PersistenceError) -> bool {
     matches!(
         error,
@@ -469,6 +477,57 @@ pub(crate) async fn submit_federation_events(
     let mut quarantine = Vec::new();
     let created_at = now();
     let source_trust_domain = trust_headers.source_trust_domain.as_str().to_owned();
+    let profile_gate =
+        match crate::routing::federation::federation::federation_profile_intersection_for_peer(
+            state,
+            &source_service_did,
+            Some(&source_trust_domain),
+        )
+        .await
+        {
+            Ok(gate) => gate,
+            Err(rejection) => {
+                let rejected = submit
+                    .events
+                    .iter()
+                    .map(|envelope| {
+                        json!({
+                            "id": event_string_field_from_value(envelope, "event_id")
+                                .unwrap_or_else(|| "unknown".to_owned()),
+                            "reason_code": rejection.code,
+                            "detail": rejection.message.clone(),
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                append_audit_log(
+                    state,
+                    None,
+                    "peer.events.submit",
+                    json!({
+                        "realm_id": binding_realm,
+                        "source_trust_domain": source_trust_domain,
+                        "source_service_did": source_service_did,
+                        "request_canonical_digest": request_hash,
+                        "accepted": Vec::<String>::new(),
+                        "duplicate": Vec::<String>::new(),
+                        "rejected_count": rejected.len(),
+                        "quarantine_count": 0,
+                        "reason": rejection.code,
+                    }),
+                    "partial",
+                )
+                .await;
+                res.render(Json(events_submit_outcome(
+                    EventsSubmitStatus::Partial,
+                    Vec::new(),
+                    Vec::new(),
+                    rejected,
+                    Vec::new(),
+                    Some(super::super::sync::sync_token_for_state(state).await),
+                )));
+                return;
+            }
+        };
 
     for envelope in submit.events {
         let id = event_string_field_from_value(&envelope, "event_id")
@@ -514,6 +573,14 @@ pub(crate) async fn submit_federation_events(
                 "id": id,
                 "reason_code": "capability_denied",
                 "detail": "actor_id home domain does not match source-trust-domain and the actor is not a known member of the binding realm",
+            }));
+            continue;
+        }
+        if let Err(rejection) = profile_gate.enforce_event(&envelope) {
+            rejected.push(json!({
+                "id": id,
+                "reason_code": rejection.code,
+                "detail": rejection.message,
             }));
             continue;
         }
@@ -1202,10 +1269,11 @@ pub(in crate::routing) async fn submit_event_value(
                 ));
             }
             if let Err(reason) = proj.check_bottom_cell_transition(operation) {
+                let (code, message) = cba_bottom_reject(reason);
                 return Err(SubmitOneError::new(
                     StatusCode::PRECONDITION_FAILED,
-                    reason,
-                    reason,
+                    code,
+                    message,
                 ));
             }
             if let Err(reason) = proj.check_membership_join_admission(operation) {

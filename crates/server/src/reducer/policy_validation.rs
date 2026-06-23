@@ -599,10 +599,57 @@ pub(crate) fn membership_state_satisfies_minimum(state: &str, required: &str) ->
     }
 }
 
-pub(crate) fn claim_required_gate_has_proof(proof: &serde_json::Map<String, Value>) -> bool {
-    match proof.get("claim_presentation") {
-        Some(Value::String(value)) => !value.trim().is_empty(),
-        Some(Value::Object(_)) | Some(Value::Array(_)) => true,
+pub(crate) fn claim_required_gate_has_proof(
+    gate: &serde_json::Map<String, Value>,
+    proof: &serde_json::Map<String, Value>,
+) -> bool {
+    let required_claims = gate
+        .get("requires_claims")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .filter(|claim| !claim.trim().is_empty())
+        .collect::<Vec<_>>();
+    if required_claims.is_empty() {
+        return false;
+    }
+    let Some(presentation) = proof.get("claim_presentation") else {
+        return false;
+    };
+    claim_presentation_present(presentation)
+        && required_claims
+            .iter()
+            .all(|claim| claim_presentation_covers_claim(presentation, claim))
+}
+
+fn claim_presentation_present(value: &Value) -> bool {
+    match value {
+        Value::String(value) => !value.trim().is_empty(),
+        Value::Object(object) => !object.is_empty(),
+        Value::Array(values) => !values.is_empty(),
+        _ => false,
+    }
+}
+
+fn claim_presentation_covers_claim(value: &Value, claim: &str) -> bool {
+    match value {
+        Value::String(value) => !value.trim().is_empty(),
+        Value::Array(values) => values
+            .iter()
+            .any(|value| claim_presentation_covers_claim(value, claim)),
+        Value::Object(object) => {
+            for field in ["claim", "claim_type", "type", "id", "name"] {
+                if object.get(field).and_then(Value::as_str) == Some(claim) {
+                    return true;
+                }
+            }
+            match object.get("claims") {
+                Some(Value::Object(claims)) if claims.contains_key(claim) => true,
+                Some(value) => claim_presentation_covers_claim(value, claim),
+                None => false,
+            }
+        }
         _ => false,
     }
 }

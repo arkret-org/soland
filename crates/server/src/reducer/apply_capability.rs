@@ -18,11 +18,11 @@
 //!   carries the revoked tombstone forward.
 //! - `bottom` is **inert** for or_set: we never produce a Bottom cell here.
 //!
-//! Acceptance / fail-closed: the envelope-level `seal_basis` discipline
-//! (`oneOf(seal_ref+auth_context XOR seal_basis)` for reducer-input control
-//! kinds) is enforced at event ingest (event-envelope schema, CBA §5 /
-//! v0.3.1 audit #12); the reducer trusts that gate and does the *structural*
-//! acceptance checks reachable at the `Operation` boundary — a present
+//! Acceptance / fail-closed: the envelope-level CBA discipline is enforced at
+//! event ingest: DataEvents use `seal_ref`/`auth_context`, while reducer-input
+//! Control Moves with effects must carry `seal_basis.leaves`. The reducer
+//! trusts that gate and does the *structural* acceptance checks reachable at
+//! the `Operation` boundary — a present
 //! `grant_id`, a parseable issuer, and (for grant) a non-empty grant body.
 //! Missing structural inputs ⇒ `Rejected` (P3 fail-closed), never a silent
 //! no-op. This mirrors `apply_capability_derived`, which likewise validates
@@ -73,9 +73,15 @@ fn normalize_selector_object(selector: &Value, realm_id: &str) -> Option<String>
     match kind {
         "*" => Some("*".to_owned()),
         "realm" => Some(selector_realm_id(selector, realm_id).to_owned()),
-        "space" => selector_string_field(selector, "space_id")
-            .map(ToOwned::to_owned)
-            .or_else(|| (match_scope == "realm_wide").then(|| "space".to_owned())),
+        "space" => match match_scope {
+            "realm_wide" => Some("space".to_owned()),
+            "children" => {
+                selector_string_field(selector, "space_id").map(|id| format!("space_child_of:{id}"))
+            }
+            "subtree" => selector_string_field(selector, "space_id")
+                .map(|id| format!("space_subtree_of:{id}")),
+            _ => selector_string_field(selector, "space_id").map(ToOwned::to_owned),
+        },
         "circle" => selector_string_field(selector, "circle_id")
             .map(ToOwned::to_owned)
             .or_else(|| (match_scope == "realm_wide").then(|| "circle".to_owned())),
@@ -475,6 +481,7 @@ impl ProjectionState {
             return true;
         }
         const CELL_PREFIX: &str = "ck:cell:ck.component.capability.grant.v1:";
+        let resource_expr = self.authz_resource_expr(realm_id, resource);
         self.cells.iter().any(|(cell_ref, cell_state)| {
             let Some(grant_id) = cell_ref.as_str().strip_prefix(CELL_PREFIX) else {
                 return false;
@@ -489,7 +496,7 @@ impl ProjectionState {
                     .expires_at
                     .is_none_or(|expires_at| expires_at > chrono::Utc::now())
                 && grant.actions.iter().any(|candidate| candidate == action)
-                && crate::authz::resource_matches(&grant.resource, resource)
+                && crate::authz::resource_matches(&grant.resource, &resource_expr)
         })
     }
 
@@ -543,7 +550,8 @@ impl ProjectionState {
             return Err("capability_grant_resources_empty");
         }
         for resource in &resources {
-            if !crate::authz::resource_matches(&parent.resource, resource) {
+            let resource_expr = self.authz_resource_expr(realm_id, resource);
+            if !crate::authz::resource_matches(&parent.resource, &resource_expr) {
                 return Err("grant_exceeds_issuer_authority");
             }
         }

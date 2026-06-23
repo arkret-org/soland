@@ -360,6 +360,7 @@ pub(in crate::routing::events::event_log) fn validate_data_event_capability_refs
                 format!("DataEvent capability_ref {grant_id} has invalid scope"),
             ));
         }
+        validate_data_event_joined_capability_view(state, grant_id)?;
         let Some(effective) = effective_by_id.get(grant_id) else {
             return Err(event_validation_error(
                 StatusCode::FORBIDDEN,
@@ -380,7 +381,7 @@ pub(in crate::routing::events::event_log) fn validate_data_event_capability_refs
         })?;
         if !referenced
             .iter()
-            .any(|grant| grant_covers_data_event_effect(grant, kind, realm_id, cell))
+            .any(|grant| grant_covers_data_event_effect(state, grant, kind, realm_id, cell))
         {
             return Err(event_validation_error(
                 StatusCode::FORBIDDEN,
@@ -390,6 +391,46 @@ pub(in crate::routing::events::event_log) fn validate_data_event_capability_refs
                 ),
             ));
         }
+    }
+    Ok(())
+}
+
+fn validate_data_event_joined_capability_view(
+    state: &AppState,
+    grant_id: &str,
+) -> Result<(), EventValidationError> {
+    let cell_ref = cokret_sdk::CellRef::new(format!(
+        "ck:cell:ck.component.capability.grant.v1:{grant_id}"
+    ))
+    .map_err(|_| {
+        event_validation_error(
+            StatusCode::BAD_REQUEST,
+            "schema_violation",
+            "DataEvent capability_ref could not be mapped to a capability cell",
+        )
+    })?;
+    if let Ok(projection) = state.projection.lock()
+        && matches!(
+            projection.cell(&cell_ref),
+            Some(cokret_sdk::lattice::CellState::Bottom(_))
+        )
+    {
+        return Err(event_validation_error(
+            StatusCode::PRECONDITION_FAILED,
+            "failed_bottom",
+            "cell_in_bottom_state",
+        ));
+    }
+    let snapshot = state.authz.grants_snapshot();
+    if let Some(current) = snapshot.iter().find(|grant| grant.grant_id == grant_id)
+        && (current.revoked
+            || crate::authz::grant_revoked_upstream(&snapshot, grant_id, chrono::Utc::now()))
+    {
+        return Err(event_validation_error(
+            StatusCode::PRECONDITION_FAILED,
+            "stale_seal_ref",
+            format!("DataEvent capability_ref {grant_id} is revoked in joined control view"),
+        ));
     }
     Ok(())
 }
@@ -619,19 +660,23 @@ fn data_event_auth_time(object: &serde_json::Map<String, Value>) -> chrono::Date
 }
 
 fn grant_covers_data_event_effect(
+    state: &AppState,
     grant: &crate::authz::Grant,
     action: &str,
     realm_id: &str,
     cell: &str,
 ) -> bool {
     grant.actions.iter().any(|candidate| candidate == action)
-        && effect_resource_candidates(cell, realm_id)
+        && effect_resource_candidates(state, cell, realm_id)
             .iter()
             .any(|resource| crate::authz::resource_matches(&grant.resource, resource))
 }
 
-fn effect_resource_candidates(cell: &str, realm_id: &str) -> Vec<String> {
-    let mut resources = vec![realm_id.to_owned(), cell.to_owned()];
+fn effect_resource_candidates(state: &AppState, cell: &str, realm_id: &str) -> Vec<String> {
+    let mut resources = Vec::new();
+    let projection = state.projection.lock().ok();
+    append_authz_resource_candidates(&mut resources, projection.as_deref(), realm_id, realm_id);
+    append_authz_resource_candidates(&mut resources, projection.as_deref(), realm_id, cell);
     let mut parts = cell.splitn(4, ':');
     if matches!(parts.next(), Some("ck"))
         && matches!(parts.next(), Some("cell"))
@@ -639,11 +684,31 @@ fn effect_resource_candidates(cell: &str, realm_id: &str) -> Vec<String> {
         && let Some(subject) = parts.next()
         && (subject.starts_with("ck:") || subject.starts_with("did:"))
     {
-        resources.push(subject.to_owned());
+        append_authz_resource_candidates(&mut resources, projection.as_deref(), realm_id, subject);
     }
     resources.sort();
     resources.dedup();
     resources
+}
+
+fn append_authz_resource_candidates(
+    resources: &mut Vec<String>,
+    projection: Option<&crate::reducer::ProjectionState>,
+    realm_id: &str,
+    resource: &str,
+) {
+    resources.push(resource.to_owned());
+    if let Some(projection) = projection {
+        for candidate in projection
+            .authz_resource_expr(realm_id, resource)
+            .split(',')
+        {
+            let candidate = candidate.trim();
+            if !candidate.is_empty() {
+                resources.push(candidate.to_owned());
+            }
+        }
+    }
 }
 
 async fn validate_applet_delegated_authorization_chain(
@@ -766,7 +831,8 @@ async fn validate_applet_delegated_authorization_chain(
         ));
     }
     let event_id = event_string_field(object, &["event_id"]).unwrap_or_default();
-    let resources = delegated_applet_resource_candidates(object, realm_id, actor_id, &event_id);
+    let resources =
+        delegated_applet_resource_candidates(state, object, realm_id, actor_id, &event_id);
     if !resources
         .iter()
         .any(|resource| crate::authz::resource_matches(&grant.resource, resource))
@@ -926,18 +992,19 @@ fn applet_namespace_pattern_is_wildcard(pattern: &str) -> bool {
 }
 
 fn delegated_applet_resource_candidates(
+    state: &AppState,
     object: &serde_json::Map<String, Value>,
     realm_id: &str,
     actor_id: &str,
     event_id: &str,
 ) -> Vec<String> {
-    let mut resources = vec![
-        realm_id.to_owned(),
-        actor_id.to_owned(),
-        event_id.to_owned(),
-    ];
+    let mut resources = Vec::new();
+    let projection = state.projection.lock().ok();
+    append_authz_resource_candidates(&mut resources, projection.as_deref(), realm_id, realm_id);
+    append_authz_resource_candidates(&mut resources, projection.as_deref(), realm_id, actor_id);
+    append_authz_resource_candidates(&mut resources, projection.as_deref(), realm_id, event_id);
     if let Some(redacts) = event_string_field(object, &["redacts"]) {
-        resources.push(redacts);
+        append_authz_resource_candidates(&mut resources, projection.as_deref(), realm_id, &redacts);
     }
     if let Some(payload) = object.get("payload").and_then(Value::as_object) {
         for field in [
@@ -948,7 +1015,12 @@ fn delegated_applet_resource_candidates(
             "target_ref",
         ] {
             if let Some(value) = event_string_field(payload, &[field]) {
-                resources.push(value);
+                append_authz_resource_candidates(
+                    &mut resources,
+                    projection.as_deref(),
+                    realm_id,
+                    &value,
+                );
             }
         }
     }
@@ -1208,6 +1280,7 @@ pub(crate) async fn validate_event_envelope(
     require_object_field(object, "payload")?;
     validate_event_schema_and_payload(state, &kind, &schema_id, envelope, object)?;
     validate_data_event_capability_refs(state, &actor_id, &realm_id, &kind, object)?;
+    validate_cba_effect_planes(object)?;
     validate_control_move_seal_basis(object)?;
     if kind == kinds::CK_MEMBER_IDENTITY_UPDATE {
         validate_member_identity_proof(state, object.get("payload").unwrap_or(&Value::Null))?;
@@ -1378,6 +1451,104 @@ fn validate_control_move_seal_basis(
         ));
     }
     Ok(())
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CbaEffectPlane {
+    Data,
+    Control,
+}
+
+const DATA_PLANE_CELL_FAMILIES: &[&str] = &[
+    "ck.component.strand.discussion.timeline.v1",
+    "ck.component.message.reactions.v1",
+    "ck.component.pin.v1",
+];
+
+fn validate_cba_effect_planes(
+    object: &serde_json::Map<String, Value>,
+) -> Result<(), EventValidationError> {
+    let Some(effects) = object.get("effects").and_then(Value::as_array) else {
+        return Ok(());
+    };
+    if effects.is_empty() {
+        return Ok(());
+    }
+    let is_data_event = object.contains_key("seal_ref") || object.contains_key("auth_context");
+    let is_control_move = object.contains_key("seal_basis");
+    if !is_data_event && !is_control_move {
+        return Ok(());
+    }
+    for effect in effects {
+        let family = cba_effect_cell_family(effect)?;
+        match cba_cell_family_plane(family)? {
+            CbaEffectPlane::Control if is_data_event => {
+                return Err(event_validation_error(
+                    StatusCode::BAD_REQUEST,
+                    "plane_cross_write",
+                    "DataEvent effects[] must not write control-plane cell",
+                ));
+            }
+            CbaEffectPlane::Data if is_control_move => {
+                return Err(event_validation_error(
+                    StatusCode::PRECONDITION_FAILED,
+                    "failed_plane",
+                    "Control Move effects[] must not write data-plane cell",
+                ));
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+fn cba_effect_cell_family(effect: &Value) -> Result<&str, EventValidationError> {
+    let cell = effect.get("cell").and_then(Value::as_str).ok_or_else(|| {
+        event_validation_error(
+            StatusCode::BAD_REQUEST,
+            "schema_violation",
+            "effects[] entries require cell",
+        )
+    })?;
+    let Some(rest) = cell.strip_prefix("ck:cell:") else {
+        return Err(event_validation_error(
+            StatusCode::BAD_REQUEST,
+            "schema_violation",
+            "effects[].cell must use the ck:cell: typed prefix",
+        ));
+    };
+    let Some((family, subject)) = rest.split_once(':') else {
+        return Err(event_validation_error(
+            StatusCode::BAD_REQUEST,
+            "schema_violation",
+            "effects[].cell must include a cell family and subject",
+        ));
+    };
+    if family.trim().is_empty() || subject.trim().is_empty() {
+        return Err(event_validation_error(
+            StatusCode::BAD_REQUEST,
+            "schema_violation",
+            "effects[].cell must include a non-empty cell family and subject",
+        ));
+    }
+    Ok(family)
+}
+
+fn cba_cell_family_plane(family: &str) -> Result<CbaEffectPlane, EventValidationError> {
+    if DATA_PLANE_CELL_FAMILIES.contains(&family) {
+        return Ok(CbaEffectPlane::Data);
+    }
+    if crate::artifacts::cell_family_bindings()
+        .iter()
+        .any(|binding| binding.cell_family == family)
+    {
+        return Ok(CbaEffectPlane::Control);
+    }
+    Err(event_validation_error(
+        StatusCode::BAD_REQUEST,
+        "schema_violation",
+        format!("effects[].cell references unknown cell family {family}"),
+    ))
 }
 
 async fn reject_revoked_actor_device_signature(

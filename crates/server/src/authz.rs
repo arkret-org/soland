@@ -380,6 +380,15 @@ impl SolandAuthzEngine {
             .collect()
     }
 
+    pub(crate) fn grants_snapshot(&self) -> Vec<Grant> {
+        self.grants
+            .lock()
+            .expect("grants lock")
+            .values()
+            .cloned()
+            .collect()
+    }
+
     /// Check if an actor can perform an action on a resource.
     ///
     /// Default rules (when no explicit grants exist):
@@ -632,13 +641,23 @@ pub(crate) fn resource_matches(pattern: &str, resource: &str) -> bool {
     if pattern == "*" {
         return false;
     }
+    let resources = resource
+        .split(',')
+        .map(str::trim)
+        .filter(|resource| !resource.is_empty())
+        .collect::<Vec<_>>();
+    if resources.is_empty() {
+        return false;
+    }
     pattern.split(',').any(|alternative| {
         let alternative = alternative.trim();
         !alternative.is_empty()
-            && alternative
-                .split('+')
-                .map(str::trim)
-                .all(|term| !term.is_empty() && resource_term_matches(term, resource))
+            && alternative.split('+').map(str::trim).all(|term| {
+                !term.is_empty()
+                    && resources
+                        .iter()
+                        .any(|resource| resource_term_matches(term, resource))
+            })
     })
 }
 
@@ -846,6 +865,14 @@ pub(crate) fn validate_resource_selector_object(
         return Err("capability_grant_resources_invalid");
     }
     if matches!(match_scope, "children" | "subtree") && kind != "space" {
+        return Err("capability_grant_resources_invalid");
+    }
+    if matches!(match_scope, "children" | "subtree")
+        && map
+            .get("space_id")
+            .and_then(Value::as_str)
+            .is_none_or(|value| value.trim().is_empty())
+    {
         return Err("capability_grant_resources_invalid");
     }
     if match_scope == "realm_wide" && !matches!(kind, "space" | "circle") {

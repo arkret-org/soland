@@ -360,6 +360,13 @@ impl ProjectionState {
         else {
             return Ok(());
         };
+        if let Err(reason) = validate_join_policy_payload(join_policy) {
+            return if reason == "join_policy_duplicate_gate_id" {
+                Err("join_policy_duplicate_gate_id")
+            } else {
+                Err("gate_check_failed")
+            };
+        }
         let Some(gates) = join_policy.get("gates").and_then(Value::as_array) else {
             return Err("gate_check_failed");
         };
@@ -466,7 +473,7 @@ impl ProjectionState {
                 .get("gate_id")
                 .and_then(Value::as_str)
                 .and_then(|gate_id| gate_proof_for_gate(proofs, gate_id))
-                .is_some_and(claim_required_gate_has_proof),
+                .is_some_and(|proof| claim_required_gate_has_proof(gate, proof)),
             Some("application_form" | "manual_review") => false,
             _ => false,
         }

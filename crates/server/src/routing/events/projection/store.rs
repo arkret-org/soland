@@ -141,6 +141,24 @@ pub async fn ingest_federation_operations(
 ) -> FederationIngestResult {
     let mut accepted = Vec::new();
     let mut rejected = Vec::new();
+    let profile_gate =
+        match crate::routing::federation::federation::federation_profile_intersection_for_peer(
+            state, origin, None,
+        )
+        .await
+        {
+            Ok(gate) => gate,
+            Err(rejection) => {
+                rejected.extend(operations.iter().map(|operation| {
+                    json!({
+                        "operation_id": operation.operation_id.clone(),
+                        "reason": rejection.code,
+                        "message": rejection.message.clone(),
+                    })
+                }));
+                return FederationIngestResult { accepted, rejected };
+            }
+        };
     for operation in operations {
         let operation_id = operation.operation_id.clone();
         if state
@@ -157,6 +175,14 @@ pub async fn ingest_federation_operations(
             rejected.push(json!({
                 "operation_id": operation_id,
                 "reason": "invalid_payload",
+            }));
+            continue;
+        }
+        if let Err(rejection) = profile_gate.enforce_operation(&operation) {
+            rejected.push(json!({
+                "operation_id": operation_id,
+                "reason": rejection.code,
+                "message": rejection.message,
             }));
             continue;
         }

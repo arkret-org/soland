@@ -1666,7 +1666,13 @@ fn validate_agent_act_on_behalf_authorization_ref(
         return Err("agent_act_on_behalf_authorization_ref_inactive");
     };
     let action_allowed = grant.actions.iter().any(|candidate| candidate == action);
-    if !action_allowed || !crate::authz::resource_matches(&grant.resource, resource) {
+    let resource_expr = state
+        .projection
+        .lock()
+        .ok()
+        .map(|projection| projection.authz_resource_expr(operation.realm_id.as_str(), resource))
+        .unwrap_or_else(|| resource.to_owned());
+    if !action_allowed || !crate::authz::resource_matches(&grant.resource, &resource_expr) {
         return Err("agent_act_on_behalf_authorization_ref_scope");
     }
     Ok(authorization_ref.to_owned())
@@ -1938,7 +1944,13 @@ fn validate_agent_context_authorization_ref(
         return Err("agent_context_authorization_ref_inactive");
     };
     let action_allowed = grant.actions.iter().any(|candidate| candidate == action);
-    if !action_allowed || !crate::authz::resource_matches(&grant.resource, resource) {
+    let resource_expr = state
+        .projection
+        .lock()
+        .ok()
+        .map(|projection| projection.authz_resource_expr(operation.realm_id.as_str(), resource))
+        .unwrap_or_else(|| resource.to_owned());
+    if !action_allowed || !crate::authz::resource_matches(&grant.resource, &resource_expr) {
         return Err("agent_context_authorization_ref_scope");
     }
     Ok(())
@@ -2198,9 +2210,9 @@ async fn validate_set_default_strand_policy(
 /// gate: the actor MUST hold the matching moderation capability action on the
 /// Realm, or own the Realm. fail-closed `missing_capability` otherwise.
 ///
-/// Action mapping (capability-action-registry.json):
-/// - `ck.moderation.decision`            → action `ck.moderation.decision`
-/// - `ck.moderation.decision.lift`       → action `ck.moderation.decision.lift`
+/// Action mapping (capability-action-registry.json and policy-server.md):
+/// - `ck.moderation.decision`            → governance policy action or narrow decision action
+/// - `ck.moderation.decision.lift`       → governance policy action or narrow lift action
 /// - `ck.moderation.appeal.submit`       → action `ck.moderation.appeal.submit`
 /// - `ck.moderation.appeal.{review,decision,close}` → action `ck.moderation.appeal.review`
 ///   (aggregate_admin: one review capability covers review / decision / close — §5.5.1 table note).
@@ -2215,13 +2227,21 @@ async fn validate_moderation_event_policy(
     let Some(kind) = kinds::canonical_kind_for_operation(operation) else {
         return Ok(());
     };
-    let action = match kind {
-        kinds::CK_MODERATION_DECISION => "ck.moderation.decision",
-        kinds::CK_MODERATION_DECISION_LIFT => "ck.moderation.decision.lift",
-        kinds::CK_MODERATION_APPEAL_SUBMIT => "ck.moderation.appeal.submit",
+    let actions = match kind {
+        kinds::CK_MODERATION_DECISION => &[
+            "ck.realm.moderation_policy",
+            "ck.policy.manage",
+            "ck.moderation.decision",
+        ][..],
+        kinds::CK_MODERATION_DECISION_LIFT => &[
+            "ck.realm.moderation_policy",
+            "ck.policy.manage",
+            "ck.moderation.decision.lift",
+        ][..],
+        kinds::CK_MODERATION_APPEAL_SUBMIT => &["ck.moderation.appeal.submit"][..],
         kinds::CK_MODERATION_APPEAL_REVIEW
         | kinds::CK_MODERATION_APPEAL_DECISION
-        | kinds::CK_MODERATION_APPEAL_CLOSE => "ck.moderation.appeal.review",
+        | kinds::CK_MODERATION_APPEAL_CLOSE => &["ck.moderation.appeal.review"][..],
         _ => return Ok(()),
     };
 
@@ -2245,19 +2265,20 @@ async fn validate_moderation_event_policy(
         return Ok(());
     }
     let (owner, members) = realm_owner_and_members(state, realm_id).await;
-    if state
-        .authz
-        .check(
-            actor,
-            action,
-            realm_id,
-            realm_id,
-            owner.as_deref(),
-            &members,
-            &[],
-        )
-        .allowed
-    {
+    if actions.iter().any(|action| {
+        state
+            .authz
+            .check(
+                actor,
+                action,
+                realm_id,
+                realm_id,
+                owner.as_deref(),
+                &members,
+                &[],
+            )
+            .allowed
+    }) {
         return Ok(());
     }
     Err("missing_capability")
