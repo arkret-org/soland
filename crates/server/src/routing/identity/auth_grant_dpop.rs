@@ -31,7 +31,7 @@ use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::{DateTime, Duration, Utc};
 use cokret_sdk::http_signature::{Ed25519PublicKey, public_key_from_bytes};
-use cokret_sdk::{FreshnessState, SessionGrantProofKind};
+use cokret_sdk::{DeviceId, FreshnessState, SessionGrantProofKind};
 use ed25519_dalek::{Signature, Verifier};
 use salvo::http::StatusCode;
 use salvo::prelude::Request;
@@ -451,7 +451,7 @@ fn session_binding_from_introspection(
         }
         let scope_details = agent_session_scope_details(grant);
         return Ok((
-            format!("agent-session:{}", grant.id),
+            format!("agent-session:{}", grant.id.as_str()),
             Some(AgentSessionRecord {
                 scope_details,
                 freshness_state: FreshnessState::Fresh,
@@ -477,7 +477,7 @@ fn session_binding_from_introspection(
         return Err(unauthenticated("session grant is missing a device scope"));
     };
 
-    let device_id = match grant.device_id.as_deref() {
+    let device_id = match grant.device_id.as_ref().map(DeviceId::as_str) {
         Some(bound) if bound != scope_device_id => {
             return Err(unauthenticated(
                 "session grant device binding does not match its device scope",
@@ -494,7 +494,7 @@ fn agent_session_scope_details(grant: &SessionGrantIntrospectGrant) -> Value {
     if let Some(object) = scope_details.as_object_mut() {
         object
             .entry("session_grant_id".to_owned())
-            .or_insert_with(|| Value::String(grant.id.clone()));
+            .or_insert_with(|| Value::String(grant.id.to_string()));
         object
             .entry("session_grant_revocation_ref".to_owned())
             .or_insert_with(|| Value::String(grant.revocation_ref.clone()));
@@ -723,6 +723,7 @@ fn htu_path(htu: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cokret_sdk::GrantId;
 
     const RFC8037_X: &str = "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo";
     const RFC8037_THUMBPRINT: &str = "kPrK_qmxVWaYVA9wwBF6Iuo3vVzz7TxHCTwXBygrS4k";
@@ -793,15 +794,17 @@ mod tests {
 
     fn test_introspection_grant() -> SessionGrantIntrospectGrant {
         SessionGrantIntrospectGrant {
-            id: "grant-1".to_owned(),
+            id: GrantId::new("ck:grant:0196419b-0000-7000-8000-000000000001").unwrap(),
             issuer: "did:web:coauth.local".to_owned(),
             subject: "did:web:alice.example".to_owned(),
             service_account_id: "alice".to_owned(),
-            device_id: Some("device-1".to_owned()),
+            device_id: Some(
+                DeviceId::new("ck:device:0196419b-0000-7000-8000-000000000001").unwrap(),
+            ),
             audience: "did:web:soland.local".to_owned(),
             scopes: vec![
                 PRINCIPAL_SESSION_BIND_SCOPE.to_owned(),
-                format!("{DEVICE_SCOPE_PREFIX}device-1"),
+                format!("{DEVICE_SCOPE_PREFIX}ck:device:0196419b-0000-7000-8000-000000000001"),
             ],
             expires_at: crate::wire::now() + Duration::minutes(5),
             revoked_at: None,
@@ -829,7 +832,7 @@ mod tests {
     #[test]
     fn agent_session_binding_materializes_scope_details() {
         let mut grant = test_introspection_grant();
-        grant.id = "agent-grant-1".to_owned();
+        grant.id = GrantId::new("ck:grant:0196419b-0000-7000-8000-000000000002").unwrap();
         grant.device_id = None;
         grant.scopes = vec!["ck.agent.action:message.send".to_owned()];
         grant.proof_kind = Some(SessionGrantProofKind::AgentKeyProof);
@@ -844,7 +847,10 @@ mod tests {
 
         let (device_id, agent_session) = session_binding_from_introspection(&grant).unwrap();
 
-        assert_eq!(device_id, "agent-session:agent-grant-1");
+        assert_eq!(
+            device_id,
+            "agent-session:ck:grant:0196419b-0000-7000-8000-000000000002"
+        );
         let agent_session = agent_session.unwrap();
         assert_eq!(agent_session.freshness_state, FreshnessState::Fresh);
         assert_eq!(

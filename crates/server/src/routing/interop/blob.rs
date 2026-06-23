@@ -769,6 +769,8 @@ fn issue_presign_envelope(
     issued_at: chrono::DateTime<chrono::Utc>,
     expires_at: chrono::DateTime<chrono::Utc>,
 ) -> Result<IssuedBlobPresign, AppError> {
+    let blob_ref = BlobRef::new(blob_ref.to_owned())
+        .map_err(|error| AppError::internal(format!("blob_ref is invalid: {error}")))?;
     let issuer_service_did = Did::new(state.config.service_did.clone())
         .map_err(|error| AppError::internal(format!("service DID is invalid: {error}")))?;
     let realm_id = realm_id
@@ -785,7 +787,7 @@ fn issue_presign_envelope(
     }
     let payload = BlobPresignPayload {
         scheme: BLOB_PRESIGN_SCHEME.to_owned(),
-        blob_ref: blob_ref.to_owned(),
+        blob_ref,
         realm_id,
         issuer_service_did: issuer_service_did.clone(),
         issued_at,
@@ -845,7 +847,7 @@ fn validate_presign_query(
     }
     let payload = envelope.payload;
     if payload.scheme != BLOB_PRESIGN_SCHEME
-        || payload.blob_ref != blob_ref
+        || payload.blob_ref.as_str() != blob_ref
         || payload.purpose != purpose
         || payload.issuer_service_did.as_str() != state.config.service_did.as_str()
         || payload.nonce.len() < 16
