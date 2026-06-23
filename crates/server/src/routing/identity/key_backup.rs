@@ -3,8 +3,8 @@
 use base64::Engine as _;
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use cokret_sdk::{
-    BackupClass, BackupId, DeviceId, Did, KEY_BACKUP_DELETE_DEVELOPMENT_PROOF_KIND, KeyBackup,
-    KeyBackupDeleteDetachedJwsProof, KeyBackupDeleteProof, KeyBackupRecipientMethod,
+    BackupClass, BackupId, DeviceId, Did, EventId, KEY_BACKUP_DELETE_DEVELOPMENT_PROOF_KIND,
+    KeyBackup, KeyBackupDeleteDetachedJwsProof, KeyBackupDeleteProof, KeyBackupRecipientMethod,
     KeysBackupsDeleteRequestBody, KeysBackupsUnlockRequestBody,
 };
 use ed25519_dalek::{Signature, Verifier as _};
@@ -361,6 +361,49 @@ mod tests {
         body["auth_data"] = did_recovery_auth_data();
         validate_key_backup_body(BACKUP_ID, ACTOR, &body)
             .expect("did_recovery with well-formed signed recovery_policy_ref should validate");
+    }
+
+    #[test]
+    fn auth_data_accepts_service_attested_device_authorize_anchor() {
+        let mut body =
+            key_backup_body("secret_storage", "recovery_secret", passphrase_encryption());
+        body["auth_data"]
+            .as_object_mut()
+            .unwrap()
+            .remove("ssk_generation");
+        body["auth_data"]["device_authorize_event_id"] =
+            json!("ck:event:01964137-0000-7000-8000-000000000123");
+
+        validate_key_backup_body(BACKUP_ID, ACTOR, &body)
+            .expect("service-attested device_authorize_event_id anchor should validate");
+    }
+
+    #[test]
+    fn auth_data_rejects_multiple_device_trust_anchors() {
+        let mut body =
+            key_backup_body("secret_storage", "recovery_secret", passphrase_encryption());
+        body["auth_data"]["device_authorize_event_id"] =
+            json!("ck:event:01964137-0000-7000-8000-000000000123");
+
+        let err = validate_key_backup_body(BACKUP_ID, ACTOR, &body)
+            .expect_err("ssk_generation and device_authorize_event_id are exclusive");
+        assert_eq!(err.code, ErrorCode::SchemaViolation);
+        assert!(err.message.contains("mutually exclusive"));
+    }
+
+    #[test]
+    fn auth_data_rejects_missing_device_trust_anchor() {
+        let mut body =
+            key_backup_body("secret_storage", "recovery_secret", passphrase_encryption());
+        body["auth_data"]
+            .as_object_mut()
+            .unwrap()
+            .remove("ssk_generation");
+
+        let err = validate_key_backup_body(BACKUP_ID, ACTOR, &body)
+            .expect_err("key backup auth_data must have one trust anchor");
+        assert_eq!(err.code, ErrorCode::SchemaViolation);
+        assert!(err.message.contains("exactly one device trust anchor"));
     }
 
     #[test]

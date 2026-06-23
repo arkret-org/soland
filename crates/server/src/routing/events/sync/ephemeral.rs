@@ -12,7 +12,7 @@ use crate::routing::spaces::space::{
     PresenceVisibilityPolicy, presence_visibility_for_actor, realm_has_member,
     realm_history_visibility_for_id, typing_scope_allows_actor,
 };
-use crate::state::{AppState, PresenceRecord, SessionRecord, TypingRecord};
+use crate::state::{AppState, EventNotification, PresenceRecord, SessionRecord, TypingRecord};
 
 #[endpoint(
     operation_id = "ck.self.ephemeral.command.send",
@@ -47,13 +47,18 @@ pub(super) async fn submit_ephemeral(
     }
 
     let mut dispatched_to: Option<u64> = None;
-    match envelope.kind.as_str() {
+    let should_wake_account_sync = match envelope.kind.as_str() {
         "ck.typing" => {
-            persist_ephemeral_typing(state, &session.actor, realm_id_str, &envelope).await?
+            persist_ephemeral_typing(state, &session.actor, realm_id_str, &envelope).await?;
+            true
         }
-        "ck.presence" => persist_ephemeral_presence(state, &session.actor, &envelope).await,
+        "ck.presence" => {
+            persist_ephemeral_presence(state, &session.actor, &envelope).await;
+            true
+        }
         "ck.receipt.read" => {
-            admit_ephemeral_read_receipt(state, &session, realm_id_str, &envelope).await?
+            admit_ephemeral_read_receipt(state, &session, realm_id_str, &envelope).await?;
+            false
         }
         "ck.call.signal" => {
             // `service-http-binding.md` §162 — sending a `ck.call.signal`
@@ -81,12 +86,20 @@ pub(super) async fn submit_ephemeral(
                 relay_ephemeral_call_signal(state, &session, realm_id_str, &payload, &envelope)
                     .await?;
             dispatched_to = Some(recipients);
+            true
         }
         _ => {
             return Err(crate::error::AppError::invalid_param(
                 "unsupported ephemeral kind",
             ));
         }
+    };
+
+    if should_wake_account_sync {
+        let _ = state.event_broadcast.send(EventNotification::ephemeral(
+            realm_id_str.to_owned(),
+            envelope.kind.clone(),
+        ));
     }
 
     crate::result::json_ok(EphemeralSubmitOutcome {

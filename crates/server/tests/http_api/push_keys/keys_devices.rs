@@ -680,8 +680,10 @@ async fn device_authorize_projects_public_key_into_devices_table() {
     // (bootstrap/first-device authorizations are validated elsewhere), so the
     // projection write is exercised directly.
     let control_realm = soland::test_support::principal_control_realm_for_did(alice);
+    let operation_id = new_prefixed_uuid7("ck:operation:");
+    let expected_authorize_event_id = operation_id.replacen("ck:operation:", "ck:event:", 1);
     let operation = Operation::create(
-        OperationId::new(new_prefixed_uuid7("ck:operation:")).unwrap(),
+        OperationId::new(operation_id.clone()).unwrap(),
         RealmId::new(control_realm).unwrap(),
         "ck.device.authorize",
         serde_json::json!({
@@ -702,6 +704,10 @@ async fn device_authorize_projects_public_key_into_devices_table() {
     assert_eq!(
         device.payload["device_public_key"].as_str(),
         Some(multibase.as_str())
+    );
+    assert_eq!(
+        device.payload["device_authorize_event_id"].as_str(),
+        Some(expected_authorize_event_id.as_str())
     );
     assert_eq!(device.verification_state, "verified");
     assert!(device.revoked_at.is_none());

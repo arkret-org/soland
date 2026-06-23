@@ -50,11 +50,11 @@ use super::read_receipts::{
 use super::{
     TO_DEVICE_PAGE_LIMIT, augment_timeline_message_json, authenticated_session,
     default_discussion_track, device_message_envelopes_after,
-    has_pending_call_signals_for_subscriber, is_realm_deleted, now, projected_event_page,
-    projection_event_json, prune_expired_typing, query_param, realm_discoverability,
-    realm_event_visible_to_session, realm_has_member, realm_history_visibility,
-    realm_id_accessible, realm_visible_to, render_error, sha256_hex, snapshot_manifest_for_realm,
-    strand_id_from_realm_id, strand_projection_for_realm,
+    has_pending_call_signals_for_subscriber, has_pending_typing_for_subscriber, is_realm_deleted,
+    now, projected_event_page, projection_event_json, prune_expired_typing, query_param,
+    realm_discoverability, realm_event_visible_to_session, realm_has_member,
+    realm_history_visibility, realm_id_accessible, realm_visible_to, render_error, sha256_hex,
+    snapshot_manifest_for_realm, strand_id_from_realm_id, strand_projection_for_realm,
     sync_timeline_message_json_with_projection, typing_ephemeral_for_realm, validate_did,
 };
 pub(crate) use crate::ids;

@@ -1360,6 +1360,33 @@ pub async fn typing_ephemeral_for_realm(
     ephemeral
 }
 
+pub async fn has_pending_typing_for_subscriber(
+    state: &AppState,
+    realm_id: &str,
+    session: Option<&SessionRecord>,
+) -> bool {
+    let Some(session) = session else {
+        return false;
+    };
+    if !realm_has_member(state, realm_id, &session.actor).await {
+        return false;
+    }
+    for record in state
+        .persistence
+        .typing()
+        .list_for_realm(realm_id)
+        .await
+        .unwrap_or_default()
+    {
+        if record.scope_id.is_some()
+            && typing_record_visible_to_session(state, &record, session).await
+        {
+            return true;
+        }
+    }
+    false
+}
+
 async fn typing_record_visible_to_session(
     state: &AppState,
     record: &TypingRecord,

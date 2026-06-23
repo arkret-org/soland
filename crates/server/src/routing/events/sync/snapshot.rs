@@ -197,6 +197,7 @@ pub(crate) async fn build_sync_snapshot(
             && !account_projection_changed
             && !has_pending_call_signals_for_subscriber(state, &realm_id, session, !is_incremental)
                 .await
+            && !has_pending_typing_for_subscriber(state, &realm_id, session).await
             && !has_pending_read_receipts_for_subscriber(state, &realm_id, session, !is_incremental)
                 .await
         {

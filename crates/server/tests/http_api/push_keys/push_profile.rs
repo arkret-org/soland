@@ -2,6 +2,8 @@
 //! call-signal contracts.
 
 #![allow(unused_imports)]
+use soland::state::EventNotificationKind;
+
 use super::helpers::*;
 use crate::common::*;
 
@@ -674,6 +676,114 @@ async fn typing_submit_accepts_default_realm_strand_scope() {
     assert_eq!(
         active_typing[0].scope_id.as_deref(),
         Some(default_strand_id.as_str())
+    );
+}
+
+#[tokio::test]
+async fn typing_submit_wakes_account_subscribe_stream() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let token = dev_token(state.clone()).await;
+    let strand_id = "ck:strand:01904100-0000-7000-8000-7a1c00000004";
+    insert_typing_scope_strand(state.clone(), strand_id, Some(true));
+    let mut wakeups = state.event_broadcast.subscribe();
+    let sent_at = chrono::Utc::now();
+    let expires_at = sent_at + chrono::Duration::seconds(30);
+
+    let typing: Value = TestClient::post("http://server/_cokret/self/ephemeral")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&serde_json::json!({
+            "kind": "ck.typing",
+            "realm_id": DEMO_REALM_ID,
+            "actor_id": "did:web:alice.example",
+            "sent_at": sent_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+            "expires_at": expires_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+            "payload": {
+                "strand_id": strand_id,
+                "typing": true
+            }
+        }))
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(typing["accepted"], true);
+
+    let notification = tokio::time::timeout(Duration::from_secs(1), wakeups.recv())
+        .await
+        .expect("typing submit should wake account subscribe")
+        .expect("event broadcast stays open");
+    assert_eq!(notification.realm_id, DEMO_REALM_ID);
+    match notification.kind {
+        EventNotificationKind::Ephemeral { kind } => assert_eq!(kind, "ck.typing"),
+        other => panic!("expected ck.typing ephemeral wakeup, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn typing_submit_is_visible_in_incremental_account_subscribe_delta() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    add_test_realm_member(&state, DEMO_REALM_ID, "did:web:bob.example");
+    let alice_token = dev_token(state.clone()).await;
+    let bob_token = dev_token_for_device(
+        state.clone(),
+        "did:web:bob.example",
+        "ck:device:01904100-0000-7000-8000-b0b000000004",
+        "Bob Desktop",
+    )
+    .await;
+    let strand_id = "ck:strand:01904100-0000-7000-8000-7a1c00000005";
+    insert_typing_scope_strand(state.clone(), strand_id, Some(true));
+
+    let baseline = account_subscribe_frame(state.clone(), Some(&bob_token), "catchup=true").await;
+    let cursor = baseline["cursor"]
+        .as_str()
+        .expect("baseline sync cursor")
+        .to_owned();
+    let sent_at = chrono::Utc::now();
+    let expires_at = sent_at + chrono::Duration::seconds(30);
+
+    let typing: Value = TestClient::post("http://server/_cokret/self/ephemeral")
+        .add_header("authorization", format!("Bearer {alice_token}"), true)
+        .json(&serde_json::json!({
+            "kind": "ck.typing",
+            "realm_id": DEMO_REALM_ID,
+            "actor_id": "did:web:alice.example",
+            "sent_at": sent_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+            "expires_at": expires_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+            "payload": {
+                "strand_id": strand_id,
+                "typing": true
+            }
+        }))
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(typing["accepted"], true);
+
+    let delta = account_subscribe_frame(
+        state.clone(),
+        Some(&bob_token),
+        &format!("catchup=true&max_wait_ms=0&after={cursor}"),
+    )
+    .await;
+    let ephemeral = delta["realms"][DEMO_REALM_ID]["ephemeral"]
+        .as_array()
+        .unwrap_or_else(|| panic!("incremental typing delta must include realm: {delta}"));
+    assert!(
+        ephemeral.iter().any(|entry| {
+            entry["type"] == "ck.typing"
+                && entry["realm_id"] == DEMO_REALM_ID
+                && entry["strand_id"] == strand_id
+                && entry["actors"].as_array().is_some_and(|actors| {
+                    actors
+                        .iter()
+                        .any(|actor| actor["actor"] == "did:web:alice.example")
+                })
+        }),
+        "incremental typing delta must include Alice typing: {delta}"
     );
 }
 

@@ -1185,11 +1185,24 @@ fn account_device_summary(device: DeviceInventoryRecord) -> Result<AccountDevice
     } else {
         "unknown"
     };
+    let authorized_event_ref = device
+        .payload
+        .get("device_authorize_event_id")
+        .and_then(Value::as_str)
+        .filter(|event_id| !event_id.trim().is_empty())
+        .map(|event_id| {
+            EventId::new(event_id.to_owned()).map_err(|error| {
+                AppError::internal(format!(
+                    "stored device_authorize_event_id `{event_id}` is invalid: {error}"
+                ))
+            })
+        })
+        .transpose()?;
     Ok(AccountDeviceSummary {
         device_id,
         status: status.to_owned(),
         display_name,
-        authorized_event_ref: None,
+        authorized_event_ref,
         authorized_at: authorized.then_some(device.created_at),
         last_seen_at: None,
         revoked_at: device.revoked_at,

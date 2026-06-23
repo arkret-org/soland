@@ -4,10 +4,10 @@ use cokret_sdk::Operation;
 use serde_json::{Value, json};
 
 use super::*;
-use crate::kinds;
 use crate::persistence::{MlsKeyPackageRow, MlsWelcomeRecord};
 use crate::reducer::MlsWelcomeQueueKey;
 use crate::state::{AppState, DeviceMessageRecord};
+use crate::{ids, kinds};
 
 pub async fn project_accepted_operations_from_device(
     state: &AppState,
@@ -958,9 +958,10 @@ async fn project_device_authorize(state: &crate::state::AppState, operation: &Op
         map.entry("device_id".to_owned())
             .or_insert_with(|| Value::String(device_id.to_owned()));
         map.insert("device_authorize_projected".to_owned(), Value::Bool(true));
+        let operation_uuid = ids::typed_uuid_part_or_panic(operation.operation_id.as_str());
         map.insert(
             "device_authorize_event_id".to_owned(),
-            Value::String(operation.operation_id.to_string()),
+            Value::String(ids::format_typed_uuid("event", &operation_uuid)),
         );
         // Tier-2 (device-lifecycle.md §5.2 / §8.2): persist the authoritative
         // `cross_signing_binding` verbatim so keys/query can echo it for

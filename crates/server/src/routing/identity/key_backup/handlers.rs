@@ -432,12 +432,12 @@ pub(super) async fn unlock_key_backup(
     // `proof.backup_id` to equal the envelope's own `backup_id`.
     verify_key_backup_unlock_proof(state, &proof, &session.actor, &session.device_id, &backup)
         .await?;
-    // key-management.md §7.4.1 — anchor the released envelope's auth_data.signature
-    // to the actor's cross-signing trust root before returning the full ciphertext.
+    // key-management.md §7.4.1 - anchor the released envelope's auth_data.signature
+    // to the actor's current device trust root before returning the full ciphertext.
     // Without this, a malicious/compromised server could substitute an envelope
     // signed by a revoked old device key; such envelopes MUST be rejected as
     // `untrusted_backup_signature` even when series chain / ciphertext_digest match.
-    anchor_key_backup_auth_data_trust_root(state, &session.actor, &backup)?;
+    anchor_key_backup_auth_data_trust_root(state, &session.actor, &backup).await?;
     // Spec key-management.md §7.8 — per-principal rolling-24h download quota
     // on full-ciphertext reads. The over-threshold download MUST be withheld
     // (429) and MUST land in the audit log as a `key_backup_read` access
