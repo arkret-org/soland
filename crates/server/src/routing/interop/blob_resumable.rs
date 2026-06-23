@@ -944,8 +944,8 @@ async fn complete_resumable_upload(
     // Staging part is consumed; drop it so it can never be replayed or
     // completed twice. Removal failure is non-fatal (the TTL sweeper
     // collects leftovers).
-    remove_staged(dir, &id).await;
-    release_upload_lock(&id);
+    remove_staged(dir, id).await;
+    release_upload_lock(id);
     let outcome = match blob_upload_outcome(
         state,
         blob_ref,

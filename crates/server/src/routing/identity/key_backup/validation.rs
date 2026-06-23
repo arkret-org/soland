@@ -563,10 +563,7 @@ pub(super) fn validate_key_backup_auth_data_typed(backup: &KeyBackup) -> Result<
             "auth_data.signature must be a non-empty base64url token",
         ));
     }
-    if !auth
-        .ssk_generation
-        .is_some_and(|generation| generation >= 1)
-    {
+    if auth.ssk_generation.is_none_or(|generation| generation < 1) {
         return Err(schema_error("auth_data.ssk_generation must be >= 1"));
     }
     for field in KEY_BACKUP_AUTH_REQUIRED_SIGNED_FIELDS {

@@ -240,11 +240,11 @@ pub async fn known_realm_denies_plaintext_service(state: &AppState, realm_id: &s
         .ok()
         .flatten()
         .is_some_and(|record| {
-            !(record.discoverability == "public" && record.history_visibility == "world_readable")
-                && !record.allows_plaintext_data_class(
-                    &state.config.service_did,
-                    cokret_sdk::PlaintextDataClassKind::MessageContent,
-                )
+            !(record.allows_plaintext_data_class(
+                &state.config.service_did,
+                cokret_sdk::PlaintextDataClassKind::MessageContent,
+            ) || record.discoverability == "public"
+                && record.history_visibility == "world_readable")
         })
 }
 
@@ -636,10 +636,10 @@ pub fn validate_canonical_json_value_inner(
                     );
                 }
                 // Unicode code point ascending order.
-                if let Some(prev) = prev_key {
-                    if key.as_bytes() <= prev.as_bytes() {
-                        return Err("canonical JSON object keys must be sorted in ascending order");
-                    }
+                if let Some(prev) = prev_key
+                    && key.as_bytes() <= prev.as_bytes()
+                {
+                    return Err("canonical JSON object keys must be sorted in ascending order");
                 }
                 prev_key = Some(key);
             }
@@ -663,12 +663,12 @@ pub fn validate_canonical_json_value_inner(
             }
             // RFC3339 UTC Z timestamp validation for fields named *_at or *_at_ms.
             for (key, value) in object {
-                if key.ends_with("_at") {
-                    if let Some(s) = value.as_str() {
-                        cokret_sdk::canonical::validate_timestamp_canonical(s).map_err(
-                            |_| "timestamp must be canonical RFC 3339 UTC (YYYY-MM-DDTHH:MM:SSZ)",
-                        )?;
-                    }
+                if key.ends_with("_at")
+                    && let Some(s) = value.as_str()
+                {
+                    cokret_sdk::canonical::validate_timestamp_canonical(s).map_err(
+                        |_| "timestamp must be canonical RFC 3339 UTC (YYYY-MM-DDTHH:MM:SSZ)",
+                    )?;
                 }
             }
         }

@@ -544,10 +544,9 @@ async fn project_delivered_contact_fact(
                 .get_scoped(issuer, subject_id, &scope)
                 .await
                 .map_err(|error| AppError::internal(error.to_string()))?
+                && existing.status == "pending"
             {
-                if existing.status == "pending" {
-                    return Ok("duplicate");
-                }
+                return Ok("duplicate");
             }
             let contact = ContactRecord {
                 requester: issuer.to_owned(),
@@ -679,7 +678,7 @@ async fn project_delivered_contact_fact(
                     state,
                     subject_id,
                     issuer,
-                    &[scope.clone()],
+                    std::slice::from_ref(&scope),
                     now(),
                     "contact_rejected",
                     Some(contact_event_id),
@@ -710,7 +709,7 @@ async fn project_delivered_contact_fact(
                 state,
                 subject_id,
                 issuer,
-                &[scope.clone()],
+                std::slice::from_ref(&scope),
                 now(),
                 "contact_rejected",
                 Some(contact_event_id),

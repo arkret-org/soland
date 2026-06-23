@@ -522,10 +522,10 @@ pub async fn redact(body: JsonBody<RedactVectorRequest>) -> JsonResult<RedactVec
         }
         // Always surface the redacted_because marker if present in the
         // redaction event so guests can render a tombstone.
-        if let Some(reason) = redaction.get("reason") {
-            if let Some(object) = projected.as_object_mut() {
-                object.insert("redacted_because".to_owned(), reason.clone());
-            }
+        if let Some(reason) = redaction.get("reason")
+            && let Some(object) = projected.as_object_mut()
+        {
+            object.insert("redacted_because".to_owned(), reason.clone());
         }
     }
 

@@ -74,10 +74,6 @@ pub use backfill::{broadcast_move_to_peers, broadcast_seal_to_peers};
 use chrono::{Duration, Utc};
 #[cfg(test)]
 use cokret_sdk::{Operation, RealmId};
-// Public OpenAPI DTOs surfaced at the original module path.
-pub use endpoints::{
-    FederationSealsOutcome, FederationSealsPushOutcome, FederationSealsPushRequestBody,
-};
 pub(super) use endpoints::{
     federation_actor_events, federation_backfill_operations, federation_operation_frontier,
     federation_pull_operations, federation_push_operations, federation_realm_members,
@@ -103,9 +99,7 @@ pub(in crate::routing) use signature::{
 #[cfg(test)]
 use signature::{validate_federation_headers, validate_signature_params};
 pub(crate) use wire::{
-    FederationIdempotencyKey, FederationTrustHeaders, HISTORICAL_ONLY_MARKER, HeaderViolation,
-    delivery_binding_handed_over_response, delivery_binding_stale_response,
-    mark_response_historical_only,
+    FederationTrustHeaders, delivery_binding_handed_over_response, delivery_binding_stale_response,
 };
 
 #[cfg(test)]

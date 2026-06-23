@@ -541,7 +541,7 @@ async fn provision_ghost_actor_endpoint(
 
     crate::routing::append_audit_log(
         state,
-        Some(&service_did.to_string()),
+        Some(service_did.as_ref()),
         "applet.ghost_actor.provision",
         json!({
             "applet_id": provision.applet_id,
@@ -823,24 +823,21 @@ async fn third_party_locations_endpoint(
     let location = query_value(req, "location")
         .or_else(|| query_value(req, "channel"))
         .or_else(|| query_value(req, "realm"));
-    if let Some(location) = location {
-        if let Some(record) = applet_records(state)
+    if let Some(location) = location
+        && let Some(record) = applet_records(state)
             .await?
             .into_iter()
             .find(|record| record.namespace == location || record.portal_realm_id == location)
-        {
-            let realm_id = RealmId::new(record.portal_realm_id.clone()).map_err(|error| {
-                AppError::internal(format!("stored applet portal realm_id is invalid: {error}"))
-            })?;
-            return json_ok(AppletRealmView {
-                exists: true,
-                realm_id: Some(realm_id),
-                title: Some(
-                    applet_display_name(&record.manifest).unwrap_or(record.namespace.clone()),
-                ),
-                external_ref: json!({"location": location, "applet_id": record.applet_id}),
-            });
-        }
+    {
+        let realm_id = RealmId::new(record.portal_realm_id.clone()).map_err(|error| {
+            AppError::internal(format!("stored applet portal realm_id is invalid: {error}"))
+        })?;
+        return json_ok(AppletRealmView {
+            exists: true,
+            realm_id: Some(realm_id),
+            title: Some(applet_display_name(&record.manifest).unwrap_or(record.namespace.clone())),
+            external_ref: json!({"location": location, "applet_id": record.applet_id}),
+        });
     }
     json_ok(AppletRealmView {
         exists: false,

@@ -86,7 +86,7 @@ async fn submit_fanout(
     if !duplicate {
         crate::routing::events::projection::project_accepted_operations_from_device(
             state,
-            &draft.operation.payload["issuer_service_did"]
+            draft.operation.payload["issuer_service_did"]
                 .as_str()
                 .unwrap_or_default(),
             SOURCE_DEVICE_ID,

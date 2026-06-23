@@ -567,9 +567,9 @@ async fn verify_cross_session_revoke_proof(
             )
         })?;
     crate::jws_verify::validate_verification_method_controller(actor.as_str(), verification_method)
-        .map_err(|error| session_revoke_proof_invalid(error))?;
+        .map_err(session_revoke_proof_invalid)?;
     let public_key = crate::jws_verify::resolve_ed25519_pubkey(state, verification_method)
-        .map_err(|error| session_revoke_proof_invalid(error))?;
+        .map_err(session_revoke_proof_invalid)?;
     let signing_bytes = proof.canonical_signing_bytes().map_err(|error| {
         AppError::internal(format!(
             "session revoke lifecycle proof canonicalization failed: {error}"

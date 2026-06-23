@@ -434,22 +434,19 @@ async fn reassign_handle(
 
     // Detach the handle from its current holder, if a different account
     // still carries the localpart.
-    if let Some(previous) = previous_subject_id.as_deref() {
-        if previous != new_subject_id {
-            if let Some(mut prior) = accounts
-                .get(previous)
-                .await
-                .map_err(|error| AppError::internal(error.to_string()))?
-            {
-                if prior.localpart == localpart {
-                    prior.localpart = String::new();
-                    accounts
-                        .put(&prior)
-                        .await
-                        .map_err(|error| AppError::internal(error.to_string()))?;
-                }
-            }
-        }
+    if let Some(previous) = previous_subject_id.as_deref()
+        && previous != new_subject_id
+        && let Some(mut prior) = accounts
+            .get(previous)
+            .await
+            .map_err(|error| AppError::internal(error.to_string()))?
+        && prior.localpart == localpart
+    {
+        prior.localpart = String::new();
+        accounts
+            .put(&prior)
+            .await
+            .map_err(|error| AppError::internal(error.to_string()))?;
     }
 
     target.localpart = localpart.clone();

@@ -108,7 +108,7 @@ async fn send_device_messages(
             let target_active = device_is_active(target_record.as_ref());
             let target_verified = device_is_active_verified(target_record.as_ref());
 
-            if !sender_verified && !(same_principal && target_verified && verification_bootstrap) {
+            if !(sender_verified || same_principal && target_verified && verification_bootstrap) {
                 return Err(AppError::capability_denied(
                     "fresh device sessions may only send verification bootstrap to authorized same-principal devices",
                 )
@@ -121,8 +121,7 @@ async fn send_device_messages(
                 .with_wire_code("device_not_authorized"));
             }
             if !target_active
-                || (!target_verified
-                    && !(sender_verified && same_principal && verification_bootstrap))
+                || !(target_verified || sender_verified && same_principal && verification_bootstrap)
             {
                 note_unknown_device(&mut unknown_devices, &recipient, &device_id);
                 continue;
@@ -334,10 +333,8 @@ async fn get_device_messages(
         .max()
         .unwrap_or(cursor_position);
     let mut to_device_position = delivered_position;
-    if lost {
-        if let Some(lost_watermark) = lost_watermark {
-            to_device_position = to_device_position.max(lost_watermark);
-        }
+    if lost && let Some(lost_watermark) = lost_watermark {
+        to_device_position = to_device_position.max(lost_watermark);
     }
     let ack_token = if page.is_empty() {
         None

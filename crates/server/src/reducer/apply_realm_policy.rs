@@ -679,14 +679,13 @@ impl ProjectionState {
         let allowed_policies = inheritance_allowed_policies(&operation.payload);
         let allowed_capability_bundles = inheritance_allowed_capability_bundles(&operation.payload);
 
-        if has_active_realm_link_to_source(self, &realm_id, source_realm_id) {
-            if let Err(reason) =
+        if has_active_realm_link_to_source(self, &realm_id, source_realm_id)
+            && let Err(reason) =
                 active_capability_inheritance_link_kind(self, &realm_id, source_realm_id)
-            {
-                return ProjectionEffect::Rejected {
-                    reason: reason.to_owned(),
-                };
-            }
+        {
+            return ProjectionEffect::Rejected {
+                reason: reason.to_owned(),
+            };
         }
         if let Err(reason) = parent_capability_grants_allow(
             self,

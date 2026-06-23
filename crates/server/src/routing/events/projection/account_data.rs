@@ -1,7 +1,6 @@
 use cokret_sdk::Operation;
 use serde_json::{Value, json};
 
-use super::*;
 use crate::kinds;
 use crate::routing::identity::device_messages::{
     ACCOUNT_DATA_UPDATE_TYPE, BLOCKLIST_UPDATE_TYPE, READ_MARKER_UPDATE_TYPE,

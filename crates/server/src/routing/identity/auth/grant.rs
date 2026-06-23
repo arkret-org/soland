@@ -16,7 +16,6 @@ pub(crate) struct SessionGrantValidationInput<'a> {
 #[derive(Debug)]
 pub(crate) struct ValidatedSessionGrant {
     pub expires_at: DateTime<Utc>,
-    pub one_time_use_consumed: bool,
     /// Session signing key (JWK) for RFC 9421 PoP verification, when the
     /// introspection bridge supplied it (SPEC-CR-001).
     pub session_public_key: Option<String>,
@@ -132,7 +131,6 @@ pub(crate) async fn validate_session_grant_binding(
 
     Ok(Some(ValidatedSessionGrant {
         expires_at: grant.expires_at,
-        one_time_use_consumed: response.one_time_use_consumed,
         session_public_key: Some(grant.session_public_key),
     }))
 }

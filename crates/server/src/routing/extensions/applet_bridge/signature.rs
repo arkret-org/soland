@@ -207,8 +207,7 @@ pub(super) fn applet_registration_verification_method(
     if !package
         .webhook_auth
         .accepted_algs
-        .iter()
-        .any(|alg| *alg == WebhookSignatureAlg::EdDsa)
+        .contains(&WebhookSignatureAlg::EdDsa)
     {
         return Err(applet_signature_error_invalid(
             "Applet webhook_auth.accepted_algs must include EdDSA for inbound transaction signatures",

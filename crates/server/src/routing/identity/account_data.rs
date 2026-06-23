@@ -199,15 +199,14 @@ async fn put_account_data(
 
     // CKP-0008 / CKP-0009: registered personal-agent account-data types are
     // controller-private; native agent principals cannot write them directly.
-    if let Some(spec) = registered_account_data_type(&data_type) {
-        if spec.controller_private
-            && session_actor_is_agent_runtime(state.persistence.agents(), &session.actor).await?
-        {
-            return Err(AppError::capability_denied(format!(
-                "{} is controller-private; agent runtimes cannot write it",
-                spec.data_type
-            )));
-        }
+    if let Some(spec) = registered_account_data_type(&data_type)
+        && spec.controller_private
+        && session_actor_is_agent_runtime(state.persistence.agents(), &session.actor).await?
+    {
+        return Err(AppError::capability_denied(format!(
+            "{} is controller-private; agent runtimes cannot write it",
+            spec.data_type
+        )));
     }
 
     let body = body.into_inner();

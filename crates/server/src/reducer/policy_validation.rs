@@ -662,10 +662,10 @@ pub(crate) fn challenge_response_gate_allows(
     let Some(challenge_proof) = proof.get("challenge_proof").and_then(Value::as_object) else {
         return false;
     };
-    if !challenge_proof
+    if challenge_proof
         .get("challenge_id")
         .and_then(Value::as_str)
-        .is_some_and(|value| !value.trim().is_empty())
+        .is_none_or(|value| value.trim().is_empty())
     {
         return false;
     }
@@ -676,9 +676,9 @@ pub(crate) fn challenge_response_gate_allows(
     if !challenge_kind_allowed(gate, challenge_proof) {
         return false;
     }
-    if !challenge_proof
+    if challenge_proof
         .get("proof")
-        .is_some_and(|value| !matches!(value, Value::Null))
+        .is_none_or(|value| matches!(value, Value::Null))
     {
         return false;
     }

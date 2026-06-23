@@ -14,7 +14,7 @@ use soland_core::admin::seal::{
     SubmitControlMoveOutcome,
 };
 
-use super::{AuthArgs, admin_signer_for, fresh_hlc, pick_admin_seal_basis, pick_admin_seal_ref};
+use super::{AuthArgs, admin_signer_for, fresh_hlc, pick_admin_seal_basis};
 use crate::error::{AppError, ErrorCode};
 use crate::state::AppState;
 use crate::{JsonResult, app_error, json_ok};

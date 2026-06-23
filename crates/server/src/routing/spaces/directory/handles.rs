@@ -750,7 +750,7 @@ pub(super) async fn list_handles_for_subject(
 
     let limit = checked_limit(body.limit.map(|limit| limit as usize))?;
     let start = list_handles_cursor_start(body.cursor.as_deref())?;
-    let requested_as_of = body.as_of.clone();
+    let requested_as_of = body.as_of;
     let session = authenticated_session(state, req).await.ok();
 
     let mut generated_claim = None;

@@ -68,7 +68,7 @@ pub use admission::{
 };
 
 mod endpoints;
-pub(in crate::routing::events) use endpoints::{events_query_durable_scope_impl, router};
+pub(in crate::routing::events) use endpoints::router;
 
 mod inception;
 use inception::{

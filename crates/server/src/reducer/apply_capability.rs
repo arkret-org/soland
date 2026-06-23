@@ -327,7 +327,7 @@ fn capability_add_dot(operation: &Operation) -> String {
 /// `ck.capability.delegate` payload. Accepts both the canonical wrapper
 /// `{grant_id, grant: {…}}` (SDK `CapabilityGrantBuilder`) and a flat
 /// payload that already *is* the grant body.
-fn grant_body<'a>(payload: &'a Value) -> &'a Value {
+fn grant_body(payload: &Value) -> &Value {
     payload
         .get("grant")
         .filter(|grant| grant.is_object())
@@ -970,16 +970,14 @@ impl ProjectionState {
                     .and_then(Value::as_str)
                     .map(|subject| subject == subject_did)
                     .unwrap_or(false);
-                if subject_matches {
-                    if let Some(grant_id) = body
+                if subject_matches
+                    && let Some(grant_id) = body
                         .get("grant_id")
                         .or_else(|| body.get("id"))
                         .and_then(Value::as_str)
-                    {
-                        if !ids.iter().any(|existing| existing == grant_id) {
-                            ids.push(grant_id.to_owned());
-                        }
-                    }
+                    && !ids.iter().any(|existing| existing == grant_id)
+                {
+                    ids.push(grant_id.to_owned());
                 }
             }
         }

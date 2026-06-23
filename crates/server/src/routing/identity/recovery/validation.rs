@@ -62,12 +62,12 @@ pub(super) fn validate_recovery_policy(payload: &Value) -> Result<RecoveryPolicy
             "explicit revocation policy (allowed_proof_kinds=[]) MUST set expires_at",
         ));
     }
-    if let Some(exp) = expires_at {
-        if exp <= issued_at {
-            return Err(AppError::invalid_param(
-                "expires_at MUST be strictly after issued_at",
-            ));
-        }
+    if let Some(exp) = expires_at
+        && exp <= issued_at
+    {
+        return Err(AppError::invalid_param(
+            "expires_at MUST be strictly after issued_at",
+        ));
     }
     let auth_data = payload
         .get("auth_data")

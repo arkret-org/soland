@@ -385,9 +385,9 @@ impl DeviceMessageStore for MemoryDeviceMessageStore {
             }
         }
         queue.retain(|message| {
-            !lost_through_by_device
+            lost_through_by_device
                 .get(&(message.recipient.clone(), message.device_id.clone()))
-                .is_some_and(|lost_through| message.position <= *lost_through)
+                .is_none_or(|lost_through| message.position > *lost_through)
         });
         Ok(before - queue.len())
     }

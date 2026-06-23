@@ -548,11 +548,10 @@ fn agent_interop_session_delegate_allows(
         .grants_for_subject(actor, operation.realm_id.as_str())
         .iter()
         .any(|grant| {
-            let action_allowed = grant.actions.iter().any(|action| {
-                actions
-                    .iter()
-                    .any(|candidate| action.as_str() == *candidate)
-            });
+            let action_allowed = grant
+                .actions
+                .iter()
+                .any(|action| actions.contains(&action.as_str()));
             let resource_allowed =
                 crate::authz::resource_matches(&grant.resource, operation.realm_id.as_str())
                     || crate::authz::resource_matches(&grant.resource, session_id);
@@ -1917,16 +1916,15 @@ async fn operation_agent_write_context(
     state: &AppState,
     operation: &Operation,
 ) -> Result<Option<(String, AgentParticipationMode)>, &'static str> {
-    if let Some(executed_by) = operation_executed_by(operation) {
-        if agent_context_agent_id(operation) == Some(executed_by)
+    if let Some(executed_by) = operation_executed_by(operation)
+        && (agent_context_agent_id(operation) == Some(executed_by)
             || operation_provenance_marks_agent(operation)
-            || native_agent_exists(state, executed_by).await?
-        {
-            return Ok(Some((
-                executed_by.to_owned(),
-                AgentParticipationMode::ActOnBehalf,
-            )));
-        }
+            || native_agent_exists(state, executed_by).await?)
+    {
+        return Ok(Some((
+            executed_by.to_owned(),
+            AgentParticipationMode::ActOnBehalf,
+        )));
     }
     if let Some(agent_id) = agent_context_agent_id(operation) {
         let mode = if operation_executed_by(operation).is_some() {
@@ -2144,16 +2142,15 @@ async fn validate_member_state_policy(
         return Err(reason);
     }
     if operation.payload.get("membership").and_then(Value::as_str) == Some("join") {
-        if let Some(member) = membership_target(operation) {
-            if crate::routing::organizations::organization_policy_blocks_join(
+        if let Some(member) = membership_target(operation)
+            && crate::routing::organizations::organization_policy_blocks_join(
                 state,
                 operation.realm_id.as_str(),
                 member,
             )
             .await
-            {
-                return Err("organization_policy_denied");
-            }
+        {
+            return Err("organization_policy_denied");
         }
         return Ok(());
     }

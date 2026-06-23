@@ -1,6 +1,10 @@
 // Some route descriptors build large `serde_json::json!` literals that exceed
 // the default macro recursion limit. Bump it for the whole crate.
 #![recursion_limit = "512"]
+// Route handlers and protocol store traits often mirror wire/context boundaries
+// rather than arbitrary arity limits. Keep these crate-level so endpoint code
+// does not accumulate noisy local allow attributes.
+#![allow(clippy::too_many_arguments, clippy::type_complexity)]
 
 pub mod artifacts;
 pub mod authz;

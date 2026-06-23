@@ -389,15 +389,15 @@ impl ProjectionState {
                         return Err("gate_check_failed");
                     }
                 }
-                Some("cooldown") => {
+                Some("cooldown")
                     if self.cooldown_gate_blocks_join(
                         gate,
                         operation.realm_id.as_str(),
                         member,
                         operation.created_at,
-                    ) {
-                        return Err("gate_check_failed");
-                    }
+                    ) =>
+                {
+                    return Err("gate_check_failed");
                 }
                 _ => {}
             }
@@ -552,18 +552,16 @@ impl ProjectionState {
         if matches!(
             direction,
             RealmLinkDirection::Outbound | RealmLinkDirection::Both
-        ) {
-            if let Some(rows) = self.realm_links.get(realm_id) {
-                out.extend(rows.iter().filter(filter).cloned());
-            }
+        ) && let Some(rows) = self.realm_links.get(realm_id)
+        {
+            out.extend(rows.iter().filter(filter).cloned());
         }
         if matches!(
             direction,
             RealmLinkDirection::Inbound | RealmLinkDirection::Both
-        ) {
-            if let Some(rows) = self.realm_links_inbound.get(realm_id) {
-                out.extend(rows.iter().filter(filter).cloned());
-            }
+        ) && let Some(rows) = self.realm_links_inbound.get(realm_id)
+        {
+            out.extend(rows.iter().filter(filter).cloned());
         }
         out.sort_by(|a, b| {
             a.target_realm_id
@@ -668,26 +666,21 @@ impl ProjectionState {
         // wins; carries the most recent update).
         if let Ok(org_cell) = cokret_sdk::CellRef::new(format!(
             "ck:cell:ck.component.realm.organization.v1:{realm_id}"
-        )) {
-            if let Some(v) = self
-                .cell_value(&org_cell)
-                .and_then(|c| c.get("security_class"))
-                .and_then(Value::as_str)
-            {
-                return Some(v.to_owned());
-            }
+        )) && let Some(v) = self
+            .cell_value(&org_cell)
+            .and_then(|c| c.get("security_class"))
+            .and_then(Value::as_str)
+        {
+            return Some(v.to_owned());
         }
         // Fallback: check the create-log cell's last entry.
         if let Ok(create_cell) =
             cokret_sdk::CellRef::new(format!("ck:cell:ck.component.realm.create.v1:{realm_id}"))
+            && let Some(arr) = self.cell_value(&create_cell).and_then(Value::as_array)
+            && let Some(last) = arr.last()
+            && let Some(s) = last.get("security_class").and_then(Value::as_str)
         {
-            if let Some(arr) = self.cell_value(&create_cell).and_then(Value::as_array) {
-                if let Some(last) = arr.last() {
-                    if let Some(s) = last.get("security_class").and_then(Value::as_str) {
-                        return Some(s.to_owned());
-                    }
-                }
-            }
+            return Some(s.to_owned());
         }
         None
     }
@@ -699,14 +692,12 @@ impl ProjectionState {
     pub fn realm_federation_policy(&self, realm_id: &str) -> Option<String> {
         if let Ok(org_cell) = cokret_sdk::CellRef::new(format!(
             "ck:cell:ck.component.realm.organization.v1:{realm_id}"
-        )) {
-            if let Some(v) = self
-                .cell_value(&org_cell)
-                .and_then(|c| c.get("federation_policy"))
-                .and_then(Value::as_str)
-            {
-                return Some(v.to_owned());
-            }
+        )) && let Some(v) = self
+            .cell_value(&org_cell)
+            .and_then(|c| c.get("federation_policy"))
+            .and_then(Value::as_str)
+        {
+            return Some(v.to_owned());
         }
         self.realm_create_log(realm_id).and_then(|entries| {
             entries.iter().rev().find_map(|entry| {

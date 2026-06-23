@@ -310,10 +310,10 @@ pub(crate) fn grant_snapshot_from_cell_item(
     item: &Value,
 ) -> Option<CapabilityGrantSnapshot> {
     let tag_matches = item.get("tag").and_then(Value::as_str) == Some(requested_ref);
-    if let Some(value) = item.get("value") {
-        if tag_matches || grant_ids_match(value, requested_ref) {
-            return Some(grant_snapshot_from_value(value));
-        }
+    if let Some(value) = item.get("value")
+        && (tag_matches || grant_ids_match(value, requested_ref))
+    {
+        return Some(grant_snapshot_from_value(value));
     }
     if tag_matches || grant_ids_match(item, requested_ref) {
         return Some(grant_snapshot_from_value(item));
@@ -493,13 +493,12 @@ pub(crate) fn validate_derived_capability(
         return Err("capability_derived_resource_widening");
     }
 
-    if let Some(derived_expires_at) = expiry_from_payload(payload) {
-        if grant
+    if let Some(derived_expires_at) = expiry_from_payload(payload)
+        && grant
             .expires_at
             .is_some_and(|source_expires_at| derived_expires_at > source_expires_at)
-        {
-            return Err("capability_derived_expiry_widening");
-        }
+    {
+        return Err("capability_derived_expiry_widening");
     }
 
     let requested_constraints = value_array_field(payload, "constraints");

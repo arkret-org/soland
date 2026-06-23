@@ -408,12 +408,12 @@ impl ProjectionState {
         // Realm binding: appeal payload realm_id MUST equal the enclosing
         // Event realm_id (content-moderation.md §5.5.2). The wire validator
         // also checks this; the reducer fails closed defensively.
-        if let Some(payload_realm) = payload_str(operation, "realm_id") {
-            if payload_realm != realm_id {
-                return ProjectionEffect::Rejected {
-                    reason: "moderation_appeal_realm_mismatch".to_owned(),
-                };
-            }
+        if let Some(payload_realm) = payload_str(operation, "realm_id")
+            && payload_realm != realm_id
+        {
+            return ProjectionEffect::Rejected {
+                reason: "moderation_appeal_realm_mismatch".to_owned(),
+            };
         }
 
         let current = self.moderation_appeal_state(&appeal_id);
@@ -471,10 +471,10 @@ impl ProjectionState {
                     map.insert("target_ref".to_owned(), Value::String(target_ref));
                 }
             }
-            if target_state == "decided" {
-                if let Some(verdict) = payload_str(operation, "verdict") {
-                    map.insert("verdict".to_owned(), Value::String(verdict));
-                }
+            if target_state == "decided"
+                && let Some(verdict) = payload_str(operation, "verdict")
+            {
+                map.insert("verdict".to_owned(), Value::String(verdict));
             }
         }
         self.cells.insert(cell_ref, CellState::Value(value));

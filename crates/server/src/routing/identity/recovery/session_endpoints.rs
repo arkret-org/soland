@@ -237,16 +237,15 @@ pub(super) async fn recovery_session_create(
     // Optional client CAS hint: if `expected_recovery_policy_ref` is present it
     // MUST match the policy the server is about to snapshot, else the client is
     // racing a policy rotation → recovery_policy_mismatch.
-    if let Some(expected) = payload.expected_recovery_policy_ref.as_ref() {
-        if expected.policy_id.as_str() != active.policy_id
-            || expected.policy_version != active.version as u64
-        {
-            return Err(AppError::conflict(format!(
-                "expected_recovery_policy_ref does not match active policy `{}` v{}",
-                active.policy_id, active.version
-            ))
-            .with_wire_code("recovery_policy_mismatch"));
-        }
+    if let Some(expected) = payload.expected_recovery_policy_ref.as_ref()
+        && (expected.policy_id.as_str() != active.policy_id
+            || expected.policy_version != active.version as u64)
+    {
+        return Err(AppError::conflict(format!(
+            "expected_recovery_policy_ref does not match active policy `{}` v{}",
+            active.policy_id, active.version
+        ))
+        .with_wire_code("recovery_policy_mismatch"));
     }
 
     let now = chrono::Utc::now();

@@ -465,35 +465,35 @@ impl SolandAuthzEngine {
                 first_constraint_reason = failures.into_iter().next();
             }
         }
-        if !satisfied_grants.is_empty() {
-            if let Some(decision) = highest_priority_decision(&satisfied_grants) {
-                return match decision {
-                    GrantDecision::Deny => AuthzResult {
-                        allowed: false,
-                        reason: "explicit_deny".to_owned(),
-                        reason_detail: None,
-                        grants: satisfied_grants,
-                    },
-                    GrantDecision::Quarantine => AuthzResult {
-                        allowed: false,
-                        reason: "quarantine".to_owned(),
-                        reason_detail: None,
-                        grants: satisfied_grants,
-                    },
-                    GrantDecision::Allow => AuthzResult {
-                        allowed: true,
-                        reason: "explicit_grant".to_owned(),
-                        reason_detail: None,
-                        grants: satisfied_grants,
-                    },
-                    GrantDecision::RequireReview => AuthzResult {
-                        allowed: false,
-                        reason: "require_review".to_owned(),
-                        reason_detail: None,
-                        grants: satisfied_grants,
-                    },
-                };
-            }
+        if !satisfied_grants.is_empty()
+            && let Some(decision) = highest_priority_decision(&satisfied_grants)
+        {
+            return match decision {
+                GrantDecision::Deny => AuthzResult {
+                    allowed: false,
+                    reason: "explicit_deny".to_owned(),
+                    reason_detail: None,
+                    grants: satisfied_grants,
+                },
+                GrantDecision::Quarantine => AuthzResult {
+                    allowed: false,
+                    reason: "quarantine".to_owned(),
+                    reason_detail: None,
+                    grants: satisfied_grants,
+                },
+                GrantDecision::Allow => AuthzResult {
+                    allowed: true,
+                    reason: "explicit_grant".to_owned(),
+                    reason_detail: None,
+                    grants: satisfied_grants,
+                },
+                GrantDecision::RequireReview => AuthzResult {
+                    allowed: false,
+                    reason: "require_review".to_owned(),
+                    reason_detail: None,
+                    grants: satisfied_grants,
+                },
+            };
         }
 
         if let Some(reason_detail) = first_constraint_reason {

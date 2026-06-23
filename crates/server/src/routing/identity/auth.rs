@@ -57,14 +57,14 @@ mod sessions;
 // External-visibility surface (referenced from other modules at the original
 // `identity::auth::<name>` path).
 // Router-mounted handlers (used by the `*_router` fns below).
-pub(self) use device_pair::account_device_pair;
+use device_pair::account_device_pair;
 // Cross-submodule private helpers, re-exported at `pub(super)` so every
 // submodule's `use super::*;` glob can see them.
 pub(super) use device_pair::initial_session_device_verification_state;
 pub(crate) use grant::{SessionGrantValidationInput, validate_session_grant_binding};
 pub(super) use login::account_existing_session_error;
-pub(self) use login::dev_login;
-pub(self) use logout::session_revoke;
+use login::dev_login;
+use logout::session_revoke;
 pub(crate) use revocation::purge_device_delivery_state;
 pub use revocation::{
     active_delegated_sessions_for_actor, is_device_revoked, revoke_delegated_sessions_for_applet,

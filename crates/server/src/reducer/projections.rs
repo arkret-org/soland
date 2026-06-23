@@ -888,9 +888,7 @@ pub fn message_expiry_projection_from_value_with_anchor(
     now: chrono::DateTime<chrono::Utc>,
     anchor: Option<&MessageExpiryAnchor>,
 ) -> Option<MessageExpiryProjection> {
-    let Some(expiry) = expiry else {
-        return None;
-    };
+    let expiry = expiry?;
     let Some(object) = expiry.as_object() else {
         return Some(MessageExpiryProjection {
             state: MessageExpiryProjectionState::InvalidMetadata,

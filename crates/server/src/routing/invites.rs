@@ -1274,7 +1274,7 @@ fn constraints_for_surface(
             constraints
                 .applies_to
                 .as_ref()
-                .is_none_or(|surfaces| surfaces.iter().any(|candidate| *candidate == surface))
+                .is_none_or(|surfaces| surfaces.contains(&surface))
         })
 }
 

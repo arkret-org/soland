@@ -64,10 +64,10 @@ pub(super) fn anchor_key_backup_auth_data_trust_root(
             return Err(untrusted());
         }
         // When the envelope declares an ssk_generation it MUST match the binding.
-        if let Some(generation) = claimed_generation {
-            if generation != published_generation {
-                return Err(untrusted());
-            }
+        if let Some(generation) = claimed_generation
+            && generation != published_generation
+        {
+            return Err(untrusted());
         }
         record.device_public_key.clone().ok_or_else(untrusted)?
     };
@@ -371,14 +371,13 @@ pub(super) async fn enforce_recovery_session_binding_when_present(
         )
         .with_wire_code("recovery_evidence_unbound"));
     }
-    if let Some((kind, digest)) = recovery_session_proof_summary(&record) {
-        if required_proof_string(proof, "proof_kind")? != kind
-            || required_proof_string(proof, "proof_digest")? != digest
-        {
-            return Err(AppError::capability_denied(
-                "key backup unlock proof proof_digest does not match recovery session",
-            ));
-        }
+    if let Some((kind, digest)) = recovery_session_proof_summary(&record)
+        && (required_proof_string(proof, "proof_kind")? != kind
+            || required_proof_string(proof, "proof_digest")? != digest)
+    {
+        return Err(AppError::capability_denied(
+            "key backup unlock proof proof_digest does not match recovery session",
+        ));
     }
     Ok(())
 }

@@ -275,15 +275,15 @@ async fn outbound_push_bridge_fetch(
         .ok()
         .flatten();
 
-    if !body.force_refresh {
-        if let Some(record) = existing_cache.clone() {
-            let mut response = outbound_push_bridge_fetch_response_from_cache(record.clone());
-            if is_cache_entry_stale(state, &record) {
-                response.trust_level = "stale".to_owned();
-                response.fetch_state = "cache_hit_stale".to_owned();
-            }
-            return json_ok(response);
+    if !body.force_refresh
+        && let Some(record) = existing_cache.clone()
+    {
+        let mut response = outbound_push_bridge_fetch_response_from_cache(record.clone());
+        if is_cache_entry_stale(state, &record) {
+            response.trust_level = "stale".to_owned();
+            response.fetch_state = "cache_hit_stale".to_owned();
         }
+        return json_ok(response);
     }
 
     let response = client
@@ -304,16 +304,17 @@ async fn outbound_push_bridge_fetch(
                     let contract_digest = sha256_hex(
                         &serde_json::to_vec(&remote_contract).unwrap_or_else(|_| b"{}".to_vec()),
                     );
-                    if let Some(existing) = existing_cache.clone() {
-                        if existing.contract_digest != contract_digest && !body.force_refresh {
-                            return json_ok(outbound_push_bridge_fetch_fallback(
-                                Some(existing),
-                                push_gateway_url,
-                                service_base_url,
-                                bridge_describe_url,
-                                "contract_drift_detected_force_refresh_required".to_owned(),
-                            ));
-                        }
+                    if let Some(existing) = existing_cache.clone()
+                        && existing.contract_digest != contract_digest
+                        && !body.force_refresh
+                    {
+                        return json_ok(outbound_push_bridge_fetch_fallback(
+                            Some(existing),
+                            push_gateway_url,
+                            service_base_url,
+                            bridge_describe_url,
+                            "contract_drift_detected_force_refresh_required".to_owned(),
+                        ));
                     }
                     let fetched_at = now();
                     let fetched_contract =

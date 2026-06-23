@@ -782,13 +782,11 @@ async fn document_projection_relations(
                 relation.from_ref.as_deref() == Some(morph_id)
                     || relation.to_ref.as_deref() == Some(morph_id)
             })
-            .filter(|relation| {
-                document_relation_visible_to_session(&*projection, relation, session)
-            })
+            .filter(|relation| document_relation_visible_to_session(&projection, relation, session))
             .map(|relation| {
                 parse_projection_id::<RelationId>(&relation.relation_id, "relations.relation_id")?;
                 Ok(document_relation_snapshot(
-                    &*projection,
+                    &projection,
                     relation,
                     morph_id,
                     session,

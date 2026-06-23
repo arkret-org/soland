@@ -53,11 +53,7 @@ mod tests;
 
 pub(super) use bottom::{admin_list_bottom_global, admin_list_realm_bottom, admin_repair_bottom};
 pub(super) use dag::{admin_compact_seal_dag, admin_get_seal_dag, admin_prune_seal_dag};
-// DTO re-exports keep the `crate::routing::admin::seal::<Dto>` path stable for
-// the salvo OpenAPI schema collector and any external referent.
-pub use gc::GcCandidatesOutcome;
 pub(super) use gc::admin_list_gc_candidates;
-pub use multisig::{PartialSignatureBody, PartialSubmitOutcome, RotateSigningKeyOutcome};
 pub(super) use multisig::{
     admin_list_multisig_pending, admin_rotate_signing_key, admin_submit_multisig_partial,
 };
@@ -127,18 +123,6 @@ pub(super) fn admin_signer_for(
             service_admin_signer(state)
         }
     }
-}
-
-/// Choose a fresh `seal_ref` for a brand-new admin Move. If
-/// the Space has at least one Seal leaf, that's the issuer's view; if
-/// it's a true genesis Space, we use the spec-canonical zero SealId
-/// (matching SDK fixtures and `state-res::apply_seal` genesis path).
-pub(super) fn pick_admin_seal_ref(state: &AppState, realm_id: &RealmId) -> SealId {
-    let leaves = state.seal_store.list_leaves(realm_id).unwrap_or_default();
-    if let Some(first) = leaves.into_iter().next() {
-        return first;
-    }
-    SealId::new(format!("ck:seal:sha256:{}", "00".repeat(32))).expect("valid genesis seal id")
 }
 
 pub(super) fn pick_admin_seal_basis(

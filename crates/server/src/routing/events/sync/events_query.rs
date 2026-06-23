@@ -1042,9 +1042,10 @@ pub(super) async fn snapshot_head(
     let manifest = snapshot_manifest_for_realm(state, &realm_id)
         .await
         .map_err(|error| {
-            if error.code == crate::error::ErrorCode::NotFound {
-                error
-            } else if error.code == crate::error::ErrorCode::InternalError {
+            if matches!(
+                error.code,
+                crate::error::ErrorCode::NotFound | crate::error::ErrorCode::InternalError
+            ) {
                 error
             } else {
                 crate::error::AppError::new(

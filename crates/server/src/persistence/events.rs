@@ -193,7 +193,7 @@ impl EventStore for MemoryEventStore {
             .filter(|record| record_is_peer_authz_state_record(record))
             .cloned()
             .collect::<Vec<_>>();
-        records.sort_by(|left, right| event_position_cmp(left, right));
+        records.sort_by(event_position_cmp);
         Ok(records)
     }
 
@@ -227,7 +227,7 @@ impl EventStore for MemoryEventStore {
             })
             .cloned()
             .collect::<Vec<_>>();
-        records.sort_by(|left, right| event_position_cmp(left, right));
+        records.sort_by(event_position_cmp);
         if query.backward {
             records.reverse();
         }
@@ -323,10 +323,10 @@ pub(crate) struct PgEventStore {
 
 fn map_canonical_event_put_error(error: diesel::result::Error) -> PersistenceError {
     use diesel::result::{DatabaseErrorKind, Error as DieselError};
-    if let DieselError::DatabaseError(DatabaseErrorKind::UniqueViolation, info) = &error {
-        if info.constraint_name() == Some("canonical_events_realm_create_unique_idx") {
-            return PersistenceError::Conflict("realm_already_exists".to_owned());
-        }
+    if let DieselError::DatabaseError(DatabaseErrorKind::UniqueViolation, info) = &error
+        && info.constraint_name() == Some("canonical_events_realm_create_unique_idx")
+    {
+        return PersistenceError::Conflict("realm_already_exists".to_owned());
     }
     PersistenceError::from(error)
 }

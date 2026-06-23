@@ -65,10 +65,10 @@ pub(crate) async fn mirror_mls_effect_to_persistence(
                     consumed_at: kp.consumed_at,
                     created_at: kp.created_at,
                 });
-            if let Some(record) = record {
-                if let Err(error) = state.persistence.mls_key_packages().put(&record).await {
-                    tracing::warn!(%error, keypackage_id = %keypackage_id, "failed to mirror MLS KeyPackage publish");
-                }
+            if let Some(record) = record
+                && let Err(error) = state.persistence.mls_key_packages().put(&record).await
+            {
+                tracing::warn!(%error, keypackage_id = %keypackage_id, "failed to mirror MLS KeyPackage publish");
             }
         }
         crate::reducer::MlsEffect::KeyPackageClaimed {
@@ -286,7 +286,7 @@ async fn write_through_projection(state: &AppState, operation: &Operation) {
     };
     use crate::reducer::{ObjectLifecycleState, SpaceContainerLifecycleState};
 
-    enum Snapshot {
+    enum ProjectionWriteThroughSnapshot {
         SpaceContainer(SpaceContainerProjectionRecord),
         Strand(StrandProjectionRecord),
         Morph(MorphProjectionRecord),
@@ -433,45 +433,49 @@ async fn write_through_projection(state: &AppState, operation: &Operation) {
 
     fn return_snapshot_space_container(
         p: &crate::reducer::SpaceContainerProjection,
-    ) -> Option<Snapshot> {
-        Some(Snapshot::SpaceContainer(SpaceContainerProjectionRecord {
-            container_space_id: p.container_space_id.clone(),
-            realm_id: p.realm_id.clone(),
-            kind: p.kind.clone(),
-            title: p.title.clone(),
-            scope_circle_id: p.scope_circle_id.clone(),
-            default_scope_circle_id: p.default_scope_circle_id.clone(),
-            child_scope_policy: p
-                .child_scope_policy
-                .as_ref()
-                .map(|policy| policy.kind.clone()),
-            child_scope_policy_scope_circle_id: p
-                .child_scope_policy
-                .as_ref()
-                .and_then(|policy| policy.scope_circle_id.clone()),
-            child_scope_policy_metadata_encryption_floor: p
-                .child_scope_policy
-                .as_ref()
-                .and_then(|policy| policy.metadata_encryption_floor.clone()),
-            parent_ref: p.parent_ref.clone(),
-            rank: p.rank.clone(),
-            state: match p.state {
-                SpaceContainerLifecycleState::Active => "active",
-                SpaceContainerLifecycleState::Archived => "archived",
-                SpaceContainerLifecycleState::Tombstoned => "tombstoned",
-            }
-            .to_owned(),
-            state_changed_at: p.state_changed_at,
-            created_by: p.created_by.clone(),
-            created_at: p.created_at,
-            history_basis_seals: p.history_basis_seals.clone(),
-            updated_by: p.updated_by.clone(),
-            updated_at: p.updated_at,
-        }))
+    ) -> Option<ProjectionWriteThroughSnapshot> {
+        Some(ProjectionWriteThroughSnapshot::SpaceContainer(
+            SpaceContainerProjectionRecord {
+                container_space_id: p.container_space_id.clone(),
+                realm_id: p.realm_id.clone(),
+                kind: p.kind.clone(),
+                title: p.title.clone(),
+                scope_circle_id: p.scope_circle_id.clone(),
+                default_scope_circle_id: p.default_scope_circle_id.clone(),
+                child_scope_policy: p
+                    .child_scope_policy
+                    .as_ref()
+                    .map(|policy| policy.kind.clone()),
+                child_scope_policy_scope_circle_id: p
+                    .child_scope_policy
+                    .as_ref()
+                    .and_then(|policy| policy.scope_circle_id.clone()),
+                child_scope_policy_metadata_encryption_floor: p
+                    .child_scope_policy
+                    .as_ref()
+                    .and_then(|policy| policy.metadata_encryption_floor.clone()),
+                parent_ref: p.parent_ref.clone(),
+                rank: p.rank.clone(),
+                state: match p.state {
+                    SpaceContainerLifecycleState::Active => "active",
+                    SpaceContainerLifecycleState::Archived => "archived",
+                    SpaceContainerLifecycleState::Tombstoned => "tombstoned",
+                }
+                .to_owned(),
+                state_changed_at: p.state_changed_at,
+                created_by: p.created_by.clone(),
+                created_at: p.created_at,
+                history_basis_seals: p.history_basis_seals.clone(),
+                updated_by: p.updated_by.clone(),
+                updated_at: p.updated_at,
+            },
+        ))
     }
 
-    fn return_snapshot_strand(f: &crate::reducer::StrandProjection) -> Snapshot {
-        Snapshot::Strand(StrandProjectionRecord {
+    fn return_snapshot_strand(
+        f: &crate::reducer::StrandProjection,
+    ) -> ProjectionWriteThroughSnapshot {
+        ProjectionWriteThroughSnapshot::Strand(StrandProjectionRecord {
             strand_id: f.strand_id.clone(),
             realm_id: f.realm_id.clone(),
             tracks: f.tracks.clone(),
@@ -488,8 +492,10 @@ async fn write_through_projection(state: &AppState, operation: &Operation) {
         })
     }
 
-    fn return_snapshot_morph(m: &crate::reducer::MorphProjection) -> Snapshot {
-        Snapshot::Morph(MorphProjectionRecord {
+    fn return_snapshot_morph(
+        m: &crate::reducer::MorphProjection,
+    ) -> ProjectionWriteThroughSnapshot {
+        ProjectionWriteThroughSnapshot::Morph(MorphProjectionRecord {
             morph_id: m.morph_id.clone(),
             realm_id: m.realm_id.clone(),
             scope_circle_id: m.scope_circle_id.clone(),
@@ -523,15 +529,19 @@ async fn write_through_projection(state: &AppState, operation: &Operation) {
     }
 
     let result = match snapshot {
-        Snapshot::SpaceContainer(r) => {
+        ProjectionWriteThroughSnapshot::SpaceContainer(r) => {
             state
                 .persistence
                 .space_container_projections()
                 .put(&r)
                 .await
         }
-        Snapshot::Strand(r) => state.persistence.strand_projections().put(&r).await,
-        Snapshot::Morph(r) => state.persistence.morph_projections().put(&r).await,
+        ProjectionWriteThroughSnapshot::Strand(r) => {
+            state.persistence.strand_projections().put(&r).await
+        }
+        ProjectionWriteThroughSnapshot::Morph(r) => {
+            state.persistence.morph_projections().put(&r).await
+        }
     };
     if let Err(error) = result {
         tracing::warn!(
@@ -665,15 +675,13 @@ async fn project_accepted_operations_inner(
         // participation.set / .get ceiling resolution).
         if let Some(record) =
             crate::routing::events::operations::agent_participation_ceiling_record(operation)
-        {
-            if let Err(error) = state
+            && let Err(error) = state
                 .persistence
                 .agent_participation()
                 .put_ceiling(record)
                 .await
-            {
-                tracing::warn!(%error, "failed to persist agent participation ceiling");
-            }
+        {
+            tracing::warn!(%error, "failed to persist agent participation ceiling");
         }
         let projected = projection_event_from_operation(operation, Some(origin));
         // Broadcast every accepted projection
@@ -774,18 +782,18 @@ async fn project_mls_welcome_to_device(
     record: &MlsWelcomeRecord,
     welcome_id: &str,
 ) {
-    let sender_device_id = source_device_id
-        .trim()
-        .is_empty()
-        .then(|| {
+    let sender_device_id = if source_device_id.trim().is_empty() {
+        {
             operation
                 .payload
                 .get("sender_device_id")
                 .and_then(Value::as_str)
                 .unwrap_or_default()
-        })
-        .unwrap_or(source_device_id)
-        .trim();
+        }
+    } else {
+        source_device_id
+    }
+    .trim();
     if sender_device_id.is_empty() {
         tracing::warn!(
             %welcome_id,

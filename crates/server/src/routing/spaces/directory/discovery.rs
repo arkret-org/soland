@@ -60,8 +60,8 @@ pub(super) async fn directory_announce(
     );
     let indexed_at = now();
     let effective_ttl_seconds = body.ttl_seconds.unwrap_or(86_400);
-    let next_revalidation_after = indexed_at.clone()
-        + chrono::Duration::seconds(effective_ttl_seconds.min(i64::MAX as u64) as i64);
+    let next_revalidation_after =
+        indexed_at + chrono::Duration::seconds(effective_ttl_seconds.min(i64::MAX as u64) as i64);
     json_ok(DirectoryAnnounceOutcome {
         announce_id: announcement_id,
         indexed_at,

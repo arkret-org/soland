@@ -1233,10 +1233,10 @@ async fn realm_event_visible_to_session_with_projection(
                     .await
                     .ok()
                     .flatten();
-                if let Some(meta) = meta {
-                    if meta.owner == session.actor {
-                        joined_at = Some(meta.created_at);
-                    }
+                if let Some(meta) = meta
+                    && meta.owner == session.actor
+                {
+                    joined_at = Some(meta.created_at);
                 }
             }
             joined_at.is_some_and(|joined_at| event_created_at >= joined_at)

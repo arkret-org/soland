@@ -23,6 +23,9 @@ pub use notification::{
     EventBroadcast, EventNotification, EventNotificationKind, Mutex, SubscribeReconnectGate,
 };
 pub use realm_directory::{RealmDirectoryEntry, RealmDirectoryIndex, RealmDirectoryQuery};
+#[cfg(test)]
+pub(crate) use records::clamp_key_backup_daily_download_limit;
+pub(crate) use records::key_backup_daily_download_limit;
 pub use records::{
     ACCOUNT_LOCKOUT_DURATION, ACCOUNT_LOCKOUT_THRESHOLD, ACCOUNT_LOCKOUT_WINDOW, AccountDataRecord,
     AccountLifecycleRecord, AccountRecord, AgentSessionRecord, BlobRecord, CallSignalRelayRecord,
@@ -49,4 +52,3 @@ pub use records::{
     SovereignRealmRecord, SovereignStoreForwardRecord, TypingRecord, WebvhDocumentRecord,
     WebvhLogRecord,
 };
-pub(crate) use records::{clamp_key_backup_daily_download_limit, key_backup_daily_download_limit};

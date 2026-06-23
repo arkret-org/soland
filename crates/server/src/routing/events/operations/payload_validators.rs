@@ -703,17 +703,16 @@ fn reject_forbidden_morph_update_patch(
         if path == "stage" || path == "stage_changed_at" {
             return Err("morph_stage_patch_forbidden");
         }
-        if let Some(field) = path.strip_prefix("fields.") {
-            if FORBIDDEN_FIELD.contains(&field) {
-                return Err("morph_forbidden_field_patch");
-            }
+        if let Some(field) = path.strip_prefix("fields.")
+            && FORBIDDEN_FIELD.contains(&field)
+        {
+            return Err("morph_forbidden_field_patch");
         }
-        if path == "fields" {
-            if let Some(map) = patch_set_value(value).and_then(Value::as_object) {
-                if FORBIDDEN_FIELD.iter().any(|field| map.contains_key(*field)) {
-                    return Err("morph_forbidden_field_patch");
-                }
-            }
+        if path == "fields"
+            && let Some(map) = patch_set_value(value).and_then(Value::as_object)
+            && FORBIDDEN_FIELD.iter().any(|field| map.contains_key(*field))
+        {
+            return Err("morph_forbidden_field_patch");
         }
     }
     Ok(())

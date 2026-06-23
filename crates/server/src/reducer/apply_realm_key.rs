@@ -14,14 +14,14 @@ impl ProjectionState {
                 Err(_) => return rejected("realm_key_share_payload_invalid"),
             };
 
-        if !share
+        if share
             .ciphertext
             .as_deref()
-            .is_some_and(|value| !value.trim().is_empty())
-            && !share
+            .is_none_or(|value| value.trim().is_empty())
+            && share
                 .encrypted_key_ref
                 .as_deref()
-                .is_some_and(|value| !value.trim().is_empty())
+                .is_none_or(|value| value.trim().is_empty())
         {
             return rejected("realm_key_share_material_missing");
         }

@@ -228,21 +228,6 @@ pub(super) async fn owned_key_backup_snapshot(
         .collect())
 }
 
-pub(crate) async fn did_recovery_first_backup_gate_satisfied(
-    state: &AppState,
-    actor_id: &str,
-) -> Result<bool, AppError> {
-    for backup in owned_key_backup_snapshot(state, actor_id).await? {
-        let Ok(backup) = serde_json::from_value::<KeyBackup>(backup) else {
-            continue;
-        };
-        if backup.satisfies_first_did_recovery_backup_gate() {
-            return Ok(true);
-        }
-    }
-    Ok(false)
-}
-
 #[endpoint(
     operation_id = "ck.self.keys.backups.resource.replace",
     tags("keys"),

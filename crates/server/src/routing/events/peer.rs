@@ -1262,8 +1262,7 @@ async fn peer_events_query_response(
 fn peer_events_candidate_limit(page_limit: usize) -> usize {
     page_limit
         .saturating_mul(4)
-        .max(MAX_PEER_EVENTS_QUERY_LIMIT)
-        .min(MAX_PEER_EVENTS_QUERY_LIMIT * 5)
+        .clamp(MAX_PEER_EVENTS_QUERY_LIMIT, MAX_PEER_EVENTS_QUERY_LIMIT * 5)
 }
 
 fn peer_events_query_scope_digest(

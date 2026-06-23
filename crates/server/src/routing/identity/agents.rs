@@ -945,16 +945,16 @@ async fn lazily_expire_pairing(
         .agents()
         .set_state(&agent_principal_id, "pairing_expired", &changed_at)
         .await;
-    if state.config.development_mode {
-        if let Ok(realm) = ensure_self_realm(state, session).await {
-            let grant_ids = state
-                .projection
-                .lock()
-                .ok()
-                .map(|proj| proj.grant_ids_for_subject(&agent_principal_id))
-                .unwrap_or_default();
-            let _ = submit_revoke_agent_grants(state, session, &realm, &grant_ids).await;
-        }
+    if state.config.development_mode
+        && let Ok(realm) = ensure_self_realm(state, session).await
+    {
+        let grant_ids = state
+            .projection
+            .lock()
+            .ok()
+            .map(|proj| proj.grant_ids_for_subject(&agent_principal_id))
+            .unwrap_or_default();
+        let _ = submit_revoke_agent_grants(state, session, &realm, &grant_ids).await;
     }
     if let Some(obj) = record.as_object_mut() {
         obj.insert(

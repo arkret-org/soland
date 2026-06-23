@@ -137,19 +137,17 @@ pub async fn ensure_projected_realm(state: &AppState, origin: &str, operation: &
             let mut changed = false;
             if let Some(discoverability) = operation_realm_discoverability(operation)
                 .filter(|value| is_valid_discoverability(value))
+                && record.discoverability != discoverability
             {
-                if record.discoverability != discoverability {
-                    record.discoverability = discoverability.to_owned();
-                    changed = true;
-                }
+                record.discoverability = discoverability.to_owned();
+                changed = true;
             }
             if let Some(history_visibility) = operation_realm_history_visibility(operation)
                 .filter(|value| is_valid_history_visibility(value))
+                && record.history_visibility != history_visibility
             {
-                if record.history_visibility != history_visibility {
-                    record.history_visibility = history_visibility.to_owned();
-                    changed = true;
-                }
+                record.history_visibility = history_visibility.to_owned();
+                changed = true;
             }
             if let Some(policy) = operation_realm_history_sharing_policy(operation) {
                 record.history_sharing_policy_digest = canonical_value_digest(&policy);

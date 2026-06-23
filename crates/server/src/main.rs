@@ -306,15 +306,15 @@ fn init_tracing(log_format: soland::config::LogFormat) -> anyhow::Result<Tracing
 
     let file_guard = if let Some(path) = log_file {
         let path = std::path::PathBuf::from(path);
-        if let Some(parent) = path.parent() {
-            if !parent.as_os_str().is_empty() {
-                std::fs::create_dir_all(parent).with_context(|| {
-                    format!(
-                        "failed to create parent directory for SOLAND_LOG_FILE: {}",
-                        parent.display()
-                    )
-                })?;
-            }
+        if let Some(parent) = path.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            std::fs::create_dir_all(parent).with_context(|| {
+                format!(
+                    "failed to create parent directory for SOLAND_LOG_FILE: {}",
+                    parent.display()
+                )
+            })?;
         }
         let file_name = path
             .file_name()

@@ -267,10 +267,10 @@ async fn submit_seal(
             .ok()
             .and_then(|proj| proj.cell_value(cell_id).cloned())
     });
-    if let Ok(mut proj) = state.projection.lock() {
-        if let Err(error) = proj.reload_cells_from_store(&seal.realm_id, cell_store, registry) {
-            tracing::warn!(error = %error, "failed to refresh ProjectionState::cells after apply_seal");
-        }
+    if let Ok(mut proj) = state.projection.lock()
+        && let Err(error) = proj.reload_cells_from_store(&seal.realm_id, cell_store, registry)
+    {
+        tracing::warn!(error = %error, "failed to refresh ProjectionState::cells after apply_seal");
     }
     // Post-apply_seal mid-stream control frames.
     // 1. Frontier — every successful Seal advances the frontier.

@@ -19,7 +19,7 @@ pub(super) const FEDERATION_AUTH_FAILURE_MESSAGE: &str = "federation request aut
 const FEDERATION_AUTH_FAILURE_TIMING_BUCKET: StdDuration = StdDuration::from_millis(80);
 
 thread_local! {
-    static FEDERATION_AUTH_TIMING_STARTED_AT: RefCell<Option<Instant>> = RefCell::new(None);
+    static FEDERATION_AUTH_TIMING_STARTED_AT: RefCell<Option<Instant>> = const { RefCell::new(None) };
 }
 
 struct FederationAuthTimingGuard {
@@ -468,13 +468,13 @@ fn validate_destination_authority(
     destination_service_did: &str,
 ) -> Result<Option<String>, AppError> {
     // The registered endpoint authority for this (destination) service.
-    if let Some(expected_authority) = public_base_url_authority(state) {
-        if !authority.eq_ignore_ascii_case(&expected_authority) {
-            crate::metrics::record_digest_mismatch("federation_authority_mismatch");
-            return Err(signature_error(
-                "signed @authority host does not match the Destination-Service-DID endpoint",
-            ));
-        }
+    if let Some(expected_authority) = public_base_url_authority(state)
+        && !authority.eq_ignore_ascii_case(&expected_authority)
+    {
+        crate::metrics::record_digest_mismatch("federation_authority_mismatch");
+        return Err(signature_error(
+            "signed @authority host does not match the Destination-Service-DID endpoint",
+        ));
     }
 
     // Optional endpoint-digest binding (conditional-required on shared ingress).
@@ -840,8 +840,7 @@ fn cross_domain_replay_error(message: impl Into<String>) -> AppError {
 }
 
 fn normalize_federation_auth_failure_delay() {
-    let started_at =
-        FEDERATION_AUTH_TIMING_STARTED_AT.with(|started_at| started_at.borrow().clone());
+    let started_at = FEDERATION_AUTH_TIMING_STARTED_AT.with(|started_at| *started_at.borrow());
     let remaining = started_at
         .and_then(|started_at| {
             FEDERATION_AUTH_FAILURE_TIMING_BUCKET.checked_sub(started_at.elapsed())

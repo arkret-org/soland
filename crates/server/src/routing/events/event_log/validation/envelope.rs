@@ -355,7 +355,7 @@ pub(in crate::routing::events::event_log) fn validate_data_event_capability_refs
                 format!("DataEvent capability_ref {grant_id} does not cover actor/realm"),
             ));
         }
-        if crate::authz::grant_scope_valid(&stored).is_err() {
+        if crate::authz::grant_scope_valid(stored).is_err() {
             return Err(event_validation_error(
                 StatusCode::FORBIDDEN,
                 "capability_denied",
@@ -576,7 +576,7 @@ fn data_event_grants_from_state_at_ref(
             continue;
         }
         if let Some(grant) =
-            crate::reducer::engine_grant_from_capability_cell_state(grant_id, &cell_state)
+            crate::reducer::engine_grant_from_capability_cell_state(grant_id, cell_state)
         {
             grants.insert(grant_id.to_owned(), grant);
         }

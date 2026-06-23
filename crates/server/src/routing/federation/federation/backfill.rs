@@ -78,6 +78,7 @@ pub(super) async fn pull_operations_page(
         .map_err(|error| AppError::internal(format!("parse federation pull response: {error}")))
 }
 
+#[cfg(test)]
 pub(super) async fn operation_frontier_value(state: &AppState, realm_id: &str) -> Value {
     serde_json::to_value(operation_frontier_outcome(state, realm_id).await)
         .unwrap_or_else(|_| Value::Null)
@@ -90,7 +91,7 @@ pub(super) async fn operation_frontier_outcome(
     let operations = state
         .persistence
         .federation_operations()
-        .list_for_realm(&realm_id)
+        .list_for_realm(realm_id)
         .await
         .unwrap_or_default();
     let mut operation_ids = operations

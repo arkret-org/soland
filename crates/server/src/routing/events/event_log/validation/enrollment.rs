@@ -174,7 +174,7 @@ async fn historical_enrollment_authority_document(
     events.sort_by_key(|event| event.seq);
     events
         .into_iter()
-        .filter(|event| {
+        .rfind(|event| {
             let entry_time = event
                 .operation
                 .get("versionTime")
@@ -184,7 +184,6 @@ async fn historical_enrollment_authority_document(
                 .unwrap_or(event.created_at);
             entry_time <= version_time
         })
-        .last()
         .and_then(|event| {
             event
                 .operation

@@ -4,10 +4,7 @@ mod authz;
 mod capability_fanout;
 pub(super) mod policy;
 
-use super::{
-    is_valid_sha256_digest, now, query_param, sha256_hex, validate_canonical_json_value,
-    validate_did,
-};
+use super::{now, query_param, validate_canonical_json_value, validate_did};
 
 /// Protocol surface mounted under `/_cokret/self/...`.
 pub fn router() -> Router {

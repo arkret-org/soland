@@ -1,7 +1,6 @@
 use cokret_sdk::Operation;
 use serde_json::Value;
 
-use super::*;
 use crate::kinds;
 use crate::state::{AppState, RetentionPolicyRecord};
 

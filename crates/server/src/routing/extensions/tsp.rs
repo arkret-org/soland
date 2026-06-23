@@ -22,15 +22,8 @@
 use std::sync::Mutex;
 
 use salvo::oapi::ToSchema;
-use salvo::oapi::extract::JsonBody;
-use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-
-use crate::error::AppError;
-use crate::result::{JsonResult, json_ok};
-use crate::routing::system::extract::AuthArgs;
-use crate::state::AppState;
 
 /// A TSP transport an actor publishes for inbound relationships.
 #[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
@@ -83,40 +76,6 @@ static REGISTRY: Mutex<TspRegistry> = Mutex::new(TspRegistry {
     routes: Vec::new(),
     audit: Vec::new(),
 });
-
-#[derive(Debug, Clone, Deserialize, ToSchema)]
-struct DeclareTransportRequestBody {
-    transport_id: String,
-    #[serde(default = "default_tsp_transport_type")]
-    transport_type: String,
-    #[serde(default)]
-    endpoint_url: String,
-    #[serde(default)]
-    supported_protocols: Vec<String>,
-}
-
-#[derive(Debug, Clone, Serialize, ToSchema)]
-struct ListTransportsResponseBody {
-    transports: Vec<TspTransport>,
-}
-
-#[derive(Debug, Clone, Deserialize, ToSchema)]
-struct EstablishRouteRequestBody {
-    route_id: String,
-    destination_actor_id: String,
-    #[serde(default)]
-    via_transports: Vec<String>,
-}
-
-#[derive(Debug, Clone, Serialize, ToSchema)]
-struct AuditRouteResponseBody {
-    route_id: String,
-    entries: Vec<TspAuditEntry>,
-}
-
-fn default_tsp_transport_type() -> String {
-    "tsp-pairwise".to_owned()
-}
 
 #[cfg(test)]
 pub(crate) fn reset_registry_for_test() {
@@ -219,130 +178,6 @@ fn hex_lower(bytes: &[u8]) -> String {
         s.push(HEX[(b & 0x0f) as usize] as char);
     }
     s
-}
-
-// ── HTTP surface ────────────────────────────────────────────────────
-
-pub(super) fn router() -> Router {
-    Router::with_path("tsp")
-        .push(
-            Router::with_path("transports")
-                .post(declare_transport_endpoint)
-                .get(list_transports_endpoint),
-        )
-        .push(Router::with_path("routes").post(establish_route_endpoint))
-        .push(Router::with_path("routes/{id}/audit").get(audit_endpoint))
-}
-
-#[endpoint(
-    operation_id = "org.cokret.soland.extensions.tsp.transports.declare",
-    tags("extensions"),
-    summary = "Declare a TSP transport"
-)]
-#[tracing::instrument(
-    skip_all,
-    fields(op = "org.cokret.soland.extensions.tsp.transports.declare")
-)]
-async fn declare_transport_endpoint(
-    aa: AuthArgs,
-    body: JsonBody<DeclareTransportRequestBody>,
-    depot: &mut Depot,
-    req: &mut Request,
-) -> JsonResult<TspTransport> {
-    let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req).await?;
-    let body = body.into_inner();
-    if body.transport_id.trim().is_empty() {
-        return Err(AppError::invalid_param("transport_id is required"));
-    }
-    let transport = declare_transport(TspTransport {
-        transport_id: body.transport_id,
-        transport_type: body.transport_type,
-        endpoint_url: body.endpoint_url,
-        supported_protocols: body.supported_protocols,
-        created_at: chrono::Utc::now(),
-        owner_actor_id: session.actor.clone(),
-    });
-    json_ok(transport)
-}
-
-#[endpoint(
-    operation_id = "org.cokret.soland.extensions.tsp.transports.list",
-    tags("extensions"),
-    summary = "List TSP transports owned by the authenticated actor"
-)]
-#[tracing::instrument(
-    skip_all,
-    fields(op = "org.cokret.soland.extensions.tsp.transports.list")
-)]
-async fn list_transports_endpoint(
-    aa: AuthArgs,
-    depot: &mut Depot,
-    req: &mut Request,
-) -> JsonResult<ListTransportsResponseBody> {
-    let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req).await?;
-    let transports = list_transports(Some(&session.actor));
-    json_ok(ListTransportsResponseBody { transports })
-}
-
-#[endpoint(
-    operation_id = "org.cokret.soland.extensions.tsp.routes.establish",
-    tags("extensions"),
-    summary = "Establish a TSP route"
-)]
-#[tracing::instrument(
-    skip_all,
-    fields(op = "org.cokret.soland.extensions.tsp.routes.establish")
-)]
-async fn establish_route_endpoint(
-    aa: AuthArgs,
-    body: JsonBody<EstablishRouteRequestBody>,
-    depot: &mut Depot,
-    req: &mut Request,
-) -> JsonResult<TspRoute> {
-    let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req).await?;
-    let body = body.into_inner();
-    if body.route_id.trim().is_empty() {
-        return Err(AppError::invalid_param("route_id is required"));
-    }
-    if body.destination_actor_id.trim().is_empty() {
-        return Err(AppError::invalid_param("destination_actor_id is required"));
-    }
-    if body.via_transports.is_empty() {
-        return Err(AppError::invalid_param(
-            "via_transports MUST contain at least one transport_id",
-        ));
-    }
-    let route = establish_route(TspRoute {
-        route_id: body.route_id,
-        source_actor_id: session.actor.clone(),
-        destination_actor_id: body.destination_actor_id,
-        via_transports: body.via_transports,
-        established_at: chrono::Utc::now(),
-    });
-    json_ok(route)
-}
-
-#[endpoint(
-    operation_id = "org.cokret.soland.extensions.tsp.routes.audit",
-    tags("extensions"),
-    summary = "Fetch the audit chain for a TSP route"
-)]
-#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.extensions.tsp.routes.audit"))]
-async fn audit_endpoint(
-    aa: AuthArgs,
-    depot: &mut Depot,
-    req: &mut Request,
-) -> JsonResult<AuditRouteResponseBody> {
-    let state = depot.obtain::<AppState>().expect("state injected");
-    let _session = aa.authenticated_session(state, req).await?;
-    let route_id = req
-        .param::<String>("id")
-        .ok_or_else(|| AppError::missing_param("route_id path segment required"))?;
-    let entries = audit_for_route(&route_id);
-    json_ok(AuditRouteResponseBody { route_id, entries })
 }
 
 #[cfg(test)]

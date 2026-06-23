@@ -271,17 +271,17 @@ impl NotaryWorker {
                     .ok()
                     .and_then(|proj| proj.cell_value(cell_id).cloned())
             });
-        if let Ok(mut proj) = state.projection.lock() {
-            if let Err(error) = proj.reload_cells_from_store(
+        if let Ok(mut proj) = state.projection.lock()
+            && let Err(error) = proj.reload_cells_from_store(
                 realm_id,
                 state.cell_store.as_ref(),
                 state.cell_registry.as_ref(),
-            ) {
-                tracing::warn!(
-                    error = %error,
-                    "notary worker failed to refresh ProjectionState::cells after apply_seal"
-                );
-            }
+            )
+        {
+            tracing::warn!(
+                error = %error,
+                "notary worker failed to refresh ProjectionState::cells after apply_seal"
+            );
         }
         // Broadcast Frontier (always) + EpochRotation (conditional).
         let _ = state

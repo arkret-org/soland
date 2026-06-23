@@ -243,16 +243,16 @@ pub(in crate::routing::events) async fn events_query_durable_scope_impl(
 ) -> Result<EventsQueryOutcome, AppError> {
     // Repeated query-arg selector: `actors[]` ∪ `realms[]`.
     let mut actors = query_param_all(req, "actors");
-    if let Some(single) = query_param(req, "actor").or_else(|| query_param(req, "actor_id")) {
-        if !actors.contains(&single) {
-            actors.push(single);
-        }
+    if let Some(single) = query_param(req, "actor").or_else(|| query_param(req, "actor_id"))
+        && !actors.contains(&single)
+    {
+        actors.push(single);
     }
     let mut realms = query_param_all(req, "realms");
-    if let Some(single) = query_param(req, "realm_id") {
-        if !realms.contains(&single) {
-            realms.push(single);
-        }
+    if let Some(single) = query_param(req, "realm_id")
+        && !realms.contains(&single)
+    {
+        realms.push(single);
     }
     for actor in &actors {
         if validate_did(actor).is_err() {

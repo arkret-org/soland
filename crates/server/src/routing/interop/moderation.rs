@@ -303,10 +303,10 @@ fn validate_moderation_evidence_package(
             "evidence_package.plaintext_digest must be a hash digest",
         ));
     }
-    if !object
+    if object
         .get("recipients")
         .and_then(Value::as_array)
-        .is_some_and(|recipients| !recipients.is_empty())
+        .is_none_or(|recipients| recipients.is_empty())
     {
         return Err(AppError::invalid_param(
             "evidence_package.recipients must name at least one moderator audience",

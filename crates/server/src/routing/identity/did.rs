@@ -46,15 +46,12 @@ mod endpoints;
 mod webvh;
 
 // Used by routing::tests and directory handle verification.
+pub(in crate::routing) use document::identity_document_record;
+#[cfg(test)]
+pub(in crate::routing) use document::validate_did_document_services;
 use document::{
     did_document_from_operation, did_operation_from_body, ensure_did_document_id,
     render_json_bytes, run_webvh_resolution_checks, string_field,
-};
-pub(in crate::routing) use document::{identity_document_record, validate_did_document_services};
-use endpoints::*;
-// Wire types surfaced through the router / oapi schema.
-pub use endpoints::{
-    EmbeddedWebvhRegisterOutcome, EmbeddedWebvhRegisterRequestBody, RawDidDocumentJson,
 };
 // Endpoint handlers referenced by identity/mod.rs router().
 pub(super) use endpoints::{

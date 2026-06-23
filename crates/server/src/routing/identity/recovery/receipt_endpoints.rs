@@ -81,21 +81,19 @@ pub(super) async fn recovery_receipt_put(
     if let Some(witness_ref) = payload
         .get("proof_summary")
         .and_then(|s| s.get("witness_ref"))
-    {
-        if let Some(observed_at) = witness_ref
+        && let Some(observed_at) = witness_ref
             .get("observed_at")
             .and_then(|v| v.as_str())
             .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
-        {
-            let now = chrono::Utc::now();
-            let age_secs = (now - observed_at.with_timezone(&chrono::Utc)).num_seconds();
-            if age_secs > RECOVERY_WITNESS_FRESHNESS_SECS {
-                return Err(AppError::invalid_param(format!(
-                    "witness_ref observed_at is {age_secs}s old (> freshness window \
+    {
+        let now = chrono::Utc::now();
+        let age_secs = (now - observed_at.with_timezone(&chrono::Utc)).num_seconds();
+        if age_secs > RECOVERY_WITNESS_FRESHNESS_SECS {
+            return Err(AppError::invalid_param(format!(
+                "witness_ref observed_at is {age_secs}s old (> freshness window \
                      {RECOVERY_WITNESS_FRESHNESS_SECS}s)"
-                ))
-                .with_wire_code(crate::error::reasons::RECOVERY_WITNESS_REVOKE_LAGGING));
-            }
+            ))
+            .with_wire_code(crate::error::reasons::RECOVERY_WITNESS_REVOKE_LAGGING));
         }
     }
 

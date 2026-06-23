@@ -623,15 +623,14 @@ pub(crate) async fn contact_tombstone(
         if !touches_peer {
             continue;
         }
-        if row_peer_service_did.is_none() {
-            if let Some(service_did) = row
+        if row_peer_service_did.is_none()
+            && let Some(service_did) = row
                 .peer_service_did
                 .as_ref()
                 .map(|did| did.trim().to_owned())
                 .filter(|did| !did.is_empty())
-            {
-                row_peer_service_did = Some(service_did);
-            }
+        {
+            row_peer_service_did = Some(service_did);
         }
         if row.requester == peer
             && row.target == holder
@@ -667,9 +666,10 @@ pub(crate) async fn contact_tombstone(
         return Err(AppError::not_found("not found"));
     }
 
-    if body.block_peer {
-        if let Some(policy) = blocked_invite_policy_update(state, &holder, &peer) {
-            state
+    if body.block_peer
+        && let Some(policy) = blocked_invite_policy_update(state, &holder, &peer)
+    {
+        state
                 .persistence
                 .invite_receive_policies()
                 .put(&policy)
@@ -680,12 +680,11 @@ pub(crate) async fn contact_tombstone(
                         "failed to persist invite_receive_policy block: {error}"
                     ))
                 })?;
-            state
-                .invite_receive_policies
-                .lock()
-                .expect("invite_receive_policies lock")
-                .insert(holder.clone(), policy);
-        }
+        state
+            .invite_receive_policies
+            .lock()
+            .expect("invite_receive_policies lock")
+            .insert(holder.clone(), policy);
     }
 
     let tombstone_fact_payload = json!({
@@ -904,7 +903,7 @@ async fn auto_revoke_expired_pending_outgoing_contact_consents(
             state,
             actor,
             &record.target,
-            &[record.scope.clone()],
+            std::slice::from_ref(&record.scope),
             observed_at,
             "contact_request_pending_ttl",
             record.request_event_ref.as_deref(),

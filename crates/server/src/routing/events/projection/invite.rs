@@ -17,6 +17,7 @@ use crate::{ids, kinds};
 ///   2. flip the `RealmInviteRecord` to `accepted`;
 ///   3. cascade membership — activate the invitee's `ck.member.state(join)` in the target Realm
 ///      (in-memory member index) so the capability grants carried on the invite take effect.
+///
 /// Replays and mismatched senders are ignored fail-closed.
 pub(super) async fn project_invite_accept_operation(
     state: &AppState,

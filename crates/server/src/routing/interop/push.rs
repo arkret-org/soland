@@ -721,13 +721,16 @@ async fn push_register_session_grant_bridge(
         .as_ref()
         .map(|grant| grant.expires_at)
         .unwrap_or_else(|| now() + chrono::Duration::minutes(5));
+    let session_public_key = validated
+        .as_ref()
+        .and_then(|grant| grant.session_public_key.clone());
 
     Ok(Some(SessionRecord {
         token_hash: format!("grant-bridge:{}", sha256_hex(grant.as_bytes())),
         actor: principal_id.to_owned(),
         device_id: body.device_id.as_str().to_owned(),
         audience: state.config.service_did.clone(),
-        session_public_key: None,
+        session_public_key,
         agent_session: None,
         expires_at,
         created_at: now(),

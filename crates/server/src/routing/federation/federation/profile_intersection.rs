@@ -251,13 +251,15 @@ struct SemanticAtoms {
 
 impl SemanticAtoms {
     fn from_event_envelope(envelope: &Value) -> Self {
-        let mut atoms = Self::default();
-        atoms.kind = envelope
-            .get("kind")
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(ToOwned::to_owned);
+        let mut atoms = Self {
+            kind: envelope
+                .get("kind")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned),
+            ..Self::default()
+        };
         atoms.schemas.insert(SCHEMA_EVENT.to_owned());
         if let Some(requirements) = envelope.get("requirements") {
             collect_requirement_schemas(requirements, &mut atoms.schemas);
@@ -272,8 +274,10 @@ impl SemanticAtoms {
     }
 
     fn from_operation(operation: &Operation) -> Self {
-        let mut atoms = Self::default();
-        atoms.kind = Some(kinds::canonical_kind_string(operation));
+        let mut atoms = Self {
+            kind: Some(kinds::canonical_kind_string(operation)),
+            ..Self::default()
+        };
         atoms.schemas.insert(SCHEMA_EVENT_PAYLOAD.to_owned());
         collect_payload_semantics(&operation.payload, &mut atoms, 0);
         atoms.finalize_risk_flags();
@@ -649,10 +653,8 @@ fn collect_constraint_kinds(
                 collect_constraint_kinds(item, constraints, depth + 1, allow_bare_string);
             }
         }
-        Value::String(value) => {
-            if allow_bare_string {
-                insert_nonempty(constraints, value);
-            }
+        Value::String(value) if allow_bare_string => {
+            insert_nonempty(constraints, value);
         }
         _ => {}
     }

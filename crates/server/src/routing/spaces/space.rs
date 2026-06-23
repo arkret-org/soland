@@ -451,7 +451,7 @@ async fn export_realm(
                     object_type: event.event_kind.clone(),
                     operation_type: event.operation_type.clone(),
                     payload: event.payload.clone(),
-                    created_at: event.created_at.clone(),
+                    created_at: event.created_at,
                 })
         })
         .collect::<Vec<_>>();
@@ -664,13 +664,6 @@ pub async fn realm_event_visible_to_session(
             .await
         }
         _ => false,
-    }
-}
-
-pub async fn realm_allows_plaintext_service(state: &AppState, realm_or_internal_id: &str) -> bool {
-    match realm_scope_to_realm_id(realm_or_internal_id) {
-        Some(realm_id) => realm_allows_plaintext_service_for_id(state, &realm_id).await,
-        None => false,
     }
 }
 
@@ -1072,31 +1065,6 @@ async fn realm_restricted_history_policy_allows(
     .is_empty()
 }
 
-pub async fn realm_allows_plaintext_service_for_id(state: &AppState, realm_id: &str) -> bool {
-    let Ok(realm_id_typed) = RealmId::new(realm_id.to_owned()) else {
-        return false;
-    };
-    let directory_realm_id = {
-        let realms = state.realms.lock().expect("realms lock");
-        realms
-            .get(&realm_id_typed)
-            .map(|realm| realm.realm_id.as_str().to_owned())
-    };
-    if let Some(directory_realm_id) = directory_realm_id {
-        if realm_public_content_for_id(state, &directory_realm_id).await {
-            return true;
-        }
-    }
-    state
-        .persistence
-        .realm_meta()
-        .get(realm_id)
-        .await
-        .ok()
-        .flatten()
-        .is_some_and(|record| record.allows_any_plaintext_data_class(&state.config.service_did))
-}
-
 pub async fn realm_allows_plaintext_service_for_data_class_id(
     state: &AppState,
     realm_id: &str,
@@ -1111,10 +1079,10 @@ pub async fn realm_allows_plaintext_service_for_data_class_id(
             .get(&realm_id_typed)
             .map(|realm| realm.realm_id.as_str().to_owned())
     };
-    if let Some(directory_realm_id) = directory_realm_id {
-        if realm_public_content_for_id(state, &directory_realm_id).await {
-            return true;
-        }
+    if let Some(directory_realm_id) = directory_realm_id
+        && realm_public_content_for_id(state, &directory_realm_id).await
+    {
+        return true;
     }
     state
         .persistence

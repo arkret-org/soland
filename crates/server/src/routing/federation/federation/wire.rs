@@ -99,6 +99,7 @@ impl HeaderViolation {
 /// NOT incorporate `request_canonical_digest` or `origin_key_state_digest`;
 /// a replay after key revocation could mine fresh side effects. This key
 /// mixes both in so a cache hit requires the key state to be unchanged.
+#[cfg(test)]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct FederationIdempotencyKey {
     pub source_did: String,
@@ -108,6 +109,7 @@ pub(crate) struct FederationIdempotencyKey {
     pub origin_key_state_digest: String,
 }
 
+#[cfg(test)]
 impl FederationIdempotencyKey {
     /// Strict key — equal to a cached entry only when ALL fields match,
     /// including the origin's current key state hash.

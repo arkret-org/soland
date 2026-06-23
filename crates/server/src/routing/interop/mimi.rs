@@ -31,7 +31,7 @@ use cokret_sdk::{
     MimiProxyDownloadRequestBody, MimiReportAbuseOutcome, MimiReportAbuseRequestBody,
     MimiRequestConsentOutcome, MimiRequestConsentRequestBody, MimiRoomUpdateOutcome,
     MimiRoomUpdateRequestBody, MimiSubmitMessageOutcome, MimiSubmitMessageRequestBody,
-    MimiUpdateConsentOutcome, MimiUpdateConsentRequestBody, Proof, RealmId, ReportId, canonical,
+    MimiUpdateConsentOutcome, MimiUpdateConsentRequestBody, Proof, ReportId, canonical,
 };
 use ed25519_dalek::Verifier as _;
 use salvo::http::StatusCode;
@@ -2012,7 +2012,7 @@ fn validate_mimi_room_binding_payload(binding: &Value) -> Result<(), AppError> {
     if payload
         .get("hub_provider")
         .and_then(Value::as_str)
-        .map_or(true, |value| value.trim().is_empty())
+        .is_none_or(|value| value.trim().is_empty())
     {
         return Err(
             AppError::invalid_param("MIMI room binding requires hub_provider")
@@ -2074,13 +2074,13 @@ fn mimi_room_binding_status(binding: &Value) -> Result<&str, AppError> {
 }
 
 fn mimi_room_binding_transition_allowed(previous: Option<&str>, next: &str) -> bool {
-    match (previous, next) {
-        (None, "proposed" | "accepted") => true,
-        (Some("proposed"), "accepted" | "revoked") => true,
-        (Some("accepted"), "migrating" | "revoked") => true,
-        (Some("migrating"), "accepted" | "revoked") => true,
-        _ => false,
-    }
+    matches!(
+        (previous, next),
+        (None, "proposed" | "accepted")
+            | (Some("proposed"), "accepted" | "revoked")
+            | (Some("accepted"), "migrating" | "revoked")
+            | (Some("migrating"), "accepted" | "revoked")
+    )
 }
 
 fn mimi_room_binding_security_payload(binding: &Value) -> &Value {
@@ -2200,7 +2200,7 @@ fn validate_mimi_submit_governance_binding(
     if frontier.is_empty()
         || frontier
             .iter()
-            .any(|value| value.as_str().map_or(true, str::is_empty))
+            .any(|value| value.as_str().is_none_or(str::is_empty))
     {
         return Err(error("mls_governance_binding_membership_frontier_missing"));
     }
@@ -2341,31 +2341,6 @@ fn mimi_room_projection(state: &AppState, room_id: &str, realm_id: &str) -> Valu
         "status": "accepted",
         "canonical_truth": "cokret_signed_event_reducer"
     })
-}
-
-fn mimi_room_participants(state: &AppState, realm_id: &str) -> Vec<Value> {
-    let Ok(realm_id) = RealmId::new(realm_id.to_owned()) else {
-        return Vec::new();
-    };
-    state
-        .realms
-        .lock()
-        .expect("realms lock")
-        .get(&realm_id)
-        .map(|realm| {
-            realm
-                .members
-                .iter()
-                .map(|did| {
-                    json!({
-                        "mimi_identifier": format!("{}/users/{}", mimi_provider_id(state), did.to_string().replace(':', ".")),
-                        "did": did.to_string(),
-                        "role": "member"
-                    })
-                })
-                .collect()
-        })
-        .unwrap_or_default()
 }
 
 fn unsupported_mimi_draft(body: &Value) -> Option<&'static str> {

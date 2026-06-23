@@ -646,8 +646,8 @@ async fn admin_realm_item_value(
             })
             .unwrap_or_default(),
         deleted: realm_meta.as_ref().is_some_and(|meta| meta.deleted),
-        created_at: realm_meta.as_ref().map(|meta| meta.created_at.clone()),
-        updated_at: realm_meta.as_ref().map(|meta| meta.updated_at.clone()),
+        created_at: realm_meta.as_ref().map(|meta| meta.created_at),
+        updated_at: realm_meta.as_ref().map(|meta| meta.updated_at),
     }
 }
 
@@ -840,8 +840,8 @@ pub(super) fn admin_invite_item(invite: &RealmInviteRecord) -> AdminInviteTokenI
         uses_allowed: 1,
         uses_completed: if invite.status == "accepted" { 1 } else { 0 },
         uses_pending: if invite.status == "pending" { 1 } else { 0 },
-        expires_at: invite.expires_at.clone(),
-        created_at: invite.created_at.clone(),
+        expires_at: invite.expires_at,
+        created_at: invite.created_at,
     }
 }
 

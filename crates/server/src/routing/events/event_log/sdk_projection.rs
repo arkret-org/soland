@@ -95,10 +95,6 @@ pub(crate) fn event_canonical_bytes(envelope: &Value) -> Result<Vec<u8>, EventVa
     })
 }
 
-pub(crate) fn event_digest(bytes: &[u8]) -> String {
-    cokret_sdk::canonical::sha256_digest(bytes)
-}
-
 pub(crate) fn is_valid_event_id(value: &str) -> bool {
     let Some(rest) = value.strip_prefix("ck:event:") else {
         return false;
@@ -176,12 +172,11 @@ pub(crate) fn projection_operation_from_event(
         .get("target_ref")
         .and_then(Value::as_str)
         .map(ToOwned::to_owned)
+        && target_ref.starts_with("ck:strand:")
     {
-        if target_ref.starts_with("ck:strand:") {
-            payload_object
-                .entry("strand_id".to_owned())
-                .or_insert_with(|| Value::String(target_ref.clone()));
-        }
+        payload_object
+            .entry("strand_id".to_owned())
+            .or_insert_with(|| Value::String(target_ref.clone()));
     }
     if !payload_object.contains_key("thread_id")
         && let Some(strand_id) = payload_object

@@ -310,13 +310,6 @@ async fn policy_check(
                 Some(policy_decision.policy_id),
                 policy_decision.obligations,
             )
-        } else if body.action.contains("delete") || body.action.contains("ban") {
-            (
-                AuthzDecision::RequireReview,
-                "review_required".to_owned(),
-                None,
-                Vec::new(),
-            )
         } else {
             (
                 AuthzDecision::RequireReview,

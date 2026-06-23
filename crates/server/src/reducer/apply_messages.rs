@@ -474,10 +474,10 @@ impl ProjectionState {
         let actor_id = operation_actor_id(operation);
         let key = (event_ref.to_owned(), occurrence_key, actor_id.clone());
         let updated_hlc = rsvp_lww_hlc(operation);
-        if let Some(existing) = self.rsvps.get(&key) {
-            if existing.status == status || existing.updated_hlc >= updated_hlc {
-                return ProjectionEffect::Ignored;
-            }
+        if let Some(existing) = self.rsvps.get(&key)
+            && (existing.status == status || existing.updated_hlc >= updated_hlc)
+        {
+            return ProjectionEffect::Ignored;
         }
         self.rsvps.insert(
             key,
@@ -977,10 +977,10 @@ fn encrypted_projection_field_matches_operation(value: &Value, operation: &Opera
             return false;
         }
     }
-    if !envelope
+    if envelope
         .get("version")
         .and_then(Value::as_str)
-        .is_some_and(|version| version.split_once('.').is_some())
+        .is_none_or(|version| version.split_once('.').is_none())
     {
         return false;
     }

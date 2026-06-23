@@ -191,12 +191,12 @@ async fn blob_upload(depot: &mut Depot, req: &mut Request, res: &mut Response) {
             return;
         }
     };
-    if encrypted_flag == Some(true) && encryption.is_none() {
-        if let Some(metadata) =
+    if encrypted_flag == Some(true)
+        && encryption.is_none()
+        && let Some(metadata) =
             encrypted_blob_encryption_metadata_for_purpose(upload_purpose.as_deref())
-        {
-            encryption = Some(metadata);
-        }
+    {
+        encryption = Some(metadata);
     }
     let encrypted = encryption.is_some() || encrypted_flag.unwrap_or(false);
     if encrypted_flag == Some(true) && encryption.is_none() {
@@ -272,21 +272,20 @@ async fn blob_upload(depot: &mut Depot, req: &mut Request, res: &mut Response) {
             return;
         }
     }
-    if let Some(encryption) = encryption.as_ref() {
-        if encryption
+    if let Some(encryption) = encryption.as_ref()
+        && encryption
             .get("ciphertext_digest")
             .and_then(Value::as_str)
             .is_some_and(|digest| digest != content_digest)
-        {
-            crate::metrics::record_digest_mismatch("blob_upload_ciphertext_digest");
-            render_error(
-                res,
-                StatusCode::CONFLICT,
-                "digest_mismatch",
-                "attachment ciphertext_digest does not match blob content",
-            );
-            return;
-        }
+    {
+        crate::metrics::record_digest_mismatch("blob_upload_ciphertext_digest");
+        render_error(
+            res,
+            StatusCode::CONFLICT,
+            "digest_mismatch",
+            "attachment ciphertext_digest does not match blob content",
+        );
+        return;
     }
     let blob_ref = format!("ck:blob:sha256:{sha256}");
     let storage_key = state.object_storage.object_key_for_sha256(&sha256);
