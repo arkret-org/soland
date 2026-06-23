@@ -154,12 +154,9 @@ pub fn apply_keypackage_publish(
 
     let created_at =
         parse_timestamp(payload.get("created_at")).unwrap_or_else(|| op.created_at.timestamp());
-    let Some(ssk_generation) = payload
-        .get("ssk_generation")
-        .and_then(Value::as_u64)
-        .filter(|generation| *generation >= 1)
-    else {
-        return reject(REASON_KEYPACKAGE_CLAIM_GENERATION_MISMATCH);
+    let trust_binding = match keypackage_claim_trust_binding(payload) {
+        Ok(binding) => binding,
+        Err(reason) => return reject(reason),
     };
     let row = MlsKeyPackage {
         id: id.to_owned(),
@@ -175,7 +172,8 @@ pub fn apply_keypackage_publish(
         last_resort,
         last_resort_realm_id,
         claimed_by: None,
-        ssk_generation: Some(ssk_generation),
+        ssk_generation: trust_binding.ssk_generation,
+        device_authorize_event_id: trust_binding.device_authorize_event_id,
         consumed_at: None,
         created_at,
     };
@@ -229,14 +227,13 @@ pub fn apply_keypackage_claim(state: &mut ProjectionState, op: &Operation) -> Pr
     if consumed_at >= row.lifetime.not_after {
         return reject(REASON_KEYPACKAGE_EXPIRED);
     }
-    let Some(claim_generation) = payload
-        .get("ssk_generation")
-        .and_then(Value::as_u64)
-        .filter(|generation| *generation >= 1)
-    else {
-        return reject(REASON_KEYPACKAGE_CLAIM_GENERATION_MISMATCH);
+    let trust_binding = match keypackage_claim_trust_binding(payload) {
+        Ok(binding) => binding,
+        Err(reason) => return reject(reason),
     };
-    if row.ssk_generation != Some(claim_generation) {
+    if row.ssk_generation != trust_binding.ssk_generation
+        || row.device_authorize_event_id != trust_binding.device_authorize_event_id
+    {
         return reject(REASON_KEYPACKAGE_CLAIM_GENERATION_MISMATCH);
     }
     let intended_realm_id = payload
@@ -763,11 +760,8 @@ fn validate_welcome_trust_binding(
         .get("claim_ref")
         .and_then(Value::as_object)
         .ok_or(REASON_KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;
-    let claim_ssk_generation = claim_ref
-        .get("ssk_generation")
-        .and_then(Value::as_u64)
-        .filter(|generation| *generation >= 1)
-        .ok_or(REASON_KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;
+    let claim_trust_binding = keypackage_claim_trust_binding_object(claim_ref)
+        .map_err(|_| REASON_KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;
     if claim_ref.get("claim_id").and_then(Value::as_str) != Some(claim_id)
         || claim_ref.get("keypackage_ref").and_then(Value::as_str) != Some(keypackage_ref)
         || claim_ref.get("keypackage_digest").and_then(Value::as_str) != Some(keypackage_digest)
@@ -788,7 +782,6 @@ fn validate_welcome_trust_binding(
         || envelope.get("keypackage_ref").and_then(Value::as_str) != Some(keypackage_ref)
         || envelope.get("keypackage_digest").and_then(Value::as_str) != Some(keypackage_digest)
         || envelope.get("intended_realm_id").and_then(Value::as_str) != Some(op.realm_id.as_str())
-        || envelope.get("ssk_generation").and_then(Value::as_u64) != Some(claim_ssk_generation)
         || envelope.get("welcome_digest").and_then(Value::as_str)
             != Some(expected_welcome_digest.as_str())
         || envelope
@@ -803,6 +796,24 @@ fn validate_welcome_trust_binding(
             .get("requester_did")
             .and_then(Value::as_str)
             .is_none_or(str::is_empty)
+    {
+        return Err(REASON_KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH);
+    }
+    let envelope_signing_binding = welcome_requester_signature_binding(envelope)?;
+    if envelope_signing_binding.ssk_generation.is_some() {
+        // Cross-signing requester path: the cryptographic preflight verifies
+        // the accepted requester SSK generation.
+    } else if let Some(requester_device_id) =
+        envelope_signing_binding.requester_device_id.as_deref()
+        && payload.get("sender_device_id").and_then(Value::as_str) != Some(requester_device_id)
+    {
+        return Err(REASON_KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH);
+    }
+    if claim_ref.get("ssk_generation").and_then(Value::as_u64) != claim_trust_binding.ssk_generation
+        || claim_ref
+            .get("device_authorize_event_id")
+            .and_then(Value::as_str)
+            != claim_trust_binding.device_authorize_event_id.as_deref()
     {
         return Err(REASON_KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH);
     }
@@ -841,15 +852,11 @@ fn validate_welcome_claim_signature(envelope: &Map<String, Value>) -> Result<(),
         .get("signature")
         .and_then(Value::as_object)
         .ok_or(REASON_KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;
-    let requester = envelope
-        .get("requester_did")
-        .and_then(Value::as_str)
-        .ok_or(REASON_KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;
     let kid = signature
         .get("kid")
         .and_then(Value::as_str)
         .ok_or(REASON_KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;
-    if !kid.starts_with(requester)
+    if kid.is_empty()
         || signature
             .get("sig")
             .and_then(Value::as_str)
@@ -933,6 +940,77 @@ fn parse_lifetime(v: Option<&Value>) -> Result<KeyPackageLifetime, &'static str>
     })
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct KeyPackageTrustBinding {
+    ssk_generation: Option<u64>,
+    device_authorize_event_id: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct WelcomeRequesterSignatureBinding {
+    ssk_generation: Option<u64>,
+    requester_device_id: Option<String>,
+}
+
+fn keypackage_claim_trust_binding(payload: &Value) -> Result<KeyPackageTrustBinding, &'static str> {
+    let object = payload
+        .as_object()
+        .ok_or(REASON_KEYPACKAGE_CLAIM_GENERATION_MISMATCH)?;
+    keypackage_claim_trust_binding_object(object)
+}
+
+fn keypackage_claim_trust_binding_object(
+    object: &Map<String, Value>,
+) -> Result<KeyPackageTrustBinding, &'static str> {
+    let ssk_generation = object
+        .get("ssk_generation")
+        .and_then(Value::as_u64)
+        .filter(|generation| *generation >= 1);
+    let device_authorize_event_id = object
+        .get("device_authorize_event_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
+    match (ssk_generation, device_authorize_event_id) {
+        (Some(ssk_generation), None) => Ok(KeyPackageTrustBinding {
+            ssk_generation: Some(ssk_generation),
+            device_authorize_event_id: None,
+        }),
+        (None, Some(device_authorize_event_id)) => Ok(KeyPackageTrustBinding {
+            ssk_generation: None,
+            device_authorize_event_id: Some(device_authorize_event_id),
+        }),
+        _ => Err(REASON_KEYPACKAGE_CLAIM_GENERATION_MISMATCH),
+    }
+}
+
+fn welcome_requester_signature_binding(
+    object: &Map<String, Value>,
+) -> Result<WelcomeRequesterSignatureBinding, &'static str> {
+    let ssk_generation = object
+        .get("ssk_generation")
+        .and_then(Value::as_u64)
+        .filter(|generation| *generation >= 1);
+    let requester_device_id = object
+        .get("requester_device_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
+    match (ssk_generation, requester_device_id) {
+        (Some(ssk_generation), None) => Ok(WelcomeRequesterSignatureBinding {
+            ssk_generation: Some(ssk_generation),
+            requester_device_id: None,
+        }),
+        (None, Some(requester_device_id)) => Ok(WelcomeRequesterSignatureBinding {
+            ssk_generation: None,
+            requester_device_id: Some(requester_device_id),
+        }),
+        _ => Err(REASON_KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH),
+    }
+}
+
 fn parse_timestamp(value: Option<&Value>) -> Option<i64> {
     match value {
         Some(Value::Number(number)) => number.as_i64(),
@@ -962,7 +1040,6 @@ const WELCOME_FORBIDDEN_METADATA_KEYS: &[&str] = &[
     "sender_actor_id",
     "sender_actor_id",
     "sender_actor_display_name",
-    "sender_device_id",
     "sender_display_name",
     "sender_handle",
     "sender_profile",

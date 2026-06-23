@@ -35,7 +35,7 @@
 //! validation queues only minimal routing metadata and rejects plaintext
 //! sender/profile/relationship side-band fields.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -60,6 +60,96 @@ use crate::state::AppState;
 use crate::wire::now;
 
 const LAST_RESORT_KEYPACKAGE_MAX_LIFETIME_SECS: i64 = 30 * 24 * 60 * 60;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct KeyPackageTrustBinding {
+    ssk_generation: Option<u64>,
+    device_authorize_event_id: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum KeyPackageTrustSelector {
+    Principal(KeyPackageTrustBinding),
+    PerDevice(BTreeMap<String, KeyPackageTrustBinding>),
+}
+
+impl KeyPackageTrustBinding {
+    fn cross_signing(ssk_generation: u64) -> Self {
+        Self {
+            ssk_generation: Some(ssk_generation),
+            device_authorize_event_id: None,
+        }
+    }
+
+    fn device_authorize(device_authorize_event_id: String) -> Self {
+        Self {
+            ssk_generation: None,
+            device_authorize_event_id: Some(device_authorize_event_id),
+        }
+    }
+
+    fn from_keypackage(kp: &MlsKeyPackage) -> Result<Self, AppError> {
+        Self::from_parts(
+            kp.ssk_generation,
+            kp.device_authorize_event_id.clone(),
+            "KeyPackage trust binding is invalid",
+        )
+    }
+
+    fn from_row(row: &MlsKeyPackageRow) -> Result<Self, AppError> {
+        Self::from_parts(
+            row.ssk_generation,
+            row.device_authorize_event_id.clone(),
+            "KeyPackage claim is missing a valid trust binding",
+        )
+    }
+
+    fn from_parts(
+        ssk_generation: Option<u64>,
+        device_authorize_event_id: Option<String>,
+        message: &'static str,
+    ) -> Result<Self, AppError> {
+        match (ssk_generation, device_authorize_event_id) {
+            (Some(generation), None) if generation >= 1 => Ok(Self::cross_signing(generation)),
+            (None, Some(event_id)) if !event_id.trim().is_empty() => {
+                Ok(Self::device_authorize(event_id))
+            }
+            _ => Err(AppError::new(ErrorCode::FailedPrecondition, message)
+                .with_wire_code("claim_generation_mismatch")),
+        }
+    }
+
+    fn insert_into(&self, value: &mut Value) {
+        let Some(object) = value.as_object_mut() else {
+            return;
+        };
+        if let Some(generation) = self.ssk_generation {
+            object.insert("ssk_generation".to_owned(), json!(generation));
+        }
+        if let Some(event_id) = self.device_authorize_event_id.as_deref() {
+            object.insert(
+                "device_authorize_event_id".to_owned(),
+                Value::String(event_id.to_owned()),
+            );
+        }
+    }
+
+    fn matches_keypackage(&self, kp: &MlsKeyPackage) -> bool {
+        kp.ssk_generation == self.ssk_generation
+            && kp.device_authorize_event_id == self.device_authorize_event_id
+    }
+}
+
+impl KeyPackageTrustSelector {
+    fn matches_keypackage(&self, kp: &MlsKeyPackage) -> bool {
+        match self {
+            Self::Principal(binding) => binding.matches_keypackage(kp),
+            Self::PerDevice(bindings) => bindings
+                .get(kp.device_id.as_str())
+                .is_some_and(|binding| binding.matches_keypackage(kp)),
+        }
+    }
+}
 
 /// Mount the `/keys/keypackages/*` sub-router. Mounted under
 /// `/_cokret/self` from `routing::mod::api_v1_router`.
@@ -148,7 +238,8 @@ async fn upload_keypackage(
     if body.key_packages.is_empty() {
         return Err(AppError::missing_param("key_packages is required"));
     }
-    let ssk_generation = current_accepted_ssk_generation(state, &body.principal_id)?;
+    let trust_binding =
+        current_keypackage_trust_binding(state, &body.principal_id, &device_id).await?;
 
     let default_device_signature = body.device_signature.clone();
     let mut accepted = 0_u32;
@@ -254,7 +345,7 @@ async fn upload_keypackage(
 
         // Run the reducer's projection update first so the in-process
         // projection carries the same metadata we mirror into the store.
-        let publish_payload = json!({
+        let mut publish_payload = json!({
             "action": "publish",
             "keypackage_id": keypackage_id.clone(),
             "keypackage_ref": keypackage_ref.clone(),
@@ -266,7 +357,6 @@ async fn upload_keypackage(
             "capabilities_digest": capabilities_digest,
             "device_signature": device_signature,
             "last_resort": last_resort,
-            "ssk_generation": ssk_generation,
             "created_at": created_at,
             "lifetime": {
                 "not_before": created_at,
@@ -274,6 +364,7 @@ async fn upload_keypackage(
             },
             "key_package_bytes_b64": key_package_bytes_b64,
         });
+        trust_binding.insert_into(&mut publish_payload);
         let op = build_op(crate::kinds::CK_MLS_KEYPACKAGE, publish_payload);
         let effect =
             reducer::mls::apply_keypackage_publish(&mut state.projection.lock().unwrap(), &op);
@@ -320,7 +411,7 @@ async fn upload_keypackage(
             state,
             &actor_id,
             None,
-            Some(ssk_generation),
+            Some(&KeyPackageTrustSelector::Principal(trust_binding)),
             None,
         )),
     })
@@ -382,7 +473,9 @@ pub(crate) async fn claim_keypackages_for_request(
         .map(ToString::to_string)
         .collect::<BTreeSet<_>>();
     let intended_realm_id = body.intended_realm_id.to_string();
-    let ssk_generation = current_accepted_ssk_generation(state, &target_principal_did)?;
+    let trust_selector =
+        current_keypackage_claim_trust_selector(state, &target_principal_did, &target_device_ids)
+            .await?;
     let available_before = available_keypackage_count(
         state,
         &target_principal_id,
@@ -391,11 +484,11 @@ pub(crate) async fn claim_keypackages_for_request(
         } else {
             None
         },
-        Some(ssk_generation),
+        Some(&trust_selector),
         Some(&intended_realm_id),
     );
     let now_secs = now().timestamp();
-    let keypackage_id = {
+    let selected_keypackage = {
         let projection = state.projection.lock().unwrap();
         let ordinary = projection
             .mls_key_packages
@@ -407,13 +500,17 @@ pub(crate) async fn claim_keypackages_for_request(
                     kp,
                     &target_principal_id,
                     &target_device_ids,
-                    ssk_generation,
+                    &trust_selector,
                     now_secs,
                     &required_capabilities,
                 )
             })
             .min_by_key(|kp| (kp.created_at, kp.id.as_str()))
-            .map(|kp| kp.id.clone());
+            .and_then(|kp| {
+                KeyPackageTrustBinding::from_keypackage(kp)
+                    .ok()
+                    .map(|binding| (kp.id.clone(), binding))
+            });
         ordinary.or_else(|| {
             projection
                 .mls_key_packages
@@ -425,16 +522,20 @@ pub(crate) async fn claim_keypackages_for_request(
                         kp,
                         &target_principal_id,
                         &target_device_ids,
-                        ssk_generation,
+                        &trust_selector,
                         now_secs,
                         &required_capabilities,
                     )
                 })
                 .min_by_key(|kp| (kp.created_at, kp.id.as_str()))
-                .map(|kp| kp.id.clone())
+                .and_then(|kp| {
+                    KeyPackageTrustBinding::from_keypackage(kp)
+                        .ok()
+                        .map(|binding| (kp.id.clone(), binding))
+                })
         })
     };
-    let Some(keypackage_id) = keypackage_id else {
+    let Some((keypackage_id, claim_binding)) = selected_keypackage else {
         let reason_code = if available_before > 0 {
             "claim_failed"
         } else {
@@ -462,13 +563,13 @@ pub(crate) async fn claim_keypackages_for_request(
     // kind is `ck.mls.keypackage`; publish-vs-claim is conveyed via
     // `payload.action`. The HTTP operation_id
     // (`ck.self.keys.keypackages.command.claim`) lives at the wire layer only.
-    let payload = json!({
+    let mut payload = json!({
         "action": "claim",
         "keypackage_id": keypackage_id,
         "group_id": mls_group_ref,
-        "intended_realm_id": intended_realm_id.clone(),
-        "ssk_generation": ssk_generation,
+        "intended_realm_id": intended_realm_id.clone()
     });
+    claim_binding.insert_into(&mut payload);
     let op = build_op(crate::kinds::CK_MLS_KEYPACKAGE, payload);
     let effect = reducer::mls::apply_keypackage_claim(&mut state.projection.lock().unwrap(), &op);
     let (consumed_at, claimed_keypackage_id, claimed_group_id, claimed_realm_id) = match effect {
@@ -529,7 +630,8 @@ pub(crate) async fn claim_keypackages_for_request(
             &claimed_keypackage_id,
             &claimed_group_id,
             claimed_realm_id.as_deref(),
-            Some(ssk_generation),
+            claim_binding.ssk_generation,
+            claim_binding.device_authorize_event_id.as_deref(),
             consumed_at,
         )
         .await
@@ -555,7 +657,7 @@ pub(crate) async fn claim_keypackages_for_request(
             state,
             &target_principal_id,
             None,
-            Some(ssk_generation),
+            Some(&trust_selector),
             Some(&intended_realm_id),
         )),
     })
@@ -638,6 +740,7 @@ async fn consume_keypackages(
                 &group_id,
                 consume_realm_id.as_deref(),
                 None,
+                None,
                 consumed_at,
             )
             .await
@@ -699,7 +802,7 @@ async fn revoke_keypackages(
                 match state
                     .persistence
                     .mls_key_packages()
-                    .try_claim(&keypackage_id, "revoked", None, None, revoked_at)
+                    .try_claim(&keypackage_id, "revoked", None, None, None, revoked_at)
                     .await
                 {
                     Ok(Some(_)) => revoked.push(keypackage_id),
@@ -920,10 +1023,7 @@ fn capabilities_satisfy(published: &[String], required: &BTreeSet<String>) -> bo
     required.is_subset(&published)
 }
 
-fn current_accepted_ssk_generation(
-    state: &AppState,
-    principal: &cokret_sdk::Did,
-) -> Result<u64, AppError> {
+fn current_accepted_ssk_generation(state: &AppState, principal: &cokret_sdk::Did) -> Option<u64> {
     state
         .cross_signing
         .lock()
@@ -931,13 +1031,92 @@ fn current_accepted_ssk_generation(
         .current_cross_signing(principal)
         .map(|publish| publish.generation)
         .filter(|generation| *generation >= 1)
+}
+
+async fn current_keypackage_trust_binding(
+    state: &AppState,
+    principal: &cokret_sdk::Did,
+    device_id: &str,
+) -> Result<KeyPackageTrustBinding, AppError> {
+    if let Some(generation) = current_accepted_ssk_generation(state, principal) {
+        return Ok(KeyPackageTrustBinding::cross_signing(generation));
+    }
+    let device = state
+        .persistence
+        .devices()
+        .get(principal.as_str(), device_id)
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?
         .ok_or_else(|| {
             AppError::new(
                 ErrorCode::FailedPrecondition,
-                "current cross-signing publish is required for KeyPackage claim",
+                "accepted device authorization is required for KeyPackage publish",
             )
             .with_wire_code("claim_generation_mismatch")
-        })
+        })?;
+    device_authorize_trust_binding(&device).ok_or_else(|| {
+        AppError::new(
+            ErrorCode::FailedPrecondition,
+            "accepted device authorization is required for KeyPackage publish",
+        )
+        .with_wire_code("claim_generation_mismatch")
+    })
+}
+
+async fn current_keypackage_claim_trust_selector(
+    state: &AppState,
+    principal: &cokret_sdk::Did,
+    target_device_ids: &BTreeSet<String>,
+) -> Result<KeyPackageTrustSelector, AppError> {
+    if let Some(generation) = current_accepted_ssk_generation(state, principal) {
+        return Ok(KeyPackageTrustSelector::Principal(
+            KeyPackageTrustBinding::cross_signing(generation),
+        ));
+    }
+
+    let mut bindings = BTreeMap::new();
+    if target_device_ids.is_empty() {
+        for device in state
+            .persistence
+            .devices()
+            .list_for_actor(principal.as_str())
+            .await
+            .map_err(|error| AppError::internal(error.to_string()))?
+        {
+            if let Some(binding) = device_authorize_trust_binding(&device) {
+                bindings.insert(device.device_id, binding);
+            }
+        }
+    } else {
+        for device_id in target_device_ids {
+            if let Some(device) = state
+                .persistence
+                .devices()
+                .get(principal.as_str(), device_id)
+                .await
+                .map_err(|error| AppError::internal(error.to_string()))?
+                && let Some(binding) = device_authorize_trust_binding(&device)
+            {
+                bindings.insert(device_id.clone(), binding);
+            }
+        }
+    }
+    Ok(KeyPackageTrustSelector::PerDevice(bindings))
+}
+
+fn device_authorize_trust_binding(
+    device: &crate::state::DeviceInventoryRecord,
+) -> Option<KeyPackageTrustBinding> {
+    if device.revoked_at.is_some() || device.verification_state != "verified" {
+        return None;
+    }
+    device
+        .payload
+        .get("device_authorize_event_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|event_id| KeyPackageTrustBinding::device_authorize(event_id.to_owned()))
 }
 
 fn keypackage_failure(
@@ -989,7 +1168,7 @@ fn available_keypackage_count(
     state: &AppState,
     actor_id: &str,
     device_id: Option<&str>,
-    ssk_generation: Option<u64>,
+    trust_selector: Option<&KeyPackageTrustSelector>,
     intended_realm_id: Option<&str>,
 ) -> u64 {
     let now_secs = now().timestamp();
@@ -999,7 +1178,7 @@ fn available_keypackage_count(
         .values()
         .filter(|kp| kp.actor_id == actor_id)
         .filter(|kp| device_id.is_none_or(|device_id| kp.device_id == device_id))
-        .filter(|kp| ssk_generation.is_none_or(|generation| kp.ssk_generation == Some(generation)))
+        .filter(|kp| trust_selector.is_none_or(|selector| selector.matches_keypackage(kp)))
         .filter(|kp| {
             if kp.last_resort {
                 intended_realm_id
@@ -1017,13 +1196,13 @@ fn keypackage_matches_claim(
     kp: &MlsKeyPackage,
     actor_id: &str,
     target_device_ids: &BTreeSet<String>,
-    ssk_generation: u64,
+    trust_selector: &KeyPackageTrustSelector,
     now_secs: i64,
     required_capabilities: &BTreeSet<String>,
 ) -> bool {
     kp.actor_id == actor_id
         && (target_device_ids.is_empty() || target_device_ids.contains(kp.device_id.as_str()))
-        && kp.ssk_generation == Some(ssk_generation)
+        && trust_selector.matches_keypackage(kp)
         && kp.lifetime.not_after > now_secs
         && capabilities_satisfy(&kp.capabilities, required_capabilities)
 }
@@ -1040,13 +1219,7 @@ fn keypackage_claim_record(
     record: &MlsKeyPackageRow,
     claim_nonce: &str,
 ) -> Result<KeypackageClaimRecord, AppError> {
-    let Some(ssk_generation) = record.ssk_generation else {
-        return Err(AppError::new(
-            ErrorCode::FailedPrecondition,
-            "KeyPackage claim is missing accepted cross-signing generation",
-        )
-        .with_wire_code("claim_generation_mismatch"));
-    };
+    let trust_binding = KeyPackageTrustBinding::from_row(record)?;
     let key_package = URL_SAFE_NO_PAD.encode(&record.key_package_bytes);
     Ok(KeypackageClaimRecord {
         claim_id: format!("{}:{claim_nonce}", record.id),
@@ -1060,7 +1233,8 @@ fn keypackage_claim_record(
         capabilities: record.capabilities.clone(),
         capabilities_digest: Hash::new(record.capabilities_digest.clone())
             .map_err(|error| AppError::internal(format!("invalid capabilities_digest: {error}")))?,
-        ssk_generation,
+        ssk_generation: trust_binding.ssk_generation,
+        device_authorize_event_id: trust_binding.device_authorize_event_id,
         expires_at: unix_timestamp_datetime(record.lifetime_not_after)?,
         device_signature: serde_json::from_value::<Signature2>(record.device_signature.clone())
             .map_err(|error| AppError::internal(format!("invalid device_signature: {error}")))?,
@@ -1106,6 +1280,7 @@ fn key_package_to_record(kp: &MlsKeyPackage) -> MlsKeyPackageRow {
         lifetime_not_after: kp.lifetime.not_after,
         claimed_by_mls_group_id: kp.claimed_by.clone(),
         ssk_generation: kp.ssk_generation,
+        device_authorize_event_id: kp.device_authorize_event_id.clone(),
         consumed_at: kp.consumed_at,
         created_at: kp.created_at,
     }

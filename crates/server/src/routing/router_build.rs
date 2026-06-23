@@ -334,6 +334,7 @@ pub(crate) fn cors_handler_for_origin_spec(raw: &str) -> CorsHandler {
         .allow_headers(vec![
             "authorization",
             "content-type",
+            "dpop",
             "idempotency-key",
             "x-cokret-request-id",
             "x-cokret-wait-for",

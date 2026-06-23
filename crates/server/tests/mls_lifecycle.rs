@@ -23,8 +23,9 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::Utc;
 use cokret_sdk::{
     CrossSigningBinding, CrossSigningKeyRecord, CrossSigningPublishContent, Did,
-    SignedCrossSigningKey, TypedTrustDomainId,
+    MlsWelcomeClaimEnvelope, SignedCrossSigningKey, TypedTrustDomainId,
 };
+use ed25519_dalek::{Signer as _, SigningKey};
 use salvo::http::StatusCode;
 use salvo::test::{ResponseExt, TestClient};
 use serde_json::{Value, json};
@@ -100,6 +101,21 @@ fn b64(bytes: &[u8]) -> String {
     URL_SAFE_NO_PAD.encode(bytes)
 }
 
+fn test_ssk_signing_key() -> SigningKey {
+    SigningKey::from_bytes(&[42_u8; 32])
+}
+
+fn ed25519_public_multibase(signing: &SigningKey) -> String {
+    let mut bytes = Vec::with_capacity(34);
+    bytes.extend_from_slice(&[0xed, 0x01]);
+    bytes.extend_from_slice(signing.verifying_key().as_bytes());
+    format!("z{}", bs58::encode(bytes).into_string())
+}
+
+fn sign_b64(signing: &SigningKey, bytes: &[u8]) -> String {
+    b64(&signing.sign(bytes).to_bytes())
+}
+
 fn sha256_json(value: &Value) -> String {
     let bytes = cokret_sdk::canonical::canonical_json_bytes(value)
         .unwrap_or_else(|_| serde_json::to_vec(value).unwrap());
@@ -169,6 +185,7 @@ async fn dev_token(state: AppState, actor: &str, device_id: &str, display: &str)
 
 fn cross_signing_publish(principal: &str, generation: u64) -> CrossSigningPublishContent {
     let principal_id = Did::new(principal.to_owned()).unwrap();
+    let self_signing_public_key = ed25519_public_multibase(&test_ssk_signing_key());
     CrossSigningPublishContent {
         principal_id: principal_id.clone(),
         trust_domain: TypedTrustDomainId::new("ck:trust_domain:soland-mls-test.local").unwrap(),
@@ -182,7 +199,7 @@ fn cross_signing_publish(principal: &str, generation: u64) -> CrossSigningPublis
             key: CrossSigningKeyRecord {
                 kid: format!("{principal}#self-signing"),
                 alg: "EdDSA".to_owned(),
-                public_key: "z6MkSelfAlice".to_owned(),
+                public_key: self_signing_public_key,
                 key_format: "multibase".to_owned(),
             },
             binding: CrossSigningBinding {
@@ -340,6 +357,13 @@ async fn mls_lifecycle_end_to_end() {
     assert_eq!(claims[0]["capabilities_digest"], json!(capabilities_digest));
     assert_eq!(claims[0]["ssk_generation"], json!(3));
     assert_eq!(claims[0]["device_signature"], device_signature);
+    let claim_id = claims[0]["claim_id"].as_str().unwrap().to_owned();
+    let claimed_keypackage_ref = claims[0]["keypackage_ref"].as_str().unwrap().to_owned();
+    let claimed_keypackage_digest = claims[0]["keypackage_digest"].as_str().unwrap().to_owned();
+    let claimed_capabilities_digest = claims[0]["capabilities_digest"]
+        .as_str()
+        .unwrap()
+        .to_owned();
 
     // ── 2b. required capabilities must be a subset of the published set ─
     let rejected_claim_resp = TestClient::post(&claim_url)
@@ -369,7 +393,7 @@ async fn mls_lifecycle_end_to_end() {
     let group_id = "ck:mls_group:abc";
     let effective_scope = json!({"kind": "realm", "realm_id": realm_id});
     let frontier_ref = "ck:event:01904100-0000-7000-8000-00000000f00d";
-    let keypackage_ref = "sha256:5555555555555555555555555555555555555555555555555555555555555555";
+    let keypackage_ref = claimed_keypackage_ref;
     let welcome_ref =
         "ck:blob:sha256:8888888888888888888888888888888888888888888888888888888888888888";
     let governance_binding = json!({
@@ -467,6 +491,30 @@ async fn mls_lifecycle_end_to_end() {
     );
 
     // ── 3b. Welcome is a durable event and mirrors into the pending queue ─
+    let mut claim_envelope = json!({
+        "keypackage_ref": keypackage_ref,
+        "keypackage_digest": claimed_keypackage_digest,
+        "intended_realm_id": realm_id,
+        "claim_id": claim_id,
+        "requester_did": alice_did,
+        "ssk_generation": 3,
+        "nonce": b64(b"welcome-claim-nonce-01-128-bit"),
+        "welcome_digest": cokret_sdk::canonical::sha256_digest(b"opaque-mls-welcome"),
+        "created_at": "2026-05-25T00:00:02Z",
+        "signature": {
+            "kid": format!("{alice_did}#self-signing"),
+            "alg": "EdDSA",
+            "sig": ""
+        }
+    });
+    let claim_envelope_model: MlsWelcomeClaimEnvelope =
+        serde_json::from_value(claim_envelope.clone()).unwrap();
+    let claim_envelope_signature = sign_b64(
+        &test_ssk_signing_key(),
+        &claim_envelope_model.canonical_signing_bytes().unwrap(),
+    );
+    claim_envelope["signature"]["sig"] = json!(claim_envelope_signature);
+
     let welcome = signed_event(
         "ck:event:01904100-0000-7000-8000-00000000e2e2",
         3,
@@ -480,44 +528,33 @@ async fn mls_lifecycle_end_to_end() {
             "recipient_principal_id": bob_did,
             "recipient_device_id": bob_device,
             "keypackage_ref": keypackage_ref,
-            "keypackage_digest": "sha256:5555555555555555555555555555555555555555555555555555555555555555",
-            "claim_id": "claim-01",
+            "keypackage_digest": claimed_keypackage_digest,
+            "claim_id": claim_id,
             "claim_ref": {
-                "claim_id": "claim-01",
+                "claim_id": claim_id,
                 "keypackage_ref": keypackage_ref,
-                "keypackage_digest": "sha256:5555555555555555555555555555555555555555555555555555555555555555",
-                "capabilities_digest": "sha256:6666666666666666666666666666666666666666666666666666666666666666",
-                "ssk_generation": 1
+                "keypackage_digest": claimed_keypackage_digest,
+                "capabilities_digest": claimed_capabilities_digest,
+                "ssk_generation": 3
             },
-            "claim_envelope": {
-                "keypackage_ref": keypackage_ref,
-                "keypackage_digest": "sha256:5555555555555555555555555555555555555555555555555555555555555555",
-                "intended_realm_id": realm_id,
-                "claim_id": "claim-01",
-                "requester_did": alice_did,
-                "ssk_generation": 1,
-                "nonce": b64(b"welcome-claim-nonce-01-128-bit"),
-                "welcome_digest": cokret_sdk::canonical::sha256_digest(b"opaque-mls-welcome"),
-                "created_at": "2026-05-25T00:00:02Z",
-                "signature": {
-                    "kid": format!("{alice_did}#self-signing"),
-                    "alg": "EdDSA",
-                    "sig": b64(b"welcome-claim-envelope-signature")
-                }
-            },
+            "claim_envelope": claim_envelope,
             "welcome_ref": welcome_ref,
-            "ciphertext": "opaque-mls-welcome",
+            "ciphertext": b64(b"opaque-mls-welcome"),
             "expires_at": "2100-01-01T00:00:00Z",
             "commit_ref": "ck:event:01904100-0000-7000-8000-00000000e2e3",
             "governance_binding": governance_binding
         }),
     );
-    let welcome_resp = TestClient::post("http://server/_cokret/self/events")
+    let mut welcome_resp = TestClient::post("http://server/_cokret/self/events")
         .add_header("authorization", format!("Bearer {alice_token}"), true)
         .json(&welcome)
         .send(&app_from_state(state.clone()))
         .await;
-    assert_eq!(welcome_resp.status_code, Some(StatusCode::OK));
+    let welcome_status = welcome_resp.status_code;
+    if welcome_status != Some(StatusCode::OK) {
+        let error: Value = welcome_resp.take_json().await.unwrap_or(Value::Null);
+        panic!("expected welcome status 200, got {welcome_status:?}: {error}");
+    }
     assert_eq!(
         state
             .persistence

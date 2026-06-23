@@ -61,6 +61,7 @@ pub(crate) async fn mirror_mls_effect_to_persistence(
                     lifetime_not_after: kp.lifetime.not_after,
                     claimed_by_mls_group_id: kp.claimed_by,
                     ssk_generation: kp.ssk_generation,
+                    device_authorize_event_id: kp.device_authorize_event_id,
                     consumed_at: kp.consumed_at,
                     created_at: kp.created_at,
                 });
@@ -84,6 +85,7 @@ pub(crate) async fn mirror_mls_effect_to_persistence(
                     keypackage_id,
                     group_id,
                     intended_realm_id.as_deref(),
+                    None,
                     None,
                     *consumed_at,
                 )
@@ -614,7 +616,7 @@ async fn project_accepted_operations_inner(
         // authorized but never opened a session (previously the key only
         // landed via the session-grant exchange path).
         if kinds::canonical_kind_string(operation) == kinds::CK_DEVICE_AUTHORIZE {
-            project_device_authorize(state, &operation.payload).await;
+            project_device_authorize(state, operation).await;
         }
         // Also apply to the deterministic reducer.
         let reducer_effect =
@@ -889,8 +891,9 @@ async fn project_realm_key_share_to_device(
 /// revocation, and any already-recorded `device_public_key`; a verified state
 /// is never downgraded. The `cross_signing_binding` was already verified at
 /// ingest (`validate_device_authorize_binding`).
-async fn project_device_authorize(state: &crate::state::AppState, payload: &Value) {
+async fn project_device_authorize(state: &crate::state::AppState, operation: &Operation) {
     use crate::state::DeviceInventoryRecord;
+    let payload = &operation.payload;
     let Some(principal_id) = payload.get("principal_id").and_then(Value::as_str) else {
         return;
     };
@@ -940,6 +943,10 @@ async fn project_device_authorize(state: &crate::state::AppState, payload: &Valu
         map.entry("device_id".to_owned())
             .or_insert_with(|| Value::String(device_id.to_owned()));
         map.insert("device_authorize_projected".to_owned(), Value::Bool(true));
+        map.insert(
+            "device_authorize_event_id".to_owned(),
+            Value::String(operation.operation_id.to_string()),
+        );
         // Tier-2 (device-lifecycle.md §5.2 / §8.2): persist the authoritative
         // `cross_signing_binding` verbatim so keys/query can echo it for
         // client-side chain verification. Inception bootstrap devices carry a

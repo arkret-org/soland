@@ -404,7 +404,7 @@ async fn retire_actor_keypackages(state: &AppState, did: &str) -> Result<usize, 
         if state
             .persistence
             .mls_key_packages()
-            .try_claim(&row.id, "revoked", None, None, retired_at)
+            .try_claim(&row.id, "revoked", None, None, None, retired_at)
             .await
             .map_err(|error| {
                 AppError::internal(format!("mls keypackage retirement failed: {error}"))

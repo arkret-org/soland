@@ -649,9 +649,10 @@ fn device_authorize_wire_payload(payload: &Value) -> Value {
     wire_payload
 }
 
-pub(crate) fn verify_mls_welcome_claim_envelope_signature(
+pub(crate) async fn verify_mls_welcome_claim_envelope_signature(
     state: &AppState,
     envelope: &MlsWelcomeClaimEnvelope,
+    sender_device_id: Option<&str>,
 ) -> Result<(), &'static str> {
     envelope.validate_signature_shape()?;
     if let Some(alg) = envelope.signature.alg.as_deref()
@@ -659,6 +660,31 @@ pub(crate) fn verify_mls_welcome_claim_envelope_signature(
     {
         return Err(crate::error::reasons::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH);
     }
+    match (
+        envelope.ssk_generation,
+        envelope.requester_device_id.as_deref(),
+    ) {
+        (Some(generation), None) => {
+            verify_mls_welcome_claim_envelope_ssk_signature(state, envelope, generation)
+        }
+        (None, Some(requester_device_id)) => {
+            verify_mls_welcome_claim_envelope_device_signature(
+                state,
+                envelope,
+                requester_device_id,
+                sender_device_id,
+            )
+            .await
+        }
+        _ => Err(crate::error::reasons::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH),
+    }
+}
+
+fn verify_mls_welcome_claim_envelope_ssk_signature(
+    state: &AppState,
+    envelope: &MlsWelcomeClaimEnvelope,
+    envelope_generation: u64,
+) -> Result<(), &'static str> {
     let (accepted_generation, ssk_kid, ssk_public_key, ssk_key_format) = {
         let mgr = state.cross_signing.lock().expect("cross_signing lock");
         let publish = mgr
@@ -671,7 +697,7 @@ pub(crate) fn verify_mls_welcome_claim_envelope_signature(
             publish.self_signing_key.key.key_format.clone(),
         )
     };
-    if envelope.ssk_generation != accepted_generation || envelope.signature.kid != ssk_kid {
+    if envelope_generation != accepted_generation || envelope.signature.kid != ssk_kid {
         return Err(crate::error::reasons::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH);
     }
     let ssk = decode_ed25519_key(&ssk_public_key, &ssk_key_format)
@@ -683,6 +709,74 @@ pub(crate) fn verify_mls_welcome_claim_envelope_signature(
         return Err(crate::error::reasons::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH);
     }
     Ok(())
+}
+
+async fn verify_mls_welcome_claim_envelope_device_signature(
+    state: &AppState,
+    envelope: &MlsWelcomeClaimEnvelope,
+    requester_device_id: &str,
+    sender_device_id: Option<&str>,
+) -> Result<(), &'static str> {
+    if sender_device_id != Some(requester_device_id) {
+        return Err(crate::error::reasons::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH);
+    }
+    let record = state
+        .persistence
+        .devices()
+        .get(envelope.requester_did.as_str(), requester_device_id)
+        .await
+        .map_err(|_| crate::error::reasons::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?
+        .ok_or(crate::error::reasons::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;
+    if record.revoked_at.is_some() || record.verification_state != "verified" {
+        return Err(crate::error::reasons::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH);
+    }
+    let device_public_key = record
+        .payload
+        .get("device_public_key")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or(crate::error::reasons::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;
+    if !device_signature_kid_points_to_device_key(
+        &envelope.signature.kid,
+        envelope.requester_did.as_str(),
+        device_public_key,
+    ) {
+        return Err(crate::error::reasons::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH);
+    }
+    let device_key = decode_ed25519_key(device_public_key, "multibase")
+        .map_err(|_| crate::error::reasons::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;
+    let signing_bytes = envelope
+        .canonical_signing_bytes()
+        .map_err(|_| crate::error::reasons::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;
+    if !ed25519_verify(&device_key, &signing_bytes, &envelope.signature.sig) {
+        return Err(crate::error::reasons::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH);
+    }
+    Ok(())
+}
+
+fn verification_method_controller(verification_method: &str) -> &str {
+    let no_query = verification_method
+        .split_once('?')
+        .map(|(head, _)| head)
+        .unwrap_or(verification_method);
+    no_query
+        .split_once('#')
+        .map(|(head, _)| head)
+        .unwrap_or(no_query)
+}
+
+fn device_signature_kid_points_to_device_key(
+    kid: &str,
+    actor: &str,
+    device_public_key: &str,
+) -> bool {
+    let expected_did_key = format!("did:key:{device_public_key}");
+    kid == expected_did_key
+        || kid
+            .strip_prefix(&expected_did_key)
+            .is_some_and(|rest| rest.starts_with('#') || rest.starts_with('?'))
+        || verification_method_controller(kid) == actor
 }
 
 /// Resolve the published PSK against the principal DID document (control-set

@@ -1795,37 +1795,64 @@ async fn submit_direct_mls_welcome(
         "direct-welcome-signature:{realm_id}:{mls_group_id}:{}",
         claim.claim_id
     ));
+    let mut claim_ref = json!({
+        "claim_id": claim.claim_id.as_str(),
+        "keypackage_ref": claim.keypackage_ref.as_str(),
+        "keypackage_digest": claim.keypackage_digest.as_str(),
+        "capabilities_digest": claim.capabilities_digest.as_str(),
+    });
+    if let Some(generation) = claim.ssk_generation {
+        claim_ref["ssk_generation"] = json!(generation);
+    } else if let Some(event_id) = claim.device_authorize_event_id.as_deref() {
+        claim_ref["device_authorize_event_id"] = json!(event_id);
+    } else {
+        return Err(AppError::new(
+            ErrorCode::FailedPrecondition,
+            "direct MLS claim is missing a valid trust binding",
+        )
+        .with_wire_code("claim_generation_mismatch"));
+    }
+    let mut claim_envelope = json!({
+        "keypackage_ref": claim.keypackage_ref.as_str(),
+        "keypackage_digest": claim.keypackage_digest.as_str(),
+        "intended_realm_id": realm_id,
+        "claim_id": claim.claim_id.as_str(),
+        "requester_did": actor,
+        "nonce": URL_SAFE_NO_PAD.encode(format!("direct-welcome:{realm_id}:{mls_group_id}:{}", claim.claim_id).as_bytes()),
+        "welcome_digest": welcome_digest,
+        "created_at": created_at.to_rfc3339_opts(SecondsFormat::Secs, true),
+        "signature": {
+            "kid": format!("{actor}#self-signing"),
+            "alg": "EdDSA",
+            "sig": URL_SAFE_NO_PAD.encode(signature_seed.as_bytes()),
+        }
+    });
+    let requester_ssk_generation = cokret_sdk::Did::new(actor.to_owned())
+        .ok()
+        .and_then(|did| {
+            state.cross_signing.lock().ok().and_then(|manager| {
+                manager
+                    .current_cross_signing(&did)
+                    .map(|publish| publish.generation)
+            })
+        })
+        .filter(|generation| *generation >= 1);
+    if let Some(generation) = requester_ssk_generation {
+        claim_envelope["ssk_generation"] = json!(generation);
+    } else {
+        claim_envelope["requester_device_id"] = json!(actor_device_id);
+    }
     let payload = json!({
         "mls_group_id": mls_group_id,
         "epoch": 1,
         "recipient_principal_id": peer,
         "recipient_device_id": claim.device_id.as_str(),
+        "sender_device_id": actor_device_id,
         "keypackage_ref": claim.keypackage_ref.as_str(),
         "keypackage_digest": claim.keypackage_digest.as_str(),
         "claim_id": claim.claim_id.as_str(),
-        "claim_ref": {
-            "claim_id": claim.claim_id.as_str(),
-            "keypackage_ref": claim.keypackage_ref.as_str(),
-            "keypackage_digest": claim.keypackage_digest.as_str(),
-            "capabilities_digest": claim.capabilities_digest.as_str(),
-            "ssk_generation": claim.ssk_generation,
-        },
-        "claim_envelope": {
-            "keypackage_ref": claim.keypackage_ref.as_str(),
-            "keypackage_digest": claim.keypackage_digest.as_str(),
-            "intended_realm_id": realm_id,
-            "claim_id": claim.claim_id.as_str(),
-            "requester_did": actor,
-            "ssk_generation": claim.ssk_generation,
-            "nonce": URL_SAFE_NO_PAD.encode(format!("direct-welcome:{realm_id}:{mls_group_id}:{}", claim.claim_id).as_bytes()),
-            "welcome_digest": welcome_digest,
-            "created_at": created_at.to_rfc3339_opts(SecondsFormat::Secs, true),
-            "signature": {
-                "kid": format!("{actor}#self-signing"),
-                "alg": "EdDSA",
-                "sig": URL_SAFE_NO_PAD.encode(signature_seed.as_bytes()),
-            }
-        },
+        "claim_ref": claim_ref,
+        "claim_envelope": claim_envelope,
         "welcome_ref": format!("ck:blob:{}", cokret_sdk::canonical::sha256_digest(&welcome_bytes)),
         "welcome_bytes_b64": URL_SAFE_NO_PAD.encode(&welcome_bytes),
         "expires_at": (created_at + chrono::Duration::days(1)).to_rfc3339_opts(SecondsFormat::Secs, true),

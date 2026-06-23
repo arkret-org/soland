@@ -16,7 +16,7 @@ async fn configured_cors_allows_only_explicit_origin() {
         .add_header("Access-Control-Request-Method", "POST", true)
         .add_header(
             "Access-Control-Request-Headers",
-            "authorization, content-type, x-cokret-wait-for",
+            "authorization, content-type, dpop, x-cokret-wait-for",
             true,
         )
         .send(&service)
@@ -51,6 +51,10 @@ async fn configured_cors_allows_only_explicit_origin() {
     assert!(
         !allow_headers.contains("x-cokret-key-backup-delete-proof"),
         "key-backup delete proof must travel in the request body, not a header: {allow_headers}"
+    );
+    assert!(
+        allow_headers.contains("dpop"),
+        "session-grant browser preflight must allow DPoP: {allow_headers}"
     );
 
     let denied = TestClient::options("http://server/_cokret/self/account/subscribe?catchup=true")

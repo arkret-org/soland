@@ -547,6 +547,7 @@ CREATE TABLE public.mls_key_packages (
     lifetime_not_after bigint NOT NULL,
     claimed_by_mls_group_id text,
     ssk_generation bigint,
+    device_authorize_event_id text,
     consumed_at bigint,
     created_at bigint NOT NULL
 );

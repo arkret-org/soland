@@ -923,7 +923,7 @@ fn events_submit_status_label(status: EventsSubmitStatus) -> &'static str {
     }
 }
 
-fn preflight_mls_welcome_claim_signature_reject(
+async fn preflight_mls_welcome_claim_signature_reject(
     state: &AppState,
     actor_id: &str,
     operation: &Operation,
@@ -949,9 +949,18 @@ fn preflight_mls_welcome_claim_signature_reject(
     if envelope.requester_did.as_str() != actor_id {
         return Some(crate::error::reasons::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH.to_owned());
     }
+    let sender_device_id = operation
+        .payload
+        .get("sender_device_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
     crate::routing::identity::cross_signing::verify_mls_welcome_claim_envelope_signature(
-        state, &envelope,
+        state,
+        &envelope,
+        sender_device_id,
     )
+    .await
     .err()
     .map(str::to_owned)
 }
@@ -1240,7 +1249,7 @@ async fn submit_event_value_with_context(
             ));
         }
         if let Some(reason) =
-            preflight_mls_welcome_claim_signature_reject(state, &parsed.actor_id, operation)
+            preflight_mls_welcome_claim_signature_reject(state, &parsed.actor_id, operation).await
         {
             return Err(SubmitOneError::new(
                 StatusCode::PRECONDITION_FAILED,
