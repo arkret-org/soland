@@ -599,7 +599,7 @@ impl ProjectionState {
     /// capability path with projection-time `ReferenceProjectionStatus`).
     pub fn check_relation_cross_realm(&self, operation: &Operation) -> Result<(), &'static str> {
         if crate::kinds::canonical_kind_for_operation(operation)
-            != Some(crate::kinds::CK_RELATION_CREATE)
+            != Some(cokret_sdk::events::kinds::RELATION_CREATE)
         {
             return Ok(());
         }
@@ -639,14 +639,14 @@ impl ProjectionState {
         };
         if !matches!(
             kind,
-            crate::kinds::CK_RELATION_CREATE
-                | crate::kinds::CK_RELATION_UPDATE
-                | crate::kinds::CK_RELATION_DELETE
+            cokret_sdk::events::kinds::RELATION_CREATE
+                | cokret_sdk::events::kinds::RELATION_UPDATE
+                | cokret_sdk::events::kinds::RELATION_TOMBSTONE
         ) {
             return Ok(());
         }
 
-        if kind == crate::kinds::CK_RELATION_CREATE {
+        if kind == cokret_sdk::events::kinds::RELATION_CREATE {
             let relation_kind = operation
                 .payload
                 .get("relation_kind")
@@ -661,7 +661,7 @@ impl ProjectionState {
             return Ok(());
         }
 
-        if kind == crate::kinds::CK_RELATION_UPDATE {
+        if kind == cokret_sdk::events::kinds::RELATION_UPDATE {
             let relation_id = operation
                 .payload
                 .get("relation_id")
@@ -724,7 +724,7 @@ impl ProjectionState {
             return Ok(());
         }
 
-        if kind == crate::kinds::CK_RELATION_DELETE {
+        if kind == cokret_sdk::events::kinds::RELATION_TOMBSTONE {
             if operation
                 .payload
                 .get("relation_kind")
@@ -1053,7 +1053,7 @@ mod cross_realm_relation_tests {
             cokret_sdk::OperationId::new("ck:operation:01904100-0000-7000-8000-57d7d85564c5")
                 .unwrap(),
             cokret_sdk::RealmId::new(REALM_A.to_owned()).unwrap(),
-            crate::kinds::CK_RELATION_CREATE,
+            cokret_sdk::events::kinds::RELATION_CREATE,
             json!({"relation_kind": relation_kind, "from_ref": from, "to_ref": to}),
         )
     }
@@ -1070,7 +1070,7 @@ mod cross_realm_relation_tests {
             cokret_sdk::OperationId::new(format!("ck:operation:01904100-0000-7000-8000-{seed}"))
                 .unwrap(),
             cokret_sdk::RealmId::new(REALM_A.to_owned()).unwrap(),
-            crate::kinds::CK_RELATION_CREATE,
+            cokret_sdk::events::kinds::RELATION_CREATE,
             json!({
                 "relation_id": relation_id,
                 "relation_kind": relation_kind,
@@ -1280,7 +1280,7 @@ mod cross_realm_relation_tests {
             cokret_sdk::OperationId::new("ck:operation:01904100-0000-7000-8000-0000000000ab")
                 .unwrap(),
             cokret_sdk::RealmId::new(REALM_A.to_owned()).unwrap(),
-            crate::kinds::CK_RELATION_UPDATE,
+            cokret_sdk::events::kinds::RELATION_UPDATE,
             json!({"relation_id": relation_id, "fields": {"level": "muted"}}),
         );
         assert!(matches!(
@@ -1292,7 +1292,7 @@ mod cross_realm_relation_tests {
             cokret_sdk::OperationId::new("ck:operation:01904100-0000-7000-8000-0000000000ac")
                 .unwrap(),
             cokret_sdk::RealmId::new(REALM_A.to_owned()).unwrap(),
-            crate::kinds::CK_RELATION_DELETE,
+            cokret_sdk::events::kinds::RELATION_TOMBSTONE,
             json!({"relation_id": "ck:relation:01904100-0000-7000-8000-0000000000aa"}),
         );
         assert!(matches!(
@@ -1394,7 +1394,7 @@ mod cross_realm_relation_tests {
             cokret_sdk::OperationId::new("ck:operation:01904100-0000-7000-8000-000000001001")
                 .unwrap(),
             cokret_sdk::RealmId::new(REALM_A.to_owned()).unwrap(),
-            crate::kinds::CK_RELATION_CREATE,
+            cokret_sdk::events::kinds::RELATION_CREATE,
             json!({
                 "relation_kind": "contains",
                 "from_ref": STRAND_A,

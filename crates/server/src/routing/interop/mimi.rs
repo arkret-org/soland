@@ -47,6 +47,7 @@ use super::moderation::{
 };
 use super::{append_audit_log, now, sha256_hex};
 use crate::error::AppError;
+use crate::ids;
 use crate::result::{JsonResult, json_ok};
 use crate::routing::events::projection::{append_projection_event, projection_event_json};
 use crate::routing::identity::consent::{
@@ -55,7 +56,6 @@ use crate::routing::identity::consent::{
 use crate::state::{
     AppState, CanonicalEventRecord, EventNotification, MessageRecord, ProjectionEventRecord,
 };
-use crate::{ids, kinds};
 
 const EVENT_SCHEMA_ID: &str = "ck.schema.event.v1";
 const MIMI_REASON_GOVERNANCE_BINDING_MISSING: &str = "mimi_governance_binding_missing";
@@ -709,7 +709,7 @@ async fn mimi_room_message(
     let projection_record = ProjectionEventRecord {
         event_id: event_id.clone(),
         realm_id: realm_id.clone(),
-        event_kind: kinds::CK_MESSAGE_CREATE.to_owned(),
+        event_kind: cokret_sdk::events::kinds::MESSAGE_CREATE.to_owned(),
         operation_type: "mimi_facade_ingress".to_owned(),
         operation_id: Some(operation_id.clone()),
         sender: Some(sender.clone()),
@@ -1354,7 +1354,7 @@ async fn persist_mimi_canonical_message_event(
         + 1;
     let mut envelope = json!({
         "event_id": event_id,
-        "kind": kinds::CK_MESSAGE_CREATE,
+        "kind": cokret_sdk::events::kinds::MESSAGE_CREATE,
         "realm_id": realm_id,
         "actor_id": actor_id,
         "actor_seq": actor_seq,
@@ -1379,7 +1379,7 @@ async fn persist_mimi_canonical_message_event(
         actor_id: actor_id.to_owned(),
         actor_seq,
         realm_id: Some(realm_id.to_owned()),
-        kind: kinds::CK_MESSAGE_CREATE.to_owned(),
+        kind: cokret_sdk::events::kinds::MESSAGE_CREATE.to_owned(),
         schema_id: EVENT_SCHEMA_ID.to_owned(),
         canonical_digest,
         canonical_bytes,

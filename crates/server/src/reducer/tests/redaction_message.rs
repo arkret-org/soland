@@ -20,7 +20,7 @@ fn message_create_and_query() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     let op = make_operation(
-        crate::kinds::CK_MESSAGE_CREATE,
+        cokret_sdk::events::kinds::MESSAGE_CREATE,
         "ck:realm:01904100-0000-7000-8000-cfc039892036",
         serde_json::json!({
             "event_id": "ck:event:01904100-0000-7000-8000-caaa6a15bce1",
@@ -47,7 +47,7 @@ fn redaction_hides_message() {
 
     state.apply(
         &make_operation(
-            crate::kinds::CK_MESSAGE_CREATE,
+            cokret_sdk::events::kinds::MESSAGE_CREATE,
             "ck:realm:01904100-0000-7000-8000-cfc039892036",
             serde_json::json!({
                 "event_id": "ck:event:01904100-0000-7000-8000-caaa6a15bce1",
@@ -60,7 +60,7 @@ fn redaction_hides_message() {
     );
     state.apply(
         &make_operation(
-            crate::kinds::CK_MESSAGE_REDACT,
+            cokret_sdk::events::kinds::MESSAGE_REDACT,
             "ck:realm:01904100-0000-7000-8000-cfc039892036",
             serde_json::json!({
                 "target_event_id": "ck:event:01904100-0000-7000-8000-caaa6a15bce1",
@@ -103,7 +103,7 @@ fn redaction_hides_message() {
 fn redact_make_message(state: &mut ProjectionState, hlc: &ServerHlc, event_id: &str) {
     state.apply(
         &make_operation(
-            crate::kinds::CK_MESSAGE_CREATE,
+            cokret_sdk::events::kinds::MESSAGE_CREATE,
             "ck:realm:01904100-0000-7000-8000-cfc039892036",
             serde_json::json!({
                 "event_id": event_id,
@@ -124,7 +124,7 @@ fn mal14_tombstone_visible_to_author() {
     redact_make_message(&mut state, &hlc, event_id);
     state.apply(
         &make_operation(
-            crate::kinds::CK_MESSAGE_REDACT,
+            cokret_sdk::events::kinds::MESSAGE_REDACT,
             "ck:realm:01904100-0000-7000-8000-cfc039892036",
             serde_json::json!({
                 "target_event_id": event_id,
@@ -152,7 +152,7 @@ fn mal14_tombstone_hidden_from_members() {
     redact_make_message(&mut state, &hlc, event_id);
     state.apply(
         &make_operation(
-            crate::kinds::CK_MESSAGE_REDACT,
+            cokret_sdk::events::kinds::MESSAGE_REDACT,
             "ck:realm:01904100-0000-7000-8000-cfc039892036",
             serde_json::json!({
                 "target_event_id": event_id,
@@ -175,7 +175,7 @@ fn mal14_unredaction_clears_cell_and_index() {
     // Redact.
     state.apply(
         &make_operation(
-            crate::kinds::CK_MESSAGE_REDACT,
+            cokret_sdk::events::kinds::MESSAGE_REDACT,
             "ck:realm:01904100-0000-7000-8000-cfc039892036",
             serde_json::json!({
                 "target_event_id": event_id,
@@ -188,7 +188,7 @@ fn mal14_unredaction_clears_cell_and_index() {
     // Un-redact via cas-register set null.
     state.apply(
         &make_operation(
-            crate::kinds::CK_MESSAGE_REDACT,
+            cokret_sdk::events::kinds::MESSAGE_REDACT,
             "ck:realm:01904100-0000-7000-8000-cfc039892036",
             serde_json::json!({
                 "target_event_id": event_id,
@@ -223,7 +223,7 @@ fn mal14_late_arriving_redaction_still_takes_effect() {
     // Now a delayed redaction arrives.
     state.apply(
         &make_operation(
-            crate::kinds::CK_MESSAGE_REDACT,
+            cokret_sdk::events::kinds::MESSAGE_REDACT,
             "ck:realm:01904100-0000-7000-8000-cfc039892036",
             serde_json::json!({
                 "target_event_id": event_id,
@@ -254,7 +254,7 @@ fn reaction_or_set_convergence() {
 
     state.apply(
         &make_operation(
-            crate::kinds::CK_REACTION_ADD,
+            cokret_sdk::events::kinds::REACTION_ADD,
             "ck:realm:01904100-0000-7000-8000-cfc039892036",
             serde_json::json!({
                 "event_id": "ck:event:01904100-0000-7000-8000-caaa6a15bce1",
@@ -273,7 +273,7 @@ fn reaction_or_set_convergence() {
 
     state.apply(
         &make_operation(
-            crate::kinds::CK_REACTION_REMOVE,
+            cokret_sdk::events::kinds::REACTION_REMOVE,
             "ck:realm:01904100-0000-7000-8000-cfc039892036",
             serde_json::json!({
                 "event_id": "ck:event:01904100-0000-7000-8000-caaa6a15bce1",
@@ -304,7 +304,7 @@ fn membership_join_leave() {
     // suite).
     state.apply(
         &make_operation(
-            crate::kinds::CK_MEMBER_STATE,
+            cokret_sdk::events::kinds::MEMBER_STATE,
             "ck:realm:01904100-0000-7000-8000-cfc039892036",
             serde_json::json!({
                 "actor_id": "did:web:bob",
@@ -324,7 +324,7 @@ fn membership_join_leave() {
 
     state.apply(
         &make_operation(
-            crate::kinds::CK_MEMBER_STATE,
+            cokret_sdk::events::kinds::MEMBER_STATE,
             "ck:realm:01904100-0000-7000-8000-cfc039892036",
             serde_json::json!({
                 "actor_id": "did:web:bob",
@@ -348,7 +348,7 @@ fn message_revise_creates_chain() {
 
     state.apply(
         &make_operation(
-            crate::kinds::CK_MESSAGE_CREATE,
+            cokret_sdk::events::kinds::MESSAGE_CREATE,
             "ck:realm:01904100-0000-7000-8000-cfc039892036",
             serde_json::json!({
                 "event_id": "ck:event:01904100-0000-7000-8000-caaa6a15bce1",
@@ -361,7 +361,7 @@ fn message_revise_creates_chain() {
     );
 
     let revise = make_operation(
-        crate::kinds::CK_MESSAGE_REVISE,
+        cokret_sdk::events::kinds::MESSAGE_REVISE,
         "ck:realm:01904100-0000-7000-8000-cfc039892036",
         serde_json::json!({
             "target_ref": "ck:event:01904100-0000-7000-8000-caaa6a15bce1",

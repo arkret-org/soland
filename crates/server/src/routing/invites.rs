@@ -1605,7 +1605,7 @@ fn validate_invite_delivery_consistency(
         ));
     }
     if body.pointer("/invite_event/kind").and_then(Value::as_str)
-        != Some(crate::kinds::CK_INVITE_CREATE)
+        != Some(cokret_sdk::events::kinds::INVITE_CREATE)
     {
         return Err(super::events::peer::schema_violation(
             "invite_event.kind must be ck.invite.create",

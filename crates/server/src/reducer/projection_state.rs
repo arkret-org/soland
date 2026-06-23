@@ -799,7 +799,6 @@ impl ProjectionState {
         &self,
         operation: &Operation,
     ) -> Result<(), &'static str> {
-        use crate::kinds::*;
         let kind = match crate::kinds::canonical_kind_for_operation(operation) {
             Some(k) => k,
             None => return Ok(()),
@@ -809,15 +808,22 @@ impl ProjectionState {
         // `ck.strand.archive` requires Active source.
         // `ck.strand.restore` requires Archived source.
         let (allowed_source, reason): (&[ObjectLifecycleState], &'static str) = match kind {
-            CK_STRAND_CREATE => return Ok(()),
-            CK_STRAND_UPDATE => (&[ObjectLifecycleState::Active], "strand_not_active"),
-            CK_STRAND_ARCHIVE => (&[ObjectLifecycleState::Active], "strand_not_active"),
-            CK_STRAND_RESTORE => (&[ObjectLifecycleState::Archived], "strand_not_archived"),
+            cokret_sdk::events::kinds::STRAND_CREATE => return Ok(()),
+            cokret_sdk::events::kinds::STRAND_UPDATE => {
+                (&[ObjectLifecycleState::Active], "strand_not_active")
+            }
+            cokret_sdk::events::kinds::STRAND_ARCHIVE => {
+                (&[ObjectLifecycleState::Active], "strand_not_active")
+            }
+            cokret_sdk::events::kinds::STRAND_RESTORE => {
+                (&[ObjectLifecycleState::Archived], "strand_not_archived")
+            }
             _ => return Ok(()),
         };
         let strand_id = match kind {
-            CK_STRAND_UPDATE => strand_id_from_payload(&operation.payload),
-            CK_STRAND_ARCHIVE | CK_STRAND_RESTORE => operation
+            cokret_sdk::events::kinds::STRAND_UPDATE => strand_id_from_payload(&operation.payload),
+            cokret_sdk::events::kinds::STRAND_ARCHIVE
+            | cokret_sdk::events::kinds::STRAND_RESTORE => operation
                 .payload
                 .get("target_ref")
                 .and_then(Value::as_str)
@@ -847,7 +853,7 @@ impl ProjectionState {
         operation: &Operation,
     ) -> Result<(), &'static str> {
         if crate::kinds::canonical_kind_for_operation(operation)
-            != Some(crate::kinds::CK_STRAND_UPDATE)
+            != Some(cokret_sdk::events::kinds::STRAND_UPDATE)
         {
             return Ok(());
         }
@@ -869,7 +875,7 @@ impl ProjectionState {
         actor_id: &str,
     ) -> Option<Value> {
         if crate::kinds::canonical_kind_for_operation(operation)
-            != Some(crate::kinds::CK_STRAND_UPDATE)
+            != Some(cokret_sdk::events::kinds::STRAND_UPDATE)
         {
             return None;
         }
@@ -905,7 +911,8 @@ impl ProjectionState {
         &self,
         operation: &Operation,
     ) -> Result<(), &'static str> {
-        if crate::kinds::canonical_kind_for_operation(operation) != Some(crate::kinds::CK_REDACTION)
+        if crate::kinds::canonical_kind_for_operation(operation)
+            != Some(cokret_sdk::events::kinds::REDACTION)
         {
             return Ok(());
         }
@@ -933,16 +940,21 @@ impl ProjectionState {
         &self,
         operation: &Operation,
     ) -> Result<(), &'static str> {
-        use crate::kinds::*;
         let kind = match crate::kinds::canonical_kind_for_operation(operation) {
             Some(k) => k,
             None => return Ok(()),
         };
         let (allowed_source, reason): (&[ObjectLifecycleState], &'static str) = match kind {
-            CK_MORPH_CREATE => return Ok(()),
-            CK_MORPH_UPDATE => (&[ObjectLifecycleState::Active], "morph_not_active"),
-            CK_MORPH_ARCHIVE => (&[ObjectLifecycleState::Active], "morph_not_active"),
-            CK_MORPH_RESTORE => (&[ObjectLifecycleState::Archived], "morph_not_archived"),
+            cokret_sdk::events::kinds::MORPH_CREATE => return Ok(()),
+            cokret_sdk::events::kinds::MORPH_UPDATE => {
+                (&[ObjectLifecycleState::Active], "morph_not_active")
+            }
+            cokret_sdk::events::kinds::MORPH_ARCHIVE => {
+                (&[ObjectLifecycleState::Active], "morph_not_active")
+            }
+            cokret_sdk::events::kinds::MORPH_RESTORE => {
+                (&[ObjectLifecycleState::Archived], "morph_not_archived")
+            }
             _ => return Ok(()),
         };
         let Some(morph_id) = operation.payload.get("target_ref").and_then(|v| v.as_str()) else {

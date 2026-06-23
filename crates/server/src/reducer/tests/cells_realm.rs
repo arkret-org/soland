@@ -57,7 +57,7 @@ fn membership_join_writes_both_structured_cache_and_fsm_cell() {
     // realm delivery-binding policy.
     state.apply(
         &make_operation(
-            crate::kinds::CK_MEMBER_STATE,
+            cokret_sdk::events::kinds::MEMBER_STATE,
             "ck:realm:01904100-0000-7000-8000-cfc039892036",
             serde_json::json!({
                 "actor_id": "did:web:alice",
@@ -103,7 +103,7 @@ fn ban_then_invite_round_trips_through_fsm_states() {
     for membership in ["join", "ban"] {
         state.apply(
             &make_operation(
-                crate::kinds::CK_MEMBER_STATE,
+                cokret_sdk::events::kinds::MEMBER_STATE,
                 "ck:realm:01904100-0000-7000-8000-cfc039892036",
                 serde_json::json!({
                     "actor_id": "did:web:bob",
@@ -137,7 +137,7 @@ fn ban_then_invite_round_trips_through_fsm_states() {
     // invite returns the actor to the invite state.
     state.apply(
         &make_operation(
-            crate::kinds::CK_MEMBER_STATE,
+            cokret_sdk::events::kinds::MEMBER_STATE,
             "ck:realm:01904100-0000-7000-8000-cfc039892036",
             serde_json::json!({"actor_id": "did:web:bob", "membership": "invite"}),
         ),
@@ -169,7 +169,7 @@ fn realm_create_writes_both_structured_cache_and_ordered_log_cell() {
     let hlc = ServerHlc::new("test");
     state.apply(
         &make_operation(
-            crate::kinds::CK_REALM_CREATE,
+            cokret_sdk::events::kinds::REALM_CREATE,
             "ck:realm:01904100-0000-7000-8000-cfc039892036",
             serde_json::json!({
                 "action": "create",
@@ -206,7 +206,7 @@ fn realm_update_writes_organization_cell_with_cas_register_semantics() {
     let hlc = ServerHlc::new("test");
     state.apply(
         &make_operation(
-            crate::kinds::CK_REALM_UPDATE,
+            cokret_sdk::events::kinds::REALM_UPDATE,
             "ck:realm:01904100-0000-7000-8000-cfc039892036",
             serde_json::json!({
                 "action": "update",
@@ -239,7 +239,7 @@ fn concurrent_realm_updates_with_same_basis_expose_bottom_and_repair_clears() {
     let realm = "ck:realm:01904100-0000-7000-8000-cfc039892036";
     let basis = "ck:seal:sha256:0000000000000000000000000000000000000000000000000000000000000000";
     let first = make_operation(
-        crate::kinds::CK_REALM_UPDATE,
+        cokret_sdk::events::kinds::REALM_UPDATE,
         realm,
         serde_json::json!({
             "patch": {"title": {"$op": "set", "value": "renamed by alice"}},
@@ -250,7 +250,7 @@ fn concurrent_realm_updates_with_same_basis_expose_bottom_and_repair_clears() {
     state.apply(&first, &hlc);
 
     let second = make_operation(
-        crate::kinds::CK_REALM_UPDATE,
+        cokret_sdk::events::kinds::REALM_UPDATE,
         realm,
         serde_json::json!({
             "patch": {"title": {"$op": "set", "value": "renamed by bob"}},
@@ -276,7 +276,7 @@ fn concurrent_realm_updates_with_same_basis_expose_bottom_and_repair_clears() {
     );
     assert_eq!(
         state.check_bottom_cell_transition(&make_operation(
-            crate::kinds::CK_REALM_UPDATE,
+            cokret_sdk::events::kinds::REALM_UPDATE,
             realm,
             serde_json::json!({
                 "patch": {"title": {"$op": "set", "value": "blocked while bottom"}},
@@ -286,7 +286,7 @@ fn concurrent_realm_updates_with_same_basis_expose_bottom_and_repair_clears() {
     );
 
     let repair = make_operation(
-        crate::kinds::CK_CONFLICT_REPAIR,
+        crate::kinds::CONFLICT_REPAIR,
         realm,
         serde_json::json!({
             "cell_id": cell.as_str(),
@@ -319,7 +319,7 @@ fn realm_destroy_writes_destroy_cell_and_marks_cache_deleted() {
     // First create...
     state.apply(
         &make_operation(
-            crate::kinds::CK_REALM_CREATE,
+            cokret_sdk::events::kinds::REALM_CREATE,
             "ck:realm:01904100-0000-7000-8000-cfc039892036",
             serde_json::json!({"action": "create", "owner": "did:web:alice"}),
         ),
@@ -330,7 +330,7 @@ fn realm_destroy_writes_destroy_cell_and_marks_cache_deleted() {
     // ...then destroy.
     state.apply(
         &make_operation(
-            crate::kinds::CK_REALM_DESTROY,
+            cokret_sdk::events::kinds::REALM_DESTROY,
             "ck:realm:01904100-0000-7000-8000-cfc039892036",
             serde_json::json!({"action": "destroy"}),
         ),
@@ -358,7 +358,7 @@ fn realm_tombstone_writes_tombstone_cell_and_successor() {
     let successor = "ck:realm:01904100-0000-7000-8000-cfc039892037";
     state.apply(
         &make_operation(
-            crate::kinds::CK_REALM_CREATE,
+            cokret_sdk::events::kinds::REALM_CREATE,
             realm_id,
             serde_json::json!({"action": "create", "owner": "did:web:alice"}),
         ),
@@ -366,7 +366,7 @@ fn realm_tombstone_writes_tombstone_cell_and_successor() {
     );
     state.apply(
         &make_operation(
-            crate::kinds::CK_REALM_TOMBSTONE,
+            cokret_sdk::events::kinds::REALM_TOMBSTONE,
             realm_id,
             serde_json::json!({
                 "reason": "migrated",
@@ -400,7 +400,7 @@ fn realm_freeze_writes_freeze_cell_and_blocks_until_expiry() {
     let realm_id = "ck:realm:01904100-0000-7000-8000-cfc039892036";
     state.apply(
         &make_operation(
-            crate::kinds::CK_REALM_CREATE,
+            cokret_sdk::events::kinds::REALM_CREATE,
             realm_id,
             serde_json::json!({"action": "create", "owner": "did:web:alice"}),
         ),
@@ -408,7 +408,7 @@ fn realm_freeze_writes_freeze_cell_and_blocks_until_expiry() {
     );
     state.apply(
         &make_operation(
-            crate::kinds::CK_REALM_FREEZE,
+            cokret_sdk::events::kinds::REALM_FREEZE,
             realm_id,
             serde_json::json!({
                 "frozen": true,
@@ -455,7 +455,7 @@ fn audit_erasure_receipt_records_scope_realm_id_and_pending_fanout() {
     let hlc = ServerHlc::new("test");
     state.apply(
         &make_operation(
-            crate::kinds::CK_AUDIT_ERASURE_RECEIPT,
+            cokret_sdk::events::kinds::AUDIT_ERASURE_RECEIPT,
             "ck:realm:01904100-0000-7000-8000-cfc039892036",
             serde_json::json!({
                 "receipt_id": "ck:receipt:01",
@@ -494,7 +494,7 @@ fn realm_create_bootstraps_creator_member_and_rejects_duplicate_create() {
     let realm_id = "ck:realm:01904100-0000-7000-8000-cfc039892036";
     let first = state.apply(
         &make_operation(
-            crate::kinds::CK_REALM_CREATE,
+            cokret_sdk::events::kinds::REALM_CREATE,
             realm_id,
             serde_json::json!({
                 "object": {
@@ -526,7 +526,7 @@ fn realm_create_bootstraps_creator_member_and_rejects_duplicate_create() {
 
     let duplicate = state.apply(
         &make_operation(
-            crate::kinds::CK_REALM_CREATE,
+            cokret_sdk::events::kinds::REALM_CREATE,
             realm_id,
             serde_json::json!({
                 "object": {
@@ -563,7 +563,7 @@ fn knock_state_visible_in_members_in_state_query() {
     let hlc = ServerHlc::new("test");
     state.apply(
         &make_operation(
-            crate::kinds::CK_MEMBER_STATE,
+            cokret_sdk::events::kinds::MEMBER_STATE,
             "ck:realm:01904100-0000-7000-8000-cfc039892036",
             serde_json::json!({"actor_id": "did:web:carol", "membership": "knock"}),
         ),
@@ -629,7 +629,7 @@ fn apply_search_policy_payload(payload: Value) -> ProjectionEffect {
     let hlc = ServerHlc::new("test");
     state.apply(
         &make_operation(
-            crate::kinds::CK_REALM_SEARCH_POLICY,
+            cokret_sdk::events::kinds::REALM_SEARCH_POLICY,
             "ck:realm:01904100-0000-7000-8000-cfc039892036",
             payload,
         ),
@@ -651,7 +651,7 @@ fn realm_search_policy_accepts_wrapped_valid_policy_and_projects_inner_value() {
     let policy = base_search_policy();
     let effect = state.apply(
         &make_operation(
-            crate::kinds::CK_REALM_SEARCH_POLICY,
+            cokret_sdk::events::kinds::REALM_SEARCH_POLICY,
             "ck:realm:01904100-0000-7000-8000-cfc039892036",
             serde_json::json!({ "value": policy.clone() }),
         ),

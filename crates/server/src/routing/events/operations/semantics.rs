@@ -37,7 +37,7 @@ pub fn validate_operation_semantics(
         // the state-aware pass (issuer anchoring against the current
         // media_service epoch + Ed25519 signature verification); the stateless
         // wire-shape pre-filter still runs inside `validate_operation_kind`.
-        if kind == crate::kinds::CK_CALL_STATE {
+        if kind == cokret_sdk::events::kinds::CALL_STATE {
             participant_binding::verify_call_state_participant_bindings(state, operation)?;
         }
         // Spec B1.13 / B1.14 — typed payload validators for the
@@ -67,7 +67,10 @@ pub(crate) fn validate_reaction_target_kind(
     kind: &str,
     operation: &Operation,
 ) -> Result<(), &'static str> {
-    if !matches!(kind, kinds::CK_REACTION_ADD | kinds::CK_REACTION_REMOVE) {
+    if !matches!(
+        kind,
+        cokret_sdk::events::kinds::REACTION_ADD | cokret_sdk::events::kinds::REACTION_REMOVE
+    ) {
         return Ok(());
     }
     let target = REACTION_TARGET_FIELDS.iter().find_map(|field| {
@@ -127,7 +130,7 @@ fn validate_typed_payload_shapes(kind: &str, operation: &Operation) -> Result<()
         // by returning Ok when the payload doesn't even resemble a
         // consent revoke (missing consent_id) — the per-kind schema
         // dispatcher will catch totally-empty payloads separately.
-        kinds::CK_CONSENT_REVOKE => {
+        cokret_sdk::events::kinds::CONSENT_REVOKE => {
             if operation.payload.get("consent_id").is_none()
                 && operation.payload.get("observed_dots").is_none()
             {
@@ -144,7 +147,7 @@ fn validate_typed_payload_shapes(kind: &str, operation: &Operation) -> Result<()
         // and new_generation == current_generation + 1. We enforce
         // schema shape here; the actual CAS comparison happens during
         // reducer apply once the cell row is read.
-        kinds::CK_CROSS_SIGNING_PUBLISH => {
+        cokret_sdk::events::kinds::CROSS_SIGNING_PUBLISH => {
             if operation
                 .payload
                 .get("expected_previous_generation")
@@ -328,413 +331,429 @@ pub(crate) fn validate_operation_payload_against_sdk_artifact(
 }
 
 pub fn operation_schema_for_kind(kind: &str) -> Option<OperationPayloadSchema> {
-    let schema = match kind {
-        kinds::CK_MESSAGE_CREATE => OperationPayloadSchema {
-            requirements: MESSAGE_CREATE_REQUIREMENTS,
-            validate: Some(validate_message_operation_payload),
-        },
-        kinds::CK_MESSAGE_REVISE => OperationPayloadSchema {
-            requirements: MESSAGE_REVISE_REQUIREMENTS,
-            validate: Some(validate_message_operation_payload),
-        },
-        kinds::CK_MESSAGE_REDACT | kinds::CK_REDACTION => OperationPayloadSchema {
-            requirements: REDACTION_REQUIREMENTS,
-            validate: None,
-        },
-        kinds::CK_REACTION_ADD | kinds::CK_REACTION_REMOVE => OperationPayloadSchema {
-            requirements: REACTION_REQUIREMENTS,
-            validate: None,
-        },
-        kinds::CK_RELATION_CREATE => OperationPayloadSchema {
-            requirements: RELATION_CREATE_REQUIREMENTS,
-            validate: Some(validate_relation_operation_payload),
-        },
-        kinds::CK_RELATION_UPDATE | kinds::CK_RELATION_DELETE => OperationPayloadSchema {
-            requirements: RELATION_ID_REQUIREMENTS,
-            validate: Some(validate_relation_operation_payload),
-        },
-        // G3.S5 — `ck.realm.link`. Permissive schema (target_realm_id +
-        // link_kind required; the reducer's `apply_realm_link`
-        // enforces the rest including cycle detection). We register
-        // here so `accept_local_operations` doesn't fall through to
-        // the SDK artifact validator (whose `realm_id` pattern is
-        // stricter than the in-tree fixtures need for testing —
-        // existing reducer-level tests use `ck:space:` prefixes).
-        kinds::CK_REALM_LINK => OperationPayloadSchema {
-            requirements: REALM_LINK_REQUIREMENTS,
-            validate: None,
-        },
-        kinds::CK_CAPABILITY_GRANT
-        | kinds::CK_CAPABILITY_REVOKE
-        | kinds::CK_CAPABILITY_DELEGATE => OperationPayloadSchema {
-            requirements: CAPABILITY_GRANT_REQUIREMENTS,
-            validate: None,
-        },
-        kinds::CK_MLS_COMMIT => OperationPayloadSchema {
-            requirements: MLS_COMMIT_REQUIREMENTS,
-            validate: None,
-        },
-        kinds::CK_MLS_GENESIS => OperationPayloadSchema {
-            requirements: MLS_GENESIS_REQUIREMENTS,
-            validate: None,
-        },
-        kinds::CK_MLS_WELCOME => OperationPayloadSchema {
-            requirements: MLS_WELCOME_REQUIREMENTS,
-            validate: None,
-        },
-        kinds::CK_MLS_KEYPACKAGE => OperationPayloadSchema {
-            requirements: MLS_KEYPACKAGE_REQUIREMENTS,
-            validate: None,
-        },
-        kinds::CK_VIEW_CREATE | kinds::CK_VIEW_UPDATE | kinds::CK_VIEW_RECONCILE => {
-            // `ck.view.*` events route through the `ck.component.view.*.v1`
-            // cell families in the lattice registry (see
-            // `reducer::lattice_kinds::ViewCreate / ViewUpdate / ViewReconcile`).
-            // The validator just enforces a `view_id` payload key — the
-            // reducer / cell-family pipeline owns mv-register semantics.
-            OperationPayloadSchema {
-                requirements: VIEW_CREATE_REQUIREMENTS,
-                validate: None,
+    let schema =
+        match kind {
+            cokret_sdk::events::kinds::MESSAGE_CREATE => OperationPayloadSchema {
+                requirements: MESSAGE_CREATE_REQUIREMENTS,
+                validate: Some(validate_message_operation_payload),
+            },
+            cokret_sdk::events::kinds::MESSAGE_REVISE => OperationPayloadSchema {
+                requirements: MESSAGE_REVISE_REQUIREMENTS,
+                validate: Some(validate_message_operation_payload),
+            },
+            cokret_sdk::events::kinds::MESSAGE_REDACT | cokret_sdk::events::kinds::REDACTION => {
+                OperationPayloadSchema {
+                    requirements: REDACTION_REQUIREMENTS,
+                    validate: None,
+                }
             }
-        }
-        kinds::CK_READ_MARKER => OperationPayloadSchema {
-            requirements: READ_MARKER_REQUIREMENTS,
-            validate: Some(validate_read_marker_payload),
-        },
-        kinds::CK_ACCOUNT_DATA_SET => OperationPayloadSchema {
-            requirements: ACCOUNT_DATA_SET_REQUIREMENTS,
-            validate: Some(validate_account_data_set_payload),
-        },
-        kinds::CK_RSVP_SET => OperationPayloadSchema {
-            requirements: RSVP_SET_REQUIREMENTS,
-            validate: Some(validate_operation_payload_against_sdk_artifact),
-        },
-        kinds::CK_PIN_ADD => OperationPayloadSchema {
-            requirements: PIN_ADD_REQUIREMENTS,
-            validate: Some(validate_operation_payload_against_sdk_artifact),
-        },
-        kinds::CK_PIN_REMOVE => OperationPayloadSchema {
-            requirements: PIN_REMOVE_REQUIREMENTS,
-            validate: Some(validate_operation_payload_against_sdk_artifact),
-        },
-        kinds::CK_PIN_REORDER => OperationPayloadSchema {
-            requirements: PIN_REORDER_REQUIREMENTS,
-            validate: Some(validate_operation_payload_against_sdk_artifact),
-        },
-        kinds::CK_CONSENT_GRANT => OperationPayloadSchema {
-            requirements: CONSENT_GRANT_REQUIREMENTS,
-            validate: None,
-        },
-        kinds::CK_CONSENT_REVOKE => OperationPayloadSchema {
-            requirements: CONSENT_REVOKE_REQUIREMENTS,
-            validate: Some(validate_observed_dots_payload),
-        },
-        kinds::CK_INVITE_CREATE => OperationPayloadSchema {
-            requirements: INVITE_CREATE_REQUIREMENTS,
-            validate: Some(validate_invite_create_payload),
-        },
-        kinds::CK_INVITE_THIRD_PARTY => OperationPayloadSchema {
-            requirements: INVITE_THIRD_PARTY_REQUIREMENTS,
-            validate: Some(validate_invite_third_party_payload),
-        },
-        kinds::CK_INVITE_CLAIM => OperationPayloadSchema {
-            requirements: INVITE_CLAIM_REQUIREMENTS,
-            validate: Some(validate_invite_claim_payload),
-        },
-        kinds::CK_AUDIT_ERASURE_RECEIPT => OperationPayloadSchema {
-            requirements: ERASURE_RECEIPT_REQUIREMENTS,
-            validate: None,
-        },
-        kind if kinds::is_invite_kind(kind) => OperationPayloadSchema {
-            requirements: INVITE_STATE_REQUIREMENTS,
-            validate: None,
-        },
-        kind if kinds::is_membership_kind(kind) => OperationPayloadSchema {
-            requirements: MEMBERSHIP_REQUIREMENTS,
-            validate: None,
-        },
-        kinds::CK_REALM_CREATE => OperationPayloadSchema {
-            // `ck.realm.create` is technically lifecycle but carries the
-            // full Realm `object` rather than a facet payload.
-            requirements: REALM_CREATE_REQUIREMENTS,
-            validate: None,
-        },
-        kinds::CK_REALM_UPDATE => OperationPayloadSchema {
-            requirements: REALM_UPDATE_REQUIREMENTS,
-            validate: None,
-        },
-        kinds::CK_REALM_ARCHIVE => OperationPayloadSchema {
-            requirements: REALM_ARCHIVE_REQUIREMENTS,
-            validate: None,
-        },
-        kinds::CK_REALM_FREEZE => OperationPayloadSchema {
-            requirements: REALM_FREEZE_REQUIREMENTS,
-            validate: None,
-        },
-        // Circle lifecycle. Structure is owned by the registered
-        // `ck.schema.circle.v1` payload schema (applied via validate_payload);
-        // registering here only builds the projection Operation so the
-        // submit-time invariant gate runs — notably the encryption_profile
-        // create-lock and circle-below-realm-floor checks in
-        // `validate_content_encryption_floor` (previously dead for circles
-        // because no Operation was built, so the lock was only caught at
-        // projection and the client saw a misleading 200).
-        kinds::CK_CIRCLE_CREATE | kinds::CK_CIRCLE_UPDATE => OperationPayloadSchema {
-            requirements: &[],
-            validate: None,
-        },
-        // Circle membership + lifecycle convenience ops (built by the
-        // `/_soland/self/circles/*` admin surface). Their payload structure and
-        // every authorization / subset invariant
-        // (`circle_member_must_be_realm_member`,
-        // `circle_member_manage_capability_required`, the lifecycle transition
-        // matrix) are owned by the reducer (`apply_circle_member_state` /
-        // `apply_circle_lifecycle`). They have no registered SDK artifact
-        // payload validator, so register them here with no extra requirements —
-        // otherwise the SDK-artifact fallback rejects them with
-        // "operation payload violates SDK artifact schema" before the reducer
-        // can run, making Circle membership/archive/tombstone unreachable.
-        kinds::CK_CIRCLE_MEMBER_STATE
-        | kinds::CK_CIRCLE_ARCHIVE
-        | kinds::CK_CIRCLE_RESTORE
-        | kinds::CK_CIRCLE_TOMBSTONE => OperationPayloadSchema {
-            requirements: &[],
-            validate: None,
-        },
-        kinds::CK_REALM_DESTROY | kinds::CK_REALM_TOMBSTONE => OperationPayloadSchema {
-            requirements: REALM_TERMINAL_REQUIREMENTS,
-            validate: None,
-        },
-        kinds::CK_REALM_MODERATION_POLICY => OperationPayloadSchema {
-            requirements: REALM_MODERATION_POLICY_REQUIREMENTS,
-            validate: None,
-        },
-        kinds::CK_REALM_DISAPPEARING_POLICY => OperationPayloadSchema {
-            requirements: REALM_DISAPPEARING_POLICY_REQUIREMENTS,
-            validate: Some(validate_operation_payload_against_sdk_artifact),
-        },
-        kinds::CK_REALM_HISTORY_VISIBILITY => OperationPayloadSchema {
-            requirements: REALM_POLICY_VALUE_REQUIREMENTS,
-            validate: Some(validate_history_visibility_payload),
-        },
-        kinds::CK_REALM_READ_RECEIPT_POLICY => OperationPayloadSchema {
-            requirements: &[],
-            validate: Some(validate_read_receipt_policy_payload),
-        },
-        kinds::CK_REALM_POLICY_COMPONENTS => OperationPayloadSchema {
-            requirements: REALM_POLICY_VALUE_REQUIREMENTS,
-            validate: None,
-        },
-        kinds::CK_REALM_SEARCH_POLICY => OperationPayloadSchema {
-            requirements: REALM_SEARCH_POLICY_REQUIREMENTS,
-            validate: Some(validate_operation_payload_against_sdk_artifact),
-        },
-        kinds::CK_MODERATION_DECISION => OperationPayloadSchema {
-            requirements: MODERATION_DECISION_REQUIREMENTS,
-            validate: None,
-        },
-        kinds::CK_MODERATION_DECISION_LIFT => OperationPayloadSchema {
-            requirements: MODERATION_DECISION_LIFT_REQUIREMENTS,
-            validate: None,
-        },
-        kinds::CK_MODERATION_APPEAL_SUBMIT => OperationPayloadSchema {
-            requirements: MODERATION_APPEAL_SUBMIT_REQUIREMENTS,
-            validate: None,
-        },
-        kinds::CK_MODERATION_APPEAL_REVIEW => OperationPayloadSchema {
-            requirements: MODERATION_APPEAL_REVIEW_REQUIREMENTS,
-            validate: None,
-        },
-        kinds::CK_MODERATION_APPEAL_DECISION => OperationPayloadSchema {
-            requirements: MODERATION_APPEAL_DECISION_REQUIREMENTS,
-            validate: None,
-        },
-        kinds::CK_MODERATION_APPEAL_CLOSE => OperationPayloadSchema {
-            requirements: MODERATION_APPEAL_CLOSE_REQUIREMENTS,
-            validate: None,
-        },
-        kinds::CK_REALM_MEDIA_SERVICE => OperationPayloadSchema {
-            requirements: &[],
-            validate: None,
-        },
-        kinds::CK_REALM_PLAINTEXT_VISIBLE_SERVICES => OperationPayloadSchema {
-            requirements: &[],
-            validate: None,
-        },
-        kinds::CK_REALM_HISTORY_SHARING_POLICY | kinds::CK_REALM_PREVIEW_POLICY => {
-            OperationPayloadSchema {
+            cokret_sdk::events::kinds::REACTION_ADD
+            | cokret_sdk::events::kinds::REACTION_REMOVE => OperationPayloadSchema {
+                requirements: REACTION_REQUIREMENTS,
+                validate: None,
+            },
+            cokret_sdk::events::kinds::RELATION_CREATE => OperationPayloadSchema {
+                requirements: RELATION_CREATE_REQUIREMENTS,
+                validate: Some(validate_relation_operation_payload),
+            },
+            cokret_sdk::events::kinds::RELATION_UPDATE
+            | cokret_sdk::events::kinds::RELATION_TOMBSTONE => OperationPayloadSchema {
+                requirements: RELATION_ID_REQUIREMENTS,
+                validate: Some(validate_relation_operation_payload),
+            },
+            // G3.S5 — `ck.realm.link`. Permissive schema (target_realm_id +
+            // link_kind required; the reducer's `apply_realm_link`
+            // enforces the rest including cycle detection). We register
+            // here so `accept_local_operations` doesn't fall through to
+            // the SDK artifact validator (whose `realm_id` pattern is
+            // stricter than the in-tree fixtures need for testing —
+            // existing reducer-level tests use `ck:space:` prefixes).
+            cokret_sdk::events::kinds::REALM_LINK => OperationPayloadSchema {
+                requirements: REALM_LINK_REQUIREMENTS,
+                validate: None,
+            },
+            cokret_sdk::events::kinds::CAPABILITY_GRANT
+            | cokret_sdk::events::kinds::CAPABILITY_REVOKE
+            | cokret_sdk::events::kinds::CAPABILITY_DELEGATE => OperationPayloadSchema {
+                requirements: CAPABILITY_GRANT_REQUIREMENTS,
+                validate: None,
+            },
+            cokret_sdk::events::kinds::MLS_COMMIT => OperationPayloadSchema {
+                requirements: MLS_COMMIT_REQUIREMENTS,
+                validate: None,
+            },
+            cokret_sdk::events::kinds::MLS_GENESIS => OperationPayloadSchema {
+                requirements: MLS_GENESIS_REQUIREMENTS,
+                validate: None,
+            },
+            cokret_sdk::events::kinds::MLS_WELCOME => OperationPayloadSchema {
+                requirements: MLS_WELCOME_REQUIREMENTS,
+                validate: None,
+            },
+            cokret_sdk::events::kinds::MLS_KEYPACKAGE => OperationPayloadSchema {
+                requirements: MLS_KEYPACKAGE_REQUIREMENTS,
+                validate: None,
+            },
+            cokret_sdk::events::kinds::VIEW_CREATE
+            | cokret_sdk::events::kinds::VIEW_UPDATE
+            | cokret_sdk::events::kinds::VIEW_RECONCILE => {
+                // `ck.view.*` events route through the `ck.component.view.*.v1`
+                // cell families in the lattice registry (see
+                // `reducer::lattice_kinds::ViewCreate / ViewUpdate / ViewReconcile`).
+                // The validator just enforces a `view_id` payload key — the
+                // reducer / cell-family pipeline owns mv-register semantics.
+                OperationPayloadSchema {
+                    requirements: VIEW_CREATE_REQUIREMENTS,
+                    validate: None,
+                }
+            }
+            cokret_sdk::events::kinds::READ_CURSOR_ADVANCE => OperationPayloadSchema {
+                requirements: READ_MARKER_REQUIREMENTS,
+                validate: Some(validate_read_marker_payload),
+            },
+            cokret_sdk::events::kinds::ACCOUNT_DATA_SET => OperationPayloadSchema {
+                requirements: ACCOUNT_DATA_SET_REQUIREMENTS,
+                validate: Some(validate_account_data_set_payload),
+            },
+            cokret_sdk::events::kinds::RSVP_SET => OperationPayloadSchema {
+                requirements: RSVP_SET_REQUIREMENTS,
+                validate: Some(validate_operation_payload_against_sdk_artifact),
+            },
+            cokret_sdk::events::kinds::PIN_ADD => OperationPayloadSchema {
+                requirements: PIN_ADD_REQUIREMENTS,
+                validate: Some(validate_operation_payload_against_sdk_artifact),
+            },
+            cokret_sdk::events::kinds::PIN_REMOVE => OperationPayloadSchema {
+                requirements: PIN_REMOVE_REQUIREMENTS,
+                validate: Some(validate_operation_payload_against_sdk_artifact),
+            },
+            cokret_sdk::events::kinds::PIN_REORDER => OperationPayloadSchema {
+                requirements: PIN_REORDER_REQUIREMENTS,
+                validate: Some(validate_operation_payload_against_sdk_artifact),
+            },
+            cokret_sdk::events::kinds::CONSENT_GRANT => OperationPayloadSchema {
+                requirements: CONSENT_GRANT_REQUIREMENTS,
+                validate: None,
+            },
+            cokret_sdk::events::kinds::CONSENT_REVOKE => OperationPayloadSchema {
+                requirements: CONSENT_REVOKE_REQUIREMENTS,
+                validate: Some(validate_observed_dots_payload),
+            },
+            cokret_sdk::events::kinds::INVITE_CREATE => OperationPayloadSchema {
+                requirements: INVITE_CREATE_REQUIREMENTS,
+                validate: Some(validate_invite_create_payload),
+            },
+            cokret_sdk::events::kinds::INVITE_THIRD_PARTY => OperationPayloadSchema {
+                requirements: INVITE_THIRD_PARTY_REQUIREMENTS,
+                validate: Some(validate_invite_third_party_payload),
+            },
+            cokret_sdk::events::kinds::INVITE_CLAIM => OperationPayloadSchema {
+                requirements: INVITE_CLAIM_REQUIREMENTS,
+                validate: Some(validate_invite_claim_payload),
+            },
+            cokret_sdk::events::kinds::AUDIT_ERASURE_RECEIPT => OperationPayloadSchema {
+                requirements: ERASURE_RECEIPT_REQUIREMENTS,
+                validate: None,
+            },
+            kind if cokret_sdk::events::kinds::is_invite_kind(kind) => OperationPayloadSchema {
+                requirements: INVITE_STATE_REQUIREMENTS,
+                validate: None,
+            },
+            kind if cokret_sdk::events::kinds::is_membership_kind(kind) => OperationPayloadSchema {
+                requirements: MEMBERSHIP_REQUIREMENTS,
+                validate: None,
+            },
+            cokret_sdk::events::kinds::REALM_CREATE => OperationPayloadSchema {
+                // `ck.realm.create` is technically lifecycle but carries the
+                // full Realm `object` rather than a facet payload.
+                requirements: REALM_CREATE_REQUIREMENTS,
+                validate: None,
+            },
+            cokret_sdk::events::kinds::REALM_UPDATE => OperationPayloadSchema {
+                requirements: REALM_UPDATE_REQUIREMENTS,
+                validate: None,
+            },
+            cokret_sdk::events::kinds::REALM_ARCHIVE => OperationPayloadSchema {
+                requirements: REALM_ARCHIVE_REQUIREMENTS,
+                validate: None,
+            },
+            cokret_sdk::events::kinds::REALM_FREEZE => OperationPayloadSchema {
+                requirements: REALM_FREEZE_REQUIREMENTS,
+                validate: None,
+            },
+            // Circle lifecycle. Structure is owned by the registered
+            // `ck.schema.circle.v1` payload schema (applied via validate_payload);
+            // registering here only builds the projection Operation so the
+            // submit-time invariant gate runs — notably the encryption_profile
+            // create-lock and circle-below-realm-floor checks in
+            // `validate_content_encryption_floor` (previously dead for circles
+            // because no Operation was built, so the lock was only caught at
+            // projection and the client saw a misleading 200).
+            cokret_sdk::events::kinds::CIRCLE_CREATE | cokret_sdk::events::kinds::CIRCLE_UPDATE => {
+                OperationPayloadSchema {
+                    requirements: &[],
+                    validate: None,
+                }
+            }
+            // Circle membership + lifecycle convenience ops (built by the
+            // `/_soland/self/circles/*` admin surface). Their payload structure and
+            // every authorization / subset invariant
+            // (`circle_member_must_be_realm_member`,
+            // `circle_member_manage_capability_required`, the lifecycle transition
+            // matrix) are owned by the reducer (`apply_circle_member_state` /
+            // `apply_circle_lifecycle`). They have no registered SDK artifact
+            // payload validator, so register them here with no extra requirements —
+            // otherwise the SDK-artifact fallback rejects them with
+            // "operation payload violates SDK artifact schema" before the reducer
+            // can run, making Circle membership/archive/tombstone unreachable.
+            cokret_sdk::events::kinds::CIRCLE_MEMBER_STATE
+            | cokret_sdk::events::kinds::CIRCLE_ARCHIVE
+            | cokret_sdk::events::kinds::CIRCLE_RESTORE
+            | cokret_sdk::events::kinds::CIRCLE_TOMBSTONE => OperationPayloadSchema {
+                requirements: &[],
+                validate: None,
+            },
+            cokret_sdk::events::kinds::REALM_DESTROY
+            | cokret_sdk::events::kinds::REALM_TOMBSTONE => OperationPayloadSchema {
+                requirements: REALM_TERMINAL_REQUIREMENTS,
+                validate: None,
+            },
+            cokret_sdk::events::kinds::REALM_MODERATION_POLICY => OperationPayloadSchema {
+                requirements: REALM_MODERATION_POLICY_REQUIREMENTS,
+                validate: None,
+            },
+            cokret_sdk::events::kinds::REALM_DISAPPEARING_POLICY => OperationPayloadSchema {
+                requirements: REALM_DISAPPEARING_POLICY_REQUIREMENTS,
+                validate: Some(validate_operation_payload_against_sdk_artifact),
+            },
+            cokret_sdk::events::kinds::REALM_HISTORY_VISIBILITY => OperationPayloadSchema {
+                requirements: REALM_POLICY_VALUE_REQUIREMENTS,
+                validate: Some(validate_history_visibility_payload),
+            },
+            cokret_sdk::events::kinds::REALM_READ_RECEIPT_POLICY => OperationPayloadSchema {
+                requirements: &[],
+                validate: Some(validate_read_receipt_policy_payload),
+            },
+            cokret_sdk::events::kinds::REALM_POLICY_COMPONENTS => OperationPayloadSchema {
                 requirements: REALM_POLICY_VALUE_REQUIREMENTS,
                 validate: None,
+            },
+            cokret_sdk::events::kinds::REALM_SEARCH_POLICY => OperationPayloadSchema {
+                requirements: REALM_SEARCH_POLICY_REQUIREMENTS,
+                validate: Some(validate_operation_payload_against_sdk_artifact),
+            },
+            cokret_sdk::events::kinds::MODERATION_DECISION => OperationPayloadSchema {
+                requirements: MODERATION_DECISION_REQUIREMENTS,
+                validate: None,
+            },
+            cokret_sdk::events::kinds::MODERATION_DECISION_LIFT => OperationPayloadSchema {
+                requirements: MODERATION_DECISION_LIFT_REQUIREMENTS,
+                validate: None,
+            },
+            cokret_sdk::events::kinds::MODERATION_APPEAL_SUBMIT => OperationPayloadSchema {
+                requirements: MODERATION_APPEAL_SUBMIT_REQUIREMENTS,
+                validate: None,
+            },
+            cokret_sdk::events::kinds::MODERATION_APPEAL_REVIEW => OperationPayloadSchema {
+                requirements: MODERATION_APPEAL_REVIEW_REQUIREMENTS,
+                validate: None,
+            },
+            cokret_sdk::events::kinds::MODERATION_APPEAL_DECISION => OperationPayloadSchema {
+                requirements: MODERATION_APPEAL_DECISION_REQUIREMENTS,
+                validate: None,
+            },
+            cokret_sdk::events::kinds::MODERATION_APPEAL_CLOSE => OperationPayloadSchema {
+                requirements: MODERATION_APPEAL_CLOSE_REQUIREMENTS,
+                validate: None,
+            },
+            cokret_sdk::events::kinds::REALM_MEDIA_SERVICE => OperationPayloadSchema {
+                requirements: &[],
+                validate: None,
+            },
+            cokret_sdk::events::kinds::REALM_PLAINTEXT_VISIBLE_SERVICES => OperationPayloadSchema {
+                requirements: &[],
+                validate: None,
+            },
+            cokret_sdk::events::kinds::REALM_HISTORY_SHARING_POLICY
+            | cokret_sdk::events::kinds::REALM_PREVIEW_POLICY => OperationPayloadSchema {
+                requirements: REALM_POLICY_VALUE_REQUIREMENTS,
+                validate: None,
+            },
+            cokret_sdk::events::kinds::REALM_KEY_SHARE => OperationPayloadSchema {
+                requirements: REALM_POLICY_VALUE_REQUIREMENTS,
+                validate: None,
+            },
+            kinds::CONFLICT_REPAIR => OperationPayloadSchema {
+                requirements: CONFLICT_REPAIR_REQUIREMENTS,
+                validate: Some(validate_conflict_repair_payload),
+            },
+            kind if cokret_sdk::events::kinds::is_space_lifecycle_kind(kind) => {
+                OperationPayloadSchema {
+                    requirements: SPACE_CONTAINER_LIFECYCLE_REQUIREMENTS,
+                    validate: None,
+                }
             }
-        }
-        kinds::CK_REALM_KEY_SHARE => OperationPayloadSchema {
-            requirements: REALM_POLICY_VALUE_REQUIREMENTS,
-            validate: None,
-        },
-        kinds::CK_CONFLICT_REPAIR => OperationPayloadSchema {
-            requirements: CONFLICT_REPAIR_REQUIREMENTS,
-            validate: Some(validate_conflict_repair_payload),
-        },
-        kind if kinds::is_space_container_lifecycle_kind(kind) => OperationPayloadSchema {
-            requirements: SPACE_CONTAINER_LIFECYCLE_REQUIREMENTS,
-            validate: None,
-        },
-        kinds::CK_SPACE_CONTAINER_CREATE => OperationPayloadSchema {
-            requirements: SPACE_CONTAINER_CREATE_REQUIREMENTS,
-            validate: None,
-        },
-        kinds::CK_SPACE_CONTAINER_UPDATE => OperationPayloadSchema {
-            requirements: SPACE_CONTAINER_UPDATE_REQUIREMENTS,
-            validate: None,
-        },
-        kinds::CK_SPACE_CONTAINER_PARENT => OperationPayloadSchema {
-            requirements: SPACE_CONTAINER_PARENT_REQUIREMENTS,
-            validate: None,
-        },
-        kind if kinds::is_strand_lifecycle_kind(kind) => OperationPayloadSchema {
-            requirements: STRAND_LIFECYCLE_REQUIREMENTS,
-            validate: None,
-        },
-        kinds::CK_STRAND_CREATE => OperationPayloadSchema {
-            requirements: STRAND_CREATE_REQUIREMENTS,
-            validate: None,
-        },
-        kinds::CK_STRAND_UPDATE => OperationPayloadSchema {
-            requirements: STRAND_UPDATE_REQUIREMENTS,
-            validate: None,
-        },
-        kinds::CK_STRAND_MOVE => OperationPayloadSchema {
-            requirements: STRAND_MOVE_REQUIREMENTS,
-            validate: None,
-        },
-        kinds::CK_STRAND_REORDER => OperationPayloadSchema {
-            requirements: STRAND_REORDER_REQUIREMENTS,
-            validate: None,
-        },
-        kinds::CK_STRAND_WATCH_SET => OperationPayloadSchema {
-            requirements: STRAND_WATCH_REQUIREMENTS,
-            validate: None,
-        },
-        kinds::CK_STRAND_TRACKS_UPDATE => OperationPayloadSchema {
-            requirements: STRAND_TRACKS_UPDATE_REQUIREMENTS,
-            validate: None,
-        },
-        kind if kinds::is_morph_lifecycle_kind(kind) => OperationPayloadSchema {
-            requirements: MORPH_LIFECYCLE_REQUIREMENTS,
-            validate: None,
-        },
-        kinds::CK_MORPH_CREATE => OperationPayloadSchema {
-            requirements: MORPH_CREATE_REQUIREMENTS,
-            validate: Some(validate_morph_create_payload),
-        },
-        kinds::CK_MORPH_UPDATE => OperationPayloadSchema {
-            requirements: MORPH_UPDATE_REQUIREMENTS,
-            validate: Some(validate_morph_update_payload),
-        },
-        kinds::CK_MORPH_SCHEMA_MIGRATE => OperationPayloadSchema {
-            requirements: MORPH_SCHEMA_MIGRATE_REQUIREMENTS,
-            validate: Some(validate_morph_schema_migrate_payload),
-        },
-        // `ck.field.position.move` / `ck.field.position.reorder` were removed
-        // in revision 0a5ab85 (see cokret-spec
-        // `artifacts/registry/removed-event-kinds.json`). The generic
-        // unknown-event-kind path in `event_log::submit_event` already
-        // hard-rejects these kinds; no operation schema branch is needed.
-        kinds::CK_CONTAINER_MOVE_ITEM | kinds::CK_CONTAINER_REBALANCE => OperationPayloadSchema {
-            requirements: RELATION_ID_REQUIREMENTS,
-            validate: None,
-        },
-        // Applet protocol family.
-        kinds::CK_APPLET_REGISTRATION => OperationPayloadSchema {
-            requirements: APPLET_REGISTRATION_REQUIREMENTS,
-            validate: None,
-        },
-        kinds::CK_APPLET_DISCOVERY => OperationPayloadSchema {
-            requirements: APPLET_DISCOVERY_REQUIREMENTS,
-            validate: None,
-        },
-        kinds::CK_APPLET_INTEROP_SESSION_START => OperationPayloadSchema {
-            requirements: APPLET_SESSION_START_REQUIREMENTS,
-            validate: None,
-        },
-        kinds::CK_APPLET_INTEROP_SESSION_STATUS => OperationPayloadSchema {
-            requirements: APPLET_SESSION_STATUS_REQUIREMENTS,
-            validate: None,
-        },
-        kinds::CK_APPLET_BRIDGE_ERROR => OperationPayloadSchema {
-            requirements: APPLET_BRIDGE_ERROR_REQUIREMENTS,
-            validate: None,
-        },
-        // Agent protocol family.
-        kinds::CK_AGENT_ENDPOINT => OperationPayloadSchema {
-            requirements: AGENT_ENDPOINT_REQUIREMENTS,
-            validate: None,
-        },
-        kinds::CK_AGENT_INTEROP_SESSION_START => OperationPayloadSchema {
-            requirements: AGENT_SESSION_START_REQUIREMENTS,
-            validate: None,
-        },
-        kinds::CK_AGENT_INTEROP_SESSION_STATUS => OperationPayloadSchema {
-            requirements: AGENT_SESSION_STATUS_REQUIREMENTS,
-            validate: None,
-        },
-        kinds::CK_AGENT_INTEROP_SESSION_RESULT => OperationPayloadSchema {
-            requirements: AGENT_SESSION_RESULT_REQUIREMENTS,
-            validate: None,
-        },
-        // R3 spec-sync — agent lifecycle FSM kinds.
-        kinds::CK_AGENT_PAUSE => OperationPayloadSchema {
-            requirements: AGENT_PAUSE_REQUIREMENTS,
-            validate: None,
-        },
-        kinds::CK_AGENT_RESUME => OperationPayloadSchema {
-            requirements: AGENT_RESUME_REQUIREMENTS,
-            validate: None,
-        },
-        kinds::CK_AGENT_DEACTIVATE => OperationPayloadSchema {
-            requirements: AGENT_DEACTIVATE_REQUIREMENTS,
-            validate: None,
-        },
-        // R3 spec-sync — actor_private_event kinds (reducer_input=false).
-        kinds::CK_AGENT_DRAFT_PROPOSE => OperationPayloadSchema {
-            requirements: AGENT_DRAFT_PROPOSE_REQUIREMENTS,
-            validate: None,
-        },
-        kinds::CK_AGENT_ACTION_REQUEST => OperationPayloadSchema {
-            requirements: AGENT_ACTION_REQUEST_REQUIREMENTS,
-            validate: None,
-        },
-        kinds::CK_AGENT_ACTION_APPROVE => OperationPayloadSchema {
-            requirements: AGENT_ACTION_APPROVE_REQUIREMENTS,
-            validate: Some(validate_operation_payload_against_sdk_artifact),
-        },
-        kinds::CK_AGENT_ACTION_REJECT => OperationPayloadSchema {
-            requirements: AGENT_ACTION_REJECT_REQUIREMENTS,
-            validate: Some(validate_operation_payload_against_sdk_artifact),
-        },
-        kinds::CK_CROSS_SIGNING_PUBLISH => OperationPayloadSchema {
-            requirements: CROSS_SIGNING_PUBLISH_REQUIREMENTS,
-            validate: Some(validate_operation_payload_against_sdk_artifact),
-        },
-        kinds::CK_CROSS_SIGNING_RESET => OperationPayloadSchema {
-            requirements: CROSS_SIGNING_RESET_REQUIREMENTS,
-            validate: Some(validate_cross_signing_reset_payload),
-        },
-        // Device-identity — `ck.device.authorize` maps to the
-        // `ck.component.device.authorization.v1` lattice cell. Registering an
-        // Operation here is what lets `project_accepted_operations` run
-        // `project_device_authorize`, which persists the authoritative
-        // `device_public_key` + verified state into the devices inventory
-        // (without it the device row stays `unverified` with no key and the
-        // client falsely shows the "existing device approval" gate). The SDK
-        // validator owns payload shape and binding oneOf; policy validation then
-        // verifies any cross_signing_binding at ingest.
-        kinds::CK_DEVICE_AUTHORIZE => OperationPayloadSchema {
-            requirements: DEVICE_AUTHORIZE_REQUIREMENTS,
-            validate: Some(validate_device_authorize_payload),
-        },
-        _ => return None,
-    };
+            cokret_sdk::events::kinds::SPACE_CREATE => OperationPayloadSchema {
+                requirements: SPACE_CONTAINER_CREATE_REQUIREMENTS,
+                validate: None,
+            },
+            cokret_sdk::events::kinds::SPACE_UPDATE => OperationPayloadSchema {
+                requirements: SPACE_CONTAINER_UPDATE_REQUIREMENTS,
+                validate: None,
+            },
+            cokret_sdk::events::kinds::SPACE_PARENT => OperationPayloadSchema {
+                requirements: SPACE_CONTAINER_PARENT_REQUIREMENTS,
+                validate: None,
+            },
+            kind if cokret_sdk::events::kinds::is_strand_lifecycle_kind(kind) => {
+                OperationPayloadSchema {
+                    requirements: STRAND_LIFECYCLE_REQUIREMENTS,
+                    validate: None,
+                }
+            }
+            cokret_sdk::events::kinds::STRAND_CREATE => OperationPayloadSchema {
+                requirements: STRAND_CREATE_REQUIREMENTS,
+                validate: None,
+            },
+            cokret_sdk::events::kinds::STRAND_UPDATE => OperationPayloadSchema {
+                requirements: STRAND_UPDATE_REQUIREMENTS,
+                validate: None,
+            },
+            cokret_sdk::events::kinds::STRAND_MOVE => OperationPayloadSchema {
+                requirements: STRAND_MOVE_REQUIREMENTS,
+                validate: None,
+            },
+            cokret_sdk::events::kinds::STRAND_REORDER => OperationPayloadSchema {
+                requirements: STRAND_REORDER_REQUIREMENTS,
+                validate: None,
+            },
+            cokret_sdk::events::kinds::STRAND_WATCH_SET => OperationPayloadSchema {
+                requirements: STRAND_WATCH_REQUIREMENTS,
+                validate: None,
+            },
+            cokret_sdk::events::kinds::STRAND_TRACKS_UPDATE => OperationPayloadSchema {
+                requirements: STRAND_TRACKS_UPDATE_REQUIREMENTS,
+                validate: None,
+            },
+            kind if cokret_sdk::events::kinds::is_morph_lifecycle_kind(kind) => {
+                OperationPayloadSchema {
+                    requirements: MORPH_LIFECYCLE_REQUIREMENTS,
+                    validate: None,
+                }
+            }
+            cokret_sdk::events::kinds::MORPH_CREATE => OperationPayloadSchema {
+                requirements: MORPH_CREATE_REQUIREMENTS,
+                validate: Some(validate_morph_create_payload),
+            },
+            cokret_sdk::events::kinds::MORPH_UPDATE => OperationPayloadSchema {
+                requirements: MORPH_UPDATE_REQUIREMENTS,
+                validate: Some(validate_morph_update_payload),
+            },
+            cokret_sdk::events::kinds::MORPH_SCHEMA_MIGRATE => OperationPayloadSchema {
+                requirements: MORPH_SCHEMA_MIGRATE_REQUIREMENTS,
+                validate: Some(validate_morph_schema_migrate_payload),
+            },
+            // `ck.field.position.move` / `ck.field.position.reorder` were removed
+            // in revision 0a5ab85 (see cokret-spec
+            // `artifacts/registry/removed-event-kinds.json`). The generic
+            // unknown-event-kind path in `event_log::submit_event` already
+            // hard-rejects these kinds; no operation schema branch is needed.
+            cokret_sdk::events::kinds::CONTAINER_MOVE_ITEM
+            | cokret_sdk::events::kinds::CONTAINER_REBALANCE => OperationPayloadSchema {
+                requirements: RELATION_ID_REQUIREMENTS,
+                validate: None,
+            },
+            // Applet protocol family.
+            cokret_sdk::events::kinds::APPLET_REGISTRATION => OperationPayloadSchema {
+                requirements: APPLET_REGISTRATION_REQUIREMENTS,
+                validate: None,
+            },
+            cokret_sdk::events::kinds::APPLET_DISCOVERY => OperationPayloadSchema {
+                requirements: APPLET_DISCOVERY_REQUIREMENTS,
+                validate: None,
+            },
+            cokret_sdk::events::kinds::APPLET_INTEROP_SESSION_START => OperationPayloadSchema {
+                requirements: APPLET_SESSION_START_REQUIREMENTS,
+                validate: None,
+            },
+            cokret_sdk::events::kinds::APPLET_INTEROP_SESSION_STATUS => OperationPayloadSchema {
+                requirements: APPLET_SESSION_STATUS_REQUIREMENTS,
+                validate: None,
+            },
+            cokret_sdk::events::kinds::APPLET_BRIDGE_ERROR => OperationPayloadSchema {
+                requirements: APPLET_BRIDGE_ERROR_REQUIREMENTS,
+                validate: None,
+            },
+            // Agent protocol family.
+            cokret_sdk::events::kinds::AGENT_ENDPOINT => OperationPayloadSchema {
+                requirements: AGENT_ENDPOINT_REQUIREMENTS,
+                validate: None,
+            },
+            cokret_sdk::events::kinds::AGENT_INTEROP_SESSION_START => OperationPayloadSchema {
+                requirements: AGENT_SESSION_START_REQUIREMENTS,
+                validate: None,
+            },
+            cokret_sdk::events::kinds::AGENT_INTEROP_SESSION_STATUS => OperationPayloadSchema {
+                requirements: AGENT_SESSION_STATUS_REQUIREMENTS,
+                validate: None,
+            },
+            cokret_sdk::events::kinds::AGENT_INTEROP_SESSION_RESULT => OperationPayloadSchema {
+                requirements: AGENT_SESSION_RESULT_REQUIREMENTS,
+                validate: None,
+            },
+            // R3 spec-sync — agent lifecycle FSM kinds.
+            cokret_sdk::events::kinds::AGENT_PAUSE => OperationPayloadSchema {
+                requirements: AGENT_PAUSE_REQUIREMENTS,
+                validate: None,
+            },
+            cokret_sdk::events::kinds::AGENT_RESUME => OperationPayloadSchema {
+                requirements: AGENT_RESUME_REQUIREMENTS,
+                validate: None,
+            },
+            cokret_sdk::events::kinds::AGENT_DEACTIVATE => OperationPayloadSchema {
+                requirements: AGENT_DEACTIVATE_REQUIREMENTS,
+                validate: None,
+            },
+            // R3 spec-sync — actor_private_event kinds (reducer_input=false).
+            cokret_sdk::events::kinds::AGENT_DRAFT_PROPOSE => OperationPayloadSchema {
+                requirements: AGENT_DRAFT_PROPOSE_REQUIREMENTS,
+                validate: None,
+            },
+            cokret_sdk::events::kinds::AGENT_ACTION_REQUEST => OperationPayloadSchema {
+                requirements: AGENT_ACTION_REQUEST_REQUIREMENTS,
+                validate: None,
+            },
+            cokret_sdk::events::kinds::AGENT_ACTION_APPROVE => OperationPayloadSchema {
+                requirements: AGENT_ACTION_APPROVE_REQUIREMENTS,
+                validate: Some(validate_operation_payload_against_sdk_artifact),
+            },
+            cokret_sdk::events::kinds::AGENT_ACTION_REJECT => OperationPayloadSchema {
+                requirements: AGENT_ACTION_REJECT_REQUIREMENTS,
+                validate: Some(validate_operation_payload_against_sdk_artifact),
+            },
+            cokret_sdk::events::kinds::CROSS_SIGNING_PUBLISH => OperationPayloadSchema {
+                requirements: CROSS_SIGNING_PUBLISH_REQUIREMENTS,
+                validate: Some(validate_operation_payload_against_sdk_artifact),
+            },
+            cokret_sdk::events::kinds::CROSS_SIGNING_RESET => OperationPayloadSchema {
+                requirements: CROSS_SIGNING_RESET_REQUIREMENTS,
+                validate: Some(validate_cross_signing_reset_payload),
+            },
+            // Device-identity — `ck.device.authorize` maps to the
+            // `ck.component.device.authorization.v1` lattice cell. Registering an
+            // Operation here is what lets `project_accepted_operations` run
+            // `project_device_authorize`, which persists the authoritative
+            // `device_public_key` + verified state into the devices inventory
+            // (without it the device row stays `unverified` with no key and the
+            // client falsely shows the "existing device approval" gate). The SDK
+            // validator owns payload shape and binding oneOf; policy validation then
+            // verifies any cross_signing_binding at ingest.
+            cokret_sdk::events::kinds::DEVICE_AUTHORIZE => OperationPayloadSchema {
+                requirements: DEVICE_AUTHORIZE_REQUIREMENTS,
+                validate: Some(validate_device_authorize_payload),
+            },
+            _ => return None,
+        };
     Some(schema)
 }
 

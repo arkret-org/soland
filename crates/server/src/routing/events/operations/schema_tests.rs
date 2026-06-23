@@ -10,7 +10,7 @@ mod invite_create_schema_tests {
                 .unwrap(),
             cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-000000000701".to_owned())
                 .unwrap(),
-            kinds::CK_INVITE_CREATE,
+            cokret_sdk::events::kinds::INVITE_CREATE,
             payload,
         )
     }
@@ -30,7 +30,7 @@ mod invite_create_schema_tests {
 
     #[test]
     fn invite_create_accepts_directed_v1_payload() {
-        let schema = operation_schema_for_kind(kinds::CK_INVITE_CREATE).unwrap();
+        let schema = operation_schema_for_kind(cokret_sdk::events::kinds::INVITE_CREATE).unwrap();
         let operation = op(invite_payload());
 
         assert!(validate_operation_schema(&operation, schema).is_ok());
@@ -38,7 +38,7 @@ mod invite_create_schema_tests {
 
     #[test]
     fn invite_create_accepts_projection_internal_fields() {
-        let schema = operation_schema_for_kind(kinds::CK_INVITE_CREATE).unwrap();
+        let schema = operation_schema_for_kind(cokret_sdk::events::kinds::INVITE_CREATE).unwrap();
         let mut payload = invite_payload();
         payload["event_id"] = json!("ck:event:01904100-0000-7000-8000-000000000701");
         payload["sender"] = json!("did:web:alice.example");
@@ -53,7 +53,7 @@ mod invite_create_schema_tests {
 
     #[test]
     fn invite_create_accepts_spec_reason_field() {
-        let schema = operation_schema_for_kind(kinds::CK_INVITE_CREATE).unwrap();
+        let schema = operation_schema_for_kind(cokret_sdk::events::kinds::INVITE_CREATE).unwrap();
         let mut payload = invite_payload();
         payload["reason"] = json!("review_accept");
         let operation = op(payload);
@@ -63,7 +63,7 @@ mod invite_create_schema_tests {
 
     #[test]
     fn invite_create_rejects_removed_inviter_payload_field() {
-        let schema = operation_schema_for_kind(kinds::CK_INVITE_CREATE).unwrap();
+        let schema = operation_schema_for_kind(cokret_sdk::events::kinds::INVITE_CREATE).unwrap();
         let mut payload = invite_payload();
         payload["inviter"] = json!("did:web:alice.example");
         let operation = op(payload);
@@ -76,7 +76,7 @@ mod invite_create_schema_tests {
 
     #[test]
     fn invite_create_requires_invite_id() {
-        let schema = operation_schema_for_kind(kinds::CK_INVITE_CREATE).unwrap();
+        let schema = operation_schema_for_kind(cokret_sdk::events::kinds::INVITE_CREATE).unwrap();
         let mut payload = invite_payload();
         payload.as_object_mut().unwrap().remove("invite_id");
         let operation = op(payload);
@@ -89,7 +89,7 @@ mod invite_create_schema_tests {
 
     #[test]
     fn invite_create_requires_expires_at() {
-        let schema = operation_schema_for_kind(kinds::CK_INVITE_CREATE).unwrap();
+        let schema = operation_schema_for_kind(cokret_sdk::events::kinds::INVITE_CREATE).unwrap();
         let mut payload = invite_payload();
         payload.as_object_mut().unwrap().remove("expires_at");
         let operation = op(payload);
@@ -102,7 +102,7 @@ mod invite_create_schema_tests {
 
     #[test]
     fn invite_create_rejects_invalid_invite_id() {
-        let schema = operation_schema_for_kind(kinds::CK_INVITE_CREATE).unwrap();
+        let schema = operation_schema_for_kind(cokret_sdk::events::kinds::INVITE_CREATE).unwrap();
         let mut payload = invite_payload();
         payload["invite_id"] = json!("ck:invite:01");
         let operation = op(payload);
@@ -115,7 +115,7 @@ mod invite_create_schema_tests {
 
     #[test]
     fn invite_create_rejects_non_canonical_expires_at() {
-        let schema = operation_schema_for_kind(kinds::CK_INVITE_CREATE).unwrap();
+        let schema = operation_schema_for_kind(cokret_sdk::events::kinds::INVITE_CREATE).unwrap();
         let mut payload = invite_payload();
         payload["expires_at"] = json!("2026-06-14T10:00:00+00:00");
         let operation = op(payload);
@@ -139,14 +139,16 @@ mod read_receipt_policy_schema_tests {
                 .unwrap(),
             cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-000000000702".to_owned())
                 .unwrap(),
-            kinds::CK_REALM_READ_RECEIPT_POLICY,
+            cokret_sdk::events::kinds::REALM_READ_RECEIPT_POLICY,
             payload,
         )
     }
 
     #[test]
     fn accepts_projection_internal_fields() {
-        let schema = operation_schema_for_kind(kinds::CK_REALM_READ_RECEIPT_POLICY).unwrap();
+        let schema =
+            operation_schema_for_kind(cokret_sdk::events::kinds::REALM_READ_RECEIPT_POLICY)
+                .unwrap();
         let operation = op(json!({
             "disclosure": "required",
             "event_id": "ck:event:01904100-0000-7000-8000-000000000702",
@@ -172,7 +174,7 @@ mod realm_media_service_schema_tests {
                 .unwrap(),
             cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-000000000901".to_owned())
                 .unwrap(),
-            kinds::CK_REALM_MEDIA_SERVICE,
+            cokret_sdk::events::kinds::REALM_MEDIA_SERVICE,
             json!({
                 "media_service": {
                     "service_id": "did:web:media.example",
@@ -185,7 +187,7 @@ mod realm_media_service_schema_tests {
                 }
             }),
         );
-        let schema = operation_schema_for_kind(kinds::CK_REALM_MEDIA_SERVICE)
+        let schema = operation_schema_for_kind(cokret_sdk::events::kinds::REALM_MEDIA_SERVICE)
             .expect("media_service event kind must build a projection Operation");
 
         validate_operation_schema(&operation, schema).unwrap();
@@ -205,7 +207,7 @@ mod realm_plaintext_visible_services_schema_tests {
                 .unwrap(),
             cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-000000000902".to_owned())
                 .unwrap(),
-            kinds::CK_REALM_PLAINTEXT_VISIBLE_SERVICES,
+            cokret_sdk::events::kinds::REALM_PLAINTEXT_VISIBLE_SERVICES,
             json!({
                 "services": [{
                     "service_did": "did:web:soland.local",
@@ -216,8 +218,9 @@ mod realm_plaintext_visible_services_schema_tests {
                 }]
             }),
         );
-        let schema = operation_schema_for_kind(kinds::CK_REALM_PLAINTEXT_VISIBLE_SERVICES)
-            .expect("plaintext_visible_services event kind must build a projection Operation");
+        let schema =
+            operation_schema_for_kind(cokret_sdk::events::kinds::REALM_PLAINTEXT_VISIBLE_SERVICES)
+                .expect("plaintext_visible_services event kind must build a projection Operation");
 
         validate_operation_schema(&operation, schema).unwrap();
     }
@@ -229,7 +232,7 @@ mod realm_plaintext_visible_services_schema_tests {
                 .unwrap();
         let cases = [
             (
-                kinds::CK_MODERATION_DECISION,
+                cokret_sdk::events::kinds::MODERATION_DECISION,
                 json!({
                     "target_ref": "ck:message:01904100-0000-7000-8000-000000000903",
                     "decision": "quarantine",
@@ -238,14 +241,14 @@ mod realm_plaintext_visible_services_schema_tests {
                 }),
             ),
             (
-                kinds::CK_MODERATION_DECISION_LIFT,
+                cokret_sdk::events::kinds::MODERATION_DECISION_LIFT,
                 json!({
                     "target_ref": "ck:message:01904100-0000-7000-8000-000000000903",
                     "decision_ref": "ck:event:01904100-0000-7000-8000-000000000903"
                 }),
             ),
             (
-                kinds::CK_MODERATION_APPEAL_SUBMIT,
+                cokret_sdk::events::kinds::MODERATION_APPEAL_SUBMIT,
                 json!({
                     "appeal_id": "ck:appeal:01904100-0000-7000-8000-000000000903",
                     "realm_id": realm_id.as_str(),
@@ -257,7 +260,7 @@ mod realm_plaintext_visible_services_schema_tests {
                 }),
             ),
             (
-                kinds::CK_MODERATION_APPEAL_REVIEW,
+                cokret_sdk::events::kinds::MODERATION_APPEAL_REVIEW,
                 json!({
                     "appeal_id": "ck:appeal:01904100-0000-7000-8000-000000000903",
                     "realm_id": realm_id.as_str(),
@@ -266,7 +269,7 @@ mod realm_plaintext_visible_services_schema_tests {
                 }),
             ),
             (
-                kinds::CK_MODERATION_APPEAL_DECISION,
+                cokret_sdk::events::kinds::MODERATION_APPEAL_DECISION,
                 json!({
                     "appeal_id": "ck:appeal:01904100-0000-7000-8000-000000000903",
                     "realm_id": realm_id.as_str(),
@@ -277,7 +280,7 @@ mod realm_plaintext_visible_services_schema_tests {
                 }),
             ),
             (
-                kinds::CK_MODERATION_APPEAL_CLOSE,
+                cokret_sdk::events::kinds::MODERATION_APPEAL_CLOSE,
                 json!({
                     "appeal_id": "ck:appeal:01904100-0000-7000-8000-000000000903",
                     "realm_id": realm_id.as_str(),
@@ -321,13 +324,13 @@ mod message_projection_schema_tests {
     #[test]
     fn message_revise_accepts_spec_canonical_target_ref() {
         let operation = op(
-            kinds::CK_MESSAGE_REVISE,
+            cokret_sdk::events::kinds::MESSAGE_REVISE,
             json!({
                 "target_ref": "ck:event:01904100-0000-7000-8000-000000000001",
                 "content": {"kind": "ck.content.text", "body": "edited"}
             }),
         );
-        let schema = operation_schema_for_kind(kinds::CK_MESSAGE_REVISE).unwrap();
+        let schema = operation_schema_for_kind(cokret_sdk::events::kinds::MESSAGE_REVISE).unwrap();
 
         assert!(validate_operation_schema(&operation, schema).is_ok());
     }
@@ -335,14 +338,14 @@ mod message_projection_schema_tests {
     #[test]
     fn reaction_accepts_spec_target_ref_without_event_alias() {
         let operation = op(
-            kinds::CK_REACTION_ADD,
+            cokret_sdk::events::kinds::REACTION_ADD,
             json!({
                 "target_ref": "ck:event:01904100-0000-7000-8000-000000000001",
                 "sender": "did:web:alice.example",
                 "key": "+1"
             }),
         );
-        let schema = operation_schema_for_kind(kinds::CK_REACTION_ADD).unwrap();
+        let schema = operation_schema_for_kind(cokret_sdk::events::kinds::REACTION_ADD).unwrap();
 
         assert!(validate_operation_schema(&operation, schema).is_ok());
         assert!(operation.payload.get("event_id").is_none());
@@ -368,9 +371,10 @@ mod agent_action_schema_tests {
 
     #[test]
     fn action_approve_accepts_complete_draft_bound_payload() {
-        let schema = operation_schema_for_kind(kinds::CK_AGENT_ACTION_APPROVE).unwrap();
+        let schema =
+            operation_schema_for_kind(cokret_sdk::events::kinds::AGENT_ACTION_APPROVE).unwrap();
         let operation = op(
-            kinds::CK_AGENT_ACTION_APPROVE,
+            cokret_sdk::events::kinds::AGENT_ACTION_APPROVE,
             json!({
                 "approval_id": "ck:agent_approval:01904100-0000-7000-8000-000000000001",
                 "draft_id": "ck:agent_draft:01904100-0000-7000-8000-000000000001",
@@ -394,9 +398,10 @@ mod agent_action_schema_tests {
 
     #[test]
     fn action_approve_rejects_legacy_minimal_payload() {
-        let schema = operation_schema_for_kind(kinds::CK_AGENT_ACTION_APPROVE).unwrap();
+        let schema =
+            operation_schema_for_kind(cokret_sdk::events::kinds::AGENT_ACTION_APPROVE).unwrap();
         let operation = op(
-            kinds::CK_AGENT_ACTION_APPROVE,
+            cokret_sdk::events::kinds::AGENT_ACTION_APPROVE,
             json!({ "request_id": "ck:agent-action-request:01904100-0000-7000-8000-000000000001" }),
         );
 
@@ -408,9 +413,10 @@ mod agent_action_schema_tests {
 
     #[test]
     fn action_reject_accepts_complete_draft_bound_payload() {
-        let schema = operation_schema_for_kind(kinds::CK_AGENT_ACTION_REJECT).unwrap();
+        let schema =
+            operation_schema_for_kind(cokret_sdk::events::kinds::AGENT_ACTION_REJECT).unwrap();
         let operation = op(
-            kinds::CK_AGENT_ACTION_REJECT,
+            cokret_sdk::events::kinds::AGENT_ACTION_REJECT,
             json!({
                 "rejection_id": "ck:agent_rejection:01904100-0000-7000-8000-000000000001",
                 "draft_id": "ck:agent_draft:01904100-0000-7000-8000-000000000001",
@@ -443,9 +449,9 @@ mod spec_sync_validator_tests {
 
     #[test]
     fn morph_create_accepts_metadata_and_rejects_content_conflict() {
-        let schema = operation_schema_for_kind(kinds::CK_MORPH_CREATE).unwrap();
+        let schema = operation_schema_for_kind(cokret_sdk::events::kinds::MORPH_CREATE).unwrap();
         let valid = op(
-            kinds::CK_MORPH_CREATE,
+            cokret_sdk::events::kinds::MORPH_CREATE,
             json!({
                 "object": {
                     "id": "ck:morph:01904100-0000-7000-8000-000000000001",
@@ -459,7 +465,7 @@ mod spec_sync_validator_tests {
         assert!(validate_operation_schema(&valid, schema).is_ok());
 
         let content_conflict = op(
-            kinds::CK_MORPH_CREATE,
+            cokret_sdk::events::kinds::MORPH_CREATE,
             json!({
                 "object": {
                     "id": "ck:morph:01904100-0000-7000-8000-000000000001",
@@ -478,9 +484,10 @@ mod spec_sync_validator_tests {
 
     #[test]
     fn morph_schema_refs_use_migrate_gate() {
-        let update_schema = operation_schema_for_kind(kinds::CK_MORPH_UPDATE).unwrap();
+        let update_schema =
+            operation_schema_for_kind(cokret_sdk::events::kinds::MORPH_UPDATE).unwrap();
         let update = op(
-            kinds::CK_MORPH_UPDATE,
+            cokret_sdk::events::kinds::MORPH_UPDATE,
             json!({
                 "target_ref": "ck:morph:01904100-0000-7000-8000-000000000001",
                 "patch": {"schema_refs": ["ck.schema.new"]}
@@ -492,7 +499,7 @@ mod spec_sync_validator_tests {
         );
 
         let migrate = op(
-            kinds::CK_MORPH_SCHEMA_MIGRATE,
+            cokret_sdk::events::kinds::MORPH_SCHEMA_MIGRATE,
             json!({
                 "morph_id": "ck:morph:01904100-0000-7000-8000-000000000001",
                 "from_schema_refs": ["ck.schema.old"],
@@ -502,12 +509,13 @@ mod spec_sync_validator_tests {
                 "capability_action": "ck.morph.schema.migrate"
             }),
         );
-        let migrate_schema = operation_schema_for_kind(kinds::CK_MORPH_SCHEMA_MIGRATE).unwrap();
+        let migrate_schema =
+            operation_schema_for_kind(cokret_sdk::events::kinds::MORPH_SCHEMA_MIGRATE).unwrap();
         assert!(validate_operation_schema(&migrate, migrate_schema).is_ok());
         assert!(validate_morph_schema_migrate_capability(&migrate).is_ok());
 
         let non_additive = op(
-            kinds::CK_MORPH_SCHEMA_MIGRATE,
+            cokret_sdk::events::kinds::MORPH_SCHEMA_MIGRATE,
             json!({
                 "morph_id": "ck:morph:01904100-0000-7000-8000-000000000001",
                 "from_schema_refs": ["ck.schema.old"],
@@ -523,7 +531,7 @@ mod spec_sync_validator_tests {
         );
 
         let missing_gate = op(
-            kinds::CK_MORPH_SCHEMA_MIGRATE,
+            cokret_sdk::events::kinds::MORPH_SCHEMA_MIGRATE,
             json!({
                 "morph_id": "ck:morph:01904100-0000-7000-8000-000000000001",
                 "from_schema_refs": ["ck.schema.old"],
@@ -537,7 +545,7 @@ mod spec_sync_validator_tests {
         );
 
         let unsupported = op(
-            kinds::CK_MORPH_SCHEMA_MIGRATE,
+            cokret_sdk::events::kinds::MORPH_SCHEMA_MIGRATE,
             json!({
                 "morph_id": "ck:morph:01904100-0000-7000-8000-000000000001",
                 "from_schema_refs": ["ck.schema.old"],
@@ -766,7 +774,7 @@ mod derived_relation_and_morph_immutability_tests {
     #[test]
     fn device_authorize_accepts_service_attested_did_key_authority() {
         let operation = op(
-            kinds::CK_DEVICE_AUTHORIZE,
+            cokret_sdk::events::kinds::DEVICE_AUTHORIZE,
             json!({
                 "principal_id": "did:webvh:zQmZcDaFwUR8yQCZRkXoYEBi9hdzMSCCLASUVdwT1J4Qyc6:local.host:webvh:01kvqwpxssfq3bqm15rcd0g99x",
                 "device_id": "ck:device:019eefcb-5882-7861-bc30-3033fa32dcf6",
@@ -791,7 +799,7 @@ mod derived_relation_and_morph_immutability_tests {
     #[test]
     fn device_authorize_rejects_multiple_authorization_bindings() {
         let operation = op(
-            kinds::CK_DEVICE_AUTHORIZE,
+            cokret_sdk::events::kinds::DEVICE_AUTHORIZE,
             json!({
                 "principal_id": "did:web:alice.example",
                 "device_id": "ck:device:01904100-0000-7000-8000-000000000001",
@@ -822,7 +830,7 @@ mod derived_relation_and_morph_immutability_tests {
     #[test]
     fn relation_create_watches_is_rejected() {
         let operation = op(
-            kinds::CK_RELATION_CREATE,
+            cokret_sdk::events::kinds::RELATION_CREATE,
             json!({
                 "relation_id": "ck:relation:01904100-0000-7000-8000-000000000001",
                 "relation_kind": "watches",
@@ -841,7 +849,7 @@ mod derived_relation_and_morph_immutability_tests {
     #[test]
     fn relation_create_container_contains_is_rejected() {
         let operation = op(
-            kinds::CK_RELATION_CREATE,
+            cokret_sdk::events::kinds::RELATION_CREATE,
             json!({
                 "relation_id": "ck:relation:01904100-0000-7000-8000-000000000003",
                 "relation_kind": "contains",
@@ -860,7 +868,7 @@ mod derived_relation_and_morph_immutability_tests {
     #[test]
     fn relation_create_strand_subtask_contains_is_allowed() {
         let operation = op(
-            kinds::CK_RELATION_CREATE,
+            cokret_sdk::events::kinds::RELATION_CREATE,
             json!({
                 "relation_id": "ck:relation:01904100-0000-7000-8000-000000000006",
                 "relation_kind": "contains",
@@ -874,7 +882,7 @@ mod derived_relation_and_morph_immutability_tests {
     #[test]
     fn relation_create_weak_reference_is_allowed() {
         let operation = op(
-            kinds::CK_RELATION_CREATE,
+            cokret_sdk::events::kinds::RELATION_CREATE,
             json!({
                 "relation_id": "ck:relation:01904100-0000-7000-8000-000000000009",
                 "relation_kind": "references",
@@ -890,7 +898,7 @@ mod derived_relation_and_morph_immutability_tests {
     #[test]
     fn relation_create_actor_supplied_effective_scope_is_rejected() {
         let operation = op(
-            kinds::CK_RELATION_CREATE,
+            cokret_sdk::events::kinds::RELATION_CREATE,
             json!({
                 "relation_id": "ck:relation:01904100-0000-7000-8000-00000000000f",
                 "relation_kind": "references",
@@ -908,7 +916,7 @@ mod derived_relation_and_morph_immutability_tests {
     #[test]
     fn relation_create_nested_effective_scope_is_rejected() {
         let operation = op(
-            kinds::CK_RELATION_CREATE,
+            cokret_sdk::events::kinds::RELATION_CREATE,
             json!({
                 "relation": {
                     "id": "ck:relation:01904100-0000-7000-8000-00000000001f",
@@ -929,7 +937,7 @@ mod derived_relation_and_morph_immutability_tests {
     #[test]
     fn morph_update_morph_type_is_immutable() {
         let bare = op(
-            kinds::CK_MORPH_UPDATE,
+            cokret_sdk::events::kinds::MORPH_UPDATE,
             json!({
                 "target_ref": "ck:morph:01904100-0000-7000-8000-00000000000c",
                 "patch": {"morph_type": "task"}
@@ -940,7 +948,7 @@ mod derived_relation_and_morph_immutability_tests {
             Err("morph_type_immutable")
         );
         let enveloped = op(
-            kinds::CK_MORPH_UPDATE,
+            cokret_sdk::events::kinds::MORPH_UPDATE,
             json!({
                 "target_ref": "ck:morph:01904100-0000-7000-8000-00000000000c",
                 "patch": {"morph_type": {"$op": "set", "value": "task"}}
@@ -958,7 +966,7 @@ mod derived_relation_and_morph_immutability_tests {
     #[test]
     fn morph_update_stage_axis_is_forbidden_wire() {
         let top_stage = op(
-            kinds::CK_MORPH_UPDATE,
+            cokret_sdk::events::kinds::MORPH_UPDATE,
             json!({
                 "target_ref": "ck:morph:01904100-0000-7000-8000-00000000000d",
                 "patch": {"stage": "done"}
@@ -969,7 +977,7 @@ mod derived_relation_and_morph_immutability_tests {
             Err("morph_stage_patch_forbidden")
         );
         let dotted = op(
-            kinds::CK_MORPH_UPDATE,
+            cokret_sdk::events::kinds::MORPH_UPDATE,
             json!({
                 "target_ref": "ck:morph:01904100-0000-7000-8000-00000000000d",
                 "patch": {"fields.lifecycle": "archived"}
@@ -980,7 +988,7 @@ mod derived_relation_and_morph_immutability_tests {
             Err("morph_forbidden_field_patch")
         );
         let object_replace = op(
-            kinds::CK_MORPH_UPDATE,
+            cokret_sdk::events::kinds::MORPH_UPDATE,
             json!({
                 "target_ref": "ck:morph:01904100-0000-7000-8000-00000000000d",
                 "patch": {"fields": {"$op": "set", "value": {"stage_reason": "x"}}}
@@ -995,7 +1003,7 @@ mod derived_relation_and_morph_immutability_tests {
     #[test]
     fn morph_update_ordinary_field_patch_is_allowed() {
         let operation = op(
-            kinds::CK_MORPH_UPDATE,
+            cokret_sdk::events::kinds::MORPH_UPDATE,
             json!({
                 "target_ref": "ck:morph:01904100-0000-7000-8000-00000000000e",
                 "patch": {"fields.severity": "high", "fields": {"$op": "set", "value": {"status": "open"}}}
@@ -1007,7 +1015,7 @@ mod derived_relation_and_morph_immutability_tests {
     #[test]
     fn object_patch_reducer_managed_path_is_rejected() {
         let operation = op(
-            kinds::CK_STRAND_UPDATE,
+            cokret_sdk::events::kinds::STRAND_UPDATE,
             json!({
                 "target_ref": "ck:strand:01904100-0000-7000-8000-00000000000e",
                 "patch": {"state": {"$op": "set", "value": "archived"}}
@@ -1022,7 +1030,7 @@ mod derived_relation_and_morph_immutability_tests {
     #[test]
     fn object_patch_redactable_unset_is_rejected() {
         let operation = op(
-            kinds::CK_STRAND_UPDATE,
+            cokret_sdk::events::kinds::STRAND_UPDATE,
             json!({
                 "target_ref": "ck:strand:01904100-0000-7000-8000-00000000000e",
                 "patch": {"metadata.summary": {"$op": "unset"}}
@@ -1037,7 +1045,7 @@ mod derived_relation_and_morph_immutability_tests {
     #[test]
     fn object_patch_non_redactable_metadata_unset_is_allowed() {
         let operation = op(
-            kinds::CK_STRAND_UPDATE,
+            cokret_sdk::events::kinds::STRAND_UPDATE,
             json!({
                 "target_ref": "ck:strand:01904100-0000-7000-8000-00000000000e",
                 "patch": {"metadata.title": {"$op": "unset"}}

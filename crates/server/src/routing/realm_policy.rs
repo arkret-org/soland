@@ -22,7 +22,6 @@ use serde_json::json;
 use super::{AuthArgs, accept_local_operations};
 use crate::error::AppError;
 use crate::ids;
-use crate::kinds::CK_REALM_POLICY_SERVER;
 use crate::result::{EmptyResult, JsonResult, empty_ok, json_ok};
 use crate::state::AppState;
 
@@ -138,7 +137,12 @@ async fn put_realm_policy_server(
         .map_err(|e| AppError::invalid_param(format!("realm_id: {e}")))?;
     let op_id = OperationId::new(ids::generate_operation_id())
         .map_err(|e| AppError::invalid_param(format!("operation_id: {e}")))?;
-    let operation = Operation::create(op_id, realm_scope, CK_REALM_POLICY_SERVER, payload);
+    let operation = Operation::create(
+        op_id,
+        realm_scope,
+        cokret_sdk::events::kinds::REALM_POLICY_SERVER,
+        payload,
+    );
     accept_local_operations(state, &session.actor, std::slice::from_ref(&operation))
         .await
         .map_err(reducer_reject_to_app_error)?;

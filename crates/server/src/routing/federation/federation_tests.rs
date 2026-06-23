@@ -273,7 +273,7 @@ async fn local_invite_membership_and_message_operations_project_invite() {
     let invite = Operation::create(
         cokret_sdk::OperationId::new("ck:operation:01904100-0000-7000-8000-000000000052").unwrap(),
         realm_id.clone(),
-        kinds::CK_MEMBER_STATE,
+        cokret_sdk::events::kinds::MEMBER_STATE,
         json!({
             "actor_id": "did:web:bob.example",
             "member": "did:web:bob.example",
@@ -283,7 +283,7 @@ async fn local_invite_membership_and_message_operations_project_invite() {
     let invite_create = Operation::create(
         cokret_sdk::OperationId::new("ck:operation:01904100-0000-7000-8000-000000000055").unwrap(),
         realm_id.clone(),
-        kinds::CK_INVITE_CREATE,
+        cokret_sdk::events::kinds::INVITE_CREATE,
         json!({
             "invite_id": "ck:invite:01904100-0000-7000-8000-000000000056",
             "invitee": "did:web:carol.example",
@@ -299,7 +299,7 @@ async fn local_invite_membership_and_message_operations_project_invite() {
     let message = Operation::create(
         cokret_sdk::OperationId::new("ck:operation:01904100-0000-7000-8000-000000000053").unwrap(),
         realm_id,
-        kinds::CK_MESSAGE_CREATE,
+        cokret_sdk::events::kinds::MESSAGE_CREATE,
         json!({
             "event_id": "ck:event:01904100-0000-7000-8000-000000000054",
             "sender": "did:web:alice.example",
@@ -350,13 +350,13 @@ async fn operation_frontier_tracks_persisted_operation_ids() {
     let first = Operation::create(
         cokret_sdk::OperationId::new("ck:operation:01904100-0000-7000-8000-000000000062").unwrap(),
         realm_id.clone(),
-        kinds::CK_MESSAGE_CREATE,
+        cokret_sdk::events::kinds::MESSAGE_CREATE,
         json!({"content": {"kind": "ck.content.text", "body": "one"}}),
     );
     let second = Operation::create(
         cokret_sdk::OperationId::new("ck:operation:01904100-0000-7000-8000-000000000063").unwrap(),
         realm_id,
-        kinds::CK_MESSAGE_CREATE,
+        cokret_sdk::events::kinds::MESSAGE_CREATE,
         json!({"content": {"kind": "ck.content.text", "body": "two"}}),
     );
     state

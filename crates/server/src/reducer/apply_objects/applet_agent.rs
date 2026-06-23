@@ -320,7 +320,7 @@ impl ProjectionState {
             );
         }
         ProjectionEffect::AgentPrivateEventAccepted {
-            kind: crate::kinds::CK_AGENT_ACTION_REQUEST,
+            kind: cokret_sdk::events::kinds::AGENT_ACTION_REQUEST,
             event_id: operation.operation_id.to_string(),
         }
     }
@@ -422,10 +422,10 @@ impl ProjectionState {
             request.approval = approval;
         }
         let kind = match status {
-            AgentActionRequestStatus::Approved => crate::kinds::CK_AGENT_ACTION_APPROVE,
-            AgentActionRequestStatus::Rejected => crate::kinds::CK_AGENT_ACTION_REJECT,
+            AgentActionRequestStatus::Approved => cokret_sdk::events::kinds::AGENT_ACTION_APPROVE,
+            AgentActionRequestStatus::Rejected => cokret_sdk::events::kinds::AGENT_ACTION_REJECT,
             AgentActionRequestStatus::Pending | AgentActionRequestStatus::Cancelled => {
-                crate::kinds::CK_AGENT_ACTION_REQUEST
+                cokret_sdk::events::kinds::AGENT_ACTION_REQUEST
             }
         };
         ProjectionEffect::AgentPrivateEventAccepted {

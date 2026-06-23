@@ -1,64 +1,7 @@
 use cokret_sdk::Operation;
-// CKP-0007 (spec b7d35be) — Circle lifecycle / membership events. Seven
-// active durable kinds registered in
-// `spec/v1/artifacts/registry/event-kind-registry.json`. The reducer
-// dispatch is wired in `src/reducer.rs`; the wire-layer admission check
-// runs through the generic local-operation event registry.
-//
-// `ck.circle.seal_commit` is reducer-DERIVED (sub-seal emitted on
-// the Circle's profile cadence) and MUST NOT be submitted directly via
-// `ck.self.events.command.submit`. The SDK gates this in
-// `kinds::is_reducer_input_event_kind`.
-pub use cokret_sdk::events::kinds::CIRCLE_CREATE as CK_CIRCLE_CREATE;
-// Space-container lifecycle (`ck.space.*`). Spec
-// `cokret-spec/spec/v1/zh/models/realm-and-space.md` — the v1 protocol
-// container, distinct from the `ck.realm.*` security boundary below.
-pub use cokret_sdk::events::kinds::SPACE_CREATE as CK_SPACE_CONTAINER_CREATE;
-// Strand lifecycle (round 13 — Strand projection state machine). spec
-// `common-fields.md §5.1` Strand row: active / archived / redacted / deleted.
-// Strand has no dedicated `ck.strand.tombstone` event (terminal state reached
-// via `ck.redaction`); only archive/restore are state-machine transitions
-// here.
-pub use cokret_sdk::events::kinds::STRAND_CREATE as CK_STRAND_CREATE;
-// Round 14 — Strand position events. Not state-machine transitions; they
-// write to the `ck.component.strand.position.v1` cell family keyed by
-// (board_space_id, strand_id). The Event-Envelope path only validates
-// payload shape and bumps the Strand's updated_at/by; the cell write
-// happens on the Move/Seal pipeline (out of scope for the reducer's
-// structured cache).
-pub use cokret_sdk::events::kinds::STRAND_MOVE as CK_STRAND_MOVE;
-// Unified Strand tracks update event. `payload.patch` uses `ck.patch.v1`
-// against the `Strand.tracks` map; atomic across multiple tracks. soland's
-// wire validator enforces payload shape (strand_id + patch | tracks) and
-// the spec common-fields.md §5.1 update-on-non-active state guard.
-// StrandProjection carries the server-side track map so ephemeral/read gates
-// can fail closed when discussion is disabled.
-pub use cokret_sdk::events::kinds::STRAND_TRACKS_UPDATE as CK_STRAND_TRACKS_UPDATE;
-// Round 16 — Strand watch subscription event. Writes the
-// `ck.component.strand.watch.v1` cas-register cell keyed by
-// (strand_id, watcher_actor_id). Spec:
-// cokret-spec/spec/v1/zh/models/strand-and-message.md §8. Like the
-// strand position events the Event-Envelope path only validates payload
-// shape; cell write happens on the Move/Seal pipeline. The Strand
-// projection's updated_at is NOT bumped — watch is a per-(strand, actor)
-// subscription that does not represent a Strand state mutation.
-pub use cokret_sdk::events::kinds::STRAND_WATCH_SET as CK_STRAND_WATCH_SET;
-pub use cokret_sdk::events::kinds::{
-    CIRCLE_ARCHIVE as CK_CIRCLE_ARCHIVE, CIRCLE_MEMBER_STATE as CK_CIRCLE_MEMBER_STATE,
-    CIRCLE_RESTORE as CK_CIRCLE_RESTORE, CIRCLE_TOMBSTONE as CK_CIRCLE_TOMBSTONE,
-    CIRCLE_UPDATE as CK_CIRCLE_UPDATE, MESSAGE_CREATE as CK_MESSAGE_CREATE,
-    MESSAGE_REDACT as CK_MESSAGE_REDACT, MESSAGE_REVISE as CK_MESSAGE_REVISE,
-    PIN_ADD as CK_PIN_ADD, PIN_REMOVE as CK_PIN_REMOVE, PIN_REORDER as CK_PIN_REORDER,
-    REACTION_ADD as CK_REACTION_ADD, REACTION_REMOVE as CK_REACTION_REMOVE,
-    RELATION_CREATE as CK_RELATION_CREATE, RELATION_TOMBSTONE as CK_RELATION_DELETE,
-    RELATION_UPDATE as CK_RELATION_UPDATE, RSVP_SET as CK_RSVP_SET,
-    SPACE_ARCHIVE as CK_SPACE_CONTAINER_ARCHIVE, SPACE_PARENT as CK_SPACE_CONTAINER_PARENT,
-    SPACE_RESTORE as CK_SPACE_CONTAINER_RESTORE, SPACE_TOMBSTONE as CK_SPACE_CONTAINER_TOMBSTONE,
-    SPACE_UPDATE as CK_SPACE_CONTAINER_UPDATE, STRAND_ARCHIVE as CK_STRAND_ARCHIVE,
-    STRAND_REORDER as CK_STRAND_REORDER, STRAND_RESTORE as CK_STRAND_RESTORE,
-    STRAND_UPDATE as CK_STRAND_UPDATE, VIEW_CREATE as CK_VIEW_CREATE,
-    VIEW_RECONCILE as CK_VIEW_RECONCILE, VIEW_UPDATE as CK_VIEW_UPDATE,
-};
+// Standard protocol event kind constants intentionally live in the SDK.
+// Soland code should refer to `cokret_sdk::events::kinds::*` directly instead
+// of re-exporting legacy aliases from this module.
 use serde_json::Value;
 
 use crate::artifacts;
@@ -73,15 +16,8 @@ pub const MLS_REDUCER_PROFILE_V1: &str = "ck.reducer.v1";
 // `zh/models/circle.md` §7.2.
 pub const RELATION_KIND_CONFIDENTIAL_DISCUSSION_OF: &str = "confidential_discussion_of";
 
-// COT-06-004 — Realm default-Strand pointer event. Sets `Realm.default_strand_id`
-// to `payload.strand_id` (which MUST name a Strand already projected in this
-// Realm, else `failed_precondition`). cell_subject = `realm_id`; the
-// authoritative spec name is `ck.realm.set_default_strand`
-// (event-payload.schema.json `realm_set_default_strand_payload`). Defined
-// locally here pending the SDK `cokret_core::events::kinds` re-export; the
-// generic `canonical_kind_for_operation` wildcard already passes the string
-// through, but the dispatch table keys on this constant.
-pub const CK_REALM_SET_DEFAULT_STRAND: &str = "ck.realm.set_default_strand";
+// COT-06-004: Realm default-Strand pointer event. The canonical event kind
+// constant is exposed as `cokret_sdk::events::kinds::REALM_SET_DEFAULT_STRAND`.
 
 // Morph lifecycle (round 13). Same shape as Strand — no dedicated tombstone.
 // `ck.field.position.move` and `ck.field.position.reorder` were removed in
@@ -104,31 +40,7 @@ pub const CK_REALM_SET_DEFAULT_STRAND: &str = "ck.realm.set_default_strand";
 // `ck.realm.freeze` is reversible read-only hold. `ck.realm.tombstone` is a
 // terminal migration to a successor Realm. `ck.realm.destroy` is terminal
 // no-successor retirement ("dissolve/close Realm" at product level).
-pub use cokret_sdk::events::kinds::{
-    ACCOUNT_DATA_SET as CK_ACCOUNT_DATA_SET, CONTAINER_MOVE_ITEM as CK_CONTAINER_MOVE_ITEM,
-    CONTAINER_REBALANCE as CK_CONTAINER_REBALANCE, INVITE_ACCEPT as CK_INVITE_ACCEPT,
-    INVITE_CANCEL as CK_INVITE_CANCEL, INVITE_CLAIM as CK_INVITE_CLAIM,
-    INVITE_CREATE as CK_INVITE_CREATE, INVITE_REVOKE as CK_INVITE_REVOKE,
-    INVITE_THIRD_PARTY as CK_INVITE_THIRD_PARTY,
-    MEMBER_IDENTITY_UPDATE as CK_MEMBER_IDENTITY_UPDATE, MEMBER_STATE as CK_MEMBER_STATE,
-    MORPH_ARCHIVE as CK_MORPH_ARCHIVE, MORPH_CREATE as CK_MORPH_CREATE,
-    MORPH_RESTORE as CK_MORPH_RESTORE, MORPH_UPDATE as CK_MORPH_UPDATE,
-    READ_CURSOR_ADVANCE as CK_READ_MARKER, REALM_ARCHIVE as CK_REALM_ARCHIVE,
-    REALM_ASSET_PRIVACY_POLICY as CK_REALM_ASSET_PRIVACY_POLICY, REALM_CREATE as CK_REALM_CREATE,
-    REALM_DESTROY as CK_REALM_DESTROY, REALM_DISAPPEARING_POLICY as CK_REALM_DISAPPEARING_POLICY,
-    REALM_FREEZE as CK_REALM_FREEZE,
-    REALM_HISTORY_SHARING_POLICY as CK_REALM_HISTORY_SHARING_POLICY,
-    REALM_HISTORY_VISIBILITY as CK_REALM_HISTORY_VISIBILITY, REALM_KEY_SHARE as CK_REALM_KEY_SHARE,
-    REALM_MEDIA_SERVICE as CK_REALM_MEDIA_SERVICE,
-    REALM_MODERATION_POLICY as CK_REALM_MODERATION_POLICY,
-    REALM_PLAINTEXT_VISIBLE_SERVICES as CK_REALM_PLAINTEXT_VISIBLE_SERVICES,
-    REALM_POLICY_COMPONENTS as CK_REALM_POLICY_COMPONENTS,
-    REALM_PREVIEW_POLICY as CK_REALM_PREVIEW_POLICY,
-    REALM_READ_RECEIPT_POLICY as CK_REALM_READ_RECEIPT_POLICY,
-    REALM_SEARCH_POLICY as CK_REALM_SEARCH_POLICY, REALM_TOMBSTONE as CK_REALM_TOMBSTONE,
-    REALM_UPDATE as CK_REALM_UPDATE,
-};
-pub const CK_CONFLICT_REPAIR: &str = "ck.conflict.repair";
+pub const CONFLICT_REPAIR: &str = "ck.conflict.repair";
 // Round 14e+ (2026-05-16) — Agent protocol family. Spec
 // `extensions/agent-integration.md`. Mirror of applet but with a
 // terminal `*.result` event that carries the signed audit binding.
@@ -241,39 +153,6 @@ pub const CK_CONFLICT_REPAIR: &str = "ck.conflict.repair";
 // pluggable policy-decision service for a Realm. cell_family
 // `ck.component.realm.policy_server.v1` (cas-register per SDK lattice
 // registry). Spec `cokret-spec/spec/v1/zh/authz/policy-server.md` §2.
-pub use cokret_sdk::events::kinds::{
-    AGENT_ACTION_APPROVE as CK_AGENT_ACTION_APPROVE, AGENT_ACTION_REJECT as CK_AGENT_ACTION_REJECT,
-    AGENT_ACTION_REQUEST as CK_AGENT_ACTION_REQUEST, AGENT_DEACTIVATE as CK_AGENT_DEACTIVATE,
-    AGENT_DRAFT_PROPOSE as CK_AGENT_DRAFT_PROPOSE, AGENT_ENDPOINT as CK_AGENT_ENDPOINT,
-    AGENT_INTEROP_SESSION_RESULT as CK_AGENT_INTEROP_SESSION_RESULT,
-    AGENT_INTEROP_SESSION_START as CK_AGENT_INTEROP_SESSION_START,
-    AGENT_INTEROP_SESSION_STATUS as CK_AGENT_INTEROP_SESSION_STATUS,
-    AGENT_KEY_AUTHORIZE as CK_AGENT_KEY_AUTHORIZE, AGENT_KEY_REVOKE as CK_AGENT_KEY_REVOKE,
-    AGENT_PAUSE as CK_AGENT_PAUSE, AGENT_RESUME as CK_AGENT_RESUME,
-    APPLET_BRIDGE_ERROR as CK_APPLET_BRIDGE_ERROR, APPLET_DISCOVERY as CK_APPLET_DISCOVERY,
-    APPLET_INTEROP_SESSION_START as CK_APPLET_INTEROP_SESSION_START,
-    APPLET_INTEROP_SESSION_STATUS as CK_APPLET_INTEROP_SESSION_STATUS,
-    APPLET_REGISTRATION as CK_APPLET_REGISTRATION,
-    AUDIT_ERASURE_RECEIPT as CK_AUDIT_ERASURE_RECEIPT, CALL_STATE as CK_CALL_STATE,
-    CALL_SUMMARY as CK_CALL_SUMMARY, CAPABILITY_DELEGATE as CK_CAPABILITY_DELEGATE,
-    CAPABILITY_DERIVED as CK_CAPABILITY_DERIVED, CAPABILITY_GRANT as CK_CAPABILITY_GRANT,
-    CAPABILITY_REVOKE as CK_CAPABILITY_REVOKE, CONSENT_GRANT as CK_CONSENT_GRANT,
-    CONSENT_REVOKE as CK_CONSENT_REVOKE, CROSS_SIGNING_PUBLISH as CK_CROSS_SIGNING_PUBLISH,
-    CROSS_SIGNING_RESET as CK_CROSS_SIGNING_RESET, DEVICE_AUTHORIZE as CK_DEVICE_AUTHORIZE,
-    DEVICE_PUSH_ROUTE as CK_DEVICE_PUSH_ROUTE,
-    KEY_BACKUP_ACTIVE_SERIES as CK_KEY_BACKUP_ACTIVE_SERIES, MLS_COMMIT as CK_MLS_COMMIT,
-    MLS_GENESIS as CK_MLS_GENESIS, MLS_KEYPACKAGE as CK_MLS_KEYPACKAGE,
-    MLS_WELCOME as CK_MLS_WELCOME, MODERATION_APPEAL_CLOSE as CK_MODERATION_APPEAL_CLOSE,
-    MODERATION_APPEAL_DECISION as CK_MODERATION_APPEAL_DECISION,
-    MODERATION_APPEAL_REVIEW as CK_MODERATION_APPEAL_REVIEW,
-    MODERATION_APPEAL_SUBMIT as CK_MODERATION_APPEAL_SUBMIT,
-    MODERATION_DECISION as CK_MODERATION_DECISION,
-    MODERATION_DECISION_LIFT as CK_MODERATION_DECISION_LIFT,
-    MORPH_SCHEMA_MIGRATE as CK_MORPH_SCHEMA_MIGRATE,
-    REALM_DELIVERY_BINDING_POLICY as CK_REALM_DELIVERY_BINDING_POLICY,
-    REALM_INHERITANCE_POLICY as CK_REALM_INHERITANCE_POLICY, REALM_LINK as CK_REALM_LINK,
-    REALM_POLICY_SERVER as CK_REALM_POLICY_SERVER, REDACTION as CK_REDACTION,
-};
 
 pub fn validate_mls_governance_binding(payload: &Value) -> Result<(), &'static str> {
     let binding = payload
@@ -370,7 +249,14 @@ pub fn validate_mls_governance_binding(payload: &Value) -> Result<(), &'static s
 }
 
 pub fn canonical_kind_for_operation(operation: &Operation) -> Option<&str> {
-    canonical_kind_for_payload(&operation.object_type, &operation.payload)
+    let object_type = operation.object_type.as_str();
+    if artifacts::active_local_operation_event_kinds().contains(object_type)
+        || object_type == CONFLICT_REPAIR
+    {
+        Some(object_type)
+    } else {
+        None
+    }
 }
 
 pub fn canonical_kind_string(operation: &Operation) -> String {
@@ -379,309 +265,39 @@ pub fn canonical_kind_string(operation: &Operation) -> String {
         .to_owned()
 }
 
-pub fn canonical_kind_for_payload<'a>(object_type: &'a str, _payload: &Value) -> Option<&'a str> {
-    canonical_registered_kind(object_type)
-}
-
-fn canonical_registered_kind(object_type: &str) -> Option<&str> {
-    if !artifacts::active_local_operation_event_kinds().contains(object_type)
-        && object_type != CK_CONFLICT_REPAIR
-    {
-        return None;
-    }
-    match object_type {
-        CK_MESSAGE_CREATE => Some(CK_MESSAGE_CREATE),
-        CK_MESSAGE_REVISE => Some(CK_MESSAGE_REVISE),
-        CK_MESSAGE_REDACT => Some(CK_MESSAGE_REDACT),
-        CK_REDACTION => Some(CK_REDACTION),
-        CK_REACTION_ADD => Some(CK_REACTION_ADD),
-        CK_REACTION_REMOVE => Some(CK_REACTION_REMOVE),
-        CK_RELATION_CREATE => Some(CK_RELATION_CREATE),
-        CK_RELATION_UPDATE => Some(CK_RELATION_UPDATE),
-        CK_RELATION_DELETE => Some(CK_RELATION_DELETE),
-        CK_VIEW_CREATE => Some(CK_VIEW_CREATE),
-        CK_VIEW_UPDATE => Some(CK_VIEW_UPDATE),
-        CK_VIEW_RECONCILE => Some(CK_VIEW_RECONCILE),
-        CK_SPACE_CONTAINER_CREATE => Some(CK_SPACE_CONTAINER_CREATE),
-        CK_SPACE_CONTAINER_UPDATE => Some(CK_SPACE_CONTAINER_UPDATE),
-        CK_SPACE_CONTAINER_PARENT => Some(CK_SPACE_CONTAINER_PARENT),
-        CK_SPACE_CONTAINER_ARCHIVE => Some(CK_SPACE_CONTAINER_ARCHIVE),
-        CK_SPACE_CONTAINER_RESTORE => Some(CK_SPACE_CONTAINER_RESTORE),
-        CK_SPACE_CONTAINER_TOMBSTONE => Some(CK_SPACE_CONTAINER_TOMBSTONE),
-        CK_STRAND_CREATE => Some(CK_STRAND_CREATE),
-        CK_STRAND_UPDATE => Some(CK_STRAND_UPDATE),
-        CK_STRAND_ARCHIVE => Some(CK_STRAND_ARCHIVE),
-        CK_STRAND_RESTORE => Some(CK_STRAND_RESTORE),
-        CK_STRAND_MOVE => Some(CK_STRAND_MOVE),
-        CK_STRAND_REORDER => Some(CK_STRAND_REORDER),
-        CK_STRAND_WATCH_SET => Some(CK_STRAND_WATCH_SET),
-        CK_STRAND_TRACKS_UPDATE => Some(CK_STRAND_TRACKS_UPDATE),
-        CK_MORPH_CREATE => Some(CK_MORPH_CREATE),
-        CK_MORPH_UPDATE => Some(CK_MORPH_UPDATE),
-        CK_MORPH_ARCHIVE => Some(CK_MORPH_ARCHIVE),
-        CK_MORPH_RESTORE => Some(CK_MORPH_RESTORE),
-        CK_CONTAINER_MOVE_ITEM => Some(CK_CONTAINER_MOVE_ITEM),
-        CK_CONTAINER_REBALANCE => Some(CK_CONTAINER_REBALANCE),
-        CK_INVITE_CREATE => Some(CK_INVITE_CREATE),
-        CK_INVITE_ACCEPT => Some(CK_INVITE_ACCEPT),
-        CK_INVITE_CANCEL => Some(CK_INVITE_CANCEL),
-        CK_INVITE_CLAIM => Some(CK_INVITE_CLAIM),
-        CK_INVITE_REVOKE => Some(CK_INVITE_REVOKE),
-        CK_INVITE_THIRD_PARTY => Some(CK_INVITE_THIRD_PARTY),
-        CK_READ_MARKER => Some(CK_READ_MARKER),
-        CK_REALM_CREATE | CK_REALM_UPDATE | CK_REALM_ARCHIVE | CK_REALM_FREEZE
-        | CK_REALM_DESTROY | CK_REALM_TOMBSTONE => Some(match object_type {
-            CK_REALM_CREATE => CK_REALM_CREATE,
-            CK_REALM_ARCHIVE => CK_REALM_ARCHIVE,
-            CK_REALM_FREEZE => CK_REALM_FREEZE,
-            CK_REALM_DESTROY => CK_REALM_DESTROY,
-            CK_REALM_TOMBSTONE => CK_REALM_TOMBSTONE,
-            _ => CK_REALM_UPDATE,
-        }),
-        CK_REALM_MODERATION_POLICY => Some(CK_REALM_MODERATION_POLICY),
-        CK_REALM_DISAPPEARING_POLICY => Some(CK_REALM_DISAPPEARING_POLICY),
-        CK_REALM_HISTORY_VISIBILITY => Some(CK_REALM_HISTORY_VISIBILITY),
-        CK_REALM_HISTORY_SHARING_POLICY => Some(CK_REALM_HISTORY_SHARING_POLICY),
-        CK_REALM_POLICY_COMPONENTS => Some(CK_REALM_POLICY_COMPONENTS),
-        CK_REALM_PREVIEW_POLICY => Some(CK_REALM_PREVIEW_POLICY),
-        CK_REALM_ASSET_PRIVACY_POLICY => Some(CK_REALM_ASSET_PRIVACY_POLICY),
-        CK_REALM_READ_RECEIPT_POLICY => Some(CK_REALM_READ_RECEIPT_POLICY),
-        CK_REALM_SEARCH_POLICY => Some(CK_REALM_SEARCH_POLICY),
-        CK_REALM_MEDIA_SERVICE => Some(CK_REALM_MEDIA_SERVICE),
-        CK_REALM_PLAINTEXT_VISIBLE_SERVICES => Some(CK_REALM_PLAINTEXT_VISIBLE_SERVICES),
-        // `ck.call.state` — durable call lifecycle + recording/transcribe/
-        // moderation projection (cell family `ck.component.call.state.v1`).
-        CK_CALL_STATE => Some(CK_CALL_STATE),
-        // `ck.call.summary` — durable terminal call summary projection
-        // (cell family `ck.component.call.summary.v1`, write-once).
-        CK_CALL_SUMMARY => Some(CK_CALL_SUMMARY),
-        CK_REALM_KEY_SHARE => Some(CK_REALM_KEY_SHARE),
-        CK_RSVP_SET => Some(CK_RSVP_SET),
-        CK_PIN_ADD => Some(CK_PIN_ADD),
-        CK_PIN_REMOVE => Some(CK_PIN_REMOVE),
-        CK_PIN_REORDER => Some(CK_PIN_REORDER),
-        CK_CONFLICT_REPAIR => Some(CK_CONFLICT_REPAIR),
-        CK_AUDIT_ERASURE_RECEIPT => Some(CK_AUDIT_ERASURE_RECEIPT),
-        CK_MEMBER_STATE => Some(CK_MEMBER_STATE),
-        // R3.1 — MemberIdentity append-only replacement event.
-        CK_MEMBER_IDENTITY_UPDATE => Some(CK_MEMBER_IDENTITY_UPDATE),
-        // Applet protocol family (round 14e+).
-        CK_APPLET_REGISTRATION => Some(CK_APPLET_REGISTRATION),
-        CK_APPLET_DISCOVERY => Some(CK_APPLET_DISCOVERY),
-        CK_APPLET_INTEROP_SESSION_START => Some(CK_APPLET_INTEROP_SESSION_START),
-        CK_APPLET_INTEROP_SESSION_STATUS => Some(CK_APPLET_INTEROP_SESSION_STATUS),
-        CK_APPLET_BRIDGE_ERROR => Some(CK_APPLET_BRIDGE_ERROR),
-        // Agent protocol family (round 14e+).
-        CK_AGENT_ENDPOINT => Some(CK_AGENT_ENDPOINT),
-        CK_AGENT_INTEROP_SESSION_START => Some(CK_AGENT_INTEROP_SESSION_START),
-        CK_AGENT_INTEROP_SESSION_STATUS => Some(CK_AGENT_INTEROP_SESSION_STATUS),
-        CK_AGENT_INTEROP_SESSION_RESULT => Some(CK_AGENT_INTEROP_SESSION_RESULT),
-        // R3 spec-sync — agent lifecycle (FSM, reducer_input=true).
-        CK_AGENT_PAUSE => Some(CK_AGENT_PAUSE),
-        CK_AGENT_RESUME => Some(CK_AGENT_RESUME),
-        CK_AGENT_DEACTIVATE => Some(CK_AGENT_DEACTIVATE),
-        // R3 spec-sync — actor_private_event kinds (reducer_input=false).
-        CK_AGENT_DRAFT_PROPOSE => Some(CK_AGENT_DRAFT_PROPOSE),
-        CK_AGENT_ACTION_REQUEST => Some(CK_AGENT_ACTION_REQUEST),
-        CK_AGENT_ACTION_APPROVE => Some(CK_AGENT_ACTION_APPROVE),
-        CK_AGENT_ACTION_REJECT => Some(CK_AGENT_ACTION_REJECT),
-        // Round C45 — new event kinds. Wire-valid; reducer dispatch is TODO
-        // (morph.schema_migrate enforces capability + compatibility_class gate).
-        CK_MORPH_SCHEMA_MIGRATE => Some(CK_MORPH_SCHEMA_MIGRATE),
-        // Round C46 — delivery binding governance + push route binding.
-        // Wire-valid; reducer projection is TODO pending full policy /
-        // push registration plumbing.
-        CK_REALM_DELIVERY_BINDING_POLICY => Some(CK_REALM_DELIVERY_BINDING_POLICY),
-        CK_DEVICE_PUSH_ROUTE => Some(CK_DEVICE_PUSH_ROUTE),
-        // Realm graph — schema-level accept; reducer projection handles
-        // link_kind / inheritance / capability derive semantics.
-        CK_REALM_LINK => Some(CK_REALM_LINK),
-        CK_REALM_INHERITANCE_POLICY => Some(CK_REALM_INHERITANCE_POLICY),
-        CK_CAPABILITY_DERIVED => Some(CK_CAPABILITY_DERIVED),
-        // P1 — capability control-plane projection. grant / revoke share
-        // the `ck.component.capability.grant.v1` or_set cell (cell_subject =
-        // payload.grant_id); delegate projects into
-        // `ck.component.capability.delegate.v1` plus a parent-grant chain.
-        CK_CAPABILITY_GRANT => Some(CK_CAPABILITY_GRANT),
-        CK_CAPABILITY_REVOKE => Some(CK_CAPABILITY_REVOKE),
-        CK_CAPABILITY_DELEGATE => Some(CK_CAPABILITY_DELEGATE),
-        // P2 — moderation control-plane projection. decision / lift share
-        // the `ck.component.moderation_state.v1` or_set cell; appeal.* drive
-        // the `ck.component.moderation.appeal.v1` fsm cell. content-
-        // moderation.md §2.6 / §5.5; reducer projection in
-        // `reducer/apply_moderation.rs`.
-        CK_MODERATION_DECISION => Some(CK_MODERATION_DECISION),
-        CK_MODERATION_DECISION_LIFT => Some(CK_MODERATION_DECISION_LIFT),
-        CK_MODERATION_APPEAL_SUBMIT => Some(CK_MODERATION_APPEAL_SUBMIT),
-        CK_MODERATION_APPEAL_REVIEW => Some(CK_MODERATION_APPEAL_REVIEW),
-        CK_MODERATION_APPEAL_DECISION => Some(CK_MODERATION_APPEAL_DECISION),
-        CK_MODERATION_APPEAL_CLOSE => Some(CK_MODERATION_APPEAL_CLOSE),
-        // G3.S2 — policy server declaration.
-        CK_REALM_POLICY_SERVER => Some(CK_REALM_POLICY_SERVER),
-        // COT-06-004 — Realm default-Strand pointer.
-        CK_REALM_SET_DEFAULT_STRAND => Some(CK_REALM_SET_DEFAULT_STRAND),
-        _ => Some(object_type),
-    }
-}
-
-/// True for any `ck.audit.*` event kind. Used by the Realm terminal-state
-/// admission guard (`routing::events::event_log::terminal_realm_check`) to
-/// admit audit-class
-/// writes even after a Realm has reached `ck.realm.tombstone` /
-/// `ck.realm.destroy` terminal state. Spec
-/// `cokret-spec/spec/v1/zh/models/realm-and-space.md` §2.5.1.
-pub fn is_audit_kind(kind: &str) -> bool {
-    kind.starts_with("ck.audit.")
-}
-
-/// Applet + agent family classifiers used by projection/audit
-/// dispatchers that want to fan out the whole family without listing
-/// every kind individually.
-pub fn is_applet_kind(kind: &str) -> bool {
-    matches!(
-        kind,
-        CK_APPLET_REGISTRATION
-            | CK_APPLET_DISCOVERY
-            | CK_APPLET_INTEROP_SESSION_START
-            | CK_APPLET_INTEROP_SESSION_STATUS
-            | CK_APPLET_BRIDGE_ERROR
-    )
-}
-
-pub fn is_agent_kind(kind: &str) -> bool {
-    matches!(
-        kind,
-        CK_AGENT_ENDPOINT
-            | CK_AGENT_INTEROP_SESSION_START
-            | CK_AGENT_INTEROP_SESSION_STATUS
-            | CK_AGENT_INTEROP_SESSION_RESULT
-            | CK_AGENT_PAUSE
-            | CK_AGENT_RESUME
-            | CK_AGENT_DEACTIVATE
-            | CK_AGENT_DRAFT_PROPOSE
-            | CK_AGENT_ACTION_REQUEST
-            | CK_AGENT_ACTION_APPROVE
-            | CK_AGENT_ACTION_REJECT
-    )
-}
-
-/// R3 spec-sync (2026-05-27) — FSM-lattice agent lifecycle kinds.
-pub fn is_agent_lifecycle_kind(kind: &str) -> bool {
-    matches!(kind, CK_AGENT_PAUSE | CK_AGENT_RESUME | CK_AGENT_DEACTIVATE)
-}
-
-/// R3 spec-sync — `actor_private_event` kinds (reducer_input=false).
-/// These MUST NOT advance the seal frontier / actor_seq; the reducer
-/// dispatches them through the audit-log projection only.
-pub fn is_actor_private_event_kind(kind: &str) -> bool {
-    matches!(
-        kind,
-        CK_ACCOUNT_DATA_SET
-            | CK_READ_MARKER
-            | CK_AGENT_DRAFT_PROPOSE
-            | CK_AGENT_ACTION_REQUEST
-            | CK_AGENT_ACTION_APPROVE
-            | CK_AGENT_ACTION_REJECT
-    )
-}
-
 pub fn operation_is_message_create(operation: &Operation) -> bool {
-    canonical_kind_for_operation(operation) == Some(CK_MESSAGE_CREATE)
+    canonical_kind_for_operation(operation) == Some(cokret_sdk::events::kinds::MESSAGE_CREATE)
 }
 
 pub fn operation_is_redaction(operation: &Operation) -> bool {
-    matches!(
-        canonical_kind_for_operation(operation),
-        Some(CK_MESSAGE_REDACT | CK_REDACTION)
-    )
+    canonical_kind_for_operation(operation)
+        .is_some_and(cokret_sdk::events::kinds::is_redaction_kind)
 }
 
 pub fn operation_is_membership(operation: &Operation) -> bool {
-    canonical_kind_for_operation(operation) == Some(CK_MEMBER_STATE)
+    canonical_kind_for_operation(operation)
+        .is_some_and(cokret_sdk::events::kinds::is_membership_kind)
 }
 
 pub fn operation_is_invite(operation: &Operation) -> bool {
-    canonical_kind_for_operation(operation).is_some_and(is_invite_kind)
+    canonical_kind_for_operation(operation).is_some_and(cokret_sdk::events::kinds::is_invite_kind)
 }
 
 pub fn operation_is_invite_create(operation: &Operation) -> bool {
-    canonical_kind_for_operation(operation) == Some(CK_INVITE_CREATE)
+    canonical_kind_for_operation(operation) == Some(cokret_sdk::events::kinds::INVITE_CREATE)
 }
 
 pub fn operation_is_invite_claim(operation: &Operation) -> bool {
-    canonical_kind_for_operation(operation) == Some(CK_INVITE_CLAIM)
+    canonical_kind_for_operation(operation) == Some(cokret_sdk::events::kinds::INVITE_CLAIM)
 }
 
 pub fn operation_is_invite_third_party(operation: &Operation) -> bool {
-    canonical_kind_for_operation(operation) == Some(CK_INVITE_THIRD_PARTY)
+    canonical_kind_for_operation(operation) == Some(cokret_sdk::events::kinds::INVITE_THIRD_PARTY)
 }
 
 pub fn operation_is_realm_lifecycle(operation: &Operation) -> bool {
-    canonical_kind_for_operation(operation).is_some_and(is_realm_lifecycle_kind)
-}
-
-pub fn is_redaction_kind(kind: &str) -> bool {
-    matches!(kind, CK_MESSAGE_REDACT | CK_REDACTION | "redaction")
-}
-
-pub fn is_membership_kind(kind: &str) -> bool {
-    matches!(kind, CK_MEMBER_STATE | CK_MEMBER_IDENTITY_UPDATE)
-}
-
-pub fn is_invite_kind(kind: &str) -> bool {
-    matches!(
-        kind,
-        CK_INVITE_CREATE
-            | CK_INVITE_ACCEPT
-            | CK_INVITE_CANCEL
-            | CK_INVITE_CLAIM
-            | CK_INVITE_REVOKE
-            | CK_INVITE_THIRD_PARTY
-    )
-}
-
-pub fn is_realm_lifecycle_kind(kind: &str) -> bool {
-    matches!(
-        kind,
-        CK_REALM_CREATE
-            | CK_REALM_UPDATE
-            | CK_REALM_ARCHIVE
-            | CK_REALM_FREEZE
-            | CK_REALM_DESTROY
-            | CK_REALM_TOMBSTONE
-    )
-}
-
-pub fn is_pin_kind(kind: &str) -> bool {
-    matches!(kind, CK_PIN_ADD | CK_PIN_REMOVE | CK_PIN_REORDER)
-}
-
-pub fn is_space_container_lifecycle_kind(kind: &str) -> bool {
-    matches!(
-        kind,
-        CK_SPACE_CONTAINER_ARCHIVE | CK_SPACE_CONTAINER_RESTORE | CK_SPACE_CONTAINER_TOMBSTONE
-    )
-}
-
-/// Strand has no dedicated `ck.strand.tombstone` event in the spec event-kind
-/// registry — terminal state is reached via `ck.redaction`. Only archive /
-/// restore are lifecycle state-machine transitions here.
-pub fn is_strand_lifecycle_kind(kind: &str) -> bool {
-    matches!(kind, CK_STRAND_ARCHIVE | CK_STRAND_RESTORE)
-}
-
-/// Morph has no dedicated tombstone event for the same reason as Strand.
-pub fn is_morph_lifecycle_kind(kind: &str) -> bool {
-    matches!(kind, CK_MORPH_ARCHIVE | CK_MORPH_RESTORE)
-}
-
-/// Strand tracks update events. Distinct from lifecycle events
-/// (`is_strand_lifecycle_kind`) because tracks don't transition Strand.state;
-/// they manage entries in `Strand.tracks`. The state guard is "parent Strand
-/// MUST be Active" (spec §5.1 update rule), enforced via
-/// `check_strand_tracks_transition`.
-pub fn is_strand_tracks_kind(kind: &str) -> bool {
-    matches!(kind, CK_STRAND_TRACKS_UPDATE)
+    canonical_kind_for_operation(operation)
+        .is_some_and(cokret_sdk::events::kinds::is_realm_lifecycle_kind)
 }
 
 // G3.S9: extensions (applet/bot/tsp) — stub event kinds. Wire-accept +
@@ -693,11 +309,11 @@ pub fn is_strand_tracks_kind(kind: &str) -> bool {
 // Spec seals:
 //   - `extensions/applet-integration.md` §3–§5 (bot / ghost actor accountability model)
 //   - `identity/tsp-integration.md` §3–§5 (transport declaration, route, audit chain)
-pub const CK_EXTENSIONS_BOT_REGISTER: &str = "ck.extensions.bot_actor.register";
-pub const CK_EXTENSIONS_BOT_REVOKE: &str = "ck.extensions.bot_actor.revoke";
-pub const CK_EXTENSIONS_TSP_TRANSPORT_DECLARE: &str = "ck.extensions.tsp.transport_declare";
-pub const CK_EXTENSIONS_TSP_ROUTE_ESTABLISH: &str = "ck.extensions.tsp.route_establish";
-pub const CK_EXTENSIONS_TSP_AUDIT_APPEND: &str = "ck.extensions.tsp.audit_append";
+pub const EXTENSIONS_BOT_REGISTER: &str = "ck.extensions.bot_actor.register";
+pub const EXTENSIONS_BOT_REVOKE: &str = "ck.extensions.bot_actor.revoke";
+pub const EXTENSIONS_TSP_TRANSPORT_DECLARE: &str = "ck.extensions.tsp.transport_declare";
+pub const EXTENSIONS_TSP_ROUTE_ESTABLISH: &str = "ck.extensions.tsp.route_establish";
+pub const EXTENSIONS_TSP_AUDIT_APPEND: &str = "ck.extensions.tsp.audit_append";
 
 // ────────────────────────────────────────────────────────────────────────
 // Audit-compliance profiles + Realm terminal-state classifier (spec T07/T09/T23).

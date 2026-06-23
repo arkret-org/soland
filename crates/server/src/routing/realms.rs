@@ -31,7 +31,6 @@ use serde_json::{Value, json};
 use super::{AuthArgs, accept_local_operations};
 use crate::error::AppError;
 use crate::ids;
-use crate::kinds::CK_REALM_LINK;
 use crate::reducer::RealmLinkState;
 use crate::reducer::realm_links::{check_realm_link_admissible, effective_policy_for_realm};
 use crate::result::{JsonResult, json_ok};
@@ -135,7 +134,7 @@ async fn list_realm_links(
 }
 
 /// G3.S5 — POST a new `ck.realm.link` Move. Builds an `Operation` for
-/// `CK_REALM_LINK` and routes through the standard
+/// `cokret_sdk::events::kinds::REALM_LINK` and routes through the standard
 /// `accept_local_operations` pipeline so reducer-level validators
 /// (cycle detection, kind validation, self-reference rejection) all run.
 #[endpoint(
@@ -184,7 +183,12 @@ async fn post_realm_link(
     }
     let op_id = OperationId::new(ids::generate_operation_id())
         .map_err(|e| AppError::invalid_param(format!("operation_id: {e}")))?;
-    let operation = Operation::create(op_id, realm_scope.clone(), CK_REALM_LINK, payload);
+    let operation = Operation::create(
+        op_id,
+        realm_scope.clone(),
+        cokret_sdk::events::kinds::REALM_LINK,
+        payload,
+    );
     accept_local_operations(state, &session.actor, std::slice::from_ref(&operation))
         .await
         .map_err(reducer_reject_to_app_error)?;
@@ -267,7 +271,12 @@ async fn delete_realm_link(
     });
     let op_id = OperationId::new(ids::generate_operation_id())
         .map_err(|e| AppError::invalid_param(format!("operation_id: {e}")))?;
-    let operation = Operation::create(op_id, realm_id.clone(), CK_REALM_LINK, payload);
+    let operation = Operation::create(
+        op_id,
+        realm_id.clone(),
+        cokret_sdk::events::kinds::REALM_LINK,
+        payload,
+    );
     accept_local_operations(state, &session.actor, std::slice::from_ref(&operation))
         .await
         .map_err(reducer_reject_to_app_error)?;

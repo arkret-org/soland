@@ -66,7 +66,7 @@ fn circle_manage_pull_realm_member_succeeds() {
     // Circle; bob performs no action and lands in `members` immediately.
     let (mut state, hlc, realm, circle) = seed_circle_authz_state();
     let op = make_operation(
-        crate::kinds::CK_CIRCLE_MEMBER_STATE,
+        cokret_sdk::events::kinds::CIRCLE_MEMBER_STATE,
         &realm,
         serde_json::json!({
             "circle_id": circle,
@@ -93,7 +93,7 @@ fn circle_pull_without_manage_rejected() {
     // (e.g. the HTTP gate was bypassed). The reducer fails closed.
     let (mut state, hlc, realm, circle) = seed_circle_authz_state();
     let op = make_operation(
-        crate::kinds::CK_CIRCLE_MEMBER_STATE,
+        cokret_sdk::events::kinds::CIRCLE_MEMBER_STATE,
         &realm,
         serde_json::json!({
             "circle_id": circle,
@@ -119,7 +119,7 @@ fn circle_pull_non_realm_member_rejected() {
     // violates the strict-subset invariant.
     let (mut state, hlc, realm, circle) = seed_circle_authz_state();
     let op = make_operation(
-        crate::kinds::CK_CIRCLE_MEMBER_STATE,
+        cokret_sdk::events::kinds::CIRCLE_MEMBER_STATE,
         &realm,
         serde_json::json!({
             "circle_id": circle,
@@ -147,7 +147,7 @@ fn circle_self_join_requires_open_rule() {
     // capability.
     let (mut state, hlc, realm, circle) = seed_circle_authz_state();
     let op_invite = make_operation(
-        crate::kinds::CK_CIRCLE_MEMBER_STATE,
+        cokret_sdk::events::kinds::CIRCLE_MEMBER_STATE,
         &realm,
         serde_json::json!({
             "circle_id": circle, "actor_id": "did:web:bob",
@@ -162,7 +162,7 @@ fn circle_self_join_requires_open_rule() {
         "self-join on a non-open Circle must be rejected"
     );
     let op_invite_with_manage = make_operation(
-        crate::kinds::CK_CIRCLE_MEMBER_STATE,
+        cokret_sdk::events::kinds::CIRCLE_MEMBER_STATE,
         &realm,
         serde_json::json!({
             "circle_id": circle, "actor_id": "did:web:alice",
@@ -181,7 +181,7 @@ fn circle_self_join_requires_open_rule() {
     // Flip the Circle to open and retry.
     state.circles.get_mut(&circle).unwrap().join_rule = "open".to_owned();
     let op_open = make_operation(
-        crate::kinds::CK_CIRCLE_MEMBER_STATE,
+        cokret_sdk::events::kinds::CIRCLE_MEMBER_STATE,
         &realm,
         serde_json::json!({
             "circle_id": circle, "actor_id": "did:web:bob",
@@ -212,7 +212,11 @@ fn content_floor_ratchet_allows_upgrade_then_rejects_downgrade() {
             None => serde_json::json!({}),
         };
         state.apply(
-            &make_operation(crate::kinds::CK_REALM_POLICY_COMPONENTS, realm, payload),
+            &make_operation(
+                cokret_sdk::events::kinds::REALM_POLICY_COMPONENTS,
+                realm,
+                payload,
+            ),
             &hlc,
         )
     };
@@ -246,7 +250,7 @@ fn metadata_floor_ratchet_rejects_downgrade() {
     let apply_meta = |state: &mut ProjectionState, level: &str| {
         state.apply(
             &make_operation(
-                crate::kinds::CK_REALM_POLICY_COMPONENTS,
+                cokret_sdk::events::kinds::REALM_POLICY_COMPONENTS,
                 realm,
                 serde_json::json!({ "metadata_encryption_floor": level }),
             ),

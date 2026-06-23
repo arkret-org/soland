@@ -19,7 +19,7 @@ use crate::routing::identity::device_messages::{
     READ_MARKER_UPDATE_TYPE, fanout_actor_private_update,
 };
 use crate::state::AppState;
-use crate::{JsonResult, ids, json_ok, kinds};
+use crate::{JsonResult, ids, json_ok};
 
 #[endpoint(
     operation_id = "ck.self.read_cursor.command.advance",
@@ -61,7 +61,7 @@ pub(super) async fn set_read_cursor(
         OperationId::new(operation_id.clone())
             .map_err(|e| AppError::invalid_param(format!("operation_id: {e}")))?,
         realm_id.clone(),
-        kinds::CK_READ_MARKER,
+        cokret_sdk::events::kinds::READ_CURSOR_ADVANCE,
         payload,
     );
     operation.created_at = read_at;

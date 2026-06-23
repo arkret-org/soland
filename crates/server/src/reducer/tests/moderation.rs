@@ -23,7 +23,7 @@ fn mod_decision_cell_ref() -> CellRef {
 
 fn seed_decision(state: &mut ProjectionState, hlc: &ServerHlc, issuer: &str) {
     let op = make_operation(
-        crate::kinds::CK_MODERATION_DECISION,
+        cokret_sdk::events::kinds::MODERATION_DECISION,
         MOD_REALM,
         serde_json::json!({
             "decision_id": MOD_DECISION_ID,
@@ -44,7 +44,7 @@ fn seed_decision(state: &mut ProjectionState, hlc: &ServerHlc, issuer: &str) {
 
 fn submit_appeal(state: &mut ProjectionState, hlc: &ServerHlc, appellant: &str) {
     let op = make_operation(
-        crate::kinds::CK_MODERATION_APPEAL_SUBMIT,
+        cokret_sdk::events::kinds::MODERATION_APPEAL_SUBMIT,
         MOD_REALM,
         serde_json::json!({
             "appeal_id": MOD_APPEAL_ID,
@@ -89,7 +89,7 @@ fn moderation_decision_then_lift_converges_on_cell() {
     );
 
     let lift = make_operation(
-        crate::kinds::CK_MODERATION_DECISION_LIFT,
+        cokret_sdk::events::kinds::MODERATION_DECISION_LIFT,
         MOD_REALM,
         serde_json::json!({
             "decision_ref": MOD_DECISION_ID,
@@ -126,7 +126,7 @@ fn moderation_appeal_fsm_submitted_under_review_decided() {
     );
 
     let review = make_operation(
-        crate::kinds::CK_MODERATION_APPEAL_REVIEW,
+        cokret_sdk::events::kinds::MODERATION_APPEAL_REVIEW,
         MOD_REALM,
         serde_json::json!({
             "appeal_id": MOD_APPEAL_ID,
@@ -144,7 +144,7 @@ fn moderation_appeal_fsm_submitted_under_review_decided() {
     );
 
     let decide = make_operation(
-        crate::kinds::CK_MODERATION_APPEAL_DECISION,
+        cokret_sdk::events::kinds::MODERATION_APPEAL_DECISION,
         MOD_REALM,
         serde_json::json!({
             "appeal_id": MOD_APPEAL_ID,
@@ -170,7 +170,7 @@ fn moderation_appeal_invalid_transition_rejected() {
     let hlc = ServerHlc::new("did:web:test.soland");
     // review before submit => (none) -> under_review is illegal.
     let review = make_operation(
-        crate::kinds::CK_MODERATION_APPEAL_REVIEW,
+        cokret_sdk::events::kinds::MODERATION_APPEAL_REVIEW,
         MOD_REALM,
         serde_json::json!({
             "appeal_id": MOD_APPEAL_ID,
@@ -192,7 +192,7 @@ fn moderation_appeal_reviewer_close_before_decision_rejected() {
     seed_decision(&mut state, &hlc, "did:web:mod.example");
     submit_appeal(&mut state, &hlc, "did:web:appellant.example");
     let review = make_operation(
-        crate::kinds::CK_MODERATION_APPEAL_REVIEW,
+        cokret_sdk::events::kinds::MODERATION_APPEAL_REVIEW,
         MOD_REALM,
         serde_json::json!({
             "appeal_id": MOD_APPEAL_ID,
@@ -206,7 +206,7 @@ fn moderation_appeal_reviewer_close_before_decision_rejected() {
     ));
 
     let close = make_operation(
-        crate::kinds::CK_MODERATION_APPEAL_CLOSE,
+        cokret_sdk::events::kinds::MODERATION_APPEAL_CLOSE,
         MOD_REALM,
         serde_json::json!({
             "appeal_id": MOD_APPEAL_ID,
@@ -230,7 +230,7 @@ fn moderation_appeal_appellant_withdrawal_before_decision_allowed() {
     submit_appeal(&mut state, &hlc, "did:web:appellant.example");
 
     let close = make_operation(
-        crate::kinds::CK_MODERATION_APPEAL_CLOSE,
+        cokret_sdk::events::kinds::MODERATION_APPEAL_CLOSE,
         MOD_REALM,
         serde_json::json!({
             "appeal_id": MOD_APPEAL_ID,
@@ -254,7 +254,7 @@ fn moderation_appeal_self_review_forbidden() {
     seed_decision(&mut state, &hlc, "did:web:mod.example");
     submit_appeal(&mut state, &hlc, "did:web:appellant.example");
     let review = make_operation(
-        crate::kinds::CK_MODERATION_APPEAL_REVIEW,
+        cokret_sdk::events::kinds::MODERATION_APPEAL_REVIEW,
         MOD_REALM,
         serde_json::json!({
             "appeal_id": MOD_APPEAL_ID,
@@ -276,7 +276,7 @@ fn moderation_appeal_overturn_missing_lift_rejected() {
     seed_decision(&mut state, &hlc, "did:web:mod.example");
     submit_appeal(&mut state, &hlc, "did:web:appellant.example");
     let review = make_operation(
-        crate::kinds::CK_MODERATION_APPEAL_REVIEW,
+        cokret_sdk::events::kinds::MODERATION_APPEAL_REVIEW,
         MOD_REALM,
         serde_json::json!({
             "appeal_id": MOD_APPEAL_ID,
@@ -290,7 +290,7 @@ fn moderation_appeal_overturn_missing_lift_rejected() {
     ));
     // overturn WITHOUT a prior lift on the moderation_state cell => reject.
     let decide = make_operation(
-        crate::kinds::CK_MODERATION_APPEAL_DECISION,
+        cokret_sdk::events::kinds::MODERATION_APPEAL_DECISION,
         MOD_REALM,
         serde_json::json!({
             "appeal_id": MOD_APPEAL_ID,
@@ -309,7 +309,7 @@ fn moderation_appeal_overturn_missing_lift_rejected() {
     // Project the paired lift first (ordered-batch semantics), then the
     // overturn decision converges.
     let lift = make_operation(
-        crate::kinds::CK_MODERATION_DECISION_LIFT,
+        cokret_sdk::events::kinds::MODERATION_DECISION_LIFT,
         MOD_REALM,
         serde_json::json!({
             "decision_ref": MOD_DECISION_ID,
@@ -336,7 +336,7 @@ fn moderation_appeal_duplicate_active_rejected() {
     submit_appeal(&mut state, &hlc, "did:web:appellant.example");
 
     let duplicate = make_operation(
-        crate::kinds::CK_MODERATION_APPEAL_SUBMIT,
+        cokret_sdk::events::kinds::MODERATION_APPEAL_SUBMIT,
         MOD_REALM,
         serde_json::json!({
             "appeal_id": "ck:appeal:01904100-0000-7000-8000-0a0a0a0a0a02",

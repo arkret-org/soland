@@ -535,7 +535,7 @@ impl ProjectionState {
         }
         let map_key = (pin_scope_key.clone(), target_ref.to_owned());
         let operation_kind = crate::kinds::canonical_kind_for_operation(operation);
-        if operation_kind == Some(crate::kinds::CK_PIN_REMOVE) {
+        if operation_kind == Some(cokret_sdk::events::kinds::PIN_REMOVE) {
             if let Some(pin) = self.pins.get_mut(&map_key) {
                 pin.active = false;
                 pin.updated_at = now;
@@ -552,7 +552,7 @@ impl ProjectionState {
             };
         };
         let previous = self.pins.get(&map_key);
-        let note = if operation_kind == Some(crate::kinds::CK_PIN_REORDER) {
+        let note = if operation_kind == Some(cokret_sdk::events::kinds::PIN_REORDER) {
             previous.and_then(|pin| pin.note.clone())
         } else {
             operation.payload.get("note").cloned()
@@ -578,7 +578,7 @@ impl ProjectionState {
 
     pub fn check_pin_scope_safety(&self, operation: &Operation) -> Result<(), &'static str> {
         if !crate::kinds::canonical_kind_for_operation(operation)
-            .is_some_and(crate::kinds::is_pin_kind)
+            .is_some_and(cokret_sdk::events::kinds::is_pin_kind)
         {
             return Ok(());
         }

@@ -169,7 +169,7 @@ pub(crate) fn projection_operation_from_event(
             .entry("hlc".to_owned())
             .or_insert_with(|| Value::String(hlc.to_owned()));
     }
-    if parsed.kind == kinds::CK_RELATION_CREATE {
+    if parsed.kind == cokret_sdk::events::kinds::RELATION_CREATE {
         normalize_relation_create_payload(payload_object, parsed);
     }
     if let Some(target_ref) = payload_object
@@ -213,7 +213,7 @@ pub(crate) fn projection_operation_from_event(
             .entry("actor_seq".to_owned())
             .or_insert_with(|| Value::from(parsed.actor_seq));
     }
-    if parsed.kind == kinds::CK_MORPH_SCHEMA_MIGRATE {
+    if parsed.kind == cokret_sdk::events::kinds::MORPH_SCHEMA_MIGRATE {
         if let Some(authorization_ref) = parsed.authorized_refs.first() {
             payload_object
                 .entry("authorization_ref".to_owned())
@@ -353,7 +353,8 @@ pub(crate) fn effective_scope_for_envelope(envelope: &Value) -> Option<String> {
     // server-stamped `effective_scope` above, derived from its Strand at ingest.
     // There is deliberately no client-supplied fallback, so a message cannot
     // spoof its own visibility scope.
-    if object.get("kind").and_then(Value::as_str) == Some(kinds::CK_MESSAGE_CREATE) {
+    if object.get("kind").and_then(Value::as_str) == Some(cokret_sdk::events::kinds::MESSAGE_CREATE)
+    {
         return None;
     }
     // Non-message events (e.g. ck.strand.create / ck.strand.update) legitimately

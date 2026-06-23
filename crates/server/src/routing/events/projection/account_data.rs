@@ -92,7 +92,7 @@ pub(super) fn actor_private_read_cursor_matches_origin(
     source_device_id: &str,
     operation: &Operation,
 ) -> bool {
-    if kinds::canonical_kind_string(operation) != kinds::CK_READ_MARKER
+    if kinds::canonical_kind_string(operation) != cokret_sdk::events::kinds::READ_CURSOR_ADVANCE
         || source_device_id.is_empty()
     {
         return true;

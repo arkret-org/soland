@@ -246,7 +246,7 @@ pub(super) async fn submit_event_batch(
                     duplicate.push(response.event_id);
                 }
                 if !response.duplicate
-                    && kind.as_deref() == Some(kinds::CK_REALM_CREATE)
+                    && kind.as_deref() == Some(cokret_sdk::events::kinds::REALM_CREATE)
                     && let (Some(realm_id), Some(actor_id)) = (realm_id, actor_id)
                 {
                     realm_bootstrap_contexts
@@ -928,7 +928,7 @@ async fn preflight_mls_welcome_claim_signature_reject(
     actor_id: &str,
     operation: &Operation,
 ) -> Option<String> {
-    if kinds::canonical_kind_string(operation) != kinds::CK_MLS_WELCOME {
+    if kinds::canonical_kind_string(operation) != cokret_sdk::events::kinds::MLS_WELCOME {
         return None;
     }
     let envelope_value = match operation.payload.get("claim_envelope") {
@@ -1127,9 +1127,9 @@ async fn submit_event_value_with_context(
             format!("events store unavailable: {error}"),
         )
     })?;
-    if parsed.kind == kinds::CK_REALM_CREATE
+    if parsed.kind == cokret_sdk::events::kinds::REALM_CREATE
         && existing_records.iter().any(|record| {
-            record.kind == kinds::CK_REALM_CREATE
+            record.kind == cokret_sdk::events::kinds::REALM_CREATE
                 && record.realm_id.as_deref() == Some(parsed.realm_id.as_str())
         })
     {
@@ -1496,10 +1496,14 @@ async fn submit_event_value_with_context(
     let scope_strand_id: Option<String> = envelope
         .get("payload")
         .and_then(|payload| match parsed.kind.as_str() {
-            kinds::CK_MESSAGE_CREATE | kinds::CK_STRAND_MOVE | kinds::CK_STRAND_REORDER => {
+            cokret_sdk::events::kinds::MESSAGE_CREATE
+            | cokret_sdk::events::kinds::STRAND_MOVE
+            | cokret_sdk::events::kinds::STRAND_REORDER => {
                 payload.get("strand_id").and_then(Value::as_str)
             }
-            kinds::CK_STRAND_UPDATE | kinds::CK_STRAND_ARCHIVE | kinds::CK_STRAND_RESTORE => {
+            cokret_sdk::events::kinds::STRAND_UPDATE
+            | cokret_sdk::events::kinds::STRAND_ARCHIVE
+            | cokret_sdk::events::kinds::STRAND_RESTORE => {
                 payload.get("target_ref").and_then(Value::as_str)
             }
             _ => None,
@@ -1534,7 +1538,7 @@ async fn submit_event_value_with_context(
         })
         .await
     {
-        if parsed.kind == kinds::CK_REALM_CREATE
+        if parsed.kind == cokret_sdk::events::kinds::REALM_CREATE
             && persistence_error_is_realm_already_exists(&error)
         {
             return Err(realm_already_exists_error());

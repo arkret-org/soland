@@ -24,11 +24,11 @@ use super::types::{
     GhostActorRecord,
 };
 use crate::error::AppError;
+use crate::ids;
 use crate::reducer::AppletProjection;
 use crate::routing::events::projection::projection_event_json;
 use crate::routing::events::strand::strand_id_from_realm_id;
 use crate::state::{AppState, EventNotification, MessageRecord, ProjectionEventRecord};
-use crate::{ids, kinds};
 
 pub(super) const GHOST_PROVISION_ACTION: &str = "ck.applet.ghost.provision";
 
@@ -383,12 +383,12 @@ fn install_execution_steps(
         1 + response.capability_grant_refs.len() + response.e2ee_authorization_refs.len(),
     );
     let registration_body = json!({
-        "event_kind": kinds::CK_APPLET_REGISTRATION,
+        "event_kind": cokret_sdk::events::kinds::APPLET_REGISTRATION,
         "payload": registration_payload_from_package(package)?,
     });
     steps.push(install_execution_step(
         0,
-        kinds::CK_APPLET_REGISTRATION,
+        cokret_sdk::events::kinds::APPLET_REGISTRATION,
         &response.registration_event_ref,
         canonical_digest(&registration_body)?,
         accepted,
@@ -402,7 +402,7 @@ fn install_execution_steps(
     {
         let grant = applet_install_grant(record, package, grant_id, action);
         let grant_body = json!({
-            "event_kind": kinds::CK_CAPABILITY_GRANT,
+            "event_kind": cokret_sdk::events::kinds::CAPABILITY_GRANT,
             "payload": {
                 "grant_id": grant_id,
                 "grant": grant,
@@ -410,7 +410,7 @@ fn install_execution_steps(
         });
         steps.push(install_execution_step(
             offset + 1,
-            kinds::CK_CAPABILITY_GRANT,
+            cokret_sdk::events::kinds::CAPABILITY_GRANT,
             grant_id,
             canonical_digest(&grant_body)?,
             accepted,
@@ -485,7 +485,7 @@ pub(super) async fn append_applet_registration_projection(
     let projection_record = ProjectionEventRecord {
         event_id: event_id.to_owned(),
         realm_id,
-        event_kind: kinds::CK_APPLET_REGISTRATION.to_owned(),
+        event_kind: cokret_sdk::events::kinds::APPLET_REGISTRATION.to_owned(),
         operation_type: "applet_install_registration".to_owned(),
         operation_id: None,
         sender: Some(record.owner_actor_id.clone()),
@@ -652,7 +652,7 @@ pub(super) async fn append_portal_message(
     let projection_record = ProjectionEventRecord {
         event_id: event_id.clone(),
         realm_id: realm_id.to_owned(),
-        event_kind: kinds::CK_MESSAGE_CREATE.to_owned(),
+        event_kind: cokret_sdk::events::kinds::MESSAGE_CREATE.to_owned(),
         operation_type: "applet_portal_ingress".to_owned(),
         operation_id: Some(operation_id.clone()),
         sender: Some(ghost.ghost_actor_id.clone()),
@@ -934,7 +934,7 @@ pub(super) async fn build_install_plan(
         "approved_scopes": approved_scopes,
         "denied_scopes": denied_scopes,
         "events_to_submit": [{
-            "event_kind": kinds::CK_APPLET_REGISTRATION,
+            "event_kind": cokret_sdk::events::kinds::APPLET_REGISTRATION,
             "payload": registration_payload,
         }],
         "capability_constraints": capability_constraints_for_scope(scope),
@@ -955,7 +955,7 @@ pub(super) async fn build_install_plan(
         approved_scopes,
         denied_scopes,
         events_to_submit: vec![InstallEventSubmission {
-            event_kind: kinds::CK_APPLET_REGISTRATION.to_owned(),
+            event_kind: cokret_sdk::events::kinds::APPLET_REGISTRATION.to_owned(),
             payload: registration_payload,
             refs: Vec::new(),
         }],
@@ -1413,7 +1413,7 @@ mod tests {
         assert_eq!(pending_steps.len(), 3);
         assert_eq!(
             pending_steps[0]["target_event_kind"],
-            json!(kinds::CK_APPLET_REGISTRATION)
+            json!(cokret_sdk::events::kinds::APPLET_REGISTRATION)
         );
         assert_eq!(pending_steps[0]["status"], json!("pending"));
         assert_eq!(pending_steps[0]["event_ref"], Value::Null);

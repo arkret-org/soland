@@ -843,7 +843,7 @@ impl ProjectionState {
     /// the delegate cell / authz index.
     pub fn check_delegation_cycle(&self, operation: &Operation) -> Result<(), &'static str> {
         if crate::kinds::canonical_kind_for_operation(operation)
-            != Some(crate::kinds::CK_CAPABILITY_DELEGATE)
+            != Some(cokret_sdk::events::kinds::CAPABILITY_DELEGATE)
         {
             return Ok(());
         }
@@ -1306,7 +1306,7 @@ mod delegation_cycle_tests {
         Operation::create(
             OperationId::new("ck:operation:01970000-0000-7000-8000-0000000000fe").unwrap(),
             RealmId::new(REALM.to_owned()).unwrap(),
-            crate::kinds::CK_CAPABILITY_DELEGATE,
+            cokret_sdk::events::kinds::CAPABILITY_DELEGATE,
             json!({
                 "grant_id": grant_id,
                 "grant": {
@@ -1333,7 +1333,7 @@ mod delegation_cycle_tests {
         Operation::create(
             OperationId::new("ck:operation:01970000-0000-7000-8000-0000000000fd").unwrap(),
             RealmId::new(REALM.to_owned()).unwrap(),
-            crate::kinds::CK_CAPABILITY_GRANT,
+            cokret_sdk::events::kinds::CAPABILITY_GRANT,
             json!({
                 "grant_id": grant_id,
                 "grant": {

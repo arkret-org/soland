@@ -886,7 +886,9 @@ pub(crate) fn validate_cross_signing_reset_replay_batch(
 ) -> Result<(), &'static str> {
     let mut seen = std::collections::BTreeSet::new();
     for operation in operations {
-        if kinds::canonical_kind_for_operation(operation) != Some(kinds::CK_CROSS_SIGNING_RESET) {
+        if kinds::canonical_kind_for_operation(operation)
+            != Some(cokret_sdk::events::kinds::CROSS_SIGNING_RESET)
+        {
             continue;
         }
         let Some(principal_id) = operation

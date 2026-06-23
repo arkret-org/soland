@@ -30,7 +30,7 @@ fn receipt_object_kind_rejected_at_submit_entry() {
 #[test]
 fn unimplemented_morph_schema_migrate_rejected_at_submit_entry() {
     assert!(matches!(
-        events_submit_pre_admit_check(crate::kinds::CK_MORPH_SCHEMA_MIGRATE),
+        events_submit_pre_admit_check(cokret_sdk::events::kinds::MORPH_SCHEMA_MIGRATE),
         Some((ErrorCode::SchemaViolation, _))
     ));
 }
@@ -54,8 +54,8 @@ fn terminal_realm_blocks_non_audit_kind() {
 #[test]
 fn frozen_realm_blocks_ordinary_write_but_allows_lifecycle_escape() {
     assert!(frozen_realm_check(true, "ck.message.create").is_some());
-    assert!(frozen_realm_check(true, crate::kinds::CK_REALM_FREEZE).is_none());
-    assert!(frozen_realm_check(true, crate::kinds::CK_REALM_DESTROY).is_none());
+    assert!(frozen_realm_check(true, cokret_sdk::events::kinds::REALM_FREEZE).is_none());
+    assert!(frozen_realm_check(true, cokret_sdk::events::kinds::REALM_DESTROY).is_none());
     assert!(frozen_realm_check(true, "ck.audit.accessed").is_none());
     assert!(frozen_realm_check(false, "ck.message.create").is_none());
 }

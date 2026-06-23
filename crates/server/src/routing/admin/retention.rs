@@ -13,7 +13,6 @@ use serde_json::{Value, json};
 
 use super::audit::append_audit_log;
 use crate::error::AppError;
-use crate::kinds;
 use crate::result::{JsonResult, json_ok};
 use crate::routing::events::projection::retention_ttl_seconds_from_value;
 use crate::routing::system::extract::AuthArgs;
@@ -174,7 +173,7 @@ async fn sweep_retention_policy(
         .unwrap_or_default()
         .into_iter()
         .filter(|event| event.realm_id == realm_id)
-        .filter(|event| event.event_kind == kinds::CK_MESSAGE_CREATE)
+        .filter(|event| event.event_kind == cokret_sdk::events::kinds::MESSAGE_CREATE)
         .collect::<Vec<_>>();
     let examined = events.len();
     let mut created = Vec::new();

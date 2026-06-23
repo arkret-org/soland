@@ -47,7 +47,7 @@ fn grant_op(grant_id: &str) -> Operation {
 
 fn grant_op_with(grant_id: &str, actions: Vec<Value>, resources: Vec<Value>) -> Operation {
     op(
-        soland::kinds::CK_CAPABILITY_GRANT,
+        cokret_sdk::events::kinds::CAPABILITY_GRANT,
         REALM,
         json!({
             "grant_id": grant_id,
@@ -66,7 +66,7 @@ fn grant_op_with(grant_id: &str, actions: Vec<Value>, resources: Vec<Value>) -> 
 
 fn revoke_op(grant_id: &str) -> Operation {
     op(
-        soland::kinds::CK_CAPABILITY_REVOKE,
+        cokret_sdk::events::kinds::CAPABILITY_REVOKE,
         REALM,
         json!({ "grant_id": grant_id }),
     )
@@ -155,7 +155,7 @@ fn canonical_circle_selector_and_constraint_project_to_narrow_runtime_grant() {
     let hlc = ServerHlc::new("test");
     let effect = state.apply(
         &op(
-            soland::kinds::CK_CAPABILITY_GRANT,
+            cokret_sdk::events::kinds::CAPABILITY_GRANT,
             REALM,
             json!({
                 "grant_id": GRANT_ID,

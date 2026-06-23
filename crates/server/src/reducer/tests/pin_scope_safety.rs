@@ -10,7 +10,7 @@ const MESSAGE_EVENT_ID: &str = "ck:event:01904100-0000-7000-8000-0000000000a1";
 fn seed_scoped_message(state: &mut ProjectionState, hlc: &ServerHlc) {
     state.apply(
         &make_operation(
-            crate::kinds::CK_REALM_CREATE,
+            cokret_sdk::events::kinds::REALM_CREATE,
             REALM_ID,
             serde_json::json!({
                 "object": {
@@ -26,7 +26,7 @@ fn seed_scoped_message(state: &mut ProjectionState, hlc: &ServerHlc) {
     );
     state.apply(
         &make_operation(
-            crate::kinds::CK_CIRCLE_CREATE,
+            cokret_sdk::events::kinds::CIRCLE_CREATE,
             REALM_ID,
             serde_json::json!({
                 "object": {
@@ -43,7 +43,7 @@ fn seed_scoped_message(state: &mut ProjectionState, hlc: &ServerHlc) {
     );
     state.apply(
         &make_operation(
-            crate::kinds::CK_CIRCLE_MEMBER_STATE,
+            cokret_sdk::events::kinds::CIRCLE_MEMBER_STATE,
             REALM_ID,
             serde_json::json!({
                 "circle_id": CIRCLE_ID,
@@ -56,7 +56,7 @@ fn seed_scoped_message(state: &mut ProjectionState, hlc: &ServerHlc) {
     );
     state.apply(
         &make_operation(
-            crate::kinds::CK_STRAND_CREATE,
+            cokret_sdk::events::kinds::STRAND_CREATE,
             REALM_ID,
             serde_json::json!({
                 "object": {
@@ -72,7 +72,7 @@ fn seed_scoped_message(state: &mut ProjectionState, hlc: &ServerHlc) {
     );
     state.apply(
         &make_operation(
-            crate::kinds::CK_MESSAGE_CREATE,
+            cokret_sdk::events::kinds::MESSAGE_CREATE,
             REALM_ID,
             serde_json::json!({
                 "event_id": MESSAGE_EVENT_ID,
@@ -87,7 +87,7 @@ fn seed_scoped_message(state: &mut ProjectionState, hlc: &ServerHlc) {
 
 fn pin_add(pin_scope: serde_json::Value) -> Operation {
     make_operation(
-        crate::kinds::CK_PIN_ADD,
+        cokret_sdk::events::kinds::PIN_ADD,
         REALM_ID,
         serde_json::json!({
             "pin_scope": pin_scope,
@@ -140,7 +140,7 @@ fn pin_rejects_redacted_message_target() {
 
     state.apply(
         &make_operation(
-            crate::kinds::CK_REDACTION,
+            cokret_sdk::events::kinds::REDACTION,
             REALM_ID,
             serde_json::json!({
                 "target_event_id": MESSAGE_EVENT_ID,

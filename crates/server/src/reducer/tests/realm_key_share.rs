@@ -46,7 +46,7 @@ fn realm_key_share_dispatch_projects_effect() {
 
     let effect = state.apply(
         &make_operation(
-            crate::kinds::CK_REALM_KEY_SHARE,
+            cokret_sdk::events::kinds::REALM_KEY_SHARE,
             REALM,
             realm_key_share_payload(realm_scope(REALM)),
         ),
@@ -80,7 +80,7 @@ fn realm_key_share_requires_material() {
         .remove("encrypted_key_ref");
 
     let effect = state.apply(
-        &make_operation(crate::kinds::CK_REALM_KEY_SHARE, REALM, payload),
+        &make_operation(cokret_sdk::events::kinds::REALM_KEY_SHARE, REALM, payload),
         &hlc,
     );
 
@@ -98,7 +98,7 @@ fn realm_key_share_rejects_scope_mismatch() {
 
     let effect = state.apply(
         &make_operation(
-            crate::kinds::CK_REALM_KEY_SHARE,
+            cokret_sdk::events::kinds::REALM_KEY_SHARE,
             REALM,
             realm_key_share_payload(realm_scope(OTHER_REALM)),
         ),
@@ -121,7 +121,7 @@ fn realm_key_share_rejects_inverted_epoch_range() {
     payload["key_scope"]["to_epoch"] = json!(3);
 
     let effect = state.apply(
-        &make_operation(crate::kinds::CK_REALM_KEY_SHARE, REALM, payload),
+        &make_operation(cokret_sdk::events::kinds::REALM_KEY_SHARE, REALM, payload),
         &hlc,
     );
 
@@ -135,7 +135,7 @@ fn realm_key_share_rejects_inverted_epoch_range() {
 #[test]
 fn realm_key_share_is_registered_in_default_apply_registry() {
     assert!(
-        default_apply_registry().contains_key(crate::kinds::CK_REALM_KEY_SHARE),
+        default_apply_registry().contains_key(cokret_sdk::events::kinds::REALM_KEY_SHARE),
         "ck.realm_key.share should dispatch through the reducer registry"
     );
 }

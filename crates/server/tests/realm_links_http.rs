@@ -109,7 +109,7 @@ fn project_inheritance_policy(
     let op = Operation::create(
         OperationId::new(format!("ck:operation:{}", uuid::Uuid::now_v7())).unwrap(),
         RealmId::new(realm_id).unwrap(),
-        soland::kinds::CK_REALM_INHERITANCE_POLICY,
+        cokret_sdk::events::kinds::REALM_INHERITANCE_POLICY,
         json!({
             "source_realm_id": source_realm_id,
             "allowed_policies": allowed_policies,

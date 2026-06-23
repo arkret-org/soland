@@ -118,7 +118,9 @@ pub async fn validate_operation_policy(
                 "private plaintext message operations require this service in plaintext_visible_services",
             );
         }
-        if kinds::canonical_kind_for_operation(operation) == Some(kinds::CK_MORPH_SCHEMA_MIGRATE) {
+        if kinds::canonical_kind_for_operation(operation)
+            == Some(cokret_sdk::events::kinds::MORPH_SCHEMA_MIGRATE)
+        {
             validate_morph_schema_migrate_capability(operation)?;
         }
         validate_principal_control_realm_binding(operation)?;
@@ -171,13 +173,13 @@ pub async fn validate_operation_policy(
 }
 
 fn realm_frozen_operation_exempt(kind: &str) -> bool {
-    kinds::is_audit_kind(kind)
+    cokret_sdk::events::kinds::is_audit_kind(kind)
         || matches!(
             kind,
-            kinds::CK_REALM_ARCHIVE
-                | kinds::CK_REALM_FREEZE
-                | kinds::CK_REALM_TOMBSTONE
-                | kinds::CK_REALM_DESTROY
+            cokret_sdk::events::kinds::REALM_ARCHIVE
+                | cokret_sdk::events::kinds::REALM_FREEZE
+                | cokret_sdk::events::kinds::REALM_TOMBSTONE
+                | cokret_sdk::events::kinds::REALM_DESTROY
         )
 }
 
@@ -191,7 +193,9 @@ fn validate_realm_lifecycle_write_gate(
         .projection
         .lock()
         .map_err(|_| "projection_unavailable")?;
-    if projection.realm_is_in_terminal_state(realm_id) && !kinds::is_audit_kind(&kind) {
+    if projection.realm_is_in_terminal_state(realm_id)
+        && !cokret_sdk::events::kinds::is_audit_kind(&kind)
+    {
         return Err("realm_terminal_state");
     }
     if projection.realm_is_frozen_at(realm_id, chrono::Utc::now())
@@ -206,7 +210,9 @@ async fn validate_circle_create_policy(
     state: &AppState,
     operation: &Operation,
 ) -> Result<(), &'static str> {
-    if kinds::canonical_kind_for_operation(operation) != Some(kinds::CK_CIRCLE_CREATE) {
+    if kinds::canonical_kind_for_operation(operation)
+        != Some(cokret_sdk::events::kinds::CIRCLE_CREATE)
+    {
         return Ok(());
     }
     if payload_asserts_agent_sidecar_ensure(&operation.payload) {
@@ -266,14 +272,20 @@ async fn validate_circle_management_policy(
         return Ok(());
     };
     let (action, reason) = match kind {
-        kinds::CK_CIRCLE_UPDATE
-        | kinds::CK_CIRCLE_ARCHIVE
-        | kinds::CK_CIRCLE_RESTORE
-        | kinds::CK_CIRCLE_TOMBSTONE => ("ck.circle.manage", "circle_manage_capability_required"),
-        kinds::CK_CIRCLE_MEMBER_STATE if circle_member_manage_required(state, operation) => (
-            "ck.circle.member.manage",
-            "circle_member_manage_capability_required",
-        ),
+        cokret_sdk::events::kinds::CIRCLE_UPDATE
+        | cokret_sdk::events::kinds::CIRCLE_ARCHIVE
+        | cokret_sdk::events::kinds::CIRCLE_RESTORE
+        | cokret_sdk::events::kinds::CIRCLE_TOMBSTONE => {
+            ("ck.circle.manage", "circle_manage_capability_required")
+        }
+        cokret_sdk::events::kinds::CIRCLE_MEMBER_STATE
+            if circle_member_manage_required(state, operation) =>
+        {
+            (
+                "ck.circle.member.manage",
+                "circle_member_manage_capability_required",
+            )
+        }
         _ => return Ok(()),
     };
     let Some(actor) = operation_actor(operation) else {
@@ -452,7 +464,8 @@ async fn validate_agent_interop_session_writer_policy(
     };
     if !matches!(
         kind,
-        kinds::CK_AGENT_INTEROP_SESSION_STATUS | kinds::CK_AGENT_INTEROP_SESSION_RESULT
+        cokret_sdk::events::kinds::AGENT_INTEROP_SESSION_STATUS
+            | cokret_sdk::events::kinds::AGENT_INTEROP_SESSION_RESULT
     ) {
         return Ok(());
     }
@@ -490,7 +503,7 @@ async fn agent_interop_session_start_actor(
 ) -> Option<String> {
     if let Some(actor) = operations.iter().find_map(|candidate| {
         (kinds::canonical_kind_for_operation(candidate)
-            == Some(kinds::CK_AGENT_INTEROP_SESSION_START)
+            == Some(cokret_sdk::events::kinds::AGENT_INTEROP_SESSION_START)
             && candidate.realm_id.as_str() == realm_id
             && agent_interop_session_id_from_payload(&candidate.payload) == Some(session_id))
         .then(|| operation_actor(candidate).map(ToOwned::to_owned))
@@ -506,7 +519,7 @@ async fn agent_interop_session_start_actor(
         .ok()?
         .iter()
         .find_map(|record| {
-            if record.kind != kinds::CK_AGENT_INTEROP_SESSION_START {
+            if record.kind != cokret_sdk::events::kinds::AGENT_INTEROP_SESSION_START {
                 return None;
             }
             if record.realm_id.as_deref() != Some(realm_id) {
@@ -567,14 +580,16 @@ fn agent_interop_session_delegate_allows(
 fn agent_interop_session_delegate_actions(operation: &Operation) -> &'static [&'static str] {
     let cancelled = operation.payload.get("status").and_then(Value::as_str) == Some("cancelled");
     match kinds::canonical_kind_for_operation(operation) {
-        Some(kinds::CK_AGENT_INTEROP_SESSION_STATUS) if cancelled => {
+        Some(cokret_sdk::events::kinds::AGENT_INTEROP_SESSION_STATUS) if cancelled => {
             &["ck.agent.interop_session.cancel"]
         }
-        Some(kinds::CK_AGENT_INTEROP_SESSION_STATUS) => &["ck.agent.interop_session.stream_status"],
-        Some(kinds::CK_AGENT_INTEROP_SESSION_RESULT) if cancelled => {
+        Some(cokret_sdk::events::kinds::AGENT_INTEROP_SESSION_STATUS) => {
+            &["ck.agent.interop_session.stream_status"]
+        }
+        Some(cokret_sdk::events::kinds::AGENT_INTEROP_SESSION_RESULT) if cancelled => {
             &["ck.agent.interop_session.cancel"]
         }
-        Some(kinds::CK_AGENT_INTEROP_SESSION_RESULT) => {
+        Some(cokret_sdk::events::kinds::AGENT_INTEROP_SESSION_RESULT) => {
             &["ck.agent.interop_session.attach_artifact"]
         }
         _ => &[],
@@ -582,7 +597,9 @@ fn agent_interop_session_delegate_actions(operation: &Operation) -> &'static [&'
 }
 
 fn validate_pin_scope_safety(state: &AppState, operation: &Operation) -> Result<(), &'static str> {
-    if !kinds::canonical_kind_for_operation(operation).is_some_and(kinds::is_pin_kind) {
+    if !kinds::canonical_kind_for_operation(operation)
+        .is_some_and(cokret_sdk::events::kinds::is_pin_kind)
+    {
         return Ok(());
     }
     let Ok(projection) = state.projection.lock() else {
@@ -797,7 +814,11 @@ async fn validate_minimal_metadata_aad_policy(
     let kind = kinds::canonical_kind_for_operation(operation);
     let is_message_or_reaction = matches!(
         kind,
-        Some(kinds::CK_MESSAGE_CREATE | kinds::CK_REACTION_ADD | kinds::CK_REACTION_REMOVE)
+        Some(
+            cokret_sdk::events::kinds::MESSAGE_CREATE
+                | cokret_sdk::events::kinds::REACTION_ADD
+                | cokret_sdk::events::kinds::REACTION_REMOVE
+        )
     );
     if !is_message_or_reaction {
         return Ok(());
@@ -931,7 +952,10 @@ fn validate_reaction_scope_policy(
     let Some(kind) = kinds::canonical_kind_for_operation(operation) else {
         return Ok(());
     };
-    if !matches!(kind, kinds::CK_REACTION_ADD | kinds::CK_REACTION_REMOVE) {
+    if !matches!(
+        kind,
+        cokret_sdk::events::kinds::REACTION_ADD | cokret_sdk::events::kinds::REACTION_REMOVE
+    ) {
         return Ok(());
     }
     let target = REACTION_TARGET_FIELDS.iter().find_map(|field| {
@@ -1011,27 +1035,28 @@ fn operation_target_scope_circle_id(
             .and_then(|morph_id| projection.morph_scope_circle_id(morph_id))
     };
     match kinds::canonical_kind_for_operation(operation)? {
-        kinds::CK_STRAND_CREATE | kinds::CK_MORPH_CREATE | kinds::CK_SPACE_CONTAINER_CREATE => {
-            inline_scope("object")
-        }
-        kinds::CK_RELATION_CREATE => inline_scope("relation")
+        cokret_sdk::events::kinds::STRAND_CREATE
+        | cokret_sdk::events::kinds::MORPH_CREATE
+        | cokret_sdk::events::kinds::SPACE_CREATE => inline_scope("object"),
+        cokret_sdk::events::kinds::RELATION_CREATE => inline_scope("relation")
             .or_else(|| inline_scope("object"))
             .or_else(top_level_scope),
-        kinds::CK_RELATION_UPDATE | kinds::CK_RELATION_DELETE => {
+        cokret_sdk::events::kinds::RELATION_UPDATE
+        | cokret_sdk::events::kinds::RELATION_TOMBSTONE => {
             relation_scope("relation_id").or_else(|| relation_scope("id"))
         }
-        kinds::CK_MESSAGE_CREATE => strand_scope("strand_id"),
-        kinds::CK_STRAND_UPDATE => strand_scope("target_ref"),
-        kinds::CK_MORPH_UPDATE | kinds::CK_MORPH_ARCHIVE | kinds::CK_MORPH_RESTORE => {
-            morph_scope("target_ref")
-        }
-        kinds::CK_STRAND_ARCHIVE
-        | kinds::CK_STRAND_RESTORE
-        | kinds::CK_STRAND_MOVE
-        | kinds::CK_STRAND_REORDER => {
+        cokret_sdk::events::kinds::MESSAGE_CREATE => strand_scope("strand_id"),
+        cokret_sdk::events::kinds::STRAND_UPDATE => strand_scope("target_ref"),
+        cokret_sdk::events::kinds::MORPH_UPDATE
+        | cokret_sdk::events::kinds::MORPH_ARCHIVE
+        | cokret_sdk::events::kinds::MORPH_RESTORE => morph_scope("target_ref"),
+        cokret_sdk::events::kinds::STRAND_ARCHIVE
+        | cokret_sdk::events::kinds::STRAND_RESTORE
+        | cokret_sdk::events::kinds::STRAND_MOVE
+        | cokret_sdk::events::kinds::STRAND_REORDER => {
             strand_scope("target_ref").or_else(|| strand_scope("strand_id"))
         }
-        kinds::CK_REACTION_ADD | kinds::CK_REACTION_REMOVE => {
+        cokret_sdk::events::kinds::REACTION_ADD | cokret_sdk::events::kinds::REACTION_REMOVE => {
             // A reaction's scope is the target Message's Strand scope — reacting
             // into a Circle is a write into that scope and requires Circle
             // membership just like authoring there. Unknown target (not yet
@@ -1120,7 +1145,9 @@ async fn validate_applet_registration_authz(
     state: &AppState,
     operation: &Operation,
 ) -> Result<(), &'static str> {
-    if kinds::canonical_kind_for_operation(operation) != Some(kinds::CK_APPLET_REGISTRATION) {
+    if kinds::canonical_kind_for_operation(operation)
+        != Some(cokret_sdk::events::kinds::APPLET_REGISTRATION)
+    {
         return Ok(());
     }
     let Some(actor) = operation_actor(operation) else {
@@ -1207,8 +1234,11 @@ async fn validate_message_edit_redact_window_policy(
     let Some(kind) = kinds::canonical_kind_for_operation(operation) else {
         return Ok(());
     };
-    let is_redact = matches!(kind, kinds::CK_MESSAGE_REDACT | kinds::CK_REDACTION);
-    let is_revise = matches!(kind, kinds::CK_MESSAGE_REVISE);
+    let is_redact = matches!(
+        kind,
+        cokret_sdk::events::kinds::MESSAGE_REDACT | cokret_sdk::events::kinds::REDACTION
+    );
+    let is_revise = matches!(kind, cokret_sdk::events::kinds::MESSAGE_REVISE);
     if !is_redact && !is_revise {
         return Ok(());
     }
@@ -1366,13 +1396,17 @@ pub async fn validate_content_encryption_floor(
 ) -> Result<(), &'static str> {
     for operation in operations {
         match kinds::canonical_kind_for_operation(operation) {
-            Some(kinds::CK_REALM_UPDATE) if operation_touches_encryption_profile(operation) => {
+            Some(cokret_sdk::events::kinds::REALM_UPDATE)
+                if operation_touches_encryption_profile(operation) =>
+            {
                 return Err(REALM_ENCRYPTION_PROFILE_CREATE_LOCKED);
             }
-            Some(kinds::CK_CIRCLE_UPDATE) if operation_touches_encryption_profile(operation) => {
+            Some(cokret_sdk::events::kinds::CIRCLE_UPDATE)
+                if operation_touches_encryption_profile(operation) =>
+            {
                 return Err(CIRCLE_ENCRYPTION_PROFILE_CREATE_LOCKED);
             }
-            Some(kinds::CK_CIRCLE_CREATE) => {
+            Some(cokret_sdk::events::kinds::CIRCLE_CREATE) => {
                 if let Some(profile) = operation_circle_encryption_profile(operation)
                     && !encryption_profile_requires_content_encryption(Some(profile))
                     && realm_requires_content_encryption(state, operation.realm_id.as_str()).await
@@ -1464,7 +1498,7 @@ fn agent_participation_ceiling_change(
             .map(ToOwned::to_owned)
     };
     match kinds::canonical_kind_for_operation(operation) {
-        Some(kinds::CK_REALM_POLICY_COMPONENTS) => {
+        Some(cokret_sdk::events::kinds::REALM_POLICY_COMPONENTS) => {
             let value = find(true)?;
             Some((
                 "realm",
@@ -1473,7 +1507,8 @@ fn agent_participation_ceiling_change(
                 Vec::new(),
             ))
         }
-        Some(kinds::CK_CIRCLE_CREATE) | Some(kinds::CK_CIRCLE_UPDATE) => {
+        Some(cokret_sdk::events::kinds::CIRCLE_CREATE)
+        | Some(cokret_sdk::events::kinds::CIRCLE_UPDATE) => {
             let value = find(false)?;
             let circle_uuid = ap_uuid_part(&id_of("circle_id")?).to_owned();
             Some((
@@ -1483,7 +1518,8 @@ fn agent_participation_ceiling_change(
                 vec![format!("realm:{realm_uuid}")],
             ))
         }
-        Some(kinds::CK_STRAND_CREATE) | Some(kinds::CK_STRAND_UPDATE) => {
+        Some(cokret_sdk::events::kinds::STRAND_CREATE)
+        | Some(cokret_sdk::events::kinds::STRAND_UPDATE) => {
             let value = find(false)?;
             let strand_uuid = ap_uuid_part(&id_of("strand_id")?).to_owned();
             Some((
@@ -2085,12 +2121,12 @@ fn operation_is_space_container(operation: &Operation) -> bool {
     matches!(
         kinds::canonical_kind_for_operation(operation),
         Some(
-            kinds::CK_SPACE_CONTAINER_CREATE
-                | kinds::CK_SPACE_CONTAINER_UPDATE
-                | kinds::CK_SPACE_CONTAINER_PARENT
-                | kinds::CK_SPACE_CONTAINER_ARCHIVE
-                | kinds::CK_SPACE_CONTAINER_RESTORE
-                | kinds::CK_SPACE_CONTAINER_TOMBSTONE
+            cokret_sdk::events::kinds::SPACE_CREATE
+                | cokret_sdk::events::kinds::SPACE_UPDATE
+                | cokret_sdk::events::kinds::SPACE_PARENT
+                | cokret_sdk::events::kinds::SPACE_ARCHIVE
+                | cokret_sdk::events::kinds::SPACE_RESTORE
+                | cokret_sdk::events::kinds::SPACE_TOMBSTONE
         )
     )
 }
@@ -2099,7 +2135,9 @@ async fn validate_member_state_policy(
     state: &AppState,
     operation: &Operation,
 ) -> Result<(), &'static str> {
-    if kinds::canonical_kind_for_operation(operation) != Some(kinds::CK_MEMBER_STATE) {
+    if kinds::canonical_kind_for_operation(operation)
+        != Some(cokret_sdk::events::kinds::MEMBER_STATE)
+    {
         return Ok(());
     }
     if let Some(reason) = direct_conversation_member_state_guard(state, operation) {
@@ -2166,7 +2204,9 @@ async fn validate_set_default_strand_policy(
     state: &AppState,
     operation: &Operation,
 ) -> Result<(), &'static str> {
-    if kinds::canonical_kind_for_operation(operation) != Some(kinds::CK_REALM_SET_DEFAULT_STRAND) {
+    if kinds::canonical_kind_for_operation(operation)
+        != Some(cokret_sdk::events::kinds::REALM_SET_DEFAULT_STRAND)
+    {
         return Ok(());
     }
     let Some(actor) = operation
@@ -2229,20 +2269,22 @@ async fn validate_moderation_event_policy(
         return Ok(());
     };
     let actions = match kind {
-        kinds::CK_MODERATION_DECISION => &[
+        cokret_sdk::events::kinds::MODERATION_DECISION => &[
             "ck.realm.moderation_policy",
             "ck.policy.manage",
             "ck.moderation.decision",
         ][..],
-        kinds::CK_MODERATION_DECISION_LIFT => &[
+        cokret_sdk::events::kinds::MODERATION_DECISION_LIFT => &[
             "ck.realm.moderation_policy",
             "ck.policy.manage",
             "ck.moderation.decision.lift",
         ][..],
-        kinds::CK_MODERATION_APPEAL_SUBMIT => &["ck.moderation.appeal.submit"][..],
-        kinds::CK_MODERATION_APPEAL_REVIEW
-        | kinds::CK_MODERATION_APPEAL_DECISION
-        | kinds::CK_MODERATION_APPEAL_CLOSE => &["ck.moderation.appeal.review"][..],
+        cokret_sdk::events::kinds::MODERATION_APPEAL_SUBMIT => &["ck.moderation.appeal.submit"][..],
+        cokret_sdk::events::kinds::MODERATION_APPEAL_REVIEW
+        | cokret_sdk::events::kinds::MODERATION_APPEAL_DECISION
+        | cokret_sdk::events::kinds::MODERATION_APPEAL_CLOSE => {
+            &["ck.moderation.appeal.review"][..]
+        }
         _ => return Ok(()),
     };
 
@@ -2255,7 +2297,7 @@ async fn validate_moderation_event_policy(
 
     // §5.5.2 appellant-withdrawal: an appellant MAY close their own appeal
     // without the review capability (closer == cell appellant).
-    if kind == kinds::CK_MODERATION_APPEAL_CLOSE
+    if kind == cokret_sdk::events::kinds::MODERATION_APPEAL_CLOSE
         && moderation_close_is_appellant_withdrawal(state, operation, actor)
     {
         return Ok(());
@@ -2266,7 +2308,9 @@ async fn validate_moderation_event_policy(
         return Ok(());
     }
     let (owner, members) = realm_owner_and_members(state, realm_id).await;
-    if kind == kinds::CK_MODERATION_APPEAL_SUBMIT && members.iter().any(|member| member == actor) {
+    if kind == cokret_sdk::events::kinds::MODERATION_APPEAL_SUBMIT
+        && members.iter().any(|member| member == actor)
+    {
         return Ok(());
     }
     if actions.iter().any(|action| {
@@ -2344,14 +2388,14 @@ fn moderation_actor<'a>(
     kind: &str,
 ) -> Result<Option<&'a str>, &'static str> {
     let actor = match kind {
-        kinds::CK_MODERATION_DECISION => operation
+        cokret_sdk::events::kinds::MODERATION_DECISION => operation
             .payload
             .get("issuer")
             .or_else(|| operation.payload.get("decided_by"))
             .and_then(Value::as_str)
             .filter(|value| !value.trim().is_empty())
             .ok_or("moderation_decision_issuer_missing")?,
-        kinds::CK_MODERATION_DECISION_LIFT => {
+        cokret_sdk::events::kinds::MODERATION_DECISION_LIFT => {
             return Ok(operation
                 .payload
                 .get("sender")
@@ -2359,19 +2403,20 @@ fn moderation_actor<'a>(
                 .and_then(Value::as_str)
                 .filter(|value| !value.trim().is_empty()));
         }
-        kinds::CK_MODERATION_APPEAL_SUBMIT => operation
+        cokret_sdk::events::kinds::MODERATION_APPEAL_SUBMIT => operation
             .payload
             .get("appellant")
             .and_then(Value::as_str)
             .filter(|value| !value.trim().is_empty())
             .ok_or("moderation_appeal_actor_missing")?,
-        kinds::CK_MODERATION_APPEAL_REVIEW | kinds::CK_MODERATION_APPEAL_DECISION => operation
+        cokret_sdk::events::kinds::MODERATION_APPEAL_REVIEW
+        | cokret_sdk::events::kinds::MODERATION_APPEAL_DECISION => operation
             .payload
             .get("reviewer")
             .and_then(Value::as_str)
             .filter(|value| !value.trim().is_empty())
             .ok_or("moderation_appeal_actor_missing")?,
-        kinds::CK_MODERATION_APPEAL_CLOSE => operation
+        cokret_sdk::events::kinds::MODERATION_APPEAL_CLOSE => operation
             .payload
             .get("closer")
             .and_then(Value::as_str)
@@ -2467,7 +2512,7 @@ mod tests {
             cokret_sdk::OperationId::new("ck:operation:01964137-0000-7000-8000-000000000040")
                 .unwrap(),
             cokret_sdk::RealmId::new("ck:realm:01964137-0000-7000-8000-000000000030").unwrap(),
-            kinds::CK_CIRCLE_CREATE,
+            cokret_sdk::events::kinds::CIRCLE_CREATE,
             payload,
         )
     }

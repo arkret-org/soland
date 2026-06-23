@@ -1183,7 +1183,7 @@ async fn audit_disclosure_policy_for_realm(state: &AppState, realm_id: &str) -> 
         .ok()?
         .into_iter()
         .filter(|record| {
-            record.kind == crate::kinds::CK_REALM_CREATE
+            record.kind == cokret_sdk::events::kinds::REALM_CREATE
                 && record.realm_id.as_deref() == Some(realm_id)
         })
         .rev()

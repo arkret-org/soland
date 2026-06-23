@@ -120,7 +120,7 @@ pub fn events_submit_pre_admit_check(kind: &str) -> Option<(ErrorCode, &'static 
              never accepted as Event.kind",
         ));
     }
-    if kind == crate::kinds::CK_MORPH_SCHEMA_MIGRATE {
+    if kind == cokret_sdk::events::kinds::MORPH_SCHEMA_MIGRATE {
         return Some((
             ErrorCode::SchemaViolation,
             "ck.morph.schema_migrate is not admitted until its reducer projection is implemented",
@@ -138,7 +138,7 @@ pub fn terminal_realm_check(
     realm_in_terminal_state: bool,
     kind: &str,
 ) -> Option<(ErrorCode, &'static str)> {
-    if realm_in_terminal_state && !crate::kinds::is_audit_kind(kind) {
+    if realm_in_terminal_state && !cokret_sdk::events::kinds::is_audit_kind(kind) {
         return Some((
             ErrorCode::FailedPrecondition,
             "Realm has reached ck.realm.tombstone or ck.realm.destroy \
@@ -149,13 +149,13 @@ pub fn terminal_realm_check(
 }
 
 fn frozen_realm_write_exempt(kind: &str) -> bool {
-    crate::kinds::is_audit_kind(kind)
+    cokret_sdk::events::kinds::is_audit_kind(kind)
         || matches!(
             kind,
-            crate::kinds::CK_REALM_ARCHIVE
-                | crate::kinds::CK_REALM_FREEZE
-                | crate::kinds::CK_REALM_TOMBSTONE
-                | crate::kinds::CK_REALM_DESTROY
+            cokret_sdk::events::kinds::REALM_ARCHIVE
+                | cokret_sdk::events::kinds::REALM_FREEZE
+                | cokret_sdk::events::kinds::REALM_TOMBSTONE
+                | cokret_sdk::events::kinds::REALM_DESTROY
         )
 }
 

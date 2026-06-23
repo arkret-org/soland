@@ -162,7 +162,7 @@ fn grant_moderation_decision(state: &AppState, realm_id: &cokret_sdk::RealmId, a
         "did:web:owner.example".to_owned(),
         actor.to_owned(),
         realm_id.to_string(),
-        vec![kinds::CK_MODERATION_DECISION.to_owned()],
+        vec![cokret_sdk::events::kinds::MODERATION_DECISION.to_owned()],
         Vec::new(),
     );
 }
@@ -244,7 +244,7 @@ async fn read_receipt_child_policy_rejects_visibility_loosening() {
     let child_policy = op(
         child_realm,
         "000000009913",
-        kinds::CK_REALM_READ_RECEIPT_POLICY,
+        cokret_sdk::events::kinds::REALM_READ_RECEIPT_POLICY,
         json!({
             "disclosure": "optional",
             "visibility": "public"
@@ -279,7 +279,7 @@ async fn read_receipt_child_policy_rejects_required_floor_without_escape() {
     let child_policy = op(
         child_realm,
         "000000009923",
-        kinds::CK_REALM_READ_RECEIPT_POLICY,
+        cokret_sdk::events::kinds::REALM_READ_RECEIPT_POLICY,
         json!({
             "disclosure": "disabled",
             "visibility": "private"
@@ -315,7 +315,7 @@ async fn read_receipt_child_policy_allows_required_floor_escape() {
     let child_policy = op(
         child_realm,
         "000000009933",
-        kinds::CK_REALM_READ_RECEIPT_POLICY,
+        cokret_sdk::events::kinds::REALM_READ_RECEIPT_POLICY,
         json!({
             "disclosure": "disabled",
             "visibility": "private"
@@ -347,7 +347,7 @@ async fn read_receipt_child_policy_rejects_any_change_when_overrides_disabled() 
     let child_policy = op(
         child_realm,
         "000000009943",
-        kinds::CK_REALM_READ_RECEIPT_POLICY,
+        cokret_sdk::events::kinds::REALM_READ_RECEIPT_POLICY,
         json!({
             "disclosure": "disabled",
             "visibility": "private"
@@ -407,7 +407,7 @@ async fn strand_agent_participation_ceiling_cannot_widen_circle_parent() {
     let strand_create = op(
         realm_id,
         "000000009954",
-        kinds::CK_STRAND_CREATE,
+        cokret_sdk::events::kinds::STRAND_CREATE,
         json!({
             "sender": "did:web:alice.example",
             "object": {
@@ -571,7 +571,12 @@ fn act_on_behalf_message(
         object.insert("approval_request_id".to_owned(), json!(request_id));
         object.insert("approval_nonce".to_owned(), json!(approval_nonce));
     }
-    op(realm_id, seed, kinds::CK_MESSAGE_CREATE, payload)
+    op(
+        realm_id,
+        seed,
+        cokret_sdk::events::kinds::MESSAGE_CREATE,
+        payload,
+    )
 }
 
 fn insert_approved_agent_action(
@@ -630,13 +635,13 @@ async fn insert_agent_interop_session_start(
             actor_id: actor.to_owned(),
             actor_seq: 1,
             realm_id: Some(realm_id.to_string()),
-            kind: kinds::CK_AGENT_INTEROP_SESSION_START.to_owned(),
+            kind: cokret_sdk::events::kinds::AGENT_INTEROP_SESSION_START.to_owned(),
             schema_id: "ck.schema.event.v1".to_owned(),
             canonical_digest: "sha256:test".to_owned(),
             canonical_bytes: Vec::new(),
             envelope: json!({
                 "actor_id": actor,
-                "kind": kinds::CK_AGENT_INTEROP_SESSION_START,
+                "kind": cokret_sdk::events::kinds::AGENT_INTEROP_SESSION_START,
                 "realm_id": realm_id.to_string(),
                 "payload": {
                     "sender": actor,
@@ -659,7 +664,7 @@ async fn active_direct_conversation_rejects_invite_space_and_third_party_member(
     let invite = op(
         realm_id.clone(),
         "000000000601",
-        kinds::CK_INVITE_CREATE,
+        cokret_sdk::events::kinds::INVITE_CREATE,
         json!({
             "invite_id": "ck:invite:01904100-0000-7000-8000-000000000601",
             "inviter": "did:web:alice.example",
@@ -681,7 +686,7 @@ async fn active_direct_conversation_rejects_invite_space_and_third_party_member(
     let space_create = op(
         realm_id.clone(),
         "000000000602",
-        kinds::CK_SPACE_CONTAINER_CREATE,
+        cokret_sdk::events::kinds::SPACE_CREATE,
         json!({
             "space_id": "ck:space:01904100-0000-7000-8000-000000000602",
             "title": "Third participant space"
@@ -697,7 +702,7 @@ async fn active_direct_conversation_rejects_invite_space_and_third_party_member(
     let member_add = op(
         realm_id,
         "000000000603",
-        kinds::CK_MEMBER_STATE,
+        cokret_sdk::events::kinds::MEMBER_STATE,
         json!({
             "actor_id": "did:web:charlie.example",
             "membership": "invite",
@@ -725,7 +730,7 @@ async fn act_on_behalf_agent_requires_participation_bit() {
         "did:web:alice.example".to_owned(),
         agent.to_owned(),
         realm_id.to_string(),
-        vec![kinds::CK_MESSAGE_CREATE.to_owned()],
+        vec![cokret_sdk::events::kinds::MESSAGE_CREATE.to_owned()],
         Vec::new(),
     );
     let message = act_on_behalf_message(
@@ -757,7 +762,7 @@ async fn act_on_behalf_agent_requires_authorization_ref_covering_action() {
         "did:web:alice.example".to_owned(),
         agent.to_owned(),
         realm_id.to_string(),
-        vec![kinds::CK_REACTION_ADD.to_owned()],
+        vec![cokret_sdk::events::kinds::REACTION_ADD.to_owned()],
         Vec::new(),
     );
     let message = act_on_behalf_message(
@@ -787,7 +792,7 @@ async fn act_on_behalf_agent_non_message_write_requires_authorization_ref() {
     let operation = op(
         realm_id,
         "0000000007a2",
-        kinds::CK_STRAND_CREATE,
+        cokret_sdk::events::kinds::STRAND_CREATE,
         json!({
             "sender": "did:web:alice.example",
             "executed_by": agent,
@@ -819,13 +824,13 @@ async fn act_on_behalf_agent_strand_write_requires_agent_context() {
         "did:web:alice.example".to_owned(),
         agent.to_owned(),
         realm_id.to_string(),
-        vec![kinds::CK_STRAND_CREATE.to_owned()],
+        vec![cokret_sdk::events::kinds::STRAND_CREATE.to_owned()],
         Vec::new(),
     );
     let operation = op(
         realm_id,
         "0000000007c1",
-        kinds::CK_STRAND_CREATE,
+        cokret_sdk::events::kinds::STRAND_CREATE,
         json!({
             "sender": "did:web:alice.example",
             "executed_by": agent,
@@ -858,7 +863,7 @@ async fn act_on_behalf_agent_relation_write_rejects_context_authorization_mismat
         "did:web:alice.example".to_owned(),
         agent.to_owned(),
         realm_id.to_string(),
-        vec![kinds::CK_RELATION_CREATE.to_owned()],
+        vec![cokret_sdk::events::kinds::RELATION_CREATE.to_owned()],
         Vec::new(),
     );
     let context_grant = state.authz.create_grant(
@@ -866,13 +871,13 @@ async fn act_on_behalf_agent_relation_write_rejects_context_authorization_mismat
         "did:web:alice.example".to_owned(),
         agent.to_owned(),
         realm_id.to_string(),
-        vec![kinds::CK_RELATION_CREATE.to_owned()],
+        vec![cokret_sdk::events::kinds::RELATION_CREATE.to_owned()],
         Vec::new(),
     );
     let operation = op(
         realm_id,
         "0000000007c2",
-        kinds::CK_RELATION_CREATE,
+        cokret_sdk::events::kinds::RELATION_CREATE,
         json!({
             "sender": "did:web:alice.example",
             "executed_by": agent,
@@ -902,7 +907,7 @@ async fn provenance_actor_kind_agent_requires_agent_context_for_non_message_writ
     let operation = op(
         realm_id,
         "0000000007c3",
-        kinds::CK_RELATION_CREATE,
+        cokret_sdk::events::kinds::RELATION_CREATE,
         json!({
             "sender": "did:web:alice.example",
             "provenance": {
@@ -936,14 +941,14 @@ async fn act_on_behalf_agent_view_write_allows_valid_agent_context_and_approval(
         "did:web:alice.example".to_owned(),
         agent.to_owned(),
         realm_id.to_string(),
-        vec![kinds::CK_VIEW_CREATE.to_owned()],
+        vec![cokret_sdk::events::kinds::VIEW_CREATE.to_owned()],
         Vec::new(),
     );
     let grant_id = grant.grant_id.clone();
     let operation = op(
         realm_id,
         "0000000007c4",
-        kinds::CK_VIEW_CREATE,
+        cokret_sdk::events::kinds::VIEW_CREATE,
         json!({
             "sender": "did:web:alice.example",
             "executed_by": agent,
@@ -1160,7 +1165,7 @@ async fn circle_member_manage_rejects_forged_verdict_without_grant() {
     let member_add = op(
         realm_id,
         "000000000881",
-        kinds::CK_CIRCLE_MEMBER_STATE,
+        cokret_sdk::events::kinds::CIRCLE_MEMBER_STATE,
         json!({
             "sender": "did:web:alice.example",
             "circle_id": "ck:circle:01904100-0000-7000-8000-000000000881",
@@ -1200,7 +1205,7 @@ async fn circle_member_manage_allows_explicit_circle_scoped_grant() {
     let member_add = op(
         realm_id,
         "000000000882",
-        kinds::CK_CIRCLE_MEMBER_STATE,
+        cokret_sdk::events::kinds::CIRCLE_MEMBER_STATE,
         json!({
             "sender": "did:web:alice.example",
             "circle_id": circle_id,
@@ -1230,7 +1235,7 @@ async fn circle_lifecycle_requires_circle_manage_grant() {
     let tombstone = op(
         realm_id.clone(),
         "000000000883",
-        kinds::CK_CIRCLE_TOMBSTONE,
+        cokret_sdk::events::kinds::CIRCLE_TOMBSTONE,
         json!({
             "sender": "did:web:alice.example",
             "circle_id": circle_id
@@ -1266,7 +1271,7 @@ async fn agent_interop_session_status_allows_start_actor_in_batch() {
     let start = op(
         realm_id.clone(),
         "0000000007b1",
-        kinds::CK_AGENT_INTEROP_SESSION_START,
+        cokret_sdk::events::kinds::AGENT_INTEROP_SESSION_START,
         json!({
             "sender": "did:web:alice.example",
             "session_id": session_id,
@@ -1278,7 +1283,7 @@ async fn agent_interop_session_status_allows_start_actor_in_batch() {
     let status = op(
         realm_id,
         "0000000007b2",
-        kinds::CK_AGENT_INTEROP_SESSION_STATUS,
+        cokret_sdk::events::kinds::AGENT_INTEROP_SESSION_STATUS,
         json!({
             "sender": "did:web:alice.example",
             "session_id": session_id,
@@ -1309,7 +1314,7 @@ async fn agent_interop_session_status_rejects_other_actor() {
     let status = op(
         realm_id,
         "0000000007b4",
-        kinds::CK_AGENT_INTEROP_SESSION_STATUS,
+        cokret_sdk::events::kinds::AGENT_INTEROP_SESSION_STATUS,
         json!({
             "sender": "did:web:bob.example",
             "session_id": session_id,
@@ -1358,7 +1363,7 @@ async fn agent_interop_session_status_rejects_realm_grant_without_session_scope(
     let status = op(
         realm_id,
         "0000000007b6",
-        kinds::CK_AGENT_INTEROP_SESSION_STATUS,
+        cokret_sdk::events::kinds::AGENT_INTEROP_SESSION_STATUS,
         json!({
             "sender": "did:web:bob.example",
             "session_id": session_id,
@@ -1404,7 +1409,7 @@ async fn agent_interop_session_status_allows_session_scoped_delegate() {
     let status = op(
         realm_id,
         "0000000007b8",
-        kinds::CK_AGENT_INTEROP_SESSION_STATUS,
+        cokret_sdk::events::kinds::AGENT_INTEROP_SESSION_STATUS,
         json!({
             "sender": "did:web:bob.example",
             "session_id": session_id,
@@ -1430,7 +1435,7 @@ async fn act_on_behalf_agent_allows_effective_selection_and_active_grant() {
         "did:web:alice.example".to_owned(),
         agent.to_owned(),
         realm_id.to_string(),
-        vec![kinds::CK_MESSAGE_CREATE.to_owned()],
+        vec![cokret_sdk::events::kinds::MESSAGE_CREATE.to_owned()],
         Vec::new(),
     );
     let message = act_on_behalf_message(
@@ -1460,7 +1465,7 @@ async fn act_on_behalf_agent_requires_fresh_approval_request() {
         "did:web:alice.example".to_owned(),
         agent.to_owned(),
         realm_id.to_string(),
-        vec![kinds::CK_MESSAGE_CREATE.to_owned()],
+        vec![cokret_sdk::events::kinds::MESSAGE_CREATE.to_owned()],
         Vec::new(),
     );
     let message = act_on_behalf_message(
@@ -1492,7 +1497,7 @@ async fn act_on_behalf_agent_consumes_approval_nonce_once() {
         "did:web:alice.example".to_owned(),
         agent.to_owned(),
         realm_id.to_string(),
-        vec![kinds::CK_MESSAGE_CREATE.to_owned()],
+        vec![cokret_sdk::events::kinds::MESSAGE_CREATE.to_owned()],
         Vec::new(),
     );
     let message = act_on_behalf_message(
@@ -1577,7 +1582,7 @@ async fn circle_scoped_relation_update_and_delete_require_circle_membership() {
     let bob_update = op(
         realm_id.clone(),
         "000000000802",
-        kinds::CK_RELATION_UPDATE,
+        cokret_sdk::events::kinds::RELATION_UPDATE,
         json!({
             "relation_id": relation_id,
             "sender": "did:web:bob.example",
@@ -1594,7 +1599,7 @@ async fn circle_scoped_relation_update_and_delete_require_circle_membership() {
     let alice_update = op(
         realm_id.clone(),
         "000000000803",
-        kinds::CK_RELATION_UPDATE,
+        cokret_sdk::events::kinds::RELATION_UPDATE,
         json!({
             "relation_id": relation_id,
             "sender": "did:web:alice.example",
@@ -1608,7 +1613,7 @@ async fn circle_scoped_relation_update_and_delete_require_circle_membership() {
     let bob_delete = op(
         realm_id,
         "000000000804",
-        kinds::CK_RELATION_DELETE,
+        cokret_sdk::events::kinds::RELATION_TOMBSTONE,
         json!({
             "relation_id": relation_id,
             "sender": "did:web:bob.example"
@@ -1632,7 +1637,7 @@ async fn moderation_decision_checks_issuer_capability_not_sender_spoof() {
     let decision = op(
         realm_id,
         "000000000901",
-        kinds::CK_MODERATION_DECISION,
+        cokret_sdk::events::kinds::MODERATION_DECISION,
         json!({
             "sender": "did:web:moderator.example",
             "issuer": "did:web:impostor.example",
@@ -1660,7 +1665,7 @@ async fn moderation_decision_allows_authorized_issuer() {
     let decision = op(
         realm_id,
         "000000000902",
-        kinds::CK_MODERATION_DECISION,
+        cokret_sdk::events::kinds::MODERATION_DECISION,
         json!({
             "sender": "did:web:moderator.example",
             "issuer": "did:web:moderator.example",
@@ -1685,7 +1690,7 @@ async fn moderation_decision_rejects_missing_issuer_even_with_sender_grant() {
     let decision = op(
         realm_id,
         "000000000903",
-        kinds::CK_MODERATION_DECISION,
+        cokret_sdk::events::kinds::MODERATION_DECISION,
         json!({
             "sender": "did:web:moderator.example",
             "target_ref": "ck:message:01904100-0000-7000-8000-000000000903",

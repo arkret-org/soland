@@ -638,12 +638,11 @@ impl ProjectionState {
 /// Map an appeal event kind to its target FSM state. Used by the dispatch
 /// adapter and the ingest preflight.
 pub(crate) fn appeal_target_state(kind: &str) -> Option<&'static str> {
-    use crate::kinds::*;
     match kind {
-        CK_MODERATION_APPEAL_SUBMIT => Some("submitted"),
-        CK_MODERATION_APPEAL_REVIEW => Some("under_review"),
-        CK_MODERATION_APPEAL_DECISION => Some("decided"),
-        CK_MODERATION_APPEAL_CLOSE => Some("closed"),
+        cokret_sdk::events::kinds::MODERATION_APPEAL_SUBMIT => Some("submitted"),
+        cokret_sdk::events::kinds::MODERATION_APPEAL_REVIEW => Some("under_review"),
+        cokret_sdk::events::kinds::MODERATION_APPEAL_DECISION => Some("decided"),
+        cokret_sdk::events::kinds::MODERATION_APPEAL_CLOSE => Some("closed"),
         _ => None,
     }
 }

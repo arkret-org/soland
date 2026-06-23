@@ -1748,7 +1748,7 @@ async fn submit_direct_mls_genesis(
         "governance_binding": governance_binding,
         "created_at": now().to_rfc3339_opts(SecondsFormat::Secs, true),
     });
-    let op = direct_mls_operation(realm_id, crate::kinds::CK_MLS_GENESIS, payload)?;
+    let op = direct_mls_operation(realm_id, cokret_sdk::events::kinds::MLS_GENESIS, payload)?;
     let effect =
         crate::reducer::mls::apply_group_genesis(&mut state.projection.lock().unwrap(), &op);
     match &effect {
@@ -1858,7 +1858,7 @@ async fn submit_direct_mls_welcome(
         "expires_at": (created_at + chrono::Duration::days(1)).to_rfc3339_opts(SecondsFormat::Secs, true),
         "governance_binding": governance_binding,
     });
-    let op = direct_mls_operation(realm_id, crate::kinds::CK_MLS_WELCOME, payload)?;
+    let op = direct_mls_operation(realm_id, cokret_sdk::events::kinds::MLS_WELCOME, payload)?;
     let effect =
         crate::reducer::mls::apply_welcome_enqueue(&mut state.projection.lock().unwrap(), &op);
     match &effect {
@@ -2020,7 +2020,7 @@ fn direct_realm_create_operation(
     Ok(cokret_sdk::Operation::create(
         direct_operation_id()?,
         realm_scope,
-        crate::kinds::CK_REALM_CREATE,
+        cokret_sdk::events::kinds::REALM_CREATE,
         payload,
     ))
 }
@@ -2036,7 +2036,7 @@ fn direct_member_join_operation(
     Ok(cokret_sdk::Operation::create(
         direct_operation_id()?,
         realm_scope,
-        crate::kinds::CK_MEMBER_STATE,
+        cokret_sdk::events::kinds::MEMBER_STATE,
         payload,
     ))
 }
@@ -2055,7 +2055,7 @@ fn direct_strand_create_operation(
     Ok(cokret_sdk::Operation::create(
         direct_operation_id()?,
         realm_scope,
-        crate::kinds::CK_STRAND_CREATE,
+        cokret_sdk::events::kinds::STRAND_CREATE,
         payload,
     ))
 }

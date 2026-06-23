@@ -298,34 +298,34 @@ async fn write_through_projection(state: &AppState, operation: &Operation) {
     // Space-container lifecycle: 6 event kinds → space_containers map.
     let is_space_container_kind = matches!(
         kind,
-        kinds::CK_SPACE_CONTAINER_CREATE
-            | kinds::CK_SPACE_CONTAINER_UPDATE
-            | kinds::CK_SPACE_CONTAINER_PARENT
-            | kinds::CK_SPACE_CONTAINER_ARCHIVE
-            | kinds::CK_SPACE_CONTAINER_RESTORE
-            | kinds::CK_SPACE_CONTAINER_TOMBSTONE
+        cokret_sdk::events::kinds::SPACE_CREATE
+            | cokret_sdk::events::kinds::SPACE_UPDATE
+            | cokret_sdk::events::kinds::SPACE_PARENT
+            | cokret_sdk::events::kinds::SPACE_ARCHIVE
+            | cokret_sdk::events::kinds::SPACE_RESTORE
+            | cokret_sdk::events::kinds::SPACE_TOMBSTONE
     );
     // Strand lifecycle (state-affecting + position-touching).
     let is_strand_kind = matches!(
         kind,
-        kinds::CK_STRAND_CREATE
-            | kinds::CK_STRAND_UPDATE
-            | kinds::CK_STRAND_ARCHIVE
-            | kinds::CK_STRAND_RESTORE
-            | kinds::CK_STRAND_MOVE
-            | kinds::CK_STRAND_REORDER
-            | kinds::CK_STRAND_TRACKS_UPDATE
+        cokret_sdk::events::kinds::STRAND_CREATE
+            | cokret_sdk::events::kinds::STRAND_UPDATE
+            | cokret_sdk::events::kinds::STRAND_ARCHIVE
+            | cokret_sdk::events::kinds::STRAND_RESTORE
+            | cokret_sdk::events::kinds::STRAND_MOVE
+            | cokret_sdk::events::kinds::STRAND_REORDER
+            | cokret_sdk::events::kinds::STRAND_TRACKS_UPDATE
     );
     let is_morph_kind = matches!(
         kind,
-        kinds::CK_MORPH_CREATE
-            | kinds::CK_MORPH_UPDATE
-            | kinds::CK_MORPH_ARCHIVE
-            | kinds::CK_MORPH_RESTORE
+        cokret_sdk::events::kinds::MORPH_CREATE
+            | cokret_sdk::events::kinds::MORPH_UPDATE
+            | cokret_sdk::events::kinds::MORPH_ARCHIVE
+            | cokret_sdk::events::kinds::MORPH_RESTORE
     );
     // ck.redaction with an `object_ref` may have flipped a Strand or
     // Morph to Redacted. Pick up either by attempting both.
-    let is_redaction = kind == kinds::CK_REDACTION;
+    let is_redaction = kind == cokret_sdk::events::kinds::REDACTION;
     if !(is_space_container_kind || is_strand_kind || is_morph_kind || is_redaction) {
         return;
     }
@@ -389,11 +389,13 @@ async fn write_through_projection(state: &AppState, operation: &Operation) {
                 None
             }
         } else if is_strand_kind {
-            let id = if kind == kinds::CK_STRAND_CREATE {
+            let id = if kind == cokret_sdk::events::kinds::STRAND_CREATE {
                 strand_id_from_object
             } else if matches!(
                 kind,
-                kinds::CK_STRAND_UPDATE | kinds::CK_STRAND_ARCHIVE | kinds::CK_STRAND_RESTORE
+                cokret_sdk::events::kinds::STRAND_UPDATE
+                    | cokret_sdk::events::kinds::STRAND_ARCHIVE
+                    | cokret_sdk::events::kinds::STRAND_RESTORE
             ) {
                 strand_id_from_target_ref
             } else {
@@ -402,7 +404,7 @@ async fn write_through_projection(state: &AppState, operation: &Operation) {
             id.and_then(|i| proj.strands.get(&i))
                 .map(return_snapshot_strand)
         } else if is_morph_kind {
-            let id = if kind == kinds::CK_MORPH_CREATE {
+            let id = if kind == cokret_sdk::events::kinds::MORPH_CREATE {
                 morph_id_from_object
             } else {
                 morph_id_from_target_ref
@@ -584,7 +586,9 @@ async fn project_accepted_operations_inner(
         // digest binding) runs inside `project_member_identity_update`;
         // plaintext Ed25519 proof verification has already run at event
         // ingest, and unsupported proof forms fail closed there.
-        if kinds::canonical_kind_string(operation) == kinds::CK_MEMBER_IDENTITY_UPDATE {
+        if kinds::canonical_kind_string(operation)
+            == cokret_sdk::events::kinds::MEMBER_IDENTITY_UPDATE
+        {
             project_member_identity_update(state, operation);
         }
         // Cache ck.realm.read_receipt_policy state into ProjectionState so
@@ -618,7 +622,7 @@ async fn project_accepted_operations_inner(
         // `keys/query` signing-key directory resolves devices that were
         // authorized but never opened a session (previously the key only
         // landed via the session-grant exchange path).
-        if kinds::canonical_kind_string(operation) == kinds::CK_DEVICE_AUTHORIZE {
+        if kinds::canonical_kind_string(operation) == cokret_sdk::events::kinds::DEVICE_AUTHORIZE {
             project_device_authorize(state, operation).await;
         }
         // Also apply to the deterministic reducer.
@@ -862,7 +866,7 @@ async fn project_realm_key_share_to_device(
         return;
     }
     let content = json!({
-        "kind": kinds::CK_REALM_KEY_SHARE,
+        "kind": cokret_sdk::events::kinds::REALM_KEY_SHARE,
         "sender_device_id": sender_device_id,
         "realm_id": operation.realm_id,
         "operation_id": operation.operation_id,

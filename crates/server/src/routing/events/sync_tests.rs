@@ -374,7 +374,7 @@ fn insert_member_identity_subject(state: &AppState) {
             replaces: Vec::new(),
             raw_event: json!({
                 "operation_id": "ck:operation:roster-identity-1",
-                "event_kind": crate::kinds::CK_MEMBER_IDENTITY_UPDATE,
+                "event_kind": cokret_sdk::events::kinds::MEMBER_IDENTITY_UPDATE,
                 "realm_id": ROSTER_REALM,
                 "created_at": now(),
                 "payload": {
@@ -492,7 +492,7 @@ fn member_identity_projection_stores_typed_event_id_and_matches_event_replaces()
     let first_op = Operation::create(
         OperationId::new("ck:operation:01904100-0000-7000-8000-0000000000e1".to_owned()).unwrap(),
         RealmId::new(realm.to_owned()).unwrap(),
-        crate::kinds::CK_MEMBER_IDENTITY_UPDATE,
+        cokret_sdk::events::kinds::MEMBER_IDENTITY_UPDATE,
         json!({
             "event_id": first_event_id,
             "realm_id": realm,
@@ -520,7 +520,7 @@ fn member_identity_projection_stores_typed_event_id_and_matches_event_replaces()
     let second_op = Operation::create(
         OperationId::new("ck:operation:01904100-0000-7000-8000-0000000000e2".to_owned()).unwrap(),
         RealmId::new(realm.to_owned()).unwrap(),
-        crate::kinds::CK_MEMBER_IDENTITY_UPDATE,
+        cokret_sdk::events::kinds::MEMBER_IDENTITY_UPDATE,
         json!({
             "event_id": second_event_id,
             "realm_id": realm,

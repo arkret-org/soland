@@ -261,7 +261,7 @@ mod tests {
             )
             .unwrap(),
             cokret_sdk::RealmId::new(realm_id.to_owned()).unwrap(),
-            kinds::CK_MESSAGE_CREATE,
+            cokret_sdk::events::kinds::MESSAGE_CREATE,
             json!({
                 "event_id": event_id,
                 "message_id": message_id,

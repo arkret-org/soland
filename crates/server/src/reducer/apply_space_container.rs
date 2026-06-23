@@ -14,7 +14,6 @@ impl ProjectionState {
         &self,
         operation: &Operation,
     ) -> Result<(), &'static str> {
-        use crate::kinds::*;
         let kind = match crate::kinds::canonical_kind_for_operation(operation) {
             Some(k) => k,
             None => return Ok(()),
@@ -28,18 +27,18 @@ impl ProjectionState {
         // `ck.space.restore` requires Archived.
         // `ck.space.tombstone` requires {Active, Archived}.
         let (allowed_source, reason): (&[SpaceContainerLifecycleState], &'static str) = match kind {
-            CK_SPACE_CONTAINER_CREATE => return Ok(()),
-            CK_SPACE_CONTAINER_UPDATE | CK_SPACE_CONTAINER_PARENT => {
+            cokret_sdk::events::kinds::SPACE_CREATE => return Ok(()),
+            cokret_sdk::events::kinds::SPACE_UPDATE | cokret_sdk::events::kinds::SPACE_PARENT => {
                 (&[SpaceContainerLifecycleState::Active], "space_not_active")
             }
-            CK_SPACE_CONTAINER_ARCHIVE => {
+            cokret_sdk::events::kinds::SPACE_ARCHIVE => {
                 (&[SpaceContainerLifecycleState::Active], "space_not_active")
             }
-            CK_SPACE_CONTAINER_RESTORE => (
+            cokret_sdk::events::kinds::SPACE_RESTORE => (
                 &[SpaceContainerLifecycleState::Archived],
                 "space_not_archived",
             ),
-            CK_SPACE_CONTAINER_TOMBSTONE => (
+            cokret_sdk::events::kinds::SPACE_TOMBSTONE => (
                 &[
                     SpaceContainerLifecycleState::Active,
                     SpaceContainerLifecycleState::Archived,
@@ -522,7 +521,7 @@ impl ProjectionState {
             None => return Ok(()),
         };
         match kind {
-            crate::kinds::CK_STRAND_CREATE => {
+            cokret_sdk::events::kinds::STRAND_CREATE => {
                 let Some(object) = operation.payload.get("object").and_then(Value::as_object)
                 else {
                     return Ok(());
@@ -549,7 +548,7 @@ impl ProjectionState {
                 }
                 Ok(())
             }
-            crate::kinds::CK_STRAND_MOVE | crate::kinds::CK_STRAND_REORDER => {
+            cokret_sdk::events::kinds::STRAND_MOVE | cokret_sdk::events::kinds::STRAND_REORDER => {
                 let Some((_, list_space_id, _)) =
                     strand_position_from_lifecycle_payload(&operation.payload)
                 else {
@@ -573,7 +572,7 @@ impl ProjectionState {
                     false,
                 )
             }
-            crate::kinds::CK_SPACE_CONTAINER_PARENT => {
+            cokret_sdk::events::kinds::SPACE_PARENT => {
                 let Some(container_space_id) = space_container_id_from_payload(&operation.payload)
                 else {
                     return Ok(());
@@ -597,7 +596,8 @@ impl ProjectionState {
                     false,
                 )
             }
-            crate::kinds::CK_CONTAINER_MOVE_ITEM | crate::kinds::CK_CONTAINER_REBALANCE => {
+            cokret_sdk::events::kinds::CONTAINER_MOVE_ITEM
+            | cokret_sdk::events::kinds::CONTAINER_REBALANCE => {
                 let Some(container_space_id) = operation
                     .payload
                     .get("to_container_id")

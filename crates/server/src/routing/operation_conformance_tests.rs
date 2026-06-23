@@ -98,7 +98,7 @@ fn builtin_operation_conformance_vectors_cover_registry() {
     let vectors = vec![
         OperationVector {
             name: "message create",
-            kind: kinds::CK_MESSAGE_CREATE,
+            kind: cokret_sdk::events::kinds::MESSAGE_CREATE,
             payload: json!({
                 "message_id": "ck:message:01904100-0000-7000-8000-79a90338768b",
                 "strand_id": "ck:strand:01904100-0000-7000-8000-6c663fa0205f",
@@ -110,79 +110,79 @@ fn builtin_operation_conformance_vectors_cover_registry() {
         },
         OperationVector {
             name: "message revise",
-            kind: kinds::CK_MESSAGE_REVISE,
+            kind: cokret_sdk::events::kinds::MESSAGE_REVISE,
             payload: json!({"target_event_id": "ck:event:01904100-0000-7000-8000-79a90338768b", "content": {"kind": "ck.content.text", "body": "edited"}}),
             valid: true,
         },
         OperationVector {
             name: "message redact",
-            kind: kinds::CK_MESSAGE_REDACT,
+            kind: cokret_sdk::events::kinds::MESSAGE_REDACT,
             payload: json!({"target_event_id": "ck:event:01904100-0000-7000-8000-79a90338768b"}),
             valid: true,
         },
         OperationVector {
             name: "generic redaction",
-            kind: kinds::CK_REDACTION,
+            kind: cokret_sdk::events::kinds::REDACTION,
             payload: json!({"redacts": "ck:event:01904100-0000-7000-8000-79a90338768b"}),
             valid: true,
         },
         OperationVector {
             name: "reaction add",
-            kind: kinds::CK_REACTION_ADD,
+            kind: cokret_sdk::events::kinds::REACTION_ADD,
             payload: json!({"event_id": "ck:event:01904100-0000-7000-8000-79a90338768b", "actor": "did:web:alice.example", "key": "+1"}),
             valid: true,
         },
         OperationVector {
             name: "reaction remove",
-            kind: kinds::CK_REACTION_REMOVE,
+            kind: cokret_sdk::events::kinds::REACTION_REMOVE,
             payload: json!({"target_event_id": "ck:event:01904100-0000-7000-8000-79a90338768b", "sender": "did:web:alice.example", "reaction": "+1"}),
             valid: true,
         },
         OperationVector {
             name: "relation create",
-            kind: kinds::CK_RELATION_CREATE,
+            kind: cokret_sdk::events::kinds::RELATION_CREATE,
             payload: json!({"relation_id": "ck:relation:01904100-0000-7000-8000-71604d58ec0b", "relation_kind": "blocks", "from_ref": "ck:strand:01904100-0000-7000-8000-ca33616973bb", "to_ref": "ck:morph:01904100-0000-7000-8000-7191ddd787e5"}),
             valid: true,
         },
         OperationVector {
             name: "relation update",
-            kind: kinds::CK_RELATION_UPDATE,
+            kind: cokret_sdk::events::kinds::RELATION_UPDATE,
             payload: json!({"relation_id": "ck:relation:01904100-0000-7000-8000-71604d58ec0b", "fields": {"weight": 1}}),
             valid: true,
         },
         OperationVector {
             name: "relation delete",
-            kind: kinds::CK_RELATION_DELETE,
+            kind: cokret_sdk::events::kinds::RELATION_TOMBSTONE,
             payload: json!({"relation_id": "ck:relation:01904100-0000-7000-8000-71604d58ec0b"}),
             valid: true,
         },
         OperationVector {
             name: "member state join",
-            kind: kinds::CK_MEMBER_STATE,
+            kind: cokret_sdk::events::kinds::MEMBER_STATE,
             payload: json!({"actor_id": "did:web:alice.example", "membership": "join"}),
             valid: true,
         },
         OperationVector {
             name: "member state leave",
-            kind: kinds::CK_MEMBER_STATE,
+            kind: cokret_sdk::events::kinds::MEMBER_STATE,
             payload: json!({"actor_id": "did:web:alice.example", "membership": "leave"}),
             valid: true,
         },
         OperationVector {
             name: "member state ban",
-            kind: kinds::CK_MEMBER_STATE,
+            kind: cokret_sdk::events::kinds::MEMBER_STATE,
             payload: json!({"actor_id": "did:web:bob.example", "membership": "ban"}),
             valid: true,
         },
         OperationVector {
             name: "member state knock",
-            kind: kinds::CK_MEMBER_STATE,
+            kind: cokret_sdk::events::kinds::MEMBER_STATE,
             payload: json!({"actor_id": "did:web:bob.example", "membership": "knock"}),
             valid: true,
         },
         OperationVector {
             name: "read marker missing event_id",
-            kind: kinds::CK_READ_MARKER,
+            kind: cokret_sdk::events::kinds::READ_CURSOR_ADVANCE,
             payload: json!({
                 "actor_id": "did:web:alice.example",
                 "read_scope": {"kind": "realm"},
@@ -192,7 +192,7 @@ fn builtin_operation_conformance_vectors_cover_registry() {
         },
         OperationVector {
             name: "read marker valid",
-            kind: kinds::CK_READ_MARKER,
+            kind: cokret_sdk::events::kinds::READ_CURSOR_ADVANCE,
             payload: json!({
                 "actor_id": "did:web:alice.example",
                 "read_scope": {"kind": "realm"},
@@ -205,7 +205,7 @@ fn builtin_operation_conformance_vectors_cover_registry() {
         },
         OperationVector {
             name: "space create",
-            kind: kinds::CK_REALM_CREATE,
+            kind: cokret_sdk::events::kinds::REALM_CREATE,
             payload: json!({"object": {
                 "id": "ck:realm:0196419b-0000-7000-8000-000000000000",
                 "schema": "ck.schema.realm.v1",
@@ -234,7 +234,7 @@ fn builtin_operation_conformance_vectors_cover_registry() {
         },
         OperationVector {
             name: "space update",
-            kind: kinds::CK_REALM_UPDATE,
+            kind: cokret_sdk::events::kinds::REALM_UPDATE,
             payload: json!({
                 "target_ref": "ck:realm:01904100-0000-7000-8000-000000000001",
                 "patch": {
@@ -245,69 +245,69 @@ fn builtin_operation_conformance_vectors_cover_registry() {
         },
         OperationVector {
             name: "space destroy",
-            kind: kinds::CK_REALM_DESTROY,
+            kind: cokret_sdk::events::kinds::REALM_DESTROY,
             payload: json!({"action": "destroy"}),
             valid: true,
         },
         OperationVector {
             name: "space container archive",
-            kind: kinds::CK_SPACE_CONTAINER_ARCHIVE,
+            kind: cokret_sdk::events::kinds::SPACE_ARCHIVE,
             payload: json!({"space_id": "ck:space:01904100-0000-7000-8000-1fb50799ad42"}),
             valid: true,
         },
         OperationVector {
             name: "space container restore",
-            kind: kinds::CK_SPACE_CONTAINER_RESTORE,
+            kind: cokret_sdk::events::kinds::SPACE_RESTORE,
             payload: json!({"space_id": "ck:space:01904100-0000-7000-8000-1fb50799ad42"}),
             valid: true,
         },
         OperationVector {
             name: "space container tombstone",
-            kind: kinds::CK_SPACE_CONTAINER_TOMBSTONE,
+            kind: cokret_sdk::events::kinds::SPACE_TOMBSTONE,
             payload: json!({"space_id": "ck:space:01904100-0000-7000-8000-1fb50799ad42"}),
             valid: true,
         },
         OperationVector {
             name: "space container restore missing space_id",
-            kind: kinds::CK_SPACE_CONTAINER_RESTORE,
+            kind: cokret_sdk::events::kinds::SPACE_RESTORE,
             payload: json!({"reason": "release_reopened"}),
             valid: false,
         },
         // Strand / Morph lifecycle conformance vectors.
         OperationVector {
             name: "strand create",
-            kind: kinds::CK_STRAND_CREATE,
+            kind: cokret_sdk::events::kinds::STRAND_CREATE,
             payload: json!({"object": {"id": "ck:strand:01904100-0000-7000-8000-ca33616973bb", "kind": "discussion", "title": "Launch"}}),
             valid: true,
         },
         OperationVector {
             name: "strand update",
-            kind: kinds::CK_STRAND_UPDATE,
+            kind: cokret_sdk::events::kinds::STRAND_UPDATE,
             payload: json!({"target_ref": "ck:strand:01904100-0000-7000-8000-ca33616973bb", "patch": {"metadata.title": { "$op": "set", "value": "Launch v2" }}}),
             valid: true,
         },
         OperationVector {
             name: "strand archive",
-            kind: kinds::CK_STRAND_ARCHIVE,
+            kind: cokret_sdk::events::kinds::STRAND_ARCHIVE,
             payload: json!({"target_ref": "ck:strand:01904100-0000-7000-8000-ca33616973bb"}),
             valid: true,
         },
         OperationVector {
             name: "strand restore",
-            kind: kinds::CK_STRAND_RESTORE,
+            kind: cokret_sdk::events::kinds::STRAND_RESTORE,
             payload: json!({"target_ref": "ck:strand:01904100-0000-7000-8000-ca33616973bb"}),
             valid: true,
         },
         OperationVector {
             name: "strand archive missing target_ref",
-            kind: kinds::CK_STRAND_ARCHIVE,
+            kind: cokret_sdk::events::kinds::STRAND_ARCHIVE,
             payload: json!({"reason": "stale_room"}),
             valid: false,
         },
         // Strand position event vectors.
         OperationVector {
             name: "strand move",
-            kind: kinds::CK_STRAND_MOVE,
+            kind: cokret_sdk::events::kinds::STRAND_MOVE,
             payload: json!({
                 "strand_id": "ck:strand:01904100-0000-7000-8000-ca33616973bb",
                 "board_space_id": "ck:space:01904100-0000-7000-8000-c10dc0000001",
@@ -318,7 +318,7 @@ fn builtin_operation_conformance_vectors_cover_registry() {
         },
         OperationVector {
             name: "strand reorder",
-            kind: kinds::CK_STRAND_REORDER,
+            kind: cokret_sdk::events::kinds::STRAND_REORDER,
             payload: json!({
                 "strand_id": "ck:strand:01904100-0000-7000-8000-ca33616973bb",
                 "board_space_id": "ck:space:01904100-0000-7000-8000-c10dc0000001",
@@ -329,50 +329,50 @@ fn builtin_operation_conformance_vectors_cover_registry() {
         },
         OperationVector {
             name: "strand move missing board_space_id",
-            kind: kinds::CK_STRAND_MOVE,
+            kind: cokret_sdk::events::kinds::STRAND_MOVE,
             payload: json!({"strand_id": "ck:strand:01904100-0000-7000-8000-ca33616973bb"}),
             valid: false,
         },
         OperationVector {
             name: "strand reorder missing strand_id",
-            kind: kinds::CK_STRAND_REORDER,
+            kind: cokret_sdk::events::kinds::STRAND_REORDER,
             payload: json!({"board_space_id": "ck:space:01904100-0000-7000-8000-c10dc0000001", "space_id": "ck:space:01904100-0000-7000-8000-c10dc0000002", "rank": "a1"}),
             valid: false,
         },
         OperationVector {
             name: "morph create",
-            kind: kinds::CK_MORPH_CREATE,
+            kind: cokret_sdk::events::kinds::MORPH_CREATE,
             payload: json!({"object": {"id": "ck:morph:01904100-0000-7000-8000-7191ddd787e5", "morph_type": "task", "metadata": {"title": "Backfill"}, "schema_refs": ["ck.schema.morph.v1"]}}),
             valid: true,
         },
         OperationVector {
             name: "morph update",
-            kind: kinds::CK_MORPH_UPDATE,
+            kind: cokret_sdk::events::kinds::MORPH_UPDATE,
             payload: json!({"target_ref": "ck:morph:01904100-0000-7000-8000-7191ddd787e5", "patch": {"metadata.title": "Backfill v2"}}),
             valid: true,
         },
         OperationVector {
             name: "morph archive",
-            kind: kinds::CK_MORPH_ARCHIVE,
+            kind: cokret_sdk::events::kinds::MORPH_ARCHIVE,
             payload: json!({"target_ref": "ck:morph:01904100-0000-7000-8000-7191ddd787e5"}),
             valid: true,
         },
         OperationVector {
             name: "morph restore",
-            kind: kinds::CK_MORPH_RESTORE,
+            kind: cokret_sdk::events::kinds::MORPH_RESTORE,
             payload: json!({"target_ref": "ck:morph:01904100-0000-7000-8000-7191ddd787e5"}),
             valid: true,
         },
         OperationVector {
             name: "morph restore missing target_ref",
-            kind: kinds::CK_MORPH_RESTORE,
+            kind: cokret_sdk::events::kinds::MORPH_RESTORE,
             payload: json!({"reason": "reopen"}),
             valid: false,
         },
         // Applet protocol family conformance vectors.
         OperationVector {
             name: "applet registration",
-            kind: kinds::CK_APPLET_REGISTRATION,
+            kind: cokret_sdk::events::kinds::APPLET_REGISTRATION,
             payload: json!({
                 "service_did": "did:web:applet.example",
                 "namespace": "extensions",
@@ -382,13 +382,13 @@ fn builtin_operation_conformance_vectors_cover_registry() {
         },
         OperationVector {
             name: "applet registration missing namespace",
-            kind: kinds::CK_APPLET_REGISTRATION,
+            kind: cokret_sdk::events::kinds::APPLET_REGISTRATION,
             payload: json!({"service_did": "did:web:applet.example"}),
             valid: false,
         },
         OperationVector {
             name: "applet discovery",
-            kind: kinds::CK_APPLET_DISCOVERY,
+            kind: cokret_sdk::events::kinds::APPLET_DISCOVERY,
             payload: json!({
                 "service_did": "did:web:applet.example",
                 "manifest": {"version": 1},
@@ -397,7 +397,7 @@ fn builtin_operation_conformance_vectors_cover_registry() {
         },
         OperationVector {
             name: "applet session start",
-            kind: kinds::CK_APPLET_INTEROP_SESSION_START,
+            kind: cokret_sdk::events::kinds::APPLET_INTEROP_SESSION_START,
             payload: json!({
                 "applet_id": "ck:applet:01904100-0000-7000-8000-aa55aa55aa55",
                 "session_id": "ck:session:01904100-0000-7000-8000-aa55aa55aa55",
@@ -407,7 +407,7 @@ fn builtin_operation_conformance_vectors_cover_registry() {
         },
         OperationVector {
             name: "applet session status",
-            kind: kinds::CK_APPLET_INTEROP_SESSION_STATUS,
+            kind: cokret_sdk::events::kinds::APPLET_INTEROP_SESSION_STATUS,
             payload: json!({
                 "session_id": "ck:session:01904100-0000-7000-8000-aa55aa55aa55",
                 "status": "running",
@@ -417,7 +417,7 @@ fn builtin_operation_conformance_vectors_cover_registry() {
         },
         OperationVector {
             name: "applet bridge error",
-            kind: kinds::CK_APPLET_BRIDGE_ERROR,
+            kind: cokret_sdk::events::kinds::APPLET_BRIDGE_ERROR,
             payload: json!({
                 "session_id": "ck:session:01904100-0000-7000-8000-aa55aa55aa55",
                 "errcode": "bridge_unavailable",
@@ -428,7 +428,7 @@ fn builtin_operation_conformance_vectors_cover_registry() {
         // Agent protocol family conformance vectors.
         OperationVector {
             name: "agent endpoint",
-            kind: kinds::CK_AGENT_ENDPOINT,
+            kind: cokret_sdk::events::kinds::AGENT_ENDPOINT,
             payload: json!({
                 "agent_id": "did:web:agent.example",
                 "endpoints": [{"protocol": "http_custom", "url": "https://agent.example/runtime"}],
@@ -437,13 +437,13 @@ fn builtin_operation_conformance_vectors_cover_registry() {
         },
         OperationVector {
             name: "agent endpoint missing endpoints",
-            kind: kinds::CK_AGENT_ENDPOINT,
+            kind: cokret_sdk::events::kinds::AGENT_ENDPOINT,
             payload: json!({"agent_id": "did:web:agent.example"}),
             valid: false,
         },
         OperationVector {
             name: "agent session start",
-            kind: kinds::CK_AGENT_INTEROP_SESSION_START,
+            kind: cokret_sdk::events::kinds::AGENT_INTEROP_SESSION_START,
             payload: json!({
                 "session_id": "ck:session:01904100-0000-7000-8000-bb66bb66bb66",
                 "counterparty_agent": "did:web:agent.example",
@@ -454,7 +454,7 @@ fn builtin_operation_conformance_vectors_cover_registry() {
         },
         OperationVector {
             name: "agent session start missing capability_grant",
-            kind: kinds::CK_AGENT_INTEROP_SESSION_START,
+            kind: cokret_sdk::events::kinds::AGENT_INTEROP_SESSION_START,
             payload: json!({
                 "session_id": "ck:session:01904100-0000-7000-8000-bb66bb66bb66",
                 "counterparty_agent": "did:web:agent.example",
@@ -464,7 +464,7 @@ fn builtin_operation_conformance_vectors_cover_registry() {
         },
         OperationVector {
             name: "agent session status",
-            kind: kinds::CK_AGENT_INTEROP_SESSION_STATUS,
+            kind: cokret_sdk::events::kinds::AGENT_INTEROP_SESSION_STATUS,
             payload: json!({
                 "session_id": "ck:session:01904100-0000-7000-8000-bb66bb66bb66",
                 "status": "working",
@@ -474,7 +474,7 @@ fn builtin_operation_conformance_vectors_cover_registry() {
         },
         OperationVector {
             name: "agent session result",
-            kind: kinds::CK_AGENT_INTEROP_SESSION_RESULT,
+            kind: cokret_sdk::events::kinds::AGENT_INTEROP_SESSION_RESULT,
             payload: json!({
                 "session_id": "ck:session:01904100-0000-7000-8000-bb66bb66bb66",
                 "result": {"summary": "ok"},
@@ -484,7 +484,7 @@ fn builtin_operation_conformance_vectors_cover_registry() {
         },
         OperationVector {
             name: "agent session result missing audit_binding",
-            kind: kinds::CK_AGENT_INTEROP_SESSION_RESULT,
+            kind: cokret_sdk::events::kinds::AGENT_INTEROP_SESSION_RESULT,
             payload: json!({
                 "session_id": "ck:session:01904100-0000-7000-8000-bb66bb66bb66",
                 "result": {"summary": "ok"},
@@ -499,7 +499,7 @@ fn builtin_operation_conformance_vectors_cover_registry() {
         },
         OperationVector {
             name: "reaction missing key",
-            kind: kinds::CK_REACTION_ADD,
+            kind: cokret_sdk::events::kinds::REACTION_ADD,
             payload: json!({"event_id": "ck:event:01904100-0000-7000-8000-79a90338768b", "actor": "did:web:alice.example"}),
             valid: false,
         },

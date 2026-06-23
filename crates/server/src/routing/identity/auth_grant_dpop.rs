@@ -722,8 +722,9 @@ fn htu_path(htu: &str) -> &str {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use cokret_sdk::GrantId;
+
+    use super::*;
 
     const RFC8037_X: &str = "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo";
     const RFC8037_THUMBPRINT: &str = "kPrK_qmxVWaYVA9wwBF6Iuo3vVzz7TxHCTwXBygrS4k";

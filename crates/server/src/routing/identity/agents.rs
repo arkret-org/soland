@@ -1715,7 +1715,8 @@ async fn ensure_sidecar_circle(
         "sidecar_ensure_capability_verified": true,
         "actor_capability": sidecar_actor_capability(None),
     });
-    let operation = new_sidecar_operation(realm_id, crate::kinds::CK_CIRCLE_CREATE, payload)?;
+    let operation =
+        new_sidecar_operation(realm_id, cokret_sdk::events::kinds::CIRCLE_CREATE, payload)?;
     accept_local_operations(state, controller, std::slice::from_ref(&operation))
         .await
         .map_err(sidecar_reducer_reject_to_app_error)?;
@@ -1762,7 +1763,11 @@ async fn ensure_sidecar_member(
             "allowed": true,
         },
     });
-    let operation = new_sidecar_operation(realm_id, crate::kinds::CK_CIRCLE_MEMBER_STATE, payload)?;
+    let operation = new_sidecar_operation(
+        realm_id,
+        cokret_sdk::events::kinds::CIRCLE_MEMBER_STATE,
+        payload,
+    )?;
     accept_local_operations(state, controller, std::slice::from_ref(&operation))
         .await
         .map_err(sidecar_reducer_reject_to_app_error)
@@ -1840,7 +1845,8 @@ async fn ensure_sidecar_strand(
         "sidecar_ensure_capability_verified": true,
         "actor_capability": sidecar_actor_capability(Some(circle_id.as_str())),
     });
-    let operation = new_sidecar_operation(realm_id, crate::kinds::CK_STRAND_CREATE, payload)?;
+    let operation =
+        new_sidecar_operation(realm_id, cokret_sdk::events::kinds::STRAND_CREATE, payload)?;
     accept_local_operations(state, controller, std::slice::from_ref(&operation))
         .await
         .map_err(sidecar_reducer_reject_to_app_error)?;
@@ -1922,7 +1928,11 @@ async fn ensure_sidecar_relation(
         "sidecar_ensure_capability_verified": true,
         "actor_capability": sidecar_actor_capability(Some(circle_id.as_str())),
     });
-    let operation = new_sidecar_operation(realm_id, crate::kinds::CK_RELATION_CREATE, payload)?;
+    let operation = new_sidecar_operation(
+        realm_id,
+        cokret_sdk::events::kinds::RELATION_CREATE,
+        payload,
+    )?;
     accept_local_operations(state, controller, std::slice::from_ref(&operation))
         .await
         .map_err(sidecar_reducer_reject_to_app_error)?;

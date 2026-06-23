@@ -44,10 +44,6 @@ use serde_json::{Value, json};
 use super::{AuthArgs, accept_local_operations};
 use crate::error::{AppError, ErrorCode};
 use crate::ids;
-use crate::kinds::{
-    CK_CIRCLE_ARCHIVE, CK_CIRCLE_CREATE, CK_CIRCLE_MEMBER_STATE, CK_CIRCLE_RESTORE,
-    CK_CIRCLE_TOMBSTONE,
-};
 use crate::reducer::{
     CircleLifecycleState, CircleProjection, MlsRemoveObligation, ProjectionState,
 };
@@ -424,7 +420,12 @@ async fn post_circle(
     let payload = json!({"object": object, "sender": session.actor.clone()});
     let op_id = OperationId::new(ids::generate_operation_id())
         .map_err(|e| AppError::invalid_param(format!("operation_id: {e}")))?;
-    let operation = Operation::create(op_id, realm_scope, CK_CIRCLE_CREATE, payload);
+    let operation = Operation::create(
+        op_id,
+        realm_scope,
+        cokret_sdk::events::kinds::CIRCLE_CREATE,
+        payload,
+    );
     accept_local_operations(state, &session.actor, std::slice::from_ref(&operation))
         .await
         .map_err(reducer_reject_to_app_error)?;
@@ -533,7 +534,12 @@ async fn post_circle_member(
     });
     let op_id = OperationId::new(ids::generate_operation_id())
         .map_err(|e| AppError::invalid_param(format!("operation_id: {e}")))?;
-    let operation = Operation::create(op_id, realm_scope, CK_CIRCLE_MEMBER_STATE, payload);
+    let operation = Operation::create(
+        op_id,
+        realm_scope,
+        cokret_sdk::events::kinds::CIRCLE_MEMBER_STATE,
+        payload,
+    );
     accept_local_operations(state, &session.actor, std::slice::from_ref(&operation))
         .await
         .map_err(reducer_reject_to_app_error)?;
@@ -583,7 +589,12 @@ async fn delete_circle_member(
     });
     let op_id = OperationId::new(ids::generate_operation_id())
         .map_err(|e| AppError::invalid_param(format!("operation_id: {e}")))?;
-    let operation = Operation::create(op_id, realm_scope, CK_CIRCLE_MEMBER_STATE, payload);
+    let operation = Operation::create(
+        op_id,
+        realm_scope,
+        cokret_sdk::events::kinds::CIRCLE_MEMBER_STATE,
+        payload,
+    );
     accept_local_operations(state, &session.actor, std::slice::from_ref(&operation))
         .await
         .map_err(reducer_reject_to_app_error)?;
@@ -706,7 +717,14 @@ async fn post_circle_archive(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<CircleView> {
-    submit_circle_lifecycle(depot, req, aa, circle_id.into_inner(), CK_CIRCLE_ARCHIVE).await
+    submit_circle_lifecycle(
+        depot,
+        req,
+        aa,
+        circle_id.into_inner(),
+        cokret_sdk::events::kinds::CIRCLE_ARCHIVE,
+    )
+    .await
 }
 
 #[endpoint(
@@ -721,7 +739,14 @@ async fn post_circle_restore(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<CircleView> {
-    submit_circle_lifecycle(depot, req, aa, circle_id.into_inner(), CK_CIRCLE_RESTORE).await
+    submit_circle_lifecycle(
+        depot,
+        req,
+        aa,
+        circle_id.into_inner(),
+        cokret_sdk::events::kinds::CIRCLE_RESTORE,
+    )
+    .await
 }
 
 #[endpoint(
@@ -736,7 +761,14 @@ async fn post_circle_tombstone(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<CircleView> {
-    submit_circle_lifecycle(depot, req, aa, circle_id.into_inner(), CK_CIRCLE_TOMBSTONE).await
+    submit_circle_lifecycle(
+        depot,
+        req,
+        aa,
+        circle_id.into_inner(),
+        cokret_sdk::events::kinds::CIRCLE_TOMBSTONE,
+    )
+    .await
 }
 
 async fn submit_circle_lifecycle(
@@ -792,11 +824,19 @@ fn preflight_circle_lifecycle(
         .get(circle_id)
         .ok_or_else(|| AppError::not_found("circle not found"))?;
     let reason = match kind {
-        CK_CIRCLE_ARCHIVE if circle.state == CircleLifecycleState::Active => None,
-        CK_CIRCLE_ARCHIVE => Some("circle_not_active"),
-        CK_CIRCLE_RESTORE if circle.state == CircleLifecycleState::Archived => None,
-        CK_CIRCLE_RESTORE => Some("circle_not_archived"),
-        CK_CIRCLE_TOMBSTONE
+        cokret_sdk::events::kinds::CIRCLE_ARCHIVE
+            if circle.state == CircleLifecycleState::Active =>
+        {
+            None
+        }
+        cokret_sdk::events::kinds::CIRCLE_ARCHIVE => Some("circle_not_active"),
+        cokret_sdk::events::kinds::CIRCLE_RESTORE
+            if circle.state == CircleLifecycleState::Archived =>
+        {
+            None
+        }
+        cokret_sdk::events::kinds::CIRCLE_RESTORE => Some("circle_not_archived"),
+        cokret_sdk::events::kinds::CIRCLE_TOMBSTONE
             if matches!(
                 circle.state,
                 CircleLifecycleState::Active | CircleLifecycleState::Archived
@@ -804,7 +844,7 @@ fn preflight_circle_lifecycle(
         {
             None
         }
-        CK_CIRCLE_TOMBSTONE => Some("circle_already_terminal"),
+        cokret_sdk::events::kinds::CIRCLE_TOMBSTONE => Some("circle_already_terminal"),
         _ => None,
     };
     match reason {

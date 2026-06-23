@@ -167,7 +167,8 @@ pub async fn ensure_projected_realm(state: &AppState, origin: &str, operation: &
                 changed = true;
             }
             if record.encryption_profile.is_none()
-                && kinds::canonical_kind_for_operation(operation) == Some(kinds::CK_REALM_CREATE)
+                && kinds::canonical_kind_for_operation(operation)
+                    == Some(cokret_sdk::events::kinds::REALM_CREATE)
                 && let Some(encryption_profile) = operation_realm_encryption_profile(operation)
             {
                 record.encryption_profile = Some(encryption_profile.to_owned());
@@ -224,7 +225,9 @@ pub async fn project_membership_operation(state: &AppState, origin: &str, operat
         .payload
         .get("membership")
         .and_then(|value| value.as_str());
-    if kinds::canonical_kind_for_operation(operation) == Some(kinds::CK_REALM_DESTROY) {
+    if kinds::canonical_kind_for_operation(operation)
+        == Some(cokret_sdk::events::kinds::REALM_DESTROY)
+    {
         let store = state.persistence.realm_meta();
         if let Ok(Some(mut record)) = store.get(operation.realm_id.as_str()).await {
             record.deleted = true;
@@ -504,7 +507,7 @@ pub fn project_member_identity_update(state: &AppState, operation: &Operation) {
     let raw_event = json!({
         "event_id": canonical_event_id,
         "operation_id": operation.operation_id.to_string(),
-        "event_kind": kinds::CK_MEMBER_IDENTITY_UPDATE,
+        "event_kind": cokret_sdk::events::kinds::MEMBER_IDENTITY_UPDATE,
         "realm_id": operation.realm_id.as_str(),
         "created_at": operation.created_at,
         "payload": operation.payload.clone(),

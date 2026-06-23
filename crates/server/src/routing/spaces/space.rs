@@ -32,7 +32,7 @@ use crate::routing::events::operations::operation_policy_reason_code;
 use crate::routing::organizations;
 use crate::state::{AppState, RealmDirectoryEntry, SessionRecord, TypingRecord};
 use crate::wire::now;
-use crate::{JsonResult, ids, json_ok, kinds};
+use crate::{JsonResult, ids, json_ok};
 
 /// Spec `realm_read` operation group (`ck.self.realm.*`): Realm lifecycle read,
 /// full export, and Realm moderation-policy effective/set. Canonical path
@@ -174,7 +174,7 @@ async fn archive_realm(
         state,
         &session.actor,
         realm_id.into_inner(),
-        kinds::CK_REALM_ARCHIVE,
+        cokret_sdk::events::kinds::REALM_ARCHIVE,
         payload,
     )
     .await
@@ -204,7 +204,7 @@ async fn freeze_realm(
         state,
         &session.actor,
         realm_id.into_inner(),
-        kinds::CK_REALM_FREEZE,
+        cokret_sdk::events::kinds::REALM_FREEZE,
         payload,
     )
     .await
@@ -234,7 +234,7 @@ async fn tombstone_realm(
         state,
         &session.actor,
         realm_id.into_inner(),
-        kinds::CK_REALM_TOMBSTONE,
+        cokret_sdk::events::kinds::REALM_TOMBSTONE,
         payload,
     )
     .await
@@ -264,7 +264,7 @@ async fn destroy_realm(
         state,
         &session.actor,
         realm_id.into_inner(),
-        kinds::CK_REALM_DESTROY,
+        cokret_sdk::events::kinds::REALM_DESTROY,
         payload,
     )
     .await

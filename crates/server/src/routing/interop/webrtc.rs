@@ -986,7 +986,8 @@ async fn call_state_from_event_log(
         .map_err(|error| AppError::internal(format!("events store unavailable: {error}")))?
         .into_iter()
         .filter(|record| {
-            record.kind == crate::kinds::CK_CALL_STATE && record_call_id(record) == Some(call_id)
+            record.kind == cokret_sdk::events::kinds::CALL_STATE
+                && record_call_id(record) == Some(call_id)
         })
         .collect::<Vec<_>>();
     if records.is_empty() {
@@ -1046,8 +1047,12 @@ fn call_state_operation_from_record(
         .get("payload")
         .cloned()
         .unwrap_or_else(|| json!({}));
-    let mut operation =
-        Operation::create(operation_id, realm_id, crate::kinds::CK_CALL_STATE, payload);
+    let mut operation = Operation::create(
+        operation_id,
+        realm_id,
+        cokret_sdk::events::kinds::CALL_STATE,
+        payload,
+    );
     operation.canonical_event_digest = Some(record.canonical_digest.clone());
     operation.created_at = record
         .envelope

@@ -31,7 +31,7 @@ fn event_digest_suite(
     realm_id: &str,
     object: &serde_json::Map<String, Value>,
 ) -> Result<String, EventValidationError> {
-    let suite = if kind == kinds::CK_REALM_CREATE {
+    let suite = if kind == cokret_sdk::events::kinds::REALM_CREATE {
         realm_create_digest_algorithm(object)
     } else {
         state
@@ -79,13 +79,13 @@ pub(crate) fn preflight_mls_projection_reject(
 ) -> Option<String> {
     let kind = kinds::canonical_kind_string(operation);
     match kind.as_str() {
-        kinds::CK_MLS_KEYPACKAGE
-        | kinds::CK_MLS_WELCOME
-        | kinds::CK_MLS_GENESIS
-        | kinds::CK_MLS_COMMIT => {
+        cokret_sdk::events::kinds::MLS_KEYPACKAGE
+        | cokret_sdk::events::kinds::MLS_WELCOME
+        | cokret_sdk::events::kinds::MLS_GENESIS
+        | cokret_sdk::events::kinds::MLS_COMMIT => {
             let mut snapshot = proj.clone();
             let effect = match kind.as_str() {
-                kinds::CK_MLS_KEYPACKAGE => {
+                cokret_sdk::events::kinds::MLS_KEYPACKAGE => {
                     match operation.payload.get("action").and_then(Value::as_str) {
                         Some("publish") => {
                             crate::reducer::mls::apply_keypackage_publish(&mut snapshot, operation)
@@ -101,13 +101,13 @@ pub(crate) fn preflight_mls_projection_reject(
                         },
                     }
                 }
-                kinds::CK_MLS_WELCOME => {
+                cokret_sdk::events::kinds::MLS_WELCOME => {
                     crate::reducer::mls::apply_welcome_enqueue(&mut snapshot, operation)
                 }
-                kinds::CK_MLS_GENESIS => {
+                cokret_sdk::events::kinds::MLS_GENESIS => {
                     crate::reducer::mls::apply_group_genesis(&mut snapshot, operation)
                 }
-                kinds::CK_MLS_COMMIT => {
+                cokret_sdk::events::kinds::MLS_COMMIT => {
                     crate::reducer::mls::apply_commit_epoch(&mut snapshot, operation)
                 }
                 _ => crate::reducer::ProjectionEffect::Ignored,
@@ -139,12 +139,12 @@ pub(crate) fn preflight_moderation_projection_reject(
     let kind = kinds::canonical_kind_string(operation);
     let is_moderation = matches!(
         kind.as_str(),
-        kinds::CK_MODERATION_DECISION
-            | kinds::CK_MODERATION_DECISION_LIFT
-            | kinds::CK_MODERATION_APPEAL_SUBMIT
-            | kinds::CK_MODERATION_APPEAL_REVIEW
-            | kinds::CK_MODERATION_APPEAL_DECISION
-            | kinds::CK_MODERATION_APPEAL_CLOSE
+        cokret_sdk::events::kinds::MODERATION_DECISION
+            | cokret_sdk::events::kinds::MODERATION_DECISION_LIFT
+            | cokret_sdk::events::kinds::MODERATION_APPEAL_SUBMIT
+            | cokret_sdk::events::kinds::MODERATION_APPEAL_REVIEW
+            | cokret_sdk::events::kinds::MODERATION_APPEAL_DECISION
+            | cokret_sdk::events::kinds::MODERATION_APPEAL_CLOSE
     );
     if !is_moderation {
         return None;
@@ -165,7 +165,7 @@ pub(crate) fn preflight_invite_projection_reject(
     let kind = kinds::canonical_kind_string(operation);
     if !matches!(
         kind.as_str(),
-        kinds::CK_INVITE_THIRD_PARTY | kinds::CK_INVITE_CLAIM
+        cokret_sdk::events::kinds::INVITE_THIRD_PARTY | cokret_sdk::events::kinds::INVITE_CLAIM
     ) {
         return None;
     }
@@ -184,7 +184,9 @@ pub(crate) fn preflight_calendar_projection_reject(
     let kind = kinds::canonical_kind_string(operation);
     if !matches!(
         kind.as_str(),
-        kinds::CK_STRAND_CREATE | kinds::CK_STRAND_UPDATE | kinds::CK_RSVP_SET
+        cokret_sdk::events::kinds::STRAND_CREATE
+            | cokret_sdk::events::kinds::STRAND_UPDATE
+            | cokret_sdk::events::kinds::RSVP_SET
     ) {
         return None;
     }
@@ -1170,7 +1172,7 @@ pub(crate) async fn validate_event_envelope_with_context(
         ));
     }
     if !artifacts::active_local_operation_event_kinds().contains(&kind)
-        && kind != kinds::CK_CONFLICT_REPAIR
+        && kind != kinds::CONFLICT_REPAIR
     {
         return Err(event_validation_error(
             StatusCode::BAD_REQUEST,
@@ -1322,7 +1324,7 @@ pub(crate) async fn validate_event_envelope_with_context(
     // store.put succeeds, so any follow-up facet event in the same
     // session naturally passes the regular realm_has_member check.
     let realm_exists = realm_exists_in_index(state, &realm_id);
-    if kind == kinds::CK_REALM_CREATE && realm_exists {
+    if kind == cokret_sdk::events::kinds::REALM_CREATE && realm_exists {
         return Err(event_validation_error(
             StatusCode::CONFLICT,
             "realm_already_exists",
@@ -1372,7 +1374,7 @@ pub(crate) async fn validate_event_envelope_with_context(
     validate_data_event_capability_refs(state, &actor_id, &realm_id, &kind, object)?;
     validate_cba_effect_planes(object)?;
     validate_control_move_seal_basis(object, is_realm_bootstrap_followup)?;
-    if kind == kinds::CK_MEMBER_IDENTITY_UPDATE {
+    if kind == cokret_sdk::events::kinds::MEMBER_IDENTITY_UPDATE {
         validate_member_identity_proof(state, object.get("payload").unwrap_or(&Value::Null))?;
     }
     if kind == "ck.device.authorize" {
@@ -1516,7 +1518,7 @@ fn validate_control_move_seal_basis(
         .get("effects")
         .and_then(Value::as_array)
         .is_some_and(|effects| !effects.is_empty());
-    if object.get("kind").and_then(Value::as_str) == Some(kinds::CK_REALM_CREATE) {
+    if object.get("kind").and_then(Value::as_str) == Some(cokret_sdk::events::kinds::REALM_CREATE) {
         if object.contains_key("seal_ref")
             || object.contains_key("auth_context")
             || object.contains_key("seal_basis")
@@ -1665,9 +1667,9 @@ fn cba_cell_family_plane(family: &str) -> Result<CbaEffectPlane, EventValidation
 fn is_realm_bootstrap_followup_kind(kind: &str) -> bool {
     matches!(
         kind,
-        kinds::CK_MEMBER_STATE
-            | kinds::CK_REALM_HISTORY_VISIBILITY
-            | kinds::CK_REALM_POLICY_COMPONENTS
+        cokret_sdk::events::kinds::MEMBER_STATE
+            | cokret_sdk::events::kinds::REALM_HISTORY_VISIBILITY
+            | cokret_sdk::events::kinds::REALM_POLICY_COMPONENTS
             | cokret_sdk::events::kinds::REALM_DISCOVERY
             | cokret_sdk::events::kinds::REALM_JOIN_RULE
             | cokret_sdk::events::kinds::REALM_PLAINTEXT_VISIBLE_SERVICES
@@ -1988,14 +1990,14 @@ pub(crate) fn validate_event_schema_and_payload(
     // Wire-shape validators that must run before the registered payload
     // schema validator to surface their precise reason codes.
     validate_pre_schema_wire_shape(kind, payload)?;
-    if kind == kinds::CK_CONFLICT_REPAIR {
+    if kind == kinds::CONFLICT_REPAIR {
         return validate_conflict_repair_event_payload(payload);
     }
     if matches!(
         kind,
-        kinds::CK_SPACE_CONTAINER_ARCHIVE
-            | kinds::CK_SPACE_CONTAINER_RESTORE
-            | kinds::CK_SPACE_CONTAINER_TOMBSTONE
+        cokret_sdk::events::kinds::SPACE_ARCHIVE
+            | cokret_sdk::events::kinds::SPACE_RESTORE
+            | cokret_sdk::events::kinds::SPACE_TOMBSTONE
     ) {
         return validate_space_container_lifecycle_payload(payload);
     }

@@ -9,7 +9,7 @@ pub(super) fn validate_pre_schema_wire_shape(
     kind: &str,
     payload: &Value,
 ) -> Result<(), EventValidationError> {
-    if kind == kinds::CK_MEMBER_IDENTITY_UPDATE {
+    if kind == cokret_sdk::events::kinds::MEMBER_IDENTITY_UPDATE {
         crate::wire_validators::member_identity::validate_member_identity_update_payload(payload)
             .map_err(wire_rejection_to_validation_error)?;
     }
@@ -107,7 +107,7 @@ pub(super) fn validate_realm_create_policy_constraints(
     kind: &str,
     payload: &Value,
 ) -> Result<(), EventValidationError> {
-    if kind != kinds::CK_REALM_CREATE {
+    if kind != cokret_sdk::events::kinds::REALM_CREATE {
         return Ok(());
     }
     let Some(object) = payload.get("object").and_then(Value::as_object) else {

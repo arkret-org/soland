@@ -20,7 +20,7 @@ impl ProjectionState {
         operation: &Operation,
     ) -> ProjectionEffect {
         if crate::kinds::canonical_kind_for_operation(operation)
-            != Some(crate::kinds::CK_KEY_BACKUP_ACTIVE_SERIES)
+            != Some(cokret_sdk::events::kinds::KEY_BACKUP_ACTIVE_SERIES)
         {
             return ProjectionEffect::Ignored;
         }

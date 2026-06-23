@@ -139,7 +139,7 @@ fn call_state_op(binding: Value) -> Operation {
     let mut op = Operation::create(
         cokret_sdk::OperationId::new(format!("ck:operation:{}", uuid::Uuid::now_v7())).unwrap(),
         cokret_sdk::RealmId::new(REALM_ID.to_owned()).unwrap(),
-        kinds::CK_CALL_STATE,
+        cokret_sdk::events::kinds::CALL_STATE,
         json!({
             "call_id": CALL_ID,
             "state": "active",

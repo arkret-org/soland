@@ -365,7 +365,7 @@ async fn upload_keypackage(
             "key_package_bytes_b64": key_package_bytes_b64,
         });
         trust_binding.insert_into(&mut publish_payload);
-        let op = build_op(crate::kinds::CK_MLS_KEYPACKAGE, publish_payload);
+        let op = build_op(cokret_sdk::events::kinds::MLS_KEYPACKAGE, publish_payload);
         let effect =
             reducer::mls::apply_keypackage_publish(&mut state.projection.lock().unwrap(), &op);
         match effect {
@@ -570,7 +570,7 @@ pub(crate) async fn claim_keypackages_for_request(
         "intended_realm_id": intended_realm_id.clone()
     });
     claim_binding.insert_into(&mut payload);
-    let op = build_op(crate::kinds::CK_MLS_KEYPACKAGE, payload);
+    let op = build_op(cokret_sdk::events::kinds::MLS_KEYPACKAGE, payload);
     let effect = reducer::mls::apply_keypackage_claim(&mut state.projection.lock().unwrap(), &op);
     let (consumed_at, claimed_keypackage_id, claimed_group_id, claimed_realm_id) = match effect {
         ProjectionEffect::Mls(MlsEffect::KeyPackageClaimed {

@@ -7,7 +7,9 @@ pub(crate) async fn validate_history_visibility_policy(
     state: &AppState,
     operation: &Operation,
 ) -> Result<(), &'static str> {
-    if kinds::canonical_kind_for_operation(operation) != Some(kinds::CK_REALM_HISTORY_VISIBILITY) {
+    if kinds::canonical_kind_for_operation(operation)
+        != Some(cokret_sdk::events::kinds::REALM_HISTORY_VISIBILITY)
+    {
         return Ok(());
     }
     if operation.payload.get("value").and_then(Value::as_str) != Some("restricted") {
@@ -49,7 +51,7 @@ pub(crate) async fn validate_read_receipt_policy_combination_write(
     operation: &Operation,
 ) -> Result<(), &'static str> {
     match kinds::canonical_kind_for_operation(operation) {
-        Some(kinds::CK_REALM_READ_RECEIPT_POLICY) => {
+        Some(cokret_sdk::events::kinds::REALM_READ_RECEIPT_POLICY) => {
             let policy = read_receipt_policy_projection_from_payload(&operation.payload)?;
             let history_visibility = intended_history_visibility_for_realm(
                 state,
@@ -60,7 +62,7 @@ pub(crate) async fn validate_read_receipt_policy_combination_write(
             validate_read_receipt_policy_against_history(&policy, &history_visibility)?;
             validate_read_receipt_child_policy_write(state, operations, operation, &policy).await
         }
-        Some(kinds::CK_REALM_HISTORY_VISIBILITY) => {
+        Some(cokret_sdk::events::kinds::REALM_HISTORY_VISIBILITY) => {
             if operation.payload.get("value").and_then(Value::as_str) != Some("world_readable") {
                 return Ok(());
             }
@@ -90,7 +92,7 @@ async fn intended_history_visibility_for_realm(
 ) -> String {
     for operation in operations.iter().rev() {
         if kinds::canonical_kind_for_operation(operation)
-            == Some(kinds::CK_REALM_HISTORY_VISIBILITY)
+            == Some(cokret_sdk::events::kinds::REALM_HISTORY_VISIBILITY)
             && operation.realm_id.as_str() == realm_id
             && let Some(value) = operation.payload.get("value").and_then(Value::as_str)
         {
@@ -115,7 +117,7 @@ async fn intended_read_receipt_policy_for_realm(
 ) -> Result<ReadReceiptPolicy, &'static str> {
     for operation in operations.iter().rev() {
         if kinds::canonical_kind_for_operation(operation)
-            == Some(kinds::CK_REALM_READ_RECEIPT_POLICY)
+            == Some(cokret_sdk::events::kinds::REALM_READ_RECEIPT_POLICY)
             && operation.realm_id.as_str() == realm_id
         {
             return read_receipt_policy_projection_from_payload(&operation.payload);
@@ -210,7 +212,7 @@ fn pending_read_receipt_policy_source_realm(
 ) -> Option<Option<String>> {
     for operation in operations.iter().rev() {
         if kinds::canonical_kind_for_operation(operation)
-            != Some(kinds::CK_REALM_INHERITANCE_POLICY)
+            != Some(cokret_sdk::events::kinds::REALM_INHERITANCE_POLICY)
             || operation.realm_id.as_str() != realm_id
         {
             continue;
@@ -243,7 +245,8 @@ fn active_read_receipt_parent_link(
         return false;
     }
     for operation in operations.iter().rev() {
-        if kinds::canonical_kind_for_operation(operation) != Some(kinds::CK_REALM_LINK)
+        if kinds::canonical_kind_for_operation(operation)
+            != Some(cokret_sdk::events::kinds::REALM_LINK)
             || operation.realm_id.as_str() != realm_id
             || operation
                 .payload
@@ -287,7 +290,9 @@ pub(crate) async fn validate_realm_key_share_policy(
     state: &AppState,
     operation: &Operation,
 ) -> Result<(), &'static str> {
-    if kinds::canonical_kind_for_operation(operation) != Some(kinds::CK_REALM_KEY_SHARE) {
+    if kinds::canonical_kind_for_operation(operation)
+        != Some(cokret_sdk::events::kinds::REALM_KEY_SHARE)
+    {
         return Ok(());
     }
     let Some(meta) = state
@@ -457,7 +462,9 @@ pub(crate) async fn validate_realm_moderation_policy(
     state: &AppState,
     operation: &Operation,
 ) -> Result<(), &'static str> {
-    if kinds::canonical_kind_for_operation(operation) != Some(kinds::CK_REALM_MODERATION_POLICY) {
+    if kinds::canonical_kind_for_operation(operation)
+        != Some(cokret_sdk::events::kinds::REALM_MODERATION_POLICY)
+    {
         return Ok(());
     }
     let realm_id = operation.realm_id.as_str();
@@ -522,7 +529,7 @@ pub(crate) async fn validate_audience_mention_operation_policy(
 ) -> Result<(), &'static str> {
     if !matches!(
         kinds::canonical_kind_for_operation(operation),
-        Some(kinds::CK_MESSAGE_CREATE | kinds::CK_MESSAGE_REVISE)
+        Some(cokret_sdk::events::kinds::MESSAGE_CREATE | cokret_sdk::events::kinds::MESSAGE_REVISE)
     ) {
         return Ok(());
     }

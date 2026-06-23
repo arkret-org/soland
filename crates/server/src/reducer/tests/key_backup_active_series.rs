@@ -45,7 +45,7 @@ fn key_backup_active_series_projects_pointer_and_cell() {
 
     let effect = state.apply(
         &make_operation(
-            crate::kinds::CK_KEY_BACKUP_ACTIVE_SERIES,
+            cokret_sdk::events::kinds::KEY_BACKUP_ACTIVE_SERIES,
             REALM,
             active_series_payload(),
         ),
@@ -91,7 +91,11 @@ fn key_backup_active_series_requires_complete_signed_fields() {
     ]);
 
     let effect = state.apply(
-        &make_operation(crate::kinds::CK_KEY_BACKUP_ACTIVE_SERIES, REALM, payload),
+        &make_operation(
+            cokret_sdk::events::kinds::KEY_BACKUP_ACTIVE_SERIES,
+            REALM,
+            payload,
+        ),
         &hlc,
     );
 
@@ -110,7 +114,11 @@ fn key_backup_active_series_rejects_active_series_in_previous_set() {
     payload["previous_series_ids"] = json!([ACTIVE_SERIES]);
 
     let effect = state.apply(
-        &make_operation(crate::kinds::CK_KEY_BACKUP_ACTIVE_SERIES, REALM, payload),
+        &make_operation(
+            cokret_sdk::events::kinds::KEY_BACKUP_ACTIVE_SERIES,
+            REALM,
+            payload,
+        ),
         &hlc,
     );
 
@@ -129,7 +137,11 @@ fn key_backup_active_series_rejects_frontier_ssk_mismatch() {
     payload["frontier_ref"]["ssk_generation"] = json!(1);
 
     let effect = state.apply(
-        &make_operation(crate::kinds::CK_KEY_BACKUP_ACTIVE_SERIES, REALM, payload),
+        &make_operation(
+            cokret_sdk::events::kinds::KEY_BACKUP_ACTIVE_SERIES,
+            REALM,
+            payload,
+        ),
         &hlc,
     );
 

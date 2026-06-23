@@ -71,23 +71,27 @@ mod reaction_and_window_policy_tests {
     #[test]
     fn reaction_on_message_target_is_accepted() {
         let op = reaction_op(
-            kinds::CK_REACTION_ADD,
+            cokret_sdk::events::kinds::REACTION_ADD,
             json!({
                 "target_ref": "ck:message:01904100-0000-7000-8000-000000000001",
                 "actor": "did:web:alice",
                 "key": "👍",
             }),
         );
-        assert!(validate_reaction_target_kind(kinds::CK_REACTION_ADD, &op).is_ok());
+        assert!(
+            validate_reaction_target_kind(cokret_sdk::events::kinds::REACTION_ADD, &op).is_ok()
+        );
     }
 
     #[test]
     fn reaction_on_event_storage_id_is_accepted() {
         let op = reaction_op(
-            kinds::CK_REACTION_ADD,
+            cokret_sdk::events::kinds::REACTION_ADD,
             json!({ "target_ref": "ck:event:01904100-0000-7000-8000-000000000001" }),
         );
-        assert!(validate_reaction_target_kind(kinds::CK_REACTION_ADD, &op).is_ok());
+        assert!(
+            validate_reaction_target_kind(cokret_sdk::events::kinds::REACTION_ADD, &op).is_ok()
+        );
     }
 
     #[test]
@@ -97,9 +101,12 @@ mod reaction_and_window_policy_tests {
             "ck:morph:01904100-0000-7000-8000-000000000001",
             "ck:circle:01904100-0000-7000-8000-000000000001",
         ] {
-            let op = reaction_op(kinds::CK_REACTION_ADD, json!({ "target_ref": target }));
+            let op = reaction_op(
+                cokret_sdk::events::kinds::REACTION_ADD,
+                json!({ "target_ref": target }),
+            );
             assert_eq!(
-                validate_reaction_target_kind(kinds::CK_REACTION_ADD, &op),
+                validate_reaction_target_kind(cokret_sdk::events::kinds::REACTION_ADD, &op),
                 Err(cokret_sdk::error::REASON_REACTION_TARGET_UNSUPPORTED),
                 "target {target} must be rejected",
             );
@@ -109,10 +116,12 @@ mod reaction_and_window_policy_tests {
     #[test]
     fn non_reaction_kinds_skip_target_check() {
         let op = reaction_op(
-            kinds::CK_MESSAGE_CREATE,
+            cokret_sdk::events::kinds::MESSAGE_CREATE,
             json!({ "target_ref": "ck:strand:01904100-0000-7000-8000-000000000001" }),
         );
-        assert!(validate_reaction_target_kind(kinds::CK_MESSAGE_CREATE, &op).is_ok());
+        assert!(
+            validate_reaction_target_kind(cokret_sdk::events::kinds::MESSAGE_CREATE, &op).is_ok()
+        );
     }
 
     #[test]

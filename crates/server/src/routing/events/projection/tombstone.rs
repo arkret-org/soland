@@ -4,7 +4,6 @@ use chrono::{DateTime, Utc};
 use serde_json::{Value, json};
 
 use super::*;
-use crate::kinds;
 use crate::reducer::{MessageExpiryProjection, message_expiry_projection_from_value};
 use crate::state::{AppState, ProjectionEventRecord, RetentionTombstoneRecord};
 
@@ -50,7 +49,7 @@ const EXPIRY_DERIVED_FIELD_KEYS: &[&str] = &[
 pub fn redaction_targets_from_events(events: &[ProjectionEventRecord]) -> HashSet<String> {
     events
         .iter()
-        .filter(|event| kinds::is_redaction_kind(&event.event_kind))
+        .filter(|event| cokret_sdk::events::kinds::is_redaction_kind(&event.event_kind))
         .filter_map(|event| {
             event
                 .payload
@@ -69,7 +68,8 @@ pub fn redaction_targets_from_events(events: &[ProjectionEventRecord]) -> HashSe
 }
 
 pub fn event_is_visible(event: &ProjectionEventRecord, redacted: &HashSet<String>) -> bool {
-    !kinds::is_redaction_kind(&event.event_kind) && !redacted.contains(&event.event_id)
+    !cokret_sdk::events::kinds::is_redaction_kind(&event.event_kind)
+        && !redacted.contains(&event.event_id)
 }
 
 pub fn actor_erased_in_realm(
@@ -111,7 +111,7 @@ pub fn tombstone_projection_event_for_erased_actor(
     projection: &crate::reducer::ProjectionState,
     event: &mut ProjectionEventRecord,
 ) {
-    if event.event_kind == kinds::CK_AUDIT_ERASURE_RECEIPT {
+    if event.event_kind == cokret_sdk::events::kinds::AUDIT_ERASURE_RECEIPT {
         return;
     }
     let Some(actor) = projection_event_actor(event) else {
@@ -175,7 +175,7 @@ pub fn stub_projection_event_for_message_expiry(
     event: &mut ProjectionEventRecord,
     now: DateTime<Utc>,
 ) {
-    if event.event_kind != kinds::CK_MESSAGE_CREATE {
+    if event.event_kind != cokret_sdk::events::kinds::MESSAGE_CREATE {
         return;
     }
     let expiry = projection
@@ -205,7 +205,7 @@ pub fn stub_pin_projection_event_for_invisible_target(
     projection: &crate::reducer::ProjectionState,
     event: &mut ProjectionEventRecord,
 ) {
-    if !kinds::is_pin_kind(&event.event_kind) {
+    if !cokret_sdk::events::kinds::is_pin_kind(&event.event_kind) {
         return;
     }
     let Some(target_ref) = event.payload.get("target_ref").and_then(Value::as_str) else {
@@ -768,7 +768,7 @@ mod tests {
         let mut event = ProjectionEventRecord {
             event_id: event_id.to_owned(),
             realm_id: realm_id.to_owned(),
-            event_kind: crate::kinds::CK_MESSAGE_CREATE.to_owned(),
+            event_kind: cokret_sdk::events::kinds::MESSAGE_CREATE.to_owned(),
             operation_type: "create".to_owned(),
             operation_id: None,
             sender: Some("did:web:alice.example".to_owned()),
@@ -936,7 +936,7 @@ mod tests {
         let mut event = ProjectionEventRecord {
             event_id: "ck:operation:01904100-0000-7000-8000-0000000000a3".to_owned(),
             realm_id: realm_id.to_owned(),
-            event_kind: crate::kinds::CK_PIN_ADD.to_owned(),
+            event_kind: cokret_sdk::events::kinds::PIN_ADD.to_owned(),
             operation_type: "create".to_owned(),
             operation_id: None,
             sender: Some("did:web:alice.example".to_owned()),
@@ -969,7 +969,7 @@ mod tests {
         let mut event = ProjectionEventRecord {
             event_id: "ck:operation:01904100-0000-7000-8000-0000000000d3".to_owned(),
             realm_id: realm_id.to_owned(),
-            event_kind: crate::kinds::CK_PIN_ADD.to_owned(),
+            event_kind: cokret_sdk::events::kinds::PIN_ADD.to_owned(),
             operation_type: "create".to_owned(),
             operation_id: None,
             sender: Some("did:web:alice.example".to_owned()),

@@ -407,7 +407,7 @@ async fn encrypted_realm_rejects_plaintext_strand_content_before_event_log_persi
                 cokret_sdk::OperationId::new(format!("ck:operation:{}", uuid::Uuid::now_v7()))
                     .unwrap(),
                 cokret_sdk::RealmId::new(DEMO_REALM_ID).unwrap(),
-                soland::kinds::CK_REALM_POLICY_COMPONENTS,
+                cokret_sdk::events::kinds::REALM_POLICY_COMPONENTS,
                 serde_json::json!({ "content_encryption_floor": "e2ee_required" }),
             ),
             &hlc,

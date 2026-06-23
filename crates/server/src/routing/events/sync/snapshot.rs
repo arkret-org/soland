@@ -1446,7 +1446,7 @@ fn projection_event_scope_circle_id(
     projection: &ProjectionState,
     event: &ProjectionEventRecord,
 ) -> Option<String> {
-    if event.event_kind == crate::kinds::CK_MESSAGE_CREATE {
+    if event.event_kind == cokret_sdk::events::kinds::MESSAGE_CREATE {
         return event
             .payload
             .get("strand_id")

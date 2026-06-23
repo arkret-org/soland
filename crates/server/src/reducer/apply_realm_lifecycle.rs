@@ -528,7 +528,7 @@ impl ProjectionState {
 
     pub fn check_bottom_cell_transition(&self, operation: &Operation) -> Result<(), &'static str> {
         match crate::kinds::canonical_kind_for_operation(operation) {
-            Some(crate::kinds::CK_REALM_UPDATE) => {
+            Some(cokret_sdk::events::kinds::REALM_UPDATE) => {
                 let realm_id = operation.realm_id.to_string();
                 if let Some(cell_id) = Self::realm_organization_cell_id(&realm_id)
                     && matches!(self.cells.get(&cell_id), Some(CellState::Bottom(_)))
@@ -537,7 +537,7 @@ impl ProjectionState {
                 }
                 Ok(())
             }
-            Some(crate::kinds::CK_CONFLICT_REPAIR) => {
+            Some(crate::kinds::CONFLICT_REPAIR) => {
                 self.validate_conflict_repair_operation(operation)
             }
             _ => Ok(()),
@@ -677,12 +677,12 @@ impl ProjectionState {
         debug_assert!(
             matches!(
                 kind,
-                crate::kinds::CK_REALM_CREATE
-                    | crate::kinds::CK_REALM_UPDATE
-                    | crate::kinds::CK_REALM_ARCHIVE
-                    | crate::kinds::CK_REALM_FREEZE
-                    | crate::kinds::CK_REALM_TOMBSTONE
-                    | crate::kinds::CK_REALM_DESTROY
+                cokret_sdk::events::kinds::REALM_CREATE
+                    | cokret_sdk::events::kinds::REALM_UPDATE
+                    | cokret_sdk::events::kinds::REALM_ARCHIVE
+                    | cokret_sdk::events::kinds::REALM_FREEZE
+                    | cokret_sdk::events::kinds::REALM_TOMBSTONE
+                    | cokret_sdk::events::kinds::REALM_DESTROY
             ),
             "apply_realm_lifecycle dispatched with non-realm kind: {kind}",
         );
@@ -703,7 +703,7 @@ impl ProjectionState {
         // terminal-state write rejects with `realm_already_terminal`.
         let payload_object = operation.payload.get("object").and_then(Value::as_object);
         let realm_id = operation.realm_id.to_string();
-        let creator = if kind == crate::kinds::CK_REALM_CREATE {
+        let creator = if kind == cokret_sdk::events::kinds::REALM_CREATE {
             let Some(creator) = payload_object
                 .and_then(|object| object.get("created_by"))
                 .and_then(Value::as_str)
@@ -797,13 +797,16 @@ impl ProjectionState {
                 reason: cokret_sdk::ERROR_CODE_UNSUPPORTED_DIGEST_ALGORITHM.to_owned(),
             };
         }
-        if kind == crate::kinds::CK_REALM_UPDATE && operation_touches_encryption_profile(operation)
+        if kind == cokret_sdk::events::kinds::REALM_UPDATE
+            && operation_touches_encryption_profile(operation)
         {
             return ProjectionEffect::Rejected {
                 reason: REALM_ENCRYPTION_PROFILE_CREATE_LOCKED.to_owned(),
             };
         }
-        if kind == crate::kinds::CK_REALM_UPDATE && operation_touches_digest_algorithm(operation) {
+        if kind == cokret_sdk::events::kinds::REALM_UPDATE
+            && operation_touches_digest_algorithm(operation)
+        {
             return ProjectionEffect::Rejected {
                 reason: cokret_sdk::ERROR_CODE_SCHEMA_VIOLATION.to_owned(),
             };
@@ -861,7 +864,8 @@ impl ProjectionState {
             && existing.terminal_state.is_some()
             && matches!(
                 kind,
-                crate::kinds::CK_REALM_TOMBSTONE | crate::kinds::CK_REALM_DESTROY
+                cokret_sdk::events::kinds::REALM_TOMBSTONE
+                    | cokret_sdk::events::kinds::REALM_DESTROY
             )
         {
             return ProjectionEffect::Rejected {
@@ -879,7 +883,7 @@ impl ProjectionState {
             .get("successor_realm_id")
             .and_then(Value::as_str)
             .map(ToOwned::to_owned);
-        if kind == crate::kinds::CK_REALM_TOMBSTONE {
+        if kind == cokret_sdk::events::kinds::REALM_TOMBSTONE {
             match payload_successor_realm_id.as_deref() {
                 None => {
                     return ProjectionEffect::Rejected {
@@ -901,13 +905,14 @@ impl ProjectionState {
             }
         }
         // ck.realm.destroy MUST NOT carry successor_realm_id (spec §2.5).
-        if kind == crate::kinds::CK_REALM_DESTROY && payload_successor_realm_id.is_some() {
+        if kind == cokret_sdk::events::kinds::REALM_DESTROY && payload_successor_realm_id.is_some()
+        {
             return ProjectionEffect::Rejected {
                 reason: cokret_sdk::ERROR_CODE_SCHEMA_VIOLATION.to_owned(),
             };
         }
 
-        if kind == crate::kinds::CK_REALM_UPDATE
+        if kind == cokret_sdk::events::kinds::REALM_UPDATE
             && let Some(effect) = self.maybe_project_realm_update_bottom(
                 operation,
                 now,
@@ -920,7 +925,9 @@ impl ProjectionState {
         {
             return effect;
         }
-        if kind == crate::kinds::CK_REALM_CREATE && self.realm_create_log(&realm_id).is_some() {
+        if kind == cokret_sdk::events::kinds::REALM_CREATE
+            && self.realm_create_log(&realm_id).is_some()
+        {
             return ProjectionEffect::Rejected {
                 reason: "realm_already_exists".to_owned(),
             };
@@ -956,22 +963,24 @@ impl ProjectionState {
         // Stream-F (Wave 1B): both terminal-state events flip the
         // summary `deleted` flag. The richer `terminal_state` /
         // `successor_realm_id` fields are the source of truth.
-        if kind == crate::kinds::CK_REALM_DESTROY || kind == crate::kinds::CK_REALM_TOMBSTONE {
+        if kind == cokret_sdk::events::kinds::REALM_DESTROY
+            || kind == cokret_sdk::events::kinds::REALM_TOMBSTONE
+        {
             realm.deleted = true;
         }
-        if kind == crate::kinds::CK_REALM_TOMBSTONE {
+        if kind == cokret_sdk::events::kinds::REALM_TOMBSTONE {
             realm.terminal_state = Some("tombstoned".to_owned());
             realm.successor_realm_id = payload_successor_realm_id.clone();
-        } else if kind == crate::kinds::CK_REALM_DESTROY {
+        } else if kind == cokret_sdk::events::kinds::REALM_DESTROY {
             realm.terminal_state = Some("destroyed".to_owned());
             realm.successor_realm_id = None;
-        } else if kind == crate::kinds::CK_REALM_ARCHIVE {
+        } else if kind == cokret_sdk::events::kinds::REALM_ARCHIVE {
             realm.archived = operation
                 .payload
                 .get("archived")
                 .and_then(Value::as_bool)
                 .unwrap_or(true);
-        } else if kind == crate::kinds::CK_REALM_FREEZE {
+        } else if kind == cokret_sdk::events::kinds::REALM_FREEZE {
             realm.frozen = operation
                 .payload
                 .get("frozen")
@@ -995,7 +1004,7 @@ impl ProjectionState {
         // Cells map: synth a CellState::Value per the spec cell family
         // for this canonical kind.
         match kind {
-            k if k == crate::kinds::CK_REALM_CREATE => {
+            k if k == cokret_sdk::events::kinds::REALM_CREATE => {
                 if let Ok(cell_id) = cokret_sdk::CellRef::new(format!(
                     "ck:cell:ck.component.realm.create.v1:{realm_id}"
                 )) {
@@ -1016,7 +1025,7 @@ impl ProjectionState {
                     self.bootstrap_realm_creator_member(&realm_id, creator, operation, now);
                 }
             }
-            k if k == crate::kinds::CK_REALM_UPDATE => {
+            k if k == cokret_sdk::events::kinds::REALM_UPDATE => {
                 // cas-register: latest value wins. Composite of
                 // owner / title / arbitrary other organization fields
                 // pulled from payload (fields the spec evolves can land
@@ -1051,7 +1060,7 @@ impl ProjectionState {
                         .insert(cell_id, CellState::Value(Value::Object(value)));
                 }
             }
-            k if k == crate::kinds::CK_REALM_ARCHIVE => {
+            k if k == cokret_sdk::events::kinds::REALM_ARCHIVE => {
                 if let Ok(cell_id) = cokret_sdk::CellRef::new(format!(
                     "ck:cell:ck.component.realm.archive.v1:{realm_id}"
                 )) {
@@ -1076,7 +1085,7 @@ impl ProjectionState {
                         .insert(cell_id, CellState::Value(Value::Object(value)));
                 }
             }
-            k if k == crate::kinds::CK_REALM_FREEZE => {
+            k if k == cokret_sdk::events::kinds::REALM_FREEZE => {
                 if let Ok(cell_id) = cokret_sdk::CellRef::new(format!(
                     "ck:cell:ck.component.realm.freeze.v1:{realm_id}"
                 )) {
@@ -1106,7 +1115,7 @@ impl ProjectionState {
                         .insert(cell_id, CellState::Value(Value::Object(value)));
                 }
             }
-            k if k == crate::kinds::CK_REALM_TOMBSTONE => {
+            k if k == cokret_sdk::events::kinds::REALM_TOMBSTONE => {
                 // Stream-F (Wave 1B): tombstone writes its own terminal
                 // cell with `successor_realm_id` so peers hydrating from
                 // cells alone can distinguish migration from destroy.
@@ -1127,7 +1136,7 @@ impl ProjectionState {
                 // successor Realm. Spec §2.5 row "tombstone" — no
                 // realm_destroyed_orphan cascade fires here.
             }
-            k if k == crate::kinds::CK_REALM_DESTROY => {
+            k if k == cokret_sdk::events::kinds::REALM_DESTROY => {
                 // cas-register: terminal {destroyed: true, at: ts}.
                 if let Ok(cell_id) = cokret_sdk::CellRef::new(format!(
                     "ck:cell:ck.component.realm.destroy.v1:{realm_id}"

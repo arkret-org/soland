@@ -185,42 +185,46 @@ fn apply_realm_create_dispatch(
     op: &Operation,
     _hlc: &ServerHlc,
 ) -> ProjectionEffect {
-    s.apply_realm_lifecycle(op, op.created_at, crate::kinds::CK_REALM_CREATE)
+    s.apply_realm_lifecycle(op, op.created_at, cokret_sdk::events::kinds::REALM_CREATE)
 }
 fn apply_realm_update_dispatch(
     s: &mut ProjectionState,
     op: &Operation,
     _hlc: &ServerHlc,
 ) -> ProjectionEffect {
-    s.apply_realm_lifecycle(op, op.created_at, crate::kinds::CK_REALM_UPDATE)
+    s.apply_realm_lifecycle(op, op.created_at, cokret_sdk::events::kinds::REALM_UPDATE)
 }
 fn apply_realm_archive_dispatch(
     s: &mut ProjectionState,
     op: &Operation,
     _hlc: &ServerHlc,
 ) -> ProjectionEffect {
-    s.apply_realm_lifecycle(op, op.created_at, crate::kinds::CK_REALM_ARCHIVE)
+    s.apply_realm_lifecycle(op, op.created_at, cokret_sdk::events::kinds::REALM_ARCHIVE)
 }
 fn apply_realm_freeze_dispatch(
     s: &mut ProjectionState,
     op: &Operation,
     _hlc: &ServerHlc,
 ) -> ProjectionEffect {
-    s.apply_realm_lifecycle(op, op.created_at, crate::kinds::CK_REALM_FREEZE)
+    s.apply_realm_lifecycle(op, op.created_at, cokret_sdk::events::kinds::REALM_FREEZE)
 }
 fn apply_realm_tombstone_dispatch(
     s: &mut ProjectionState,
     op: &Operation,
     _hlc: &ServerHlc,
 ) -> ProjectionEffect {
-    s.apply_realm_lifecycle(op, op.created_at, crate::kinds::CK_REALM_TOMBSTONE)
+    s.apply_realm_lifecycle(
+        op,
+        op.created_at,
+        cokret_sdk::events::kinds::REALM_TOMBSTONE,
+    )
 }
 fn apply_realm_destroy_dispatch(
     s: &mut ProjectionState,
     op: &Operation,
     _hlc: &ServerHlc,
 ) -> ProjectionEffect {
-    s.apply_realm_lifecycle(op, op.created_at, crate::kinds::CK_REALM_DESTROY)
+    s.apply_realm_lifecycle(op, op.created_at, cokret_sdk::events::kinds::REALM_DESTROY)
 }
 fn apply_realm_set_default_strand_dispatch(
     s: &mut ProjectionState,
@@ -498,7 +502,7 @@ fn apply_agent_draft_propose_dispatch(
     _hlc: &ServerHlc,
 ) -> ProjectionEffect {
     ProjectionEffect::AgentPrivateEventAccepted {
-        kind: crate::kinds::CK_AGENT_DRAFT_PROPOSE,
+        kind: cokret_sdk::events::kinds::AGENT_DRAFT_PROPOSE,
         event_id: op.operation_id.to_string(),
     }
 }
@@ -831,27 +835,72 @@ pub fn default_apply_registry() -> std::collections::HashMap<&'static str, Apply
     use crate::kinds::*;
     let mut m: std::collections::HashMap<&'static str, ApplyFn> =
         std::collections::HashMap::with_capacity(40);
-    m.insert(CK_MESSAGE_CREATE, apply_message_dispatch as ApplyFn);
-    m.insert(CK_MESSAGE_REVISE, apply_message_revise_dispatch);
-    m.insert(CK_MESSAGE_REDACT, apply_redaction_dispatch);
-    m.insert(CK_REDACTION, apply_redaction_dispatch);
-    m.insert(CK_REACTION_ADD, apply_reaction_add_dispatch);
-    m.insert(CK_REACTION_REMOVE, apply_reaction_remove_dispatch);
-    m.insert(CK_RSVP_SET, apply_rsvp_set_dispatch);
-    m.insert(CK_PIN_ADD, apply_pin_dispatch);
-    m.insert(CK_PIN_REMOVE, apply_pin_dispatch);
-    m.insert(CK_PIN_REORDER, apply_pin_dispatch);
-    m.insert(CK_READ_MARKER, apply_read_cursor_dispatch);
-    m.insert(CK_RELATION_CREATE, apply_relation_create_dispatch);
-    m.insert(CK_RELATION_UPDATE, apply_relation_update_dispatch);
-    m.insert(CK_RELATION_DELETE, apply_relation_delete_dispatch);
-    m.insert(CK_CONTAINER_MOVE_ITEM, apply_container_position_dispatch);
-    m.insert(CK_CONTAINER_REBALANCE, apply_container_position_dispatch);
-    m.insert(CK_MEMBER_STATE, apply_membership_dispatch);
-    m.insert(CK_INVITE_THIRD_PARTY, apply_invite_third_party_dispatch);
-    m.insert(CK_INVITE_CLAIM, apply_invite_claim_dispatch);
     m.insert(
-        CK_KEY_BACKUP_ACTIVE_SERIES,
+        cokret_sdk::events::kinds::MESSAGE_CREATE,
+        apply_message_dispatch as ApplyFn,
+    );
+    m.insert(
+        cokret_sdk::events::kinds::MESSAGE_REVISE,
+        apply_message_revise_dispatch,
+    );
+    m.insert(
+        cokret_sdk::events::kinds::MESSAGE_REDACT,
+        apply_redaction_dispatch,
+    );
+    m.insert(
+        cokret_sdk::events::kinds::REDACTION,
+        apply_redaction_dispatch,
+    );
+    m.insert(
+        cokret_sdk::events::kinds::REACTION_ADD,
+        apply_reaction_add_dispatch,
+    );
+    m.insert(
+        cokret_sdk::events::kinds::REACTION_REMOVE,
+        apply_reaction_remove_dispatch,
+    );
+    m.insert(cokret_sdk::events::kinds::RSVP_SET, apply_rsvp_set_dispatch);
+    m.insert(cokret_sdk::events::kinds::PIN_ADD, apply_pin_dispatch);
+    m.insert(cokret_sdk::events::kinds::PIN_REMOVE, apply_pin_dispatch);
+    m.insert(cokret_sdk::events::kinds::PIN_REORDER, apply_pin_dispatch);
+    m.insert(
+        cokret_sdk::events::kinds::READ_CURSOR_ADVANCE,
+        apply_read_cursor_dispatch,
+    );
+    m.insert(
+        cokret_sdk::events::kinds::RELATION_CREATE,
+        apply_relation_create_dispatch,
+    );
+    m.insert(
+        cokret_sdk::events::kinds::RELATION_UPDATE,
+        apply_relation_update_dispatch,
+    );
+    m.insert(
+        cokret_sdk::events::kinds::RELATION_TOMBSTONE,
+        apply_relation_delete_dispatch,
+    );
+    m.insert(
+        cokret_sdk::events::kinds::CONTAINER_MOVE_ITEM,
+        apply_container_position_dispatch,
+    );
+    m.insert(
+        cokret_sdk::events::kinds::CONTAINER_REBALANCE,
+        apply_container_position_dispatch,
+    );
+    m.insert(
+        cokret_sdk::events::kinds::MEMBER_STATE,
+        apply_membership_dispatch,
+    );
+    m.insert(
+        cokret_sdk::events::kinds::INVITE_THIRD_PARTY,
+        apply_invite_third_party_dispatch,
+    );
+    m.insert(
+        cokret_sdk::events::kinds::INVITE_CLAIM,
+        apply_invite_claim_dispatch,
+    );
+    m.insert(
+        cokret_sdk::events::kinds::KEY_BACKUP_ACTIVE_SERIES,
         apply_key_backup_active_series_dispatch,
     );
     // MID-1..6 (R3.1/R3.2 spec-sync, cokret-spec @ b56cab1) —
@@ -864,160 +913,307 @@ pub fn default_apply_registry() -> std::collections::HashMap<&'static str, Apply
     // because it spans cells; the in-process reducer just records that
     // the event was accepted so subscribers observe the lifecycle effect.
     m.insert(
-        CK_MEMBER_IDENTITY_UPDATE,
+        cokret_sdk::events::kinds::MEMBER_IDENTITY_UPDATE,
         apply_member_identity_update_dispatch,
     );
-    m.insert(CK_REALM_CREATE, apply_realm_create_dispatch);
-    m.insert(CK_REALM_UPDATE, apply_realm_update_dispatch);
-    m.insert(CK_REALM_ARCHIVE, apply_realm_archive_dispatch);
-    m.insert(CK_REALM_FREEZE, apply_realm_freeze_dispatch);
-    m.insert(CK_REALM_TOMBSTONE, apply_realm_tombstone_dispatch);
-    m.insert(CK_REALM_DESTROY, apply_realm_destroy_dispatch);
+    m.insert(
+        cokret_sdk::events::kinds::REALM_CREATE,
+        apply_realm_create_dispatch,
+    );
+    m.insert(
+        cokret_sdk::events::kinds::REALM_UPDATE,
+        apply_realm_update_dispatch,
+    );
+    m.insert(
+        cokret_sdk::events::kinds::REALM_ARCHIVE,
+        apply_realm_archive_dispatch,
+    );
+    m.insert(
+        cokret_sdk::events::kinds::REALM_FREEZE,
+        apply_realm_freeze_dispatch,
+    );
+    m.insert(
+        cokret_sdk::events::kinds::REALM_TOMBSTONE,
+        apply_realm_tombstone_dispatch,
+    );
+    m.insert(
+        cokret_sdk::events::kinds::REALM_DESTROY,
+        apply_realm_destroy_dispatch,
+    );
     // COT-06-004 — Realm default-Strand pointer.
     m.insert(
-        CK_REALM_SET_DEFAULT_STRAND,
+        cokret_sdk::events::kinds::REALM_SET_DEFAULT_STRAND,
         apply_realm_set_default_strand_dispatch,
     );
-    m.insert(CK_CONFLICT_REPAIR, apply_conflict_repair_dispatch);
-    m.insert(CK_AUDIT_ERASURE_RECEIPT, apply_erasure_receipt_dispatch);
+    m.insert(CONFLICT_REPAIR, apply_conflict_repair_dispatch);
     m.insert(
-        CK_SPACE_CONTAINER_CREATE,
+        cokret_sdk::events::kinds::AUDIT_ERASURE_RECEIPT,
+        apply_erasure_receipt_dispatch,
+    );
+    m.insert(
+        cokret_sdk::events::kinds::SPACE_CREATE,
         apply_space_container_create_dispatch,
     );
     m.insert(
-        CK_SPACE_CONTAINER_UPDATE,
+        cokret_sdk::events::kinds::SPACE_UPDATE,
         apply_space_container_update_dispatch,
     );
     m.insert(
-        CK_SPACE_CONTAINER_PARENT,
+        cokret_sdk::events::kinds::SPACE_PARENT,
         apply_space_container_parent_dispatch,
     );
     m.insert(
-        CK_SPACE_CONTAINER_ARCHIVE,
+        cokret_sdk::events::kinds::SPACE_ARCHIVE,
         apply_space_container_archive_dispatch,
     );
     m.insert(
-        CK_SPACE_CONTAINER_RESTORE,
+        cokret_sdk::events::kinds::SPACE_RESTORE,
         apply_space_container_restore_dispatch,
     );
     m.insert(
-        CK_SPACE_CONTAINER_TOMBSTONE,
+        cokret_sdk::events::kinds::SPACE_TOMBSTONE,
         apply_space_container_tombstone_dispatch,
     );
-    m.insert(CK_STRAND_CREATE, apply_strand_create_dispatch);
-    m.insert(CK_STRAND_UPDATE, apply_strand_update_dispatch);
-    m.insert(CK_STRAND_ARCHIVE, apply_strand_archive_dispatch);
-    m.insert(CK_STRAND_RESTORE, apply_strand_restore_dispatch);
-    m.insert(CK_STRAND_MOVE, apply_strand_position_touch_dispatch);
-    m.insert(CK_STRAND_REORDER, apply_strand_position_touch_dispatch);
-    m.insert(CK_STRAND_WATCH_SET, apply_strand_watch_set_dispatch);
+    m.insert(
+        cokret_sdk::events::kinds::STRAND_CREATE,
+        apply_strand_create_dispatch,
+    );
+    m.insert(
+        cokret_sdk::events::kinds::STRAND_UPDATE,
+        apply_strand_update_dispatch,
+    );
+    m.insert(
+        cokret_sdk::events::kinds::STRAND_ARCHIVE,
+        apply_strand_archive_dispatch,
+    );
+    m.insert(
+        cokret_sdk::events::kinds::STRAND_RESTORE,
+        apply_strand_restore_dispatch,
+    );
+    m.insert(
+        cokret_sdk::events::kinds::STRAND_MOVE,
+        apply_strand_position_touch_dispatch,
+    );
+    m.insert(
+        cokret_sdk::events::kinds::STRAND_REORDER,
+        apply_strand_position_touch_dispatch,
+    );
+    m.insert(
+        cokret_sdk::events::kinds::STRAND_WATCH_SET,
+        apply_strand_watch_set_dispatch,
+    );
     // Unified tracks patch. Payload-shape validation (presence of `tracks`
     // patch map) lives in the wire validator. TODO: apply patch ops
     // against soland-side Strand.tracks projection once the server-side
     // projection carries the tracks map.
-    m.insert(CK_STRAND_TRACKS_UPDATE, apply_strand_track_touch_dispatch);
-    m.insert(CK_MORPH_CREATE, apply_morph_create_dispatch);
-    m.insert(CK_MORPH_UPDATE, apply_morph_update_dispatch);
-    m.insert(CK_MORPH_ARCHIVE, apply_morph_archive_dispatch);
-    m.insert(CK_MORPH_RESTORE, apply_morph_restore_dispatch);
+    m.insert(
+        cokret_sdk::events::kinds::STRAND_TRACKS_UPDATE,
+        apply_strand_track_touch_dispatch,
+    );
+    m.insert(
+        cokret_sdk::events::kinds::MORPH_CREATE,
+        apply_morph_create_dispatch,
+    );
+    m.insert(
+        cokret_sdk::events::kinds::MORPH_UPDATE,
+        apply_morph_update_dispatch,
+    );
+    m.insert(
+        cokret_sdk::events::kinds::MORPH_ARCHIVE,
+        apply_morph_archive_dispatch,
+    );
+    m.insert(
+        cokret_sdk::events::kinds::MORPH_RESTORE,
+        apply_morph_restore_dispatch,
+    );
     // CKP-0007 — Circle lifecycle / membership dispatch. The seventh
     // active kind, `ck.circle.seal_commit`, is reducer-derived (sub-
     // seal on the Circle's profile cadence) and listed in the SDK's
     // `NON_REDUCER_EVENT_KINDS` set, so no dispatch entry is added for
     // it here.
-    m.insert(CK_CIRCLE_CREATE, apply_circle_create_dispatch);
-    m.insert(CK_CIRCLE_UPDATE, apply_circle_update_dispatch);
-    m.insert(CK_CIRCLE_ARCHIVE, apply_circle_archive_dispatch);
-    m.insert(CK_CIRCLE_RESTORE, apply_circle_restore_dispatch);
-    m.insert(CK_CIRCLE_TOMBSTONE, apply_circle_tombstone_dispatch);
-    m.insert(CK_CIRCLE_MEMBER_STATE, apply_circle_member_state_dispatch);
-    m.insert(CK_APPLET_REGISTRATION, apply_applet_registration_dispatch);
-    m.insert(CK_APPLET_DISCOVERY, apply_applet_discovery_dispatch);
-    m.insert(CK_AGENT_ENDPOINT, apply_agent_endpoint_dispatch);
+    m.insert(
+        cokret_sdk::events::kinds::CIRCLE_CREATE,
+        apply_circle_create_dispatch,
+    );
+    m.insert(
+        cokret_sdk::events::kinds::CIRCLE_UPDATE,
+        apply_circle_update_dispatch,
+    );
+    m.insert(
+        cokret_sdk::events::kinds::CIRCLE_ARCHIVE,
+        apply_circle_archive_dispatch,
+    );
+    m.insert(
+        cokret_sdk::events::kinds::CIRCLE_RESTORE,
+        apply_circle_restore_dispatch,
+    );
+    m.insert(
+        cokret_sdk::events::kinds::CIRCLE_TOMBSTONE,
+        apply_circle_tombstone_dispatch,
+    );
+    m.insert(
+        cokret_sdk::events::kinds::CIRCLE_MEMBER_STATE,
+        apply_circle_member_state_dispatch,
+    );
+    m.insert(
+        cokret_sdk::events::kinds::APPLET_REGISTRATION,
+        apply_applet_registration_dispatch,
+    );
+    m.insert(
+        cokret_sdk::events::kinds::APPLET_DISCOVERY,
+        apply_applet_discovery_dispatch,
+    );
+    m.insert(
+        cokret_sdk::events::kinds::AGENT_ENDPOINT,
+        apply_agent_endpoint_dispatch,
+    );
     // REDU-1 (R3 spec-sync) — agent lifecycle FSM dispatch. bottom=reject,
     // deactivate is terminal.
-    m.insert(CK_AGENT_PAUSE, apply_agent_pause_dispatch);
-    m.insert(CK_AGENT_RESUME, apply_agent_resume_dispatch);
-    m.insert(CK_AGENT_DEACTIVATE, apply_agent_deactivate_dispatch);
+    m.insert(
+        cokret_sdk::events::kinds::AGENT_PAUSE,
+        apply_agent_pause_dispatch,
+    );
+    m.insert(
+        cokret_sdk::events::kinds::AGENT_RESUME,
+        apply_agent_resume_dispatch,
+    );
+    m.insert(
+        cokret_sdk::events::kinds::AGENT_DEACTIVATE,
+        apply_agent_deactivate_dispatch,
+    );
     // REDU-2 — actor_private_event kinds (reducer_input=false). These
     // accept but do NOT advance the seal frontier / actor_seq;
     // downstream consumers read them from the audit log.
-    m.insert(CK_AGENT_DRAFT_PROPOSE, apply_agent_draft_propose_dispatch);
-    m.insert(CK_AGENT_ACTION_REQUEST, apply_agent_action_request_dispatch);
-    m.insert(CK_AGENT_ACTION_APPROVE, apply_agent_action_approve_dispatch);
-    m.insert(CK_AGENT_ACTION_REJECT, apply_agent_action_reject_dispatch);
+    m.insert(
+        cokret_sdk::events::kinds::AGENT_DRAFT_PROPOSE,
+        apply_agent_draft_propose_dispatch,
+    );
+    m.insert(
+        cokret_sdk::events::kinds::AGENT_ACTION_REQUEST,
+        apply_agent_action_request_dispatch,
+    );
+    m.insert(
+        cokret_sdk::events::kinds::AGENT_ACTION_APPROVE,
+        apply_agent_action_approve_dispatch,
+    );
+    m.insert(
+        cokret_sdk::events::kinds::AGENT_ACTION_REJECT,
+        apply_agent_action_reject_dispatch,
+    );
     // delivery_binding_policy is Realm-scoped with cell_family
     // `ck.component.realm.delivery_binding_policy.v1`.
     m.insert(
-        CK_REALM_DELIVERY_BINDING_POLICY,
+        cokret_sdk::events::kinds::REALM_DELIVERY_BINDING_POLICY,
         apply_delivery_binding_policy_dispatch,
     );
     m.insert(
-        CK_REALM_POLICY_COMPONENTS,
+        cokret_sdk::events::kinds::REALM_POLICY_COMPONENTS,
         apply_realm_policy_components_dispatch,
     );
     m.insert(
-        CK_REALM_DISAPPEARING_POLICY,
+        cokret_sdk::events::kinds::REALM_DISAPPEARING_POLICY,
         apply_realm_disappearing_policy_dispatch,
     );
-    m.insert(CK_REALM_SEARCH_POLICY, apply_realm_search_policy_dispatch);
+    m.insert(
+        cokret_sdk::events::kinds::REALM_SEARCH_POLICY,
+        apply_realm_search_policy_dispatch,
+    );
     // media_service is Realm-scoped with cell_family
     // `ck.component.realm.media_service.v1`; consumed by the CKP-0010
     // media token exchange in `routing::interop::webrtc`.
-    m.insert(CK_REALM_MEDIA_SERVICE, apply_realm_media_service_dispatch);
+    m.insert(
+        cokret_sdk::events::kinds::REALM_MEDIA_SERVICE,
+        apply_realm_media_service_dispatch,
+    );
     // `ck.call.state` — durable call lifecycle + recording/transcribe/
     // moderation projection. Cell family `ck.component.call.state.v1`,
     // `cell_subject = payload.call_id` (`call-state.md` §4.2 / §5).
-    m.insert(CK_CALL_STATE, apply_call_state_dispatch);
+    m.insert(
+        cokret_sdk::events::kinds::CALL_STATE,
+        apply_call_state_dispatch,
+    );
     // `ck.call.summary` — durable terminal summary projection. Cell family
     // `ck.component.call.summary.v1`, write-once cas_register (`call-state.md`
     // §7).
-    m.insert(CK_CALL_SUMMARY, apply_call_summary_dispatch);
-    m.insert(CK_DEVICE_PUSH_ROUTE, apply_device_push_route_dispatch);
+    m.insert(
+        cokret_sdk::events::kinds::CALL_SUMMARY,
+        apply_call_summary_dispatch,
+    );
+    m.insert(
+        cokret_sdk::events::kinds::DEVICE_PUSH_ROUTE,
+        apply_device_push_route_dispatch,
+    );
     // R3.1 / R3.2 / R3.3 — Realm-governance event kinds. Each writes a
     // cell + a structured side-band cache; see the per-kind apply
     // helpers for cell-family naming.
-    m.insert(CK_REALM_LINK, apply_realm_link_dispatch);
     m.insert(
-        CK_REALM_INHERITANCE_POLICY,
+        cokret_sdk::events::kinds::REALM_LINK,
+        apply_realm_link_dispatch,
+    );
+    m.insert(
+        cokret_sdk::events::kinds::REALM_INHERITANCE_POLICY,
         apply_realm_inheritance_policy_dispatch,
     );
-    m.insert(CK_CAPABILITY_DERIVED, apply_capability_derived_dispatch);
+    m.insert(
+        cokret_sdk::events::kinds::CAPABILITY_DERIVED,
+        apply_capability_derived_dispatch,
+    );
     // P1 — capability control-plane projection (grant / revoke / delegate).
     // grant + revoke share the `ck.component.capability.grant.v1` or_set
     // cell; delegate writes `ck.component.capability.delegate.v1` + parent
     // chain. Acceptance fail-closed lives in `apply_capability.rs`.
-    m.insert(CK_CAPABILITY_GRANT, apply_capability_grant_dispatch);
-    m.insert(CK_CAPABILITY_REVOKE, apply_capability_revoke_dispatch);
-    m.insert(CK_CAPABILITY_DELEGATE, apply_capability_delegate_dispatch);
+    m.insert(
+        cokret_sdk::events::kinds::CAPABILITY_GRANT,
+        apply_capability_grant_dispatch,
+    );
+    m.insert(
+        cokret_sdk::events::kinds::CAPABILITY_REVOKE,
+        apply_capability_revoke_dispatch,
+    );
+    m.insert(
+        cokret_sdk::events::kinds::CAPABILITY_DELEGATE,
+        apply_capability_delegate_dispatch,
+    );
     // CKP-0008 §4.5 / §4.11 / D3 — agent runtime key authorization +
     // revocation. authorize records the key and clears the agent's pending
     // `effective_after_first_authorized_key` grants; revoke removes the key.
-    m.insert(CK_AGENT_KEY_AUTHORIZE, apply_agent_key_authorize_dispatch);
-    m.insert(CK_AGENT_KEY_REVOKE, apply_agent_key_revoke_dispatch);
+    m.insert(
+        cokret_sdk::events::kinds::AGENT_KEY_AUTHORIZE,
+        apply_agent_key_authorize_dispatch,
+    );
+    m.insert(
+        cokret_sdk::events::kinds::AGENT_KEY_REVOKE,
+        apply_agent_key_revoke_dispatch,
+    );
     // P2 — moderation control-plane projection (decision / lift / appeal.*).
     // decision + lift share the `ck.component.moderation_state.v1` or_set
     // cell; the four appeal kinds drive the `ck.component.moderation.appeal.v1`
     // fsm cell. §5.5.2 reducer constraints + acceptance fail-closed live in
     // `apply_moderation.rs`.
-    m.insert(CK_MODERATION_DECISION, apply_moderation_decision_dispatch);
     m.insert(
-        CK_MODERATION_DECISION_LIFT,
+        cokret_sdk::events::kinds::MODERATION_DECISION,
+        apply_moderation_decision_dispatch,
+    );
+    m.insert(
+        cokret_sdk::events::kinds::MODERATION_DECISION_LIFT,
         apply_moderation_decision_lift_dispatch,
     );
     m.insert(
-        CK_MODERATION_APPEAL_SUBMIT,
+        cokret_sdk::events::kinds::MODERATION_APPEAL_SUBMIT,
         apply_moderation_appeal_dispatch,
     );
     m.insert(
-        CK_MODERATION_APPEAL_REVIEW,
+        cokret_sdk::events::kinds::MODERATION_APPEAL_REVIEW,
         apply_moderation_appeal_dispatch,
     );
     m.insert(
-        CK_MODERATION_APPEAL_DECISION,
+        cokret_sdk::events::kinds::MODERATION_APPEAL_DECISION,
         apply_moderation_appeal_dispatch,
     );
-    m.insert(CK_MODERATION_APPEAL_CLOSE, apply_moderation_appeal_dispatch);
+    m.insert(
+        cokret_sdk::events::kinds::MODERATION_APPEAL_CLOSE,
+        apply_moderation_appeal_dispatch,
+    );
     // G3.S1: MLS lifecycle. KeyPackage publish/claim (atomic CAS),
     // Welcome to-device persistence, commit monotonic-epoch bump, and
     // governance covered_seals accumulation.
@@ -1027,13 +1223,31 @@ pub fn default_apply_registry() -> std::collections::HashMap<&'static str, Apply
     // only the canonical `ck.mls.keypackage` kind.
     // Deferred (TODO(G3.S1-followup)): decryption_pending. See
     // `reducer/mls.rs`.
-    m.insert(CK_MLS_KEYPACKAGE, apply_mls_keypackage_dispatch);
-    m.insert(CK_MLS_WELCOME, apply_mls_welcome_dispatch);
-    m.insert(CK_MLS_GENESIS, apply_mls_genesis_dispatch);
-    m.insert(CK_MLS_COMMIT, apply_mls_commit_dispatch);
-    m.insert(CK_REALM_KEY_SHARE, apply_realm_key_share_dispatch);
+    m.insert(
+        cokret_sdk::events::kinds::MLS_KEYPACKAGE,
+        apply_mls_keypackage_dispatch,
+    );
+    m.insert(
+        cokret_sdk::events::kinds::MLS_WELCOME,
+        apply_mls_welcome_dispatch,
+    );
+    m.insert(
+        cokret_sdk::events::kinds::MLS_GENESIS,
+        apply_mls_genesis_dispatch,
+    );
+    m.insert(
+        cokret_sdk::events::kinds::MLS_COMMIT,
+        apply_mls_commit_dispatch,
+    );
+    m.insert(
+        cokret_sdk::events::kinds::REALM_KEY_SHARE,
+        apply_realm_key_share_dispatch,
+    );
     // G3.S2: policy server cell
-    m.insert(CK_REALM_POLICY_SERVER, apply_realm_policy_server_dispatch);
+    m.insert(
+        cokret_sdk::events::kinds::REALM_POLICY_SERVER,
+        apply_realm_policy_server_dispatch,
+    );
     m
 }
 

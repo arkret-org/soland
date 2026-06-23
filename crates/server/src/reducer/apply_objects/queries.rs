@@ -340,7 +340,7 @@ impl ProjectionState {
         operation: &Operation,
     ) -> Result<(), &'static str> {
         if crate::kinds::canonical_kind_for_operation(operation)
-            != Some(crate::kinds::CK_MEMBER_STATE)
+            != Some(cokret_sdk::events::kinds::MEMBER_STATE)
             || operation.payload.get("membership").and_then(Value::as_str) != Some("join")
         {
             return Ok(());

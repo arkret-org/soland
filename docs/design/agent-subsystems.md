@@ -48,7 +48,7 @@ pub(crate) async fn emit_server_event(
 **目标**:`participation.set` 中 `reply`/`act_on_behalf` effective 为真 → 发射 `ck.capability.grant`(agent 为 subject,scope 为 resource);为假 → `ck.capability.revoke`。读侧(authz `grants_for_realm` 读 grant cell)已存在,只补写侧。
 
 ### 事件与 reducer
-- `kinds.rs`:新增 `CK_CAPABILITY_GRANT = "ck.capability.grant"`、`CK_CAPABILITY_REVOKE = "ck.capability.revoke"`(若 event-kind-registry 已注册则对齐命名)。
+- 事件 kind 直接使用 SDK 常量:`cokret_sdk::events::kinds::{CAPABILITY_GRANT, CAPABILITY_REVOKE}`;soland 不再新增或 re-export 旧别名。
 - `reducer.rs`:`APPLY_REGISTRY` 注册 `apply_capability_grant_dispatch` / `apply_capability_revoke_dispatch`,镜像 `apply_capability_derived` 的 cell 写法。
 
 ```rust
@@ -72,7 +72,7 @@ fn apply_capability_revoke(&mut self, op: &Operation) -> ProjectionEffect {
    - `reply=true` → actions `["ck.message.create","ck.reaction.add"]`,resource selector = scope(realm/circle/strand,复用 `cokret_sdk::authz::ResourceSelector`)。
    - `act_on_behalf=true` → 追加 CKP-0008 §4.10 act-on-behalf grant(constraints:`approval_required`/`controller_approval_required`)。
 2. capability_id 确定性派生:`ck:capability:` + `hash(agent_principal_id, scope_key, "reply"|"aob")` → 同 scope 同 bit 复用一条 grant,幂等。
-3. effective bit=true 且 grant 不存在/已 revoked → `emit_server_event(.., CK_CAPABILITY_GRANT, payload)`;bit=false 且 grant active → `emit_server_event(.., CK_CAPABILITY_REVOKE, {capability_id})`。
+3. effective bit=true 且 grant 不存在/已 revoked → `emit_server_event(.., cokret_sdk::events::kinds::CAPABILITY_GRANT, payload)`;bit=false 且 grant active → `emit_server_event(.., cokret_sdk::events::kinds::CAPABILITY_REVOKE, {capability_id})`。
 4. 与 `put_selection` 同一 handler 内顺序执行;任一步失败返回 `AppError::internal`,不留半物化(grant 发射放在 selection 落库之后,失败时记录 audit 供重试)。
 
 `grant.attach`/`grant.detach`/`agent.deactivate` 的同类 TODO 用同一 `emit_server_event` 收敛。

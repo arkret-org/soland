@@ -1120,7 +1120,7 @@ fn erasure_receipt_operation(receipt: Value) -> Option<cokret_sdk::Operation> {
     Some(cokret_sdk::Operation::create(
         operation_id,
         realm_id,
-        crate::kinds::CK_AUDIT_ERASURE_RECEIPT,
+        cokret_sdk::events::kinds::AUDIT_ERASURE_RECEIPT,
         receipt,
     ))
 }

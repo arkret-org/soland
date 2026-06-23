@@ -75,7 +75,7 @@ pub async fn maybe_emit_echo_result_for_session_start(
     operation: &cokret_sdk::Operation,
 ) {
     let kind = kinds::canonical_kind_string(operation);
-    if kind != kinds::CK_AGENT_INTEROP_SESSION_START {
+    if kind != cokret_sdk::events::kinds::AGENT_INTEROP_SESSION_START {
         return;
     }
     let body = match operation.payload.as_object() {
@@ -169,7 +169,7 @@ pub async fn maybe_emit_echo_result_for_session_start(
             let error_record = ProjectionEventRecord {
                 event_id: ids::generate("event"),
                 realm_id: operation.realm_id.to_string(),
-                event_kind: kinds::CK_AGENT_INTEROP_SESSION_RESULT.to_owned(),
+                event_kind: cokret_sdk::events::kinds::AGENT_INTEROP_SESSION_RESULT.to_owned(),
                 operation_type: operation_type.to_owned(),
                 operation_id: None,
                 sender: Some(origin.to_owned()),
@@ -204,7 +204,7 @@ pub async fn maybe_emit_echo_result_for_session_start(
     let status_record = ProjectionEventRecord {
         event_id: ids::generate("event"),
         realm_id: operation.realm_id.to_string(),
-        event_kind: kinds::CK_AGENT_INTEROP_SESSION_STATUS.to_owned(),
+        event_kind: cokret_sdk::events::kinds::AGENT_INTEROP_SESSION_STATUS.to_owned(),
         operation_type: "agent_echo_bridge_status".to_owned(),
         operation_id: None,
         sender: Some(origin.to_owned()),
@@ -463,7 +463,7 @@ async fn emit_agent_result_envelope(
     let record = ProjectionEventRecord {
         event_id: ids::generate("event"),
         realm_id: realm_id.to_owned(),
-        event_kind: kinds::CK_AGENT_INTEROP_SESSION_RESULT.to_owned(),
+        event_kind: cokret_sdk::events::kinds::AGENT_INTEROP_SESSION_RESULT.to_owned(),
         operation_type: operation_type.to_owned(),
         operation_id: None,
         sender: Some(origin.to_owned()),
@@ -558,7 +558,7 @@ mod tests {
             OperationId::new("ck:operation:01904100-0000-7bbb-8bbb-000000000001".to_owned())
                 .unwrap(),
             RealmId::new("ck:realm:01904100-0000-7000-8000-bbbbbbbbbbbb".to_owned()).unwrap(),
-            kinds::CK_AGENT_INTEROP_SESSION_START,
+            cokret_sdk::events::kinds::AGENT_INTEROP_SESSION_START,
             json!({
                 "session_id": session_id,
                 "counterparty_agent": agent_principal_id,
@@ -616,7 +616,7 @@ mod tests {
         let status_entry = projections
             .iter()
             .find(|e| {
-                e.event_kind == kinds::CK_AGENT_INTEROP_SESSION_STATUS
+                e.event_kind == cokret_sdk::events::kinds::AGENT_INTEROP_SESSION_STATUS
                     && e.payload["session_id"] == session
             })
             .expect("synthetic status event missing");
@@ -633,7 +633,7 @@ mod tests {
         let result_entry = projections
             .iter()
             .find(|e| {
-                e.event_kind == kinds::CK_AGENT_INTEROP_SESSION_RESULT
+                e.event_kind == cokret_sdk::events::kinds::AGENT_INTEROP_SESSION_RESULT
                     && e.payload["session_id"] == session
             })
             .expect("synthetic result event missing");
@@ -697,7 +697,7 @@ mod tests {
         // failed before acknowledging the invocation.
         assert!(
             !projections.iter().any(|e| {
-                e.event_kind == kinds::CK_AGENT_INTEROP_SESSION_STATUS
+                e.event_kind == cokret_sdk::events::kinds::AGENT_INTEROP_SESSION_STATUS
                     && e.payload["session_id"] == session
             }),
             "failed-closed dispatch must skip the status(working) event"
@@ -705,7 +705,7 @@ mod tests {
         let result_entry = projections
             .iter()
             .find(|e| {
-                e.event_kind == kinds::CK_AGENT_INTEROP_SESSION_RESULT
+                e.event_kind == cokret_sdk::events::kinds::AGENT_INTEROP_SESSION_RESULT
                     && e.payload["session_id"] == session
             })
             .expect("error result event missing");
@@ -748,7 +748,7 @@ mod tests {
             .expect("snapshot");
         assert!(
             !projections.iter().any(|e| {
-                e.event_kind == kinds::CK_AGENT_INTEROP_SESSION_STATUS
+                e.event_kind == cokret_sdk::events::kinds::AGENT_INTEROP_SESSION_STATUS
                     && e.payload["session_id"] == session
             }),
             "retired endpoint dispatch must skip the status(working) event"
@@ -756,7 +756,7 @@ mod tests {
         let result_entry = projections
             .iter()
             .find(|e| {
-                e.event_kind == kinds::CK_AGENT_INTEROP_SESSION_RESULT
+                e.event_kind == cokret_sdk::events::kinds::AGENT_INTEROP_SESSION_RESULT
                     && e.payload["session_id"] == session
             })
             .expect("error result event missing");
@@ -797,7 +797,7 @@ mod tests {
         let result_entry = projections
             .iter()
             .find(|e| {
-                e.event_kind == kinds::CK_AGENT_INTEROP_SESSION_RESULT
+                e.event_kind == cokret_sdk::events::kinds::AGENT_INTEROP_SESSION_RESULT
                     && e.payload["session_id"] == session
             })
             .expect("result event missing");
@@ -864,7 +864,7 @@ mod tests {
                     .await
                     .expect("snapshot");
                 if let Some(e) = projections.into_iter().find(|e| {
-                    e.event_kind == kinds::CK_AGENT_INTEROP_SESSION_RESULT
+                    e.event_kind == cokret_sdk::events::kinds::AGENT_INTEROP_SESSION_RESULT
                         && e.payload["session_id"] == session
                 }) {
                     found = Some(e);
@@ -895,7 +895,7 @@ mod tests {
         let status_entry = projections
             .iter()
             .find(|e| {
-                e.event_kind == kinds::CK_AGENT_INTEROP_SESSION_STATUS
+                e.event_kind == cokret_sdk::events::kinds::AGENT_INTEROP_SESSION_STATUS
                     && e.payload["session_id"] == session
             })
             .expect("status(working) event missing");
@@ -924,7 +924,7 @@ mod tests {
         let result_entry = projections
             .iter()
             .find(|e| {
-                e.event_kind == kinds::CK_AGENT_INTEROP_SESSION_RESULT
+                e.event_kind == cokret_sdk::events::kinds::AGENT_INTEROP_SESSION_RESULT
                     && e.payload["session_id"] == session
             })
             .expect("result event missing");
@@ -942,7 +942,7 @@ mod tests {
             OperationId::new("ck:operation:01904100-0000-7bbb-8bbb-000000000002".to_owned())
                 .unwrap(),
             RealmId::new("ck:realm:01904100-0000-7000-8000-bbbbbbbbbbbb".to_owned()).unwrap(),
-            kinds::CK_AGENT_ENDPOINT,
+            cokret_sdk::events::kinds::AGENT_ENDPOINT,
             json!({"endpoint_url": "https://agent.example/api"}),
         );
         op.object_id = Some("did:web:agent.example".to_owned());
@@ -955,8 +955,8 @@ mod tests {
             .expect("snapshot");
         assert!(
             !projections.iter().any(|e| {
-                e.event_kind == kinds::CK_AGENT_INTEROP_SESSION_RESULT
-                    || e.event_kind == kinds::CK_AGENT_INTEROP_SESSION_STATUS
+                e.event_kind == cokret_sdk::events::kinds::AGENT_INTEROP_SESSION_RESULT
+                    || e.event_kind == cokret_sdk::events::kinds::AGENT_INTEROP_SESSION_STATUS
             }),
             "non-session_start operation must not trigger agent echo bridge"
         );
@@ -969,7 +969,7 @@ mod tests {
             OperationId::new("ck:operation:01904100-0000-7bbb-8bbb-000000000003".to_owned())
                 .unwrap(),
             RealmId::new("ck:realm:01904100-0000-7000-8000-bbbbbbbbbbbb".to_owned()).unwrap(),
-            kinds::CK_AGENT_INTEROP_SESSION_START,
+            cokret_sdk::events::kinds::AGENT_INTEROP_SESSION_START,
             json!({"counterparty_agent": "did:web:agent.example"}),
         );
         op.object_id = None;
@@ -982,8 +982,8 @@ mod tests {
             .expect("snapshot");
         assert!(
             !projections.iter().any(|e| {
-                e.event_kind == kinds::CK_AGENT_INTEROP_SESSION_RESULT
-                    || e.event_kind == kinds::CK_AGENT_INTEROP_SESSION_STATUS
+                e.event_kind == cokret_sdk::events::kinds::AGENT_INTEROP_SESSION_RESULT
+                    || e.event_kind == cokret_sdk::events::kinds::AGENT_INTEROP_SESSION_STATUS
             }),
             "agent session_start without session_id must fail closed"
         );

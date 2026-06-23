@@ -7,7 +7,7 @@ fn op(payload: serde_json::Value) -> Operation {
     Operation::create(
         cokret_sdk::OperationId::new("ck:operation:01904100-0000-7000-8000-57d7d85564c5").unwrap(),
         cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-668e2181b41d").unwrap(),
-        kinds::CK_STRAND_TRACKS_UPDATE,
+        cokret_sdk::events::kinds::STRAND_TRACKS_UPDATE,
         payload,
     )
 }
@@ -24,9 +24,10 @@ fn canonical_strand_tracks_update_accepts_patch_payload() {
     }));
     assert_eq!(
         kinds::canonical_kind_for_operation(&operation),
-        Some(kinds::CK_STRAND_TRACKS_UPDATE)
+        Some(cokret_sdk::events::kinds::STRAND_TRACKS_UPDATE)
     );
-    let schema = operation_schema_for_kind(kinds::CK_STRAND_TRACKS_UPDATE).unwrap();
+    let schema =
+        operation_schema_for_kind(cokret_sdk::events::kinds::STRAND_TRACKS_UPDATE).unwrap();
     assert!(validate_operation_schema(&operation, schema).is_ok());
 }
 
@@ -38,13 +39,15 @@ fn canonical_strand_tracks_update_accepts_tracks_payload() {
             "review": {"profile": "review"}
         }
     }));
-    let schema = operation_schema_for_kind(kinds::CK_STRAND_TRACKS_UPDATE).unwrap();
+    let schema =
+        operation_schema_for_kind(cokret_sdk::events::kinds::STRAND_TRACKS_UPDATE).unwrap();
     assert!(validate_operation_schema(&operation, schema).is_ok());
 }
 
 #[test]
 fn canonical_strand_tracks_update_requires_strand_id_and_patch_or_tracks() {
-    let schema = operation_schema_for_kind(kinds::CK_STRAND_TRACKS_UPDATE).unwrap();
+    let schema =
+        operation_schema_for_kind(cokret_sdk::events::kinds::STRAND_TRACKS_UPDATE).unwrap();
 
     let missing_strand_id = op(json!({
         "tracks": {
@@ -69,7 +72,7 @@ fn canonical_strand_tracks_update_requires_strand_id_and_patch_or_tracks() {
 fn encrypted_realm_strand_content_detector_matches_content_only_boundary() {
     let strand_id = "ck:strand:01904100-0000-7000-8000-000000000001";
     let content_update = strand_position_op(
-        kinds::CK_STRAND_UPDATE,
+        cokret_sdk::events::kinds::STRAND_UPDATE,
         json!({
             "target_ref": strand_id,
             "patch": {
@@ -82,7 +85,7 @@ fn encrypted_realm_strand_content_detector_matches_content_only_boundary() {
     ));
 
     let summary_update = strand_position_op(
-        kinds::CK_STRAND_UPDATE,
+        cokret_sdk::events::kinds::STRAND_UPDATE,
         json!({
             "target_ref": strand_id,
             "patch": {
@@ -95,7 +98,7 @@ fn encrypted_realm_strand_content_detector_matches_content_only_boundary() {
     ));
 
     let sdk_encrypted_content_update = strand_position_op(
-        kinds::CK_STRAND_UPDATE,
+        cokret_sdk::events::kinds::STRAND_UPDATE,
         json!({
             "target_ref": strand_id,
             "patch": {
@@ -118,7 +121,7 @@ fn encrypted_realm_strand_content_detector_matches_content_only_boundary() {
     ));
 
     let ciphertext_label_content_update = strand_position_op(
-        kinds::CK_STRAND_UPDATE,
+        cokret_sdk::events::kinds::STRAND_UPDATE,
         json!({
             "target_ref": strand_id,
             "patch": {
@@ -136,7 +139,7 @@ fn encrypted_realm_strand_content_detector_matches_content_only_boundary() {
     ));
 
     let title_create = strand_position_op(
-        kinds::CK_STRAND_CREATE,
+        cokret_sdk::events::kinds::STRAND_CREATE,
         json!({
             "object": {
                 "id": strand_id,
@@ -152,7 +155,7 @@ fn encrypted_realm_strand_content_detector_matches_content_only_boundary() {
 #[test]
 fn create_locked_encryption_profile_detector_matches_update_shapes() {
     let direct_patch = strand_position_op(
-        kinds::CK_REALM_UPDATE,
+        cokret_sdk::events::kinds::REALM_UPDATE,
         json!({
             "patch": {
                 "encryption_profile": "none"
@@ -162,7 +165,7 @@ fn create_locked_encryption_profile_detector_matches_update_shapes() {
     assert!(operation_touches_encryption_profile(&direct_patch));
 
     let pointer_patch = strand_position_op(
-        kinds::CK_CIRCLE_UPDATE,
+        cokret_sdk::events::kinds::CIRCLE_UPDATE,
         json!({
             "circle_id": "ck:circle:01904100-0000-7000-8000-000000000001",
             "patch": {
@@ -176,7 +179,7 @@ fn create_locked_encryption_profile_detector_matches_update_shapes() {
     assert!(operation_touches_encryption_profile(&pointer_patch));
 
     let metadata_patch = strand_position_op(
-        kinds::CK_REALM_UPDATE,
+        cokret_sdk::events::kinds::REALM_UPDATE,
         json!({
             "patch": {
                 "title": "Still mutable"
@@ -197,9 +200,9 @@ fn strand_position_op(kind: &'static str, payload: serde_json::Value) -> Operati
 
 #[test]
 fn canonical_strand_move_requires_board_target_and_rank() {
-    let schema = operation_schema_for_kind(kinds::CK_STRAND_MOVE).unwrap();
+    let schema = operation_schema_for_kind(cokret_sdk::events::kinds::STRAND_MOVE).unwrap();
     let operation = strand_position_op(
-        kinds::CK_STRAND_MOVE,
+        cokret_sdk::events::kinds::STRAND_MOVE,
         json!({
             "board_space_id": "ck:space:01904100-0000-7000-8000-000000000001",
             "strand_id": "ck:strand:01904100-0000-7000-8000-000000000002",
@@ -210,7 +213,7 @@ fn canonical_strand_move_requires_board_target_and_rank() {
     assert!(validate_operation_schema(&operation, schema).is_ok());
 
     let missing_target = strand_position_op(
-        kinds::CK_STRAND_MOVE,
+        cokret_sdk::events::kinds::STRAND_MOVE,
         json!({
             "board_space_id": "ck:space:01904100-0000-7000-8000-000000000001",
             "strand_id": "ck:strand:01904100-0000-7000-8000-000000000002",
@@ -225,9 +228,9 @@ fn canonical_strand_move_requires_board_target_and_rank() {
 
 #[test]
 fn canonical_strand_reorder_requires_board_space_and_rank() {
-    let schema = operation_schema_for_kind(kinds::CK_STRAND_REORDER).unwrap();
+    let schema = operation_schema_for_kind(cokret_sdk::events::kinds::STRAND_REORDER).unwrap();
     let operation = strand_position_op(
-        kinds::CK_STRAND_REORDER,
+        cokret_sdk::events::kinds::STRAND_REORDER,
         json!({
             "board_space_id": "ck:space:01904100-0000-7000-8000-000000000001",
             "strand_id": "ck:strand:01904100-0000-7000-8000-000000000002",
@@ -249,9 +252,9 @@ fn space_container_op(kind: &'static str, payload: serde_json::Value) -> Operati
 
 #[test]
 fn canonical_space_update_requires_space_id_and_patch() {
-    let schema = operation_schema_for_kind(kinds::CK_SPACE_CONTAINER_UPDATE).unwrap();
+    let schema = operation_schema_for_kind(cokret_sdk::events::kinds::SPACE_UPDATE).unwrap();
     let operation = space_container_op(
-        kinds::CK_SPACE_CONTAINER_UPDATE,
+        cokret_sdk::events::kinds::SPACE_UPDATE,
         json!({
             "space_id": "ck:space:01904100-0000-7000-8000-000000000003",
             "patch": {"title": "Launch v2"}
@@ -260,7 +263,7 @@ fn canonical_space_update_requires_space_id_and_patch() {
     assert!(validate_operation_schema(&operation, schema).is_ok());
 
     let removed_target_ref = space_container_op(
-        kinds::CK_SPACE_CONTAINER_UPDATE,
+        cokret_sdk::events::kinds::SPACE_UPDATE,
         json!({
             "target_ref": "ck:space:01904100-0000-7000-8000-000000000003",
             "patch": {"title": "Launch v2"}
@@ -272,7 +275,7 @@ fn canonical_space_update_requires_space_id_and_patch() {
     );
 
     let missing_space_id = space_container_op(
-        kinds::CK_SPACE_CONTAINER_UPDATE,
+        cokret_sdk::events::kinds::SPACE_UPDATE,
         json!({"patch": {"title": "Launch v2"}}),
     );
     assert_eq!(
@@ -283,9 +286,9 @@ fn canonical_space_update_requires_space_id_and_patch() {
 
 #[test]
 fn canonical_space_parent_requires_space_id_and_expected_parent() {
-    let schema = operation_schema_for_kind(kinds::CK_SPACE_CONTAINER_PARENT).unwrap();
+    let schema = operation_schema_for_kind(cokret_sdk::events::kinds::SPACE_PARENT).unwrap();
     let operation = space_container_op(
-        kinds::CK_SPACE_CONTAINER_PARENT,
+        cokret_sdk::events::kinds::SPACE_PARENT,
         json!({
             "space_id": "ck:space:01904100-0000-7000-8000-000000000003",
             "parent_space_id": "ck:space:01904100-0000-7000-8000-000000000004",
@@ -295,7 +298,7 @@ fn canonical_space_parent_requires_space_id_and_expected_parent() {
     assert!(validate_operation_schema(&operation, schema).is_ok());
 
     let missing_expected = space_container_op(
-        kinds::CK_SPACE_CONTAINER_PARENT,
+        cokret_sdk::events::kinds::SPACE_PARENT,
         json!({
             "space_id": "ck:space:01904100-0000-7000-8000-000000000003",
             "parent_space_id": "ck:space:01904100-0000-7000-8000-000000000004"

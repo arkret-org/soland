@@ -188,7 +188,7 @@ mod tests {
         Operation::create(
             OperationId::new(format!("ck:operation:{}", uuid::Uuid::now_v7())).unwrap(),
             RealmId::new(realm_id).unwrap(),
-            crate::kinds::CK_REALM_POLICY_SERVER,
+            cokret_sdk::events::kinds::REALM_POLICY_SERVER,
             payload,
         )
     }

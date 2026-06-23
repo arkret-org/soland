@@ -287,7 +287,7 @@ impl ProjectionState {
             Some(k) => k,
             None => return Ok(()),
         };
-        if !crate::kinds::is_strand_tracks_kind(kind) {
+        if !cokret_sdk::events::kinds::is_strand_tracks_kind(kind) {
             return Ok(());
         }
         let Some(strand_id) = operation.payload.get("strand_id").and_then(|v| v.as_str()) else {

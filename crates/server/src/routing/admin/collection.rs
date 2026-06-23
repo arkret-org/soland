@@ -397,7 +397,12 @@ pub(super) async fn admin_create_realm(
     });
     let op_id = OperationId::new(ids::generate_operation_id())
         .map_err(|error| AppError::invalid_param(format!("operation_id: {error}")))?;
-    let operation = Operation::create(op_id, realm_scope, kinds::CK_REALM_CREATE, payload);
+    let operation = Operation::create(
+        op_id,
+        realm_scope,
+        cokret_sdk::events::kinds::REALM_CREATE,
+        payload,
+    );
     accept_local_operations(state, &session.actor, std::slice::from_ref(&operation))
         .await
         .map_err(|reason| AppError::new(ErrorCode::FailedPrecondition, reason.to_owned()))?;
@@ -442,7 +447,12 @@ pub(super) async fn admin_delete_realm(
         .map_err(|error| AppError::invalid_param(format!("realm destroy payload: {error}")))?;
     let op_id = OperationId::new(ids::generate_operation_id())
         .map_err(|error| AppError::invalid_param(format!("operation_id: {error}")))?;
-    let operation = Operation::create(op_id, realm_scope, kinds::CK_REALM_DESTROY, payload);
+    let operation = Operation::create(
+        op_id,
+        realm_scope,
+        cokret_sdk::events::kinds::REALM_DESTROY,
+        payload,
+    );
     accept_local_operations(state, &session.actor, std::slice::from_ref(&operation))
         .await
         .map_err(|reason| AppError::new(ErrorCode::FailedPrecondition, reason.to_owned()))?;

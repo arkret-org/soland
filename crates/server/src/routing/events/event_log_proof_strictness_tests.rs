@@ -399,7 +399,7 @@ async fn minimal_metadata_realm_rejects_non_hidden_aad() {
             cokret_sdk::OperationId::new("ck:operation:01904100-0000-7000-8000-57d7d85564c5")
                 .unwrap(),
             cokret_sdk::RealmId::new(realm_id.to_owned()).unwrap(),
-            kinds::CK_MESSAGE_CREATE,
+            cokret_sdk::events::kinds::MESSAGE_CREATE,
             payload,
         )
     };
@@ -486,7 +486,7 @@ async fn circle_scoped_write_requires_circle_membership() {
             cokret_sdk::OperationId::new("ck:operation:01904100-0000-7000-8000-57d7d8550abc")
                 .unwrap(),
             cokret_sdk::RealmId::new(realm_id.to_owned()).unwrap(),
-            kinds::CK_STRAND_CREATE,
+            cokret_sdk::events::kinds::STRAND_CREATE,
             json!({"sender": sender, "object": object}),
         )
     };
@@ -603,7 +603,7 @@ async fn circle_scoped_reaction_requires_circle_membership() {
             cokret_sdk::OperationId::new("ck:operation:01904100-0000-7000-8000-c2c2e000000a")
                 .unwrap(),
             cokret_sdk::RealmId::new(realm_id.to_owned()).unwrap(),
-            kinds::CK_REACTION_ADD,
+            cokret_sdk::events::kinds::REACTION_ADD,
             json!({"sender": sender, "target_event_id": event_id, "key": "👍"}),
         )
     };
@@ -692,7 +692,7 @@ async fn circle_scoped_morph_update_requires_circle_membership() {
             cokret_sdk::OperationId::new("ck:operation:01904100-0000-7000-8000-c3c3e000000a")
                 .unwrap(),
             cokret_sdk::RealmId::new(realm_id.to_owned()).unwrap(),
-            kinds::CK_MORPH_UPDATE,
+            cokret_sdk::events::kinds::MORPH_UPDATE,
             json!({
                 "sender": sender,
                 "target_ref": morph_id,
@@ -769,7 +769,7 @@ async fn applet_registration_requires_realm_admin() {
             cokret_sdk::OperationId::new("ck:operation:01904100-0000-7000-8000-57d7d855a99e")
                 .unwrap(),
             cokret_sdk::RealmId::new(realm_id.to_owned()).unwrap(),
-            kinds::CK_APPLET_REGISTRATION,
+            cokret_sdk::events::kinds::APPLET_REGISTRATION,
             json!({
                 "sender": sender,
                 "applet_id": "ck:applet:01904100-0000-7000-8000-000000000a01",
@@ -829,7 +829,7 @@ async fn non_minimal_metadata_realm_allows_any_aad() {
     let op = cokret_sdk::Operation::create(
         cokret_sdk::OperationId::new("ck:operation:01904100-0000-7000-8000-57d7d85564c6").unwrap(),
         cokret_sdk::RealmId::new(realm_id.to_owned()).unwrap(),
-        kinds::CK_MESSAGE_CREATE,
+        cokret_sdk::events::kinds::MESSAGE_CREATE,
         json!({
             "strand_id": "ck:strand:01904100-0000-7000-8000-000000000001",
             "track_name": "main",
@@ -958,7 +958,7 @@ async fn top_level_effective_scope_is_reducer_managed() {
     let session = session();
     let envelope = json!({
         "event_id": "ck:event:01904100-0000-7000-8000-00000000eff0",
-        "kind": crate::kinds::CK_REALM_CREATE,
+        "kind": cokret_sdk::events::kinds::REALM_CREATE,
         "requirements": { "schema": ["ck.schema.event.v1"] },
         "actor_id": session.actor.clone(),
         "effective_scope": "ck:realm:01904100-0000-7000-8000-a11ce0000001"
