@@ -1,11 +1,11 @@
 //! HTTP endpoint handlers and router assembly for the applet bridge.
 
 use cokret_sdk::{
-    AppletActorView, AppletPingOutcome, AppletProtocolMetadata, AppletRealmView,
+    AppletActorView, AppletPingOutcome, AppletProtocolMetadata, AppletRealmView, AppletRevokeMode,
     AppletRevokeOutcome, AppletTransactionOutcome, AppletTransactionRequestBody, Did,
     GhostActorProvisionOutcome, GhostActorProvisionRequestBody, InstallCommitOutcome,
     InstallCommitRequestBody, InstallPlan, InstallPreviewRequestBody, InstallRevokeRequestBody,
-    RealmId,
+    RealmId, SessionRevokeOutcome, SessionRevokeRequestBody,
 };
 use salvo::http::StatusCode;
 use salvo::oapi::extract::JsonBody;
@@ -17,7 +17,7 @@ use super::ghost::{
     build_ghost_accountability_grant_event, build_ghost_profile_create_event,
     ensure_formal_ghost_provision_allowed, external_user_from_ghost_request,
     persist_formal_applet_event, provision_ghost, revoke_applet_record,
-    validate_ghost_actor_provision_request,
+    revoke_applet_record_after_admin_gate, validate_ghost_actor_provision_request,
 };
 use super::install::{
     append_portal_message, applet_response, approved_scopes_from_approval_request,
@@ -39,6 +39,7 @@ use super::types::{
 };
 use crate::error::AppError;
 use crate::result::{JsonResult, json_ok};
+use crate::routing::identity::auth::revoke_delegated_sessions_for_applet;
 use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;
 
@@ -286,14 +287,186 @@ async fn revoke_install_endpoint(
     // realm-scoped registration; require `ck.realm.admin` over the install's
     // realm. fail-closed.
     require_realm_admin(state, &session.actor, &revoke.effective_scope).await?;
-    let outcome = revoke_applet_record(state, &session.actor, &applet_id).await?;
-    let mut revoked_refs = Vec::with_capacity(1 + outcome.ghost_actor_ids.len());
-    revoked_refs.push(outcome.bot_actor_id);
-    revoked_refs.extend(outcome.ghost_actor_ids);
+    let service_did = record
+        .package
+        .as_ref()
+        .map(|package| package.service_did.to_string());
+    let grant_refs = record
+        .install_response
+        .as_ref()
+        .map(|response| response.capability_grant_refs.clone())
+        .unwrap_or_default();
+    let mut revoked_refs = Vec::new();
+    if matches!(
+        revoke.revoke_mode,
+        AppletRevokeMode::RevokeAll | AppletRevokeMode::RevokeRuntimeOnly
+    ) {
+        for grant_ref in &grant_refs {
+            state.authz.mark_projected_grant_revoked(grant_ref);
+            revoked_refs.push(grant_ref.clone());
+        }
+        let outcome =
+            revoke_applet_record_after_admin_gate(state, &session.actor, &applet_id).await?;
+        revoked_refs.push(outcome.bot_actor_id);
+        revoked_refs.extend(outcome.ghost_actor_ids);
+    }
+    if matches!(
+        revoke.revoke_mode,
+        AppletRevokeMode::RevokeAll | AppletRevokeMode::RevokeDelegatedSessions
+    ) {
+        revoked_refs.extend(
+            revoke_auth_side_delegated_sessions_for_applet(
+                state,
+                req,
+                &record,
+                &revoke,
+                &grant_refs,
+            )
+            .await?,
+        );
+        revoked_refs.extend(
+            revoke_delegated_sessions_for_applet(
+                state,
+                &applet_id,
+                service_did.as_deref(),
+                &grant_refs,
+            )
+            .await
+            .map_err(AppError::internal)?,
+        );
+    }
+    revoked_refs.sort();
+    revoked_refs.dedup();
+    crate::routing::append_audit_log(
+        state,
+        Some(&session.actor),
+        "applet.revoke",
+        json!({
+            "applet_id": applet_id,
+            "effective_scope_realm_id": scope_realm,
+            "reason_code": revoke.reason_code,
+            "revoke_mode": revoke.revoke_mode,
+            "revoked_refs": revoked_refs,
+        }),
+        "accepted",
+    )
+    .await;
     json_ok(AppletRevokeOutcome {
         ok: true,
         revoked_refs,
         rejected: Vec::new(),
+    })
+}
+
+async fn revoke_auth_side_delegated_sessions_for_applet(
+    state: &AppState,
+    req: &Request,
+    record: &AppletRecord,
+    revoke: &InstallRevokeRequestBody,
+    grant_refs: &[String],
+) -> Result<Vec<String>, AppError> {
+    let Some(revoke_url) = session_grant_revoke_url(state)? else {
+        return Ok(Vec::new());
+    };
+    let grant_jwt = crate::routing::system::util::bearer_token(req)
+        .map(str::to_owned)
+        .ok_or_else(|| {
+            AppError::unauthenticated(
+                "applet delegated session revoke requires a presented session grant",
+            )
+        })?;
+    let request = session_revoke_body_for_applet(record, revoke, grant_refs)?;
+    let (revoke_url, client) = crate::security::validate_http_url_for_egress_with_pinned_client(
+        &revoke_url,
+        "applet delegated session revoke",
+        state.config.development_mode,
+        std::time::Duration::from_secs(10),
+    )
+    .map_err(AppError::capability_denied)?;
+    let response = client
+        .post(revoke_url)
+        .bearer_auth(grant_jwt)
+        .json(&request)
+        .send()
+        .await
+        .map_err(|error| {
+            AppError::new(
+                crate::error::ErrorCode::TemporarilyUnavailable,
+                format!("Auth-side applet delegated session revoke request failed: {error}"),
+            )
+        })?;
+    let status = response.status();
+    if status == reqwest::StatusCode::NOT_FOUND {
+        return Ok(Vec::new());
+    }
+    if !status.is_success() {
+        return Err(AppError::new(
+            crate::error::ErrorCode::TemporarilyUnavailable,
+            format!("Auth-side applet delegated session revoke was rejected: {status}"),
+        ));
+    }
+    let outcome = response
+        .json::<SessionRevokeOutcome>()
+        .await
+        .map_err(|error| {
+            AppError::new(
+                crate::error::ErrorCode::TemporarilyUnavailable,
+                format!("invalid Auth-side applet delegated session revoke response: {error}"),
+            )
+        })?;
+    Ok(outcome
+        .revoked_grant_ids
+        .into_iter()
+        .map(|grant_id| grant_id.to_string())
+        .collect())
+}
+
+fn session_grant_revoke_url(state: &AppState) -> Result<Option<String>, AppError> {
+    let Some(introspection_url) = state.config.session_grant_introspection_url.as_deref() else {
+        if state.config.development_mode {
+            return Ok(None);
+        }
+        return Err(AppError::unsupported_feature(
+            "applet delegated session revoke requires SOLAND_SESSION_GRANT_INTROSPECTION_URL",
+        ));
+    };
+    introspection_url
+        .strip_suffix("/session-grants/introspect")
+        .map(|base| Some(format!("{base}/session-grants/revoke")))
+        .ok_or_else(|| {
+            AppError::unsupported_feature(
+                "SOLAND_SESSION_GRANT_INTROSPECTION_URL must end in /session-grants/introspect so the Auth-side session-grants/revoke endpoint can be derived",
+            )
+        })
+}
+
+fn session_revoke_body_for_applet(
+    record: &AppletRecord,
+    revoke: &InstallRevokeRequestBody,
+    grant_refs: &[String],
+) -> Result<SessionRevokeRequestBody, AppError> {
+    let package = record.package.as_ref().ok_or_else(|| {
+        AppError::conflict("applet install projection is missing package metadata")
+            .with_wire_code("applet_install_projection_incomplete")
+    })?;
+    let proof = revoke.proof.clone().ok_or_else(|| {
+        AppError::capability_denied(
+            "applet delegated session revoke requires a fresh session revoke lifecycle proof",
+        )
+    })?;
+    let effective_scope = serde_json::to_value(&revoke.effective_scope).map_err(|error| {
+        AppError::internal(format!("serialize applet effective_scope: {error}"))
+    })?;
+    Ok(SessionRevokeRequestBody {
+        target_grant_id: None,
+        target_device_id: None,
+        all_sessions: None,
+        applet_id: Some(record.applet_id.clone()),
+        effective_scope: Some(effective_scope),
+        registration_epoch: Some(package.registration_epoch.clone()),
+        service_did: Some(package.service_did.clone()),
+        capability_grant_refs: grant_refs.to_vec(),
+        proof: Some(proof),
     })
 }
 

@@ -310,6 +310,10 @@ pub(crate) const CONFLICT_REPAIR_REQUIREMENTS: &[PayloadRequirement] = &[
         "recovery_capability_ref",
         "conflict repair requires recovery_capability_ref",
     ),
+    PayloadRequirement::Required(
+        "state_witness_ref",
+        "conflict repair requires state_witness_ref",
+    ),
 ];
 // `ck.space.archive` / `ck.space.restore` / `ck.space.tombstone` share the
 // spec-canonical `space_id` target field.

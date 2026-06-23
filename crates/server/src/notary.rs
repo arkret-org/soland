@@ -330,9 +330,10 @@ impl NotaryWorker {
     /// - **Genesis** (no notary cell yet) — implicit `service_did` is the notary.
     /// - **Bottom** on the notary cell — Realm-wide pause; not authorized.
     /// - **single_did** — DID match against `service_did`.
-    /// - **threshold(k, members)** / **open_set(members)** — leader election: among `members`, the
-    ///   lex-smallest DID is the round leader; if it matches `service_did`, this node signs;
-    ///   otherwise no-op.
+    /// - **threshold(k, members)** — leader election: among `members`, the lex-smallest DID is the
+    ///   round leader; if it matches `service_did`, this node signs.
+    /// - **open_set(members)** — every listed member may sign; concurrent leaves converge through
+    ///   the joined control view. otherwise no-op.
     /// - **mixed(primary, recovery_members, revocation_freshness_window_ms?)** — primary signs by
     ///   default. If the latest leaf is older than `revocation_freshness_window_ms` (default
     ///   60_000ms), the recovery set takes over with the same lex-smallest leader election.
@@ -383,8 +384,12 @@ impl NotaryWorker {
         };
         match notary_value {
             cokret_sdk::NotaryValue::SingleDid { did } => Ok(did.as_str() == self.service_did),
-            cokret_sdk::NotaryValue::Threshold { members, .. }
-            | cokret_sdk::NotaryValue::OpenSet { members } => Ok(self.is_round_leader(&members)),
+            cokret_sdk::NotaryValue::Threshold { members, .. } => {
+                Ok(self.is_round_leader(&members))
+            }
+            cokret_sdk::NotaryValue::OpenSet { members } => Ok(members
+                .iter()
+                .any(|member| member.as_str() == self.service_did)),
             cokret_sdk::NotaryValue::Mixed {
                 primary,
                 recovery_members,

@@ -39,6 +39,7 @@ use super::{now, validate_canonical_json_value, validate_did};
 use crate::error::AppError;
 use crate::ids;
 use crate::result::{JsonResult, json_ok};
+use crate::routing::append_audit_log;
 use crate::routing::system::extract::AuthArgs;
 use crate::state::{AppState, PolicyDocumentRecord};
 use crate::wire::{
@@ -275,8 +276,22 @@ async fn policy_check(
 ) -> JsonResult<PolicyCheckOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
-    let _ = &session;
     let body = body.into_inner();
+    if !policy_check_actor_bound_to_session(&body, &session.actor) {
+        append_audit_log(
+            state,
+            Some(&session.actor),
+            "ck.self.policy.query.check",
+            json!({
+                "realm_id": body.realm_id.as_str(),
+                "action": body.action.as_str(),
+                "reason_code": "actor_session_binding_failed",
+            }),
+            "denied",
+        )
+        .await;
+        return Err(AppError::capability_denied("request not authorized"));
+    }
     let active_policy_documents = state
         .persistence
         .policy_documents()
@@ -370,6 +385,24 @@ async fn policy_check(
             next_retry_at =
                 Some(now() + chrono::Duration::seconds(POLICY_FRESHNESS_RETRY_AFTER_SECONDS));
         }
+    }
+    if matches!(
+        decision,
+        AuthzDecision::HardDeny | AuthzDecision::Quarantine
+    ) {
+        append_audit_log(
+            state,
+            Some(&session.actor),
+            "ck.self.policy.query.check",
+            json!({
+                "realm_id": body.realm_id.as_str(),
+                "action": body.action.as_str(),
+                "reason_code": reason_code.as_str(),
+                "decision": &decision,
+            }),
+            "denied",
+        )
+        .await;
     }
 
     let policy_server_id = Did::new(state.config.service_did.clone())
@@ -634,6 +667,81 @@ fn policy_resource_matches(resource: &Value, request: &PolicyCheckRequestBody) -
     true
 }
 
+fn policy_check_actor_bound_to_session(
+    request: &PolicyCheckRequestBody,
+    session_actor: &str,
+) -> bool {
+    request.actor_id.as_str() == session_actor
+        || policy_check_has_service_delegation(request, session_actor)
+}
+
+fn policy_check_has_service_delegation(
+    request: &PolicyCheckRequestBody,
+    session_actor: &str,
+) -> bool {
+    let Some(proof) = request
+        .auth_context
+        .get("service_delegation")
+        .or_else(|| request.auth_context.get("delegation_proof"))
+        .or_else(|| request.auth_context.get("delegation"))
+        .and_then(Value::as_object)
+    else {
+        return false;
+    };
+    let kind_ok = proof
+        .get("kind")
+        .and_then(Value::as_str)
+        .is_none_or(|kind| matches!(kind, "service_delegation" | "ck.service_delegation"));
+    if !kind_ok {
+        return false;
+    }
+    let subject_ok = string_field_matches(
+        proof,
+        &["actor_id", "subject_actor_id", "subject_id", "on_behalf_of"],
+        request.actor_id.as_str(),
+    );
+    let executor_ok = string_field_matches(
+        proof,
+        &[
+            "executed_by",
+            "service_did",
+            "delegated_service_did",
+            "source_service_did",
+        ],
+        session_actor,
+    ) && request.source.service_did.as_str() == session_actor;
+    let proof_ref_ok = any_nonempty_string_field(
+        proof,
+        &[
+            "authorization_ref",
+            "capability_ref",
+            "delegation_ref",
+            "proof",
+            "signature",
+        ],
+    );
+    subject_ok && executor_ok && proof_ref_ok
+}
+
+fn string_field_matches(
+    object: &serde_json::Map<String, Value>,
+    fields: &[&str],
+    expected: &str,
+) -> bool {
+    fields
+        .iter()
+        .any(|field| object.get(*field).and_then(Value::as_str) == Some(expected))
+}
+
+fn any_nonempty_string_field(object: &serde_json::Map<String, Value>, fields: &[&str]) -> bool {
+    fields.iter().any(|field| {
+        object
+            .get(*field)
+            .and_then(Value::as_str)
+            .is_some_and(|value| !value.trim().is_empty())
+    })
+}
+
 fn policy_effect_decision(value: &str) -> Option<AuthzDecision> {
     match value {
         "allow" => Some(AuthzDecision::Allow),
@@ -675,4 +783,89 @@ pub fn is_valid_generated_or_custom_id(value: &str, kind: &str) -> bool {
         && value[prefix.len()..]
             .chars()
             .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | ':' | '.'))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_hash() -> Hash {
+        Hash::new(format!("sha256:{}", "1".repeat(64))).unwrap()
+    }
+
+    fn policy_request(
+        actor: &str,
+        source_service: &str,
+        auth_context: Value,
+    ) -> PolicyCheckRequestBody {
+        PolicyCheckRequestBody {
+            request_id: "ck:policy_request:test".to_owned(),
+            realm_id: RealmId::new("ck:realm:01904100-0000-7000-8000-000000000001").unwrap(),
+            actor_id: Did::new(actor.to_owned()).unwrap(),
+            device_id: None,
+            action: "ck.message.create".to_owned(),
+            request_canonical_digest: test_hash(),
+            source: cokret_sdk::PolicyCheckSource {
+                service_did: Did::new(source_service.to_owned()).unwrap(),
+                service_type: "soland".to_owned(),
+                source_ip_digest: Some(test_hash()),
+                signed_transport: true,
+            },
+            event_preview: Value::Null,
+            auth_context,
+        }
+    }
+
+    #[test]
+    fn policy_check_actor_must_match_session_by_default() {
+        let request = policy_request("did:web:alice.example", "did:web:soland.local", Value::Null);
+        assert!(policy_check_actor_bound_to_session(
+            &request,
+            "did:web:alice.example"
+        ));
+        assert!(!policy_check_actor_bound_to_session(
+            &request,
+            "did:web:service.example"
+        ));
+    }
+
+    #[test]
+    fn policy_check_actor_can_be_bound_by_explicit_service_delegation() {
+        let request = policy_request(
+            "did:web:alice.example",
+            "did:web:service.example",
+            json!({
+                "service_delegation": {
+                    "kind": "service_delegation",
+                    "subject_actor_id": "did:web:alice.example",
+                    "executed_by": "did:web:service.example",
+                    "authorization_ref": "ck:grant:01904100-0000-7000-8000-000000000abc"
+                }
+            }),
+        );
+        assert!(policy_check_actor_bound_to_session(
+            &request,
+            "did:web:service.example"
+        ));
+    }
+
+    #[test]
+    fn policy_check_delegation_requires_source_service_binding() {
+        let request = policy_request(
+            "did:web:alice.example",
+            "did:web:other-service.example",
+            json!({
+                "service_delegation": {
+                    "kind": "service_delegation",
+                    "subject_actor_id": "did:web:alice.example",
+                    "executed_by": "did:web:service.example",
+                    "authorization_ref": "ck:grant:01904100-0000-7000-8000-000000000abc"
+                }
+            }),
+        );
+        assert!(!policy_check_actor_bound_to_session(
+            &request,
+            "did:web:service.example"
+        ));
+    }
 }

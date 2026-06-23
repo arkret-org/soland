@@ -875,10 +875,10 @@ async fn notify_audit_agent_for_report(
         return None;
     }
     let agent_url = agent_url.trim_end_matches('/');
-    // SOL-03-002: all three audit-agent calls target the same `agent_url`
+    // SOL-03-002: all audit-agent calls target the same `agent_url`
     // host. Build one client that pins the validated IPs (egress check and
     // connection resolve to the same addresses), closing the DNS-rebinding
-    // TOCTOU window; the remaining two URLs are validated against the same
+    // TOCTOU window; the remaining URL is validated against the same
     // egress policy and ride the same pinned host.
     let (identity_url, client) =
         match crate::security::validate_http_url_for_egress_with_pinned_client(
@@ -893,17 +893,6 @@ async fn notify_audit_agent_for_report(
                 return None;
             }
         };
-    let invite_url = match crate::security::validate_http_url_for_egress(
-        &format!("{agent_url}/_cokret/self/audit-agent/invite"),
-        "audit agent invite",
-        state.config.development_mode,
-    ) {
-        Ok(url) => url,
-        Err(error) => {
-            tracing::warn!(%error, "audit agent invite request denied by egress policy");
-            return None;
-        }
-    };
     let events_url = match crate::security::validate_http_url_for_egress(
         &format!("{agent_url}/_cokret/self/audit-agent/events"),
         "audit agent events",
@@ -940,78 +929,38 @@ async fn notify_audit_agent_for_report(
         .get("report_id")
         .and_then(Value::as_str)
         .unwrap_or_default();
-    let target_ref = report_payload
-        .get("target_ref")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-
-    let invite_body = json!({
-        "realm_id": realm_id,
-        "invite": {
-            "event_id": target_ref,
-            "report_id": report_id,
-            "reason": "moderation_report",
-        },
-        "mls_key_package": identity.get("key_package").cloned().unwrap_or(Value::Null),
-    });
-    match client.post(invite_url).json(&invite_body).send().await {
-        Ok(response) if response.status().is_success() => {
-            if let Ok(body) = response.json::<Value>().await {
-                append_audit_agent_invite_log(
-                    state,
-                    &audit_agent_principal_id,
-                    report_payload,
-                    &body,
-                )
-                .await;
-                append_agent_accessed_if_present(
-                    state,
-                    &audit_agent_principal_id,
-                    report_payload,
-                    &body,
-                )
-                .await;
-            }
-        }
-        Ok(response) => {
-            append_audit_log(
-                state,
-                None,
-                "org.cokret.soland.audit.agent_invite",
-                json!({
-                    "realm_id": realm_id,
-                    "report_id": report_id,
-                    "audit_agent_principal_id": audit_agent_principal_id,
-                    "status": response.status().as_u16(),
-                }),
-                "failed",
-            )
-            .await
-        }
-        Err(error) => {
-            append_audit_log(
-                state,
-                None,
-                "org.cokret.soland.audit.agent_invite",
-                json!({
-                    "realm_id": realm_id,
-                    "report_id": report_id,
-                    "audit_agent_principal_id": audit_agent_principal_id,
-                    "error": error.to_string(),
-                }),
-                "failed",
-            )
-            .await
-        }
-    }
+    audit_plaintext_release_withheld_for_report(
+        state,
+        policy,
+        report_payload,
+        &audit_agent_principal_id,
+    )
+    .await;
 
     let event_body = json!({
         "kind": "org.cokret.soland.audit.report",
         "event": report_payload,
+        "disclosure": {
+            "plaintext_release": false,
+            "history_key_release": false,
+            "sealed_decision_required": true,
+        },
     });
     match client.post(events_url).json(&event_body).send().await {
         Ok(response) if response.status().is_success() => {
             if let Ok(body) = response.json::<Value>().await {
+                append_audit_log(
+                    state,
+                    None,
+                    "org.cokret.soland.audit.report",
+                    json!({
+                        "realm_id": realm_id,
+                        "report_id": report_id,
+                        "audit_agent_principal_id": audit_agent_principal_id,
+                    }),
+                    "accepted",
+                )
+                .await;
                 append_agent_accessed_if_present(
                     state,
                     &audit_agent_principal_id,
@@ -1055,6 +1004,45 @@ async fn notify_audit_agent_for_report(
     Some(audit_agent_principal_id)
 }
 
+async fn audit_plaintext_release_withheld_for_report(
+    state: &AppState,
+    policy: &Value,
+    report_payload: &Value,
+    audit_agent_principal_id: &str,
+) {
+    let requested = policy
+        .get("release_plaintext_on_report")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+        || policy
+            .get("release_history_key_on_report")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        || policy
+            .get("plaintext_release")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+    if !requested {
+        return;
+    }
+    append_audit_log(
+        state,
+        None,
+        "org.cokret.soland.audit.plaintext_release",
+        json!({
+            "kind": "org.cokret.soland.audit.plaintext_release",
+            "realm_id": report_payload.get("realm_id").cloned().unwrap_or(Value::Null),
+            "report_id": report_payload.get("report_id").cloned().unwrap_or(Value::Null),
+            "target_ref": report_payload.get("target_ref").cloned().unwrap_or(Value::Null),
+            "audit_agent_principal_id": audit_agent_principal_id,
+            "reason_code": "sealed_decision_required",
+        }),
+        "withheld",
+    )
+    .await;
+}
+
+#[allow(dead_code)]
 async fn append_audit_agent_invite_log(
     state: &AppState,
     audit_agent_principal_id: &str,
@@ -1087,6 +1075,27 @@ async fn append_agent_accessed_if_present(
     let Some(emitted) = response_body.get("emitted") else {
         return;
     };
+    if !is_plaintext_release_emission(emitted) {
+        return;
+    }
+    if !sealed_plaintext_release_authorized(emitted) {
+        append_audit_log(
+            state,
+            None,
+            "org.cokret.soland.audit.plaintext_release",
+            json!({
+                "kind": "org.cokret.soland.audit.plaintext_release",
+                "realm_id": report_payload.get("realm_id").cloned().unwrap_or(Value::Null),
+                "report_id": report_payload.get("report_id").cloned().unwrap_or(Value::Null),
+                "target_ref": report_payload.get("target_ref").cloned().unwrap_or(Value::Null),
+                "audit_agent_principal_id": audit_agent_principal_id,
+                "reason_code": "sealed_decision_required",
+            }),
+            "failed_closed",
+        )
+        .await;
+        return;
+    }
     append_audit_log(
         state,
         Some(audit_agent_principal_id),
@@ -1106,6 +1115,63 @@ async fn append_agent_accessed_if_present(
         "accepted",
     )
     .await;
+}
+
+fn is_plaintext_release_emission(emitted: &Value) -> bool {
+    emitted
+        .get("access_kind")
+        .and_then(Value::as_str)
+        .or_else(|| {
+            emitted
+                .pointer("/payload/access_kind")
+                .and_then(Value::as_str)
+        })
+        == Some("e2ee_plaintext_release")
+}
+
+fn sealed_plaintext_release_authorized(emitted: &Value) -> bool {
+    let Some(object) = emitted.as_object() else {
+        return false;
+    };
+    if !is_plaintext_release_emission(emitted) {
+        return false;
+    }
+    let sealed = object
+        .get("sealed")
+        .and_then(Value::as_bool)
+        .or_else(|| {
+            object
+                .get("sealed_decision")
+                .and_then(Value::as_object)
+                .and_then(|decision| decision.get("sealed"))
+                .and_then(Value::as_bool)
+        })
+        .unwrap_or(false);
+    let decision_ref = object
+        .get("sealed_decision_ref")
+        .and_then(Value::as_str)
+        .or_else(|| object.get("decision_ref").and_then(Value::as_str))
+        .or_else(|| {
+            object
+                .get("sealed_decision")
+                .and_then(Value::as_object)
+                .and_then(|decision| decision.get("decision_ref"))
+                .and_then(Value::as_str)
+        })
+        .filter(|value| value.starts_with("ck:event:") || value.starts_with("ck:decision:"));
+    let proof = object
+        .get("binding_proof")
+        .and_then(Value::as_str)
+        .or_else(|| object.get("seal_ref").and_then(Value::as_str))
+        .or_else(|| {
+            object
+                .get("sealed_decision")
+                .and_then(Value::as_object)
+                .and_then(|decision| decision.get("seal_ref"))
+                .and_then(Value::as_str)
+        })
+        .filter(|value| !value.trim().is_empty());
+    sealed && decision_ref.is_some() && proof.is_some()
 }
 
 async fn audit_disclosure_policy_for_realm(state: &AppState, realm_id: &str) -> Option<Value> {
@@ -1543,5 +1609,28 @@ mod report_safety_tests {
             error.wire_code(),
             cokret_sdk::error::ERROR_CODE_PROOF_INVALID
         );
+    }
+
+    #[test]
+    fn plaintext_release_audit_requires_sealed_decision_boundary() {
+        assert!(!is_plaintext_release_emission(&json!({
+            "access_kind": "report_ack",
+        })));
+        assert!(!sealed_plaintext_release_authorized(&json!({
+            "access_kind": "e2ee_plaintext_release",
+            "decision_ref": "ck:event:01904100-0000-7000-8000-000000000999",
+            "binding_proof": "proof",
+        })));
+        assert!(!sealed_plaintext_release_authorized(&json!({
+            "access_kind": "e2ee_plaintext_release",
+            "sealed": true,
+            "binding_proof": "proof",
+        })));
+        assert!(sealed_plaintext_release_authorized(&json!({
+            "access_kind": "e2ee_plaintext_release",
+            "sealed": true,
+            "sealed_decision_ref": "ck:event:01904100-0000-7000-8000-000000000999",
+            "binding_proof": "proof",
+        })));
     }
 }

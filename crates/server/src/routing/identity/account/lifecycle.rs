@@ -3,6 +3,11 @@
 //! cohesive unit; external paths preserved via `pub(crate) use` re-export in
 //! the parent module.
 
+use cokret_sdk::{
+    Did, ErasedClass, ErasureOutcome, ErasureReceipt, ErasureReceiptProof, ErasureScope,
+    ErasureStorageBoundary, ErasureSubject, ErasureSubjectKind,
+};
+
 use super::*;
 
 #[endpoint(
@@ -797,70 +802,11 @@ pub(super) async fn erase_account(
 
     let completed_at = now();
     let completed_at_wire = completed_at.to_rfc3339_opts(SecondsFormat::Millis, true);
-    let retained_stub = json!({
-        "schema": "ck.schema.erasure_receipt.stub.v1",
-        "issuer": state.config.service_did.clone(),
-        "subject": {"kind": "principal", "ref": actor.clone()},
-        "storage_boundary": "account_private_store",
-        "completed_at": completed_at_wire.clone(),
-    });
-    let retained_stub_bytes =
-        cokret_sdk::canonical::canonical_json_bytes(&retained_stub).map_err(|error| {
-            AppError::internal(format!(
-                "erasure retained stub canonicalization failed: {error}"
-            ))
-        })?;
-    let retained_stub_digest = cokret_sdk::canonical::sha256_digest(&retained_stub_bytes);
-    let proof_payload = json!({
-        "receipt_id_seed": actor.clone(),
-        "retained_stub_digest": retained_stub_digest.clone(),
-        "completed_at": completed_at_wire.clone(),
-    });
-    let proof_hash = erasure_receipt_payload_digest(&proof_payload);
-    let proof_signature = erasure_receipt_proof_signature(state, &proof_payload);
-    let erasure_receipt = json!({
-        "receipt_id": crate::ids::generate("receipt"),
-        "schema": "ck.schema.erasure_receipt.v1",
-        "issuer": state.config.service_did.clone(),
-        "subject": {
-            "kind": "principal",
-            "ref": actor.clone()
-        },
-        "scope": {
-            "storage_boundary": "account_private_store",
-            "service_scope": "soland.account.erase",
-            "target_refs": [actor.clone()]
-        },
-        "outcome": "completed",
-        "erased_classes": [
-            "account_private_state",
-            "push_routes",
-            "device_secrets",
-            "projection_rows"
-        ],
-        "retained_stub_digest": retained_stub_digest.clone(),
-        "completed_at": completed_at_wire.clone(),
-        "issued_at": completed_at_wire.clone(),
-        "proofs": [{
-            "verification_method": format!("{}#erasure-receipt", state.config.service_did),
-            "payload_digest": proof_hash.clone(),
-            "alg": "EdDSA",
-            "signature": proof_signature,
-            "signature_input": "soland-erasure-receipt-proof-v1"
-        }]
-    });
+    let erasure_receipt = account_erasure_receipt(state, &actor, completed_at)?;
     let realm_erasure_receipts = affected_realms
         .iter()
-        .map(|realm_id| {
-            realm_erasure_receipt(
-                state,
-                &actor,
-                realm_id,
-                &retained_stub_digest,
-                &completed_at_wire,
-            )
-        })
-        .collect::<Vec<_>>();
+        .map(|realm_id| realm_erasure_receipt(state, &actor, realm_id, completed_at))
+        .collect::<Result<Vec<_>, _>>()?;
     append_audit_log(
         state,
         Some(&actor),
@@ -1046,49 +992,121 @@ fn realm_erasure_receipt(
     state: &AppState,
     actor: &str,
     realm_id: &str,
-    retained_stub_digest: &str,
-    completed_at_wire: &str,
-) -> Value {
-    let receipt_id = crate::ids::generate("receipt");
-    let proof_payload = json!({
-        "receipt_id": receipt_id.clone(),
-        "subject": actor,
-        "realm_id": realm_id,
-        "retained_stub_digest": retained_stub_digest,
-        "completed_at": completed_at_wire,
-    });
-    let proof_hash = erasure_receipt_payload_digest(&proof_payload);
-    let proof_signature = erasure_receipt_proof_signature(state, &proof_payload);
-    json!({
-        "receipt_id": receipt_id,
-        "schema": "ck.schema.erasure_receipt.v1",
-        "issuer": state.config.service_did.clone(),
-        "subject": {
-            "kind": "principal",
-            "ref": actor
+    completed_at: chrono::DateTime<chrono::Utc>,
+) -> Result<Value, AppError> {
+    let realm_id = RealmId::new(realm_id.to_owned())
+        .map_err(|_| AppError::internal("stored erasure realm_id is invalid"))?;
+    build_erasure_receipt_value(
+        state,
+        crate::ids::generate("receipt"),
+        ErasureSubject {
+            kind: ErasureSubjectKind::Principal,
+            reference: actor.to_owned(),
         },
-        "scope": {
-            "storage_boundary": "projection_store",
-            "service_scope": "soland.account.erase.federation",
-            "realm_id": realm_id,
-            "target_refs": [actor]
+        ErasureScope {
+            storage_boundary: ErasureStorageBoundary::ProjectionStore,
+            realm_id: Some(realm_id),
+            target_refs: vec![actor.to_owned()],
+            retention_policy_id: None,
+            service_scope: Some("soland.account.erase.federation".to_owned()),
         },
-        "outcome": "completed",
-        "erased_classes": [
-            "projection_rows",
-            "federated_plaintext_timeline"
+        vec![ErasedClass::ProjectionRows, ErasedClass::DerivedPlaintext],
+        completed_at,
+    )
+}
+
+fn account_erasure_receipt(
+    state: &AppState,
+    actor: &str,
+    completed_at: chrono::DateTime<chrono::Utc>,
+) -> Result<Value, AppError> {
+    build_erasure_receipt_value(
+        state,
+        crate::ids::generate("receipt"),
+        ErasureSubject {
+            kind: ErasureSubjectKind::Principal,
+            reference: actor.to_owned(),
+        },
+        ErasureScope {
+            storage_boundary: ErasureStorageBoundary::AccountPrivateStore,
+            realm_id: None,
+            target_refs: vec![actor.to_owned()],
+            retention_policy_id: None,
+            service_scope: Some("soland.account.erase".to_owned()),
+        },
+        vec![
+            ErasedClass::AccountPrivateState,
+            ErasedClass::PushRoutes,
+            ErasedClass::DeviceSecrets,
+            ErasedClass::ProjectionRows,
         ],
-        "retained_stub_digest": retained_stub_digest,
-        "completed_at": completed_at_wire,
-        "issued_at": completed_at_wire,
-        "proofs": [{
-            "verification_method": format!("{}#erasure-receipt", state.config.service_did),
-            "payload_digest": proof_hash,
-            "alg": "EdDSA",
-            "signature": proof_signature,
-            "signature_input": "soland-erasure-receipt-proof-v1"
-        }]
-    })
+        completed_at,
+    )
+}
+
+fn build_erasure_receipt_value(
+    state: &AppState,
+    receipt_id: String,
+    subject: ErasureSubject,
+    scope: ErasureScope,
+    erased_classes: Vec<ErasedClass>,
+    completed_at: chrono::DateTime<chrono::Utc>,
+) -> Result<Value, AppError> {
+    let issuer = Did::new(state.config.service_did.clone())
+        .map_err(|error| AppError::internal(format!("service DID is invalid: {error}")))?;
+    let retained_stub =
+        erasure_retained_stub(&issuer, &receipt_id, &subject, &scope, completed_at)?;
+    let retained_stub_digest = cokret_sdk::Hash::new(
+        cokret_sdk::canonical::canonical_sha256(&retained_stub)
+            .map_err(|error| AppError::internal(format!("erasure retained stub: {error}")))?,
+    )
+    .map_err(|error| AppError::internal(format!("erasure retained stub digest: {error}")))?;
+    let mut receipt = ErasureReceipt {
+        receipt_id,
+        schema: ErasureReceipt::SCHEMA.to_owned(),
+        issuer,
+        subject,
+        scope,
+        outcome: ErasureOutcome::Completed,
+        erased_classes,
+        retained_stub_digest,
+        retained_stub: Some(retained_stub),
+        legal_hold_ref: None,
+        completed_at,
+        issued_at: Some(completed_at),
+        proofs: Vec::new(),
+        fanout_status: None,
+        peer_receipts: Vec::new(),
+    };
+    let payload_digest = receipt
+        .canonical_payload_digest()
+        .map_err(|error| AppError::internal(format!("erasure receipt digest: {error}")))?;
+    let proof_payload = receipt
+        .canonical_proof_input()
+        .map_err(|error| AppError::internal(format!("erasure receipt proof input: {error}")))?;
+    let verification_method = format!("{}#notary-key", receipt.issuer.as_str());
+    let signature = erasure_receipt_proof_signature(state, &proof_payload, &verification_method)?;
+    let mut extra = std::collections::BTreeMap::new();
+    extra.insert("alg".to_owned(), Value::String("EdDSA".to_owned()));
+    extra.insert(
+        "scheme".to_owned(),
+        Value::String("ed25519-detached-jws".to_owned()),
+    );
+    extra.insert(
+        "signature_input".to_owned(),
+        Value::String("rfc7515-detached-jws".to_owned()),
+    );
+    receipt.proofs.push(ErasureReceiptProof {
+        verification_method,
+        payload_digest,
+        signature,
+        extra,
+    });
+    receipt
+        .validate_with_inline_retained_stub()
+        .map_err(|error| AppError::internal(format!("erasure receipt self-check: {error}")))?;
+    serde_json::to_value(receipt)
+        .map_err(|error| AppError::internal(format!("erasure receipt encode: {error}")))
 }
 
 fn erasure_receipt_operation(receipt: Value) -> Option<cokret_sdk::Operation> {
@@ -1107,10 +1125,23 @@ fn erasure_receipt_operation(receipt: Value) -> Option<cokret_sdk::Operation> {
     ))
 }
 
-fn erasure_receipt_payload_digest(payload: &Value) -> String {
-    let bytes = cokret_sdk::canonical::canonical_json_bytes(payload)
-        .unwrap_or_else(|_| payload.to_string().into_bytes());
-    cokret_sdk::canonical::sha256_digest(&bytes)
+fn erasure_retained_stub(
+    issuer: &Did,
+    receipt_id: &str,
+    subject: &ErasureSubject,
+    scope: &ErasureScope,
+    completed_at: chrono::DateTime<chrono::Utc>,
+) -> Result<Value, AppError> {
+    Ok(json!({
+        "schema": "ck.schema.erasure_verification_stub.v1",
+        "receipt_id": receipt_id,
+        "issuer": issuer.as_str(),
+        "subject": serde_json::to_value(subject)
+            .map_err(|error| AppError::internal(format!("erasure stub subject: {error}")))?,
+        "scope": serde_json::to_value(scope)
+            .map_err(|error| AppError::internal(format!("erasure stub scope: {error}")))?,
+        "completed_at": completed_at.to_rfc3339_opts(SecondsFormat::Millis, true),
+    }))
 }
 
 async fn persist_account_lifecycle_record(
@@ -1135,25 +1166,23 @@ async fn persist_account_lifecycle_record(
     }
 }
 
-fn erasure_receipt_proof_signature(state: &AppState, payload: &Value) -> String {
-    let payload = cokret_sdk::canonical::canonical_json_bytes(payload)
-        .unwrap_or_else(|_| payload.to_string().into_bytes());
-    let mut signing_input = Vec::with_capacity(
-        b"soland-erasure-receipt-proof-v1".len()
-            + state.config.service_did.len()
-            + payload.len()
-            + 2,
-    );
-    signing_input.extend_from_slice(b"soland-erasure-receipt-proof-v1");
-    signing_input.push(0);
-    signing_input.extend_from_slice(state.config.service_did.as_bytes());
-    signing_input.push(0);
-    signing_input.extend_from_slice(&payload);
-    let signature = state.notary_signing_key().sign(&signing_input);
-    format!(
-        "eddsa-ed25519:{}",
-        URL_SAFE_NO_PAD.encode(signature.to_bytes())
-    )
+fn erasure_receipt_proof_signature(
+    state: &AppState,
+    payload: &[u8],
+    verification_method: &str,
+) -> Result<String, AppError> {
+    let protected = json!({
+        "alg": "EdDSA",
+        "kid": verification_method,
+    });
+    let protected = cokret_sdk::canonical::canonical_json_bytes(&protected)
+        .map_err(|error| AppError::internal(format!("erasure proof header: {error}")))?;
+    let protected_b64 = URL_SAFE_NO_PAD.encode(protected);
+    let payload_b64 = URL_SAFE_NO_PAD.encode(payload);
+    let signing_input = format!("{protected_b64}.{payload_b64}");
+    let signature = state.notary_signing_key().sign(signing_input.as_bytes());
+    let signature_b64 = URL_SAFE_NO_PAD.encode(signature.to_bytes());
+    Ok(format!("{protected_b64}..{signature_b64}"))
 }
 
 fn short_actor_tag(did: &str) -> String {

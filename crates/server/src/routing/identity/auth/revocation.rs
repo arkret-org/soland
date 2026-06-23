@@ -1,4 +1,7 @@
+use serde_json::Value;
+
 use super::*;
+use crate::state::AgentSessionRecord;
 
 /// Revoke every active bearer session for an actor.
 pub async fn revoke_sessions_for_actor(state: &AppState, actor: &str) -> Result<usize, String> {
@@ -44,6 +47,106 @@ pub async fn active_delegated_sessions_for_actor(
                 && session.agent_session.is_some()
         })
         .count())
+}
+
+pub async fn revoke_delegated_sessions_for_applet(
+    state: &AppState,
+    applet_id: &str,
+    service_did: Option<&str>,
+    grant_refs: &[String],
+) -> Result<Vec<String>, String> {
+    let revoked_at = now();
+    let sessions = state
+        .persistence
+        .sessions()
+        .snapshot_all()
+        .await
+        .map_err(|error| error.to_string())?;
+    let mut revoked_refs = Vec::new();
+    for mut session in sessions.into_iter().filter(|session| {
+        session.revoked_at.is_none()
+            && session.agent_session.as_ref().is_some_and(|agent| {
+                delegated_session_matches_applet(agent, applet_id, service_did, grant_refs)
+            })
+    }) {
+        session.revoked_at = Some(revoked_at);
+        revoked_refs.push(delegated_session_revocation_ref(&session));
+        state
+            .persistence
+            .sessions()
+            .put(&session)
+            .await
+            .map_err(|error| error.to_string())?;
+    }
+    revoked_refs.sort();
+    revoked_refs.dedup();
+    Ok(revoked_refs)
+}
+
+fn delegated_session_matches_applet(
+    agent: &AgentSessionRecord,
+    applet_id: &str,
+    service_did: Option<&str>,
+    grant_refs: &[String],
+) -> bool {
+    json_contains_string(&agent.scope_details, applet_id)
+        || service_did.is_some_and(|did| json_contains_string(&agent.scope_details, did))
+        || grant_refs
+            .iter()
+            .any(|grant_ref| json_contains_string(&agent.scope_details, grant_ref))
+}
+
+fn delegated_session_revocation_ref(session: &SessionRecord) -> String {
+    session
+        .agent_session
+        .as_ref()
+        .and_then(|agent| {
+            find_first_string_key(
+                &agent.scope_details,
+                &[
+                    "session_grant_revocation_ref",
+                    "revocation_ref",
+                    "session_grant_id",
+                    "grant_id",
+                    "authorization_ref",
+                ],
+            )
+        })
+        .unwrap_or_else(|| session.token_hash.clone())
+}
+
+fn find_first_string_key(value: &Value, keys: &[&str]) -> Option<String> {
+    match value {
+        Value::Object(object) => {
+            for key in keys {
+                if let Some(value) = object.get(*key).and_then(Value::as_str)
+                    && !value.trim().is_empty()
+                {
+                    return Some(value.to_owned());
+                }
+            }
+            object
+                .values()
+                .find_map(|value| find_first_string_key(value, keys))
+        }
+        Value::Array(values) => values
+            .iter()
+            .find_map(|value| find_first_string_key(value, keys)),
+        _ => None,
+    }
+}
+
+fn json_contains_string(value: &Value, needle: &str) -> bool {
+    match value {
+        Value::String(value) => value == needle,
+        Value::Array(values) => values
+            .iter()
+            .any(|value| json_contains_string(value, needle)),
+        Value::Object(object) => object
+            .values()
+            .any(|value| json_contains_string(value, needle)),
+        _ => false,
+    }
 }
 
 /// Revoke every active device record for an actor.

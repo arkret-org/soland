@@ -60,15 +60,29 @@ pub fn validate_http_url_for_egress_with_pinned_client(
     development_mode: bool,
     request_timeout: Duration,
 ) -> Result<(Url, reqwest::Client), String> {
+    validate_http_url_for_egress_with_pinned_client_allow_private(
+        raw_url,
+        purpose,
+        private_networks_allowed(development_mode),
+        request_timeout,
+    )
+}
+
+pub fn validate_http_url_for_egress_with_pinned_client_allow_private(
+    raw_url: &str,
+    purpose: &str,
+    allow_private_networks: bool,
+    request_timeout: Duration,
+) -> Result<(Url, reqwest::Client), String> {
     let url = Url::parse(raw_url).map_err(|error| format!("{purpose}: invalid URL: {error}"))?;
-    let allow_private = private_networks_allowed(development_mode);
-    let socket_addrs = match resolve_and_validate_url_for_egress(&url, purpose, allow_private) {
-        Ok(addrs) => addrs,
-        Err(error) => {
-            record_egress_denial(&url, purpose, &error);
-            return Err(error);
-        }
-    };
+    let socket_addrs =
+        match resolve_and_validate_url_for_egress(&url, purpose, allow_private_networks) {
+            Ok(addrs) => addrs,
+            Err(error) => {
+                record_egress_denial(&url, purpose, &error);
+                return Err(error);
+            }
+        };
     let host = url
         .host_str()
         .ok_or_else(|| format!("{purpose}: URL host is required"))?;
@@ -295,6 +309,9 @@ fn blocked_ip_reason(ip: IpAddr) -> Option<&'static str> {
             if let Some(v4) = ipv4_mapped(ip) {
                 return blocked_ipv4_reason(v4);
             }
+            if let Some((_, v4)) = ipv4_embedded_transition(ip) {
+                return blocked_ipv4_reason(v4);
+            }
             blocked_ipv6_reason(ip)
         }
     }
@@ -315,6 +332,11 @@ fn hard_blocked_ip_reason(ip: IpAddr) -> Option<&'static str> {
         IpAddr::V6(ip) => {
             if let Some(v4) = ipv4_mapped(ip) {
                 return hard_blocked_ip_reason(IpAddr::V4(v4));
+            }
+            if let Some((_, v4)) = ipv4_embedded_transition(ip)
+                && let Some(reason) = hard_blocked_ip_reason(IpAddr::V4(v4))
+            {
+                return Some(reason);
             }
             let segments = ip.segments();
             if (segments[0] & 0xfe00) == 0xfc00 {
@@ -411,6 +433,26 @@ fn ipv4_mapped(ip: Ipv6Addr) -> Option<Ipv4Addr> {
     } else {
         None
     }
+}
+
+fn ipv4_embedded_transition(ip: Ipv6Addr) -> Option<(&'static str, Ipv4Addr)> {
+    let segments = ip.segments();
+    if segments[..6] == [0x0064, 0xff9b, 0, 0, 0, 0] {
+        let high = segments[6].to_be_bytes();
+        let low = segments[7].to_be_bytes();
+        return Some(("nat64", Ipv4Addr::new(high[0], high[1], low[0], low[1])));
+    }
+    if segments[0] == 0x2002 {
+        let high = segments[1].to_be_bytes();
+        let low = segments[2].to_be_bytes();
+        return Some(("6to4", Ipv4Addr::new(high[0], high[1], low[0], low[1])));
+    }
+    if segments[0] == 0x2001 && segments[1] == 0 {
+        let high = (!segments[6]).to_be_bytes();
+        let low = (!segments[7]).to_be_bytes();
+        return Some(("teredo", Ipv4Addr::new(high[0], high[1], low[0], low[1])));
+    }
+    None
 }
 
 fn federation_denylist_entries() -> Vec<String> {
@@ -563,6 +605,9 @@ mod tests {
             "http://169.254.169.254/latest/meta-data",
             "http://[::1]/x",
             "http://[fd00::1]/x",
+            "http://[64:ff9b::a00:1]/x",
+            "http://[2002:0a00:0001::1]/x",
+            "http://[2001:0000::f5ff:fffe]/x",
         ] {
             let url = Url::parse(raw).unwrap();
             assert!(
@@ -586,6 +631,7 @@ mod tests {
             "http://169.254.169.254/latest/meta-data",
             "http://169.254.1.1/x",
             "http://[fd00::1]/x",
+            "http://[64:ff9b::a9fe:a9fe]/x",
         ] {
             let url = Url::parse(raw).unwrap();
             assert!(

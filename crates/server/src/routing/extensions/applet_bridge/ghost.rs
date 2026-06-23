@@ -28,11 +28,28 @@ pub(super) async fn revoke_applet_record(
     actor: &str,
     applet_id: &str,
 ) -> Result<super::types::AppletRevokeRecordOutcome, AppError> {
+    revoke_applet_record_inner(state, actor, applet_id, true).await
+}
+
+pub(super) async fn revoke_applet_record_after_admin_gate(
+    state: &AppState,
+    actor: &str,
+    applet_id: &str,
+) -> Result<super::types::AppletRevokeRecordOutcome, AppError> {
+    revoke_applet_record_inner(state, actor, applet_id, false).await
+}
+
+async fn revoke_applet_record_inner(
+    state: &AppState,
+    actor: &str,
+    applet_id: &str,
+    require_owner: bool,
+) -> Result<super::types::AppletRevokeRecordOutcome, AppError> {
     let now = chrono::Utc::now();
     let mut record = applet_record(state, applet_id)
         .await?
         .ok_or_else(|| AppError::not_found("applet is not registered"))?;
-    if record.owner_actor_id != actor {
+    if require_owner && record.owner_actor_id != actor {
         return Err(AppError::capability_denied(
             "only the registering actor can revoke this applet",
         ));

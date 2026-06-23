@@ -262,6 +262,10 @@ pub struct BottomEntry {
 pub enum BottomRepairStrategy {
     HeadInWinner {
         head: BottomCandidateHead,
+        recovery_capability_ref: String,
+        state_witness_ref: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        state_witness_inclusion_proof_ref: Option<String>,
     },
     Manual {
         #[serde(default, skip_serializing_if = "Option::is_none")]

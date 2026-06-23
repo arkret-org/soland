@@ -360,7 +360,7 @@ pub(in crate::routing::events::event_log) fn validate_data_event_capability_refs
                 format!("DataEvent capability_ref {grant_id} has invalid scope"),
             ));
         }
-        validate_data_event_joined_capability_view(state, grant_id)?;
+        validate_data_event_joined_capability_view(state, realm_id, grant_id)?;
         let Some(effective) = effective_by_id.get(grant_id) else {
             return Err(event_validation_error(
                 StatusCode::FORBIDDEN,
@@ -397,6 +397,7 @@ pub(in crate::routing::events::event_log) fn validate_data_event_capability_refs
 
 fn validate_data_event_joined_capability_view(
     state: &AppState,
+    realm_id: &str,
     grant_id: &str,
 ) -> Result<(), EventValidationError> {
     let cell_ref = cokret_sdk::CellRef::new(format!(
@@ -409,6 +410,81 @@ fn validate_data_event_joined_capability_view(
             "DataEvent capability_ref could not be mapped to a capability cell",
         )
     })?;
+    let realm = RealmId::new(realm_id.to_owned()).map_err(|_| {
+        event_validation_error(
+            StatusCode::BAD_REQUEST,
+            "schema_violation",
+            "DataEvent realm_id must be a valid ck:realm id",
+        )
+    })?;
+    let leaves = state.seal_store.list_leaves(&realm).map_err(|error| {
+        event_validation_error(
+            StatusCode::PRECONDITION_FAILED,
+            "stale_seal_ref",
+            format!("DataEvent joined control leaves unavailable: {error}"),
+        )
+    })?;
+    if !leaves.is_empty() {
+        let joined_state = cokret_sdk::state_res::effective_state_at(
+            &leaves,
+            &realm,
+            state.seal_store.as_ref(),
+            state.cell_store.as_ref(),
+            state.cell_registry.as_ref(),
+        )
+        .map_err(|error| {
+            event_validation_error(
+                StatusCode::PRECONDITION_FAILED,
+                "stale_seal_ref",
+                format!("DataEvent joined control view could not be resolved: {error}"),
+            )
+        })?;
+        match joined_state.get(&cell_ref) {
+            Some(cokret_sdk::lattice::CellState::Bottom(_)) => {
+                return Err(event_validation_error(
+                    StatusCode::PRECONDITION_FAILED,
+                    "failed_bottom",
+                    "capability cell is bottom in joined control view",
+                ));
+            }
+            Some(cell_state) => {
+                let joined_grants = data_event_grants_from_state_at_ref(&joined_state);
+                let current =
+                    crate::reducer::engine_grant_from_capability_cell_state(grant_id, cell_state)
+                        .or_else(|| joined_grants.get(grant_id).cloned());
+                let Some(current) = current else {
+                    return Err(event_validation_error(
+                        StatusCode::PRECONDITION_FAILED,
+                        "stale_seal_ref",
+                        format!(
+                            "DataEvent capability_ref {grant_id} is absent from joined control view"
+                        ),
+                    ));
+                };
+                let snapshot: Vec<crate::authz::Grant> = joined_grants.values().cloned().collect();
+                if current.revoked
+                    || crate::authz::grant_revoked_upstream(&snapshot, grant_id, chrono::Utc::now())
+                {
+                    return Err(event_validation_error(
+                        StatusCode::PRECONDITION_FAILED,
+                        "stale_seal_ref",
+                        format!(
+                            "DataEvent capability_ref {grant_id} is revoked in joined control view"
+                        ),
+                    ));
+                }
+            }
+            None => {
+                return Err(event_validation_error(
+                    StatusCode::PRECONDITION_FAILED,
+                    "stale_seal_ref",
+                    format!(
+                        "DataEvent capability_ref {grant_id} is missing from joined control view"
+                    ),
+                ));
+            }
+        }
+    }
     if let Ok(projection) = state.projection.lock()
         && matches!(
             projection.cell(&cell_ref),

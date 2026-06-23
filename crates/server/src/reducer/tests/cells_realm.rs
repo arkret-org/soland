@@ -293,7 +293,7 @@ fn concurrent_realm_updates_with_same_basis_expose_bottom_and_repair_clears() {
             "conflict_heads": [first_id, second_id],
             "recovery_capability_ref": "cap.recovery-01",
             "winner_value": {"title": "renamed by alice"},
-            "state_witness": basis,
+            "state_witness_ref": basis,
         }),
     );
     state.apply(&repair, &hlc);

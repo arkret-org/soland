@@ -588,6 +588,15 @@ pub(crate) fn validate_conflict_repair_payload(operation: &Operation) -> Result<
     if recovery.trim().is_empty() {
         return Err("conflict repair recovery_capability_ref must be non-empty");
     }
+    let witness = operation
+        .payload
+        .get("state_witness_ref")
+        .or_else(|| operation.payload.get("state_witness"))
+        .and_then(serde_json::Value::as_str)
+        .ok_or("conflict repair requires state_witness_ref")?;
+    if witness.trim().is_empty() {
+        return Err("conflict repair state_witness_ref must be non-empty");
+    }
     if operation.payload.get("winner_value").is_none() {
         return Err("conflict repair requires winner_value");
     }

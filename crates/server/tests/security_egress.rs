@@ -16,9 +16,34 @@ fn production_egress_rejects_private_targets() {
         "http://[::1]/sink",
         "http://[fd00::1]/sink",
         "http://[fe80::1]/sink",
+        "http://[64:ff9b::a00:1]/sink",
+        "http://[2002:0a00:0001::1]/sink",
+        "http://[2001:0000::f5ff:fffe]/sink",
     ] {
         let url = Url::parse(raw).unwrap();
         assert!(soland::security::validate_url_for_egress(&url, "test", false).is_err());
+    }
+}
+
+#[test]
+fn production_egress_rejects_transition_dns_private_answers() {
+    let _env = clean_egress_env();
+    let url = Url::parse("https://relay.example/federation").unwrap();
+    for ip in [
+        IpAddr::V6("64:ff9b::a00:1".parse().unwrap()),
+        IpAddr::V6("2002:0a00:0001::1".parse().unwrap()),
+        IpAddr::V6("2001:0000::f5ff:fffe".parse().unwrap()),
+    ] {
+        assert!(
+            soland::security::validate_url_for_egress_with_resolved_ips(
+                &url,
+                "test",
+                false,
+                &[ip],
+            )
+            .is_err(),
+            "{ip} should be blocked"
+        );
     }
 }
 

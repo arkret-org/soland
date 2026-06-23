@@ -379,6 +379,11 @@ pub(super) async fn session_revoke(
             target_grant_id: None,
             target_device_id: None,
             all_sessions: None,
+            applet_id: None,
+            effective_scope: None,
+            registration_epoch: None,
+            service_did: None,
+            capability_grant_refs: Vec::new(),
             proof: None,
         },
     };
@@ -390,11 +395,17 @@ pub(super) async fn session_revoke(
     }
     let selector_count = usize::from(body.target_grant_id.is_some())
         + usize::from(body.target_device_id.is_some())
-        + usize::from(body.all_sessions == Some(true));
+        + usize::from(body.all_sessions == Some(true))
+        + usize::from(session_revoke_has_applet_selector(&body));
     if selector_count > 1 {
         return Err(AppError::new(
             ErrorCode::SessionRevokeSelectorConflict,
-            "target_grant_id, target_device_id and all_sessions are mutually exclusive",
+            "target_grant_id, target_device_id, all_sessions and applet selector are mutually exclusive",
+        ));
+    }
+    if session_revoke_has_applet_selector(&body) {
+        return Err(AppError::unsupported_feature(
+            "applet selector session-grant revoke is handled by the Account Authority",
         ));
     }
     if selector_count == 1 && body.proof.is_none() {
@@ -533,6 +544,7 @@ async fn verify_cross_session_revoke_proof(
         body.target_grant_id.as_ref(),
         body.target_device_id.as_ref(),
         body.all_sessions == Some(true),
+        None,
     )
     .map_err(|error| {
         AppError::internal(format!(
@@ -575,6 +587,14 @@ fn session_revoke_proof_invalid(message: impl Into<String>) -> AppError {
     AppError::new(ErrorCode::InvalidSignature, message)
         .with_status(StatusCode::UNAUTHORIZED)
         .with_wire_code(crate::error::reasons::PROOF_INVALID)
+}
+
+fn session_revoke_has_applet_selector(body: &SessionRevokeRequestBody) -> bool {
+    body.applet_id.is_some()
+        || body.effective_scope.is_some()
+        || body.registration_epoch.is_some()
+        || body.service_did.is_some()
+        || !body.capability_grant_refs.is_empty()
 }
 
 fn decode_lifecycle_signature(signature: &str) -> Option<Signature> {

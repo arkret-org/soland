@@ -449,10 +449,11 @@ fn session_binding_from_introspection(
                 ));
             }
         }
+        let scope_details = agent_session_scope_details(grant);
         return Ok((
             format!("agent-session:{}", grant.id),
             Some(AgentSessionRecord {
-                scope_details: grant.scope_details.clone(),
+                scope_details,
                 freshness_state: FreshnessState::Fresh,
             }),
         ));
@@ -486,6 +487,19 @@ fn session_binding_from_introspection(
         None => scope_device_id,
     };
     Ok((device_id, None))
+}
+
+fn agent_session_scope_details(grant: &SessionGrantIntrospectGrant) -> Value {
+    let mut scope_details = grant.scope_details.clone();
+    if let Some(object) = scope_details.as_object_mut() {
+        object
+            .entry("session_grant_id".to_owned())
+            .or_insert_with(|| Value::String(grant.id.clone()));
+        object
+            .entry("session_grant_revocation_ref".to_owned())
+            .or_insert_with(|| Value::String(grant.revocation_ref.clone()));
+    }
+    scope_details
 }
 
 pub(crate) fn session_record_from_introspected_grant_for_logout(

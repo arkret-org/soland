@@ -1,9 +1,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use cokret_sdk::{BlobVisibility, FreshnessState, PlaintextDataClassKind};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AgentSessionRecord {
     pub scope_details: Value,
     pub freshness_state: FreshnessState,

@@ -565,13 +565,26 @@ impl ProjectionState {
         if actual.len() < 2 || declared.iter().any(|head| !actual.contains(head)) {
             return Err("repair_head_in_drift");
         }
-        if let Some(witness) = operation
+        let recovery_capability = operation
+            .payload
+            .get("recovery_capability")
+            .or_else(|| operation.payload.get("recovery_capability_ref"))
+            .and_then(Value::as_str)
+            .ok_or("recovery_capability_missing")?;
+        if recovery_capability.trim().is_empty() {
+            return Err("recovery_capability_missing");
+        }
+        let witness = operation
             .payload
             .get("state_witness")
+            .or_else(|| operation.payload.get("state_witness_ref"))
             .and_then(Value::as_str)
-            && !witness.starts_with("ck:seal:sha256:")
-        {
+            .ok_or("recovery_witness_missing")?;
+        if !witness.starts_with("ck:seal:sha256:") {
             return Err("repair_state_witness_invalid");
+        }
+        if declared.iter().any(|head| head == witness) {
+            return Err("recovery_witness_post_conflict");
         }
         Ok(())
     }

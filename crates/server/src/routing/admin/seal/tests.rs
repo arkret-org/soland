@@ -99,6 +99,9 @@ fn bottom_repair_request_body_round_trips_through_serde() {
                 hlc: None,
                 summary: None,
             },
+            recovery_capability_ref: "ck:grant:recovery".to_owned(),
+            state_witness_ref: format!("ck:seal:sha256:{}", "11".repeat(32)),
+            state_witness_inclusion_proof_ref: Some("ck:proof:state-witness".to_owned()),
         },
     };
     let j = serde_json::to_value(&head_in).unwrap();
@@ -108,8 +111,19 @@ fn bottom_repair_request_body_round_trips_through_serde() {
     );
     let back: BottomRepairRequestBody = serde_json::from_value(j).unwrap();
     match back.strategy {
-        BottomRepairStrategy::HeadInWinner { head } => {
+        BottomRepairStrategy::HeadInWinner {
+            head,
+            recovery_capability_ref,
+            state_witness_ref,
+            state_witness_inclusion_proof_ref,
+        } => {
             assert_eq!(head.event_id, "ck:event:abc");
+            assert_eq!(recovery_capability_ref, "ck:grant:recovery");
+            assert!(state_witness_ref.starts_with("ck:seal:sha256:"));
+            assert_eq!(
+                state_witness_inclusion_proof_ref.as_deref(),
+                Some("ck:proof:state-witness")
+            );
         }
         other => panic!("expected HeadInWinner, got {other:?}"),
     }

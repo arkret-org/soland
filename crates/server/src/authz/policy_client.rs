@@ -286,7 +286,7 @@ impl std::error::Error for PolicyClientError {}
 
 /// Outbound client to a Realm's policy server.
 pub struct PolicyClient {
-    http: reqwest::Client,
+    _http: reqwest::Client,
     cache: PolicyCache,
     /// Local soland service DID. Used to mint the "proxy" signature on
     /// timeout-fail-closed responses so audit logs can attribute the
@@ -299,7 +299,7 @@ pub struct PolicyClient {
 impl PolicyClient {
     pub fn new(http: reqwest::Client, local_service_did: impl Into<String>) -> Self {
         Self {
-            http,
+            _http: http,
             cache: PolicyCache::new(),
             local_service_did: local_service_did.into(),
             verification_key_resolver: None,
@@ -475,17 +475,15 @@ impl PolicyClient {
         url: &str,
         body: &PolicyCheckRequestBody,
     ) -> Result<PolicyCheckOutcome, PolicyClientError> {
-        let url = reqwest::Url::parse(url).map_err(|error| {
-            PolicyClientError::Configuration(format!("invalid policy_server_url: {error}"))
-        })?;
-        crate::security::validate_url_for_egress(
-            &url,
-            "policy server check",
-            self.allow_private_network_egress,
-        )
-        .map_err(PolicyClientError::Transport)?;
-        let response = self
-            .http
+        let (url, client) =
+            crate::security::validate_http_url_for_egress_with_pinned_client_allow_private(
+                url,
+                "policy server check",
+                self.allow_private_network_egress,
+                Duration::from_secs(10),
+            )
+            .map_err(PolicyClientError::Transport)?;
+        let response = client
             .post(url)
             .json(body)
             .send()

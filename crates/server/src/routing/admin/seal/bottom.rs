@@ -4,7 +4,7 @@ use std::collections::BTreeSet;
 
 use cokret_sdk::lattice::CellState;
 use cokret_sdk::move_event::{Effect, LatticeOp, LatticeOpType};
-use cokret_sdk::{CellRef, Move, MoveSigner, RealmId, UnsignedMove};
+use cokret_sdk::{CellRef, Move, MoveSigner, RealmId, SealId, UnsignedMove};
 use salvo::http::StatusCode;
 use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
@@ -222,12 +222,77 @@ pub(crate) async fn admin_repair_bottom(
     let strategy = body.into_inner().strategy;
 
     match &strategy {
-        BottomRepairStrategy::HeadInWinner { head } => {
+        BottomRepairStrategy::HeadInWinner {
+            head,
+            recovery_capability_ref,
+            state_witness_ref,
+            state_witness_inclusion_proof_ref,
+        } => {
             if head.event_id.is_empty() {
                 return Err(
                     app_error!(InvalidParam, "winning head must carry an event_id")
                         .with_status(StatusCode::BAD_REQUEST),
                 );
+            }
+            if recovery_capability_ref.trim().is_empty() {
+                return Err(
+                    app_error!(InvalidParam, "recovery_capability_ref is required")
+                        .with_status(StatusCode::BAD_REQUEST),
+                );
+            }
+            let state_witness_seal = SealId::new(state_witness_ref.clone()).map_err(|e| {
+                app_error!(InvalidParam, "invalid state_witness_ref: {e}")
+                    .with_status(StatusCode::BAD_REQUEST)
+            })?;
+            let witness_seal = state
+                .seal_store
+                .get(&state_witness_seal)
+                .map_err(|e| app_error!(InternalError, "seal_store.get failed: {e}"))?
+                .ok_or_else(|| {
+                    app_error!(
+                        FailedPrecondition,
+                        "state_witness_ref does not resolve to a Seal"
+                    )
+                    .with_status(StatusCode::PRECONDITION_FAILED)
+                })?;
+            if witness_seal.realm_id != realm {
+                return Err(app_error!(
+                    FailedPrecondition,
+                    "state_witness_ref belongs to a different Realm"
+                )
+                .with_status(StatusCode::PRECONDITION_FAILED));
+            }
+            let current_bottom_heads = collect_bottom_entries_for_realm(state, &realm_id)
+                .into_iter()
+                .find(|entry| entry.cell_id == cell_id_str)
+                .map(|entry| entry.event_ids)
+                .unwrap_or_default();
+            if current_bottom_heads.len() < 2 {
+                return Err(
+                    app_error!(FailedPrecondition, "target cell is not currently Bottom")
+                        .with_status(StatusCode::PRECONDITION_FAILED),
+                );
+            }
+            if !current_bottom_heads
+                .iter()
+                .any(|event_id| event_id == &head.event_id)
+            {
+                return Err(app_error!(
+                    FailedPrecondition,
+                    "winning head is not in current Bottom heads"
+                )
+                .with_status(StatusCode::PRECONDITION_FAILED));
+            }
+            if witness_seal.covered_event_digests.iter().any(|covered| {
+                current_bottom_heads
+                    .iter()
+                    .any(|head| head == covered.as_str())
+            }) {
+                return Err(app_error!(
+                    FailedPrecondition,
+                    "state_witness_ref must be pre-conflict"
+                )
+                .with_status(StatusCode::PRECONDITION_FAILED));
             }
             // Build the head_in Effect. The `tag` carries the winning
             // Move id; `value` carries a placeholder (the canonical
@@ -249,26 +314,29 @@ pub(crate) async fn admin_repair_bottom(
                 },
             };
             let recovery_ref = cokret_sdk::move_event::SemanticRef {
-                id: head.event_id.clone(),
+                id: recovery_capability_ref.clone(),
                 role: "recovery_capability".to_owned(),
                 critical: true,
             };
             let seal_basis = pick_admin_seal_basis(state, &realm)?;
-            let seal_ref = seal_basis
-                .leaves
-                .first()
-                .cloned()
-                .unwrap_or_else(|| pick_admin_seal_ref(state, &realm));
             let state_witness_ref = cokret_sdk::move_event::SemanticRef {
-                id: seal_ref.as_str().to_owned(),
+                id: state_witness_seal.as_str().to_owned(),
                 role: "state_witness".to_owned(),
                 critical: true,
             };
-            let inclusion_proof_ref = cokret_sdk::move_event::SemanticRef {
-                id: format!("ck:proof:bottom-repair:{}", head.event_id),
-                role: "inclusion_proof".to_owned(),
-                critical: true,
-            };
+            let mut refs = vec![recovery_ref, state_witness_ref];
+            if let Some(inclusion_ref) = state_witness_inclusion_proof_ref
+                .as_ref()
+                .map(String::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            {
+                refs.push(cokret_sdk::move_event::SemanticRef {
+                    id: inclusion_ref.to_owned(),
+                    role: "inclusion_proof".to_owned(),
+                    critical: true,
+                });
+            }
             // Per-admin signing — Move's `verification_method` is the
             // operator's `<did>#admin-key` when a per-admin key is
             // provisioned, else falls back to the service signer.
@@ -280,7 +348,7 @@ pub(crate) async fn admin_repair_bottom(
                 vec![effect],
                 fresh_hlc(state)?,
             )
-            .with_refs(vec![recovery_ref, state_witness_ref, inclusion_proof_ref]);
+            .with_refs(refs);
             let signed_move = Move::sign(&unsigned, &signer)
                 .map_err(|e| app_error!(InternalError, "Move::sign failed: {e}"))?;
             let move_id = signed_move.id.as_str().to_owned();

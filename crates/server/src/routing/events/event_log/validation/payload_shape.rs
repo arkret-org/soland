@@ -81,6 +81,18 @@ pub(super) fn validate_conflict_repair_event_payload(
             "conflict repair payload requires recovery_capability_ref",
         ));
     }
+    if object
+        .get("state_witness_ref")
+        .or_else(|| object.get("state_witness"))
+        .and_then(Value::as_str)
+        .is_none_or(|value| value.trim().is_empty())
+    {
+        return Err(event_validation_error(
+            StatusCode::BAD_REQUEST,
+            "schema_violation",
+            "conflict repair payload requires state_witness_ref",
+        ));
+    }
     if !object.contains_key("winner_value") {
         return Err(event_validation_error(
             StatusCode::BAD_REQUEST,
