@@ -805,7 +805,12 @@ fn validate_welcome_trust_binding(
         // the accepted requester SSK generation.
     } else if let Some(requester_device_id) =
         envelope_signing_binding.requester_device_id.as_deref()
-        && payload.get("sender_device_id").and_then(Value::as_str) != Some(requester_device_id)
+        && let Some(sender_device_id) = payload
+            .get("sender_device_id")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        && sender_device_id != requester_device_id
     {
         return Err(REASON_KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH);
     }
@@ -1572,6 +1577,75 @@ mod tests {
             .filter(|r| r.delivered_at.is_none())
             .collect();
         assert!(still_pending.is_empty());
+    }
+
+    #[test]
+    fn welcome_enqueue_accepts_requester_device_envelope_without_sender_device_id() {
+        let mut state = ProjectionState::default();
+        let mut payload = welcome_payload("ck:mls_welcome:w-device");
+        let claim_ref = payload
+            .get_mut("claim_ref")
+            .and_then(Value::as_object_mut)
+            .unwrap();
+        claim_ref.remove("ssk_generation");
+        claim_ref.insert(
+            "device_authorize_event_id".to_owned(),
+            json!("ck:event:01904100-0000-7000-8000-00000000d001"),
+        );
+        let claim_envelope = payload
+            .get_mut("claim_envelope")
+            .and_then(Value::as_object_mut)
+            .unwrap();
+        claim_envelope.remove("ssk_generation");
+        claim_envelope.insert(
+            "requester_device_id".to_owned(),
+            json!("ck:device:alice-desktop"),
+        );
+        claim_envelope["signature"]["kid"] = json!("did:key:z6MkRequesterDevice#device");
+        assert!(payload.get("sender_device_id").is_none());
+
+        let enqueue = op_at(300, "ck.mls.welcome", payload);
+        let effect = apply_welcome_enqueue(&mut state, &enqueue);
+
+        assert!(matches!(
+            effect,
+            ProjectionEffect::Mls(MlsEffect::WelcomeEnqueued { .. })
+        ));
+    }
+
+    #[test]
+    fn welcome_enqueue_rejects_mismatched_sender_device_id_when_present() {
+        let mut state = ProjectionState::default();
+        let mut payload = welcome_payload("ck:mls_welcome:w-device-mismatch");
+        let claim_ref = payload
+            .get_mut("claim_ref")
+            .and_then(Value::as_object_mut)
+            .unwrap();
+        claim_ref.remove("ssk_generation");
+        claim_ref.insert(
+            "device_authorize_event_id".to_owned(),
+            json!("ck:event:01904100-0000-7000-8000-00000000d001"),
+        );
+        let claim_envelope = payload
+            .get_mut("claim_envelope")
+            .and_then(Value::as_object_mut)
+            .unwrap();
+        claim_envelope.remove("ssk_generation");
+        claim_envelope.insert(
+            "requester_device_id".to_owned(),
+            json!("ck:device:alice-desktop"),
+        );
+        claim_envelope["signature"]["kid"] = json!("did:key:z6MkRequesterDevice#device");
+        payload["sender_device_id"] = json!("ck:device:other");
+
+        let enqueue = op_at(300, "ck.mls.welcome", payload);
+        let effect = apply_welcome_enqueue(&mut state, &enqueue);
+
+        assert!(matches!(
+            effect,
+            ProjectionEffect::Rejected { reason }
+                if reason == REASON_KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH
+        ));
     }
 
     #[test]

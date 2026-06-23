@@ -717,7 +717,9 @@ async fn verify_mls_welcome_claim_envelope_device_signature(
     requester_device_id: &str,
     sender_device_id: Option<&str>,
 ) -> Result<(), &'static str> {
-    if sender_device_id != Some(requester_device_id) {
+    if let Some(sender_device_id) = sender_device_id
+        && sender_device_id != requester_device_id
+    {
         return Err(crate::error::reasons::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH);
     }
     let record = state
