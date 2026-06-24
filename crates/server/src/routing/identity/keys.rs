@@ -15,14 +15,16 @@ use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 use serde_json::{Value, json};
 
-use super::{is_device_revoked, now};
+use super::{bearer_token, is_device_revoked, now, sha256_hex};
 use crate::error::AppError;
 use crate::result::{JsonResult, json_ok};
 use crate::routing::system::extract::AuthArgs;
 use crate::state::{AppState, DeviceInventoryRecord};
 use crate::wire::{
-    DeviceStatus, KeysClaimOutcome, KeysClaimRequestBody, KeysQueryOutcome, KeysQueryRequestBody,
-    KeysUploadOutcome, KeysUploadRequestBody, QueryDeviceRecord,
+    AuthorizedDeviceSigningKey, DeviceSigningKeyDirectoryOutcome,
+    DeviceSigningKeyDirectoryQueryRequestBody, DeviceStatus, KeysClaimOutcome, KeysClaimRequestBody,
+    KeysQueryOutcome, KeysQueryRequestBody, KeysUploadOutcome, KeysUploadRequestBody,
+    QueryDeviceRecord,
 };
 
 const KEYS_UPLOAD_SIGNATURE_PREFIX: &[u8] = b"ck-keys-upload-v1\n";
@@ -32,6 +34,15 @@ pub(super) fn router() -> Router {
         .push(Router::with_path("keys/upload").post(keys_upload))
         .push(Router::with_path("keys/query").post(keys_query))
         .push(Router::with_path("keys/claim").post(keys_claim))
+}
+
+/// Product-surface (`/_soland/gate/account/...`) router carrying the
+/// server-to-server device signing-key directory read used by the Auth Server
+/// (coauth) to verify device holder proofs. Mounted under `_soland`, not the
+/// `/_cokret` protocol root: it is a deployment-local integration read, not a
+/// spec operation.
+pub(super) fn product_router() -> Router {
+    Router::with_path("gate/account/device-signing-keys/query").post(device_signing_keys_query)
 }
 
 #[endpoint(
@@ -464,5 +475,115 @@ async fn keys_claim(
     json_ok(KeysClaimOutcome {
         one_time_keys: claimed,
         failures: Vec::new(),
+    })
+}
+
+/// Server-to-server bearer gate for the device signing-key directory read.
+///
+/// Reuses the deployment's `SOLAND_EMBEDDED_WEBVH_REGISTRATION_BEARER`: the Auth
+/// Server (coauth) already holds this static bearer for the same Principal
+/// Server (it registers embedded `did:webvh` records with it), so the directory
+/// read it issues while verifying a device holder proof rides the same trust
+/// edge without minting a second credential. Compared in constant-ish form via
+/// SHA-256 digests of both sides.
+fn require_device_directory_bearer(state: &AppState, req: &Request) -> Result<(), AppError> {
+    let Some(expected) = state
+        .config
+        .embedded_webvh_registration_bearer
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return Err(AppError::new(
+            crate::error::ErrorCode::TemporarilyUnavailable,
+            "device signing-key directory read requires SOLAND_EMBEDDED_WEBVH_REGISTRATION_BEARER",
+        )
+        .with_status(StatusCode::SERVICE_UNAVAILABLE));
+    };
+    let Some(provided) = bearer_token(req)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return Err(AppError::unauthenticated(
+            "device signing-key directory read requires Authorization: Bearer <token>",
+        ));
+    };
+    if sha256_hex(provided.as_bytes()) != sha256_hex(expected.as_bytes()) {
+        return Err(AppError::unauthenticated(
+            "invalid device signing-key directory bearer",
+        ));
+    }
+    Ok(())
+}
+
+#[endpoint(
+    operation_id = "org.cokret.soland.gate.account.device_signing_keys.query",
+    tags("keys"),
+    summary = "Look up authorized, non-revoked device signing keys for a principal (server-to-server)"
+)]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.gate.account.device_signing_keys.query"))]
+async fn device_signing_keys_query(
+    body: JsonBody<DeviceSigningKeyDirectoryQueryRequestBody>,
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<DeviceSigningKeyDirectoryOutcome> {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    require_device_directory_bearer(state, req)?;
+
+    let body = body.into_inner();
+    let principal_id = body.principal_id;
+
+    // Resolve the target device-id set. An explicit, non-empty `device_ids`
+    // restricts the lookup; otherwise enumerate the principal's directory
+    // (revoked devices are dropped below by the facet predicate either way).
+    let device_ids: Vec<String> = if body.device_ids.is_empty() {
+        state
+            .persistence
+            .devices()
+            .list_for_actor(principal_id.as_str())
+            .await
+            .map_err(|error| AppError::internal(error.to_string()))?
+            .into_iter()
+            .map(|record| record.device_id)
+            .collect()
+    } else {
+        body.device_ids
+            .into_iter()
+            .map(|device_id| device_id.as_str().to_owned())
+            .collect()
+    };
+
+    let mut devices = Vec::new();
+    for device_id in device_ids {
+        // Single source of truth: the same verified + non-revoked predicate the
+        // `keys/query` directory facet applies (device-lifecycle.md §8.2). A
+        // revoked / unverified device yields no `signing_key_did`, so it never
+        // surfaces here.
+        let facet = crate::routing::identity::cross_signing::resolve_device_signing_directory_facet(
+            state,
+            principal_id.as_str(),
+            &device_id,
+        )
+        .await;
+        if !matches!(facet.status, DeviceStatus::Active) {
+            continue;
+        }
+        let Some(device_signing_key) = facet.signing_key_did else {
+            continue;
+        };
+        let Ok(typed_device_id) = cokret_sdk::DeviceId::new(device_id.clone()) else {
+            continue;
+        };
+        devices.push(AuthorizedDeviceSigningKey {
+            device_id: typed_device_id,
+            device_signing_key,
+            device_status: DeviceStatus::Active,
+            device_authorize_event_id: facet.device_authorize_event_id,
+        });
+    }
+
+    json_ok(DeviceSigningKeyDirectoryOutcome {
+        principal_id,
+        devices,
     })
 }

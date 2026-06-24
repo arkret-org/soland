@@ -7,9 +7,10 @@ use cokret_sdk::{
     ServerDescription, SessionGrantProofKind,
 };
 pub use cokret_sdk::{
-    ContactListRow, ContactState, DeviceMessageEnvelope, DeviceMessageTarget,
-    DeviceMessagesAckOutcome, DeviceMessagesAckRequestBody, DeviceMessagesGetOutcome,
-    DeviceMessagesSendOutcome, DeviceMessagesSendRequestBody, DeviceStatus,
+    AuthorizedDeviceSigningKey, ContactListRow, ContactState, DeviceMessageEnvelope,
+    DeviceMessageTarget, DeviceMessagesAckOutcome, DeviceMessagesAckRequestBody,
+    DeviceMessagesGetOutcome, DeviceMessagesSendOutcome, DeviceMessagesSendRequestBody,
+    DeviceSigningKeyDirectoryOutcome, DeviceSigningKeyDirectoryQueryRequestBody, DeviceStatus,
     DirectConversationBindingState, DirectConversationSummary, EventsQueryPostRequestBody,
     IdentityResolveRequestBody, KeysClaimOutcome, KeysClaimRequestBody, KeysQueryOutcome,
     KeysQueryRequestBody, KeysUploadOutcome, KeysUploadRequestBody, OkOutcome, PushNotifyOutcome,

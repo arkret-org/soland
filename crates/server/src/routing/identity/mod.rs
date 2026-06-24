@@ -91,6 +91,14 @@ pub fn local_router() -> Router {
                 .push(auth::router())
                 .push(Router::with_path("account").push(agents::agent_key_pair_router())),
         )
+        // Server-to-server device signing-key directory read at
+        // `/_soland/gate/account/device-signing-keys/query`. The Auth Server
+        // (coauth) calls this while verifying a device holder proof
+        // (session-grant refresh / soft-logout restore): the holder key is the
+        // `ck.device.authorize`-authorized device signing key projected into
+        // this Principal Server's directory, NOT a DID-document
+        // verificationMethod. Bearer-gated (see `keys::product_router`).
+        .push(keys::product_router())
         .push(account::local_service_router())
         // `root` — trust root: DID / identity documents + recovery.
         .push(
