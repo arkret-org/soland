@@ -256,6 +256,8 @@ async fn keys_query(
                     device_signing_key: facet.signing_key_did,
                     device_status: Some(facet.status),
                     cross_signing_binding: facet.cross_signing_binding,
+                    enrollment_authority_binding: facet.enrollment_authority_binding,
+                    device_authorize_event_id: facet.device_authorize_event_id,
                 },
             );
         }

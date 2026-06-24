@@ -975,6 +975,17 @@ async fn project_device_authorize(state: &crate::state::AppState, operation: &Op
                 map.remove("cross_signing_binding");
             }
         }
+        // Service-attested devices carry the delegated enrollment authority
+        // binding instead of cross-signing material. Persist it verbatim so
+        // keys/query can expose the current device-set trust anchor.
+        match payload.get("enrollment_authority_binding") {
+            Some(binding @ Value::Object(_)) => {
+                map.insert("enrollment_authority_binding".to_owned(), binding.clone());
+            }
+            _ => {
+                map.remove("enrollment_authority_binding");
+            }
+        }
     }
     let device = DeviceInventoryRecord {
         actor: principal_id.to_owned(),

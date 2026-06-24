@@ -14,8 +14,9 @@ use std::collections::BTreeSet;
 use base64::Engine as _;
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use cokret_sdk::{
-    CrossSigningPublishContent, CrossSigningResetContent, CrossSigningResetProof, DeviceId,
-    DeviceQuorumSignature, DeviceStatus, DeviceTrustBinding, Did, MlsWelcomeClaimEnvelope,
+    CrossSigningPublishContent, CrossSigningResetContent, CrossSigningResetProof,
+    DeviceEnrollmentAuthorityBinding, DeviceId, DeviceQuorumSignature, DeviceStatus,
+    DeviceTrustBinding, Did, EventId, MlsWelcomeClaimEnvelope,
 };
 use ed25519_dalek::{Signature, Verifier as _, VerifyingKey};
 use serde_json::{Map, Value};
@@ -819,6 +820,14 @@ pub(crate) struct DeviceSigningDirectoryFacet {
     /// verification. Present only for a verified, non-revoked device that
     /// carries one (inception bootstrap devices have none).
     pub cross_signing_binding: Option<cokret_sdk::QueryDeviceCrossSigningBinding>,
+    /// Service-attested trust material echoed from `ck.device.authorize`.
+    /// Present only for a verified, non-revoked device that was authorized by a
+    /// designated enrollment authority.
+    pub enrollment_authority_binding: Option<DeviceEnrollmentAuthorityBinding>,
+    /// Accepted `ck.device.authorize` event id anchoring the device-set
+    /// projection. Service-attested clients use this with
+    /// `enrollment_authority_binding` as the hot-path trust anchor.
+    pub device_authorize_event_id: Option<EventId>,
 }
 
 /// Resolve the `keys/query` signing-key directory facet for `(principal_id,
@@ -851,6 +860,8 @@ pub(crate) async fn resolve_device_signing_directory_facet(
                 signing_key_did: None,
                 status: DeviceStatus::Revoked,
                 cross_signing_binding: None,
+                enrollment_authority_binding: None,
+                device_authorize_event_id: None,
             };
         }
     };
@@ -859,6 +870,8 @@ pub(crate) async fn resolve_device_signing_directory_facet(
             signing_key_did: None,
             status: DeviceStatus::Revoked,
             cross_signing_binding: None,
+            enrollment_authority_binding: None,
+            device_authorize_event_id: None,
         };
     }
     let signing_key_did = record
@@ -879,10 +892,24 @@ pub(crate) async fn resolve_device_signing_directory_facet(
         .and_then(|value| {
             serde_json::from_value::<cokret_sdk::QueryDeviceCrossSigningBinding>(value.clone()).ok()
         });
+    let enrollment_authority_binding = record
+        .payload
+        .get("enrollment_authority_binding")
+        .filter(|value| value.is_object())
+        .and_then(|value| {
+            serde_json::from_value::<DeviceEnrollmentAuthorityBinding>(value.clone()).ok()
+        });
+    let device_authorize_event_id = record
+        .payload
+        .get("device_authorize_event_id")
+        .and_then(Value::as_str)
+        .and_then(|value| EventId::new(value.to_owned()).ok());
     DeviceSigningDirectoryFacet {
         signing_key_did,
         status: DeviceStatus::Active,
         cross_signing_binding,
+        enrollment_authority_binding,
+        device_authorize_event_id,
     }
 }
 

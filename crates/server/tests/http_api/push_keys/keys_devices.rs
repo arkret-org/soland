@@ -713,6 +713,68 @@ async fn device_authorize_projects_public_key_into_devices_table() {
     assert!(device.revoked_at.is_none());
 }
 
+#[tokio::test]
+async fn keys_query_exposes_service_attested_device_anchor() {
+    let state = AppState::new(test_config(), Db { pool: None });
+
+    let alice = "did:web:managed-alice.example";
+    let alice_device = "ck:device:01904100-0000-7000-8000-a11ce0000004";
+    let device_key = SigningKey::from_bytes(&[203u8; 32]);
+    let multibase = test_ed25519_multibase_public(&device_key);
+    let control_realm = soland::test_support::principal_control_realm_for_did(alice);
+    let operation_id = new_prefixed_uuid7("ck:operation:");
+    let expected_authorize_event_id = operation_id.replacen("ck:operation:", "ck:event:", 1);
+    let operation = Operation::create(
+        OperationId::new(operation_id).unwrap(),
+        RealmId::new(control_realm).unwrap(),
+        "ck.device.authorize",
+        serde_json::json!({
+            "principal_id": alice,
+            "device_id": alice_device,
+            "device_public_key": multibase,
+            "enrollment_authority_binding": {
+                "kind": "service_attested",
+                "authority_did": "did:web:auth.example",
+                "authorization_ref": "did:web:managed-alice.example#device-enrollment"
+            }
+        }),
+    );
+    soland::test_support::project_accepted_operations(&state, alice, &[operation]).await;
+
+    let token = dev_token_for_device(
+        state.clone(),
+        alice,
+        "ck:device:01904100-0000-7000-8000-a11ce0000099",
+        "Alice Desktop",
+    )
+    .await;
+    let query: Value = TestClient::post("http://server/_cokret/self/keys/query")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&serde_json::json!({
+            "device_keys": { alice: [alice_device] }
+        }))
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    let entry = &query["device_keys"][alice][alice_device];
+    assert_eq!(entry["device_status"], "active", "entry: {query}");
+    assert_eq!(entry["device_signing_key"], format!("did:key:{multibase}"));
+    assert_eq!(
+        entry["enrollment_authority_binding"]["kind"],
+        "service_attested"
+    );
+    assert_eq!(
+        entry["device_authorize_event_id"],
+        expected_authorize_event_id
+    );
+    assert!(
+        entry["cross_signing_binding"].is_null(),
+        "service-attested query record must not invent cross-signing material: {query}"
+    );
+}
+
 /// Build a real, fully-signed `(ck.cross_signing.publish payload,
 /// ck.device.authorize cross_signing_binding)` pair for `principal` / `device`
 /// using the supplied PSK / SSK keypairs and the SDK canonical-input
