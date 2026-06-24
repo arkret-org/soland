@@ -165,6 +165,18 @@ pub(crate) fn projection_operation_from_event(
             .entry("hlc".to_owned())
             .or_insert_with(|| Value::String(hlc.to_owned()));
     }
+    // morph.md §4.1 S1 — the schema-migration preflight validates that the
+    // event `requirements.schema[]` binds the migration schema set. That field
+    // lives on the envelope, not the payload, so surface it on the projection
+    // operation for this kind (scoped to avoid changing other reducers' payload
+    // shape).
+    if parsed.kind == cokret_sdk::events::kinds::MORPH_SCHEMA_MIGRATE
+        && let Some(requirements) = envelope.get("requirements")
+    {
+        payload_object
+            .entry("requirements".to_owned())
+            .or_insert_with(|| requirements.clone());
+    }
     if parsed.kind == cokret_sdk::events::kinds::RELATION_CREATE {
         normalize_relation_create_payload(payload_object, parsed);
     }

@@ -61,6 +61,16 @@ pub const REASON_KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH: &str =
 pub const REASON_COMMIT_COVERED_SEALS_MISSING: &str = "mls_covered_seals_missing";
 /// Reject code for a second genesis against an already initialized group.
 pub const REASON_GENESIS_ALREADY_EXISTS: &str = "mls_genesis_already_exists";
+/// Reject code for a commit whose `governance_binding.policy_root` does not
+/// match the policy root the MLS group's epoch chain was genesis-locked to
+/// (encryption-and-audit.md §2.5.1). On a federation push the ingest pipeline
+/// maps it to a 412 whole-batch reject.
+pub const REASON_GOVERNANCE_BINDING_MISMATCH: &str =
+    cokret_sdk::error::REASON_MLS_GOVERNANCE_BINDING_MISMATCH;
+/// Reject code emitted while a group's `covered_frontier_cell` is `⊥`
+/// (concurrent commits, encryption-and-audit.md §2.5.2). Sends / decrypts on
+/// the contested epoch stay fail-closed until a resolving commit advances it.
+pub const REASON_DECRYPTION_PENDING: &str = cokret_sdk::error::REASON_MLS_DECRYPTION_PENDING;
 
 /// G3.S1 — project a `ck.mls.keypackage` event with
 /// `payload.action == "publish"`.
@@ -429,6 +439,7 @@ pub fn apply_group_genesis(state: &mut ProjectionState, op: &Operation) -> Proje
         return reject(REASON_GENESIS_ALREADY_EXISTS);
     }
     let covered_seals = extract_covered_seals(payload).unwrap_or_default();
+    let policy_root = binding_policy_root(payload).unwrap_or_default();
     state.mls_commit_epochs.insert(
         epoch_key,
         MlsCommitEpoch {
@@ -438,6 +449,10 @@ pub fn apply_group_genesis(state: &mut ProjectionState, op: &Operation) -> Proje
             leader_actor_id: creator_actor_id.to_owned(),
             covered_seals: covered_seals.clone(),
             committed_at: op.created_at.timestamp(),
+            policy_root,
+            accepted_commit_digest: None,
+            accepted_from_epoch: None,
+            frontier_contested: false,
         },
     );
 
@@ -519,21 +534,85 @@ pub fn apply_commit_epoch(state: &mut ProjectionState, op: &Operation) -> Projec
         Some(frontier) => frontier,
         None => return reject(REASON_COMMIT_COVERED_SEALS_MISSING),
     };
+    let commit_digest = match commit_digest_value(payload) {
+        Some(digest) => digest,
+        None => return reject("mls_commit_bytes_missing"),
+    };
 
-    let current = state.mls_commit_epochs.get(&epoch_key).map(|e| e.epoch);
-    let Some(current) = current else {
+    let Some(existing) = state.mls_commit_epochs.get(&epoch_key) else {
         return reject("mls_genesis_missing");
     };
+    let current = existing.epoch;
+    let locked_policy_root = existing.policy_root.clone();
+    let accepted_digest = existing.accepted_commit_digest.clone();
+    let accepted_from_epoch = existing.accepted_from_epoch;
+    let prior_contested = existing.frontier_contested;
+    let mut covered_seals = existing.covered_seals.clone();
+
+    // §2.5.1 — the commit binding MUST stay bound to the policy_root the
+    // group's epoch chain was genesis-locked to. A forged / stale binding is
+    // rejected with `governance_binding_mismatch` (and, on a federation push,
+    // bubbles up as the whole-batch reject the ingest pipeline maps to 412).
+    if !locked_policy_root.is_empty() {
+        let commit_policy_root = binding_policy_root(payload).unwrap_or_default();
+        if commit_policy_root != locked_policy_root {
+            return reject(REASON_GOVERNANCE_BINDING_MISMATCH);
+        }
+    }
+
+    // §2.5.2 — concurrent commit detection. Two commits attesting the *same*
+    // base epoch with *different* commit material drive `covered_frontier_cell`
+    // to `⊥`. Because the reducer applies commits sequentially, the first
+    // already advanced the epoch and recorded `(accepted_from_epoch,
+    // accepted_commit_digest)`; the racing second still attests
+    // `accepted_from_epoch` but carries a different digest. A genuine race is
+    // distinguished from a plain stale replay (which stays `mls_epoch_skew`) by
+    // the committer explicitly attesting the same base via `base_epoch_ref` of
+    // the accepted commit — i.e. the payload declares it forked from the live
+    // frontier, not from a long-superseded epoch. The fork is signalled by
+    // `concurrent_commit == true`; without it a non-matching base is skew.
+    let declares_concurrent = payload
+        .get("concurrent_commit")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let is_contention = declares_concurrent
+        && accepted_from_epoch == Some(expected_prev_epoch)
+        && accepted_digest
+            .as_deref()
+            .is_some_and(|digest| digest != commit_digest);
+    if is_contention {
+        if prior_contested {
+            // The frontier is already `⊥` and another racing commit attests the
+            // contested base: stay fail-closed with the wire-visible
+            // `decryption_pending` reject until a resolving commit advances the
+            // epoch. (A reject never reaches persistence, so it does not need a
+            // mirror.)
+            return reject(REASON_DECRYPTION_PENDING);
+        }
+        // First racing commit at this base: drive `covered_frontier_cell` to
+        // `⊥`. The accepted `CommitFrontierContested` effect flips the marker on
+        // the real projection and is mirrored durably onto the epoch row; the
+        // epoch itself is left untouched.
+        if let Some(entry) = state.mls_commit_epochs.get_mut(&epoch_key) {
+            entry.frontier_contested = true;
+        }
+        return ProjectionEffectOut::Mls(MlsEffect::CommitFrontierContested {
+            group_id: group_id.to_owned(),
+            effective_scope,
+            epoch: current,
+        });
+    }
+
     if expected_prev_epoch != current {
         return reject(REASON_COMMIT_EPOCH_SKEW);
     }
+
+    // Reaching here with `expected_prev_epoch == current` is a forward advance.
+    // When the frontier was `⊥`, this is the resolving commit: the insert below
+    // both bumps the epoch and resets `frontier_contested = false`.
+
     let new_epoch = current.saturating_add(1);
     let committed_at = op.created_at.timestamp();
-    let mut covered_seals = state
-        .mls_commit_epochs
-        .get(&epoch_key)
-        .map(|e| e.covered_seals.clone())
-        .unwrap_or_default();
     merge_frontier(&mut covered_seals, &covered_delta);
     state.mls_commit_epochs.insert(
         epoch_key,
@@ -544,6 +623,10 @@ pub fn apply_commit_epoch(state: &mut ProjectionState, op: &Operation) -> Projec
             leader_actor_id: leader_actor_id.to_owned(),
             covered_seals: covered_seals.clone(),
             committed_at,
+            policy_root: locked_policy_root,
+            accepted_commit_digest: Some(commit_digest),
+            accepted_from_epoch: Some(expected_prev_epoch),
+            frontier_contested: false,
         },
     );
 
@@ -1101,6 +1184,34 @@ fn extract_covered_seals(payload: &Value) -> Option<Vec<String>> {
     frontier.sort();
     frontier.dedup();
     (!frontier.is_empty()).then_some(frontier)
+}
+
+/// Read `governance_binding.policy_root` from a genesis / commit payload. The
+/// genesis locks this value onto the group; later commits MUST match it.
+fn binding_policy_root(payload: &Value) -> Option<String> {
+    payload
+        .get("governance_binding")
+        .or_else(|| payload.get("mls_governance_binding"))
+        .and_then(|binding| binding.get("policy_root"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+/// Read the opaque commit material identity used to detect concurrent commits
+/// at the same base epoch. Accepts the canonical `commit_digest`, or falls back
+/// to the opaque `commit_bytes_b64` / `commit_message_ref` the presence check
+/// above already required.
+fn commit_digest_value(payload: &Value) -> Option<String> {
+    payload
+        .get("commit_digest")
+        .or_else(|| payload.get("commit_bytes_b64"))
+        .or_else(|| payload.get("commit_message_ref"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
 }
 
 fn push_frontier_values(value: Option<&Value>, out: &mut Vec<String>) {
@@ -1774,6 +1885,12 @@ mod tests {
                     "ck:event:0196419b-0000-7000-8000-000000000001".to_owned()
                 ],
                 committed_at: 501,
+                policy_root:
+                    "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+                        .to_owned(),
+                accepted_commit_digest: Some(b64(b"opaque-commit-2")),
+                accepted_from_epoch: Some(1),
+                frontier_contested: false,
             }
         );
     }
@@ -1985,5 +2102,107 @@ mod tests {
                 .epoch,
             1
         );
+    }
+
+    fn commit_op(secs: i64, label: &[u8], extra: Value) -> Operation {
+        let mut payload = json!({
+            "group_id": "ck:mls_group:abc",
+            "expected_prev_epoch": 0,
+            "next_epoch": 1,
+            "leader_actor_id": "did:web:alice.example",
+            "commit_bytes_b64": b64(label),
+            "governance_binding": governance_binding(0),
+        });
+        if let (Some(object), Some(extra)) = (payload.as_object_mut(), extra.as_object()) {
+            for (key, value) in extra {
+                object.insert(key.clone(), value.clone());
+            }
+        }
+        op_at(secs, "ck.mls.commit", payload)
+    }
+
+    #[test]
+    fn commit_rejects_policy_root_mismatch() {
+        let mut state = ProjectionState::default();
+        initialize_genesis(&mut state);
+        // A commit whose governance_binding.policy_root differs from the
+        // genesis-locked root is rejected with governance_binding_mismatch.
+        let mut binding = governance_binding(0);
+        binding["policy_root"] =
+            json!("sha256:9999999999999999999999999999999999999999999999999999999999999999");
+        let effect = apply_commit_epoch(
+            &mut state,
+            &commit_op(500, b"forged-binding", json!({ "governance_binding": binding })),
+        );
+        match effect {
+            ProjectionEffect::Rejected { reason } => {
+                assert_eq!(reason, REASON_GOVERNANCE_BINDING_MISMATCH);
+            }
+            other => panic!("expected governance_binding_mismatch, got {other:?}"),
+        }
+        // The epoch is untouched.
+        assert_eq!(
+            state
+                .mls_commit_epochs
+                .get(&mls_epoch_key(&realm_scope(), "ck:mls_group:abc").unwrap())
+                .unwrap()
+                .epoch,
+            0
+        );
+    }
+
+    #[test]
+    fn concurrent_commits_contend_then_resolve() {
+        let mut state = ProjectionState::default();
+        initialize_genesis(&mut state);
+        let epoch_key = mls_epoch_key(&realm_scope(), "ck:mls_group:abc").unwrap();
+
+        // First commit at base epoch 0 lands → epoch 1.
+        assert!(matches!(
+            apply_commit_epoch(&mut state, &commit_op(500, b"commit-a", json!({}))),
+            ProjectionEffect::Mls(MlsEffect::CommitEpochAdvanced { new_epoch: 1, .. })
+        ));
+
+        // A racing commit that explicitly forks base epoch 0 with different
+        // material drives covered_frontier_cell to ⊥ (CommitFrontierContested).
+        let contended = apply_commit_epoch(
+            &mut state,
+            &commit_op(501, b"commit-b", json!({ "concurrent_commit": true })),
+        );
+        assert!(matches!(
+            contended,
+            ProjectionEffect::Mls(MlsEffect::CommitFrontierContested { epoch: 0, .. })
+        ));
+        assert!(state.mls_commit_epochs.get(&epoch_key).unwrap().frontier_contested);
+        // Epoch unchanged while contested.
+        assert_eq!(state.mls_commit_epochs.get(&epoch_key).unwrap().epoch, 1);
+
+        // A further racing commit at the contested base fails closed as
+        // decryption_pending.
+        let pending = apply_commit_epoch(
+            &mut state,
+            &commit_op(502, b"commit-c", json!({ "concurrent_commit": true })),
+        );
+        assert!(matches!(
+            pending,
+            ProjectionEffect::Rejected { reason } if reason == REASON_DECRYPTION_PENDING
+        ));
+
+        // A resolving commit at the current epoch advances and clears ⊥.
+        let resolve = apply_commit_epoch(
+            &mut state,
+            &commit_op(
+                503,
+                b"commit-resolve",
+                json!({ "expected_prev_epoch": 1, "next_epoch": 2 }),
+            ),
+        );
+        assert!(matches!(
+            resolve,
+            ProjectionEffect::Mls(MlsEffect::CommitEpochAdvanced { new_epoch: 2, .. })
+        ));
+        let row = state.mls_commit_epochs.get(&epoch_key).unwrap();
+        assert_eq!(row.epoch, 2);
+        assert!(!row.frontier_contested);
     }
 }

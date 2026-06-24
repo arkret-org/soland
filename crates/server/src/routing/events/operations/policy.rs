@@ -122,6 +122,7 @@ pub async fn validate_operation_policy(
             == Some(cokret_sdk::events::kinds::MORPH_SCHEMA_MIGRATE)
         {
             validate_morph_schema_migrate_capability(operation)?;
+            validate_morph_schema_migrate_authz(state, operation).await?;
         }
         validate_principal_control_realm_binding(operation)?;
         validate_accountability_profile_policy(state, operations, operation).await?;
@@ -204,6 +205,42 @@ fn validate_realm_lifecycle_write_gate(
         return Err(cokret_sdk::ERROR_CODE_REALM_FROZEN);
     }
     Ok(())
+}
+
+/// `morph.md` §4.1 S3 — the actor MUST hold the high-tier
+/// `ck.morph.schema_migrate` capability at the event frontier. Missing
+/// capability yields `capability_denied`. Realm owners are implicitly
+/// authorized (mirrors the other Realm-object capability gates). The opt-in
+/// profile gate and CAS are enforced by the state-aware preflight; this check
+/// is the capability conjunct only.
+async fn validate_morph_schema_migrate_authz(
+    state: &AppState,
+    operation: &Operation,
+) -> Result<(), &'static str> {
+    let Some(actor) = operation_actor(operation) else {
+        return Err("capability_denied");
+    };
+    let realm_id = operation.realm_id.as_str();
+    let (owner, members) = realm_owner_and_members(state, realm_id).await;
+    if owner.as_deref() == Some(actor) {
+        return Ok(());
+    }
+    if state
+        .authz
+        .check(
+            actor,
+            cokret_sdk::events::kinds::MORPH_SCHEMA_MIGRATE,
+            realm_id,
+            realm_id,
+            owner.as_deref(),
+            &members,
+            &[],
+        )
+        .allowed
+    {
+        return Ok(());
+    }
+    Err("capability_denied")
 }
 
 async fn validate_circle_create_policy(

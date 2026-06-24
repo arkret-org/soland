@@ -76,6 +76,7 @@ DROP TABLE IF EXISTS space_state_events CASCADE;
 DROP TABLE IF EXISTS spaces CASCADE;
 DROP TABLE IF EXISTS sync_cursor_handles CASCADE;
 DROP TABLE IF EXISTS sync_cursor_revocations CASCADE;
+DROP TABLE IF EXISTS idempotency_keys CASCADE;
 DROP TABLE IF EXISTS webrtc_sessions CASCADE;
 DROP TABLE IF EXISTS webvh_documents CASCADE;
 DROP TABLE IF EXISTS webvh_log_events CASCADE;

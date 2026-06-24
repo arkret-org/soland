@@ -133,6 +133,7 @@ pub(crate) struct RealmEffectiveModerationPolicyOutcome {
     #[serde(default)]
     effective_rules: Vec<Value>,
     override_requires_organization_approval: bool,
+    policy_merge_strategy: String,
     fanout: RealmModerationPolicyFanout,
 }
 
@@ -653,6 +654,13 @@ pub(crate) fn effective_policy_for_realm(
         realm_policy,
         effective_rules: effective_rules(state, realm_id),
         override_requires_organization_approval: has_organization_inheritance,
+        // content-moderation.md §7 — when a Realm names more than one owning
+        // organization, the inherited layers combine most-restrictively: a join
+        // / write is denied if ANY owning organization denies it (union of deny
+        // rules). `organization_policy_blocks_join` already evaluates this union
+        // across all linked organizations; this field surfaces the merge
+        // semantics so a cross-organization Realm can be reasoned about.
+        policy_merge_strategy: "most_restrictive".to_owned(),
         fanout: RealmModerationPolicyFanout {
             source: "organization_policy".to_owned(),
             rewrites_realm_policy: false,
@@ -741,12 +749,51 @@ pub(crate) async fn realm_policy_override_has_approval(
     if !realm_policy_override_requires_approval_cached(state, realm_id, payload) {
         return true;
     }
-    let org_ids = realm_organization_ids(state, realm_id)
+    // content-moderation.md §7 — most-restrictive cross-organization merge:
+    // every owning organization that denies one of the override targets MUST
+    // independently approve the override. An approval from an unrelated owning
+    // organization (one that does not deny the target) does not satisfy the
+    // denying organization's gate.
+    let denying_org_ids = organizations_denying_override_targets(state, realm_id, payload);
+    if denying_org_ids.is_empty() {
+        return true;
+    }
+    let approvals = approvals_from_payload(payload);
+    denying_org_ids.iter().all(|org_id| {
+        let single = BTreeSet::from([org_id.clone()]);
+        approvals
+            .iter()
+            .any(|approval| approval_matches(approval, &single))
+    })
+}
+
+/// The owning organizations of `realm_id` whose policy denies at least one of
+/// the `allow_join` override targets carried in `payload`. Drives the
+/// most-restrictive approval gate: each such organization MUST approve.
+fn organizations_denying_override_targets(
+    state: &AppState,
+    realm_id: &str,
+    payload: &Value,
+) -> BTreeSet<String> {
+    let targets = allow_join_override_targets(payload);
+    if targets.is_empty() {
+        return BTreeSet::new();
+    }
+    let org_ids = realm_organization_ids(state, realm_id);
+    let policies = state
+        .organization_policies
+        .lock()
+        .expect("organization policies lock");
+    org_ids
         .into_iter()
-        .collect::<BTreeSet<_>>();
-    approvals_from_payload(payload)
-        .iter()
-        .any(|approval| approval_matches(approval, &org_ids))
+        .filter(|org_id| {
+            policies.get(org_id).is_some_and(|policy| {
+                targets
+                    .iter()
+                    .any(|target| policy_denies_join_actor(&policy.payload, target))
+            })
+        })
+        .collect()
 }
 
 pub(crate) async fn persist_realm_moderation_policy(

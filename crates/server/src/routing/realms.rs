@@ -46,6 +46,7 @@ pub(crate) fn router() -> Router {
         )
         .push(Router::with_path("{realm_id}/links/{target_realm_id}").delete(delete_realm_link))
         .push(Router::with_path("{realm_id}/effective-policy").get(get_effective_policy))
+        .push(Router::with_path("{realm_id}/applications").get(list_member_applications))
 }
 
 fn stored_realm_id(field: &str, value: &str) -> Result<RealmId, AppError> {
@@ -131,6 +132,74 @@ async fn list_realm_links(
         direction: direction_enum,
         links: entries,
     })
+}
+
+/// join-policy.md §7 / §9 — list the Realm's member applications scoped to
+/// the viewer. Reviewers (holders of the policy `review_capability`, or the
+/// Realm owner) see the full `answers`; other callers see only the
+/// `application_pending` placeholder, honouring
+/// `applicant_visibility=reviewer_only` (§3 #2, §8.1). Each reviewer read of
+/// an application body is logged as `ck.audit.accessed` (§8.1).
+#[endpoint(
+    operation_id = "ck.self.member_application.query.list",
+    tags("realms"),
+    summary = "List join-policy member applications scoped by viewer"
+)]
+#[tracing::instrument(skip_all, fields(op = "ck.self.member_application.query.list"))]
+async fn list_member_applications(
+    aa: AuthArgs,
+    realm_id: PathParam<String>,
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<Value> {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let session = aa.authenticated_session(state, req).await?;
+    let realm_id = RealmId::new(realm_id.into_inner())
+        .map_err(|e| AppError::invalid_param(format!("realm_id: {e}")))?;
+    let viewer = session.actor.clone();
+    let (applications, viewer_is_reviewer, receipts) = {
+        let projection = state.projection.lock().expect("projection mutex");
+        let review_capability = projection
+            .realm_join_policy_review_capability(realm_id.as_str())
+            .unwrap_or_else(|| "ck.realm.join.review".to_owned());
+        let viewer_is_reviewer = projection.issuer_has_projected_capability(
+            &viewer,
+            realm_id.as_str(),
+            &review_capability,
+            realm_id.as_str(),
+        );
+        let applications = projection.member_applications_for_viewer(
+            realm_id.as_str(),
+            &viewer,
+            viewer_is_reviewer,
+        );
+        let receipts = projection.member_application_receipts(realm_id.as_str());
+        (applications, viewer_is_reviewer, receipts)
+    };
+    // §8.1 — write one `ck.audit.accessed` per reviewer body read.
+    if viewer_is_reviewer {
+        for receipt_digest in receipts {
+            super::admin::audit::append_audit_log(
+                state,
+                Some(&viewer),
+                cokret_sdk::events::kinds::AUDIT_ACCESSED,
+                json!({
+                    "access_kind": "join_application_review",
+                    "realm_id": realm_id.as_str(),
+                    "application_receipt_digest": receipt_digest,
+                    "writer_did": viewer.clone(),
+                    "purpose": "join_application_review",
+                }),
+                "accepted",
+            )
+            .await;
+        }
+    }
+    json_ok(json!({
+        "realm_id": realm_id,
+        "applications": applications,
+        "viewer_is_reviewer": viewer_is_reviewer,
+    }))
 }
 
 /// G3.S5 — POST a new `ck.realm.link` Move. Builds an `Operation` for
@@ -385,6 +454,7 @@ fn merge_organization_effective_policy(
             "override_requires_organization_approval",
             "override_requires_organization_approval",
         ),
+        ("policy_merge_strategy", "organization_policy_merge_strategy"),
         ("fanout", "organization_policy_fanout"),
     ] {
         if let Some(value) = map.remove(source) {

@@ -105,6 +105,7 @@ pub fn local_router() -> Router {
                             .post(did::identity_submit_did_operation),
                     )
                     .push(Router::with_path("webvh/register").post(did::embedded_webvh_register))
+                    .push(Router::with_path("webvh/rotate").post(did::embedded_webvh_rotate))
                     .push(Router::with_path("receipts").get(did::identity_receipts)),
             ),
         )

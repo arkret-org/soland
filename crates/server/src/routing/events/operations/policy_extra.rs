@@ -779,8 +779,15 @@ pub(crate) fn validate_morph_schema_migrate_capability(
         .get("capability_action")
         .or_else(|| operation.payload.get("action"))
         .and_then(serde_json::Value::as_str);
-    if action != Some("ck.morph.schema.migrate") {
-        return Err("ck.morph.schema_migrate requires ck.morph.schema.migrate capability");
+    // `capability-action-registry.json` is canonical: the action id is the
+    // same-name `ck.morph.schema_migrate`. The dotted `ck.morph.schema.migrate`
+    // spelling used in some prose is accepted as an alias so existing callers
+    // are not broken.
+    if !matches!(
+        action,
+        Some("ck.morph.schema_migrate" | "ck.morph.schema.migrate")
+    ) {
+        return Err("ck.morph.schema_migrate requires ck.morph.schema_migrate capability");
     }
     Ok(())
 }

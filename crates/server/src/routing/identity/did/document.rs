@@ -46,6 +46,11 @@ pub(super) async fn run_webvh_resolution_checks(
     let genesis = &log[0];
     verify_scid_against_did(did, genesis)?;
     validate_witness_policy_for_log(&log, now().timestamp())?;
+    // Rotation control authorisation (identity-did.md §7 controller proof,
+    // §8.1–§8.2 governance quorum, key-management.md §3.3 recovery key). Kept
+    // distinct from witness quorum above: witnesses prove history visibility,
+    // these proofs prove who is allowed to change the DID.
+    validate_rotation_authorization_for_log(&log)?;
     Ok(())
 }
 

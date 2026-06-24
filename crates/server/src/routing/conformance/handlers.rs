@@ -160,6 +160,26 @@ pub struct RedactVectorOutcome {
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
+pub struct EraseReceiptVectorRequest {
+    vector_id: String,
+    #[salvo(schema(value_type = serde_json::Value))]
+    event: Value,
+    #[salvo(schema(value_type = serde_json::Value))]
+    receipt: Value,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct EraseReceiptVectorOutcome {
+    #[salvo(schema(value_type = serde_json::Value))]
+    projected_event: Value,
+    outcome: String,
+    retained_stub_digest: String,
+    verification_stub_retained: bool,
+    plaintext_fingerprint_present: bool,
+    legal_hold_blocked: bool,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct SnapshotVectorRequest {
     vector_id: String,
     #[salvo(schema(value_type = serde_json::Value))]
@@ -495,12 +515,14 @@ pub async fn redact(body: JsonBody<RedactVectorRequest>) -> JsonResult<RedactVec
 
     // Spec §3.2 — redaction strips the fields listed in `redaction.fields`
     // (default: `["content", "payload.content"]`) unless the viewer is the
-    // event's original sender. The projection MUST drop the keys entirely
+    // event's original author (`sender_actor_id` / `actor_id`). The projection
+    // MUST drop the keys entirely
     // (not set them to null) and MUST keep `event_id`, `redacted_because`,
     // and tombstone markers visible to every viewer.
     let owner_did = event
-        .get("sender")
+        .get("sender_actor_id")
         .and_then(Value::as_str)
+        .or_else(|| event.get("actor_id").and_then(Value::as_str))
         .or_else(|| event.get("actor").and_then(Value::as_str));
     let viewer_is_owner = owner_did == Some(viewer_did);
 
@@ -532,6 +554,119 @@ pub async fn redact(body: JsonBody<RedactVectorRequest>) -> JsonResult<RedactVec
     json_ok(RedactVectorOutcome {
         projected_event: projected,
     })
+}
+
+#[endpoint(
+    operation_id = "org.cokret.soland.conformance.erase_receipt",
+    tags("conformance"),
+    summary = "Run a hard-erasure receipt / snapshot-pruning verification-stub conformance vector"
+)]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.conformance.erase_receipt"))]
+pub async fn erase_receipt(
+    body: JsonBody<EraseReceiptVectorRequest>,
+) -> JsonResult<EraseReceiptVectorOutcome> {
+    super::ensure_enabled()?;
+    let body = body.into_inner();
+    let _vector = body.vector_id.as_str();
+    let event = &body.event;
+    let receipt = &body.receipt;
+
+    // conformance-vectors.md §3.4 — hard erasure deletes the erased subject's
+    // payload bytes and derived plaintext within the storage boundary, but
+    // retains a verification stub (original event id, envelope/proof digest,
+    // redaction event id, erasure reason, executing service DID, time, signed
+    // receipt). The default projection MUST show the erased / redacted
+    // placeholder, never the original plaintext, and MUST NOT fabricate a
+    // standalone content fingerprint of the erased low-entropy plaintext.
+    let outcome = receipt
+        .get("outcome")
+        .and_then(Value::as_str)
+        .unwrap_or("completed")
+        .to_owned();
+    let legal_hold_blocked = outcome == "blocked_by_legal_hold";
+
+    // Build the default redacted projection: drop the erased content + proofs
+    // entirely (key removed, not nulled) so no erased plaintext survives in the
+    // default view. §3.4: legal hold blocks hard erasure but the default
+    // display still applies redaction, so the strip happens regardless of
+    // outcome.
+    let mut projected = event.clone();
+    if let Some(object) = projected.as_object_mut() {
+        strip_path(object, "payload.content");
+        strip_path(object, "content");
+        object.remove("proofs");
+        object.remove("sender_actor_id");
+        // Surface a tombstone marker keyed by the signed receipt so an auditor
+        // can pivot to the retained verification stub.
+        let receipt_id = receipt
+            .get("receipt_id")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned();
+        object.insert(
+            "redacted_because".to_owned(),
+            json!({ "code": "hard_erasure", "receipt_id": receipt_id }),
+        );
+    }
+
+    // The retained verification stub digest binds the exact stub bytes
+    // (erasure-receipt.schema.json `retained_stub_digest`). Recompute it from
+    // the in-band `retained_stub` when present so the wire test sees a digest
+    // that matches the stub the issuer would expose, falling back to the
+    // declared digest otherwise.
+    let declared_stub_digest = receipt
+        .get("retained_stub_digest")
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned);
+    let (retained_stub_digest, verification_stub_retained) =
+        if let Some(stub) = receipt.get("retained_stub").filter(|stub| stub.is_object()) {
+            let canonical = canonical_json(stub).map_err(schema_error)?;
+            (sha256_digest(canonical.as_bytes()), true)
+        } else if let Some(declared) = declared_stub_digest {
+            (declared, true)
+        } else if let Some(stub) = receipt
+            .pointer("/snapshot/verification_stub")
+            .filter(|stub| stub.is_object())
+        {
+            // §3.5 snapshot pruning — the stub may travel inside the snapshot
+            // descriptor instead of a standalone receipt.
+            let canonical = canonical_json(stub).map_err(schema_error)?;
+            (sha256_digest(canonical.as_bytes()), true)
+        } else {
+            (String::new(), false)
+        };
+
+    // Fail-closed plaintext-leak guard: the projected default view MUST NOT
+    // still carry the erased content/proofs, and the retained stub digest MUST
+    // NOT be a bare digest of the erased low-entropy plaintext.
+    let plaintext_fingerprint_present = projected_event_carries_plaintext(&projected, event);
+
+    json_ok(EraseReceiptVectorOutcome {
+        projected_event: projected,
+        outcome,
+        retained_stub_digest,
+        verification_stub_retained,
+        plaintext_fingerprint_present,
+        legal_hold_blocked,
+    })
+}
+
+/// True when the projected (post-erasure) event still leaks the original
+/// erased content body or its standalone digest. Used as a fail-closed guard so
+/// the conformance projection never surfaces erased plaintext.
+fn projected_event_carries_plaintext(projected: &Value, original: &Value) -> bool {
+    let Some(body) = original
+        .pointer("/payload/content/body")
+        .and_then(Value::as_str)
+    else {
+        return false;
+    };
+    if body.is_empty() {
+        return false;
+    }
+    let body_digest = sha256_digest(body.as_bytes());
+    let serialized = projected.to_string();
+    serialized.contains(body) || serialized.contains(&body_digest)
 }
 
 #[endpoint(

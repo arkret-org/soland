@@ -544,7 +544,12 @@ mod spec_sync_validator_tests {
             Err("ck.morph.schema_migrate requires authorization_ref")
         );
 
-        let unsupported = op(
+        // `morph.md` §4.1 S3 — a breaking migration is shape-valid at the
+        // stateless schema layer; whether it is admissible depends on the
+        // Realm declaring the opt-in profile, which is enforced by the
+        // state-aware preflight (`ProjectionState::check_morph_schema_migrate`),
+        // not here.
+        let breaking = op(
             cokret_sdk::events::kinds::MORPH_SCHEMA_MIGRATE,
             json!({
                 "morph_id": "ck:morph:01904100-0000-7000-8000-000000000001",
@@ -552,12 +557,27 @@ mod spec_sync_validator_tests {
                 "to_schema_refs": ["ck.schema.new"],
                 "compatibility_class": "breaking",
                 "authorization_ref": "ck:event:01904100-0000-7000-8000-aaaaaaaaaaaa",
-                "capability_action": "ck.morph.schema.migrate"
+                "capability_action": "ck.morph.schema_migrate"
+            }),
+        );
+        assert!(validate_operation_schema(&breaking, migrate_schema).is_ok());
+
+        // A transformation migration MUST carry non-empty transformation_rules[]
+        // even at the stateless layer.
+        let transformation_without_rules = op(
+            cokret_sdk::events::kinds::MORPH_SCHEMA_MIGRATE,
+            json!({
+                "morph_id": "ck:morph:01904100-0000-7000-8000-000000000001",
+                "from_schema_refs": ["ck.schema.old"],
+                "to_schema_refs": ["ck.schema.new"],
+                "compatibility_class": "transformation",
+                "authorization_ref": "ck:event:01904100-0000-7000-8000-aaaaaaaaaaaa",
+                "capability_action": "ck.morph.schema_migrate"
             }),
         );
         assert_eq!(
-            validate_operation_schema(&unsupported, migrate_schema),
-            Err("morph_schema_refs_transformation_unsupported")
+            validate_operation_schema(&transformation_without_rules, migrate_schema),
+            Err("unsupported_transformation_rule")
         );
     }
 }

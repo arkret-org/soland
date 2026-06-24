@@ -65,6 +65,20 @@ pub(super) fn protocol_router() -> Router {
         )
 }
 
+/// Product-private read surface (`/_soland/self/*`). These are
+/// implementation-private projection reads that are NOT canonical protocol
+/// operations: per `service-http-binding.md` §2.1.3, relation / view / object
+/// direct reads that go beyond the declared `/_cokret/self/realms/...` read
+/// binding live on the implementation's own negative-space root. They expose
+/// already-projected reducer state (single Strand object fields, the relation
+/// edge list) so cotest can assert invariants the canonical list endpoints do
+/// not surface (raw `fields`, per-(from_ref, relation_kind) active edge sets).
+pub(super) fn local_router() -> Router {
+    Router::new()
+        .push(Router::with_path("strands/{strand_id}").get(get_strand_projection))
+        .push(Router::with_path("relations").get(list_relation_projections))
+}
+
 // ── Helpers ────────────────────────────────────────────────────────────
 
 /// Terminal-state check for Strand / Morph. Mirror of
@@ -1125,6 +1139,176 @@ async fn list_strand_projections(
         next_cursor: None,
         has_more: false,
     })
+}
+
+/// `GET /_soland/self/strands/{strand_id}` — return a single Strand's
+/// projected object state including the raw `fields` map (e.g.
+/// `fields.status`). The canonical `/_cokret/self/realms/{realm_id}/strands`
+/// list intentionally does NOT surface arbitrary `fields`, so this
+/// product-private read backs invariant assertions (CAS read-back,
+/// patch-merge effects) that need the materialized field values. Visibility
+/// reuses the same Realm history / Circle scope gate as the list endpoint.
+#[endpoint(
+    operation_id = "org.cokret.soland.strands.get",
+    tags("soland-local"),
+    summary = "Read a single Strand projection with materialized fields"
+)]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.strands.get"))]
+async fn get_strand_projection(
+    aa: AuthArgs,
+    depot: &mut Depot,
+    req: &mut Request,
+    strand_id: PathParam<String>,
+) -> JsonResult<Value> {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let session = aa.authenticated_session(state, req).await?;
+    let strand_id = strand_id.into_inner();
+    StrandId::new(strand_id.clone())
+        .map_err(|_| AppError::invalid_param("invalid strand_id format"))?;
+    let realm_id = {
+        let proj = state
+            .projection
+            .lock()
+            .map_err(|_| projection_state_unavailable())?;
+        let Some(strand) = proj.strands.get(&strand_id) else {
+            return Err(AppError::not_found("strand not found"));
+        };
+        strand.realm_id.clone()
+    };
+    if !realm_id_accessible(state, &realm_id, Some(&session)).await {
+        return Err(AppError::new(
+            ErrorCode::CapabilityDenied,
+            "Strand not visible to this actor",
+        )
+        .with_status(StatusCode::FORBIDDEN));
+    }
+    let history_visibility = realm_history_visibility(state, &realm_id).await;
+    let history_policy = realm_history_sharing_policy(state, &realm_id).await;
+    let proj = state
+        .projection
+        .lock()
+        .map_err(|_| projection_state_unavailable())?;
+    let Some(strand) = proj.strands.get(&strand_id).cloned() else {
+        return Err(AppError::not_found("strand not found"));
+    };
+    if !projection_row_visible_to_session(
+        state,
+        &proj,
+        &realm_id,
+        &session,
+        &strand.created_by,
+        strand.created_at,
+        &strand.history_basis_seals,
+        strand.scope_circle_id.as_deref(),
+        &history_visibility,
+        history_policy.as_ref(),
+    ) {
+        return Err(AppError::new(
+            ErrorCode::CapabilityDenied,
+            "Strand not visible to this actor",
+        )
+        .with_status(StatusCode::FORBIDDEN));
+    }
+    let (board_space_id, list_space_id, rank) = strand_position_fields(&proj, &strand_id)?;
+    drop(proj);
+    json_ok(json!({
+        "strand_id": strand.strand_id,
+        "realm_id": strand.realm_id,
+        "state": projection_object_state(strand.state),
+        "state_changed_at": strand.state_changed_at,
+        "title": strand.title,
+        "summary": strand.summary,
+        "fields": strand.fields,
+        "board_space_id": board_space_id.map(|id| id.to_string()),
+        "list_space_id": list_space_id.map(|id| id.to_string()),
+        "rank": rank,
+        "created_by": strand.created_by,
+        "created_at": strand.created_at,
+        "updated_at": strand.updated_at,
+    }))
+}
+
+/// `GET /_soland/self/relations?from_ref=&to_ref=&relation_kind=&state=` —
+/// list relation edges projected from `ck.relation.*` events. Backs the
+/// relation-cardinality invariant checks (e.g. asserting at most one active
+/// `has_default_view` edge per `from_ref`). Filters are AND-combined; `state`
+/// defaults to `active`. Only edges whose `realm_id` is accessible to the
+/// caller are returned, so non-members can't enumerate another Realm's graph.
+#[endpoint(
+    operation_id = "org.cokret.soland.relations.list",
+    tags("soland-local"),
+    summary = "List relation edge projections with from/to/kind/state filters"
+)]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.relations.list"))]
+async fn list_relation_projections(
+    aa: AuthArgs,
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<Value> {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let session = aa.authenticated_session(state, req).await?;
+    let from_ref = crate::routing::system::util::query_param(req, "from_ref");
+    let to_ref = crate::routing::system::util::query_param(req, "to_ref");
+    let relation_kind = crate::routing::system::util::query_param(req, "relation_kind");
+    let state_filter = crate::routing::system::util::query_param(req, "state")
+        .unwrap_or_else(|| "active".to_owned());
+
+    let candidates: Vec<SolandRelationState> = {
+        let proj = state
+            .projection
+            .lock()
+            .map_err(|_| projection_state_unavailable())?;
+        proj.relations
+            .values()
+            .filter(|relation| match state_filter.as_str() {
+                "any" | "all" => true,
+                other => relation.state == other,
+            })
+            .filter(|relation| {
+                from_ref
+                    .as_deref()
+                    .is_none_or(|value| relation.from_ref.as_deref() == Some(value))
+            })
+            .filter(|relation| {
+                to_ref
+                    .as_deref()
+                    .is_none_or(|value| relation.to_ref.as_deref() == Some(value))
+            })
+            .filter(|relation| {
+                relation_kind
+                    .as_deref()
+                    .is_none_or(|value| relation.relation_kind == value)
+            })
+            .cloned()
+            .collect()
+    };
+
+    let mut items = Vec::new();
+    for relation in candidates {
+        if !realm_id_accessible(state, &relation.realm_id, Some(&session)).await {
+            continue;
+        }
+        items.push(json!({
+            "relation_id": relation.relation_id,
+            "realm_id": relation.realm_id,
+            "relation_kind": relation.relation_kind,
+            "from_ref": relation.from_ref,
+            "to_ref": relation.to_ref,
+            "fields": relation.fields,
+            "state": relation.state,
+            "scope_circle_id": relation.scope_circle_id,
+            "created_at": relation.created_at,
+            "updated_at": relation.updated_at,
+        }));
+    }
+    items.sort_by(|left, right| {
+        left["relation_id"]
+            .as_str()
+            .unwrap_or_default()
+            .cmp(right["relation_id"].as_str().unwrap_or_default())
+    });
+    let total = total_count(items.len())?;
+    json_ok(json!({ "items": items, "total": total }))
 }
 
 #[endpoint(

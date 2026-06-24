@@ -201,6 +201,24 @@ pub(crate) async fn mirror_mls_effect_to_persistence(
             }
             bind_circle_mls_group(state, group_id, effective_scope, true);
         }
+        crate::reducer::MlsEffect::CommitFrontierContested {
+            group_id,
+            effective_scope,
+            epoch,
+        } => {
+            // §2.5.2 — concurrent commits drove `covered_frontier_cell` to `⊥`.
+            // Mirror the contested marker onto the durable epoch row so the
+            // group stays fail-closed (`decryption_pending`) across restarts
+            // until a resolving commit advances the epoch.
+            if let Err(error) = state
+                .persistence
+                .mls_commits()
+                .mark_frontier_contested(effective_scope, group_id, *epoch)
+                .await
+            {
+                tracing::warn!(%error, group_id = %group_id, "failed to mirror MLS contested frontier");
+            }
+        }
     }
 }
 

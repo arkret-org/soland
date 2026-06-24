@@ -215,6 +215,11 @@ impl ProjectionState {
             );
         }
 
+        // join-policy.md §7 — project the candidate profile-private
+        // application / review / cancel sub-payloads carried on this
+        // `ck.member.state` event into the application-review workflow cache.
+        self.project_member_application(operation);
+
         ProjectionEffect::MembershipChanged {
             realm_id,
             member,
@@ -392,6 +397,7 @@ impl ProjectionState {
                 terminal_state: None,
                 successor_realm_id: None,
                 default_strand_id: None,
+                active_profiles: Vec::new(),
             });
         realm.default_strand_id = Some(strand_id.clone());
         realm.updated_at = now;
@@ -638,6 +644,7 @@ impl ProjectionState {
                         terminal_state: None,
                         successor_realm_id: None,
                         default_strand_id: None,
+                        active_profiles: Vec::new(),
                     });
                 entry.title = Some(title.to_owned());
                 entry.updated_at = now;
@@ -951,7 +958,17 @@ impl ProjectionState {
                 terminal_state: None,
                 successor_realm_id: None,
                 default_strand_id: None,
+                active_profiles: Vec::new(),
             });
+        // `morph.md` §4.1 S3 — merge any declared opt-in conformance profile
+        // ids from this event (create or update) into the Realm's growing
+        // profile set. Both `active_profiles[]` and the legacy `profiles[]`
+        // spelling are accepted; the set only grows.
+        for profile in realm_declared_profiles(operation) {
+            if !realm.active_profiles.contains(&profile) {
+                realm.active_profiles.push(profile);
+            }
+        }
         // Lock trust_domain on first observation (ck.realm.create). The
         // mismatch case is already rejected above; here we only set the
         // value when it has not yet been captured.

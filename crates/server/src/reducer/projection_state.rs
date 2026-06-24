@@ -254,6 +254,23 @@ pub struct ProjectionState {
     /// by the `erasure_receipts_endpoint` server-describe surface and
     /// by `apply_audit_erasure_receipt_dispatch`.
     pub erasure_receipts: Vec<ErasureReceiptRecord>,
+    /// Join-policy application-review workflow projection keyed by
+    /// `(realm_id, applicant_did)`. Spec
+    /// `governance/join-policy.md` §7. The application / review / cancel
+    /// records are candidate profile-private payloads carried on the
+    /// active `ck.member.state` event under the `application` /
+    /// `application_review` / `application_cancel` sub-objects; this cache
+    /// tracks the open application state, its TTL deadline, the reviewer
+    /// accept receipt digest (for the `join_authorised_by` ref binding),
+    /// and the `applicant_visibility` floor so reads can be scoped.
+    pub member_applications: BTreeMap<(String, String), MemberApplicationState>,
+    /// Per-`(realm_id, applicant_did)` reject cooldown anchor. Spec
+    /// `governance/join-policy.md` §3 `cooldown_after_reject` / §12:
+    /// after a review reject the reducer MUST refuse a fresh
+    /// `member.application` from the same actor until the window elapses.
+    /// Distinct from the `cooldown` deny gate (which keys off the last
+    /// `leave`); this keys off the last review `reject`.
+    pub member_application_reject_at: BTreeMap<(String, String), chrono::DateTime<chrono::Utc>>,
 }
 
 impl ProjectionState {
@@ -967,5 +984,132 @@ impl ProjectionState {
             return Err(reason);
         }
         Ok(())
+    }
+
+    /// `morph.md` §4.1 S1/S3 — fail-closed admission gate for
+    /// `ck.morph.schema_migrate`. Enforced before durable apply. Capability
+    /// (`capability_denied`) is checked separately in the operation policy
+    /// layer where the authz engine is available; this method covers the
+    /// state-aware preconditions:
+    ///
+    /// - S1 version binding: the event `requirements.schema[]` MUST bind the
+    ///   migration schema set (union of `from`/`to`); otherwise
+    ///   `morph_schema_version_binding_missing`.
+    /// - S3 profile gate: `breaking` / `transformation` require the Realm to
+    ///   have declared `ck.profile.morph.schema_migration_transformations.v1`;
+    ///   absent → `morph_schema_refs_transformation_unsupported`.
+    /// - S3 dialect: every `transformation_rules[]` entry's `rule` id MUST be
+    ///   in the profile dialect; otherwise `unsupported_transformation_rule`
+    ///   (hard reject, no partial apply).
+    /// - additive predicate for the additive class (defence in depth; also
+    ///   enforced statelessly in payload validation).
+    /// - `from_schema_refs[]` set-equals the Morph's current `schema_refs[]`;
+    ///   otherwise `morph_schema_refs_precondition_mismatch`.
+    pub fn check_morph_schema_migrate(
+        &self,
+        operation: &Operation,
+    ) -> Result<(), &'static str> {
+        if crate::kinds::canonical_kind_for_operation(operation)
+            != Some(cokret_sdk::events::kinds::MORPH_SCHEMA_MIGRATE)
+        {
+            return Ok(());
+        }
+        let from_schema_refs = crate::reducer::string_array_field_from_payload(
+            &operation.payload,
+            "from_schema_refs",
+        );
+        let to_schema_refs =
+            crate::reducer::string_array_field_from_payload(&operation.payload, "to_schema_refs");
+        let compatibility_class = operation
+            .payload
+            .get("compatibility_class")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+
+        // S1 — the event MUST bind the active schema version(s). The migration
+        // schema set is the union of from/to; the binding MUST cover every id.
+        let bound_schema: std::collections::BTreeSet<&str> = operation
+            .payload
+            .get("requirements")
+            .and_then(|requirements| requirements.get("schema"))
+            .and_then(Value::as_array)
+            .map(|items| items.iter().filter_map(Value::as_str).collect())
+            .unwrap_or_default();
+        let union_refs = from_schema_refs
+            .iter()
+            .chain(to_schema_refs.iter())
+            .map(String::as_str);
+        if !union_refs.clone().all(|schema_ref| bound_schema.contains(schema_ref)) {
+            return Err("morph_schema_version_binding_missing");
+        }
+
+        match compatibility_class {
+            "additive" => {
+                let empty = cokret_sdk::MorphSchemaFieldSet::new();
+                cokret_sdk::morph_schema_refs_additive_only(
+                    &from_schema_refs,
+                    &to_schema_refs,
+                    &empty,
+                    &empty,
+                )
+                .map_err(|_| "morph_schema_refs_transformation_unsupported")?;
+            }
+            "breaking" | "transformation" => {
+                if !self.realm_declares_morph_migration_profile(operation.realm_id.as_str()) {
+                    return Err("morph_schema_refs_transformation_unsupported");
+                }
+                if compatibility_class == "transformation" {
+                    let rules = operation
+                        .payload
+                        .get("transformation_rules")
+                        .and_then(Value::as_array);
+                    let Some(rules) = rules.filter(|rules| !rules.is_empty()) else {
+                        return Err("unsupported_transformation_rule");
+                    };
+                    for rule in rules {
+                        let rule_id = rule
+                            .as_object()
+                            .and_then(|object| object.get("rule"))
+                            .and_then(Value::as_str)
+                            .unwrap_or_default();
+                        if !crate::reducer::SUPPORTED_MORPH_TRANSFORMATION_RULE_IDS
+                            .contains(&rule_id)
+                        {
+                            return Err("unsupported_transformation_rule");
+                        }
+                    }
+                }
+            }
+            _ => return Err("morph schema_migrate compatibility_class is invalid"),
+        }
+
+        // CAS — from_schema_refs[] MUST match the live Morph schema_refs[].
+        // An unmaterialized Morph is left to the reducer's pending-replay path.
+        if let Some(morph) = self.morphs.get(
+            operation
+                .payload
+                .get("morph_id")
+                .and_then(Value::as_str)
+                .unwrap_or_default(),
+        ) {
+            if morph.state != ObjectLifecycleState::Active {
+                return Err("morph_not_active");
+            }
+            if !crate::reducer::string_sets_equal(&morph.schema_refs, &from_schema_refs) {
+                return Err("morph_schema_refs_precondition_mismatch");
+            }
+        }
+        Ok(())
+    }
+
+    /// `morph.md` §4.1 S3 — whether the Realm has declared the opt-in
+    /// `ck.profile.morph.schema_migration_transformations.v1` profile that
+    /// permits breaking / transformation schema migrations.
+    pub fn realm_declares_morph_migration_profile(&self, realm_id: &str) -> bool {
+        self.realm_states.get(realm_id).is_some_and(|realm| {
+            realm.active_profiles.iter().any(|profile| {
+                profile == crate::reducer::MORPH_SCHEMA_MIGRATION_TRANSFORMATIONS_PROFILE
+            })
+        })
     }
 }

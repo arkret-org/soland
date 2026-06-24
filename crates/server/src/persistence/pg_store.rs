@@ -57,6 +57,7 @@ pub struct PgPersistenceStore {
     agents: PgAgentStore,
     notifications: PgNotificationStore,
     sync_cursors: PgSyncCursorStore,
+    idempotency_keys: PgIdempotencyStore,
     fallback: SolandMemoryPersistenceStore,
 }
 
@@ -112,6 +113,7 @@ impl PgPersistenceStore {
             agent_participation: PgAgentParticipationStore { pool: pool.clone() },
             agents: PgAgentStore { pool: pool.clone() },
             sync_cursors: PgSyncCursorStore { pool: pool.clone() },
+            idempotency_keys: PgIdempotencyStore { pool: pool.clone() },
             notifications: PgNotificationStore { pool },
             fallback: SolandMemoryPersistenceStore::new(),
         }
@@ -341,5 +343,9 @@ impl PersistenceStore for PgPersistenceStore {
 
     fn sync_cursors(&self) -> &dyn SyncCursorStore {
         &self.sync_cursors
+    }
+
+    fn idempotency_keys(&self) -> &dyn IdempotencyStore {
+        &self.idempotency_keys
     }
 }

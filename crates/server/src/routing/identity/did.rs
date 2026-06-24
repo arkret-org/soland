@@ -29,8 +29,8 @@ use serde_json::{Value, json};
 
 use super::webvh_validation::{
     WebvhLogEntry, derive_webvh_scid_from_skeleton, validate_log_chain,
-    validate_witness_policy_for_log, verify_scid_against_did, verify_webvh_log_proof,
-    webvh_entry_hash_multibase,
+    validate_rotation_authorization_for_log, validate_witness_policy_for_log,
+    verify_scid_against_did, verify_webvh_log_proof, webvh_entry_hash_multibase,
 };
 use super::{append_audit_log, bearer_token, now, render_error, sha256_hex, validate_did};
 use crate::error::{AppError, ErrorCode};
@@ -55,8 +55,8 @@ use document::{
 };
 // Endpoint handlers referenced by identity/mod.rs router().
 pub(super) use endpoints::{
-    embedded_webvh_document, embedded_webvh_log, embedded_webvh_register, identity_describe,
-    identity_did_document, identity_document, identity_log, identity_receipts, identity_resolve,
-    identity_submit_did_operation,
+    embedded_webvh_document, embedded_webvh_log, embedded_webvh_register, embedded_webvh_rotate,
+    identity_describe, identity_did_document, identity_document, identity_log, identity_receipts,
+    identity_resolve, identity_submit_did_operation,
 };
 use webvh::*;

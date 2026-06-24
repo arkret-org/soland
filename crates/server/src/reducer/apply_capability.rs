@@ -465,7 +465,7 @@ impl ProjectionState {
         }
     }
 
-    fn issuer_has_projected_capability(
+    pub(crate) fn issuer_has_projected_capability(
         &self,
         issuer: &str,
         realm_id: &str,
@@ -984,6 +984,57 @@ impl ProjectionState {
         ids
     }
 
+    /// `sync/federation.md` §4.4 Capability Revoke Fanout — the set of peer
+    /// service DIDs whose federation service delegation for `realm_id` has been
+    /// revoked. A "service delegation" is a capability grant whose `subject` is
+    /// a service DID (`did:`-prefixed). Once such a grant carries a revoked
+    /// tombstone (or_set observed-remove, terminal per capabilities.md §12.1),
+    /// the source Principal Server MUST stop pushing future events for that
+    /// Realm to the revoked peer. Scanning the grant cells keeps this derivable
+    /// from durable capability events with no extra durable column.
+    pub fn federation_delivery_revoked_peers(
+        &self,
+        realm_id: &str,
+    ) -> std::collections::BTreeSet<String> {
+        let cell_prefix = "ck:cell:ck.component.capability.grant.v1:";
+        let mut revoked: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        for (cell_ref, cell_state) in &self.cells {
+            if !cell_ref.as_str().starts_with(cell_prefix) {
+                continue;
+            }
+            let CellState::Value(Value::Array(items)) = cell_state else {
+                continue;
+            };
+            // Terminal or_set semantics: if any surviving add for this grant
+            // cell is revoked, the whole grant_id is revoked (capabilities.md
+            // §12.1). Snapshot subject + grant realm from the latest add.
+            let any_revoked = items.iter().any(|item| {
+                let body = item.get("value").unwrap_or(item);
+                body.get("revoked").and_then(Value::as_bool).unwrap_or(false)
+            });
+            if !any_revoked {
+                continue;
+            }
+            let Some(last) = items.last() else {
+                continue;
+            };
+            let body = last.get("value").unwrap_or(last);
+            let grant_realm = body
+                .get("realm_id")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            if grant_realm != realm_id {
+                continue;
+            }
+            if let Some(subject) = body.get("subject").and_then(Value::as_str)
+                && subject.starts_with("did:")
+            {
+                revoked.insert(subject.to_owned());
+            }
+        }
+        revoked
+    }
+
     /// CKP-0008 §4.11 — the authorized key ids the agent currently holds
     /// (for the deactivate `ck.agent.key.revoke` fan-out).
     pub fn authorized_key_ids_for(&self, agent_principal_id: &str) -> Vec<String> {
@@ -1156,6 +1207,7 @@ mod agent_key_flag_tests {
                 terminal_state: None,
                 successor_realm_id: None,
                 default_strand_id: None,
+                active_profiles: Vec::new(),
             },
         );
     }
@@ -1363,6 +1415,7 @@ mod delegation_cycle_tests {
                 terminal_state: None,
                 successor_realm_id: None,
                 default_strand_id: None,
+                active_profiles: Vec::new(),
             },
         );
     }
@@ -1465,5 +1518,120 @@ mod delegation_cycle_tests {
             crate::reducer::ProjectionEffect::Rejected { reason }
                 if reason == "delegation_depth_exceeded"
         ));
+    }
+}
+
+#[cfg(test)]
+mod federation_revoke_fanout_tests {
+    use cokret_sdk::{Operation, OperationId, RealmId};
+    use serde_json::json;
+
+    use crate::reducer::{ProjectionState, SolandRealmState};
+
+    const REALM: &str = "ck:realm:01970000-0000-7000-8000-000000000000";
+    const OTHER_REALM: &str = "ck:realm:01970000-0000-7000-8000-000000000001";
+    const OWNER: &str = "did:web:alice.example";
+    const PEER_SERVICE_DID: &str = "did:web:beta.example";
+    const GRANT: &str = "ck:grant:01970000-0000-7000-8000-0000000000d1";
+
+    fn capability_op(operation_id: &str, kind: &str, payload: serde_json::Value) -> Operation {
+        Operation::create(
+            OperationId::new(operation_id.to_owned()).unwrap(),
+            RealmId::new(REALM.to_owned()).unwrap(),
+            kind,
+            payload,
+        )
+    }
+
+    fn seed_realm_owner(state: &mut ProjectionState) {
+        let now = chrono::Utc::now();
+        state.realm_states.insert(
+            REALM.to_owned(),
+            SolandRealmState {
+                realm_id: REALM.to_owned(),
+                owner: Some(OWNER.to_owned()),
+                title: None,
+                deleted: false,
+                archived: false,
+                frozen: false,
+                freeze_expires_at: None,
+                created_at: now,
+                updated_at: now,
+                trust_domain: None,
+                terminal_state: None,
+                successor_realm_id: None,
+                default_strand_id: None,
+                active_profiles: Vec::new(),
+            },
+        );
+    }
+
+    fn delivery_binding_grant_payload() -> serde_json::Value {
+        json!({
+            "grant_id": GRANT,
+            "grant": {
+                "id": GRANT,
+                "schema": "ck.schema.capability_grant.v1",
+                "realm_id": REALM,
+                "issuer": OWNER,
+                "subject": PEER_SERVICE_DID,
+                "actions": ["ck.realm.delivery_binding_policy"],
+                "resources": [{ "kind": "realm", "realm_id": REALM }],
+            }
+        })
+    }
+
+    #[test]
+    fn revoking_service_delegation_marks_peer_delivery_revoked() {
+        let mut state = ProjectionState::default();
+        seed_realm_owner(&mut state);
+        let now = chrono::Utc::now();
+
+        // Before any grant: nothing revoked.
+        assert!(
+            state
+                .federation_delivery_revoked_peers(REALM)
+                .is_empty()
+        );
+
+        // Grant β's federation delivery binding service delegation. An active
+        // grant MUST NOT appear in the revoked set.
+        state.apply_capability_grant(
+            &capability_op(
+                "ck:operation:01970000-0000-7000-8000-0000000000a1",
+                cokret_sdk::events::kinds::CAPABILITY_GRANT,
+                delivery_binding_grant_payload(),
+            ),
+            now,
+        );
+        assert!(
+            state
+                .federation_delivery_revoked_peers(REALM)
+                .is_empty(),
+            "active service delegation must not be reported as revoked"
+        );
+
+        // Revoke it: the peer service DID is now delivery-revoked for this Realm.
+        state.apply_capability_revoke(
+            &capability_op(
+                "ck:operation:01970000-0000-7000-8000-0000000000a2",
+                cokret_sdk::events::kinds::CAPABILITY_REVOKE,
+                json!({ "grant_id": GRANT, "realm_id": REALM }),
+            ),
+            now,
+        );
+        let revoked = state.federation_delivery_revoked_peers(REALM);
+        assert!(
+            revoked.contains(PEER_SERVICE_DID),
+            "revoked service delegation peer MUST be reported"
+        );
+
+        // Scope check: another Realm sees no revocation from this grant.
+        assert!(
+            state
+                .federation_delivery_revoked_peers(OTHER_REALM)
+                .is_empty(),
+            "revocation is scoped to the grant's Realm"
+        );
     }
 }

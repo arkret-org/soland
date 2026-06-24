@@ -1356,11 +1356,17 @@ pub(crate) async fn validate_event_envelope_with_context(
         && realm_bootstrap_contexts
             .iter()
             .any(|context| context.realm_id == realm_id && context.actor_id == actor_id);
+    // join-policy.md §7.1 — a not-yet-member applicant MUST be able to submit
+    // their own `ck.member.state{membership=knock}` (and the profile-private
+    // application sub-payload it carries). Gate / review enforcement happens at
+    // the later `join` transition, not on the knock itself.
+    let is_member_self_knock = member_self_knock(object, &session.actor);
     if !is_realm_create_bootstrap
         && !is_invite_acceptance_join
         && !is_third_party_invite_claim
         && !is_foreign_invite_delivery
         && !is_applet_delegated
+        && !is_member_self_knock
         && !realm_has_member(state, &realm_id, &session.actor).await
     {
         return Err(event_validation_error(

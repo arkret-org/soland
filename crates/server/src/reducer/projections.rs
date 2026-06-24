@@ -344,6 +344,24 @@ pub struct MlsCommitEpoch {
     pub leader_actor_id: String,
     pub covered_seals: Vec<String>,
     pub committed_at: i64,
+    /// `governance_binding.policy_root` the genesis bound this MLS group to.
+    /// Every later commit's binding MUST carry the same `policy_root`; a
+    /// mismatch is rejected with `governance_binding_mismatch`
+    /// (encryption-and-audit.md §2.5.1).
+    pub policy_root: String,
+    /// `commit_digest` of the commit that advanced the group into the current
+    /// epoch. A *different* commit that attests the same base epoch
+    /// (`accepted_from_epoch`) drives the group's `covered_frontier_cell` to
+    /// `⊥` (encryption-and-audit.md §2.5.2). `None` at genesis (no commit yet).
+    pub accepted_commit_digest: Option<String>,
+    /// Base epoch the `accepted_commit_digest` commit attested. Lets the reducer
+    /// tell a *concurrent* commit at that same base (⊥ contention) apart from a
+    /// plain stale / out-of-order replay (`mls_epoch_skew`). `None` at genesis.
+    pub accepted_from_epoch: Option<u64>,
+    /// `true` once concurrent commits resolved the frontier to `⊥`. While
+    /// contested, sends / decrypts on this epoch fail closed as
+    /// `decryption_pending` until a resolving commit advances the epoch.
+    pub frontier_contested: bool,
 }
 
 /// Reducer-derived MLS remove obligation created when an MLS-backed Circle
@@ -667,6 +685,14 @@ pub struct SolandAgentProjection {
     /// uses this only as an observability field; production runtimes
     /// will follow it for outbound dispatch.
     pub endpoint_url: Option<String>,
+    /// Adapter-registry protocol ids declared across the `endpoints[]`
+    /// array (spec §5.1 / §11: `a2a` / `acp` / `mcp_bridge` /
+    /// `http_custom`). Surfaced by `POST /_cokret/self/agents/discover`.
+    pub supported_protocols: Vec<String>,
+    /// A2A AgentCard URL declared in a `ck.agent.endpoint` entry (§5.1).
+    pub agent_card_url: Option<String>,
+    /// ACP metadata URL declared in a `ck.agent.endpoint` entry (§5.1).
+    pub metadata_url: Option<String>,
     pub registered_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
@@ -737,12 +763,15 @@ impl ObjectLifecycleState {
 
 /// Value of the parallel `redaction` cas-register
 /// cell on the same subject as the target message cell. Mirrors the spec
-/// shape `{redacted_at, by, reason}`.
+/// shape `{redacted_at, by, reason}` and carries the triggering
+/// `ck.message.redact` event id so the read path can surface
+/// `redaction_ref` on the message tombstone (strand-and-message.md §9).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RedactionCellValue {
     pub redacted_at: chrono::DateTime<chrono::Utc>,
     pub by: String,
     pub reason: Option<String>,
+    pub redaction_event_id: Option<String>,
 }
 
 impl RedactionCellValue {
@@ -756,6 +785,12 @@ impl RedactionCellValue {
         obj.insert("by".to_owned(), Value::String(self.by.clone()));
         if let Some(reason) = &self.reason {
             obj.insert("reason".to_owned(), Value::String(reason.clone()));
+        }
+        if let Some(redaction_event_id) = &self.redaction_event_id {
+            obj.insert(
+                "redaction_ref".to_owned(),
+                Value::String(redaction_event_id.clone()),
+            );
         }
         Value::Object(obj)
     }
@@ -1139,4 +1174,11 @@ pub struct SolandRealmState {
     /// `strand_id == realm.default_strand_id` — there is no separate stored
     /// per-Strand column.
     pub default_strand_id: Option<String>,
+    /// `morph.md` §4.1 S3 — opt-in conformance profile ids the Realm has
+    /// declared (`active_profiles[]` / `profiles[]` on `ck.realm.create` or
+    /// `ck.realm.update`). Projected as a monotonically-growing set: a profile
+    /// once observed stays declared (soland is not the committer and never
+    /// silently relaxes a declared profile). Read by the morph schema-migration
+    /// gate to decide whether breaking / transformation migrations are allowed.
+    pub active_profiles: Vec<String>,
 }

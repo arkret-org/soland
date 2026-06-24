@@ -211,6 +211,10 @@ fn soland_local_router() -> Router {
                 .hoop(identity::session_pop::verify_session_pop)
                 .push(identity::account::local_router())
                 .push(spaces::local_router())
+                // Product-private projection reads: single-Strand object
+                // (`/_soland/self/strands/{strand_id}`) + relation edge list
+                // (`/_soland/self/relations`). See `events::local_router`.
+                .push(events::local_router())
                 .push(admin::audit_router())
                 // Owner-scoped policy document storage CRUD
                 // (`/_soland/self/policies*`). Deployment-local management

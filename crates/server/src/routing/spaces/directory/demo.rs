@@ -45,6 +45,35 @@ pub fn demo_organization(realms: &[&RealmDirectoryEntry], service_did: &str) -> 
     })
 }
 
+/// Stale-online decay window for directory presence projection. Mirrors the
+/// Sync presence projection's `PRESENCE_ONLINE_TTL_SECONDS` (`profiles-presence.md`
+/// §3): an `online` record stops being refreshed when the client closes its
+/// tab, and the directory must surface it as `offline` once the refresh window
+/// lapses rather than pinning a phantom `online`.
+const DIRECTORY_PRESENCE_ONLINE_TTL_SECONDS: i64 = 3;
+
+/// Project the live presence store value for `actor` into the directory
+/// preview shape, applying the stale-online rule above. Absent records project
+/// as `offline`.
+pub(super) async fn directory_presence_for_actor(state: &AppState, did: &str) -> Value {
+    let record = state.persistence.presence().get(did).await.ok().flatten();
+    let (status, updated_at) = match record {
+        Some(record) => {
+            let stale_online = record.status == "online"
+                && now().signed_duration_since(record.updated_at)
+                    > chrono::Duration::seconds(DIRECTORY_PRESENCE_ONLINE_TTL_SECONDS);
+            let status = if stale_online {
+                "offline".to_owned()
+            } else {
+                record.status
+            };
+            (status, record.updated_at)
+        }
+        None => ("offline".to_owned(), now()),
+    };
+    json!({ "status": status, "updated_at": updated_at })
+}
+
 pub async fn demo_actors(state: &AppState) -> Vec<Value> {
     let mut actors = vec![json!({
         "did": "did:web:alice.example",
@@ -74,6 +103,7 @@ pub async fn demo_actors(state: &AppState) -> Vec<Value> {
         if matches!(account_state.as_str(), "deactivated" | "erasure_pending") {
             continue;
         }
+        let presence = directory_presence_for_actor(state, &account.did).await;
         actors.push(json!({
             "did": account.did,
             "handle": account.handle(),
@@ -83,7 +113,7 @@ pub async fn demo_actors(state: &AppState) -> Vec<Value> {
             "bio": account.bio,
             "organization_id": "ck:org:demo",
             "avatar_url": account.avatar_url,
-            "presence": {"status": "offline", "updated_at": now()},
+            "presence": presence,
         }));
     }
 
@@ -118,6 +148,7 @@ pub async fn demo_actors(state: &AppState) -> Vec<Value> {
             .values()
             .find_map(|device| device["display_name"].as_str())
             .unwrap_or(did);
+        let presence = directory_presence_for_actor(state, did).await;
         actors.push(json!({
             "did": did,
             "handle": handle_for_did(did),
@@ -126,7 +157,7 @@ pub async fn demo_actors(state: &AppState) -> Vec<Value> {
             "account_state": account_state,
             "organization_id": "ck:org:demo",
             "avatar_url": null,
-            "presence": {"status": "offline", "updated_at": now()},
+            "presence": presence,
         }));
     }
     actors

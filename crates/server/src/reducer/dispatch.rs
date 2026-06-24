@@ -173,6 +173,18 @@ fn apply_invite_claim_dispatch(
 ) -> ProjectionEffect {
     s.apply_invite_claim(op, op.created_at)
 }
+fn apply_invite_create_dispatch(
+    s: &mut ProjectionState,
+    op: &Operation,
+    _hlc: &ServerHlc,
+) -> ProjectionEffect {
+    // join-policy.md §7.5 — consume the cited review accept so the same
+    // `join_authorised_by` authorisation cannot be replayed by a second
+    // invite. The envelope's authz / refs validity is enforced at submit
+    // time by `check_invite_join_authorisation`.
+    s.consume_join_authorisation(op);
+    ProjectionEffect::Ignored
+}
 fn apply_key_backup_active_series_dispatch(
     s: &mut ProjectionState,
     op: &Operation,
@@ -378,6 +390,13 @@ fn apply_morph_restore_dispatch(
     _hlc: &ServerHlc,
 ) -> ProjectionEffect {
     s.apply_morph_lifecycle(op, op.created_at, ObjectLifecycleTransition::Restore)
+}
+fn apply_morph_schema_migrate_dispatch(
+    s: &mut ProjectionState,
+    op: &Operation,
+    _hlc: &ServerHlc,
+) -> ProjectionEffect {
+    s.apply_morph_schema_migrate(op, op.created_at)
 }
 
 // CKP-0007 — Circle dispatch wrappers.
@@ -900,6 +919,10 @@ pub fn default_apply_registry() -> std::collections::HashMap<&'static str, Apply
         apply_invite_claim_dispatch,
     );
     m.insert(
+        cokret_sdk::events::kinds::INVITE_CREATE,
+        apply_invite_create_dispatch,
+    );
+    m.insert(
         cokret_sdk::events::kinds::KEY_BACKUP_ACTIVE_SERIES,
         apply_key_backup_active_series_dispatch,
     );
@@ -1025,6 +1048,10 @@ pub fn default_apply_registry() -> std::collections::HashMap<&'static str, Apply
     m.insert(
         cokret_sdk::events::kinds::MORPH_RESTORE,
         apply_morph_restore_dispatch,
+    );
+    m.insert(
+        cokret_sdk::events::kinds::MORPH_SCHEMA_MIGRATE,
+        apply_morph_schema_migrate_dispatch,
     );
     // CKP-0007 — Circle lifecycle / membership dispatch. The seventh
     // active kind, `ck.circle.seal_commit`, is reducer-derived (sub-

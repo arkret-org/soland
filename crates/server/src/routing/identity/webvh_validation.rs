@@ -33,6 +33,23 @@ const ED25519_MULTICODEC_PREFIX: [u8; 2] = [0xed, 0x01];
 const WEBVH_SCID_PLACEHOLDER: &str = "{SCID}";
 pub const WEBVH_DEGRADED_NO_WITNESS_MAX_SECS: i64 = 24 * 60 * 60;
 
+/// Resolve the effective `degraded_no_witness` window (identity-did.md §4.2.1).
+///
+/// Defaults to the 24h spec ceiling. `SOLAND_WEBVH_DEGRADED_NO_WITNESS_MAX_SECS`
+/// MAY compress it (e.g. to 30s) so e2e tests can exercise the
+/// expiry → unresolvable edge without a real 24h wait. Production MUST leave it
+/// unset (or at 24h); the env override never raises the window above the spec
+/// ceiling — a value above 24h is clamped back to 24h so the compression hook
+/// can only tighten, never loosen, the invariant.
+pub fn webvh_degraded_no_witness_max_secs() -> i64 {
+    std::env::var("SOLAND_WEBVH_DEGRADED_NO_WITNESS_MAX_SECS")
+        .ok()
+        .and_then(|value| value.trim().parse::<i64>().ok())
+        .filter(|value| *value > 0)
+        .map(|value| value.min(WEBVH_DEGRADED_NO_WITNESS_MAX_SECS))
+        .unwrap_or(WEBVH_DEGRADED_NO_WITNESS_MAX_SECS)
+}
+
 /// A `did:webvh` log entry as it appears on the wire. We keep the
 /// underlying `serde_json::Value` so the validator stays agnostic of the
 /// DIF didwebvh struct evolution — the chain / SCID / signature rules
@@ -100,6 +117,22 @@ pub enum WebvhValidationError {
         required: usize,
         valid: usize,
     },
+    /// A rotation entry was not authorised by any accepted path: it carried
+    /// neither a valid signature from the previous entry's `updateKeys`
+    /// (normal controller rotation) nor a valid recovery-key signature
+    /// (genesis-declared emergency recovery key). Spec: identity-did.md §7
+    /// (controller proof) + key-management.md §3.3 (recovery key path).
+    RotationNotAuthorized { at_index: usize, reason: String },
+    /// An organization rotation entry did not satisfy the genesis-declared
+    /// governance threshold: fewer than `required` distinct valid proofs from
+    /// the eligible governance methods signed the entry. Single-sig
+    /// submissions on an N-of-M org DID fail closed here. Spec:
+    /// identity-did.md §8.1–§8.2.
+    GovernanceQuorumNotMet {
+        at_index: usize,
+        required: usize,
+        valid: usize,
+    },
     /// The log was empty — every did:webvh resolve MUST have at least the
     /// genesis entry, so this is treated as a hard chain break too.
     EmptyLog,
@@ -121,6 +154,8 @@ impl WebvhValidationError {
             Self::WitnessQuorumNotMet { .. } => "webvh_witness_quorum_not_met",
             Self::WitnessEvidenceExpired { .. } => "webvh_witness_evidence_expired",
             Self::RotationWitnessQuorumMissing { .. } => "webvh_rotation_witness_quorum_missing",
+            Self::RotationNotAuthorized { .. } => "webvh_rotation_not_authorized",
+            Self::GovernanceQuorumNotMet { .. } => "webvh_governance_quorum_not_met",
             Self::EmptyLog => "webvh_empty_log",
             Self::MalformedEntry { .. } => "webvh_malformed_entry",
         }
@@ -136,9 +171,12 @@ impl WebvhValidationError {
             | Self::WitnessQuorumNotMet { .. }
             | Self::WitnessEvidenceExpired { .. }
             | Self::RotationWitnessQuorumMissing { .. }
+            | Self::GovernanceQuorumNotMet { .. }
             | Self::EmptyLog
             | Self::MalformedEntry { .. } => StatusCode::UNPROCESSABLE_ENTITY,
-            Self::WitnessSignatureInvalid { .. } => StatusCode::UNAUTHORIZED,
+            Self::WitnessSignatureInvalid { .. } | Self::RotationNotAuthorized { .. } => {
+                StatusCode::UNAUTHORIZED
+            }
         }
     }
 
@@ -179,6 +217,16 @@ impl WebvhValidationError {
                 valid,
             } => format!(
                 "did:webvh rotation witness quorum missing at index {at_index}: required {required}, valid {valid}"
+            ),
+            Self::RotationNotAuthorized { at_index, reason } => format!(
+                "did:webvh rotation at index {at_index} is not authorized: {reason}"
+            ),
+            Self::GovernanceQuorumNotMet {
+                at_index,
+                required,
+                valid,
+            } => format!(
+                "did:webvh governance quorum not met at index {at_index}: required {required}, valid {valid}"
             ),
             Self::EmptyLog => "did:webvh log is empty".to_owned(),
             Self::MalformedEntry { at_index, reason } => {
@@ -391,6 +439,23 @@ pub fn validate_witness_policy_for_log(
     log: &[WebvhLogEntry],
     now_unix_secs: i64,
 ) -> Result<(), WebvhValidationError> {
+    validate_witness_policy_for_log_with_window(
+        log,
+        now_unix_secs,
+        webvh_degraded_no_witness_max_secs(),
+    )
+}
+
+/// Window-parameterised variant of [`validate_witness_policy_for_log`].
+///
+/// `degraded_max_secs` is the effective `degraded_no_witness` ceiling
+/// (identity-did.md §4.2.1). The public entry point sources it from
+/// [`webvh_degraded_no_witness_max_secs`]; tests pass it explicitly.
+pub fn validate_witness_policy_for_log_with_window(
+    log: &[WebvhLogEntry],
+    now_unix_secs: i64,
+    degraded_max_secs: i64,
+) -> Result<(), WebvhValidationError> {
     let mut policy = WitnessPolicy::default();
     for (index, entry) in log.iter().enumerate() {
         policy.merge_from_entry(entry);
@@ -418,15 +483,255 @@ pub fn validate_witness_policy_for_log(
                 reason: "versionTime is required for degraded_no_witness window".to_owned(),
             }
         })?;
-        if age_secs > WEBVH_DEGRADED_NO_WITNESS_MAX_SECS {
+        if age_secs > degraded_max_secs {
             return Err(WebvhValidationError::WitnessEvidenceExpired {
                 at_index: index,
                 age_secs,
-                max_secs: WEBVH_DEGRADED_NO_WITNESS_MAX_SECS,
+                max_secs: degraded_max_secs,
             });
         }
     }
     Ok(())
+}
+
+/// Validate that every rotation entry in a `did:webvh` log was authorised by
+/// an accepted control path. A rotation entry (one that changes `updateKeys`
+/// or the document's control keys) MUST be authorised by at least one of:
+///
+/// 1. **normal controller rotation** — a `proof[]` signed by a key listed in
+///    the *previous* entry's `updateKeys` (the current controller signs over
+///    the new key set). Spec: identity-did.md §7.
+/// 2. **emergency recovery** — a `proof[]` signed by a genesis-declared
+///    recovery key (`parameters.recoveryKeys` / `recovery_keys`), so a
+///    compromised controller key can be rotated out without a prev-key
+///    signature. Spec: key-management.md §3.3, identity-did.md §8.2 emergency
+///    recovery.
+/// 3. **organization governance quorum** — when the genesis declares an
+///    `application-level multi-proof` governance threshold
+///    (`parameters.governance.threshold` + eligible methods), at least
+///    `threshold` distinct valid `proof[]` from the eligible governance
+///    methods MUST sign the rotation. A single-sig submission on an N-of-M org
+///    DID fails closed. Spec: identity-did.md §8.1–§8.2.
+///
+/// Witness quorum (history visibility) is validated separately by
+/// [`validate_witness_policy_for_log`]; this function validates control
+/// authorisation (who may change the DID), which the spec keeps distinct from
+/// witnessing (§8.1: "Witness 证明历史可见性…quorum 证明治理授权").
+pub fn validate_rotation_authorization_for_log(
+    log: &[WebvhLogEntry],
+) -> Result<(), WebvhValidationError> {
+    if log.is_empty() {
+        return Err(WebvhValidationError::EmptyLog);
+    }
+    let governance = GovernancePolicy::from_genesis(&log[0]);
+    let recovery_keys = recovery_keys_from_genesis(&log[0]);
+    for index in 1..log.len() {
+        let previous = &log[index - 1];
+        let current = &log[index];
+        if !is_rotation_entry(previous, current) {
+            continue;
+        }
+        // Organization governance threshold takes precedence: when the DID
+        // declares an N-of-M governance policy, every rotation MUST clear it.
+        if let Some(policy) = &governance {
+            let valid = count_distinct_valid_entry_proofs(current, &policy.eligible_methods)?;
+            if valid < policy.threshold {
+                return Err(WebvhValidationError::GovernanceQuorumNotMet {
+                    at_index: index,
+                    required: policy.threshold,
+                    valid,
+                });
+            }
+            continue;
+        }
+        // Otherwise accept either a normal controller proof (prev updateKeys)
+        // or an emergency recovery-key proof.
+        let prev_update_keys = update_keys_of(previous);
+        let controller_valid =
+            count_distinct_valid_entry_proofs(current, &prev_update_keys)? > 0;
+        if controller_valid {
+            continue;
+        }
+        let recovery_valid =
+            !recovery_keys.is_empty() && count_distinct_valid_entry_proofs(current, &recovery_keys)? > 0;
+        if recovery_valid {
+            continue;
+        }
+        return Err(WebvhValidationError::RotationNotAuthorized {
+            at_index: index,
+            reason: "rotation proof is signed by neither the previous controller updateKeys nor a declared recovery key".to_owned(),
+        });
+    }
+    Ok(())
+}
+
+/// Count distinct verification methods in an entry's `proof[]` array whose key
+/// is in `accepted_keys` AND whose signature verifies over the proof-stripped
+/// canonical entry. Any *present* proof whose key is in `accepted_keys` but
+/// whose signature is invalid is a hard failure (you cannot launder a forged
+/// controller/governance signature into a "missing proof").
+fn count_distinct_valid_entry_proofs(
+    entry: &WebvhLogEntry,
+    accepted_keys: &[String],
+) -> Result<usize, WebvhValidationError> {
+    let Some(proofs) = entry.payload.get("proof").and_then(Value::as_array) else {
+        return Ok(0);
+    };
+    let mut seen = std::collections::BTreeSet::new();
+    for proof in proofs.iter().filter_map(Value::as_object) {
+        let key = entry_proof_key(proof);
+        if accepted_keys.iter().all(|accepted| accepted != &key) {
+            continue;
+        }
+        verify_entry_proof(entry, proof)?;
+        seen.insert(key);
+    }
+    Ok(seen.len())
+}
+
+/// Verify a single `proof[]` object signs the proof-stripped canonical entry
+/// under `eddsa-jcs-2022`. Mirrors [`verify_one_witness_proof`] but strips
+/// `proof` (not `witness`), matching the controller-proof construction in the
+/// embedded provider and coauth's `soland_webvh::build_proof`.
+fn verify_entry_proof(
+    entry: &WebvhLogEntry,
+    proof: &serde_json::Map<String, Value>,
+) -> Result<(), WebvhValidationError> {
+    if proof.get("type").and_then(Value::as_str) != Some("DataIntegrityProof") {
+        return Err(WebvhValidationError::RotationNotAuthorized {
+            at_index: 0,
+            reason: "proof type must be DataIntegrityProof".to_owned(),
+        });
+    }
+    if proof.get("cryptosuite").and_then(Value::as_str) != Some("eddsa-jcs-2022") {
+        return Err(WebvhValidationError::RotationNotAuthorized {
+            at_index: 0,
+            reason: "proof cryptosuite must be eddsa-jcs-2022".to_owned(),
+        });
+    }
+    let key = entry_proof_key(proof);
+    let public_key = decode_ed25519_public_key(&key).map_err(|reason| {
+        WebvhValidationError::RotationNotAuthorized {
+            at_index: 0,
+            reason,
+        }
+    })?;
+    let signature = decode_webvh_signature(
+        proof
+            .get("proofValue")
+            .and_then(Value::as_str)
+            .unwrap_or_default(),
+    )
+    .map_err(|reason| WebvhValidationError::RotationNotAuthorized {
+        at_index: 0,
+        reason,
+    })?;
+    let mut canonical_entry = entry.payload.clone();
+    if let Value::Object(map) = &mut canonical_entry {
+        map.remove("proof");
+    }
+    let payload =
+        cokret_sdk::canonical::canonical_json_bytes(&canonical_entry).map_err(|error| {
+            WebvhValidationError::RotationNotAuthorized {
+                at_index: 0,
+                reason: error.to_string(),
+            }
+        })?;
+    public_key
+        .verify(&payload, &signature)
+        .map_err(|_| WebvhValidationError::RotationNotAuthorized {
+            at_index: 0,
+            reason: "rotation proof signature is invalid".to_owned(),
+        })
+}
+
+/// Extract the multibase key a `proof[]` object signs with — the fragment
+/// after `#` in `verificationMethod` (matching the `did:key:<mb>#<mb>` shape
+/// the embedded provider / coauth emit).
+fn entry_proof_key(proof: &serde_json::Map<String, Value>) -> String {
+    let verification_method = proof
+        .get("verificationMethod")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    verification_method
+        .rsplit_once('#')
+        .map(|(_, fragment)| fragment)
+        .unwrap_or(verification_method)
+        .to_owned()
+}
+
+fn update_keys_of(entry: &WebvhLogEntry) -> Vec<String> {
+    entry
+        .payload
+        .pointer("/parameters/updateKeys")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(ToOwned::to_owned)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn recovery_keys_from_genesis(genesis: &WebvhLogEntry) -> Vec<String> {
+    let parameters = genesis.payload.get("parameters").unwrap_or(&Value::Null);
+    parameters
+        .get("recoveryKeys")
+        .or_else(|| parameters.get("recovery_keys"))
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(ToOwned::to_owned)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+struct GovernancePolicy {
+    threshold: usize,
+    eligible_methods: Vec<String>,
+}
+
+impl GovernancePolicy {
+    /// Read an `application-level multi-proof` governance policy from the
+    /// genesis `parameters.governance` block (identity-did.md §8). Returns
+    /// `None` when no governance threshold is declared (ordinary single-key
+    /// principal DID).
+    fn from_genesis(genesis: &WebvhLogEntry) -> Option<Self> {
+        let governance = genesis.payload.pointer("/parameters/governance")?;
+        let threshold = governance
+            .pointer("/threshold/required")
+            .or_else(|| governance.get("threshold"))
+            .and_then(Value::as_u64)
+            .and_then(|value| usize::try_from(value).ok())
+            .filter(|value| *value > 0)?;
+        let eligible_methods = governance
+            .pointer("/threshold/eligible_methods")
+            .or_else(|| governance.get("eligible_methods"))
+            .and_then(Value::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(|value| {
+                        value
+                            .rsplit_once('#')
+                            .map(|(_, fragment)| fragment)
+                            .unwrap_or(value)
+                            .to_owned()
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        Some(Self {
+            threshold,
+            eligible_methods,
+        })
+    }
 }
 
 /// Verify all witness proofs on an entry and return the number of

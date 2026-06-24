@@ -157,7 +157,10 @@ async fn get_consent_cell(
         return Err(AppError::invalid_param("invalid peer DID"));
     }
     authorize_reader(&session.actor, &holder, &peer)?;
-    let scope = normalize_scope(query_param(req, "consent_scope").as_deref())?;
+    // Accept both `consent_scope` (canonical) and the shorter `scope` alias so
+    // holder-private reads stay addressable from either query convention.
+    let scope_param = query_param(req, "consent_scope").or_else(|| query_param(req, "scope"));
+    let scope = normalize_scope(scope_param.as_deref())?;
     let key = ConsentCellKey {
         holder,
         peer,

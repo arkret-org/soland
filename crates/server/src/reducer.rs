@@ -28,6 +28,7 @@
 mod apply_capability;
 mod apply_invites;
 mod apply_key_backup;
+mod apply_member_application;
 mod apply_messages;
 mod apply_moderation;
 mod apply_objects;
@@ -78,6 +79,7 @@ pub const CHILD_ORDER_CELL_FAMILY: &str = "ck.component.child_order.v1";
 // The handful of `pub` items in these modules get an explicit `pub use`
 // (which takes priority over the glob for that name).
 pub(crate) use apply_capability::engine_grant_from_capability_cell_state;
+pub(crate) use apply_member_application::MemberApplicationState;
 pub(crate) use capability_derivation::*;
 pub(crate) use dispatch::{APPLY_REGISTRY, extract_event_ref_id, upsert_realm_link};
 // Dispatch registry — `ApplyFn` + `default_apply_registry` are `pub`

@@ -124,6 +124,35 @@ pub fn tombstone_projection_event_for_erased_actor(
     event.payload = tombstone_payload_value(&event.payload);
 }
 
+/// Fold a per-message redaction tombstone onto a timeline message value.
+///
+/// When the message identified by `event_id` is redacted (the parallel
+/// `redaction` cas-register holds a value), rewrite the timeline value into its
+/// spec tombstone form (strand-and-message.md §9): keep the slot + audit
+/// metadata, strip every plaintext / derived surface, and add the structured
+/// `redacted` / `state` / `redacted_at` / `redaction_ref` markers a client
+/// folds onto an existing message. Returns `true` when a tombstone was applied.
+pub fn apply_message_redaction_timeline_projection(
+    event: &mut Value,
+    event_id: &str,
+    projection: &crate::reducer::ProjectionState,
+) -> bool {
+    if !projection.redactions.contains(event_id) {
+        return false;
+    }
+    let cell = projection
+        .redaction_cells
+        .get(event_id)
+        .and_then(|value| value.as_ref());
+    let redacted_at = cell
+        .map(|cell| cell.redacted_at)
+        .or_else(|| projection.messages.get(event_id).and_then(|m| m.redacted_at))
+        .unwrap_or_else(chrono::Utc::now);
+    let redaction_ref = cell.and_then(|cell| cell.redaction_event_id.as_deref());
+    cokret_sdk::events::redaction_tombstone_message_value(event, redacted_at, redaction_ref);
+    true
+}
+
 pub fn tombstone_timeline_event_value(event: &mut Value) {
     let Some(object) = event.as_object_mut() else {
         return;
@@ -931,6 +960,7 @@ mod tests {
                 redacted_at: now,
                 by: "did:web:alice.example".to_owned(),
                 reason: Some("policy".to_owned()),
+                redaction_event_id: None,
             }),
         );
         let mut event = ProjectionEventRecord {
@@ -988,5 +1018,56 @@ mod tests {
         assert_eq!(event.payload["target"]["visibility"], json!("locked"));
         assert!(event.payload.get("target_ref").is_none());
         assert!(event.payload.get("note").is_none());
+    }
+
+    #[test]
+    fn timeline_message_for_redacted_event_surfaces_tombstone() {
+        let event_id = "ck:event:01904100-0000-7000-8000-0000000000e1";
+        let redaction_id = "ck:event:01904100-0000-7000-8000-0000000000e2";
+        let realm_id = "ck:realm:01904100-0000-7000-8000-cfc039892036";
+        let now = chrono::Utc::now();
+        let mut projection = ProjectionState::new();
+        projection.messages.insert(
+            event_id.to_owned(),
+            MessageState {
+                event_id: event_id.to_owned(),
+                message_id: crate::reducer::message_id_from_event_id(event_id),
+                realm_id: realm_id.to_owned(),
+                sender: "did:web:bob.example".to_owned(),
+                thread_id: realm_id.to_owned(),
+                content: json!({"kind": "ck.content.text", "body": "secret"}),
+                expiry: None,
+                encrypted: false,
+                operation_id: "ck:operation:01904100-0000-7000-8000-0000000000e3".to_owned(),
+                created_at: now,
+                history_basis_seals: Vec::new(),
+                revision_of: None,
+                redacted_at: Some(now),
+            },
+        );
+        projection.redactions.insert(event_id.to_owned());
+        projection.redaction_cells.insert(
+            event_id.to_owned(),
+            Some(RedactionCellValue {
+                redacted_at: now,
+                by: "did:web:bob.example".to_owned(),
+                reason: Some("author_redaction".to_owned()),
+                redaction_event_id: Some(redaction_id.to_owned()),
+            }),
+        );
+        let message = projection.messages.get(event_id).cloned().unwrap();
+
+        let event = crate::routing::events::projection::sync_timeline_message_json_with_projection(
+            &message,
+            &projection,
+        );
+
+        assert_eq!(event["event_id"], json!(event_id));
+        assert_eq!(event["kind"], json!("ck.message.create"));
+        assert_eq!(event["redacted"], json!(true));
+        assert_eq!(event["state"], json!("redacted"));
+        assert_eq!(event["redaction_ref"], json!(redaction_id));
+        assert_ne!(event["content"]["body"], json!("secret"));
+        assert!(event.get("reactions").is_none());
     }
 }

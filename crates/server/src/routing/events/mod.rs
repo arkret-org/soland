@@ -47,6 +47,16 @@ pub fn router() -> Router {
         .push(projection_query::protocol_router())
 }
 
+/// Product-private (`/_soland/self/*`) projection read surface: single-Strand
+/// object read with materialized `fields`, and the relation edge list. These
+/// stay off the canonical `/_cokret/*` protocol root per
+/// `service-http-binding.md` §2.1.3 (relation / object direct reads beyond the
+/// declared Realm-scoped read binding belong to the implementation private
+/// surface).
+pub fn local_router() -> Router {
+    projection_query::local_router()
+}
+
 pub fn peer_router() -> Router {
     peer::router()
 }

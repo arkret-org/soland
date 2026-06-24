@@ -61,6 +61,7 @@ pub struct SolandMemoryPersistenceStore {
     agents: MemoryAgentStore,
     notifications: MemoryNotificationStore,
     sync_cursors: MemorySyncCursorStore,
+    idempotency_keys: MemoryIdempotencyStore,
 }
 
 impl SolandMemoryPersistenceStore {
@@ -123,6 +124,7 @@ impl SolandMemoryPersistenceStore {
             agents: MemoryAgentStore::new(),
             notifications: MemoryNotificationStore::new(),
             sync_cursors: MemorySyncCursorStore::new(),
+            idempotency_keys: MemoryIdempotencyStore::new(),
         }
     }
 }
@@ -357,5 +359,9 @@ impl PersistenceStore for SolandMemoryPersistenceStore {
 
     fn sync_cursors(&self) -> &dyn SyncCursorStore {
         &self.sync_cursors
+    }
+
+    fn idempotency_keys(&self) -> &dyn IdempotencyStore {
+        &self.idempotency_keys
     }
 }

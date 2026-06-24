@@ -373,6 +373,16 @@ pub enum MlsEffect {
         leader_actor_id: String,
         covered_seals: Vec<String>,
     },
+    /// `apply_commit_epoch` — a second commit attested the same base epoch with
+    /// different commit material, resolving the group's `covered_frontier_cell`
+    /// to `⊥` (encryption-and-audit.md §2.5.2). The epoch is left untouched and
+    /// marked contested; sends / decrypts on it fail closed as
+    /// `decryption_pending` until a resolving commit advances the epoch.
+    CommitFrontierContested {
+        group_id: String,
+        effective_scope: Value,
+        epoch: u64,
+    },
 }
 
 /// Which Space-container lifecycle transition is being attempted. Used by

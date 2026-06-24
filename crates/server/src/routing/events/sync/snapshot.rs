@@ -998,7 +998,7 @@ async fn timeline_events_for_realm(
     let mut newest_position = after_position;
     let mut timeline_entries = Vec::new();
 
-    for message in projection.messages_for_realm(realm_id) {
+    for message in projection.messages_for_realm_including_redacted(realm_id) {
         let position = timeline_event_position(state, &message.event_id, message.created_at).await;
         newest_position = newest_position.max(position);
         if position <= after_position || !seen.insert(message.event_id.clone()) {
@@ -1603,6 +1603,9 @@ fn sync_timeline_message_record_json_with_projection(
     let mut event = sync_timeline_message_record_json(message);
     if actor_erased_in_realm(projection, &message.sender, &message.realm_id) {
         tombstone_timeline_event_value(&mut event);
+    }
+    if apply_message_redaction_timeline_projection(&mut event, &message.event_id, projection) {
+        return event;
     }
     augment_timeline_message_json(event, &message.event_id, &message.content, projection)
 }

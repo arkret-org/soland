@@ -676,3 +676,97 @@ async fn agent_bridge_plumbs_endpoint_url_through_session_envelopes() {
         "admin agents row must surface endpoint_url"
     );
 }
+
+#[tokio::test]
+async fn agent_discover_reflects_endpoint_projection_and_fails_closed() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let token = dev_token(state.clone()).await;
+    let agent_id = "did:web:discover-agent.example";
+
+    // Register a ck.agent.endpoint declaring a2a + acp endpoints with
+    // distinct agent_card_url / metadata_url plus a non-registry protocol
+    // that discover MUST drop (spec §11 adapter registry subset).
+    let endpoint_payload = serde_json::json!({
+        "agent_id": agent_id,
+        "endpoints": [
+            {
+                "protocol": "a2a",
+                "agent_card_url": "https://agent.example/.well-known/agent-card.json",
+            },
+            {
+                "protocol": "acp",
+                "metadata_url": "https://agent.example/info",
+            },
+            {
+                "protocol": "not_a_registry_id",
+            },
+        ],
+    });
+    let mut endpoint_event = serde_json::json!({
+        "event_id": "ck:event:01904100-0000-7000-8000-d15c0ffee001",
+        "kind": "ck.agent.endpoint",
+        "schema_id": "ck.schema.agent.v1",
+        "actor_id": "did:web:alice.example",
+        "actor_seq": 1u64,
+        "realm_id": DEMO_REALM_ID,
+        "device_id": "ck:device:01904100-0000-7000-8000-a11ce0000001",
+        "audience": "did:web:soland.local",
+        "domain": "did:web:soland.local",
+        "prev_refs": Vec::<String>::new(),
+        "auth_refs": Vec::<String>::new(),
+        "payload": endpoint_payload.clone(),
+        "proofs": [{
+            "type": "dev-proof",
+            "verification_method": "did:web:alice.example#01904100-0000-7000-8000-a11ce0000001",
+            "device_id": "ck:device:01904100-0000-7000-8000-a11ce0000001",
+            "audience": "did:web:soland.local",
+            "domain": "did:web:soland.local",
+            "payload_digest": sha256_json(&endpoint_payload),
+        }],
+    });
+    endpoint_event["canonical_digest"] = Value::String(event_canonical_digest(&endpoint_event));
+    let endpoint_resp: Value = TestClient::post("http://server/_cokret/self/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&endpoint_event)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(endpoint_resp["status"], "accepted");
+
+    let discover: Value = TestClient::post("http://server/_cokret/self/agents/discover")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&serde_json::json!({ "agent_id": agent_id }))
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(discover["agent_id"], agent_id);
+    let protocols = discover["supported_protocols"]
+        .as_array()
+        .expect("supported_protocols array");
+    let protocol_strs: Vec<&str> = protocols.iter().filter_map(Value::as_str).collect();
+    assert!(protocol_strs.contains(&"a2a"), "discover should surface a2a");
+    assert!(protocol_strs.contains(&"acp"), "discover should surface acp");
+    assert!(
+        !protocol_strs.contains(&"not_a_registry_id"),
+        "discover must drop protocols outside the §11 adapter registry"
+    );
+    assert_eq!(
+        discover["agent_card_url"],
+        "https://agent.example/.well-known/agent-card.json"
+    );
+    assert_eq!(discover["metadata_url"], "https://agent.example/info");
+
+    // Fail closed: an unregistered agent cannot be discovered.
+    let mut missing = TestClient::post("http://server/_cokret/self/agents/discover")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&serde_json::json!({ "agent_id": "did:web:nope.example" }))
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(missing.status_code.unwrap().as_u16(), 404);
+    let missing_body: Value = missing.take_json().await.unwrap();
+    assert_eq!(missing_body["error"]["code"], "discovery_failed");
+}

@@ -807,7 +807,26 @@ pub(crate) fn validate_morph_schema_migrate_payload(
             )
             .map_err(|_| "morph_schema_refs_transformation_unsupported")
         }
-        Some("breaking" | "transformation") => Err("morph_schema_refs_transformation_unsupported"),
+        // `morph.md` §4.1 S3 — breaking / transformation are NOT statically
+        // rejected here: whether they are admissible depends on the Realm
+        // declaring `ck.profile.morph.schema_migration_transformations.v1`,
+        // which is only visible to the state-aware preflight
+        // (`ProjectionState::check_morph_schema_migrate`). The static layer
+        // only checks shape: a transformation migration MUST carry a
+        // non-empty `transformation_rules[]`.
+        Some("breaking") => Ok(()),
+        Some("transformation") => {
+            let has_rules = operation
+                .payload
+                .get("transformation_rules")
+                .and_then(serde_json::Value::as_array)
+                .is_some_and(|rules| !rules.is_empty());
+            if has_rules {
+                Ok(())
+            } else {
+                Err("unsupported_transformation_rule")
+            }
+        }
         _ => Err("morph schema_migrate compatibility_class is invalid"),
     }
 }

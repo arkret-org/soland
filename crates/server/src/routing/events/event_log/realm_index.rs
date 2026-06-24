@@ -46,6 +46,48 @@ pub(super) fn invite_create_actor_is_inviter(
     inviter.is_some_and(|inviter| inviter == actor)
 }
 
+/// True when a `ck.member.state` event is a self-authored join-policy entry by
+/// a not-yet-member applicant:
+///   - `membership=knock` — stage 1 of the application-review path
+///     (join-policy.md §7.1); and
+///   - `membership=join` carrying `gate_proofs[]` — the auto-resolve path
+///     (join-policy.md §5), where the not-yet-member submits its own join with
+///     inline gate proofs.
+/// In both cases the applicant is not yet a member, so the generic
+/// `realm_has_member` gate would wrongly reject the entry. The actual
+/// join-policy gate / review enforcement runs in
+/// `check_membership_join_admission` / `check_membership_application_admission`
+/// later in the submit pipeline, not here.
+pub(super) fn member_self_knock(
+    object: &serde_json::Map<String, Value>,
+    actor: &str,
+) -> bool {
+    if object.get("kind").and_then(Value::as_str)
+        != Some(cokret_sdk::events::kinds::MEMBER_STATE)
+    {
+        return false;
+    }
+    let Some(payload) = object.get("payload") else {
+        return false;
+    };
+    let membership = payload.get("membership").and_then(Value::as_str);
+    let is_knock = membership == Some("knock");
+    let is_gate_proof_join = membership == Some("join")
+        && payload
+            .get("gate_proofs")
+            .and_then(Value::as_array)
+            .is_some_and(|proofs| !proofs.is_empty());
+    if !is_knock && !is_gate_proof_join {
+        return false;
+    }
+    payload
+        .get("actor_id")
+        .or_else(|| payload.get("member"))
+        .and_then(Value::as_str)
+        .map(|target| target == actor)
+        .unwrap_or(true)
+}
+
 pub(super) async fn member_join_accepts_pending_invite(
     state: &AppState,
     object: &serde_json::Map<String, Value>,

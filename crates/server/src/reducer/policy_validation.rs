@@ -774,6 +774,53 @@ pub(crate) fn parse_iso8601_duration(value: &str) -> Option<Duration> {
     Some(Duration::seconds(total_seconds))
 }
 
+/// `morph.md` §4.1 S3 — collect the opt-in conformance profile ids a Realm
+/// lifecycle event declares. Reads `active_profiles[]` / `profiles[]` from the
+/// payload root, the `object` block, and a `patch.active_profiles` register set
+/// (so `ck.realm.update` declarations are captured as well). Only well-formed
+/// `ck.profile.*` strings are returned.
+pub(crate) fn realm_declared_profiles(operation: &Operation) -> Vec<String> {
+    let mut profiles = Vec::new();
+    let mut push_array = |value: Option<&Value>| {
+        if let Some(items) = value.and_then(Value::as_array) {
+            for item in items {
+                if let Some(id) = item.as_str().filter(|id| id.starts_with("ck.profile.")) {
+                    let owned = id.to_owned();
+                    if !profiles.contains(&owned) {
+                        profiles.push(owned);
+                    }
+                }
+            }
+        }
+    };
+    for field in ["active_profiles", "profiles"] {
+        push_array(operation.payload.get(field));
+        push_array(
+            operation
+                .payload
+                .get("object")
+                .and_then(|object| object.get(field)),
+        );
+        // `ck.realm.update` carries mutable fields in the patch register; a
+        // `patch.active_profiles: { "$op": "set", "value": [...] }` (or the
+        // direct-array sugar) declares the profile set.
+        if let Some(patch_field) = operation
+            .payload
+            .get("patch")
+            .and_then(|patch| patch.get(field))
+        {
+            match patch_field {
+                Value::Array(_) => push_array(Some(patch_field)),
+                Value::Object(op) if op.get("$op").and_then(Value::as_str) == Some("set") => {
+                    push_array(op.get("value"));
+                }
+                _ => {}
+            }
+        }
+    }
+    profiles
+}
+
 pub(crate) fn operation_encryption_profile(operation: &Operation) -> Option<&str> {
     operation
         .payload

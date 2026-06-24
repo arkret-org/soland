@@ -31,7 +31,8 @@ use std::collections::BTreeSet;
 
 use chrono::SecondsFormat;
 use cokret_sdk::models::{
-    AgentDeactivateRequestBody, AgentGrantAttachOutcome, AgentGrantAttachRequestBody,
+    AgentDeactivateRequestBody, AgentDiscoverOutcome, AgentDiscoverRequestBody,
+    AgentGrantAttachOutcome, AgentGrantAttachRequestBody,
     AgentGrantDetachOutcome, AgentKeyPairOutcome, AgentKeyPairRequestBody, AgentLifecycleOutcome,
     AgentLifecycleState, AgentList, AgentParticipation, AgentParticipationEntry,
     AgentParticipationOutcome as AgentParticipationResBody, AgentParticipationScope,
@@ -71,6 +72,7 @@ pub(super) fn protocol_router() -> Router {
             Router::with_path("agents")
                 .post(provision_agent)
                 .get(list_agents)
+                .push(Router::with_path("discover").post(discover_agent_endpoint))
                 .push(Router::with_path("{agent_id}").get(get_agent))
                 .push(Router::with_path("{agent_id}/pause").post(pause_agent))
                 .push(Router::with_path("{agent_id}/resume").post(resume_agent))
@@ -874,6 +876,60 @@ async fn list_agents(aa: AuthArgs, depot: &mut Depot, req: &mut Request) -> Json
         agents,
         next_cursor: None,
         has_more: false,
+    })
+}
+
+/// Spec §11 adapter registry ids. `supported_protocols` returned by
+/// discover MUST be a subset of this set; a registered endpoint that
+/// declares a protocol outside the registry is dropped from the
+/// discover projection rather than surfaced verbatim.
+const AGENT_ADAPTER_REGISTRY_IDS: [&str; 4] = ["a2a", "acp", "mcp_bridge", "http_custom"];
+
+#[endpoint(
+    operation_id = "ck.agent.protocol.discover",
+    tags("agents"),
+    summary = "Discover an agent runtime's declared external protocol endpoints",
+    status_codes(200, 400, 401, 404, 500)
+)]
+#[tracing::instrument(skip_all, fields(op = "ck.agent.protocol.discover"))]
+async fn discover_agent_endpoint(
+    aa: AuthArgs,
+    body: JsonBody<AgentDiscoverRequestBody>,
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<AgentDiscoverOutcome> {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    // Any authenticated principal may probe the public agent endpoint
+    // registry; the discover surface returns only the projection of an
+    // accepted `ck.agent.endpoint` event (no controller-private fields).
+    let _session = aa.authenticated_session(state, req).await?;
+    let body = body.into_inner();
+    let agent_id = body.agent_id.as_str().to_owned();
+    let snapshot = state
+        .projection
+        .lock()
+        .ok()
+        .and_then(|proj| proj.agents.get(&agent_id).cloned());
+    let Some(projection) = snapshot else {
+        // Fail closed: an agent with no accepted `ck.agent.endpoint`
+        // cannot be discovered (spec §12 `discovery_failed`).
+        return Err(AppError::not_found("agent endpoint not registered")
+            .with_wire_code("discovery_failed"));
+    };
+    // Constrain to the §11 adapter registry so callers can rely on the
+    // returned ids being valid adapter selectors.
+    let supported_protocols: Vec<String> = projection
+        .supported_protocols
+        .iter()
+        .filter(|p| AGENT_ADAPTER_REGISTRY_IDS.contains(&p.as_str()))
+        .cloned()
+        .collect();
+    json_ok(AgentDiscoverOutcome {
+        agent_id: body.agent_id,
+        supported_protocols,
+        agent_card_url: projection.agent_card_url,
+        metadata_url: projection.metadata_url,
+        endpoint_url: projection.endpoint_url,
     })
 }
 

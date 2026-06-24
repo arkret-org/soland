@@ -160,6 +160,90 @@ impl ProjectionState {
         }
     }
 
+    /// Apply `ck.morph.schema_migrate` (`morph.md` §4.1 S3). Projects an
+    /// accepted schema-refs evolution onto the Morph: `schema_refs[]` becomes
+    /// `to_schema_refs[]` and, for `transformation` class, the deterministic
+    /// `transformation_rules[]` are applied to `fields`.
+    ///
+    /// All authorization / profile-gate / dialect / CAS preconditions are
+    /// enforced fail-closed by [`ProjectionState::check_morph_schema_migrate`]
+    /// (and the capability gate in the operation policy layer) BEFORE this
+    /// method runs, so reaching here means the migration is admissible. The
+    /// method is still defensive: an unknown Morph queues for replay and the
+    /// `from_schema_refs[]` set-equality is re-checked so a divergent clone
+    /// cannot apply a stale migration.
+    pub(crate) fn apply_morph_schema_migrate(
+        &mut self,
+        operation: &Operation,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> ProjectionEffect {
+        let Some(morph_id) = operation
+            .payload
+            .get("morph_id")
+            .and_then(|v| v.as_str())
+            .map(ToOwned::to_owned)
+        else {
+            return ProjectionEffect::Rejected {
+                reason: "morph_schema_migrate_missing_morph_id".to_owned(),
+            };
+        };
+        let to_schema_refs = string_array_field_from_payload(&operation.payload, "to_schema_refs");
+        let from_schema_refs =
+            string_array_field_from_payload(&operation.payload, "from_schema_refs");
+        let compatibility_class = operation
+            .payload
+            .get("compatibility_class")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned();
+        let transformation_rules = operation
+            .payload
+            .get("transformation_rules")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+
+        let Some(morph) = self.morphs.get_mut(&morph_id) else {
+            return self.queue_pending_replay(morph_id, operation, "morph_unknown");
+        };
+        if morph.state != ObjectLifecycleState::Active {
+            return ProjectionEffect::Rejected {
+                reason: "morph_not_active".to_owned(),
+            };
+        }
+        // S3 / federation §4.1 — `from_schema_refs[]` is an optimistic
+        // concurrency precondition; re-check set-equality against live state.
+        if !string_sets_equal(&morph.schema_refs, &from_schema_refs) {
+            return ProjectionEffect::Rejected {
+                reason: "morph_schema_refs_precondition_mismatch".to_owned(),
+            };
+        }
+        // Deterministic field transform for the `transformation` class. The
+        // predicate is pure over (current fields, rules) so two back-to-back
+        // invocations are byte-equal.
+        if compatibility_class == "transformation" {
+            match apply_morph_transformation_rules(&morph.fields, &transformation_rules) {
+                Ok(next_fields) => morph.fields = next_fields,
+                Err(reason) => {
+                    return ProjectionEffect::Rejected {
+                        reason: reason.to_owned(),
+                    };
+                }
+            }
+        }
+        morph.schema_refs = to_schema_refs;
+        morph.updated_by = operation
+            .payload
+            .get("sender")
+            .and_then(|v| v.as_str())
+            .map(ToOwned::to_owned);
+        morph.updated_at = Some(now);
+        ProjectionEffect::MorphLifecycle {
+            morph_id,
+            new_state: morph.state,
+        }
+    }
+
     /// Apply `ck.morph.archive` / `ck.morph.restore`. Mirror of
     /// `apply_strand_lifecycle`.
     pub(crate) fn apply_morph_lifecycle(

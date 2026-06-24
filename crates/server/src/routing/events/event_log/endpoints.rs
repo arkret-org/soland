@@ -52,6 +52,16 @@ async fn events_describe(depot: &mut Depot) -> JsonResult<cokret_sdk::ServerDesc
 #[tracing::instrument(skip_all, fields(op = "submit_event"))]
 async fn submit_event(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
+    // api-conventions.md §6 — read the generic `Idempotency-Key` header before
+    // the body is consumed; an empty / blank value is treated as absent so a
+    // misconfigured client does not collapse every write onto one key.
+    let idempotency_key = req
+        .headers()
+        .get("idempotency-key")
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
     let submit = match req.parse_json::<SolandEventsSubmitRequestBody>().await {
         Ok(body) => body,
         Err(_) => {
@@ -76,6 +86,80 @@ async fn submit_event(depot: &mut Depot, req: &mut Request, res: &mut Response) 
     let Some(session) = auth_or_render(state, req, res).await else {
         return;
     };
+
+    // §6 generic idempotency key path. When present, the key is scoped to the
+    // authenticated principal: a replay carrying the SAME canonical body
+    // returns the cached first response; the SAME key with a DIFFERENT
+    // canonical body is a `duplicate_conflict`. Event-ID idempotency below
+    // still applies independently (a write with no header relies on it).
+    if let Some(key) = idempotency_key.as_deref() {
+        let request_hash = match cokret_sdk::canonical::canonical_sha256(&submit) {
+            Ok(hash) => hash,
+            Err(error) => {
+                render_error(
+                    res,
+                    StatusCode::BAD_REQUEST,
+                    "schema_violation",
+                    &format!("request body is not canonical-hashable: {error}"),
+                );
+                return;
+            }
+        };
+        match state
+            .persistence
+            .idempotency_keys()
+            .get(&session.actor, key)
+            .await
+        {
+            Ok(Some(record)) if record.request_hash == request_hash => {
+                // Replay: re-emit the cached first response verbatim, no
+                // re-execution and no second side effect.
+                let status = StatusCode::from_u16(record.response_status as u16)
+                    .unwrap_or(StatusCode::OK);
+                res.status_code(status);
+                res.render(Json(record.response_body));
+                return;
+            }
+            Ok(Some(_)) => {
+                render_error(
+                    res,
+                    StatusCode::CONFLICT,
+                    "duplicate_conflict",
+                    "Idempotency-Key was reused with a different request body",
+                );
+                return;
+            }
+            Ok(None) => {}
+            Err(error) => {
+                render_error(
+                    res,
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal_error",
+                    &format!("idempotency lookup failed: {error}"),
+                );
+                return;
+            }
+        }
+        let (status, body) = submit_event_dispatch(state, &session, submit).await;
+        // Only deterministic outcomes are cached: a 5xx is transient, so caching
+        // it would wrongly pin a server-side failure under the key and block a
+        // legitimate retry. The client may safely re-send the same key.
+        if !status.is_server_error() {
+            persist_idempotency_first_response(
+                state,
+                &session.actor,
+                key,
+                &request_hash,
+                status,
+                &body,
+            )
+            .await;
+        }
+        res.status_code(status);
+        res.render(Json(body));
+        return;
+    }
+
     match submit {
         SolandEventsSubmitRequestBody::Federation(_) => unreachable!("handled before auth"),
         SolandEventsSubmitRequestBody::Batch(batch) => {
@@ -91,6 +175,101 @@ async fn submit_event(depot: &mut Depot, req: &mut Request, res: &mut Response) 
                 Err(error) => render_submit_one_error(res, error),
             }
         }
+    }
+}
+
+/// How long a generic `Idempotency-Key` mapping is retained. api-conventions.md
+/// §6 only requires "at least until the related Event is fully synced or
+/// expired"; 24h comfortably covers a client's retry horizon while keeping the
+/// table bounded under the periodic TTL sweep.
+const IDEMPOTENCY_KEY_TTL_SECONDS: i64 = 86_400;
+
+/// Run the (already-authenticated, non-federation) submit and reduce it to the
+/// rendered `(status, body)` pair — the same value either rendered directly or
+/// cached under an `Idempotency-Key`. Mirrors the no-key match arms exactly so
+/// the cached first response is byte-for-byte what a keyless write would emit.
+async fn submit_event_dispatch(
+    state: &AppState,
+    session: &SessionRecord,
+    submit: SolandEventsSubmitRequestBody,
+) -> (StatusCode, Value) {
+    match submit {
+        SolandEventsSubmitRequestBody::Federation(_) => unreachable!("handled before auth"),
+        SolandEventsSubmitRequestBody::Batch(batch) => {
+            match submit_event_batch_outcome(state, session, batch.events).await {
+                Ok(outcome) => (StatusCode::OK, submit_outcome_value(&outcome)),
+                Err(error) => submit_one_error_value(error),
+            }
+        }
+        SolandEventsSubmitRequestBody::Single(envelope) => {
+            let envelope_for_chaos = envelope.clone();
+            match submit_event_value(state, session, envelope).await {
+                Ok(response) => {
+                    maybe_delay_test_chaos_breakpoint(state, &envelope_for_chaos, &response).await;
+                    (StatusCode::OK, submit_outcome_value(&response.outcome))
+                }
+                Err(error) => submit_one_error_value(error),
+            }
+        }
+    }
+}
+
+fn submit_outcome_value(outcome: &cokret_sdk::EventsSubmitOutcome) -> Value {
+    serde_json::to_value(outcome).unwrap_or_else(|_| json!({"status": "accepted"}))
+}
+
+/// Render a `SubmitOneError` to the same `(status, body)` shape
+/// `render_submit_one_error` writes: a quarantine error becomes a 200 `partial`
+/// outcome, every other error becomes the standard error envelope.
+fn submit_one_error_value(error: SubmitOneError) -> (StatusCode, Value) {
+    if let Some(event_id) = error.quarantine_event_id {
+        let outcome = events_submit_outcome(
+            cokret_sdk::EventsSubmitStatus::Partial,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            vec![event_id],
+            None,
+        );
+        return (StatusCode::OK, submit_outcome_value(&outcome));
+    }
+    let body = json!(
+        cokret_sdk::ErrorEnvelope::new(error.code.clone(), error.message.clone())
+            .with_request_id(crate::ids::generate_request_id())
+    );
+    (error.status, body)
+}
+
+/// Persist the FIRST response under an `Idempotency-Key`. Best-effort: a failed
+/// write is downgraded to a warning rather than failing the request the caller
+/// already executed — a missing mapping only costs a later replay its cache hit
+/// (it re-executes, and Event-ID idempotency still de-duplicates the work).
+async fn persist_idempotency_first_response(
+    state: &AppState,
+    principal_id: &str,
+    idempotency_key: &str,
+    request_hash: &str,
+    status: StatusCode,
+    body: &Value,
+) {
+    let created_at = now();
+    let record = crate::persistence::IdempotencyRecord {
+        principal_id: principal_id.to_owned(),
+        idempotency_key: idempotency_key.to_owned(),
+        service_id: state.config.service_did.clone(),
+        request_hash: request_hash.to_owned(),
+        response_status: status.as_u16() as i32,
+        response_body: body.clone(),
+        created_at,
+        expires_at: created_at + Duration::seconds(IDEMPOTENCY_KEY_TTL_SECONDS),
+    };
+    if let Err(error) = state
+        .persistence
+        .idempotency_keys()
+        .record(&record)
+        .await
+    {
+        tracing::warn!(%error, idempotency_key, "idempotency first-response persist failed");
     }
 }
 

@@ -528,6 +528,7 @@ CREATE TABLE public.mls_commits (
     covered_seals jsonb DEFAULT '[]'::jsonb NOT NULL,
     governance_binding jsonb DEFAULT '{}'::jsonb NOT NULL,
     committed_at bigint NOT NULL,
+    frontier_contested boolean DEFAULT false NOT NULL,
     CONSTRAINT mls_commits_effective_scope_check CHECK ((((effective_scope_kind = 'realm'::text) AND (circle_id IS NULL)) OR ((effective_scope_kind = 'circle'::text) AND (circle_id IS NOT NULL))))
 );
 
@@ -1004,6 +1005,17 @@ CREATE TABLE public.sync_cursor_revocations (
     CONSTRAINT sync_cursor_revocations_scope_check CHECK ((scope = ANY (ARRAY['this_cursor'::text, 'same_device'::text, 'same_session'::text])))
 );
 
+CREATE TABLE public.idempotency_keys (
+    principal_id text NOT NULL,
+    idempotency_key text NOT NULL,
+    service_id text NOT NULL,
+    request_hash text NOT NULL,
+    response_status integer NOT NULL,
+    response_body jsonb NOT NULL,
+    created_at timestamp with time zone NOT NULL,
+    expires_at timestamp with time zone NOT NULL
+);
+
 CREATE TABLE public.webrtc_sessions (
     id uuid NOT NULL,
     realm_id uuid NOT NULL,
@@ -1322,6 +1334,9 @@ ALTER TABLE ONLY public.sync_cursor_handles
 ALTER TABLE ONLY public.sync_cursor_revocations
     ADD CONSTRAINT sync_cursor_revocations_pkey PRIMARY KEY (id);
 
+ALTER TABLE ONLY public.idempotency_keys
+    ADD CONSTRAINT idempotency_keys_pkey PRIMARY KEY (principal_id, idempotency_key);
+
 ALTER TABLE ONLY public.webrtc_sessions
     ADD CONSTRAINT webrtc_sessions_pkey PRIMARY KEY (id);
 
@@ -1576,6 +1591,8 @@ CREATE INDEX sync_cursor_handles_expiry_idx ON public.sync_cursor_handles USING 
 CREATE INDEX sync_cursor_handles_stream_idx ON public.sync_cursor_handles USING btree (principal_id, device_id, filter_digest);
 
 CREATE INDEX sync_cursor_revocations_expiry_idx ON public.sync_cursor_revocations USING btree (expires_at);
+
+CREATE INDEX idempotency_keys_expiry_idx ON public.idempotency_keys USING btree (expires_at);
 
 CREATE INDEX webrtc_sessions_expires_idx ON public.webrtc_sessions USING btree (expires_at);
 

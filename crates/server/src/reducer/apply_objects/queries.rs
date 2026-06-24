@@ -28,6 +28,23 @@ impl ProjectionState {
         msgs
     }
 
+    /// Get messages for a Realm including redacted rows, sorted by creation
+    /// time. Superseded revisions are still dropped (only the latest revision
+    /// of a message survives). The message stream (sync timeline) uses this so
+    /// a redacted message keeps its slot and can be surfaced as a per-message
+    /// tombstone (strand-and-message.md §9) instead of vanishing — the read
+    /// path replaces its body with the redaction tombstone before emitting.
+    pub fn messages_for_realm_including_redacted(&self, realm_id: &str) -> Vec<&MessageState> {
+        let superseded = self.superseded_message_ids();
+        let mut msgs: Vec<_> = self
+            .messages
+            .values()
+            .filter(|m| m.realm_id == realm_id && !superseded.contains(m.event_id.as_str()))
+            .collect();
+        msgs.sort_by_key(|a| a.created_at);
+        msgs
+    }
+
     /// Get messages for a thread, sorted by creation time.
     pub fn messages_for_thread(&self, thread_id: &str) -> Vec<&MessageState> {
         let superseded = self.superseded_message_ids();

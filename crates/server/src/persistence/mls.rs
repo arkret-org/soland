@@ -56,6 +56,10 @@ pub struct MlsCommitEpochRecord {
     pub covered_seals: Vec<String>,
     pub governance_binding: Value,
     pub committed_at: i64,
+    /// `true` once concurrent commits resolved the group's
+    /// `covered_frontier_cell` to `⊥` (encryption-and-audit.md §2.5.2). Cleared
+    /// when a resolving commit advances the epoch via `try_bump`.
+    pub frontier_contested: bool,
 }
 
 /// G3.S1 — KeyPackage store. The `try_claim` CAS path is what
@@ -136,6 +140,15 @@ pub trait MlsCommitStore: Send + Sync {
         covered_seals: &[String],
         governance_binding: &Value,
         committed_at: i64,
+    ) -> PersistenceResult<Option<MlsCommitEpochRecord>>;
+    /// §2.5.2 — flag the group's current epoch row as contested (`⊥`) after
+    /// concurrent commits. A no-op (`Ok(None)`) when no epoch row exists or the
+    /// stored epoch has already advanced past `epoch`.
+    async fn mark_frontier_contested(
+        &self,
+        effective_scope: &Value,
+        group_id: &str,
+        epoch: u64,
     ) -> PersistenceResult<Option<MlsCommitEpochRecord>>;
     async fn snapshot_all(&self) -> PersistenceResult<Vec<MlsCommitEpochRecord>>;
 }
@@ -430,6 +443,7 @@ impl MlsCommitStore for MemoryMlsCommitStore {
             covered_seals,
             governance_binding: governance_binding.clone(),
             committed_at,
+            frontier_contested: false,
         };
         rows.insert(key, record.clone());
         Ok(Some(record))
@@ -467,9 +481,29 @@ impl MlsCommitStore for MemoryMlsCommitStore {
             covered_seals: merged_frontier,
             governance_binding: governance_binding.clone(),
             committed_at,
+            // A resolving commit advances the epoch and clears the ⊥ marker.
+            frontier_contested: false,
         };
         rows.insert(key, new_record.clone());
         Ok(Some(new_record))
+    }
+
+    async fn mark_frontier_contested(
+        &self,
+        effective_scope: &Value,
+        group_id: &str,
+        epoch: u64,
+    ) -> PersistenceResult<Option<MlsCommitEpochRecord>> {
+        let key = mls_epoch_key(effective_scope, group_id)?;
+        let mut rows = self.rows.lock().expect("mls commit lock");
+        let Some(record) = rows.get_mut(&key) else {
+            return Ok(None);
+        };
+        if record.epoch != epoch {
+            return Ok(None);
+        }
+        record.frontier_contested = true;
+        Ok(Some(record.clone()))
     }
 
     async fn snapshot_all(&self) -> PersistenceResult<Vec<MlsCommitEpochRecord>> {
@@ -704,7 +738,7 @@ impl MlsCommitStore for PgMlsCommitStore {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(
             "SELECT id, mls_group_id, effective_scope, epoch, leader_actor_id, covered_seals, \
-             governance_binding, committed_at \
+             governance_binding, committed_at, frontier_contested \
              FROM mls_commits \
              WHERE effective_scope_kind = $1 \
                AND realm_id = $2 \
@@ -738,10 +772,10 @@ impl MlsCommitStore for PgMlsCommitStore {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(
             "INSERT INTO mls_commits \
-             (id, effective_scope_kind, realm_id, circle_id, effective_scope, mls_group_id, epoch, leader_actor_id, covered_seals, governance_binding, committed_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, 0, $7, $8, $9, $10) \
+             (id, effective_scope_kind, realm_id, circle_id, effective_scope, mls_group_id, epoch, leader_actor_id, covered_seals, governance_binding, committed_at, frontier_contested) \
+             VALUES ($1, $2, $3, $4, $5, $6, 0, $7, $8, $9, $10, false) \
              ON CONFLICT DO NOTHING \
-             RETURNING id, mls_group_id, effective_scope, epoch, leader_actor_id, covered_seals, governance_binding, committed_at",
+             RETURNING id, mls_group_id, effective_scope, epoch, leader_actor_id, covered_seals, governance_binding, committed_at, frontier_contested",
         )
         .bind::<SqlUuid, _>(Uuid::now_v7())
         .bind::<Text, _>(&scope.kind)
@@ -786,13 +820,14 @@ impl MlsCommitStore for PgMlsCommitStore {
                  FROM jsonb_array_elements_text(mls_commits.covered_seals || $8::jsonb) AS merged(value) \
                ), \
                governance_binding = $9, \
-               committed_at = $10 \
+               committed_at = $10, \
+               frontier_contested = false \
              WHERE effective_scope_kind = $1 \
                AND realm_id = $2 \
                AND circle_id IS NOT DISTINCT FROM $3 \
                AND mls_group_id = $4 \
                AND epoch = $5 \
-             RETURNING id, mls_group_id, effective_scope, epoch, leader_actor_id, covered_seals, governance_binding, committed_at",
+             RETURNING id, mls_group_id, effective_scope, epoch, leader_actor_id, covered_seals, governance_binding, committed_at, frontier_contested",
         )
         .bind::<Text, _>(&scope.kind)
         .bind::<Text, _>(&scope.realm_id)
@@ -810,10 +845,40 @@ impl MlsCommitStore for PgMlsCommitStore {
         .map_err(PersistenceError::from)
     }
 
+    async fn mark_frontier_contested(
+        &self,
+        effective_scope: &Value,
+        group_id: &str,
+        epoch: u64,
+    ) -> PersistenceResult<Option<MlsCommitEpochRecord>> {
+        let scope = mls_effective_scope_parts(effective_scope)?;
+        let epoch = i64::try_from(epoch)
+            .map_err(|_| PersistenceError::Internal("MLS epoch exceeds i64".to_owned()))?;
+        let mut conn = pg_conn(&self.pool).await?;
+        sql_query(
+            "UPDATE mls_commits SET frontier_contested = true \
+             WHERE effective_scope_kind = $1 \
+               AND realm_id = $2 \
+               AND circle_id IS NOT DISTINCT FROM $3 \
+               AND mls_group_id = $4 \
+               AND epoch = $5 \
+             RETURNING id, mls_group_id, effective_scope, epoch, leader_actor_id, covered_seals, governance_binding, committed_at, frontier_contested",
+        )
+        .bind::<Text, _>(&scope.kind)
+        .bind::<Text, _>(&scope.realm_id)
+        .bind::<Nullable<Text>, _>(&scope.circle_id)
+        .bind::<Text, _>(group_id)
+        .bind::<BigInt, _>(epoch)
+        .get_result::<MlsCommitEpochRow>(&mut *conn).await
+        .optional()
+        .map(|row| row.map(MlsCommitEpochRecord::from))
+        .map_err(PersistenceError::from)
+    }
+
     async fn snapshot_all(&self) -> PersistenceResult<Vec<MlsCommitEpochRecord>> {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(
-            "SELECT id, mls_group_id, effective_scope, epoch, leader_actor_id, covered_seals, governance_binding, committed_at \
+            "SELECT id, mls_group_id, effective_scope, epoch, leader_actor_id, covered_seals, governance_binding, committed_at, frontier_contested \
              FROM mls_commits ORDER BY effective_scope_kind ASC, realm_id ASC, circle_id ASC, mls_group_id ASC",
         )
         .load::<MlsCommitEpochRow>(&mut *conn).await
@@ -943,6 +1008,8 @@ struct MlsCommitEpochRow {
     governance_binding: Value,
     #[diesel(sql_type = BigInt)]
     committed_at: i64,
+    #[diesel(sql_type = Bool)]
+    frontier_contested: bool,
 }
 
 impl From<MlsCommitEpochRow> for MlsCommitEpochRecord {
@@ -956,6 +1023,7 @@ impl From<MlsCommitEpochRow> for MlsCommitEpochRecord {
             covered_seals: json_string_array(row.covered_seals),
             governance_binding: row.governance_binding,
             committed_at: row.committed_at,
+            frontier_contested: row.frontier_contested,
         }
     }
 }

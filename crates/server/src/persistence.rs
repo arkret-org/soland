@@ -36,6 +36,7 @@ mod devices;
 mod events;
 mod federation;
 mod governance;
+mod idempotency;
 mod key_backup;
 mod memory_store;
 mod mls;
@@ -66,6 +67,7 @@ pub use devices::*;
 pub use events::*;
 pub use federation::*;
 pub use governance::*;
+pub use idempotency::*;
 pub use key_backup::*;
 pub use memory_store::SolandMemoryPersistenceStore;
 pub use mls::*;
@@ -168,6 +170,7 @@ pub trait PersistenceStore: Send + Sync {
     // CKP-0016 — per-recipient notification projection.
     fn notifications(&self) -> &dyn NotificationStore;
     fn sync_cursors(&self) -> &dyn SyncCursorStore;
+    fn idempotency_keys(&self) -> &dyn IdempotencyStore;
 }
 
 pub(crate) fn json_string_array(value: Value) -> Vec<String> {

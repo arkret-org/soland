@@ -1510,3 +1510,71 @@ async fn pg_contact_consent_policy_and_direct_binding_survive_store_restart() {
         .await
         .unwrap();
 }
+
+fn idempotency_record(
+    principal: &str,
+    key: &str,
+    request_hash: &str,
+    expires_at: chrono::DateTime<Utc>,
+) -> IdempotencyRecord {
+    IdempotencyRecord {
+        principal_id: principal.to_owned(),
+        idempotency_key: key.to_owned(),
+        service_id: "did:web:soland.local".to_owned(),
+        request_hash: request_hash.to_owned(),
+        response_status: 200,
+        response_body: serde_json::json!({"status": "accepted"}),
+        created_at: Utc::now(),
+        expires_at,
+    }
+}
+
+#[tokio::test]
+async fn memory_idempotency_store_first_writer_wins_and_replays() {
+    let store = MemoryIdempotencyStore::new();
+    let future = Utc::now() + chrono::Duration::hours(1);
+    let first = idempotency_record("did:web:alice", "k1", "hash-a", future);
+    store.record(&first).await.unwrap();
+
+    // First-writer-wins: a second `record` under the same (principal, key)
+    // MUST NOT clobber the cached first response, even with a different hash.
+    let mut second = idempotency_record("did:web:alice", "k1", "hash-b", future);
+    second.response_body = serde_json::json!({"status": "duplicate"});
+    store.record(&second).await.unwrap();
+
+    let got = store.get("did:web:alice", "k1").await.unwrap().unwrap();
+    assert_eq!(got.request_hash, "hash-a", "first response is retained");
+    assert_eq!(got.response_body, serde_json::json!({"status": "accepted"}));
+
+    // The same key is per-principal: a different principal sees no row.
+    assert!(store.get("did:web:bob", "k1").await.unwrap().is_none());
+}
+
+#[tokio::test]
+async fn memory_idempotency_store_prune_expired_sweeps_by_ttl() {
+    let store = MemoryIdempotencyStore::new();
+    let now = Utc::now();
+    store
+        .record(&idempotency_record(
+            "did:web:alice",
+            "live",
+            "h",
+            now + chrono::Duration::hours(1),
+        ))
+        .await
+        .unwrap();
+    store
+        .record(&idempotency_record(
+            "did:web:alice",
+            "stale",
+            "h",
+            now - chrono::Duration::hours(1),
+        ))
+        .await
+        .unwrap();
+
+    let pruned = store.prune_expired(now).await.unwrap();
+    assert_eq!(pruned, 1);
+    assert!(store.get("did:web:alice", "stale").await.unwrap().is_none());
+    assert!(store.get("did:web:alice", "live").await.unwrap().is_some());
+}

@@ -362,6 +362,15 @@ pub(crate) fn apply_claim_level_partition(
             ),
             ..cokret_sdk::ClaimedProfileEntry::self_claimed("ck.profile.mimi_interop.v1")
         },
+        cokret_sdk::ClaimedProfileEntry {
+            notes: Some(
+                "Agent protocol interop extension profile: ck.agent.endpoint registry, \
+                 /_cokret/self/agents/discover, ck.agent.interop_session.* lifecycle + \
+                 Ed25519 audit_binding. See zh/extensions/agent-protocol-interop.md."
+                    .to_owned(),
+            ),
+            ..cokret_sdk::ClaimedProfileEntry::self_claimed("ck.profile.agent_runtime.v1")
+        },
     ];
     // G3.S9 — when the sovereign enclave profile is enabled, claim it
     // alongside the baseline profiles. The enclave invariants

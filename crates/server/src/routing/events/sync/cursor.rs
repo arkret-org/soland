@@ -327,7 +327,8 @@ pub fn spawn_sync_cursor_ttl_sweeper(
         ticker.tick().await;
         loop {
             ticker.tick().await;
-            let now_ms = chrono::Utc::now().timestamp_millis();
+            let now = chrono::Utc::now();
+            let now_ms = now.timestamp_millis();
             match state.persistence.sync_cursors().prune_expired(now_ms).await {
                 Ok(0) => {}
                 Ok(pruned) => tracing::debug!(
@@ -339,6 +340,22 @@ pub fn spawn_sync_cursor_ttl_sweeper(
                     worker = "sync_cursor_ttl_sweep",
                     %error,
                     "sync cursor TTL sweep failed"
+                ),
+            }
+            // api-conventions.md §6 — the generic `Idempotency-Key` cache shares
+            // this periodic sweep so its mapping table stays bounded by the
+            // per-record TTL instead of growing with every keyed write.
+            match state.persistence.idempotency_keys().prune_expired(now).await {
+                Ok(0) => {}
+                Ok(pruned) => tracing::debug!(
+                    worker = "sync_cursor_ttl_sweep",
+                    pruned,
+                    "expired idempotency keys pruned"
+                ),
+                Err(error) => tracing::warn!(
+                    worker = "sync_cursor_ttl_sweep",
+                    %error,
+                    "idempotency key TTL sweep failed"
                 ),
             }
         }

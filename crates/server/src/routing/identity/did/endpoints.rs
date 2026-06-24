@@ -238,6 +238,21 @@ pub struct EmbeddedWebvhRegisterRequestBody {
     /// SCID + log proof verify; absent for callers that designate no authority.
     #[serde(default)]
     pub device_enrollment_authority_did: Option<String>,
+    /// Genesis-declared emergency recovery keys (multibase ed25519 public
+    /// keys). When present they are written into `parameters.recoveryKeys` so a
+    /// later emergency rotation (key-management.md §3.3) can be authorised by a
+    /// recovery key without a previous-controller signature. The registering
+    /// client MUST include the same values it signed over (they affect the SCID
+    /// and entry hash).
+    #[serde(default)]
+    pub recovery_keys: Vec<String>,
+    /// Genesis-declared organization governance threshold (identity-did.md §8).
+    /// `{ "threshold": { "required": N, "eligible_methods": [...] } }`. When
+    /// present it is written into `parameters.governance` so every later
+    /// rotation MUST clear the N-of-M quorum. The registering client MUST
+    /// include the same value it signed over.
+    #[serde(default)]
+    pub governance: Option<Value>,
 }
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
@@ -364,14 +379,34 @@ pub(crate) async fn embedded_webvh_register(
         service_endpoint.as_str(),
         body.device_enrollment_authority_did.as_deref(),
     );
+    let mut parameters = json!({
+        "scid": WEBVH_SCID_PLACEHOLDER,
+        "method": WEBVH_METHOD_VERSION,
+        "updateKeys": [body.update_public_key_multibase.clone()],
+    });
+    // Optional genesis-declared recovery keys + governance threshold. They are
+    // part of the signed entry, so the client MUST have signed over the same
+    // values — they flow through SCID derivation and the entry hash unchanged.
+    if let Value::Object(map) = &mut parameters {
+        if !body.recovery_keys.is_empty() {
+            map.insert(
+                "recoveryKeys".to_owned(),
+                Value::Array(
+                    body.recovery_keys
+                        .iter()
+                        .map(|key| Value::String(key.clone()))
+                        .collect(),
+                ),
+            );
+        }
+        if let Some(governance) = body.governance.clone() {
+            map.insert("governance".to_owned(), governance);
+        }
+    }
     let entry_skeleton = json!({
         "versionId": format!("0-{WEBVH_SCID_PLACEHOLDER}"),
         "versionTime": version_time,
-        "parameters": {
-            "scid": WEBVH_SCID_PLACEHOLDER,
-            "method": WEBVH_METHOD_VERSION,
-            "updateKeys": [body.update_public_key_multibase.clone()],
-        },
+        "parameters": parameters,
         "state": did_document_skeleton,
     });
     let scid = derive_webvh_scid(&entry_skeleton).map_err(AppError::invalid_param)?;
@@ -472,6 +507,183 @@ pub(crate) async fn embedded_webvh_register(
     })
 }
 
+#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
+pub struct EmbeddedWebvhRotateRequestBody {
+    /// The DID whose `did.jsonl` history a rotation entry is appended to.
+    pub did: String,
+    /// The next `did:webvh` log entry, already shaped by the client:
+    /// `versionId` (`<seq>-<multibase-multihash>`), `previousVersionId`
+    /// (the current head's `versionId`), `versionTime`, `parameters`
+    /// (`updateKeys`, optional `witnesses` / `witness_threshold`), `state`
+    /// (the new DID document), `proof[]` (controller / recovery / governance
+    /// signatures), and optional `witness[]` attestations. soland appends it
+    /// verbatim and re-validates the whole chain (hash chain, SCID, witness
+    /// quorum, rotation authorisation) before persisting.
+    #[salvo(schema(value_type = serde_json::Value))]
+    pub log_entry: Value,
+}
+
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
+pub struct EmbeddedWebvhRotateOutcome {
+    pub status: String,
+    pub did: String,
+    pub seq: u64,
+    pub key_log_head: String,
+    pub did_document: Value,
+    pub entry_count: usize,
+}
+
+/// Append a client-signed rotation entry to an embedded `did:webvh` history.
+///
+/// Unlike `submit-did-operation` (a method-neutral document replace), this
+/// endpoint appends a real `did:webvh` log entry to `did.jsonl` and then runs
+/// the full resolver validation gate over the resulting chain
+/// (`run_webvh_resolution_checks`): hash chain link, SCID, witness quorum /
+/// degraded window, and rotation control authorisation (controller proof,
+/// recovery key, or organization governance quorum). It fails closed on any
+/// integrity / authorisation break, so E9.1 (tampered prev hash), E9.3
+/// (governance N-of-M) and E9.5 (recovery key) are all enforced at write time.
+/// Spec: identity-did.md §3.4 / §4.2.1 / §7 / §8 + key-management.md §3.3.
+#[endpoint(
+    operation_id = "org.cokret.soland.identity.webvh.rotate",
+    tags("identity"),
+    summary = "Append a rotation entry to an embedded did:webvh history",
+    status_codes(200, 400, 401, 404, 409, 422, 500, 503)
+)]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.identity.webvh.rotate"))]
+pub(crate) async fn embedded_webvh_rotate(
+    depot: &mut Depot,
+    req: &mut Request,
+    body: JsonBody<EmbeddedWebvhRotateRequestBody>,
+) -> JsonResult<EmbeddedWebvhRotateOutcome> {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    if !state.config.embedded_webvh_provider_enabled {
+        return Err(AppError::not_found(
+            "embedded did:webvh provider is disabled",
+        ));
+    }
+    require_embedded_webvh_registration_bearer(state, req)?;
+    let body = body.into_inner();
+    let did = body.did.trim().to_owned();
+    if validate_did(&did).is_err() || !did.starts_with("did:webvh:") {
+        return Err(AppError::invalid_param("did must be a valid did:webvh"));
+    }
+    let entry = body.log_entry;
+    if !entry.is_object() {
+        return Err(AppError::invalid_param("log_entry must be an object"));
+    }
+    let version_id = entry
+        .get("versionId")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .ok_or_else(|| AppError::invalid_param("log_entry.versionId is required"))?;
+    let new_document = entry
+        .get("state")
+        .filter(|state| state.is_object())
+        .cloned()
+        .ok_or_else(|| {
+            AppError::invalid_param("log_entry.state (the new DID document) is required")
+        })?;
+    ensure_webvh_document_id(&did, &new_document)?;
+
+    // Load the existing log; the rotation MUST extend a known history.
+    let mut events = state
+        .persistence
+        .webvh()
+        .list_log_events(&did)
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    if events.is_empty() {
+        return Err(AppError::not_found(
+            "no existing did:webvh history for did; register the genesis entry first",
+        ));
+    }
+    let next_seq = events.iter().map(|event| event.seq).max().unwrap_or(0) + 1;
+
+    // Build the candidate chain (existing entries + the new entry) and run the
+    // full resolver validation gate over it before persisting anything.
+    let mut candidate: Vec<WebvhLogEntry> = events
+        .iter()
+        .map(|event| WebvhLogEntry::new(event.operation.clone()))
+        .collect();
+    candidate.push(WebvhLogEntry::new(entry.clone()));
+    validate_log_chain(&candidate)?;
+    verify_scid_against_did(&did, &candidate[0])?;
+    validate_witness_policy_for_log(&candidate, now().timestamp())?;
+    validate_rotation_authorization_for_log(&candidate)?;
+
+    let submitted_at = now();
+    state
+        .persistence
+        .webvh()
+        .put_document(WebvhDocumentRecord {
+            did: did.clone(),
+            did_document: new_document.clone(),
+            key_log_head: Some(version_id.clone()),
+            seq: next_seq,
+            method_evidence: json!({
+                "mode": "embedded_webvh_provider",
+                "provider_id": "soland.embedded",
+                "rotation": true,
+                "version_id": version_id,
+            }),
+            fetched_at: submitted_at,
+            expires_at: submitted_at,
+            updated_at: submitted_at,
+        })
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    state
+        .persistence
+        .webvh()
+        .append_log_event(WebvhLogRecord {
+            event_digest: version_id.clone(),
+            did: did.clone(),
+            seq: next_seq,
+            operation: entry,
+            created_at: submitted_at,
+        })
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    events.push(WebvhLogRecord {
+        event_digest: version_id.clone(),
+        did: did.clone(),
+        seq: next_seq,
+        operation: json!({}),
+        created_at: submitted_at,
+    });
+    append_audit_log(
+        state,
+        Some(&did),
+        "identity.webvh_rotate",
+        json!({
+            "did": did.clone(),
+            "seq": next_seq,
+            "version_id": version_id.clone(),
+        }),
+        "accepted",
+    )
+    .await;
+    json_ok(EmbeddedWebvhRotateOutcome {
+        status: "accepted".to_owned(),
+        did,
+        seq: next_seq,
+        key_log_head: version_id,
+        did_document: new_document,
+        entry_count: events.len(),
+    })
+}
+
+fn ensure_webvh_document_id(did: &str, document: &Value) -> Result<(), AppError> {
+    match document.get("id").and_then(Value::as_str) {
+        Some(value) if value == did => Ok(()),
+        Some(_) => Err(AppError::invalid_param(
+            "log_entry.state.id does not match did",
+        )),
+        None => Err(AppError::invalid_param("log_entry.state.id is required")),
+    }
+}
+
 #[endpoint]
 #[tracing::instrument(skip_all, fields(op = "embedded_webvh_document"))]
 pub(crate) async fn embedded_webvh_document(
@@ -538,16 +750,14 @@ pub(crate) async fn identity_resolve(
     let did = body.did.as_str();
     if let Ok(Some(record)) = state.persistence.webvh().get_document(did).await {
         // G3.S3: every did:webvh resolution MUST first re-validate the
-        // log chain, SCID derivation, and configured witness quorum.
-        // Rotation entries fail closed when witness quorum is missing;
-        // non-rotation entries may only remain in degraded_no_witness
-        // for the spec's 24h window. Spec: identity-did.md §3.4 +
-        // §4.2.1.
-        //
-        // TODO(G3.S3-followup): emergency rotation path
-        // (key-management.md §3.3 recovery key). Today rotation entries
-        // must be controller-signed; recovery-key-only rotations are
-        // not yet accepted.
+        // log chain, SCID derivation, configured witness quorum, and
+        // rotation control authorisation. Rotation entries fail closed
+        // when witness quorum is missing; non-rotation entries may only
+        // remain in degraded_no_witness for the spec's 24h window.
+        // Rotation control authorisation accepts a previous-controller
+        // proof, a genesis-declared recovery key (key-management.md §3.3),
+        // or an organization governance quorum (identity-did.md §8.1–§8.2).
+        // Spec: identity-did.md §3.4 + §4.2.1 + §7 + §8.
         if did.starts_with("did:webvh:") {
             run_webvh_resolution_checks(state, did).await?;
         }

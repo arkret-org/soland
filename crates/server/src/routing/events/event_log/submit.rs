@@ -192,27 +192,36 @@ pub(super) async fn submit_event_batch(
     envelopes: Vec<Event>,
     res: &mut Response,
 ) {
+    match submit_event_batch_outcome(state, session, envelopes).await {
+        Ok(outcome) => res.render(Json(outcome)),
+        Err(error) => render_submit_one_error(res, error),
+    }
+}
+
+/// Run a multi-envelope batch and return its `EventsSubmitOutcome` without
+/// rendering, so the caller can also feed the value through the generic
+/// `Idempotency-Key` cache (api-conventions.md §6) before rendering. The batch
+/// surface never produces a 409 on its own — per-envelope conflicts are folded
+/// into `rejected[]` / `quarantine[]` and the aggregate status is `partial` —
+/// so only the two early body-shape guards short-circuit as a `SubmitOneError`.
+pub(super) async fn submit_event_batch_outcome(
+    state: &AppState,
+    session: &SessionRecord,
+    envelopes: Vec<Event>,
+) -> Result<EventsSubmitOutcome, SubmitOneError> {
     if envelopes.is_empty() {
-        render_submit_one_error(
-            res,
-            SubmitOneError::new(
-                StatusCode::BAD_REQUEST,
-                "missing_param",
-                "events submit batch must contain at least one envelope",
-            ),
-        );
-        return;
+        return Err(SubmitOneError::new(
+            StatusCode::BAD_REQUEST,
+            "missing_param",
+            "events submit batch must contain at least one envelope",
+        ));
     }
     if cokret_sdk::validate_event_submit_batch_count(envelopes.len()).is_err() {
-        render_submit_one_error(
-            res,
-            SubmitOneError::new(
-                StatusCode::PAYLOAD_TOO_LARGE,
-                "payload_too_large",
-                "events submit batch exceeds max batch size",
-            ),
-        );
-        return;
+        return Err(SubmitOneError::new(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "payload_too_large",
+            "events submit batch exceeds max batch size",
+        ));
     }
     let mut accepted = Vec::new();
     let mut duplicate = Vec::new();
@@ -274,14 +283,14 @@ pub(super) async fn submit_event_batch(
     } else {
         EventsSubmitStatus::Accepted
     };
-    res.render(Json(events_submit_outcome(
+    Ok(events_submit_outcome(
         status,
         accepted,
         duplicate,
         rejected,
         quarantine,
         Some(super::super::sync::sync_token_for_state(state).await),
-    )));
+    ))
 }
 
 pub(crate) async fn submit_federation_events(
@@ -700,6 +709,14 @@ async fn federation_service_binding_current_for_destination(
     state: &AppState,
     binding: &FederationServiceBindingRef,
 ) -> FederationServiceBindingCheck {
+    // The delivery-binding gate validates an inbound push against the receiver's
+    // existing local member bindings. A federation push that first establishes
+    // the Realm on this receiver has no prior members to be stale against (and
+    // the batch's own realm/member/binding events are validated by the normal
+    // reducer admission path), so admit it instead of failing closed.
+    if !crate::routing::events::event_log::realm_is_indexed(state, binding.realm_id.as_str()) {
+        return FederationServiceBindingCheck::Current;
+    }
     let members = {
         let projection = state.projection.lock().expect("projection lock");
         projection
@@ -1293,6 +1310,17 @@ async fn submit_event_value_with_context(
                     reason,
                 ));
             }
+            // morph.md §4.1 S1/S3 — schema-migration profile gate, dialect
+            // check, S1 version binding, and from_schema_refs[] CAS. Capability
+            // (`capability_denied`) is enforced earlier in the operation policy
+            // layer where the authz engine is available.
+            if let Err(reason) = proj.check_morph_schema_migrate(operation) {
+                return Err(SubmitOneError::new(
+                    StatusCode::PRECONDITION_FAILED,
+                    reason,
+                    reason,
+                ));
+            }
             if let Err(reason) = proj.check_redaction_target_transition(operation) {
                 return Err(SubmitOneError::new(
                     StatusCode::PRECONDITION_FAILED,
@@ -1316,6 +1344,28 @@ async fn submit_event_value_with_context(
                 ));
             }
             if let Err(reason) = proj.check_membership_join_admission(operation) {
+                return Err(SubmitOneError::new(
+                    StatusCode::PRECONDITION_FAILED,
+                    reason,
+                    reason,
+                ));
+            }
+            // join-policy.md §3 / §7 / §12 — application-review workflow
+            // anti-abuse limits (cooldown_after_reject, application_ttl,
+            // max_open_applications_per_actor) and review-decision
+            // preconditions for the candidate profile-private payloads.
+            if let Err(reason) = proj.check_membership_application_admission(operation) {
+                return Err(SubmitOneError::new(
+                    StatusCode::PRECONDITION_FAILED,
+                    reason,
+                    reason,
+                ));
+            }
+            // join-policy.md §7.5 — `ck.invite.create` with
+            // `refs[role="join_authorised_by"]` MUST bind to a fresh,
+            // unconsumed review accept whose reviewer still holds
+            // `review_capability`.
+            if let Err(reason) = proj.check_invite_join_authorisation(operation) {
                 return Err(SubmitOneError::new(
                     StatusCode::PRECONDITION_FAILED,
                     reason,
@@ -1466,6 +1516,18 @@ async fn submit_event_value_with_context(
                 format!("device revocation enforcement failed: {error}"),
             )
         })?;
+        // device-lifecycle.md §7 grace drop — a to-device message already queued
+        // for the revoked device MUST be dropped on revocation: a lost or
+        // compromised device that comes back online MUST NOT drain key-exchange
+        // or verification bootstrap material queued before the revoke. Runs after
+        // the record flip so `GET /_cokret/self/device_messages` for that device
+        // returns nothing once the revoke is accepted.
+        let purge_outcome = crate::routing::identity::auth::purge_device_delivery_state(
+            state,
+            &parsed.actor_id,
+            &target_device_id,
+        )
+        .await;
         append_audit_log(
             state,
             Some(&parsed.actor_id),
@@ -1475,10 +1537,49 @@ async fn submit_event_value_with_context(
                 "by_device_id": session.device_id.clone(),
                 "via": "ck.device.revoke",
                 "event_id": parsed.event_id.clone(),
+                "to_device_messages_dropped": purge_outcome.to_device_messages_dropped,
+                "push_registrations_removed": purge_outcome.push_registrations_removed,
             }),
             "accepted",
         )
         .await;
+    }
+
+    // morph.md §4.1 S3 — a breaking / transformation schema migration that
+    // reached this point passed the profile gate + capability check + CAS, and
+    // MUST emit a `schema_migration_breaking` audit record carrying issuer,
+    // from/to schema sets, compatibility class, the capability action used, and
+    // the opt-in profile ref. (additive migrations need no audit-grade record.)
+    if parsed.kind == cokret_sdk::events::kinds::MORPH_SCHEMA_MIGRATE {
+        let migrate_payload = envelope.get("payload");
+        let compatibility_class = migrate_payload
+            .and_then(|payload| payload.get("compatibility_class"))
+            .and_then(|value| value.as_str());
+        if matches!(compatibility_class, Some("breaking" | "transformation")) {
+            let payload_field = |field: &str| migrate_payload.and_then(|payload| payload.get(field));
+            let capability_used = payload_field("capability_action")
+                .or_else(|| payload_field("action"))
+                .and_then(|value| value.as_str())
+                .unwrap_or("ck.morph.schema_migrate");
+            append_audit_log(
+                state,
+                Some(&parsed.actor_id),
+                "schema_migration_breaking",
+                json!({
+                    "realm_id": parsed.realm_id.clone(),
+                    "morph_id": payload_field("morph_id"),
+                    "issuer": parsed.actor_id.clone(),
+                    "from_schema_refs": payload_field("from_schema_refs"),
+                    "to_schema_refs": payload_field("to_schema_refs"),
+                    "compatibility_class": compatibility_class,
+                    "capability_used": capability_used,
+                    "profile_ref": "ck.profile.morph.schema_migration_transformations.v1",
+                    "event_id": parsed.event_id.clone(),
+                }),
+                "accepted",
+            )
+            .await;
+        }
     }
 
     // CKP-0007: stamp the authoritative top-level `effective_scope` onto the
@@ -1823,6 +1924,22 @@ fn dynamic_peer_event_targets(
 ) -> Vec<DynamicPeerEventTarget> {
     let service_frontiers = {
         let projection = state.projection.lock().expect("projection lock");
+        // sync/federation.md §4.4 — peers whose federation service delegation
+        // for this Realm has been revoked MUST NOT receive future outbound
+        // pushes. Compute the revoked-peer set once under the projection lock.
+        // The revoke / grant capability control events themselves still fan out
+        // so the peer can invalidate its allow cache (§4.4: "推送 payload MUST
+        // 包含原始 Event Envelope … 便于接收方立即失效 capability cache"); only
+        // non-capability events are gated.
+        let is_capability_control_event = matches!(
+            parsed.kind.as_str(),
+            "ck.capability.revoke" | "ck.capability.grant" | "ck.capability.delegate"
+        );
+        let revoked_peers = if is_capability_control_event {
+            std::collections::BTreeSet::new()
+        } else {
+            projection.federation_delivery_revoked_peers(&parsed.realm_id)
+        };
         let mut service_frontiers: BTreeMap<String, (BTreeSet<String>, BTreeSet<String>)> =
             BTreeMap::new();
         for member in projection.members_of_realm(&parsed.realm_id) {
@@ -1833,6 +1950,15 @@ fn dynamic_peer_event_targets(
                 continue;
             };
             if service_did == state.config.service_did {
+                continue;
+            }
+            if revoked_peers.contains(service_did) {
+                tracing::info!(
+                    event_id = %parsed.event_id,
+                    realm_id = %parsed.realm_id,
+                    revoked_peer_service_did = %service_did,
+                    "skipping outbound federation push to peer with revoked service delegation (federation.md §4.4)"
+                );
                 continue;
             }
             let entry = service_frontiers.entry(service_did.to_owned()).or_default();

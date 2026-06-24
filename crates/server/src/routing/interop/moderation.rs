@@ -1174,26 +1174,72 @@ fn sealed_plaintext_release_authorized(emitted: &Value) -> bool {
     sealed && decision_ref.is_some() && proof.is_some()
 }
 
+/// Resolve the effective `audit_disclosure_policy` for a Realm.
+///
+/// The create-time policy (`ck.realm.create`) is the baseline. Subsequent
+/// `ck.realm.update` events MAY carry an `audit_disclosure_policy` in their
+/// object patch; the latest such patch wins (cas-register semantics), so an
+/// admin can revoke or narrow the policy after the fact (audited-e2ee.md §3.1
+/// — admins MAY suspend / revoke a binding). A revoke is expressed by an
+/// update whose patch sets `audit_disclosure_policy.enabled = false`; once the
+/// resolved policy reports `enabled == false`, `notify_audit_agent_for_report`
+/// refuses to invite the audit agent for any later report, while historical
+/// `ck.audit.accessed` records stay in the durable audit log.
 async fn audit_disclosure_policy_for_realm(state: &AppState, realm_id: &str) -> Option<Value> {
-    state
-        .persistence
-        .events()
-        .snapshot_all()
-        .await
-        .ok()?
-        .into_iter()
-        .filter(|record| {
-            record.kind == cokret_sdk::events::kinds::REALM_CREATE
-                && record.realm_id.as_deref() == Some(realm_id)
-        })
-        .rev()
-        .find_map(|record| {
-            record
+    let mut records = state.persistence.events().snapshot_all().await.ok()?;
+    // Fold in chronological order so the latest create/update wins regardless
+    // of the backing store's natural iteration order.
+    records.sort_by(|left, right| {
+        left.received_at
+            .cmp(&right.received_at)
+            .then_with(|| left.event_id.cmp(&right.event_id))
+    });
+    let mut policy: Option<Value> = None;
+    for record in records {
+        if record.realm_id.as_deref() != Some(realm_id) {
+            continue;
+        }
+        if record.kind == cokret_sdk::events::kinds::REALM_CREATE {
+            if let Some(found) = record
                 .envelope
                 .pointer("/payload/object/audit_disclosure_policy")
                 .or_else(|| record.envelope.pointer("/payload/audit_disclosure_policy"))
                 .cloned()
-        })
+            {
+                policy = Some(found);
+            }
+        } else if record.kind == cokret_sdk::events::kinds::REALM_UPDATE {
+            if let Some(found) = record
+                .envelope
+                .pointer("/payload/patch/audit_disclosure_policy")
+                .or_else(|| {
+                    record
+                        .envelope
+                        .pointer("/payload/patch/object/audit_disclosure_policy")
+                })
+                .or_else(|| record.envelope.pointer("/payload/audit_disclosure_policy"))
+                .map(unwrap_realm_update_patch_value)
+            {
+                policy = Some(found);
+            }
+        }
+    }
+    policy
+}
+
+/// A `ck.realm.update` patch entry MAY be either a direct value
+/// (`audit_disclosure_policy: { ... }`) or a `$op` register form
+/// (`audit_disclosure_policy: { "$op": "set", "value": { ... } }`), matching
+/// the realm-lifecycle reducer's patch handling. Unwrap the latter to the
+/// embedded value; pass any other shape through unchanged.
+fn unwrap_realm_update_patch_value(value: &Value) -> Value {
+    if let Value::Object(object) = value
+        && object.get("$op").and_then(Value::as_str) == Some("set")
+        && let Some(inner) = object.get("value")
+    {
+        return inner.clone();
+    }
+    value.clone()
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]

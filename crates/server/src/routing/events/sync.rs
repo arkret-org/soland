@@ -41,7 +41,8 @@ pub(crate) use tokio::sync::broadcast::error::RecvError;
 
 use super::super::identity::device_messages::prune_device_messages_for_limits;
 pub(crate) use super::projection::{
-    actor_erased_in_realm, retention_tombstone_for_event, tombstone_timeline_event_for_retention,
+    actor_erased_in_realm, apply_message_redaction_timeline_projection,
+    retention_tombstone_for_event, tombstone_timeline_event_for_retention,
     tombstone_timeline_event_value,
 };
 use super::read_receipts::{

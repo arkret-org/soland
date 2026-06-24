@@ -270,10 +270,17 @@ impl ProjectionState {
             .unwrap_or("")
             .to_owned();
         let reason = redaction_human_reason(&operation.payload);
+        let redaction_event_id = operation
+            .payload
+            .get("event_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or(operation.operation_id.as_str())
+            .to_owned();
         let cell = RedactionCellValue {
             redacted_at: operation.created_at,
             by,
             reason: reason.clone(),
+            redaction_event_id: Some(redaction_event_id),
         };
         self.redaction_cells
             .insert(target.clone(), Some(cell.clone()));
@@ -824,11 +831,14 @@ impl ProjectionState {
             updated_at: now,
         };
         let key = (realm_id, actor_id, read_scope_key(&read_scope));
-        // LWW: only update if newer
+        // Convergence per read-receipts.md §3.2 / §6.5: same actor/scope across
+        // devices merges by HLC-max, with device_id as the lexicographic
+        // tiebreaker on equal HLC. position.hlc is a required, schema-validated
+        // field, so the merge never falls back to the server-receive clock.
         let dominated = self
             .read_cursors
             .get(&key)
-            .is_some_and(|existing| existing.updated_at >= marker.updated_at);
+            .is_some_and(|existing| read_cursor_dominates(existing, &marker));
         if !dominated {
             self.read_cursors.insert(key, marker.clone());
             self.observe_message_read_for_expiry(
@@ -926,6 +936,23 @@ impl ProjectionState {
             },
         );
         true
+    }
+}
+
+/// Whether the already-stored read marker dominates the incoming one for the
+/// same `(realm_id, actor_id, scope)` key. Convergence follows
+/// read-receipts.md §3.2 / §6.5: HLC-max wins; on equal HLC the larger
+/// `device_id` (lexicographic) wins as the actor-internal tiebreaker. The HLC
+/// string format (`<ts>-<counter>-<node>`, fixed-width lowercase hex) is
+/// monotonic under lexicographic comparison, so byte ordering matches HLC
+/// ordering.
+fn read_cursor_dominates(existing: &ReadMarkerState, incoming: &ReadMarkerState) -> bool {
+    let existing_hlc = existing.position.hlc.as_str();
+    let incoming_hlc = incoming.position.hlc.as_str();
+    match existing_hlc.cmp(incoming_hlc) {
+        std::cmp::Ordering::Greater => true,
+        std::cmp::Ordering::Less => false,
+        std::cmp::Ordering::Equal => existing.device_id >= incoming.device_id,
     }
 }
 

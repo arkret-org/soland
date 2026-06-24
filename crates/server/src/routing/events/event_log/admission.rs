@@ -120,12 +120,6 @@ pub fn events_submit_pre_admit_check(kind: &str) -> Option<(ErrorCode, &'static 
              never accepted as Event.kind",
         ));
     }
-    if kind == cokret_sdk::events::kinds::MORPH_SCHEMA_MIGRATE {
-        return Some((
-            ErrorCode::SchemaViolation,
-            "ck.morph.schema_migrate is not admitted until its reducer projection is implemented",
-        ));
-    }
     None
 }
 

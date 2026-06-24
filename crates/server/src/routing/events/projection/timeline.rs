@@ -43,6 +43,9 @@ pub fn sync_timeline_message_json_with_projection(
     if actor_erased_in_realm(projection, &message.sender, &message.realm_id) {
         tombstone_timeline_event_value(&mut event);
     }
+    if apply_message_redaction_timeline_projection(&mut event, &message.event_id, projection) {
+        return event;
+    }
     if apply_message_expiry_timeline_projection(&mut event, message, projection, chrono::Utc::now())
     {
         return event;

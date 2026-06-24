@@ -13,6 +13,7 @@
 //!   - `cursor`
 //!   - `envelope`
 //!   - `redact`
+//!   - `erase-receipt`
 //!   - `snapshot`
 //!   - `query`
 //!
@@ -77,6 +78,7 @@ pub fn router() -> Router {
         .push(Router::with_path("cursor").post(handlers::cursor))
         .push(Router::with_path("envelope").post(handlers::envelope))
         .push(Router::with_path("redact").post(handlers::redact))
+        .push(Router::with_path("erase-receipt").post(handlers::erase_receipt))
         .push(Router::with_path("snapshot").post(handlers::snapshot))
         .push(Router::with_path("query").post(handlers::query))
         .push(Router::with_path("chaos/operation").get(handlers::chaos_operation))
