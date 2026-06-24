@@ -738,9 +738,16 @@ pub(super) async fn erase_account(
         account.display_name = Some("[user erased]".to_owned());
         account.bio = None;
         account.avatar_url = None;
-        account.localpart = format!("erased-{}", short_actor_tag(&actor));
+        account.localpart = String::new();
         let _ = state.persistence.accounts().put(&account).await;
-        let _ = record_handle_release(state, &previous_localpart).await;
+        let _ = state
+            .persistence
+            .account_localparts()
+            .clear_for_account(&actor)
+            .await;
+        if !previous_localpart.is_empty() {
+            let _ = record_handle_release(state, &previous_localpart).await;
+        }
     }
 
     // Revoke every device record so other surfaces (key delivery,
@@ -1183,15 +1190,6 @@ fn erasure_receipt_proof_signature(
     let signature = state.notary_signing_key().sign(signing_input.as_bytes());
     let signature_b64 = URL_SAFE_NO_PAD.encode(signature.to_bytes());
     Ok(format!("{protected_b64}..{signature_b64}"))
-}
-
-fn short_actor_tag(did: &str) -> String {
-    // Deterministic 8-char tag derived from the DID — used to mint a
-    // synthetic handle after erasure so we don't collide with active
-    // accounts that share the same DID label fragment.
-    use sha2::{Digest as _, Sha256};
-    let digest = Sha256::digest(did.as_bytes());
-    digest.iter().take(4).map(|b| format!("{b:02x}")).collect()
 }
 
 #[cfg(test)]

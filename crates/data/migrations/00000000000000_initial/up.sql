@@ -13,10 +13,18 @@ CREATE TABLE public.account_datas (
 CREATE TABLE public.accounts (
     id uuid NOT NULL,
     principal_id text NOT NULL,
-    localpart text NOT NULL,
     display_name text,
     payload jsonb DEFAULT '{}'::jsonb NOT NULL,
     disabled_at timestamp with time zone,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+CREATE TABLE public.account_localparts (
+    id uuid NOT NULL,
+    account_id uuid NOT NULL,
+    localpart text NOT NULL,
+    is_primary boolean DEFAULT false NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL
 );
@@ -1047,8 +1055,11 @@ ALTER TABLE ONLY public.accounts
 ALTER TABLE ONLY public.accounts
     ADD CONSTRAINT accounts_principal_id_key UNIQUE (principal_id);
 
-ALTER TABLE ONLY public.accounts
-    ADD CONSTRAINT accounts_localpart_key UNIQUE (localpart);
+ALTER TABLE ONLY public.account_localparts
+    ADD CONSTRAINT account_localparts_pkey PRIMARY KEY (id);
+
+ALTER TABLE ONLY public.account_localparts
+    ADD CONSTRAINT account_localparts_localpart_key UNIQUE (localpart);
 
 ALTER TABLE ONLY public.account_lifecycle
     ADD CONSTRAINT account_lifecycle_pkey PRIMARY KEY (principal_id);
@@ -1336,6 +1347,10 @@ ALTER TABLE ONLY public.webvh_log_events
 
 CREATE INDEX agent_grants_principal_idx ON public.agent_grants USING btree (agent_principal_id);
 
+CREATE INDEX account_localparts_account_idx ON public.account_localparts USING btree (account_id);
+
+CREATE UNIQUE INDEX account_localparts_primary_account_idx ON public.account_localparts USING btree (account_id) WHERE (is_primary);
+
 CREATE INDEX account_lifecycle_state_idx ON public.account_lifecycle USING btree (state, changed_at);
 
 CREATE INDEX agent_grants_state_idx ON public.agent_grants USING btree (state);
@@ -1584,6 +1599,9 @@ CREATE INDEX webrtc_sessions_space_idx ON public.webrtc_sessions USING btree (re
 CREATE INDEX webvh_documents_expires_at_idx ON public.webvh_documents USING btree (expires_at);
 
 CREATE INDEX webvh_log_events_did_seq_idx ON public.webvh_log_events USING btree (did, seq);
+
+ALTER TABLE ONLY public.account_localparts
+    ADD CONSTRAINT account_localparts_account_id_fkey FOREIGN KEY (account_id) REFERENCES public.accounts(id) ON DELETE CASCADE;
 
 ALTER TABLE ONLY public.agent_grants
     ADD CONSTRAINT agent_grants_agent_principal_id_fkey FOREIGN KEY (agent_principal_id) REFERENCES public.agent_principals(id) ON DELETE CASCADE;

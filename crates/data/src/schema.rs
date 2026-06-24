@@ -2,10 +2,20 @@ diesel::table! {
     accounts (id) {
         id -> Uuid,
         principal_id -> Text,
-        localpart -> Text,
         display_name -> Nullable<Text>,
         payload -> Jsonb,
         disabled_at -> Nullable<Timestamptz>,
+        created_at -> Timestamptz,
+        updated_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
+    account_localparts (id) {
+        id -> Uuid,
+        account_id -> Uuid,
+        localpart -> Text,
+        is_primary -> Bool,
         created_at -> Timestamptz,
         updated_at -> Timestamptz,
     }
@@ -653,6 +663,7 @@ diesel::table! {
 
 diesel::allow_tables_to_appear_in_same_query!(
     accounts,
+    account_localparts,
     handle_releases,
     organizations,
     organization_policies,

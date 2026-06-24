@@ -609,6 +609,14 @@ impl AppState {
             if let Err(error) = self.persistence.accounts().put(&demo_account).await {
                 tracing::warn!(%error, "failed to seed demo account into persistence store");
             }
+            if let Err(error) = self
+                .persistence
+                .account_localparts()
+                .add(&demo_account.did, &demo_account.localpart, true)
+                .await
+            {
+                tracing::warn!(%error, "failed to seed demo account localpart into persistence store");
+            }
 
             let demo_realm_meta = RealmMetaRecord {
                 owner: "did:web:alice.example".to_owned(),

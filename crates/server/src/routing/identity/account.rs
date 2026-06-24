@@ -35,7 +35,7 @@ use cokret_sdk::{
 };
 use ed25519_dalek::Signer as _;
 use salvo::http::StatusCode;
-use salvo::oapi::extract::JsonBody;
+use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -51,13 +51,13 @@ use super::consent::{
     revoke_contact_managed_consent,
 };
 use super::{
-    AuthArgs, append_audit_log, handle_for_did, normalize_localpart, now, sha256_hex, validate_did,
+    AuthArgs, append_audit_log, bearer_token, normalize_localpart, now, sha256_hex, validate_did,
 };
 use crate::error::AppError;
 use crate::routing::validate_device_id;
 use crate::state::{
-    AccountLifecycleRecord, AccountRecord, AppState, ContactRecord, DeviceInventoryRecord,
-    DirectConversationBindingRecord, ProjectionEventRecord,
+    AccountLifecycleRecord, AccountLocalpartRecord, AccountRecord, AppState, ContactRecord,
+    DeviceInventoryRecord, DirectConversationBindingRecord, ProjectionEventRecord,
 };
 use crate::wire::SolandAccountRegisterOutcome;
 
@@ -94,11 +94,11 @@ fn handle_domain_from_public_base_url(public_base_url: &str) -> Option<String> {
     valid_handle_domain_candidate(url.host_str()?)
 }
 
-/// Resolve the durable account localpart from a canonical registration handle
+/// Resolve the account localpart from a canonical registration handle
 /// (`<localpart>:<domain>`). The Principal Server only issues handle bindings
-/// for its own domain (identity-handles.md §3.7.1); a foreign domain or an
-/// already-taken localpart is rejected. The signed handle claim itself is
-/// re-derived on demand from this localpart, so nothing else is persisted.
+/// for its own domain; a foreign domain or an already-taken localpart is
+/// rejected. The signed handle claim itself is re-derived on demand from the
+/// `account_localparts` binding, so the claim is never persisted.
 async fn resolve_registration_localpart(
     state: &AppState,
     handle: &str,
@@ -120,12 +120,11 @@ async fn resolve_registration_localpart(
     }
     let taken = state
         .persistence
-        .accounts()
-        .list()
+        .account_localparts()
+        .owner_of(&localpart)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
-        .into_iter()
-        .any(|account| account.localpart == localpart);
+        .is_some();
     if taken {
         return Err(AppError::new(
             crate::error::ErrorCode::DuplicateConflict,
@@ -136,24 +135,21 @@ async fn resolve_registration_localpart(
 }
 
 /// The account's Principal-Server-signed primary handle claim, re-derived on
-/// demand from the durable localpart (identity-handles.md §3.7.1). `None` when
-/// the account still carries the synthetic DID-derived bootstrap localpart
-/// (no real handle registered), so the client renders "not published".
+/// demand from the primary `account_localparts` row. `None` means the account
+/// has no published localpart binding, so the client renders "not published".
 async fn account_primary_handle_claim(state: &AppState, account: &AccountRecord) -> Option<Value> {
     account_primary_handle_claim_for(state, account, state.config.service_did.as_str()).await
 }
 
 /// Re-derive `account`'s Principal-Server-signed primary handle claim
-/// (identity-handles.md §3.7.1) bound to `audience`. `None` when the account
-/// still carries the synthetic DID-derived bootstrap localpart (no real handle
-/// registered), so the client renders "not published".
+/// bound to `audience`. `None` when the account has no published localpart
+/// binding, so the client renders "not published".
 pub(crate) async fn account_primary_handle_claim_for(
     state: &AppState,
     account: &AccountRecord,
     audience: &str,
 ) -> Option<Value> {
-    let synthetic = normalize_localpart(&handle_for_did(&account.did));
-    if account.localpart == synthetic {
+    if account.localpart.is_empty() {
         return None;
     }
     match crate::routing::spaces::directory::signed_handle_claim_value(
@@ -174,7 +170,7 @@ pub(crate) async fn account_primary_handle_claim_for(
 
 /// Re-derive the registered local account's primary handle claim for
 /// `subject`, bound to `audience`. `None` when `subject` is not a known local
-/// account or still carries its synthetic bootstrap localpart. Lets the
+/// account or has no primary localpart binding. Lets the
 /// directory `list_handles_for_subject` surface stay consistent with the
 /// account viewer's `primary_handle_claim` so an account's own handle resolves
 /// through both read paths.
@@ -229,12 +225,25 @@ pub(super) fn protocol_router() -> Router {
 }
 
 pub(in crate::routing) fn local_router() -> Router {
-    Router::with_path("account")
-        .push(Router::with_path("register").post(local_account_register))
-        .push(Router::with_path("me").get(local_account_me))
-        .push(Router::with_path("export").get(lifecycle::export_account))
-        .push(Router::with_path("deactivate").post(lifecycle::deactivate_account))
-        .push(Router::with_path("erase").post(lifecycle::erase_account))
+    Router::new().push(
+        Router::with_path("account")
+            .push(Router::with_path("register").post(local_account_register))
+            .push(Router::with_path("me").get(local_account_me))
+            .push(Router::with_path("export").get(lifecycle::export_account))
+            .push(Router::with_path("deactivate").post(lifecycle::deactivate_account))
+            .push(Router::with_path("erase").post(lifecycle::erase_account)),
+    )
+}
+
+pub(in crate::routing) fn local_service_router() -> Router {
+    Router::with_path("accounts/{account_did}/localparts")
+        .get(list_account_localparts)
+        .post(add_account_localpart)
+        .push(
+            Router::with_path("{localpart}")
+                .patch(update_account_localpart)
+                .delete(delete_account_localpart),
+        )
 }
 
 fn contact_routes() -> Router {
@@ -259,6 +268,124 @@ struct LocalAccountRegisterRequestBody {
     pub display_name: Option<String>,
     #[serde(default)]
     pub device_id: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, salvo::oapi::ToSchema)]
+struct AccountLocalpartView {
+    pub id: String,
+    pub localpart: String,
+    pub is_primary: bool,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub updated_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Clone, Debug, Serialize, salvo::oapi::ToSchema)]
+struct AccountLocalpartListOutcome {
+    pub account_did: String,
+    pub primary_localpart: Option<String>,
+    pub localparts: Vec<AccountLocalpartView>,
+}
+
+#[derive(Clone, Debug, Deserialize, salvo::oapi::ToSchema)]
+#[serde(deny_unknown_fields)]
+struct AccountLocalpartAddRequestBody {
+    pub localpart: String,
+    #[serde(default)]
+    pub is_primary: Option<bool>,
+}
+
+#[derive(Clone, Debug, Deserialize, salvo::oapi::ToSchema)]
+#[serde(deny_unknown_fields)]
+struct AccountLocalpartUpdateRequestBody {
+    #[serde(default)]
+    pub is_primary: Option<bool>,
+}
+
+#[derive(Clone, Debug, Serialize, salvo::oapi::ToSchema)]
+struct AccountLocalpartMutationOutcome {
+    pub localpart: AccountLocalpartView,
+}
+
+#[derive(Clone, Debug, Serialize, salvo::oapi::ToSchema)]
+struct AccountLocalpartDeleteOutcome {
+    pub ok: bool,
+}
+
+fn require_account_localparts_bearer(state: &AppState, req: &Request) -> Result<(), AppError> {
+    let Some(expected) = state
+        .config
+        .embedded_webvh_registration_bearer
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return Err(AppError::new(
+            crate::error::ErrorCode::TemporarilyUnavailable,
+            "account localparts sync requires SOLAND_EMBEDDED_WEBVH_REGISTRATION_BEARER",
+        )
+        .with_status(StatusCode::SERVICE_UNAVAILABLE));
+    };
+    let Some(provided) = bearer_token(req)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return Err(AppError::unauthenticated(
+            "account localparts sync requires Authorization: Bearer <token>",
+        ));
+    };
+    if sha256_hex(provided.as_bytes()) != sha256_hex(expected.as_bytes()) {
+        return Err(AppError::unauthenticated(
+            "invalid account localparts sync bearer",
+        ));
+    }
+    Ok(())
+}
+
+fn account_localpart_view(record: AccountLocalpartRecord) -> AccountLocalpartView {
+    AccountLocalpartView {
+        id: record.id,
+        localpart: record.localpart,
+        is_primary: record.is_primary,
+        created_at: record.created_at,
+        updated_at: record.updated_at,
+    }
+}
+
+fn normalize_account_localpart_for_request(
+    state: &AppState,
+    localpart: &str,
+) -> Result<String, AppError> {
+    let localpart = normalize_localpart(localpart);
+    if localpart.is_empty() || localpart.contains(':') || localpart.contains('@') {
+        return Err(AppError::invalid_param(
+            "localpart must be a bare handle localpart",
+        ));
+    }
+    let domain = principal_handle_domain(state);
+    SdkHandle::parse(&format!("{localpart}:{domain}"))
+        .map_err(|_| AppError::invalid_param("localpart is not a valid handle localpart"))?;
+    Ok(localpart)
+}
+
+fn localpart_persistence_error(error: crate::persistence::PersistenceError) -> AppError {
+    match error {
+        crate::persistence::PersistenceError::NotFound(message) => AppError::not_found(message),
+        crate::persistence::PersistenceError::Conflict(message) => {
+            AppError::new(crate::error::ErrorCode::DuplicateConflict, message)
+        }
+        other => AppError::internal(other.to_string()),
+    }
+}
+
+async fn account_exists(state: &AppState, account_did: &str) -> Result<(), AppError> {
+    state
+        .persistence
+        .accounts()
+        .get(account_did)
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?
+        .map(|_| ())
+        .ok_or_else(|| AppError::not_found("account not found"))
 }
 
 fn account_registration_policy_snapshot(state: &AppState) -> AccountRegistrationPolicy {
@@ -642,16 +769,21 @@ async fn local_account_register(
             "handle localpart must not be empty",
         ));
     }
-    let accounts = state
+    let account_exists = state
         .persistence
         .accounts()
-        .list()
+        .get(&did)
         .await
-        .map_err(|error| AppError::internal(error.to_string()))?;
-    if accounts
-        .iter()
-        .any(|account| account.did == did || account.localpart == localpart)
-    {
+        .map_err(|error| AppError::internal(error.to_string()))?
+        .is_some();
+    let localpart_exists = state
+        .persistence
+        .account_localparts()
+        .owner_of(&localpart)
+        .await
+        .map_err(localpart_persistence_error)?
+        .is_some();
+    if account_exists || localpart_exists {
         return Err(AppError::new(
             crate::error::ErrorCode::DuplicateConflict,
             "account already exists",
@@ -676,6 +808,12 @@ async fn local_account_register(
         .put(&account)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
+    state
+        .persistence
+        .account_localparts()
+        .add(&did, &account.localpart, true)
+        .await
+        .map_err(localpart_persistence_error)?;
     if let Some(device_id) = body.device_id.as_deref() {
         let device_id = validate_device_id(device_id)
             .map_err(|_| AppError::invalid_param("invalid device_id"))?;
@@ -740,6 +878,207 @@ async fn local_account_me(
 }
 
 #[endpoint(
+    operation_id = "org.cokret.soland.accounts.localparts.list",
+    tags("account"),
+    summary = "List account localparts",
+    status_codes(200, 401, 404, 500)
+)]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.accounts.localparts.list"))]
+async fn list_account_localparts(
+    account_did: PathParam<String>,
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<AccountLocalpartListOutcome> {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    require_account_localparts_bearer(state, req)?;
+    let account_did = account_did.into_inner();
+    validate_did(&account_did).map_err(|_| AppError::invalid_param("invalid account DID"))?;
+    account_exists(state, &account_did).await?;
+    let records = state
+        .persistence
+        .account_localparts()
+        .list_for_account(&account_did)
+        .await
+        .map_err(localpart_persistence_error)?;
+    let primary_localpart = records
+        .iter()
+        .find(|record| record.is_primary)
+        .map(|record| record.localpart.clone());
+    json_ok(AccountLocalpartListOutcome {
+        account_did,
+        primary_localpart,
+        localparts: records.into_iter().map(account_localpart_view).collect(),
+    })
+}
+
+#[endpoint(
+    operation_id = "org.cokret.soland.accounts.localparts.add",
+    tags("account"),
+    summary = "Bind a localpart to an account",
+    status_codes(200, 400, 401, 404, 409, 500)
+)]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.accounts.localparts.add"))]
+async fn add_account_localpart(
+    account_did: PathParam<String>,
+    depot: &mut Depot,
+    req: &mut Request,
+    body: JsonBody<AccountLocalpartAddRequestBody>,
+) -> JsonResult<AccountLocalpartMutationOutcome> {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    require_account_localparts_bearer(state, req)?;
+    let account_did = account_did.into_inner();
+    validate_did(&account_did).map_err(|_| AppError::invalid_param("invalid account DID"))?;
+    account_exists(state, &account_did).await?;
+    let body = body.into_inner();
+    let localpart = normalize_account_localpart_for_request(state, &body.localpart)?;
+    let existing = state
+        .persistence
+        .account_localparts()
+        .list_for_account(&account_did)
+        .await
+        .map_err(localpart_persistence_error)?;
+    let primary = body.is_primary.unwrap_or(existing.is_empty()) || existing.is_empty();
+    let record = state
+        .persistence
+        .account_localparts()
+        .add(&account_did, &localpart, primary)
+        .await
+        .map_err(localpart_persistence_error)?;
+    append_audit_log(
+        state,
+        Some(&account_did),
+        "account.localpart.add",
+        json!({
+            "account_did": account_did,
+            "localpart": localpart,
+            "is_primary": record.is_primary,
+        }),
+        "accepted",
+    )
+    .await;
+    json_ok(AccountLocalpartMutationOutcome {
+        localpart: account_localpart_view(record),
+    })
+}
+
+#[endpoint(
+    operation_id = "org.cokret.soland.accounts.localparts.update",
+    tags("account"),
+    summary = "Update an account localpart binding",
+    status_codes(200, 400, 401, 404, 409, 500)
+)]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.accounts.localparts.update"))]
+async fn update_account_localpart(
+    account_did: PathParam<String>,
+    localpart: PathParam<String>,
+    depot: &mut Depot,
+    req: &mut Request,
+    body: JsonBody<AccountLocalpartUpdateRequestBody>,
+) -> JsonResult<AccountLocalpartMutationOutcome> {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    require_account_localparts_bearer(state, req)?;
+    let account_did = account_did.into_inner();
+    validate_did(&account_did).map_err(|_| AppError::invalid_param("invalid account DID"))?;
+    account_exists(state, &account_did).await?;
+    let localpart = normalize_account_localpart_for_request(state, &localpart.into_inner())?;
+    let body = body.into_inner();
+    if body.is_primary != Some(true) {
+        return Err(AppError::invalid_param(
+            "only setting is_primary=true is supported",
+        ));
+    }
+    let record = state
+        .persistence
+        .account_localparts()
+        .set_primary(&account_did, &localpart)
+        .await
+        .map_err(localpart_persistence_error)?;
+    append_audit_log(
+        state,
+        Some(&account_did),
+        "account.localpart.primary",
+        json!({
+            "account_did": account_did,
+            "localpart": localpart,
+        }),
+        "accepted",
+    )
+    .await;
+    json_ok(AccountLocalpartMutationOutcome {
+        localpart: account_localpart_view(record),
+    })
+}
+
+#[endpoint(
+    operation_id = "org.cokret.soland.accounts.localparts.delete",
+    tags("account"),
+    summary = "Remove an account localpart binding",
+    status_codes(200, 400, 401, 404, 409, 500)
+)]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.accounts.localparts.delete"))]
+async fn delete_account_localpart(
+    account_did: PathParam<String>,
+    localpart: PathParam<String>,
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<AccountLocalpartDeleteOutcome> {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    require_account_localparts_bearer(state, req)?;
+    let account_did = account_did.into_inner();
+    validate_did(&account_did).map_err(|_| AppError::invalid_param("invalid account DID"))?;
+    account_exists(state, &account_did).await?;
+    let localpart = normalize_account_localpart_for_request(state, &localpart.into_inner())?;
+    let before = state
+        .persistence
+        .account_localparts()
+        .list_for_account(&account_did)
+        .await
+        .map_err(localpart_persistence_error)?;
+    let removed_primary = before
+        .iter()
+        .any(|record| record.localpart == localpart && record.is_primary);
+    state
+        .persistence
+        .account_localparts()
+        .remove(&account_did, &localpart)
+        .await
+        .map_err(localpart_persistence_error)?;
+    if removed_primary {
+        if let Some(replacement) = state
+            .persistence
+            .account_localparts()
+            .list_for_account(&account_did)
+            .await
+            .map_err(localpart_persistence_error)?
+            .into_iter()
+            .next()
+        {
+            state
+                .persistence
+                .account_localparts()
+                .set_primary(&account_did, &replacement.localpart)
+                .await
+                .map_err(localpart_persistence_error)?;
+        }
+    }
+    record_handle_release(state, &localpart)
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    append_audit_log(
+        state,
+        Some(&account_did),
+        "account.localpart.delete",
+        json!({
+            "account_did": account_did,
+            "localpart": localpart,
+        }),
+        "accepted",
+    )
+    .await;
+    json_ok(AccountLocalpartDeleteOutcome { ok: true })
+}
+
+#[endpoint(
     operation_id = "ck.self.account.query.viewer",
     tags("account"),
     summary = "Get the authenticated principal's account viewer projection",
@@ -783,9 +1122,8 @@ async fn account_viewer(
 /// Spec: sync/service-http-binding.md — request is
 /// `AccountRegisterRequestBody {principal_id, handle?, display_name?,
 /// device_id?, proof?, policy_evidence?}`. When `handle` is present the
-/// Principal Server issues the first signed handle claim; otherwise the
-/// account is provisioned with a synthetic localpart derived from the DID
-/// (same bootstrap rule as `dev_login`). The optional lifecycle `proof`
+/// Principal Server records the first localpart binding; otherwise the account
+/// is provisioned without a published handle. The optional lifecycle `proof`
 /// shares the session-grant proof vocabulary; signature verification of
 /// that proof is future work (cf. the device-pairing scaffolds), the field
 /// is currently accepted without cryptographic validation.
@@ -836,7 +1174,7 @@ async fn gate_account_register(
     }
     let localpart = match body.handle.as_deref() {
         Some(handle) => resolve_registration_localpart(state, handle).await?,
-        None => normalize_localpart(&handle_for_did(&did)),
+        None => String::new(),
     };
     let account = AccountRecord {
         id: crate::ids::generate_account_id(),
@@ -853,6 +1191,14 @@ async fn gate_account_register(
         .put(&account)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
+    if !account.localpart.is_empty() {
+        state
+            .persistence
+            .account_localparts()
+            .add(&did, &account.localpart, true)
+            .await
+            .map_err(localpart_persistence_error)?;
+    }
     if let Some(device_id) = body.device_id.as_ref() {
         let registered_at = now();
         // Device-identity B-model (decision 0002 / device-lifecycle.md §5.4): a
@@ -891,7 +1237,8 @@ async fn gate_account_register(
             .await
             .map_err(|error| AppError::internal(error.to_string()))?;
     }
-    append_account_registration_audit(state, &did, Some(&account.handle()), &registration_audit)
+    let audit_handle = (!account.localpart.is_empty()).then(|| account.handle());
+    append_account_registration_audit(state, &did, audit_handle.as_deref(), &registration_audit)
         .await;
     let devices = account_device_summaries(state, &did).await?;
     let primary_handle_claim = account_primary_handle_claim(state, &account).await;

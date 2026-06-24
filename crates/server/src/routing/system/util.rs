@@ -288,10 +288,7 @@ pub fn normalize_handle(handle: &str) -> String {
     }
 }
 
-/// Bare localpart form stored on `AccountRecord` / `accounts.localpart`:
-/// trimmed, lowercase, no leading `@`. The domain half of the canonical
-/// `<localpart>:<domain>` handle is never stored — it is implicitly this
-/// server's own service domain, so a domain rename never rewrites rows.
+/// Bare localpart form: trimmed, lowercase, no leading `@`.
 pub fn normalize_localpart(handle: &str) -> String {
     normalize_handle(handle).trim_start_matches('@').to_owned()
 }

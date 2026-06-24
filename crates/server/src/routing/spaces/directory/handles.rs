@@ -588,31 +588,30 @@ pub(super) async fn resolve_handle(
     }
 }
 
-async fn require_holder_also_known_as(
+async fn require_local_handle_binding(
     state: &AppState,
     did: &str,
     canonical_handle: &str,
-    service_domain: &str,
+    localpart: &str,
 ) -> Result<(), AppError> {
-    let record = crate::routing::identity::did::identity_document_record(state, did).await;
-    let aliases = record
-        .did_document
-        .get("alsoKnownAs")
-        .and_then(Value::as_array)
-        .ok_or_else(handle_unverified_error)?;
-    let endorsed = aliases.iter().filter_map(Value::as_str).any(|alias| {
-        canonicalize_handle_for_service(alias, service_domain).as_deref() == Some(canonical_handle)
-    });
-    if endorsed {
+    let owner = state
+        .persistence
+        .account_localparts()
+        .owner_of(localpart)
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    if owner.is_some_and(|record| record.account_did == did) {
         Ok(())
     } else {
-        Err(handle_unverified_error())
+        Err(handle_unverified_error(canonical_handle))
     }
 }
 
-fn handle_unverified_error() -> AppError {
-    AppError::capability_denied("handle lacks holder DID Document alsoKnownAs endorsement")
-        .with_wire_code("handle_unverified")
+fn handle_unverified_error(canonical_handle: &str) -> AppError {
+    AppError::capability_denied(format!(
+        "handle `{canonical_handle}` is not bound to the subject account"
+    ))
+    .with_wire_code("handle_unverified")
 }
 
 pub(super) async fn signed_handle_claim(
@@ -637,7 +636,10 @@ pub(super) async fn signed_handle_claim(
     let canonical_handle = lookup.canonical;
     let localpart = lookup.localpart;
     let handle_domain = lookup.authority;
-    require_holder_also_known_as(state, did, &canonical_handle, &handle_domain).await?;
+    if handle_domain != default_domain {
+        return Err(handle_unverified_error(&canonical_handle));
+    }
+    require_local_handle_binding(state, did, &canonical_handle, &localpart).await?;
     let handle = SdkHandle::parse(&canonical_handle).map_err(|err| {
         AppError::internal(format!("handle claim handle construction failed: {err}"))
     })?;
