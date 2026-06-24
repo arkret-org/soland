@@ -1,8 +1,8 @@
 //! Realm lifecycle read surface and Space-container cell read surface.
 //!
 //! Surfaces that remain:
-//! - `GET    /_soland/self/realms/{realm_id}` — read a Realm lifecycle response.
-//! - `GET    /_soland/self/realms/{realm_id}/export` — full event log + projection dump.
+//! - `GET    /_cokret/self/realms/{realm_id}` — read a Realm lifecycle response.
+//! - `GET    /_cokret/self/realms/{realm_id}/export` — full event log + projection dump.
 //! - `GET    /_soland/self/spaces/{space_id}/cells/{cell_family}` — projected Space-container
 //!   child-order cell.
 //!

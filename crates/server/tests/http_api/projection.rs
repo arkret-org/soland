@@ -14,7 +14,7 @@ async fn projection_space_containers_endpoint_reports_lifecycle_state() {
 
     // ── auth required ──────────────────────────────────────────────────
     let unauth = TestClient::get(format!(
-        "http://server/_cokret/self/projection/spaces?realm_id={realm_id}"
+        "http://server/_cokret/self/realms/{realm_id}/spaces"
     ))
     .send(&app_from_state(state.clone()))
     .await;
@@ -71,7 +71,7 @@ async fn projection_space_containers_endpoint_reports_lifecycle_state() {
 
     // ── projection now reports archived ───────────────────────────────
     let body: Value = TestClient::get(format!(
-        "http://server/_cokret/self/projection/spaces?realm_id={realm_id}"
+        "http://server/_cokret/self/realms/{realm_id}/spaces"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state.clone()))
@@ -110,7 +110,7 @@ async fn projection_space_containers_endpoint_reports_lifecycle_state() {
     );
 
     let body: Value = TestClient::get(format!(
-        "http://server/_cokret/self/projection/spaces?realm_id={realm_id}"
+        "http://server/_cokret/self/realms/{realm_id}/spaces"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state.clone()))
@@ -185,7 +185,7 @@ async fn projection_strands_endpoint_reports_lifecycle_state() {
     assert_eq!(r["status"], "accepted");
 
     let body: Value = TestClient::get(format!(
-        "http://server/_cokret/self/projection/strands?realm_id={realm_id}"
+        "http://server/_cokret/self/realms/{realm_id}/strands"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state.clone()))
@@ -319,7 +319,7 @@ async fn projection_morphs_endpoint_reports_lifecycle_state() {
 
     // Initial state — Active.
     let body: Value = TestClient::get(format!(
-        "http://server/_cokret/self/projection/morphs?realm_id={realm_id}"
+        "http://server/_cokret/self/realms/{realm_id}/morphs"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state.clone()))
@@ -355,7 +355,7 @@ async fn projection_morphs_endpoint_reports_lifecycle_state() {
     assert_eq!(r["status"], "accepted");
 
     let body: Value = TestClient::get(format!(
-        "http://server/_cokret/self/projection/morphs?realm_id={realm_id}"
+        "http://server/_cokret/self/realms/{realm_id}/morphs"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state.clone()))
@@ -373,7 +373,7 @@ async fn projection_morphs_endpoint_reports_lifecycle_state() {
 
     // Unauthenticated → 401, no body leak.
     let unauth = TestClient::get(format!(
-        "http://server/_cokret/self/projection/morphs?realm_id={realm_id}"
+        "http://server/_cokret/self/realms/{realm_id}/morphs"
     ))
     .send(&app_from_state(state.clone()))
     .await;
@@ -452,7 +452,7 @@ async fn projection_morphs_endpoint_filters_circle_scope() {
     }
 
     let bob_body: Value = TestClient::get(format!(
-        "http://server/_cokret/self/projection/morphs?realm_id={realm_id}"
+        "http://server/_cokret/self/realms/{realm_id}/morphs"
     ))
     .add_header("authorization", format!("Bearer {bob}"), true)
     .send(&app_from_state(state.clone()))
@@ -465,7 +465,7 @@ async fn projection_morphs_endpoint_filters_circle_scope() {
     assert!(!bob_morphs.iter().any(|m| m["morph_id"] == scoped_morph_id));
 
     let alice_body: Value = TestClient::get(format!(
-        "http://server/_cokret/self/projection/morphs?realm_id={realm_id}"
+        "http://server/_cokret/self/realms/{realm_id}/morphs"
     ))
     .add_header("authorization", format!("Bearer {alice}"), true)
     .send(&app_from_state(state.clone()))
@@ -662,7 +662,7 @@ async fn projection_document_endpoint_reports_body_versions_relations_and_range_
     );
 
     let body: Value = TestClient::get(format!(
-        "http://server/_cokret/self/projection/documents/{morph_id}"
+        "http://server/_cokret/self/realms/{realm_id}/morphs/{morph_id}"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state.clone()))
@@ -847,7 +847,7 @@ async fn projection_document_relations_return_lazy_and_locked_stubs() {
     }
 
     let body: Value = TestClient::get(format!(
-        "http://server/_cokret/self/projection/documents/{morph_id}"
+        "http://server/_cokret/self/realms/{realm_id}/morphs/{morph_id}"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state.clone()))
@@ -944,7 +944,7 @@ async fn projection_endpoints_hide_terminal_state_by_default() {
 
     // Default Space-container projection — tombstoned Space container is hidden.
     let body: Value = TestClient::get(format!(
-        "http://server/_cokret/self/projection/spaces?realm_id={realm_id}"
+        "http://server/_cokret/self/realms/{realm_id}/spaces"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state.clone()))
@@ -963,7 +963,7 @@ async fn projection_endpoints_hide_terminal_state_by_default() {
 
     // Explicit include_terminal=true — tombstoned Space container is visible.
     let body: Value = TestClient::get(format!(
-        "http://server/_cokret/self/projection/spaces?realm_id={realm_id}&include_terminal=true"
+        "http://server/_cokret/self/realms/{realm_id}/spaces?include_terminal=true"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state.clone()))
@@ -1025,7 +1025,7 @@ async fn projection_endpoints_hide_terminal_state_by_default() {
 
     // Default Strand listing — redacted Strand hidden.
     let body: Value = TestClient::get(format!(
-        "http://server/_cokret/self/projection/strands?realm_id={realm_id}"
+        "http://server/_cokret/self/realms/{realm_id}/strands"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state.clone()))
@@ -1044,7 +1044,7 @@ async fn projection_endpoints_hide_terminal_state_by_default() {
 
     // Explicit include_terminal=true — redacted Strand visible.
     let body: Value = TestClient::get(format!(
-        "http://server/_cokret/self/projection/strands?realm_id={realm_id}&include_terminal=true"
+        "http://server/_cokret/self/realms/{realm_id}/strands?include_terminal=true"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state.clone()))

@@ -48,7 +48,9 @@ const MAX_CLOCK_SKEW_SECONDS: i64 = 30;
 /// §3.2).
 const SENSITIVE_READ_FRAGMENTS: &[&str] = &[
     "/members",
-    "/projection",
+    "/spaces",
+    "/strands",
+    "/morphs",
     "/keys/backups",
     "/devices",
     "/moderation",
@@ -331,7 +333,7 @@ mod tests {
         assert!(is_write(&salvo::http::Method::DELETE));
         assert!(!is_write(&salvo::http::Method::GET));
         assert!(is_sensitive_read("/_cokret/self/keys/backups"));
-        assert!(is_sensitive_read("/_cokret/self/projection/strands"));
+        assert!(is_sensitive_read("/_cokret/self/realms/r1/strands"));
         assert!(!is_sensitive_read("/_cokret/self/realms/r1/links"));
     }
 }

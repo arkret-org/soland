@@ -142,8 +142,10 @@ fn method_path_requires_fresh_introspection(method: &salvo::http::Method, path: 
         "/keys",
         "/members",
         "/moderation",
+        "/morphs",
         "/policy/check",
-        "/projection",
+        "/spaces",
+        "/strands",
     ]
     .iter()
     .any(|fragment| path.contains(fragment))
@@ -227,7 +229,7 @@ mod tests {
             "/_cokret/self/device_messages",
             "/_cokret/self/keys/backups",
             "/_cokret/self/keys/query",
-            "/_cokret/self/projection/strands",
+            "/_cokret/self/realms/r1/strands",
         ] {
             assert!(
                 method_path_requires_fresh_introspection(&Method::GET, path),

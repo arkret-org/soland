@@ -6,12 +6,12 @@
 //! `ck.space.archive` accepted by the server doesn't appear "unarchived"
 //! again when the kanban view re-mounts.
 //!
-//! - `GET /_cokret/self/projection/spaces?realm_id=...` — canonical projection endpoint listing
+//! - `GET /_cokret/self/realms/{realm_id}/spaces` — canonical projection endpoint listing
 //!   Space containers in a Realm scope, with `state` ∈ {active, archived, tombstoned} (spec
 //!   `common-fields.md §5.1`).
-//! - `GET /_cokret/self/projection/strands?realm_id=...` — same for Strands (state ∈ {active,
+//! - `GET /_cokret/self/realms/{realm_id}/strands` — same for Strands (state ∈ {active,
 //!   archived, redacted}).
-//! - `GET /_cokret/self/projection/morphs?realm_id=...` — same for Morphs (same enum as Strands).
+//! - `GET /_cokret/self/realms/{realm_id}/morphs` — same for Morphs (same enum as Strands).
 //!
 //! All three endpoints are authenticated. Resource visibility check
 //! piggy-backs on `realm_id_accessible` so a non-member can't probe
@@ -57,10 +57,12 @@ use crate::state::{AppState, SessionRecord};
 
 pub(super) fn protocol_router() -> Router {
     Router::new()
-        .push(Router::with_path("projection/spaces").get(list_space_container_projections))
-        .push(Router::with_path("projection/strands").get(list_strand_projections))
-        .push(Router::with_path("projection/morphs").get(list_morph_projections))
-        .push(Router::with_path("projection/documents/{morph_id}").get(get_document_projection))
+        .push(Router::with_path("realms/{realm_id}/spaces").get(list_space_container_projections))
+        .push(Router::with_path("realms/{realm_id}/strands").get(list_strand_projections))
+        .push(Router::with_path("realms/{realm_id}/morphs").get(list_morph_projections))
+        .push(
+            Router::with_path("realms/{realm_id}/morphs/{morph_id}").get(get_document_projection),
+        )
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────
@@ -935,16 +937,16 @@ fn document_projection_comments(
 }
 
 #[endpoint(
-    operation_id = "ck.self.projection.spaces.query.list",
-    tags("projection"),
+    operation_id = "ck.self.space.query.list",
+    tags("realm"),
     summary = "List Space lifecycle projection state for a Realm"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.projection.spaces.query.list"))]
+#[tracing::instrument(skip_all, fields(op = "ck.self.space.query.list"))]
 async fn list_space_container_projections(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
-    realm_id: QueryParam<String, true>,
+    realm_id: PathParam<String>,
     include_terminal: QueryParam<bool, false>,
 ) -> JsonResult<ProjectionSpaceList> {
     let state = depot.obtain::<AppState>().expect("state injected");
@@ -1026,16 +1028,16 @@ async fn list_space_container_projections(
 }
 
 #[endpoint(
-    operation_id = "ck.self.projection.strands.query.list",
-    tags("projection"),
+    operation_id = "ck.self.strand.query.list",
+    tags("realm"),
     summary = "List Strand lifecycle projection state for a Realm"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.projection.strands.query.list"))]
+#[tracing::instrument(skip_all, fields(op = "ck.self.strand.query.list"))]
 async fn list_strand_projections(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
-    realm_id: QueryParam<String, true>,
+    realm_id: PathParam<String>,
     include_terminal: QueryParam<bool, false>,
 ) -> JsonResult<ProjectionStrandList> {
     let state = depot.obtain::<AppState>().expect("state injected");
@@ -1126,23 +1128,25 @@ async fn list_strand_projections(
 }
 
 #[endpoint(
-    operation_id = "ck.self.projection.document.resource.get",
-    tags("projection"),
+    operation_id = "ck.self.morph.resource.get",
+    tags("realm"),
     summary = "Get a derived document Morph projection"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.projection.document.resource.get"))]
+#[tracing::instrument(skip_all, fields(op = "ck.self.morph.resource.get"))]
 async fn get_document_projection(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
+    realm_id: PathParam<String>,
     morph_id: PathParam<String>,
 ) -> JsonResult<DocumentMorphProjectionOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
+    let realm_id = validate_realm_id(realm_id.into_inner())?;
     let morph_id = morph_id.into_inner();
     MorphId::new(morph_id.clone())
         .map_err(|_| AppError::invalid_param("invalid morph_id format"))?;
-    let realm_id = {
+    {
         let proj = state
             .projection
             .lock()
@@ -1150,7 +1154,9 @@ async fn get_document_projection(
         let Some(morph) = proj.morphs.get(&morph_id) else {
             return Err(AppError::not_found("document Morph not found"));
         };
-        morph.realm_id.clone()
+        if morph.realm_id != realm_id {
+            return Err(AppError::not_found("document Morph not found"));
+        }
     };
     if !realm_id_accessible(state, &realm_id, Some(&session)).await {
         return Err(AppError::new(
@@ -1216,16 +1222,16 @@ async fn get_document_projection(
 }
 
 #[endpoint(
-    operation_id = "ck.self.projection.morphs.query.list",
-    tags("projection"),
+    operation_id = "ck.self.morph.query.list",
+    tags("realm"),
     summary = "List Morph lifecycle projection state for a Realm"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.projection.morphs.query.list"))]
+#[tracing::instrument(skip_all, fields(op = "ck.self.morph.query.list"))]
 async fn list_morph_projections(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
-    realm_id: QueryParam<String, true>,
+    realm_id: PathParam<String>,
     include_terminal: QueryParam<bool, false>,
 ) -> JsonResult<ProjectionMorphList> {
     let state = depot.obtain::<AppState>().expect("state injected");
