@@ -32,9 +32,9 @@ use std::collections::BTreeSet;
 use chrono::SecondsFormat;
 use cokret_sdk::models::{
     AgentDeactivateRequestBody, AgentDiscoverOutcome, AgentDiscoverRequestBody,
-    AgentGrantAttachOutcome, AgentGrantAttachRequestBody,
-    AgentGrantDetachOutcome, AgentKeyPairOutcome, AgentKeyPairRequestBody, AgentLifecycleOutcome,
-    AgentLifecycleState, AgentList, AgentParticipation, AgentParticipationEntry,
+    AgentGrantAttachOutcome, AgentGrantAttachRequestBody, AgentGrantDetachOutcome,
+    AgentKeyPairOutcome, AgentKeyPairRequestBody, AgentLifecycleOutcome, AgentLifecycleState,
+    AgentList, AgentParticipation, AgentParticipationEntry,
     AgentParticipationOutcome as AgentParticipationResBody, AgentParticipationScope,
     AgentParticipationSetRequestBody as AgentParticipationSetReqBody, AgentPauseRequestBody,
     AgentProvisionOutcome, AgentProvisionRequestBody, AgentResumeRequestBody,
@@ -913,8 +913,9 @@ async fn discover_agent_endpoint(
     let Some(projection) = snapshot else {
         // Fail closed: an agent with no accepted `ck.agent.endpoint`
         // cannot be discovered (spec §12 `discovery_failed`).
-        return Err(AppError::not_found("agent endpoint not registered")
-            .with_wire_code("discovery_failed"));
+        return Err(
+            AppError::not_found("agent endpoint not registered").with_wire_code("discovery_failed")
+        );
     };
     // Constrain to the §11 adapter registry so callers can rely on the
     // returned ids being valid adapter selectors.

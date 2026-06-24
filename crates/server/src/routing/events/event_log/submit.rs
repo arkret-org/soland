@@ -1556,7 +1556,8 @@ async fn submit_event_value_with_context(
             .and_then(|payload| payload.get("compatibility_class"))
             .and_then(|value| value.as_str());
         if matches!(compatibility_class, Some("breaking" | "transformation")) {
-            let payload_field = |field: &str| migrate_payload.and_then(|payload| payload.get(field));
+            let payload_field =
+                |field: &str| migrate_payload.and_then(|payload| payload.get(field));
             let capability_used = payload_field("capability_action")
                 .or_else(|| payload_field("action"))
                 .and_then(|value| value.as_str())

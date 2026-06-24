@@ -193,7 +193,9 @@ impl ProjectionState {
                     .get("protocol")
                     .and_then(|v| v.as_str())
                     .filter(|value| !value.is_empty())
-                    && !supported_protocols.iter().any(|p| p.as_str() == entry_protocol)
+                    && !supported_protocols
+                        .iter()
+                        .any(|p| p.as_str() == entry_protocol)
                 {
                     supported_protocols.push(entry_protocol.to_owned());
                 }

@@ -114,8 +114,8 @@ async fn submit_event(depot: &mut Depot, req: &mut Request, res: &mut Response) 
             Ok(Some(record)) if record.request_hash == request_hash => {
                 // Replay: re-emit the cached first response verbatim, no
                 // re-execution and no second side effect.
-                let status = StatusCode::from_u16(record.response_status as u16)
-                    .unwrap_or(StatusCode::OK);
+                let status =
+                    StatusCode::from_u16(record.response_status as u16).unwrap_or(StatusCode::OK);
                 res.status_code(status);
                 res.render(Json(record.response_body));
                 return;
@@ -263,12 +263,7 @@ async fn persist_idempotency_first_response(
         created_at,
         expires_at: created_at + Duration::seconds(IDEMPOTENCY_KEY_TTL_SECONDS),
     };
-    if let Err(error) = state
-        .persistence
-        .idempotency_keys()
-        .record(&record)
-        .await
-    {
+    if let Err(error) = state.persistence.idempotency_keys().record(&record).await {
         tracing::warn!(%error, idempotency_key, "idempotency first-response persist failed");
     }
 }

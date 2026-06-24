@@ -19,9 +19,18 @@
 use std::collections::BTreeMap;
 
 use cokret_sdk::{
-    Operation, OperationId, RealmEffectivePolicyInheritanceMode, RealmEffectivePolicyOutcome,
-    RealmId, RealmLinkCreateRequestBody, RealmLinkDirection, RealmLinkEntry, RealmLinkKind,
-    RealmLinkList, RealmLinkMutationOutcome, RealmLinkStatus,
+    Operation, OperationId,
+    REALM_EFFECTIVE_MODERATION_POLICY_FIELD_EFFECTIVE_RULES as FIELD_EFFECTIVE_RULES,
+    REALM_EFFECTIVE_MODERATION_POLICY_FIELD_FANOUT as FIELD_FANOUT,
+    REALM_EFFECTIVE_MODERATION_POLICY_FIELD_ORGANIZATION_EFFECTIVE_RULES as FIELD_ORGANIZATION_EFFECTIVE_RULES,
+    REALM_EFFECTIVE_MODERATION_POLICY_FIELD_ORGANIZATION_POLICY_FANOUT as FIELD_ORGANIZATION_POLICY_FANOUT,
+    REALM_EFFECTIVE_MODERATION_POLICY_FIELD_ORGANIZATION_POLICY_LAYERS as FIELD_ORGANIZATION_POLICY_LAYERS,
+    REALM_EFFECTIVE_MODERATION_POLICY_FIELD_ORGANIZATION_POLICY_MERGE_STRATEGY as FIELD_ORGANIZATION_POLICY_MERGE_STRATEGY,
+    REALM_EFFECTIVE_MODERATION_POLICY_FIELD_OVERRIDE_REQUIRES_ORGANIZATION_APPROVAL as FIELD_OVERRIDE_REQUIRES_ORGANIZATION_APPROVAL,
+    REALM_EFFECTIVE_MODERATION_POLICY_FIELD_POLICY_MERGE_STRATEGY as FIELD_POLICY_MERGE_STRATEGY,
+    RealmEffectivePolicyInheritanceMode, RealmEffectivePolicyOutcome, RealmId,
+    RealmLinkCreateRequestBody, RealmLinkDirection, RealmLinkEntry, RealmLinkKind, RealmLinkList,
+    RealmLinkMutationOutcome, RealmLinkStatus,
 };
 use salvo::http::StatusCode;
 use salvo::oapi::extract::{JsonBody, PathParam, QueryParam};
@@ -441,21 +450,27 @@ fn merge_organization_effective_policy(
         return;
     };
     let has_organization_layers = map
-        .get("organization_policy_layers")
+        .get(FIELD_ORGANIZATION_POLICY_LAYERS)
         .and_then(Value::as_array)
         .is_some_and(|layers| !layers.is_empty());
     if !has_organization_layers {
         return;
     }
     for (source, target) in [
-        ("organization_policy_layers", "organization_policy_layers"),
-        ("effective_rules", "organization_effective_rules"),
         (
-            "override_requires_organization_approval",
-            "override_requires_organization_approval",
+            FIELD_ORGANIZATION_POLICY_LAYERS,
+            FIELD_ORGANIZATION_POLICY_LAYERS,
         ),
-        ("policy_merge_strategy", "organization_policy_merge_strategy"),
-        ("fanout", "organization_policy_fanout"),
+        (FIELD_EFFECTIVE_RULES, FIELD_ORGANIZATION_EFFECTIVE_RULES),
+        (
+            FIELD_OVERRIDE_REQUIRES_ORGANIZATION_APPROVAL,
+            FIELD_OVERRIDE_REQUIRES_ORGANIZATION_APPROVAL,
+        ),
+        (
+            FIELD_POLICY_MERGE_STRATEGY,
+            FIELD_ORGANIZATION_POLICY_MERGE_STRATEGY,
+        ),
+        (FIELD_FANOUT, FIELD_ORGANIZATION_POLICY_FANOUT),
     ] {
         if let Some(value) = map.remove(source) {
             effective_policy.insert(target.to_owned(), value);

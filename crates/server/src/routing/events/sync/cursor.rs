@@ -345,7 +345,12 @@ pub fn spawn_sync_cursor_ttl_sweeper(
             // api-conventions.md §6 — the generic `Idempotency-Key` cache shares
             // this periodic sweep so its mapping table stays bounded by the
             // per-record TTL instead of growing with every keyed write.
-            match state.persistence.idempotency_keys().prune_expired(now).await {
+            match state
+                .persistence
+                .idempotency_keys()
+                .prune_expired(now)
+                .await
+            {
                 Ok(0) => {}
                 Ok(pruned) => tracing::debug!(
                     worker = "sync_cursor_ttl_sweep",

@@ -748,8 +748,14 @@ async fn agent_discover_reflects_endpoint_projection_and_fails_closed() {
         .as_array()
         .expect("supported_protocols array");
     let protocol_strs: Vec<&str> = protocols.iter().filter_map(Value::as_str).collect();
-    assert!(protocol_strs.contains(&"a2a"), "discover should surface a2a");
-    assert!(protocol_strs.contains(&"acp"), "discover should surface acp");
+    assert!(
+        protocol_strs.contains(&"a2a"),
+        "discover should surface a2a"
+    );
+    assert!(
+        protocol_strs.contains(&"acp"),
+        "discover should surface acp"
+    );
     assert!(
         !protocol_strs.contains(&"not_a_registry_id"),
         "discover must drop protocols outside the §11 adapter registry"

@@ -146,7 +146,12 @@ pub fn apply_message_redaction_timeline_projection(
         .and_then(|value| value.as_ref());
     let redacted_at = cell
         .map(|cell| cell.redacted_at)
-        .or_else(|| projection.messages.get(event_id).and_then(|m| m.redacted_at))
+        .or_else(|| {
+            projection
+                .messages
+                .get(event_id)
+                .and_then(|m| m.redacted_at)
+        })
         .unwrap_or_else(chrono::Utc::now);
     let redaction_ref = cell.and_then(|cell| cell.redaction_event_id.as_deref());
     cokret_sdk::events::redaction_tombstone_message_value(event, redacted_at, redaction_ref);

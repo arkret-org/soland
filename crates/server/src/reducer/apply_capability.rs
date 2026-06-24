@@ -1010,7 +1010,9 @@ impl ProjectionState {
             // §12.1). Snapshot subject + grant realm from the latest add.
             let any_revoked = items.iter().any(|item| {
                 let body = item.get("value").unwrap_or(item);
-                body.get("revoked").and_then(Value::as_bool).unwrap_or(false)
+                body.get("revoked")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
             });
             if !any_revoked {
                 continue;
@@ -1588,11 +1590,7 @@ mod federation_revoke_fanout_tests {
         let now = chrono::Utc::now();
 
         // Before any grant: nothing revoked.
-        assert!(
-            state
-                .federation_delivery_revoked_peers(REALM)
-                .is_empty()
-        );
+        assert!(state.federation_delivery_revoked_peers(REALM).is_empty());
 
         // Grant β's federation delivery binding service delegation. An active
         // grant MUST NOT appear in the revoked set.
@@ -1605,9 +1603,7 @@ mod federation_revoke_fanout_tests {
             now,
         );
         assert!(
-            state
-                .federation_delivery_revoked_peers(REALM)
-                .is_empty(),
+            state.federation_delivery_revoked_peers(REALM).is_empty(),
             "active service delegation must not be reported as revoked"
         );
 

@@ -6,14 +6,13 @@
 //! history under a bare name. soland carries them as profile-private
 //! sub-objects on the active `ck.member.state` event:
 //!
-//!   - stage 1 knock: `ck.member.state{membership=knock}` with an
-//!     `application` object → opens an application record.
-//!   - stage 2 review: `ck.member.state{membership=knock|leave}` with an
-//!     `application_review` object → records reviewer accept / reject /
-//!     request_changes. `reject` drives the member to `leave` and stamps a
-//!     `cooldown_after_reject` anchor (§3, §12).
-//!   - cancel: `ck.member.state{membership=leave}` with an
-//!     `application_cancel` object → applicant withdraws; no cooldown (§7.4).
+//!   - stage 1 knock: `ck.member.state{membership=knock}` with an `application` object → opens an
+//!     application record.
+//!   - stage 2 review: `ck.member.state{membership=knock|leave}` with an `application_review`
+//!     object → records reviewer accept / reject / request_changes. `reject` drives the member to
+//!     `leave` and stamps a `cooldown_after_reject` anchor (§3, §12).
+//!   - cancel: `ck.member.state{membership=leave}` with an `application_cancel` object → applicant
+//!     withdraws; no cooldown (§7.4).
 //!
 //! The reducer enforces the §3 / §12 anti-abuse limits
 //! (`max_open_applications_per_actor`, `application_ttl`,
@@ -69,11 +68,7 @@ impl MemberApplicationState {
     }
 }
 
-fn join_policy_duration_or(
-    join_policy: &Value,
-    field: &str,
-    default: &str,
-) -> Duration {
+fn join_policy_duration_or(join_policy: &Value, field: &str, default: &str) -> Duration {
     join_policy
         .get(field)
         .and_then(Value::as_str)
@@ -191,15 +186,8 @@ impl ProjectionState {
         Ok(())
     }
 
-    fn check_application_review(
-        &self,
-        review: &Value,
-        realm_id: &str,
-    ) -> Result<(), &'static str> {
-        let decision = review
-            .get("decision")
-            .and_then(Value::as_str)
-            .unwrap_or("");
+    fn check_application_review(&self, review: &Value, realm_id: &str) -> Result<(), &'static str> {
+        let decision = review.get("decision").and_then(Value::as_str).unwrap_or("");
         if !matches!(decision, "accept" | "reject" | "request_changes") {
             return Err("failed_precondition");
         }
@@ -289,9 +277,9 @@ impl ProjectionState {
         realm_id: &str,
         receipt_digest: &str,
     ) -> Option<&MemberApplicationState> {
-        self.member_applications.values().find(|state| {
-            state.realm_id == realm_id && state.receipt_digest == receipt_digest
-        })
+        self.member_applications
+            .values()
+            .find(|state| state.realm_id == realm_id && state.receipt_digest == receipt_digest)
     }
 
     fn member_application_by_review(
@@ -331,12 +319,7 @@ impl ProjectionState {
         }
     }
 
-    fn open_member_application(
-        &mut self,
-        operation: &Operation,
-        realm_id: &str,
-        member: &str,
-    ) {
+    fn open_member_application(&mut self, operation: &Operation, realm_id: &str, member: &str) {
         let application = operation
             .payload
             .get("application")
@@ -543,9 +526,7 @@ fn join_authorised_by_refs(payload: &Value) -> Vec<String> {
             refs.iter()
                 .filter_map(|reference| {
                     let object = reference.as_object()?;
-                    if object.get("role").and_then(Value::as_str)
-                        != Some("join_authorised_by")
-                    {
+                    if object.get("role").and_then(Value::as_str) != Some("join_authorised_by") {
                         return None;
                     }
                     object

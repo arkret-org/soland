@@ -218,9 +218,9 @@ impl WebvhValidationError {
             } => format!(
                 "did:webvh rotation witness quorum missing at index {at_index}: required {required}, valid {valid}"
             ),
-            Self::RotationNotAuthorized { at_index, reason } => format!(
-                "did:webvh rotation at index {at_index} is not authorized: {reason}"
-            ),
+            Self::RotationNotAuthorized { at_index, reason } => {
+                format!("did:webvh rotation at index {at_index} is not authorized: {reason}")
+            }
             Self::GovernanceQuorumNotMet {
                 at_index,
                 required,
@@ -498,20 +498,17 @@ pub fn validate_witness_policy_for_log_with_window(
 /// an accepted control path. A rotation entry (one that changes `updateKeys`
 /// or the document's control keys) MUST be authorised by at least one of:
 ///
-/// 1. **normal controller rotation** — a `proof[]` signed by a key listed in
-///    the *previous* entry's `updateKeys` (the current controller signs over
-///    the new key set). Spec: identity-did.md §7.
-/// 2. **emergency recovery** — a `proof[]` signed by a genesis-declared
-///    recovery key (`parameters.recoveryKeys` / `recovery_keys`), so a
-///    compromised controller key can be rotated out without a prev-key
-///    signature. Spec: key-management.md §3.3, identity-did.md §8.2 emergency
-///    recovery.
-/// 3. **organization governance quorum** — when the genesis declares an
-///    `application-level multi-proof` governance threshold
-///    (`parameters.governance.threshold` + eligible methods), at least
-///    `threshold` distinct valid `proof[]` from the eligible governance
-///    methods MUST sign the rotation. A single-sig submission on an N-of-M org
-///    DID fails closed. Spec: identity-did.md §8.1–§8.2.
+/// 1. **normal controller rotation** — a `proof[]` signed by a key listed in the *previous* entry's
+///    `updateKeys` (the current controller signs over the new key set). Spec: identity-did.md §7.
+/// 2. **emergency recovery** — a `proof[]` signed by a genesis-declared recovery key
+///    (`parameters.recoveryKeys` / `recovery_keys`), so a compromised controller key can be rotated
+///    out without a prev-key signature. Spec: key-management.md §3.3, identity-did.md §8.2
+///    emergency recovery.
+/// 3. **organization governance quorum** — when the genesis declares an `application-level
+///    multi-proof` governance threshold (`parameters.governance.threshold` + eligible methods), at
+///    least `threshold` distinct valid `proof[]` from the eligible governance methods MUST sign the
+///    rotation. A single-sig submission on an N-of-M org DID fails closed. Spec: identity-did.md
+///    §8.1–§8.2.
 ///
 /// Witness quorum (history visibility) is validated separately by
 /// [`validate_witness_policy_for_log`]; this function validates control
@@ -547,13 +544,12 @@ pub fn validate_rotation_authorization_for_log(
         // Otherwise accept either a normal controller proof (prev updateKeys)
         // or an emergency recovery-key proof.
         let prev_update_keys = update_keys_of(previous);
-        let controller_valid =
-            count_distinct_valid_entry_proofs(current, &prev_update_keys)? > 0;
+        let controller_valid = count_distinct_valid_entry_proofs(current, &prev_update_keys)? > 0;
         if controller_valid {
             continue;
         }
-        let recovery_valid =
-            !recovery_keys.is_empty() && count_distinct_valid_entry_proofs(current, &recovery_keys)? > 0;
+        let recovery_valid = !recovery_keys.is_empty()
+            && count_distinct_valid_entry_proofs(current, &recovery_keys)? > 0;
         if recovery_valid {
             continue;
         }
@@ -637,12 +633,12 @@ fn verify_entry_proof(
                 reason: error.to_string(),
             }
         })?;
-    public_key
-        .verify(&payload, &signature)
-        .map_err(|_| WebvhValidationError::RotationNotAuthorized {
+    public_key.verify(&payload, &signature).map_err(|_| {
+        WebvhValidationError::RotationNotAuthorized {
             at_index: 0,
             reason: "rotation proof signature is invalid".to_owned(),
-        })
+        }
+    })
 }
 
 /// Extract the multibase key a `proof[]` object signs with — the fragment

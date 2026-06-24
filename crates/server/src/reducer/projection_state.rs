@@ -992,32 +992,25 @@ impl ProjectionState {
     /// layer where the authz engine is available; this method covers the
     /// state-aware preconditions:
     ///
-    /// - S1 version binding: the event `requirements.schema[]` MUST bind the
-    ///   migration schema set (union of `from`/`to`); otherwise
-    ///   `morph_schema_version_binding_missing`.
-    /// - S3 profile gate: `breaking` / `transformation` require the Realm to
-    ///   have declared `ck.profile.morph.schema_migration_transformations.v1`;
-    ///   absent → `morph_schema_refs_transformation_unsupported`.
-    /// - S3 dialect: every `transformation_rules[]` entry's `rule` id MUST be
-    ///   in the profile dialect; otherwise `unsupported_transformation_rule`
-    ///   (hard reject, no partial apply).
-    /// - additive predicate for the additive class (defence in depth; also
-    ///   enforced statelessly in payload validation).
-    /// - `from_schema_refs[]` set-equals the Morph's current `schema_refs[]`;
-    ///   otherwise `morph_schema_refs_precondition_mismatch`.
-    pub fn check_morph_schema_migrate(
-        &self,
-        operation: &Operation,
-    ) -> Result<(), &'static str> {
+    /// - S1 version binding: the event `requirements.schema[]` MUST bind the migration schema set
+    ///   (union of `from`/`to`); otherwise `morph_schema_version_binding_missing`.
+    /// - S3 profile gate: `breaking` / `transformation` require the Realm to have declared
+    ///   `ck.profile.morph.schema_migration_transformations.v1`; absent →
+    ///   `morph_schema_refs_transformation_unsupported`.
+    /// - S3 dialect: every `transformation_rules[]` entry's `rule` id MUST be in the profile
+    ///   dialect; otherwise `unsupported_transformation_rule` (hard reject, no partial apply).
+    /// - additive predicate for the additive class (defence in depth; also enforced statelessly in
+    ///   payload validation).
+    /// - `from_schema_refs[]` set-equals the Morph's current `schema_refs[]`; otherwise
+    ///   `morph_schema_refs_precondition_mismatch`.
+    pub fn check_morph_schema_migrate(&self, operation: &Operation) -> Result<(), &'static str> {
         if crate::kinds::canonical_kind_for_operation(operation)
             != Some(cokret_sdk::events::kinds::MORPH_SCHEMA_MIGRATE)
         {
             return Ok(());
         }
-        let from_schema_refs = crate::reducer::string_array_field_from_payload(
-            &operation.payload,
-            "from_schema_refs",
-        );
+        let from_schema_refs =
+            crate::reducer::string_array_field_from_payload(&operation.payload, "from_schema_refs");
         let to_schema_refs =
             crate::reducer::string_array_field_from_payload(&operation.payload, "to_schema_refs");
         let compatibility_class = operation
@@ -1039,7 +1032,10 @@ impl ProjectionState {
             .iter()
             .chain(to_schema_refs.iter())
             .map(String::as_str);
-        if !union_refs.clone().all(|schema_ref| bound_schema.contains(schema_ref)) {
+        if !union_refs
+            .clone()
+            .all(|schema_ref| bound_schema.contains(schema_ref))
+        {
             return Err("morph_schema_version_binding_missing");
         }
 

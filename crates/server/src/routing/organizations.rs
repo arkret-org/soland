@@ -8,6 +8,11 @@
 use std::collections::BTreeSet;
 
 use chrono::Utc;
+use cokret_sdk::{
+    REALM_MODERATION_POLICY_FANOUT_SOURCE_ORGANIZATION_POLICY,
+    REALM_MODERATION_POLICY_MERGE_STRATEGY_MOST_RESTRICTIVE,
+    REALM_MODERATION_POLICY_WIRE_CODE_REQUIRES_ORGANIZATION_APPROVAL,
+};
 use salvo::http::StatusCode;
 use salvo::oapi::ToSchema;
 use salvo::oapi::extract::{JsonBody, PathParam};
@@ -660,9 +665,9 @@ pub(crate) fn effective_policy_for_realm(
         // rules). `organization_policy_blocks_join` already evaluates this union
         // across all linked organizations; this field surfaces the merge
         // semantics so a cross-organization Realm can be reasoned about.
-        policy_merge_strategy: "most_restrictive".to_owned(),
+        policy_merge_strategy: REALM_MODERATION_POLICY_MERGE_STRATEGY_MOST_RESTRICTIVE.to_owned(),
         fanout: RealmModerationPolicyFanout {
-            source: "organization_policy".to_owned(),
+            source: REALM_MODERATION_POLICY_FANOUT_SOURCE_ORGANIZATION_POLICY.to_owned(),
             rewrites_realm_policy: false,
         },
     }
@@ -1124,7 +1129,7 @@ fn safe_id_fragment(value: &str) -> String {
 }
 
 pub(crate) fn requires_organization_approval_error() -> AppError {
-    AppError::capability_denied("requires_organization_approval")
+    AppError::capability_denied(REALM_MODERATION_POLICY_WIRE_CODE_REQUIRES_ORGANIZATION_APPROVAL)
         .with_status(StatusCode::FORBIDDEN)
-        .with_wire_code("requires_organization_approval")
+        .with_wire_code(REALM_MODERATION_POLICY_WIRE_CODE_REQUIRES_ORGANIZATION_APPROVAL)
 }

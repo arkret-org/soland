@@ -2132,7 +2132,11 @@ mod tests {
             json!("sha256:9999999999999999999999999999999999999999999999999999999999999999");
         let effect = apply_commit_epoch(
             &mut state,
-            &commit_op(500, b"forged-binding", json!({ "governance_binding": binding })),
+            &commit_op(
+                500,
+                b"forged-binding",
+                json!({ "governance_binding": binding }),
+            ),
         );
         match effect {
             ProjectionEffect::Rejected { reason } => {
@@ -2173,7 +2177,13 @@ mod tests {
             contended,
             ProjectionEffect::Mls(MlsEffect::CommitFrontierContested { epoch: 0, .. })
         ));
-        assert!(state.mls_commit_epochs.get(&epoch_key).unwrap().frontier_contested);
+        assert!(
+            state
+                .mls_commit_epochs
+                .get(&epoch_key)
+                .unwrap()
+                .frontier_contested
+        );
         // Epoch unchanged while contested.
         assert_eq!(state.mls_commit_epochs.get(&epoch_key).unwrap().epoch, 1);
 

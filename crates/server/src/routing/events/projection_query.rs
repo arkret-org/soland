@@ -1123,6 +1123,11 @@ async fn list_strand_projections(
                 assigned_to_relations,
                 created_by: Some(parse_projection_id::<Did>(&f.created_by, "created_by")?),
                 created_at: Some(f.created_at),
+                updated_by: f
+                    .updated_by
+                    .as_deref()
+                    .map(|actor| parse_projection_id::<Did>(actor, "updated_by"))
+                    .transpose()?,
                 updated_at: f.updated_at,
                 is_default: default_strand_id.as_deref() == Some(f.strand_id.as_str()),
             })
@@ -1222,6 +1227,7 @@ async fn get_strand_projection(
         "rank": rank,
         "created_by": strand.created_by,
         "created_at": strand.created_at,
+        "updated_by": strand.updated_by,
         "updated_at": strand.updated_at,
     }))
 }
