@@ -1548,6 +1548,7 @@ fn account_device_summary(device: DeviceInventoryRecord) -> Result<AccountDevice
     Ok(AccountDeviceSummary {
         device_id,
         status: status.to_owned(),
+        verification_state: device.verification_state.clone(),
         display_name,
         authorized_event_ref,
         authorized_at: authorized.then_some(device.created_at),
