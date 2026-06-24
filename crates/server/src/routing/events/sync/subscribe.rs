@@ -333,6 +333,15 @@ pub(super) async fn account_subscribe(depot: &mut Depot, req: &mut Request, res:
         }
     }
 
+    if account_subscribe_prefers_json(req) {
+        if let Some(control_frame) = control_frame {
+            res.render(Json(control_frame));
+        } else {
+            res.render(Json(response));
+        }
+        return;
+    }
+
     let frames = if let Some(control_frame) = control_frame {
         vec![ndjson_line(&control_frame)]
     } else {
@@ -354,6 +363,22 @@ pub(super) async fn account_subscribe(depot: &mut Depot, req: &mut Request, res:
     };
     let _ = res.add_header("content-type", "application/x-ndjson", true);
     res.stream(body_stream.boxed());
+}
+
+fn account_subscribe_prefers_json(req: &Request) -> bool {
+    req.headers()
+        .get(header::ACCEPT)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|accept| accept_contains_media_type(accept, "application/json"))
+}
+
+fn accept_contains_media_type(accept: &str, media_type: &str) -> bool {
+    accept.split(',').any(|part| {
+        part.split(';')
+            .next()
+            .map(str::trim)
+            .is_some_and(|value| value.eq_ignore_ascii_case(media_type))
+    })
 }
 
 fn parse_max_wait_ms(req: &mut Request) -> u64 {

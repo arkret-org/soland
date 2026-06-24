@@ -5,6 +5,7 @@ use super::*;
 /// In-memory implementation of persistence store.
 pub struct SolandMemoryPersistenceStore {
     accounts: MemoryAccountStore,
+    account_localparts: MemoryAccountLocalpartStore,
     account_lifecycle: MemoryAccountLifecycleStore,
     sessions: MemorySessionStore,
     account_data: MemoryAccountDataStore,
@@ -66,8 +67,11 @@ pub struct SolandMemoryPersistenceStore {
 
 impl SolandMemoryPersistenceStore {
     pub fn new() -> Self {
+        let account_localparts = MemoryAccountLocalpartStore::new();
+        let accounts = MemoryAccountStore::new(account_localparts.shared_data());
         Self {
-            accounts: MemoryAccountStore::new(),
+            accounts,
+            account_localparts,
             account_lifecycle: MemoryAccountLifecycleStore::new(),
             sessions: MemorySessionStore::new(),
             account_data: MemoryAccountDataStore::new(),
@@ -138,6 +142,10 @@ impl Default for SolandMemoryPersistenceStore {
 impl PersistenceStore for SolandMemoryPersistenceStore {
     fn accounts(&self) -> &dyn AccountStore {
         &self.accounts
+    }
+
+    fn account_localparts(&self) -> &dyn AccountLocalpartStore {
+        &self.account_localparts
     }
 
     fn account_lifecycle(&self) -> &dyn AccountLifecycleStore {

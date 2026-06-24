@@ -46,11 +46,10 @@ pub struct AccountRecord {
     pub id: String,
     /// The account's protocol identity DID (DB column `principal_id`).
     pub did: String,
-    /// Bare handle localpart (`alice` — never `@alice` or `alice:domain`).
-    /// The domain half of the canonical `<localpart>:<domain>` handle is
-    /// implicit (always this server's own service domain), so renaming the
-    /// server's domain never rewrites account rows. Wire/display surfaces
-    /// use [`AccountRecord::handle`] for the `@`-prefixed form.
+    /// Primary bare handle localpart (`alice` — never `@alice` or
+    /// `alice:domain`). This is derived from `account_localparts`, not stored
+    /// on the account row. Wire/display surfaces use [`AccountRecord::handle`]
+    /// for the `@`-prefixed form.
     pub localpart: String,
     pub display_name: Option<String>,
     /// Free-form short description for directory rendering. Updated via
@@ -68,8 +67,22 @@ impl AccountRecord {
     /// `@<localpart>` form used by the product API, audit log and
     /// directory projections.
     pub fn handle(&self) -> String {
-        format!("@{}", self.localpart)
+        if self.localpart.is_empty() {
+            String::new()
+        } else {
+            format!("@{}", self.localpart)
+        }
     }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AccountLocalpartRecord {
+    pub id: String,
+    pub account_did: String,
+    pub localpart: String,
+    pub is_primary: bool,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub updated_at: chrono::DateTime<chrono::Utc>,
 }
 
 #[derive(Clone, Debug)]

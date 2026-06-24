@@ -10,10 +10,10 @@
 //! - `POST /_soland/admin/handles/{id}/reassign` — operator-level re-bind of a handle to a new
 //!   subject DID.
 //!
-//! Authoritative data source: the durable `accounts` table. Each account
-//! row carries a bare `localpart`; the canonical handle is `@<localpart>`.
-//! The handle id surfaced to operators is the account's `localpart` (stable
-//! and URL-safe). The local handle-claim evidence cache
+//! Authoritative data source: the durable `account_localparts` table. Each row
+//! carries a bare `localpart`; the canonical handle is `@<localpart>`. The
+//! handle id surfaced to operators is the localpart (stable and URL-safe).
+//! The local handle-claim evidence cache
 //! ([`crate::state::MemberIdentityRegistry`]) enriches rows with
 //! issuer / binding-state metadata when present. Wire shapes mirror sodmin's
 //! `HandleRecord` / `HandleAuditEvent` / `HandleReassignRequest` DTOs
@@ -115,10 +115,15 @@ pub(super) async fn admin_handle_items(state: &AppState) -> Vec<AdminHandleRecor
         .await
         .unwrap_or_default();
 
-    accounts
-        .into_iter()
-        .filter(|account| !account.localpart.is_empty())
-        .map(|account| {
+    let mut rows = Vec::new();
+    for account in accounts {
+        let localparts = state
+            .persistence
+            .account_localparts()
+            .list_for_account(&account.did)
+            .await
+            .unwrap_or_default();
+        for localpart in localparts {
             let evidence = claims_by_subject.get(&account.did);
             let primary_claim = evidence.and_then(|records| records.first());
             let status = match primary_claim {
@@ -126,22 +131,24 @@ pub(super) async fn admin_handle_items(state: &AppState) -> Vec<AdminHandleRecor
                 Some(record) => record.binding_state.clone(),
                 None => "active".to_owned(),
             };
-            AdminHandleRecord {
-                id: account.localpart.clone(),
-                canonical_uri: format!("ck:handle:{}", account.handle()),
-                aliases: vec![account.handle()],
+            let handle = format!("@{}", localpart.localpart);
+            rows.push(AdminHandleRecord {
+                id: localpart.localpart.clone(),
+                canonical_uri: format!("ck:handle:{handle}"),
+                aliases: vec![handle],
                 issuer_did: primary_claim
                     .and_then(|record| record.issuer_service_did.clone())
                     .or_else(|| Some(state.config.service_did.clone())),
                 subject_id: Some(account.did.clone()),
-                assigned_at: Some(account.created_at.to_rfc3339()),
+                assigned_at: Some(localpart.created_at.to_rfc3339()),
                 expires_at: primary_claim
                     .and_then(|record| record.expires_at.map(|ts| ts.to_rfc3339())),
                 last_reassignment_at: None,
                 status: Some(status),
-            }
-        })
-        .collect()
+            });
+        }
+    }
+    rows
 }
 
 /// Resolve a single handle row by its operator id (the account localpart).
@@ -352,19 +359,13 @@ async fn revoke_handle(
         .clone()
         .ok_or_else(|| AppError::not_found("handle has no bound subject"))?;
 
-    // Operator revocation releases the durable account binding: clear the
-    // localpart so the handle is no longer claimed, and record the release
-    // in the post-release grace ledger like the self-service path does.
-    let accounts = state.persistence.accounts();
-    let mut account = accounts
-        .get(&subject_did)
-        .await
-        .map_err(|error| AppError::internal(error.to_string()))?
-        .ok_or_else(|| AppError::not_found("account not found"))?;
-    let released = account.localpart.clone();
-    account.localpart = String::new();
-    accounts
-        .put(&account)
+    // Operator revocation releases the durable account-localpart binding and
+    // records the release in the post-release grace ledger.
+    let released = handle_id.clone();
+    state
+        .persistence
+        .account_localparts()
+        .remove(&subject_did, &released)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
     crate::routing::identity::account::record_handle_release(state, &released)
@@ -417,7 +418,6 @@ async fn reassign_handle(
     let record = handle_record_by_id(state, &handle_id).await?;
     let previous_subject_id = record.subject_id.clone();
 
-    let accounts = state.persistence.accounts();
     // The localpart that backs this handle is the operator id itself.
     let localpart = record
         .aliases
@@ -426,7 +426,9 @@ async fn reassign_handle(
         .unwrap_or_else(|| handle_id.clone());
 
     // Target account must exist before we re-bind onto it.
-    let mut target = accounts
+    let target = state
+        .persistence
+        .accounts()
         .get(&new_subject_id)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
@@ -436,22 +438,19 @@ async fn reassign_handle(
     // still carries the localpart.
     if let Some(previous) = previous_subject_id.as_deref()
         && previous != new_subject_id
-        && let Some(mut prior) = accounts
-            .get(previous)
-            .await
-            .map_err(|error| AppError::internal(error.to_string()))?
-        && prior.localpart == localpart
     {
-        prior.localpart = String::new();
-        accounts
-            .put(&prior)
+        state
+            .persistence
+            .account_localparts()
+            .remove(previous, &localpart)
             .await
             .map_err(|error| AppError::internal(error.to_string()))?;
     }
 
-    target.localpart = localpart.clone();
-    accounts
-        .put(&target)
+    state
+        .persistence
+        .account_localparts()
+        .add(&target.did, &localpart, true)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
 

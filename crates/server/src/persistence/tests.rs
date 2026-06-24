@@ -2,7 +2,8 @@ use super::*;
 
 #[tokio::test]
 async fn memory_account_store_crud() {
-    let store = MemoryAccountStore::new();
+    let localparts = MemoryAccountLocalpartStore::new();
+    let store = MemoryAccountStore::new(localparts.shared_data());
     let record = AccountRecord {
         id: "ck:account:00000000-0000-7000-8000-000000000001".to_owned(),
         did: "did:web:test".to_owned(),
@@ -19,6 +20,13 @@ async fn memory_account_store_crud() {
     // Read
     let fetched = store.get("did:web:test").await.unwrap().unwrap();
     assert_eq!(fetched.did, "did:web:test");
+    assert_eq!(fetched.localpart, "test");
+    localparts
+        .add("did:web:test", "second", true)
+        .await
+        .unwrap();
+    let fetched = store.get("did:web:test").await.unwrap().unwrap();
+    assert_eq!(fetched.localpart, "second");
 
     // List
     let all = store.list().await.unwrap();

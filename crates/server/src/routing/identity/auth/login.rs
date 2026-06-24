@@ -162,6 +162,12 @@ pub(super) async fn dev_login(
             .put(&record)
             .await
             .map_err(|error| AppError::internal(error.to_string()))?;
+        state
+            .persistence
+            .account_localparts()
+            .add(actor_str, &record.localpart, true)
+            .await
+            .map_err(|error| AppError::internal(error.to_string()))?;
         append_audit_log(
             state,
             Some(actor_str),

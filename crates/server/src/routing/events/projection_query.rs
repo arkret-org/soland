@@ -6,11 +6,11 @@
 //! `ck.space.archive` accepted by the server doesn't appear "unarchived"
 //! again when the kanban view re-mounts.
 //!
-//! - `GET /_cokret/self/realms/{realm_id}/spaces` — canonical projection endpoint listing
-//!   Space containers in a Realm scope, with `state` ∈ {active, archived, tombstoned} (spec
+//! - `GET /_cokret/self/realms/{realm_id}/spaces` — canonical projection endpoint listing Space
+//!   containers in a Realm scope, with `state` ∈ {active, archived, tombstoned} (spec
 //!   `common-fields.md §5.1`).
-//! - `GET /_cokret/self/realms/{realm_id}/strands` — same for Strands (state ∈ {active,
-//!   archived, redacted}).
+//! - `GET /_cokret/self/realms/{realm_id}/strands` — same for Strands (state ∈ {active, archived,
+//!   redacted}).
 //! - `GET /_cokret/self/realms/{realm_id}/morphs` — same for Morphs (same enum as Strands).
 //!
 //! All three endpoints are authenticated. Resource visibility check
@@ -60,9 +60,7 @@ pub(super) fn protocol_router() -> Router {
         .push(Router::with_path("realms/{realm_id}/spaces").get(list_space_container_projections))
         .push(Router::with_path("realms/{realm_id}/strands").get(list_strand_projections))
         .push(Router::with_path("realms/{realm_id}/morphs").get(list_morph_projections))
-        .push(
-            Router::with_path("realms/{realm_id}/morphs/{morph_id}").get(get_document_projection),
-        )
+        .push(Router::with_path("realms/{realm_id}/morphs/{morph_id}").get(get_document_projection))
 }
 
 /// Product-private read surface (`/_soland/self/*`). These are

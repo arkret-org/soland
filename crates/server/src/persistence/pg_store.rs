@@ -8,6 +8,7 @@ use super::*;
 /// direct-conversation binding accessors are wired to Pg stores.
 pub struct PgPersistenceStore {
     accounts: PgAccountStore,
+    account_localparts: PgAccountLocalpartStore,
     account_lifecycle: PgAccountLifecycleStore,
     sessions: PgSessionStore,
     account_data: PgAccountDataStore,
@@ -65,6 +66,7 @@ impl PgPersistenceStore {
     pub fn new(pool: PgPool) -> Self {
         Self {
             accounts: PgAccountStore { pool: pool.clone() },
+            account_localparts: PgAccountLocalpartStore { pool: pool.clone() },
             account_lifecycle: PgAccountLifecycleStore { pool: pool.clone() },
             sessions: PgSessionStore { pool: pool.clone() },
             account_data: PgAccountDataStore { pool: pool.clone() },
@@ -123,6 +125,10 @@ impl PgPersistenceStore {
 impl PersistenceStore for PgPersistenceStore {
     fn accounts(&self) -> &dyn AccountStore {
         &self.accounts
+    }
+
+    fn account_localparts(&self) -> &dyn AccountLocalpartStore {
+        &self.account_localparts
     }
 
     fn account_lifecycle(&self) -> &dyn AccountLifecycleStore {

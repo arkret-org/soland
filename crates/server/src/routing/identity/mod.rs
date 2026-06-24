@@ -91,6 +91,7 @@ pub fn local_router() -> Router {
                 .push(auth::router())
                 .push(Router::with_path("account").push(agents::agent_key_pair_router())),
         )
+        .push(account::local_service_router())
         // `root` — trust root: DID / identity documents + recovery.
         .push(
             Router::with_path("root").push(
