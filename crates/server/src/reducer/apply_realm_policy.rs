@@ -712,18 +712,25 @@ impl ProjectionState {
             self.cells.insert(cell_id, CellState::Value(value));
         }
 
-        self.realm_inheritance_policies.insert(
-            realm_id.clone(),
-            RealmInheritancePolicyState {
-                realm_id: realm_id.clone(),
-                operation_id: operation.operation_id.to_string(),
-                source_realm_id: source_realm_id.to_owned(),
-                allowed_policies,
-                allowed_capability_bundles,
-                max_depth,
-                updated_at: now,
-            },
+        let state_row = RealmInheritancePolicyState {
+            realm_id: realm_id.clone(),
+            operation_id: operation.operation_id.to_string(),
+            source_realm_id: source_realm_id.to_owned(),
+            allowed_policies,
+            allowed_capability_bundles,
+            max_depth,
+            updated_at: now,
+        };
+        // realm-links.md §6.2 — retain the per-(child, source) declaration so
+        // a child opted into multiple governance sources keeps each source's
+        // narrowed allow-list for the narrow-only intersection read; the
+        // single last-write map below preserves the legacy single-source walk.
+        self.realm_inheritance_policies_by_source.insert(
+            (realm_id.clone(), source_realm_id.to_owned()),
+            state_row.clone(),
         );
+        self.realm_inheritance_policies
+            .insert(realm_id.clone(), state_row);
 
         ProjectionEffect::RealmInheritancePolicyProjected {
             realm_id,

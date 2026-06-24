@@ -204,6 +204,16 @@ pub struct ProjectionState {
     /// child `realm_id` (the envelope `realm_id`). Cas-register
     /// semantics — last write wins.
     pub realm_inheritance_policies: BTreeMap<String, RealmInheritancePolicyState>,
+    /// realm-links.md §6.2 — per-`(child_realm, source_realm)` inheritance
+    /// declarations, so a child that opts into multiple governance sources
+    /// (multi-`governed_by`) retains each source's narrowed allow-list
+    /// independently. Cas-register per `(child, source)` pair — a re-declared
+    /// `(child, source)` replaces only that pair. This is the substrate the
+    /// effective-policy read uses to compute the narrow-only intersection
+    /// across all opted-in sources, distinct from the single last-write
+    /// `realm_inheritance_policies` map used by the legacy single-source walk.
+    pub realm_inheritance_policies_by_source:
+        BTreeMap<(String, String), RealmInheritancePolicyState>,
     /// R3.2 — `ck.capability.derived` projection, keyed by
     /// `capability_id`. Cas-register semantics — last write wins per
     /// capability.
@@ -585,6 +595,93 @@ impl ProjectionState {
             CellState::Value(v) => Some(v),
             CellState::Bottom(_) => None,
         }
+    }
+
+    /// event-and-patch.md §4.4 — a Control Move MAY carry `preconditions[]`;
+    /// the reducer MUST evaluate every predicate against the current
+    /// materialized head BEFORE applying any effect, and the whole Move MUST
+    /// fail closed (`failed_precondition`) without partial application when
+    /// any predicate does not hold.
+    ///
+    /// This evaluates the generic `head_eq` compare-and-swap predicate:
+    /// each entry is `{ "cell": "<cell_ref>", "predicate": { "op": "head_eq",
+    /// "value": { "<field-path>": <expected> } } }`. For a strand-fields cell
+    /// (`ck.component.strand.fields.v1:<strand_id>`) the `fields.<key>` paths
+    /// resolve against the materialized strand `fields`; for any other cell
+    /// family the path resolves against the resolved cell JSON value. A
+    /// mismatch — or a referenced cell / strand that is absent or in `Bottom`
+    /// — fails the precondition so the Move does not apply.
+    ///
+    /// Returns `Ok(())` when there are no `preconditions[]`, when every
+    /// predicate holds, or when a predicate carries an `op` this engine does
+    /// not recognize (forward-compatible: unknown ops are not silently
+    /// treated as satisfied for `head_eq`, but other op kinds are deferred to
+    /// their dedicated reducer gates and ignored here).
+    pub fn check_move_preconditions(&self, operation: &Operation) -> Result<(), &'static str> {
+        let Some(preconditions) = operation
+            .payload
+            .get("preconditions")
+            .and_then(Value::as_array)
+        else {
+            return Ok(());
+        };
+        for precondition in preconditions {
+            let Some(predicate) = precondition.get("predicate") else {
+                continue;
+            };
+            let op = predicate.get("op").and_then(Value::as_str);
+            if op != Some("head_eq") {
+                continue;
+            }
+            let Some(cell_ref) = precondition.get("cell").and_then(Value::as_str) else {
+                return Err("failed_precondition");
+            };
+            let Some(expected) = predicate.get("value").and_then(Value::as_object) else {
+                return Err("failed_precondition");
+            };
+            if !self.head_eq_holds(cell_ref, expected) {
+                return Err("failed_precondition");
+            }
+        }
+        Ok(())
+    }
+
+    /// Resolve every `<field-path> -> <expected>` entry in a `head_eq`
+    /// predicate against the current materialized head for `cell_ref` and
+    /// return `true` iff all hold. Strand-fields cells resolve against the
+    /// materialized strand `fields`; other cells resolve against the cell's
+    /// resolved JSON value.
+    fn head_eq_holds(
+        &self,
+        cell_ref: &str,
+        expected: &serde_json::Map<String, Value>,
+    ) -> bool {
+        const STRAND_FIELDS_FAMILY: &str = "ck.component.strand.fields.v1";
+        if let Some(strand_id) = cell_ref
+            .strip_prefix("ck:cell:")
+            .and_then(|rest| rest.strip_prefix(STRAND_FIELDS_FAMILY))
+            .and_then(|rest| rest.strip_prefix(':'))
+        {
+            let Some(strand) = self.strands.get(strand_id) else {
+                return false;
+            };
+            return expected.iter().all(|(path, want)| {
+                let key = path.strip_prefix("fields.").unwrap_or(path);
+                strand.fields.get(key) == Some(want)
+            });
+        }
+        let Ok(cell_id) = CellRef::new(cell_ref.to_owned()) else {
+            return false;
+        };
+        let Some(value) = self.cell_value(&cell_id) else {
+            return false;
+        };
+        expected.iter().all(|(path, want)| {
+            let resolved = path
+                .split('.')
+                .try_fold(value, |current, segment| current.get(segment));
+            resolved == Some(want)
+        })
     }
 
     pub fn child_order_cell_value(&self, parent_space_id: &str) -> Value {

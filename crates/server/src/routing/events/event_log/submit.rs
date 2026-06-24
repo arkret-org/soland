@@ -1301,6 +1301,18 @@ async fn submit_event_value_with_context(
                     reason,
                 ));
             }
+            // event-and-patch.md §4.4 — a Control Move's generic
+            // `preconditions[].head_eq` compare-and-swap MUST be evaluated
+            // against the materialized head before any effect lands; a stale
+            // head fails closed with `failed_precondition` and no partial
+            // apply.
+            if let Err(reason) = proj.check_move_preconditions(operation) {
+                return Err(SubmitOneError::new(
+                    StatusCode::PRECONDITION_FAILED,
+                    reason,
+                    reason,
+                ));
+            }
             strand_status_audit_payload =
                 proj.strand_status_transition_audit_payload(operation, &parsed.actor_id);
             if let Err(reason) = proj.check_morph_lifecycle_transition(operation) {

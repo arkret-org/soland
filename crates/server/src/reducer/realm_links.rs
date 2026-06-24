@@ -54,7 +54,7 @@ use std::collections::BTreeSet;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use super::{ProjectionState, RealmLinkState};
+use super::{ProjectionState, RealmInheritancePolicyState, RealmLinkState};
 
 /// Directed link kinds for which the reducer enforces cycle detection.
 ///
@@ -245,9 +245,20 @@ pub fn effective_policy_for_realm(state: &ProjectionState, realm_id: &str) -> Ef
         }
     }
 
+    // realm-links.md §6.2 — derived grants MUST NOT be wider than ANY source.
+    // The union above stays for the legacy single-source read; alongside it we
+    // surface the narrow-only INTERSECTION across every source the child has
+    // opted into via a currently-active governance link. A policy survives the
+    // narrowing only when EVERY opted-in source declares it, which is the
+    // assertable narrow-only result for multi-`governed_by` children.
+    let (narrowed_policies, narrowed_capability_bundles) =
+        narrowed_inheritance_intersection(state, realm_id);
+
     let effective_policy = json!({
         "allowed_policies": allowed_policies.into_iter().collect::<Vec<_>>(),
         "allowed_capability_bundles": allowed_capability_bundles.into_iter().collect::<Vec<_>>(),
+        "narrowed_policies": narrowed_policies,
+        "narrowed_capability_bundles": narrowed_capability_bundles,
     });
 
     EffectivePolicy {
@@ -256,6 +267,91 @@ pub fn effective_policy_for_realm(state: &ProjectionState, realm_id: &str) -> Ef
         inheritance_chain: chain,
         effective_policy,
     }
+}
+
+/// realm-links.md §6.2 narrow-only — compute the INTERSECTION of the
+/// `allowed_policies` / `allowed_capability_bundles` across every source the
+/// child Realm has opted into via a currently-active `governed_by` /
+/// `inherits_policy_from` link.
+///
+/// Each opted-in source contributes its own declared narrowed allow-list; a
+/// policy survives only when EVERY active source declares it (so adding a
+/// stricter governance source can only narrow, never widen, the derived set —
+/// the spec's "只能收窄" invariant). Sources whose underlying link is rejected
+/// / tombstoned do not participate. Returns `(narrowed_policies,
+/// narrowed_capability_bundles)` in deterministic sorted order. With zero
+/// active sources both sets are empty (nothing is inherited).
+fn narrowed_inheritance_intersection(
+    state: &ProjectionState,
+    realm_id: &str,
+) -> (Vec<String>, Vec<String>) {
+    let active_link_to = |source: &str| {
+        state
+            .realm_links
+            .get(realm_id)
+            .map(|links| {
+                links.iter().any(|l| {
+                    l.target_realm_id == source
+                        && l.status == "active"
+                        && matches!(l.link_kind.as_str(), "governed_by" | "inherits_policy_from")
+                })
+            })
+            .unwrap_or(false)
+    };
+
+    // The child's per-source opt-in declarations naming a real, currently
+    // active governance source.
+    let opt_ins: Vec<&RealmInheritancePolicyState> = state
+        .realm_inheritance_policies_for_child(realm_id)
+        .into_iter()
+        .filter(|decl| decl.source_realm_id != realm_id && active_link_to(&decl.source_realm_id))
+        .collect();
+
+    if opt_ins.is_empty() {
+        return (Vec::new(), Vec::new());
+    }
+
+    // For each opted-in source S: the inheritable set is S's OWN declared
+    // allow-list (its self-declaration), optionally further narrowed by the
+    // child's opt-in list when the child restricts what it accepts. Then
+    // intersect across all sources — a policy survives only when EVERY active
+    // source declares it (narrow-only, §6.2).
+    let per_source = |selector: fn(&RealmInheritancePolicyState) -> &Vec<String>| {
+        let mut acc: Option<BTreeSet<String>> = None;
+        for opt_in in &opt_ins {
+            // The source's OWN narrowing declaration is its self-declaration
+            // `(source, source)`; prefer that over the source's last-write
+            // single-source row so a source that itself inherits elsewhere
+            // still contributes the set it published for downstream children.
+            let source_self_key =
+                (opt_in.source_realm_id.clone(), opt_in.source_realm_id.clone());
+            let source_decl = state
+                .realm_inheritance_policies_by_source
+                .get(&source_self_key)
+                .or_else(|| state.realm_inheritance_policy(&opt_in.source_realm_id));
+            let source_declared: BTreeSet<String> = source_decl
+                .map(|decl| selector(decl).iter().cloned().collect())
+                .unwrap_or_default();
+            let child_filter: BTreeSet<String> = selector(opt_in).iter().cloned().collect();
+            // Empty child opt-in = accept the source's full declared set;
+            // non-empty = intersect with what the child explicitly accepts.
+            let inheritable: BTreeSet<String> = if child_filter.is_empty() {
+                source_declared
+            } else {
+                source_declared.intersection(&child_filter).cloned().collect()
+            };
+            acc = Some(match acc {
+                Some(prev) => prev.intersection(&inheritable).cloned().collect(),
+                None => inheritable,
+            });
+        }
+        acc.unwrap_or_default().into_iter().collect::<Vec<_>>()
+    };
+
+    (
+        per_source(|decl| &decl.allowed_policies),
+        per_source(|decl| &decl.allowed_capability_bundles),
+    )
 }
 
 /// Inner DFS for [`effective_policy_for_realm`]. Bounded by

@@ -595,6 +595,22 @@ impl ProjectionState {
         self.realm_inheritance_policies.get(realm_id)
     }
 
+    /// realm-links.md §6.2 — every per-`(child, source)` inheritance
+    /// declaration the child Realm has on file, in deterministic source
+    /// order. Unlike [`Self::realm_inheritance_policy`] this surfaces ALL
+    /// opted-in sources (multi-`governed_by`), so the effective-policy read
+    /// can compute the narrow-only intersection across them.
+    pub fn realm_inheritance_policies_for_child(
+        &self,
+        realm_id: &str,
+    ) -> Vec<&RealmInheritancePolicyState> {
+        self.realm_inheritance_policies_by_source
+            .iter()
+            .filter(|((child, _source), _state)| child == realm_id)
+            .map(|(_key, state)| state)
+            .collect()
+    }
+
     /// R3.2 — read the most-recent `ck.capability.derived` projection
     /// for a capability id, if any.
     pub fn capability_derived_state(&self, capability_id: &str) -> Option<&CapabilityDerivedState> {
