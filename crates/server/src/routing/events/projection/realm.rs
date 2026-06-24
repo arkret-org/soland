@@ -258,6 +258,20 @@ pub async fn project_membership_operation(state: &AppState, origin: &str, operat
     if membership == Some("invite")
         && let Ok(invitee) = Did::new(member)
     {
+        if crate::routing::spaces::space::realm_has_member_by_id(
+            state,
+            operation.realm_id.as_str(),
+            invitee.as_str(),
+        )
+        .await
+        {
+            tracing::debug!(
+                invitee = %invitee.as_str(),
+                realm_id = %operation.realm_id,
+                "seed-invite skipped: invitee is already a member"
+            );
+            return;
+        }
         let invites = state.persistence.realm_invites();
         let already_invited = invites
             .snapshot_all()
@@ -339,22 +353,23 @@ pub async fn project_membership_operation(state: &AppState, origin: &str, operat
 }
 
 async fn project_invite_acceptance(state: &AppState, member: &str, operation: &Operation) {
-    let Some(invite_id) = invite_acceptance_ref_for_operation(operation) else {
-        return;
-    };
     let invites = state.persistence.realm_invites();
-    let Ok(Some(mut record)) = invites.get(&invite_id).await else {
+    let Ok(records) = invites.snapshot_all().await else {
         return;
     };
-    if record.invitee.as_deref() != Some(member) {
-        return;
-    }
-    if !matches!(record.status.as_str(), "pending" | "claimed") {
-        return;
-    }
-    record.status = "accepted".to_owned();
-    if let Err(error) = invites.put(record).await {
-        tracing::warn!(%error, invite_id = %invite_id, "failed to mark invite accepted");
+    for mut record in records {
+        if record.realm_id != operation.realm_id.as_str()
+            || record.invitee.as_deref() != Some(member)
+            || !matches!(record.status.as_str(), "pending" | "claimed")
+        {
+            continue;
+        }
+        record.status = "accepted".to_owned();
+        record.updated_at = Some(operation.created_at);
+        let invite_id = record.invite_id.clone();
+        if let Err(error) = invites.put(record).await {
+            tracing::warn!(%error, invite_id = %invite_id, "failed to mark invite accepted");
+        }
     }
 }
 

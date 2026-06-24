@@ -148,6 +148,43 @@ pub(super) async fn member_join_accepts_pending_invite(
     invite.realm_id == realm_id
 }
 
+pub(super) async fn invitee_cancels_pending_invite(
+    state: &AppState,
+    object: &serde_json::Map<String, Value>,
+    actor: &str,
+    realm_id: &str,
+) -> bool {
+    if object.get("kind").and_then(Value::as_str) != Some(cokret_sdk::events::kinds::INVITE_CANCEL)
+    {
+        return false;
+    }
+    let Some(payload) = object.get("payload") else {
+        return false;
+    };
+    let Some(invite_id) = payload.get("invite_id").and_then(Value::as_str) else {
+        return false;
+    };
+    if crate::ids::parse_typed_uuid(invite_id, "invite").is_none() {
+        return false;
+    }
+    let Ok(Some(invite)) = state.persistence.realm_invites().get(invite_id).await else {
+        return false;
+    };
+    if invite.realm_id != realm_id
+        || !matches!(invite.status.as_str(), "pending" | "claimed")
+        || invite.invitee.as_deref() != Some(actor)
+    {
+        return false;
+    }
+    if invite
+        .expires_at
+        .is_some_and(|expires_at| expires_at <= now())
+    {
+        return false;
+    }
+    true
+}
+
 pub(super) async fn invite_claim_actor_claims_pending_third_party_invite(
     state: &AppState,
     object: &serde_json::Map<String, Value>,

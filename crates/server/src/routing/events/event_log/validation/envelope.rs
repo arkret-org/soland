@@ -1336,6 +1336,8 @@ pub(crate) async fn validate_event_envelope_with_context(
         && !realm_exists;
     let is_invite_acceptance_join =
         member_join_accepts_pending_invite(state, object, &session.actor, &realm_id).await;
+    let is_invitee_invite_cancel =
+        invitee_cancels_pending_invite(state, object, &session.actor, &realm_id).await;
     let is_third_party_invite_claim = invite_claim_actor_claims_pending_third_party_invite(
         state,
         object,
@@ -1363,6 +1365,7 @@ pub(crate) async fn validate_event_envelope_with_context(
     let is_member_self_knock = member_self_knock(object, &session.actor);
     if !is_realm_create_bootstrap
         && !is_invite_acceptance_join
+        && !is_invitee_invite_cancel
         && !is_third_party_invite_claim
         && !is_foreign_invite_delivery
         && !is_applet_delegated

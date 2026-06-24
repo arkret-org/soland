@@ -99,6 +99,113 @@ pub(super) async fn project_invite_accept_operation(
     );
 }
 
+pub(super) async fn project_invite_cancel_operation(
+    state: &AppState,
+    origin: &str,
+    operation: &Operation,
+) {
+    if kinds::canonical_kind_string(operation) != cokret_sdk::events::kinds::INVITE_CANCEL {
+        return;
+    }
+    project_invite_terminal_operation(state, origin, operation, InviteTerminalEvent::Cancel).await;
+}
+
+pub(super) async fn project_invite_revoke_operation(
+    state: &AppState,
+    origin: &str,
+    operation: &Operation,
+) {
+    if kinds::canonical_kind_string(operation) != cokret_sdk::events::kinds::INVITE_REVOKE {
+        return;
+    }
+    project_invite_terminal_operation(state, origin, operation, InviteTerminalEvent::Revoke).await;
+}
+
+#[derive(Clone, Copy)]
+enum InviteTerminalEvent {
+    Cancel,
+    Revoke,
+}
+
+async fn project_invite_terminal_operation(
+    state: &AppState,
+    origin: &str,
+    operation: &Operation,
+    terminal_event: InviteTerminalEvent,
+) {
+    let Some(invite_id) = invite_acceptance_ref_for_operation(operation) else {
+        tracing::warn!(
+            operation_id = %operation.operation_id,
+            "invite terminal event missing valid invite_id"
+        );
+        return;
+    };
+    let invites = state.persistence.realm_invites();
+    let Ok(Some(mut record)) = invites.get(&invite_id).await else {
+        tracing::warn!(invite_id = %invite_id, "invite terminal event references unknown invite");
+        return;
+    };
+    if record.realm_id != operation.realm_id.as_str() {
+        tracing::warn!(
+            invite_id = %invite_id,
+            record_realm = %record.realm_id,
+            operation_realm = %operation.realm_id,
+            "invite terminal event realm mismatch"
+        );
+        return;
+    }
+    if matches!(
+        record.status.as_str(),
+        "accepted"
+            | "rejected"
+            | "revoked"
+            | "revoked_by_capability_loss"
+            | "revoked_by_inviter_left"
+            | "expired"
+            | "invalidated_by_rate_limit"
+    ) {
+        tracing::debug!(
+            invite_id = %invite_id,
+            status = %record.status,
+            "invite terminal event on terminal invite ignored"
+        );
+        return;
+    }
+    let terminal_status = if record
+        .expires_at
+        .is_some_and(|expires_at| expires_at <= operation.created_at)
+    {
+        "expired"
+    } else {
+        match terminal_event {
+            InviteTerminalEvent::Cancel if record.invitee.as_deref() == Some(origin.trim()) => {
+                "rejected"
+            }
+            InviteTerminalEvent::Cancel | InviteTerminalEvent::Revoke => "revoked",
+        }
+    };
+    record.status = terminal_status.to_owned();
+    record.updated_at = Some(operation.created_at);
+    record.invite_token.clear();
+    remove_third_party_active_material(&mut record.third_party_id, terminal_status != "rejected");
+    let realm_id = record.realm_id.clone();
+    match invites.put(record).await {
+        Ok(()) => {
+            touch_realm(state, &realm_id).await;
+            tracing::info!(
+                invite_id = %invite_id,
+                actor = %origin,
+                realm_id = %realm_id,
+                status = %terminal_status,
+                "invite terminal event projected"
+            );
+        }
+        Err(error) => {
+            tracing::warn!(%error, invite_id = %invite_id, "failed to project invite terminal event")
+        }
+    }
+}
+
 pub(super) async fn project_invite_third_party_operation(state: &AppState, operation: &Operation) {
     if !kinds::operation_is_invite_third_party(operation) {
         return;
@@ -298,6 +405,21 @@ pub(super) async fn project_invite_create_operation(
         );
         return;
     };
+    if crate::routing::spaces::space::realm_has_member_by_id(
+        state,
+        operation.realm_id.as_str(),
+        invitee.as_str(),
+    )
+    .await
+    {
+        tracing::debug!(
+            invite_id = %invite_id,
+            invitee = %invitee.as_str(),
+            realm_id = %operation.realm_id,
+            "ck.invite.create projection skipped: invitee is already a member"
+        );
+        return;
+    }
 
     let invites = state.persistence.realm_invites();
     match invites.get(&invite_id).await {

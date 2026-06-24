@@ -250,6 +250,25 @@ pub(crate) fn validate_invite_claim_payload(operation: &Operation) -> Result<(),
     Ok(())
 }
 
+pub(crate) fn validate_invite_ref_payload(operation: &Operation) -> Result<(), &'static str> {
+    let payload = operation
+        .payload
+        .as_object()
+        .ok_or("invite reference payload must be an object")?;
+    let invite_id =
+        payload_string(payload, "invite_id").ok_or("invite reference requires invite_id")?;
+    if cokret_sdk::InviteId::new(invite_id).is_err() {
+        return Err("invite reference invite_id must be ck:invite:<uuidv7>");
+    }
+    if let Some(reason) = payload.get("reason")
+        && !reason.is_string()
+    {
+        return Err("invite reference reason must be a string");
+    }
+    validate_operation_payload_against_sdk_artifact(operation)?;
+    Ok(())
+}
+
 fn invite_field(
     payload: &serde_json::Map<String, Value>,
     invite: Option<&serde_json::Map<String, Value>>,

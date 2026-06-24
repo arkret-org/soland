@@ -22,6 +22,7 @@ use serde_json::{Value, json};
 use super::{now, query_param};
 use crate::error::AppError;
 use crate::result::{JsonResult, json_ok};
+use crate::routing::spaces::space::realm_has_member_by_id;
 use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;
 use crate::wire::{AuthzCheckOutcome, AuthzCheckRequestBody};
@@ -368,29 +369,34 @@ async fn invites(
         false
     };
     let now = now();
-    let invite_list = state
+    let mut invite_list = Vec::new();
+    for invite in state
         .persistence
         .realm_invites()
         .snapshot_all()
         .await
         .unwrap_or_default()
         .into_iter()
-        .filter(|invite| {
-            matches!(invite.status.as_str(), "pending" | "claimed")
-                && realm_filter
-                    .as_deref()
-                    .is_none_or(|realm_id| invite.realm_id.as_str() == realm_id)
-                && invite
-                    .invitee
-                    .as_deref()
-                    .is_some_and(|invitee| invitee == subject.as_str())
-                && (subject_is_self
-                    || invite.inviter.as_str() == session.actor.as_str()
-                    || caller_owns_realm)
-                && invite.expires_at.is_none_or(|expires_at| expires_at > now)
-        })
-        .map(invite_record_to_sdk)
-        .collect::<Result<Vec<_>, _>>()?;
+    {
+        if !matches!(invite.status.as_str(), "pending" | "claimed")
+            || realm_filter
+                .as_deref()
+                .is_some_and(|realm_id| invite.realm_id.as_str() != realm_id)
+            || invite.invitee.as_deref() != Some(subject.as_str())
+            || (!subject_is_self
+                && invite.inviter.as_str() != session.actor.as_str()
+                && !caller_owns_realm)
+            || invite
+                .expires_at
+                .is_some_and(|expires_at| expires_at <= now)
+        {
+            continue;
+        }
+        if realm_has_member_by_id(state, &invite.realm_id, &subject).await {
+            continue;
+        }
+        invite_list.push(invite_record_to_sdk(invite)?);
+    }
     crate::result::json_ok(AuthzInviteList {
         invites: invite_list,
         next_cursor: None,

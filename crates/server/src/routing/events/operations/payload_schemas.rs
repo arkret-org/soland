@@ -162,6 +162,10 @@ pub(crate) const INVITE_CLAIM_REQUIREMENTS: &[PayloadRequirement] = &[
     PayloadRequirement::Required("binding_proof", "ck.invite.claim requires binding_proof"),
     PayloadRequirement::Required("subject_proof", "ck.invite.claim requires subject_proof"),
 ];
+pub(crate) const INVITE_REF_REQUIREMENTS: &[PayloadRequirement] = &[PayloadRequirement::Required(
+    "invite_id",
+    "invite reference operation requires invite_id",
+)];
 pub(crate) const INVITE_STATE_REQUIREMENTS: &[PayloadRequirement] = &[];
 pub(crate) const REALM_CREATE_REQUIREMENTS: &[PayloadRequirement] =
     &[PayloadRequirement::Required(

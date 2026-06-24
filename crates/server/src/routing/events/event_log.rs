@@ -81,8 +81,8 @@ pub(in crate::routing) use realm_index::realm_is_indexed;
 use realm_index::{
     bootstrap_realm_member_index, event_string_field,
     invite_claim_actor_claims_pending_third_party_invite, invite_create_actor_is_inviter,
-    member_join_accepts_pending_invite, member_self_knock, realm_create_actor_is_creator,
-    realm_exists_in_index,
+    invitee_cancels_pending_invite, member_join_accepts_pending_invite, member_self_knock,
+    realm_create_actor_is_creator, realm_exists_in_index,
 };
 
 mod submit;

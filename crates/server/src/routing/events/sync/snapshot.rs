@@ -633,6 +633,15 @@ pub(crate) async fn pending_invite_notification_delta(
         {
             continue;
         }
+        if crate::routing::spaces::space::realm_has_member_by_id(
+            state,
+            &invite.realm_id,
+            &session.actor,
+        )
+        .await
+        {
+            continue;
+        }
         let position = invite_projection_position(&invite);
         positions
             .entry(invite.realm_id.clone())

@@ -451,6 +451,12 @@ pub fn operation_schema_for_kind(kind: &str) -> Option<OperationPayloadSchema> {
                 requirements: INVITE_CLAIM_REQUIREMENTS,
                 validate: Some(validate_invite_claim_payload),
             },
+            cokret_sdk::events::kinds::INVITE_CANCEL | cokret_sdk::events::kinds::INVITE_REVOKE => {
+                OperationPayloadSchema {
+                    requirements: INVITE_REF_REQUIREMENTS,
+                    validate: Some(validate_invite_ref_payload),
+                }
+            }
             cokret_sdk::events::kinds::AUDIT_ERASURE_RECEIPT => OperationPayloadSchema {
                 requirements: ERASURE_RECEIPT_REQUIREMENTS,
                 validate: None,

@@ -601,6 +601,14 @@ async fn project_accepted_operations_inner(
             project_invite_claim_operation(state, operation).await;
         } else if kinds::canonical_kind_string(operation) == "ck.invite.accept" {
             project_invite_accept_operation(state, origin, operation).await;
+        } else if kinds::canonical_kind_string(operation)
+            == cokret_sdk::events::kinds::INVITE_CANCEL
+        {
+            project_invite_cancel_operation(state, origin, operation).await;
+        } else if kinds::canonical_kind_string(operation)
+            == cokret_sdk::events::kinds::INVITE_REVOKE
+        {
+            project_invite_revoke_operation(state, origin, operation).await;
         } else if kinds::canonical_kind_string(operation) == "ck.realm.plaintext_visible_services" {
             project_plaintext_visible_services_operation(state, operation).await;
         } else if kinds::operation_is_membership(operation)
