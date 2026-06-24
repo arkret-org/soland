@@ -46,6 +46,58 @@ fn mention_subjects(payload: &Value) -> Vec<String> {
     out
 }
 
+fn mention_sidecar_hashes(payload: &Value) -> BTreeSet<String> {
+    payload
+        .get("mention_sidecar_hash")
+        .or_else(|| {
+            payload
+                .get("payload")
+                .and_then(|payload| payload.get("mention_sidecar_hash"))
+        })
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .collect()
+}
+
+fn realm_joined_members(state: &AppState, realm_id: &str) -> BTreeSet<String> {
+    let mut members = BTreeSet::new();
+    if let Ok(parsed_realm_id) = cokret_sdk::RealmId::new(realm_id.to_owned())
+        && let Ok(realms) = state.realms.lock()
+        && let Some(entry) = realms.get(&parsed_realm_id)
+    {
+        members.extend(entry.members.iter().map(|did| did.as_str().to_owned()));
+    }
+    if let Ok(projection) = state.projection.lock() {
+        members.extend(
+            projection
+                .members_of_realm(realm_id)
+                .into_iter()
+                .map(|member| member.member.clone()),
+        );
+    }
+    members
+}
+
+fn sidecar_hash_for_recipient(realm_id: &str, recipient_id: &str) -> String {
+    cokret_sdk::canonical::sha256_hex(format!("{realm_id}|{recipient_id}").as_bytes())
+}
+
+fn mention_sidecar_subjects(state: &AppState, realm_id: &str, payload: &Value) -> BTreeSet<String> {
+    let sidecar_hashes = mention_sidecar_hashes(payload);
+    if sidecar_hashes.is_empty() {
+        return BTreeSet::new();
+    }
+    realm_joined_members(state, realm_id)
+        .into_iter()
+        .filter(|member| sidecar_hashes.contains(&sidecar_hash_for_recipient(realm_id, member)))
+        .collect()
+}
+
 /// Effective `accept_third_party_mention` for an agent in the message
 /// scope = most-specific selection (strand over circle over realm) intersected with ceiling.
 async fn agent_accepts_third_party_mention(
@@ -106,6 +158,7 @@ pub(crate) async fn dispatch_message_notifications(
         .map(ToOwned::to_owned);
     let mentioned_subjects = mention_subjects(payload)
         .into_iter()
+        .chain(mention_sidecar_subjects(state, &realm_id, payload).into_iter())
         .filter(|subject| !subject.trim().is_empty())
         .collect::<BTreeSet<_>>();
     for subject in mentioned_subjects {
@@ -389,6 +442,30 @@ mod tests {
         )
     }
 
+    fn encrypted_sidecar_mention_message(
+        realm_id: &str,
+        seed: &str,
+        sender: &str,
+        recipient: &str,
+    ) -> cokret_sdk::Operation {
+        cokret_sdk::Operation::create(
+            cokret_sdk::OperationId::new(format!("ck:operation:01904100-0000-7000-8000-{seed}"))
+                .unwrap(),
+            cokret_sdk::RealmId::new(realm_id.to_owned()).unwrap(),
+            cokret_sdk::events::kinds::MESSAGE_CREATE,
+            json!({
+                "sender": sender,
+                "event_id": format!("ck:event:01904100-0000-7000-8000-{seed}"),
+                "mention_sidecar_hash": [sidecar_hash_for_recipient(realm_id, recipient)],
+                "encrypted": true,
+                "encrypted_content": {
+                    "content_type": "ck.message.v1",
+                    "ciphertext": "opaque-ciphertext"
+                }
+            }),
+        )
+    }
+
     #[tokio::test]
     async fn plain_message_does_not_notify_unmentioned_members_by_default() {
         let state = test_state();
@@ -446,6 +523,42 @@ mod tests {
                 .get("notification_type")
                 .and_then(Value::as_str),
             Some("mention")
+        );
+    }
+
+    #[tokio::test]
+    async fn encrypted_mention_sidecar_routes_only_to_matching_member() {
+        let state = test_state();
+        let realm_id = "ck:realm:01904100-0000-7000-8000-000000009974";
+        let alice = "did:web:alice.example";
+        let bob = "did:web:bob.example";
+        let carol = "did:web:carol.example";
+        seed_realm_members(&state, realm_id, &[alice, bob, carol]);
+
+        let delivered = encrypted_sidecar_mention_message(realm_id, "000000009975", alice, bob);
+        dispatch_message_notifications(&state, &delivered).await;
+
+        let bob_notifications = state
+            .persistence
+            .notifications()
+            .list_for_recipient(bob)
+            .await
+            .unwrap();
+        assert_eq!(bob_notifications.len(), 1);
+        assert_eq!(
+            bob_notifications[0]
+                .get("notification_type")
+                .and_then(Value::as_str),
+            Some("mention")
+        );
+        assert!(
+            state
+                .persistence
+                .notifications()
+                .list_for_recipient(carol)
+                .await
+                .unwrap()
+                .is_empty()
         );
     }
 
