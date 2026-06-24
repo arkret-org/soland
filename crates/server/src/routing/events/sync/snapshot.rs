@@ -165,7 +165,10 @@ pub(crate) async fn build_sync_snapshot(
             session,
         )
         .await;
-        let account_position = account_realm_projection_position(meta.as_ref(), &realm_id);
+        let (state_events, state_position) =
+            state_events_for_realm(state, &realm_id, after_account_position, session).await;
+        let account_position =
+            account_realm_projection_position(meta.as_ref(), &realm_id).max(state_position);
         timeline_positions.insert(realm_id.clone(), timeline_position);
         account_positions.insert(realm_id.clone(), account_position);
         let account_projection_changed = if known_account_to_cursor {
@@ -194,6 +197,7 @@ pub(crate) async fn build_sync_snapshot(
         if is_incremental
             && known_timeline_to_cursor
             && timeline_events.is_empty()
+            && state_events.is_empty()
             && !account_projection_changed
             && !has_pending_call_signals_for_subscriber(state, &realm_id, session, !is_incremental)
                 .await
@@ -236,7 +240,7 @@ pub(crate) async fn build_sync_snapshot(
                 "members_limited": false,
                 "strands": [strand_list_item],
                 "timeline": {"events": timeline_events, "limited": false},
-                "state": [],
+                "state": {"events": state_events, "limited": false},
                 "state_after": {"events": [strand_state_after]},
                 "bottom_cells": bottom_cells,
                 "seal_view": seal_view,
@@ -1089,6 +1093,55 @@ async fn timeline_events_for_realm(
             .collect(),
         newest_position,
     )
+}
+
+async fn state_events_for_realm(
+    state: &AppState,
+    realm_id: &str,
+    after_position: i64,
+    session: Option<&SessionRecord>,
+) -> (Vec<serde_json::Value>, i64) {
+    let mut events = state
+        .persistence
+        .projection_events()
+        .snapshot_all()
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|event| event.realm_id == realm_id)
+        .collect::<Vec<_>>();
+    if events.is_empty() {
+        events = crate::routing::events::projection::load_projected_events_from_pg(state, realm_id)
+            .await
+            .unwrap_or_default();
+    }
+
+    let mut seen = BTreeSet::new();
+    let mut newest_position = after_position;
+    let mut state_entries = Vec::new();
+    for event in events {
+        if event.event_kind == cokret_sdk::events::kinds::MESSAGE_CREATE {
+            continue;
+        }
+        let position = projection_event_position(&event);
+        newest_position = newest_position.max(position);
+        if position <= after_position || !seen.insert(event.event_id.clone()) {
+            continue;
+        }
+        if !projection_record_visible_to_session(state, &event, session).await {
+            continue;
+        }
+        state_entries.push((position, projection_event_json(&event)));
+    }
+    state_entries.sort_by_key(|left| left.0);
+    (
+        state_entries.into_iter().map(|(_, event)| event).collect(),
+        newest_position,
+    )
+}
+
+fn projection_event_position(event: &crate::state::ProjectionEventRecord) -> i64 {
+    timestamp_position_with_tie_breaker(event.created_at, &event.event_id)
 }
 
 fn account_realm_projection_position(meta: Option<&RealmMetaRecord>, realm_id: &str) -> i64 {
