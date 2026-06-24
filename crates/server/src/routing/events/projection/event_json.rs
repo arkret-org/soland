@@ -55,6 +55,10 @@ pub fn projection_event_json(event: &ProjectionEventRecord) -> serde_json::Value
         "created_at": event.created_at,
     });
     if let Some(object) = value.as_object_mut() {
+        if let Some(sender) = event.sender.as_deref().filter(|sender| !sender.is_empty()) {
+            object.insert("actor_id".to_owned(), json!(sender));
+            object.insert("sender_actor_id".to_owned(), json!(sender));
+        }
         if let Some(strand_id) = strand_id {
             object.insert("strand_id".to_owned(), json!(strand_id));
         }

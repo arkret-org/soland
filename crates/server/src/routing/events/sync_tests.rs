@@ -863,6 +863,128 @@ async fn sync_snapshot_emits_device_list_baseline_changes_and_left_principals() 
     );
 }
 
+#[tokio::test]
+async fn sync_snapshot_emits_state_events_without_timeline_messages() {
+    let mut config = test_config();
+    config.seed_demo_data = false;
+    let state = AppState::new(config, crate::db::Db { pool: None });
+    let session = roster_session(&state, ROSTER_CALLER);
+    state
+        .realms
+        .lock()
+        .unwrap()
+        .upsert(roster_realm(false, true));
+
+    let first_created_at = DateTime::parse_from_rfc3339("2026-06-24T10:00:00Z")
+        .unwrap()
+        .with_timezone(&Utc);
+    let second_created_at = first_created_at + ChronoDuration::seconds(1);
+    let meta_created_at = first_created_at - ChronoDuration::seconds(1);
+    state
+        .persistence
+        .realm_meta()
+        .put(
+            ROSTER_REALM,
+            &crate::state::RealmMetaRecord {
+                owner: ROSTER_ACTOR.to_owned(),
+                deleted: false,
+                discoverability: "invite_only".to_owned(),
+                history_visibility: "shared".to_owned(),
+                history_sharing_policy: None,
+                history_sharing_policy_digest: None,
+                preview_policy: None,
+                preview_policy_digest: None,
+                asset_privacy_policy: None,
+                asset_privacy_policy_digest: None,
+                encryption_profile: None,
+                plaintext_visible_services: BTreeSet::new(),
+                plaintext_visible_service_classes: BTreeMap::new(),
+                minimal_metadata_realm: false,
+                created_at: meta_created_at,
+                updated_at: meta_created_at,
+            },
+        )
+        .await
+        .expect("realm meta stored");
+    state
+        .persistence
+        .projection_events()
+        .append(crate::state::ProjectionEventRecord {
+            event_id: "ck:event:01904100-0000-7000-8000-0000000000a1".to_owned(),
+            realm_id: ROSTER_REALM.to_owned(),
+            event_kind: cokret_sdk::events::kinds::STRAND_UPDATE.to_owned(),
+            operation_type: "state".to_owned(),
+            operation_id: Some("ck:operation:01904100-0000-7000-8000-0000000000a1".to_owned()),
+            sender: Some(ROSTER_ACTOR.to_owned()),
+            payload: json!({
+                "strand_id": "ck:strand:01904100-0000-7000-8000-0000000000a2",
+                "patch": {"synthesis": {"$op": "set", "value": "first"}}
+            }),
+            created_at: first_created_at,
+        })
+        .await
+        .expect("first state event appended");
+
+    let body = roster_body(&state.config.service_did);
+    let initial = build_sync_snapshot(&state, Some(&session), &body, &SyncCursor::default()).await;
+    let initial_events = initial.realms[ROSTER_REALM]["state"]["events"]
+        .as_array()
+        .expect("state events array");
+    assert_eq!(initial_events.len(), 1);
+    assert_eq!(initial_events[0]["actor_id"], ROSTER_ACTOR);
+
+    let filter_value = sync_filter_value(body.filter.as_ref());
+    let initial_cursor = parse_and_validate_sync_cursor(
+        &initial.cursor,
+        &state,
+        Some(&session),
+        filter_value.as_ref(),
+        chrono::Utc::now().timestamp_millis(),
+    )
+    .await
+    .expect("initial cursor parses");
+
+    state
+        .persistence
+        .projection_events()
+        .append(crate::state::ProjectionEventRecord {
+            event_id: "ck:event:01904100-0000-7000-8000-0000000000b1".to_owned(),
+            realm_id: ROSTER_REALM.to_owned(),
+            event_kind: cokret_sdk::events::kinds::STRAND_UPDATE.to_owned(),
+            operation_type: "state".to_owned(),
+            operation_id: Some("ck:operation:01904100-0000-7000-8000-0000000000b1".to_owned()),
+            sender: Some(ROSTER_CALLER.to_owned()),
+            payload: json!({
+                "strand_id": "ck:strand:01904100-0000-7000-8000-0000000000a2",
+                "patch": {"synthesis": {"$op": "set", "value": "first\n\n---\n\nsecond"}}
+            }),
+            created_at: second_created_at,
+        })
+        .await
+        .expect("second state event appended");
+
+    let mut incremental_body = body.clone();
+    incremental_body.after = Some(initial.cursor.clone());
+    let incremental =
+        build_sync_snapshot(&state, Some(&session), &incremental_body, &initial_cursor).await;
+    let incremental_events = incremental.realms[ROSTER_REALM]["state"]["events"]
+        .as_array()
+        .expect("incremental state events array");
+    assert_eq!(
+        incremental_events.len(),
+        1,
+        "state-only updates must keep the Realm in incremental sync"
+    );
+    assert_eq!(incremental_events[0]["actor_id"], ROSTER_CALLER);
+    assert_eq!(
+        incremental.realms[ROSTER_REALM]["timeline"]["events"]
+            .as_array()
+            .expect("timeline events")
+            .len(),
+        0
+    );
+}
+
 #[test]
 fn auth_material_present_separates_anonymous_from_bad_credential() {
     // Genuinely anonymous: no Authorization header, no query token → the

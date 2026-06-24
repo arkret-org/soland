@@ -22,9 +22,9 @@ use crate::routing::system::extract::AuthArgs;
 use crate::state::{AppState, DeviceInventoryRecord};
 use crate::wire::{
     AuthorizedDeviceSigningKey, DeviceSigningKeyDirectoryOutcome,
-    DeviceSigningKeyDirectoryQueryRequestBody, DeviceStatus, KeysClaimOutcome, KeysClaimRequestBody,
-    KeysQueryOutcome, KeysQueryRequestBody, KeysUploadOutcome, KeysUploadRequestBody,
-    QueryDeviceRecord,
+    DeviceSigningKeyDirectoryQueryRequestBody, DeviceStatus, KeysClaimOutcome,
+    KeysClaimRequestBody, KeysQueryOutcome, KeysQueryRequestBody, KeysUploadOutcome,
+    KeysUploadRequestBody, QueryDeviceRecord,
 };
 
 const KEYS_UPLOAD_SIGNATURE_PREFIX: &[u8] = b"ck-keys-upload-v1\n";
@@ -521,7 +521,10 @@ fn require_device_directory_bearer(state: &AppState, req: &Request) -> Result<()
     tags("keys"),
     summary = "Look up authorized, non-revoked device signing keys for a principal (server-to-server)"
 )]
-#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.gate.account.device_signing_keys.query"))]
+#[tracing::instrument(
+    skip_all,
+    fields(op = "org.cokret.soland.gate.account.device_signing_keys.query")
+)]
 async fn device_signing_keys_query(
     body: JsonBody<DeviceSigningKeyDirectoryQueryRequestBody>,
     depot: &mut Depot,
@@ -559,12 +562,13 @@ async fn device_signing_keys_query(
         // `keys/query` directory facet applies (device-lifecycle.md §8.2). A
         // revoked / unverified device yields no `signing_key_did`, so it never
         // surfaces here.
-        let facet = crate::routing::identity::cross_signing::resolve_device_signing_directory_facet(
-            state,
-            principal_id.as_str(),
-            &device_id,
-        )
-        .await;
+        let facet =
+            crate::routing::identity::cross_signing::resolve_device_signing_directory_facet(
+                state,
+                principal_id.as_str(),
+                &device_id,
+            )
+            .await;
         if !matches!(facet.status, DeviceStatus::Active) {
             continue;
         }

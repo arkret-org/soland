@@ -100,6 +100,32 @@ mod tests {
     }
 
     #[test]
+    fn projection_event_json_emits_canonical_actor_fields() {
+        let created_at = chrono::DateTime::parse_from_rfc3339("2026-06-24T10:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let event = crate::state::ProjectionEventRecord {
+            event_id: "ck:event:01904100-0000-7000-8000-0000000000f1".to_owned(),
+            realm_id: REALM_ID.to_owned(),
+            event_kind: cokret_sdk::events::kinds::STRAND_UPDATE.to_owned(),
+            operation_type: "state".to_owned(),
+            operation_id: Some(OPERATION_ID.to_owned()),
+            sender: Some("did:web:bob.example".to_owned()),
+            payload: json!({
+                "strand_id": "ck:strand:01904100-0000-7000-8000-0000000000f2",
+                "patch": {"synthesis": {"$op": "set", "value": "bob update"}}
+            }),
+            created_at,
+        };
+
+        let json = projection_event_json(&event);
+
+        assert_eq!(json["actor_id"], "did:web:bob.example");
+        assert_eq!(json["sender_actor_id"], "did:web:bob.example");
+        assert_eq!(json["sender"], "did:web:bob.example");
+    }
+
+    #[test]
     fn plaintext_visible_services_projection_is_data_class_aware() {
         let service = "did:web:soland.local";
         let operation = op(
