@@ -412,11 +412,25 @@ pub(super) fn record_pending_request(
     scope: &str,
     requested_at: DateTime<Utc>,
 ) -> ConsentCellRecord {
+    record_pending_request_with_cell_id(state, holder, peer, scope, requested_at, None)
+}
+
+fn record_pending_request_with_cell_id(
+    state: &AppState,
+    holder: &str,
+    peer: &str,
+    scope: &str,
+    requested_at: DateTime<Utc>,
+    cell_id: Option<String>,
+) -> ConsentCellRecord {
     let key = consent_key(holder, peer, scope);
     let mut cells = state.consent_cells.lock().expect("consent_cells lock");
     let cell = cells
         .entry(key)
         .or_insert_with(|| empty_cell(holder, peer, scope, requested_at));
+    if let Some(cell_id) = cell_id {
+        cell.cell_id = cell_id;
+    }
     cell.requested_at = Some(requested_at);
     cell.updated_at = requested_at;
     cell.clone()
@@ -445,15 +459,23 @@ pub(crate) async fn materialize_mimi_consent_request(
     holder: &str,
     peer: &str,
     scope: &str,
-) -> Result<ConsentCellRecord, AppError> {
+) -> Result<(String, ConsentCellRecord), AppError> {
     validate_did(holder).map_err(|_| AppError::invalid_param("invalid holder DID"))?;
     validate_did(peer).map_err(|_| AppError::invalid_param("invalid peer DID"))?;
     let scope = normalize_scope(Some(scope))?;
     let requested_at = now();
     let previous = consent_cell_snapshot(state, holder, peer, &scope);
-    let cell = record_pending_request(state, holder, peer, &scope, requested_at);
+    let consent_id = ids::generate("consent");
+    let cell = record_pending_request_with_cell_id(
+        state,
+        holder,
+        peer,
+        &scope,
+        requested_at,
+        Some(consent_cell_id_for_consent_id(&consent_id)),
+    );
     persist_consent_cell(state, &cell, previous).await?;
-    Ok(cell)
+    Ok((consent_id, cell))
 }
 
 pub(crate) async fn materialize_mimi_consent_update(
@@ -491,7 +513,9 @@ pub(crate) async fn materialize_mimi_consent_update_by_id(
         .lock()
         .expect("consent_cells lock")
         .values()
-        .find(|cell| cell.cell_id == consent_id)
+        .find(|cell| {
+            cell.cell_id == consent_id || cell.cell_id == consent_cell_id_for_consent_id(consent_id)
+        })
         .cloned();
     let Some(existing) = existing else {
         return Ok(None);

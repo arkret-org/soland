@@ -23,6 +23,8 @@ pub fn sync_timeline_message_json(message: &crate::reducer::MessageState) -> ser
         "realm_id": message.realm_id,
         "track_name": default_discussion_track(&strand_id, &track_id),
         "thread_id": message.thread_id,
+        "actor_id": message.sender,
+        "sender_actor_id": message.sender,
         "sender": message.sender,
         "content": message.content,
         "encrypted": message.encrypted,
@@ -265,6 +267,7 @@ mod tests {
             json!({
                 "event_id": event_id,
                 "message_id": message_id,
+                "sender": "did:web:alice.example",
                 "strand_id": "ck:strand:019e4fd4-4e26-7cc9-af7e-d7102d6f4a22",
                 "track_name": "discussion",
                 "content": {"kind": "ck.content.text", "body": "hello"}
@@ -277,5 +280,7 @@ mod tests {
         let event = sync_timeline_message_json_with_projection(message, &projection);
 
         assert_eq!(event["message_id"], message_id);
+        assert_eq!(event["actor_id"], "did:web:alice.example");
+        assert_eq!(event["sender_actor_id"], "did:web:alice.example");
     }
 }

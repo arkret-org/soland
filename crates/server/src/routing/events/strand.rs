@@ -11,9 +11,7 @@
 
 use serde_json::json;
 
-use super::{
-    now, realm_allows_plaintext_service_for_data_class, realm_discoverability, sha256_hex,
-};
+use super::{now, realm_discoverability, sha256_hex};
 use crate::state::{AppState, ProjectionEventRecord};
 
 pub fn retag_typed_id(value: &str, from_prefix: &str, to_prefix: &str) -> Option<String> {
@@ -121,17 +119,6 @@ pub async fn strand_projection_for_realm(
                 "enabled": true,
                 "track_kind": "discussion",
                 "history_visibility": history_visibility,
-                "encryption_profile": if realm_allows_plaintext_service_for_data_class(
-                    state,
-                    realm_id,
-                    cokret_sdk::PlaintextDataClassKind::MessageContent,
-                )
-                .await
-                {
-                    "none"
-                } else {
-                    "mls_rfc9420"
-                },
                 "fields": {}
             }
         },

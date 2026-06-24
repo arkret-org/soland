@@ -1417,11 +1417,7 @@ async fn personal_blocklist_blocks_sender_for_session(
         {
             Ok(None) => {}
             Ok(Some(record)) => {
-                return !record
-                    .payload
-                    .get("tombstone")
-                    .and_then(Value::as_bool)
-                    .unwrap_or(false);
+                return blocklist_payload_blocks_sender(&record.payload, sender);
             }
             Err(error) => {
                 tracing::warn!(
@@ -1434,6 +1430,58 @@ async fn personal_blocklist_blocks_sender_for_session(
         }
     }
     false
+}
+
+fn blocklist_payload_blocks_sender(payload: &Value, sender: &str) -> bool {
+    if payload
+        .get("tombstone")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        return false;
+    }
+    let Some(entries) = payload.get("entries").and_then(Value::as_array) else {
+        return false;
+    };
+    entries
+        .iter()
+        .any(|entry| blocklist_entry_blocks_sender(entry, sender))
+}
+
+fn blocklist_entry_blocks_sender(entry: &Value, sender: &str) -> bool {
+    let mode = entry
+        .get("mode")
+        .or_else(|| entry.get("kind"))
+        .and_then(Value::as_str)
+        .unwrap_or("block");
+    if mode != "block" {
+        return false;
+    }
+    if entry.get("expires_at").is_some_and(|expires_at| {
+        expires_at.as_str().is_some_and(|value| {
+            chrono::DateTime::parse_from_rfc3339(value)
+                .is_ok_and(|expires| expires <= chrono::Utc::now())
+        })
+    }) {
+        return false;
+    }
+    let Some(target) = entry.get("target") else {
+        return ["did", "actor", "id"]
+            .iter()
+            .any(|field| entry.get(*field).and_then(Value::as_str) == Some(sender));
+    };
+    if let Some(value) = target.as_str() {
+        return value == sender;
+    }
+    let Some(object) = target.as_object() else {
+        return false;
+    };
+    if object.get("kind").and_then(Value::as_str) != Some("actor") {
+        return false;
+    }
+    ["did", "actor", "id"]
+        .iter()
+        .any(|field| object.get(*field).and_then(Value::as_str) == Some(sender))
 }
 
 fn message_scope_circle_id(content: &Value) -> Option<&str> {
@@ -1536,6 +1584,8 @@ fn sync_timeline_message_record_json(message: &crate::state::MessageRecord) -> s
         "realm_id": message.realm_id,
         "track_name": default_discussion_track(&strand_id, &track_id),
         "thread_id": message.thread_id,
+        "actor_id": message.sender,
+        "sender_actor_id": message.sender,
         "sender": message.sender,
         "content": message.content,
         "encrypted": message.encrypted,

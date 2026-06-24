@@ -53,6 +53,7 @@ use crate::routing::events::projection::{append_projection_event, projection_eve
 use crate::routing::identity::consent::{
     materialize_mimi_consent_request, materialize_mimi_consent_update_by_id,
 };
+use crate::routing::system::extract::AuthArgs;
 use crate::state::{
     AppState, CanonicalEventRecord, EventNotification, MessageRecord, ProjectionEventRecord,
 };
@@ -815,13 +816,13 @@ async fn mimi_group_info(
 )]
 #[tracing::instrument(skip_all, fields(op = "ck.open.mimi.command.request_consent"))]
 async fn mimi_consent_request(
+    aa: AuthArgs,
     body: JsonBody<MimiRequestConsentRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<MimiRequestConsentOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = typed_body_value(body.into_inner(), "mimi consent request")?;
-    verify_mimi_write_service_proof(state, req, &body, None)?;
     if let Some(message) = unsupported_mimi_draft(&body) {
         return Err(AppError::invalid_param(message).with_wire_code("mimi_draft_unsupported"));
     }
@@ -829,6 +830,7 @@ async fn mimi_consent_request(
         .get("requester_id")
         .and_then(Value::as_str)
         .ok_or_else(|| AppError::invalid_param("mimi consent request requires requester_id"))?;
+    verify_mimi_consent_write_authority(state, req, aa, &body, requester).await?;
     let target_holder = mimi_consent_target_holder(&body);
     let scope = body
         .get("purpose")
@@ -842,8 +844,8 @@ async fn mimi_consent_request(
     };
     let consent_id = materialized
         .as_ref()
-        .map(|cell| cell.cell_id.clone())
-        .unwrap_or_else(|| ids::generate("mimi_consent"));
+        .map(|(consent_id, _cell)| consent_id.clone())
+        .unwrap_or_else(|| ids::generate("consent"));
     let _receipt = mimi_receipt(
         state,
         "ck.open.mimi.command.request_consent",
@@ -869,13 +871,13 @@ async fn mimi_consent_request(
 )]
 #[tracing::instrument(skip_all, fields(op = "ck.open.mimi.command.update_consent"))]
 async fn mimi_consent_update(
+    aa: AuthArgs,
     body: JsonBody<MimiUpdateConsentRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<MimiUpdateConsentOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = typed_body_value(body.into_inner(), "mimi consent update")?;
-    verify_mimi_write_service_proof(state, req, &body, None)?;
     if let Some(message) = unsupported_mimi_draft(&body) {
         return Err(AppError::invalid_param(message).with_wire_code("mimi_draft_unsupported"));
     }
@@ -896,6 +898,7 @@ async fn mimi_consent_update(
         .get("actor_id")
         .and_then(|value| value.as_str())
         .ok_or_else(|| AppError::invalid_param("mimi consent update requires actor_id"))?;
+    verify_mimi_consent_write_authority(state, req, aa, &body, actor_id).await?;
     let materialized =
         materialize_mimi_consent_update_by_id(state, consent_id, actor_id, granted).await?;
     let updated_at = now();
@@ -924,15 +927,39 @@ async fn mimi_consent_update(
 fn mimi_consent_target_holder(body: &Value) -> Option<&str> {
     body.get("target")
         .and_then(|target| {
-            target
-                .get("holder_did")
-                .or_else(|| target.get("principal_did"))
-                .or_else(|| target.get("did"))
+            if target.get("kind").and_then(Value::as_str) != Some("did") {
+                return None;
+            }
+            target.get("id")
         })
-        .or_else(|| body.get("holder_did"))
-        .or_else(|| body.get("target_did"))
         .and_then(Value::as_str)
         .filter(|value| value.starts_with("did:"))
+}
+
+async fn verify_mimi_consent_write_authority(
+    state: &AppState,
+    req: &Request,
+    aa: AuthArgs,
+    body: &Value,
+    expected_actor: &str,
+) -> Result<(), AppError> {
+    if request_has_bearer_session(req) {
+        let session = aa.authenticated_session(state, req).await?;
+        if session.actor != expected_actor {
+            return Err(AppError::capability_denied(
+                "MIMI consent user session must match the consent actor",
+            ));
+        }
+        return Ok(());
+    }
+    verify_mimi_write_service_proof(state, req, body, None)
+}
+
+fn request_has_bearer_session(req: &Request) -> bool {
+    req.headers()
+        .get("authorization")
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.trim().to_ascii_lowercase().starts_with("bearer "))
 }
 
 #[endpoint(

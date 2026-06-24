@@ -6,8 +6,9 @@
 //! third-party mention (author != its controller) when its effective
 //! `accept_third_party_mention` bit (selection ∩ ceiling) is true for the
 //! message scope; otherwise the mention is dropped for that agent. Human
-//! recipients are notified unconditionally (mute / blocklist / DND / push
-//! rules are layered on top by the push pipeline — TODO floria push).
+//! direct mention recipients are notified after the same message-scope checks.
+
+use std::collections::BTreeSet;
 
 use serde_json::Value;
 
@@ -61,7 +62,26 @@ async fn agent_accepts_third_party_mention(
         .is_some_and(|resolved| resolved.effective.accept_third_party_mention)
 }
 
-/// Fan out mention notifications for an accepted `ck.message.create`.
+async fn put_message_notification(
+    state: &AppState,
+    recipient_id: &str,
+    realm_id: &str,
+    source_event_id: &str,
+    notification_type: &str,
+) {
+    let record = serde_json::json!({
+        "notification_id": crate::ids::generate_notification_id(),
+        "recipient_id": recipient_id,
+        "realm_id": realm_id,
+        "source_event_id": source_event_id,
+        "notification_type": notification_type,
+    });
+    if let Err(error) = state.persistence.notifications().put(record).await {
+        tracing::warn!(%error, "failed to persist message notification");
+    }
+}
+
+/// Fan out message notifications for an accepted `ck.message.create`.
 pub(crate) async fn dispatch_message_notifications(
     state: &AppState,
     operation: &cokret_sdk::Operation,
@@ -84,7 +104,11 @@ pub(crate) async fn dispatch_message_notifications(
         .and_then(Value::as_str)
         .or_else(|| payload.get("thread_id").and_then(Value::as_str))
         .map(ToOwned::to_owned);
-    for subject in mention_subjects(payload) {
+    let mentioned_subjects = mention_subjects(payload)
+        .into_iter()
+        .filter(|subject| !subject.trim().is_empty())
+        .collect::<BTreeSet<_>>();
+    for subject in mentioned_subjects {
         if subject == sender {
             continue;
         }
@@ -106,21 +130,13 @@ pub(crate) async fn dispatch_message_notifications(
                 continue;
             }
         }
-        let record = serde_json::json!({
-            "notification_id": format!("ck:notification:{}", uuid::Uuid::now_v7()),
-            "recipient_id": subject,
-            "realm_id": realm_id,
-            "source_event_id": source_event_id,
-            "notification_type": "mention",
-        });
-        if let Err(error) = state.persistence.notifications().put(record).await {
-            tracing::warn!(%error, "failed to persist mention notification");
-        }
+        put_message_notification(state, &subject, &realm_id, &source_event_id, "mention").await;
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use cokret_sdk::RealmId;
     use serde_json::{Value, json};
 
     use super::*;
@@ -186,6 +202,17 @@ mod tests {
 
     fn test_state() -> AppState {
         AppState::new(test_config(), Db { pool: None })
+    }
+
+    fn seed_realm_members(state: &AppState, realm_id: &str, members: &[&str]) {
+        let realm_id_typed = RealmId::new(realm_id.to_owned()).expect("valid realm id");
+        let mut entry = crate::state::RealmDirectoryEntry::new(realm_id_typed, "Notify test");
+        for member in members {
+            entry
+                .members
+                .insert(cokret_sdk::Did::new((*member).to_owned()).expect("valid member did"));
+        }
+        state.realms.lock().expect("realms lock").upsert(entry);
     }
 
     async fn put_agent(state: &AppState, agent: &str, controller: &str) {
@@ -277,6 +304,22 @@ mod tests {
             .expect("agent participation circle ceiling");
     }
 
+    fn plain_message(realm_id: &str, seed: &str, sender: &str) -> cokret_sdk::Operation {
+        cokret_sdk::Operation::create(
+            cokret_sdk::OperationId::new(format!("ck:operation:01904100-0000-7000-8000-{seed}"))
+                .unwrap(),
+            cokret_sdk::RealmId::new(realm_id.to_owned()).unwrap(),
+            cokret_sdk::events::kinds::MESSAGE_CREATE,
+            json!({
+                "sender": sender,
+                "event_id": format!("ck:event:01904100-0000-7000-8000-{seed}"),
+                "content": {
+                    "body": "hello"
+                }
+            }),
+        )
+    }
+
     fn seed_strand_scope(state: &AppState, realm_id: &str, strand_id: &str, circle_id: &str) {
         state
             .projection
@@ -344,6 +387,66 @@ mod tests {
             cokret_sdk::events::kinds::MESSAGE_CREATE,
             payload,
         )
+    }
+
+    #[tokio::test]
+    async fn plain_message_does_not_notify_unmentioned_members_by_default() {
+        let state = test_state();
+        let realm_id = "ck:realm:01904100-0000-7000-8000-000000009970";
+        let alice = "did:web:alice.example";
+        let bob = "did:web:bob.example";
+        let carol = "did:web:carol.example";
+        seed_realm_members(&state, realm_id, &[alice, bob, carol]);
+
+        let delivered = plain_message(realm_id, "000000009971", alice);
+        dispatch_message_notifications(&state, &delivered).await;
+
+        assert!(
+            state
+                .persistence
+                .notifications()
+                .list_for_recipient(alice)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        for recipient in [bob, carol] {
+            assert!(
+                state
+                    .persistence
+                    .notifications()
+                    .list_for_recipient(recipient)
+                    .await
+                    .unwrap()
+                    .is_empty()
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn member_mention_is_single_mention_notification() {
+        let state = test_state();
+        let realm_id = "ck:realm:01904100-0000-7000-8000-000000009972";
+        let alice = "did:web:alice.example";
+        let bob = "did:web:bob.example";
+        seed_realm_members(&state, realm_id, &[alice, bob]);
+
+        let delivered = mention_message(realm_id, "000000009973", alice, bob);
+        dispatch_message_notifications(&state, &delivered).await;
+
+        let notifications = state
+            .persistence
+            .notifications()
+            .list_for_recipient(bob)
+            .await
+            .unwrap();
+        assert_eq!(notifications.len(), 1);
+        assert_eq!(
+            notifications[0]
+                .get("notification_type")
+                .and_then(Value::as_str),
+            Some("mention")
+        );
     }
 
     #[tokio::test]

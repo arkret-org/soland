@@ -1422,11 +1422,7 @@ async fn personal_blocklist_allows_actor(
         .await
     {
         Ok(None) => true,
-        Ok(Some(record)) => record
-            .payload
-            .get("tombstone")
-            .and_then(Value::as_bool)
-            .unwrap_or(false),
+        Ok(Some(record)) => !blocklist_payload_blocks_sender(&record.payload, sender),
         Err(error) => {
             tracing::warn!(
                 %error,
@@ -1436,6 +1432,58 @@ async fn personal_blocklist_allows_actor(
             false
         }
     }
+}
+
+fn blocklist_payload_blocks_sender(payload: &Value, sender: &str) -> bool {
+    if payload
+        .get("tombstone")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        return false;
+    }
+    let Some(entries) = payload.get("entries").and_then(Value::as_array) else {
+        return false;
+    };
+    entries
+        .iter()
+        .any(|entry| blocklist_entry_blocks_sender(entry, sender))
+}
+
+fn blocklist_entry_blocks_sender(entry: &Value, sender: &str) -> bool {
+    let mode = entry
+        .get("mode")
+        .or_else(|| entry.get("kind"))
+        .and_then(Value::as_str)
+        .unwrap_or("block");
+    if mode != "block" {
+        return false;
+    }
+    if entry.get("expires_at").is_some_and(|expires_at| {
+        expires_at.as_str().is_some_and(|value| {
+            chrono::DateTime::parse_from_rfc3339(value)
+                .is_ok_and(|expires| expires <= chrono::Utc::now())
+        })
+    }) {
+        return false;
+    }
+    let Some(target) = entry.get("target") else {
+        return ["did", "actor", "id"]
+            .iter()
+            .any(|field| entry.get(*field).and_then(Value::as_str) == Some(sender));
+    };
+    if let Some(value) = target.as_str() {
+        return value == sender;
+    }
+    let Some(object) = target.as_object() else {
+        return false;
+    };
+    if object.get("kind").and_then(Value::as_str) != Some("actor") {
+        return false;
+    }
+    ["did", "actor", "id"]
+        .iter()
+        .any(|field| object.get(*field).and_then(Value::as_str) == Some(sender))
 }
 
 /// `webrtc-signaling.md` §5 / §7 — relayed `ck.call.signal` records a given
