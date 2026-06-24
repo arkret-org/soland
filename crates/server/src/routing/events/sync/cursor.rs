@@ -909,26 +909,30 @@ fn cursor_authority_revoked(
 /// Spec B1.5 — when an implementation would emit a `Dropped` frame but
 /// cannot supply a resume cursor, the wire-breaking rule downgrades to
 /// `ResyncRequired`. Callers use [`dropped_or_resync`] to construct the
-/// correct frame body from an optional cursor.
+/// correct flat frame from an optional cursor.
 ///
-/// Note: the cursor type expected by `EventsSubscribeFrameBody::Dropped`
+/// Note: the cursor type expected by `EventsSubscribeFrame::cursor`
 /// is the typed-id `cokret_identifiers::Cursor` (`ck:cursor:<base64url>`),
 /// NOT the `cokret_sdk::Cursor` struct produced by `cursor::Cursor::new()`.
 /// The typed-id is exposed as `cokret_sdk::identifiers::Cursor`.
 pub fn dropped_or_resync(
     cursor: Option<cokret_sdk::identifiers::Cursor>,
-    reason: impl Into<String>,
+    _reason: impl Into<String>,
     reconnect_after_ms: Option<u64>,
-) -> cokret_sdk::EventsSubscribeFrameBody {
-    let reason = reason.into();
+) -> cokret_sdk::EventsSubscribeFrame {
     match cursor {
-        Some(cursor) => cokret_sdk::EventsSubscribeFrameBody::Dropped {
-            cursor,
-            reason,
+        Some(cursor) => cokret_sdk::EventsSubscribeFrame {
+            kind: cokret_sdk::EventsSubscribeFrameKind::Dropped,
+            realm_id: None,
+            cursor: Some(cursor),
+            payload: serde_json::Value::Null,
             reconnect_after_ms,
         },
-        None => cokret_sdk::EventsSubscribeFrameBody::ResyncRequired {
-            reason,
+        None => cokret_sdk::EventsSubscribeFrame {
+            kind: cokret_sdk::EventsSubscribeFrameKind::ResyncRequired,
+            realm_id: None,
+            cursor: None,
+            payload: serde_json::Value::Null,
             reconnect_after_ms,
         },
     }
@@ -967,19 +971,14 @@ mod cursor_frame_tests {
     #[test]
     fn dropped_without_cursor_downgrades_to_resync() {
         let body = dropped_or_resync(None, "broadcast_lag", Some(10_000));
-        assert!(matches!(
-            body,
-            cokret_sdk::EventsSubscribeFrameBody::ResyncRequired { .. }
-        ));
+        assert_eq!(
+            body.kind,
+            cokret_sdk::EventsSubscribeFrameKind::ResyncRequired
+        );
         let cursor = cokret_sdk::identifiers::Cursor::new("ck:cursor:resume").unwrap();
         let body = dropped_or_resync(Some(cursor), "broadcast_lag", Some(10_000));
-        assert!(matches!(
-            body,
-            cokret_sdk::EventsSubscribeFrameBody::Dropped {
-                reconnect_after_ms: Some(10_000),
-                ..
-            }
-        ));
+        assert_eq!(body.kind, cokret_sdk::EventsSubscribeFrameKind::Dropped);
+        assert_eq!(body.reconnect_after_ms, Some(10_000));
     }
 
     #[test]

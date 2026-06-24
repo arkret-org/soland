@@ -258,7 +258,7 @@ pub(crate) async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: 
                         }
                         Err(RecvError::Lagged(skipped)) => {
                             // Round 4 (B1.5) — broadcast capacity exceeded.
-                            // The typed EventsSubscribeFrameBody requires a
+                            // The typed EventsSubscribeFrame requires a
                             // resume cursor on Dropped; if we don't have a
                             // valid cursor (the broadcast lag dropped state
                             // we'd need to mint one) the SDK rule downgrades
@@ -280,8 +280,7 @@ pub(crate) async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: 
                                 format!("broadcast_lagged skipped={skipped}"),
                                 Some(SUBSCRIBE_RECONNECT_AFTER_MS),
                             );
-                            // Emit the typed frame body fields at the top
-                            // level (matches the SDK `kind`-tagged shape).
+                            // Emit the flat frame fields at the top level.
                             let body_json = serde_json::to_value(&body)
                                 .unwrap_or_else(|_| json!({"kind": "resync_required"}));
                             let mut frame = body_json;
