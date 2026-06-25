@@ -924,6 +924,64 @@ async fn project_realm_key_share_to_device(
     }
 }
 
+/// Relay an ephemeral `ck.realm_key.request` to the provider device named by
+/// `target_source_ref`. Mirrors [`project_realm_key_share_to_device`] /
+/// [`project_mls_welcome_to_device`]: the request rides the provider device's
+/// to-device queue so the provider can answer with a `ck.realm_key.share`.
+///
+/// Unlike the durable `ck.realm_key.share` projection, `ck.realm_key.request`
+/// is wire-scope ephemeral (reducer_input=false) — there is no projected
+/// operation here. The caller (the ephemeral relay) has already verified the
+/// sender's membership/device signature and resolved the provider principal
+/// that owns `target_device_id`; this function only enqueues the payload.
+///
+/// `idempotency_key` is prefixed `realm_key_request:` so a replayed request
+/// (same envelope) collapses to a single queued message.
+pub(crate) async fn project_realm_key_request_to_device(
+    state: &AppState,
+    origin: &str,
+    sender_device_id: &str,
+    realm_id: &str,
+    request_id: &str,
+    target_principal_id: &str,
+    target_device_id: &str,
+    payload: &Value,
+    created_at: chrono::DateTime<chrono::Utc>,
+) {
+    let sender_device_id = sender_device_id.trim();
+    let target_device_id = target_device_id.trim();
+    if target_device_id.is_empty() {
+        tracing::warn!(
+            %request_id,
+            "cannot enqueue realm key request without a target device id"
+        );
+        return;
+    }
+    let content = json!({
+        "kind": "ck.realm_key.request",
+        "sender_device_id": sender_device_id,
+        "realm_id": realm_id,
+        "request_id": request_id,
+        "payload": payload,
+    });
+    let record = DeviceMessageRecord {
+        idempotency_key: format!("realm_key_request:{request_id}"),
+        sender: origin.to_owned(),
+        recipient: target_principal_id.to_owned(),
+        device_id: target_device_id.to_owned(),
+        position: state.next_to_device_position(),
+        content,
+        created_at,
+    };
+    if let Err(error) = state.persistence.device_messages().append(record).await {
+        tracing::warn!(
+            %error,
+            %request_id,
+            "failed to enqueue realm key request to-device message"
+        );
+    }
+}
+
 /// Device-identity Phase 1 — persist an accepted `ck.device.authorize`'s
 /// authoritative `device_public_key` into the devices inventory so the
 /// `keys/query` signing-key directory (`device-lifecycle.md` §8.2) can resolve

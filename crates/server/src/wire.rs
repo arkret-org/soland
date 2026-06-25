@@ -1050,6 +1050,15 @@ pub fn describe(
             "org.cokret.soland.feature.mimi.proxy_download_policy".to_owned(),
             "org.cokret.soland.feature.registry.artifacts".to_owned(),
             "org.cokret.soland.feature.plaintext_visible_services".to_owned(),
+            // realm-and-space.md history-sharing — advertise the three
+            // `ck.realm_key.request` / `ck.realm_key.share` retrieval modes the
+            // server relays history keys through: backup-derived retrieval,
+            // device-to-device peer relay (the ephemeral `ck.realm_key.request`
+            // relay implemented in `routing::events::realm_key_request`), and
+            // archive retrieval.
+            "ck.feature.realm_key.backup_retrieval.v1".to_owned(),
+            "ck.feature.realm_key.peer_relay.v1".to_owned(),
+            "ck.feature.realm_key.archive_retrieval.v1".to_owned(),
         ],
         supported_operations,
         // service-surface.md §3 documents `base_url` (typed `format: uri` in
@@ -1363,6 +1372,35 @@ pub struct GetReadMarkersRequestBody {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn service_describe_advertises_realm_key_history_features() {
+        let description = describe(
+            "did:web:soland.example",
+            "https://soland.example/",
+            "memory",
+            true,
+            None,
+            None,
+            "ck:trust_domain:soland.example",
+            86_400,
+            10_000,
+        );
+        let value = serde_json::to_value(description).expect("description serializes");
+        let features = value["supported_features"]
+            .as_array()
+            .expect("features array");
+        for feature in [
+            "ck.feature.realm_key.backup_retrieval.v1",
+            "ck.feature.realm_key.peer_relay.v1",
+            "ck.feature.realm_key.archive_retrieval.v1",
+        ] {
+            assert!(
+                features.contains(&json!(feature)),
+                "describe must advertise {feature}"
+            );
+        }
+    }
 
     #[test]
     fn service_describe_supported_bindings_advertise_public_base_url() {

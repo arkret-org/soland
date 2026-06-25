@@ -34,6 +34,12 @@ pub(crate) const CONTENT_ENCRYPTION_FLOOR_DOWNGRADE: &str = "content_encryption_
 /// One-way ratchet: effective metadata encryption floor MUST be monotonically
 /// non-decreasing (`allow_plaintext < e2ee_required`).
 pub(crate) const METADATA_ENCRYPTION_FLOOR_DOWNGRADE: &str = "metadata_encryption_floor_downgrade";
+/// One-way ratchet: effective Realm `content_scheme` MUST NOT downgrade from the
+/// exporter-derived AEAD scheme (`mls-exporter-aead-v1`) back to the application
+/// message scheme (`mls-rfc9420`). Lowering the negotiated scheme would let a
+/// member re-key history content under a weaker mechanism after the realm has
+/// committed to the exporter-AEAD history-sharing path.
+pub(crate) const CONTENT_SCHEME_DOWNGRADE: &str = "content_scheme_downgrade";
 
 /// R1.2 — pure validation for a `ck.member.state{join,routable}`
 /// `delivery_binding` against a projected
@@ -932,4 +938,30 @@ pub(crate) fn metadata_floor_rank(floor: Option<&str>) -> u8 {
         Some("e2ee_required") => 1,
         _ => 0,
     }
+}
+
+/// Extract the Realm `content_scheme` field from a `ck.realm.policy_components`
+/// value, accepting both the top-level and `/components/`-nested wire forms
+/// (mirrors [`policy_floor_field`]). Returns `None` when the field is absent.
+pub(crate) fn content_scheme_field(value: &Value) -> Option<&str> {
+    policy_floor_field(value, "content_scheme")
+}
+
+/// Ordinal rank for the Realm `content_scheme`. The exporter-derived AEAD scheme
+/// (`mls-exporter-aead-v1`, rank 1) sits above the MLS application-message scheme
+/// (`mls-rfc9420`, rank 0). `None` / unknown values rank as `mls-rfc9420` (0);
+/// the one-way ratchet rejects any later write whose rank is strictly lower than
+/// the projected scheme.
+pub(crate) fn content_scheme_rank(scheme: Option<&str>) -> u8 {
+    match scheme.map(str::trim) {
+        Some("mls-exporter-aead-v1") => 1,
+        _ => 0,
+    }
+}
+
+/// The canonical Realm `content_scheme` enum
+/// (realm-and-space.md history-sharing): `mls-rfc9420` (application messages) and
+/// `mls-exporter-aead-v1` (exporter-derived AEAD content for history sharing).
+pub(crate) fn content_scheme_is_known(scheme: &str) -> bool {
+    matches!(scheme.trim(), "mls-rfc9420" | "mls-exporter-aead-v1")
 }

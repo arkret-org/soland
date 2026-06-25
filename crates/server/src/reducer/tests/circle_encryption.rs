@@ -267,3 +267,73 @@ fn metadata_floor_ratchet_rejects_downgrade() {
         ProjectionEffect::Rejected { reason } if reason == METADATA_ENCRYPTION_FLOOR_DOWNGRADE
     ));
 }
+
+// realm-and-space.md history-sharing — one-way `content_scheme` ratchet.
+// `mls-rfc9420` < `mls-exporter-aead-v1`; once the realm negotiates the
+// exporter-AEAD scheme it MUST NOT fall back to the application-message scheme.
+#[test]
+fn content_scheme_ratchet_allows_upgrade_then_rejects_downgrade() {
+    let mut state = ProjectionState::new();
+    let hlc = ServerHlc::new("test");
+    let realm = "ck:realm:01904100-0000-7000-8000-cfc039892063";
+    let apply_scheme = |state: &mut ProjectionState, scheme: Option<&str>| {
+        let payload = match scheme {
+            Some(s) => serde_json::json!({ "content_scheme": s }),
+            None => serde_json::json!({}),
+        };
+        state.apply(
+            &make_operation(
+                cokret_sdk::events::kinds::REALM_POLICY_COMPONENTS,
+                realm,
+                payload,
+            ),
+            &hlc,
+        )
+    };
+    // baseline mls-rfc9420 -> projected
+    assert!(matches!(
+        apply_scheme(&mut state, Some("mls-rfc9420")),
+        ProjectionEffect::RealmPolicyComponentsProjected { .. }
+    ));
+    // upgrade rfc9420 -> exporter-aead is accepted
+    assert!(matches!(
+        apply_scheme(&mut state, Some("mls-exporter-aead-v1")),
+        ProjectionEffect::RealmPolicyComponentsProjected { .. }
+    ));
+    // re-asserting the same scheme is an idempotent no-op (accepted)
+    assert!(matches!(
+        apply_scheme(&mut state, Some("mls-exporter-aead-v1")),
+        ProjectionEffect::RealmPolicyComponentsProjected { .. }
+    ));
+    // downgrade exporter-aead -> rfc9420 is rejected
+    assert!(matches!(
+        apply_scheme(&mut state, Some("mls-rfc9420")),
+        ProjectionEffect::Rejected { reason } if reason == CONTENT_SCHEME_DOWNGRADE
+    ));
+    // dropping the scheme by omission is also a downgrade
+    assert!(matches!(
+        apply_scheme(&mut state, None),
+        ProjectionEffect::Rejected { reason } if reason == CONTENT_SCHEME_DOWNGRADE
+    ));
+}
+
+// An unknown `content_scheme` enum value is rejected outright, even on a realm
+// that has not yet committed to any scheme.
+#[test]
+fn content_scheme_rejects_unknown_value() {
+    let mut state = ProjectionState::new();
+    let hlc = ServerHlc::new("test");
+    let realm = "ck:realm:01904100-0000-7000-8000-cfc039892064";
+    let effect = state.apply(
+        &make_operation(
+            cokret_sdk::events::kinds::REALM_POLICY_COMPONENTS,
+            realm,
+            serde_json::json!({ "content_scheme": "aes-gcm-siv-handrolled" }),
+        ),
+        &hlc,
+    );
+    assert!(matches!(
+        effect,
+        ProjectionEffect::Rejected { reason } if reason == CONTENT_SCHEME_DOWNGRADE
+    ));
+}
