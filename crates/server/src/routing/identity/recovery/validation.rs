@@ -380,6 +380,14 @@ pub(super) fn recovery_signature_error(message: impl Into<String>) -> AppError {
         .with_wire_code(crate::error::reasons::PROOF_INVALID)
 }
 
+/// A recovery proof is not bound to the expected (recovery policy, session,
+/// recovery key entry) tuple. Registry-canonical `recovery_evidence_unbound`.
+pub(super) fn recovery_evidence_unbound_error(message: impl Into<String>) -> AppError {
+    AppError::new(ErrorCode::InvalidSignature, message.into())
+        .with_status(StatusCode::UNAUTHORIZED)
+        .with_wire_code("recovery_evidence_unbound")
+}
+
 // ── Small helpers ─────────────────────────────────────────────────────
 
 pub(super) fn require_const_string(

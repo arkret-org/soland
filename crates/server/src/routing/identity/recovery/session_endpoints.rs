@@ -89,6 +89,18 @@ fn recovery_proof_summary_transcript(
                 proof_body,
             ))
         }
+        "recovery_unlock" => {
+            // Same binding transcript the proof verification covered:
+            // proof_body is the proof object minus signature + unlock_commitment.
+            let mut proof_body = proof.clone();
+            proof_body.remove("signature");
+            proof_body.remove("unlock_commitment");
+            Some(generic_recovery_proof_transcript(
+                record,
+                "recovery_unlock",
+                Value::Object(proof_body),
+            ))
+        }
         _ => Some(recovery_proof_transcript(record, kind)),
     }
 }
@@ -394,6 +406,9 @@ pub(super) async fn recovery_session_proof_submit(
         "principal_signing" => {
             verify_principal_signing_proof(state, &record, proof).await?;
         }
+        "recovery_unlock" => {
+            verify_recovery_unlock_proof(state, &record, proof).await?;
+        }
         "trusted_recovery_service" => {
             verify_trusted_recovery_service_proof(state, &record, proof).await?;
         }
@@ -607,6 +622,196 @@ pub(super) async fn verify_trusted_recovery_service_proof(
             crate::metrics::record_digest_mismatch("recovery_proof_digest");
             recovery_signature_error("trusted recovery service proof signature verification failed")
         })
+}
+
+/// §15 step 2 — verify a `recovery_unlock` recovery proof.
+///
+/// The 24-word Recovery Key (§3.3) unlock factor. Trust root is the principal's
+/// own published `recovery_policy.recovery_keys[]` (not the DID document):
+///
+/// (a) `recovery_secret_ref` MUST resolve to a `recovery_keys[]` entry that was
+///     authoritative at the session `created_at` (not_before/expires_at window,
+///     not revoked), and `verification_method` MUST equal that entry's
+///     verification_method;
+/// (b) `signature` (under the entry's `alg`, Ed25519) MUST verify over the
+///     generic recovery transcript whose proof_body is this proof object with
+///     `signature` and `unlock_commitment` removed, using the public key
+///     decoded from the entry's verification_method;
+/// (c) `unlock_commitment` MUST equal
+///     SHA-256(utf8("ck-recovery-session-unlock-binding-v1\n")
+///       || utf8(recovery_secret_ref) || unlock_binding_input_bytes),
+///     where unlock_binding_input_bytes is the same canonical transcript bytes
+///     verified in (b).
+pub(super) async fn verify_recovery_unlock_proof(
+    _state: &AppState,
+    record: &RecoverySessionRecord,
+    proof: &Map<String, Value>,
+) -> Result<(), AppError> {
+    let alg = required_proof_string(proof, "alg")?;
+    if alg != "Ed25519" {
+        return Err(AppError::invalid_param(format!(
+            "proof.alg `{alg}` must be `Ed25519` for recovery_unlock",
+        )));
+    }
+    let recovery_secret_ref = required_proof_string(proof, "recovery_secret_ref")?;
+    let verification_method = required_proof_string(proof, "verification_method")?;
+    let unlock_commitment = required_proof_string(proof, "unlock_commitment")?;
+
+    // (a) Resolve the recovery key entry from the bound recovery policy.
+    let entry = resolve_recovery_key_entry(
+        &record.policy_payload,
+        recovery_secret_ref,
+        record.created_at,
+    )?;
+    let entry_method = entry
+        .get("verification_method")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if entry_method != recovery_secret_ref || entry_method != verification_method {
+        return Err(recovery_evidence_unbound_error(
+            "recovery_unlock verification_method does not match the resolved recovery key entry",
+        ));
+    }
+    let entry_alg = entry.get("alg").and_then(Value::as_str).unwrap_or_default();
+    if entry_alg != alg {
+        return Err(recovery_evidence_unbound_error(
+            "recovery_unlock proof.alg does not match the recovery key entry alg",
+        ));
+    }
+    let recovery_key = decode_recovery_key_public_key(verification_method)?;
+
+    // (b)/(c) Build the binding transcript (proof_body excluding signature +
+    // unlock_commitment) once; both the signature and the commitment cover it.
+    let mut proof_body = proof.clone();
+    proof_body.remove("signature");
+    proof_body.remove("unlock_commitment");
+    let transcript = generic_recovery_proof_transcript(
+        record,
+        "recovery_unlock",
+        Value::Object(proof_body),
+    );
+    let transcript_bytes =
+        cokret_sdk::canonical::canonical_json_bytes(&transcript).map_err(|error| {
+            AppError::internal(format!("recovery_unlock transcript failed: {error}"))
+        })?;
+
+    // (c) unlock_commitment integrity.
+    let mut hasher = Sha256::new();
+    hasher.update(b"ck-recovery-session-unlock-binding-v1\n");
+    hasher.update(recovery_secret_ref.as_bytes());
+    hasher.update(&transcript_bytes);
+    let expected_commitment = format!("sha256:{}", hex::encode(hasher.finalize()));
+    if unlock_commitment != expected_commitment {
+        crate::metrics::record_digest_mismatch("recovery_unlock_commitment");
+        return Err(recovery_evidence_unbound_error(
+            "recovery_unlock unlock_commitment does not match the recomputed binding",
+        ));
+    }
+
+    // (b) signature possession proof.
+    let signature_b64 = required_proof_string(proof, "signature")?;
+    let raw = URL_SAFE_NO_PAD
+        .decode(signature_b64.as_bytes())
+        .or_else(|_| STANDARD.decode(signature_b64.as_bytes()))
+        .map_err(|_| recovery_signature_error("proof.signature is not base64/base64url"))?;
+    let signature = Signature::from_slice(&raw)
+        .map_err(|_| recovery_signature_error("proof.signature must be 64 Ed25519 bytes"))?;
+    recovery_key.verify(&transcript_bytes, &signature).map_err(|_| {
+        crate::metrics::record_digest_mismatch("recovery_proof_digest");
+        recovery_signature_error("recovery_unlock proof signature verification failed")
+    })
+}
+
+/// Resolve a non-revoked, in-window `recovery_keys[]` entry whose
+/// `verification_method` equals `recovery_secret_ref`, evaluated at `as_of`
+/// (the recovery session `created_at`).
+fn resolve_recovery_key_entry(
+    policy_payload: &Value,
+    recovery_secret_ref: &str,
+    as_of: chrono::DateTime<chrono::Utc>,
+) -> Result<Map<String, Value>, AppError> {
+    let entries = policy_payload
+        .get("recovery_keys")
+        .and_then(Value::as_array)
+        .ok_or_else(|| {
+            recovery_evidence_unbound_error(
+                "bound recovery policy declares no recovery_keys[] for recovery_unlock",
+            )
+        })?;
+    for entry in entries {
+        let Some(object) = entry.as_object() else {
+            continue;
+        };
+        if object.get("verification_method").and_then(Value::as_str) != Some(recovery_secret_ref) {
+            continue;
+        }
+        if !recovery_key_entry_authoritative_at(object, as_of) {
+            return Err(recovery_evidence_unbound_error(
+                "recovery key entry is revoked or outside its validity window",
+            ));
+        }
+        return Ok(object.clone());
+    }
+    Err(recovery_evidence_unbound_error(
+        "recovery_secret_ref does not resolve to a recovery_keys[] entry",
+    ))
+}
+
+/// `not_before <= as_of < expires_at` and (`revoked_at` is null or
+/// `as_of < revoked_at`).
+fn recovery_key_entry_authoritative_at(
+    entry: &Map<String, Value>,
+    as_of: chrono::DateTime<chrono::Utc>,
+) -> bool {
+    let parse = |key: &str| -> Option<chrono::DateTime<chrono::Utc>> {
+        entry
+            .get(key)
+            .and_then(Value::as_str)
+            .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+            .map(|value| value.with_timezone(&chrono::Utc))
+    };
+    let Some(not_before) = parse("not_before") else {
+        return false;
+    };
+    let Some(expires_at) = parse("expires_at") else {
+        return false;
+    };
+    if as_of < not_before || as_of >= expires_at {
+        return false;
+    }
+    match entry.get("revoked_at") {
+        Some(Value::Null) | None => true,
+        Some(Value::String(_)) => parse("revoked_at").is_some_and(|revoked| as_of < revoked),
+        _ => false,
+    }
+}
+
+/// Decode the Ed25519 public key carried self-describingly by a recovery key
+/// `verification_method`. The trust root is the principal-signed recovery
+/// policy, so the key material is the `did:key` multibase encoded in the
+/// verification_method itself (no DID-document lookup): the `z…` multibase is
+/// taken from the fragment when present, else from the method-specific id.
+fn decode_recovery_key_public_key(verification_method: &str) -> Result<VerifyingKey, AppError> {
+    let multibase = recovery_key_multibase(verification_method).ok_or_else(|| {
+        recovery_evidence_unbound_error(
+            "recovery key verification_method does not carry a did:key multibase public key",
+        )
+    })?;
+    crate::routing::identity::cross_signing::decode_ed25519_key(multibase, "multibase")
+        .map_err(|error| recovery_evidence_unbound_error(format!("recovery key invalid: {error}")))
+}
+
+/// Extract the base58btc multibase (`z…`) public key from a `did:key`
+/// verification method. Accepts `did:key:z…#z…` (fragment carries the key id)
+/// and bare `did:key:z…`.
+fn recovery_key_multibase(verification_method: &str) -> Option<&str> {
+    let body = verification_method.strip_prefix("did:key:")?;
+    let candidate = match body.split_once('#') {
+        Some((_, fragment)) if fragment.starts_with('z') => fragment,
+        Some((id, _)) => id,
+        None => body,
+    };
+    candidate.starts_with('z').then_some(candidate)
 }
 
 fn required_proof_string<'a>(
