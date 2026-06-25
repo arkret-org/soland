@@ -814,10 +814,13 @@ pub(super) fn validate_applet_package(
     })?;
     let mut unsigned = package.clone();
     unsigned.proof = None;
-    let expected_payload_digest = cokret_sdk::Hash::new(
-        cokret_sdk::canonical::canonical_sha256(&unsigned)
-            .map_err(|error| AppError::internal(format!("package proof digest failed: {error}")))?,
-    )
+    let unsigned_canonical_bytes =
+        cokret_sdk::canonical::canonical_json_bytes(&unsigned).map_err(|error| {
+            AppError::internal(format!("package proof canonical bytes failed: {error}"))
+        })?;
+    let expected_payload_digest = cokret_sdk::Hash::new(cokret_sdk::canonical::sha256_digest(
+        &unsigned_canonical_bytes,
+    ))
     .map_err(|error| AppError::internal(format!("package proof digest invalid: {error}")))?;
     if proof.event_digest != expected_payload_digest {
         return Err(
@@ -825,8 +828,74 @@ pub(super) fn validate_applet_package(
                 .with_wire_code("proof_invalid"),
         );
     }
+    // applet-integration.md §4.1 line 193/199 + §4b line 229: the controller
+    // detached proof MUST be a real signature by `controller_did` covering the
+    // canonical package body. Digest equality alone is forgeable — anyone can
+    // recompute `event_digest` over `unsigned` and sign it with an arbitrary
+    // key. Anchor the proof's verification_method to `controller_did` and run
+    // the same detached-JWS verifier every other soland proof path uses
+    // (dev: shape-only; production: DID-resolved Ed25519). Preview/commit MUST
+    // fail closed (`proof_invalid`) when the controller proof is invalid or its
+    // key cannot be resolved.
+    validate_controller_proof(state, package, &unsigned_canonical_bytes)?;
     validate_registration_epoch_evidence(state, package)?;
     Ok(())
+}
+
+/// Cryptographically verify the controller detached proof on an Applet package.
+///
+/// Reuses the shared soland detached-JWS verifier boundary
+/// (`crate::jws_verify`), dispatching on `development_mode` exactly like
+/// [`crate::routing::federation::move_seal::select_jws_verifier`]: dev mode runs
+/// the RFC 7515 shape-only check (no live DID document required, but the
+/// all-zero sentinel signature is still rejected), production resolves the
+/// controller DID document and runs the Ed25519 verify against the
+/// verification method's public key.
+///
+/// `controller_did` is anchored two ways: the proof's `verification_method`
+/// MUST be a DID URL under `controller_did`, and the resolved public key MUST
+/// come from `controller_did`'s DID document (production). A proof signed by any
+/// other key — even with a correctly recomputed `event_digest` — fails here.
+fn validate_controller_proof(
+    state: &AppState,
+    package: &AppletPackage,
+    unsigned_canonical_bytes: &[u8],
+) -> Result<(), AppError> {
+    let proof = package
+        .proof
+        .as_ref()
+        .ok_or_else(|| AppError::invalid_param("applet package proof is required"))?;
+    let controller_did = package.controller_did.as_str();
+    crate::jws_verify::validate_verification_method_controller(
+        controller_did,
+        &proof.verification_method,
+    )
+    .map_err(|reason| {
+        AppError::invalid_param("applet package proof is not anchored to controller_did")
+            .with_wire_code("proof_invalid")
+            .with_reason_detail(reason)
+    })?;
+    let verify_result = if state.config.development_mode {
+        crate::jws_verify::verify_jws_shape(
+            unsigned_canonical_bytes,
+            &proof.jws,
+            &proof.verification_method,
+            controller_did,
+        )
+    } else {
+        crate::jws_verify::verify_jws_ed25519(
+            unsigned_canonical_bytes,
+            &proof.jws,
+            &proof.verification_method,
+            controller_did,
+            state,
+        )
+    };
+    verify_result.map_err(|reason| {
+        AppError::invalid_param("applet package controller proof signature is invalid")
+            .with_wire_code("proof_invalid")
+            .with_reason_detail(reason)
+    })
 }
 
 fn validate_registration_epoch_evidence(
@@ -1309,9 +1378,185 @@ pub(super) fn capability_allows_message_create(capability: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use cokret_sdk::{AppletNamespaceEntry, Did, Hash};
+    use cokret_sdk::{AppletNamespaceEntry, Did, Ed25519MoveSigner, Hash};
 
     use super::*;
+
+    /// Minimal production-mode (`development_mode == false`) AppState for
+    /// exercising the controller-proof verifier against the built-in
+    /// `did:key` resolver. Mirrors `routing/events/operations/policy_tests.rs`
+    /// but with real-crypto verification enabled.
+    fn production_test_state() -> AppState {
+        let config = crate::config::AppConfig {
+            bind: "127.0.0.1:0".parse().unwrap(),
+            metrics_bind: "127.0.0.1:0".parse().unwrap(),
+            public_base_url: "http://server".to_owned(),
+            service_did: "did:web:soland.local".to_owned(),
+            tls_cert_path: None,
+            tls_key_path: None,
+            database_url: None,
+            object_storage: crate::config::ObjectStorageConfig::local(
+                std::env::temp_dir().join("soland-applet-proof-test-blobs"),
+            ),
+            ice: crate::config::IceServersConfig::default(),
+            livekit: crate::config::LiveKitConfig::default(),
+            cors_allow_origin: None,
+            account_authority_url: None,
+            oidc_client_id: None,
+            development_mode: false,
+            session_grant_introspection_url: None,
+            session_grant_introspection_bearer: None,
+            did_resolver_allow_methods: vec!["web".to_owned(), "key".to_owned()],
+            embedded_webvh_provider_enabled: false,
+            embedded_webvh_registration_bearer: None,
+            external_webvh_provider_url: None,
+            external_webvh_provider_active: false,
+            default_webvh_provider_id: None,
+            jws_replay_window_seconds: 0,
+            jws_replay_window_per_family: std::collections::BTreeMap::new(),
+            notary_signing_key_seed: Some([9u8; 32]),
+            agent_audit_binding_signing_seed: None,
+            use_keystore: false,
+            federation_policy: crate::config::FederationPolicy::Mesh,
+            federation_peers: Vec::new(),
+            federation_outbound_enabled: false,
+            admin_default_page_limit: 100,
+            admin_max_page_limit: 1000,
+            admin_principal_dids: Vec::new(),
+            to_device_queue_capacity: 10_000,
+            push_bridge_cache_ttl_seconds: 900,
+            push_bridge_trusted_service_dids: Vec::new(),
+            resumable_upload_dir: std::path::PathBuf::from("./soland-resumable-uploads"),
+            resumable_upload_incomplete_ttl_seconds: 86_400,
+            seal_compaction_min_age_seconds: 604_800,
+            compaction_min_witnesses: 1,
+            compaction_preserve_genesis: true,
+            compaction_prune_only_singleton_successors: true,
+            compaction_prune_walk_interval_seconds: 0,
+            compaction_prune_walk_per_realm_limit: 50,
+            seed_demo_data: false,
+            trust_domain: "ck:trust_domain:soland.local".to_owned(),
+            receive_policy_constraints: None,
+            sovereign_enclave_enabled: false,
+            sovereign_enclave_allowed_outbound_hosts: Vec::new(),
+            erasure_propagation_window_ms: 604_800_000,
+            log_format: crate::config::LogFormat::Plain,
+        };
+        AppState::new(config, crate::db::Db { pool: None })
+    }
+
+    /// Derive a `did:key` DID + its `#`-fragment verification method for an
+    /// Ed25519 seed, using the SDK's canonical multibase encoder so the
+    /// built-in `DidKeyResolver` resolves the embedded public key.
+    fn did_key_for_seed(seed: [u8; 32]) -> (Did, String) {
+        let verifying = ed25519_dalek::SigningKey::from_bytes(&seed).verifying_key();
+        let multibase = cokret_sdk::ed25519_pubkey_to_did_key_multibase(&verifying.to_bytes());
+        let did_str = format!("did:key:{multibase}");
+        let vm = format!("{did_str}#{multibase}");
+        (Did::new(did_str).unwrap(), vm)
+    }
+
+    /// Build a sealed package whose `controller_did` is a `did:key` and whose
+    /// `registration_epoch_evidence` is consistent with a non-empty service
+    /// DID document, then sign it with the signer/verification_method chosen
+    /// by the caller. When the signer key differs from `controller_did`'s key
+    /// the resulting controller proof MUST fail verification.
+    fn signed_did_key_package(
+        controller_seed: [u8; 32],
+        signer_seed: [u8; 32],
+        verification_method: &str,
+    ) -> AppletPackage {
+        let (controller_did, _) = did_key_for_seed(controller_seed);
+        let registration_epoch = Hash::new(format!("sha256:{}", "11".repeat(32))).unwrap();
+        let mut package = AppletPackage::new(
+            "package:ck:applet:test".to_owned(),
+            "ck:applet:01974100-0000-7000-8000-000000000001".to_owned(),
+            Did::new("did:web:test-applet.example".to_owned()).unwrap(),
+            controller_did.clone(),
+            "https://test-applet.example".to_owned(),
+            Did::new("did:web:bot-test-applet.soland.local".to_owned()).unwrap(),
+            vec!["cokret.portal".to_owned()],
+            AppletWireNamespaces {
+                handles: vec![AppletNamespaceEntry::exclusive("bridge.test".to_owned())],
+                ..Default::default()
+            },
+            registration_epoch,
+        );
+        package.requested_scopes = vec!["ck.message.create".to_owned()];
+        package.registration_epoch_evidence =
+            Some(cokret_sdk::applet::AppletRegistrationEpochEvidence::new(
+                package.service_did.clone(),
+                Hash::new(format!("sha256:{}", "22".repeat(32))).unwrap(),
+                vec![cokret_sdk::applet::AppletAcceptedSigningKeyEvidence {
+                    key_ref: package.webhook_auth.key_ref.clone(),
+                    public_key_digest: Hash::new(format!("sha256:{}", "33".repeat(32))).unwrap(),
+                }],
+            ));
+        package.seal().unwrap();
+        let signer = Ed25519MoveSigner::from_did_key_seed(
+            signer_seed,
+            controller_did,
+            verification_method.to_owned(),
+        );
+        package.sign(&signer, verification_method).unwrap();
+        package
+    }
+
+    #[test]
+    fn validate_controller_proof_rejects_wrong_key_signature() {
+        let state = production_test_state();
+        // controller_did is keyed by `controller_seed`, but the proof is signed
+        // with `signer_seed` while still naming controller_did's verification
+        // method. The forged proof recomputes the correct payload digest yet
+        // the Ed25519 signature is made by the wrong key — verification MUST
+        // fail closed with `proof_invalid`.
+        let controller_seed = [1u8; 32];
+        let signer_seed = [2u8; 32];
+        let (_, controller_vm) = did_key_for_seed(controller_seed);
+        let package = signed_did_key_package(controller_seed, signer_seed, &controller_vm);
+
+        let mut unsigned = package.clone();
+        unsigned.proof = None;
+        let bytes = cokret_sdk::canonical::canonical_json_bytes(&unsigned).unwrap();
+        let error = validate_controller_proof(&state, &package, &bytes)
+            .expect_err("wrong-key controller proof must be rejected");
+        assert_eq!(error.wire_code(), "proof_invalid");
+    }
+
+    #[test]
+    fn validate_controller_proof_rejects_unanchored_verification_method() {
+        let state = production_test_state();
+        // Sign with a verification_method belonging to a *different* DID than
+        // controller_did. The anchoring gate MUST reject before any crypto,
+        // because the proof is not attributable to controller_did.
+        let controller_seed = [1u8; 32];
+        let other_seed = [2u8; 32];
+        let (_, other_vm) = did_key_for_seed(other_seed);
+        let package = signed_did_key_package(controller_seed, other_seed, &other_vm);
+
+        let mut unsigned = package.clone();
+        unsigned.proof = None;
+        let bytes = cokret_sdk::canonical::canonical_json_bytes(&unsigned).unwrap();
+        let error = validate_controller_proof(&state, &package, &bytes)
+            .expect_err("controller proof not anchored to controller_did must be rejected");
+        assert_eq!(error.wire_code(), "proof_invalid");
+    }
+
+    #[test]
+    fn validate_controller_proof_accepts_correct_controller_signature() {
+        let state = production_test_state();
+        // Same key for controller_did and signer: a genuine controller proof
+        // verifies against the resolved did:key public key.
+        let seed = [1u8; 32];
+        let (_, vm) = did_key_for_seed(seed);
+        let package = signed_did_key_package(seed, seed, &vm);
+
+        let mut unsigned = package.clone();
+        unsigned.proof = None;
+        let bytes = cokret_sdk::canonical::canonical_json_bytes(&unsigned).unwrap();
+        validate_controller_proof(&state, &package, &bytes)
+            .expect("genuine controller proof must verify");
+    }
 
     fn sample_package() -> AppletPackage {
         let registration_epoch = Hash::new(format!("sha256:{}", "11".repeat(32))).unwrap();
