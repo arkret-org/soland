@@ -197,6 +197,72 @@ pub struct RealmInheritancePolicyState {
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
 
+/// SOL-ORG-02 — structured cache row for one `ck.realm.organization`
+/// relationship statement projection. Mirrors the canonical
+/// `ck.component.realm.organization.v1` cas-register cell keyed by the
+/// composite subject `(organization_id, relationship)`. The reducer keeps
+/// the latest statement per `(realm_id, organization_id, relationship)`; an
+/// `active` statement marks the relationship live, a `revoked` statement
+/// marks it inactive while retaining `statement_id` for audit.
+///
+/// Field order mirrors the spec `realm_organization_payload` so the
+/// persistence row and query DTO stay aligned.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RealmOrganizationStatementState {
+    pub realm_id: String,
+    pub organization_id: String,
+    /// snake_case relationship: `owner` / `governance` / `sponsor` /
+    /// `directory_certifier`.
+    pub relationship: String,
+    pub statement_id: String,
+    /// `active` (relationship live) or `revoked` (inactive, retained for
+    /// audit).
+    pub status: String,
+    /// Endorsement scopes covered by the organization's consent
+    /// (snake_case `control_scopes[]` items).
+    pub control_scopes: Vec<String>,
+    pub issued_at: chrono::DateTime<chrono::Utc>,
+    pub not_before: Option<chrono::DateTime<chrono::Utc>>,
+    pub expires_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub supersedes_statement_id: Option<String>,
+    pub revokes_statement_id: Option<String>,
+    /// Digest of the Realm control frontier the organization evaluated.
+    pub realm_frontier_digest: Option<String>,
+    /// Audit summary of the proof material (never the raw signature bytes).
+    pub proof_digest: Option<String>,
+    /// `authorization.delegation_ref` when present (delegated issuer roles).
+    pub delegation_ref: Option<String>,
+    /// `authorization.issuer_role` (snake_case).
+    pub issuer_role: String,
+    pub updated_at: chrono::DateTime<chrono::Utc>,
+}
+
+impl RealmOrganizationStatementState {
+    /// `true` when this is an `active` statement currently inside its
+    /// validity window (`not_before <= now < expires_at`).
+    pub fn is_effective_active(&self, now: chrono::DateTime<chrono::Utc>) -> bool {
+        if self.status != "active" {
+            return false;
+        }
+        if let Some(nbf) = self.not_before
+            && now < nbf
+        {
+            return false;
+        }
+        if let Some(exp) = self.expires_at
+            && now >= exp
+        {
+            return false;
+        }
+        true
+    }
+
+    /// `true` when this active statement's `control_scopes` cover `scope`.
+    pub fn covers_scope(&self, scope: &str) -> bool {
+        self.control_scopes.iter().any(|s| s == scope)
+    }
+}
+
 /// R3.2 — structured cache row for `ck.capability.derived`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CapabilityDerivedState {

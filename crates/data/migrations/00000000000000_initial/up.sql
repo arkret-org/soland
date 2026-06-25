@@ -617,7 +617,36 @@ CREATE TABLE public.organization_policies (
     CONSTRAINT organization_policies_version_check CHECK ((version >= 0))
 );
 
+-- SOL-ORG-04 — verified `ck.realm.organization` relationship statements.
+-- Primary key `(realm_id, organization_id, relationship)` so owner /
+-- governance / sponsor / directory_certifier relationships for the same Realm
+-- coexist as independent rows. Column order mirrors the spec
+-- `realm_organization_payload`. Only the proof / delegation audit digests are
+-- stored, never raw signature bytes.
 CREATE TABLE public.realm_organizations (
+    realm_id text NOT NULL,
+    organization_id text NOT NULL,
+    relationship text NOT NULL,
+    statement_id text NOT NULL,
+    status text NOT NULL,
+    control_scopes jsonb DEFAULT '[]'::jsonb NOT NULL,
+    issued_at timestamp with time zone NOT NULL,
+    not_before timestamp with time zone,
+    expires_at timestamp with time zone,
+    supersedes_statement_id text,
+    revokes_statement_id text,
+    realm_frontier_digest text,
+    proof_digest text,
+    delegation_ref text,
+    issuer_role text NOT NULL,
+    updated_at timestamp with time zone NOT NULL
+);
+
+-- SOL-ORG-05 — `owning_organizations` declared hints. These NO LONGER drive
+-- governance / durability / delivery / directory policy inheritance (only a
+-- verified `ck.realm.organization` statement does); the table is retained as a
+-- discovery / display hint surface.
+CREATE TABLE public.realm_owning_organizations (
     realm_id text NOT NULL,
     organization_id text NOT NULL,
     linked_at timestamp with time zone DEFAULT now() NOT NULL
@@ -1247,7 +1276,10 @@ ALTER TABLE ONLY public.organization_policies
     ADD CONSTRAINT organization_policies_pkey PRIMARY KEY (organization_id);
 
 ALTER TABLE ONLY public.realm_organizations
-    ADD CONSTRAINT realm_organizations_pkey PRIMARY KEY (realm_id, organization_id);
+    ADD CONSTRAINT realm_organizations_pkey PRIMARY KEY (realm_id, organization_id, relationship);
+
+ALTER TABLE ONLY public.realm_owning_organizations
+    ADD CONSTRAINT realm_owning_organizations_pkey PRIMARY KEY (realm_id, organization_id);
 
 ALTER TABLE ONLY public.realm_moderation_policies
     ADD CONSTRAINT realm_moderation_policies_pkey PRIMARY KEY (realm_id);
@@ -1506,6 +1538,10 @@ CREATE INDEX organizations_handle_idx ON public.organizations USING btree (handl
 CREATE INDEX organizations_did_idx ON public.organizations USING btree (organization_did);
 
 CREATE INDEX realm_organizations_organization_idx ON public.realm_organizations USING btree (organization_id);
+
+CREATE INDEX realm_organizations_relationship_idx ON public.realm_organizations USING btree (realm_id, relationship, status);
+
+CREATE INDEX realm_owning_organizations_organization_idx ON public.realm_owning_organizations USING btree (organization_id);
 
 CREATE INDEX retention_tombstones_realm_idx ON public.retention_tombstones USING btree (realm_id);
 

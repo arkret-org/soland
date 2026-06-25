@@ -26,6 +26,7 @@ pub struct SolandMemoryPersistenceStore {
     organizations: MemoryOrganizationStore,
     organization_policies: MemoryOrganizationPolicyStore,
     realm_organizations: MemoryRealmOrganizationStore,
+    realm_organization_statements: MemoryRealmOrganizationStatementStore,
     realm_moderation_policies: MemoryRealmModerationPolicyStore,
     audit: MemoryAuditStore,
     moderation: MemoryModerationStore,
@@ -92,6 +93,7 @@ impl SolandMemoryPersistenceStore {
             organizations: MemoryOrganizationStore::new(),
             organization_policies: MemoryOrganizationPolicyStore::new(),
             realm_organizations: MemoryRealmOrganizationStore::new(),
+            realm_organization_statements: MemoryRealmOrganizationStatementStore::new(),
             realm_moderation_policies: MemoryRealmModerationPolicyStore::new(),
             audit: MemoryAuditStore::new(),
             moderation: MemoryModerationStore::new(),
@@ -226,6 +228,10 @@ impl PersistenceStore for SolandMemoryPersistenceStore {
 
     fn realm_organizations(&self) -> &dyn RealmOrganizationStore {
         &self.realm_organizations
+    }
+
+    fn realm_organization_statements(&self) -> &dyn RealmOrganizationStatementStore {
+        &self.realm_organization_statements
     }
 
     fn realm_moderation_policies(&self) -> &dyn RealmModerationPolicyStore {

@@ -244,15 +244,19 @@ impl ProjectionState {
 
     // ── Realm lifecycle cell helpers ──
 
-    /// Read the effective `ck.component.realm.organization.v1` cas-register
-    /// value (mutable Realm metadata: owner, title, updated_at). Returns
-    /// `None` if no `ck.realm.update` event has landed for this realm, or
-    /// if the cell is in `Bottom` (concurrent admin updates require recovery).
-    pub fn realm_organization_cell_value(&self, realm_id: &str) -> Option<&Value> {
-        let cell_id = cokret_sdk::CellRef::new(format!(
-            "ck:cell:ck.component.realm.organization.v1:{realm_id}"
-        ))
-        .ok()?;
+    /// SOL-ORG-01 — read the effective `ck.component.realm.metadata.v1`
+    /// cas-register value (mutable Realm metadata: owner, title,
+    /// security_class, federation_policy, updated_at). Returns `None` if no
+    /// `ck.realm.update` event has landed for this realm, or if the cell is in
+    /// `Bottom` (concurrent admin updates require recovery).
+    ///
+    /// This is the renamed-from `realm_organization_cell_value`: the
+    /// `ck.component.realm.organization.v1` cell family is now exclusively the
+    /// `ck.realm.organization` relationship-statement surface, keyed by
+    /// `(organization_id, relationship)`. Mutable Realm metadata moved to its
+    /// own `ck.component.realm.metadata.v1` cell.
+    pub fn realm_metadata_cell_value(&self, realm_id: &str) -> Option<&Value> {
+        let cell_id = ProjectionState::realm_metadata_cell_id(realm_id)?;
         self.cell_value(&cell_id)
     }
 
@@ -718,16 +722,14 @@ impl ProjectionState {
     }
 
     /// R3.4 — read the projected Realm `security_class` (from the
-    /// `ck.component.realm.organization.v1` cas-register cell). Returns
+    /// `ck.component.realm.metadata.v1` cas-register cell). Returns
     /// `None` when no Realm-update has landed yet — caller may infer
     /// `standard` per spec default.
     pub fn realm_security_class(&self, realm_id: &str) -> Option<String> {
-        // First check the organization cell (cas-register, last write
+        // First check the metadata cell (cas-register, last write
         // wins; carries the most recent update).
-        if let Ok(org_cell) = cokret_sdk::CellRef::new(format!(
-            "ck:cell:ck.component.realm.organization.v1:{realm_id}"
-        )) && let Some(v) = self
-            .cell_value(&org_cell)
+        if let Some(v) = self
+            .realm_metadata_cell_value(realm_id)
             .and_then(|c| c.get("security_class"))
             .and_then(Value::as_str)
         {
@@ -746,14 +748,12 @@ impl ProjectionState {
     }
 
     /// R3.4 — read the effective Realm federation policy. The mutable
-    /// organization cas-register wins; when no update has landed, fall
+    /// metadata cas-register wins; when no update has landed, fall
     /// back to the latest `ck.realm.create` log entry that carried an
     /// initial `federation_policy`.
     pub fn realm_federation_policy(&self, realm_id: &str) -> Option<String> {
-        if let Ok(org_cell) = cokret_sdk::CellRef::new(format!(
-            "ck:cell:ck.component.realm.organization.v1:{realm_id}"
-        )) && let Some(v) = self
-            .cell_value(&org_cell)
+        if let Some(v) = self
+            .realm_metadata_cell_value(realm_id)
             .and_then(|c| c.get("federation_policy"))
             .and_then(Value::as_str)
         {

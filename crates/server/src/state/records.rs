@@ -903,6 +903,34 @@ pub struct RealmModerationPolicyRecord {
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
 
+/// SOL-ORG-04 — durable row for one verified `ck.realm.organization`
+/// relationship statement. Primary key `(realm_id, organization_id,
+/// relationship)`. Field order mirrors the spec `realm_organization_payload`.
+/// `control_scopes` is a JSON string array; the proof / delegation references
+/// are stored as audit digests, never raw signature bytes.
+#[derive(Clone, Debug)]
+pub struct RealmOrganizationStatementRecord {
+    pub realm_id: String,
+    pub organization_id: String,
+    /// snake_case relationship: `owner` / `governance` / `sponsor` /
+    /// `directory_certifier`.
+    pub relationship: String,
+    pub statement_id: String,
+    /// `active` or `revoked`.
+    pub status: String,
+    pub control_scopes: Vec<String>,
+    pub issued_at: chrono::DateTime<chrono::Utc>,
+    pub not_before: Option<chrono::DateTime<chrono::Utc>>,
+    pub expires_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub supersedes_statement_id: Option<String>,
+    pub revokes_statement_id: Option<String>,
+    pub realm_frontier_digest: Option<String>,
+    pub proof_digest: Option<String>,
+    pub delegation_ref: Option<String>,
+    pub issuer_role: String,
+    pub updated_at: chrono::DateTime<chrono::Utc>,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct SovereignDeploymentState {
     pub profile_override: Option<String>,

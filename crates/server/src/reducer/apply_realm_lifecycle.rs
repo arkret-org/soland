@@ -408,11 +408,21 @@ impl ProjectionState {
         }
     }
 
-    pub(crate) fn realm_organization_cell_id(realm_id: &str) -> Option<CellRef> {
-        CellRef::new(format!(
-            "ck:cell:ck.component.realm.organization.v1:{realm_id}"
-        ))
-        .ok()
+    /// SOL-ORG-01 — the soland-local cell family that backs `ck.realm.update`
+    /// mutable Realm metadata (owner / title / security_class /
+    /// federation_policy) and its CAS-register / bottom / conflict-repair
+    /// mechanics. It is keyed by `realm_id` (singleton per Realm).
+    ///
+    /// This is deliberately NOT `ck.component.realm.organization.v1`: that
+    /// cell family is the organization-authorized relationship statement
+    /// surface (`ck.realm.organization`, cell subject
+    /// `(organization_id, relationship)`) and must not be overwritten by
+    /// Realm metadata patches. Spec's event-kind-registry declares no
+    /// dedicated cell family for `ck.realm.update`; the source of truth for
+    /// Realm metadata is the `realm_states` object projection, and this cell
+    /// only exists to drive the concurrent-update conflict resolution.
+    pub(crate) fn realm_metadata_cell_id(realm_id: &str) -> Option<CellRef> {
+        CellRef::new(format!("ck:cell:ck.component.realm.metadata.v1:{realm_id}")).ok()
     }
 
     pub(crate) fn realm_update_conflict_basis(operation: &Operation) -> Option<String> {
@@ -472,7 +482,7 @@ impl ProjectionState {
         security_class: Option<&String>,
         federation_policy: Option<&String>,
     ) -> Option<ProjectionEffect> {
-        let cell_id = Self::realm_organization_cell_id(realm_id)?;
+        let cell_id = Self::realm_metadata_cell_id(realm_id)?;
         match self.cells.get(&cell_id) {
             Some(CellState::Bottom(_)) => {
                 return Some(ProjectionEffect::Rejected {
@@ -536,7 +546,7 @@ impl ProjectionState {
         match crate::kinds::canonical_kind_for_operation(operation) {
             Some(cokret_sdk::events::kinds::REALM_UPDATE) => {
                 let realm_id = operation.realm_id.to_string();
-                if let Some(cell_id) = Self::realm_organization_cell_id(&realm_id)
+                if let Some(cell_id) = Self::realm_metadata_cell_id(&realm_id)
                     && matches!(self.cells.get(&cell_id), Some(CellState::Bottom(_)))
                 {
                     return Err("cell_bottom_state");
@@ -625,7 +635,7 @@ impl ProjectionState {
         let value =
             augment_repair_winner_value(winner, &heads, operation.operation_id.as_str(), now);
         self.cells.insert(cell, CellState::Value(value.clone()));
-        if let Some(realm_id) = realm_organization_realm_id_from_cell(&cell_id) {
+        if let Some(realm_id) = realm_metadata_realm_id_from_cell(&cell_id) {
             if let Some(title) = value.get("title").and_then(Value::as_str) {
                 let entry = self
                     .realm_states
@@ -699,7 +709,7 @@ impl ProjectionState {
         // Per spec event-kind-registry, each ck.realm.* lifecycle event
         // writes a distinct cell family with its own lattice:
         //   ck.realm.create     → ck.component.realm.create.v1  (genesis singleton)
-        //   ck.realm.update     → ck.component.realm.organization.v1 (cas-register, singleton)
+        //   ck.realm.update     → ck.component.realm.metadata.v1 (cas-register, singleton)
         //   ck.realm.archive    → ck.component.realm.archive.v1 (cas-register, singleton)
         //   ck.realm.freeze     → ck.component.realm.freeze.v1 (cas-register, singleton)
         //   ck.realm.tombstone  → ck.component.realm.tombstone.v1 (cas-register, singleton)
@@ -844,16 +854,13 @@ impl ProjectionState {
         // projected federation_policy is computed by taking the payload
         // value if present, otherwise the prior cell value.
         let effective_federation_policy = payload_federation_policy.clone().or_else(|| {
-            cokret_sdk::CellRef::new(format!(
-                "ck:cell:ck.component.realm.organization.v1:{realm_id}"
-            ))
-            .ok()
-            .and_then(|c| self.cell_value(&c).cloned())
-            .and_then(|v| {
-                v.get("federation_policy")
-                    .and_then(Value::as_str)
-                    .map(ToOwned::to_owned)
-            })
+            Self::realm_metadata_cell_id(&realm_id)
+                .and_then(|c| self.cell_value(&c).cloned())
+                .and_then(|v| {
+                    v.get("federation_policy")
+                        .and_then(Value::as_str)
+                        .map(ToOwned::to_owned)
+                })
         });
         if matches!(effective_security_class.as_deref(), Some("high_assurance"))
             && matches!(effective_federation_policy.as_deref(), Some("open"))
@@ -1047,9 +1054,7 @@ impl ProjectionState {
                 // owner / title / arbitrary other organization fields
                 // pulled from payload (fields the spec evolves can land
                 // here without changing soland code).
-                if let Ok(cell_id) = cokret_sdk::CellRef::new(format!(
-                    "ck:cell:ck.component.realm.organization.v1:{realm_id}"
-                )) {
+                if let Some(cell_id) = Self::realm_metadata_cell_id(&realm_id) {
                     // Start from the existing cell value so partial
                     // updates retain previously-set fields.
                     let mut value = match self.cells.get(&cell_id) {

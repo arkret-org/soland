@@ -159,6 +159,7 @@ pub async fn validate_operation_policy(
         validate_call_recording_start_policy(state, operation).await?;
         validate_moderation_event_policy(state, operation).await?;
         validate_set_default_strand_policy(state, operation).await?;
+        validate_realm_organization_policy(state, operation).await?;
         validate_history_visibility_policy(state, operation).await?;
         validate_read_receipt_policy_combination_write(state, operations, operation).await?;
         validate_realm_key_share_policy(state, operation).await?;
@@ -2275,6 +2276,69 @@ async fn validate_set_default_strand_policy(
         {
             return Ok(());
         }
+    }
+    Err("missing_capability")
+}
+
+/// SOL-ORG-03 — two-sided authorization gate for `ck.realm.organization`.
+///
+///   - **Realm side**: the actor admitting the statement into Realm history
+///     MUST own the Realm or hold `ck.realm.admin` on it. A plain OIDC human
+///     session only proves the executor's identity; it does not by itself
+///     create organization principal control, so the executor still needs the
+///     Realm-admin capability. fail-closed `missing_capability` otherwise.
+///   - **Organization side**: the statement MUST pass the SDK fail-closed
+///     verifier. Delegated issuer roles (`governance_service` /
+///     `account_authority`) require a `delegation_ref`; without a runtime
+///     delegation resolver wired at this layer they are rejected here
+///     (`NoDelegationResolver`), so a Realm admin alone cannot forge
+///     organization consent.
+async fn validate_realm_organization_policy(
+    state: &AppState,
+    operation: &Operation,
+) -> Result<(), &'static str> {
+    if kinds::canonical_kind_for_operation(operation)
+        != Some(cokret_sdk::events::kinds::REALM_ORGANIZATION)
+    {
+        return Ok(());
+    }
+    // Organization side — strong-typed parse + SDK verifier (fail-closed).
+    let payload: cokret_sdk::models::RealmOrganizationPayload =
+        serde_json::from_value(operation.payload.clone())
+            .map_err(|_| cokret_sdk::ERROR_CODE_SCHEMA_VIOLATION)?;
+    cokret_sdk::models::verify_realm_organization_statement(
+        &payload,
+        &operation.realm_id,
+        chrono::Utc::now(),
+        &cokret_sdk::models::NoDelegationResolver,
+    )
+    .map_err(|_| "organization_statement_unverified")?;
+
+    // Realm side — owner or `ck.realm.admin`. The executor identity comes from
+    // the envelope sender / authorization.executed_by; a bare OIDC session is
+    // not sufficient on its own.
+    let Some(actor) = operation_actor(operation) else {
+        return Err("missing_capability");
+    };
+    let realm_id = operation.realm_id.as_str();
+    if realm_owner_matches(state, realm_id, actor).await {
+        return Ok(());
+    }
+    let (owner, members) = realm_owner_and_members(state, realm_id).await;
+    if state
+        .authz
+        .check(
+            actor,
+            "ck.realm.admin",
+            realm_id,
+            realm_id,
+            owner.as_deref(),
+            &members,
+            &[],
+        )
+        .allowed
+    {
+        return Ok(());
     }
     Err("missing_capability")
 }

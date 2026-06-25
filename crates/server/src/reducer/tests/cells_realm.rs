@@ -201,7 +201,7 @@ fn realm_create_writes_both_structured_cache_and_ordered_log_cell() {
 }
 
 #[test]
-fn realm_update_writes_organization_cell_with_cas_register_semantics() {
+fn realm_update_writes_metadata_cell_with_cas_register_semantics() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     state.apply(
@@ -218,8 +218,20 @@ fn realm_update_writes_organization_cell_with_cas_register_semantics() {
     );
 
     let value = state
-        .realm_organization_cell_value("ck:realm:01904100-0000-7000-8000-cfc039892036")
-        .expect("organization cell should resolve to Value");
+        .realm_metadata_cell_value("ck:realm:01904100-0000-7000-8000-cfc039892036")
+        .expect("metadata cell should resolve to Value");
+    // SOL-ORG-01 regression: ck.realm.update must NOT touch the
+    // organization relationship cell family.
+    assert!(
+        state
+            .cell_value(
+                &cokret_sdk::CellRef::new(
+                    "ck:cell:ck.component.realm.organization.v1:ck:realm:01904100-0000-7000-8000-cfc039892036".to_owned(),
+                )
+                .unwrap(),
+            )
+            .is_none()
+    );
     assert_eq!(
         value.get("title").and_then(Value::as_str),
         Some("Renamed Realm")
@@ -260,7 +272,7 @@ fn concurrent_realm_updates_with_same_basis_expose_bottom_and_repair_clears() {
     let second_id = second.operation_id.as_str().to_owned();
     state.apply(&second, &hlc);
 
-    let cell = ProjectionState::realm_organization_cell_id(realm).unwrap();
+    let cell = ProjectionState::realm_metadata_cell_id(realm).unwrap();
     let bottom = match state.cell(&cell) {
         Some(CellState::Bottom(bottom)) => bottom,
         other => panic!("expected bottom cell, got {other:?}"),
@@ -298,7 +310,7 @@ fn concurrent_realm_updates_with_same_basis_expose_bottom_and_repair_clears() {
     );
     state.apply(&repair, &hlc);
     let repaired = state
-        .realm_organization_cell_value(realm)
+        .realm_metadata_cell_value(realm)
         .expect("repair should restore cell value");
     assert_eq!(
         repaired.get("title").and_then(Value::as_str),
@@ -549,10 +561,10 @@ fn realm_create_bootstraps_creator_member_and_rejects_duplicate_create() {
 }
 
 #[test]
-fn realm_organization_cell_returns_none_for_uncreated_realm() {
+fn realm_metadata_cell_returns_none_for_uncreated_realm() {
     let realm_id = "ck:realm:01904100-0000-7000-8000-0f863ed7d6d2";
     let state = ProjectionState::new();
-    assert!(state.realm_organization_cell_value(realm_id).is_none());
+    assert!(state.realm_metadata_cell_value(realm_id).is_none());
     assert!(state.realm_create_log(realm_id).is_none());
     assert!(!state.realm_is_destroyed(realm_id));
 }

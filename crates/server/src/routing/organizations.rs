@@ -599,6 +599,8 @@ pub(crate) async fn link_realm_to_organization(
     Ok(())
 }
 
+/// SOL-ORG-05 — declared `owning_organizations` hint ids for a Realm. Display /
+/// discovery surface ONLY; never use this to drive policy inheritance.
 pub(crate) fn realm_organization_ids(state: &AppState, realm_id: &str) -> Vec<String> {
     state
         .realm_organizations
@@ -609,11 +611,37 @@ pub(crate) fn realm_organization_ids(state: &AppState, realm_id: &str) -> Vec<St
         .unwrap_or_default()
 }
 
+/// SOL-ORG-05 — the organization DIDs whose active, in-window
+/// `ck.realm.organization` statement endorses `realm_id` with a
+/// `moderation_policy` control scope. This is the ONLY basis on which an
+/// organization's moderation policy may flow into the Realm's effective policy;
+/// `owning_organizations` declared hints no longer qualify. Returns a stable,
+/// de-duplicated, sorted list.
+pub(crate) fn verified_moderation_organization_ids(
+    state: &AppState,
+    realm_id: &str,
+) -> Vec<String> {
+    let now = Utc::now();
+    let proj = state.projection.lock().expect("projection lock");
+    let mut ids = proj.verified_organizations_with_scope(
+        realm_id,
+        cokret_sdk::models::RealmOrganizationControlScope::ModerationPolicy,
+        now,
+    );
+    ids.sort();
+    ids.dedup();
+    ids
+}
+
 pub(crate) fn effective_policy_for_realm(
     state: &AppState,
     realm_id: &str,
 ) -> RealmEffectiveModerationPolicyOutcome {
-    let org_ids = realm_organization_ids(state, realm_id);
+    // SOL-ORG-05 — only organizations with a verified, active, in-window
+    // `ck.realm.organization` statement carrying the `moderation_policy`
+    // control scope drive the effective moderation policy. Declared
+    // `owning_organizations` hints no longer qualify.
+    let org_ids = verified_moderation_organization_ids(state, realm_id);
     let policies = state
         .organization_policies
         .lock()
@@ -691,7 +719,8 @@ pub(crate) async fn organization_policy_blocks_join(
     if accepted_realm_override_allows_join(state, realm_id, actor) {
         return false;
     }
-    let org_ids = realm_organization_ids(state, realm_id);
+    // SOL-ORG-05 — only verified moderation-scoped organizations gate joins.
+    let org_ids = verified_moderation_organization_ids(state, realm_id);
     if org_ids.is_empty() {
         return false;
     }
@@ -726,7 +755,9 @@ fn realm_policy_override_requires_approval_cached(
     if targets.is_empty() {
         return false;
     }
-    let org_ids = realm_organization_ids(state, realm_id);
+    // SOL-ORG-05 — only verified moderation-scoped organizations' deny rules
+    // require a Realm override to be approved.
+    let org_ids = verified_moderation_organization_ids(state, realm_id);
     if org_ids.is_empty() {
         return false;
     }
@@ -772,9 +803,11 @@ pub(crate) async fn realm_policy_override_has_approval(
     })
 }
 
-/// The owning organizations of `realm_id` whose policy denies at least one of
-/// the `allow_join` override targets carried in `payload`. Drives the
-/// most-restrictive approval gate: each such organization MUST approve.
+/// The verified moderation-scoped organizations of `realm_id` whose policy
+/// denies at least one of the `allow_join` override targets carried in
+/// `payload`. Drives the most-restrictive approval gate: each such organization
+/// MUST approve. SOL-ORG-05 — declared `owning_organizations` hints do not
+/// participate.
 fn organizations_denying_override_targets(
     state: &AppState,
     realm_id: &str,
@@ -784,7 +817,7 @@ fn organizations_denying_override_targets(
     if targets.is_empty() {
         return BTreeSet::new();
     }
-    let org_ids = realm_organization_ids(state, realm_id);
+    let org_ids = verified_moderation_organization_ids(state, realm_id);
     let policies = state
         .organization_policies
         .lock()
@@ -942,7 +975,9 @@ pub(crate) fn realm_policy_record_outcome(
 }
 
 fn effective_rules(state: &AppState, realm_id: &str) -> Vec<Value> {
-    let org_ids = realm_organization_ids(state, realm_id);
+    // SOL-ORG-05 — effective rules are sourced only from verified
+    // moderation-scoped organizations.
+    let org_ids = verified_moderation_organization_ids(state, realm_id);
     let policies = state
         .organization_policies
         .lock()

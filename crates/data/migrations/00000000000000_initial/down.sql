@@ -50,6 +50,7 @@ DROP TABLE IF EXISTS moderation_reports CASCADE;
 DROP TABLE IF EXISTS organizations CASCADE;
 DROP TABLE IF EXISTS organization_policies CASCADE;
 DROP TABLE IF EXISTS realm_organizations CASCADE;
+DROP TABLE IF EXISTS realm_owning_organizations CASCADE;
 DROP TABLE IF EXISTS realm_moderation_policies CASCADE;
 DROP TABLE IF EXISTS retention_policies CASCADE;
 DROP TABLE IF EXISTS retention_tombstones CASCADE;

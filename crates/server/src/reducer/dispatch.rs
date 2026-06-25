@@ -672,6 +672,18 @@ fn apply_realm_link_dispatch(
     s.apply_realm_link(op, op.created_at)
 }
 
+/// SOL-ORG-02 — dispatch for `ck.realm.organization`. Projects the
+/// organization-authorized Realm relationship statement (cas-register cell
+/// keyed by `(organization_id, relationship)` + structured cache) after the
+/// SDK organization-side verifier passes.
+fn apply_realm_organization_dispatch(
+    s: &mut ProjectionState,
+    op: &Operation,
+    _hlc: &ServerHlc,
+) -> ProjectionEffect {
+    s.apply_realm_organization(op, op.created_at)
+}
+
 /// R3.2 — dispatch for `ck.realm.inheritance_policy`. Projects the
 /// cas-register cell + structured cache; validates parent grant bounds
 /// when the relevant parent grant cells are available.
@@ -1176,6 +1188,11 @@ pub fn default_apply_registry() -> std::collections::HashMap<&'static str, Apply
     m.insert(
         cokret_sdk::events::kinds::REALM_LINK,
         apply_realm_link_dispatch,
+    );
+    // SOL-ORG-02 — organization-authorized Realm relationship statement.
+    m.insert(
+        cokret_sdk::events::kinds::REALM_ORGANIZATION,
+        apply_realm_organization_dispatch,
     );
     m.insert(
         cokret_sdk::events::kinds::REALM_INHERITANCE_POLICY,

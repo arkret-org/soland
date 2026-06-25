@@ -683,6 +683,9 @@ async fn project_accepted_operations_inner(
             mirror_mls_effect_to_persistence(state, origin, source_device_id, operation, &effect)
                 .await;
             mirror_moderation_effect_to_persistence(state, operation, &effect).await;
+            // SOL-ORG-04 — persist an accepted `ck.realm.organization`
+            // relationship statement projection durably.
+            mirror_realm_organization_effect_to_persistence(state, &effect).await;
             // P1 — fold the projected capability grant cell back into the
             // SolandAuthzEngine read index. The cell is the source of truth;
             // the engine map is a read-side index maintained by projection
@@ -796,6 +799,73 @@ pub(crate) async fn mirror_moderation_effect_to_persistence(
             appeal_id = %appeal_id,
             operation_id = %operation.operation_id,
             "failed to mirror moderation appeal event"
+        );
+    }
+}
+
+/// SOL-ORG-04 — persist an accepted `ck.realm.organization` relationship
+/// statement. The reducer has already verified (organization side) and
+/// projected the row into `ProjectionState::realm_organization_statements`;
+/// here we snapshot that row (under lock) and upsert it into the durable
+/// `realm_organizations` table keyed by `(realm_id, organization_id,
+/// relationship)`.
+pub(crate) async fn mirror_realm_organization_effect_to_persistence(
+    state: &AppState,
+    effect: &crate::reducer::ProjectionEffect,
+) {
+    let crate::reducer::ProjectionEffect::RealmOrganizationProjected {
+        realm_id,
+        organization_id,
+        relationship,
+        ..
+    } = effect
+    else {
+        return;
+    };
+
+    let key = (
+        realm_id.clone(),
+        organization_id.clone(),
+        relationship.clone(),
+    );
+    let row = state
+        .projection
+        .lock()
+        .ok()
+        .and_then(|proj| proj.realm_organization_statements.get(&key).cloned());
+    let Some(row) = row else {
+        return;
+    };
+    let record = crate::state::RealmOrganizationStatementRecord {
+        realm_id: row.realm_id,
+        organization_id: row.organization_id,
+        relationship: row.relationship,
+        statement_id: row.statement_id,
+        status: row.status,
+        control_scopes: row.control_scopes,
+        issued_at: row.issued_at,
+        not_before: row.not_before,
+        expires_at: row.expires_at,
+        supersedes_statement_id: row.supersedes_statement_id,
+        revokes_statement_id: row.revokes_statement_id,
+        realm_frontier_digest: row.realm_frontier_digest,
+        proof_digest: row.proof_digest,
+        delegation_ref: row.delegation_ref,
+        issuer_role: row.issuer_role,
+        updated_at: row.updated_at,
+    };
+    if let Err(error) = state
+        .persistence
+        .realm_organization_statements()
+        .put(&record)
+        .await
+    {
+        tracing::warn!(
+            %error,
+            realm_id = %record.realm_id,
+            organization_id = %record.organization_id,
+            relationship = %record.relationship,
+            "failed to persist ck.realm.organization relationship statement"
         );
     }
 }

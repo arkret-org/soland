@@ -108,9 +108,9 @@ pub struct ProjectionState {
     ///   - `realm_states` (mixed: ordered-log + cas-register) — kept as structured `realm_states`
     ///     side-band cache (server-side `created_at`/`updated_at`/`deleted` flag) BUT every
     ///     `apply_realm_lifecycle` now also writes one of: `ck.component.realm.create.v1`
-    ///     (ordered-log, append) / `ck.component.realm.organization.v1` (cas-register, latest
+    ///     (ordered-log, append) / `ck.component.realm.metadata.v1` (cas-register, latest
     ///     metadata) / `ck.component.realm.destroy.v1` (cas-register, terminal). Helpers:
-    ///     `realm_create_log` / `realm_organization_cell_value` / `realm_is_destroyed` query cells
+    ///     `realm_create_log` / `realm_metadata_cell_value` / `realm_is_destroyed` query cells
     ///     directly. Durable-event-only fields (`messages` / `reactions` / `read_cursors` /
     ///     `relations` / `redactions`) stay structured per spec (those event kinds have no
     ///     `cell_family` declaration).
@@ -218,6 +218,18 @@ pub struct ProjectionState {
     /// `capability_id`. Cas-register semantics — last write wins per
     /// capability.
     pub capability_derived: BTreeMap<String, CapabilityDerivedState>,
+    /// SOL-ORG-02 — `ck.realm.organization` relationship-statement
+    /// projection, keyed by `(realm_id, organization_id, relationship)`.
+    /// Cas-register semantics per `(organization_id, relationship)` cell
+    /// subject — the latest statement (active or revoked) wins. Multiple
+    /// owner / governance / sponsor / directory_certifier relationships for
+    /// the same Realm coexist as independent rows. Cell-canonical values
+    /// live in `cells` under `ck.component.realm.organization.v1` keyed by
+    /// the composite `{organization_id}::{relationship}` subject; this is
+    /// the structured side-band cache the verified-relationship and
+    /// effective-policy reads consult.
+    pub realm_organization_statements:
+        BTreeMap<(String, String, String), RealmOrganizationStatementState>,
     /// G3.S1 — published MLS KeyPackages keyed by `keypackage_id`. Each
     /// row is per `(actor_id, device_id)`; the `claimed_by` /
     /// `consumed_at` slots flip on a successful CAS claim.

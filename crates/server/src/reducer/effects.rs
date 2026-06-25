@@ -180,6 +180,17 @@ pub enum ProjectionEffect {
         capability_id: String,
         realm_id: String,
     },
+    /// SOL-ORG-02 — `ck.realm.organization` relationship statement projected
+    /// into the `ck.component.realm.organization.v1` cas-register cell keyed by
+    /// `(organization_id, relationship)` + the `realm_organization_statements`
+    /// structured cache. `status` is `active` (relationship live) or `revoked`
+    /// (inactive, retained for audit).
+    RealmOrganizationProjected {
+        realm_id: String,
+        organization_id: String,
+        relationship: String,
+        status: String,
+    },
     /// P1 — `ck.capability.grant` event was projected into the
     /// `ck.component.capability.grant.v1` or_set cell (one cell per
     /// `grant_id`). `revived_terminal=false` always; a re-grant of a

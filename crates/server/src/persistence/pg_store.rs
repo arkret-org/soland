@@ -27,6 +27,7 @@ pub struct PgPersistenceStore {
     organizations: PgOrganizationStore,
     organization_policies: PgOrganizationPolicyStore,
     realm_organizations: PgRealmOrganizationStore,
+    realm_organization_statements: PgRealmOrganizationStatementStore,
     realm_moderation_policies: PgRealmModerationPolicyStore,
     push_bridge_cache: PgPushBridgeCacheStore,
     multisig_pending: PgMultisigPendingStore,
@@ -85,6 +86,9 @@ impl PgPersistenceStore {
             organizations: PgOrganizationStore { pool: pool.clone() },
             organization_policies: PgOrganizationPolicyStore { pool: pool.clone() },
             realm_organizations: PgRealmOrganizationStore { pool: pool.clone() },
+            realm_organization_statements: PgRealmOrganizationStatementStore {
+                pool: pool.clone(),
+            },
             realm_moderation_policies: PgRealmModerationPolicyStore { pool: pool.clone() },
             push_bridge_cache: PgPushBridgeCacheStore { pool: pool.clone() },
             multisig_pending: PgMultisigPendingStore { pool: pool.clone() },
@@ -209,6 +213,10 @@ impl PersistenceStore for PgPersistenceStore {
 
     fn realm_organizations(&self) -> &dyn RealmOrganizationStore {
         &self.realm_organizations
+    }
+
+    fn realm_organization_statements(&self) -> &dyn RealmOrganizationStatementStore {
+        &self.realm_organization_statements
     }
 
     fn realm_moderation_policies(&self) -> &dyn RealmModerationPolicyStore {

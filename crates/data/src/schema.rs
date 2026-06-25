@@ -57,7 +57,28 @@ diesel::table! {
 }
 
 diesel::table! {
-    realm_organizations (realm_id, organization_id) {
+    realm_organizations (realm_id, organization_id, relationship) {
+        realm_id -> Text,
+        organization_id -> Text,
+        relationship -> Text,
+        statement_id -> Text,
+        status -> Text,
+        control_scopes -> Jsonb,
+        issued_at -> Timestamptz,
+        not_before -> Nullable<Timestamptz>,
+        expires_at -> Nullable<Timestamptz>,
+        supersedes_statement_id -> Nullable<Text>,
+        revokes_statement_id -> Nullable<Text>,
+        realm_frontier_digest -> Nullable<Text>,
+        proof_digest -> Nullable<Text>,
+        delegation_ref -> Nullable<Text>,
+        issuer_role -> Text,
+        updated_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
+    realm_owning_organizations (realm_id, organization_id) {
         realm_id -> Text,
         organization_id -> Text,
         linked_at -> Timestamptz,
@@ -668,6 +689,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     organizations,
     organization_policies,
     realm_organizations,
+    realm_owning_organizations,
     realm_moderation_policies,
     retention_policies,
     retention_tombstones,

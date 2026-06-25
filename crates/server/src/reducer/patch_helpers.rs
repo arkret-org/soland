@@ -150,9 +150,14 @@ pub(crate) fn utc_timestamp_z(now: chrono::DateTime<chrono::Utc>) -> String {
     cokret_sdk::canonical::format_timestamp_canonical(now)
 }
 
-pub(crate) fn realm_organization_realm_id_from_cell(cell_id: &str) -> Option<String> {
+/// SOL-ORG-01 — parse the `realm_id` out of a `ck.component.realm.metadata.v1`
+/// cell id. This is the soland-local mutable-Realm-metadata cell family that
+/// backs `ck.realm.update` (NOT the organization relationship cell family
+/// `ck.component.realm.organization.v1`, whose subject is the composite
+/// `(organization_id, relationship)` and is owned by `ck.realm.organization`).
+pub(crate) fn realm_metadata_realm_id_from_cell(cell_id: &str) -> Option<String> {
     cell_id
-        .strip_prefix("ck:cell:ck.component.realm.organization.v1:")
+        .strip_prefix("ck:cell:ck.component.realm.metadata.v1:")
         .filter(|realm_id| realm_id.starts_with("ck:realm:"))
         .map(ToOwned::to_owned)
 }

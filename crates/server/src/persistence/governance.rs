@@ -42,10 +42,23 @@ pub trait OrganizationPolicyStore: Send + Sync {
     async fn snapshot_all(&self) -> PersistenceResult<Vec<OrganizationPolicyRecord>>;
 }
 
+/// SOL-ORG-05 — declared `owning_organizations` hint links. These are NOT
+/// verified relationships and do not drive policy inheritance; see
+/// [`RealmOrganizationStatementStore`] for the verified statement surface.
+/// Backed by the `realm_owning_organizations` table.
 #[async_trait]
 pub trait RealmOrganizationStore: Send + Sync {
     async fn link(&self, realm_id: &str, organization_id: &str) -> PersistenceResult<()>;
     async fn snapshot_all(&self) -> PersistenceResult<Vec<(String, BTreeSet<String>)>>;
+}
+
+/// SOL-ORG-04 — verified `ck.realm.organization` relationship statements.
+/// Backed by the `realm_organizations` table, keyed by
+/// `(realm_id, organization_id, relationship)`.
+#[async_trait]
+pub trait RealmOrganizationStatementStore: Send + Sync {
+    async fn put(&self, record: &RealmOrganizationStatementRecord) -> PersistenceResult<()>;
+    async fn snapshot_all(&self) -> PersistenceResult<Vec<RealmOrganizationStatementRecord>>;
 }
 
 #[async_trait]
@@ -296,6 +309,46 @@ impl RealmOrganizationStore for MemoryRealmOrganizationStore {
             .expect("realm organization lock")
             .iter()
             .map(|(realm_id, organizations)| (realm_id.clone(), organizations.clone()))
+            .collect())
+    }
+}
+
+pub(crate) struct MemoryRealmOrganizationStatementStore {
+    data: Arc<Mutex<BTreeMap<(String, String, String), RealmOrganizationStatementRecord>>>,
+}
+
+impl MemoryRealmOrganizationStatementStore {
+    pub(crate) fn new() -> Self {
+        Self {
+            data: Arc::new(Mutex::new(BTreeMap::new())),
+        }
+    }
+}
+
+#[async_trait]
+impl RealmOrganizationStatementStore for MemoryRealmOrganizationStatementStore {
+    async fn put(&self, record: &RealmOrganizationStatementRecord) -> PersistenceResult<()> {
+        self.data
+            .lock()
+            .expect("realm organization statement lock")
+            .insert(
+                (
+                    record.realm_id.clone(),
+                    record.organization_id.clone(),
+                    record.relationship.clone(),
+                ),
+                record.clone(),
+            );
+        Ok(())
+    }
+
+    async fn snapshot_all(&self) -> PersistenceResult<Vec<RealmOrganizationStatementRecord>> {
+        Ok(self
+            .data
+            .lock()
+            .expect("realm organization statement lock")
+            .values()
+            .cloned()
             .collect())
     }
 }
@@ -796,7 +849,7 @@ impl RealmOrganizationStore for PgRealmOrganizationStore {
     async fn link(&self, realm_id: &str, organization_id: &str) -> PersistenceResult<()> {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(
-            "INSERT INTO realm_organizations (realm_id, organization_id, linked_at) \
+            "INSERT INTO realm_owning_organizations (realm_id, organization_id, linked_at) \
              VALUES ($1, $2, NOW()) \
              ON CONFLICT (realm_id, organization_id) DO NOTHING",
         )
@@ -811,7 +864,7 @@ impl RealmOrganizationStore for PgRealmOrganizationStore {
     async fn snapshot_all(&self) -> PersistenceResult<Vec<(String, BTreeSet<String>)>> {
         let mut conn = pg_conn(&self.pool).await?;
         let rows = sql_query(
-            "SELECT realm_id, organization_id FROM realm_organizations \
+            "SELECT realm_id, organization_id FROM realm_owning_organizations \
              ORDER BY realm_id, organization_id",
         )
         .load::<RealmOrganizationRow>(&mut *conn)
@@ -833,6 +886,139 @@ struct RealmOrganizationRow {
     realm_id: String,
     #[diesel(sql_type = Text)]
     organization_id: String,
+}
+
+pub(crate) struct PgRealmOrganizationStatementStore {
+    pub(crate) pool: PgPool,
+}
+
+#[async_trait]
+impl RealmOrganizationStatementStore for PgRealmOrganizationStatementStore {
+    async fn put(&self, record: &RealmOrganizationStatementRecord) -> PersistenceResult<()> {
+        let mut conn = pg_conn(&self.pool).await?;
+        let control_scopes = serde_json::to_value(&record.control_scopes)
+            .unwrap_or_else(|_| Value::Array(Vec::new()));
+        sql_query(
+            "INSERT INTO realm_organizations \
+             (realm_id, organization_id, relationship, statement_id, status, control_scopes, \
+              issued_at, not_before, expires_at, supersedes_statement_id, revokes_statement_id, \
+              realm_frontier_digest, proof_digest, delegation_ref, issuer_role, updated_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16) \
+             ON CONFLICT (realm_id, organization_id, relationship) DO UPDATE SET \
+               statement_id = EXCLUDED.statement_id, \
+               status = EXCLUDED.status, \
+               control_scopes = EXCLUDED.control_scopes, \
+               issued_at = EXCLUDED.issued_at, \
+               not_before = EXCLUDED.not_before, \
+               expires_at = EXCLUDED.expires_at, \
+               supersedes_statement_id = EXCLUDED.supersedes_statement_id, \
+               revokes_statement_id = EXCLUDED.revokes_statement_id, \
+               realm_frontier_digest = EXCLUDED.realm_frontier_digest, \
+               proof_digest = EXCLUDED.proof_digest, \
+               delegation_ref = EXCLUDED.delegation_ref, \
+               issuer_role = EXCLUDED.issuer_role, \
+               updated_at = EXCLUDED.updated_at",
+        )
+        .bind::<Text, _>(&record.realm_id)
+        .bind::<Text, _>(&record.organization_id)
+        .bind::<Text, _>(&record.relationship)
+        .bind::<Text, _>(&record.statement_id)
+        .bind::<Text, _>(&record.status)
+        .bind::<Jsonb, _>(&control_scopes)
+        .bind::<Timestamptz, _>(record.issued_at)
+        .bind::<Nullable<Timestamptz>, _>(record.not_before)
+        .bind::<Nullable<Timestamptz>, _>(record.expires_at)
+        .bind::<Nullable<Text>, _>(&record.supersedes_statement_id)
+        .bind::<Nullable<Text>, _>(&record.revokes_statement_id)
+        .bind::<Nullable<Text>, _>(&record.realm_frontier_digest)
+        .bind::<Nullable<Text>, _>(&record.proof_digest)
+        .bind::<Nullable<Text>, _>(&record.delegation_ref)
+        .bind::<Text, _>(&record.issuer_role)
+        .bind::<Timestamptz, _>(record.updated_at)
+        .execute(&mut *conn)
+        .await
+        .map(|_| ())
+        .map_err(PersistenceError::from)
+    }
+
+    async fn snapshot_all(&self) -> PersistenceResult<Vec<RealmOrganizationStatementRecord>> {
+        let mut conn = pg_conn(&self.pool).await?;
+        sql_query(
+            "SELECT realm_id, organization_id, relationship, statement_id, status, control_scopes, \
+                    issued_at, not_before, expires_at, supersedes_statement_id, \
+                    revokes_statement_id, realm_frontier_digest, proof_digest, delegation_ref, \
+                    issuer_role, updated_at \
+             FROM realm_organizations \
+             ORDER BY realm_id, organization_id, relationship",
+        )
+        .load::<RealmOrganizationStatementRow>(&mut *conn)
+        .await
+        .map(|rows| {
+            rows.into_iter()
+                .map(RealmOrganizationStatementRecord::from)
+                .collect()
+        })
+        .map_err(PersistenceError::from)
+    }
+}
+
+#[derive(QueryableByName)]
+struct RealmOrganizationStatementRow {
+    #[diesel(sql_type = Text)]
+    realm_id: String,
+    #[diesel(sql_type = Text)]
+    organization_id: String,
+    #[diesel(sql_type = Text)]
+    relationship: String,
+    #[diesel(sql_type = Text)]
+    statement_id: String,
+    #[diesel(sql_type = Text)]
+    status: String,
+    #[diesel(sql_type = Jsonb)]
+    control_scopes: Value,
+    #[diesel(sql_type = Timestamptz)]
+    issued_at: chrono::DateTime<chrono::Utc>,
+    #[diesel(sql_type = Nullable<Timestamptz>)]
+    not_before: Option<chrono::DateTime<chrono::Utc>>,
+    #[diesel(sql_type = Nullable<Timestamptz>)]
+    expires_at: Option<chrono::DateTime<chrono::Utc>>,
+    #[diesel(sql_type = Nullable<Text>)]
+    supersedes_statement_id: Option<String>,
+    #[diesel(sql_type = Nullable<Text>)]
+    revokes_statement_id: Option<String>,
+    #[diesel(sql_type = Nullable<Text>)]
+    realm_frontier_digest: Option<String>,
+    #[diesel(sql_type = Nullable<Text>)]
+    proof_digest: Option<String>,
+    #[diesel(sql_type = Nullable<Text>)]
+    delegation_ref: Option<String>,
+    #[diesel(sql_type = Text)]
+    issuer_role: String,
+    #[diesel(sql_type = Timestamptz)]
+    updated_at: chrono::DateTime<chrono::Utc>,
+}
+
+impl From<RealmOrganizationStatementRow> for RealmOrganizationStatementRecord {
+    fn from(row: RealmOrganizationStatementRow) -> Self {
+        Self {
+            realm_id: row.realm_id,
+            organization_id: row.organization_id,
+            relationship: row.relationship,
+            statement_id: row.statement_id,
+            status: row.status,
+            control_scopes: json_string_array(row.control_scopes),
+            issued_at: row.issued_at,
+            not_before: row.not_before,
+            expires_at: row.expires_at,
+            supersedes_statement_id: row.supersedes_statement_id,
+            revokes_statement_id: row.revokes_statement_id,
+            realm_frontier_digest: row.realm_frontier_digest,
+            proof_digest: row.proof_digest,
+            delegation_ref: row.delegation_ref,
+            issuer_role: row.issuer_role,
+            updated_at: row.updated_at,
+        }
+    }
 }
 
 pub(crate) struct PgRealmModerationPolicyStore {

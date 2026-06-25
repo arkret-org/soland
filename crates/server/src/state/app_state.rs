@@ -182,8 +182,13 @@ pub struct AppState {
     pub organizations: Arc<Mutex<BTreeMap<String, OrganizationRecord>>>,
     /// Current organization moderation policy per organization.
     pub organization_policies: Arc<Mutex<BTreeMap<String, OrganizationPolicyRecord>>>,
-    /// Realm -> organizations declared by `ck.realm.create.owning_organizations`
-    /// or the local organization link endpoint.
+    /// SOL-ORG-05 — Realm -> `owning_organizations` DECLARED HINTS, sourced
+    /// from `ck.realm.create.owning_organizations` or the local organization
+    /// link endpoint. These are NOT verified relationships and MUST NOT drive
+    /// governance / durability / delivery / directory policy inheritance — only
+    /// a verified `ck.realm.organization` statement does (see the reducer
+    /// `realm_organization_statements` projection). Retained as a discovery /
+    /// display hint surface only.
     pub realm_organizations: Arc<Mutex<BTreeMap<String, BTreeSet<String>>>>,
     /// Organization -> member Realm ids. This is the read-side fanout index:
     /// policy updates do not rewrite per-Realm rows.
@@ -839,6 +844,42 @@ impl AppState {
                         .insert(realm_id.clone());
                 }
                 realm_map.insert(realm_id, organization_ids);
+            }
+        }
+
+        // SOL-ORG-04 — rehydrate verified `ck.realm.organization` relationship
+        // statements into the reducer projection so verified relationships /
+        // scope-gated policy inheritance survive a restart.
+        let realm_organization_statements = self
+            .persistence
+            .realm_organization_statements()
+            .snapshot_all()
+            .await?;
+        {
+            let mut proj = self.projection.lock().expect("projection lock");
+            for record in realm_organization_statements {
+                let row = crate::reducer::RealmOrganizationStatementState {
+                    realm_id: record.realm_id.clone(),
+                    organization_id: record.organization_id.clone(),
+                    relationship: record.relationship.clone(),
+                    statement_id: record.statement_id,
+                    status: record.status,
+                    control_scopes: record.control_scopes,
+                    issued_at: record.issued_at,
+                    not_before: record.not_before,
+                    expires_at: record.expires_at,
+                    supersedes_statement_id: record.supersedes_statement_id,
+                    revokes_statement_id: record.revokes_statement_id,
+                    realm_frontier_digest: record.realm_frontier_digest,
+                    proof_digest: record.proof_digest,
+                    delegation_ref: record.delegation_ref,
+                    issuer_role: record.issuer_role,
+                    updated_at: record.updated_at,
+                };
+                proj.realm_organization_statements.insert(
+                    (record.realm_id, record.organization_id, record.relationship),
+                    row,
+                );
             }
         }
 

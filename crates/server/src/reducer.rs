@@ -34,6 +34,7 @@ mod apply_moderation;
 mod apply_objects;
 mod apply_realm_key;
 mod apply_realm_lifecycle;
+mod apply_realm_organization;
 mod apply_realm_policy;
 mod apply_relations;
 mod apply_space_container;
@@ -108,7 +109,8 @@ pub use projections::{
     MlsWelcomeQueueKey, MorphProjection, ObjectLifecycleState, PendingReplayEntry, PinProjection,
     PollOptionState, PollState, ProjectedMessageView, PushRouteCellValue, PushRouteSubject,
     ReactionState, ReadMarkerState, RealmInheritancePolicyState, RealmLinkState,
-    RealmPolicyServerConfig, RedactionCellValue, RsvpProjection, SolandAgentProjection,
+    RealmOrganizationStatementState, RealmPolicyServerConfig, RedactionCellValue, RsvpProjection,
+    SolandAgentProjection,
     SolandKeyBackupActiveSeries, SolandMembershipState, SolandRealmState, SolandRelationState,
     SpaceContainerLifecycleState, SpaceContainerProjection, StrandProjection,
     message_expiry_projection_from_value, message_expiry_projection_from_value_with_anchor,
