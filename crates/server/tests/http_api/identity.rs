@@ -335,3 +335,69 @@ async fn embedded_webvh_provider_registers_and_serves_identity() {
     assert_eq!(resolved["did_document"]["id"], registered["did"]);
     assert_eq!(resolved["key_log_head"], registered["key_log_head"]);
 }
+
+/// Regression: a `did:webvh` document provisioned through
+/// `submit-did-operation` (the path coauth account registration uses) MUST be
+/// resolvable at its canonical `/webvh/{local_id}/did.json` URL, exactly like an
+/// embedded-provider registration. Previously the public document endpoint only
+/// matched records whose `method_evidence.mode == "embedded_webvh_provider"`,
+/// so submit-provisioned DIDs (mode `submitted_operation`, no `local_id` in
+/// evidence) 404'd — breaking every cross-actor did:webvh resolution (MLS
+/// Welcome / KeyPackage / event signature verification) for coauth-registered
+/// accounts.
+#[tokio::test]
+async fn submit_did_operation_webvh_serves_canonical_did_json() {
+    let mut config = test_config();
+    config.public_base_url = "https://soland.example".to_owned();
+    config.embedded_webvh_provider_enabled = true;
+    config.did_resolver_allow_methods = vec!["web".to_owned(), "key".to_owned(), "webvh".to_owned()];
+    let state = AppState::new(config, Db { pool: None });
+
+    let did = "did:webvh:zQmTestScidValueForRegression123456:soland.example:webvh:bobwebvh";
+    let submitted: Value = TestClient::post("http://server/_cokret/root/identity/submit-did-operation")
+        .json(&serde_json::json!({
+            "did": did,
+            "did_method": "did:webvh",
+            "seq": 1,
+            "operation": {
+                "type": "replace",
+                "state": {
+                    "id": did,
+                    "verificationMethod": [{
+                        "id": format!("{did}#did-key-1"),
+                        "type": "Multikey",
+                        "controller": did,
+                        "publicKeyMultibase": "z6MkbobwebvhRegressionKey"
+                    }],
+                    "authentication": [format!("{did}#did-key-1")],
+                    "assertionMethod": [format!("{did}#did-key-1")]
+                }
+            }
+        }))
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(submitted["status"], "accepted");
+
+    // The canonical did:webvh document URL must now resolve (200), not 404.
+    let mut did_json = TestClient::get("http://server/webvh/bobwebvh/did.json")
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(did_json.status_code.unwrap(), StatusCode::OK);
+    let document: Value = did_json.take_json().await.unwrap();
+    assert_eq!(document["id"], did);
+
+    // The append-only log is served at the canonical URL too.
+    let log_response = TestClient::get("http://server/webvh/bobwebvh/did.jsonl")
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(log_response.status_code.unwrap(), StatusCode::OK);
+
+    // An unknown local_id still 404s (the suffix match is exact, not a prefix).
+    let unknown = TestClient::get("http://server/webvh/nosuchlocalid/did.json")
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(unknown.status_code.unwrap(), StatusCode::NOT_FOUND);
+}
