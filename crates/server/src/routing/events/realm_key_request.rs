@@ -16,8 +16,9 @@
 //!
 //! - the *sender* must be a current joined member of the Realm,
 //! - the Realm must carry a projected `history_sharing_policy`,
-//! - the named provider device (`target_source_ref`) must resolve to a current
-//!   member's active (non-revoked) device,
+//! - the named provider device (`target_source_ref`) must be a syntactically
+//!   valid `ck:device:<id>` and resolve to an active (non-revoked) device of its
+//!   declared owning principal (`target_principal_id`),
 //! - the SDK history-key-share gates must admit the share for the requesting
 //!   reader before the request is relayed.
 
@@ -59,16 +60,23 @@ pub(crate) async fn relay_ephemeral_realm_key_request(
         ));
     }
 
-    // Resolve the provider device named by `target_source_ref` to a current
-    // member's active device. `target_source_ref` is a bare `ck:device:<id>`;
-    // the owning principal is discovered by scanning the Realm membership.
-    let target = resolve_target_provider_device(state, realm_id, &request.target_source_ref)
-        .await
-        .ok_or_else(|| {
-            AppError::invalid_param(
-                "ck.realm_key.request target_source_ref does not resolve to an active member device",
-            )
-        })?;
+    // Resolve the provider device named by `target_source_ref`. The request now
+    // carries `target_principal_id` (the provider device's owning principal)
+    // directly, so we address the device by `(target_principal_id,
+    // target_source_ref)` instead of scanning Realm membership — we only verify
+    // that `target_source_ref` is a syntactically valid `ck:device:<id>` and
+    // resolves to an active (non-revoked) device of that principal.
+    let target = resolve_target_provider_device(
+        state,
+        request.target_principal_id.as_str(),
+        &request.target_source_ref,
+    )
+    .await
+    .ok_or_else(|| {
+        AppError::invalid_param(
+            "ck.realm_key.request target_source_ref does not resolve to an active provider device",
+        )
+    })?;
 
     // The Realm must carry a projected history-sharing policy, and the SDK
     // history-key-share gates must admit a share to the requesting reader.
@@ -127,43 +135,38 @@ async fn realm_member_is_joined(state: &AppState, realm_id: &str, actor: &str) -
     crate::routing::spaces::space::realm_has_member_by_id(state, realm_id, actor).await
 }
 
-/// Scan the Realm membership for the principal that owns `target_device_ref`,
-/// returning it together with the bare device id once an active (non-revoked)
-/// device row is found. `None` when no current member owns an active device with
-/// that id.
+/// Resolve `target_device_ref` against its declared owning principal
+/// (`target_principal_id`). The request now addresses the provider device
+/// directly, so there is no membership scan: we only confirm `target_device_ref`
+/// is a syntactically valid `ck:device:<id>` and that `(principal_id,
+/// device_id)` names an active (non-revoked) device row. `None` when the device
+/// id is malformed or the device is absent/revoked.
 async fn resolve_target_provider_device(
     state: &AppState,
-    realm_id: &str,
+    principal_id: &str,
     target_device_ref: &str,
 ) -> Option<ResolvedTarget> {
     let device_id = target_device_ref.trim();
-    if device_id.is_empty() {
+    if device_id.is_empty() || cokret_sdk::DeviceId::new(device_id.to_owned()).is_err() {
         return None;
     }
-    let members = realm_member_ids(state, realm_id);
-    for member in members {
-        let device = state
-            .persistence
-            .devices()
-            .get(&member, device_id)
-            .await
-            .ok()
-            .flatten();
-        let Some(device) = device else {
-            continue;
-        };
-        if device.revoked_at.is_some() {
-            continue;
-        }
-        if crate::routing::identity::auth::is_device_revoked(state, &member, device_id).await {
-            continue;
-        }
-        return Some(ResolvedTarget {
-            principal_id: member,
-            device_id: device_id.to_owned(),
-        });
+    let device = state
+        .persistence
+        .devices()
+        .get(principal_id, device_id)
+        .await
+        .ok()
+        .flatten()?;
+    if device.revoked_at.is_some() {
+        return None;
     }
-    None
+    if crate::routing::identity::auth::is_device_revoked(state, principal_id, device_id).await {
+        return None;
+    }
+    Some(ResolvedTarget {
+        principal_id: principal_id.to_owned(),
+        device_id: device_id.to_owned(),
+    })
 }
 
 /// Run the SDK `evaluate_history_key_share_gates` for the request direction. The
@@ -233,7 +236,7 @@ async fn evaluate_request_gate(
         range: cokret_sdk::HistoryRangeContext {
             since_invite: true,
             since_join: reader_state == cokret_sdk::HistoryReaderEventState::Joined,
-            epoch_span: epoch_span(request.key_scope.from_epoch, request.key_scope.to_epoch),
+            epoch_span: Some(epoch_span(request.key_scope.from_epoch, request.key_scope.to_epoch)),
         },
         policy: Some(&policy),
         key_source: request.requested_source_class,
@@ -269,26 +272,8 @@ fn reader_event_state(
     cokret_sdk::HistoryReaderEventState::None
 }
 
-fn epoch_span(from_epoch: Option<u64>, to_epoch: Option<u64>) -> Option<u64> {
-    Some(to_epoch?.saturating_sub(from_epoch?).saturating_add(1))
-}
-
-/// Current member DIDs for the Realm, read from the in-memory `realms` index
-/// (mirrors `operations::policy_extra::realm_owner_and_members`). Empty when the
-/// Realm is unknown or the lock is poisoned.
-fn realm_member_ids(state: &AppState, realm_id: &str) -> Vec<String> {
-    state
-        .realms
-        .lock()
-        .ok()
-        .map(|realms| {
-            cokret_sdk::RealmId::new(realm_id.to_owned())
-                .ok()
-                .and_then(|id| realms.get(&id))
-                .map(|realm| realm.members.iter().map(ToString::to_string).collect())
-                .unwrap_or_default()
-        })
-        .unwrap_or_default()
+fn epoch_span(from_epoch: u64, to_epoch: u64) -> u64 {
+    to_epoch.saturating_sub(from_epoch).saturating_add(1)
 }
 
 #[cfg(test)]
@@ -368,14 +353,25 @@ mod tests {
         let provider_device = "ck:device:01904100-0000-7000-8000-a11ce0000001";
         let request_id = "req-0001";
         let payload = serde_json::json!({
-            "key_scope": {"effective_scope": {"kind": "realm", "realm_id": realm_id}},
+            "key_scope": {
+                "effective_scope": {"kind": "realm", "realm_id": realm_id},
+                "from_epoch": 0,
+                "to_epoch": 3
+            },
             "recipient_principal_id": sender_actor,
             "recipient_device_id": sender_device,
             "recipient_hpke_public_key": "cHVia2V5",
             "requested_source_class": "verified_member_device",
             "target_source_ref": provider_device,
+            "target_principal_id": provider_principal,
             "created_at": "2026-06-25T00:00:00Z"
         });
+
+        // The relay addresses the provider device by the `target_principal_id`
+        // carried in the request payload (no membership scan): the delivery
+        // target principal MUST equal that field.
+        let target_principal = payload["target_principal_id"].as_str().unwrap();
+        assert_eq!(target_principal, provider_principal);
 
         // The target device's queue is empty before the relay.
         let before = state
@@ -392,7 +388,7 @@ mod tests {
             sender_device,
             realm_id,
             request_id,
-            provider_principal,
+            target_principal,
             provider_device,
             &payload,
             chrono::Utc::now(),
