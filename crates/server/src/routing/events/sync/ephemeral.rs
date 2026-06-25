@@ -60,6 +60,21 @@ pub(super) async fn submit_ephemeral(
             admit_ephemeral_read_receipt(state, &session, realm_id_str, &envelope).await?;
             false
         }
+        "ck.realm_key.request" => {
+            // realm-and-space.md history-sharing — a late-joining member device
+            // asks a provider device to seal retained history keys. The request
+            // is relayed to the provider's to-device queue (no realm broadcast),
+            // so this does NOT wake account sync.
+            crate::routing::events::realm_key_request::relay_ephemeral_realm_key_request(
+                state,
+                &session,
+                realm_id_str,
+                &envelope,
+            )
+            .await?;
+            dispatched_to = Some(1);
+            false
+        }
         "ck.call.signal" => {
             // `service-http-binding.md` §162 — sending a `ck.call.signal`
             // envelope on `/_cokret/self/ephemeral` requires the realm-scoped
@@ -157,7 +172,11 @@ fn validate_ephemeral_envelope(
 ) -> Result<(), crate::error::AppError> {
     if !matches!(
         envelope.kind.as_str(),
-        "ck.call.signal" | "ck.presence" | "ck.typing" | "ck.receipt.read"
+        "ck.call.signal"
+            | "ck.presence"
+            | "ck.typing"
+            | "ck.receipt.read"
+            | "ck.realm_key.request"
     ) {
         return Err(crate::error::AppError::invalid_param(
             "unsupported ephemeral kind",

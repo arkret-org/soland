@@ -690,6 +690,17 @@ impl ProjectionState {
         policy_floor_field(components, "metadata_encryption_floor").map(ToOwned::to_owned)
     }
 
+    /// Effective Realm `content_scheme` projected from the
+    /// `ck.component.realm.policy_components.v1` cell (read from the same
+    /// `policy_components` cell as the encryption floors). `None` means no
+    /// scheme has been negotiated yet — callers treat that as the
+    /// application-message default (`mls-rfc9420`). Drives the one-way
+    /// `content_scheme` ratchet in `apply_realm_policy_components`.
+    pub fn realm_content_scheme(&self, realm_id: &str) -> Option<String> {
+        let components = self.realm_policy_components_cell_value(realm_id)?;
+        content_scheme_field(components).map(ToOwned::to_owned)
+    }
+
     /// R3.4 — read the projected Realm `security_class` (from the
     /// `ck.component.realm.organization.v1` cas-register cell). Returns
     /// `None` when no Realm-update has landed yet — caller may infer

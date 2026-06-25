@@ -57,6 +57,27 @@ impl ProjectionState {
                 reason: METADATA_ENCRYPTION_FLOOR_DOWNGRADE.to_owned(),
             };
         }
+        // One-way `content_scheme` ratchet (realm-and-space.md history-sharing):
+        // the negotiated content scheme MUST be monotonically non-decreasing
+        // (`mls-rfc9420` < `mls-exporter-aead-v1`). A present-but-unknown enum
+        // value is rejected outright. Like the encryption floors, a lower rank
+        // — including dropping a previously-committed scheme by omission
+        // (incoming rank 0 against a higher projected rank) — is a downgrade.
+        let incoming_scheme = content_scheme_field(&value);
+        if let Some(scheme) = incoming_scheme
+            && !content_scheme_is_known(scheme)
+        {
+            return ProjectionEffect::Rejected {
+                reason: CONTENT_SCHEME_DOWNGRADE.to_owned(),
+            };
+        }
+        if content_scheme_rank(incoming_scheme)
+            < content_scheme_rank(self.realm_content_scheme(&realm_id).as_deref())
+        {
+            return ProjectionEffect::Rejected {
+                reason: CONTENT_SCHEME_DOWNGRADE.to_owned(),
+            };
+        }
         if let Ok(cell_id) = cokret_sdk::CellRef::new(format!(
             "ck:cell:ck.component.realm.policy_components.v1:{realm_id}"
         )) {
