@@ -982,9 +982,13 @@ pub fn describe(
         development_mode,
         // service-describe.schema.json requires `rate_limit_policy` or
         // `rate_limit_policy_id` (the legacy top-level `rate_limit` field was
-        // removed). Advertise the service-wide windowed budget as a canonical
-        // policy.
-        rate_limit_policy: Some(cokret_sdk::RateLimitPolicy::windowed_per_minute(600)),
+        // removed). Derive the advertised per-class policy from the SAME runtime
+        // config the middleware enforces (`crate::ratelimit`) so wire and
+        // enforcement can never drift — a conformant client budgeting against
+        // this policy cannot trip a 429 it could not predict.
+        rate_limit_policy: Some(
+            crate::ratelimit::RateLimiterConfig::from_env(development_mode).advertised_policy(),
+        ),
         rate_limit_policy_id: None,
         egress_network_policy: Some(cokret_sdk::EgressNetworkPolicy::deny_private_defaults()),
         resource_types: Vec::new(),
