@@ -298,6 +298,29 @@ pub(crate) async fn validate_realm_key_share_policy(
     {
         return Ok(());
     }
+    let share =
+        serde_json::from_value::<cokret_sdk::RealmKeySharePayload>(operation.payload.clone())
+            .map_err(|_| "policy_denied")?;
+    // encryption-and-audit.md §2.10.8 — a `ck.realm_key.share` with
+    // `share_class=realm_recovery_key` is the Realm Recovery Key (RRK) eager-
+    // sealing path: provider-initiated, the recipient is an OFFLINE recovery org
+    // (NOT an MLS member, not in the ratchet tree). It MUST NOT be forced through
+    // the member history-share gate (it would reject `not_member`). The canonical
+    // discriminator is the `share_class` field (event-payload.schema.json); an
+    // RRK-class share MUST validate as a declared `durability_policy`
+    // recovery recipient or it is rejected.
+    if matches!(
+        share.share_class,
+        cokret_sdk::RealmKeyShareClass::RealmRecoveryKey
+    ) {
+        return validate_rrk_targeted_realm_key_share(state, operation.realm_id.as_str(), &share)
+            .unwrap_or(Err("durability_recovery_recipient_unverified"));
+    }
+    // share_class=member_device from here: recipient_device_id is required.
+    let recipient_device_id = share
+        .recipient_device_id
+        .as_deref()
+        .ok_or("policy_denied")?;
     let Some(meta) = state
         .persistence
         .realm_meta()
@@ -311,9 +334,6 @@ pub(crate) async fn validate_realm_key_share_policy(
     let Some(policy_value) = meta.history_sharing_policy.as_ref() else {
         return Err("history_sharing_policy_missing");
     };
-    let share =
-        serde_json::from_value::<cokret_sdk::RealmKeySharePayload>(operation.payload.clone())
-            .map_err(|_| "policy_denied")?;
     if !realm_key_share_receiver_is_current_member(
         state,
         operation.realm_id.as_str(),
@@ -326,7 +346,7 @@ pub(crate) async fn validate_realm_key_share_policy(
     if crate::routing::identity::auth::is_device_revoked(
         state,
         share.recipient_principal_id.as_str(),
-        &share.recipient_device_id,
+        recipient_device_id,
     )
     .await
     {
@@ -335,10 +355,7 @@ pub(crate) async fn validate_realm_key_share_policy(
     let device = state
         .persistence
         .devices()
-        .get(
-            share.recipient_principal_id.as_str(),
-            &share.recipient_device_id,
-        )
+        .get(share.recipient_principal_id.as_str(), recipient_device_id)
         .await
         .map_err(|_| "policy_denied")?
         .ok_or("policy_denied")?;
@@ -404,6 +421,96 @@ pub(crate) async fn validate_realm_key_share_policy(
     }
 }
 
+/// encryption-and-audit.md §2.10.8 — RRK eager-seal acceptance gate.
+///
+/// ## RRK design decision (recipient targeting without a wire field)
+///
+/// The spec `realm_key_share_payload` schema is `additionalProperties:false` and
+/// carries no recovery-recipient discriminator. Rather than widen the wire (the
+/// spec is authoritative and frozen), soland recognises an RRK-targeted share
+/// structurally: a `ck.realm_key.share` whose `recipient_principal_id` equals a
+/// `principal_id` listed in the Realm's current
+/// `durability_policy.recovery_recipients[]` is treated as the provider-initiated
+/// RRK seal for that recipient. This is unambiguous because recovery recipients
+/// are offline orgs, NOT realm members — the member history-share path and the
+/// RRK path never collide on the same `(recipient_principal_id, realm)`.
+///
+/// Returns:
+/// - `None` — not RRK-targeted; the caller falls through to the member history-share gate.
+/// - `Some(Ok(()))` — a valid RRK seal: the recipient is a current recovery recipient, the share
+///   carries ciphertext / key material, and `key_scope` references this Realm with a valid epoch
+///   range. Membership is NOT required.
+/// - `Some(Err(reason))` — RRK-shaped but invalid (recipient no longer a recovery recipient,
+///   missing material, or scope mismatch).
+///
+/// The ciphertext is opaque to soland (HPKE-sealed to the recipient's RRK public
+/// key); the server stores it as a durable Event and never decrypts it.
+fn validate_rrk_targeted_realm_key_share(
+    state: &AppState,
+    realm_id: &str,
+    share: &cokret_sdk::RealmKeySharePayload,
+) -> Option<Result<(), &'static str>> {
+    use cokret_sdk::models::DurabilityMode;
+    // Snapshot the durability policy off the projection without holding the lock
+    // across any await (this function is sync).
+    let durability = {
+        let projection = state.projection.lock().ok()?;
+        projection.realm_durability_policy(realm_id)?
+    };
+    if matches!(durability.mode, DurabilityMode::None) {
+        // A realm_recovery_key-class share on a Realm without an active
+        // durability policy is unverifiable.
+        return Some(Err("durability_recovery_recipient_unverified"));
+    }
+    let recipient = share.recipient_principal_id.as_str();
+    let matched = durability
+        .recovery_recipients
+        .iter()
+        .find(|recovery_recipient| recovery_recipient.principal_id.as_str() == recipient);
+    let Some(matched) = matched else {
+        // realm_recovery_key class but recipient is not a declared recovery
+        // recipient — reject (do NOT fall through to the member gate).
+        return Some(Err("durability_recovery_recipient_unverified"));
+    };
+    // The RRK addressing fields MUST match the declared recovery recipient
+    // (verification_method + recipient_id), not just the principal.
+    if share.recovery_recipient_id.as_deref() != Some(matched.recipient_id.as_str())
+        || share.recipient_verification_method.as_deref()
+            != Some(matched.verification_method.as_str())
+    {
+        return Some(Err("durability_recovery_recipient_unverified"));
+    }
+    // RRK-targeted: validate material presence and that the key_scope references
+    // this Realm with a sane epoch range. Membership / history-visibility gates
+    // do NOT apply (the recipient is an offline org, not a member).
+    let has_material = share
+        .ciphertext
+        .as_deref()
+        .is_some_and(|value| !value.trim().is_empty())
+        || share.encrypted_key_ref.is_some();
+    if !has_material {
+        return Some(Err("realm_key_share_material_missing"));
+    }
+    if let Some(scope_realm_id) = share
+        .key_scope
+        .effective_scope
+        .get("realm_id")
+        .and_then(Value::as_str)
+        && scope_realm_id != realm_id
+    {
+        return Some(Err("realm_key_share_scope_mismatch"));
+    }
+    if share
+        .key_scope
+        .from_epoch
+        .zip(share.key_scope.to_epoch)
+        .is_some_and(|(from_epoch, to_epoch)| from_epoch > to_epoch)
+    {
+        return Some(Err("realm_key_share_epoch_range_invalid"));
+    }
+    Some(Ok(()))
+}
+
 async fn realm_key_share_receiver_is_current_member(
     state: &AppState,
     realm_id: &str,
@@ -438,7 +545,7 @@ fn realm_key_share_receiver_event_state(
 fn realm_key_share_source(
     share: &cokret_sdk::RealmKeySharePayload,
 ) -> cokret_sdk::HistoryKeySource {
-    if share.sender_device_id == share.recipient_device_id {
+    if share.recipient_device_id.as_deref() == Some(share.sender_device_id.as_str()) {
         cokret_sdk::HistoryKeySource::OwnDevice
     } else if share.encrypted_key_ref.is_some() {
         cokret_sdk::HistoryKeySource::KeyBackup

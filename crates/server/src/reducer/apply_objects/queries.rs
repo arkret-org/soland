@@ -701,6 +701,22 @@ impl ProjectionState {
         content_scheme_field(components).map(ToOwned::to_owned)
     }
 
+    /// Effective Realm `durability_policy` (Realm Recovery Key, realm-and-space.md
+    /// §2.3.1) projected from the `ck.component.realm.policy_components.v1` cell.
+    /// `None` means no policy has been declared yet — callers treat that as the
+    /// spec default `mode=none` (no organizational recovery path). Deserialized
+    /// into the authoritative SDK [`cokret_sdk::models::DurabilityPolicy`] strong
+    /// type (soland does not redefine the spec shape). The RRK share-acceptance
+    /// gate reads this to confirm a recipient is a declared recovery recipient.
+    pub fn realm_durability_policy(
+        &self,
+        realm_id: &str,
+    ) -> Option<cokret_sdk::models::DurabilityPolicy> {
+        let components = self.realm_policy_components_cell_value(realm_id)?;
+        let durability = crate::reducer::durability_policy_field(components)?;
+        serde_json::from_value(durability.clone()).ok()
+    }
+
     /// R3.4 — read the projected Realm `security_class` (from the
     /// `ck.component.realm.organization.v1` cas-register cell). Returns
     /// `None` when no Realm-update has landed yet — caller may infer

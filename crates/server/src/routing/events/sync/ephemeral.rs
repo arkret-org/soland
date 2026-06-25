@@ -172,11 +172,7 @@ fn validate_ephemeral_envelope(
 ) -> Result<(), crate::error::AppError> {
     if !matches!(
         envelope.kind.as_str(),
-        "ck.call.signal"
-            | "ck.presence"
-            | "ck.typing"
-            | "ck.receipt.read"
-            | "ck.realm_key.request"
+        "ck.call.signal" | "ck.presence" | "ck.typing" | "ck.receipt.read" | "ck.realm_key.request"
     ) {
         return Err(crate::error::AppError::invalid_param(
             "unsupported ephemeral kind",

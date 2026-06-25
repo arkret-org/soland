@@ -40,6 +40,16 @@ pub(crate) const METADATA_ENCRYPTION_FLOOR_DOWNGRADE: &str = "metadata_encryptio
 /// member re-key history content under a weaker mechanism after the realm has
 /// committed to the exporter-AEAD history-sharing path.
 pub(crate) const CONTENT_SCHEME_DOWNGRADE: &str = "content_scheme_downgrade";
+/// realm-and-space.md §2.3.1 / encryption-and-audit.md §2.10.8 — a Realm Recovery
+/// Key durability policy with `mode != none` is only meaningful on a
+/// `content_scheme=mls-exporter-aead-v1` Realm, because `mls-rfc9420`
+/// (PrivateMessage) has no deliverable `history_secret` to seal to recovery
+/// recipients. Declaring `mode != none` on an incompatible Realm is rejected.
+pub(crate) const DURABILITY_SCHEME_INCOMPATIBLE: &str = "durability_scheme_incompatible";
+/// realm-and-space.md §2.3.1 — `durability_policy` invariants: `recovery_recipients`
+/// MUST be non-empty when `mode != none`, and `threshold` (`1 <= k <= n ==
+/// len(recovery_recipients)`) is required when `mode=threshold`.
+pub(crate) const DURABILITY_POLICY_INVALID: &str = "durability_policy_invalid";
 
 /// R1.2 — pure validation for a `ck.member.state{join,routable}`
 /// `delivery_binding` against a projected
@@ -964,4 +974,63 @@ pub(crate) fn content_scheme_rank(scheme: Option<&str>) -> u8 {
 /// `mls-exporter-aead-v1` (exporter-derived AEAD content for history sharing).
 pub(crate) fn content_scheme_is_known(scheme: &str) -> bool {
     matches!(scheme.trim(), "mls-rfc9420" | "mls-exporter-aead-v1")
+}
+
+/// Extract the `durability_policy` object from a `ck.realm.policy_components`
+/// value, accepting both the top-level and `/components/`-nested wire forms
+/// (mirrors [`policy_floor_field`]). Returns `None` when the field is absent.
+pub(crate) fn durability_policy_field(value: &Value) -> Option<&Value> {
+    value
+        .get("durability_policy")
+        .or_else(|| value.pointer("/components/durability_policy"))
+        .filter(|policy| policy.is_object())
+}
+
+/// realm-and-space.md §2.3.1 — validate an incoming `durability_policy` against
+/// its structural invariants and the effective `content_scheme`. `scheme` is the
+/// Realm's effective `content_scheme` *after* applying this policy update (the
+/// incoming scheme when present, else the already-projected scheme).
+///
+/// - `mode != none` requires a non-empty `recovery_recipients` array → `durability_policy_invalid`
+///   otherwise.
+/// - `mode=threshold` requires `threshold.{k,n}` with `1 <= k <= n == len(recovery_recipients)` →
+///   `durability_policy_invalid` otherwise.
+/// - `mode != none` is only valid on `content_scheme=mls-exporter-aead-v1` →
+///   `durability_scheme_incompatible` otherwise (the spec failed_precondition).
+pub(crate) fn validate_durability_policy(
+    policy: &Value,
+    effective_scheme: Option<&str>,
+) -> Result<(), &'static str> {
+    let mode = policy.get("mode").and_then(Value::as_str).unwrap_or("none");
+    if !matches!(mode, "none" | "org_recovery_key" | "threshold") {
+        return Err(DURABILITY_POLICY_INVALID);
+    }
+    if mode == "none" {
+        return Ok(());
+    }
+    // mode != none — recovery_recipients MUST be non-empty and unique.
+    let recipients = policy
+        .get("recovery_recipients")
+        .and_then(Value::as_array)
+        .filter(|recipients| !recipients.is_empty())
+        .ok_or(DURABILITY_POLICY_INVALID)?;
+    // scheme gate: organizational recovery requires a deliverable history_secret.
+    if content_scheme_rank(effective_scheme) < content_scheme_rank(Some("mls-exporter-aead-v1")) {
+        return Err(DURABILITY_SCHEME_INCOMPATIBLE);
+    }
+    if mode == "threshold" {
+        let threshold = policy
+            .get("threshold")
+            .and_then(Value::as_object)
+            .ok_or(DURABILITY_POLICY_INVALID)?;
+        let k = threshold.get("k").and_then(Value::as_u64);
+        let n = threshold.get("n").and_then(Value::as_u64);
+        let (Some(k), Some(n)) = (k, n) else {
+            return Err(DURABILITY_POLICY_INVALID);
+        };
+        if k < 1 || k > n || n != recipients.len() as u64 {
+            return Err(DURABILITY_POLICY_INVALID);
+        }
+    }
+    Ok(())
 }

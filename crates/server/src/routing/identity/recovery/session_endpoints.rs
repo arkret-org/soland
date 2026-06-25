@@ -685,11 +685,8 @@ pub(super) async fn verify_recovery_unlock_proof(
     let mut proof_body = proof.clone();
     proof_body.remove("signature");
     proof_body.remove("unlock_commitment");
-    let transcript = generic_recovery_proof_transcript(
-        record,
-        "recovery_unlock",
-        Value::Object(proof_body),
-    );
+    let transcript =
+        generic_recovery_proof_transcript(record, "recovery_unlock", Value::Object(proof_body));
     let transcript_bytes =
         cokret_sdk::canonical::canonical_json_bytes(&transcript).map_err(|error| {
             AppError::internal(format!("recovery_unlock transcript failed: {error}"))
@@ -716,10 +713,12 @@ pub(super) async fn verify_recovery_unlock_proof(
         .map_err(|_| recovery_signature_error("proof.signature is not base64/base64url"))?;
     let signature = Signature::from_slice(&raw)
         .map_err(|_| recovery_signature_error("proof.signature must be 64 Ed25519 bytes"))?;
-    recovery_key.verify(&transcript_bytes, &signature).map_err(|_| {
-        crate::metrics::record_digest_mismatch("recovery_proof_digest");
-        recovery_signature_error("recovery_unlock proof signature verification failed")
-    })
+    recovery_key
+        .verify(&transcript_bytes, &signature)
+        .map_err(|_| {
+            crate::metrics::record_digest_mismatch("recovery_proof_digest");
+            recovery_signature_error("recovery_unlock proof signature verification failed")
+        })
 }
 
 /// Resolve a non-revoked, in-window `recovery_keys[]` entry whose

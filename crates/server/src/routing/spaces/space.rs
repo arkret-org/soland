@@ -888,6 +888,72 @@ pub async fn realm_id_accessible_for_id(
     })
 }
 
+/// encryption-and-audit.md §2.10.8 — recovery-grade read gate.
+///
+/// ## Recovery read design decision (non-member organizational recovery)
+///
+/// §2.10.8 requires that the organization holding the RRK can retrieve the
+/// Realm's RRK-targeted `ck.realm_key.share` ciphertext events "after all member
+/// devices are lost or all members leave" — i.e. while it is NOT a member of the
+/// Realm and may never have been. The spec leaves "how a non-member org is
+/// authorized to read realm events" as an open surface. soland resolves it with
+/// a **dedicated recovery-grade read scope** that does NOT widen ordinary member
+/// gating:
+///
+/// - A session whose `actor` equals a current
+///   `durability_policy.recovery_recipients[].principal_id` is granted realm *scan admission* (so
+///   `events.query` does not `not_found` it), but
+/// - the per-event recovery filter ([`realm_recovery_event_visible`]) restricts such a session to
+///   ONLY `ck.realm_key.share` events whose `recipient_principal_id` is that same recovery
+///   recipient. The recovery org never sees the general timeline, message bodies, membership, or
+///   shares addressed to other recipients.
+///
+/// This keeps the recovery face minimal-disclosure: the recovery org reads
+/// exactly the opaque (HPKE-sealed) ciphertext it is entitled to HPKE-open, and
+/// nothing else. Ordinary `realm_id_accessible` membership semantics are
+/// untouched.
+///
+/// Returns `true` iff `actor` is a current recovery recipient of `realm_id`.
+pub async fn realm_recovery_recipient_principal(
+    state: &AppState,
+    realm_id: &str,
+    actor: &str,
+) -> bool {
+    use cokret_sdk::models::DurabilityMode;
+    let Some(realm_id) = realm_scope_to_realm_id(realm_id) else {
+        return false;
+    };
+    let durability = {
+        let Ok(projection) = state.projection.lock() else {
+            return false;
+        };
+        projection.realm_durability_policy(&realm_id)
+    };
+    let Some(durability) = durability else {
+        return false;
+    };
+    if matches!(durability.mode, DurabilityMode::None) {
+        return false;
+    }
+    durability
+        .recovery_recipients
+        .iter()
+        .any(|recipient| recipient.principal_id.as_str() == actor)
+}
+
+/// encryption-and-audit.md §2.10.8 — per-event recovery visibility. For a
+/// recovery-recipient (non-member) session, an event is visible ONLY when it is
+/// a `ck.realm_key.share` addressed to that recipient's `principal_id`. Used by
+/// the `events.query` per-event filter to keep the recovery face narrow.
+pub fn realm_recovery_event_visible(
+    event_kind: &str,
+    recipient_principal_id: Option<&str>,
+    actor: &str,
+) -> bool {
+    event_kind == cokret_sdk::events::kinds::REALM_KEY_SHARE
+        && recipient_principal_id == Some(actor)
+}
+
 /// Look up the persisted `history_visibility` for a Realm, defaulting to
 /// `joined` when no meta record exists (matches the spec default).
 pub async fn realm_history_visibility_for_id(state: &AppState, realm_id: &str) -> String {

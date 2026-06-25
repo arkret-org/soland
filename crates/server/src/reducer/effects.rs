@@ -266,7 +266,8 @@ pub enum ProjectionEffect {
     RealmKeyShareProjected {
         realm_id: String,
         recipient_principal_id: String,
-        recipient_device_id: String,
+        /// Absent for `share_class=realm_recovery_key` (offline RRK recipient).
+        recipient_device_id: Option<String>,
     },
     /// G3.S2 — `ck.realm.policy_server` projected into the
     /// `ck.component.realm.policy_server.v1` cas-register cell + the

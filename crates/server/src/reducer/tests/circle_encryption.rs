@@ -337,3 +337,137 @@ fn content_scheme_rejects_unknown_value() {
         ProjectionEffect::Rejected { reason } if reason == CONTENT_SCHEME_DOWNGRADE
     ));
 }
+
+// realm-and-space.md §2.3.1 — `durability_policy.mode != none` is only valid on
+// a `content_scheme=mls-exporter-aead-v1` realm. Declaring an org RRK on a realm
+// that has not committed to the exporter-AEAD scheme MUST
+// `durability_scheme_incompatible`.
+#[test]
+fn durability_policy_requires_exporter_aead_scheme() {
+    let mut state = ProjectionState::new();
+    let hlc = ServerHlc::new("durability-scheme");
+    let realm = "ck:realm:01904100-0000-7000-8000-d0d0d0d0d001";
+    let recipient = serde_json::json!({
+        "recipient_id": "rrk-1",
+        "principal_id": "did:web:hr.example",
+        "verification_method": "did:web:hr.example#rrk-1"
+    });
+    // No scheme committed yet (defaults to mls-rfc9420) → incompatible.
+    let effect = state.apply(
+        &make_operation(
+            cokret_sdk::events::kinds::REALM_POLICY_COMPONENTS,
+            realm,
+            serde_json::json!({
+                "durability_policy": {
+                    "mode": "org_recovery_key",
+                    "recovery_recipients": [recipient]
+                }
+            }),
+        ),
+        &hlc,
+    );
+    assert!(matches!(
+        effect,
+        ProjectionEffect::Rejected { reason } if reason == DURABILITY_SCHEME_INCOMPATIBLE
+    ));
+}
+
+// A `durability_policy.mode != none` declared together with (or after) the
+// `mls-exporter-aead-v1` scheme is accepted and projected.
+#[test]
+fn durability_policy_accepted_on_exporter_aead_scheme() {
+    let mut state = ProjectionState::new();
+    let hlc = ServerHlc::new("durability-ok");
+    let realm = "ck:realm:01904100-0000-7000-8000-d0d0d0d0d002";
+    let recipient = serde_json::json!({
+        "recipient_id": "rrk-1",
+        "principal_id": "did:web:hr.example",
+        "verification_method": "did:web:hr.example#rrk-1"
+    });
+    // Same-update set of scheme + durability policy is accepted.
+    let effect = state.apply(
+        &make_operation(
+            cokret_sdk::events::kinds::REALM_POLICY_COMPONENTS,
+            realm,
+            serde_json::json!({
+                "content_scheme": "mls-exporter-aead-v1",
+                "durability_policy": {
+                    "mode": "org_recovery_key",
+                    "recovery_recipients": [recipient]
+                }
+            }),
+        ),
+        &hlc,
+    );
+    assert!(matches!(
+        effect,
+        ProjectionEffect::RealmPolicyComponentsProjected { .. }
+    ));
+    let projected = state
+        .realm_durability_policy(realm)
+        .expect("durability policy projected");
+    assert!(matches!(
+        projected.mode,
+        cokret_sdk::models::DurabilityMode::OrgRecoveryKey
+    ));
+    assert_eq!(projected.recovery_recipients.len(), 1);
+}
+
+// `mode != none` with an empty `recovery_recipients` array is structurally
+// invalid → `durability_policy_invalid`.
+#[test]
+fn durability_policy_rejects_empty_recipients() {
+    let mut state = ProjectionState::new();
+    let hlc = ServerHlc::new("durability-empty");
+    let realm = "ck:realm:01904100-0000-7000-8000-d0d0d0d0d003";
+    let effect = state.apply(
+        &make_operation(
+            cokret_sdk::events::kinds::REALM_POLICY_COMPONENTS,
+            realm,
+            serde_json::json!({
+                "content_scheme": "mls-exporter-aead-v1",
+                "durability_policy": {
+                    "mode": "org_recovery_key",
+                    "recovery_recipients": []
+                }
+            }),
+        ),
+        &hlc,
+    );
+    assert!(matches!(
+        effect,
+        ProjectionEffect::Rejected { reason } if reason == DURABILITY_POLICY_INVALID
+    ));
+}
+
+// `mode=threshold` requires `threshold.{k,n}` with `n == len(recovery_recipients)`.
+#[test]
+fn durability_policy_threshold_validates_k_of_n() {
+    let mut state = ProjectionState::new();
+    let hlc = ServerHlc::new("durability-threshold");
+    let realm = "ck:realm:01904100-0000-7000-8000-d0d0d0d0d004";
+    let recipients = serde_json::json!([
+        {"recipient_id": "rrk-1", "principal_id": "did:web:a.example", "verification_method": "did:web:a.example#rrk"},
+        {"recipient_id": "rrk-2", "principal_id": "did:web:b.example", "verification_method": "did:web:b.example#rrk"}
+    ]);
+    // n=3 but only 2 recipients → invalid.
+    let effect = state.apply(
+        &make_operation(
+            cokret_sdk::events::kinds::REALM_POLICY_COMPONENTS,
+            realm,
+            serde_json::json!({
+                "content_scheme": "mls-exporter-aead-v1",
+                "durability_policy": {
+                    "mode": "threshold",
+                    "recovery_recipients": recipients,
+                    "threshold": {"k": 2, "n": 3}
+                }
+            }),
+        ),
+        &hlc,
+    );
+    assert!(matches!(
+        effect,
+        ProjectionEffect::Rejected { reason } if reason == DURABILITY_POLICY_INVALID
+    ));
+}

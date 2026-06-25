@@ -78,6 +78,21 @@ impl ProjectionState {
                 reason: CONTENT_SCHEME_DOWNGRADE.to_owned(),
             };
         }
+        // realm-and-space.md §2.3.1 — `durability_policy` (Realm Recovery Key)
+        // is reducer-derived from `ck.realm.policy_components`. Validate its
+        // structural invariants and that `mode != none` is only declared on a
+        // `content_scheme=mls-exporter-aead-v1` Realm (else
+        // `durability_scheme_incompatible`). The effective scheme is the
+        // incoming scheme when this same update sets it, else the projected one.
+        if let Some(durability_policy) = durability_policy_field(&value) {
+            let projected_scheme = self.realm_content_scheme(&realm_id);
+            let effective_scheme = incoming_scheme.or(projected_scheme.as_deref());
+            if let Err(reason) = validate_durability_policy(durability_policy, effective_scheme) {
+                return ProjectionEffect::Rejected {
+                    reason: reason.to_owned(),
+                };
+            }
+        }
         if let Ok(cell_id) = cokret_sdk::CellRef::new(format!(
             "ck:cell:ck.component.realm.policy_components.v1:{realm_id}"
         )) {

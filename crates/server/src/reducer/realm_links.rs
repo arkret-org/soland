@@ -323,8 +323,10 @@ fn narrowed_inheritance_intersection(
             // `(source, source)`; prefer that over the source's last-write
             // single-source row so a source that itself inherits elsewhere
             // still contributes the set it published for downstream children.
-            let source_self_key =
-                (opt_in.source_realm_id.clone(), opt_in.source_realm_id.clone());
+            let source_self_key = (
+                opt_in.source_realm_id.clone(),
+                opt_in.source_realm_id.clone(),
+            );
             let source_decl = state
                 .realm_inheritance_policies_by_source
                 .get(&source_self_key)
@@ -338,7 +340,10 @@ fn narrowed_inheritance_intersection(
             let inheritable: BTreeSet<String> = if child_filter.is_empty() {
                 source_declared
             } else {
-                source_declared.intersection(&child_filter).cloned().collect()
+                source_declared
+                    .intersection(&child_filter)
+                    .cloned()
+                    .collect()
             };
             acc = Some(match acc {
                 Some(prev) => prev.intersection(&inheritable).cloned().collect(),

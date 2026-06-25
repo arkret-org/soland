@@ -887,6 +887,12 @@ async fn project_realm_key_share_to_device(
     else {
         return;
     };
+    // share_class=realm_recovery_key (recipient_device_id absent): the recipient is
+    // an offline recovery org delivered via the durable Event, not a to-device
+    // queue (encryption-and-audit.md §2.10.8). No device message is enqueued.
+    let Some(recipient_device_id) = share.recipient_device_id.clone() else {
+        return;
+    };
     let sender_device_id = if source_device_id.trim().is_empty() {
         share.sender_device_id.trim()
     } else {
@@ -910,7 +916,7 @@ async fn project_realm_key_share_to_device(
         idempotency_key: format!("realm_key_share:{}", operation.operation_id),
         sender: origin.to_owned(),
         recipient: share.recipient_principal_id.to_string(),
-        device_id: share.recipient_device_id,
+        device_id: recipient_device_id,
         position: state.next_to_device_position(),
         content,
         created_at: operation.created_at,

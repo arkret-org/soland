@@ -10,6 +10,7 @@ const SENDER_DEVICE: &str = "ck:device:alice-history";
 
 fn realm_key_share_payload(effective_scope: Value) -> Value {
     json!({
+        "share_class": "member_device",
         "recipient_principal_id": RECIPIENT,
         "recipient_device_id": RECIPIENT_DEVICE,
         "sender_device_id": SENDER_DEVICE,
@@ -61,7 +62,7 @@ fn realm_key_share_dispatch_projects_effect() {
             ref recipient_device_id,
         } if realm_id == REALM
             && recipient_principal_id == RECIPIENT
-            && recipient_device_id == RECIPIENT_DEVICE
+            && recipient_device_id.as_deref() == Some(RECIPIENT_DEVICE)
     ));
 }
 

@@ -16,11 +16,11 @@
 //!
 //! - the *sender* must be a current joined member of the Realm,
 //! - the Realm must carry a projected `history_sharing_policy`,
-//! - the named provider device (`target_source_ref`) must be a syntactically
-//!   valid `ck:device:<id>` and resolve to an active (non-revoked) device of its
-//!   declared owning principal (`target_principal_id`),
-//! - the SDK history-key-share gates must admit the share for the requesting
-//!   reader before the request is relayed.
+//! - the named provider device (`target_source_ref`) must be a syntactically valid `ck:device:<id>`
+//!   and resolve to an active (non-revoked) device of its declared owning principal
+//!   (`target_principal_id`),
+//! - the SDK history-key-share gates must admit the share for the requesting reader before the
+//!   request is relayed.
 
 use cokret_sdk::EphemeralEnvelope;
 use serde_json::Value;
@@ -47,11 +47,13 @@ pub(crate) async fn relay_ephemeral_realm_key_request(
 ) -> Result<(), AppError> {
     let request: cokret_sdk::RealmKeyRequestPayload =
         serde_json::from_value(envelope.payload.clone()).map_err(|error| {
-            AppError::invalid_param(format!("ck.realm_key.request payload is malformed: {error}"))
+            AppError::invalid_param(format!(
+                "ck.realm_key.request payload is malformed: {error}"
+            ))
         })?;
-    request
-        .validate()
-        .map_err(|error| AppError::invalid_param(format!("ck.realm_key.request invalid: {error}")))?;
+    request.validate().map_err(|error| {
+        AppError::invalid_param(format!("ck.realm_key.request invalid: {error}"))
+    })?;
 
     // The sender (requesting reader) must be a current joined member.
     if !realm_member_is_joined(state, realm_id, &session.actor).await {
@@ -106,7 +108,10 @@ pub(crate) async fn relay_ephemeral_realm_key_request(
 /// Deterministic relay id for the request: prefer the envelope's own id-bearing
 /// fields, else derive a stable digest over the canonical payload so a replayed
 /// envelope collapses onto the same to-device `idempotency_key`.
-fn realm_key_request_id(envelope: &EphemeralEnvelope, request: &cokret_sdk::RealmKeyRequestPayload) -> String {
+fn realm_key_request_id(
+    envelope: &EphemeralEnvelope,
+    request: &cokret_sdk::RealmKeyRequestPayload,
+) -> String {
     if let Some(id) = envelope
         .payload
         .get("request_id")
@@ -187,17 +192,21 @@ async fn evaluate_request_gate(
         .await
         .ok()
         .flatten()
-        .ok_or_else(|| AppError::invalid_param("ck.realm_key.request realm has no history-sharing policy"))?;
-    let policy_value = meta
-        .history_sharing_policy
-        .as_ref()
-        .ok_or_else(|| AppError::invalid_param("ck.realm_key.request realm has no history-sharing policy"))?;
+        .ok_or_else(|| {
+            AppError::invalid_param("ck.realm_key.request realm has no history-sharing policy")
+        })?;
+    let policy_value = meta.history_sharing_policy.as_ref().ok_or_else(|| {
+        AppError::invalid_param("ck.realm_key.request realm has no history-sharing policy")
+    })?;
     let policy = serde_json::from_value::<cokret_sdk::HistorySharingPolicyPayloadValue>(
         policy_value.clone(),
     )
-    .map_err(|_| AppError::invalid_param("ck.realm_key.request history-sharing policy is malformed"))?;
-    cokret_sdk::validate_history_sharing_policy(&policy)
-        .map_err(|_| AppError::invalid_param("ck.realm_key.request history-sharing policy is invalid"))?;
+    .map_err(|_| {
+        AppError::invalid_param("ck.realm_key.request history-sharing policy is malformed")
+    })?;
+    cokret_sdk::validate_history_sharing_policy(&policy).map_err(|_| {
+        AppError::invalid_param("ck.realm_key.request history-sharing policy is invalid")
+    })?;
 
     // The requesting reader's projected membership event-state drives the
     // since-join range gate (mirrors the share-direction policy).
@@ -236,7 +245,10 @@ async fn evaluate_request_gate(
         range: cokret_sdk::HistoryRangeContext {
             since_invite: true,
             since_join: reader_state == cokret_sdk::HistoryReaderEventState::Joined,
-            epoch_span: Some(epoch_span(request.key_scope.from_epoch, request.key_scope.to_epoch)),
+            epoch_span: Some(epoch_span(
+                request.key_scope.from_epoch,
+                request.key_scope.to_epoch,
+            )),
         },
         policy: Some(&policy),
         key_source: request.requested_source_class,

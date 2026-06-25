@@ -651,11 +651,7 @@ impl ProjectionState {
     /// return `true` iff all hold. Strand-fields cells resolve against the
     /// materialized strand `fields`; other cells resolve against the cell's
     /// resolved JSON value.
-    fn head_eq_holds(
-        &self,
-        cell_ref: &str,
-        expected: &serde_json::Map<String, Value>,
-    ) -> bool {
+    fn head_eq_holds(&self, cell_ref: &str, expected: &serde_json::Map<String, Value>) -> bool {
         const STRAND_FIELDS_FAMILY: &str = "ck.component.strand.fields.v1";
         if let Some(strand_id) = cell_ref
             .strip_prefix("ck:cell:")

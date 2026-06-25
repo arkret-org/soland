@@ -1802,3 +1802,132 @@ async fn call_recording_start_transcript_allows_transcribe_capability() {
         .await
         .expect("ck.call.transcribe should authorize transcript capture");
 }
+
+// encryption-and-audit.md §2.10.8 — an RRK-targeted `ck.realm_key.share` (to a
+// declared recovery recipient) is accepted by the share-policy gate even though
+// the recipient is NOT a member and the realm carries no history-sharing policy.
+// The discriminator is structural: `recipient_principal_id` is a current
+// `durability_policy.recovery_recipients[].principal_id`.
+#[tokio::test]
+async fn realm_key_share_rrk_targeted_is_accepted_for_recovery_recipient() {
+    use cokret_sdk::lattice::CellState;
+
+    let state = test_state();
+    let realm_id =
+        cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-00000000d100".to_owned())
+            .unwrap();
+    let recovery_principal = "did:web:hr.example";
+
+    // Seed the projected policy_components cell with an exporter-AEAD scheme +
+    // org RRK durability policy naming `recovery_principal` as a recipient.
+    {
+        let mut projection = state.projection.lock().expect("projection mutex");
+        let cell_id = cokret_sdk::CellRef::new(format!(
+            "ck:cell:ck.component.realm.policy_components.v1:{}",
+            realm_id.as_str()
+        ))
+        .expect("valid policy_components cell ref");
+        projection.cells.insert(
+            cell_id,
+            CellState::Value(json!({
+                "content_scheme": "mls-exporter-aead-v1",
+                "durability_policy": {
+                    "mode": "org_recovery_key",
+                    "recovery_recipients": [{
+                        "recipient_id": "rrk-1",
+                        "principal_id": recovery_principal,
+                        "verification_method": format!("{recovery_principal}#rrk-1")
+                    }]
+                }
+            })),
+        );
+    }
+
+    let share = op(
+        realm_id.clone(),
+        "00000000d100",
+        cokret_sdk::events::kinds::REALM_KEY_SHARE,
+        json!({
+            "share_class": "realm_recovery_key",
+            "recipient_principal_id": recovery_principal,
+            "recipient_verification_method": format!("{recovery_principal}#rrk-1"),
+            "recovery_recipient_id": "rrk-1",
+            "sender_device_id": "ck:device:01904100-0000-7000-8000-00000000d1d2",
+            "sender_device_signature": {"alg": "EdDSA", "kid": "k", "sig": "s"},
+            "key_scope": {
+                "effective_scope": {"kind": "realm", "realm_id": realm_id.as_str()},
+                "policy_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+                "from_epoch": 1,
+                "to_epoch": 3
+            },
+            "ciphertext": "hpke-sealed-history-secret",
+            "created_at": "2026-06-25T00:00:00Z"
+        }),
+    );
+
+    validate_realm_key_share_policy(&state, &share)
+        .await
+        .expect("RRK-targeted share to a recovery recipient must be accepted");
+}
+
+// A non-recovery, non-member recipient with no history-sharing policy still
+// fails closed — the RRK branch only applies to declared recovery recipients.
+#[tokio::test]
+async fn realm_key_share_non_recovery_recipient_without_policy_is_rejected() {
+    use cokret_sdk::lattice::CellState;
+
+    let state = test_state();
+    let realm_id =
+        cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-00000000d200".to_owned())
+            .unwrap();
+    {
+        let mut projection = state.projection.lock().expect("projection mutex");
+        let cell_id = cokret_sdk::CellRef::new(format!(
+            "ck:cell:ck.component.realm.policy_components.v1:{}",
+            realm_id.as_str()
+        ))
+        .expect("valid policy_components cell ref");
+        projection.cells.insert(
+            cell_id,
+            CellState::Value(json!({
+                "content_scheme": "mls-exporter-aead-v1",
+                "durability_policy": {
+                    "mode": "org_recovery_key",
+                    "recovery_recipients": [{
+                        "recipient_id": "rrk-1",
+                        "principal_id": "did:web:hr.example",
+                        "verification_method": "did:web:hr.example#rrk-1"
+                    }]
+                }
+            })),
+        );
+    }
+
+    let share = op(
+        realm_id.clone(),
+        "00000000d200",
+        cokret_sdk::events::kinds::REALM_KEY_SHARE,
+        json!({
+            "share_class": "member_device",
+            "recipient_principal_id": "did:web:stranger.example",
+            "recipient_device_id": "ck:device:01904100-0000-7000-8000-00000000d2d1",
+            "sender_device_id": "ck:device:01904100-0000-7000-8000-00000000d2d2",
+            "sender_device_signature": {"alg": "EdDSA", "kid": "k", "sig": "s"},
+            "key_scope": {
+                "effective_scope": {"kind": "realm", "realm_id": realm_id.as_str()},
+                "policy_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+                "from_epoch": 1,
+                "to_epoch": 3
+            },
+            "ciphertext": "sealed",
+            "created_at": "2026-06-25T00:00:00Z"
+        }),
+    );
+
+    let result = validate_realm_key_share_policy(&state, &share).await;
+    assert_eq!(
+        result,
+        Err("history_sharing_policy_missing"),
+        "a non-recovery recipient with no history-sharing policy must fail closed"
+    );
+}

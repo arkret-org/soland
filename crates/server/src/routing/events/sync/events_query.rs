@@ -724,8 +724,27 @@ async fn events_query_impl(
         return crate::result::json_ok(response);
     }
     let mut accessible_realms: Vec<String> = Vec::with_capacity(realms.len());
+    // encryption-and-audit.md §2.10.8 — realms the caller may scan ONLY as a
+    // recovery recipient (non-member). Per-event visibility for these realms is
+    // restricted to the caller's own RRK-targeted `ck.realm_key.share` events.
+    let mut recovery_only_realms: std::collections::BTreeSet<String> =
+        std::collections::BTreeSet::new();
     for realm in realms {
         if realm_id_accessible(state, &realm, session.as_ref()).await {
+            accessible_realms.push(realm);
+            continue;
+        }
+        // Not a member — admit for recovery-grade read iff the caller is a
+        // current recovery recipient of this realm.
+        if let Some(session) = session.as_ref()
+            && crate::routing::spaces::space::realm_recovery_recipient_principal(
+                state,
+                &realm,
+                &session.actor,
+            )
+            .await
+        {
+            recovery_only_realms.insert(realm.clone());
             accessible_realms.push(realm);
         }
     }
@@ -741,12 +760,15 @@ async fn events_query_impl(
     // actor-scoped durable reader (SOL-05-003).
     if accessible_realms.len() == 1 {
         let realm_id = &accessible_realms[0];
+        let recovery_only = recovery_only_realms.contains(realm_id);
         match projected_event_page(state, realm_id, cursor.as_deref(), limit).await {
             Ok(Some(page)) => {
                 let mut events: Vec<Value> = Vec::new();
                 let mut last_visible_event_id = None;
                 for event in &page.items {
-                    if projection_record_visible_to_session(state, event, session.as_ref()).await {
+                    if events_query_event_visible(state, event, session.as_ref(), recovery_only)
+                        .await
+                    {
                         last_visible_event_id = Some(event.event_id.clone());
                         events.push(projection_event_json(event));
                     }
@@ -805,13 +827,16 @@ async fn events_query_impl(
     let mut merged: Vec<serde_json::Value> = Vec::new();
     let mut any_has_more = false;
     for realm_id in &accessible_realms {
+        let recovery_only = recovery_only_realms.contains(realm_id);
         match projected_event_page(state, realm_id, cursor.as_deref(), limit).await {
             Ok(Some(page)) => {
                 if page.has_more {
                     any_has_more = true;
                 }
                 for event in &page.items {
-                    if projection_record_visible_to_session(state, event, session.as_ref()).await {
+                    if events_query_event_visible(state, event, session.as_ref(), recovery_only)
+                        .await
+                    {
                         merged.push(projection_event_json(event));
                     }
                 }
@@ -860,6 +885,36 @@ async fn events_query_impl(
         has_more: limited,
         range_completeness: Value::Null,
     })
+}
+
+/// Per-event visibility for `events.query`. For ordinary (member) realm access
+/// this delegates to [`projection_record_visible_to_session`]. For a realm the
+/// caller reached ONLY via the recovery-recipient gate
+/// (`recovery_only == true`, encryption-and-audit.md §2.10.8), visibility is
+/// narrowed to the caller's own RRK-targeted `ck.realm_key.share` events — the
+/// recovery org reads exactly the opaque ciphertext it can HPKE-open and nothing
+/// else from the realm timeline.
+async fn events_query_event_visible(
+    state: &AppState,
+    event: &crate::state::ProjectionEventRecord,
+    session: Option<&crate::state::SessionRecord>,
+    recovery_only: bool,
+) -> bool {
+    if recovery_only {
+        let Some(session) = session else {
+            return false;
+        };
+        let recipient = event
+            .payload
+            .get("recipient_principal_id")
+            .and_then(Value::as_str);
+        return crate::routing::spaces::space::realm_recovery_event_visible(
+            &event.event_kind,
+            recipient,
+            &session.actor,
+        );
+    }
+    projection_record_visible_to_session(state, event, session).await
 }
 
 /// Enrich visible projection rows to full spec `Event` envelopes by fetching
