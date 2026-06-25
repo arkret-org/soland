@@ -11,7 +11,10 @@ use crate::ratelimit::{RateLimiter, RateLimiterConfig, RateLimiterMiddleware};
 use crate::state::AppState;
 
 pub fn router(state: AppState) -> Router {
-    router_with_rate_limiter_config(state, RateLimiterConfig::default())
+    // Derive the limiter ceilings from the deployment posture (+ env overrides)
+    // so the live `describe` policy and the enforced quota share one source.
+    let rate_limiter_config = RateLimiterConfig::from_env(state.config.development_mode);
+    router_with_rate_limiter_config(state, rate_limiter_config)
 }
 
 pub fn router_with_rate_limiter_config(

@@ -884,7 +884,9 @@ impl AppConfig {
         // mode flips us into the chatty path.
         let log_redaction_enabled = !development_mode;
         let admin_auth_mode = self.admin_auth_mode().to_owned();
-        // Rate limiter is unconditionally installed by `router()`.
+        // The rate limiter middleware is unconditionally installed by
+        // `router()` in every mode (only the per-class ceilings vary with the
+        // deployment posture; see `crate::ratelimit::RateLimiterConfig::from_env`).
         let rate_limit_enabled = true;
         // Provider credential rotation: soland's only signing identity
         // is the notary key; rotation is manual today. The KeyStore

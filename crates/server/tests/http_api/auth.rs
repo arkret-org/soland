@@ -254,6 +254,7 @@ async fn rate_limit_errors_use_standard_envelope_with_retry_after() {
             // (`/health` is not under /_cokret/*, so it falls into `other`).
             auth_max_requests: 1,
             api_max_requests: 1,
+            probe_max_requests: 1,
         },
     );
 

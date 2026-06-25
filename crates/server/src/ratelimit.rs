@@ -2,9 +2,14 @@
 //!
 //! Spec: A.3 — buckets are keyed on `(remote_addr, endpoint_class)` rather
 //! than the raw remote address so a single abusive endpoint cannot starve
-//! a peer's quota across the rest of the API surface. We currently
-//! recognize three endpoint classes:
+//! a peer's quota across the rest of the API surface. We recognize four
+//! endpoint classes:
 //!
+//! - `probe`  — the public capability probe (`/_cokret/describe`). Every client
+//!   MUST fetch this *before* it can authenticate, so it gets its own generous
+//!   bucket and never shares the authenticated `api` quota: a hot authenticated
+//!   surface (e.g. a sync long-poll loop) must not be able to starve the one
+//!   probe a client needs just to begin signing in.
 //! - `auth`   — the credential/bearer-issuing surface (strict, low ceiling): the spec-canonical
 //!   `/_cokret/gate/account/register`, `/_cokret/gate/account/session-grants`, and
 //!   `/_cokret/gate/account/agent-key-pair`, plus the `/_soland/gate/auth/*` auth routes. Must be
@@ -12,8 +17,19 @@
 //! - `api`    — every other `/_cokret/*` request (moderate ceiling).
 //! - `other`  — anything outside `/_cokret/*` (default ceiling).
 //!
-//! Each class can carry its own quota; absent overrides fall back to the
-//! default (`max_requests` / `window`).
+//! Each class carries its own quota; the `describe` wire surface advertises the
+//! SAME per-class ceilings via [`RateLimiterConfig::advertised_policy`], so a
+//! conformant client that budgets against the advertised policy can never trip
+//! a 429 it could not predict. Advertised quota and enforced quota MUST agree.
+//!
+//! Ceilings come from [`RateLimiterConfig::from_env`]: production keeps the
+//! strict per-class defaults; `development_mode` lifts every ceiling far above
+//! a human dev's click rate (on localhost every local client shares the single
+//! loopback bucket, so prod ceilings would otherwise trip 429 during dx
+//! hot-reload + repeated connect bootstraps and block sign-in). The limiter
+//! stays installed in both modes. Operators can tune any class with the
+//! `SOLAND_RATE_LIMIT_{DEFAULT,AUTH,API,PROBE}_PER_MINUTE` and
+//! `SOLAND_RATE_LIMIT_WINDOW_SECONDS` env vars.
 //!
 //! Reverse-proxy deployments can opt into sanitized `X-Forwarded-For`
 //! client extraction with `SOLAND_RATE_LIMIT_TRUST_X_FORWARDED_FOR=1`.
@@ -25,6 +41,17 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use salvo::prelude::*;
+
+/// Canonical paths whose [`EndpointClass`] is pinned. Shared by
+/// [`EndpointClass::classify`] (enforcement) and
+/// [`RateLimiterConfig::advertised_policy`] (the `describe` wire surface) so the
+/// advertised policy can never drift from what is actually enforced.
+const DESCRIBE_PROBE_PATH: &str = "/_cokret/describe";
+const AUTH_REGISTER_PATH: &str = "/_cokret/gate/account/register";
+const AUTH_SESSION_GRANTS_PATH: &str = "/_cokret/gate/account/session-grants";
+const AUTH_AGENT_KEY_PAIR_PATH: &str = "/_cokret/gate/account/agent-key-pair";
+const SOLAND_AUTH_PREFIX: &str = "/_soland/gate/auth/";
+const COKRET_PREFIX: &str = "/_cokret/";
 
 /// Rate limiter configuration.
 #[derive(Clone, Debug)]
@@ -40,27 +67,120 @@ pub struct RateLimiterConfig {
     pub auth_max_requests: u32,
     /// Moderate ceiling for the rest of `/_cokret/*`.
     pub api_max_requests: u32,
+    /// Generous ceiling for the public capability probe (`/_cokret/describe`).
+    /// It is the unauthenticated bootstrap surface and lives in its own bucket,
+    /// so a high limit here cannot be spent by authenticated traffic.
+    pub probe_max_requests: u32,
 }
 
 impl Default for RateLimiterConfig {
     fn default() -> Self {
-        // Match the `per_minute: 600` quota soland advertises in its
-        // `ck.server.query.describe` response (`wire::describe`). Wire +
-        // enforcement MUST agree, otherwise clients budget under the
-        // advertised quota and trip 429 in normal long-poll loops.
         Self {
+            // `other` (non-`/_cokret/*`) ceiling.
             max_requests: 600,
             window: Duration::from_secs(60),
-            // Strict for /auth/*: 60/min ≈ 1/sec. Enough headroom for an
-            // OAuth refresh cycle, but tight enough to stall a guessing
-            // loop.
+            // Strict for the credential endpoints: 60/min ≈ 1/sec. Enough
+            // headroom for an OAuth refresh cycle, but tight enough to stall a
+            // guessing loop.
             auth_max_requests: 60,
-            // Moderate for the rest of /_cokret/*. Lower than the
-            // advertised `per_minute: 600` so a single endpoint cannot
-            // burn the entire IP-wide budget on its own.
+            // Moderate for the rest of /_cokret/*. Lower than `other` so a
+            // single endpoint cannot burn the entire IP-wide budget on its own.
             api_max_requests: 300,
+            // The bootstrap probe gets a full budget in its own bucket; clients
+            // must succeed at it before they can authenticate at all.
+            probe_max_requests: 600,
         }
     }
+}
+
+impl RateLimiterConfig {
+    /// Build the runtime config from the deployment posture +
+    /// `SOLAND_RATE_LIMIT_*` overrides.
+    ///
+    /// Production keeps the strict per-class ceilings ([`Self::default`]).
+    /// `development_mode` lifts every ceiling far above any human dev's click
+    /// rate so localhost loopback (where every local client shares the single
+    /// `127.0.0.1` bucket) does not trip 429 during hot-reload / repeated
+    /// connect bootstraps and block sign-in. The limiter stays installed in
+    /// both modes (defense in depth + an honest `hardening.rate_limit_enabled`);
+    /// only the ceilings move.
+    pub fn from_env(development_mode: bool) -> Self {
+        let base = if development_mode {
+            Self::development()
+        } else {
+            Self::default()
+        };
+        base.with_env_overrides()
+    }
+
+    fn development() -> Self {
+        // Far above any human's interactive request rate, but still bounded so
+        // a runaway loop in a dev build is eventually caught.
+        const DEV_CEILING: u32 = 100_000;
+        Self {
+            max_requests: DEV_CEILING,
+            window: Duration::from_secs(60),
+            auth_max_requests: DEV_CEILING,
+            api_max_requests: DEV_CEILING,
+            probe_max_requests: DEV_CEILING,
+        }
+    }
+
+    fn with_env_overrides(mut self) -> Self {
+        if let Some(seconds) = env_u32("SOLAND_RATE_LIMIT_WINDOW_SECONDS") {
+            self.window = Duration::from_secs(u64::from(seconds.max(1)));
+        }
+        if let Some(value) = env_u32("SOLAND_RATE_LIMIT_DEFAULT_PER_MINUTE") {
+            self.max_requests = value;
+        }
+        if let Some(value) = env_u32("SOLAND_RATE_LIMIT_AUTH_PER_MINUTE") {
+            self.auth_max_requests = value;
+        }
+        if let Some(value) = env_u32("SOLAND_RATE_LIMIT_API_PER_MINUTE") {
+            self.api_max_requests = value;
+        }
+        if let Some(value) = env_u32("SOLAND_RATE_LIMIT_PROBE_PER_MINUTE") {
+            self.probe_max_requests = value;
+        }
+        self
+    }
+
+    /// The advertised `rate_limit_policy` for the `describe` wire surface,
+    /// derived from the SAME ceilings the middleware enforces. Entries are
+    /// ordered most-specific-first, mirroring [`EndpointClass::classify`]; the
+    /// scope is `ip` because the buckets are keyed on the remote address.
+    pub fn advertised_policy(&self) -> cokret_sdk::RateLimitPolicy {
+        let window_seconds = u32::try_from(self.window.as_secs())
+            .unwrap_or(u32::MAX)
+            .max(1);
+        let entry = |endpoint: String, max_requests: u32| cokret_sdk::RateLimitEntry {
+            endpoint: Some(endpoint),
+            // NOTE: `cokret_sdk::RateLimitScope` (crate root) is the authz
+            // constraints enum; the describe entry needs the service-description
+            // scope, which lives under `models`.
+            rate_limit_scope: Some(cokret_sdk::models::RateLimitScope::Single("ip".to_owned())),
+            window_seconds: Some(window_seconds),
+            max_requests: Some(max_requests.max(1)),
+            ..cokret_sdk::RateLimitEntry::default()
+        };
+        cokret_sdk::RateLimitPolicy {
+            policy_version: Some("1".to_owned()),
+            entries: vec![
+                entry(DESCRIBE_PROBE_PATH.to_owned(), self.probe_max_requests),
+                entry(AUTH_REGISTER_PATH.to_owned(), self.auth_max_requests),
+                entry(AUTH_SESSION_GRANTS_PATH.to_owned(), self.auth_max_requests),
+                entry(AUTH_AGENT_KEY_PAIR_PATH.to_owned(), self.auth_max_requests),
+                entry(format!("{SOLAND_AUTH_PREFIX}*"), self.auth_max_requests),
+                entry(format!("{COKRET_PREFIX}*"), self.api_max_requests),
+                entry("*".to_owned(), self.max_requests),
+            ],
+            ..cokret_sdk::RateLimitPolicy::default()
+        }
+    }
+}
+
+fn env_u32(name: &str) -> Option<u32> {
+    std::env::var(name).ok()?.trim().parse::<u32>().ok()
 }
 
 /// Endpoint class — derived from the request path. Each class participates
@@ -68,6 +188,7 @@ impl Default for RateLimiterConfig {
 /// starve a peer's quota across the rest of the API surface.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 enum EndpointClass {
+    Probe,
     Auth,
     Api,
     Other,
@@ -75,19 +196,26 @@ enum EndpointClass {
 
 impl EndpointClass {
     fn classify(path: &str) -> Self {
+        // The public capability probe gets its own bucket: it is the
+        // unauthenticated bootstrap surface every client must reach before it
+        // can sign in, so it must never share the authenticated `Api` quota.
+        // Checked first because it is itself under `/_cokret/`.
+        if path == DESCRIBE_PROBE_PATH {
+            Self::Probe
+        }
         // Credential/bearer-issuing endpoints get the strict `Auth` bucket so the
         // anti-credential-stuffing quota actually covers them. These do NOT live
         // under a single `/_cokret/gate/auth/` prefix: the spec-canonical
         // account registration, session-grant exchange, and agent-key-pair authorization sit under
         // `/_cokret/gate/account/*`, and the private auth surface lives under
         // `/_soland/gate/auth/*`. Match the real routes, not a dead prefix.
-        if path == "/_cokret/gate/account/register"
-            || path == "/_cokret/gate/account/session-grants"
-            || path == "/_cokret/gate/account/agent-key-pair"
-            || path.starts_with("/_soland/gate/auth/")
+        else if path == AUTH_REGISTER_PATH
+            || path == AUTH_SESSION_GRANTS_PATH
+            || path == AUTH_AGENT_KEY_PAIR_PATH
+            || path.starts_with(SOLAND_AUTH_PREFIX)
         {
             Self::Auth
-        } else if path.starts_with("/_cokret/") {
+        } else if path.starts_with(COKRET_PREFIX) {
             Self::Api
         } else {
             Self::Other
@@ -96,6 +224,7 @@ impl EndpointClass {
 
     fn label(self) -> &'static str {
         match self {
+            Self::Probe => "probe",
             Self::Auth => "auth",
             Self::Api => "api",
             Self::Other => "other",
@@ -120,6 +249,7 @@ impl RateLimiter {
 
     fn ceiling_for(&self, class: EndpointClass) -> u32 {
         match class {
+            EndpointClass::Probe => self.config.probe_max_requests,
             EndpointClass::Auth => self.config.auth_max_requests,
             EndpointClass::Api => self.config.api_max_requests,
             EndpointClass::Other => self.config.max_requests,
@@ -267,6 +397,7 @@ mod tests {
             window: Duration::from_secs(60),
             auth_max_requests: 1,
             api_max_requests: 1,
+            probe_max_requests: 1,
         });
 
         assert!(limiter.check("client"));
@@ -275,5 +406,64 @@ mod tests {
         let retry_after = limiter.retry_after("client");
         assert!(retry_after > Duration::from_secs(0));
         assert!(retry_after <= Duration::from_secs(60));
+    }
+
+    #[test]
+    fn describe_probe_has_its_own_class() {
+        // The login bootstrap calls `/_cokret/describe` before it can
+        // authenticate; it must not share the authenticated `Api` bucket.
+        assert_eq!(
+            EndpointClass::classify(DESCRIBE_PROBE_PATH),
+            EndpointClass::Probe
+        );
+        assert_eq!(
+            EndpointClass::classify("/_cokret/self/account/subscribe"),
+            EndpointClass::Api
+        );
+        assert_eq!(
+            EndpointClass::classify(AUTH_REGISTER_PATH),
+            EndpointClass::Auth
+        );
+        assert_eq!(EndpointClass::classify("/health"), EndpointClass::Other);
+    }
+
+    #[test]
+    fn advertised_policy_matches_enforced_ceilings() {
+        // The core invariant: a client that budgets against the advertised
+        // `describe` policy can never trip a 429 it could not predict. Every
+        // advertised entry's ceiling MUST equal what the middleware enforces
+        // for a request matching that endpoint's class.
+        let config = RateLimiterConfig::default();
+        let limiter = RateLimiter::new(config.clone());
+        let policy = config.advertised_policy();
+        assert!(!policy.entries.is_empty());
+
+        for entry in &policy.entries {
+            let endpoint = entry.endpoint.as_deref().expect("entry has endpoint");
+            let advertised = entry.max_requests.expect("entry has max_requests");
+            // Resolve a representative concrete path for the glob/catch-all
+            // entries so we can run them through the real classifier.
+            let concrete = match endpoint {
+                "*" => "/some/non-cokret/path",
+                "/_cokret/*" => "/_cokret/self/account/subscribe",
+                "/_soland/gate/auth/*" => "/_soland/gate/auth/dev-login",
+                literal => literal,
+            };
+            let enforced = limiter.ceiling_for(EndpointClass::classify(concrete));
+            assert_eq!(
+                advertised, enforced,
+                "advertised ceiling for `{endpoint}` drifted from enforcement",
+            );
+        }
+    }
+
+    #[test]
+    fn development_mode_relaxes_every_class() {
+        let dev = RateLimiterConfig::from_env(true);
+        let prod = RateLimiterConfig::default();
+        assert!(dev.probe_max_requests > prod.probe_max_requests);
+        assert!(dev.api_max_requests > prod.api_max_requests);
+        assert!(dev.auth_max_requests > prod.auth_max_requests);
+        assert!(dev.max_requests >= prod.max_requests);
     }
 }
