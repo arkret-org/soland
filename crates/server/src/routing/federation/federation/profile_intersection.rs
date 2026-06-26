@@ -55,9 +55,18 @@ impl FederationProfileIntersection {
     }
 
     fn enforce_atoms(&self, atoms: &SemanticAtoms) -> Result<(), FederationProfileGateRejection> {
-        if let Some(kind) = atoms.kind.as_deref() {
-            self.require_event_kind(kind)?;
-        }
+        // federation.md: inbound `/_cokret/peer/events` acceptance is gated by
+        // the RFC 9421 service signature + trust-domain/destination binding +
+        // byte-exact `reducer_profile_digest` match (admission.rs) + the
+        // MLS/E2EE governance binding lower bound. A peer ServiceDescribe's
+        // `required_event_kinds` is the set the profile *requires support for*
+        // (a floor), NOT an allowlist of acceptable kinds — gating per-event
+        // acceptance on it wrongly rejected standard federatable DataEvents
+        // (e.g. `ck.message.create`) whenever the peer described
+        // `federation_minimal` or its ServiceDescribe was momentarily
+        // unfetchable. Event-kind admissibility is settled by the matched
+        // reducer profile (which carries the required/rejected kind sets),
+        // not by intersecting ServiceDescribe `required_event_kinds`.
         for schema in &atoms.schemas {
             self.require_schema(schema, atoms.kind.as_deref())?;
         }
@@ -77,14 +86,6 @@ impl FederationProfileIntersection {
             self.require_profile_semantics(PROFILE_MLS_GOVERNANCE_FULL)?;
         }
         Ok(())
-    }
-
-    fn require_event_kind(&self, kind: &str) -> Result<(), FederationProfileGateRejection> {
-        self.require(
-            self.local.covers_event_kind(kind),
-            self.peer.covers_event_kind(kind),
-            format!("event kind {kind}"),
-        )
     }
 
     fn require_schema(
