@@ -269,10 +269,12 @@ async fn admin_reconfigure_notary_builds_real_move_and_seals_it() {
         resp["status"], "accepted",
         "admin_reconfigure_notary should produce a real signed Move (got {resp:?})"
     );
-    let move_id = resp["move_id"].as_str().expect("move_id should be set");
+    let move_id = resp["control_move_id"]
+        .as_str()
+        .expect("control_move_id should be set");
     assert!(
         move_id.starts_with("sha256:"),
-        "move_id should be content-addressed sha256, got {move_id}"
+        "control_move_id should be content-addressed sha256, got {move_id}"
     );
     let seal_id = resp["seal_id"]
         .as_str()

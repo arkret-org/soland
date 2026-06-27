@@ -262,53 +262,10 @@ async fn admin_list_cells_paginates_with_limit_and_offset() {
     );
 }
 
-/// `account/{did}/principal-realm` returns the deterministic
-/// DID → control-Realm mapping. Two queries for the same DID return the
-/// same `realm_id`; two queries for different DIDs return different ones.
-#[tokio::test]
-async fn account_principal_realm_is_deterministic() {
-    let state = AppState::new(test_config(), Db { pool: None });
-    let token = dev_token(state.clone()).await;
-    let app = service(state.clone());
-
-    let alice_url = "http://server/_soland/self/account/did:web:alice.example/principal-realm";
-    let resp_a: Value = TestClient::get(alice_url)
-        .add_header("Authorization", format!("Bearer {token}"), true)
-        .send(&app)
-        .await
-        .take_json()
-        .await
-        .unwrap();
-    let resp_a2: Value = TestClient::get(alice_url)
-        .add_header("Authorization", format!("Bearer {token}"), true)
-        .send(&app)
-        .await
-        .take_json()
-        .await
-        .unwrap();
-    assert_eq!(
-        resp_a["realm_id"], resp_a2["realm_id"],
-        "same DID → same realm_id (got {resp_a:?} vs {resp_a2:?})"
-    );
-    assert_eq!(resp_a["mapping_kind"], "deterministic");
-    assert_eq!(resp_a["did"], "did:web:alice.example");
-    let realm_id_str = resp_a["realm_id"].as_str().expect("realm_id present");
-    assert!(
-        realm_id_str.starts_with("ck:realm:"),
-        "realm_id has ck:realm: prefix (got {realm_id_str})"
-    );
-
-    let bob_url = "http://server/_soland/self/account/did:web:bob.example/principal-realm";
-    let resp_b: Value = TestClient::get(bob_url)
-        .add_header("Authorization", format!("Bearer {token}"), true)
-        .send(&app)
-        .await
-        .take_json()
-        .await
-        .unwrap();
-    assert_ne!(
-        resp_a["realm_id"], resp_b["realm_id"],
-        "alice and bob MUST map to different Realms (both got {})",
-        resp_a["realm_id"]
-    );
-}
+// NOTE: `account_principal_realm_is_deterministic` was removed. It exercised
+// the `GET /_soland/self/account/{did}/principal-realm` endpoint (and its
+// `mapping_kind` response field), which was intentionally deleted in this
+// round's wire-validation refactor (commit 46ea158). The route no longer
+// exists, so the integration test was stale; the deterministic DID → Realm
+// mapping is still covered by the `principal_realm_for_did_*` unit tests in
+// `routing::identity::account`.

@@ -25,6 +25,8 @@ pub(crate) use std::collections::{BTreeMap, BTreeSet};
 pub(crate) use base64::Engine;
 pub(crate) use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 pub(crate) use cokret_sdk::lattice::CellState;
+pub(crate) use cokret_sdk::signatures::sign_eddsa_detached_jws;
+pub(crate) use ed25519_dalek::SigningKey;
 pub(crate) use cokret_sdk::state_res::state_root::EMPTY_STATE_ROOT;
 pub(crate) use cokret_sdk::state_res::{compute_state_root, control_event_set_root};
 pub(crate) use cokret_sdk::{
@@ -125,6 +127,24 @@ pub(crate) fn empty_seal_basis_value() -> Value {
     })
 }
 
+/// Ed25519 seed whose verifying key matches soland's dev-mode shape
+/// verifier (`jws_verify::dev_shape_only_public_key` uses
+/// `SigningKey::from_bytes(&[7u8; 32])`). Signing fixtures with this seed
+/// produces a real 64-byte Ed25519 detached-JWS signature that passes the
+/// tightened SDK verifier (`Ed25519DetachedJwsVerifier::verify_proof`),
+/// which now rejects non-64-byte placeholder signatures.
+const DEV_SIGNING_SEED: [u8; 32] = [7u8; 32];
+
+/// Produce a real detached-JWS signature string over `canonical_bytes`
+/// using the dev signing key. The signing input is
+/// `b64u({"alg":"EdDSA"}).b64u(canonical_bytes)`, matching the SDK
+/// `verify_proof` reconstruction exactly.
+pub(crate) fn dev_detached_jws(canonical_bytes: &[u8]) -> String {
+    let signing_key = SigningKey::from_bytes(&DEV_SIGNING_SEED);
+    sign_eddsa_detached_jws(&signing_key, canonical_bytes)
+        .expect("sign canonical move bytes with dev key")
+}
+
 pub(crate) fn build_invited_to_join_move() -> Move {
     let body = json!({
         "issuer": "did:web:admin.example",
@@ -153,9 +173,10 @@ pub(crate) fn build_invited_to_join_move() -> Move {
             "verification_method": "did:web:admin.example#k1",
             "payload_digest": payload_digest,
             "created_at": "2026-05-08T00:00:00Z",
-            // Detached JWS shape (RFC 7515 §3.2). Real Ed25519 verification
-            // is covered by separate production-verifier tests.
-            "jws": "eyJhbGciOiJFZERTQSJ9..ZmFrZS1zaWctZm9yLXRlc3Rz"
+            // Real 64-byte Ed25519 detached JWS over the canonical body
+            // bytes, signed with the dev verifier key. The SDK verifier
+            // (wave-2 tightening) rejects shorter placeholder signatures.
+            "jws": dev_detached_jws(&body_bytes)
         }),
     );
     serde_json::from_value(Value::Object(full)).unwrap()
@@ -284,7 +305,7 @@ pub(crate) fn build_consent_grant_add_move() -> Move {
             "verification_method": "did:web:admin.example#k1",
             "payload_digest": payload_digest,
             "created_at": "2026-05-08T00:00:00Z",
-            "jws": "eyJhbGciOiJFZERTQSJ9..ZmFrZS1zaWctZm9yLXRlc3Rz"
+            "jws": dev_detached_jws(&body_bytes)
         }),
     );
     serde_json::from_value(Value::Object(full)).unwrap()

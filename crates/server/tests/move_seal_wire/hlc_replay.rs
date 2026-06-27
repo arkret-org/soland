@@ -36,7 +36,7 @@ fn build_member_state_move_with_hlc(physical_ms: u64) -> Move {
             "verification_method": "did:web:admin.example#k1",
             "payload_digest": payload_digest,
             "created_at": "2026-05-08T00:00:00Z",
-            "jws": "eyJhbGciOiJFZERTQSJ9..ZmFrZS1zaWctZm9yLXRlc3Rz"
+            "jws": dev_detached_jws(&body_bytes)
         }),
     );
     serde_json::from_value(Value::Object(full)).unwrap()
