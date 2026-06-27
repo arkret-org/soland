@@ -588,6 +588,7 @@ pub(crate) fn test_app_state_with_peers(
         federation_policy: FederationPolicy::Mesh,
         federation_peers: peers,
         federation_outbound_enabled: false,
+        federation_replica_observer: false,
         admin_default_page_limit: 100,
         admin_max_page_limit: 1000,
         admin_principal_dids: Vec::new(),

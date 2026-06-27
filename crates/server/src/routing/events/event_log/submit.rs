@@ -725,6 +725,19 @@ async fn federation_service_binding_current_for_destination(
             .filter_map(delivery_binding_member_view)
             .collect::<Vec<_>>()
     };
+    // Federation replica / observer admission: when this server hosts the Realm
+    // but is the effective `delivery_binding.recipient_service_did` for zero
+    // local members, there is no local member binding the asserted frontier can
+    // be stale against. A conservative deployment (default) still fails closed
+    // below; a server explicitly configured as a replica / observer admits the
+    // push as pure replication (config: `federation_replica_observer`).
+    if state.config.federation_replica_observer
+        && !members
+            .iter()
+            .any(|member| member.recipient_service_did == state.config.service_did)
+    {
+        return FederationServiceBindingCheck::Current;
+    }
     let result = federation_service_binding_check_from_members(
         state.config.service_did.as_str(),
         now(),

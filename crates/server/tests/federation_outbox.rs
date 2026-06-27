@@ -113,6 +113,7 @@ fn outbox_test_config() -> AppConfig {
         // Worker is driven manually via run_one_pass — leave the
         // boot-time spawn off so we don't race the background loop.
         federation_outbound_enabled: false,
+        federation_replica_observer: false,
         admin_default_page_limit: 100,
         admin_max_page_limit: 1000,
         admin_principal_dids: Vec::new(),

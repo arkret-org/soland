@@ -41,6 +41,7 @@ fn config_with_policy(policy: FederationPolicy, peers: Vec<String>) -> AppConfig
         federation_policy: policy,
         federation_peers: peers,
         federation_outbound_enabled: false,
+        federation_replica_observer: false,
         admin_default_page_limit: 100,
         admin_max_page_limit: 1000,
         admin_principal_dids: Vec::new(),
