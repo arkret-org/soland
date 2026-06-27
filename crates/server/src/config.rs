@@ -267,6 +267,17 @@ pub struct AppConfig {
     /// Comma-separated env var
     /// `SOLAND_SOVEREIGN_ENCLAVE_ALLOWED_OUTBOUND_HOSTS`.
     pub sovereign_enclave_allowed_outbound_hosts: Vec<String>,
+    /// When true, soland claims the `ck.profile.candidate.join_policy.v1`
+    /// candidate profile and exposes the product-local join-policy
+    /// member-application read surface
+    /// (`GET /_soland/self/realms/{realm_id}/applications`,
+    /// `org.cokret.soland.member_application.query.list`). `member.application`
+    /// is a spec candidate concept (`governance/join-policy.md` §7.2) that MUST
+    /// stay off the `/_cokret/...` protocol root and out of the `ck.*` namespace
+    /// until formally registered; the read surface is fail-closed (404) unless
+    /// this profile is declared.
+    /// Env: `SOLAND_CANDIDATE_JOIN_POLICY` (default false).
+    pub candidate_join_policy_enabled: bool,
     /// Stream-F (Wave 2C) — cross-Principal-Server erasure-receipt
     /// propagation window in milliseconds. After a
     /// `ck.audit.erasure_receipt` is accepted, the federation fanout
@@ -696,6 +707,8 @@ impl AppConfig {
                         .collect::<Vec<_>>()
                 })
                 .unwrap_or_default();
+        let candidate_join_policy_enabled =
+            env_bool("SOLAND_CANDIDATE_JOIN_POLICY")?.unwrap_or(false);
         let trust_domain = derive_trust_domain(&service_did)?;
         let receive_policy_constraints = load_receive_policy_constraints()?;
         let log_format = LogFormat::from_env(development_mode);
@@ -751,6 +764,7 @@ impl AppConfig {
             receive_policy_constraints,
             sovereign_enclave_enabled,
             sovereign_enclave_allowed_outbound_hosts,
+            candidate_join_policy_enabled,
             erasure_propagation_window_ms,
             log_format,
         })

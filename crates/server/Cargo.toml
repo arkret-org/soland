@@ -88,3 +88,7 @@ uuid = {workspace = true,features = ["v4", "v7", "serde"]}
 
 [dev-dependencies]
 proptest = {workspace = true}
+# `test-util` enables the paused-clock test runtime
+# (`#[tokio::test(start_paused = true)]`) used to assert the federation
+# auth-failure timing-bucket pad deterministically without a real sleep.
+tokio = {workspace = true,features = ["test-util"]}

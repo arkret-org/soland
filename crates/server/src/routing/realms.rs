@@ -46,6 +46,9 @@ use crate::result::{JsonResult, json_ok};
 use crate::routing::organizations;
 use crate::state::AppState;
 
+/// Protocol-surface realm governance routes, mounted under
+/// `/_cokret/self/realms/...`. Only spec-registered `ck.self.realm_link.*`
+/// operations live here — every URL has an `operation-registry.json` entry.
 pub(crate) fn router() -> Router {
     Router::with_path("realms")
         .push(
@@ -55,6 +58,18 @@ pub(crate) fn router() -> Router {
         )
         .push(Router::with_path("{realm_id}/links/{target_realm_id}").delete(delete_realm_link))
         .push(Router::with_path("{realm_id}/effective-policy").get(get_effective_policy))
+}
+
+/// Product-local realm routes, mounted under `/_soland/self/realms/...`.
+///
+/// Hosts the join-policy member-application read surface. `member.application`
+/// is a spec **candidate** workflow concept (`governance/join-policy.md` §7.2,
+/// `conformance/schema-registry.md:178`) that MUST NOT use the `ck.*` prefix or
+/// occupy the `/_cokret/...` protocol root before formal registration. It is
+/// gated behind the `ck.profile.candidate.join_policy.v1` profile and uses the
+/// reverse-domain `org.cokret.soland.*` operation namespace.
+pub(crate) fn local_router() -> Router {
+    Router::with_path("realms")
         .push(Router::with_path("{realm_id}/applications").get(list_member_applications))
 }
 
@@ -143,25 +158,72 @@ async fn list_realm_links(
     })
 }
 
-/// join-policy.md §7 / §9 — list the Realm's member applications scoped to
-/// the viewer. Reviewers (holders of the policy `review_capability`, or the
-/// Realm owner) see the full `answers`; other callers see only the
-/// `application_pending` placeholder, honouring
-/// `applicant_visibility=reviewer_only` (§3 #2, §8.1). Each reviewer read of
-/// an application body is logged as `ck.audit.accessed` (§8.1).
+/// A single member-application entry in the join-policy read surface.
+///
+/// Reviewers (holders of the policy `review_capability`, the Realm owner, or
+/// the applicant themselves) see the full `answers`; other callers see only the
+/// `application_pending` placeholder, honouring `applicant_visibility=reviewer_only`
+/// (join-policy.md §3 #2, §8.1). Exactly one of `answers` / `application_pending`
+/// is present per entry.
+#[derive(Debug, Clone, serde::Serialize, salvo::oapi::ToSchema)]
+pub struct MemberApplicationEntry {
+    /// DID of the applicant.
+    pub applicant_did: String,
+    /// Canonical receipt digest of the application record.
+    pub application_receipt_digest: String,
+    /// Effective application status (`open` / `accepted` / `rejected` /
+    /// `cancelled` / `expired`).
+    pub status: String,
+    /// RFC 3339 submission timestamp.
+    pub submitted_at: String,
+    /// Applicant-supplied answers, present only when the viewer is authorised
+    /// to read the application body.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub answers: Option<Value>,
+    /// Placeholder flag (`true`) shown to viewers who may not read the body.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub application_pending: Option<bool>,
+}
+
+/// Outcome of the product-local member-application listing
+/// (`org.cokret.soland.member_application.query.list`).
+#[derive(Debug, Clone, serde::Serialize, salvo::oapi::ToSchema)]
+pub struct MemberApplicationListOutcome {
+    /// The Realm the applications are scoped to.
+    pub realm_id: RealmId,
+    /// Whether the viewer holds the join-policy `review_capability`.
+    pub viewer_is_reviewer: bool,
+    /// The viewer-scoped application entries.
+    pub applications: Vec<MemberApplicationEntry>,
+}
+
+/// join-policy.md §7 / §9 — list the Realm's member applications scoped to the
+/// viewer. `member.application` is a spec **candidate** concept (§7.2,
+/// schema-registry.md:178): it MUST stay off the `/_cokret/...` protocol root and
+/// the `ck.*` namespace until formally registered, so this read surface lives on
+/// the product-local `/_soland/self/realms/{realm_id}/applications` URL under the
+/// reverse-domain `org.cokret.soland.*` namespace and is fail-closed (404) unless
+/// the deployment declares `ck.profile.candidate.join_policy.v1`. Each reviewer
+/// read of an application body is logged as `ck.audit.accessed` (§8.1).
 #[endpoint(
-    operation_id = "ck.self.member_application.query.list",
-    tags("realms"),
-    summary = "List join-policy member applications scoped by viewer"
+    operation_id = "org.cokret.soland.member_application.query.list",
+    tags("soland-local"),
+    summary = "List join-policy member applications scoped by viewer (candidate profile)"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.member_application.query.list"))]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.member_application.query.list"))]
 async fn list_member_applications(
     aa: AuthArgs,
     realm_id: PathParam<String>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<Value> {
+) -> JsonResult<MemberApplicationListOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
+    // Fail-closed unless the candidate join-policy profile is declared:
+    // surface a canonical 404 so the candidate read surface is indistinguishable
+    // from an unrecognised endpoint when the profile is off.
+    if !state.config.candidate_join_policy_enabled {
+        return Err(AppError::not_found("unrecognized_endpoint"));
+    }
     let session = aa.authenticated_session(state, req).await?;
     let realm_id = RealmId::new(realm_id.into_inner())
         .map_err(|e| AppError::invalid_param(format!("realm_id: {e}")))?;
@@ -204,11 +266,11 @@ async fn list_member_applications(
             .await;
         }
     }
-    json_ok(json!({
-        "realm_id": realm_id,
-        "applications": applications,
-        "viewer_is_reviewer": viewer_is_reviewer,
-    }))
+    json_ok(MemberApplicationListOutcome {
+        realm_id,
+        viewer_is_reviewer,
+        applications,
+    })
 }
 
 /// G3.S5 — POST a new `ck.realm.link` Move. Builds an `Operation` for

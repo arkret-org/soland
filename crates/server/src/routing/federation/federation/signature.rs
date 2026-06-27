@@ -1,4 +1,3 @@
-use std::cell::RefCell;
 use std::time::{Duration as StdDuration, Instant};
 
 use base64::Engine as _;
@@ -18,28 +17,22 @@ use crate::state::AppState;
 pub(super) const FEDERATION_AUTH_FAILURE_MESSAGE: &str = "federation request authentication failed";
 const FEDERATION_AUTH_FAILURE_TIMING_BUCKET: StdDuration = StdDuration::from_millis(80);
 
-thread_local! {
-    static FEDERATION_AUTH_TIMING_STARTED_AT: RefCell<Option<Instant>> = const { RefCell::new(None) };
-}
-
-struct FederationAuthTimingGuard {
-    previous: Option<Instant>,
-}
-
-impl FederationAuthTimingGuard {
-    fn enter() -> Self {
-        let now = Instant::now();
-        let previous =
-            FEDERATION_AUTH_TIMING_STARTED_AT.with(|started_at| started_at.replace(Some(now)));
-        Self { previous }
-    }
-}
-
-impl Drop for FederationAuthTimingGuard {
-    fn drop(&mut self) {
-        FEDERATION_AUTH_TIMING_STARTED_AT.with(|started_at| {
-            started_at.replace(self.previous.take());
-        });
+/// Pad a failed federation/peer auth attempt that started at `started_at` up to
+/// the constant [`FEDERATION_AUTH_FAILURE_TIMING_BUCKET`] (federation.md §3.2 /
+/// §8.3 timing-bucket normalization), waiting via `tokio::time::sleep().await`
+/// so the pad never blocks a tokio worker thread.
+///
+/// Previously this used a thread-local timing guard plus `std::thread::sleep`,
+/// which pinned a worker for the full 80ms bucket on every failure — letting an
+/// unauthenticated peer exhaust the runtime thread pool. The start instant is
+/// now a plain local captured at verify entry and the sleep is async, so there
+/// is no thread-local-across-`.await` hazard and no worker blocking.
+async fn apply_federation_auth_failure_delay(started_at: Instant) {
+    let remaining = FEDERATION_AUTH_FAILURE_TIMING_BUCKET
+        .checked_sub(started_at.elapsed())
+        .unwrap_or(FEDERATION_AUTH_FAILURE_TIMING_BUCKET);
+    if remaining.as_nanos() > 0 {
+        tokio::time::sleep(remaining).await;
     }
 }
 
@@ -80,7 +73,7 @@ pub(super) fn validate_federation_headers(
     Ok(())
 }
 
-pub(super) fn verify_inbound_push_http_signature(
+pub(super) async fn verify_inbound_push_http_signature(
     state: &AppState,
     req: &Request,
     body: &cokret_sdk::FederationPushOperationsRequestBody,
@@ -98,9 +91,10 @@ pub(super) fn verify_inbound_push_http_signature(
         body.destination.as_str(),
         "federation_push",
     )
+    .await
 }
 
-pub(super) fn verify_inbound_transaction_http_signature(
+pub(super) async fn verify_inbound_transaction_http_signature(
     state: &AppState,
     req: &Request,
     body: &cokret_sdk::FederationTransactionRequestBody,
@@ -118,9 +112,10 @@ pub(super) fn verify_inbound_transaction_http_signature(
         body.destination.as_str(),
         "federation_transaction",
     )
+    .await
 }
 
-fn verify_inbound_federation_http_signature(
+async fn verify_inbound_federation_http_signature(
     state: &AppState,
     req: &Request,
     body_value: &Value,
@@ -128,7 +123,32 @@ fn verify_inbound_federation_http_signature(
     body_destination: &str,
     metric_label: &'static str,
 ) -> Result<(), AppError> {
-    let _timing_bucket = FederationAuthTimingGuard::enter();
+    // Capture the bucket start as a plain local, run the synchronous verify
+    // body, then on failure pad the response timing asynchronously (no worker
+    // blocking) — see `apply_federation_auth_failure_delay`.
+    let started_at = Instant::now();
+    let outcome = verify_inbound_federation_http_signature_inner(
+        state,
+        req,
+        body_value,
+        body_origin,
+        body_destination,
+        metric_label,
+    );
+    if outcome.is_err() {
+        apply_federation_auth_failure_delay(started_at).await;
+    }
+    outcome
+}
+
+fn verify_inbound_federation_http_signature_inner(
+    state: &AppState,
+    req: &Request,
+    body_value: &Value,
+    body_origin: &str,
+    body_destination: &str,
+    metric_label: &'static str,
+) -> Result<(), AppError> {
     let body_bytes = cokret_sdk::canonical::canonical_json_bytes(body_value).map_err(|error| {
         AppError::new(
             crate::error::ErrorCode::SchemaViolation,
@@ -236,12 +256,26 @@ fn verify_inbound_federation_http_signature(
 /// query_post / resolve / invites / contacts) and bodyless GETs (query /
 /// frontier / snapshot.head), binding the signature to an empty-body
 /// Content-Digest in the latter case.
-pub(in crate::routing) fn verify_inbound_peer_http_signature(
+pub(in crate::routing) async fn verify_inbound_peer_http_signature(
     state: &AppState,
     req: &Request,
     body: Option<&Value>,
 ) -> Result<(), AppError> {
-    let _timing_bucket = FederationAuthTimingGuard::enter();
+    // Bucket-normalize the failure timing without blocking a tokio worker:
+    // run the synchronous verify body, then async-pad on the error path.
+    let started_at = Instant::now();
+    let outcome = verify_inbound_peer_http_signature_inner(state, req, body);
+    if outcome.is_err() {
+        apply_federation_auth_failure_delay(started_at).await;
+    }
+    outcome
+}
+
+fn verify_inbound_peer_http_signature_inner(
+    state: &AppState,
+    req: &Request,
+    body: Option<&Value>,
+) -> Result<(), AppError> {
     let body_digests = match body {
         Some(value) => {
             let body_bytes =
@@ -825,7 +859,6 @@ fn signature_error(message: impl Into<String>) -> AppError {
         federation_auth_detail = %detail,
         "federation request authentication failed"
     );
-    normalize_federation_auth_failure_delay();
     AppError::unauthenticated(FEDERATION_AUTH_FAILURE_MESSAGE)
 }
 
@@ -835,21 +868,9 @@ fn cross_domain_replay_error(message: impl Into<String>) -> AppError {
         federation_auth_detail = %detail,
         "federation cross-domain replay check failed"
     );
-    normalize_federation_auth_failure_delay();
     AppError::unauthenticated(FEDERATION_AUTH_FAILURE_MESSAGE)
 }
 
-fn normalize_federation_auth_failure_delay() {
-    let started_at = FEDERATION_AUTH_TIMING_STARTED_AT.with(|started_at| *started_at.borrow());
-    let remaining = started_at
-        .and_then(|started_at| {
-            FEDERATION_AUTH_FAILURE_TIMING_BUCKET.checked_sub(started_at.elapsed())
-        })
-        .unwrap_or(FEDERATION_AUTH_FAILURE_TIMING_BUCKET);
-    if remaining.as_nanos() > 0 {
-        std::thread::sleep(remaining);
-    }
-}
 
 #[cfg(test)]
 mod tests {
@@ -877,10 +898,21 @@ mod tests {
         );
     }
 
-    #[test]
-    fn federation_auth_errors_use_timing_bucket() {
+    /// The failure-timing pad is now applied via `tokio::time::sleep().await`
+    /// (non-blocking) rather than `std::thread::sleep`, so a fast auth failure
+    /// is still padded up to the constant bucket but without pinning a worker.
+    #[tokio::test(start_paused = true)]
+    async fn federation_auth_failure_delay_pads_to_bucket() {
+        // The pad is `tokio::time::sleep(remaining).await`. Under
+        // `start_paused`, tokio auto-advances its *virtual* clock to satisfy the
+        // sleep, so we measure with `tokio::time::Instant` (which tracks the
+        // virtual clock) rather than `std::time::Instant` (wall-clock, which the
+        // paused runtime does not advance). `started_at` is a `std`-clock value
+        // captured immediately before the call, so its `elapsed()` is ~0 and the
+        // function pads by the full bucket.
+        let virtual_start = tokio::time::Instant::now();
         let started_at = Instant::now();
-        let _ = signature_error("fast auth failure");
-        assert!(started_at.elapsed() >= FEDERATION_AUTH_FAILURE_TIMING_BUCKET);
+        apply_federation_auth_failure_delay(started_at).await;
+        assert!(virtual_start.elapsed() >= FEDERATION_AUTH_FAILURE_TIMING_BUCKET);
     }
 }

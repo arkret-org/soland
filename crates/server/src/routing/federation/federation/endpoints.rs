@@ -18,7 +18,7 @@ use super::backfill::{
 };
 use super::inbound_policy::{
     MAX_INBOUND_FEDERATION_OPERATIONS, enforce_inbound_operation_batch_policy,
-    ensure_private_inbound_write_rail_local,
+    ensure_private_inbound_read_rail_local, ensure_private_inbound_write_rail_local,
 };
 use super::signature::{
     origin_key_state_digest_for_service, validate_federation_headers,
@@ -120,7 +120,7 @@ pub(crate) async fn federation_transaction(
     )
     .map_err(|error| AppError::internal(format!("configured trust_domain invalid: {error}")))?;
     validate_federation_headers(&trust_headers, &expected_destination, &content_digest)?;
-    verify_inbound_transaction_http_signature(state, req, &body)?;
+    verify_inbound_transaction_http_signature(state, req, &body).await?;
     let fragment = trust_headers.transcript_fragment();
     tracing::trace!(transcript_fragment = %fragment, "round-4 federation transcript fragment");
     // Round 4 (B1.8) — round-4 federation idempotency cache key. The
@@ -420,7 +420,7 @@ pub(crate) async fn federation_push_operations(
             "federation push destination does not match this service",
         ));
     }
-    verify_inbound_push_http_signature(state, req, &body)?;
+    verify_inbound_push_http_signature(state, req, &body).await?;
     let origin = body.origin.to_string();
     let operations = body.operations;
     enforce_inbound_operation_batch_policy(state, &origin, &operations).await?;
@@ -443,6 +443,7 @@ pub(crate) async fn federation_actor_events(
     depot: &mut Depot,
 ) -> JsonResult<FederationActorEventsOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
+    ensure_private_inbound_read_rail_local(state)?;
     let actor = actor_id.into_inner();
     if Did::new(actor.clone()).is_err() {
         return Err(AppError::invalid_param("invalid actor_id"));
@@ -517,6 +518,7 @@ pub(crate) async fn federation_pull_operations(
     depot: &mut Depot,
 ) -> JsonResult<cokret_sdk::FederationPullOperationsOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
+    ensure_private_inbound_read_rail_local(state)?;
     let realm_id = realm_id.into_inner();
     if cokret_sdk::RealmId::new(realm_id.clone()).is_err() {
         return Err(AppError::invalid_param("invalid realm_id"));
@@ -728,6 +730,7 @@ pub(crate) async fn federation_operation_frontier(
     depot: &mut Depot,
 ) -> JsonResult<FederationOperationFrontierOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
+    ensure_private_inbound_read_rail_local(state)?;
     let realm_id = realm_id.into_inner();
     if cokret_sdk::RealmId::new(realm_id.clone()).is_err() {
         return Err(AppError::invalid_param("invalid realm_id"));
@@ -746,6 +749,7 @@ pub(crate) async fn federation_realm_members(
     depot: &mut Depot,
 ) -> JsonResult<cokret_sdk::FederationRealmMemberList> {
     let state = depot.obtain::<AppState>().expect("state injected");
+    ensure_private_inbound_read_rail_local(state)?;
     let realm_id_value = RealmId::new(realm_id.into_inner())
         .map_err(|_| AppError::invalid_param("invalid realm_id"))?;
     let members = state
@@ -858,6 +862,7 @@ pub(crate) async fn federation_seals_pull(
     realm_id: QueryParam<String, true>,
 ) -> JsonResult<FederationSealsOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
+    ensure_private_inbound_read_rail_local(state)?;
     let realm_id = realm_id.into_inner();
     if cokret_sdk::RealmId::new(realm_id.clone()).is_err() {
         return Err(AppError::invalid_param("invalid realm_id"));
@@ -884,6 +889,7 @@ pub(crate) async fn federation_seals_pull(
 )]
 #[tracing::instrument(skip_all, fields(op = "org.cokret.soland.federation.seals.push"))]
 pub(crate) async fn federation_seals_push(
+    req: &mut Request,
     depot: &mut Depot,
     body: JsonBody<FederationSealsPushRequestBody>,
 ) -> JsonResult<FederationSealsPushOutcome> {
@@ -897,6 +903,24 @@ pub(crate) async fn federation_seals_push(
         )
         .with_status(StatusCode::UNAUTHORIZED));
     }
+    // SOL-SEC-02 (federation.md §1 / §3.2) — a self-consistent `derive_id`
+    // check is NOT source authenticity: without these gates any reachable
+    // caller could push arbitrary id-consistent Seals into `seal_store`. Bring
+    // this push surface up to the protocol rail's strength:
+    //   1. enforce the local origin deny policy, then
+    //   2. verify the inbound RFC 9421 HTTP Message Signature (binds origin /
+    //      destination trust headers + the canonical body digest), exactly like
+    //      `/_cokret/peer/*` and the sibling `federation_push_operations`.
+    if crate::security::federation_origin_denied(body.origin.as_str()) {
+        return Err(AppError::capability_denied(
+            "federation seals push origin is denied by local peer policy",
+        )
+        .with_wire_code("federation_origin_denied"));
+    }
+    let body_value = serde_json::to_value(&body).map_err(|error| {
+        AppError::internal(format!("federation seals push body serialize: {error}"))
+    })?;
+    super::verify_inbound_peer_http_signature(state, req, Some(&body_value)).await?;
     let mut accepted: Vec<String> = Vec::new();
     let mut rejected: Vec<serde_json::Value> = Vec::new();
     for seal in body.seals {

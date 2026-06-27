@@ -66,6 +66,7 @@ fn test_config() -> AppConfig {
         receive_policy_constraints: None,
         sovereign_enclave_enabled: false,
         sovereign_enclave_allowed_outbound_hosts: Vec::new(),
+        candidate_join_policy_enabled: false,
         erasure_propagation_window_ms: 604_800_000,
         log_format: soland::config::LogFormat::Plain,
     }

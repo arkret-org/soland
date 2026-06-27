@@ -127,7 +127,7 @@ async fn peer_events_submit(depot: &mut Depot, req: &mut Request, res: &mut Resp
             return;
         }
     };
-    if let Err(error) = validate_peer_request(state, req, Some(&body_value)) {
+    if let Err(error) = validate_peer_request(state, req, Some(&body_value)).await {
         render_app_error(res, error);
         return;
     }
@@ -142,7 +142,7 @@ async fn peer_events_submit(depot: &mut Depot, req: &mut Request, res: &mut Resp
 #[tracing::instrument(skip_all, fields(op = "ck.peer.events.query.scan"))]
 async fn peer_events_query(depot: &mut Depot, req: &mut Request) -> JsonResult<EventsQueryOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    validate_peer_request(state, req, None)?;
+    validate_peer_request(state, req, None).await?;
     let source_service_did = source_service_did_from_request(req)?;
     let parts = PeerEventsQueryParts::from_query(req)?;
     peer_events_query_response(state, source_service_did, parts).await
@@ -167,7 +167,7 @@ async fn peer_events_query_post(
     let body = serde_json::to_value(&request).map_err(|error| {
         AppError::internal(format!("peer events query request serialize: {error}"))
     })?;
-    validate_peer_request(state, req, Some(&body))?;
+    validate_peer_request(state, req, Some(&body)).await?;
     let source_service_did = source_service_did_from_request(req)?;
     let parts = PeerEventsQueryParts::from_body(request)?;
     peer_events_query_response(state, source_service_did, parts).await
@@ -192,7 +192,7 @@ async fn peer_events_resolve(
     let body = serde_json::to_value(&request).map_err(|error| {
         AppError::internal(format!("peer events resolve request serialize: {error}"))
     })?;
-    validate_peer_request(state, req, Some(&body))?;
+    validate_peer_request(state, req, Some(&body)).await?;
     let source_service_did = source_service_did_from_request(req)?;
     if request.event_ids.len() + request.event_digests.len() > MAX_PEER_EVENTS_RESOLVE {
         return Err(AppError::new(
@@ -276,7 +276,7 @@ async fn peer_events_frontier(
     req: &mut Request,
 ) -> JsonResult<PeerEventsFrontierOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    validate_peer_request(state, req, None)?;
+    validate_peer_request(state, req, None).await?;
     let source_service_did = source_service_did_from_request(req)?;
     let realm_id = query_param(req, "realm_id")
         .ok_or_else(|| AppError::missing_param("realm_id is required"))?;
@@ -394,7 +394,7 @@ async fn peer_snapshot_head(
     req: &mut Request,
 ) -> JsonResult<PeerSnapshotHeadOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    validate_peer_request(state, req, None)?;
+    validate_peer_request(state, req, None).await?;
     Err(AppError::new(
         crate::error::ErrorCode::NotImplemented,
         "ck.peer.snapshot.query.manifest_head is not implemented: this deployment cannot \
@@ -1383,7 +1383,7 @@ where
         .map_err(|_| AppError::bad_json(message))
 }
 
-pub(in crate::routing) fn validate_peer_request(
+pub(in crate::routing) async fn validate_peer_request(
     state: &AppState,
     req: &Request,
     body: Option<&Value>,
@@ -1465,7 +1465,8 @@ pub(in crate::routing) fn validate_peer_request(
     // The bare trust-header checks above are necessary but not sufficient; the
     // signature verification (which also re-binds POST body digests and runs
     // the deny policy) is the authoritative gate.
-    crate::routing::federation::federation::verify_inbound_peer_http_signature(state, req, body)?;
+    crate::routing::federation::federation::verify_inbound_peer_http_signature(state, req, body)
+        .await?;
     Ok(())
 }
 

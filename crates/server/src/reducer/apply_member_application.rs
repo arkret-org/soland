@@ -474,7 +474,7 @@ impl ProjectionState {
         realm_id: &str,
         viewer: &str,
         viewer_is_reviewer: bool,
-    ) -> Vec<Value> {
+    ) -> Vec<crate::routing::realms::MemberApplicationEntry> {
         let now = Utc::now();
         self.member_applications
             .values()
@@ -490,29 +490,14 @@ impl ProjectionState {
                     || state.applicant_visibility == "public"
                     || (state.applicant_visibility == "members_after_join"
                         && state.status == "accepted");
-                let mut entry = serde_json::Map::new();
-                entry.insert(
-                    "applicant_did".to_owned(),
-                    Value::String(state.applicant.clone()),
-                );
-                entry.insert(
-                    "application_receipt_digest".to_owned(),
-                    Value::String(state.receipt_digest.clone()),
-                );
-                entry.insert(
-                    "status".to_owned(),
-                    Value::String(effective_status.to_owned()),
-                );
-                entry.insert(
-                    "submitted_at".to_owned(),
-                    Value::String(state.submitted_at.to_rfc3339()),
-                );
-                if can_see_body {
-                    entry.insert("answers".to_owned(), state.answers.clone());
-                } else {
-                    entry.insert("application_pending".to_owned(), Value::Bool(true));
+                crate::routing::realms::MemberApplicationEntry {
+                    applicant_did: state.applicant.clone(),
+                    application_receipt_digest: state.receipt_digest.clone(),
+                    status: effective_status.to_owned(),
+                    submitted_at: state.submitted_at.to_rfc3339(),
+                    answers: can_see_body.then(|| state.answers.clone()),
+                    application_pending: (!can_see_body).then_some(true),
                 }
-                Value::Object(entry)
             })
             .collect()
     }

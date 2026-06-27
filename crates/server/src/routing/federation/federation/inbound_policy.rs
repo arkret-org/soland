@@ -35,6 +35,33 @@ pub(crate) fn ensure_private_inbound_write_rail_local(state: &AppState) -> Resul
     .with_wire_code("federation_interop_track_only"))
 }
 
+/// SOL-SEC-01 (federation.md §1) — the `/_soland/peer/federation/*` inbound
+/// *read* rail (seals-pull, realm-members, actor-events, pull-operations,
+/// operation-frontier) is unauthenticated: it carries no RFC 9421 service
+/// signature / PoP like the protocol `/_cokret/peer/*` track. Leaving it open
+/// would expose Realm membership, the Seal DAG, and per-actor projection events
+/// to any unauthenticated caller that can reach the `_soland` namespace — a
+/// posture inversion the spec forbids ("private rail MUST NOT be weaker than the
+/// protocol rail").
+///
+/// Until the rail either gains full per-request peer signature verification or
+/// is folded into the protocol track, fail-close it outside deployment-local
+/// mode so it is reachable only in the `development_mode` debug posture, matching
+/// the read rail's stated "deployment-local test/ops affordance" intent and the
+/// write rail's existing gate. The error mirrors the write rail's guidance.
+pub(crate) fn ensure_private_inbound_read_rail_local(state: &AppState) -> Result<(), AppError> {
+    if state.config.development_mode {
+        return Ok(());
+    }
+    Err(AppError::unsupported_feature(
+        "the /_soland/peer/federation/* inbound read rail is a deployment-local debug affordance \
+         and is not authenticated to the protocol rail's standard; it is disabled outside \
+         development mode. Use the protocol federation track (/_cokret/peer/*) for cross-deployment \
+         reads",
+    )
+    .with_wire_code("federation_private_read_rail_local_only"))
+}
+
 pub(super) async fn enforce_inbound_operation_batch_policy(
     state: &AppState,
     origin_service_did: &str,

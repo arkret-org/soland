@@ -361,8 +361,7 @@ fn http_message_signature_evidence(
 }
 
 pub(super) fn content_digest_header(bytes: &[u8]) -> String {
-    let digest = Sha256::digest(bytes);
-    format!("sha-256=:{}:", STANDARD.encode(digest))
+    crate::routing::federation::rfc9530_content_digest(bytes)
 }
 
 #[cfg(test)]
@@ -608,6 +607,7 @@ pub(crate) fn test_app_state_with_peers(
         receive_policy_constraints: None,
         sovereign_enclave_enabled: false,
         sovereign_enclave_allowed_outbound_hosts: Vec::new(),
+        candidate_join_policy_enabled: false,
         erasure_propagation_window_ms,
         log_format: crate::config::LogFormat::Plain,
     };

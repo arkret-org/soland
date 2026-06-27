@@ -239,7 +239,7 @@ async fn peer_contacts_submit(
     let body = serde_json::to_value(&delivery).map_err(|error| {
         AppError::internal(format!("contact delivery request serialize: {error}"))
     })?;
-    super::super::events::peer::validate_peer_request(state, req, Some(&body))?;
+    super::super::events::peer::validate_peer_request(state, req, Some(&body)).await?;
     validate_content_digest(req, &body)?;
 
     delivery.validate_minimal().map_err(|error| {
@@ -905,6 +905,7 @@ mod tests {
             receive_policy_constraints: None,
             sovereign_enclave_enabled: false,
             sovereign_enclave_allowed_outbound_hosts: Vec::new(),
+            candidate_join_policy_enabled: false,
             erasure_propagation_window_ms: 604_800_000,
             log_format: LogFormat::Plain,
         }

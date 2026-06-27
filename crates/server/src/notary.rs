@@ -858,4 +858,83 @@ mod tests {
         let worker = NotaryWorker::for_service("did:ck:a");
         assert!(!worker.is_round_leader::<String>(&[]));
     }
+
+    /// SDK-SEC-02 / decision-3 cross-implementation golden check for the Seal
+    /// `state_root` Merkle (spec event-auth-state-resolution.md §6.2.1 / §6.2.2,
+    /// RFC 6962 domain separation). soland computes governance roots by reusing
+    /// the SDK's `cokret_sdk::state_res::compute_state_root`, so the only drift
+    /// risk is a future SDK change silently altering the byte rule. This test
+    /// re-derives the expected root with an INDEPENDENT second implementation
+    /// (raw `sha2` + canonical JSON, mirroring the spec text directly) so that
+    /// any divergence between soland's consumed SDK and the normative wire rule
+    /// fails loudly here.
+    ///
+    /// Pins:
+    ///   - empty cell map  -> `EMPTY_STATE_ROOT` = `sha256("")`
+    ///   - single Value cell -> `sha256(0x00 || canonical_json({"value": v}))`
+    ///     (single-leaf root equals the leaf hash, no internal-node prefix)
+    ///   - two cells -> `sha256(0x01 || leaf_lo || leaf_hi)` with leaves ordered
+    ///     by ascending cell wire string.
+    #[test]
+    fn state_root_matches_independent_rfc6962_recompute() {
+        use std::collections::BTreeMap;
+
+        use cokret_sdk::CellRef;
+        use cokret_sdk::lattice::CellState;
+        use sha2::{Digest, Sha256};
+
+        // Independent leaf rule (spec §6.2.1):
+        //   leaf_input = {"cell": <cell wire>, "state": {"value": <v>}}
+        //   leaf = H(0x00 || canonical_json(leaf_input))
+        fn leaf(cell: &str, value: &serde_json::Value) -> [u8; 32] {
+            let leaf_input = json!({
+                "cell": cell,
+                "state": { "value": value },
+            });
+            let preimage = cokret_sdk::canonical::canonical_json_bytes(&leaf_input).unwrap();
+            let mut h = Sha256::new();
+            h.update([0x00u8]);
+            h.update(&preimage);
+            h.finalize().into()
+        }
+        fn hex(bytes: &[u8]) -> String {
+            bytes.iter().map(|b| format!("{b:02x}")).collect()
+        }
+
+        // 1) Empty map -> sha256("").
+        let empty = compute_state_root(&BTreeMap::new()).unwrap();
+        assert_eq!(empty.as_str(), cokret_sdk::EMPTY_STATE_ROOT);
+        assert_eq!(
+            empty.as_str(),
+            "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+
+        // 2) Single cell -> single-leaf root == leaf hash (no node prefix).
+        let cell_a = CellRef::new("ck:cell:ck.x:1".to_owned()).unwrap();
+        let val_a = json!("alpha");
+        let mut one = BTreeMap::new();
+        one.insert(cell_a.clone(), CellState::Value(val_a.clone()));
+        let root_one = compute_state_root(&one).unwrap();
+        assert_eq!(
+            root_one.as_str(),
+            format!("sha256:{}", hex(&leaf(cell_a.as_str(), &val_a)))
+        );
+
+        // 3) Two cells -> H(0x01 || leaf(lo) || leaf(hi)), leaves ordered by
+        //    ascending cell wire string ("ck:cell:ck.x:1" < "ck:cell:ck.y:2").
+        let cell_b = CellRef::new("ck:cell:ck.y:2".to_owned()).unwrap();
+        let val_b = json!("beta");
+        let cell_a_wire = cell_a.as_str().to_owned();
+        let cell_b_wire = cell_b.as_str().to_owned();
+        let mut two = BTreeMap::new();
+        two.insert(cell_a, CellState::Value(val_a.clone()));
+        two.insert(cell_b, CellState::Value(val_b.clone()));
+        let root_two = compute_state_root(&two).unwrap();
+        let mut node = Sha256::new();
+        node.update([0x01u8]);
+        node.update(leaf(&cell_a_wire, &val_a)); // lo cell wire
+        node.update(leaf(&cell_b_wire, &val_b)); // hi cell wire
+        let node: [u8; 32] = node.finalize().into();
+        assert_eq!(root_two.as_str(), format!("sha256:{}", hex(&node)));
+    }
 }

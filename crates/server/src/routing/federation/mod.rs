@@ -19,6 +19,21 @@ use super::{
     redaction_targets_from_operations, sha256_hex, sync_token, validate_did,
 };
 
+/// RFC 9530 `Content-Digest` structured-field value over `bytes`:
+/// `sha-256=:<base64(SHA256(bytes))>:`.
+///
+/// Single source of truth for the federation S2S surface — the outbound
+/// dispatcher, the per-peer outbox, and the invite delivery rail all derive the
+/// same header from this helper so the wire byte encoding / base64 variant can
+/// never drift between sign and verify. Callers decide which bytes to feed (raw
+/// body vs canonical JSON); this only maps `bytes -> header string`.
+pub(crate) fn rfc9530_content_digest(bytes: &[u8]) -> String {
+    use base64::Engine as _;
+    use base64::engine::general_purpose::STANDARD;
+    use sha2::{Digest, Sha256};
+    format!("sha-256=:{}:", STANDARD.encode(Sha256::digest(bytes)))
+}
+
 /// Operator seal-signing endpoint (`POST /_soland/admin/seals/sign`). Mounted
 /// at the bare deployment-local `/admin/*` namespace on the root router
 /// (NOT under `/_cokret/...`), alongside the rest of the admin surface.

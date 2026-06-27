@@ -12,9 +12,22 @@
 //!   user inside the portal realm. Same wire shape as bots; the `kind` discriminator differs.
 //!
 //! Both flavours are recorded in a process-local registry
-//! (`BOT_REGISTRY` below) for the stub. Persistence in the
-//! `state.persistence` store is a follow-up — see TODO at module
-//! bottom.
+//! (`BOT_REGISTRY` below).
+//!
+//! SOL-HYG-01 — KNOWN LIMITATION (durability / horizontal scale):
+//! `BOT_REGISTRY` is a `static Mutex<Vec<..>>`, so the bot/ghost *liveness +
+//! revocation* state it holds is **process-local**: it does not survive a
+//! restart and does not propagate across replicas. The durable source of truth
+//! for which applet owns which bot is the `applets` table (`bot_actor_id`
+//! column, see `persistence::applets`); this registry is a best-effort runtime
+//! cache layered on top of that. This is safe for the single-instance dev /
+//! deployment-local posture (the HTTP handlers here are NOT mounted in the
+//! production router), but a revocation performed on one replica will not be
+//! observed by another and is lost on restart. Persisting the full
+//! `BotActor` row (name / kind / owner / `revoked_at`) — plus ghost actors as
+//! first-class rows — through `state.persistence` is the proper fix and is
+//! tracked as a follow-up (it needs its own table + rehydration on startup, out
+//! of scope for the wave-3 hardening pass).
 //!
 //! Deployment-local HTTP handlers are intentionally not mounted in the
 //! production router until this registry has durable state and accountable
@@ -22,9 +35,9 @@
 //!
 //! TODO(G3.S9-followup): bind bot/ghost provisioning to the verified
 //! manifest's `applet_id`; persist the registry through
-//! `state.persistence` so it survives restart; emit
-//! `ck.identity.accountability_grant` events so the accountability
-//! chain is queryable via the standard DID Document fetch.
+//! `state.persistence` so it survives restart / propagates across replicas
+//! (SOL-HYG-01); emit `ck.identity.accountability_grant` events so the
+//! accountability chain is queryable via the standard DID Document fetch.
 
 use std::sync::Mutex;
 

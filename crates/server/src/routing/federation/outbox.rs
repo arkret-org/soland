@@ -38,7 +38,6 @@ use std::time::Duration;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use ed25519_dalek::Signer as _;
-use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::persistence::PersistenceResult;
@@ -229,8 +228,7 @@ fn trust_domain_from_service_did(service_did: &str) -> String {
 
 /// Compute the RFC 9530 `Content-Digest` header value for a body.
 fn content_digest_header_value(body: &[u8]) -> String {
-    let digest = Sha256::digest(body);
-    format!("sha-256=:{}:", STANDARD.encode(digest))
+    super::rfc9530_content_digest(body)
 }
 
 /// Truncate a response body for the `last_response_excerpt` column.

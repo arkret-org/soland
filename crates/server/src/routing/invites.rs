@@ -4,7 +4,7 @@
 //! online locator resolver from `sync/invite-addressing.md`.
 
 use base64::Engine as _;
-use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::{Duration, SecondsFormat, Utc};
 use cokret_sdk::client_api::{
     ThirdPartyInviteClaimOutcome, ThirdPartyInviteClaimRequestBody, ThirdPartyInviteIssueOutcome,
@@ -30,7 +30,6 @@ use rand::RngExt;
 use salvo::http::StatusCode;
 use salvo::prelude::*;
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
 
 use crate::error::{AppError, ErrorCode};
 use crate::result::{JsonResult, json_ok};
@@ -330,7 +329,7 @@ async fn peer_invites_submit(
     let body = serde_json::to_value(&delivery).map_err(|error| {
         AppError::internal(format!("invite delivery request serialize: {error}"))
     })?;
-    super::events::peer::validate_peer_request(state, req, Some(&body))?;
+    super::events::peer::validate_peer_request(state, req, Some(&body)).await?;
     validate_content_digest(req, &body)?;
 
     delivery.validate_minimal().map_err(|error| {
@@ -1668,14 +1667,13 @@ fn validate_content_digest(req: &Request, body: &Value) -> Result<(), AppError> 
         ))
     })?;
     // RFC 9530 Content-Digest is the base64 of the SHA-256 *digest* of the
-    // canonical body bytes, matching the `peer/events` federation surface
-    // (`federation::content_digest_header`) and the signing base every peer
-    // builds. Earlier this hashed nothing and base64'd the raw canonical
-    // bytes, so well-formed `peer/invites` deliveries were rejected.
-    let expected = format!(
-        "sha-256=:{}:",
-        STANDARD.encode(Sha256::digest(&canonical_bytes))
-    );
+    // canonical body bytes, matching the `peer/events` federation surface and
+    // the signing base every peer builds. Routed through the single
+    // `federation::rfc9530_content_digest` helper so the byte encoding can't
+    // drift from the outbound/outbox sign path. Earlier this hashed nothing and
+    // base64'd the raw canonical bytes, so well-formed `peer/invites`
+    // deliveries were rejected.
+    let expected = super::federation::rfc9530_content_digest(&canonical_bytes);
     if header != expected {
         crate::metrics::record_digest_mismatch("peer_invites_content_digest");
         return Err(super::events::peer::cross_domain_replay(

@@ -30,6 +30,8 @@
 //! default. Explicit `include_terminal=true` returns the full set for audit /
 //! debugging UIs.
 
+use std::collections::BTreeMap;
+
 use chrono::{DateTime, Utc};
 use cokret_sdk::{
     CellRef, Did, DocumentMorphProjectionOutcome, HistoryRangeContext, HistoryReaderContext,
@@ -1144,6 +1146,60 @@ async fn list_strand_projections(
     })
 }
 
+/// Strongly-typed response body for `org.cokret.soland.strands.get`
+/// (`GET /_soland/self/strands/{strand_id}`). This is a soland product-private
+/// projection read (`/_soland/self/*` negative-space root); the SDK does not —
+/// and per `service-http-binding.md` §2.1.3 should not — define a response type
+/// for it, so the DTO lives here next to its only handler. Field set and JSON
+/// shape mirror the materialized `StrandProjection` row plus the derived
+/// board/list position fields. `state` / `fields` keep `serde_json` free-form
+/// types: `state` is a small projected enum already rendered as a string and
+/// `fields` is an arbitrary materialized key/value map.
+#[derive(Debug, serde::Serialize, salvo::oapi::ToSchema)]
+struct StrandProjectionView {
+    strand_id: String,
+    realm_id: String,
+    state: ProjectionObjectState,
+    state_changed_at: Option<DateTime<Utc>>,
+    title: String,
+    summary: Option<String>,
+    fields: BTreeMap<String, Value>,
+    board_space_id: Option<String>,
+    list_space_id: Option<String>,
+    rank: Option<String>,
+    created_by: String,
+    created_at: DateTime<Utc>,
+    updated_by: Option<String>,
+    updated_at: Option<DateTime<Utc>>,
+}
+
+/// One relation edge in the `org.cokret.soland.relations.list` response.
+/// Mirrors the projected [`SolandRelationState`] fields surfaced by the
+/// product-private `/_soland/self/relations` read. `fields` stays a free-form
+/// `serde_json` map (arbitrary relation payload values).
+#[derive(Debug, serde::Serialize, salvo::oapi::ToSchema)]
+struct RelationEdgeView {
+    relation_id: String,
+    realm_id: String,
+    relation_kind: String,
+    from_ref: Option<String>,
+    to_ref: Option<String>,
+    fields: BTreeMap<String, Value>,
+    state: String,
+    scope_circle_id: Option<String>,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+}
+
+/// Strongly-typed response body for `org.cokret.soland.relations.list`
+/// (`GET /_soland/self/relations`). soland product-private projection read;
+/// the DTO lives here for the same reason as [`StrandProjectionView`].
+#[derive(Debug, serde::Serialize, salvo::oapi::ToSchema)]
+struct RelationEdgeList {
+    items: Vec<RelationEdgeView>,
+    total: u64,
+}
+
 /// `GET /_soland/self/strands/{strand_id}` — return a single Strand's
 /// projected object state including the raw `fields` map (e.g.
 /// `fields.status`). The canonical `/_cokret/self/realms/{realm_id}/strands`
@@ -1162,7 +1218,7 @@ async fn get_strand_projection(
     depot: &mut Depot,
     req: &mut Request,
     strand_id: PathParam<String>,
-) -> JsonResult<Value> {
+) -> JsonResult<StrandProjectionView> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let strand_id = strand_id.into_inner();
@@ -1214,22 +1270,22 @@ async fn get_strand_projection(
     }
     let (board_space_id, list_space_id, rank) = strand_position_fields(&proj, &strand_id)?;
     drop(proj);
-    json_ok(json!({
-        "strand_id": strand.strand_id,
-        "realm_id": strand.realm_id,
-        "state": projection_object_state(strand.state),
-        "state_changed_at": strand.state_changed_at,
-        "title": strand.title,
-        "summary": strand.summary,
-        "fields": strand.fields,
-        "board_space_id": board_space_id.map(|id| id.to_string()),
-        "list_space_id": list_space_id.map(|id| id.to_string()),
-        "rank": rank,
-        "created_by": strand.created_by,
-        "created_at": strand.created_at,
-        "updated_by": strand.updated_by,
-        "updated_at": strand.updated_at,
-    }))
+    json_ok(StrandProjectionView {
+        strand_id: strand.strand_id,
+        realm_id: strand.realm_id,
+        state: projection_object_state(strand.state),
+        state_changed_at: strand.state_changed_at,
+        title: strand.title,
+        summary: strand.summary,
+        fields: strand.fields,
+        board_space_id: board_space_id.map(|id| id.to_string()),
+        list_space_id: list_space_id.map(|id| id.to_string()),
+        rank,
+        created_by: strand.created_by,
+        created_at: strand.created_at,
+        updated_by: strand.updated_by,
+        updated_at: strand.updated_at,
+    })
 }
 
 /// `GET /_soland/self/relations?from_ref=&to_ref=&relation_kind=&state=` —
@@ -1248,7 +1304,7 @@ async fn list_relation_projections(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<Value> {
+) -> JsonResult<RelationEdgeList> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let from_ref = crate::routing::system::util::query_param(req, "from_ref");
@@ -1292,27 +1348,22 @@ async fn list_relation_projections(
         if !realm_id_accessible(state, &relation.realm_id, Some(&session)).await {
             continue;
         }
-        items.push(json!({
-            "relation_id": relation.relation_id,
-            "realm_id": relation.realm_id,
-            "relation_kind": relation.relation_kind,
-            "from_ref": relation.from_ref,
-            "to_ref": relation.to_ref,
-            "fields": relation.fields,
-            "state": relation.state,
-            "scope_circle_id": relation.scope_circle_id,
-            "created_at": relation.created_at,
-            "updated_at": relation.updated_at,
-        }));
+        items.push(RelationEdgeView {
+            relation_id: relation.relation_id,
+            realm_id: relation.realm_id,
+            relation_kind: relation.relation_kind,
+            from_ref: relation.from_ref,
+            to_ref: relation.to_ref,
+            fields: relation.fields,
+            state: relation.state,
+            scope_circle_id: relation.scope_circle_id,
+            created_at: relation.created_at,
+            updated_at: relation.updated_at,
+        });
     }
-    items.sort_by(|left, right| {
-        left["relation_id"]
-            .as_str()
-            .unwrap_or_default()
-            .cmp(right["relation_id"].as_str().unwrap_or_default())
-    });
+    items.sort_by(|left, right| left.relation_id.cmp(&right.relation_id));
     let total = total_count(items.len())?;
-    json_ok(json!({ "items": items, "total": total }))
+    json_ok(RelationEdgeList { items, total })
 }
 
 #[endpoint(

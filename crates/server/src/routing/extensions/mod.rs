@@ -1,23 +1,22 @@
 //! G3.S9 — extensions surface (applet manifest verifier, bot / ghost
-//! actor support, TSP transport + route + audit, sovereign enclave
-//! profile guards).
+//! actor support, sovereign enclave profile guards).
 //!
 //! Deployment-local sub-routers are mounted under `/_soland/...`.
-//! Unfinished bot/TSP runnable stubs are intentionally not mounted in the
+//! Unfinished bot runnable stubs are intentionally not mounted in the
 //! production route tree.
 //!
 //! Spec seals:
 //!   - `cokret-spec/spec/v1/zh/extensions/applet-integration.md` §3–§5 (manifest signing, bot /
 //!     ghost actor accountability)
 //!   - `cokret-spec/spec/v1/zh/extensions/applet-schema.md` (manifest schema)
-//!   - `cokret-spec/spec/v1/zh/identity/tsp-integration.md` §3–§8 (TSP transport declaration,
-//!     relationship bootstrap, audit chain)
 //!   - `cokret-spec/spec/v1/zh/sync/sovereign-deployment.md` §2–§6 (sovereign enclave profile,
 //!     outbound federation guard)
 //!
-//! TODO(G3.S9-followup): full TSP envelope verify/decrypt + nested
-//! metadata-privacy enforcement; capability inheritance from primary
-//! actor to bot/ghost; MIMI provider mapping for portal realms.
+//! TODO(G3.S9-followup): capability inheritance from primary actor to
+//! bot/ghost; MIMI provider mapping for portal realms. (The prior TSP
+//! transport/route/audit runnable stub was removed as dead code; the
+//! `identity/tsp-integration.md` surface will be re-implemented from the
+//! protocol track when scheduled.)
 
 use salvo::prelude::*;
 
@@ -25,15 +24,14 @@ pub mod applet_bridge;
 pub mod applet_manifest;
 pub mod bot_actor;
 pub mod sovereign;
-pub mod tsp;
 
 /// Compose the soland extension sub-routers under trust segments.
 /// Mounted into the `_soland` router by `routing::mod.rs`.
 ///
 /// Trust segments: the applet bridge + manifest verifier are the
-/// push/bridge gateway surface (`edge`); the bot/ghost actor + TSP
-/// transport surfaces and the sovereign-enclave deployment surface are
-/// authenticated session-scoped (`self`).
+/// push/bridge gateway surface (`edge`); the bot/ghost actor surface and
+/// the sovereign-enclave deployment surface are authenticated
+/// session-scoped (`self`).
 pub fn router() -> Router {
     protocol_router()
 }
