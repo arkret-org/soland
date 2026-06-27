@@ -86,9 +86,7 @@ impl PgPersistenceStore {
             organizations: PgOrganizationStore { pool: pool.clone() },
             organization_policies: PgOrganizationPolicyStore { pool: pool.clone() },
             realm_organizations: PgRealmOrganizationStore { pool: pool.clone() },
-            realm_organization_statements: PgRealmOrganizationStatementStore {
-                pool: pool.clone(),
-            },
+            realm_organization_statements: PgRealmOrganizationStatementStore { pool: pool.clone() },
             realm_moderation_policies: PgRealmModerationPolicyStore { pool: pool.clone() },
             push_bridge_cache: PgPushBridgeCacheStore { pool: pool.clone() },
             multisig_pending: PgMultisigPendingStore { pool: pool.clone() },

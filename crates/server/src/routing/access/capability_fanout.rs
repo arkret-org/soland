@@ -80,7 +80,10 @@ pub(super) fn router() -> Router {
     tags("soland-local"),
     summary = "Materialize coauth-issued collaboration capability fanout (deployment-internal S2S)"
 )]
-#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.root.authz.capability_fanout.submit"))]
+#[tracing::instrument(
+    skip_all,
+    fields(op = "org.cokret.soland.root.authz.capability_fanout.submit")
+)]
 async fn submit_fanout(
     body: JsonBody<Value>,
     depot: &mut Depot,

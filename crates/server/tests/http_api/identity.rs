@@ -350,35 +350,37 @@ async fn submit_did_operation_webvh_serves_canonical_did_json() {
     let mut config = test_config();
     config.public_base_url = "https://soland.example".to_owned();
     config.embedded_webvh_provider_enabled = true;
-    config.did_resolver_allow_methods = vec!["web".to_owned(), "key".to_owned(), "webvh".to_owned()];
+    config.did_resolver_allow_methods =
+        vec!["web".to_owned(), "key".to_owned(), "webvh".to_owned()];
     let state = AppState::new(config, Db { pool: None });
 
     let did = "did:webvh:zQmTestScidValueForRegression123456:soland.example:webvh:bobwebvh";
-    let submitted: Value = TestClient::post("http://server/_cokret/root/identity/submit-did-operation")
-        .json(&serde_json::json!({
-            "did": did,
-            "did_method": "did:webvh",
-            "seq": 1,
-            "operation": {
-                "type": "replace",
-                "state": {
-                    "id": did,
-                    "verificationMethod": [{
-                        "id": format!("{did}#did-key-1"),
-                        "type": "Multikey",
-                        "controller": did,
-                        "publicKeyMultibase": "z6MkbobwebvhRegressionKey"
-                    }],
-                    "authentication": [format!("{did}#did-key-1")],
-                    "assertionMethod": [format!("{did}#did-key-1")]
+    let submitted: Value =
+        TestClient::post("http://server/_cokret/root/identity/submit-did-operation")
+            .json(&serde_json::json!({
+                "did": did,
+                "did_method": "did:webvh",
+                "seq": 1,
+                "operation": {
+                    "type": "replace",
+                    "state": {
+                        "id": did,
+                        "verificationMethod": [{
+                            "id": format!("{did}#did-key-1"),
+                            "type": "Multikey",
+                            "controller": did,
+                            "publicKeyMultibase": "z6MkbobwebvhRegressionKey"
+                        }],
+                        "authentication": [format!("{did}#did-key-1")],
+                        "assertionMethod": [format!("{did}#did-key-1")]
+                    }
                 }
-            }
-        }))
-        .send(&app_from_state(state.clone()))
-        .await
-        .take_json()
-        .await
-        .unwrap();
+            }))
+            .send(&app_from_state(state.clone()))
+            .await
+            .take_json()
+            .await
+            .unwrap();
     assert_eq!(submitted["status"], "accepted");
 
     // The canonical did:webvh document URL must now resolve (200), not 404.

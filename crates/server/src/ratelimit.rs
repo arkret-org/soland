@@ -5,11 +5,10 @@
 //! a peer's quota across the rest of the API surface. We recognize four
 //! endpoint classes:
 //!
-//! - `probe`  — the public capability probe (`/_cokret/describe`). Every client
-//!   MUST fetch this *before* it can authenticate, so it gets its own generous
-//!   bucket and never shares the authenticated `api` quota: a hot authenticated
-//!   surface (e.g. a sync long-poll loop) must not be able to starve the one
-//!   probe a client needs just to begin signing in.
+//! - `probe`  — the public capability probe (`/_cokret/describe`). Every client MUST fetch this
+//!   *before* it can authenticate, so it gets its own generous bucket and never shares the
+//!   authenticated `api` quota: a hot authenticated surface (e.g. a sync long-poll loop) must not
+//!   be able to starve the one probe a client needs just to begin signing in.
 //! - `auth`   — the credential/bearer-issuing surface (strict, low ceiling): the spec-canonical
 //!   `/_cokret/gate/account/register`, `/_cokret/gate/account/session-grants`, and
 //!   `/_cokret/gate/account/agent-key-pair`, plus the `/_soland/gate/auth/*` auth routes. Must be

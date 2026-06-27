@@ -305,7 +305,7 @@ pub(super) async fn bootstrap_realm_member_index(
     let asset_privacy_policy_digest = asset_privacy_policy
         .as_ref()
         .and_then(canonical_value_digest);
-    let plaintext_visible_services = object
+    let mut plaintext_visible_services: std::collections::BTreeSet<String> = object
         .get("payload")
         .and_then(|payload| payload.get("plaintext_visible_services"))
         .or_else(|| {
@@ -333,6 +333,14 @@ pub(super) async fn bootstrap_realm_member_index(
                 .extend(classes);
         }
     }
+    // Maintain the `plaintext_visible_services ⊇ keys(plaintext_visible_service_classes)`
+    // invariant the dedicated `ck.realm.plaintext_visible_services` projection
+    // upholds: spec-canonical declarations carry structured `{service_did,
+    // data_classes, …}` entries (event-payload.schema.json
+    // `plaintext_visible_services_payload`) with no bare-string form, so the
+    // service-DID set must be derived from the typed map, not only from
+    // (legacy) string array entries.
+    plaintext_visible_services.extend(plaintext_visible_service_classes.keys().cloned());
     let minimal_metadata_realm =
         payload_object.is_some_and(crate::kinds::payload_declares_minimal_metadata_realm);
     let mut entry = crate::state::RealmDirectoryEntry::new(realm_id_typed.clone(), title);

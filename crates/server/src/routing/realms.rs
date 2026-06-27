@@ -210,7 +210,10 @@ pub struct MemberApplicationListOutcome {
     tags("soland-local"),
     summary = "List join-policy member applications scoped by viewer (candidate profile)"
 )]
-#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.member_application.query.list"))]
+#[tracing::instrument(
+    skip_all,
+    fields(op = "org.cokret.soland.member_application.query.list")
+)]
 async fn list_member_applications(
     aa: AuthArgs,
     realm_id: PathParam<String>,

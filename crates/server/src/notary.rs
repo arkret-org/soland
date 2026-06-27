@@ -871,10 +871,10 @@ mod tests {
     ///
     /// Pins:
     ///   - empty cell map  -> `EMPTY_STATE_ROOT` = `sha256("")`
-    ///   - single Value cell -> `sha256(0x00 || canonical_json({"value": v}))`
-    ///     (single-leaf root equals the leaf hash, no internal-node prefix)
-    ///   - two cells -> `sha256(0x01 || leaf_lo || leaf_hi)` with leaves ordered
-    ///     by ascending cell wire string.
+    ///   - single Value cell -> `sha256(0x00 || canonical_json({"value": v}))` (single-leaf root
+    ///     equals the leaf hash, no internal-node prefix)
+    ///   - two cells -> `sha256(0x01 || leaf_lo || leaf_hi)` with leaves ordered by ascending cell
+    ///     wire string.
     #[test]
     fn state_root_matches_independent_rfc6962_recompute() {
         use std::collections::BTreeMap;
@@ -920,8 +920,8 @@ mod tests {
             format!("sha256:{}", hex(&leaf(cell_a.as_str(), &val_a)))
         );
 
-        // 3) Two cells -> H(0x01 || leaf(lo) || leaf(hi)), leaves ordered by
-        //    ascending cell wire string ("ck:cell:ck.x:1" < "ck:cell:ck.y:2").
+        // 3) Two cells -> H(0x01 || leaf(lo) || leaf(hi)), leaves ordered by ascending cell wire
+        //    string ("ck:cell:ck.x:1" < "ck:cell:ck.y:2").
         let cell_b = CellRef::new("ck:cell:ck.y:2".to_owned()).unwrap();
         let val_b = json!("beta");
         let cell_a_wire = cell_a.as_str().to_owned();

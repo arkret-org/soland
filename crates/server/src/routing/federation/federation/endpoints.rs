@@ -908,9 +908,9 @@ pub(crate) async fn federation_seals_push(
     // caller could push arbitrary id-consistent Seals into `seal_store`. Bring
     // this push surface up to the protocol rail's strength:
     //   1. enforce the local origin deny policy, then
-    //   2. verify the inbound RFC 9421 HTTP Message Signature (binds origin /
-    //      destination trust headers + the canonical body digest), exactly like
-    //      `/_cokret/peer/*` and the sibling `federation_push_operations`.
+    //   2. verify the inbound RFC 9421 HTTP Message Signature (binds origin / destination trust
+    //      headers + the canonical body digest), exactly like `/_cokret/peer/*` and the sibling
+    //      `federation_push_operations`.
     if crate::security::federation_origin_denied(body.origin.as_str()) {
         return Err(AppError::capability_denied(
             "federation seals push origin is denied by local peer policy",

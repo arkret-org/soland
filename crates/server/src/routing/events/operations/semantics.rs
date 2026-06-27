@@ -580,6 +580,16 @@ pub fn operation_schema_for_kind(kind: &str) -> Option<OperationPayloadSchema> {
                 requirements: &[],
                 validate: None,
             },
+            // R1.2 — `ck.realm.delivery_binding_policy` (member-delivery-binding.md
+            // §4). The reducer dispatch (`apply_delivery_binding_policy`) projects
+            // the whole payload into the `ck.component.realm.delivery_binding_policy.v1`
+            // cell; without a projection-operation schema entry the event is never
+            // turned into an Operation, the policy cell is never set, and every
+            // routable member join fails closed with `delivery_binding_policy_unset`.
+            cokret_sdk::events::kinds::REALM_DELIVERY_BINDING_POLICY => OperationPayloadSchema {
+                requirements: &[],
+                validate: None,
+            },
             cokret_sdk::events::kinds::REALM_HISTORY_SHARING_POLICY
             | cokret_sdk::events::kinds::REALM_PREVIEW_POLICY => OperationPayloadSchema {
                 requirements: REALM_POLICY_VALUE_REQUIREMENTS,

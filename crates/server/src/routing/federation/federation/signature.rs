@@ -871,7 +871,6 @@ fn cross_domain_replay_error(message: impl Into<String>) -> AppError {
     AppError::unauthenticated(FEDERATION_AUTH_FAILURE_MESSAGE)
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;

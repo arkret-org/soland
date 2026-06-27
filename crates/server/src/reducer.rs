@@ -110,9 +110,8 @@ pub use projections::{
     PollOptionState, PollState, ProjectedMessageView, PushRouteCellValue, PushRouteSubject,
     ReactionState, ReadMarkerState, RealmInheritancePolicyState, RealmLinkState,
     RealmOrganizationStatementState, RealmPolicyServerConfig, RedactionCellValue, RsvpProjection,
-    SolandAgentProjection,
-    SolandKeyBackupActiveSeries, SolandMembershipState, SolandRealmState, SolandRelationState,
-    SpaceContainerLifecycleState, SpaceContainerProjection, StrandProjection,
+    SolandAgentProjection, SolandKeyBackupActiveSeries, SolandMembershipState, SolandRealmState,
+    SolandRelationState, SpaceContainerLifecycleState, SpaceContainerProjection, StrandProjection,
     message_expiry_projection_from_value, message_expiry_projection_from_value_with_anchor,
 };
 pub(crate) use projections::{operation_history_basis_seals, space_container_id_from_payload};

@@ -2282,17 +2282,14 @@ async fn validate_set_default_strand_policy(
 
 /// SOL-ORG-03 — two-sided authorization gate for `ck.realm.organization`.
 ///
-///   - **Realm side**: the actor admitting the statement into Realm history
-///     MUST own the Realm or hold `ck.realm.admin` on it. A plain OIDC human
-///     session only proves the executor's identity; it does not by itself
-///     create organization principal control, so the executor still needs the
+///   - **Realm side**: the actor admitting the statement into Realm history MUST own the Realm or
+///     hold `ck.realm.admin` on it. A plain OIDC human session only proves the executor's identity;
+///     it does not by itself create organization principal control, so the executor still needs the
 ///     Realm-admin capability. fail-closed `missing_capability` otherwise.
-///   - **Organization side**: the statement MUST pass the SDK fail-closed
-///     verifier. Delegated issuer roles (`governance_service` /
-///     `account_authority`) require a `delegation_ref`; without a runtime
-///     delegation resolver wired at this layer they are rejected here
-///     (`NoDelegationResolver`), so a Realm admin alone cannot forge
-///     organization consent.
+///   - **Organization side**: the statement MUST pass the SDK fail-closed verifier. Delegated
+///     issuer roles (`governance_service` / `account_authority`) require a `delegation_ref`;
+///     without a runtime delegation resolver wired at this layer they are rejected here
+///     (`NoDelegationResolver`), so a Realm admin alone cannot forge organization consent.
 async fn validate_realm_organization_policy(
     state: &AppState,
     operation: &Operation,

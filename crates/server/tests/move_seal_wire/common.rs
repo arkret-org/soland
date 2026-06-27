@@ -26,12 +26,12 @@ pub(crate) use base64::Engine;
 pub(crate) use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 pub(crate) use cokret_sdk::lattice::CellState;
 pub(crate) use cokret_sdk::signatures::sign_eddsa_detached_jws;
-pub(crate) use ed25519_dalek::SigningKey;
 pub(crate) use cokret_sdk::state_res::state_root::EMPTY_STATE_ROOT;
 pub(crate) use cokret_sdk::state_res::{compute_state_root, control_event_set_root};
 pub(crate) use cokret_sdk::{
     CellRef, Hash, Hlc, Move, MoveId, MoveSignature, NotarySig, RealmId, Seal, SealId, canonical,
 };
+pub(crate) use ed25519_dalek::SigningKey;
 pub(crate) use salvo::http::StatusCode;
 pub(crate) use salvo::test::{ResponseExt, TestClient};
 pub(crate) use serde_json::{Value, json};

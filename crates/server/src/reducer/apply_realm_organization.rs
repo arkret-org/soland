@@ -16,15 +16,13 @@
 //! ## Two-sided authorization gate (SOL-ORG-03)
 //!
 //! Accepting a relationship requires BOTH:
-//!   1. **Realm side** — the event must be admitted into Realm history by a
-//!      bootstrap path or by an actor holding `ck.realm.admin` (enforced at
-//!      ingest in the routing/authz layer, not here — the reducer runs after
-//!      admission). A human OIDC session only proves the executor's identity;
-//!      it never by itself creates organization principal control.
-//!   2. **Organization side** — the statement's `authorization` must pass the
-//!      SDK [`verify_realm_organization_statement`] check: issuer-role /
-//!      delegation coupling (delegated roles MUST carry a resolvable
-//!      `delegation_ref`), proof presence, validity window, and
+//!   1. **Realm side** — the event must be admitted into Realm history by a bootstrap path or by an
+//!      actor holding `ck.realm.admin` (enforced at ingest in the routing/authz layer, not here —
+//!      the reducer runs after admission). A human OIDC session only proves the executor's
+//!      identity; it never by itself creates organization principal control.
+//!   2. **Organization side** — the statement's `authorization` must pass the SDK
+//!      [`verify_realm_organization_statement`] check: issuer-role / delegation coupling (delegated
+//!      roles MUST carry a resolvable `delegation_ref`), proof presence, validity window, and
 //!      status/revocation consistency.
 //!
 //! The reducer is a pure projection with no DID-document runtime, so it injects
@@ -78,9 +76,12 @@ impl ProjectionState {
         // the offline resolver. Delegated issuer roles
         // (governance_service / account_authority) require a live delegation
         // and are rejected here until a runtime resolver is injected upstream.
-        if let Err(error) =
-            verify_realm_organization_statement(&payload, &expected_realm_id, now, &NoDelegationResolver)
-        {
+        if let Err(error) = verify_realm_organization_statement(
+            &payload,
+            &expected_realm_id,
+            now,
+            &NoDelegationResolver,
+        ) {
             tracing::warn!(
                 statement_id = %payload.statement_id,
                 organization_id = %payload.organization_id.as_str(),
@@ -143,7 +144,11 @@ impl ProjectionState {
             updated_at: now,
         };
         self.realm_organization_statements.insert(
-            (realm_id.clone(), organization_id.clone(), relationship.clone()),
+            (
+                realm_id.clone(),
+                organization_id.clone(),
+                relationship.clone(),
+            ),
             row,
         );
 
@@ -180,7 +185,7 @@ impl ProjectionState {
     ) -> Vec<&RealmOrganizationStatementState> {
         self.realm_organization_statements
             .iter()
-            .filter(|((rid, _, _), _)| rid == realm_id)
+            .filter(|((rid, ..), _)| rid == realm_id)
             .map(|(_, row)| row)
             .collect()
     }
@@ -341,12 +346,7 @@ mod tests {
     }
 
     /// Active `organization_did` statement (no delegation_ref required).
-    fn active_payload(
-        realm_id: &str,
-        org: &str,
-        relationship: &str,
-        scopes: &[&str],
-    ) -> Value {
+    fn active_payload(realm_id: &str, org: &str, relationship: &str, scopes: &[&str]) -> Value {
         json!({
             "statement_id": format!("org-stmt-{relationship}"),
             "realm_id": realm_id,
@@ -396,7 +396,10 @@ mod tests {
     #[test]
     fn distinct_relationships_coexist_for_same_realm() {
         let mut state = ProjectionState::new();
-        apply(&mut state, active_payload(REALM, ORG, "owner", &["realm_admin"]));
+        apply(
+            &mut state,
+            active_payload(REALM, ORG, "owner", &["realm_admin"]),
+        );
         apply(
             &mut state,
             active_payload(REALM, ORG2, "governance", &["moderation_policy"]),
@@ -415,8 +418,16 @@ mod tests {
     #[test]
     fn revoked_statement_marks_inactive_but_retains_audit() {
         let mut state = ProjectionState::new();
-        apply(&mut state, active_payload(REALM, ORG, "owner", &["realm_admin"]));
-        assert_eq!(state.verified_organization_relationships(REALM, now()).len(), 1);
+        apply(
+            &mut state,
+            active_payload(REALM, ORG, "owner", &["realm_admin"]),
+        );
+        assert_eq!(
+            state
+                .verified_organization_relationships(REALM, now())
+                .len(),
+            1
+        );
 
         let mut revoke = active_payload(REALM, ORG, "owner", &["realm_admin"]);
         revoke["status"] = json!("revoked");
@@ -428,14 +439,21 @@ mod tests {
             ProjectionEffect::RealmOrganizationProjected { ref status, .. } if status == "revoked"
         ));
         // Verified relationship + control scope immediately gone.
-        assert!(state.verified_organization_relationships(REALM, now()).is_empty());
+        assert!(
+            state
+                .verified_organization_relationships(REALM, now())
+                .is_empty()
+        );
         assert!(!state.realm_has_verified_control_scope(REALM, Scope::RealmAdmin, now()));
         // Audit row retained with the revoking statement_id.
         let all = state.realm_organization_statements_for_realm(REALM);
         assert_eq!(all.len(), 1);
         assert_eq!(all[0].status, "revoked");
         assert_eq!(all[0].statement_id, "org-stmt-owner-2");
-        assert_eq!(all[0].revokes_statement_id.as_deref(), Some("org-stmt-owner"));
+        assert_eq!(
+            all[0].revokes_statement_id.as_deref(),
+            Some("org-stmt-owner")
+        );
     }
 
     #[test]
@@ -445,8 +463,15 @@ mod tests {
         payload["expires_at"] = json!("2026-06-25T06:00:00Z");
         apply(&mut state, payload);
         // Row stored, but not verified at `now()` (12:00 > 06:00 expiry).
-        assert_eq!(state.realm_organization_statements_for_realm(REALM).len(), 1);
-        assert!(state.verified_organization_relationships(REALM, now()).is_empty());
+        assert_eq!(
+            state.realm_organization_statements_for_realm(REALM).len(),
+            1
+        );
+        assert!(
+            state
+                .verified_organization_relationships(REALM, now())
+                .is_empty()
+        );
     }
 
     #[test]
@@ -455,7 +480,11 @@ mod tests {
         let mut payload = active_payload(REALM, ORG, "owner", &["realm_admin"]);
         payload["not_before"] = json!("2026-06-26T00:00:00Z");
         apply(&mut state, payload);
-        assert!(state.verified_organization_relationships(REALM, now()).is_empty());
+        assert!(
+            state
+                .verified_organization_relationships(REALM, now())
+                .is_empty()
+        );
     }
 
     #[test]
@@ -465,7 +494,11 @@ mod tests {
         payload["authorization"]["issuer_role"] = json!("governance_service");
         let effect = apply(&mut state, payload);
         assert!(matches!(effect, ProjectionEffect::Rejected { .. }));
-        assert!(state.realm_organization_statements_for_realm(REALM).is_empty());
+        assert!(
+            state
+                .realm_organization_statements_for_realm(REALM)
+                .is_empty()
+        );
     }
 
     #[test]
@@ -503,7 +536,10 @@ mod tests {
     #[test]
     fn malformed_payload_is_schema_violation() {
         let mut state = ProjectionState::new();
-        let effect = apply(&mut state, json!({ "organization_ref": "did:web:org.example" }));
+        let effect = apply(
+            &mut state,
+            json!({ "organization_ref": "did:web:org.example" }),
+        );
         assert!(matches!(
             effect,
             ProjectionEffect::Rejected { ref reason }
@@ -514,7 +550,10 @@ mod tests {
     #[test]
     fn proof_digest_is_recorded_not_raw_bytes() {
         let mut state = ProjectionState::new();
-        apply(&mut state, active_payload(REALM, ORG, "owner", &["realm_admin"]));
+        apply(
+            &mut state,
+            active_payload(REALM, ORG, "owner", &["realm_admin"]),
+        );
         let row = state.realm_organization_statements_for_realm(REALM)[0];
         let digest = row.proof_digest.as_deref().expect("proof digest");
         assert_ne!(digest, "c2ln");
