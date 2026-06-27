@@ -357,6 +357,21 @@ pub(crate) fn apply_claim_level_partition(
         cokret_sdk::ClaimedProfileEntry::self_claimed("ck.profile.principal_server_events_api.v1"),
         cokret_sdk::ClaimedProfileEntry {
             notes: Some(
+                "Full MLS Governance Binding: reducer validates governance_binding \
+                 policy_root / metadata coverage and the covered_seals_cell coverage \
+                 gate for E2EE DataEvent seal_refs. This is the cross-deployment E2EE \
+                 federation interop floor (crypto-media/encryption-and-audit.md §2.5 / \
+                 §295); a principal server federating MLS-backed Realms MUST advertise \
+                 it, and it is mutually exclusive with ck.profile.e2ee_relaxed.v1 \
+                 (not claimed)."
+                    .to_owned(),
+            ),
+            ..cokret_sdk::ClaimedProfileEntry::self_claimed(
+                "ck.profile.mls_governance_binding.full.v1",
+            )
+        },
+        cokret_sdk::ClaimedProfileEntry {
+            notes: Some(
                 "MIMI provider facade first round (not a full v1 core conformance claim)"
                     .to_owned(),
             ),
