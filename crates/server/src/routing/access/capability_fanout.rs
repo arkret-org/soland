@@ -61,12 +61,26 @@ pub(super) fn router() -> Router {
     Router::new().push(Router::with_path("authz/capability-fanout").post(submit_fanout))
 }
 
+// Deployment-local server-to-server product surface, mounted under the
+// `/_soland/root/...` negative-space root (NOT the `/_cokret/*` protocol
+// root). Per service-http-binding.md §2.1.3(b), a product / deployment-private
+// capability between the Auth Server (coauth) and this Principal Server MUST
+// live on the implementation's own root and MUST NOT occupy a `/_cokret/*`
+// production trust-surface segment. coauth issues this fanout in its Auth-Server
+// role — it holds no principal session, so the protocol `POST /_cokret/self/events`
+// path (which requires `user_session` / `device_proof` / a principal-authorised
+// delegated service signature, service-http-binding.md §2.1 row `self/events`
+// + §189) is not an available caller surface. The reverse-DNS `org.cokret.soland.*`
+// operation_id mirrors the device-signing-key directory read
+// (`org.cokret.soland.gate.account.device_signing_keys.query`): both are
+// deployment-internal S2S contracts, not spec operations. Trust boundary is
+// registered in coauth `docs/{zh,en}/setup/principal-server.md`.
 #[endpoint(
-    operation_id = "soland.root.authz.capability_fanout.submit",
+    operation_id = "org.cokret.soland.root.authz.capability_fanout.submit",
     tags("soland-local"),
-    summary = "Materialize coauth-issued collaboration capability fanout"
+    summary = "Materialize coauth-issued collaboration capability fanout (deployment-internal S2S)"
 )]
-#[tracing::instrument(skip_all, fields(op = "soland.root.authz.capability_fanout.submit"))]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.root.authz.capability_fanout.submit"))]
 async fn submit_fanout(
     body: JsonBody<Value>,
     depot: &mut Depot,
