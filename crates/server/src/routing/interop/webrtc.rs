@@ -7,10 +7,11 @@
 //! These are the only spec-registered media surfaces. Both are stateless with
 //! respect to any ephemeral signaling session: the media token issuer reads the
 //! durable `ck.call.state` cell (`ck.component.call.state.v1`) for the committed
-//! `session_focus` and the `removed_participants[]` ban set, and ICE config is a
-//! transport-layer discovery surface bound to the authenticated `(actor,
-//! device)`. STUN/TURN URLs, credential TTLs, and the optional TURN shared
-//! secret are operator-configurable via `AppConfig::ice`.
+//! `session_focus`, the `removed_participants[]` ban set, and the current
+//! `participant_mute_overrides[]` set, and ICE config is a transport-layer
+//! discovery surface bound to the authenticated `(actor, device)`. STUN/TURN
+//! URLs, credential TTLs, and the optional TURN shared secret are
+//! operator-configurable via `AppConfig::ice`.
 
 use std::collections::BTreeSet;
 
@@ -745,8 +746,9 @@ async fn handle_rtc_token(
     // `bindings/livekit.md` §2/§5 — publish grants are derived from the
     // caller's `desired_media`. Absent the field we default to audio+video
     // (no screen): screen capture is an opt-in source gated by
-    // `ck.call.screen_share`.
-    let desired_media = body
+    // `ck.call.screen_share`. Durable moderator mute overrides are applied
+    // here so every backend token is minted with the narrowed send permission.
+    let mut desired_media = body
         .desired_media
         .as_ref()
         .map(|media| {
@@ -757,6 +759,14 @@ async fn handle_rtc_token(
             )
         })
         .unwrap_or((true, true, false));
+    let (audio_muted, video_muted) =
+        call_state.participant_mute_override(body.actor_id.as_str(), body.device_id.as_str());
+    if audio_muted {
+        desired_media.0 = false;
+    }
+    if video_muted {
+        desired_media.1 = false;
+    }
     // `bindings/livekit.md` §5 — the `screen_share` publish source is gated by
     // a real `ck.call.screen_share` capability, not merely the presence of any
     // `capability_refs`. Resolve it against the projected grants so an actor
@@ -965,6 +975,39 @@ impl CallStateCell {
             row.get("action").and_then(Value::as_str) == Some("ban")
                 && row.get("actor_id").and_then(Value::as_str) == Some(actor_id)
         })
+    }
+
+    /// Current moderator mute override for this call leg. Duplicate malformed
+    /// rows fail closed: any matching `*_muted=true` removes that publish
+    /// permission from the issued backend token.
+    fn participant_mute_override(&self, actor_id: &str, device_id: &str) -> (bool, bool) {
+        let Some(rows) = self
+            .value
+            .as_ref()
+            .and_then(|value| value.get("participant_mute_overrides"))
+            .and_then(Value::as_array)
+        else {
+            return (false, false);
+        };
+        rows.iter()
+            .filter(|row| {
+                row.get("actor_id").and_then(Value::as_str) == Some(actor_id)
+                    && row.get("device_id").and_then(Value::as_str) == Some(device_id)
+            })
+            .fold((false, false), |(audio, video), row| {
+                (
+                    audio
+                        || row
+                            .get("audio_muted")
+                            .and_then(Value::as_bool)
+                            .unwrap_or(false),
+                    video
+                        || row
+                            .get("video_muted")
+                            .and_then(Value::as_bool)
+                            .unwrap_or(false),
+                )
+            })
     }
 }
 
@@ -1217,6 +1260,7 @@ fn issue_signed_backend_token(
     signing_key: &ed25519_dalek::SigningKey,
 ) -> IssuedMediaToken {
     let nonce = ids::generate("media_token");
+    let (audio, video, screen) = token_media_permissions(request);
     let token_payload = json!({
         "iss": request.focus.issuer_kid,
         "aud": request.focus.audience,
@@ -1230,6 +1274,11 @@ fn issue_signed_backend_token(
         "e2ee_key_source": request.focus.e2ee_key_source,
         "iat": request.issued_at,
         "exp": request.expires_at,
+        "media": {
+            "audio": audio,
+            "video": video,
+            "screen": screen,
+        },
         "nonce": nonce,
     });
     let token_bytes = cokret_sdk::canonical::canonical_json_bytes(&token_payload)
@@ -1250,6 +1299,11 @@ fn issue_signed_backend_token(
         ),
         connect_url: request.focus.connect_url.clone(),
     }
+}
+
+fn token_media_permissions(request: &MediaTokenIssueRequestBody<'_>) -> (bool, bool, bool) {
+    let (audio, video, screen) = request.desired_media;
+    (audio, video, screen && request.allow_screen_share)
 }
 
 /// LiveKit backend token (`bindings/livekit.md` §2). Emits a **standard
@@ -1287,7 +1341,7 @@ fn issue_livekit_backend_token(
         )));
     }
 
-    let (audio, video, screen) = request.desired_media;
+    let (audio, video, screen) = token_media_permissions(request);
     let mut can_publish_sources = Vec::new();
     if audio {
         can_publish_sources.push("microphone");
@@ -1295,7 +1349,7 @@ fn issue_livekit_backend_token(
     if video {
         can_publish_sources.push("camera");
     }
-    if screen && request.allow_screen_share {
+    if screen {
         can_publish_sources.push("screen_share");
     }
     let can_publish = !can_publish_sources.is_empty();
@@ -1409,6 +1463,81 @@ async fn cokret_rtc_token(
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     handle_rtc_token(state, &session, body.into_inner()).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn participant_mute_override_matches_call_leg_and_fails_closed_on_duplicates() {
+        let cell = CallStateCell {
+            value: Some(json!({
+                "participant_mute_overrides": [
+                    {
+                        "actor_id": "did:web:alice.example",
+                        "device_id": "ck:device:01904100-0000-7000-8000-000000000001",
+                        "audio_muted": false,
+                        "video_muted": false,
+                        "muted_by": "did:web:mod.example",
+                        "muted_at": "2026-06-16T00:00:00Z"
+                    },
+                    {
+                        "actor_id": "did:web:alice.example",
+                        "device_id": "ck:device:01904100-0000-7000-8000-000000000001",
+                        "audio_muted": true,
+                        "video_muted": false,
+                        "muted_by": "did:web:mod.example",
+                        "muted_at": "2026-06-16T00:00:01Z"
+                    },
+                    {
+                        "actor_id": "did:web:alice.example",
+                        "device_id": "ck:device:01904100-0000-7000-8000-000000000002",
+                        "audio_muted": false,
+                        "video_muted": true,
+                        "muted_by": "did:web:mod.example",
+                        "muted_at": "2026-06-16T00:00:02Z"
+                    }
+                ]
+            })),
+        };
+
+        assert_eq!(
+            cell.participant_mute_override(
+                "did:web:alice.example",
+                "ck:device:01904100-0000-7000-8000-000000000001",
+            ),
+            (true, false)
+        );
+    }
+
+    #[test]
+    fn token_media_permissions_gate_screen_after_mute_adjustment() {
+        let focus = MediaProviderConfig {
+            provider: MediaProviderKind::CokretNative,
+            focus_id: "ck:focus:cokret-native:test".to_owned(),
+            issuer_kid: "did:web:media.example#key-1".to_owned(),
+            audience: "media".to_owned(),
+            ttl_seconds: 300,
+            connect_url: Some("https://media.example".to_owned()),
+            e2ee_key_source: None,
+        };
+        let issued_at = Utc::now();
+        let request = MediaTokenIssueRequestBody {
+            focus: &focus,
+            realm_id: "ck:realm:01904100-0000-7000-8000-cfc039892063",
+            call_id: "ck:call:01904100-0000-7000-8000-c0000000000c",
+            actor_id: "did:web:alice.example",
+            device_id: "ck:device:01904100-0000-7000-8000-000000000001",
+            participant_identity: "ck:rtc_participant:01904100-0000-7000-8000-000000000009",
+            desired_media: (false, true, true),
+            allow_screen_share: false,
+            issued_at,
+            expires_at: issued_at + Duration::seconds(300),
+        };
+
+        assert_eq!(token_media_permissions(&request), (false, true, false));
+    }
 }
 
 // `webrtc-signaling.md` §3 — canonical capability actions. The registry is

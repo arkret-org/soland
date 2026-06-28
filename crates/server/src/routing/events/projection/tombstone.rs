@@ -587,7 +587,6 @@ mod tests {
             expiry: Some(json!({
                 "ttl_ms": 1,
                 "trigger": "on_send",
-                "seal_hlc": "2020-01-01T00:00:00Z",
                 "grace_ms": 0
             })),
             encrypted: false,
@@ -681,7 +680,6 @@ mod tests {
         message.expiry = Some(json!({
             "ttl_ms": 86_400_000,
             "trigger": "on_first_read",
-            "seal_hlc": "2026-06-19T00:00:00Z",
             "grace_ms": 0
         }));
         let projection = ProjectionState::new();
@@ -696,6 +694,7 @@ mod tests {
         assert_eq!(event["expiry_trigger"], json!("on_first_read"));
         assert_eq!(event["content"]["body"], json!("secret"));
         assert!(event.get("expires_at").is_none());
+        assert!(event.get("expiry_anchor_hlc").is_none());
     }
 
     #[test]
@@ -820,7 +819,6 @@ mod tests {
                 "expiry": {
                     "ttl_ms": 1,
                     "trigger": "on_send",
-                    "seal_hlc": "2020-01-01T00:00:00Z",
                     "grace_ms": 0
                 }
             }),

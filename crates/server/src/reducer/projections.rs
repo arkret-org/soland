@@ -1003,11 +1003,6 @@ pub fn message_expiry_projection_from_value_with_anchor(
         .and_then(Value::as_str)
         .unwrap_or("unknown")
         .to_owned();
-    let payload_anchor_hlc = object
-        .get("seal_hlc")
-        .and_then(Value::as_str)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned);
 
     if matches!(trigger.as_str(), "on_first_read" | "on_last_read") {
         let ttl_ms = object.get("ttl_ms").and_then(Value::as_u64);
@@ -1017,7 +1012,7 @@ pub fn message_expiry_projection_from_value_with_anchor(
                 state: MessageExpiryProjectionState::Live,
                 trigger,
                 expires_at: None,
-                anchor_hlc: payload_anchor_hlc,
+                anchor_hlc: None,
             });
         };
         let expires_at = ttl_ms
@@ -1053,7 +1048,7 @@ pub fn message_expiry_projection_from_value_with_anchor(
             state: MessageExpiryProjectionState::InvalidMetadata,
             trigger,
             expires_at: None,
-            anchor_hlc: payload_anchor_hlc,
+            anchor_hlc: None,
         });
     }
     let ttl_ms = object.get("ttl_ms").and_then(Value::as_u64);
@@ -1069,7 +1064,7 @@ pub fn message_expiry_projection_from_value_with_anchor(
             state: MessageExpiryProjectionState::InvalidMetadata,
             trigger,
             expires_at: None,
-            anchor_hlc: payload_anchor_hlc,
+            anchor_hlc: None,
         });
     };
     Some(MessageExpiryProjection {
@@ -1080,7 +1075,7 @@ pub fn message_expiry_projection_from_value_with_anchor(
         },
         trigger,
         expires_at: Some(expires_at),
-        anchor_hlc: payload_anchor_hlc,
+        anchor_hlc: None,
     })
 }
 

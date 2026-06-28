@@ -209,6 +209,78 @@ fn call_state_removed_participants_ban_set_is_monotonic() {
     assert_eq!(rows[0]["actor_id"], "did:web:bob.example");
 }
 
+/// `call-state.md` §4 — `participant_mute_overrides[]` is the current
+/// moderator override set, not an append-only audit trail. A later
+/// `ck.call.state` event can remove an override by writing a replacement array.
+#[test]
+fn call_state_participant_mute_overrides_are_current_set() {
+    let mut state = ProjectionState::new();
+    let hlc = ServerHlc::new("test");
+    let realm = "ck:realm:01904100-0000-7000-8000-cfc039892063";
+    let call_id = "ck:call:01904100-0000-7000-8000-c0000000000c";
+    let cell_id =
+        cokret_sdk::CellRef::new(format!("ck:cell:ck.component.call.state.v1:{call_id}")).unwrap();
+
+    assert!(matches!(
+        state.apply(
+            &make_operation(
+                cokret_sdk::events::kinds::CALL_STATE,
+                realm,
+                serde_json::json!({ "call_id": call_id, "state": "ringing" }),
+            ),
+            &hlc,
+        ),
+        ProjectionEffect::CallStateProjected { .. }
+    ));
+
+    assert!(matches!(
+        state.apply(
+            &make_operation(
+                cokret_sdk::events::kinds::CALL_STATE,
+                realm,
+                serde_json::json!({
+                    "call_id": call_id,
+                    "state": "active",
+                    "participant_mute_overrides": [{
+                        "actor_id": "did:web:bob.example",
+                        "device_id": "ck:device:01904100-0000-7000-8000-000000000002",
+                        "audio_muted": true,
+                        "video_muted": false,
+                        "muted_by": "did:web:mod.example",
+                        "muted_at": "2026-06-16T00:00:00Z"
+                    }]
+                }),
+            ),
+            &hlc,
+        ),
+        ProjectionEffect::CallStateProjected { .. }
+    ));
+    assert_eq!(
+        state.cell_value(&cell_id).unwrap()["participant_mute_overrides"][0]["audio_muted"],
+        true
+    );
+
+    assert!(matches!(
+        state.apply(
+            &make_operation(
+                cokret_sdk::events::kinds::CALL_STATE,
+                realm,
+                serde_json::json!({
+                    "call_id": call_id,
+                    "state": "active",
+                    "participant_mute_overrides": []
+                }),
+            ),
+            &hlc,
+        ),
+        ProjectionEffect::CallStateProjected { .. }
+    ));
+    let rows = state.cell_value(&cell_id).unwrap()["participant_mute_overrides"]
+        .as_array()
+        .expect("override set remains an array");
+    assert!(rows.is_empty(), "empty replacement clears the override");
+}
+
 /// `call-state.md` §4.2 — the `state` lifecycle FSM: first-state range, the
 /// legal-successor table, terminal absorption, and idempotent replay.
 #[test]

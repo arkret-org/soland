@@ -355,7 +355,7 @@ pub(crate) fn validate_message_expiry_payload(operation: &Operation) -> Result<(
         return Err("ck.message.create.payload.expiry must be an object");
     };
     for key in object.keys() {
-        if !["ttl_ms", "trigger", "seal_hlc", "grace_ms"].contains(&key.as_str()) {
+        if !["ttl_ms", "trigger", "grace_ms"].contains(&key.as_str()) {
             return Err("ck.message.create.payload.expiry has unknown field");
         }
     }
@@ -369,12 +369,6 @@ pub(crate) fn validate_message_expiry_payload(operation: &Operation) -> Result<(
     match object.get("trigger").and_then(Value::as_str) {
         Some("on_send" | "on_first_read" | "on_last_read") => {}
         _ => return Err("ck.message.create.payload.expiry trigger is invalid"),
-    }
-    if object
-        .get("seal_hlc")
-        .is_some_and(|value| value.as_str().is_none_or(str::is_empty))
-    {
-        return Err("ck.message.create.payload.expiry seal_hlc must be non-empty");
     }
     if object
         .get("grace_ms")
@@ -1097,4 +1091,53 @@ fn is_valid_encrypted_envelope_digest(value: &str) -> bool {
         && digest
             .bytes()
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+#[cfg(test)]
+mod tests {
+    use cokret_sdk::Operation;
+    use serde_json::json;
+
+    use super::validate_message_expiry_payload;
+
+    fn message_operation(expiry: serde_json::Value) -> Operation {
+        Operation::create(
+            cokret_sdk::OperationId::new(
+                "ck:operation:01904100-0000-7000-8000-0000000000e1".to_owned(),
+            )
+            .unwrap(),
+            cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-cfc039892036").unwrap(),
+            cokret_sdk::events::kinds::MESSAGE_CREATE,
+            json!({
+                "content": {"kind": "ck.content.text", "body": "secret"},
+                "expiry": expiry
+            }),
+        )
+    }
+
+    #[test]
+    fn message_expiry_accepts_current_wire_shape() {
+        let operation = message_operation(json!({
+            "ttl_ms": 60_000,
+            "trigger": "on_send",
+            "grace_ms": 1_000
+        }));
+
+        assert_eq!(validate_message_expiry_payload(&operation), Ok(()));
+    }
+
+    #[test]
+    fn message_expiry_rejects_removed_seal_hlc() {
+        let operation = message_operation(json!({
+            "ttl_ms": 60_000,
+            "trigger": "on_send",
+            "grace_ms": 1_000,
+            "seal_hlc": "019041000000-0001-00000001"
+        }));
+
+        assert_eq!(
+            validate_message_expiry_payload(&operation),
+            Err("ck.message.create.payload.expiry has unknown field")
+        );
+    }
 }
