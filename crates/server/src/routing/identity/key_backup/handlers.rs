@@ -237,7 +237,7 @@ pub(super) async fn owned_key_backup_snapshot(
 pub(super) async fn put_key_backup(
     aa: AuthArgs,
     backup_id: PathParam<String>,
-    backup: JsonBody<Value>,
+    backup: JsonBody<KeyBackup>,
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<KeysBackupsReplaceOutcome> {
@@ -255,7 +255,10 @@ pub(super) async fn put_key_backup(
             "backup_id must be a ck:backup:<uuidv7> typed id: {error}"
         ))
     })?;
-    let backup = typed_key_backup_body(&backup.into_inner())?;
+    // The request body is now deserialized straight into the SDK `KeyBackup`
+    // type (matching `request_schema_ref: key-backup.schema.json`), so the
+    // OpenAPI request contract is strong rather than `Value`.
+    let backup = backup.into_inner();
     validate_key_backup_body_typed(&typed_backup_id, &session.actor, &backup)?;
     if backup.is_first_did_recovery_backup() && !backup.satisfies_first_did_recovery_backup_gate() {
         return Err(AppError::new(

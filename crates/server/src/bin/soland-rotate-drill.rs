@@ -60,14 +60,16 @@ struct Args {
 fn parse_args() -> anyhow::Result<Args> {
     let raw: Vec<String> = std::env::args().collect();
     let mut mode = Mode::RotateDrill;
-    let mut service_did =
-        std::env::var("SERVERX_SERVICE_DID").unwrap_or_else(|_| "did:web:soland.local".to_owned());
-    let mut target_url = std::env::var("PASION_TARGET_URL")
-        .ok()
-        .or_else(|| std::env::var("SERVERX_PUBLIC_BASE_URL").ok());
-    let mut bearer = std::env::var("PASION_SESSION_TOKEN")
-        .ok()
-        .or_else(|| std::env::var("SERVERX_ADMIN_BEARER").ok());
+    // Canonical env is `SOLAND_SERVICE_DID` (see `config.rs`); default mirrors
+    // the server's own did:webvh default. `did:web` is never the default — a
+    // drill that silently signs against a forbidden DID would also derive the
+    // wrong notary KeyStore id (`cokret:signer:soland-notary:<service_did>`).
+    let mut service_did = std::env::var("SOLAND_SERVICE_DID").unwrap_or_else(|_| {
+        "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service"
+            .to_owned()
+    });
+    let mut target_url = std::env::var("SOLAND_PUBLIC_BASE_URL").ok();
+    let mut bearer = std::env::var("SOLAND_ADMIN_BEARER").ok();
     let mut realm_id: Option<String> = None;
     let mut output = None;
     let mut input = None;

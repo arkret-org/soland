@@ -108,14 +108,6 @@ pub(super) fn key_backup_to_value(backup: &KeyBackup) -> Result<Value, AppError>
         .map_err(|error| AppError::internal(format!("key backup body re-encode failed: {error}")))
 }
 
-pub(super) fn typed_key_backup_body(body: &Value) -> Result<KeyBackup, AppError> {
-    serde_json::from_value(body.clone()).map_err(|error| {
-        schema_error(format!(
-            "key backup payload failed SDK type validation: {error}"
-        ))
-    })
-}
-
 pub(super) fn validate_key_backup_body_typed(
     backup_id: &BackupId,
     actor_id: &str,
