@@ -680,6 +680,8 @@ impl AppState {
             proj.space_containers.extend(proj_updates.space_containers);
             proj.strands.extend(proj_updates.strands);
             proj.morphs.extend(proj_updates.morphs);
+            proj.mls_key_packages.extend(proj_updates.mls_key_packages);
+            proj.mls_commit_epochs.extend(proj_updates.mls_commit_epochs);
             proj.replay_resolved_pending(&self.hlc);
         }
 
@@ -1329,8 +1331,9 @@ async fn hydrate_projections_from_persistence(
     authz: &SolandAuthzEngine,
 ) {
     use crate::reducer::{
-        AppletProjection, ChildScopePolicy, MorphProjection, ObjectLifecycleState,
-        SpaceContainerLifecycleState, SpaceContainerProjection, StrandProjection,
+        AppletProjection, ChildScopePolicy, KeyPackageLifetime, MlsCommitEpoch, MlsCommitEpochKey,
+        MlsKeyPackage, MorphProjection, ObjectLifecycleState, SpaceContainerLifecycleState,
+        SpaceContainerProjection, StrandProjection,
     };
 
     fn parse_space_container_state(value: &str) -> Option<SpaceContainerLifecycleState> {
@@ -1537,6 +1540,85 @@ async fn hydrate_projections_from_persistence(
             hydrate_applet_install_grants(authz, &row, &package, registered_at);
         }
     }
+
+    // MLS KeyPackage projection — the claim selector reads ONLY this in-memory
+    // map (`routing/mls.rs`), so without this rehydration the admin can never
+    // claim a joined invitee's KeyPackage after a restart and admission stalls
+    // ("waiting for a Welcome"). The durable `mls_key_packages` table is the
+    // authoritative store; mirror it back 1:1.
+    if let Ok(rows) = persistence.mls_key_packages().snapshot_all().await {
+        for row in rows {
+            proj.mls_key_packages.insert(
+                row.id.clone(),
+                MlsKeyPackage {
+                    id: row.id,
+                    keypackage_ref: row.keypackage_ref,
+                    keypackage_digest: row.keypackage_digest,
+                    actor_id: row.actor_id,
+                    device_id: row.device_id,
+                    lifetime: KeyPackageLifetime {
+                        not_before: row.lifetime_not_before,
+                        not_after: row.lifetime_not_after,
+                    },
+                    key_package_bytes: row.key_package_bytes,
+                    capabilities: row.capabilities,
+                    capabilities_digest: row.capabilities_digest,
+                    device_signature: row.device_signature,
+                    last_resort: row.last_resort,
+                    last_resort_realm_id: row.last_resort_realm_id,
+                    claimed_by: row.claimed_by_mls_group_id,
+                    ssk_generation: row.ssk_generation,
+                    device_authorize_event_id: row.device_authorize_event_id,
+                    consumed_at: row.consumed_at,
+                    created_at: row.created_at,
+                },
+            );
+        }
+    }
+
+    // MLS commit-epoch projection — the reducer treats this in-memory map as the
+    // epoch CAS authority (`reducer/mls.rs apply_commit_epoch`). Without
+    // rehydration, after a restart the genesis guard sees no epoch row and an
+    // admin's add-member commit is rejected (or forks the epoch from 0),
+    // breaking E2EE membership advance. The durable `mls_commits` table carries
+    // the authoritative epoch per group. `accepted_commit_digest` /
+    // `accepted_from_epoch` are ⊥-contention bookkeeping not persisted to the
+    // durable row; defaulting them to `None` only loses contention detection
+    // against a commit that raced the exact restart boundary (vanishingly rare),
+    // never the epoch / policy_root the genesis locked.
+    if let Ok(records) = persistence.mls_commits().snapshot_all().await {
+        for record in records {
+            let Ok(scope_key) = crate::reducer::mls::effective_scope_key(&record.effective_scope)
+            else {
+                tracing::warn!(
+                    group_id = %record.group_id,
+                    "skipping mls_commit row with invalid effective_scope during hydrate"
+                );
+                continue;
+            };
+            let policy_root = record
+                .governance_binding
+                .get("policy_root")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_owned();
+            proj.mls_commit_epochs.insert(
+                MlsCommitEpochKey::new(scope_key, record.group_id.clone()),
+                MlsCommitEpoch {
+                    group_id: record.group_id,
+                    effective_scope: record.effective_scope,
+                    epoch: record.epoch,
+                    leader_actor_id: record.leader_actor_id,
+                    covered_seals: record.covered_seals,
+                    committed_at: record.committed_at,
+                    policy_root,
+                    accepted_commit_digest: None,
+                    accepted_from_epoch: None,
+                    frontier_contested: record.frontier_contested,
+                },
+            );
+        }
+    }
 }
 
 fn hydrate_applet_install_grants(
@@ -1605,6 +1687,16 @@ async fn hydrate_realms_from_canonical_events(
     for record in events {
         if record.kind == "ck.realm.create" {
             hydrate_realm_create_event(persistence, realms, &record, service_did).await;
+        } else if record.kind == "ck.member.state" {
+            // Membership transitions MUST be replayed too, or every joined
+            // member except the realm creator (who is seeded by
+            // `hydrate_realm_create_event`) vanishes from `realm_entry.members`
+            // on restart. That silently breaks admin-side MLS admission: the
+            // admin's synced roster shows only itself, `other_joined` stays
+            // false, and a newly-joined invitee is never claimed/Welcomed —
+            // stuck "waiting for a Welcome" forever. Mirrors the live
+            // projection in `routing/events/projection/realm.rs`.
+            hydrate_realm_member_state_event(realms, &record);
         } else if matches!(
             record.kind.as_str(),
             "ck.realm.history_visibility"
@@ -1614,6 +1706,71 @@ async fn hydrate_realms_from_canonical_events(
         ) {
             hydrate_realm_policy_event(persistence, &record).await;
         }
+    }
+}
+
+/// Replay one persisted `ck.member.state` event into the rebuilt realm
+/// directory on boot. `join` adds the member to `realm_entry.members`;
+/// `leave`/`ban` removes them. Other transitions (`invite`/`knock`) do not
+/// affect the directory member set (they live in the structured membership
+/// projection, consistent with the live `apply_membership` path). Events are
+/// replayed in persisted (chronological) order, so the `ck.realm.create` that
+/// seeds the directory entry is always applied before any membership delta.
+fn hydrate_realm_member_state_event(
+    realms: &mut RealmDirectoryIndex,
+    record: &CanonicalEventRecord,
+) {
+    let payload = record.envelope.get("payload");
+    let membership = payload
+        .and_then(|payload| payload.get("membership"))
+        .and_then(Value::as_str);
+    if !matches!(membership, Some("join" | "leave" | "ban")) {
+        return;
+    }
+    let Some(member) = payload
+        .and_then(|payload| {
+            payload
+                .get("actor_id")
+                .or_else(|| payload.get("member"))
+                .or_else(|| payload.get("member_id"))
+                .or_else(|| payload.get("subject"))
+        })
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .map(ToOwned::to_owned)
+        .or_else(|| Some(record.actor_id.clone()))
+        .filter(|value| !value.trim().is_empty())
+    else {
+        return;
+    };
+    let Some(realm_id) = record
+        .envelope
+        .get("realm_id")
+        .and_then(Value::as_str)
+        .or(record.realm_id.as_deref())
+        .map(normalize_persisted_realm_id)
+    else {
+        return;
+    };
+    let Ok(realm_id) = RealmId::new(realm_id) else {
+        return;
+    };
+    let Ok(member) = Did::new(member) else {
+        return;
+    };
+    let Some(entry) = realms.get_mut(&realm_id) else {
+        // No directory entry yet (create event not seen / pruned) — nothing to
+        // attach the membership to.
+        return;
+    };
+    match membership {
+        Some("join") => {
+            entry.members.insert(member);
+        }
+        Some("leave" | "ban") => {
+            entry.members.remove(&member);
+        }
+        _ => {}
     }
 }
 
@@ -1828,4 +1985,189 @@ fn canonical_value_digest(value: &Value) -> Option<String> {
 
 fn normalize_persisted_realm_id(id: &str) -> String {
     id.to_owned()
+}
+
+#[cfg(test)]
+mod membership_hydration_tests {
+    use super::*;
+    use cokret_sdk::{Did, RealmId};
+
+    fn member_state_event(realm_id: &str, member: &str, membership: &str) -> CanonicalEventRecord {
+        CanonicalEventRecord {
+            event_id: format!("ck:event:{member}-{membership}"),
+            actor_id: member.to_owned(),
+            actor_seq: 1,
+            realm_id: Some(realm_id.to_owned()),
+            kind: "ck.member.state".to_owned(),
+            schema_id: String::new(),
+            canonical_digest: String::new(),
+            canonical_bytes: Vec::new(),
+            envelope: serde_json::json!({
+                "realm_id": realm_id,
+                "payload": { "membership": membership, "actor_id": member },
+            }),
+            received_at: chrono::DateTime::<chrono::Utc>::from_timestamp(0, 0).unwrap(),
+        }
+    }
+
+    fn directory_with_creator(realm_id: &RealmId, creator: &Did) -> RealmDirectoryIndex {
+        let mut realms = RealmDirectoryIndex::new();
+        let mut entry = RealmDirectoryEntry::new(realm_id.clone(), "Hydration Test Realm");
+        entry.members.insert(creator.clone());
+        realms.upsert(entry);
+        realms
+    }
+
+    // Regression: a joined invitee's `ck.member.state{join}` MUST be replayed
+    // into the realm directory on boot. Without it the admin's synced roster
+    // shows only the creator, admin-side MLS admission never fires, and the
+    // invitee is stuck "waiting for a Welcome" after every restart.
+    #[test]
+    fn joined_member_survives_directory_hydration() {
+        let realm_id = RealmId::new("ck:realm:019f0dd3-081c-7f03-b388-e0399e7759fc".to_owned())
+            .expect("realm id");
+        let creator = Did::new("did:web:alice.example".to_owned()).expect("creator did");
+        let invitee = Did::new("did:web:bob.example".to_owned()).expect("invitee did");
+
+        let mut realms = directory_with_creator(&realm_id, &creator);
+        // Before replay: only the creator is present (the realm.create seed).
+        assert_eq!(realms.get(&realm_id).unwrap().members.len(), 1);
+
+        hydrate_realm_member_state_event(
+            &mut realms,
+            &member_state_event(realm_id.as_str(), invitee.as_str(), "join"),
+        );
+
+        let members = &realms.get(&realm_id).unwrap().members;
+        assert!(
+            members.contains(&invitee),
+            "joined invitee must survive directory hydration"
+        );
+        assert!(members.contains(&creator));
+        assert_eq!(members.len(), 2);
+    }
+
+    #[test]
+    fn left_member_is_dropped_on_directory_hydration() {
+        let realm_id = RealmId::new("ck:realm:019f0dd3-081c-7f03-b388-e0399e7759fc".to_owned())
+            .expect("realm id");
+        let creator = Did::new("did:web:alice.example".to_owned()).expect("creator did");
+        let invitee = Did::new("did:web:bob.example".to_owned()).expect("invitee did");
+
+        let mut realms = directory_with_creator(&realm_id, &creator);
+        hydrate_realm_member_state_event(
+            &mut realms,
+            &member_state_event(realm_id.as_str(), invitee.as_str(), "join"),
+        );
+        hydrate_realm_member_state_event(
+            &mut realms,
+            &member_state_event(realm_id.as_str(), invitee.as_str(), "leave"),
+        );
+
+        let members = &realms.get(&realm_id).unwrap().members;
+        assert!(!members.contains(&invitee), "left member must be removed");
+        assert!(members.contains(&creator));
+    }
+
+    // `invite`/`knock` are not directory member-set transitions (they live in
+    // the structured membership projection), so they must not add a directory
+    // member during hydration.
+    #[test]
+    fn invite_state_does_not_add_directory_member() {
+        let realm_id = RealmId::new("ck:realm:019f0dd3-081c-7f03-b388-e0399e7759fc".to_owned())
+            .expect("realm id");
+        let creator = Did::new("did:web:alice.example".to_owned()).expect("creator did");
+        let invitee = Did::new("did:web:bob.example".to_owned()).expect("invitee did");
+
+        let mut realms = directory_with_creator(&realm_id, &creator);
+        hydrate_realm_member_state_event(
+            &mut realms,
+            &member_state_event(realm_id.as_str(), invitee.as_str(), "invite"),
+        );
+
+        let members = &realms.get(&realm_id).unwrap().members;
+        assert!(!members.contains(&invitee));
+        assert_eq!(members.len(), 1);
+    }
+
+    // Regression: the MLS KeyPackage + commit-epoch projections — which the
+    // claim selector and the commit-epoch CAS read ONLY from memory — MUST be
+    // rebuilt from their durable tables on boot, or a restart strands every
+    // pending admission (admin can't claim the invitee's KeyPackage; add-member
+    // commit is rejected for "no genesis").
+    #[tokio::test]
+    async fn mls_projections_rehydrate_from_durable_stores() {
+        use crate::persistence::{MlsKeyPackageRow, PersistenceStore, SolandMemoryPersistenceStore};
+
+        let realm_id = "ck:realm:019f0dd3-081c-7f03-b388-e0399e7759fc";
+        let group_id = "ck:mls_group:019f0dd3-aaaa";
+        let store = SolandMemoryPersistenceStore::new();
+
+        store
+            .mls_key_packages()
+            .put(&MlsKeyPackageRow {
+                id: "ck:mls_keypackage:01".to_owned(),
+                keypackage_ref: "sha256:ref".to_owned(),
+                keypackage_digest: "sha256:digest".to_owned(),
+                actor_id: "did:web:bob.example".to_owned(),
+                device_id: "ck:device:bob-1".to_owned(),
+                key_package_bytes: vec![1, 2, 3],
+                capabilities: vec!["ck.content.v1".to_owned()],
+                capabilities_digest: "sha256:caps".to_owned(),
+                device_signature: serde_json::json!({}),
+                last_resort: true,
+                last_resort_realm_id: Some(realm_id.to_owned()),
+                lifetime_not_before: 0,
+                lifetime_not_after: i64::MAX,
+                claimed_by_mls_group_id: None,
+                ssk_generation: None,
+                device_authorize_event_id: Some("ck:event:auth".to_owned()),
+                consumed_at: None,
+                created_at: 1,
+            })
+            .await
+            .expect("put keypackage");
+
+        let effective_scope = serde_json::json!({ "kind": "realm", "realm_id": realm_id });
+        let governance_binding =
+            serde_json::json!({ "policy_root": "sha256:locked-root" });
+        store
+            .mls_commits()
+            .initialize_genesis(
+                &effective_scope,
+                group_id,
+                "did:web:alice.example",
+                &[],
+                &governance_binding,
+                1,
+            )
+            .await
+            .expect("init genesis");
+
+        let mut proj = ProjectionState::new();
+        let authz = SolandAuthzEngine::new();
+        hydrate_projections_from_persistence(&store, &mut proj, &authz).await;
+
+        // KeyPackage projection is rebuilt → the claim selector can find it.
+        let kp = proj
+            .mls_key_packages
+            .get("ck:mls_keypackage:01")
+            .expect("keypackage rehydrated");
+        assert_eq!(kp.actor_id, "did:web:bob.example");
+        assert!(kp.last_resort);
+        assert!(kp.claimed_by.is_none());
+
+        // Commit-epoch projection is rebuilt with the genesis-locked policy_root
+        // → the add-member commit's governance binding check passes.
+        let key = crate::reducer::MlsCommitEpochKey::new(
+            crate::reducer::mls::effective_scope_key(&effective_scope).unwrap(),
+            group_id.to_owned(),
+        );
+        let epoch = proj
+            .mls_commit_epochs
+            .get(&key)
+            .expect("commit epoch rehydrated");
+        assert_eq!(epoch.epoch, 0);
+        assert_eq!(epoch.policy_root, "sha256:locked-root");
+    }
 }

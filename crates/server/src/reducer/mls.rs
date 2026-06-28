@@ -664,7 +664,7 @@ fn mls_epoch_key(
     ))
 }
 
-fn effective_scope_key(scope: &Value) -> Result<String, &'static str> {
+pub(crate) fn effective_scope_key(scope: &Value) -> Result<String, &'static str> {
     let object = scope.as_object().ok_or("mls_effective_scope_invalid")?;
     let realm_id = object
         .get("realm_id")
