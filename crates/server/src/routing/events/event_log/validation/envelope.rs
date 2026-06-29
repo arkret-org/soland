@@ -1678,6 +1678,11 @@ fn is_realm_bootstrap_followup_kind(kind: &str) -> bool {
         kind,
         cokret_sdk::events::kinds::MEMBER_STATE
             | cokret_sdk::events::kinds::REALM_HISTORY_VISIBILITY
+            // `restricted` history_visibility bootstraps MUST carry a
+            // ck.realm.history_sharing_policy in the same ordered batch
+            // (payload_shape.rs `history_sharing_policy_missing`); it is a
+            // genesis-time policy Control Move exactly like the siblings here.
+            | cokret_sdk::events::kinds::REALM_HISTORY_SHARING_POLICY
             | cokret_sdk::events::kinds::REALM_POLICY_COMPONENTS
             | cokret_sdk::events::kinds::REALM_DISCOVERY
             | cokret_sdk::events::kinds::REALM_JOIN_RULE
@@ -2432,4 +2437,37 @@ fn event_proof_binding_bytes(
             format!("proof binding canonicalization failed: {error}"),
         )
     })
+}
+
+#[cfg(test)]
+mod control_move_seal_basis_tests {
+    use super::*;
+
+    fn control_move_with_effects(kind: &str) -> serde_json::Map<String, Value> {
+        serde_json::json!({
+            "kind": kind,
+            "effects": [{"cell": "ck:cell:x", "op": {"type": "set", "value": 1}}],
+        })
+        .as_object()
+        .unwrap()
+        .clone()
+    }
+
+    #[test]
+    fn realm_history_sharing_policy_is_a_bootstrap_followup() {
+        // Regression: yougen's restricted-history bootstrap emits a
+        // ck.realm.history_sharing_policy Control Move in the same ordered
+        // batch (no Seal exists yet, so it carries no seal_basis). soland
+        // MUST accept it as a genesis followup alongside the other realm.*
+        // policy moves, else the whole create batch is `status=partial`.
+        assert!(is_realm_bootstrap_followup_kind(
+            cokret_sdk::events::kinds::REALM_HISTORY_SHARING_POLICY
+        ));
+        let obj = control_move_with_effects(cokret_sdk::events::kinds::REALM_HISTORY_SHARING_POLICY);
+        // As a recognized bootstrap followup it passes without seal_basis…
+        validate_control_move_seal_basis(&obj, true).unwrap();
+        // …but a non-bootstrap effects-bearing Control Move still requires it.
+        let err = validate_control_move_seal_basis(&obj, false).unwrap_err();
+        assert!(format!("{err:?}").contains("seal_basis.leaves"));
+    }
 }
