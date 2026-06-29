@@ -561,7 +561,8 @@ pub(crate) fn default_invite_receive_policy(subject: &str) -> InviteReceivePolic
     InviteReceivePolicy {
         schema: cokret_sdk::INVITE_RECEIVE_POLICY_SCHEMA.to_owned(),
         subject_id: Did::new(subject.to_owned()).unwrap_or_else(|_| {
-            Did::new("did:web:invalid.invalid".to_owned()).expect("placeholder did")
+            // did:webvh-only red line: placeholder is never a did:web literal.
+            Did::new("did:webvh:invalid.invalid".to_owned()).expect("placeholder did")
         }),
         allowed_introduction_kinds: vec![
             "locator_ref".to_owned(),

@@ -62,6 +62,27 @@ pub(crate) fn ensure_private_inbound_read_rail_local(state: &AppState) -> Result
     .with_wire_code("federation_private_read_rail_local_only"))
 }
 
+/// SOL-02-007 / SOL-SEC-01 — federation actor↔origin binding, shared by both
+/// inbound rails (the `/_cokret/peer/events` envelope track and the
+/// `/_soland/peer/federation/*` operation track). Accept an inbound author when
+/// its derived home trust domain equals the asserted source trust domain, or
+/// when the actor is already present in the local membership index of the
+/// binding Realm (the source domain relays for a known member; proofs are still
+/// verified downstream). Converging both rails on this single gate keeps the
+/// two surfaces from diverging again (SOL-DRY-01).
+pub(crate) async fn federation_actor_origin_acceptable(
+    state: &AppState,
+    actor: &str,
+    source_trust_domain: &str,
+    binding_realm: &str,
+) -> bool {
+    let actor_home_domain = super::trust_domain_from_service_did(actor);
+    if actor_home_domain == source_trust_domain {
+        return true;
+    }
+    crate::routing::spaces::space::realm_has_member(state, binding_realm, actor).await
+}
+
 pub(super) async fn enforce_inbound_operation_batch_policy(
     state: &AppState,
     origin_service_did: &str,
@@ -79,7 +100,30 @@ pub(super) async fn enforce_inbound_operation_batch_policy(
         .with_status(StatusCode::PAYLOAD_TOO_LARGE)
         .with_wire_code("payload_too_large"));
     }
+    // The origin peer authenticated as a service DID; derive its trust domain so
+    // each operation's embedded author can be bound to it.
+    let origin_trust_domain = super::trust_domain_from_service_did(origin_service_did);
     for operation in operations {
+        // SOL-SEC-01 — bind the operation's embedded actor DID to the origin
+        // peer's domain before any side effect, so a verified peer cannot speak
+        // for an actor in another trust domain that is not a known member of the
+        // target Realm.
+        if let Some(actor) = operation_actor_id(operation) {
+            if !federation_actor_origin_acceptable(
+                state,
+                actor,
+                &origin_trust_domain,
+                operation.realm_id.as_str(),
+            )
+            .await
+            {
+                return Err(AppError::capability_denied(
+                    "operation actor home domain does not match the origin peer trust domain and \
+                     the actor is not a known member of the target realm",
+                )
+                .with_wire_code("federation_actor_origin_rejected"));
+            }
+        }
         enforce_realm_federation_policy(
             state,
             operation.realm_id.as_str(),
@@ -133,9 +177,12 @@ fn enforce_realm_federation_policy(
         .map_err(|error| AppError::internal(format!("projection lock: {error}")))?
         .realm_federation_policy(realm_id)
         .unwrap_or_else(|| "open".to_owned());
+    // realm.schema.json federation_policy enum: ["open","restricted","closed",
+    // "quarantine"] only. Any other value (incl. legacy mesh/hub/disabled) is
+    // not spec-registered and fails closed.
     match policy.as_str() {
-        "open" | "mesh" | "hub" => Ok(()),
-        "closed" | "disabled" => Err(AppError::capability_denied(
+        "open" => Ok(()),
+        "closed" => Err(AppError::capability_denied(
             "realm federation_policy forbids federation",
         )
         .with_wire_code("realm_federation_policy_closed")),
@@ -172,7 +219,9 @@ fn enforce_realm_moderation_federation_policy(
     let record = state
         .realm_moderation_policies
         .lock()
-        .expect("realm moderation policies lock")
+        // SOL-REL-01 — federation inbound path: recover a poisoned lock instead
+        // of cascading panics that would make every federated delivery crash.
+        .unwrap_or_else(|error| error.into_inner())
         .get(realm_id)
         .cloned();
     let Some(record) = record else {

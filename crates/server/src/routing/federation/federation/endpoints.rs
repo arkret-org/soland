@@ -448,10 +448,13 @@ pub(crate) async fn federation_actor_events(
     if Did::new(actor.clone()).is_err() {
         return Err(AppError::invalid_param("invalid actor_id"));
     }
+    // SOL-SEC-04 — bound the table load so this (development-mode) debug read
+    // cannot full-scan an arbitrarily large projection table into memory.
+    const FEDERATION_ACTOR_EVENTS_SCAN_CAP: usize = 10_000;
     let mut events = state
         .persistence
         .projection_events()
-        .snapshot_all()
+        .snapshot_capped(FEDERATION_ACTOR_EVENTS_SCAN_CAP)
         .await
         .unwrap_or_default()
         .into_iter()
@@ -795,15 +798,23 @@ pub(crate) async fn federation_verify_actor(
     validate_federation_request_binding(&state.config.trust_domain, req, &request_hash)?;
 
     if state.config.development_mode {
+        // SOL-SEC-02 — even in development_mode the actor signature is NOT
+        // verified here, so the outcome MUST NOT report `valid: true`. A
+        // misconfigured production deployment with development_mode=true would
+        // otherwise unconditionally accept any peer's actor verification
+        // request. Fail closed: report `valid: false` and explain that the
+        // signature was skipped, rather than asserting a verification that did
+        // not happen.
         return json_ok(cokret_sdk::FederationVerifyActorOutcome {
-            valid: true,
+            valid: false,
             actor_id: body.actor_id.clone(),
             verified_key_id: None,
             key_log_head: None,
             did_document_ref: Some(format!("{}#document", body.actor_id)),
             expires_at: Some(now() + Duration::minutes(5)),
             warnings: vec![
-                "development_mode accepted request binding without actor signature verification"
+                "development_mode skipped actor signature verification; valid=false because no \
+                 signature was checked"
                     .to_owned(),
             ],
         });

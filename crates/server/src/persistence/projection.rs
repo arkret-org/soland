@@ -131,6 +131,12 @@ pub struct MorphProjectionRecord {
 pub trait ProjectionEventStore: Send + Sync {
     async fn append(&self, record: ProjectionEventRecord) -> PersistenceResult<()>;
     async fn snapshot_all(&self) -> PersistenceResult<Vec<ProjectionEventRecord>>;
+    /// SOL-SEC-04 — bounded variant of [`snapshot_all`] that pushes a `LIMIT`
+    /// into the query so a single (federation-reachable) request cannot load
+    /// the entire `projection_events` table into memory. Returns at most
+    /// `limit` rows in the same order as `snapshot_all`.
+    async fn snapshot_capped(&self, limit: usize)
+    -> PersistenceResult<Vec<ProjectionEventRecord>>;
 }
 
 // In-memory Realm meta store
@@ -346,6 +352,20 @@ impl ProjectionEventStore for MemoryProjectionEventStore {
 
     async fn snapshot_all(&self) -> PersistenceResult<Vec<ProjectionEventRecord>> {
         Ok(self.data.lock().expect("projection events lock").clone())
+    }
+
+    async fn snapshot_capped(
+        &self,
+        limit: usize,
+    ) -> PersistenceResult<Vec<ProjectionEventRecord>> {
+        Ok(self
+            .data
+            .lock()
+            .expect("projection events lock")
+            .iter()
+            .take(limit)
+            .cloned()
+            .collect())
     }
 }
 
@@ -977,6 +997,21 @@ impl ProjectionEventStore for PgProjectionEventStore {
             "SELECT event_id, realm_id, event_kind, operation_type, operation_id, sender_id AS sender, payload, created_at \
              FROM projection_events ORDER BY id",
         )
+        .load::<ProjectionEventRow>(&mut *conn).await
+        .map(|rows| rows.into_iter().map(ProjectionEventRecord::from).collect())
+        .map_err(PersistenceError::from)
+    }
+
+    async fn snapshot_capped(
+        &self,
+        limit: usize,
+    ) -> PersistenceResult<Vec<ProjectionEventRecord>> {
+        let mut conn = pg_conn(&self.pool).await?;
+        sql_query(
+            "SELECT event_id, realm_id, event_kind, operation_type, operation_id, sender_id AS sender, payload, created_at \
+             FROM projection_events ORDER BY id LIMIT $1",
+        )
+        .bind::<BigInt, _>(limit as i64)
         .load::<ProjectionEventRow>(&mut *conn).await
         .map(|rows| rows.into_iter().map(ProjectionEventRecord::from).collect())
         .map_err(PersistenceError::from)

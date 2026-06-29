@@ -1,5 +1,15 @@
 use super::*;
 
+/// SOL-SEC-05 — constant-time string equality for recovery
+/// challenge/commitment comparisons, so a timing side channel cannot leak how
+/// many leading bytes of a security-relevant value matched.
+fn constant_time_str_eq(left: &str, right: &str) -> bool {
+    use subtle::ConstantTimeEq as _;
+    let left = left.as_bytes();
+    let right = right.as_bytes();
+    left.len() == right.len() && bool::from(left.ct_eq(right))
+}
+
 // ── C-P2 (REC-1) recovery session lifecycle ──────────────────────────────
 //
 // A recovery session binds a *requesting device* to the principal's currently
@@ -389,7 +399,7 @@ pub(super) async fn recovery_session_proof_submit(
         .get("challenge")
         .and_then(Value::as_str)
         .ok_or_else(|| AppError::invalid_param("proof.challenge is required"))?;
-    if echoed != record.challenge {
+    if !constant_time_str_eq(echoed, &record.challenge) {
         return Err(AppError::new(
             ErrorCode::InvalidSignature,
             "proof.challenge does not match the session challenge",
@@ -698,7 +708,7 @@ pub(super) async fn verify_recovery_unlock_proof(
     hasher.update(recovery_secret_ref.as_bytes());
     hasher.update(&transcript_bytes);
     let expected_commitment = format!("sha256:{}", hex::encode(hasher.finalize()));
-    if unlock_commitment != expected_commitment {
+    if !constant_time_str_eq(&unlock_commitment, &expected_commitment) {
         crate::metrics::record_digest_mismatch("recovery_unlock_commitment");
         return Err(recovery_evidence_unbound_error(
             "recovery_unlock unlock_commitment does not match the recomputed binding",

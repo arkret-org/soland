@@ -840,15 +840,28 @@ fn signed_applet_package(applet_id: &str, namespace: &str) -> AppletPackage {
         "ck.message.create".to_owned(),
         "ck.applet.ghost.provision".to_owned(),
     ];
-    package.endpoint_policy = json!({
-        "transactions": "/_cokret/edge/applet/transactions",
-        "actors": "/_cokret/edge/applet/actors/{actor_id}",
-        "realms": "/_cokret/edge/applet/realms/{realm_id_or_alias}",
-    });
-    package.ghost_policy = json!({
-        "allow_ghost_actors": true,
-        "accountability": ["bot_actor", "applet_registry"],
-    });
+    package.endpoint_policy = cokret_sdk::applet::AppletEndpointPolicy {
+        extra: BTreeMap::from([
+            (
+                "transactions".to_owned(),
+                json!("/_cokret/edge/applet/transactions"),
+            ),
+            (
+                "actors".to_owned(),
+                json!("/_cokret/edge/applet/actors/{actor_id}"),
+            ),
+            (
+                "realms".to_owned(),
+                json!("/_cokret/edge/applet/realms/{realm_id_or_alias}"),
+            ),
+        ]),
+        ..Default::default()
+    };
+    package.ghost_policy = cokret_sdk::applet::AppletGhostPolicy {
+        enabled: true,
+        accountability_template: Some("bot_actor_and_applet_registry".to_owned()),
+        ..Default::default()
+    };
     package.receive_events = true;
     package.receive_ephemeral = true;
     package.seal().unwrap();

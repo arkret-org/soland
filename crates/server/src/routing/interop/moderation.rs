@@ -476,8 +476,13 @@ fn encrypted_event_payload_digest(record: &crate::state::CanonicalEventRecord) -
         .filter(|value| is_valid_report_hash(value))
 }
 
+// Wire code for an invalid franking proof. `proof_invalid` is a registered
+// `reason_code`, so it is sourced from the SDK as `REASON_PROOF_INVALID`
+// rather than a local literal.
+use cokret_sdk::error::REASON_PROOF_INVALID;
+
 fn franking_proof_invalid(message: impl Into<String>) -> AppError {
-    AppError::invalid_param(message).with_wire_code(cokret_sdk::error::ERROR_CODE_PROOF_INVALID)
+    AppError::invalid_param(message).with_wire_code(REASON_PROOF_INVALID)
 }
 
 fn validate_franking_sender_claim(object: &serde_json::Map<String, Value>) -> Result<(), AppError> {
@@ -919,7 +924,9 @@ async fn notify_audit_agent_for_report(
                 .and_then(Value::as_str)
         })
         .or_else(|| policy.get("agent_id").and_then(Value::as_str))
-        .unwrap_or("did:web:audit-agent.unknown")
+        // did:webvh-only red line: sentinel default for a missing audit agent
+        // is never a did:web literal.
+        .unwrap_or("did:webvh:audit-agent.unknown")
         .to_owned();
     let realm_id = report_payload
         .get("realm_id")
@@ -1641,7 +1648,7 @@ mod report_safety_tests {
             .unwrap_err();
         assert_eq!(
             error.wire_code(),
-            cokret_sdk::error::ERROR_CODE_PROOF_INVALID
+            cokret_sdk::error::REASON_PROOF_INVALID
         );
     }
 
@@ -1655,7 +1662,7 @@ mod report_safety_tests {
             .unwrap_err();
         assert_eq!(
             error.wire_code(),
-            cokret_sdk::error::ERROR_CODE_PROOF_INVALID
+            cokret_sdk::error::REASON_PROOF_INVALID
         );
     }
 

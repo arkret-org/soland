@@ -73,18 +73,18 @@ pub(super) fn protocol_router() -> Router {
                 .post(provision_agent)
                 .get(list_agents)
                 .push(Router::with_path("discover").post(discover_agent_endpoint))
-                .push(Router::with_path("{agent_id}").get(get_agent))
-                .push(Router::with_path("{agent_id}/pause").post(pause_agent))
-                .push(Router::with_path("{agent_id}/resume").post(resume_agent))
-                .push(Router::with_path("{agent_id}/deactivate").post(deactivate_agent))
-                .push(Router::with_path("{agent_id}/rotate-key").post(rotate_agent_key))
+                .push(Router::with_path("{agent_principal_id}").get(get_agent))
+                .push(Router::with_path("{agent_principal_id}/pause").post(pause_agent))
+                .push(Router::with_path("{agent_principal_id}/resume").post(resume_agent))
+                .push(Router::with_path("{agent_principal_id}/deactivate").post(deactivate_agent))
+                .push(Router::with_path("{agent_principal_id}/rotate-key").post(rotate_agent_key))
                 .push(
-                    Router::with_path("{agent_id}/grants")
+                    Router::with_path("{agent_principal_id}/grants")
                         .post(attach_agent_grant)
                         .push(Router::with_path("{grant_id}").delete(detach_agent_grant)),
                 )
                 .push(
-                    Router::with_path("{agent_id}/participation")
+                    Router::with_path("{agent_principal_id}/participation")
                         .get(get_agent_participation)
                         .put(set_agent_participation),
                 ),
@@ -193,8 +193,31 @@ fn verification_method_principal(verification_method: &str) -> &str {
         .unwrap_or("")
 }
 
-fn generate_agent_principal_did() -> String {
-    format!("did:web:agent-{}.agents.example", uuid::Uuid::now_v7())
+/// Mint a `did:webvh` principal DID for a server-provisioned agent.
+///
+/// did:webvh-only red line: agent principals MUST NOT use `did:web` (no
+/// key-log history). The DID host is the deployment's real service host
+/// (derived from the configured `service_did`), never a `.agents.example`
+/// placeholder. The SCID is a self-certifying multihash derived from a
+/// per-agent genesis skeleton so the identifier is bound to its inception
+/// material rather than being an opaque random string.
+fn generate_agent_principal_did(service_did: &str) -> String {
+    let host = crate::config::did_host_from_service_did(service_did)
+        .unwrap_or_else(|| "soland.local".to_owned());
+    let agent_uuid = uuid::Uuid::now_v7();
+    // Genesis skeleton: the SCID is the multihash of this canonical structure
+    // with the SCID field left as the placeholder, matching the did:webvh SCID
+    // derivation used elsewhere in soland.
+    let skeleton = serde_json::json!({
+        "scid": "{SCID}",
+        "host": host,
+        "path": format!("webvh:agent:{agent_uuid}"),
+    });
+    let scid = crate::routing::identity::webvh_validation::derive_webvh_scid_from_skeleton(
+        &skeleton,
+    )
+    .unwrap_or_else(|_| agent_uuid.simple().to_string());
+    format!("did:webvh:{scid}:{host}:webvh:agent:{agent_uuid}")
 }
 
 /// Project a persisted agent_principal JSON record into the spec
@@ -310,14 +333,14 @@ fn agent_participation_failed_precondition(reason: &'static str) -> AppError {
 #[tracing::instrument(skip_all, fields(op = "ck.self.agent.participation.resource.replace"))]
 async fn set_agent_participation(
     aa: AuthArgs,
-    agent_id: PathParam<String>,
+    agent_principal_id: PathParam<String>,
     body: JsonBody<AgentParticipationSetReqBody>,
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<AgentParticipationResBody> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
-    let agent_id = agent_id.into_inner();
+    let agent_id = agent_principal_id.into_inner();
     require_agent_controller(state, &session, &agent_id).await?;
     let body = body.into_inner();
     let ceiling = resolve_effective_ceiling(state, &body.scope).await;
@@ -501,13 +524,13 @@ fn normalize_sidecar_exposure_ack(
 #[tracing::instrument(skip_all, fields(op = "ck.self.agent.participation.resource.get"))]
 async fn get_agent_participation(
     aa: AuthArgs,
-    agent_id: PathParam<String>,
+    agent_principal_id: PathParam<String>,
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<AgentParticipationResBody> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
-    let agent_id = agent_id.into_inner();
+    let agent_id = agent_principal_id.into_inner();
     require_agent_controller(state, &session, &agent_id).await?;
     let selections = state
         .persistence
@@ -752,9 +775,23 @@ async fn provision_agent(
         }
     }
     // The agent's actor DID is server-generated (the spec body carries no
-    // client-supplied agent_id).
-    let agent_id = format!("did:web:agent.{}", session.actor.replace([':', '/'], "."));
-    let agent_principal_id = generate_agent_principal_did();
+    // client-supplied agent_id). did:webvh-only red line: derive it on the
+    // deployment service host with a self-certifying SCID, never did:web.
+    let agent_id = {
+        let host = crate::config::did_host_from_service_did(&state.config.service_did)
+            .unwrap_or_else(|| "soland.local".to_owned());
+        let controller_slug = session.actor.replace([':', '/', '.'], "-");
+        let skeleton = serde_json::json!({
+            "scid": "{SCID}",
+            "host": host,
+            "path": format!("webvh:agent-actor:{controller_slug}"),
+        });
+        let scid =
+            crate::routing::identity::webvh_validation::derive_webvh_scid_from_skeleton(&skeleton)
+                .unwrap_or_else(|_| controller_slug.clone());
+        format!("did:webvh:{scid}:{host}:webvh:agent-actor:{controller_slug}")
+    };
+    let agent_principal_id = generate_agent_principal_did(&state.config.service_did);
     let now_utc = chrono::Utc::now();
     let timestamp = now_utc.to_rfc3339_opts(SecondsFormat::Millis, true);
     let pairing_request_id = format!("agent_pairing_request:{}", uuid::Uuid::now_v7());
@@ -886,12 +923,12 @@ async fn list_agents(aa: AuthArgs, depot: &mut Depot, req: &mut Request) -> Json
 const AGENT_ADAPTER_REGISTRY_IDS: [&str; 4] = ["a2a", "acp", "mcp_bridge", "http_custom"];
 
 #[endpoint(
-    operation_id = "ck.agent.protocol.discover",
+    operation_id = "ck.self.agent.protocol.query.discover",
     tags("agents"),
     summary = "Discover an agent runtime's declared external protocol endpoints",
     status_codes(200, 400, 401, 404, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.agent.protocol.discover"))]
+#[tracing::instrument(skip_all, fields(op = "ck.self.agent.protocol.query.discover"))]
 async fn discover_agent_endpoint(
     aa: AuthArgs,
     body: JsonBody<AgentDiscoverRequestBody>,
@@ -943,13 +980,13 @@ async fn discover_agent_endpoint(
 #[tracing::instrument(skip_all, fields(op = "ck.self.agent.resource.get"))]
 async fn get_agent(
     aa: AuthArgs,
-    agent_id: PathParam<String>,
+    agent_principal_id: PathParam<String>,
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<AgentView> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
-    let agent_id = agent_id.into_inner();
+    let agent_id = agent_principal_id.into_inner();
     validate_agent_principal_id(&agent_id)?;
     let record = state
         .persistence
@@ -1139,7 +1176,7 @@ async fn lifecycle_transition(
 #[tracing::instrument(skip_all, fields(op = "ck.self.agent.command.pause"))]
 async fn pause_agent(
     aa: AuthArgs,
-    agent_id: PathParam<String>,
+    agent_principal_id: PathParam<String>,
     body: JsonBody<AgentPauseRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
@@ -1151,7 +1188,7 @@ async fn pause_agent(
             state,
             &aa,
             req,
-            agent_id.into_inner(),
+            agent_principal_id.into_inner(),
             AgentLifecycleState::Paused,
             "ck.self.agent.pause",
             body.reason,
@@ -1170,7 +1207,7 @@ async fn pause_agent(
 #[tracing::instrument(skip_all, fields(op = "ck.self.agent.command.resume"))]
 async fn resume_agent(
     aa: AuthArgs,
-    agent_id: PathParam<String>,
+    agent_principal_id: PathParam<String>,
     body: JsonBody<AgentResumeRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
@@ -1182,7 +1219,7 @@ async fn resume_agent(
             state,
             &aa,
             req,
-            agent_id.into_inner(),
+            agent_principal_id.into_inner(),
             AgentLifecycleState::Active,
             "ck.self.agent.resume",
             None,
@@ -1201,7 +1238,7 @@ async fn resume_agent(
 #[tracing::instrument(skip_all, fields(op = "ck.self.agent.command.deactivate"))]
 async fn deactivate_agent(
     aa: AuthArgs,
-    agent_id: PathParam<String>,
+    agent_principal_id: PathParam<String>,
     body: JsonBody<AgentDeactivateRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
@@ -1213,7 +1250,7 @@ async fn deactivate_agent(
             state,
             &aa,
             req,
-            agent_id.into_inner(),
+            agent_principal_id.into_inner(),
             AgentLifecycleState::Deactivated,
             "ck.self.agent.deactivate",
             body.reason,
@@ -1232,14 +1269,14 @@ async fn deactivate_agent(
 #[tracing::instrument(skip_all, fields(op = "ck.self.agent.command.rotate_key"))]
 async fn rotate_agent_key(
     aa: AuthArgs,
-    agent_id: PathParam<String>,
+    agent_principal_id: PathParam<String>,
     body: JsonBody<AgentRotateKeyRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<AgentRotateKeyOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
-    let agent_id = agent_id.into_inner();
+    let agent_id = agent_principal_id.into_inner();
     require_agent_controller(state, &session, &agent_id).await?;
     let body = body.into_inner();
     // spec `agent_rotate_key_request_body` = `{replacement_key, proof_of_possession}`.
@@ -1282,7 +1319,7 @@ async fn rotate_agent_key(
 #[tracing::instrument(skip_all, fields(op = "ck.self.agent.grant.command.attach"))]
 async fn attach_agent_grant(
     aa: AuthArgs,
-    agent_id: PathParam<String>,
+    agent_principal_id: PathParam<String>,
     body: JsonBody<AgentGrantAttachRequestBody>,
     depot: &mut Depot,
     res: &mut Response,
@@ -1290,7 +1327,7 @@ async fn attach_agent_grant(
 ) -> JsonResult<AgentGrantAttachOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
-    let agent_id = agent_id.into_inner();
+    let agent_id = agent_principal_id.into_inner();
     require_agent_controller(state, &session, &agent_id).await?;
     let body = body.into_inner();
     // spec `agent_grant_attach_request_body` = `{grant: object}`.
@@ -1342,14 +1379,14 @@ async fn attach_agent_grant(
 #[tracing::instrument(skip_all, fields(op = "ck.self.agent.grant.resource.delete"))]
 async fn detach_agent_grant(
     aa: AuthArgs,
-    agent_id: PathParam<String>,
+    agent_principal_id: PathParam<String>,
     grant_id: PathParam<String>,
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<AgentGrantDetachOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
-    let agent_id = agent_id.into_inner();
+    let agent_id = agent_principal_id.into_inner();
     let grant_id = grant_id.into_inner();
     require_agent_controller(state, &session, &agent_id).await?;
     if !grant_id.starts_with("ck:accountability_grant:") && !grant_id.starts_with("ck:grant:") {
@@ -2157,9 +2194,9 @@ mod tests {
     #[test]
     fn agent_view_projects_spec_shape_dropping_internal_columns() {
         let view = agent_view_from_record(&json!({
-            "agent_principal_id": "did:web:agent.example",
-            "controller_did": "did:web:example.com:users:alice",
-            "agent_id": "did:web:agent.example",
+            "agent_principal_id": "did:webvh:agent.example",
+            "controller_did": "did:webvh:example.com:users:alice",
+            "agent_id": "did:webvh:agent.example",
             "display_name": "Summary Assistant",
             "agent_slug": "summary",
             "state": "active",
@@ -2173,7 +2210,7 @@ mod tests {
         assert_eq!(agent["agent"]["status"], "active");
         assert_eq!(
             agent["agent"]["agent_principal_id"],
-            "did:web:agent.example"
+            "did:webvh:agent.example"
         );
         // soland-internal columns MUST NOT leak into the protocol projection.
         assert!(agent["agent"].get("controller_did").is_none());

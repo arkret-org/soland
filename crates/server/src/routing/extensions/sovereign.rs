@@ -413,7 +413,9 @@ struct DeploymentAuditResponseBody {
 }
 
 fn unknown_did() -> String {
-    "did:web:unknown".to_owned()
+    // Reserved placeholder for an unknown principal. did:webvh-only red line:
+    // never emit a did:web literal, even as a sentinel.
+    "did:webvh:unknown".to_owned()
 }
 
 pub(super) fn router() -> Router {

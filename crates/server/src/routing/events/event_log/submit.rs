@@ -1,21 +1,33 @@
-use std::collections::{BTreeMap, BTreeSet, HashMap};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::collections::{BTreeMap, BTreeSet};
+use std::hash::Hasher;
+use std::sync::{Arc, OnceLock};
 
 use super::*;
 use crate::invite_claim_proofs::{
     invite_claim_proof_context_from_projection, verify_invite_claim_proofs_for_operation,
 };
 
-static ACTOR_SUBMIT_LOCKS: OnceLock<Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>> =
-    OnceLock::new();
+/// SOL-SEC-03 — per-actor submit serialization uses a fixed-size pool of locks
+/// keyed by a hash of the actor DID, instead of an unbounded per-actor
+/// `HashMap` entry that was never evicted. Federation inbound can carry
+/// arbitrarily many distinct actor DIDs, so a per-actor map grows without bound
+/// (memory DoS). A fixed pool bounds memory to `ACTOR_SUBMIT_LOCK_SHARDS`
+/// entries; two actors hashing to the same shard merely serialize together,
+/// which is a safe superset of the required per-actor exclusion.
+const ACTOR_SUBMIT_LOCK_SHARDS: usize = 1024;
+
+static ACTOR_SUBMIT_LOCKS: OnceLock<Vec<Arc<tokio::sync::Mutex<()>>>> = OnceLock::new();
 
 fn actor_submit_lock(actor_id: &str) -> Arc<tokio::sync::Mutex<()>> {
-    let locks = ACTOR_SUBMIT_LOCKS.get_or_init(|| Mutex::new(HashMap::new()));
-    let mut guard = locks.lock().expect("actor submit lock map poisoned");
-    guard
-        .entry(actor_id.to_owned())
-        .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
-        .clone()
+    let locks = ACTOR_SUBMIT_LOCKS.get_or_init(|| {
+        (0..ACTOR_SUBMIT_LOCK_SHARDS)
+            .map(|_| Arc::new(tokio::sync::Mutex::new(())))
+            .collect()
+    });
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    std::hash::Hash::hash(actor_id, &mut hasher);
+    let shard = (hasher.finish() as usize) % ACTOR_SUBMIT_LOCK_SHARDS;
+    locks[shard].clone()
 }
 
 #[derive(Debug)]
@@ -594,8 +606,13 @@ pub(crate) async fn submit_federation_events(
         //   2. the actor is already a member of the binding Realm in the local membership index
         //      (the source domain is then relaying for a known member; identity is re-verified
         //      downstream by `validate_event_envelope`'s proof checks).
-        if !federation_actor_origin_acceptable(state, &actor, &source_trust_domain, &binding_realm)
-            .await
+        if !crate::routing::federation::federation::federation_actor_origin_acceptable(
+            state,
+            &actor,
+            &source_trust_domain,
+            &binding_realm,
+        )
+        .await
         {
             rejected.push(json!({
                 "id": id,
@@ -684,25 +701,6 @@ pub(super) fn event_string_field_from_value(value: &Value, field: &str) -> Optio
     value
         .as_object()
         .and_then(|object| event_string_field(object, &[field]))
-}
-
-/// SOL-02-007 — federation actor↔source binding. Accept the envelope actor
-/// when its derived home trust domain equals the asserted
-/// `source-trust-domain`, or when the actor is already present in the local
-/// membership index of the binding Realm (the source domain relays for a
-/// known member; proofs are still verified downstream).
-async fn federation_actor_origin_acceptable(
-    state: &AppState,
-    actor: &str,
-    source_trust_domain: &str,
-    binding_realm: &str,
-) -> bool {
-    let actor_home_domain =
-        crate::routing::federation::federation::trust_domain_from_service_did(actor);
-    if actor_home_domain == source_trust_domain {
-        return true;
-    }
-    realm_has_member(state, binding_realm, actor).await
 }
 
 async fn federation_service_binding_current_for_destination(

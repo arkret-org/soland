@@ -1189,7 +1189,7 @@ fn derive_trust_domain(service_did: &str) -> anyhow::Result<String> {
     Ok(candidate)
 }
 
-fn did_host_from_service_did(service_did: &str) -> Option<String> {
+pub(crate) fn did_host_from_service_did(service_did: &str) -> Option<String> {
     let host = if let Some(rest) = service_did.strip_prefix("did:web:") {
         rest.split(':').next()?
     } else if let Some(rest) = service_did.strip_prefix("did:webvh:") {

@@ -156,6 +156,15 @@ pub(crate) async fn dispatch_message_notifications(
         .and_then(Value::as_str)
         .or_else(|| payload.get("thread_id").and_then(Value::as_str))
         .map(ToOwned::to_owned);
+    // SOL-SEC-06 — if the message is scoped to a Circle, a mention notification
+    // MUST NOT be delivered to a subject who cannot see that Circle; otherwise
+    // the notification leaks the metadata "a message in this Circle mentions
+    // you" to a non-member.
+    let scope_circle_id = payload
+        .get("scope_circle_id")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .map(ToOwned::to_owned);
     let mentioned_subjects = mention_subjects(payload)
         .into_iter()
         .chain(mention_sidecar_subjects(state, &realm_id, payload).into_iter())
@@ -164,6 +173,16 @@ pub(crate) async fn dispatch_message_notifications(
     for subject in mentioned_subjects {
         if subject == sender {
             continue;
+        }
+        if let Some(circle_id) = scope_circle_id.as_deref() {
+            let visible = state
+                .projection
+                .lock()
+                .map(|projection| projection.circle_scope_visible_to_actor(circle_id, &subject))
+                .unwrap_or(false);
+            if !visible {
+                continue;
+            }
         }
         // CKP-0016 §9.4.5 — agent third-party mention gate.
         if let Ok(Some(agent_record)) = state.persistence.agents().get(&subject).await {

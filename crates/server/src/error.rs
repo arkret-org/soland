@@ -182,20 +182,22 @@ pub mod reasons {
     ];
 
     // Agent / pairing / session-grant reason codes.
-    pub const PROOF_INVALID: &str = "proof_invalid";
+    pub const PROOF_INVALID: &str = core_error::REASON_PROOF_INVALID;
     pub const ACTOR_KIND_REDUCER_MANAGED: &str = core_error::REASON_ACTOR_KIND_REDUCER_MANAGED;
     pub const EFFECTIVE_SCOPE_REDUCER_MANAGED: &str =
         core_error::REASON_EFFECTIVE_SCOPE_REDUCER_MANAGED;
 
     // Media binding reason codes.
-    pub const UNKNOWN_FOCUS_TYPE: &str = "unknown_focus_type";
-    pub const FOCUS_MISMATCH: &str = "focus_mismatch";
+    pub const UNKNOWN_FOCUS_TYPE: &str = core_error::REASON_UNKNOWN_FOCUS_TYPE;
+    pub const FOCUS_MISMATCH: &str = core_error::REASON_FOCUS_MISMATCH;
     pub const TOKEN_ISSUER_UNAUTHORISED: &str = core_error::REASON_TOKEN_ISSUER_UNAUTHORISED;
-    pub const PARTICIPANT_BINDING_INVALID: &str = "participant_binding_invalid";
-    pub const PARTICIPANT_IDENTITY_UNRECOGNISED: &str = "participant_identity_unrecognised";
-    pub const SESSION_FOCUS_ALREADY_COMMITTED: &str = "session_focus_already_committed";
+    pub const PARTICIPANT_BINDING_INVALID: &str = core_error::REASON_PARTICIPANT_BINDING_INVALID;
+    pub const PARTICIPANT_IDENTITY_UNRECOGNISED: &str =
+        core_error::REASON_PARTICIPANT_IDENTITY_UNRECOGNISED;
+    pub const SESSION_FOCUS_ALREADY_COMMITTED: &str =
+        core_error::REASON_SESSION_FOCUS_ALREADY_COMMITTED;
     pub const E2EE_KEY_SOURCE_UNAUTHORISED: &str = core_error::REASON_E2EE_KEY_SOURCE_UNAUTHORISED;
-    pub const FOCUS_UNAVAILABLE_FOR_CLIENT: &str = "focus_unavailable_for_client";
+    pub const FOCUS_UNAVAILABLE_FOR_CLIENT: &str = core_error::REASON_FOCUS_UNAVAILABLE_FOR_CLIENT;
 
     // Call moderation reason codes (webrtc-signaling.md §3a).
     pub const CALL_MODERATION_UNAUTHORISED: &str = "call_moderation_unauthorised";
@@ -208,26 +210,29 @@ pub mod reasons {
     // Call recording / transcription lifecycle reason codes
     // (call-state.md §5 / §5.1 / §5.2 / §7).
     pub const RECORDING_CONSENT_REQUIRED: &str = core_error::REASON_RECORDING_CONSENT_REQUIRED;
-    pub const TRANSCRIPTION_DENIED: &str = "transcription_denied";
+    pub const TRANSCRIPTION_DENIED: &str = core_error::REASON_TRANSCRIPTION_DENIED;
     pub const TRANSCRIPTION_ARTIFACT_PIPELINE_BYPASSED: &str =
-        "transcription_artifact_pipeline_bypassed";
+        core_error::REASON_TRANSCRIPTION_ARTIFACT_PIPELINE_BYPASSED;
     pub const CALL_SUMMARY_INVALID: &str = "call_summary_invalid";
     pub const LEGAL_HOLD_ACTIVE: &str = core_error::REASON_LEGAL_HOLD_ACTIVE;
 
     // Recovery reason codes.
     pub const RECOVERY_WITNESS_REVOKE_LAGGING: &str = "recovery_witness_revoke_lagging";
 
-    // MemberIdentity append-only replacement event reason codes.
-    pub const MEMBER_IDENTITY_UNKNOWN_SEGMENT: &str = "member_identity_unknown_segment";
+    // MemberIdentity append-only replacement event reason codes. These map to
+    // the SDK's NON-REGISTRY member-identity rejection reasons (pending
+    // registration in error-code-registry.json#reason_codes).
+    pub const MEMBER_IDENTITY_UNKNOWN_SEGMENT: &str =
+        core_error::REASON_MEMBER_IDENTITY_UNKNOWN_SEGMENT;
 
     // Federation / admission reason codes that are not top-level SDK variants.
-    pub const CROSS_DOMAIN_REPLAY_REJECTED: &str = "cross_domain_replay_rejected";
-    pub const RESET_EVENT_ID_MISMATCH: &str = "reset_event_id_mismatch";
+    pub const CROSS_DOMAIN_REPLAY_REJECTED: &str = core_error::REASON_CROSS_DOMAIN_REPLAY_REJECTED;
+    pub const RESET_EVENT_ID_MISMATCH: &str = core_error::REASON_RESET_EVENT_ID_MISMATCH;
     pub const E2EE_RELAXED_DISALLOWED_IN_COMPLIANCE_PROFILE: &str =
-        "e2ee_relaxed_disallowed_in_compliance_profile";
+        core_error::REASON_E2EE_RELAXED_DISALLOWED_IN_COMPLIANCE_PROFILE;
     pub const MEDIA_PLAINTEXT_SERVICE_NOT_AUTHORISED: &str =
-        "media_plaintext_service_not_authorised";
-    pub const BLOB_REDACTED: &str = "blob_redacted";
+        core_error::REASON_MEDIA_PLAINTEXT_SERVICE_NOT_AUTHORISED;
+    pub const BLOB_REDACTED: &str = core_error::REASON_BLOB_REDACTED;
 
     // MemberIdentity / handle-claim wire-shape reason codes.
     pub const MEMBER_IDENTITY_HANDLE_FIELD_FORBIDDEN: &str =

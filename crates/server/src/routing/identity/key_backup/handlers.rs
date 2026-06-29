@@ -150,7 +150,15 @@ pub(super) async fn enforce_key_backup_series_chain_typed(
         .with_wire_code("series_predecessor_not_found"));
     };
     let expected_digest = key_backup_canonical_digest_without_signature(&predecessor)?;
-    if supersedes_digest != expected_digest {
+    // SOL-SEC-05 — constant-time digest comparison so a timing side channel
+    // cannot leak how many leading bytes of the supersedes digest matched.
+    let digests_equal = {
+        use subtle::ConstantTimeEq as _;
+        let left = supersedes_digest.as_bytes();
+        let right = expected_digest.as_bytes();
+        left.len() == right.len() && bool::from(left.ct_eq(right))
+    };
+    if !digests_equal {
         return Err(AppError::new(
             ErrorCode::SchemaViolation,
             "series_chain_broken: supersedes_digest does not match predecessor canonical digest",
