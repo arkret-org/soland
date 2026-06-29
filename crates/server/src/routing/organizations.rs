@@ -300,6 +300,14 @@ async fn upsert_organization(
 ) -> JsonResult<OrganizationView> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
+    // Registering an organization (a verified, listable org-principal record) is
+    // a deployment-governance act, gated to the server's configured admin
+    // principals — not every authenticated user may mint organizations.
+    if !state.config.is_admin_principal(&session.actor) {
+        return Err(AppError::capability_denied(
+            "organization registry write requires a server administrator",
+        ));
+    }
     let body = body.into_inner();
     validate_did(&body.organization_did)
         .map_err(|_| AppError::invalid_param("organization_did must be a DID"))?;
