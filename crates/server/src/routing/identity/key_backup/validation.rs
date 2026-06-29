@@ -19,7 +19,18 @@ pub(super) fn is_base64url_token(value: &str) -> bool {
 }
 
 pub(super) fn is_sha_digest(value: &str) -> bool {
-    cokret_sdk::Hash::new(value.to_owned()).is_ok()
+    // Critical key-backup digests (proof_digest / key_commitment) are restricted
+    // to sha256 per key-management.md: exactly the `sha256:` prefix followed by 64
+    // lowercase hex characters. The SDK `Hash` type intentionally accepts the wider
+    // multi-algorithm digest vocabulary (blake3 / sha3_256 / sha512), so this gate
+    // must enforce the sha256-only shape itself rather than delegate to `Hash::new`.
+    let Some(hex) = value.strip_prefix("sha256:") else {
+        return false;
+    };
+    hex.len() == 64
+        && hex
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
 pub(super) fn backup_class_wire(backup_class: BackupClass) -> &'static str {

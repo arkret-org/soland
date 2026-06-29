@@ -457,7 +457,7 @@ impl FederationTransactionStore for PgFederationTransactionStore {
         let realm_id_uuid: Option<Uuid> = record
             .realm_id
             .as_deref()
-            .map(ids::typed_uuid_part_or_panic);
+            .map(ids::typed_uuid_part_expect_internal);
         let inserted = sql_query(
             "INSERT INTO federation_transactions \
              (id, txn_id, source_service, destination_service, realm_id, status, \
@@ -491,7 +491,7 @@ impl FederationTransactionStore for PgFederationTransactionStore {
         let realm_id_uuid: Option<Uuid> = record
             .realm_id
             .as_deref()
-            .map(ids::typed_uuid_part_or_panic);
+            .map(ids::typed_uuid_part_expect_internal);
         sql_query(
             "INSERT INTO federation_transactions \
              (id, txn_id, source_service, destination_service, realm_id, status, \
@@ -715,7 +715,7 @@ impl FederationFrontierExchangeStore for PgFederationFrontierExchangeStore {
         peer_service_did: &str,
     ) -> PersistenceResult<Option<FederationFrontierExchangeRecord>> {
         let mut conn = pg_conn(&self.pool).await?;
-        let realm_id_uuid = ids::typed_uuid_part_or_panic(realm_id);
+        let realm_id_uuid = ids::typed_uuid_part_expect_internal(realm_id);
         sql_query(
             "SELECT realm_id, peer_service_did, status, consecutive_failures, \
              last_success_at, last_failure_at, last_frontier_root, last_error, updated_at \
@@ -789,7 +789,7 @@ impl FederationFrontierExchangeStore for PgFederationFrontierExchangeStore {
 impl PgFederationFrontierExchangeStore {
     async fn put_record(&self, record: &FederationFrontierExchangeRecord) -> PersistenceResult<()> {
         let mut conn = pg_conn(&self.pool).await?;
-        let realm_id_uuid = ids::typed_uuid_part_or_panic(&record.realm_id);
+        let realm_id_uuid = ids::typed_uuid_part_expect_internal(&record.realm_id);
         sql_query(
             "INSERT INTO federation_frontier_exchange \
              (realm_id, peer_service_did, status, consecutive_failures, last_success_at, \
@@ -836,8 +836,8 @@ impl FederationOperationsStore for PgFederationOperationsStore {
             .ok()
             .and_then(|v| v.as_str().map(ToOwned::to_owned))
             .unwrap_or_else(|| "create".to_owned());
-        let operation_id_uuid = ids::typed_uuid_part_or_panic(operation.operation_id.as_str());
-        let realm_id_uuid = ids::typed_uuid_part_or_panic(operation.realm_id.as_str());
+        let operation_id_uuid = ids::typed_uuid_part_expect_internal(operation.operation_id.as_str());
+        let realm_id_uuid = ids::typed_uuid_part_expect_internal(operation.realm_id.as_str());
         sql_query(
             "INSERT INTO federation_operations \
              (id, realm_id, object_type, object_id, operation_type, payload, created_at) \
@@ -859,7 +859,7 @@ impl FederationOperationsStore for PgFederationOperationsStore {
 
     async fn contains(&self, operation_id: &str) -> PersistenceResult<bool> {
         let mut conn = pg_conn(&self.pool).await?;
-        let operation_id_uuid = ids::typed_uuid_part_or_panic(operation_id);
+        let operation_id_uuid = ids::typed_uuid_part_expect_internal(operation_id);
         sql_query("SELECT EXISTS(SELECT 1 FROM federation_operations WHERE id = $1) AS present")
             .bind::<SqlUuid, _>(operation_id_uuid)
             .get_result::<ExistsRow>(&mut *conn)
@@ -870,7 +870,7 @@ impl FederationOperationsStore for PgFederationOperationsStore {
 
     async fn list_for_realm(&self, realm_id: &str) -> PersistenceResult<Vec<Operation>> {
         let mut conn = pg_conn(&self.pool).await?;
-        let realm_id_uuid = ids::typed_uuid_part_or_panic(realm_id);
+        let realm_id_uuid = ids::typed_uuid_part_expect_internal(realm_id);
         let rows: Vec<JsonPayloadRow> = sql_query(
             "SELECT payload FROM federation_operations \
              WHERE realm_id = $1 ORDER BY created_at ASC, id ASC",

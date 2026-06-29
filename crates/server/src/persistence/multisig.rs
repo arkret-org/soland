@@ -297,7 +297,7 @@ fn partials_to_jsonb(partials: &BTreeMap<String, Value>) -> Value {
 impl MultisigPendingStore for PgMultisigPendingStore {
     async fn upsert(&self, record: MultisigPendingRecord) -> PersistenceResult<()> {
         let mut conn = pg_conn(&self.pool).await?;
-        let realm_id_uuid = ids::typed_uuid_part_or_panic(&record.realm_id);
+        let realm_id_uuid = ids::typed_uuid_part_expect_internal(&record.realm_id);
         sql_query(
             "INSERT INTO multisig_pending \
              (id, realm_id, threshold_k, threshold_n, members, canonical_b64, partials, created_at, expires_at) \
@@ -367,7 +367,7 @@ impl MultisigPendingStore for PgMultisigPendingStore {
         realm_id: &str,
     ) -> PersistenceResult<Vec<MultisigPendingRecord>> {
         let mut conn = pg_conn(&self.pool).await?;
-        let realm_id_uuid = ids::typed_uuid_part_or_panic(realm_id);
+        let realm_id_uuid = ids::typed_uuid_part_expect_internal(realm_id);
         sql_query(
             "SELECT id AS seal_id, realm_id, threshold_k, threshold_n, members, canonical_b64, \
              partials, created_at, expires_at, claimed_by_node_id, claimed_until, claim_seq \

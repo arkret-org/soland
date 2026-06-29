@@ -74,7 +74,7 @@ impl BlobStore for PgBlobStore {
         let realm_id_uuid: Option<Uuid> = record
             .realm_id
             .as_deref()
-            .map(ids::typed_uuid_part_or_panic);
+            .map(ids::typed_uuid_part_expect_internal);
         let payload = serde_json::json!({
             "encryption": record.encryption.clone(),
         });

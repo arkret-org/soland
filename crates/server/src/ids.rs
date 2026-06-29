@@ -129,13 +129,38 @@ pub fn typed_uuid_part(typed: &str) -> Option<Uuid> {
 }
 
 /// Same as `typed_uuid_part`, but panics with a descriptive message on
-/// malformed input. Use only at persistence boundaries that have already
-/// been validated upstream (e.g. SDK `*Id::new` validators); production
-/// code that handles untrusted input MUST use `typed_uuid_part` and
-/// propagate the `None` case as a typed error.
-pub fn typed_uuid_part_or_panic(typed: &str) -> Uuid {
-    typed_uuid_part(typed)
-        .unwrap_or_else(|| panic!("malformed typed wire ID at persistence boundary: {typed:?}"))
+/// malformed input.
+///
+/// SOL-COR-02: this variant is reserved for IDs the server **itself**
+/// generated (via the `generate_*` helpers above) or that arrived through an
+/// SDK strong-typed newtype (`RealmId`/`OperationId`/`SealId::new`/...), where
+/// a malformed value would be an internal invariant violation rather than bad
+/// client input. The name documents that contract: callers MUST guarantee the
+/// value cannot be an unvalidated client string. Any persistence boundary that
+/// may receive untrusted input MUST use [`typed_uuid_part_or_schema_violation`]
+/// instead and propagate the typed error.
+pub fn typed_uuid_part_expect_internal(typed: &str) -> Uuid {
+    typed_uuid_part(typed).unwrap_or_else(|| {
+        panic!("malformed typed wire ID at internal persistence boundary: {typed:?}")
+    })
+}
+
+/// Parse the trailing UUID of a typed wire ID at a persistence boundary that
+/// may receive **untrusted** input (e.g. a value pulled raw out of an event
+/// payload, or a client-supplied path/query id).
+///
+/// SOL-COR-02: returns a [`crate::persistence::PersistenceError::SchemaViolation`]
+/// (which surfaces as the `schema_violation` wire reason) instead of panicking,
+/// so a malformed id degrades to a structured 4xx rather than aborting the
+/// request task and losing the error code.
+pub fn typed_uuid_part_or_schema_violation(
+    typed: &str,
+) -> Result<Uuid, crate::persistence::PersistenceError> {
+    typed_uuid_part(typed).ok_or_else(|| {
+        crate::persistence::PersistenceError::SchemaViolation(format!(
+            "malformed typed wire ID: {typed:?}"
+        ))
+    })
 }
 
 /// Format a raw `Uuid` back to a typed wire ID `ck:<kind>:<uuid>`.

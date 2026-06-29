@@ -100,7 +100,7 @@ pub async fn load_projected_events_from_pg(
         return Ok(Vec::new());
     };
     let mut conn = pool.get().await?;
-    let realm_id_uuid = ids::typed_uuid_part_or_panic(realm_id);
+    let realm_id_uuid = ids::typed_uuid_part_expect_internal(realm_id);
     let rows = sql_query(
         "SELECT id AS event_id, realm_id, event_type AS event_kind, 'event' AS operation_type, operation_id, sender_id AS sender, payload, created_at \
          FROM events WHERE realm_id = $1 \
@@ -303,7 +303,7 @@ pub async fn persist_projected_operation(
             .and_then(|value| value.as_str())
             .map(ToOwned::to_owned)
             .unwrap_or_else(|| {
-                let op_uuid = ids::typed_uuid_part_or_panic(operation.operation_id.as_str());
+                let op_uuid = ids::typed_uuid_part_expect_internal(operation.operation_id.as_str());
                 ids::format_typed_uuid("event", &op_uuid)
             });
         let sender = operation
@@ -315,9 +315,12 @@ pub async fn persist_projected_operation(
             .payload
             .get("thread_id")
             .and_then(|value| value.as_str());
-        let event_id_uuid = ids::typed_uuid_part_or_panic(&event_id);
-        let realm_id_uuid = ids::typed_uuid_part_or_panic(operation.realm_id.as_str());
-        let operation_id_uuid = ids::typed_uuid_part_or_panic(operation.operation_id.as_str());
+        // SOL-COR-02: `event_id` may originate from the raw event payload
+        // (untrusted), so a malformed value must degrade to `schema_violation`
+        // rather than panic the request task.
+        let event_id_uuid = ids::typed_uuid_part_or_schema_violation(&event_id)?;
+        let realm_id_uuid = ids::typed_uuid_part_expect_internal(operation.realm_id.as_str());
+        let operation_id_uuid = ids::typed_uuid_part_expect_internal(operation.operation_id.as_str());
         sql_query(
                 "INSERT INTO events (id, realm_id, event_type, sender_id, thread_id, operation_id, payload, created_at) \
                  VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
@@ -350,8 +353,8 @@ pub async fn persist_projected_operation(
                 "invite_only"
             }
         });
-        let realm_id_uuid = ids::typed_uuid_part_or_panic(operation.realm_id.as_str());
-        let operation_id_uuid = ids::typed_uuid_part_or_panic(operation.operation_id.as_str());
+        let realm_id_uuid = ids::typed_uuid_part_expect_internal(operation.realm_id.as_str());
+        let operation_id_uuid = ids::typed_uuid_part_expect_internal(operation.operation_id.as_str());
         if title.is_some() {
             sql_query(
                     "INSERT INTO spaces (id, title, summary, owner_id, discoverability, payload, created_at, updated_at) \

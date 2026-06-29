@@ -148,7 +148,7 @@ impl From<RealmInviteRow> for RealmInviteRecord {
 impl RealmInviteStore for PgRealmInviteStore {
     async fn get(&self, invite_id: &str) -> PersistenceResult<Option<RealmInviteRecord>> {
         let mut conn = pg_conn(&self.pool).await?;
-        let invite_id_uuid = ids::typed_uuid_part_or_panic(invite_id);
+        let invite_id_uuid = ids::typed_uuid_part_expect_internal(invite_id);
         sql_query(
             "SELECT id, realm_id, inviter_id AS inviter, invitee_id AS invitee, invite_delivery_target, introduction_evidence_digest, third_party_id, join_rule_snapshot, invite_token, status, claim_nonces, expires_at, created_at, updated_at \
              FROM realm_invites WHERE id = $1",
@@ -163,8 +163,8 @@ impl RealmInviteStore for PgRealmInviteStore {
 
     async fn put(&self, record: RealmInviteRecord) -> PersistenceResult<()> {
         let mut conn = pg_conn(&self.pool).await?;
-        let invite_id_uuid = ids::typed_uuid_part_or_panic(&record.invite_id);
-        let realm_id_uuid = ids::typed_uuid_part_or_panic(&record.realm_id);
+        let invite_id_uuid = ids::typed_uuid_part_expect_internal(&record.invite_id);
+        let realm_id_uuid = ids::typed_uuid_part_expect_internal(&record.realm_id);
         sql_query(
             "INSERT INTO realm_invites \
              (id, realm_id, inviter_id, invitee_id, invite_delivery_target, introduction_evidence_digest, third_party_id, join_rule_snapshot, invite_token, status, claim_nonces, expires_at, created_at, updated_at) \

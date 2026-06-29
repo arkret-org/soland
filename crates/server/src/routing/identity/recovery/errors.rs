@@ -20,6 +20,9 @@ pub(super) fn recovery_store_error(error: PersistenceError) -> AppError {
         PersistenceError::Database(error) => {
             AppError::internal(format!("recovery persistence database error: {error}"))
         }
+        PersistenceError::SchemaViolation(message) => {
+            AppError::invalid_param(message).with_wire_code("schema_violation")
+        }
         PersistenceError::Internal(message) => AppError::internal(message),
     }
 }

@@ -465,7 +465,7 @@ impl AccountStore for PgAccountStore {
              display_name = EXCLUDED.display_name, updated_at = NOW() \
              RETURNING id",
         )
-        .bind::<SqlUuid, _>(ids::typed_uuid_part_or_panic(&record.id))
+        .bind::<SqlUuid, _>(ids::typed_uuid_part_expect_internal(&record.id))
         .bind::<Text, _>(&record.did)
         .bind::<Nullable<Text>, _>(&record.display_name)
         .bind::<Timestamptz, _>(record.created_at)

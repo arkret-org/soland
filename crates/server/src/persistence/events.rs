@@ -379,11 +379,11 @@ impl From<CanonicalEventRow> for CanonicalEventRecord {
 impl EventStore for PgEventStore {
     async fn put(&self, record: CanonicalEventRecord) -> PersistenceResult<()> {
         let mut conn = pg_conn(&self.pool).await?;
-        let event_id_uuid = ids::typed_uuid_part_or_panic(&record.event_id);
+        let event_id_uuid = ids::typed_uuid_part_expect_internal(&record.event_id);
         let realm_id_uuid: Option<Uuid> = record
             .realm_id
             .as_deref()
-            .map(ids::typed_uuid_part_or_panic);
+            .map(ids::typed_uuid_part_expect_internal);
         sql_query(
             "INSERT INTO canonical_events \
              (id, actor_id, actor_seq, realm_id, kind, schema_id, canonical_digest, canonical_bytes, envelope, received_at) \
@@ -407,7 +407,7 @@ impl EventStore for PgEventStore {
 
     async fn get(&self, event_id: &str) -> PersistenceResult<Option<CanonicalEventRecord>> {
         let mut conn = pg_conn(&self.pool).await?;
-        let event_id_uuid = ids::typed_uuid_part_or_panic(event_id);
+        let event_id_uuid = ids::typed_uuid_part_expect_internal(event_id);
         sql_query(
             "SELECT id, actor_id, actor_seq, realm_id, kind, schema_id, canonical_digest, canonical_bytes, envelope, received_at \
              FROM canonical_events WHERE id = $1",
@@ -421,7 +421,7 @@ impl EventStore for PgEventStore {
 
     async fn contains(&self, event_id: &str) -> PersistenceResult<bool> {
         let mut conn = pg_conn(&self.pool).await?;
-        let event_id_uuid = ids::typed_uuid_part_or_panic(event_id);
+        let event_id_uuid = ids::typed_uuid_part_expect_internal(event_id);
         sql_query("SELECT EXISTS(SELECT 1 FROM canonical_events WHERE id = $1) AS present")
             .bind::<SqlUuid, _>(event_id_uuid)
             .get_result::<ExistsRow>(&mut *conn)
@@ -532,7 +532,7 @@ impl EventStore for PgEventStore {
         realm_id: &str,
     ) -> PersistenceResult<Vec<CanonicalEventRecord>> {
         let mut conn = pg_conn(&self.pool).await?;
-        let realm_id_uuid = ids::typed_uuid_part_or_panic(realm_id);
+        let realm_id_uuid = ids::typed_uuid_part_expect_internal(realm_id);
         sql_query(
             "SELECT id, actor_id, actor_seq, realm_id, kind, schema_id, canonical_digest, canonical_bytes, envelope, received_at \
              FROM canonical_events WHERE realm_id = $1 ORDER BY received_at DESC, id DESC",

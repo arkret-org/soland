@@ -87,7 +87,9 @@ pub(super) async fn applet_record(
         .map_err(|error| AppError::internal(format!("stored applet record is invalid: {error}")))
 }
 
-pub(super) async fn applet_records(state: &AppState) -> Result<Vec<AppletRecord>, AppError> {
+pub(in crate::routing::extensions) async fn applet_records(
+    state: &AppState,
+) -> Result<Vec<AppletRecord>, AppError> {
     state
         .persistence
         .applets()
@@ -140,7 +142,9 @@ pub(super) fn manifest_namespace(manifest: &AppletManifest) -> Option<String> {
         .map(str::to_owned)
 }
 
-pub(super) fn applet_display_name(manifest: &AppletManifest) -> Option<String> {
+pub(in crate::routing::extensions) fn applet_display_name(
+    manifest: &AppletManifest,
+) -> Option<String> {
     manifest
         .metadata
         .get("display_name")

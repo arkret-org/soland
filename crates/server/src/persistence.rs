@@ -99,6 +99,11 @@ pub enum PersistenceError {
     Conflict(String),
     #[error("database error: {0}")]
     Database(#[from] diesel::result::Error),
+    /// SOL-COR-02: a malformed typed wire ID reached a persistence boundary
+    /// that handles untrusted input. Surfaces as the `schema_violation` wire
+    /// reason instead of panicking the request task.
+    #[error("schema violation: {0}")]
+    SchemaViolation(String),
     #[error("internal error: {0}")]
     Internal(String),
 }

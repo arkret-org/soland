@@ -97,9 +97,9 @@ impl NotificationStore for PgNotificationStore {
              VALUES ($1, $2, $3, $4, $5, NOW()) \
              ON CONFLICT (id) DO NOTHING",
         )
-        .bind::<SqlUuid, _>(ids::typed_uuid_part_or_panic(&notification_id))
+        .bind::<SqlUuid, _>(ids::typed_uuid_part_expect_internal(&notification_id))
         .bind::<Text, _>(&recipient_id)
-        .bind::<SqlUuid, _>(ids::typed_uuid_part_or_panic(&realm_id))
+        .bind::<SqlUuid, _>(ids::typed_uuid_part_expect_internal(&realm_id))
         .bind::<Text, _>(&source_event_id)
         .bind::<Text, _>(&notification_type)
         .execute(&mut *conn)

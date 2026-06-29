@@ -1118,7 +1118,7 @@ async fn project_device_authorize(state: &crate::state::AppState, operation: &Op
         map.entry("device_id".to_owned())
             .or_insert_with(|| Value::String(device_id.to_owned()));
         map.insert("device_authorize_projected".to_owned(), Value::Bool(true));
-        let operation_uuid = ids::typed_uuid_part_or_panic(operation.operation_id.as_str());
+        let operation_uuid = ids::typed_uuid_part_expect_internal(operation.operation_id.as_str());
         map.insert(
             "device_authorize_event_id".to_owned(),
             Value::String(ids::format_typed_uuid("event", &operation_uuid)),

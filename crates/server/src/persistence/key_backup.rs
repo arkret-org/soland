@@ -126,7 +126,7 @@ impl KeyBackupStore for PgKeyBackupStore {
                 key_material_encrypted = EXCLUDED.key_material_encrypted, \
                 payload = EXCLUDED.payload",
         )
-        .bind::<SqlUuid, _>(ids::typed_uuid_part_or_panic(&backup_id))
+        .bind::<SqlUuid, _>(ids::typed_uuid_part_expect_internal(&backup_id))
         .bind::<Nullable<Text>, _>(&account_id)
         .bind::<Nullable<Text>, _>(&device_id)
         .bind::<Nullable<Text>, _>(&scheme)
@@ -143,11 +143,11 @@ impl KeyBackupStore for PgKeyBackupStore {
         // last_accessed_at side-effect on read is informational; failure here
         // must not crash the get path.
         let _ = sql_query("UPDATE key_backups SET last_accessed_at = NOW() WHERE id = $1")
-            .bind::<SqlUuid, _>(ids::typed_uuid_part_or_panic(backup_id))
+            .bind::<SqlUuid, _>(ids::typed_uuid_part_expect_internal(backup_id))
             .execute(&mut *conn)
             .await;
         sql_query("SELECT payload FROM key_backups WHERE id = $1")
-            .bind::<SqlUuid, _>(ids::typed_uuid_part_or_panic(backup_id))
+            .bind::<SqlUuid, _>(ids::typed_uuid_part_expect_internal(backup_id))
             .get_result::<JsonPayloadRow>(&mut *conn)
             .await
             .optional()
@@ -158,7 +158,7 @@ impl KeyBackupStore for PgKeyBackupStore {
     async fn delete(&self, backup_id: &str) -> PersistenceResult<bool> {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query("DELETE FROM key_backups WHERE id = $1")
-            .bind::<SqlUuid, _>(ids::typed_uuid_part_or_panic(backup_id))
+            .bind::<SqlUuid, _>(ids::typed_uuid_part_expect_internal(backup_id))
             .execute(&mut *conn)
             .await
             .map(|n| n > 0)

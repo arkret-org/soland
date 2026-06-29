@@ -14,10 +14,9 @@ use salvo::prelude::*;
 use serde_json::{Value, json};
 
 use super::super::applet_manifest::{AppletManifest, VerifiedAppletManifest};
-use super::super::bot_actor::{self, BotActor, KIND_BOT};
 use super::record::{
-    applet_display_name, applet_record, applet_records, bot_actor_id_for, manifest_namespace,
-    persist_applet_record, portal_realm_id_for, safe_token,
+    applet_record, applet_records, bot_actor_id_for, manifest_namespace, persist_applet_record,
+    portal_realm_id_for, safe_token,
 };
 use super::types::{
     AppletManifestRegisterRequestBody, AppletPortalMessageOutcome, AppletRecord, AppletView,
@@ -182,7 +181,6 @@ async fn recover_applet_install_fanout(
     record: &mut AppletRecord,
     response: &InstallCommitOutcome,
 ) -> Result<(), AppError> {
-    register_applet_install_bot(record);
     update_applet_projection(state, record);
     ensure_applet_registration_projection(state, record, &response.registration_event_ref).await?;
     project_applet_install_grants(state, record, &response.capability_grant_refs);
@@ -243,17 +241,6 @@ async fn ensure_applet_e2ee_authorization_projections(
         }
     }
     Ok(())
-}
-
-fn register_applet_install_bot(record: &AppletRecord) {
-    bot_actor::register_bot(BotActor {
-        did: record.bot_actor_id.clone(),
-        name: applet_display_name(&record.manifest).unwrap_or_else(|| record.namespace.clone()),
-        kind: KIND_BOT.to_owned(),
-        owner_actor_id: record.owner_actor_id.clone(),
-        created_at: record.registered_at,
-        revoked_at: None,
-    });
 }
 
 async fn ensure_applet_registration_projection(
@@ -571,7 +558,7 @@ pub(super) async fn register_verified_applet(
         namespace,
         owner_actor_id: owner_actor_id.to_owned(),
         registry_did: verified.signer_did,
-        bot_actor_id: bot_actor_id.clone(),
+        bot_actor_id,
         portal_realm_id,
         capabilities: verified.capabilities,
         manifest,
@@ -588,15 +575,10 @@ pub(super) async fn register_verified_applet(
         install_execution: None,
         ghosts: Vec::new(),
     };
+    // SOL-HYG-01: the bot actor's liveness/revocation state is captured durably
+    // by the applet record persisted here (`bot_actor_id` + `revoked_at`); the
+    // prior in-memory registry write was a redundant, non-durable shadow.
     persist_applet_record(state, &record).await?;
-    bot_actor::register_bot(BotActor {
-        did: bot_actor_id,
-        name: applet_display_name(&record.manifest).unwrap_or_else(|| record.namespace.clone()),
-        kind: KIND_BOT.to_owned(),
-        owner_actor_id: owner_actor_id.to_owned(),
-        created_at: now,
-        revoked_at: None,
-    });
     crate::routing::append_audit_log(
         state,
         Some(owner_actor_id),
@@ -1361,11 +1343,7 @@ pub(super) fn allow_ghost_actors_for_install(
     approved_actions: &[String],
     actor_policy: &cokret_sdk::ActorPolicy,
 ) -> bool {
-    let package_allows = package
-        .ghost_policy
-        .get("enabled")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
+    let package_allows = package.ghost_policy.enabled;
     let scope_approved = approved_actions
         .iter()
         .any(|action| action == GHOST_PROVISION_ACTION);
@@ -1601,10 +1579,11 @@ mod tests {
     #[test]
     fn allow_ghost_actors_uses_package_ghost_policy_enabled() {
         let mut package = sample_package();
-        package.ghost_policy = json!({
-            "enabled": true,
-            "accountability_template": "bot_actor_and_applet_registry"
-        });
+        package.ghost_policy = cokret_sdk::applet::AppletGhostPolicy {
+            enabled: true,
+            accountability_template: Some("bot_actor_and_applet_registry".to_owned()),
+            ..Default::default()
+        };
         let actor_policy = cokret_sdk::ActorPolicy {
             bot_membership: "join".to_owned(),
             ghost_actor_mode: "policy_declared".to_owned(),
@@ -1615,10 +1594,11 @@ mod tests {
             &actor_policy
         ));
 
-        package.ghost_policy = json!({
-            "enabled": false,
-            "accountability_template": "bot_actor_and_applet_registry"
-        });
+        package.ghost_policy = cokret_sdk::applet::AppletGhostPolicy {
+            enabled: false,
+            accountability_template: Some("bot_actor_and_applet_registry".to_owned()),
+            ..Default::default()
+        };
         assert!(!allow_ghost_actors_for_install(
             &package,
             &[GHOST_PROVISION_ACTION.to_owned()],

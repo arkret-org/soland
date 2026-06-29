@@ -132,7 +132,7 @@ impl PolicyDocumentStore for PgPolicyDocumentStore {
             "SELECT id AS policy_id, owner_id AS owner, scope, subject_ref, policy_type, document, active, updated_at \
              FROM policy_documents WHERE id = $1",
         )
-        .bind::<SqlUuid, _>(ids::typed_uuid_part_or_panic(policy_id))
+        .bind::<SqlUuid, _>(ids::typed_uuid_part_expect_internal(policy_id))
         .get_result::<PolicyDocumentRow>(&mut *conn).await
         .optional()
         .map(|row| row.map(PolicyDocumentRecord::from))
@@ -167,7 +167,7 @@ impl PolicyDocumentStore for PgPolicyDocumentStore {
                 active = EXCLUDED.active, \
                 updated_at = EXCLUDED.updated_at",
         )
-        .bind::<SqlUuid, _>(ids::typed_uuid_part_or_panic(&record.policy_id))
+        .bind::<SqlUuid, _>(ids::typed_uuid_part_expect_internal(&record.policy_id))
         .bind::<Text, _>(&record.owner)
         .bind::<Text, _>(&record.scope)
         .bind::<Text, _>(&record.subject_ref)
@@ -185,7 +185,7 @@ impl PolicyDocumentStore for PgPolicyDocumentStore {
     async fn delete(&self, policy_id: &str) -> PersistenceResult<bool> {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query("DELETE FROM policy_documents WHERE id = $1")
-            .bind::<SqlUuid, _>(ids::typed_uuid_part_or_panic(policy_id))
+            .bind::<SqlUuid, _>(ids::typed_uuid_part_expect_internal(policy_id))
             .execute(&mut *conn)
             .await
             .map(|n| n > 0)

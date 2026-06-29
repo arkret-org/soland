@@ -441,7 +441,7 @@ impl SpaceContainerProjectionStore for PgSpaceContainerProjectionStore {
         sql_query(format!(
             "SELECT {SPACE_CONTAINER_PROJECTION_COLUMNS} FROM projection_spaces WHERE id = $1"
         ))
-        .bind::<SqlUuid, _>(ids::typed_uuid_part_or_panic(container_space_id))
+        .bind::<SqlUuid, _>(ids::typed_uuid_part_expect_internal(container_space_id))
         .get_result::<SpaceContainerProjectionRow>(&mut *conn)
         .await
         .optional()
@@ -475,26 +475,26 @@ impl SpaceContainerProjectionStore for PgSpaceContainerProjectionStore {
                 updated_by_id = EXCLUDED.updated_by_id, \
                 updated_at = EXCLUDED.updated_at",
         )
-        .bind::<SqlUuid, _>(ids::typed_uuid_part_or_panic(&record.container_space_id))
-        .bind::<SqlUuid, _>(ids::typed_uuid_part_or_panic(&record.realm_id))
+        .bind::<SqlUuid, _>(ids::typed_uuid_part_expect_internal(&record.container_space_id))
+        .bind::<SqlUuid, _>(ids::typed_uuid_part_expect_internal(&record.realm_id))
         .bind::<Nullable<SqlUuid>, _>(
             record
                 .scope_circle_id
                 .as_deref()
-                .map(ids::typed_uuid_part_or_panic),
+                .map(ids::typed_uuid_part_expect_internal),
         )
         .bind::<Nullable<SqlUuid>, _>(
             record
                 .default_scope_circle_id
                 .as_deref()
-                .map(ids::typed_uuid_part_or_panic),
+                .map(ids::typed_uuid_part_expect_internal),
         )
         .bind::<Nullable<Text>, _>(&record.child_scope_policy)
         .bind::<Nullable<SqlUuid>, _>(
             record
                 .child_scope_policy_scope_circle_id
                 .as_deref()
-                .map(ids::typed_uuid_part_or_panic),
+                .map(ids::typed_uuid_part_expect_internal),
         )
         .bind::<Nullable<Text>, _>(&record.child_scope_policy_metadata_encryption_floor)
         .bind::<Text, _>(&record.kind)
@@ -503,7 +503,7 @@ impl SpaceContainerProjectionStore for PgSpaceContainerProjectionStore {
             record
                 .parent_ref
                 .as_deref()
-                .map(ids::typed_uuid_part_or_panic),
+                .map(ids::typed_uuid_part_expect_internal),
         )
         .bind::<Nullable<Text>, _>(&record.rank)
         .bind::<Text, _>(&record.state)
@@ -528,7 +528,7 @@ impl SpaceContainerProjectionStore for PgSpaceContainerProjectionStore {
             "SELECT {SPACE_CONTAINER_PROJECTION_COLUMNS} FROM projection_spaces \
              WHERE realm_id = $1 ORDER BY id"
         ))
-        .bind::<SqlUuid, _>(ids::typed_uuid_part_or_panic(realm_id))
+        .bind::<SqlUuid, _>(ids::typed_uuid_part_expect_internal(realm_id))
         .load::<SpaceContainerProjectionRow>(&mut *conn)
         .await
         .map(|rows| {
@@ -557,7 +557,7 @@ impl SpaceContainerProjectionStore for PgSpaceContainerProjectionStore {
     async fn delete(&self, container_space_id: &str) -> PersistenceResult<()> {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query("DELETE FROM projection_spaces WHERE id = $1")
-            .bind::<SqlUuid, _>(ids::typed_uuid_part_or_panic(container_space_id))
+            .bind::<SqlUuid, _>(ids::typed_uuid_part_expect_internal(container_space_id))
             .execute(&mut *conn)
             .await
             .map(|_| ())
@@ -632,7 +632,7 @@ impl StrandProjectionStore for PgStrandProjectionStore {
         sql_query(format!(
             "SELECT {STRAND_PROJECTION_COLUMNS} FROM projection_strands WHERE id = $1"
         ))
-        .bind::<SqlUuid, _>(ids::typed_uuid_part_or_panic(strand_id))
+        .bind::<SqlUuid, _>(ids::typed_uuid_part_expect_internal(strand_id))
         .get_result::<StrandProjectionRow>(&mut *conn)
         .await
         .optional()
@@ -661,13 +661,13 @@ impl StrandProjectionStore for PgStrandProjectionStore {
                 updated_by_id = EXCLUDED.updated_by_id, \
                 updated_at = EXCLUDED.updated_at",
         )
-        .bind::<SqlUuid, _>(ids::typed_uuid_part_or_panic(&record.strand_id))
-        .bind::<SqlUuid, _>(ids::typed_uuid_part_or_panic(&record.realm_id))
+        .bind::<SqlUuid, _>(ids::typed_uuid_part_expect_internal(&record.strand_id))
+        .bind::<SqlUuid, _>(ids::typed_uuid_part_expect_internal(&record.realm_id))
         .bind::<Nullable<SqlUuid>, _>(
             record
                 .scope_circle_id
                 .as_deref()
-                .map(ids::typed_uuid_part_or_panic),
+                .map(ids::typed_uuid_part_expect_internal),
         )
         .bind::<Jsonb, _>(&tracks)
         .bind::<Text, _>(&record.title)
@@ -694,7 +694,7 @@ impl StrandProjectionStore for PgStrandProjectionStore {
             "SELECT {STRAND_PROJECTION_COLUMNS} FROM projection_strands \
              WHERE realm_id = $1 ORDER BY id"
         ))
-        .bind::<SqlUuid, _>(ids::typed_uuid_part_or_panic(realm_id))
+        .bind::<SqlUuid, _>(ids::typed_uuid_part_expect_internal(realm_id))
         .load::<StrandProjectionRow>(&mut *conn)
         .await
         .map(|rows| rows.into_iter().map(StrandProjectionRecord::from).collect())
@@ -715,7 +715,7 @@ impl StrandProjectionStore for PgStrandProjectionStore {
     async fn delete(&self, strand_id: &str) -> PersistenceResult<()> {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query("DELETE FROM projection_strands WHERE id = $1")
-            .bind::<SqlUuid, _>(ids::typed_uuid_part_or_panic(strand_id))
+            .bind::<SqlUuid, _>(ids::typed_uuid_part_expect_internal(strand_id))
             .execute(&mut *conn)
             .await
             .map(|_| ())
@@ -800,7 +800,7 @@ impl MorphProjectionStore for PgMorphProjectionStore {
         sql_query(format!(
             "SELECT {MORPH_PROJECTION_COLUMNS} FROM projection_morphs WHERE id = $1"
         ))
-        .bind::<SqlUuid, _>(ids::typed_uuid_part_or_panic(morph_id))
+        .bind::<SqlUuid, _>(ids::typed_uuid_part_expect_internal(morph_id))
         .get_result::<MorphProjectionRow>(&mut *conn)
         .await
         .optional()
@@ -830,13 +830,13 @@ impl MorphProjectionStore for PgMorphProjectionStore {
                 history_basis_seals = EXCLUDED.history_basis_seals, \
                 updated_at = EXCLUDED.updated_at",
         )
-        .bind::<SqlUuid, _>(ids::typed_uuid_part_or_panic(&record.morph_id))
-        .bind::<SqlUuid, _>(ids::typed_uuid_part_or_panic(&record.realm_id))
+        .bind::<SqlUuid, _>(ids::typed_uuid_part_expect_internal(&record.morph_id))
+        .bind::<SqlUuid, _>(ids::typed_uuid_part_expect_internal(&record.realm_id))
         .bind::<Nullable<SqlUuid>, _>(
             record
                 .scope_circle_id
                 .as_deref()
-                .map(ids::typed_uuid_part_or_panic),
+                .map(ids::typed_uuid_part_expect_internal),
         )
         .bind::<Text, _>(&record.morph_type)
         .bind::<Nullable<Text>, _>(&record.title)
@@ -866,7 +866,7 @@ impl MorphProjectionStore for PgMorphProjectionStore {
             "SELECT {MORPH_PROJECTION_COLUMNS} FROM projection_morphs \
              WHERE realm_id = $1 ORDER BY id"
         ))
-        .bind::<SqlUuid, _>(ids::typed_uuid_part_or_panic(realm_id))
+        .bind::<SqlUuid, _>(ids::typed_uuid_part_expect_internal(realm_id))
         .load::<MorphProjectionRow>(&mut *conn)
         .await
         .map(|rows| rows.into_iter().map(MorphProjectionRecord::from).collect())
@@ -887,7 +887,7 @@ impl MorphProjectionStore for PgMorphProjectionStore {
     async fn delete(&self, morph_id: &str) -> PersistenceResult<()> {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query("DELETE FROM projection_morphs WHERE id = $1")
-            .bind::<SqlUuid, _>(ids::typed_uuid_part_or_panic(morph_id))
+            .bind::<SqlUuid, _>(ids::typed_uuid_part_expect_internal(morph_id))
             .execute(&mut *conn)
             .await
             .map(|_| ())
@@ -953,15 +953,15 @@ impl ProjectionEventStore for PgProjectionEventStore {
              (event_id, realm_id, event_kind, operation_type, operation_id, sender_id, payload, created_at) \
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
         )
-        .bind::<SqlUuid, _>(ids::typed_uuid_part_or_panic(&record.event_id))
-        .bind::<SqlUuid, _>(ids::typed_uuid_part_or_panic(&record.realm_id))
+        .bind::<SqlUuid, _>(ids::typed_uuid_part_expect_internal(&record.event_id))
+        .bind::<SqlUuid, _>(ids::typed_uuid_part_expect_internal(&record.realm_id))
         .bind::<Text, _>(&record.event_kind)
         .bind::<Text, _>(&record.operation_type)
         .bind::<Nullable<SqlUuid>, _>(
             record
                 .operation_id
                 .as_deref()
-                .map(ids::typed_uuid_part_or_panic),
+                .map(ids::typed_uuid_part_expect_internal),
         )
         .bind::<Nullable<Text>, _>(&record.sender)
         .bind::<Jsonb, _>(&record.payload)

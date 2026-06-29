@@ -355,7 +355,7 @@ impl RecoveryPolicyStore for PgRecoveryPolicyStore {
                     expires_at, issued_at, verification_method, raw_payload, accepted_at \
              FROM recovery_policies WHERE id = $1",
         )
-        .bind::<SqlUuid, _>(ids::typed_uuid_part_or_panic(policy_id))
+        .bind::<SqlUuid, _>(ids::typed_uuid_part_expect_internal(policy_id))
         .get_result::<RecoveryPolicyRow>(&mut *conn)
         .await
         .optional()?
@@ -445,7 +445,7 @@ impl RecoveryPolicyStore for PgRecoveryPolicyStore {
               expires_at, issued_at, verification_method, raw_payload, accepted_at) \
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
         )
-        .bind::<SqlUuid, _>(ids::typed_uuid_part_or_panic(&record.policy_id))
+        .bind::<SqlUuid, _>(ids::typed_uuid_part_expect_internal(&record.policy_id))
         .bind::<Text, _>(&record.principal_id)
         .bind::<Integer, _>(record.version as i32)
         .bind::<Text, _>(&record.trust_domain)
@@ -454,7 +454,7 @@ impl RecoveryPolicyStore for PgRecoveryPolicyStore {
             record
                 .supersedes
                 .as_deref()
-                .map(ids::typed_uuid_part_or_panic),
+                .map(ids::typed_uuid_part_expect_internal),
         )
         .bind::<Nullable<Timestamptz>, _>(record.expires_at)
         .bind::<Timestamptz, _>(record.issued_at)
@@ -549,7 +549,7 @@ impl RecoveryReceiptStore for PgRecoveryReceiptStore {
                     verification_method, raw_payload, accepted_at \
              FROM recovery_receipts WHERE recovery_session_id = $1",
         )
-        .bind::<SqlUuid, _>(ids::typed_uuid_part_or_panic(recovery_session_id))
+        .bind::<SqlUuid, _>(ids::typed_uuid_part_expect_internal(recovery_session_id))
         .get_result::<RecoveryReceiptRow>(&mut *conn)
         .await
         .optional()?
@@ -596,10 +596,10 @@ impl RecoveryReceiptStore for PgRecoveryReceiptStore {
               verification_method, raw_payload, accepted_at) \
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)",
         )
-        .bind::<SqlUuid, _>(ids::typed_uuid_part_or_panic(&record.receipt_id))
+        .bind::<SqlUuid, _>(ids::typed_uuid_part_expect_internal(&record.receipt_id))
         .bind::<Text, _>(&record.principal_id)
-        .bind::<SqlUuid, _>(ids::typed_uuid_part_or_panic(&record.recovery_session_id))
-        .bind::<SqlUuid, _>(ids::typed_uuid_part_or_panic(&record.policy_id))
+        .bind::<SqlUuid, _>(ids::typed_uuid_part_expect_internal(&record.recovery_session_id))
+        .bind::<SqlUuid, _>(ids::typed_uuid_part_expect_internal(&record.policy_id))
         .bind::<Integer, _>(record.policy_version as i32)
         .bind::<Text, _>(&record.trust_domain)
         .bind::<Text, _>(&record.new_device_id)
@@ -706,7 +706,7 @@ impl RecoverySessionStore for PgRecoverySessionStore {
             "SELECT {RECOVERY_SESSION_COLUMNS} FROM recovery_sessions \
              WHERE id = $1"
         ))
-        .bind::<SqlUuid, _>(ids::typed_uuid_part_or_panic(recovery_session_id))
+        .bind::<SqlUuid, _>(ids::typed_uuid_part_expect_internal(recovery_session_id))
         .get_result::<RecoverySessionRow>(&mut *conn)
         .await
         .optional()?
@@ -723,11 +723,11 @@ impl RecoverySessionStore for PgRecoverySessionStore {
               created_at, updated_at, expires_at) \
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)",
         )
-        .bind::<SqlUuid, _>(ids::typed_uuid_part_or_panic(&record.recovery_session_id))
+        .bind::<SqlUuid, _>(ids::typed_uuid_part_expect_internal(&record.recovery_session_id))
         .bind::<Text, _>(&record.principal_id)
         .bind::<Text, _>(&record.requesting_device_id)
         .bind::<Text, _>(&record.trust_domain)
-        .bind::<SqlUuid, _>(ids::typed_uuid_part_or_panic(&record.policy_id))
+        .bind::<SqlUuid, _>(ids::typed_uuid_part_expect_internal(&record.policy_id))
         .bind::<Integer, _>(record.policy_version as i32)
         .bind::<Integer, _>(record.ssk_generation as i32)
         .bind::<Jsonb, _>(&record.policy_payload)
@@ -750,7 +750,7 @@ impl RecoverySessionStore for PgRecoverySessionStore {
                 state = $2, proof_payload = $3, updated_at = $4, expires_at = $5 \
              WHERE id = $1",
         )
-        .bind::<SqlUuid, _>(ids::typed_uuid_part_or_panic(&record.recovery_session_id))
+        .bind::<SqlUuid, _>(ids::typed_uuid_part_expect_internal(&record.recovery_session_id))
         .bind::<Text, _>(&record.state)
         .bind::<Nullable<Jsonb>, _>(record.proof_payload.as_ref())
         .bind::<Timestamptz, _>(record.updated_at)

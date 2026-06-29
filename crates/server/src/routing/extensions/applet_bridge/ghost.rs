@@ -9,7 +9,6 @@ use cokret_sdk::{
 };
 use serde_json::{Value, json};
 
-use super::super::bot_actor::{self, BotActor, KIND_GHOST};
 use super::record::{
     applet_record, applet_records, ensure_not_revoked, extension_actor_id_document,
     ghost_actor_id_for, persist_applet_record,
@@ -59,11 +58,11 @@ async fn revoke_applet_record_inner(
     for ghost in &mut record.ghosts {
         ghost.revoked_at.get_or_insert(now);
     }
+    // SOL-HYG-01: the applet record persisted above carries the durable
+    // revocation state (`status` / `revoked_at` on the applet and on each
+    // ghost); the prior in-memory `bot_actor::revoke_bot` shadow was redundant
+    // and not durable across restart / replicas.
     persist_applet_record(state, &record).await?;
-    bot_actor::revoke_bot(&record.bot_actor_id);
-    for ghost in &record.ghosts {
-        bot_actor::revoke_bot(&ghost.ghost_actor_id);
-    }
     crate::routing::append_audit_log(
         state,
         Some(actor),
@@ -571,18 +570,10 @@ pub(super) async fn provision_ghost(
         revoked_at: None,
     };
     record.ghosts.push(ghost.clone());
+    // SOL-HYG-01: persisting the applet record (with the freshly pushed ghost)
+    // is the durable source of truth for ghost liveness; no separate in-memory
+    // registry write is needed.
     persist_applet_record(state, &record).await?;
-    bot_actor::register_bot(BotActor {
-        did: ghost.ghost_actor_id.clone(),
-        name: ghost
-            .display_name
-            .clone()
-            .unwrap_or_else(|| ghost.external_id.clone()),
-        kind: KIND_GHOST.to_owned(),
-        owner_actor_id: record.owner_actor_id.clone(),
-        created_at: now,
-        revoked_at: None,
-    });
     Ok((record, ghost))
 }
 

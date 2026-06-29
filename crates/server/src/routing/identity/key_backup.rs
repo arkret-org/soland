@@ -211,8 +211,10 @@ mod tests {
             "recipient_method": "recovery_public_key",
             "recipient_key_ref": "did:web:alice.example#recovery",
             "aead": {
-                "name": "chacha20_poly1305",
-                "aead_profile": "ck.aead.chacha20_poly1305.v1",
+                // Absent hpke_suite selector denotes the v1 default-MUST HPKE suite
+                // ck.hpke_x25519_aead_xchacha20poly1305.v1, whose AEAD is xchacha20_poly1305.
+                "name": "xchacha20_poly1305",
+                "aead_profile": "ck.aead.xchacha20_poly1305.v1",
                 "enc": "ZW5jYXBzdWxhdGVka2V5"
             }
         })
@@ -449,7 +451,9 @@ mod tests {
         let err = validate_key_backup_body(BACKUP_ID, ACTOR, &body)
             .expect_err("passphrase_kdf without kdf metadata is invalid");
         assert_eq!(err.code, ErrorCode::SchemaViolation);
-        assert!(err.message.contains("encryption.kdf"));
+        // The SDK encryption type validation gate fires first and rejects the
+        // missing kdf ("passphrase_kdf requires `kdf`") before soland's domain check.
+        assert!(err.message.contains("kdf"));
     }
 
     #[test]

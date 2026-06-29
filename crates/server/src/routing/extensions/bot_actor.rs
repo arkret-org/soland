@@ -1,59 +1,51 @@
-//! G3.S9 — Bot / ghost actor registry (runnable stub).
+//! G3.S9 — Bot / ghost actor registry (persistence-backed view).
 //!
 //! Bot and ghost actors are second-class identities tied to a primary actor's
 //! authority (the applet controller). Canonical provisioning happens through
-//! `ck.self.applet.command.install` / `ck.applet.registration`; this registry is the local
-//! runtime state those strands populate. Per
+//! `ck.self.applet.command.install` / `ck.applet.registration`; the durable
+//! source of truth is the `applet_registrations` table (`persistence::applets`,
+//! materialised as [`AppletRecord`]). Per
 //! `extensions/applet-integration.md` §3–§5:
 //!
-//! - A **bot actor** is a stable per-applet DID. Registered once when the applet install completes;
-//!   lives until revoked.
-//! - A **ghost actor** is a per-external-user DID minted by the applet to represent an external
-//!   user inside the portal realm. Same wire shape as bots; the `kind` discriminator differs.
+//! - A **bot actor** is a stable per-applet DID. Created when the applet install
+//!   completes (`applet_registrations.bot_actor_id`); lives until the applet is
+//!   revoked (`applet_registrations.revoked_at`).
+//! - A **ghost actor** is a per-external-user DID minted by the applet to
+//!   represent an external user inside the portal realm. Recorded as a row in
+//!   the applet record's `ghosts` array; the `kind` discriminator differs.
 //!
-//! Both flavours are recorded in a process-local registry
-//! (`BOT_REGISTRY` below).
+//! SOL-HYG-01 — durability / horizontal scale.
+//! This module used to keep bot/ghost liveness + revocation in a process-local
+//! `static Mutex<Vec<BotActor>>`, which did not survive a restart and did not
+//! propagate across replicas. That shadow state was redundant: every
+//! registration and revocation is already persisted to `applet_registrations`
+//! by the install / revoke paths before the registry was touched, and nothing on
+//! the production path ever read the registry back. The registry is now a thin
+//! **read view** that derives [`BotActor`] rows directly from the persisted
+//! applet records, so liveness + revocation are durable and consistent across
+//! replicas with a single source of truth.
 //!
-//! SOL-HYG-01 — KNOWN LIMITATION (durability / horizontal scale):
-//! `BOT_REGISTRY` is a `static Mutex<Vec<..>>`, so the bot/ghost *liveness +
-//! revocation* state it holds is **process-local**: it does not survive a
-//! restart and does not propagate across replicas. The durable source of truth
-//! for which applet owns which bot is the `applets` table (`bot_actor_id`
-//! column, see `persistence::applets`); this registry is a best-effort runtime
-//! cache layered on top of that. This is safe for the single-instance dev /
-//! deployment-local posture (the HTTP handlers here are NOT mounted in the
-//! production router), but a revocation performed on one replica will not be
-//! observed by another and is lost on restart. Persisting the full
-//! `BotActor` row (name / kind / owner / `revoked_at`) — plus ghost actors as
-//! first-class rows — through `state.persistence` is the proper fix and is
-//! tracked as a follow-up (it needs its own table + rehydration on startup, out
-//! of scope for the wave-3 hardening pass).
-//!
-//! Deployment-local HTTP handlers are intentionally not mounted in the
-//! production router until this registry has durable state and accountable
-//! provisioning semantics.
-//!
-//! TODO(G3.S9-followup): bind bot/ghost provisioning to the verified
-//! manifest's `applet_id`; persist the registry through
-//! `state.persistence` so it survives restart / propagates across replicas
-//! (SOL-HYG-01); emit `ck.identity.accountability_grant` events so the
-//! accountability chain is queryable via the standard DID Document fetch.
+//! TODO(G3.S9-followup): bind bot/ghost provisioning to the verified manifest's
+//! `applet_id`; emit `ck.identity.accountability_grant` events so the
+//! accountability chain is queryable via the standard DID Document fetch (the
+//! ghost provisioning path already builds these via
+//! `applet_bridge::build_ghost_accountability_grant_event`; bot-actor inception
+//! grants remain a follow-up).
 
-use std::sync::Mutex;
-
-#[cfg(test)]
 use cokret_sdk::Did;
 use salvo::oapi::ToSchema;
 use serde::{Deserialize, Serialize};
 
-#[cfg(test)]
+use super::applet_bridge::{applet_display_name, applet_records};
 use crate::error::AppError;
+use crate::state::AppState;
 
 /// Discriminator for [`BotActor::kind`].
 pub const KIND_BOT: &str = "bot";
 pub const KIND_GHOST: &str = "ghost";
 
-/// On-wire representation of a bot or ghost actor.
+/// On-wire representation of a bot or ghost actor, derived from a persisted
+/// applet record.
 #[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
 pub struct BotActor {
     pub did: String,
@@ -68,56 +60,55 @@ pub struct BotActor {
     pub revoked_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
-/// Process-local registry. See module TODO for the persistence
-/// follow-up.
-static BOT_REGISTRY: Mutex<Vec<BotActor>> = Mutex::new(Vec::new());
-
-#[cfg(test)]
-pub(crate) fn reset_registry_for_test() {
-    BOT_REGISTRY.lock().unwrap().clear();
-}
-
-/// Register a bot/ghost actor. Returns the inserted [`BotActor`]; if
-/// the DID is already registered (and not revoked), returns the
-/// existing row idempotently.
-pub fn register_bot(actor: BotActor) -> BotActor {
-    let mut guard = BOT_REGISTRY.lock().expect("bot registry poisoned");
-    if let Some(existing) = guard
-        .iter()
-        .find(|b| b.did == actor.did && b.revoked_at.is_none())
-    {
-        return existing.clone();
+/// List non-revoked bot and ghost actors owned by `owner_actor_id`, derived
+/// from the durable applet records. A bot actor is owned by the applet's
+/// `owner_actor_id`; a ghost actor is owned by the same actor as its parent
+/// applet. Revoked applets (and revoked ghosts) are skipped.
+pub async fn list_bots_owned_by(
+    state: &AppState,
+    owner_actor_id: &str,
+) -> Result<Vec<BotActor>, AppError> {
+    let mut bots = Vec::new();
+    for record in applet_records(state).await? {
+        if record.owner_actor_id != owner_actor_id {
+            continue;
+        }
+        let applet_revoked = record.revoked_at.is_some();
+        if !applet_revoked {
+            bots.push(BotActor {
+                did: record.bot_actor_id.clone(),
+                name: applet_display_name(&record.manifest)
+                    .unwrap_or_else(|| record.namespace.clone()),
+                kind: KIND_BOT.to_owned(),
+                owner_actor_id: record.owner_actor_id.clone(),
+                created_at: record.registered_at,
+                revoked_at: None,
+            });
+        }
+        for ghost in &record.ghosts {
+            if applet_revoked || ghost.revoked_at.is_some() {
+                continue;
+            }
+            bots.push(BotActor {
+                did: ghost.ghost_actor_id.clone(),
+                name: ghost
+                    .display_name
+                    .clone()
+                    .unwrap_or_else(|| ghost.external_id.clone()),
+                kind: KIND_GHOST.to_owned(),
+                owner_actor_id: record.owner_actor_id.clone(),
+                created_at: ghost.created_at,
+                revoked_at: None,
+            });
+        }
     }
-    guard.push(actor.clone());
-    actor
+    Ok(bots)
 }
 
-/// Mark a bot/ghost as revoked. Returns true on success; false when
-/// the DID isn't registered. Historic registry rows are preserved
-/// (the spec requires accountability history to outlive revocation).
-pub fn revoke_bot(did: &str) -> bool {
-    let mut guard = BOT_REGISTRY.lock().expect("bot registry poisoned");
-    if let Some(row) = guard.iter_mut().find(|b| b.did == did) {
-        row.revoked_at = Some(chrono::Utc::now());
-        return true;
-    }
-    false
-}
-
-/// List bots owned by `owner_actor_id`, skipping revoked rows. Used
-/// by the GET endpoint below.
-pub fn list_bots_owned_by(owner_actor_id: &str) -> Vec<BotActor> {
-    BOT_REGISTRY
-        .lock()
-        .expect("bot registry poisoned")
-        .iter()
-        .filter(|b| b.owner_actor_id == owner_actor_id && b.revoked_at.is_none())
-        .cloned()
-        .collect()
-}
-
-#[cfg(test)]
-fn validate_extension_actor_did(did: &str) -> Result<(), AppError> {
+/// Validate that an extension actor DID is a bare DID scalar (no DID URL
+/// fragment) and well-formed, before it is recorded against an applet.
+#[allow(dead_code)]
+pub(super) fn validate_extension_actor_did(did: &str) -> Result<(), AppError> {
     if did.contains('#') {
         return Err(AppError::invalid_param(
             "bot and ghost actor DID must be a DID scalar without fragment",
@@ -132,72 +123,16 @@ fn validate_extension_actor_did(did: &str) -> Result<(), AppError> {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Mutex;
-
     use super::*;
-
-    // Tests share the process-local `BOT_REGISTRY` static, so they
-    // would race if run in parallel under `cargo test`. The
-    // `TEST_GUARD` mutex serialises them; each test holds it for the
-    // duration of its work so a fresh `reset_registry_for_test()` +
-    // assertions sequence is atomic.
-    static TEST_GUARD: Mutex<()> = Mutex::new(());
-
-    fn fresh_actor(did: &str, owner: &str) -> BotActor {
-        BotActor {
-            did: did.to_owned(),
-            name: "Test Bot".to_owned(),
-            kind: KIND_BOT.to_owned(),
-            owner_actor_id: owner.to_owned(),
-            created_at: chrono::Utc::now(),
-            revoked_at: None,
-        }
-    }
-
-    #[test]
-    fn bot_register_then_list() {
-        let _g = TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner());
-        reset_registry_for_test();
-        register_bot(fresh_actor("did:web:bot-alpha", "did:web:alice"));
-        register_bot(fresh_actor("did:web:bot-beta", "did:web:alice"));
-        register_bot(fresh_actor("did:web:bot-gamma", "did:web:bob"));
-        let alice_bots = list_bots_owned_by("did:web:alice");
-        assert_eq!(alice_bots.len(), 2);
-        assert!(alice_bots.iter().any(|b| b.did == "did:web:bot-alpha"));
-        assert!(alice_bots.iter().any(|b| b.did == "did:web:bot-beta"));
-        let bob_bots = list_bots_owned_by("did:web:bob");
-        assert_eq!(bob_bots.len(), 1);
-    }
-
-    #[test]
-    fn bot_register_is_idempotent() {
-        let _g = TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner());
-        reset_registry_for_test();
-        let first = register_bot(fresh_actor("did:web:bot-dup", "did:web:alice"));
-        let second = register_bot(fresh_actor("did:web:bot-dup", "did:web:alice"));
-        // Same row returned; not duplicated in the registry.
-        assert_eq!(first.did, second.did);
-        assert_eq!(list_bots_owned_by("did:web:alice").len(), 1);
-    }
-
-    #[test]
-    fn bot_revoke_hides_from_listing() {
-        let _g = TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner());
-        reset_registry_for_test();
-        register_bot(fresh_actor("did:web:bot-revoke", "did:web:alice"));
-        assert_eq!(list_bots_owned_by("did:web:alice").len(), 1);
-        assert!(revoke_bot("did:web:bot-revoke"));
-        assert_eq!(list_bots_owned_by("did:web:alice").len(), 0);
-        // Re-revoke is idempotent (returns true again because the row
-        // still exists; the timestamp just moves forward).
-        assert!(revoke_bot("did:web:bot-revoke"));
-        // Unknown DIDs return false.
-        assert!(!revoke_bot("did:web:unknown"));
-    }
 
     #[test]
     fn bot_register_rejects_did_url_fragment() {
         let err = validate_extension_actor_did("did:web:alice.example#agent").unwrap_err();
         assert_eq!(err.wire_code(), "schema_violation");
+    }
+
+    #[test]
+    fn bot_did_scalar_is_accepted() {
+        validate_extension_actor_did("did:web:alice.example").expect("bare DID scalar is valid");
     }
 }
