@@ -927,22 +927,38 @@ async fn project_mls_welcome_to_device(
             "key_package_id": record.key_package_id,
         }
     });
+    let position = state.next_to_device_position();
+    let recipient = record.recipient_actor_id.clone();
+    let device = record.recipient_device_id.clone();
     let message = DeviceMessageRecord {
         idempotency_key: format!("mls_welcome:{welcome_id}"),
         sender: origin.to_owned(),
-        recipient: record.recipient_actor_id.clone(),
-        device_id: record.recipient_device_id.clone(),
-        position: state.next_to_device_position(),
+        recipient: recipient.clone(),
+        device_id: device.clone(),
+        position,
         content,
         created_at: operation.created_at,
     };
-    if let Err(error) = state.persistence.device_messages().append(message).await {
-        tracing::warn!(
-            %error,
-            %welcome_id,
-            operation_id = %operation.operation_id,
-            "failed to enqueue MLS Welcome to-device message"
-        );
+    tracing::warn!(
+        target: "mls_welcome_delivery",
+        %welcome_id,
+        recipient = %recipient,
+        device = %device,
+        position,
+        sender_device_id = %sender_device_id,
+        "DIAG appending MLS Welcome to device_messages queue"
+    );
+    match state.persistence.device_messages().append(message).await {
+        Ok(()) => tracing::warn!(
+            target: "mls_welcome_delivery",
+            %welcome_id, recipient = %recipient, device = %device, position,
+            "DIAG MLS Welcome appended OK (ON CONFLICT DO NOTHING — if the row count is 0 a position/idempotency conflict swallowed it)"
+        ),
+        Err(error) => tracing::warn!(
+            target: "mls_welcome_delivery",
+            %error, %welcome_id, operation_id = %operation.operation_id,
+            "DIAG failed to enqueue MLS Welcome to-device message"
+        ),
     }
 }
 
