@@ -145,6 +145,13 @@ pub(crate) async fn build_sync_snapshot(
             .as_ref()
             .and_then(|record| record.encryption_profile.clone())
             .unwrap_or_else(|| "none".to_owned());
+        // §2.10 content scheme (capability axis) — projected from the
+        // `ck.component.realm.policy_components.v1` cell. Surfaced top-level so
+        // the client encrypt path can read the realm's declared scheme and
+        // author content as `mls-exporter-aead-v1` (history-shareable) vs the
+        // forward-secret `mls-rfc9420`. `None` ⇒ field is null ⇒ client treats
+        // it as the `mls-rfc9420` default (legacy realms predate the field).
+        let content_scheme = projection.realm_content_scheme(&realm_id);
         let known_timeline_to_cursor = after_cursor.positions.contains_key(&realm_id);
         let known_account_to_cursor = after_cursor.account_positions.contains_key(&realm_id);
         let after_timeline_position = after_cursor
@@ -229,9 +236,11 @@ pub(crate) async fn build_sync_snapshot(
                     "members_limited": false,
                     "history_visibility": history_visibility.clone(),
                     "encryption_profile": encryption_profile.clone(),
+                    "content_scheme": content_scheme.clone(),
                 },
                 "history_visibility": history_visibility,
                 "encryption_profile": encryption_profile,
+                "content_scheme": content_scheme,
                 "members": members,
                 // SYNC-MEM-2 (cokret-spec @ 7157ee8) — `members_limited`
                 // is always `false` until lazy-load truncation lands; the
