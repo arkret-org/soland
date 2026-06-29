@@ -176,7 +176,20 @@ pub(crate) async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: 
         Some(event_id) => {
             sync_token_for_events_query(&state, session.as_ref(), &filter_digest, &event_id).await
         }
-        None => sync_token_for_state(&state).await,
+        // No new history event to anchor the catchup cursor to. On a resume poll
+        // (`after=<cursor>`, `include_history=false`) the history loop is skipped
+        // entirely, so this branch is the steady state of an idle realm. We MUST
+        // echo back the client's already-validated, principal-bound `after`
+        // cursor here: minting a `sync_token_for_state` token instead stamps
+        // `principal_id = None`, and the client's next poll resubmitting it is
+        // rejected by `parse_and_validate_events_query_cursor` with
+        // `cursor_integrity_invalid` ("cursor principal does not match request
+        // actor") — an oscillating error on every idle poll. Only fall back to
+        // the service-state token on a fresh subscribe that carried no `after`.
+        None => match after_token.clone() {
+            Some(after) => after,
+            None => sync_token_for_state(&state).await,
+        },
     };
     let realm_filter: BTreeSet<String> = accessible_realms.iter().cloned().collect();
     let stream_deadline = tokio::time::Instant::now() + Duration::from_millis(max_duration_ms);
