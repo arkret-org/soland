@@ -1039,6 +1039,10 @@ pub fn describe(
             // supported_bindings below.
             "ck.feature.blob.resumable_upload.tus.v1".to_owned(),
             "ck.feature.mls_last_resort_keypackage.v1".to_owned(),
+            // encryption-and-audit.md §2.10.7 — advertise support for the
+            // history-shareable `mls-exporter-aead-v1` content scheme so clients
+            // know late-joiner pre-join history decryption is reachable here.
+            "ck.feature.mls_exporter_aead.v1".to_owned(),
             "org.cokret.soland.feature.blob.authenticated_download".to_owned(),
             "org.cokret.soland.feature.file_transfer".to_owned(),
             "org.cokret.soland.feature.blob.presigned_download.local_direct_serve".to_owned(),
