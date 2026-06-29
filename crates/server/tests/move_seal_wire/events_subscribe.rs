@@ -206,3 +206,125 @@ async fn events_subscribe_emits_close_heartbeat_at_deadline() {
         "deadline-close heartbeat must carry stream_closing=true"
     );
 }
+
+/// Regression: every frame the realm subscribe stream emits MUST deserialize
+/// through the SDK's *typed* [`cokret_sdk::EventsSubscribeFrame`] — the exact
+/// type the wasm/native client parses with. The `cursor` field is
+/// `Option<identifiers::Cursor>`, which rejects anything without a
+/// `ck:cursor:` prefix; an earlier build put the raw `event_id` there, so the
+/// client's whole buffered poll errored, never advanced its resume cursor, and
+/// re-requested full history (`include_history=true`, no `after`) on every
+/// iteration — replaying the same events forever.
+///
+/// The older tests in this file parse each line as untyped `serde_json::Value`,
+/// which accepts ANY string in `cursor` and so never exercised the typed
+/// contract — that was the blind spot. This test:
+///   1. seeds a durable history event,
+///   2. subscribes with `include_history=true` and asserts every line parses as
+///      the typed frame (this is what the raw-`event_id` bug broke),
+///   3. asserts `catchup_complete` carries a real `ck:cursor:` token, and
+///   4. feeds that token back as `after` and asserts the history event is NOT
+///      replayed (the cursor actually advances — no duplicates).
+#[tokio::test]
+async fn events_subscribe_frames_are_sdk_typed_and_cursor_advances() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let token = dev_token(state.clone()).await;
+
+    // Seed one durable history event directly into the projection store — the
+    // exact rows `projected_event_page` serves as history. Going through the
+    // projection store (rather than `/events` submit) keeps the test
+    // deterministic and isolates the subscribe/cursor surface under test; the
+    // sender matches the dev session actor so it passes visibility.
+    let event_id = "ck:event:01984101-0000-7000-8000-00000000d0c5";
+    state
+        .persistence
+        .projection_events()
+        .append(soland::state::ProjectionEventRecord {
+            event_id: event_id.to_owned(),
+            realm_id: demo_realm_id().to_owned(),
+            event_kind: "ck.message.create".to_owned(),
+            operation_type: "create".to_owned(),
+            operation_id: Some("ck:operation:01984101-0000-7000-8000-00000000d0c5".to_owned()),
+            sender: Some("did:web:admin.example".to_owned()),
+            payload: json!({"content": {"body": "durable history"}}),
+            created_at: chrono::Utc::now(),
+        })
+        .await
+        .expect("seed projection event");
+
+    // ── Subscribe #1: include history, parse via the TYPED SDK frame. ──
+    let app1 = service(state.clone());
+    let mut response = TestClient::get(format!(
+        "http://server/_cokret/self/events/subscribe?realms={}&include_history=true&max_duration_ms=300&heartbeat_ms=10000",
+        demo_realm_id()
+    ))
+    .add_header("Authorization", format!("Bearer {token}"), true)
+    .send(&app1)
+    .await;
+    let body_string = response.take_string().await.expect("response body");
+
+    let typed_frames: Vec<cokret_sdk::EventsSubscribeFrame> = body_string
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| {
+            serde_json::from_str(line).unwrap_or_else(|err| {
+                panic!("subscribe frame must parse as the typed SDK EventsSubscribeFrame \
+                        (a raw event_id in `cursor` regresses this): {err}; line={line}")
+            })
+        })
+        .collect();
+
+    // The seeded event must show up as a history event frame.
+    let saw_history_event = typed_frames
+        .iter()
+        .any(|frame| frame.kind == cokret_sdk::EventsSubscribeFrameKind::Event);
+    assert!(
+        saw_history_event,
+        "history event frame missing; frames={typed_frames:?}"
+    );
+
+    // catchup_complete must carry a real ck:cursor token, not an event_id.
+    let catchup = typed_frames
+        .iter()
+        .find(|frame| frame.kind == cokret_sdk::EventsSubscribeFrameKind::CatchupComplete)
+        .expect("a catchup_complete frame");
+    let resume_cursor = catchup
+        .cursor
+        .as_ref()
+        .expect("catchup_complete carries a resume cursor")
+        .as_str()
+        .to_owned();
+    assert!(
+        resume_cursor.starts_with("ck:cursor:"),
+        "resume cursor must be a ck:cursor token, got {resume_cursor}"
+    );
+
+    // ── Subscribe #2: resume from that cursor — history must NOT replay. ──
+    let app2 = service(state.clone());
+    let mut response2 = TestClient::get(format!(
+        // `ck:cursor:<base64url>` is query-safe unencoded: only `:` and the
+        // base64url alphabet (`A-Za-z0-9-_`), all valid query `pchar`s.
+        "http://server/_cokret/self/events/subscribe?realms={}&after={resume_cursor}&max_duration_ms=300&heartbeat_ms=10000",
+        demo_realm_id(),
+    ))
+    .add_header("Authorization", format!("Bearer {token}"), true)
+    .send(&app2)
+    .await;
+    let body2 = response2.take_string().await.expect("response body");
+
+    let replayed = body2
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .any(|frame| {
+            frame.get("kind").and_then(Value::as_str) == Some("event")
+                && serde_json::to_string(&frame)
+                    .map(|text| text.contains(event_id))
+                    .unwrap_or(false)
+        });
+    assert!(
+        !replayed,
+        "resuming from the catchup cursor must not replay the already-seen \
+         history event ({event_id}); body={body2}"
+    );
+}
