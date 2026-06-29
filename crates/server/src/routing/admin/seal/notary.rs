@@ -47,31 +47,41 @@ fn sdk_notary_value_from_body(
     body: &NotaryReconfigRequestBody,
 ) -> Result<SdkNotaryValue, AppError> {
     let value = match body.kind.as_str() {
-        "single_did" => SdkNotaryValue::SingleDid {
-            did: did_from_admin_field(
-                "single_did",
-                body.single_did.as_deref().ok_or_else(|| {
-                    app_error!(InvalidParam, "single_did notary requires single_did")
-                        .with_status(StatusCode::BAD_REQUEST)
-                })?,
-            )?,
-        },
-        "threshold" => SdkNotaryValue::Threshold {
-            k: body.threshold_k.ok_or_else(|| {
+        // Admin reconfig binds a single primary DID; org-diversity recovery
+        // fields are not configured through this surface, so the orgless
+        // `{type, did}` shape is the authoritative result.
+        "single_did" => SdkNotaryValue::single_did(did_from_admin_field(
+            "single_did",
+            body.single_did.as_deref().ok_or_else(|| {
+                app_error!(InvalidParam, "single_did notary requires single_did")
+                    .with_status(StatusCode::BAD_REQUEST)
+            })?,
+        )?),
+        "threshold" => {
+            let threshold = body.threshold_k.ok_or_else(|| {
                 app_error!(InvalidParam, "threshold notary requires threshold_k")
                     .with_status(StatusCode::BAD_REQUEST)
-            })?,
-            n: body.threshold_n.ok_or_else(|| {
-                app_error!(InvalidParam, "threshold notary requires threshold_n")
-                    .with_status(StatusCode::BAD_REQUEST)
-            })?,
-            members: dids_from_admin_field("threshold_dids", &body.threshold_dids)?,
-        },
+            })?;
+            let members = dids_from_admin_field("threshold_dids", &body.threshold_dids)?;
+            // Forensic-attribution mode is derived from the committee
+            // arithmetic (realm.schema.json notary.forensic_attribution):
+            // quorum_intersection iff 2*threshold > members.len().
+            let forensic_attribution = if 2 * (threshold as usize) > members.len() {
+                cokret_sdk::ForensicAttribution::QuorumIntersection
+            } else {
+                cokret_sdk::ForensicAttribution::Waived
+            };
+            SdkNotaryValue::Threshold {
+                threshold,
+                members,
+                forensic_attribution,
+            }
+        }
         "open_set" => SdkNotaryValue::OpenSet {
             members: dids_from_admin_field("open_set_members", &body.open_set_members)?,
         },
         "mixed" => SdkNotaryValue::Mixed {
-            primary: did_from_admin_field(
+            did: did_from_admin_field(
                 "mixed_primary",
                 body.mixed_primary.as_deref().ok_or_else(|| {
                     app_error!(InvalidParam, "mixed notary requires mixed_primary")
@@ -108,9 +118,10 @@ pub(super) fn notary_value_object_from_body(
 
 /// Project a JSON cell value into the typed [`NotaryValue`]. The
 /// on-wire notary cell value MUST be the SDK-authoritative `NotaryValue`
-/// shape (internal tag `type`, fields `did|k|n|members|primary|
-/// recovery_members`); removed alias spellings (`shape`/`kind_raw`/
-/// `single_did`/`threshold_dids`/...) are rejected.
+/// shape (internal tag `type`, fields `did|threshold|members|
+/// forensic_attribution|recovery_members`); removed alias spellings
+/// (`shape`/`kind_raw`/`k`/`n`/`primary`/`single_did`/`threshold_dids`/...)
+/// are rejected.
 ///
 /// When the value is `None` we return a `single_did` placeholder pointed
 /// at the service DID — that matches the genesis-Space "implicit notary is
@@ -124,7 +135,7 @@ pub(super) fn notary_value_from_cell(
         let did = Did::new(service_did.to_owned())
             .map_err(|e| app_error!(InternalError, "invalid service DID `{service_did}`: {e}"))?;
         return Ok(admin_notary_value_from_sdk(
-            SdkNotaryValue::SingleDid { did },
+            SdkNotaryValue::single_did(did),
             None,
         ));
     };
@@ -147,17 +158,20 @@ fn admin_notary_value_from_sdk(value: SdkNotaryValue, envelope: Option<&Value>) 
         .and_then(|value| value.get("paused").and_then(Value::as_bool))
         .unwrap_or(false);
     match value {
-        SdkNotaryValue::SingleDid { did } => NotaryValue {
+        SdkNotaryValue::SingleDid { did, .. } => NotaryValue {
             kind_raw: "single_did".to_owned(),
             single_did: Some(did.as_str().to_owned()),
             revocation_freshness_window_ms,
             paused,
             ..Default::default()
         },
-        SdkNotaryValue::Threshold { k, n, members } => NotaryValue {
+        SdkNotaryValue::Threshold {
+            threshold, members, ..
+        } => NotaryValue {
             kind_raw: "threshold".to_owned(),
-            threshold_k: Some(k),
-            threshold_n: Some(n),
+            threshold_k: Some(threshold),
+            // `n` is no longer a wire field; it equals the committee size.
+            threshold_n: Some(members.len() as u32),
             threshold_dids: members
                 .into_iter()
                 .map(|did| did.as_str().to_owned())
@@ -177,7 +191,7 @@ fn admin_notary_value_from_sdk(value: SdkNotaryValue, envelope: Option<&Value>) 
             ..Default::default()
         },
         SdkNotaryValue::Mixed {
-            primary,
+            did: primary,
             recovery_members,
         } => NotaryValue {
             kind_raw: "mixed".to_owned(),
@@ -287,12 +301,12 @@ pub(crate) async fn admin_reconfigure_notary(
     let service_signer_did = state.config.service_did.clone();
     let operator_did = admin_session.actor.clone();
     let proposed_members: Vec<&str> = match &proposed_notary {
-        SdkNotaryValue::SingleDid { did } => vec![did.as_str()],
+        SdkNotaryValue::SingleDid { did, .. } => vec![did.as_str()],
         SdkNotaryValue::Threshold { members, .. } | SdkNotaryValue::OpenSet { members } => {
             members.iter().map(|d| d.as_str()).collect()
         }
         SdkNotaryValue::Mixed {
-            primary,
+            did: primary,
             recovery_members,
         } => std::iter::once(primary.as_str())
             .chain(recovery_members.iter().map(|d| d.as_str()))

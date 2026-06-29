@@ -374,16 +374,18 @@ impl NotaryWorker {
             return Ok(false);
         }
         // The cell value MUST be the SDK-authoritative `NotaryValue` wire
-        // shape (internal tag `type`, fields `did|k|n|members|primary|
-        // recovery_members`). Anything else — including the pre-rename
-        // alias spellings (`shape`/`kind_raw`/`threshold_dids`/...) — is
-        // fail-closed: not authorized.
+        // shape (internal tag `type`, fields `did|threshold|members|
+        // forensic_attribution|recovery_members`). Anything else — including
+        // the pre-rename alias spellings (`shape`/`kind_raw`/`k`/`n`/
+        // `primary`/`threshold_dids`/...) — is fail-closed: not authorized.
         let Ok(notary_value) = serde_json::from_value::<cokret_sdk::NotaryValue>(value.clone())
         else {
             return Ok(false);
         };
         match notary_value {
-            cokret_sdk::NotaryValue::SingleDid { did } => Ok(did.as_str() == self.service_did),
+            cokret_sdk::NotaryValue::SingleDid { did, .. } => {
+                Ok(did.as_str() == self.service_did)
+            }
             cokret_sdk::NotaryValue::Threshold { members, .. } => {
                 Ok(self.is_round_leader(&members))
             }
@@ -391,7 +393,7 @@ impl NotaryWorker {
                 .iter()
                 .any(|member| member.as_str() == self.service_did)),
             cokret_sdk::NotaryValue::Mixed {
-                primary,
+                did: primary,
                 recovery_members,
             } => {
                 // `revocation_freshness_window_ms` is an envelope field
@@ -815,16 +817,18 @@ mod tests {
         // (`paused`, `revocation_freshness_window_ms`) are tolerated.
         let v = json!({
             "type": "threshold",
-            "k": 2,
-            "n": 3,
+            "threshold": 2,
             "members": ["did:ck:a", "did:ck:b", "did:ck:c"],
+            "forensic_attribution": "quorum_intersection",
             "revocation_freshness_window_ms": 60000,
             "paused": false,
         });
         let parsed: cokret_sdk::NotaryValue = serde_json::from_value(v).unwrap();
         match parsed {
-            cokret_sdk::NotaryValue::Threshold { k, n, members } => {
-                assert_eq!((k, n), (2, 3));
+            cokret_sdk::NotaryValue::Threshold {
+                threshold, members, ..
+            } => {
+                assert_eq!(threshold, 2);
                 assert_eq!(members.len(), 3);
             }
             other => panic!("expected Threshold, got {other:?}"),

@@ -40,13 +40,14 @@ fn notary_value_from_cell_reads_authoritative_single_did_form() {
 fn notary_value_from_cell_reads_authoritative_threshold_form() {
     let v = json!({
         "type": "threshold",
-        "k": 2,
-        "n": 3,
+        "threshold": 2,
         "members": ["did:ck:a", "did:ck:b", "did:ck:c"],
+        "forensic_attribution": "quorum_intersection",
     });
     let resp = notary_value_from_cell(Some(&v), "did:web:s").unwrap();
     assert_eq!(resp.kind_raw, "threshold");
     assert_eq!(resp.threshold_k, Some(2));
+    // `n` is derived from the committee size now (no wire `n`).
     assert_eq!(resp.threshold_n, Some(3));
     assert_eq!(resp.threshold_dids.len(), 3);
 }
@@ -151,15 +152,20 @@ fn notary_reconfig_body_converts_to_sdk_authoritative_cell_value() {
     .unwrap();
     let cell_value = notary_value_object_from_body(&body).unwrap();
     assert_eq!(cell_value["type"], "threshold");
-    assert_eq!(cell_value["k"], 2);
-    assert_eq!(cell_value["n"], 3);
+    // Authoritative wire shape: `threshold` (not `k`/`n`) + derived
+    // `forensic_attribution` (2*2 > 3 → quorum_intersection). `n` is no
+    // longer a wire field; the committee size is `members.len()`.
+    assert_eq!(cell_value["threshold"], 2);
+    assert_eq!(cell_value["forensic_attribution"], "quorum_intersection");
     assert_eq!(cell_value["members"].as_array().unwrap().len(), 3);
+    assert!(cell_value.get("k").is_none());
+    assert!(cell_value.get("n").is_none());
     assert!(cell_value.get("kind").is_none());
     assert!(cell_value.get("threshold_k").is_none());
     assert!(cell_value.get("threshold_dids").is_none());
 
     // Structural violations are rejected by the SDK validator
-    // (members.len() != n).
+    // (threshold > members.len()).
     let invalid: NotaryReconfigRequestBody = serde_json::from_value(json!({
         "kind": "threshold",
         "threshold_k": 2,
