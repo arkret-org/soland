@@ -63,11 +63,42 @@ pub(crate) async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: 
         .and_then(|value| value.parse::<usize>().ok())
         .unwrap_or(100)
         .min(100);
-    let cursor = query_param(req, "after");
+    let after_token = query_param(req, "after");
     let include_history = query_param(req, "include_history")
         .as_deref()
         .map(|value| matches!(value, "true" | "1" | "yes"))
         .unwrap_or(true);
+    // Every cursor this stream hands out is an opaque `ck:cursor:` token (NOT a
+    // raw `event_id`): the typed `EventsSubscribeFrame.cursor` is
+    // `Option<identifiers::Cursor>`, which rejects anything without the
+    // `ck:cursor:` prefix, so a frame carrying a bare `event_id` fails to parse
+    // client-side and the client never advances its resume position. We mint
+    // tokens with `sync_token_for_events_query` and accept them back through
+    // `parse_and_validate_events_query_cursor`; both are bound to the SAME
+    // realm-scope `filter_digest` so a token we issue round-trips as a valid
+    // `after`.
+    let filter_digest = events_subscribe_filter_digest(&accessible_realms);
+    let resume_event_id = match &after_token {
+        Some(after) => {
+            match parse_and_validate_events_query_cursor(
+                after,
+                &state,
+                session.as_ref(),
+                &filter_digest,
+                chrono::Utc::now().timestamp_millis(),
+            )
+            .await
+            {
+                Ok(cursor) => Some(cursor.event_id),
+                Err(error) => {
+                    let mapped = events_query_cursor_error(error);
+                    crate::error::render_error_code(mapped.code, res, &mapped.message);
+                    return;
+                }
+            }
+        }
+        None => None,
+    };
     let subscribe_scope_key = events_subscribe_scope_key(req, session.as_ref(), &accessible_realms);
     if reject_subscribe_reconnect(&state, &subscribe_scope_key, res) {
         return;
@@ -95,11 +126,16 @@ pub(crate) async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: 
     // live events.
     let mut history_frames: Vec<serde_json::Value> = Vec::new();
     let mut seq: u64 = 0;
-    let mut last_cursor: Option<String> = None;
+    // The raw `event_id` of the last history event served. The resume cursor is
+    // minted from it once, below — history event frames carry no per-event
+    // cursor (the typed frame's `cursor` is optional, and the single
+    // `catchup_complete` token is what the client resumes from), which also
+    // avoids one cursor-record upsert per history event.
+    let mut last_event_id: Option<String> = None;
 
     if include_history {
         for realm_id in &accessible_realms {
-            match projected_event_page(&state, realm_id, cursor.as_deref(), limit).await {
+            match projected_event_page(&state, realm_id, resume_event_id.as_deref(), limit).await {
                 Ok(Some(page)) => {
                     for event in page.items {
                         if !projection_record_visible_to_session(&state, &event, session.as_ref())
@@ -108,17 +144,15 @@ pub(crate) async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: 
                             continue;
                         }
                         seq += 1;
-                        let event_cursor = event.event_id.clone();
-                        last_cursor = Some(event_cursor.clone());
+                        last_event_id = Some(event.event_id.clone());
                         history_frames.push(json!({
                             "kind": "event",
                             "seq": seq,
-                            "cursor": event_cursor,
                             "payload": projection_event_json(&event)
                         }));
                     }
                     if let Some(next) = page.next_cursor {
-                        last_cursor = Some(next);
+                        last_event_id = Some(next);
                     }
                 }
                 Ok(None) => {}
@@ -138,14 +172,17 @@ pub(crate) async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: 
         }
     }
 
-    let catchup_cursor = match last_cursor {
-        Some(cursor) => cursor,
+    let catchup_cursor = match last_event_id {
+        Some(event_id) => {
+            sync_token_for_events_query(&state, session.as_ref(), &filter_digest, &event_id).await
+        }
         None => sync_token_for_state(&state).await,
     };
     let realm_filter: BTreeSet<String> = accessible_realms.iter().cloned().collect();
     let stream_deadline = tokio::time::Instant::now() + Duration::from_millis(max_duration_ms);
     let session_for_stream = session.clone();
     let subscribe_scope_key_for_stream = subscribe_scope_key.clone();
+    let filter_digest_for_stream = filter_digest.clone();
 
     // The async stream — yields one NDJSON line (Bytes) per frame.
     let body_stream = async_stream::stream! {
@@ -199,10 +236,19 @@ pub(crate) async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: 
                                         continue;
                                     }
                                     live_seq += 1;
+                                    // The broadcast carries the raw `event_id`;
+                                    // mint the opaque `ck:cursor:` resume token
+                                    // the typed frame requires.
+                                    let live_cursor = sync_token_for_events_query(
+                                        &state,
+                                        session_for_stream.as_ref(),
+                                        &filter_digest_for_stream,
+                                        &cursor,
+                                    ).await;
                                     json!({
                                         "kind": "event",
                                         "seq": live_seq,
-                                        "cursor": cursor,
+                                        "cursor": live_cursor,
                                         "payload": event_payload,
                                     })
                                 }
@@ -329,6 +375,27 @@ pub(crate) fn subscribe_subject(req: &Request, session: Option<&SessionRecord>) 
         Some(session) => format!("session:{}:{}", session.actor, session.device_id),
         None => format!("remote:{}", req.remote_addr()),
     }
+}
+
+/// Scope `filter_digest` the realm subscribe stream binds its cursors to.
+///
+/// Resume cursors minted by `sync_token_for_events_query` are bound to this
+/// digest, and `parse_and_validate_events_query_cursor` rejects a token whose
+/// digest does not match — so a cursor issued for one realm-set cannot be
+/// replayed against another (`cursor_integrity_invalid`). Distinct from the
+/// account stream's filter (different `operation_id`), keeping the two streams'
+/// cursors non-interchangeable per `encoding.md` §8.3.1.
+fn events_subscribe_filter_digest(accessible_realms: &[String]) -> String {
+    let realms = accessible_realms
+        .iter()
+        .cloned()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    sync_filter_digest(Some(&json!({
+        "operation_id": "ck.self.events.stream.subscribe",
+        "realms": realms,
+    })))
 }
 
 fn events_subscribe_scope_key(
