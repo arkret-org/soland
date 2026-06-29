@@ -149,6 +149,8 @@ fn api_v1_router(conformance_harness_enabled: bool) -> Router {
                 .push(realms::router())
                 // self/realms/{realm_id}/policy-server (ck.self.realm_policy_server.*).
                 .push(realm_policy::router())
+                // self/realms/{realm_id}/organizations (ck.self.realm_organization.query.list).
+                .push(realm_organization::router())
                 // G3.S1: MLS / keys lifecycle — spec-canonical path is
                 // `/_cokret/self/keys/keypackages/*` (see `mls::router`).
                 .push(mls::router()),

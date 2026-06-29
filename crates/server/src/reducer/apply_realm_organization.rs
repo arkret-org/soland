@@ -457,6 +457,41 @@ mod tests {
     }
 
     #[test]
+    fn sol_org_06_lifecycle_phase_split() {
+        // SOL-ORG-06 read contract: the org-relationship projection the
+        // `ck.self.realm_organization.query.list` handler reads must expose
+        // BOTH the active and the revoked statement, with exactly the active,
+        // in-window one classified `verified_active` (the others
+        // `revoked_or_expired`). An org with a currently-verified statement is
+        // never also surfaced as an unverified declared hint.
+        let mut state = ProjectionState::new();
+        apply(
+            &mut state,
+            active_payload(REALM, ORG, "owner", &["realm_admin"]),
+        );
+        let mut revoke = active_payload(REALM, ORG2, "governance", &["moderation_policy"]);
+        revoke["status"] = json!("revoked");
+        revoke["statement_id"] = json!("org-stmt-governance-2");
+        revoke["revokes_statement_id"] = json!("org-stmt-governance");
+        apply(&mut state, revoke);
+
+        let rows = state.realm_organization_statements_for_realm(REALM);
+        assert_eq!(rows.len(), 2, "both active and revoked rows are projected");
+        let verified: Vec<_> = rows
+            .iter()
+            .filter(|row| row.is_effective_active(now()))
+            .map(|row| row.organization_id.clone())
+            .collect();
+        // Exactly the active statement maps onto verified_active.
+        assert_eq!(verified, vec![ORG.to_owned()]);
+        // The revoked statement maps onto revoked_or_expired (not verified).
+        assert!(
+            rows.iter()
+                .any(|row| row.organization_id == ORG2 && !row.is_effective_active(now()))
+        );
+    }
+
+    #[test]
     fn expired_statement_is_not_verified() {
         let mut state = ProjectionState::new();
         let mut payload = active_payload(REALM, ORG, "owner", &["realm_admin"]);

@@ -2280,6 +2280,54 @@ async fn validate_set_default_strand_policy(
     Err("missing_capability")
 }
 
+/// SOL-ORG-07 (model C) — verify the organization-side proof signature against
+/// the organization's OWN DID document.
+///
+/// The signing key MUST be a verification method controlled by `organization_id`
+/// (`authorization.verification_method`); soland resolves that document from its
+/// own DID store and verifies the detached Ed25519 signature over the
+/// SDK-canonical statement transcript
+/// ([`cokret_sdk::models::realm_organization_statement_signing_bytes`]). This is
+/// the cryptographic anchor that makes "organization consent" unforgeable: only
+/// a holder of the organization's own DID key can produce an accepted statement,
+/// and no external party (not even a Realm admin) can forge it.
+async fn verify_realm_organization_proof_signature(
+    state: &AppState,
+    payload: &cokret_sdk::models::RealmOrganizationPayload,
+) -> Result<(), &'static str> {
+    use base64::Engine as _;
+
+    let proof_b64 = match &payload.authorization.proof {
+        cokret_sdk::models::SignatureMaterial::NonEmptyString(value) => value.as_str(),
+        cokret_sdk::models::SignatureMaterial::Variant1(_) => {
+            return Err("organization_statement_unverified");
+        }
+    };
+    let sig_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(proof_b64.trim())
+        .map_err(|_| "organization_statement_unverified")?;
+    let signature = ed25519_dalek::Signature::from_slice(&sig_bytes)
+        .map_err(|_| "organization_statement_unverified")?;
+
+    // Resolves the key from the organization's own DID document AND enforces
+    // verification-method controller == organization_id (the security anchor).
+    let resolved = crate::jws_verify::resolve_ed25519_verification_key_for_did(
+        state,
+        &payload.organization_id,
+        payload.authorization.verification_method.as_str(),
+    )
+    .await
+    .map_err(|_| "organization_statement_unverified")?;
+
+    let signing_bytes =
+        cokret_sdk::models::realm_organization_statement_signing_bytes(payload)
+            .map_err(|_| "organization_statement_unverified")?;
+    resolved
+        .public_key
+        .verify_strict(&signing_bytes, &signature)
+        .map_err(|_| "organization_statement_unverified")
+}
+
 /// SOL-ORG-03 — two-sided authorization gate for `ck.realm.organization`.
 ///
 ///   - **Realm side**: the actor admitting the statement into Realm history MUST own the Realm or
@@ -2310,6 +2358,15 @@ async fn validate_realm_organization_policy(
         &cokret_sdk::models::NoDelegationResolver,
     )
     .map_err(|_| "organization_statement_unverified")?;
+
+    // Cryptographic organization-side proof verification (model C): the proof
+    // MUST be a real detached signature by a verification method in the
+    // organization's OWN DID document, which soland (the DID server) hosts and
+    // resolves. Skipped in development_mode — consistent with jws_verify's
+    // dev/prod split — where statements ride placeholder proofs.
+    if !state.config.development_mode {
+        verify_realm_organization_proof_signature(state, &payload).await?;
+    }
 
     // Realm side — owner or `ck.realm.admin`. The executor identity comes from
     // the envelope sender / authorization.executed_by; a bare OIDC session is

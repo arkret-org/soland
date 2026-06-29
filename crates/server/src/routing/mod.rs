@@ -24,6 +24,8 @@ pub(crate) mod spaces;
 pub(crate) mod system;
 // G3.S2: realm policy server
 pub(crate) mod realm_policy;
+// SOL-ORG-06: realm organization-relationship read surface
+pub(crate) mod realm_organization;
 
 use access::policy::policy_document_to_response;
 use admin::audit::append_audit_log;
