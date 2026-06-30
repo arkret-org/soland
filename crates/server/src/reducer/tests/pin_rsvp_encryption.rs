@@ -4,8 +4,12 @@ const REALM_ID: &str = "ck:realm:01904100-0000-7000-8000-cfc039892036";
 const STRAND_ID: &str = "ck:strand:01904100-0000-7000-8000-0000000000f1";
 
 fn encrypted_payload(event_kind: &str) -> Value {
+    encrypted_payload_with_scheme(event_kind, "mls-rfc9420", "MLS")
+}
+
+fn encrypted_payload_with_scheme(event_kind: &str, scheme: &str, algorithm: &str) -> Value {
     serde_json::json!({
-        "scheme": "mls-rfc9420",
+        "scheme": scheme,
         "version": "1.0",
         "group_id": "Z3JvdXA",
         "epoch": 7u64,
@@ -17,7 +21,7 @@ fn encrypted_payload(event_kind: &str) -> Value {
             "event_kind": event_kind
         },
         "key_ref": {
-            "algorithm": "MLS",
+            "algorithm": algorithm,
             "group_state_ref": "ck:event:01904100-0000-7000-8000-0000000000aa"
         },
         "aad_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
@@ -136,6 +140,62 @@ fn pin_note_accepts_encrypted_projection_payload() {
     ));
     let pin = state.pins.values().next().expect("pin should project");
     assert_eq!(pin.note.as_ref(), Some(&note));
+}
+
+#[test]
+fn pin_note_accepts_exporter_aead_encrypted_projection_payload() {
+    let mut state = ProjectionState::new();
+    let hlc = ServerHlc::new("test");
+    seed_pin_target(&mut state, &hlc);
+    let note = encrypted_payload_with_scheme(
+        cokret_sdk::events::kinds::PIN_ADD,
+        "mls-exporter-aead-v1",
+        "MLS-EXPORTER-AEAD",
+    );
+
+    let effect = state.apply(
+        &make_operation(
+            cokret_sdk::events::kinds::PIN_ADD,
+            REALM_ID,
+            pin_payload(note.clone()),
+        ),
+        &hlc,
+    );
+
+    assert!(matches!(
+        effect,
+        ProjectionEffect::PinProjected { active: true, .. }
+    ));
+    let pin = state.pins.values().next().expect("pin should project");
+    assert_eq!(pin.note.as_ref(), Some(&note));
+}
+
+#[test]
+fn pin_note_rejects_exporter_aead_with_mls_key_algorithm() {
+    let mut state = ProjectionState::new();
+    let hlc = ServerHlc::new("test");
+    seed_pin_target(&mut state, &hlc);
+    let note = encrypted_payload_with_scheme(
+        cokret_sdk::events::kinds::PIN_ADD,
+        "mls-exporter-aead-v1",
+        "MLS",
+    );
+
+    let effect = state.apply(
+        &make_operation(
+            cokret_sdk::events::kinds::PIN_ADD,
+            REALM_ID,
+            pin_payload(note),
+        ),
+        &hlc,
+    );
+
+    assert!(matches!(
+        effect,
+        ProjectionEffect::Rejected { ref reason }
+            if reason == "pin_note_encrypted_payload_required"
+    ));
+    assert!(state.pins.is_empty());
 }
 
 #[test]

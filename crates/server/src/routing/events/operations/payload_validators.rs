@@ -946,151 +946,9 @@ pub(crate) fn validate_cross_signing_reset_replay_batch(
 pub fn validate_encrypted_payload_envelope(
     content: &serde_json::Value,
 ) -> Result<(), &'static str> {
-    let Some(envelope) = content.as_object() else {
-        return Err("encrypted content must be a JSON object");
-    };
-
-    for field in [
-        "cleartext_commitment",
-        "authentication_tag",
-        "digests",
-        "ciphertext_digest",
-    ] {
-        if envelope.contains_key(field) {
-            return Err("encrypted content envelope contains forbidden field");
-        }
-    }
-
-    for field in [
-        "scheme",
-        "version",
-        "group_id",
-        "content_type",
-        "ciphertext",
-        "aad_visibility_event_id",
-        "payload_digest",
-        "aad_digest",
-    ] {
-        if envelope
-            .get(field)
-            .and_then(|value| value.as_str())
-            .is_none_or(|value| value.trim().is_empty())
-        {
-            return Err("encrypted content envelope is missing required string fields");
-        }
-    }
-
-    if envelope.get("scheme").and_then(Value::as_str) != Some("mls-rfc9420") {
-        return Err("encrypted content envelope scheme must be mls-rfc9420");
-    }
-    let Some(version) = envelope.get("version").and_then(Value::as_str) else {
-        return Err("encrypted content envelope requires version");
-    };
-    if !version.split_once('.').is_some_and(|(major, minor)| {
-        !major.is_empty()
-            && !minor.is_empty()
-            && major.bytes().all(|byte| byte.is_ascii_digit())
-            && minor.bytes().all(|byte| byte.is_ascii_digit())
-    }) {
-        return Err("encrypted content envelope version must be major.minor");
-    }
-    if envelope
-        .get("epoch")
-        .is_none_or(|value| value.as_u64().is_none())
-    {
-        return Err("encrypted content envelope requires numeric epoch");
-    }
-
-    let Some(aad) = envelope.get("aad").and_then(Value::as_object) else {
-        return Err("encrypted content envelope requires aad");
-    };
-    if aad
-        .get("realm_id")
-        .and_then(Value::as_str)
-        .is_none_or(|value| value.trim().is_empty())
-        || aad
-            .get("event_kind")
-            .and_then(Value::as_str)
-            .is_none_or(|value| value.trim().is_empty())
-    {
-        return Err("encrypted content envelope aad requires realm_id and event_kind");
-    }
-
-    let Some(key_ref) = envelope.get("key_ref").and_then(Value::as_object) else {
-        return Err("encrypted content envelope requires key_ref");
-    };
-    if key_ref.get("algorithm").and_then(Value::as_str) != Some("MLS")
-        || key_ref
-            .get("group_state_ref")
-            .and_then(Value::as_str)
-            .is_none_or(|value| value.trim().is_empty())
-    {
-        return Err("encrypted content envelope key_ref is invalid");
-    }
-
-    for field in ["payload_digest", "aad_digest"] {
-        if !envelope
-            .get(field)
-            .and_then(Value::as_str)
-            .is_some_and(is_valid_encrypted_envelope_digest)
-        {
-            return Err(
-                "encrypted content envelope digest must be sha256/blake3:<64 lowercase hex>",
-            );
-        }
-    }
-
-    match envelope
-        .get("aad_visibility_event_id")
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-    {
-        "hidden" => {
-            if aad.contains_key("event_id") || aad.contains_key("event_ref_digest") {
-                return Err("encrypted content envelope hidden aad exposes event id");
-            }
-        }
-        "routing_digest" => {
-            if aad.contains_key("event_id") {
-                return Err("encrypted content envelope routing_digest aad forbids event_id");
-            }
-            if !aad
-                .get("event_ref_digest")
-                .and_then(Value::as_str)
-                .is_some_and(is_valid_encrypted_envelope_digest)
-            {
-                return Err(
-                    "encrypted content envelope routing_digest aad requires event_ref_digest",
-                );
-            }
-        }
-        "opaque_id" => {
-            if aad.contains_key("event_ref_digest") {
-                return Err("encrypted content envelope opaque_id aad forbids event_ref_digest");
-            }
-            if aad
-                .get("event_id")
-                .and_then(Value::as_str)
-                .is_none_or(|value| value.trim().is_empty())
-            {
-                return Err("encrypted content envelope opaque_id aad requires event_id");
-            }
-        }
-        _ => return Err("encrypted content envelope aad_visibility_event_id is invalid"),
-    }
-
-    Ok(())
-}
-
-fn is_valid_encrypted_envelope_digest(value: &str) -> bool {
-    let Some((algorithm, digest)) = value.split_once(':') else {
-        return false;
-    };
-    matches!(algorithm, "sha256" | "blake3")
-        && digest.len() == 64
-        && digest
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    cokret_sdk::EncryptedEnvelopeV1::parse_and_validate(content.clone())
+        .map(|_| ())
+        .map_err(|_| "encrypted content envelope violates SDK schema")
 }
 
 #[cfg(test)]
@@ -1098,7 +956,7 @@ mod tests {
     use cokret_sdk::Operation;
     use serde_json::json;
 
-    use super::validate_message_expiry_payload;
+    use super::{validate_encrypted_payload_envelope, validate_message_expiry_payload};
 
     fn message_operation(expiry: serde_json::Value) -> Operation {
         Operation::create(
@@ -1138,6 +996,38 @@ mod tests {
         assert_eq!(
             validate_message_expiry_payload(&operation),
             Err("ck.message.create.payload.expiry has unknown field")
+        );
+    }
+
+    #[test]
+    fn encrypted_payload_envelope_accepts_exporter_aead_scheme_binding() {
+        let envelope = json!({
+            "scheme": "mls-exporter-aead-v1",
+            "version": "1.0",
+            "group_id": "Z3JvdXA",
+            "epoch": 7u64,
+            "content_type": "application/json",
+            "ciphertext": "Y2lwaGVydGV4dA",
+            "aad_visibility_event_id": "hidden",
+            "aad": {
+                "realm_id": "ck:realm:01904100-0000-7000-8000-000000000001",
+                "event_kind": "ck.message.create"
+            },
+            "key_ref": {
+                "algorithm": "MLS-EXPORTER-AEAD",
+                "group_state_ref": "ck:event:01904100-0000-7000-8000-000000000001"
+            },
+            "aad_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+            "payload_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+        });
+
+        assert_eq!(validate_encrypted_payload_envelope(&envelope), Ok(()));
+
+        let mut mismatched = envelope;
+        mismatched["key_ref"]["algorithm"] = json!("MLS");
+        assert_eq!(
+            validate_encrypted_payload_envelope(&mismatched),
+            Err("encrypted content envelope violates SDK schema")
         );
     }
 }
