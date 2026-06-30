@@ -100,6 +100,7 @@ pub(crate) async fn relay_ephemeral_realm_key_request(
         &target.device_id,
         &envelope.payload,
         request.created_at,
+        envelope.expires_at,
     )
     .await;
     Ok(())
@@ -366,6 +367,8 @@ mod tests {
         let provider_principal = "did:web:alice.example";
         let provider_device = "ck:device:01904100-0000-7000-8000-a11ce0000001";
         let request_id = "req-0001";
+        let created_at = chrono::Utc::now();
+        let expires_at = created_at + chrono::Duration::minutes(5);
         let payload = serde_json::json!({
             "key_scope": {
                 "effective_scope": {"kind": "realm", "realm_id": realm_id},
@@ -405,7 +408,8 @@ mod tests {
             target_principal,
             provider_device,
             &payload,
-            chrono::Utc::now(),
+            created_at,
+            expires_at,
         )
         .await;
 
@@ -425,8 +429,17 @@ mod tests {
         );
         assert_eq!(message.content["kind"], "ck.realm_key.request");
         assert_eq!(message.content["sender_device_id"], sender_device);
-        assert_eq!(message.content["realm_id"], realm_id);
-        assert_eq!(message.content["payload"], payload);
+        assert_eq!(message.content["content"]["realm_id"], realm_id);
+        assert_eq!(message.content["content"]["request_id"], request_id);
+        assert_eq!(message.content["content"]["payload"], payload);
+
+        let delivered =
+            crate::routing::identity::device_messages::device_message_envelopes_after(&queued);
+        assert_eq!(delivered.len(), 1);
+        assert_eq!(delivered[0].content["realm_id"], realm_id);
+        assert_eq!(delivered[0].content["request_id"], request_id);
+        assert_eq!(delivered[0].content["payload"], payload);
+        assert_eq!(delivered[0].expires_at, expires_at);
 
         // The requester's own device queue stays empty — this is a directed
         // relay to the provider, not a broadcast.

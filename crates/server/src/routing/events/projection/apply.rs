@@ -991,13 +991,12 @@ async fn project_realm_key_share_to_device(
         );
         return;
     }
-    let content = json!({
-        "kind": cokret_sdk::events::kinds::REALM_KEY_SHARE,
-        "sender_device_id": sender_device_id,
-        "realm_id": operation.realm_id,
-        "operation_id": operation.operation_id,
-        "payload": operation.payload,
-    });
+    let content = realm_key_share_device_message_content(
+        sender_device_id,
+        operation.realm_id.as_str(),
+        operation.operation_id.as_str(),
+        &operation.payload,
+    );
     let record = DeviceMessageRecord {
         idempotency_key: format!("realm_key_share:{}", operation.operation_id),
         sender: origin.to_owned(),
@@ -1039,6 +1038,7 @@ pub(crate) async fn project_realm_key_request_to_device(
     target_device_id: &str,
     payload: &Value,
     created_at: chrono::DateTime<chrono::Utc>,
+    expires_at: chrono::DateTime<chrono::Utc>,
 ) {
     let sender_device_id = sender_device_id.trim();
     let target_device_id = target_device_id.trim();
@@ -1049,13 +1049,13 @@ pub(crate) async fn project_realm_key_request_to_device(
         );
         return;
     }
-    let content = json!({
-        "kind": "ck.realm_key.request",
-        "sender_device_id": sender_device_id,
-        "realm_id": realm_id,
-        "request_id": request_id,
-        "payload": payload,
-    });
+    let content = realm_key_request_device_message_content(
+        sender_device_id,
+        realm_id,
+        request_id,
+        payload,
+        expires_at,
+    );
     let record = DeviceMessageRecord {
         idempotency_key: format!("realm_key_request:{request_id}"),
         sender: origin.to_owned(),
@@ -1072,6 +1072,42 @@ pub(crate) async fn project_realm_key_request_to_device(
             "failed to enqueue realm key request to-device message"
         );
     }
+}
+
+fn realm_key_share_device_message_content(
+    sender_device_id: &str,
+    realm_id: &str,
+    operation_id: &str,
+    payload: &Value,
+) -> Value {
+    json!({
+        "kind": cokret_sdk::events::kinds::REALM_KEY_SHARE,
+        "sender_device_id": sender_device_id,
+        "content": {
+            "realm_id": realm_id,
+            "operation_id": operation_id,
+            "payload": payload,
+        },
+    })
+}
+
+fn realm_key_request_device_message_content(
+    sender_device_id: &str,
+    realm_id: &str,
+    request_id: &str,
+    payload: &Value,
+    expires_at: chrono::DateTime<chrono::Utc>,
+) -> Value {
+    json!({
+        "kind": "ck.realm_key.request",
+        "sender_device_id": sender_device_id,
+        "expires_at": expires_at,
+        "content": {
+            "realm_id": realm_id,
+            "request_id": request_id,
+            "payload": payload,
+        },
+    })
 }
 
 /// Device-identity Phase 1 — persist an accepted `ck.device.authorize`'s
@@ -1215,5 +1251,114 @@ fn refresh_authz_index_from_capability_effect(
             // we hold one.
             None => state.authz.mark_projected_grant_revoked(&grant_id),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::routing::identity::device_messages::device_message_envelopes_after;
+
+    #[test]
+    fn realm_key_share_device_projection_preserves_payload_in_envelope_content() {
+        let realm_id = "ck:realm:0196419b-1000-7000-8000-000000000001";
+        let operation_id = "ck:operation:0196419b-1000-7000-8000-000000000002";
+        let sender = "did:web:alice.example";
+        let sender_device = "ck:device:01904100-0000-7000-8000-a11ce0000001";
+        let recipient = "did:web:bob.example";
+        let recipient_device = "ck:device:01904100-0000-7000-8000-b0b000000001";
+        let payload = json!({
+            "share_class": "member_device",
+            "recipient_principal_id": recipient,
+            "recipient_device_id": recipient_device,
+            "sender_device_id": sender_device,
+            "sender_device_signature": {
+                "alg": "EdDSA",
+                "kid": "did:web:alice.example#ck:device:01904100-0000-7000-8000-a11ce0000001",
+                "sig": "signature"
+            },
+            "key_scope": {
+                "effective_scope": {"realm_id": realm_id},
+                "from_epoch": 0,
+                "to_epoch": 0
+            },
+            "ciphertext": "sealed",
+            "aad_digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+            "created_at": "2026-06-30T00:00:00Z"
+        });
+        let created_at = chrono::Utc::now();
+        let record = DeviceMessageRecord {
+            idempotency_key: format!("realm_key_share:{operation_id}"),
+            sender: sender.to_owned(),
+            recipient: recipient.to_owned(),
+            device_id: recipient_device.to_owned(),
+            position: 1,
+            content: realm_key_share_device_message_content(
+                sender_device,
+                realm_id,
+                operation_id,
+                &payload,
+            ),
+            created_at,
+        };
+
+        let delivered = device_message_envelopes_after(&[record]);
+        assert_eq!(delivered.len(), 1);
+        assert_eq!(
+            delivered[0].kind,
+            cokret_sdk::events::kinds::REALM_KEY_SHARE
+        );
+        assert_eq!(delivered[0].content["realm_id"], realm_id);
+        assert_eq!(delivered[0].content["operation_id"], operation_id);
+        assert_eq!(delivered[0].content["payload"], payload);
+    }
+
+    #[test]
+    fn realm_key_request_device_projection_preserves_payload_in_envelope_content() {
+        let realm_id = "ck:realm:0196419b-1000-7000-8000-000000000001";
+        let request_id = "sha256:request";
+        let sender = "did:web:bob.example";
+        let sender_device = "ck:device:01904100-0000-7000-8000-b0b000000001";
+        let recipient = "did:web:alice.example";
+        let recipient_device = "ck:device:01904100-0000-7000-8000-a11ce0000001";
+        let payload = json!({
+            "key_scope": {
+                "effective_scope": {"realm_id": realm_id},
+                "from_epoch": 0,
+                "to_epoch": 0
+            },
+            "recipient_principal_id": sender,
+            "recipient_device_id": sender_device,
+            "recipient_hpke_public_key": "cHVia2V5",
+            "requested_source_class": "verified_member_device",
+            "target_source_ref": recipient_device,
+            "target_principal_id": recipient,
+            "created_at": "2026-06-30T00:00:00Z"
+        });
+        let created_at = chrono::Utc::now();
+        let expires_at = created_at + chrono::Duration::minutes(5);
+        let record = DeviceMessageRecord {
+            idempotency_key: format!("realm_key_request:{request_id}"),
+            sender: sender.to_owned(),
+            recipient: recipient.to_owned(),
+            device_id: recipient_device.to_owned(),
+            position: 1,
+            content: realm_key_request_device_message_content(
+                sender_device,
+                realm_id,
+                request_id,
+                &payload,
+                expires_at,
+            ),
+            created_at,
+        };
+
+        let delivered = device_message_envelopes_after(&[record]);
+        assert_eq!(delivered.len(), 1);
+        assert_eq!(delivered[0].kind, "ck.realm_key.request");
+        assert_eq!(delivered[0].content["realm_id"], realm_id);
+        assert_eq!(delivered[0].content["request_id"], request_id);
+        assert_eq!(delivered[0].content["payload"], payload);
+        assert_eq!(delivered[0].expires_at, expires_at);
     }
 }
