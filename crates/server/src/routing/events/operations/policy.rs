@@ -12,6 +12,13 @@ pub fn operation_policy_reason_code(message: &str) -> (salvo::http::StatusCode, 
             salvo::http::StatusCode::PRECONDITION_FAILED,
             "failed_precondition",
         )
+    } else if message
+        == cokret_sdk::error::REASON_HISTORY_VISIBILITY_REQUIRES_HISTORY_CAPABLE_SCHEME
+    {
+        (
+            salvo::http::StatusCode::PRECONDITION_FAILED,
+            cokret_sdk::error::REASON_HISTORY_VISIBILITY_REQUIRES_HISTORY_CAPABLE_SCHEME,
+        )
     } else if message == "applet_registration_unauthorized" {
         // applet-integration.md §4 — surface the spec reason verbatim (matches
         // the dedicated install aggregate's `with_wire_code`), not the generic
@@ -161,6 +168,7 @@ pub async fn validate_operation_policy(
         validate_set_default_strand_policy(state, operation).await?;
         validate_realm_organization_policy(state, operation).await?;
         validate_history_visibility_policy(state, operation).await?;
+        validate_history_visibility_content_scheme_policy(state, operations, operation).await?;
         validate_read_receipt_policy_combination_write(state, operations, operation).await?;
         validate_realm_key_share_policy(state, operation).await?;
         validate_realm_moderation_policy(state, operation).await?;
@@ -2319,9 +2327,8 @@ async fn verify_realm_organization_proof_signature(
     .await
     .map_err(|_| "organization_statement_unverified")?;
 
-    let signing_bytes =
-        cokret_sdk::models::realm_organization_statement_signing_bytes(payload)
-            .map_err(|_| "organization_statement_unverified")?;
+    let signing_bytes = cokret_sdk::models::realm_organization_statement_signing_bytes(payload)
+        .map_err(|_| "organization_statement_unverified")?;
     resolved
         .public_key
         .verify_strict(&signing_bytes, &signature)

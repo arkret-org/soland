@@ -1983,13 +1983,10 @@ fn direct_realm_create_operation(
             // DM Realms are fail-closed: third-party invite / member_add MUST
             // be refused (spec §7).
             "default_join_rule": "closed",
-            // Both participants share the full 1:1 history (the canonical DM
-            // is a symmetric two-party conversation, not a join-gated room):
-            // `shared` lets each active member read every message the other
-            // sent, which is what a direct conversation means. spec §7 leaves
-            // history_visibility to the DM profile; it only pins the
-            // encryption profile / join rule / member-count invariants.
-            "history_visibility": "shared",
+            // The peer is joined before the first discussion Strand is
+            // created, so `joined` preserves full DM history without requiring
+            // a pre-join history_secret delivery scheme.
+            "history_visibility": "joined",
             // DM Realms use the MLS RFC 9420 profile (spec §7).
             "encryption_profile": "mls_rfc9420",
             "security_class": "standard",

@@ -857,8 +857,8 @@ pub async fn invite_token_realm_id(state: &AppState, token: &str) -> Option<Stri
 /// Read-side authorization rules:
 /// 1. `discoverability=public` → anyone.
 /// 2. `history_visibility=world_readable` → anyone (including anonymous / non-member registered
-///    actors). MLS-encrypted Realms are explicitly forbidden from this state
-///    (`incompatible_history_with_encryption`).
+///    actors). For MLS-backed Realms this state is valid only when the effective content scheme is
+///    history-capable.
 /// 3. Otherwise → caller MUST be an authenticated member.
 pub async fn realm_id_accessible_for_id(
     state: &AppState,

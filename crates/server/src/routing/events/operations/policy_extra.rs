@@ -42,6 +42,32 @@ pub(crate) async fn validate_history_visibility_policy(
     }
 }
 
+pub(crate) async fn validate_history_visibility_content_scheme_policy(
+    state: &AppState,
+    operations: &[Operation],
+    operation: &Operation,
+) -> Result<(), &'static str> {
+    match kinds::canonical_kind_for_operation(operation) {
+        Some(cokret_sdk::events::kinds::REALM_CREATE)
+        | Some(cokret_sdk::events::kinds::REALM_HISTORY_VISIBILITY)
+        | Some(cokret_sdk::events::kinds::REALM_POLICY_COMPONENTS) => {}
+        _ => return Ok(()),
+    }
+    let realm_id = operation.realm_id.as_str();
+    let encryption_profile =
+        intended_encryption_profile_for_realm(state, operations, realm_id).await;
+    if encryption_profile.as_deref() != Some("mls_rfc9420") {
+        return Ok(());
+    }
+    let history_visibility =
+        intended_history_visibility_for_realm(state, operations, realm_id).await;
+    let content_scheme = intended_content_scheme_for_realm(state, operations, realm_id).await;
+    cokret_sdk::validate_history_visibility_content_scheme_values(
+        &history_visibility,
+        content_scheme.as_deref(),
+    )
+}
+
 const READ_RECEIPT_VISIBILITY_COMBINATION_INVALID: &str =
     "read_receipt_visibility_combination_invalid";
 const READ_RECEIPT_FORCED_PUBLIC_WORLD_READABLE_FORBIDDEN: &str =
@@ -101,6 +127,17 @@ async fn intended_history_visibility_for_realm(
         {
             return value.to_owned();
         }
+        if kinds::canonical_kind_for_operation(operation)
+            == Some(cokret_sdk::events::kinds::REALM_CREATE)
+            && operation.realm_id.as_str() == realm_id
+            && let Some(value) = operation
+                .payload
+                .get("object")
+                .and_then(|object| object.get("history_visibility"))
+                .and_then(Value::as_str)
+        {
+            return value.to_owned();
+        }
     }
     state
         .persistence
@@ -111,6 +148,67 @@ async fn intended_history_visibility_for_realm(
         .flatten()
         .map(|meta| meta.history_visibility)
         .unwrap_or_else(|| "joined".to_owned())
+}
+
+async fn intended_content_scheme_for_realm(
+    state: &AppState,
+    operations: &[Operation],
+    realm_id: &str,
+) -> Option<String> {
+    for operation in operations.iter().rev() {
+        if operation.realm_id.as_str() != realm_id {
+            continue;
+        }
+        if kinds::canonical_kind_for_operation(operation)
+            == Some(cokret_sdk::events::kinds::REALM_POLICY_COMPONENTS)
+            && let Some(value) = policy_components_content_scheme(&operation.payload)
+        {
+            return Some(value);
+        }
+    }
+    state
+        .projection
+        .lock()
+        .ok()
+        .and_then(|projection| projection.realm_content_scheme(realm_id))
+}
+
+async fn intended_encryption_profile_for_realm(
+    state: &AppState,
+    operations: &[Operation],
+    realm_id: &str,
+) -> Option<String> {
+    for operation in operations.iter().rev() {
+        if operation.realm_id.as_str() == realm_id
+            && kinds::canonical_kind_for_operation(operation)
+                == Some(cokret_sdk::events::kinds::REALM_CREATE)
+            && let Some(value) = operation
+                .payload
+                .get("object")
+                .and_then(|object| object.get("encryption_profile"))
+                .and_then(Value::as_str)
+        {
+            return Some(value.to_owned());
+        }
+    }
+    state
+        .persistence
+        .realm_meta()
+        .get(realm_id)
+        .await
+        .ok()
+        .flatten()
+        .and_then(|meta| meta.encryption_profile)
+}
+
+fn policy_components_content_scheme(payload: &Value) -> Option<String> {
+    let value = projection_context_stripped_payload(payload);
+    let value = value.get("value").unwrap_or(&value);
+    value
+        .get("content_scheme")
+        .or_else(|| value.pointer("/components/content_scheme"))
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned)
 }
 
 async fn intended_read_receipt_policy_for_realm(

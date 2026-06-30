@@ -78,6 +78,21 @@ impl ProjectionState {
                 reason: CONTENT_SCHEME_DOWNGRADE.to_owned(),
             };
         }
+        let projected_scheme = self.realm_content_scheme(&realm_id);
+        let effective_scheme = incoming_scheme.or(projected_scheme.as_deref());
+        if self.realm_encryption_profile(&realm_id).as_deref() == Some("mls_rfc9420") {
+            let effective_history_visibility = self
+                .realm_history_visibility(&realm_id)
+                .unwrap_or_else(|| "joined".to_owned());
+            if let Err(reason) = cokret_sdk::validate_history_visibility_content_scheme_values(
+                &effective_history_visibility,
+                effective_scheme,
+            ) {
+                return ProjectionEffect::Rejected {
+                    reason: reason.to_owned(),
+                };
+            }
+        }
         // realm-and-space.md §2.3.1 — `durability_policy` (Realm Recovery Key)
         // is reducer-derived from `ck.realm.policy_components`. Validate its
         // structural invariants and that `mode != none` is only declared on a
@@ -85,8 +100,6 @@ impl ProjectionState {
         // `durability_scheme_incompatible`). The effective scheme is the
         // incoming scheme when this same update sets it, else the projected one.
         if let Some(durability_policy) = durability_policy_field(&value) {
-            let projected_scheme = self.realm_content_scheme(&realm_id);
-            let effective_scheme = incoming_scheme.or(projected_scheme.as_deref());
             if let Err(reason) = validate_durability_policy(durability_policy, effective_scheme) {
                 return ProjectionEffect::Rejected {
                     reason: reason.to_owned(),

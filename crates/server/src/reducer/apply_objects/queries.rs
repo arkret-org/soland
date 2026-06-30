@@ -705,6 +705,21 @@ impl ProjectionState {
         content_scheme_field(components).map(ToOwned::to_owned)
     }
 
+    /// Effective Realm `history_visibility` projected from the metadata cell,
+    /// falling back to the create-log genesis value.
+    pub fn realm_history_visibility(&self, realm_id: &str) -> Option<String> {
+        self.realm_metadata_cell_value(realm_id)
+            .and_then(|value| value.get("history_visibility"))
+            .and_then(Value::as_str)
+            .or_else(|| {
+                self.realm_create_log(realm_id)
+                    .and_then(|entries| entries.last())
+                    .and_then(|entry| entry.get("history_visibility"))
+                    .and_then(Value::as_str)
+            })
+            .map(ToOwned::to_owned)
+    }
+
     /// Effective Realm `durability_policy` (Realm Recovery Key, realm-and-space.md
     /// §2.3.1) projected from the `ck.component.realm.policy_components.v1` cell.
     /// `None` means no policy has been declared yet — callers treat that as the

@@ -1805,6 +1805,153 @@ async fn call_recording_start_transcript_allows_transcribe_capability() {
         .expect("ck.call.transcribe should authorize transcript capture");
 }
 
+#[tokio::test]
+async fn mls_prejoin_history_rejects_non_history_capable_content_scheme() {
+    let state = test_state();
+    let realm_id =
+        cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-00000000c100".to_owned())
+            .unwrap();
+    let create = op(
+        realm_id.clone(),
+        "00000000c101",
+        cokret_sdk::events::kinds::REALM_CREATE,
+        json!({
+            "object": {
+                "id": realm_id.as_str(),
+                "title": "Prejoin history",
+                "history_visibility": "shared",
+                "encryption_profile": "mls_rfc9420"
+            }
+        }),
+    );
+    let strict_scheme = op(
+        realm_id,
+        "00000000c102",
+        cokret_sdk::events::kinds::REALM_POLICY_COMPONENTS,
+        json!({
+            "value": {
+                "content_scheme": "mls-rfc9420"
+            }
+        }),
+    );
+
+    let reason = validate_operation_policy(&state, &[create, strict_scheme])
+        .await
+        .unwrap_err();
+    assert_eq!(
+        reason,
+        cokret_sdk::error::REASON_HISTORY_VISIBILITY_REQUIRES_HISTORY_CAPABLE_SCHEME
+    );
+    assert_eq!(
+        operation_policy_reason_code(reason),
+        (
+            salvo::http::StatusCode::PRECONDITION_FAILED,
+            cokret_sdk::error::REASON_HISTORY_VISIBILITY_REQUIRES_HISTORY_CAPABLE_SCHEME
+        )
+    );
+}
+
+#[tokio::test]
+async fn mls_prejoin_history_accepts_exporter_aead_content_scheme() {
+    let state = test_state();
+    let realm_id =
+        cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-00000000c200".to_owned())
+            .unwrap();
+    let create = op(
+        realm_id.clone(),
+        "00000000c201",
+        cokret_sdk::events::kinds::REALM_CREATE,
+        json!({
+            "object": {
+                "id": realm_id.as_str(),
+                "title": "Prejoin history",
+                "history_visibility": "shared",
+                "encryption_profile": "mls_rfc9420"
+            }
+        }),
+    );
+    let exporter_scheme = op(
+        realm_id,
+        "00000000c202",
+        cokret_sdk::events::kinds::REALM_POLICY_COMPONENTS,
+        json!({
+            "value": {
+                "content_scheme": "mls-exporter-aead-v1"
+            }
+        }),
+    );
+
+    validate_operation_policy(&state, &[create, exporter_scheme])
+        .await
+        .expect("pre-join history is valid when the MLS realm declares exporter-AEAD");
+}
+
+#[tokio::test]
+async fn mls_strict_existing_realm_rejects_prejoin_history_update() {
+    use cokret_sdk::lattice::CellState;
+
+    let state = test_state();
+    let realm_id =
+        cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-00000000c300".to_owned())
+            .unwrap();
+    let now = chrono::Utc::now();
+    state
+        .persistence
+        .realm_meta()
+        .put(
+            realm_id.as_str(),
+            &crate::state::RealmMetaRecord {
+                owner: "did:web:alice.example".to_owned(),
+                deleted: false,
+                discoverability: "invite_only".to_owned(),
+                history_visibility: "joined".to_owned(),
+                history_sharing_policy: None,
+                history_sharing_policy_digest: None,
+                preview_policy: None,
+                preview_policy_digest: None,
+                asset_privacy_policy: None,
+                asset_privacy_policy_digest: None,
+                encryption_profile: Some("mls_rfc9420".to_owned()),
+                plaintext_visible_services: std::collections::BTreeSet::new(),
+                plaintext_visible_service_classes: std::collections::BTreeMap::new(),
+                minimal_metadata_realm: false,
+                created_at: now,
+                updated_at: now,
+            },
+        )
+        .await
+        .expect("realm meta stored");
+    {
+        let mut projection = state.projection.lock().expect("projection mutex");
+        let cell_id = cokret_sdk::CellRef::new(format!(
+            "ck:cell:ck.component.realm.policy_components.v1:{}",
+            realm_id.as_str()
+        ))
+        .expect("valid policy_components cell ref");
+        projection.cells.insert(
+            cell_id,
+            CellState::Value(json!({
+                "content_scheme": "mls-rfc9420"
+            })),
+        );
+    }
+    let history_visibility = op(
+        realm_id,
+        "00000000c301",
+        cokret_sdk::events::kinds::REALM_HISTORY_VISIBILITY,
+        json!({
+            "value": "shared"
+        }),
+    );
+
+    assert_eq!(
+        validate_operation_policy(&state, &[history_visibility])
+            .await
+            .unwrap_err(),
+        cokret_sdk::error::REASON_HISTORY_VISIBILITY_REQUIRES_HISTORY_CAPABLE_SCHEME
+    );
+}
+
 // encryption-and-audit.md §2.10.8 — an RRK-targeted `ck.realm_key.share` (to a
 // declared recovery recipient) is accepted by the share-policy gate even though
 // the recipient is NOT a member and the realm carries no history-sharing policy.

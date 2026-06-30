@@ -117,17 +117,6 @@ pub(super) fn validate_realm_create_policy_constraints(
         .get("history_visibility")
         .and_then(Value::as_str)
         .unwrap_or("joined");
-    let encryption_profile = object
-        .get("encryption_profile")
-        .and_then(Value::as_str)
-        .unwrap_or("none");
-    if history_visibility == "world_readable" && encryption_profile != "none" {
-        return Err(event_validation_error(
-            StatusCode::BAD_REQUEST,
-            "incompatible_history_with_encryption",
-            "world_readable history requires encryption_profile=none",
-        ));
-    }
     if history_visibility == "restricted"
         && object
             .get("history_sharing_policy")

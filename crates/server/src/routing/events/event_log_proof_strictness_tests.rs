@@ -1242,7 +1242,7 @@ fn event_payload_validator_enforces_patch_family_schema() {
 }
 
 #[test]
-fn realm_create_rejects_world_readable_encrypted_history() {
+fn realm_create_shape_allows_world_readable_encrypted_history() {
     let state = make_state(true);
     let realm_id = "ck:realm:01904100-0000-7000-8000-a11ce0000001";
     let envelope = json!({
@@ -1274,15 +1274,14 @@ fn realm_create_rejects_world_readable_encrypted_history() {
         }
     });
     let object = envelope.as_object().unwrap();
-    let err = validate_event_schema_and_payload(
+    validate_event_schema_and_payload(
         &state,
         "ck.realm.create",
         "ck.schema.event.v1",
         &envelope,
         object,
     )
-    .expect_err("encrypted world-readable Realm history must fail closed");
-    assert_eq!(err.code, "incompatible_history_with_encryption");
+    .expect("shape validation defers encrypted history scheme compatibility to operation policy");
 }
 
 #[tokio::test]

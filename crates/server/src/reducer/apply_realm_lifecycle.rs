@@ -802,6 +802,12 @@ impl ProjectionState {
             .map(ToOwned::to_owned);
         let payload_encryption_profile =
             operation_encryption_profile(operation).map(ToOwned::to_owned);
+        let payload_history_visibility = operation
+            .payload
+            .get("history_visibility")
+            .or_else(|| payload_object.and_then(|object| object.get("history_visibility")))
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned);
         let payload_digest_algorithm = operation
             .payload
             .get("digest_algorithm")
@@ -1037,6 +1043,7 @@ impl ProjectionState {
                         "title": title,
                         "security_class": payload_security_class,
                         "federation_policy": payload_federation_policy,
+                        "history_visibility": payload_history_visibility,
                         "encryption_profile": payload_encryption_profile,
                         "digest_algorithm": payload_digest_algorithm,
                         "created_at": now.to_rfc3339(),
