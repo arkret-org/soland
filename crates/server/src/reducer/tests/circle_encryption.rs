@@ -415,6 +415,43 @@ fn prejoin_history_accepts_exporter_aead_scheme_on_mls_realm() {
     ));
 }
 
+#[test]
+fn content_scheme_falls_back_to_realm_create_log() {
+    use cokret_sdk::lattice::CellState;
+
+    let mut state = ProjectionState::new();
+    let hlc = ServerHlc::new("history-scheme-create");
+    let realm = "ck:realm:01904100-0000-7000-8000-d0d0d0d0c012";
+    let create_cell =
+        cokret_sdk::CellRef::new(format!("ck:cell:ck.component.realm.create.v1:{realm}"))
+            .expect("valid create cell ref");
+    state.cells.insert(
+        create_cell,
+        CellState::Value(serde_json::json!([{
+            "encryption_profile": "mls_rfc9420",
+            "history_visibility": "shared",
+            "content_scheme": "mls-exporter-aead-v1"
+        }])),
+    );
+
+    assert_eq!(
+        state.realm_content_scheme(realm).as_deref(),
+        Some("mls-exporter-aead-v1")
+    );
+    let effect = state.apply(
+        &make_operation(
+            cokret_sdk::events::kinds::REALM_POLICY_COMPONENTS,
+            realm,
+            serde_json::json!({ "content_scheme": "mls-rfc9420" }),
+        ),
+        &hlc,
+    );
+    assert!(matches!(
+        effect,
+        ProjectionEffect::Rejected { reason } if reason == CONTENT_SCHEME_DOWNGRADE
+    ));
+}
+
 // realm-and-space.md §2.3.1 — `durability_policy.mode != none` is only valid on
 // a `content_scheme=mls-exporter-aead-v1` realm. Declaring an org RRK on a realm
 // that has not committed to the exporter-AEAD scheme MUST

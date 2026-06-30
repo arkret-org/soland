@@ -165,6 +165,16 @@ async fn intended_content_scheme_for_realm(
         {
             return Some(value);
         }
+        if kinds::canonical_kind_for_operation(operation)
+            == Some(cokret_sdk::events::kinds::REALM_CREATE)
+            && let Some(value) = operation
+                .payload
+                .get("object")
+                .and_then(|object| object.get("content_scheme"))
+                .and_then(Value::as_str)
+        {
+            return Some(value.to_owned());
+        }
     }
     state
         .projection

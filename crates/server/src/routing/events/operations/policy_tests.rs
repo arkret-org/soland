@@ -1887,6 +1887,62 @@ async fn mls_prejoin_history_accepts_exporter_aead_content_scheme() {
 }
 
 #[tokio::test]
+async fn mls_prejoin_history_accepts_create_object_exporter_aead_content_scheme() {
+    let state = test_state();
+    let realm_id =
+        cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-00000000c210".to_owned())
+            .unwrap();
+    let create = op(
+        realm_id.clone(),
+        "00000000c211",
+        cokret_sdk::events::kinds::REALM_CREATE,
+        json!({
+            "object": {
+                "id": realm_id.as_str(),
+                "title": "Prejoin history",
+                "history_visibility": "shared",
+                "encryption_profile": "mls_rfc9420",
+                "content_scheme": "mls-exporter-aead-v1"
+            }
+        }),
+    );
+
+    validate_operation_policy(&state, &[create])
+        .await
+        .expect("pre-join history is valid when ck.realm.create declares exporter-AEAD");
+}
+
+#[tokio::test]
+async fn mls_prejoin_history_rejects_create_object_strict_content_scheme() {
+    let state = test_state();
+    let realm_id =
+        cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-00000000c220".to_owned())
+            .unwrap();
+    let create = op(
+        realm_id.clone(),
+        "00000000c221",
+        cokret_sdk::events::kinds::REALM_CREATE,
+        json!({
+            "object": {
+                "id": realm_id.as_str(),
+                "title": "Prejoin history",
+                "history_visibility": "shared",
+                "encryption_profile": "mls_rfc9420",
+                "content_scheme": "mls-rfc9420"
+            }
+        }),
+    );
+
+    let reason = validate_operation_policy(&state, &[create])
+        .await
+        .unwrap_err();
+    assert_eq!(
+        reason,
+        cokret_sdk::error::REASON_HISTORY_VISIBILITY_REQUIRES_HISTORY_CAPABLE_SCHEME
+    );
+}
+
+#[tokio::test]
 async fn mls_strict_existing_realm_rejects_prejoin_history_update() {
     use cokret_sdk::lattice::CellState;
 

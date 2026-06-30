@@ -695,14 +695,21 @@ impl ProjectionState {
     }
 
     /// Effective Realm `content_scheme` projected from the
-    /// `ck.component.realm.policy_components.v1` cell (read from the same
-    /// `policy_components` cell as the encryption floors). `None` means no
-    /// scheme has been negotiated yet — callers treat that as the
-    /// application-message default (`mls-rfc9420`). Drives the one-way
-    /// `content_scheme` ratchet in `apply_realm_policy_components`.
+    /// `ck.component.realm.policy_components.v1` cell, falling back to the
+    /// create-log genesis value. `None` means no scheme has been negotiated
+    /// yet — callers treat that as the application-message default
+    /// (`mls-rfc9420`). Drives the one-way `content_scheme` ratchet in
+    /// `apply_realm_policy_components`.
     pub fn realm_content_scheme(&self, realm_id: &str) -> Option<String> {
-        let components = self.realm_policy_components_cell_value(realm_id)?;
-        content_scheme_field(components).map(ToOwned::to_owned)
+        self.realm_policy_components_cell_value(realm_id)
+            .and_then(content_scheme_field)
+            .or_else(|| {
+                self.realm_create_log(realm_id)
+                    .and_then(|entries| entries.last())
+                    .and_then(|entry| entry.get("content_scheme"))
+                    .and_then(Value::as_str)
+            })
+            .map(ToOwned::to_owned)
     }
 
     /// Effective Realm `history_visibility` projected from the metadata cell,
