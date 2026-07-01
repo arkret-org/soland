@@ -1,4 +1,5 @@
 -- Squashed initial migration. This drops all tables. Only use in development.
+DROP TABLE IF EXISTS server_settings CASCADE;
 DROP TABLE IF EXISTS account_datas CASCADE;
 DROP TABLE IF EXISTS account_localparts CASCADE;
 DROP TABLE IF EXISTS accounts CASCADE;

@@ -499,6 +499,23 @@ CREATE TABLE public.invite_receive_policies (
     updated_at timestamp with time zone DEFAULT now() NOT NULL
 );
 
+-- Deployment-wide dynamic operational settings (rate limits, admin
+-- allowlist, federation peers, feature toggles). One row PER setting key:
+-- `value` is the JSON for that key only. This is an OVERLAY — env/boot config
+-- provides the defaults and only explicitly-overridden keys have a row here,
+-- so changing an env default still takes effect for keys never overridden.
+-- Per-key rows also mean independent updates, per-key audit, and no
+-- lost-update when two keys change concurrently. Tier-1 bootstrap/secret
+-- config (bind, DATABASE_URL, service DID, signing seeds) deliberately stays
+-- in env and is NOT stored here.
+CREATE TABLE public.server_settings (
+    key text NOT NULL,
+    value jsonb NOT NULL,
+    updated_by text NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT server_settings_pkey PRIMARY KEY (key)
+);
+
 CREATE TABLE public.key_backups (
     id uuid NOT NULL,
     actor_id text,

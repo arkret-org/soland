@@ -281,7 +281,7 @@ async fn get_server_stats(
         .await
         .map(|items| items.len() as u64)
         .unwrap_or(0);
-    let federation_peer_count = state.config.federation_peers.len() as u64;
+    let federation_peer_count = state.settings().federation_peers.len() as u64;
     let (applet_count, agent_count) = state
         .projection
         .lock()

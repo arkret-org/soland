@@ -34,6 +34,15 @@ async fn events_describe(depot: &mut Depot) -> JsonResult<cokret_sdk::ServerDesc
         &mut description,
         state.verified_profiles.as_ref(),
     );
+    // Advertise the live rate-limit ceilings (see the canonical describe
+    // handler) so wire and enforcement stay in lock-step after a hot-swap.
+    description.rate_limit_policy = Some(
+        state
+            .settings()
+            .rate_limit
+            .to_limiter_config()
+            .advertised_policy(),
+    );
     if let Some(limits) = description.limits.as_object_mut() {
         limits.insert(
             "max_event_bytes".to_owned(),

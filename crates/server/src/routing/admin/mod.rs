@@ -14,6 +14,7 @@ mod media;
 mod moderation;
 mod retention;
 mod seal;
+mod settings;
 mod spec;
 
 use audit::append_audit_log;
@@ -81,7 +82,7 @@ pub(super) fn require_admin_principal(
     state: &AppState,
     session: SessionRecord,
 ) -> Result<SessionRecord, AppError> {
-    if state.config.development_mode || state.config.is_admin_principal(&session.actor) {
+    if state.config.development_mode || state.is_admin_principal(&session.actor) {
         Ok(session)
     } else {
         Err(AppError::new(
@@ -112,6 +113,7 @@ pub fn router() -> Router {
         .push(Router::with_path("admin/{resource}").get(collection::admin_collection))
         .push(control::router())
         .push(retention::router())
+        .push(settings::router())
 }
 
 pub fn spec_router() -> Router {

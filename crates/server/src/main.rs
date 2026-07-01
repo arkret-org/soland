@@ -367,11 +367,21 @@ where
 {
     let server = Server::new(acceptor);
     let handle = server.handle();
+    // Bounded drain: after a shutdown signal, stop accepting and wait up to
+    // `SOLAND_SHUTDOWN_GRACE_SECS` for in-flight requests to finish before
+    // forcibly closing the listener. Unset (or 0) preserves the previous
+    // "wait indefinitely" behavior. A finite bound matters under an
+    // orchestrator (Kubernetes / systemd) that will SIGKILL after its own
+    // grace period — a long-lived `events.subscribe` stream would otherwise
+    // block a clean shutdown until the hard kill.
+    let shutdown_grace = std::env::var("SOLAND_SHUTDOWN_GRACE_SECS")
+        .ok()
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .filter(|secs| *secs > 0)
+        .map(std::time::Duration::from_secs);
     tokio::spawn(async move {
         shutdown_signal().await;
-        // `None` means wait until all in-flight requests finish before
-        // closing the listener.
-        handle.stop_graceful(None);
+        handle.stop_graceful(shutdown_grace);
     });
     server.serve(service(state)).await;
 }

@@ -340,7 +340,7 @@ fn moderation_target_matches_peer(entry: &Value, peer_did: &str, peer_url: Optio
 
 fn configured_peer_matches(state: &AppState, peer_did: &str, peer_url: Option<&str>) -> bool {
     state
-        .config
+        .settings()
         .federation_peers
         .iter()
         .filter_map(|entry| parse_peer_target(entry))

@@ -5,6 +5,24 @@ pub const DEFAULT_MAX_REQUEST_SIZE_BYTES: usize = 1024 * 1024;
 pub const DEFAULT_TO_DEVICE_QUEUE_CAPACITY: usize = 10_000;
 pub const PQ_HYBRID_TLS_DEPLOYMENT_PROBE_ENV: &str = "SOLAND_PQ_TLS_DEPLOYMENT_PROBE";
 
+/// Built-in placeholder `service_did` used only when `SOLAND_SERVICE_DID` is
+/// unset. It is deliberately a globally-shared, non-routable identity so a
+/// production deployment that boots without setting its own DID is rejected
+/// at startup (see [`AppConfig::from_env_and_args`]) rather than silently
+/// federating and signing under a fake shared identity.
+pub const PLACEHOLDER_SERVICE_DID: &str =
+    "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service";
+
+/// STUN URL shipped as the [`IceServersConfig::default`] value. A production
+/// deployment still advertising this Google public STUN server leaks client
+/// candidate-gathering to a third party; surfaced as a hardening warning.
+pub const PLACEHOLDER_STUN_URL: &str = "stun:stun.l.google.com:19302";
+
+/// TURN URL shipped as the [`IceServersConfig::default`] value. It points at a
+/// non-existent host, so a production deployment still advertising it has no
+/// working relay; surfaced as a hardening warning.
+pub const PLACEHOLDER_TURN_HOST: &str = "turn.soland.local";
+
 #[derive(Clone, Debug)]
 pub struct AppConfig {
     pub bind: SocketAddr,
@@ -479,7 +497,8 @@ fn load_livekit_config() -> anyhow::Result<LiveKitConfig> {
 
 /// Federation routing policy. Selected at config-load
 /// time via `SOLAND_FEDERATION_POLICY` env var (`mesh` | `hub`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum FederationPolicy {
     /// Default — broadcast every accepted Event to every peer in
     /// [`AppConfig::federation_peers`].
@@ -545,10 +564,8 @@ impl AppConfig {
             .parse()?;
         let public_base_url =
             std::env::var("SOLAND_PUBLIC_BASE_URL").unwrap_or_else(|_| format!("http://{bind}"));
-        let service_did = std::env::var("SOLAND_SERVICE_DID").unwrap_or_else(|_| {
-            "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service"
-                .to_owned()
-        });
+        let service_did = env_non_empty("SOLAND_SERVICE_DID")
+            .unwrap_or_else(|| PLACEHOLDER_SERVICE_DID.to_owned());
         let tls_cert_path = env_non_empty("SOLAND_TLS_CERT_PATH").map(PathBuf::from);
         let tls_key_path = env_non_empty("SOLAND_TLS_KEY_PATH").map(PathBuf::from);
         if tls_cert_path.is_some() != tls_key_path.is_some() {
@@ -568,6 +585,14 @@ impl AppConfig {
         let development_mode = std::env::var("SOLAND_DEVELOPMENT_MODE")
             .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes"))
             .unwrap_or(false);
+        // T1 — a production deployment MUST declare its own routable service
+        // DID. Booting under the shared placeholder means every such
+        // deployment signs and federates under the same fake identity.
+        if !development_mode && service_did == PLACEHOLDER_SERVICE_DID {
+            anyhow::bail!(
+                "SOLAND_SERVICE_DID is required when SOLAND_DEVELOPMENT_MODE is false; the built-in placeholder DID is a shared, non-routable identity"
+            );
+        }
         // CORS posture per api-conventions.md §10 — browser clients SHOULD be
         // able to reach us via preflight. Three shapes:
         //   - env unset, production mode → `None` (no CORS handler at all; operator must opt in
@@ -600,6 +625,13 @@ impl AppConfig {
             .ok()
             .and_then(|value| value.trim().parse::<u64>().ok())
             .unwrap_or(300);
+        // T3 — 0 disables Move/Seal replay-window enforcement. Fine for
+        // fixed-time test fixtures (dev mode); a production misconfiguration.
+        if !development_mode && jws_replay_window_seconds == 0 {
+            anyhow::bail!(
+                "SOLAND_JWS_REPLAY_WINDOW_SECONDS must be > 0 when SOLAND_DEVELOPMENT_MODE is false (0 disables replay protection)"
+            );
+        }
         let notary_signing_key_seed = load_notary_signing_key_seed()?;
         let agent_audit_binding_signing_seed = load_agent_audit_binding_signing_seed()?;
         if !development_mode && agent_audit_binding_signing_seed.is_none() {
@@ -610,6 +642,15 @@ impl AppConfig {
         let use_keystore = std::env::var("SOLAND_USE_KEYSTORE")
             .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes"))
             .unwrap_or(false);
+        // T2 — without a persistent notary seed (env or KeyStore) the worker
+        // mints a fresh ephemeral ed25519 identity on every restart, which
+        // breaks the Seal signature chain. Match the `agent_audit_binding`
+        // fail-fast posture; the notary key is at least as critical.
+        if !development_mode && notary_signing_key_seed.is_none() && !use_keystore {
+            anyhow::bail!(
+                "SOLAND_NOTARY_SIGNING_KEY (or SOLAND_USE_KEYSTORE=true) is required when SOLAND_DEVELOPMENT_MODE is false; an ephemeral notary key breaks the Seal signature chain across restarts"
+            );
+        }
         let federation_policy = std::env::var("SOLAND_FEDERATION_POLICY")
             .ok()
             .map(|value| FederationPolicy::from_env_value(&value))
@@ -959,6 +1000,26 @@ impl AppConfig {
                 checklist_score += 1;
             } else {
                 warnings.push((*label).to_owned());
+            }
+        }
+
+        // T4 — advisory (non-scored) ICE/TURN posture. A production
+        // deployment still advertising the built-in placeholders has no
+        // working relay (placeholder TURN host does not resolve) or leaks
+        // candidate gathering to a third party (Google public STUN). These
+        // do not lower the checklist score — they are operational hints —
+        // but they surface on `/health` so operators notice unset RTC infra.
+        if !development_mode {
+            if self.ice.stun_urls.iter().any(|u| u == PLACEHOLDER_STUN_URL) {
+                warnings.push("ice_stun_placeholder".to_owned());
+            }
+            if self
+                .ice
+                .turn_urls
+                .iter()
+                .any(|u| u.contains(PLACEHOLDER_TURN_HOST))
+            {
+                warnings.push("ice_turn_placeholder".to_owned());
             }
         }
 

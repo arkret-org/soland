@@ -682,6 +682,15 @@ diesel::table! {
     }
 }
 
+diesel::table! {
+    server_settings (key) {
+        key -> Text,
+        value -> Jsonb,
+        updated_by -> Text,
+        updated_at -> Timestamptz,
+    }
+}
+
 diesel::allow_tables_to_appear_in_same_query!(
     accounts,
     account_localparts,
@@ -732,4 +741,5 @@ diesel::allow_tables_to_appear_in_same_query!(
     consent_cells,
     direct_conversation_bindings,
     invite_receive_policies,
+    server_settings,
 );

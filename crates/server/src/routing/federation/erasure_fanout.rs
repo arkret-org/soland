@@ -104,7 +104,7 @@ pub async fn fanout_erasure_receipt(state: &AppState, receipt_id: &str) {
 /// Fan out a durable `ck.audit.erasure_receipt` operation through the normal
 /// federation push batch wire shape.
 pub async fn fanout_erasure_receipt_operation(state: &AppState, operation: &Operation) {
-    if state.config.federation_peers.is_empty() {
+    if state.settings().federation_peers.is_empty() {
         return;
     }
     let now = Utc::now();
@@ -293,10 +293,10 @@ async fn persist_erasure_operation_for_pull(state: &AppState, operation: &Operat
 
 fn configured_erasure_peer_targets(state: &AppState) -> Vec<ErasurePeerTarget> {
     use crate::config::FederationPolicy;
-    let entries: Vec<String> = match state.config.federation_policy {
-        FederationPolicy::Mesh => state.config.federation_peers.clone(),
-        FederationPolicy::Hub => state
-            .config
+    let settings = state.settings();
+    let entries: Vec<String> = match settings.federation_policy {
+        FederationPolicy::Mesh => settings.federation_peers.clone(),
+        FederationPolicy::Hub => settings
             .federation_peers
             .first()
             .cloned()

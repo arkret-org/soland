@@ -729,7 +729,7 @@ async fn federation_service_binding_current_for_destination(
     // be stale against. A conservative deployment (default) still fails closed
     // below; a server explicitly configured as a replica / observer admits the
     // push as pure replication (config: `federation_replica_observer`).
-    if state.config.federation_replica_observer
+    if state.settings().federation_replica_observer
         && !members
             .iter()
             .any(|member| member.recipient_service_did == state.config.service_did)

@@ -328,7 +328,8 @@ fn local_peer_policy_digest_for_transaction(
     origin_service_did: &str,
     body: &cokret_sdk::FederationTransactionRequestBody,
 ) -> Result<String, AppError> {
-    let mut federation_peers = state.config.federation_peers.clone();
+    let live_settings = state.settings();
+    let mut federation_peers = live_settings.federation_peers.clone();
     federation_peers.sort();
     federation_peers.dedup();
     let realm_ids = body
@@ -375,7 +376,7 @@ fn local_peer_policy_digest_for_transaction(
         "source_service_did": origin_service_did,
         "destination_service_did": body.destination.as_str(),
         "service_binding_ref": body.service_binding_ref.as_str(),
-        "federation_policy": state.config.federation_policy.as_str(),
+        "federation_policy": live_settings.federation_policy.as_str(),
         "federation_peers": federation_peers,
         "source_denied": crate::security::federation_origin_denied(origin_service_did),
         "max_inbound_operations": MAX_INBOUND_FEDERATION_OPERATIONS,
@@ -888,7 +889,7 @@ pub(crate) async fn federation_seals_pull(
     }
     json_ok(FederationSealsOutcome {
         seals,
-        policy: state.config.federation_policy.as_str().to_owned(),
+        policy: state.settings().federation_policy.as_str().to_owned(),
         next_cursor: None,
     })
 }

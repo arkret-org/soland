@@ -202,7 +202,7 @@ pub(super) async fn admin_collection(
 ) -> JsonResult<AdminCollectionOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
-    if !state.config.development_mode && !state.config.is_admin_principal(&session.actor) {
+    if !state.config.development_mode && !state.is_admin_principal(&session.actor) {
         return Err(AppError::capability_denied(
             "admin collection API requires the caller DID to be listed in SOLAND_ADMIN_PRINCIPAL_DIDS",
         ));

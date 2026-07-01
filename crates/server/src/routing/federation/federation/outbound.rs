@@ -16,10 +16,10 @@ pub(crate) struct FederationPeerTarget {
 
 pub(crate) fn configured_peer_targets(state: &AppState) -> Vec<FederationPeerTarget> {
     use crate::config::FederationPolicy;
-    let entries: Vec<String> = match state.config.federation_policy {
-        FederationPolicy::Mesh => state.config.federation_peers.clone(),
-        FederationPolicy::Hub => state
-            .config
+    let settings = state.settings();
+    let entries: Vec<String> = match settings.federation_policy {
+        FederationPolicy::Mesh => settings.federation_peers.clone(),
+        FederationPolicy::Hub => settings
             .federation_peers
             .first()
             .cloned()

@@ -49,6 +49,12 @@ use crate::verified_profiles::VerifiedProfileDescriptor;
 #[derive(Clone)]
 pub struct AppState {
     pub config: AppConfig,
+    /// Mutable operational overlay (admin allowlist, rate-limit ceilings,
+    /// federation peers, feature toggles). Seeded from `config` at boot,
+    /// overlaid by the `server_settings` DB row in [`AppState::hydrate`], and
+    /// hot-swapped by the admin settings endpoint. Read a consistent snapshot
+    /// via [`AppState::settings`]. See [`crate::runtime_settings`].
+    pub settings: Arc<ArcSwap<crate::runtime_settings::RuntimeSettings>>,
     pub db: Db,
     pub persistence: Arc<dyn PersistenceStore>,
     pub object_storage: Arc<dyn ObjectStorage>,
@@ -525,8 +531,16 @@ impl AppState {
             .or_else(|| std::env::var("DATABASE_URL").ok());
         let event_broadcast_pool = db.pool.clone();
 
+        // Seed the mutable overlay from boot config; `hydrate` overlays the
+        // persisted `server_settings` row on top if one exists.
+        let initial_settings =
+            Arc::new(ArcSwap::from_pointee(crate::runtime_settings::RuntimeSettings::from_config(
+                &config,
+            )));
+
         Self {
             config,
+            settings: initial_settings,
             hlc: ServerHlc::new(&service_did),
             projection: Arc::new(Mutex::new(hydrated)),
             authz: SolandAuthzEngine::new(),
@@ -589,6 +603,35 @@ impl AppState {
         }
     }
 
+    /// Load a consistent snapshot of the mutable operational settings. Cheap
+    /// (an atomic pointer load + refcount bump); call per request rather than
+    /// caching, so a hot-swap by the admin endpoint is observed immediately.
+    #[inline]
+    pub fn settings(&self) -> Arc<crate::runtime_settings::RuntimeSettings> {
+        self.settings.load_full()
+    }
+
+    /// Runtime-authoritative admin-allowlist check. Reads the live overlay,
+    /// so an admin added via the settings endpoint takes effect without a
+    /// restart.
+    #[inline]
+    pub fn is_admin_principal(&self, actor: &str) -> bool {
+        self.settings().is_admin_principal(actor)
+    }
+
+    /// Effective admin-API auth posture from the live overlay + boot
+    /// `development_mode`. Mirrors [`crate::config::AppConfig::admin_auth_mode`]
+    /// but reflects runtime allowlist changes.
+    pub fn admin_auth_mode(&self) -> &'static str {
+        if self.config.development_mode {
+            "development"
+        } else if !self.settings().admin_principal_dids.is_empty() {
+            "did_allowlist"
+        } else {
+            "closed"
+        }
+    }
+
     /// Touch the (now async) persistence store to finish boot:
     ///   * seed the demo account + Realm metadata when `seed_demo_data` is on,
     ///   * hydrate the Realm directory from persisted `ck.realm.create` events,
@@ -600,6 +643,26 @@ impl AppState {
     /// empty snapshot, so this is a no-op there.
     pub async fn hydrate(&self) -> PersistenceResult<()> {
         let now = chrono::Utc::now();
+        // Overlay the persisted per-key operational settings on top of the
+        // boot-config seed. Only overridden keys have rows; everything else
+        // keeps its env default. Per-key decode failures are logged and
+        // skipped so a corrupt row can never brick startup.
+        if let Some(pool) = self.db.pool.as_ref() {
+            match crate::runtime_settings::load_overrides(pool).await {
+                Ok(rows) if !rows.is_empty() => {
+                    let mut merged =
+                        crate::runtime_settings::RuntimeSettings::from_config(&self.config);
+                    let count = rows.len();
+                    merged.apply_override_rows(rows);
+                    self.settings.store(Arc::new(merged));
+                    tracing::info!(count, "applied server_settings overrides");
+                }
+                Ok(_) => {}
+                Err(error) => {
+                    tracing::warn!(%error, "failed to load server_settings; using boot config");
+                }
+            }
+        }
         if self.config.seed_demo_data {
             let demo_realm_id = "ck:realm:0196419b-0000-7000-8000-000000000000";
             let demo_account = AccountRecord {

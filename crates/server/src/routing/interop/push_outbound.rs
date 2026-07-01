@@ -674,7 +674,7 @@ fn resolve_trust_level(state: &AppState, contract: &OutboundPushResolvedContract
         return "pending".to_owned();
     }
     if state
-        .config
+        .settings()
         .push_bridge_trusted_service_dids
         .iter()
         .any(|allowed| allowed == &contract.service_did)

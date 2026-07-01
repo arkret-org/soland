@@ -1,6 +1,8 @@
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
+use deadpool::Runtime;
 use diesel_async::AsyncPgConnection;
 use diesel_async::async_connection_wrapper::AsyncConnectionWrapper;
 use diesel_async::pooled_connection::AsyncDieselConnectionManager;
@@ -29,7 +31,25 @@ impl Db {
             Some(url) if !url.trim().is_empty() => {
                 migrations_applied_flag().store(false, Ordering::Release);
                 let manager = AsyncDieselConnectionManager::<AsyncPgConnection>::new(&url);
-                let pool = Pool::builder(manager).build()?;
+                // Pool sizing / acquire timeout are env-tunable so operators
+                // can match the pool to their Postgres `max_connections` and
+                // fail fast instead of blocking forever when the pool is
+                // exhausted. Unset falls back to deadpool defaults
+                // (max_size = cpu_count * 4, no wait timeout).
+                let mut builder = Pool::builder(manager);
+                if let Some(max) =
+                    env_parse::<usize>("SOLAND_DB_POOL_MAX_SIZE").filter(|n| *n > 0)
+                {
+                    builder = builder.max_size(max);
+                }
+                if let Some(secs) =
+                    env_parse::<u64>("SOLAND_DB_POOL_ACQUIRE_TIMEOUT_SECS").filter(|n| *n > 0)
+                {
+                    builder = builder
+                        .wait_timeout(Some(Duration::from_secs(secs)))
+                        .runtime(Runtime::Tokio1);
+                }
+                let pool = builder.build()?;
                 run_migrations(&url).await?;
                 migrations_applied_flag().store(true, Ordering::Release);
                 Some(pool)
@@ -64,6 +84,10 @@ impl Db {
             })
             .unwrap_or(0)
     }
+}
+
+fn env_parse<T: std::str::FromStr>(name: &str) -> Option<T> {
+    std::env::var(name).ok()?.trim().parse::<T>().ok()
 }
 
 async fn run_migrations(database_url: &str) -> anyhow::Result<()> {

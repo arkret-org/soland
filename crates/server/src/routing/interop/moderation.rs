@@ -796,7 +796,7 @@ pub(crate) async fn moderation_report_visible_to_actor(
     report: &Value,
     actor: &str,
 ) -> bool {
-    if state.config.is_admin_principal(actor) {
+    if state.is_admin_principal(actor) {
         return true;
     }
     match report_realm_id(report) {
@@ -814,7 +814,7 @@ async fn moderation_routing_visible_to_actor(
     realm_id: &str,
     actor: &str,
 ) -> bool {
-    if state.config.is_admin_principal(actor) {
+    if state.is_admin_principal(actor) {
         return true;
     }
     let owner = state

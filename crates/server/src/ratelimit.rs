@@ -144,6 +144,16 @@ impl RateLimiterConfig {
         self
     }
 
+    /// Ceiling for a request class under these ceilings.
+    fn ceiling_for(&self, class: EndpointClass) -> u32 {
+        match class {
+            EndpointClass::Probe => self.probe_max_requests,
+            EndpointClass::Auth => self.auth_max_requests,
+            EndpointClass::Api => self.api_max_requests,
+            EndpointClass::Other => self.max_requests,
+        }
+    }
+
     /// The advertised `rate_limit_policy` for the `describe` wire surface,
     /// derived from the SAME ceilings the middleware enforces. Entries are
     /// ordered most-specific-first, mirroring [`EndpointClass::classify`]; the
@@ -246,15 +256,6 @@ impl RateLimiter {
         }
     }
 
-    fn ceiling_for(&self, class: EndpointClass) -> u32 {
-        match class {
-            EndpointClass::Probe => self.config.probe_max_requests,
-            EndpointClass::Auth => self.config.auth_max_requests,
-            EndpointClass::Api => self.config.api_max_requests,
-            EndpointClass::Other => self.config.max_requests,
-        }
-    }
-
     /// Check if a request is allowed for the given key.
     /// Returns true if allowed, false if rate limited.
     pub fn check(&self, key: &str) -> bool {
@@ -262,11 +263,19 @@ impl RateLimiter {
     }
 
     fn check_with_ceiling(&self, key: &str, ceiling: u32) -> bool {
+        self.check_with_ceiling_window(key, ceiling, self.config.window)
+    }
+
+    /// Sliding-window check against an explicit ceiling **and** window. The
+    /// rate-limiter middleware passes the live (hot-swappable) window/ceiling
+    /// from `RuntimeSettings` here so quota changes take effect immediately;
+    /// the shared counter map is unaffected by the source of the window.
+    fn check_with_ceiling_window(&self, key: &str, ceiling: u32, window: Duration) -> bool {
         let mut state = self.state.lock().expect("rate limiter lock");
         let now = Instant::now();
 
         if let Some((count, window_start)) = state.get_mut(key)
-            && now.duration_since(*window_start) < self.config.window
+            && now.duration_since(*window_start) < window
         {
             if *count >= ceiling {
                 return false;
@@ -282,16 +291,18 @@ impl RateLimiter {
 
     /// Remaining time in the current window for a key.
     pub fn retry_after(&self, key: &str) -> Duration {
+        self.retry_after_window(key, self.config.window)
+    }
+
+    /// [`Self::retry_after`] against an explicit window (the live window from
+    /// `RuntimeSettings`).
+    fn retry_after_window(&self, key: &str, window: Duration) -> Duration {
         let state = self.state.lock().expect("rate limiter lock");
         let now = Instant::now();
         state
             .get(key)
-            .and_then(|(_, window_start)| {
-                self.config
-                    .window
-                    .checked_sub(now.duration_since(*window_start))
-            })
-            .unwrap_or(self.config.window)
+            .and_then(|(_, window_start)| window.checked_sub(now.duration_since(*window_start)))
+            .unwrap_or(window)
     }
 
     /// Clean up expired entries.
@@ -360,10 +371,23 @@ impl Handler for RateLimiterMiddleware {
         // credential-stuffing prohibitively slow.
         let class = EndpointClass::classify(req.uri().path());
         let key = format!("{}:{}", rate_limit_peer_key(req), class.label());
-        let ceiling = self.limiter.ceiling_for(class);
+        // Live ceilings/window from the runtime overlay (hot-swappable via the
+        // admin settings endpoint). `affix_state::inject(state)` runs before
+        // this hoop, so `AppState` is always in the depot; the fallback to the
+        // limiter's boot config only matters in unit tests that exercise the
+        // middleware without injected state.
+        let effective = depot
+            .obtain::<crate::state::AppState>()
+            .ok()
+            .map(|state| state.settings().rate_limit.to_limiter_config())
+            .unwrap_or_else(|| self.limiter.config.clone());
+        let ceiling = effective.ceiling_for(class);
 
-        if !self.limiter.check_with_ceiling(&key, ceiling) {
-            let retry_after = self.limiter.retry_after(&key);
+        if !self
+            .limiter
+            .check_with_ceiling_window(&key, ceiling, effective.window)
+        {
+            let retry_after = self.limiter.retry_after_window(&key, effective.window);
             let retry_after_ms = retry_after.as_millis().try_into().unwrap_or(u64::MAX);
             let retry_after_seconds = retry_after_ms.div_ceil(1000).max(1);
             let request_id = crate::ids::generate_request_id();
@@ -433,7 +457,6 @@ mod tests {
         // advertised entry's ceiling MUST equal what the middleware enforces
         // for a request matching that endpoint's class.
         let config = RateLimiterConfig::default();
-        let limiter = RateLimiter::new(config.clone());
         let policy = config.advertised_policy();
         assert!(!policy.entries.is_empty());
 
@@ -448,7 +471,7 @@ mod tests {
                 "/_soland/gate/auth/*" => "/_soland/gate/auth/dev-login",
                 literal => literal,
             };
-            let enforced = limiter.ceiling_for(EndpointClass::classify(concrete));
+            let enforced = config.ceiling_for(EndpointClass::classify(concrete));
             assert_eq!(
                 advertised, enforced,
                 "advertised ceiling for `{endpoint}` drifted from enforcement",

@@ -2,7 +2,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::{DateTime, SecondsFormat, Utc};
 use cokret_sdk::http::{EventsQueryOutcome, EventsResolveOutcome, EventsResolveRequestBody};
-use cokret_sdk::{Did, EventId, EventsQueryPostRequestBody, Hash, RealmId, canonical};
+use cokret_sdk::{
+    Did, EventId, EventsFrontierFederationPeerState, EventsQueryPostRequestBody, RealmId, canonical,
+};
 use salvo::http::StatusCode;
 use salvo::prelude::*;
 use serde::Serialize;
@@ -38,20 +40,6 @@ struct PeerEventsDescribeLimits {
     max_batch_size: usize,
     max_query_limit: usize,
     max_resolve: usize,
-}
-
-#[derive(Debug, Serialize, ToSchema)]
-struct PeerEventsFrontierOutcome {
-    realm_id: RealmId,
-    heads: Vec<EventId>,
-    frontier_root: Hash,
-    actor_seq_upper_bounds: BTreeMap<Did, u64>,
-    witness_receipts: Vec<Value>,
-    observed_at: String,
-    issuer: Did,
-    signature: Value,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    max_hlc: Option<String>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -274,7 +262,7 @@ async fn peer_events_resolve(
 async fn peer_events_frontier(
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<PeerEventsFrontierOutcome> {
+) -> JsonResult<EventsFrontierFederationPeerState> {
     let state = depot.obtain::<AppState>().expect("state injected");
     validate_peer_request(state, req, None).await?;
     let source_service_did = source_service_did_from_request(req)?;
@@ -361,7 +349,7 @@ async fn peer_events_frontier(
         state.notary_signing_key().as_ref(),
     )
     .map_err(|error| AppError::internal(format!("frontier signature: {error}")))?;
-    json_ok(PeerEventsFrontierOutcome {
+    json_ok(EventsFrontierFederationPeerState {
         realm_id,
         heads: typed_heads,
         frontier_root,

@@ -224,7 +224,7 @@ async fn list_member_applications(
     // Fail-closed unless the candidate join-policy profile is declared:
     // surface a canonical 404 so the candidate read surface is indistinguishable
     // from an unrecognised endpoint when the profile is off.
-    if !state.config.candidate_join_policy_enabled {
+    if !state.settings().candidate_join_policy_enabled {
         return Err(AppError::not_found("unrecognized_endpoint"));
     }
     let session = aa.authenticated_session(state, req).await?;

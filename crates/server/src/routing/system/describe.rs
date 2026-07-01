@@ -131,7 +131,7 @@ async fn health(depot: &mut Depot, res: &mut Response) -> JsonResult<HealthOutco
         }),
         development_mode: state.config.development_mode,
         proof_verifier_mode: state.config.proof_verifier_mode(),
-        admin_auth_mode: state.config.admin_auth_mode(),
+        admin_auth_mode: state.admin_auth_mode(),
         hardening: state.config.hardening_status(),
     })
 }
@@ -261,7 +261,7 @@ async fn soland_describe(depot: &mut Depot) -> JsonResult<SolandServerDescribeOu
         service,
         unsupported_profiles,
         proof_verifier_mode: state.config.proof_verifier_mode().to_owned(),
-        admin_auth_mode: state.config.admin_auth_mode().to_owned(),
+        admin_auth_mode: state.admin_auth_mode().to_owned(),
         erasure_receipts_endpoint: "/_soland/admin/audit/erasure-receipts".to_owned(),
         hardening: state.config.hardening_status(),
     })
@@ -296,6 +296,16 @@ fn build_server_description(state: &AppState) -> ServerDescription {
         state.config.to_device_queue_capacity,
     );
     description.receive_policy_constraints = state.config.receive_policy_constraints.clone();
+    // Advertise the LIVE rate-limit ceilings (from the runtime overlay, which
+    // the middleware also enforces) rather than the boot-config defaults, so
+    // the advertised==enforced invariant holds after an admin hot-swap.
+    description.rate_limit_policy = Some(
+        state
+            .settings()
+            .rate_limit
+            .to_limiter_config()
+            .advertised_policy(),
+    );
     // T6.1 — claim-level partition of the describe response.
     // See cokret-spec/spec/v1/zh/sync/service-surface.md §3.0 and
     // `ck.schema.service_describe.v1`. `supported_operations` is

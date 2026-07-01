@@ -1105,7 +1105,7 @@ async fn account_viewer(
 
     let primary_handle_claim = account_primary_handle_claim(state, &account).await;
     let profile = Some(actor_profile_from_account(&account, None, None)?);
-    let is_server_admin = state.config.is_admin_principal(&session.actor);
+    let is_server_admin = state.is_admin_principal(&session.actor);
     json_ok(AccountView {
         principal_id,
         state: state.account_lifecycle_status(&account.did),

@@ -6,7 +6,6 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use ed25519_dalek::Signer as _;
 use reqwest::header::{HeaderMap, HeaderValue};
-use serde_json::Value;
 
 use crate::persistence::FEDERATION_FRONTIER_STATUS_STALE_PEER;
 use crate::state::{AppState, CanonicalEventRecord};
@@ -148,8 +147,9 @@ impl FrontierExchangeWorker {
         if !status.is_success() {
             return Err(format!("http_status:{}", status.as_u16()));
         }
-        let value: Value = serde_json::from_str(&body).map_err(|_| "bad_json".to_owned())?;
-        validate_frontier_response(&value, peer_did, realm_id)
+        let state: cokret_sdk::EventsFrontierFederationPeerState =
+            serde_json::from_str(&body).map_err(|_| "bad_json".to_owned())?;
+        validate_frontier_response(&state, peer_did, realm_id)
     }
 
     async fn record_failure(
@@ -321,25 +321,20 @@ fn local_frontier_root(records: &[CanonicalEventRecord], realm_id: &str) -> Resu
 }
 
 fn validate_frontier_response(
-    value: &Value,
+    state: &cokret_sdk::EventsFrontierFederationPeerState,
     peer_did: &str,
     realm_id: &str,
 ) -> Result<String, String> {
-    if value.get("realm_id").and_then(Value::as_str) != Some(realm_id) {
+    if state.realm_id.as_str() != realm_id {
         return Err("realm_id_mismatch".to_owned());
     }
-    if value.get("issuer").and_then(Value::as_str) != Some(peer_did) {
+    if state.issuer.as_str() != peer_did {
         return Err("issuer_mismatch".to_owned());
     }
-    let Some(frontier_root) = value.get("frontier_root").and_then(Value::as_str) else {
-        return Err("frontier_root_missing".to_owned());
-    };
-    cokret_sdk::Hash::new(frontier_root.to_owned())
-        .map_err(|_| "frontier_root_invalid".to_owned())?;
-    if !value.get("signature").is_some_and(Value::is_object) {
+    if !state.signature.is_object() {
         return Err("signature_missing".to_owned());
     }
-    Ok(frontier_root.to_owned())
+    Ok(state.frontier_root.to_string())
 }
 
 pub async fn inbound_peer_is_stale(
@@ -366,13 +361,17 @@ mod tests {
     fn frontier_response_validation_requires_bound_peer_and_realm() {
         let body = serde_json::json!({
             "realm_id": "ck:realm:01904100-0000-7000-8000-000000000001",
+            "heads": [],
             "issuer": "did:web:peer.example",
             "frontier_root": format!("sha256:{}", "a".repeat(64)),
+            "observed_at": "2026-01-01T00:00:00Z",
             "signature": {}
         });
+        let state: cokret_sdk::EventsFrontierFederationPeerState =
+            serde_json::from_value(body).expect("valid peer state fixture");
         assert!(
             validate_frontier_response(
-                &body,
+                &state,
                 "did:web:peer.example",
                 "ck:realm:01904100-0000-7000-8000-000000000001"
             )
@@ -380,7 +379,7 @@ mod tests {
         );
         assert_eq!(
             validate_frontier_response(
-                &body,
+                &state,
                 "did:web:other.example",
                 "ck:realm:01904100-0000-7000-8000-000000000001"
             )

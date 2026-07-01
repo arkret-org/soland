@@ -51,7 +51,7 @@ async fn well_known_cokret(depot: &mut Depot) -> JsonResult<WellKnownCokretOutco
     // federation policy advertised to peers. The body is deliberately
     // stable + minimal so cache/proxy layers can serve it without
     // re-validating on every request.
-    let policy = match state.config.federation_policy {
+    let policy = match state.settings().federation_policy {
         crate::config::FederationPolicy::Mesh => "mesh",
         crate::config::FederationPolicy::Hub => "hub",
     };

@@ -20,34 +20,18 @@ use cokret_sdk::RealmId;
 use salvo::http::StatusCode;
 use salvo::oapi::extract::PathParam;
 use salvo::prelude::*;
-use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+// Shared wire DTOs live in `soland-core` so producer (this server) and
+// consumer (sodmin) cannot drift. `CoveredSealsSnapshot` is the describe
+// response; `CoveredSealsAdvanceOutcome` is the override response.
+use soland_core::admin::covered_seals::{
+    CoveredSealsAdvanceOutcome, CoveredSealsSnapshot as CoveredSealsSnapshotOutcome,
+};
 
 use super::{AuthArgs, append_audit_log, require_admin_principal};
 use crate::error::AppError;
 use crate::state::AppState;
 use crate::{JsonResult, app_error, json_ok};
-
-/// Snapshot returned by the covered-seals describe endpoint. Mirrors
-/// sodmin's `CoveredSealsSnapshot`.
-#[derive(Clone, Debug, Default, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub(super) struct CoveredSealsSnapshotOutcome {
-    pub realm_id: String,
-    pub mls_epoch: u64,
-    pub governance_seals: Vec<String>,
-    pub covered_seals: Vec<String>,
-    pub latest_seal_id: Option<String>,
-    pub last_covered_at: Option<String>,
-}
-
-/// Response from the advance override. Mirrors sodmin's
-/// `CoveredSealsAdvanceOutcome`.
-#[derive(Clone, Debug, Default, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub(super) struct CoveredSealsAdvanceOutcome {
-    pub realm_id: String,
-    pub lag_count: u64,
-    pub control_move_id: Option<String>,
-}
 
 pub(super) fn router() -> Router {
     Router::with_path("realms/{realm_id}/mls/covered-seals")

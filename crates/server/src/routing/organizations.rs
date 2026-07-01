@@ -303,7 +303,7 @@ async fn upsert_organization(
     // Registering an organization (a verified, listable org-principal record) is
     // a deployment-governance act, gated to the server's configured admin
     // principals — not every authenticated user may mint organizations.
-    if !state.config.is_admin_principal(&session.actor) {
+    if !state.is_admin_principal(&session.actor) {
         return Err(AppError::capability_denied(
             "organization registry write requires a server administrator",
         ));
