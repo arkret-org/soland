@@ -563,7 +563,7 @@ pub use cokret_sdk::models::{
 };
 pub use cokret_sdk::{
     CallMediaParticipantBinding, CallMediaServiceSignature, CallMediaTokenExchangeOutcome,
-    IdentityLogOutcome, IdentityReceiptsOutcome, KeysBackupsPutRequestBody,
+    IdentityLogListOutcome, IdentityReceiptListOutcome, KeysBackupsPutRequestBody,
 };
 
 // Recovery policy / receipt endpoints validate against the spec REC-1 shapes in

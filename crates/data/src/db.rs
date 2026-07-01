@@ -37,8 +37,7 @@ impl Db {
                 // exhausted. Unset falls back to deadpool defaults
                 // (max_size = cpu_count * 4, no wait timeout).
                 let mut builder = Pool::builder(manager);
-                if let Some(max) =
-                    env_parse::<usize>("SOLAND_DB_POOL_MAX_SIZE").filter(|n| *n > 0)
+                if let Some(max) = env_parse::<usize>("SOLAND_DB_POOL_MAX_SIZE").filter(|n| *n > 0)
                 {
                     builder = builder.max_size(max);
                 }

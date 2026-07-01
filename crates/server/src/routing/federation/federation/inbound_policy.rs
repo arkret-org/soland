@@ -182,10 +182,10 @@ fn enforce_realm_federation_policy(
     // not spec-registered and fails closed.
     match policy.as_str() {
         "open" => Ok(()),
-        "closed" => Err(AppError::capability_denied(
-            "realm federation_policy forbids federation",
-        )
-        .with_wire_code("realm_federation_policy_closed")),
+        "closed" => Err(
+            AppError::capability_denied("realm federation_policy forbids federation")
+                .with_wire_code("realm_federation_policy_closed"),
+        ),
         "quarantine" => Err(AppError::capability_denied(
             "realm federation_policy is quarantine; live federation is blocked",
         )

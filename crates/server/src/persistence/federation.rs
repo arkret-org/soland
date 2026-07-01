@@ -836,7 +836,8 @@ impl FederationOperationsStore for PgFederationOperationsStore {
             .ok()
             .and_then(|v| v.as_str().map(ToOwned::to_owned))
             .unwrap_or_else(|| "create".to_owned());
-        let operation_id_uuid = ids::typed_uuid_part_expect_internal(operation.operation_id.as_str());
+        let operation_id_uuid =
+            ids::typed_uuid_part_expect_internal(operation.operation_id.as_str());
         let realm_id_uuid = ids::typed_uuid_part_expect_internal(operation.realm_id.as_str());
         sql_query(
             "INSERT INTO federation_operations \

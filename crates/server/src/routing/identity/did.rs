@@ -36,7 +36,7 @@ use super::{append_audit_log, bearer_token, now, render_error, sha256_hex, valid
 use crate::error::{AppError, ErrorCode};
 use crate::result::{JsonResult, json_ok};
 use crate::state::{AppState, WebvhDocumentRecord, WebvhLogRecord};
-use crate::wire::{IdentityLogOutcome, IdentityReceiptsOutcome, IdentityResolveRequestBody};
+use crate::wire::{IdentityLogListOutcome, IdentityReceiptListOutcome, IdentityResolveRequestBody};
 
 const WEBVH_SCID_PLACEHOLDER: &str = "{SCID}";
 const WEBVH_METHOD_VERSION: &str = "did:webvh:1.0";

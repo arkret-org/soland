@@ -533,10 +533,9 @@ impl AppState {
 
         // Seed the mutable overlay from boot config; `hydrate` overlays the
         // persisted `server_settings` row on top if one exists.
-        let initial_settings =
-            Arc::new(ArcSwap::from_pointee(crate::runtime_settings::RuntimeSettings::from_config(
-                &config,
-            )));
+        let initial_settings = Arc::new(ArcSwap::from_pointee(
+            crate::runtime_settings::RuntimeSettings::from_config(&config),
+        ));
 
         Self {
             config,
@@ -744,7 +743,8 @@ impl AppState {
             proj.strands.extend(proj_updates.strands);
             proj.morphs.extend(proj_updates.morphs);
             proj.mls_key_packages.extend(proj_updates.mls_key_packages);
-            proj.mls_commit_epochs.extend(proj_updates.mls_commit_epochs);
+            proj.mls_commit_epochs
+                .extend(proj_updates.mls_commit_epochs);
             proj.replay_resolved_pending(&self.hlc);
         }
 
@@ -2052,8 +2052,9 @@ fn normalize_persisted_realm_id(id: &str) -> String {
 
 #[cfg(test)]
 mod membership_hydration_tests {
-    use super::*;
     use cokret_sdk::{Did, RealmId};
+
+    use super::*;
 
     fn member_state_event(realm_id: &str, member: &str, membership: &str) -> CanonicalEventRecord {
         CanonicalEventRecord {
@@ -2160,7 +2161,9 @@ mod membership_hydration_tests {
     // commit is rejected for "no genesis").
     #[tokio::test]
     async fn mls_projections_rehydrate_from_durable_stores() {
-        use crate::persistence::{MlsKeyPackageRow, PersistenceStore, SolandMemoryPersistenceStore};
+        use crate::persistence::{
+            MlsKeyPackageRow, PersistenceStore, SolandMemoryPersistenceStore,
+        };
 
         let realm_id = "ck:realm:019f0dd3-081c-7f03-b388-e0399e7759fc";
         let group_id = "ck:mls_group:019f0dd3-aaaa";
@@ -2192,8 +2195,7 @@ mod membership_hydration_tests {
             .expect("put keypackage");
 
         let effective_scope = serde_json::json!({ "kind": "realm", "realm_id": realm_id });
-        let governance_binding =
-            serde_json::json!({ "policy_root": "sha256:locked-root" });
+        let governance_binding = serde_json::json!({ "policy_root": "sha256:locked-root" });
         store
             .mls_commits()
             .initialize_genesis(

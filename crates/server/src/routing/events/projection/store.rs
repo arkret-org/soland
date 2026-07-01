@@ -320,7 +320,8 @@ pub async fn persist_projected_operation(
         // rather than panic the request task.
         let event_id_uuid = ids::typed_uuid_part_or_schema_violation(&event_id)?;
         let realm_id_uuid = ids::typed_uuid_part_expect_internal(operation.realm_id.as_str());
-        let operation_id_uuid = ids::typed_uuid_part_expect_internal(operation.operation_id.as_str());
+        let operation_id_uuid =
+            ids::typed_uuid_part_expect_internal(operation.operation_id.as_str());
         sql_query(
                 "INSERT INTO events (id, realm_id, event_type, sender_id, thread_id, operation_id, payload, created_at) \
                  VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
@@ -354,7 +355,8 @@ pub async fn persist_projected_operation(
             }
         });
         let realm_id_uuid = ids::typed_uuid_part_expect_internal(operation.realm_id.as_str());
-        let operation_id_uuid = ids::typed_uuid_part_expect_internal(operation.operation_id.as_str());
+        let operation_id_uuid =
+            ids::typed_uuid_part_expect_internal(operation.operation_id.as_str());
         if title.is_some() {
             sql_query(
                     "INSERT INTO spaces (id, title, summary, owner_id, discoverability, payload, created_at, updated_at) \

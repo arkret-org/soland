@@ -79,10 +79,10 @@ pub(super) use endpoints::{
     federation_pull_operations, federation_push_operations, federation_realm_members,
     federation_seals_pull, federation_seals_push, federation_transaction, federation_verify_actor,
 };
+pub(super) use inbound_policy::ensure_private_inbound_write_rail_local;
 // Local inbound write-rail guard, used by the parent module's Move/Seal
 // ingest handlers (`super::federation::ensure_private_inbound_write_rail_local`).
 pub(crate) use inbound_policy::federation_actor_origin_acceptable;
-pub(super) use inbound_policy::ensure_private_inbound_write_rail_local;
 pub(crate) use outbound::configured_peer_targets;
 #[cfg(test)]
 pub(crate) use outbound::test_app_state_with_peers;

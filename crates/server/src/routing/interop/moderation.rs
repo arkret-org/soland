@@ -1646,10 +1646,7 @@ mod report_safety_tests {
         let error = validate_moderation_franking_proof(&state, REALM, &proof)
             .await
             .unwrap_err();
-        assert_eq!(
-            error.wire_code(),
-            cokret_sdk::error::REASON_PROOF_INVALID
-        );
+        assert_eq!(error.wire_code(), cokret_sdk::error::REASON_PROOF_INVALID);
     }
 
     #[tokio::test]
@@ -1660,10 +1657,7 @@ mod report_safety_tests {
         let error = validate_moderation_franking_proof(&state, REALM, &proof)
             .await
             .unwrap_err();
-        assert_eq!(
-            error.wire_code(),
-            cokret_sdk::error::REASON_PROOF_INVALID
-        );
+        assert_eq!(error.wire_code(), cokret_sdk::error::REASON_PROOF_INVALID);
     }
 
     #[test]

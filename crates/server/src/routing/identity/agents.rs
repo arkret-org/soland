@@ -31,16 +31,16 @@ use std::collections::BTreeSet;
 
 use chrono::SecondsFormat;
 use cokret_sdk::models::{
-    AgentDeactivateRequestBody, AgentDiscoverOutcome, AgentDiscoverRequestBody,
-    AgentGrantAttachOutcome, AgentGrantAttachRequestBody, AgentGrantDetachOutcome,
-    AgentKeyPairOutcome, AgentKeyPairRequestBody, AgentLifecycleOutcome, AgentLifecycleState,
-    AgentList, AgentParticipation, AgentParticipationEntry,
+    AgentDeactivateRequestBody, AgentGrantAttachOutcome, AgentGrantAttachRequestBody,
+    AgentGrantDetachOutcome, AgentKeyPairOutcome, AgentKeyPairRequestBody, AgentLifecycleOutcome,
+    AgentLifecycleState, AgentList, AgentParticipation, AgentParticipationEntry,
     AgentParticipationOutcome as AgentParticipationResBody, AgentParticipationScope,
     AgentParticipationSetRequestBody as AgentParticipationSetReqBody, AgentPauseRequestBody,
-    AgentProvisionOutcome, AgentProvisionRequestBody, AgentResumeRequestBody,
-    AgentRotateKeyOutcome, AgentRotateKeyRequestBody, AgentSidecarContextRef,
-    AgentSidecarExposureAck, AgentSidecarThreadEnsureOutcome, AgentSidecarThreadEnsureRequestBody,
-    AgentView, effective_participation, validate_agent_slug, validate_selection_within_ceiling,
+    AgentProtocolDiscoverOutcome, AgentProtocolDiscoverRequestBody, AgentProvisionOutcome,
+    AgentProvisionRequestBody, AgentResumeRequestBody, AgentRotateKeyOutcome,
+    AgentRotateKeyRequestBody, AgentSidecarContextRef, AgentSidecarExposureAck,
+    AgentSidecarThreadEnsureOutcome, AgentSidecarThreadEnsureRequestBody, AgentView,
+    effective_participation, validate_agent_slug, validate_selection_within_ceiling,
 };
 use cokret_sdk::{
     CircleId, Did, EventId, GrantId, Operation, OperationId, RealmId, RelationId, StrandId,
@@ -213,10 +213,9 @@ fn generate_agent_principal_did(service_did: &str) -> String {
         "host": host,
         "path": format!("webvh:agent:{agent_uuid}"),
     });
-    let scid = crate::routing::identity::webvh_validation::derive_webvh_scid_from_skeleton(
-        &skeleton,
-    )
-    .unwrap_or_else(|_| agent_uuid.simple().to_string());
+    let scid =
+        crate::routing::identity::webvh_validation::derive_webvh_scid_from_skeleton(&skeleton)
+            .unwrap_or_else(|_| agent_uuid.simple().to_string());
     format!("did:webvh:{scid}:{host}:webvh:agent:{agent_uuid}")
 }
 
@@ -931,10 +930,10 @@ const AGENT_ADAPTER_REGISTRY_IDS: [&str; 4] = ["a2a", "acp", "mcp_bridge", "http
 #[tracing::instrument(skip_all, fields(op = "ck.self.agent.protocol.query.discover"))]
 async fn discover_agent_endpoint(
     aa: AuthArgs,
-    body: JsonBody<AgentDiscoverRequestBody>,
+    body: JsonBody<AgentProtocolDiscoverRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<AgentDiscoverOutcome> {
+) -> JsonResult<AgentProtocolDiscoverOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     // Any authenticated principal may probe the public agent endpoint
     // registry; the discover surface returns only the projection of an
@@ -962,7 +961,7 @@ async fn discover_agent_endpoint(
         .filter(|p| AGENT_ADAPTER_REGISTRY_IDS.contains(&p.as_str()))
         .cloned()
         .collect();
-    json_ok(AgentDiscoverOutcome {
+    json_ok(AgentProtocolDiscoverOutcome {
         agent_id: body.agent_id,
         supported_protocols,
         agent_card_url: projection.agent_card_url,

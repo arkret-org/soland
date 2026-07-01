@@ -884,7 +884,7 @@ pub(crate) async fn identity_did_document(
 pub(crate) async fn identity_log(
     did: salvo::oapi::extract::QueryParam<String, true>,
     depot: &mut Depot,
-) -> JsonResult<IdentityLogOutcome> {
+) -> JsonResult<IdentityLogListOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let did = did.into_inner();
     if validate_did(&did).is_err() {
@@ -907,7 +907,7 @@ pub(crate) async fn identity_log(
             })
         })
         .collect();
-    json_ok(IdentityLogOutcome {
+    json_ok(IdentityLogListOutcome {
         events,
         next_cursor: None,
         has_more: false,
@@ -923,7 +923,7 @@ pub(crate) async fn identity_log(
 pub(crate) async fn identity_receipts(
     did: salvo::oapi::extract::QueryParam<String, true>,
     depot: &mut Depot,
-) -> JsonResult<IdentityReceiptsOutcome> {
+) -> JsonResult<IdentityReceiptListOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let did = did.into_inner();
     if validate_did(&did).is_err() {
@@ -936,7 +936,7 @@ pub(crate) async fn identity_receipts(
         .await
         .ok()
         .flatten();
-    json_ok(IdentityReceiptsOutcome {
+    json_ok(IdentityReceiptListOutcome {
         receipts: record
             .map(|record| {
                 vec![json!({

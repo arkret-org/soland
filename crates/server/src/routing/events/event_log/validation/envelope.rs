@@ -2463,7 +2463,8 @@ mod control_move_seal_basis_tests {
         assert!(is_realm_bootstrap_followup_kind(
             cokret_sdk::events::kinds::REALM_HISTORY_SHARING_POLICY
         ));
-        let obj = control_move_with_effects(cokret_sdk::events::kinds::REALM_HISTORY_SHARING_POLICY);
+        let obj =
+            control_move_with_effects(cokret_sdk::events::kinds::REALM_HISTORY_SHARING_POLICY);
         // As a recognized bootstrap followup it passes without seal_basis…
         validate_control_move_seal_basis(&obj, true).unwrap();
         // …but a non-bootstrap effects-bearing Control Move still requires it.

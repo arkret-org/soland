@@ -220,11 +220,11 @@ async fn events_subscribe_emits_close_heartbeat_at_deadline() {
 /// which accepts ANY string in `cursor` and so never exercised the typed
 /// contract — that was the blind spot. This test:
 ///   1. seeds a durable history event,
-///   2. subscribes with `include_history=true` and asserts every line parses as
-///      the typed frame (this is what the raw-`event_id` bug broke),
+///   2. subscribes with `include_history=true` and asserts every line parses as the typed frame
+///      (this is what the raw-`event_id` bug broke),
 ///   3. asserts `catchup_complete` carries a real `ck:cursor:` token, and
-///   4. feeds that token back as `after` and asserts the history event is NOT
-///      replayed (the cursor actually advances — no duplicates).
+///   4. feeds that token back as `after` and asserts the history event is NOT replayed (the cursor
+///      actually advances — no duplicates).
 #[tokio::test]
 async fn events_subscribe_frames_are_sdk_typed_and_cursor_advances() {
     let state = AppState::new(test_config(), Db { pool: None });
@@ -268,8 +268,10 @@ async fn events_subscribe_frames_are_sdk_typed_and_cursor_advances() {
         .filter(|line| !line.trim().is_empty())
         .map(|line| {
             serde_json::from_str(line).unwrap_or_else(|err| {
-                panic!("subscribe frame must parse as the typed SDK EventsSubscribeFrame \
-                        (a raw event_id in `cursor` regresses this): {err}; line={line}")
+                panic!(
+                    "subscribe frame must parse as the typed SDK EventsSubscribeFrame \
+                        (a raw event_id in `cursor` regresses this): {err}; line={line}"
+                )
             })
         })
         .collect();

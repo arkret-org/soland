@@ -21,7 +21,10 @@ use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
-use cokret_sdk::SessionGrantIntrospection;
+use cokret_sdk::{
+    SessionGrantIntrospectOutcome, SessionGrantIntrospectRequestBody, SessionGrantIntrospectStatus,
+    SessionGrantIntrospection,
+};
 use salvo::http::StatusCode;
 use salvo::prelude::Request;
 
@@ -76,6 +79,58 @@ fn cache_grant(token_hash: String, grant: SessionGrantIntrospection) {
 
 fn prune_cache_locked(cache: &mut HashMap<String, CacheEntry>, now: Instant) {
     cache.retain(|_, entry| now.duration_since(entry.inserted_at) < INTROSPECTION_CACHE_TTL);
+}
+
+fn session_grant_status_wire(status: SessionGrantIntrospectStatus) -> String {
+    serde_json::to_value(status)
+        .ok()
+        .and_then(|value| value.as_str().map(str::to_owned))
+        .unwrap_or_else(|| "unknown".to_owned())
+}
+
+fn admin_grant_from_introspection_outcome(
+    outcome: SessionGrantIntrospectOutcome,
+) -> Result<SessionGrantIntrospection, AppError> {
+    if !outcome.active || outcome.status != SessionGrantIntrospectStatus::Active {
+        return Err(AppError::new(
+            ErrorCode::CapabilityDenied,
+            format!(
+                "admin scope introspection returned inactive grant: {}",
+                session_grant_status_wire(outcome.status)
+            ),
+        )
+        .with_status(StatusCode::FORBIDDEN));
+    }
+
+    let grant = outcome.grant.ok_or_else(|| {
+        AppError::new(
+            ErrorCode::CapabilityDenied,
+            "admin scope introspection omitted grant metadata".to_owned(),
+        )
+        .with_status(StatusCode::FORBIDDEN)
+    })?;
+    let principal_id = cokret_sdk::Did::new(grant.subject.clone()).map_err(|error| {
+        AppError::new(
+            ErrorCode::CapabilityDenied,
+            format!("admin scope introspection returned invalid subject DID: {error}"),
+        )
+        .with_status(StatusCode::FORBIDDEN)
+    })?;
+
+    Ok(SessionGrantIntrospection {
+        active: true,
+        principal_id,
+        admin_scopes: grant.scopes,
+        expires_at_unix: Some(grant.expires_at.timestamp()),
+        device_id: grant
+            .device_id
+            .map(|device_id| device_id.as_str().to_owned()),
+        audit_context: serde_json::json!({
+            "source": "ck.gate.account.command.introspect_session_grant",
+            "grant_id": grant.id.as_str(),
+            "audience": grant.audience,
+        }),
+    })
 }
 
 /// Pull the raw bearer token from the request's `Authorization` header.
@@ -155,6 +210,12 @@ pub(crate) async fn introspect_admin_scopes(
         )
         .with_status(StatusCode::UNAUTHORIZED)
     })?;
+    let request = SessionGrantIntrospectRequestBody {
+        id: None,
+        grant_jwt: Some(token),
+        audience: Some(state.config.service_did.clone()),
+        proof: None,
+    };
     let bearer = state
         .config
         .session_grant_introspection_bearer
@@ -179,7 +240,7 @@ pub(crate) async fn introspect_admin_scopes(
     let response = client
         .post(url)
         .bearer_auth(bearer)
-        .json(&serde_json::json!({ "token": token, "audience": state.config.service_did }))
+        .json(&request)
         .send()
         .await
         .map_err(|error| {
@@ -198,8 +259,8 @@ pub(crate) async fn introspect_admin_scopes(
         )
         .with_status(StatusCode::FORBIDDEN));
     }
-    let grant = response
-        .json::<SessionGrantIntrospection>()
+    let outcome = response
+        .json::<SessionGrantIntrospectOutcome>()
         .await
         .map_err(|error| {
             AppError::new(
@@ -207,6 +268,7 @@ pub(crate) async fn introspect_admin_scopes(
                 format!("invalid admin scope introspection response: {error}"),
             )
         })?;
+    let grant = admin_grant_from_introspection_outcome(outcome)?;
 
     let now_unix = chrono::Utc::now().timestamp();
     if !grant.is_currently_active(now_unix) {

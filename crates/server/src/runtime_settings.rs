@@ -312,13 +312,17 @@ mod tests {
     #[test]
     fn apply_key_is_a_partial_override() {
         let mut settings = sample();
-        settings.apply_key(
-            keys::ADMIN_PRINCIPAL_DIDS,
-            serde_json::json!(["did:web:a", "did:web:b"]),
-        )
-        .expect("apply admin dids");
+        settings
+            .apply_key(
+                keys::ADMIN_PRINCIPAL_DIDS,
+                serde_json::json!(["did:web:a", "did:web:b"]),
+            )
+            .expect("apply admin dids");
         // Only the targeted field changed.
-        assert_eq!(settings.admin_principal_dids, vec!["did:web:a", "did:web:b"]);
+        assert_eq!(
+            settings.admin_principal_dids,
+            vec!["did:web:a", "did:web:b"]
+        );
         assert_eq!(settings.federation_policy, FederationPolicy::Hub);
         assert!(settings.candidate_join_policy_enabled);
     }
@@ -348,7 +352,10 @@ mod tests {
         assert!(settings.apply_key("nope", serde_json::json!(1)).is_err());
         assert!(
             settings
-                .apply_key(keys::CANDIDATE_JOIN_POLICY_ENABLED, serde_json::json!("yes"))
+                .apply_key(
+                    keys::CANDIDATE_JOIN_POLICY_ENABLED,
+                    serde_json::json!("yes")
+                )
                 .is_err(),
             "a string is not a bool"
         );
@@ -375,7 +382,10 @@ mod tests {
                 },
             };
             fresh.apply_key(key, value).expect("apply key back");
-            assert_eq!(fresh.key_value(key).unwrap(), settings.key_value(key).unwrap());
+            assert_eq!(
+                fresh.key_value(key).unwrap(),
+                settings.key_value(key).unwrap()
+            );
         }
     }
 }

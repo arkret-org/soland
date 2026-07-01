@@ -18,11 +18,11 @@ mod types;
 mod inbound_signature_tests;
 
 pub(in crate::routing::extensions) use endpoints::{protocol_router, router};
+pub use ghost::did_document_for_extension_actor;
 // SOL-HYG-01: the sibling `bot_actor` view derives bot/ghost rows directly
 // from the durable applet records, so expose the record accessors and the
 // manifest display-name helper to the `extensions` module scope.
 pub(in crate::routing::extensions) use record::{applet_display_name, applet_records};
-pub use ghost::did_document_for_extension_actor;
 pub use types::{
     AppletExternalUserInput, AppletGhostIngressOutcome, AppletGhostIngressRequestBody,
     AppletInstallPaths, AppletManifestRegisterRequestBody, AppletPortalMessageOutcome,

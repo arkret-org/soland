@@ -268,7 +268,9 @@ impl ModerationStore for PgModerationStore {
         let target_event_id_uuid: Option<Uuid> = target_event_id
             .as_deref()
             .map(ids::typed_uuid_part_expect_internal);
-        let realm_id_uuid: Option<Uuid> = realm_id.as_deref().map(ids::typed_uuid_part_expect_internal);
+        let realm_id_uuid: Option<Uuid> = realm_id
+            .as_deref()
+            .map(ids::typed_uuid_part_expect_internal);
         sql_query(
             "INSERT INTO moderation_reports \
              (id, reporter_id, target_actor_id, target_event_id, realm_id, payload, created_at) \
@@ -303,7 +305,9 @@ impl ModerationStore for PgModerationStore {
         let action_kind = extract("action_kind");
         let realm_id = extract("realm_id");
         let action_id_uuid = ids::typed_uuid_part_expect_internal(&action_id);
-        let realm_id_uuid: Option<Uuid> = realm_id.as_deref().map(ids::typed_uuid_part_expect_internal);
+        let realm_id_uuid: Option<Uuid> = realm_id
+            .as_deref()
+            .map(ids::typed_uuid_part_expect_internal);
         sql_query(
             "INSERT INTO moderation_actions \
              (id, moderator_id, target_actor_id, action_kind, realm_id, payload, created_at) \

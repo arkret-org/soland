@@ -383,9 +383,7 @@ impl NotaryWorker {
             return Ok(false);
         };
         match notary_value {
-            cokret_sdk::NotaryValue::SingleDid { did, .. } => {
-                Ok(did.as_str() == self.service_did)
-            }
+            cokret_sdk::NotaryValue::SingleDid { did, .. } => Ok(did.as_str() == self.service_did),
             cokret_sdk::NotaryValue::Threshold { members, .. } => {
                 Ok(self.is_round_leader(&members))
             }

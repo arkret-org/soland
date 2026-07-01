@@ -135,8 +135,7 @@ pub trait ProjectionEventStore: Send + Sync {
     /// into the query so a single (federation-reachable) request cannot load
     /// the entire `projection_events` table into memory. Returns at most
     /// `limit` rows in the same order as `snapshot_all`.
-    async fn snapshot_capped(&self, limit: usize)
-    -> PersistenceResult<Vec<ProjectionEventRecord>>;
+    async fn snapshot_capped(&self, limit: usize) -> PersistenceResult<Vec<ProjectionEventRecord>>;
 }
 
 // In-memory Realm meta store
@@ -354,10 +353,7 @@ impl ProjectionEventStore for MemoryProjectionEventStore {
         Ok(self.data.lock().expect("projection events lock").clone())
     }
 
-    async fn snapshot_capped(
-        &self,
-        limit: usize,
-    ) -> PersistenceResult<Vec<ProjectionEventRecord>> {
+    async fn snapshot_capped(&self, limit: usize) -> PersistenceResult<Vec<ProjectionEventRecord>> {
         Ok(self
             .data
             .lock()
@@ -1002,10 +998,7 @@ impl ProjectionEventStore for PgProjectionEventStore {
         .map_err(PersistenceError::from)
     }
 
-    async fn snapshot_capped(
-        &self,
-        limit: usize,
-    ) -> PersistenceResult<Vec<ProjectionEventRecord>> {
+    async fn snapshot_capped(&self, limit: usize) -> PersistenceResult<Vec<ProjectionEventRecord>> {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(
             "SELECT event_id, realm_id, event_kind, operation_type, operation_id, sender_id AS sender, payload, created_at \

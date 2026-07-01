@@ -7,12 +7,12 @@
 //! materialised as [`AppletRecord`]). Per
 //! `extensions/applet-integration.md` §3–§5:
 //!
-//! - A **bot actor** is a stable per-applet DID. Created when the applet install
-//!   completes (`applet_registrations.bot_actor_id`); lives until the applet is
-//!   revoked (`applet_registrations.revoked_at`).
-//! - A **ghost actor** is a per-external-user DID minted by the applet to
-//!   represent an external user inside the portal realm. Recorded as a row in
-//!   the applet record's `ghosts` array; the `kind` discriminator differs.
+//! - A **bot actor** is a stable per-applet DID. Created when the applet install completes
+//!   (`applet_registrations.bot_actor_id`); lives until the applet is revoked
+//!   (`applet_registrations.revoked_at`).
+//! - A **ghost actor** is a per-external-user DID minted by the applet to represent an external
+//!   user inside the portal realm. Recorded as a row in the applet record's `ghosts` array; the
+//!   `kind` discriminator differs.
 //!
 //! SOL-HYG-01 — durability / horizontal scale.
 //! This module used to keep bot/ghost liveness + revocation in a process-local

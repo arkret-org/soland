@@ -209,7 +209,10 @@ impl SolandAuthzEngine {
             // SOL-REL-01 — the grants index is on the authorization hot path;
             // recover a poisoned lock via `into_inner()` rather than cascading
             // panics that would make every subsequent authz check crash.
-            let grants = self.grants.lock().unwrap_or_else(|error| error.into_inner());
+            let grants = self
+                .grants
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
             grants
                 .get(parent_grant_id)
                 .map(|g| g.realm_id.clone())
@@ -267,7 +270,10 @@ impl SolandAuthzEngine {
     /// [`cokret_sdk::authz::delegation::revoke_with_cascade`]; this method
     /// applies the resulting mutation to the engine's in-memory map.
     pub fn revoke_grant_with_cascade(&self, grant_id: &str) -> (bool, Vec<String>) {
-        let mut grants = self.grants.lock().unwrap_or_else(|error| error.into_inner());
+        let mut grants = self
+            .grants
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         if !grants.contains_key(grant_id) {
             return (false, Vec::new());
         }
@@ -308,14 +314,22 @@ impl SolandAuthzEngine {
     /// grant_id is unknown to the index (the cell tombstone is authoritative;
     /// the index simply has nothing to filter yet).
     pub fn mark_projected_grant_revoked(&self, grant_id: &str) {
-        if let Some(grant) = self.grants.lock().unwrap_or_else(|error| error.into_inner()).get_mut(grant_id) {
+        if let Some(grant) = self
+            .grants
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .get_mut(grant_id)
+        {
             grant.revoked = true;
         }
     }
 
     pub fn mark_projected_grants_revoked_for_subject(&self, subject: &str) -> usize {
         let mut count = 0usize;
-        let mut grants = self.grants.lock().unwrap_or_else(|error| error.into_inner());
+        let mut grants = self
+            .grants
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         for grant in grants.values_mut() {
             if grant.subject == subject && !grant.revoked {
                 grant.revoked = true;
