@@ -61,6 +61,7 @@ const INTROSPECTION_CACHE_MAX_ENTRIES: usize = 4096;
 /// bounds replay to the same scale as the §3.2 / federation PoP windows.
 const DPOP_MAX_AGE_SECONDS: i64 = 300;
 const DPOP_MAX_FUTURE_SKEW_SECONDS: i64 = 30;
+const DPOP_REPLAY_MAX_ENTRIES: usize = 50_000;
 
 type AuthError = (StatusCode, &'static str, &'static str);
 
@@ -270,20 +271,39 @@ async fn introspect_session_grant_remote(
 static DPOP_REPLAY: LazyLock<Mutex<HashMap<String, DateTime<Utc>>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
-/// Record `jti` as seen; returns false if it was already seen within its
-/// freshness window (a replay). Sweeps expired entries opportunistically.
-fn register_dpop_jti(jti: &str, expires_at: DateTime<Utc>) -> bool {
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DpopReplayRegistration {
+    Accepted,
+    Replay,
+    Full,
+}
+
+/// Record `jti` as seen. Sweeps expired entries opportunistically and fails
+/// closed when the bounded replay ledger is full.
+fn register_dpop_jti(jti: &str, expires_at: DateTime<Utc>) -> DpopReplayRegistration {
     let now = crate::wire::now();
     let Ok(mut seen) = DPOP_REPLAY.lock() else {
-        // Lock poisoned: fail closed by treating as a replay.
-        return false;
+        return DpopReplayRegistration::Full;
     };
+    register_dpop_jti_locked(&mut seen, jti, expires_at, now, DPOP_REPLAY_MAX_ENTRIES)
+}
+
+fn register_dpop_jti_locked(
+    seen: &mut HashMap<String, DateTime<Utc>>,
+    jti: &str,
+    expires_at: DateTime<Utc>,
+    now: DateTime<Utc>,
+    max_entries: usize,
+) -> DpopReplayRegistration {
     seen.retain(|_, expiry| *expiry > now);
     if seen.contains_key(jti) {
-        return false;
+        return DpopReplayRegistration::Replay;
+    }
+    if seen.len() >= max_entries {
+        return DpopReplayRegistration::Full;
     }
     seen.insert(jti.to_owned(), expires_at);
-    true
+    DpopReplayRegistration::Accepted
 }
 
 // ── DPoP proof verification ──────────────────────────────────────────────────
@@ -574,10 +594,20 @@ pub(crate) fn verify_grant_dpop_request(
         ));
     }
     let jti_expiry = iat + Duration::seconds(DPOP_MAX_AGE_SECONDS + DPOP_MAX_FUTURE_SKEW_SECONDS);
-    if !register_dpop_jti(&claims.jti, jti_expiry) {
-        return Err(unauthenticated(
-            "DPoP proof jti has already been used (replay)",
-        ));
+    match register_dpop_jti(&claims.jti, jti_expiry) {
+        DpopReplayRegistration::Accepted => {}
+        DpopReplayRegistration::Replay => {
+            return Err(unauthenticated(
+                "DPoP proof jti has already been used (replay)",
+            ));
+        }
+        DpopReplayRegistration::Full => {
+            return Err((
+                StatusCode::SERVICE_UNAVAILABLE,
+                "auth_unavailable",
+                "DPoP replay cache is at capacity",
+            ));
+        }
     }
     Ok(())
 }
@@ -756,8 +786,39 @@ mod tests {
     fn jti_replay_is_rejected_within_window() {
         let expiry = crate::wire::now() + Duration::seconds(60);
         let jti = "test-jti-unique-001";
-        assert!(register_dpop_jti(jti, expiry));
-        assert!(!register_dpop_jti(jti, expiry));
+        assert_eq!(
+            register_dpop_jti(jti, expiry),
+            DpopReplayRegistration::Accepted
+        );
+        assert_eq!(
+            register_dpop_jti(jti, expiry),
+            DpopReplayRegistration::Replay
+        );
+    }
+
+    #[test]
+    fn jti_replay_capacity_fails_closed() {
+        let now = crate::wire::now();
+        let expiry = now + Duration::seconds(60);
+        let mut seen = HashMap::new();
+        for index in 0..3 {
+            assert_eq!(
+                register_dpop_jti_locked(
+                    &mut seen,
+                    &format!("capacity-jti-{index}"),
+                    expiry,
+                    now,
+                    3
+                ),
+                DpopReplayRegistration::Accepted
+            );
+        }
+
+        assert_eq!(
+            register_dpop_jti_locked(&mut seen, "capacity-overflow", expiry, now, 3),
+            DpopReplayRegistration::Full
+        );
+        assert!(!seen.contains_key("capacity-overflow"));
     }
 
     #[test]

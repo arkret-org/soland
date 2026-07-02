@@ -1339,6 +1339,15 @@ async fn list_relation_projections(
                     .as_deref()
                     .is_none_or(|value| relation.relation_kind == value)
             })
+            .filter(|relation| {
+                relation.scope_circle_id.as_deref().is_none_or(|circle_id| {
+                    proj.circle_scope_visible_to_actor_at(
+                        circle_id,
+                        &session.actor,
+                        relation.created_at,
+                    )
+                })
+            })
             .cloned()
             .collect()
     };
