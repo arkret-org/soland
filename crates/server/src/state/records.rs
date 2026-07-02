@@ -729,10 +729,27 @@ pub struct FederationFrontierExchangeRecord {
     pub updated_at: i64,
 }
 
+/// Per-device presence broadcast admitted from `ck.presence`
+/// (profiles-presence.md §3.3). One actor may have several device rows;
+/// the projection aggregates them (`dnd > online > idle`, all expired →
+/// `offline`) before anything reaches an observer.
 #[derive(Clone, Debug)]
 pub struct PresenceRecord {
     pub actor: String,
+    /// Broadcasting device (proof-bound `device_id` of the envelope).
+    pub device_id: String,
+    /// Closed v1 wire state (`online` / `idle` / `dnd` / `offline`),
+    /// validated at admission via `PresenceStatus::parse_wire`.
     pub status: String,
+    /// Transient status-message override, validated at admission
+    /// (≤256 code points, NFC, no control chars).
+    pub status_message: Option<String>,
+    /// Sender-supplied `last_active_at` wire value (bucket interval),
+    /// validated fail-closed at admission and passed through verbatim.
+    pub last_active_at: Option<String>,
+    /// Envelope TTL; expired rows only contribute the stale-offline
+    /// fallback to aggregation.
+    pub expires_at: Option<chrono::DateTime<chrono::Utc>>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
 

@@ -1,10 +1,14 @@
 use super::*;
 
-/// Presence (online/away/dnd) per actor.
+/// Presence (online/idle/dnd/offline) per (actor, device). Upserts are
+/// keyed by the broadcasting device so one actor's devices coexist and
+/// the read side can aggregate them per profiles-presence.md §3.3.
 #[async_trait]
 pub trait PresenceStore: Send + Sync {
     async fn put(&self, presence: PresenceRecord) -> PersistenceResult<()>;
-    async fn get(&self, actor: &str) -> PersistenceResult<Option<PresenceRecord>>;
+    async fn list_for_actor(&self, actor: &str) -> PersistenceResult<Vec<PresenceRecord>>;
+    /// Remove every device row of `actor` (used when the visibility
+    /// policy flips to `nobody`).
     async fn delete(&self, actor: &str) -> PersistenceResult<()>;
 }
 
@@ -63,7 +67,7 @@ pub(crate) const CALL_SIGNAL_RELAY_MAX_PER_REALM: usize = 256;
 
 #[derive(Default)]
 pub(crate) struct MemoryPresenceStore {
-    data: Mutex<BTreeMap<String, PresenceRecord>>,
+    data: Mutex<BTreeMap<(String, String), PresenceRecord>>,
 }
 
 impl MemoryPresenceStore {
@@ -75,20 +79,27 @@ impl MemoryPresenceStore {
 #[async_trait]
 impl PresenceStore for MemoryPresenceStore {
     async fn put(&self, presence: PresenceRecord) -> PersistenceResult<()> {
-        let actor = presence.actor.clone();
-        self.data
-            .lock()
-            .expect("presence lock")
-            .insert(actor, presence);
+        let key = (presence.actor.clone(), presence.device_id.clone());
+        self.data.lock().expect("presence lock").insert(key, presence);
         Ok(())
     }
 
-    async fn get(&self, actor: &str) -> PersistenceResult<Option<PresenceRecord>> {
-        Ok(self.data.lock().expect("presence lock").get(actor).cloned())
+    async fn list_for_actor(&self, actor: &str) -> PersistenceResult<Vec<PresenceRecord>> {
+        Ok(self
+            .data
+            .lock()
+            .expect("presence lock")
+            .values()
+            .filter(|record| record.actor == actor)
+            .cloned()
+            .collect())
     }
 
     async fn delete(&self, actor: &str) -> PersistenceResult<()> {
-        self.data.lock().expect("presence lock").remove(actor);
+        self.data
+            .lock()
+            .expect("presence lock")
+            .retain(|(record_actor, _), _| record_actor != actor);
         Ok(())
     }
 }
@@ -263,7 +274,15 @@ struct PresenceRow {
     #[diesel(sql_type = Text)]
     actor: String,
     #[diesel(sql_type = Text)]
+    device_id: String,
+    #[diesel(sql_type = Text)]
     status: String,
+    #[diesel(sql_type = Nullable<Text>)]
+    status_message: Option<String>,
+    #[diesel(sql_type = Nullable<Text>)]
+    last_active_at: Option<String>,
+    #[diesel(sql_type = Nullable<Timestamptz>)]
+    expires_at: Option<chrono::DateTime<chrono::Utc>>,
     #[diesel(sql_type = Timestamptz)]
     updated_at: chrono::DateTime<chrono::Utc>,
 }
@@ -272,7 +291,11 @@ impl From<PresenceRow> for PresenceRecord {
     fn from(row: PresenceRow) -> Self {
         Self {
             actor: row.actor,
+            device_id: row.device_id,
             status: row.status,
+            status_message: row.status_message,
+            last_active_at: row.last_active_at,
+            expires_at: row.expires_at,
             updated_at: row.updated_at,
         }
     }
@@ -283,14 +306,21 @@ impl PresenceStore for PgPresenceStore {
     async fn put(&self, presence: PresenceRecord) -> PersistenceResult<()> {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(
-            "INSERT INTO presence (id, status, updated_at) \
-             VALUES ($1, $2, $3) \
-             ON CONFLICT (id) DO UPDATE SET \
+            "INSERT INTO presence (id, device_id, status, status_message, last_active_at, expires_at, updated_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7) \
+             ON CONFLICT (id, device_id) DO UPDATE SET \
                 status = EXCLUDED.status, \
+                status_message = EXCLUDED.status_message, \
+                last_active_at = EXCLUDED.last_active_at, \
+                expires_at = EXCLUDED.expires_at, \
                 updated_at = EXCLUDED.updated_at",
         )
         .bind::<Text, _>(&presence.actor)
+        .bind::<Text, _>(&presence.device_id)
         .bind::<Text, _>(&presence.status)
+        .bind::<Nullable<Text>, _>(&presence.status_message)
+        .bind::<Nullable<Text>, _>(&presence.last_active_at)
+        .bind::<Nullable<Timestamptz>, _>(presence.expires_at)
         .bind::<Timestamptz, _>(presence.updated_at)
         .execute(&mut *conn)
         .await
@@ -298,15 +328,17 @@ impl PresenceStore for PgPresenceStore {
         .map_err(PersistenceError::from)
     }
 
-    async fn get(&self, actor: &str) -> PersistenceResult<Option<PresenceRecord>> {
+    async fn list_for_actor(&self, actor: &str) -> PersistenceResult<Vec<PresenceRecord>> {
         let mut conn = pg_conn(&self.pool).await?;
-        sql_query("SELECT id AS actor, status, updated_at FROM presence WHERE id = $1")
-            .bind::<Text, _>(actor)
-            .get_result::<PresenceRow>(&mut *conn)
-            .await
-            .optional()
-            .map(|row| row.map(PresenceRecord::from))
-            .map_err(PersistenceError::from)
+        sql_query(
+            "SELECT id AS actor, device_id, status, status_message, last_active_at, expires_at, updated_at \
+             FROM presence WHERE id = $1",
+        )
+        .bind::<Text, _>(actor)
+        .load::<PresenceRow>(&mut *conn)
+        .await
+        .map(|rows| rows.into_iter().map(PresenceRecord::from).collect())
+        .map_err(PersistenceError::from)
     }
 
     async fn delete(&self, actor: &str) -> PersistenceResult<()> {

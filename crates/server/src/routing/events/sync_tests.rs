@@ -170,15 +170,28 @@ fn timeline_position_disambiguates_same_second_events() {
     assert!(welcome_message > realm_create);
 }
 
+fn presence_record(device: &str, status: &str, updated_at: DateTime<Utc>) -> PresenceRecord {
+    PresenceRecord {
+        actor: "did:web:alice.example".to_owned(),
+        device_id: device.to_owned(),
+        status: status.to_owned(),
+        status_message: None,
+        last_active_at: None,
+        expires_at: Some(updated_at + ChronoDuration::seconds(60)),
+        updated_at,
+    }
+}
+
 #[test]
 fn presence_sync_event_marks_stale_online_offline() {
-    let record = PresenceRecord {
-        actor: "did:web:alice.example".to_owned(),
-        status: "online".to_owned(),
-        updated_at: now() - ChronoDuration::seconds(PRESENCE_ONLINE_TTL_SECONDS + 1),
-    };
+    let record = presence_record(
+        "ck:device:a",
+        "online",
+        now() - ChronoDuration::seconds(PRESENCE_ONLINE_TTL_SECONDS + 1),
+    );
 
-    let event = presence_sync_event_json(record, true);
+    let aggregated = aggregate_presence_records(&[record], now()).expect("aggregate");
+    let event = presence_sync_event_json("did:web:alice.example", &aggregated, true);
 
     assert_eq!(event["user_id"], "did:web:alice.example");
     assert_eq!(event["presence"], "offline");
@@ -192,16 +205,62 @@ fn presence_sync_event_marks_stale_online_offline() {
 
 #[test]
 fn presence_sync_event_hides_activity_detail_without_contact_visibility() {
-    let record = PresenceRecord {
-        actor: "did:web:alice.example".to_owned(),
-        status: "dnd".to_owned(),
-        updated_at: now(),
-    };
+    let mut record = presence_record("ck:device:a", "dnd", now());
+    record.status_message = Some("in a meeting".to_owned());
+    record.last_active_at = Some("2026-07-03T10:00:00Z/PT1H".to_owned());
 
-    let event = presence_sync_event_json(record, false);
+    let aggregated = aggregate_presence_records(&[record], now()).expect("aggregate");
+    let event = presence_sync_event_json("did:web:alice.example", &aggregated, false);
 
     assert_eq!(event["presence"], "offline");
     assert_eq!(event["status"], "offline");
+    // §3.4 downgrade must not leak the transient message or the
+    // activity bucket alongside the degraded state.
+    assert!(event.get("status_message").is_none());
+    assert!(event.get("last_active_at").is_none());
+}
+
+#[test]
+fn presence_aggregation_prefers_dnd_then_online_then_idle() {
+    let now = now();
+    let records = vec![
+        presence_record("ck:device:a", "idle", now - ChronoDuration::seconds(1)),
+        presence_record("ck:device:b", "online", now),
+    ];
+    let aggregated = aggregate_presence_records(&records, now).expect("aggregate");
+    assert_eq!(aggregated.status, "online");
+
+    let records = vec![
+        presence_record("ck:device:a", "online", now),
+        presence_record("ck:device:b", "dnd", now - ChronoDuration::seconds(1)),
+    ];
+    let aggregated = aggregate_presence_records(&records, now).expect("aggregate");
+    assert_eq!(aggregated.status, "dnd");
+}
+
+#[test]
+fn presence_aggregation_all_expired_projects_offline() {
+    let now = now();
+    let mut record = presence_record("ck:device:a", "idle", now - ChronoDuration::seconds(120));
+    record.expires_at = Some(now - ChronoDuration::seconds(30));
+    let aggregated = aggregate_presence_records(&[record], now).expect("aggregate");
+    assert_eq!(aggregated.status, "offline");
+    assert!(aggregated.all_expired);
+    assert_eq!(aggregate_presence_records(&[], now).map(|a| a.status), None);
+}
+
+#[test]
+fn presence_sync_event_carries_status_message_for_authorized_observer() {
+    let mut record = presence_record("ck:device:a", "online", now());
+    record.status_message = Some("On vacation until May 5".to_owned());
+    record.last_active_at = Some("2026-07-03T10:00:00Z/PT1H".to_owned());
+
+    let aggregated = aggregate_presence_records(&[record], now()).expect("aggregate");
+    let event = presence_sync_event_json("did:web:alice.example", &aggregated, true);
+
+    assert_eq!(event["status"], "online");
+    assert_eq!(event["status_message"], "On vacation until May 5");
+    assert_eq!(event["last_active_at"], "2026-07-03T10:00:00Z/PT1H");
 }
 
 fn test_config() -> crate::config::AppConfig {
@@ -288,7 +347,6 @@ fn roster_body(audience: &str) -> SyncRequestBody {
             not_event_types: Vec::new(),
             extra,
         }),
-        set_presence: None,
         subscriptions: None,
         wait_for: None,
     }

@@ -747,7 +747,11 @@ CREATE TABLE public.policy_documents (
 
 CREATE TABLE public.presence (
     id text NOT NULL,
+    device_id text NOT NULL,
     status text NOT NULL,
+    status_message text,
+    last_active_at text,
+    expires_at timestamp with time zone,
     updated_at timestamp with time zone DEFAULT now() NOT NULL
 );
 
@@ -1320,7 +1324,7 @@ ALTER TABLE ONLY public.policy_documents
     ADD CONSTRAINT policy_documents_pkey PRIMARY KEY (id);
 
 ALTER TABLE ONLY public.presence
-    ADD CONSTRAINT presence_pkey PRIMARY KEY (id);
+    ADD CONSTRAINT presence_pkey PRIMARY KEY (id, device_id);
 
 ALTER TABLE ONLY public.projection_circle_members
     ADD CONSTRAINT projection_circle_members_pkey PRIMARY KEY (id);

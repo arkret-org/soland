@@ -4,8 +4,7 @@
 
 use super::*;
 use crate::routing::spaces::space::{
-    PresenceVisibilityPolicy, presence_activity_detail_visible_to_session,
-    presence_visibility_for_actor, presence_visible_to_session,
+    presence_activity_detail_visible_to_session, presence_visible_to_session,
 };
 
 #[endpoint]
@@ -203,34 +202,12 @@ pub(super) async fn account_subscribe(depot: &mut Depot, req: &mut Request, res:
             )
             .await;
     }
-    if let Some(presence) = body.set_presence.as_ref() {
-        let Some(session) = session.as_ref() else {
-            crate::error::render_error_code(
-                crate::error::ErrorCode::Unauthenticated,
-                res,
-                "set_presence requires authentication",
-            );
-            return;
-        };
-        if presence_visibility_for_actor(&state, &session.actor).await
-            == PresenceVisibilityPolicy::Nobody
-        {
-            if let Err(error) = state.persistence.presence().delete(&session.actor).await {
-                tracing::error!(%error, "failed to clear hidden presence");
-            }
-        } else if let Err(error) = state
-            .persistence
-            .presence()
-            .put(PresenceRecord {
-                actor: session.actor.clone(),
-                status: presence_status_wire(presence).to_owned(),
-                updated_at: chrono::Utc::now(),
-            })
-            .await
-        {
-            tracing::error!(%error, "failed to persist presence");
-        }
-    }
+    // client-sync.md: the account subscribe surface is read-only.
+    // Presence intent (`set_presence`) is NOT a subscribe parameter —
+    // clients broadcast `ck.presence` through
+    // `POST /_cokret/self/ephemeral`; any `set_presence` query value is
+    // ignored here so establishing or replaying a subscription never
+    // triggers a server-side mutation.
     prune_expired_typing(&state).await;
 
     // Subscribe to broadcast BEFORE building the initial snapshot so an
@@ -439,12 +416,6 @@ fn account_subscribe_query(req: &mut Request) -> SyncRequestBody {
         after: query_param(req, "after"),
         catchup: query_param(req, "catchup").and_then(|value| value.parse::<bool>().ok()),
         filter: query_param(req, "filter").and_then(|value| serde_json::from_str(&value).ok()),
-        set_presence: query_param(req, "set_presence").and_then(|value| match value.as_str() {
-            "online" => Some(PresenceStatus::Online),
-            "offline" => Some(PresenceStatus::Offline),
-            "unavailable" => Some(PresenceStatus::Unavailable),
-            _ => None,
-        }),
         subscriptions: None,
         wait_for: None,
     }
@@ -452,14 +423,6 @@ fn account_subscribe_query(req: &mut Request) -> SyncRequestBody {
 
 pub(crate) fn sync_filter_value(filter: Option<&cokret_sdk::SyncFilter>) -> Option<Value> {
     filter.and_then(|filter| serde_json::to_value(filter).ok())
-}
-
-fn presence_status_wire(status: &PresenceStatus) -> &'static str {
-    match status {
-        PresenceStatus::Online => "online",
-        PresenceStatus::Offline => "offline",
-        PresenceStatus::Unavailable => "unavailable",
-    }
 }
 
 fn account_delta_frame(response: cokret_sdk::models::SyncOutcome) -> Value {
@@ -546,48 +509,141 @@ pub(crate) async fn presence_events_for_actors(
         if !presence_visible_to_session(state, &actor, session).await {
             continue;
         }
-        if let Ok(Some(record)) = state.persistence.presence().get(&actor).await {
+        let records = state
+            .persistence
+            .presence()
+            .list_for_actor(&actor)
+            .await
+            .unwrap_or_default();
+        if let Some(aggregated) = aggregate_presence_records(&records, now()) {
             let reveal_activity_detail =
                 presence_activity_detail_visible_to_session(state, &actor, session).await;
-            events.push(presence_sync_event_json(record, reveal_activity_detail));
+            events.push(presence_sync_event_json(
+                &actor,
+                &aggregated,
+                reveal_activity_detail,
+            ));
         }
     }
     events
 }
 
-pub(crate) fn presence_sync_event_json(
-    record: PresenceRecord,
-    reveal_activity_detail: bool,
-) -> Value {
-    let is_stale_online = record.status == "online"
-        && now().signed_duration_since(record.updated_at)
-            > ChronoDuration::seconds(PRESENCE_ONLINE_TTL_SECONDS);
-    let status = if is_stale_online {
-        "offline".to_owned()
-    } else {
-        presence_status_for_observer(&record.status, reveal_activity_detail)
-    };
-    let mut event = json!({
-        "user_id": record.actor,
-        "actor_id": record.actor,
-        "presence": status,
-        "status": status,
-        "updated_at": record.updated_at,
-    });
-    if is_stale_online && let Some(object) = event.as_object_mut() {
-        object.insert(
-            "last_active_at".to_owned(),
-            json!(presence_last_active_bucket_interval(record.updated_at)),
-        );
-    }
-    event
+/// One actor's presence after merging their per-device broadcasts
+/// (profiles-presence.md §3.3 multi-device aggregation).
+#[derive(Clone, Debug)]
+pub(crate) struct AggregatedPresence {
+    pub status: String,
+    pub status_message: Option<String>,
+    pub last_active_at: Option<String>,
+    pub updated_at: DateTime<Utc>,
+    /// Every device row has lapsed — the actor projects as `offline`
+    /// with the coarse stale-activity bucket appended.
+    pub all_expired: bool,
 }
 
-fn presence_status_for_observer(status: &str, reveal_activity_detail: bool) -> String {
-    if !reveal_activity_detail && matches!(status, "dnd" | "idle") {
-        return "offline".to_owned();
+/// Deterministic multi-device merge: unexpired rows aggregate by the
+/// `dnd > online > idle` priority; no unexpired row at all projects as
+/// `offline`. `status_message` / `last_active_at` come from the most
+/// recently updated unexpired row carrying a value.
+pub(crate) fn aggregate_presence_records(
+    records: &[PresenceRecord],
+    now: DateTime<Utc>,
+) -> Option<AggregatedPresence> {
+    let newest_updated_at = records.iter().map(|record| record.updated_at).max()?;
+    let live: Vec<&PresenceRecord> = records
+        .iter()
+        .filter(|record| !presence_record_expired(record, now))
+        .collect();
+    if live.is_empty() {
+        return Some(AggregatedPresence {
+            status: "offline".to_owned(),
+            status_message: None,
+            last_active_at: None,
+            updated_at: newest_updated_at,
+            all_expired: true,
+        });
     }
-    status.to_owned()
+    let status = cokret_sdk::aggregate_presence_states(
+        live.iter()
+            .filter_map(|record| cokret_sdk::PresenceStatus::parse_wire(&record.status)),
+    );
+    let mut by_recency: Vec<&&PresenceRecord> = live.iter().collect();
+    by_recency.sort_by_key(|record| std::cmp::Reverse(record.updated_at));
+    let status_message = by_recency
+        .iter()
+        .find_map(|record| record.status_message.clone().filter(|m| !m.is_empty()));
+    let last_active_at = by_recency
+        .iter()
+        .find_map(|record| record.last_active_at.clone());
+    Some(AggregatedPresence {
+        status: status.as_wire().to_owned(),
+        status_message,
+        last_active_at,
+        updated_at: by_recency
+            .first()
+            .map(|record| record.updated_at)
+            .unwrap_or(newest_updated_at),
+        all_expired: false,
+    })
+}
+
+fn presence_record_expired(record: &PresenceRecord, now: DateTime<Utc>) -> bool {
+    if let Some(expires_at) = record.expires_at
+        && expires_at <= now
+    {
+        return true;
+    }
+    // Stale-online decay back-stop: an `online` row that stopped being
+    // refreshed lapses even when its envelope TTL was generous.
+    record.status == "online"
+        && now.signed_duration_since(record.updated_at)
+            > ChronoDuration::seconds(PRESENCE_ONLINE_TTL_SECONDS)
+}
+
+pub(crate) fn presence_sync_event_json(
+    actor: &str,
+    aggregated: &AggregatedPresence,
+    reveal_activity_detail: bool,
+) -> Value {
+    let downgraded = !reveal_activity_detail
+        && matches!(aggregated.status.as_str(), "dnd" | "idle");
+    let status = if downgraded {
+        "offline".to_owned()
+    } else {
+        aggregated.status.clone()
+    };
+    let mut event = json!({
+        "user_id": actor,
+        "actor_id": actor,
+        "presence": status,
+        "status": status,
+        "updated_at": aggregated.updated_at,
+    });
+    let Some(object) = event.as_object_mut() else {
+        return event;
+    };
+    if downgraded {
+        // §3.4: for observers outside the visibility set `dnd` / `idle`
+        // degrade to `offline`; leaking a fresh status message or
+        // activity bucket alongside would reopen the same side channel.
+        return event;
+    }
+    if aggregated.all_expired {
+        object.insert(
+            "last_active_at".to_owned(),
+            json!(presence_last_active_bucket_interval(
+                aggregated.updated_at
+            )),
+        );
+        return event;
+    }
+    if let Some(status_message) = aggregated.status_message.as_ref() {
+        object.insert("status_message".to_owned(), json!(status_message));
+    }
+    if reveal_activity_detail && let Some(last_active_at) = aggregated.last_active_at.as_ref() {
+        object.insert("last_active_at".to_owned(), json!(last_active_at));
+    }
+    event
 }
 
 fn presence_last_active_bucket_interval(updated_at: DateTime<Utc>) -> String {

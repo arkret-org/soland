@@ -45,32 +45,23 @@ pub fn demo_organization(realms: &[&RealmDirectoryEntry], service_did: &str) -> 
     })
 }
 
-/// Stale-online decay window for directory presence projection. Mirrors the
-/// Sync presence projection's `PRESENCE_ONLINE_TTL_SECONDS` (`profiles-presence.md`
-/// §3): an `online` record stops being refreshed when the client closes its
-/// tab, and the directory must surface it as `offline` once the refresh window
-/// lapses rather than pinning a phantom `online`.
-const DIRECTORY_PRESENCE_ONLINE_TTL_SECONDS: i64 = 3;
-
 /// Project the live presence store value for `actor` into the directory
-/// preview shape, applying the stale-online rule above. Absent records project
-/// as `offline`.
+/// preview shape. Uses the shared multi-device aggregation
+/// (profiles-presence.md §3.3): unexpired device rows merge by priority
+/// and a fully-lapsed actor projects as `offline`. Absent records
+/// project as `offline`.
 pub(super) async fn directory_presence_for_actor(state: &AppState, did: &str) -> Value {
-    let record = state.persistence.presence().get(did).await.ok().flatten();
-    let (status, updated_at) = match record {
-        Some(record) => {
-            let stale_online = record.status == "online"
-                && now().signed_duration_since(record.updated_at)
-                    > chrono::Duration::seconds(DIRECTORY_PRESENCE_ONLINE_TTL_SECONDS);
-            let status = if stale_online {
-                "offline".to_owned()
-            } else {
-                record.status
-            };
-            (status, record.updated_at)
-        }
-        None => ("offline".to_owned(), now()),
-    };
+    let records = state
+        .persistence
+        .presence()
+        .list_for_actor(did)
+        .await
+        .unwrap_or_default();
+    let (status, updated_at) =
+        match crate::routing::events::sync::aggregate_presence_records(&records, now()) {
+            Some(aggregated) => (aggregated.status, aggregated.updated_at),
+            None => ("offline".to_owned(), now()),
+        };
     json!({ "status": status, "updated_at": updated_at })
 }
 

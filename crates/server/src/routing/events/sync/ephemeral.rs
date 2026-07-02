@@ -53,7 +53,7 @@ pub(super) async fn submit_ephemeral(
             true
         }
         "ck.presence" => {
-            persist_ephemeral_presence(state, &session.actor, &envelope).await;
+            persist_ephemeral_presence(state, &session, &envelope).await?;
             true
         }
         "ck.receipt.read" => {
@@ -214,6 +214,16 @@ async fn persist_ephemeral_typing(
     realm_id: &str,
     envelope: &cokret_sdk::EphemeralEnvelope,
 ) -> Result<(), crate::error::AppError> {
+    // ephemeral-envelope.schema.json ck.typing branch: `track_name` is optional
+    // but const "discussion" in v1 (mirrors message.schema.json); when omitted
+    // receivers resolve it to "discussion".
+    if let Some(track_name) = envelope.payload.get("track_name") {
+        if track_name.as_str() != Some("discussion") {
+            return Err(crate::routing::events::peer::schema_violation(
+                "ck.typing payload.track_name must be \"discussion\" in v1",
+            ));
+        }
+    }
     let typing = envelope
         .payload
         .get("typing")
@@ -256,41 +266,114 @@ async fn persist_ephemeral_typing(
 
 async fn persist_ephemeral_presence(
     state: &AppState,
-    actor: &str,
+    session: &SessionRecord,
     envelope: &cokret_sdk::EphemeralEnvelope,
-) {
+) -> Result<(), crate::error::AppError> {
+    let actor = session.actor.as_str();
+    // Fail-closed field admission (profiles-presence.md §3.2/§3.3):
+    // validate the payload before consulting the visibility policy so a
+    // malformed broadcast is rejected identically for every sender.
+    let status = presence_state_from_payload(&envelope.payload)?;
+    let status_message = match envelope.payload.get("status_message") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(message)) => {
+            cokret_sdk::validate_status_message(message).map_err(|error| {
+                crate::error::AppError::new(
+                    crate::error::ErrorCode::SchemaViolation,
+                    format!("ck.presence status_message rejected: {error}"),
+                )
+            })?;
+            Some(message.clone())
+        }
+        Some(_) => {
+            return Err(crate::error::AppError::new(
+                crate::error::ErrorCode::SchemaViolation,
+                "ck.presence status_message must be a string",
+            ));
+        }
+    };
+    let last_active_at = match envelope.payload.get("last_active_at") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(value)) => {
+            cokret_sdk::validate_last_active_at(value).map_err(|error| {
+                crate::error::AppError::new(
+                    crate::error::ErrorCode::SchemaViolation,
+                    format!("ck.presence last_active_at rejected: {error}"),
+                )
+            })?;
+            // §3.3: without a policy explicitly allowing precise
+            // disclosure only the bucketed form is admitted; a valid
+            // second-precision timestamp is a policy violation, not a
+            // schema one.
+            if !value.contains('/') {
+                return Err(crate::error::AppError::new(
+                    crate::error::ErrorCode::PolicyViolation,
+                    "ck.presence last_active_at must be bucketed; precise timestamps require an explicit disclosure policy",
+                )
+                .with_status(StatusCode::FORBIDDEN));
+            }
+            Some(value.clone())
+        }
+        Some(_) => {
+            return Err(crate::error::AppError::new(
+                crate::error::ErrorCode::SchemaViolation,
+                "ck.presence last_active_at must be a string",
+            ));
+        }
+    };
     if presence_visibility_for_actor(state, actor).await == PresenceVisibilityPolicy::Nobody {
         if let Err(error) = state.persistence.presence().delete(actor).await {
             tracing::error!(%error, "failed to clear hidden ephemeral presence");
         }
-        return;
+        return Ok(());
     }
-    let status = presence_status_from_payload(&envelope.payload);
+    // `validate_ephemeral_broadcast_proof_shape` already guaranteed the
+    // proof-bound device_id is present.
+    let device_id = envelope
+        .device_id
+        .as_ref()
+        .map(|device| device.as_str().to_owned())
+        .unwrap_or_else(|| session.device_id.clone());
     if let Err(error) = state
         .persistence
         .presence()
         .put(PresenceRecord {
             actor: actor.to_owned(),
-            status,
+            device_id,
+            status: status.as_wire().to_owned(),
+            status_message,
+            last_active_at,
+            expires_at: Some(envelope.expires_at),
             updated_at: chrono::Utc::now(),
         })
         .await
     {
         tracing::error!(%error, "failed to persist ephemeral presence");
     }
+    Ok(())
 }
 
-fn presence_status_from_payload(payload: &Value) -> String {
-    let status = payload
-        .get("status")
-        .or_else(|| payload.get("state"))
+/// Strict closed-set `state` admission (profiles-presence.md §3.2):
+/// unknown or missing values are a `schema_violation`, never guessed
+/// into a nearby state (`unavailable` / `busy` are not v1 wire values).
+fn presence_state_from_payload(
+    payload: &Value,
+) -> Result<cokret_sdk::PresenceStatus, crate::error::AppError> {
+    let state = payload
+        .get("state")
         .and_then(Value::as_str)
-        .unwrap_or("online")
-        .trim();
-    match status {
-        "online" | "offline" | "unavailable" | "dnd" | "idle" => status.to_owned(),
-        _ => "offline".to_owned(),
-    }
+        .ok_or_else(|| {
+            crate::error::AppError::new(
+                crate::error::ErrorCode::SchemaViolation,
+                "ck.presence payload requires state",
+            )
+        })?;
+    cokret_sdk::PresenceStatus::parse_wire(state).ok_or_else(|| {
+        crate::error::AppError::new(
+            crate::error::ErrorCode::SchemaViolation,
+            "ck.presence state is not in the closed v1 set {online, idle, dnd, offline}",
+        )
+    })
 }
 
 async fn admit_ephemeral_read_receipt(
@@ -431,12 +514,17 @@ fn validate_ephemeral_broadcast_proof_shape(
             "{kind} proof.jws must be detached header..signature"
         )));
     }
-    let mut without_proof = serde_json::to_value(envelope).map_err(|error| {
-        crate::error::AppError::invalid_param(format!("{kind} envelope is not serialisable: {error}"))
+    // The digest covers the canonical envelope without `proof`; the typed
+    // clone with `proof = None` serializes to exactly those bytes.
+    let without_proof = cokret_sdk::EphemeralEnvelope {
+        proof: None,
+        ..envelope.clone()
+    };
+    let without_proof = serde_json::to_value(&without_proof).map_err(|error| {
+        crate::error::AppError::invalid_param(format!(
+            "{kind} envelope is not serialisable: {error}"
+        ))
     })?;
-    if let Some(object) = without_proof.as_object_mut() {
-        object.remove("proof");
-    }
     let canonical =
         cokret_sdk::canonical::canonical_json_bytes(&without_proof).map_err(|error| {
             crate::error::AppError::invalid_param(format!(

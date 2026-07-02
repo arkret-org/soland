@@ -808,32 +808,56 @@ async fn memory_moderation_store_append_and_list_matches_trait() {
 }
 
 #[tokio::test]
-async fn memory_presence_store_put_get_matches_trait() {
+async fn memory_presence_store_put_list_matches_trait() {
     let store = MemoryPresenceStore::new();
     let now = Utc::now();
     let record = PresenceRecord {
         actor: "did:web:alice.example".to_owned(),
+        device_id: "ck:device:a".to_owned(),
         status: "online".to_owned(),
+        status_message: Some("hi".to_owned()),
+        last_active_at: None,
+        expires_at: Some(now + chrono::Duration::seconds(60)),
         updated_at: now,
     };
     store.put(record.clone()).await.unwrap();
 
-    let fetched = store.get("did:web:alice.example").await.unwrap().unwrap();
-    assert_eq!(fetched.status, "online");
-    assert_eq!(fetched.actor, "did:web:alice.example");
+    let fetched = store.list_for_actor("did:web:alice.example").await.unwrap();
+    assert_eq!(fetched.len(), 1);
+    assert_eq!(fetched[0].status, "online");
+    assert_eq!(fetched[0].status_message.as_deref(), Some("hi"));
+    assert_eq!(fetched[0].actor, "did:web:alice.example");
 
-    // Upsert: latest write wins.
+    // Upsert per device: same device overwrites, another device adds.
     let update = PresenceRecord {
-        actor: "did:web:alice.example".to_owned(),
-        status: "away".to_owned(),
+        status: "idle".to_owned(),
         updated_at: now + chrono::Duration::seconds(30),
+        ..record.clone()
     };
     store.put(update).await.unwrap();
-    let after = store.get("did:web:alice.example").await.unwrap().unwrap();
-    assert_eq!(after.status, "away");
+    let other_device = PresenceRecord {
+        device_id: "ck:device:b".to_owned(),
+        status: "dnd".to_owned(),
+        ..record.clone()
+    };
+    store.put(other_device).await.unwrap();
+    let after = store.list_for_actor("did:web:alice.example").await.unwrap();
+    assert_eq!(after.len(), 2);
+    assert!(after.iter().any(|r| r.device_id == "ck:device:a" && r.status == "idle"));
+    assert!(after.iter().any(|r| r.device_id == "ck:device:b" && r.status == "dnd"));
 
-    // Missing actor → None.
-    assert!(store.get("did:web:nobody").await.unwrap().is_none());
+    // Delete clears every device row of the actor.
+    store.delete("did:web:alice.example").await.unwrap();
+    assert!(
+        store
+            .list_for_actor("did:web:alice.example")
+            .await
+            .unwrap()
+            .is_empty()
+    );
+
+    // Missing actor → empty.
+    assert!(store.list_for_actor("did:web:nobody").await.unwrap().is_empty());
 }
 
 #[tokio::test]

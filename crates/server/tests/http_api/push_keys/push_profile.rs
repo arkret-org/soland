@@ -7,6 +7,39 @@ use soland::state::EventNotificationKind;
 use super::helpers::*;
 use crate::common::*;
 
+/// Broadcast ephemeral envelope with the structural admission contract
+/// (`ephemeral-envelope.schema.json`): `device_id` present and a
+/// detached-JWS `proof` whose `verification_method` is
+/// `{actor_id}#{device_id}` and whose `event_digest` covers the
+/// canonical envelope bytes without `proof`. The relay checks shape
+/// only — signature bytes stay dummy.
+fn broadcast_ephemeral_envelope(kind: &str, payload: Value) -> Value {
+    let actor_id = "did:web:alice.example";
+    let device_id = "ck:device:01904100-0000-7000-8000-a11ce0000001";
+    let sent_at = chrono::Utc::now();
+    let expires_at = sent_at + chrono::Duration::seconds(30);
+    let mut env = serde_json::json!({
+        "kind": kind,
+        "realm_id": DEMO_REALM_ID,
+        "actor_id": actor_id,
+        "device_id": device_id,
+        "sent_at": sent_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+        "expires_at": expires_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+        "payload": payload,
+    });
+    let canonical = cokret_sdk::canonical::canonical_json_bytes(&env).unwrap();
+    let event_digest = cokret_sdk::canonical::sha256_digest(&canonical);
+    env["proof"] = serde_json::json!({
+        "kind": "detached_jws",
+        "alg": "EdDSA",
+        "verification_method": format!("{actor_id}#{device_id}"),
+        "event_digest": event_digest,
+        "created_at": sent_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+        "jws": "eyJhbGciOiJFZERTQSJ9..c2ln"
+    });
+    env
+}
+
 #[tokio::test]
 async fn file_transfer_blob_upload_uses_encrypted_metadata_and_blocks_presign() {
     let state = AppState::new(test_config(), Db { pool: None });
@@ -154,35 +187,37 @@ async fn profile_avatar_get_recovers_existing_local_object_without_metadata() {
 async fn push_profile_and_moderation_contracts_work() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
-    let sent_at = chrono::Utc::now();
-    let expires_at = sent_at + chrono::Duration::seconds(30);
     let unauth_presence = TestClient::post("http://server/_cokret/self/ephemeral")
-        .json(&serde_json::json!({
-            "kind": "ck.presence",
-            "realm_id": DEMO_REALM_ID,
-            "actor_id": "did:web:alice.example",
-            "sent_at": sent_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
-            "expires_at": expires_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
-            "payload": {
-                "status": "online"
-            }
-        }))
+        .json(&broadcast_ephemeral_envelope(
+            "ck.presence",
+            serde_json::json!({"state": "online"}),
+        ))
         .send(&app_from_state(state.clone()))
         .await;
     assert_eq!(unauth_presence.status_code, Some(StatusCode::UNAUTHORIZED));
 
+    // Matrix-legacy `unavailable` is outside the closed v1 wire set →
+    // schema_violation, never remapped (profiles-presence.md §3.2).
+    let mut legacy_state = TestClient::post("http://server/_cokret/self/ephemeral")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&broadcast_ephemeral_envelope(
+            "ck.presence",
+            serde_json::json!({"state": "unavailable"}),
+        ))
+        .send(&app_from_state(state.clone()))
+        .await;
+    let legacy_state_body: Value = legacy_state.take_json().await.unwrap();
+    assert_eq!(legacy_state_body["error"]["code"], "schema_violation");
+
     let presence: Value = TestClient::post("http://server/_cokret/self/ephemeral")
         .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&serde_json::json!({
-            "kind": "ck.presence",
-            "realm_id": DEMO_REALM_ID,
-            "actor_id": "did:web:alice.example",
-            "sent_at": sent_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
-            "expires_at": expires_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
-            "payload": {
-                "status": "unavailable"
-            }
-        }))
+        .json(&broadcast_ephemeral_envelope(
+            "ck.presence",
+            serde_json::json!({
+                "state": "dnd",
+                "status_message": "In a meeting"
+            }),
+        ))
         .send(&app_from_state(state.clone()))
         .await
         .take_json()
@@ -194,14 +229,22 @@ async fn push_profile_and_moderation_contracts_work() {
     let presence_sync = account_subscribe_frame(state.clone(), Some(&token), "catchup=true").await;
     let profile = presence_event(&presence_sync, "did:web:alice.example");
     assert_eq!(profile["actor_id"], "did:web:alice.example");
-    assert_eq!(profile["status"], "unavailable");
+    assert_eq!(profile["status"], "dnd");
+    assert_eq!(
+        profile["status_message"], "In a meeting",
+        "admitted status_message must survive into the presence projection: {profile}"
+    );
 
     state
         .persistence
         .presence()
         .put(PresenceRecord {
             actor: "did:web:alice.example".to_owned(),
+            device_id: "ck:device:01904100-0000-7000-8000-a11ce0000001".to_owned(),
             status: "online".to_owned(),
+            status_message: None,
+            last_active_at: None,
+            expires_at: Some(chrono::Utc::now() - chrono::Duration::seconds(1)),
             updated_at: chrono::Utc::now() - chrono::Duration::seconds(10),
         })
         .await
@@ -219,34 +262,26 @@ async fn push_profile_and_moderation_contracts_work() {
     insert_typing_scope_strand(state.clone(), typing_strand_id, Some(true));
 
     let unauth_typing = TestClient::post("http://server/_cokret/self/ephemeral")
-        .json(&serde_json::json!({
-            "kind": "ck.typing",
-            "realm_id": DEMO_REALM_ID,
-            "actor_id": "did:web:alice.example",
-            "sent_at": sent_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
-            "expires_at": expires_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
-            "payload": {
+        .json(&broadcast_ephemeral_envelope(
+            "ck.typing",
+            serde_json::json!({
                 "strand_id": typing_strand_id,
                 "typing": true
-            }
-        }))
+            }),
+        ))
         .send(&app_from_state(state.clone()))
         .await;
     assert_eq!(unauth_typing.status_code, Some(StatusCode::UNAUTHORIZED));
 
     let typing: Value = TestClient::post("http://server/_cokret/self/ephemeral")
         .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&serde_json::json!({
-            "kind": "ck.typing",
-            "realm_id": DEMO_REALM_ID,
-            "actor_id": "did:web:alice.example",
-            "sent_at": sent_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
-            "expires_at": expires_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
-            "payload": {
+        .json(&broadcast_ephemeral_envelope(
+            "ck.typing",
+            serde_json::json!({
                 "strand_id": typing_strand_id,
                 "typing": true
-            }
-        }))
+            }),
+        ))
         .send(&app_from_state(state.clone()))
         .await
         .take_json()
@@ -265,20 +300,14 @@ async fn push_profile_and_moderation_contracts_work() {
     assert_eq!(active_typing[0].actor, "did:web:alice.example");
     assert_eq!(active_typing[0].scope_id.as_deref(), Some(typing_strand_id));
 
-    let stop_sent_at = chrono::Utc::now();
-    let stop_expires_at = stop_sent_at + chrono::Duration::seconds(30);
     let typing_stopped: Value = TestClient::post("http://server/_cokret/self/ephemeral")
         .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&serde_json::json!({
-            "kind": "ck.typing",
-            "realm_id": DEMO_REALM_ID,
-            "actor_id": "did:web:alice.example",
-            "sent_at": stop_sent_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
-            "expires_at": stop_expires_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
-            "payload": {
+        .json(&broadcast_ephemeral_envelope(
+            "ck.typing",
+            serde_json::json!({
                 "typing": false
-            }
-        }))
+            }),
+        ))
         .send(&app_from_state(state.clone()))
         .await
         .take_json()
@@ -443,7 +472,11 @@ async fn presence_visibility_account_data_requires_encrypted_content() {
         .presence()
         .put(PresenceRecord {
             actor: "did:web:alice.example".to_owned(),
+            device_id: "ck:device:01904100-0000-7000-8000-a11ce0000001".to_owned(),
             status: "online".to_owned(),
+            status_message: None,
+            last_active_at: None,
+            expires_at: Some(chrono::Utc::now() + chrono::Duration::seconds(60)),
             updated_at: chrono::Utc::now(),
         })
         .await
@@ -459,20 +492,12 @@ async fn presence_visibility_account_data_requires_encrypted_content() {
         "encrypted presence account_data must not be parsed as plaintext relay policy: {visible_sync}"
     );
 
-    let sent_at = chrono::Utc::now();
-    let expires_at = sent_at + chrono::Duration::seconds(30);
     let presence: Value = TestClient::post("http://server/_cokret/self/ephemeral")
         .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&serde_json::json!({
-            "kind": "ck.presence",
-            "realm_id": DEMO_REALM_ID,
-            "actor_id": "did:web:alice.example",
-            "sent_at": sent_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
-            "expires_at": expires_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
-            "payload": {
-                "status": "online"
-            }
-        }))
+        .json(&broadcast_ephemeral_envelope(
+            "ck.presence",
+            serde_json::json!({"state": "online"}),
+        ))
         .send(&app_from_state(state.clone()))
         .await
         .take_json()
@@ -480,28 +505,27 @@ async fn presence_visibility_account_data_requires_encrypted_content() {
         .unwrap();
     assert_eq!(presence["accepted"], true);
     assert!(
-        state
+        !state
             .persistence
             .presence()
-            .get("did:web:alice.example")
+            .list_for_actor("did:web:alice.example")
             .await
             .unwrap()
-            .is_some(),
+            .is_empty(),
         "encrypted presence preferences must not clear server-visible presence"
     );
 
+    let typing_strand_id = "ck:strand:01904100-0000-7000-8000-7a1c00000004";
+    insert_typing_scope_strand(state.clone(), typing_strand_id, Some(true));
     let typing: Value = TestClient::post("http://server/_cokret/self/ephemeral")
         .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&serde_json::json!({
-            "kind": "ck.typing",
-            "realm_id": DEMO_REALM_ID,
-            "actor_id": "did:web:alice.example",
-            "sent_at": sent_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
-            "expires_at": expires_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
-            "payload": {
+        .json(&broadcast_ephemeral_envelope(
+            "ck.typing",
+            serde_json::json!({
+                "strand_id": typing_strand_id,
                 "typing": true
-            }
-        }))
+            }),
+        ))
         .send(&app_from_state(state.clone()))
         .await
         .take_json()
@@ -545,20 +569,12 @@ async fn presence_visibility_account_data_requires_encrypted_content() {
         "opaque presence policy must fail closed for cached presence: {hidden_sync}"
     );
 
-    let opaque_sent_at = chrono::Utc::now();
-    let opaque_expires_at = opaque_sent_at + chrono::Duration::seconds(30);
     let hidden_presence: Value = TestClient::post("http://server/_cokret/self/ephemeral")
         .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&serde_json::json!({
-            "kind": "ck.presence",
-            "realm_id": DEMO_REALM_ID,
-            "actor_id": "did:web:alice.example",
-            "sent_at": opaque_sent_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
-            "expires_at": opaque_expires_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
-            "payload": {
-                "status": "online"
-            }
-        }))
+        .json(&broadcast_ephemeral_envelope(
+            "ck.presence",
+            serde_json::json!({"state": "online"}),
+        ))
         .send(&app_from_state(state.clone()))
         .await
         .take_json()
@@ -569,25 +585,22 @@ async fn presence_visibility_account_data_requires_encrypted_content() {
         state
             .persistence
             .presence()
-            .get("did:web:alice.example")
+            .list_for_actor("did:web:alice.example")
             .await
             .unwrap()
-            .is_none(),
+            .is_empty(),
         "opaque presence policy must clear server-visible presence"
     );
 
     let hidden_typing: Value = TestClient::post("http://server/_cokret/self/ephemeral")
         .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&serde_json::json!({
-            "kind": "ck.typing",
-            "realm_id": DEMO_REALM_ID,
-            "actor_id": "did:web:alice.example",
-            "sent_at": opaque_sent_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
-            "expires_at": opaque_expires_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
-            "payload": {
+        .json(&broadcast_ephemeral_envelope(
+            "ck.typing",
+            serde_json::json!({
+                "strand_id": typing_strand_id,
                 "typing": true
-            }
-        }))
+            }),
+        ))
         .send(&app_from_state(state.clone()))
         .await
         .take_json()
@@ -610,22 +623,16 @@ async fn presence_visibility_account_data_requires_encrypted_content() {
 async fn typing_submit_rejects_unknown_strand_scope() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
-    let sent_at = chrono::Utc::now();
-    let expires_at = sent_at + chrono::Duration::seconds(30);
 
     let rejected_typing = TestClient::post("http://server/_cokret/self/ephemeral")
         .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&serde_json::json!({
-            "kind": "ck.typing",
-            "realm_id": DEMO_REALM_ID,
-            "actor_id": "did:web:alice.example",
-            "sent_at": sent_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
-            "expires_at": expires_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
-            "payload": {
+        .json(&broadcast_ephemeral_envelope(
+            "ck.typing",
+            serde_json::json!({
                 "strand_id": new_prefixed_uuid7("ck:strand:"),
                 "typing": true
-            }
-        }))
+            }),
+        ))
         .send(&app_from_state(state.clone()))
         .await;
     assert_eq!(rejected_typing.status_code, Some(StatusCode::FORBIDDEN));
@@ -1105,7 +1112,7 @@ async fn ephemeral_call_signal_enforces_structural_contract() {
             env["proof"] = serde_json::json!({
                 "kind": "detached_jws",
                 "alg": "EdDSA",
-                "verification_method": "did:web:alice.example#device",
+                "verification_method": format!("did:web:alice.example#{device_id}"),
                 "event_digest": event_digest,
                 "created_at": sent_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
                 "jws": "eyJhbGciOiJFZERTQSJ9..c2ln"
