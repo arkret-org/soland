@@ -520,10 +520,20 @@ pub fn verify_device_cross_signing_binding(
     principal_id: &str,
     device_id: &str,
     device_public_key: &str,
+    hpke_key: &str,
+    algorithms: &[String],
     binding: &Map<String, Value>,
 ) -> Result<(), AppError> {
-    check_device_cross_signing_binding(state, principal_id, device_id, device_public_key, binding)
-        .map_err(device_binding_reason_to_app_error)
+    check_device_cross_signing_binding(
+        state,
+        principal_id,
+        device_id,
+        device_public_key,
+        hpke_key,
+        algorithms,
+        binding,
+    )
+    .map_err(device_binding_reason_to_app_error)
 }
 
 /// Map a `check_device_cross_signing_binding` wire reason to a typed HTTP error,
@@ -561,6 +571,8 @@ pub(crate) fn check_device_cross_signing_binding(
     principal_id: &str,
     device_id: &str,
     device_public_key: &str,
+    hpke_key: &str,
+    algorithms: &[String],
     binding: &Map<String, Value>,
 ) -> Result<(), &'static str> {
     let principal =
@@ -593,6 +605,8 @@ pub(crate) fn check_device_cross_signing_binding(
         &principal,
         &device,
         device_public_key,
+        hpke_key,
+        algorithms,
         binding_generation,
     )
     .map_err(|_| "cross_signing_binding_input_failed")?;
@@ -615,6 +629,10 @@ pub fn validate_device_authorize_binding(
         serde_json::from_value(device_authorize_wire_payload(payload))
             .map_err(|_| "ck.device.authorize payload violates SDK artifact schema")?;
     payload_shape.validate_authorization_binding_one_of()?;
+    // device-lifecycle.md §5.2: the payload MUST carry the canonical
+    // (bytewise-sorted, deduplicated) algorithms array that entered the
+    // trust binding transcript.
+    payload_shape.validate_canonical_algorithms()?;
     let Some(binding) = payload
         .get("cross_signing_binding")
         .and_then(Value::as_object)
@@ -633,7 +651,15 @@ pub fn validate_device_authorize_binding(
         .get("device_public_key")
         .and_then(Value::as_str)
         .ok_or("device_authorize_missing_device_public_key")?;
-    check_device_cross_signing_binding(state, principal_id, device_id, device_public_key, binding)
+    check_device_cross_signing_binding(
+        state,
+        principal_id,
+        device_id,
+        device_public_key,
+        &payload_shape.hpke_key,
+        &payload_shape.algorithms,
+        binding,
+    )
 }
 
 fn device_authorize_wire_payload(payload: &Value) -> Value {
@@ -814,6 +840,13 @@ fn resolve_psk_in_control_set(
 /// `Revoked` otherwise.
 pub(crate) struct DeviceSigningDirectoryFacet {
     pub signing_key_did: Option<String>,
+    /// §8.2: the device HPKE sealing public key echoed verbatim from the
+    /// authorize payload projection. Present only for verified, non-revoked
+    /// devices; never substituted in projection.
+    pub hpke_key: Option<String>,
+    /// §8.2: the canonical trust-binding algorithms array echoed verbatim
+    /// from the authorize payload projection.
+    pub trust_algorithms: Option<Vec<String>>,
     pub status: DeviceStatus,
     /// Tier-2 (device-lifecycle.md §8.2): the device's authoritative
     /// `cross_signing_binding` echoed verbatim for client-side chain
@@ -858,6 +891,8 @@ pub(crate) async fn resolve_device_signing_directory_facet(
         _ => {
             return DeviceSigningDirectoryFacet {
                 signing_key_did: None,
+                hpke_key: None,
+                trust_algorithms: None,
                 status: DeviceStatus::Revoked,
                 cross_signing_binding: None,
                 enrollment_authority_binding: None,
@@ -868,6 +903,8 @@ pub(crate) async fn resolve_device_signing_directory_facet(
     if record.revoked_at.is_some() || record.verification_state != "verified" {
         return DeviceSigningDirectoryFacet {
             signing_key_did: None,
+            hpke_key: None,
+            trust_algorithms: None,
             status: DeviceStatus::Revoked,
             cross_signing_binding: None,
             enrollment_authority_binding: None,
@@ -882,6 +919,26 @@ pub(crate) async fn resolve_device_signing_directory_facet(
         .filter(|value| !value.is_empty())
         .filter(|value| decode_ed25519_key(value, "multibase").is_ok())
         .map(|value| format!("did:key:{value}"));
+    // §8.2: echo the projected hpke_key / canonical algorithms verbatim.
+    let hpke_key = record
+        .payload
+        .get("hpke_key")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
+    let trust_algorithms = record
+        .payload
+        .get("algorithms")
+        .and_then(Value::as_array)
+        .map(|values| {
+            values
+                .iter()
+                .filter_map(Value::as_str)
+                .map(ToOwned::to_owned)
+                .collect::<Vec<_>>()
+        })
+        .filter(|values| !values.is_empty());
     // Tier-2: echo the persisted `cross_signing_binding` verbatim (device.authorize
     // projection stored it). Deserialize defensively; a malformed stored value is
     // dropped rather than failing the whole query.
@@ -906,6 +963,8 @@ pub(crate) async fn resolve_device_signing_directory_facet(
         .and_then(|value| EventId::new(value.to_owned()).ok());
     DeviceSigningDirectoryFacet {
         signing_key_did,
+        hpke_key,
+        trust_algorithms,
         status: DeviceStatus::Active,
         cross_signing_binding,
         enrollment_authority_binding,

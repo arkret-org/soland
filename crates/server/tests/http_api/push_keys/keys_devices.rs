@@ -844,9 +844,15 @@ fn tier2_publish_and_authorize(
         cokret_sdk::base64url_encode(psk.sign(&ssk_input).to_bytes());
 
     // SSK signs the device binding over the §5.2 canonical input.
-    let device_input =
-        DeviceTrustBinding::canonical_input(&principal_did, &device_id, &device_public_key, 1)
-            .unwrap();
+    let device_input = DeviceTrustBinding::canonical_input(
+        &principal_did,
+        &device_id,
+        &device_public_key,
+        "z6LSTestTier2HpkeKey",
+        &["ck.hpke_x25519_aead_xchacha20poly1305.v1".to_owned(), "ck.mls.v1".to_owned()],
+        1,
+    )
+    .unwrap();
     let binding_signature = cokret_sdk::base64url_encode(ssk.sign(&device_input).to_bytes());
 
     let publish_payload = serde_json::to_value(&publish).unwrap();
@@ -854,6 +860,8 @@ fn tier2_publish_and_authorize(
         "principal_id": principal,
         "device_id": device,
         "device_public_key": device_public_key,
+        "hpke_key": "z6LSTestTier2HpkeKey",
+        "algorithms": ["ck.hpke_x25519_aead_xchacha20poly1305.v1", "ck.mls.v1"],
         "cross_signing_binding": {
             "verification_method": format!("{principal}#ck_self_signing_v1"),
             "alg": "EdDSA",
@@ -969,6 +977,8 @@ async fn keys_query_exposes_tier2_cross_signing_chain_and_verifies() {
         &principal_did,
         &device_id_typed,
         &device_public_key,
+        "z6LSTestTier2HpkeKey",
+        &["ck.hpke_x25519_aead_xchacha20poly1305.v1".to_owned(), "ck.mls.v1".to_owned()],
         &anchored_psk,
     );
     assert_eq!(state_ok, DeviceTrustState::CrossSigned);
@@ -984,6 +994,8 @@ async fn keys_query_exposes_tier2_cross_signing_chain_and_verifies() {
         &principal_did,
         &device_id_typed,
         &device_public_key,
+        "z6LSTestTier2HpkeKey",
+        &["ck.hpke_x25519_aead_xchacha20poly1305.v1".to_owned(), "ck.mls.v1".to_owned()],
         &anchored_psk,
     );
     assert_ne!(state_bad, DeviceTrustState::CrossSigned);

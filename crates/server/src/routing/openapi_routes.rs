@@ -199,6 +199,38 @@ pub async fn error_catcher(res: &mut Response, ctrl: &mut FlowCtrl) {
         return;
     }
 
+    // error-code-registry.json alignment for typed-body extractor rejections
+    // (`JsonBody<T>` surfaces a 400 StatusError caused by
+    // `ParseError::SerdeJson`):
+    //   * body parses as JSON but violates the declared schema contract
+    //     (missing field / bad typed value) → 422 `schema_violation`;
+    //   * body is not valid JSON at all (syntax / EOF) → 400 `invalid_param`
+    //     — it never parsed, so `schema_violation` ("parsed input…") does not
+    //     apply, and `bad_request` is not a registered code.
+    if status == StatusCode::BAD_REQUEST
+        && let salvo::http::ResBody::Error(status_error) = &res.body
+        && let Some(parse_error) = status_error
+            .cause
+            .as_ref()
+            .and_then(|cause| cause.downcast_ref::<salvo::http::ParseError>())
+        && let salvo::http::ParseError::SerdeJson(serde_error) = parse_error
+    {
+        if serde_error.classify() == serde_json::error::Category::Data {
+            let detail = format!("request body violates the declared schema: {serde_error}");
+            render_error(
+                res,
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "schema_violation",
+                &detail,
+            );
+        } else {
+            let detail = format!("request body is not valid JSON: {serde_error}");
+            render_error(res, StatusCode::BAD_REQUEST, "invalid_param", &detail);
+        }
+        ctrl.skip_rest();
+        return;
+    }
+
     let (code, message) = match status {
         StatusCode::NOT_FOUND => ("not_found", "not found"),
         StatusCode::METHOD_NOT_ALLOWED => ("method_not_allowed", "method not allowed"),
@@ -206,7 +238,11 @@ pub async fn error_catcher(res: &mut Response, ctrl: &mut FlowCtrl) {
         StatusCode::PAYLOAD_TOO_LARGE => ("payload_too_large", "payload too large"),
         StatusCode::TOO_MANY_REQUESTS => ("rate_limited", "rate limited"),
         StatusCode::INTERNAL_SERVER_ERROR => ("internal_error", "internal server error"),
-        _ if status.is_client_error() => ("bad_request", "bad request"),
+        // Fallback for framework-originated client errors that carry no typed
+        // AppError. `invalid_param` is the registered generic 400; other 4xx
+        // statuses without a specific code also degrade to it rather than an
+        // unregistered `bad_request`.
+        _ if status.is_client_error() => ("invalid_param", "invalid request"),
         _ => ("internal_error", "internal server error"),
     };
     render_error(res, status, code, message);

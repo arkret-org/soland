@@ -1048,6 +1048,24 @@ pub(super) async fn recovery_session_complete(
         .and_then(Value::as_str)
         .unwrap_or_default()
         .to_owned();
+    // §5.2: the trust binding transcript also covers the device HPKE sealing
+    // key and the canonical algorithms array carried by the authorize payload.
+    let hpke_key = authorize_payload
+        .get("hpke_key")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_owned();
+    let algorithms = authorize_payload
+        .get("algorithms")
+        .and_then(Value::as_array)
+        .map(|values| {
+            values
+                .iter()
+                .filter_map(Value::as_str)
+                .map(ToOwned::to_owned)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
     let binding = authorize_payload
         .get("cross_signing_binding")
         .and_then(Value::as_object)
@@ -1059,6 +1077,8 @@ pub(super) async fn recovery_session_complete(
         &record.principal_id,
         &record.requesting_device_id,
         &device_public_key,
+        &hpke_key,
+        &algorithms,
         binding,
     )?;
 

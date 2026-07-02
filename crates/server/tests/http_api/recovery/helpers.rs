@@ -240,10 +240,17 @@ pub(crate) fn device_authorize_material(session: &Value, ssk: &SigningKey) -> Va
     // The new device's real keypair — its multibase public key is what the
     // server records, and what a later recovery_receipt MUST be signed by.
     let device_public_key = test_ed25519_multibase_public(&recovery_device_key());
+    let hpke_key = "z6LSTestRecoveryHpkeKey";
+    let algorithms = [
+        "ck.hpke_x25519_aead_xchacha20poly1305.v1".to_owned(),
+        "ck.mls.v1".to_owned(),
+    ];
     let input = cokret_sdk::DeviceTrustBinding::canonical_input(
         &did,
         &device_id,
         &device_public_key,
+        hpke_key,
+        &algorithms,
         generation,
     )
     .unwrap();
@@ -252,6 +259,8 @@ pub(crate) fn device_authorize_material(session: &Value, ssk: &SigningKey) -> Va
         "principal_id": principal,
         "device_id": device,
         "device_public_key": device_public_key,
+        "hpke_key": hpke_key,
+        "algorithms": algorithms,
         "authorized_by": principal,
         // Canonical operation timestamps are seconds-precision UTC.
         "not_before": "2026-05-30T00:00:00Z",

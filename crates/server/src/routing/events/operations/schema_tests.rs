@@ -799,6 +799,8 @@ mod derived_relation_and_morph_immutability_tests {
                 "principal_id": "did:webvh:zQmZcDaFwUR8yQCZRkXoYEBi9hdzMSCCLASUVdwT1J4Qyc6:local.host:webvh:01kvqwpxssfq3bqm15rcd0g99x",
                 "device_id": "ck:device:019eefcb-5882-7861-bc30-3033fa32dcf6",
                 "device_public_key": "z6MkjHNtpwuhc2QSXzkf4DWoWp7eSMKB9PzfdnvaLB7kb3dG",
+                "hpke_key": "z6LSgy7T8CEsMDMzk1e4EBFVX8CDXWWzvkFZWSXhsC97zjcM",
+                "algorithms": ["ck.hpke_x25519_aead_xchacha20poly1305.v1", "ck.mls.v1"],
                 "authorized_by": "did:key:z6MknBuwKMPAzbhp6EwCnaxsEDk4G2KFeWRu273gYVuTY5jw",
                 "not_before": "2026-06-22T14:45:51Z",
                 "enrollment_authority_binding": {
@@ -824,6 +826,8 @@ mod derived_relation_and_morph_immutability_tests {
                 "principal_id": "did:web:alice.example",
                 "device_id": "ck:device:01904100-0000-7000-8000-000000000001",
                 "device_public_key": "z6MkDeviceKey",
+                "hpke_key": "z6LSDeviceHpkeKey",
+                "algorithms": ["ck.hpke_x25519_aead_xchacha20poly1305.v1", "ck.mls.v1"],
                 "authorized_by": "did:web:alice.example",
                 "not_before": "2026-05-30T00:00:00Z",
                 "device_signature": "c2ln",

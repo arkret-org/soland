@@ -1169,6 +1169,18 @@ async fn project_device_authorize(state: &crate::state::AppState, operation: &Op
         );
         map.entry("device_id".to_owned())
             .or_insert_with(|| Value::String(device_id.to_owned()));
+        // §5.2: hpke_key and canonical algorithms are part of the authorized
+        // device record; project them verbatim (services MUST NOT substitute
+        // these values in projection).
+        match payload.get("hpke_key").and_then(Value::as_str) {
+            Some(hpke_key) if !hpke_key.trim().is_empty() => {
+                map.insert("hpke_key".to_owned(), Value::String(hpke_key.to_owned()));
+            }
+            _ => {}
+        }
+        if let Some(algorithms @ Value::Array(_)) = payload.get("algorithms") {
+            map.insert("algorithms".to_owned(), algorithms.clone());
+        }
         map.insert("device_authorize_projected".to_owned(), Value::Bool(true));
         let operation_uuid = ids::typed_uuid_part_expect_internal(operation.operation_id.as_str());
         map.insert(

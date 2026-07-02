@@ -193,6 +193,18 @@ fn validate_ephemeral_envelope(
             "ephemeral signal is already expired",
         ));
     }
+    // ephemeral-envelope.schema.json: every broadcast ephemeral kind MUST
+    // carry `device_id` and a detached-JWS `proof` whose verification_method
+    // is `{actor_id}#{device_id}` and whose event_digest covers the canonical
+    // envelope bytes without `proof`. (`ck.realm_key.request` is a targeted
+    // to-device relay, not one of the four broadcast kinds, and keeps its own
+    // admission rules in realm_key_request.rs.)
+    if matches!(
+        envelope.kind.as_str(),
+        "ck.call.signal" | "ck.presence" | "ck.typing" | "ck.receipt.read"
+    ) {
+        validate_ephemeral_broadcast_proof_shape(envelope)?;
+    }
     Ok(())
 }
 
@@ -374,38 +386,53 @@ fn admit_ephemeral_call_signal(
             "ck.call.signal envelope failed structural validation: {error}"
         ))
     })?;
-    validate_ephemeral_call_signal_proof_shape(envelope)?;
     Ok(payload)
 }
 
-fn validate_ephemeral_call_signal_proof_shape(
+/// Structural proof admission shared by all four broadcast ephemeral kinds
+/// (`ephemeral-envelope.schema.json`): `device_id` present, detached-JWS
+/// `proof` present, `verification_method == {actor_id}#{device_id}`, and
+/// `event_digest` covering the canonical envelope bytes without `proof`.
+///
+/// Boundary (unchanged from the call.signal-only era): the relay does NOT
+/// perform cryptographic `proof` verification — the spec assigns signature
+/// verification to the *receiver*. The relay enforces the structural contract
+/// so malformed signals never enter the ephemeral fan-out.
+fn validate_ephemeral_broadcast_proof_shape(
     envelope: &cokret_sdk::EphemeralEnvelope,
 ) -> Result<(), crate::error::AppError> {
-    let proof_value = envelope
-        .proof
-        .as_ref()
-        .ok_or_else(|| crate::error::AppError::invalid_param("ck.call.signal proof is required"))?;
+    let kind = envelope.kind.as_str();
+    let device_id = envelope.device_id.as_ref().ok_or_else(|| {
+        crate::error::AppError::invalid_param(format!(
+            "{kind} device_id is required for broadcast ephemeral signals"
+        ))
+    })?;
+    let proof_value = envelope.proof.as_ref().ok_or_else(|| {
+        crate::error::AppError::invalid_param(format!("{kind} proof is required"))
+    })?;
     let proof: cokret_sdk::Proof =
         serde_json::from_value(proof_value.clone()).map_err(|error| {
-            crate::error::AppError::invalid_param(format!(
-                "ck.call.signal proof is malformed: {error}"
-            ))
+            crate::error::AppError::invalid_param(format!("{kind} proof is malformed: {error}"))
         })?;
     proof.validate_production().map_err(|error| {
         crate::error::AppError::invalid_param(format!(
-            "ck.call.signal proof is not production-grade: {error}"
+            "{kind} proof is not production-grade: {error}"
         ))
     })?;
+    let expected_vm = format!("{}#{}", envelope.actor_id, device_id.as_str());
+    if proof.verification_method != expected_vm {
+        return Err(crate::error::AppError::invalid_param(format!(
+            "{kind} proof.verification_method must be {{actor_id}}#{{device_id}}"
+        )));
+    }
     let parts = proof.jws.split('.').collect::<Vec<_>>();
     if parts.len() != 3 || !parts[1].is_empty() {
-        return Err(crate::error::AppError::invalid_param(
-            "ck.call.signal proof.jws must be detached header..signature",
-        ));
+        return Err(crate::error::AppError::invalid_param(format!(
+            "{kind} proof.jws must be detached header..signature"
+        )));
     }
     let mut without_proof = serde_json::to_value(envelope).map_err(|error| {
-        crate::error::AppError::invalid_param(format!(
-            "ck.call.signal envelope is not serialisable: {error}"
-        ))
+        crate::error::AppError::invalid_param(format!("{kind} envelope is not serialisable: {error}"))
     })?;
     if let Some(object) = without_proof.as_object_mut() {
         object.remove("proof");
@@ -413,14 +440,14 @@ fn validate_ephemeral_call_signal_proof_shape(
     let canonical =
         cokret_sdk::canonical::canonical_json_bytes(&without_proof).map_err(|error| {
             crate::error::AppError::invalid_param(format!(
-                "ck.call.signal envelope canonicalization failed: {error}"
+                "{kind} envelope canonicalization failed: {error}"
             ))
         })?;
     let expected = cokret_sdk::canonical::sha256_digest(&canonical);
     if proof.event_digest.as_str() != expected {
-        return Err(crate::error::AppError::invalid_param(
-            "ck.call.signal proof.event_digest does not match the envelope without proof",
-        ));
+        return Err(crate::error::AppError::invalid_param(format!(
+            "{kind} proof.event_digest does not match the envelope without proof"
+        )));
     }
     Ok(())
 }

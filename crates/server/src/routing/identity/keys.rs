@@ -265,6 +265,8 @@ async fn keys_query(
                 QueryDeviceRecord {
                     algorithms,
                     device_signing_key: facet.signing_key_did,
+                    hpke_key: facet.hpke_key,
+                    trust_algorithms: facet.trust_algorithms,
                     device_status: Some(facet.status),
                     cross_signing_binding: facet.cross_signing_binding,
                     enrollment_authority_binding: facet.enrollment_authority_binding,
