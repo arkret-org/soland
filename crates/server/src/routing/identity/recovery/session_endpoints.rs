@@ -1043,29 +1043,18 @@ pub(super) async fn recovery_session_complete(
                 .with_wire_code("recovery_authorization_session_mismatch"),
         );
     }
-    let device_public_key = authorize_payload
-        .get("device_public_key")
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_owned();
-    // §5.2: the trust binding transcript also covers the device HPKE sealing
-    // key and the canonical algorithms array carried by the authorize payload.
-    let hpke_key = authorize_payload
-        .get("hpke_key")
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_owned();
-    let algorithms = authorize_payload
-        .get("algorithms")
-        .and_then(Value::as_array)
-        .map(|values| {
-            values
-                .iter()
-                .filter_map(Value::as_str)
-                .map(ToOwned::to_owned)
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
+    // Parse the accepted authorize payload into the typed SDK wire shape so
+    // the §5.2 transcript fields (device_public_key / hpke_key / algorithms)
+    // are checked access, not stringly lookups. Projection-injected envelope
+    // fields are stripped first.
+    let typed_authorize: cokret_sdk::DeviceAuthorizePayload = serde_json::from_value(
+        crate::routing::identity::cross_signing::device_authorize_wire_payload(&authorize_payload),
+    )
+    .map_err(|error| {
+        AppError::invalid_param(format!(
+            "authorize event payload is not the typed device_authorize wire shape: {error}"
+        ))
+    })?;
     let binding = authorize_payload
         .get("cross_signing_binding")
         .and_then(Value::as_object)
@@ -1076,9 +1065,9 @@ pub(super) async fn recovery_session_complete(
         state,
         &record.principal_id,
         &record.requesting_device_id,
-        &device_public_key,
-        &hpke_key,
-        &algorithms,
+        &typed_authorize.device_public_key,
+        &typed_authorize.hpke_key,
+        &typed_authorize.algorithms,
         binding,
     )?;
 
@@ -1144,7 +1133,7 @@ pub(super) async fn recovery_session_complete(
             // The accepted device key (from the referenced ck.device.authorize),
             // used to verify a later recovery_receipt is signed by THIS device
             // (recovery-receipt.schema.json auth_data.verification_method, §15 step 7).
-            "device_public_key": device_public_key,
+            "device_public_key": typed_authorize.device_public_key,
             "authorization_event_id": authorization_event_id,
         }),
         created_at: now,

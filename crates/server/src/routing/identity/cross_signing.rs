@@ -662,7 +662,10 @@ pub fn validate_device_authorize_binding(
     )
 }
 
-fn device_authorize_wire_payload(payload: &Value) -> Value {
+/// Strip the reducer/projection-injected envelope fields so the remaining
+/// object is exactly the wire `device_authorize_payload` shape the typed SDK
+/// counterpart (`deny_unknown_fields`) accepts.
+pub(crate) fn device_authorize_wire_payload(payload: &Value) -> Value {
     let mut wire_payload = payload.clone();
     if let Some(object) = wire_payload.as_object_mut() {
         object.remove("event_id");
@@ -863,6 +866,29 @@ pub(crate) struct DeviceSigningDirectoryFacet {
     pub device_authorize_event_id: Option<EventId>,
 }
 
+/// Typed view of the fields the device projection
+/// (`project_device_authorize` / recovery completion) persists into the
+/// devices-table `payload` column and the directory facet reads back.
+/// Tolerant of extra stored fields (it is a storage row, not a wire shape);
+/// every field is optional because legacy rows predate the newer columns.
+#[derive(Debug, Default, serde::Deserialize)]
+pub(crate) struct ProjectedDevicePayload {
+    #[serde(default)]
+    pub device_public_key: Option<String>,
+    /// §8.2: hpke_key echoed verbatim from the authorize payload.
+    #[serde(default)]
+    pub hpke_key: Option<String>,
+    /// §8.2: canonical trust-binding algorithms echoed verbatim.
+    #[serde(default)]
+    pub algorithms: Option<Vec<String>>,
+    #[serde(default)]
+    pub cross_signing_binding: Option<cokret_sdk::QueryDeviceCrossSigningBinding>,
+    #[serde(default)]
+    pub enrollment_authority_binding: Option<DeviceEnrollmentAuthorityBinding>,
+    #[serde(default)]
+    pub device_authorize_event_id: Option<String>,
+}
+
 /// Resolve the `keys/query` signing-key directory facet for `(principal_id,
 /// device_id)`. Single source of truth for the "verified + not revoked → return
 /// `device_signing_key`" rule that `device-lifecycle.md` §8.2 mandates; the
@@ -911,63 +937,36 @@ pub(crate) async fn resolve_device_signing_directory_facet(
             device_authorize_event_id: None,
         };
     }
-    let signing_key_did = record
-        .payload
-        .get("device_public_key")
-        .and_then(Value::as_str)
+    // Parse the stored projection row once through the typed view; a
+    // malformed stored value drops the affected optional field rather than
+    // failing the whole query.
+    let payload: ProjectedDevicePayload =
+        serde_json::from_value(record.payload.clone()).unwrap_or_default();
+    let signing_key_did = payload
+        .device_public_key
+        .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .filter(|value| decode_ed25519_key(value, "multibase").is_ok())
         .map(|value| format!("did:key:{value}"));
     // §8.2: echo the projected hpke_key / canonical algorithms verbatim.
-    let hpke_key = record
-        .payload
-        .get("hpke_key")
-        .and_then(Value::as_str)
+    let hpke_key = payload
+        .hpke_key
+        .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned);
-    let trust_algorithms = record
-        .payload
-        .get("algorithms")
-        .and_then(Value::as_array)
-        .map(|values| {
-            values
-                .iter()
-                .filter_map(Value::as_str)
-                .map(ToOwned::to_owned)
-                .collect::<Vec<_>>()
-        })
-        .filter(|values| !values.is_empty());
-    // Tier-2: echo the persisted `cross_signing_binding` verbatim (device.authorize
-    // projection stored it). Deserialize defensively; a malformed stored value is
-    // dropped rather than failing the whole query.
-    let cross_signing_binding = record
-        .payload
-        .get("cross_signing_binding")
-        .filter(|value| value.is_object())
-        .and_then(|value| {
-            serde_json::from_value::<cokret_sdk::QueryDeviceCrossSigningBinding>(value.clone()).ok()
-        });
-    let enrollment_authority_binding = record
-        .payload
-        .get("enrollment_authority_binding")
-        .filter(|value| value.is_object())
-        .and_then(|value| {
-            serde_json::from_value::<DeviceEnrollmentAuthorityBinding>(value.clone()).ok()
-        });
-    let device_authorize_event_id = record
-        .payload
-        .get("device_authorize_event_id")
-        .and_then(Value::as_str)
-        .and_then(|value| EventId::new(value.to_owned()).ok());
+    let trust_algorithms = payload.algorithms.filter(|values| !values.is_empty());
+    let device_authorize_event_id = payload
+        .device_authorize_event_id
+        .and_then(|value| EventId::new(value).ok());
     DeviceSigningDirectoryFacet {
         signing_key_did,
         hpke_key,
         trust_algorithms,
         status: DeviceStatus::Active,
-        cross_signing_binding,
-        enrollment_authority_binding,
+        cross_signing_binding: payload.cross_signing_binding,
+        enrollment_authority_binding: payload.enrollment_authority_binding,
         device_authorize_event_id,
     }
 }

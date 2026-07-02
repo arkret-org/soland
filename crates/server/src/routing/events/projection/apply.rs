@@ -1121,21 +1121,25 @@ fn realm_key_request_device_message_content(
 async fn project_device_authorize(state: &crate::state::AppState, operation: &Operation) {
     use crate::state::DeviceInventoryRecord;
     let payload = &operation.payload;
-    let Some(principal_id) = payload.get("principal_id").and_then(Value::as_str) else {
-        return;
+    // Accepted device.authorize payloads already passed schema validation;
+    // parse the wire shape (projection-injected envelope fields stripped)
+    // into the typed SDK counterpart so field access is checked, not stringly.
+    let wire_payload =
+        crate::routing::identity::cross_signing::device_authorize_wire_payload(payload);
+    let typed: cokret_sdk::DeviceAuthorizePayload = match serde_json::from_value(wire_payload) {
+        Ok(typed) => typed,
+        Err(error) => {
+            tracing::warn!(%error, "accepted ck.device.authorize payload is not the typed wire shape; skipping projection");
+            return;
+        }
     };
-    let Some(device_id) = payload.get("device_id").and_then(Value::as_str) else {
-        return;
-    };
-    let device_public_key = payload
-        .get("device_public_key")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
-    let Some(device_public_key) = device_public_key else {
+    let principal_id = typed.principal_id.as_str();
+    let device_id = typed.device_id.as_str();
+    let device_public_key = typed.device_public_key.trim();
+    if device_public_key.is_empty() {
         // No key to project; nothing the directory needs from this event.
         return;
-    };
+    }
     let existing = state
         .persistence
         .devices()
@@ -1172,15 +1176,19 @@ async fn project_device_authorize(state: &crate::state::AppState, operation: &Op
         // §5.2: hpke_key and canonical algorithms are part of the authorized
         // device record; project them verbatim (services MUST NOT substitute
         // these values in projection).
-        match payload.get("hpke_key").and_then(Value::as_str) {
-            Some(hpke_key) if !hpke_key.trim().is_empty() => {
-                map.insert("hpke_key".to_owned(), Value::String(hpke_key.to_owned()));
-            }
-            _ => {}
+        if !typed.hpke_key.trim().is_empty() {
+            map.insert("hpke_key".to_owned(), Value::String(typed.hpke_key.clone()));
         }
-        if let Some(algorithms @ Value::Array(_)) = payload.get("algorithms") {
-            map.insert("algorithms".to_owned(), algorithms.clone());
-        }
+        map.insert(
+            "algorithms".to_owned(),
+            Value::Array(
+                typed
+                    .algorithms
+                    .iter()
+                    .map(|algorithm| Value::String(algorithm.clone()))
+                    .collect(),
+            ),
+        );
         map.insert("device_authorize_projected".to_owned(), Value::Bool(true));
         let operation_uuid = ids::typed_uuid_part_expect_internal(operation.operation_id.as_str());
         map.insert(
