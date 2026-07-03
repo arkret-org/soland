@@ -387,6 +387,10 @@ pub fn operation_schema_for_kind(kind: &str) -> Option<OperationPayloadSchema> {
                 requirements: MLS_GENESIS_REQUIREMENTS,
                 validate: None,
             },
+            cokret_sdk::events::kinds::MLS_PROPOSAL => OperationPayloadSchema {
+                requirements: MLS_PROPOSAL_REQUIREMENTS,
+                validate: None,
+            },
             cokret_sdk::events::kinds::MLS_WELCOME => OperationPayloadSchema {
                 requirements: MLS_WELCOME_REQUIREMENTS,
                 validate: None,

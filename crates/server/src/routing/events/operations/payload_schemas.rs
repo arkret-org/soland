@@ -33,6 +33,21 @@ pub(crate) const MLS_GENESIS_REQUIREMENTS: &[PayloadRequirement] = &[PayloadRequ
     MLS_GENESIS_GROUP_FIELDS,
     "ck.mls.genesis requires mls_group_id for reducer projection",
 )];
+pub(crate) const MLS_PROPOSAL_GROUP_FIELDS: &[&str] = &["group_id", "mls_group_id"];
+pub(crate) const MLS_PROPOSAL_REQUIREMENTS: &[PayloadRequirement] = &[
+    PayloadRequirement::AnyOf(
+        MLS_PROPOSAL_GROUP_FIELDS,
+        "ck.mls.proposal requires mls_group_id for reducer projection",
+    ),
+    PayloadRequirement::Required(
+        "base_epoch",
+        "ck.mls.proposal requires base_epoch for reducer projection",
+    ),
+    PayloadRequirement::Required(
+        "proposal_type",
+        "ck.mls.proposal requires proposal_type for reducer projection",
+    ),
+];
 pub(crate) const MLS_WELCOME_GROUP_FIELDS: &[&str] = &["group_id", "mls_group_id"];
 pub(crate) const MLS_WELCOME_RECIPIENT_FIELDS: &[&str] =
     &["recipient_actor_id", "recipient_principal_id"];
