@@ -31,7 +31,6 @@ impl PolicyDocumentStore for MemoryPolicyDocumentStore {
         Ok(self
             .data
             .lock()
-            .expect("policy documents lock")
             .get(policy_id)
             .cloned())
     }
@@ -40,7 +39,6 @@ impl PolicyDocumentStore for MemoryPolicyDocumentStore {
         let id = record.policy_id.clone();
         self.data
             .lock()
-            .expect("policy documents lock")
             .insert(id, record);
         Ok(())
     }
@@ -49,7 +47,6 @@ impl PolicyDocumentStore for MemoryPolicyDocumentStore {
         Ok(self
             .data
             .lock()
-            .expect("policy documents lock")
             .remove(policy_id)
             .is_some())
     }
@@ -58,7 +55,6 @@ impl PolicyDocumentStore for MemoryPolicyDocumentStore {
         Ok(self
             .data
             .lock()
-            .expect("policy documents lock")
             .values()
             .filter(|record| record.owner == owner)
             .cloned()
@@ -69,14 +65,13 @@ impl PolicyDocumentStore for MemoryPolicyDocumentStore {
         Ok(self
             .data
             .lock()
-            .expect("policy documents lock")
             .values()
             .cloned()
             .collect())
     }
 
     async fn list_active(&self) -> PersistenceResult<Vec<PolicyDocumentRecord>> {
-        let guard = self.data.lock().expect("policy documents lock");
+        let guard = self.data.lock();
         Ok(guard
             .values()
             .filter(|record| record.active)

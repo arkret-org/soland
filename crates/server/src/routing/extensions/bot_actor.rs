@@ -107,7 +107,8 @@ pub async fn list_bots_owned_by(
 
 /// Validate that an extension actor DID is a bare DID scalar (no DID URL
 /// fragment) and well-formed, before it is recorded against an applet.
-#[allow(dead_code)]
+/// Wired into the bot register / install-commit and ghost provision write
+/// paths (G3.S9).
 pub(super) fn validate_extension_actor_did(did: &str) -> Result<(), AppError> {
     if did.contains('#') {
         return Err(AppError::invalid_param(

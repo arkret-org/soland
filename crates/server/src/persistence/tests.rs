@@ -478,7 +478,7 @@ async fn push_bridge_verify_contract_freshness_stale_rejected() {
     // distant past. Mirrors what would happen if the refresh worker fell
     // behind for several days.
     {
-        let mut data = store.data.lock().unwrap();
+        let mut data = store.data.lock();
         let record = data.get_mut(url).unwrap();
         record.freshness_at = Utc::now() - chrono::Duration::days(7);
     }
@@ -1368,7 +1368,7 @@ async fn optional_pg_persistence_store() -> Option<PgPersistenceStore> {
     {
         return None;
     }
-    let db = crate::db::Db::from_env()
+    let db = soland_data::Db::from_env()
         .await
         .expect("postgres migrations should run");
     Some(PgPersistenceStore::new(

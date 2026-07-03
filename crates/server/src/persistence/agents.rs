@@ -48,7 +48,7 @@ impl MemoryAgentParticipationStore {
 impl AgentParticipationStore for MemoryAgentParticipationStore {
     async fn put_selection(&self, record: Value) -> PersistenceResult<()> {
         let target = agent_participation_record_key(&record);
-        let mut guard = self.selections.lock().expect("agent participation lock");
+        let mut guard = self.selections.lock();
         guard.retain(|existing| agent_participation_record_key(existing) != target);
         guard.push(record);
         Ok(())
@@ -58,7 +58,6 @@ impl AgentParticipationStore for MemoryAgentParticipationStore {
         Ok(self
             .selections
             .lock()
-            .expect("agent participation lock")
             .iter()
             .filter(|row| {
                 row.get("agent_principal_id").and_then(Value::as_str) == Some(agent_principal_id)
@@ -74,7 +73,6 @@ impl AgentParticipationStore for MemoryAgentParticipationStore {
         Ok(self
             .ceilings
             .lock()
-            .expect("agent participation ceiling lock")
             .iter()
             .filter(|row| {
                 row.get("scope_key")
@@ -93,8 +91,7 @@ impl AgentParticipationStore for MemoryAgentParticipationStore {
             .map(ToOwned::to_owned);
         let mut guard = self
             .ceilings
-            .lock()
-            .expect("agent participation ceiling lock");
+            .lock();
         guard.retain(|existing| {
             existing
                 .get("scope_key")
@@ -337,7 +334,7 @@ impl AgentStore for MemoryAgentStore {
                 "agent record missing agent_principal_id".to_owned(),
             ));
         };
-        self.data.lock().expect("agent lock").insert(id, record);
+        self.data.lock().insert(id, record);
         Ok(())
     }
 
@@ -345,7 +342,6 @@ impl AgentStore for MemoryAgentStore {
         Ok(self
             .data
             .lock()
-            .expect("agent lock")
             .get(agent_principal_id)
             .cloned())
     }
@@ -354,7 +350,6 @@ impl AgentStore for MemoryAgentStore {
         Ok(self
             .data
             .lock()
-            .expect("agent lock")
             .values()
             .filter(|r| r.get("controller_did").and_then(Value::as_str) == Some(controller_did))
             .cloned()
@@ -367,7 +362,7 @@ impl AgentStore for MemoryAgentStore {
         state: &str,
         changed_at: &str,
     ) -> PersistenceResult<bool> {
-        let mut guard = self.data.lock().expect("agent lock");
+        let mut guard = self.data.lock();
         if let Some(record) = guard.get_mut(agent_principal_id) {
             if let Some(obj) = record.as_object_mut() {
                 obj.insert("state".to_owned(), Value::String(state.to_owned()));

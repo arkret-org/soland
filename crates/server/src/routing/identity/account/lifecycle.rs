@@ -354,7 +354,6 @@ async fn run_account_deactivation_fanout(
     let identity_link_cache_invalidated = state
         .member_identity
         .lock()
-        .expect("member_identity lock")
         .invalidate_handle_claims_for_subject(did);
     let capability_cache_invalidated = state.authz.mark_projected_grants_revoked_for_subject(did);
     Ok(AccountDeactivationFanout {
@@ -588,7 +587,7 @@ async fn append_account_deactivation_propagation_state(
 }
 
 fn deactivation_peer_service_targets_for_actor(state: &AppState, actor: &str) -> Vec<Value> {
-    let projection = state.projection.lock().expect("projection lock");
+    let projection = state.projection.lock();
     let actor_realms = projection
         .members
         .values()
@@ -902,7 +901,7 @@ fn remove_realm_memberships_for_actor(state: &AppState, actor: &str) -> usize {
         Ok(did) => did,
         Err(_) => return 0,
     };
-    let mut realms = state.realms.lock().expect("realms lock");
+    let mut realms = state.realms.lock();
     let realm_ids: Vec<cokret_sdk::RealmId> = realms
         .entries_iter()
         .filter(|(_id, entry)| entry.members.contains(&actor_id))
@@ -968,7 +967,8 @@ async fn affected_erasure_realms_for_actor(state: &AppState, actor: &str) -> Vec
             realms.insert(event.realm_id);
         }
     }
-    if let Ok(projection) = state.projection.lock() {
+    {
+        let projection = state.projection.lock();
         for message in projection.messages.values() {
             if message.sender == actor {
                 realms.insert(message.realm_id.clone());

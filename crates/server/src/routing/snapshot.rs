@@ -11,7 +11,7 @@ pub(crate) async fn snapshot_manifest_for_realm(
     let realm_id_value = cokret_sdk::RealmId::new(realm_id.to_owned())
         .map_err(|_| crate::error::AppError::invalid_param("invalid realm_id"))?;
     {
-        let realms = state.realms.lock().expect("realms lock");
+        let realms = state.realms.lock();
         if realms.get(&realm_id_value).is_none() {
             return Err(crate::error::AppError::not_found("not found"));
         }

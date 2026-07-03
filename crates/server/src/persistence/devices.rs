@@ -112,12 +112,12 @@ impl DeviceInventoryStore for MemoryDeviceInventoryStore {
         actor: &str,
         device_id: &str,
     ) -> PersistenceResult<Option<DeviceInventoryRecord>> {
-        let data = self.data.lock().expect("lock");
+        let data = self.data.lock();
         Ok(data.get(&(actor.to_owned(), device_id.to_owned())).cloned())
     }
 
     async fn put(&self, record: &DeviceInventoryRecord) -> PersistenceResult<()> {
-        let mut data = self.data.lock().expect("lock");
+        let mut data = self.data.lock();
         data.insert(
             (record.actor.clone(), record.device_id.clone()),
             record.clone(),
@@ -126,7 +126,7 @@ impl DeviceInventoryStore for MemoryDeviceInventoryStore {
     }
 
     async fn list_for_actor(&self, actor: &str) -> PersistenceResult<Vec<DeviceInventoryRecord>> {
-        let data = self.data.lock().expect("lock");
+        let data = self.data.lock();
         Ok(data
             .values()
             .filter(|record| record.actor == actor && record.revoked_at.is_none())
@@ -138,7 +138,7 @@ impl DeviceInventoryStore for MemoryDeviceInventoryStore {
         &self,
         actor: &str,
     ) -> PersistenceResult<Vec<DeviceInventoryRecord>> {
-        let data = self.data.lock().expect("lock");
+        let data = self.data.lock();
         Ok(data
             .values()
             .filter(|record| record.actor == actor)
@@ -147,7 +147,7 @@ impl DeviceInventoryStore for MemoryDeviceInventoryStore {
     }
 
     async fn list(&self) -> PersistenceResult<Vec<DeviceInventoryRecord>> {
-        let data = self.data.lock().expect("lock");
+        let data = self.data.lock();
         Ok(data
             .values()
             .filter(|record| record.revoked_at.is_none())
@@ -237,7 +237,6 @@ impl DeviceMessageStore for MemoryDeviceMessageStore {
     async fn append(&self, message: DeviceMessageRecord) -> PersistenceResult<()> {
         self.queue
             .lock()
-            .expect("device message lock")
             .push_back(message);
         Ok(())
     }
@@ -246,7 +245,6 @@ impl DeviceMessageStore for MemoryDeviceMessageStore {
         Ok(self
             .txns
             .lock()
-            .expect("device message txn lock")
             .insert(key))
     }
 
@@ -261,7 +259,7 @@ impl DeviceMessageStore for MemoryDeviceMessageStore {
         }
         let now = Utc::now();
         let token = fresh_device_message_ack_token();
-        let mut tokens = self.ack_tokens.lock().expect("device message ack lock");
+        let mut tokens = self.ack_tokens.lock();
         tokens.retain(|_, record| record.expires_at > now);
         tokens.insert(
             token.clone(),
@@ -283,7 +281,7 @@ impl DeviceMessageStore for MemoryDeviceMessageStore {
         ack_token: &str,
     ) -> PersistenceResult<Option<usize>> {
         let now = Utc::now();
-        let mut tokens = self.ack_tokens.lock().expect("device message ack lock");
+        let mut tokens = self.ack_tokens.lock();
         tokens.retain(|_, record| record.expires_at > now);
         let Some(record) = tokens.get_mut(ack_token) else {
             return Ok(None);
@@ -295,7 +293,7 @@ impl DeviceMessageStore for MemoryDeviceMessageStore {
             return Ok(Some(0));
         }
         let ack_position = record.queue_position;
-        let mut queue = self.queue.lock().expect("device message lock");
+        let mut queue = self.queue.lock();
         let before = queue.len();
         queue.retain(|message| {
             !(message.recipient == recipient
@@ -315,7 +313,6 @@ impl DeviceMessageStore for MemoryDeviceMessageStore {
         Ok(self
             .queue
             .lock()
-            .expect("device message lock")
             .iter()
             .filter(|message| {
                 message.recipient == recipient
@@ -327,12 +324,11 @@ impl DeviceMessageStore for MemoryDeviceMessageStore {
     }
 
     async fn prune_expired(&self, now: chrono::DateTime<Utc>) -> PersistenceResult<usize> {
-        let mut queue = self.queue.lock().expect("device message lock");
+        let mut queue = self.queue.lock();
         let before = queue.len();
         let mut watermarks = self
             .lost_watermarks
-            .lock()
-            .expect("device message lost watermark lock");
+            .lock();
         for message in queue.iter() {
             if device_message_expires_at(message) <= now {
                 let key = (message.recipient.clone(), message.device_id.clone());
@@ -352,7 +348,7 @@ impl DeviceMessageStore for MemoryDeviceMessageStore {
         if per_device_capacity == 0 {
             return Ok(0);
         }
-        let mut queue = self.queue.lock().expect("device message lock");
+        let mut queue = self.queue.lock();
         let before = queue.len();
         let mut positions_by_device: BTreeMap<(String, String), Vec<i64>> = BTreeMap::new();
         for message in queue.iter() {
@@ -377,8 +373,7 @@ impl DeviceMessageStore for MemoryDeviceMessageStore {
         {
             let mut watermarks = self
                 .lost_watermarks
-                .lock()
-                .expect("device message lost watermark lock");
+                .lock();
             for (key, lost_through) in &lost_through_by_device {
                 let entry = watermarks.entry(key.clone()).or_default();
                 *entry = (*entry).max(*lost_through);
@@ -400,18 +395,16 @@ impl DeviceMessageStore for MemoryDeviceMessageStore {
         Ok(self
             .lost_watermarks
             .lock()
-            .expect("device message lost watermark lock")
             .get(&(recipient.to_owned(), device_id.to_owned()))
             .copied())
     }
 
     async fn purge(&self, recipient: &str, device_id: &str) -> PersistenceResult<usize> {
-        let mut queue = self.queue.lock().expect("device message lock");
+        let mut queue = self.queue.lock();
         let before = queue.len();
         queue.retain(|message| !(message.recipient == recipient && message.device_id == device_id));
         self.ack_tokens
             .lock()
-            .expect("device message ack lock")
             .retain(|_, token| !(token.recipient == recipient && token.device_id == device_id));
         Ok(before - queue.len())
     }
@@ -421,7 +414,7 @@ impl DeviceMessageStore for MemoryDeviceMessageStore {
         recipient: &str,
         new_generation: u64,
     ) -> PersistenceResult<usize> {
-        let mut queue = self.queue.lock().expect("device message lock");
+        let mut queue = self.queue.lock();
         let before = queue.len();
         let mut lost_by_device: BTreeMap<String, i64> = BTreeMap::new();
         for message in queue.iter().filter(|message| {
@@ -437,8 +430,7 @@ impl DeviceMessageStore for MemoryDeviceMessageStore {
         {
             let mut watermarks = self
                 .lost_watermarks
-                .lock()
-                .expect("device message lost watermark lock");
+                .lock();
             for (device_id, lost_through) in &lost_by_device {
                 let key = (recipient.to_owned(), device_id.clone());
                 let entry = watermarks.entry(key).or_default();
@@ -451,7 +443,6 @@ impl DeviceMessageStore for MemoryDeviceMessageStore {
         });
         self.ack_tokens
             .lock()
-            .expect("device message ack lock")
             .retain(|_, token| token.recipient != recipient);
         Ok(before - queue.len())
     }
@@ -836,7 +827,6 @@ impl DeviceKeyStore for MemoryDeviceKeyStore {
     async fn put(&self, actor: String, device_id: String, payload: Value) -> PersistenceResult<()> {
         self.data
             .lock()
-            .expect("device keys lock")
             .insert((actor, device_id), payload);
         Ok(())
     }
@@ -845,7 +835,6 @@ impl DeviceKeyStore for MemoryDeviceKeyStore {
         Ok(self
             .data
             .lock()
-            .expect("device keys lock")
             .get(&(actor.to_owned(), device_id.to_owned()))
             .cloned())
     }
@@ -872,7 +861,6 @@ impl OneTimeKeyStore for MemoryOneTimeKeyStore {
     ) -> PersistenceResult<()> {
         self.data
             .lock()
-            .expect("one time keys lock")
             .insert((actor, device_id), keys);
         Ok(())
     }
@@ -881,7 +869,6 @@ impl OneTimeKeyStore for MemoryOneTimeKeyStore {
         Ok(self
             .data
             .lock()
-            .expect("one time keys lock")
             .get_mut(&(actor.to_owned(), device_id.to_owned()))
             .and_then(|pool| pool.pop()))
     }

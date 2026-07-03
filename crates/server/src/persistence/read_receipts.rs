@@ -57,15 +57,14 @@ impl ReadReceiptRelayStore for MemoryReadReceiptRelayStore {
         let position = {
             let mut counters = self
                 .next_position
-                .lock()
-                .expect("read receipt position lock");
+                .lock();
             let counter = counters.entry(realm_id.clone()).or_insert(0);
             *counter += 1;
             *counter
         };
         record.position = position;
 
-        let mut data = self.data.lock().expect("read receipt relay lock");
+        let mut data = self.data.lock();
         let bucket = data.entry(realm_id).or_default();
         bucket.retain(|existing| existing.expires_at > now);
         bucket.push(record);
@@ -84,7 +83,6 @@ impl ReadReceiptRelayStore for MemoryReadReceiptRelayStore {
         Ok(self
             .data
             .lock()
-            .expect("read receipt relay lock")
             .get(realm_id)
             .map(|bucket| {
                 bucket
@@ -104,7 +102,6 @@ impl ReadReceiptRelayStore for MemoryReadReceiptRelayStore {
         Ok(self
             .data
             .lock()
-            .expect("read receipt relay lock")
             .values()
             .flat_map(|bucket| bucket.iter())
             .filter(|record| record.event_id == event_id && record.expires_at > now)
@@ -114,7 +111,7 @@ impl ReadReceiptRelayStore for MemoryReadReceiptRelayStore {
 
     async fn prune_expired(&self) -> PersistenceResult<usize> {
         let now = Utc::now();
-        let mut data = self.data.lock().expect("read receipt relay lock");
+        let mut data = self.data.lock();
         let mut removed = 0usize;
         for bucket in data.values_mut() {
             let before = bucket.len();
@@ -135,7 +132,6 @@ impl ReadReceiptRelayStore for MemoryReadReceiptRelayStore {
         Ok(self
             .watermark
             .lock()
-            .expect("read receipt watermark lock")
             .get(&key)
             .copied()
             .unwrap_or(0))
@@ -149,7 +145,7 @@ impl ReadReceiptRelayStore for MemoryReadReceiptRelayStore {
         position: u64,
     ) -> PersistenceResult<()> {
         let key = (actor.to_owned(), device.to_owned(), realm_id.to_owned());
-        let mut watermark = self.watermark.lock().expect("read receipt watermark lock");
+        let mut watermark = self.watermark.lock();
         let entry = watermark.entry(key).or_insert(0);
         if position > *entry {
             *entry = position;

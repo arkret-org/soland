@@ -16,11 +16,10 @@ pub(crate) async fn realm_requires_content_encryption(state: &AppState, realm_id
 /// (realm-and-space.md §2.3 / §2.5, circle.md §7). The floor is a one-way
 /// ratchet enforced by the reducer, so this read can only flip false→true.
 pub(crate) fn realm_content_floor_requires_e2ee(state: &AppState, realm_id: &str) -> bool {
-    state
-        .projection
-        .lock()
-        .ok()
-        .and_then(|projection| projection.realm_content_encryption_floor(realm_id))
+    {
+        let projection = state.projection.lock();
+        projection.realm_content_encryption_floor(realm_id)
+    }
         .as_deref()
         == Some("e2ee_required")
 }

@@ -101,7 +101,7 @@ impl MemoryAccountStore {
     }
 
     fn with_current_localpart(&self, mut record: AccountRecord) -> AccountRecord {
-        let localparts = self.localparts.lock().expect("account localpart lock");
+        let localparts = self.localparts.lock();
         record.localpart = Self::primary_localpart_from(&localparts, &record.did);
         record
     }
@@ -110,19 +110,19 @@ impl MemoryAccountStore {
 #[async_trait]
 impl AccountStore for MemoryAccountStore {
     async fn get(&self, did: &str) -> PersistenceResult<Option<AccountRecord>> {
-        let data = self.data.lock().expect("lock");
+        let data = self.data.lock();
         let record = data.get(did).cloned();
         drop(data);
         Ok(record.map(|record| self.with_current_localpart(record)))
     }
 
     async fn put(&self, record: &AccountRecord) -> PersistenceResult<()> {
-        let mut data = self.data.lock().expect("lock");
+        let mut data = self.data.lock();
         data.insert(record.did.clone(), record.clone());
         drop(data);
 
         let now = Utc::now();
-        let mut localparts = self.localparts.lock().expect("account localpart lock");
+        let mut localparts = self.localparts.lock();
         if record.localpart.trim().is_empty() {
             localparts.retain(|_, localpart| localpart.account_did != record.did);
             return Ok(());
@@ -164,7 +164,7 @@ impl AccountStore for MemoryAccountStore {
     }
 
     async fn list(&self) -> PersistenceResult<Vec<AccountRecord>> {
-        let data = self.data.lock().expect("lock");
+        let data = self.data.lock();
         let records: Vec<AccountRecord> = data.values().cloned().collect();
         drop(data);
         Ok(records
@@ -174,12 +174,11 @@ impl AccountStore for MemoryAccountStore {
     }
 
     async fn delete(&self, did: &str) -> PersistenceResult<()> {
-        let mut data = self.data.lock().expect("lock");
+        let mut data = self.data.lock();
         data.remove(did);
         drop(data);
         self.localparts
             .lock()
-            .expect("account localpart lock")
             .retain(|_, localpart| localpart.account_did != did);
         Ok(())
     }
@@ -207,7 +206,7 @@ impl AccountLocalpartStore for MemoryAccountLocalpartStore {
         &self,
         account_did: &str,
     ) -> PersistenceResult<Vec<AccountLocalpartRecord>> {
-        let data = self.data.lock().expect("account localpart lock");
+        let data = self.data.lock();
         let mut rows: Vec<AccountLocalpartRecord> = data
             .values()
             .filter(|record| record.account_did == account_did)
@@ -234,7 +233,7 @@ impl AccountLocalpartStore for MemoryAccountLocalpartStore {
     }
 
     async fn owner_of(&self, localpart: &str) -> PersistenceResult<Option<AccountLocalpartRecord>> {
-        let data = self.data.lock().expect("account localpart lock");
+        let data = self.data.lock();
         Ok(data.get(localpart).cloned())
     }
 
@@ -245,7 +244,7 @@ impl AccountLocalpartStore for MemoryAccountLocalpartStore {
         primary: bool,
     ) -> PersistenceResult<AccountLocalpartRecord> {
         let now = Utc::now();
-        let mut data = self.data.lock().expect("account localpart lock");
+        let mut data = self.data.lock();
         if data
             .get(localpart)
             .is_some_and(|record| record.account_did != account_did)
@@ -287,7 +286,7 @@ impl AccountLocalpartStore for MemoryAccountLocalpartStore {
         localpart: &str,
     ) -> PersistenceResult<AccountLocalpartRecord> {
         let now = Utc::now();
-        let mut data = self.data.lock().expect("account localpart lock");
+        let mut data = self.data.lock();
         let owner = data
             .get(localpart)
             .ok_or_else(|| PersistenceError::NotFound("localpart not found".to_owned()))?
@@ -310,7 +309,7 @@ impl AccountLocalpartStore for MemoryAccountLocalpartStore {
     }
 
     async fn remove(&self, account_did: &str, localpart: &str) -> PersistenceResult<()> {
-        let mut data = self.data.lock().expect("account localpart lock");
+        let mut data = self.data.lock();
         match data.get(localpart) {
             Some(record) if record.account_did == account_did => {
                 data.remove(localpart);
@@ -324,7 +323,7 @@ impl AccountLocalpartStore for MemoryAccountLocalpartStore {
     }
 
     async fn clear_for_account(&self, account_did: &str) -> PersistenceResult<()> {
-        let mut data = self.data.lock().expect("account localpart lock");
+        let mut data = self.data.lock();
         data.retain(|_, record| record.account_did != account_did);
         Ok(())
     }
@@ -347,7 +346,6 @@ impl AccountLifecycleStore for MemoryAccountLifecycleStore {
     async fn put(&self, did: &str, record: &AccountLifecycleRecord) -> PersistenceResult<()> {
         self.data
             .lock()
-            .expect("account lifecycle lock")
             .insert(did.to_owned(), record.clone());
         Ok(())
     }
@@ -355,7 +353,6 @@ impl AccountLifecycleStore for MemoryAccountLifecycleStore {
     async fn delete(&self, did: &str) -> PersistenceResult<()> {
         self.data
             .lock()
-            .expect("account lifecycle lock")
             .remove(did);
         Ok(())
     }
@@ -364,7 +361,6 @@ impl AccountLifecycleStore for MemoryAccountLifecycleStore {
         Ok(self
             .data
             .lock()
-            .expect("account lifecycle lock")
             .iter()
             .map(|(did, record)| (did.clone(), record.clone()))
             .collect())
@@ -393,12 +389,12 @@ impl AccountDataStore for MemoryAccountDataStore {
         actor: &str,
         data_type: &str,
     ) -> PersistenceResult<Option<AccountDataRecord>> {
-        let data = self.data.lock().expect("lock");
+        let data = self.data.lock();
         Ok(data.get(&(actor.to_owned(), data_type.to_owned())).cloned())
     }
 
     async fn put(&self, record: &AccountDataRecord) -> PersistenceResult<()> {
-        let mut data = self.data.lock().expect("lock");
+        let mut data = self.data.lock();
         data.insert(
             (record.actor.clone(), record.data_type.clone()),
             record.clone(),
@@ -407,13 +403,13 @@ impl AccountDataStore for MemoryAccountDataStore {
     }
 
     async fn delete(&self, actor: &str, data_type: &str) -> PersistenceResult<()> {
-        let mut data = self.data.lock().expect("lock");
+        let mut data = self.data.lock();
         data.remove(&(actor.to_owned(), data_type.to_owned()));
         Ok(())
     }
 
     async fn list_for_actor(&self, actor: &str) -> PersistenceResult<Vec<AccountDataRecord>> {
-        let data = self.data.lock().expect("lock");
+        let data = self.data.lock();
         Ok(data
             .iter()
             .filter(|((row_actor, _), _)| row_actor == actor)

@@ -3,7 +3,7 @@ use salvo::conn::Acceptor;
 use salvo::conn::rustls::{Keycert, RustlsConfig};
 use salvo::prelude::*;
 use soland::config::AppConfig;
-use soland::db::Db;
+use soland_data::Db;
 use soland::multisig_watchdog::{MultisigWatchdog, MultisigWatchdogConfig};
 use soland::state::AppState;
 use soland::{artifacts, service};

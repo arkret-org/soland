@@ -98,24 +98,23 @@ impl MemoryModerationStore {
 #[async_trait]
 impl ModerationStore for MemoryModerationStore {
     async fn append_report(&self, report: Value) -> PersistenceResult<()> {
-        self.reports.lock().expect("moderation lock").push(report);
+        self.reports.lock().push(report);
         Ok(())
     }
 
     async fn append_action(&self, action: Value) -> PersistenceResult<()> {
         self.actions
             .lock()
-            .expect("moderation action lock")
             .push(action);
         Ok(())
     }
 
     async fn list_reports(&self) -> PersistenceResult<Vec<Value>> {
-        Ok(self.reports.lock().expect("moderation lock").clone())
+        Ok(self.reports.lock().clone())
     }
 
     async fn list_actions(&self) -> PersistenceResult<Vec<Value>> {
-        Ok(self.actions.lock().expect("moderation action lock").clone())
+        Ok(self.actions.lock().clone())
     }
 
     async fn append_decision(&self, decision: Value) -> PersistenceResult<()> {
@@ -126,7 +125,7 @@ impl ModerationStore for MemoryModerationStore {
                 PersistenceError::Internal("moderation decision missing decision_id".to_owned())
             })?
             .to_owned();
-        let mut decisions = self.decisions.lock().expect("moderation decisions lock");
+        let mut decisions = self.decisions.lock();
         if !decisions
             .iter()
             .any(|d| d.get("decision_id").and_then(Value::as_str) == Some(id.as_str()))
@@ -140,7 +139,6 @@ impl ModerationStore for MemoryModerationStore {
         Ok(self
             .decisions
             .lock()
-            .expect("moderation decisions lock")
             .clone())
     }
 
@@ -148,7 +146,6 @@ impl ModerationStore for MemoryModerationStore {
         Ok(self
             .decisions
             .lock()
-            .expect("moderation decisions lock")
             .iter()
             .find(|d| d.get("decision_id").and_then(Value::as_str) == Some(decision_id))
             .cloned())
@@ -157,7 +154,6 @@ impl ModerationStore for MemoryModerationStore {
     async fn append_decision_lift(&self, lift: Value) -> PersistenceResult<()> {
         self.decision_lifts
             .lock()
-            .expect("moderation decision lifts lock")
             .push(lift);
         Ok(())
     }
@@ -170,7 +166,7 @@ impl ModerationStore for MemoryModerationStore {
                 PersistenceError::Internal("moderation queue item missing id".to_owned())
             })?
             .to_owned();
-        let mut queue = self.queue_items.lock().expect("moderation queue lock");
+        let mut queue = self.queue_items.lock();
         if let Some(slot) = queue
             .iter_mut()
             .find(|i| i.get("id").and_then(Value::as_str) == Some(id.as_str()))
@@ -186,7 +182,6 @@ impl ModerationStore for MemoryModerationStore {
         Ok(self
             .queue_items
             .lock()
-            .expect("moderation queue lock")
             .clone())
     }
 
@@ -194,7 +189,6 @@ impl ModerationStore for MemoryModerationStore {
         Ok(self
             .queue_items
             .lock()
-            .expect("moderation queue lock")
             .iter()
             .find(|i| i.get("id").and_then(Value::as_str) == Some(id))
             .cloned())
@@ -208,7 +202,6 @@ impl ModerationStore for MemoryModerationStore {
         }
         self.appeals
             .lock()
-            .expect("moderation appeals lock")
             .push(appeal);
         Ok(())
     }
@@ -219,7 +212,6 @@ impl ModerationStore for MemoryModerationStore {
         let all = self
             .appeals
             .lock()
-            .expect("moderation appeals lock")
             .clone();
         let mut latest: std::collections::BTreeMap<String, Value> =
             std::collections::BTreeMap::new();
@@ -235,7 +227,6 @@ impl ModerationStore for MemoryModerationStore {
         Ok(self
             .appeals
             .lock()
-            .expect("moderation appeals lock")
             .iter()
             .filter(|a| a.get("appeal_id").and_then(Value::as_str) == Some(appeal_id))
             .cloned()

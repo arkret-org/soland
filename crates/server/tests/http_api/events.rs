@@ -504,7 +504,6 @@ async fn realm_create_with_bootstrap_effects_does_not_require_seal_basis() {
         state
             .projection
             .lock()
-            .expect("projection lock")
             .member(&realm_id, "did:web:alice.example")
             .is_some_and(|member| member.state == "join")
     );

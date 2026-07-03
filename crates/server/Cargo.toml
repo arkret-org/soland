@@ -15,6 +15,10 @@ authors.workspace = true
 
 [features]
 default = []
+# Exposes `AppConfig::test_default()` (and future test-only constructors) to
+# the crate's own integration tests via the dev-dependency self-reference
+# below. `#[cfg(test)]` alone only covers inline unit tests.
+test-util = []
 otel = [
     "dep:opentelemetry",
     "dep:opentelemetry-otlp",
@@ -67,6 +71,7 @@ object_store = {workspace = true,features = ["aws"]}
 opentelemetry = {workspace = true,default-features = false,features = ["trace"],optional = true}
 opentelemetry-otlp = {workspace = true,default-features = false,features = ["trace", "grpc-tonic"],optional = true}
 opentelemetry_sdk = {workspace = true,default-features = false,features = ["trace", "rt-tokio"],optional = true}
+parking_lot = {workspace = true}
 rand = {workspace = true}
 reqwest = {workspace = true,default-features = false,features = ["form", "json", "rustls"]}
 salvo = {workspace = true,default-features = false,features = ["cookie", "fix-http1-request-uri", "server", "server-handle", "http1", "http2", "test", "matched-path", "ring", "affix-state", "catch-panic", "cors", "oapi", "rustls"]}
@@ -88,6 +93,10 @@ uuid = {workspace = true,features = ["v4", "v7", "serde"]}
 
 [dev-dependencies]
 proptest = {workspace = true}
+# Dev-dependency self-reference: activates the `test-util` feature when
+# compiling the tests/ integration binaries, which link the library without
+# `cfg(test)` and would otherwise not see `AppConfig::test_default()`.
+soland = {path = ".", features = ["test-util"]}
 # `test-util` enables the paused-clock test runtime
 # (`#[tokio::test(start_paused = true)]`) used to assert the federation
 # auth-failure timing-bucket pad deterministically without a real sleep.

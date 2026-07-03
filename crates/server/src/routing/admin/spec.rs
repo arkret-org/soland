@@ -185,7 +185,6 @@ async fn get_server_status(
     let realm_count = state
         .realms
         .lock()
-        .expect("realms lock")
         .search(Default::default())
         .len();
     json_ok(AdminServerStatusOutcome {
@@ -229,7 +228,6 @@ async fn get_server_info(
         allow_public_registration: state
             .account_registration_policy
             .lock()
-            .expect("account registration policy lock")
             .enabled,
     })
 }
@@ -264,7 +262,6 @@ async fn get_server_stats(
     let realm_count = state
         .realms
         .lock()
-        .expect("realms lock")
         .search(Default::default())
         .len() as u64;
     let device_count = state
@@ -282,11 +279,10 @@ async fn get_server_stats(
         .map(|items| items.len() as u64)
         .unwrap_or(0);
     let federation_peer_count = state.settings().federation_peers.len() as u64;
-    let (applet_count, agent_count) = state
-        .projection
-        .lock()
-        .map(|proj| (proj.applets.len() as u64, proj.agents.len() as u64))
-        .unwrap_or((0, 0));
+    let (applet_count, agent_count) = {
+        let proj = state.projection.lock();
+        (proj.applets.len() as u64, proj.agents.len() as u64)
+    };
     let blobs = state
         .persistence
         .blobs()

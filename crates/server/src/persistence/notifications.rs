@@ -23,7 +23,7 @@ impl MemoryNotificationStore {
 #[async_trait]
 impl NotificationStore for MemoryNotificationStore {
     async fn put(&self, record: Value) -> PersistenceResult<()> {
-        self.data.lock().expect("notification lock").push(record);
+        self.data.lock().push(record);
         Ok(())
     }
 
@@ -31,7 +31,6 @@ impl NotificationStore for MemoryNotificationStore {
         Ok(self
             .data
             .lock()
-            .expect("notification lock")
             .iter()
             .filter(|r| r.get("recipient_id").and_then(Value::as_str) == Some(recipient_id))
             .cloned()

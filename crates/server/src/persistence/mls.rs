@@ -167,7 +167,7 @@ impl MemoryMlsKeyPackageStore {
 #[async_trait]
 impl MlsKeyPackageStore for MemoryMlsKeyPackageStore {
     async fn put(&self, record: &MlsKeyPackageRow) -> PersistenceResult<bool> {
-        let mut rows = self.rows.lock().expect("mls keypackage lock");
+        let mut rows = self.rows.lock();
         let fresh = !rows.contains_key(&record.id);
         rows.insert(record.id.clone(), record.clone());
         Ok(fresh)
@@ -177,7 +177,6 @@ impl MlsKeyPackageStore for MemoryMlsKeyPackageStore {
         Ok(self
             .rows
             .lock()
-            .expect("mls keypackage lock")
             .get(id)
             .cloned())
     }
@@ -191,7 +190,7 @@ impl MlsKeyPackageStore for MemoryMlsKeyPackageStore {
         device_authorize_event_id: Option<&str>,
         consumed_at: i64,
     ) -> PersistenceResult<Option<MlsKeyPackageRow>> {
-        let mut rows = self.rows.lock().expect("mls keypackage lock");
+        let mut rows = self.rows.lock();
         let Some(row) = rows.get_mut(id) else {
             return Ok(None);
         };
@@ -237,7 +236,6 @@ impl MlsKeyPackageStore for MemoryMlsKeyPackageStore {
         Ok(self
             .rows
             .lock()
-            .expect("mls keypackage lock")
             .values()
             .cloned()
             .collect())
@@ -260,7 +258,6 @@ impl MlsWelcomeStore for MemoryMlsWelcomeStore {
     async fn enqueue(&self, record: &MlsWelcomeRecord) -> PersistenceResult<()> {
         self.queue
             .lock()
-            .expect("mls welcome lock")
             .push_back(record.clone());
         Ok(())
     }
@@ -272,7 +269,7 @@ impl MlsWelcomeStore for MemoryMlsWelcomeStore {
         now_unix_secs: i64,
         limit: usize,
     ) -> PersistenceResult<Vec<MlsWelcomeRecord>> {
-        let mut queue = self.queue.lock().expect("mls welcome lock");
+        let mut queue = self.queue.lock();
         let mut drained = Vec::new();
         for row in queue.iter_mut() {
             if drained.len() >= limit {
@@ -296,7 +293,6 @@ impl MlsWelcomeStore for MemoryMlsWelcomeStore {
         Ok(self
             .queue
             .lock()
-            .expect("mls welcome lock")
             .iter()
             .cloned()
             .collect())
@@ -415,7 +411,6 @@ impl MlsCommitStore for MemoryMlsCommitStore {
         Ok(self
             .rows
             .lock()
-            .expect("mls commit lock")
             .get(&key)
             .cloned())
     }
@@ -430,7 +425,7 @@ impl MlsCommitStore for MemoryMlsCommitStore {
         committed_at: i64,
     ) -> PersistenceResult<Option<MlsCommitEpochRecord>> {
         let key = mls_epoch_key(effective_scope, group_id)?;
-        let mut rows = self.rows.lock().expect("mls commit lock");
+        let mut rows = self.rows.lock();
         if rows.contains_key(&key) {
             return Ok(None);
         }
@@ -463,7 +458,7 @@ impl MlsCommitStore for MemoryMlsCommitStore {
         committed_at: i64,
     ) -> PersistenceResult<Option<MlsCommitEpochRecord>> {
         let key = mls_epoch_key(effective_scope, group_id)?;
-        let mut rows = self.rows.lock().expect("mls commit lock");
+        let mut rows = self.rows.lock();
         let Some(current_record) = rows.get(&key) else {
             return Ok(None);
         };
@@ -498,7 +493,7 @@ impl MlsCommitStore for MemoryMlsCommitStore {
         epoch: u64,
     ) -> PersistenceResult<Option<MlsCommitEpochRecord>> {
         let key = mls_epoch_key(effective_scope, group_id)?;
-        let mut rows = self.rows.lock().expect("mls commit lock");
+        let mut rows = self.rows.lock();
         let Some(record) = rows.get_mut(&key) else {
             return Ok(None);
         };
@@ -513,7 +508,6 @@ impl MlsCommitStore for MemoryMlsCommitStore {
         Ok(self
             .rows
             .lock()
-            .expect("mls commit lock")
             .values()
             .cloned()
             .collect())

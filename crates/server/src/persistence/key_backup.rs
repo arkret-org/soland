@@ -45,7 +45,6 @@ impl KeyBackupStore for MemoryKeyBackupStore {
     async fn put(&self, backup_id: String, payload: Value) -> PersistenceResult<()> {
         self.backups
             .lock()
-            .expect("key backup lock")
             .insert(backup_id, payload);
         Ok(())
     }
@@ -54,7 +53,6 @@ impl KeyBackupStore for MemoryKeyBackupStore {
         Ok(self
             .backups
             .lock()
-            .expect("key backup lock")
             .get(backup_id)
             .cloned())
     }
@@ -63,7 +61,6 @@ impl KeyBackupStore for MemoryKeyBackupStore {
         Ok(self
             .backups
             .lock()
-            .expect("key backup lock")
             .remove(backup_id)
             .is_some())
     }
@@ -72,7 +69,6 @@ impl KeyBackupStore for MemoryKeyBackupStore {
         Ok(self
             .backups
             .lock()
-            .expect("key backup lock")
             .values()
             .cloned()
             .collect())

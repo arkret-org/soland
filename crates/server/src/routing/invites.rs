@@ -599,7 +599,6 @@ pub(crate) fn resolve_invite_receive_policy(
     state
         .invite_receive_policies
         .lock()
-        .expect("invite_receive_policies lock")
         .get(subject)
         .cloned()
         .unwrap_or_else(|| default_invite_receive_policy(subject))

@@ -141,6 +141,7 @@ pub fn verify_jws_ed25519(
         issuer,
         &*state.did_resolver as &dyn DidResolver,
     )
+    .map_err(|error| error.to_string())
 }
 
 /// Resolve a DID URL to its Ed25519 [`VerifyingKey`] via the AppState
@@ -154,6 +155,7 @@ pub fn resolve_ed25519_pubkey(
         &*state.did_resolver as &dyn DidResolver,
         verification_method,
     )
+    .map_err(|error| error.to_string())
 }
 
 /// Resolve and validate a DID-scoped Ed25519 verification method.

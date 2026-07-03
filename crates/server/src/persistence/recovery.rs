@@ -85,7 +85,6 @@ impl RecoveryPolicyStore for MemoryRecoveryPolicyStore {
         Ok(self
             .data
             .lock()
-            .expect("recovery policy lock")
             .get(policy_id)
             .cloned())
     }
@@ -94,7 +93,7 @@ impl RecoveryPolicyStore for MemoryRecoveryPolicyStore {
         &self,
         principal_id: &str,
     ) -> PersistenceResult<Option<RecoveryPolicyRecord>> {
-        let data = self.data.lock().expect("recovery policy lock");
+        let data = self.data.lock();
         Ok(recovery_active_policy_locked(&data, principal_id))
     }
 
@@ -102,7 +101,7 @@ impl RecoveryPolicyStore for MemoryRecoveryPolicyStore {
         &self,
         principal_id: &str,
     ) -> PersistenceResult<Vec<RecoveryPolicyRecord>> {
-        let data = self.data.lock().expect("recovery policy lock");
+        let data = self.data.lock();
         let mut out: Vec<RecoveryPolicyRecord> = data
             .values()
             .filter(|record| record.principal_id == principal_id)
@@ -113,7 +112,7 @@ impl RecoveryPolicyStore for MemoryRecoveryPolicyStore {
     }
 
     async fn insert(&self, record: RecoveryPolicyRecord) -> PersistenceResult<()> {
-        let mut data = self.data.lock().expect("recovery policy lock");
+        let mut data = self.data.lock();
         if data.contains_key(&record.policy_id) {
             return Err(PersistenceError::Conflict(format!(
                 "recovery policy_id `{}` already exists",
@@ -173,7 +172,6 @@ impl RecoveryReceiptStore for MemoryRecoveryReceiptStore {
         Ok(self
             .by_session
             .lock()
-            .expect("recovery receipt lock")
             .get(recovery_session_id)
             .cloned())
     }
@@ -182,7 +180,7 @@ impl RecoveryReceiptStore for MemoryRecoveryReceiptStore {
         &self,
         principal_id: &str,
     ) -> PersistenceResult<Vec<RecoveryReceiptRecord>> {
-        let by_session = self.by_session.lock().expect("recovery receipt lock");
+        let by_session = self.by_session.lock();
         let mut out: Vec<RecoveryReceiptRecord> = by_session
             .values()
             .filter(|record| record.principal_id == principal_id)
@@ -193,8 +191,8 @@ impl RecoveryReceiptStore for MemoryRecoveryReceiptStore {
     }
 
     async fn insert(&self, record: RecoveryReceiptRecord) -> PersistenceResult<()> {
-        let mut by_session = self.by_session.lock().expect("recovery receipt lock");
-        let mut receipt_ids = self.receipt_ids.lock().expect("recovery receipt id lock");
+        let mut by_session = self.by_session.lock();
+        let mut receipt_ids = self.receipt_ids.lock();
         if receipt_ids.contains(&record.receipt_id) {
             return Err(PersistenceError::Conflict(format!(
                 "recovery receipt_id `{}` already exists",
@@ -233,13 +231,12 @@ impl RecoverySessionStore for MemoryRecoverySessionStore {
         Ok(self
             .by_id
             .lock()
-            .expect("recovery session lock")
             .get(recovery_session_id)
             .cloned())
     }
 
     async fn insert(&self, record: RecoverySessionRecord) -> PersistenceResult<()> {
-        let mut by_id = self.by_id.lock().expect("recovery session lock");
+        let mut by_id = self.by_id.lock();
         if by_id.contains_key(&record.recovery_session_id) {
             return Err(PersistenceError::Conflict(format!(
                 "recovery_session_id `{}` already exists",
@@ -251,7 +248,7 @@ impl RecoverySessionStore for MemoryRecoverySessionStore {
     }
 
     async fn update(&self, record: RecoverySessionRecord) -> PersistenceResult<()> {
-        let mut by_id = self.by_id.lock().expect("recovery session lock");
+        let mut by_id = self.by_id.lock();
         if !by_id.contains_key(&record.recovery_session_id) {
             return Err(PersistenceError::NotFound(format!(
                 "recovery_session_id `{}` not found",

@@ -176,11 +176,10 @@ async fn intended_content_scheme_for_realm(
             return Some(value.to_owned());
         }
     }
-    state
-        .projection
-        .lock()
-        .ok()
-        .and_then(|projection| projection.realm_content_scheme(realm_id))
+    {
+        let projection = state.projection.lock();
+        projection.realm_content_scheme(realm_id)
+    }
 }
 
 async fn intended_encryption_profile_for_realm(
@@ -301,11 +300,10 @@ fn read_receipt_policy_parent_realm_id(
                 .then_some(source_realm_id)
         });
     }
-    let policy = state
-        .projection
-        .lock()
-        .ok()
-        .and_then(|projection| projection.realm_inheritance_policy(realm_id).cloned())?;
+    let policy = {
+        let projection = state.projection.lock();
+        projection.realm_inheritance_policy(realm_id).cloned()
+    }?;
     if !policy
         .allowed_policies
         .iter()
@@ -379,11 +377,10 @@ fn active_read_receipt_parent_link(
                 .and_then(Value::as_str)
                 .is_some_and(read_receipt_parent_link_kind);
     }
-    state
-        .projection
-        .lock()
-        .ok()
-        .and_then(|projection| projection.realm_links.get(realm_id).cloned())
+    {
+        let projection = state.projection.lock();
+        projection.realm_links.get(realm_id).cloned()
+    }
         .is_some_and(|links| {
             links.iter().any(|link| {
                 link.target_realm_id == source_realm_id
@@ -562,7 +559,7 @@ fn validate_rrk_targeted_realm_key_share(
     // Snapshot the durability policy off the projection without holding the lock
     // across any await (this function is sync).
     let durability = {
-        let projection = state.projection.lock().ok()?;
+        let projection = state.projection.lock();
         projection.realm_durability_policy(realm_id)?
     };
     if matches!(durability.mode, DurabilityMode::None) {
@@ -624,10 +621,11 @@ async fn realm_key_share_receiver_is_current_member(
     realm_id: &str,
     receiver: &str,
 ) -> bool {
-    if let Ok(projection) = state.projection.lock()
-        && let Some(member) = projection.member(realm_id, receiver)
     {
-        return member.state == "join";
+        let projection = state.projection.lock();
+        if let Some(member) = projection.member(realm_id, receiver) {
+            return member.state == "join";
+        }
     }
     crate::routing::spaces::space::realm_has_member_by_id(state, realm_id, receiver).await
 }
@@ -637,15 +635,16 @@ fn realm_key_share_receiver_event_state(
     realm_id: &str,
     receiver: &str,
 ) -> cokret_sdk::HistoryReaderEventState {
-    if let Ok(projection) = state.projection.lock()
-        && let Some(member) = projection.member(realm_id, receiver)
     {
-        return match member.state.as_str() {
-            "join" => cokret_sdk::HistoryReaderEventState::Joined,
-            "invite" => cokret_sdk::HistoryReaderEventState::Invited,
-            "leave" | "ban" => cokret_sdk::HistoryReaderEventState::Removed,
-            _ => cokret_sdk::HistoryReaderEventState::None,
-        };
+        let projection = state.projection.lock();
+        if let Some(member) = projection.member(realm_id, receiver) {
+            return match member.state.as_str() {
+                "join" => cokret_sdk::HistoryReaderEventState::Joined,
+                "invite" => cokret_sdk::HistoryReaderEventState::Invited,
+                "leave" | "ban" => cokret_sdk::HistoryReaderEventState::Removed,
+                _ => cokret_sdk::HistoryReaderEventState::None,
+            };
+        }
     }
     cokret_sdk::HistoryReaderEventState::None
 }
@@ -731,9 +730,7 @@ pub(crate) fn validate_poll_operation_policy(
     let Some(poll_id) = content.get("poll_id").and_then(serde_json::Value::as_str) else {
         return Ok(());
     };
-    let Ok(projection) = state.projection.lock() else {
-        return Ok(());
-    };
+    let projection = state.projection.lock();
     if projection.poll(poll_id).is_some_and(|poll| poll.closed) {
         Err("poll_closed")
     } else {
@@ -755,7 +752,10 @@ pub(crate) async fn validate_audience_mention_operation_policy(
     if mentions.is_empty() {
         return Ok(());
     }
-    let actor = operation_actor(operation).ok_or("audience_mention_actor_missing")?;
+    let actor = operation
+        .actor()
+        .ok_or("audience_mention_actor_missing")?;
+    let actor = actor.as_str();
     let realm_id = operation.realm_id.as_str();
     let resource = operation
         .payload
@@ -797,15 +797,6 @@ pub(crate) async fn validate_audience_mention_operation_policy(
     Ok(())
 }
 
-pub(crate) fn operation_actor(operation: &Operation) -> Option<&str> {
-    operation
-        .payload
-        .get("sender")
-        .or_else(|| operation.payload.get("actor_id"))
-        .or_else(|| operation.payload.get("created_by"))
-        .and_then(Value::as_str)
-}
-
 pub(crate) async fn realm_owner_and_members(
     state: &AppState,
     realm_id: &str,
@@ -818,20 +809,14 @@ pub(crate) async fn realm_owner_and_members(
         .ok()
         .flatten();
     let owner = meta.map(|meta| meta.owner);
-    let members = state
-        .realms
-        .lock()
-        .ok()
-        .map(|realms| {
-            if let Some(realm) = cokret_sdk::RealmId::new(realm_id.to_owned())
-                .ok()
-                .and_then(|id| realms.get(&id))
-            {
-                return realm.members.iter().map(ToString::to_string).collect();
-            }
-            Vec::new()
-        })
-        .unwrap_or_default();
+    let members = {
+        let realms = state.realms.lock();
+        cokret_sdk::RealmId::new(realm_id.to_owned())
+            .ok()
+            .and_then(|id| realms.get(&id))
+            .map(|realm| realm.members.iter().map(ToString::to_string).collect())
+            .unwrap_or_default()
+    };
     (owner, members)
 }
 
@@ -897,11 +882,9 @@ pub(crate) fn estimate_audience_recipient_count(
             .get("strand_id")
             .and_then(Value::as_str)
             .map(|strand_id| {
-                state
-                    .projection
-                    .lock()
-                    .ok()
-                    .map(|projection| {
+                {
+                    let projection = state.projection.lock();
+                    Some({
                         projection
                             .messages_for_thread(strand_id)
                             .into_iter()
@@ -909,6 +892,7 @@ pub(crate) fn estimate_audience_recipient_count(
                             .collect::<std::collections::BTreeSet<_>>()
                             .len()
                     })
+                }
                     .unwrap_or(members.len())
             })
             .unwrap_or(members.len()),

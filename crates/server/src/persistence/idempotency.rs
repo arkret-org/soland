@@ -61,14 +61,14 @@ impl IdempotencyStore for MemoryIdempotencyStore {
         principal_id: &str,
         idempotency_key: &str,
     ) -> PersistenceResult<Option<IdempotencyRecord>> {
-        let data = self.data.lock().expect("lock");
+        let data = self.data.lock();
         Ok(data
             .get(&(principal_id.to_owned(), idempotency_key.to_owned()))
             .cloned())
     }
 
     async fn record(&self, record: &IdempotencyRecord) -> PersistenceResult<()> {
-        let mut data = self.data.lock().expect("lock");
+        let mut data = self.data.lock();
         // First-writer-wins: keep the earliest landed row (mirrors the Pg
         // `ON CONFLICT DO NOTHING`), so a concurrent racer reads back the
         // original first response rather than overwriting it.
@@ -78,7 +78,7 @@ impl IdempotencyStore for MemoryIdempotencyStore {
     }
 
     async fn prune_expired(&self, now: chrono::DateTime<Utc>) -> PersistenceResult<usize> {
-        let mut data = self.data.lock().expect("lock");
+        let mut data = self.data.lock();
         let before = data.len();
         data.retain(|_, record| record.expires_at > now);
         Ok(before - data.len())

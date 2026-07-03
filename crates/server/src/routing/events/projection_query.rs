@@ -371,14 +371,6 @@ fn strand_assigned_to_relations(
 
 // ── Handlers ───────────────────────────────────────────────────────────
 
-fn projection_state_unavailable() -> AppError {
-    AppError::new(
-        ErrorCode::TemporarilyUnavailable,
-        "projection state unavailable",
-    )
-    .with_status(StatusCode::INTERNAL_SERVER_ERROR)
-}
-
 fn document_projection_document(morph: &MorphProjection, body: Value) -> Result<Value, AppError> {
     parse_projection_id::<MorphId>(&morph.morph_id, "document.morph_id")?;
     parse_projection_id::<RealmId>(&morph.realm_id, "document.realm_id")?;
@@ -685,9 +677,7 @@ async fn document_relation_target_row_visible(
     };
     let history_visibility = realm_history_visibility(state, target_realm_id).await;
     let history_policy = realm_history_sharing_policy(state, target_realm_id).await;
-    let Ok(projection) = state.projection.lock() else {
-        return false;
-    };
+    let projection = state.projection.lock();
     projection_row_visible_to_session(
         state,
         &projection,
@@ -787,8 +777,7 @@ async fn document_projection_relations(
     let snapshots = {
         let projection = state
             .projection
-            .lock()
-            .map_err(|_| projection_state_unavailable())?;
+            .lock();
         projection
             .relations
             .values()
@@ -978,13 +967,7 @@ async fn list_space_container_projections(
     }
     let history_visibility = realm_history_visibility(state, &realm_id).await;
     let history_policy = realm_history_sharing_policy(state, &realm_id).await;
-    let proj = state.projection.lock().map_err(|_| {
-        AppError::new(
-            ErrorCode::TemporarilyUnavailable,
-            "projection state unavailable",
-        )
-        .with_status(StatusCode::INTERNAL_SERVER_ERROR)
-    })?;
+    let proj = state.projection.lock();
     let spaces: Vec<ProjectionSpaceRow> = proj
         .space_containers
         .values()
@@ -1069,13 +1052,7 @@ async fn list_strand_projections(
     }
     let history_visibility = realm_history_visibility(state, &realm_id).await;
     let history_policy = realm_history_sharing_policy(state, &realm_id).await;
-    let proj = state.projection.lock().map_err(|_| {
-        AppError::new(
-            ErrorCode::TemporarilyUnavailable,
-            "projection state unavailable",
-        )
-        .with_status(StatusCode::INTERNAL_SERVER_ERROR)
-    })?;
+    let proj = state.projection.lock();
     // COT-06-004 — the Realm's default-Strand pointer drives each row's
     // derived `is_default` flag (no per-Strand stored column).
     let default_strand_id = proj
@@ -1227,8 +1204,7 @@ async fn get_strand_projection(
     let realm_id = {
         let proj = state
             .projection
-            .lock()
-            .map_err(|_| projection_state_unavailable())?;
+            .lock();
         let Some(strand) = proj.strands.get(&strand_id) else {
             return Err(AppError::not_found("strand not found"));
         };
@@ -1245,8 +1221,7 @@ async fn get_strand_projection(
     let history_policy = realm_history_sharing_policy(state, &realm_id).await;
     let proj = state
         .projection
-        .lock()
-        .map_err(|_| projection_state_unavailable())?;
+        .lock();
     let Some(strand) = proj.strands.get(&strand_id).cloned() else {
         return Err(AppError::not_found("strand not found"));
     };
@@ -1316,8 +1291,7 @@ async fn list_relation_projections(
     let candidates: Vec<SolandRelationState> = {
         let proj = state
             .projection
-            .lock()
-            .map_err(|_| projection_state_unavailable())?;
+            .lock();
         proj.relations
             .values()
             .filter(|relation| match state_filter.as_str() {
@@ -1397,8 +1371,7 @@ async fn get_document_projection(
     {
         let proj = state
             .projection
-            .lock()
-            .map_err(|_| projection_state_unavailable())?;
+            .lock();
         let Some(morph) = proj.morphs.get(&morph_id) else {
             return Err(AppError::not_found("document Morph not found"));
         };
@@ -1418,8 +1391,7 @@ async fn get_document_projection(
     let (document, versions, comments) = {
         let proj = state
             .projection
-            .lock()
-            .map_err(|_| projection_state_unavailable())?;
+            .lock();
         let Some(morph) = proj.morphs.get(&morph_id).cloned() else {
             return Err(AppError::not_found("document Morph not found"));
         };
@@ -1497,13 +1469,7 @@ async fn list_morph_projections(
     }
     let history_visibility = realm_history_visibility(state, &realm_id).await;
     let history_policy = realm_history_sharing_policy(state, &realm_id).await;
-    let proj = state.projection.lock().map_err(|_| {
-        AppError::new(
-            ErrorCode::TemporarilyUnavailable,
-            "projection state unavailable",
-        )
-        .with_status(StatusCode::INTERNAL_SERVER_ERROR)
-    })?;
+    let proj = state.projection.lock();
     let morphs: Vec<ProjectionMorphRow> = proj
         .morphs
         .values()

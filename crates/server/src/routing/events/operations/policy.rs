@@ -201,8 +201,7 @@ fn validate_realm_lifecycle_write_gate(
     let realm_id = operation.realm_id.as_str();
     let projection = state
         .projection
-        .lock()
-        .map_err(|_| "projection_unavailable")?;
+        .lock();
     if projection.realm_is_in_terminal_state(realm_id)
         && !cokret_sdk::events::kinds::is_audit_kind(&kind)
     {
@@ -226,9 +225,10 @@ async fn validate_morph_schema_migrate_authz(
     state: &AppState,
     operation: &Operation,
 ) -> Result<(), &'static str> {
-    let Some(actor) = operation_actor(operation) else {
+    let Some(actor) = operation.actor() else {
         return Err("capability_denied");
     };
+    let actor = actor.as_str();
     let realm_id = operation.realm_id.as_str();
     let (owner, members) = realm_owner_and_members(state, realm_id).await;
     if owner.as_deref() == Some(actor) {
@@ -262,9 +262,10 @@ async fn validate_circle_create_policy(
         return Ok(());
     }
     if payload_asserts_agent_sidecar_ensure(&operation.payload) {
-        let Some(actor) = operation_actor(operation) else {
+        let Some(actor) = operation.actor() else {
             return Err("sidecar_create_denied");
         };
+        let actor = actor.as_str();
         if !sidecar_circle_create_shape_is_constrained(&operation.payload, operation, actor) {
             return Err("sidecar_create_denied");
         }
@@ -287,9 +288,10 @@ async fn validate_circle_create_policy(
         }
         return Err("sidecar_create_denied");
     }
-    let Some(actor) = operation_actor(operation) else {
+    let Some(actor) = operation.actor() else {
         return Ok(());
     };
+    let actor = actor.as_str();
     let realm_id = operation.realm_id.as_str();
     let (owner, members) = realm_owner_and_members(state, realm_id).await;
     if state
@@ -334,9 +336,10 @@ async fn validate_circle_management_policy(
         }
         _ => return Ok(()),
     };
-    let Some(actor) = operation_actor(operation) else {
+    let Some(actor) = operation.actor() else {
         return Ok(());
     };
+    let actor = actor.as_str();
     let Some(circle_id) = operation_circle_id(operation) else {
         return Ok(());
     };
@@ -375,9 +378,10 @@ fn operation_circle_id(operation: &Operation) -> Option<&str> {
 }
 
 fn circle_member_manage_required(state: &AppState, operation: &Operation) -> bool {
-    let Some(actor) = operation_actor(operation) else {
+    let Some(actor) = operation.actor() else {
         return false;
     };
+    let actor = actor.as_str();
     let Some(target) = operation.payload.get("actor_id").and_then(Value::as_str) else {
         return false;
     };
@@ -392,15 +396,14 @@ fn circle_member_manage_required(state: &AppState, operation: &Operation) -> boo
             let Some(circle_id) = operation_circle_id(operation) else {
                 return false;
             };
-            state
-                .projection
-                .lock()
-                .ok()
-                .and_then(|projection| {
+            {
+                let projection = state.projection.lock();
+                {
                     projection
                         .circle(circle_id)
                         .map(|circle| circle.join_rule != "open")
-                })
+                }
+            }
                 .unwrap_or(false)
         }
         _ => target != actor,
@@ -408,15 +411,14 @@ fn circle_member_manage_required(state: &AppState, operation: &Operation) -> boo
 }
 
 fn policy_realm_member_joined(state: &AppState, realm_id: &str, actor: &str) -> bool {
-    state
-        .projection
-        .lock()
-        .ok()
-        .and_then(|projection| {
+    {
+        let projection = state.projection.lock();
+        {
             projection
                 .member(realm_id, actor)
                 .map(|membership| membership.state == "join")
-        })
+        }
+    }
         .unwrap_or(false)
 }
 
@@ -518,9 +520,10 @@ async fn validate_agent_interop_session_writer_policy(
     let Some(session_id) = agent_interop_session_id_from_payload(&operation.payload) else {
         return Err("interop_session_writer_unauthorized");
     };
-    let Some(actor) = operation_actor(operation) else {
+    let Some(actor) = operation.actor() else {
         return Err("interop_session_writer_unauthorized");
     };
+    let actor = actor.as_str();
     if agent_interop_session_start_actor(state, operations, operation.realm_id.as_str(), session_id)
         .await
         .as_deref()
@@ -552,7 +555,7 @@ async fn agent_interop_session_start_actor(
             == Some(cokret_sdk::events::kinds::AGENT_INTEROP_SESSION_START)
             && candidate.realm_id.as_str() == realm_id
             && agent_interop_session_id_from_payload(&candidate.payload) == Some(session_id))
-        .then(|| operation_actor(candidate).map(ToOwned::to_owned))
+        .then(|| candidate.actor().map(|did| did.to_string()))
         .flatten()
     }) {
         return Some(actor);
@@ -647,9 +650,7 @@ fn validate_pin_scope_safety(state: &AppState, operation: &Operation) -> Result<
     {
         return Ok(());
     }
-    let Ok(projection) = state.projection.lock() else {
-        return Err("pin_scope_safety_unavailable");
-    };
+    let projection = state.projection.lock();
     projection.check_pin_scope_safety(operation)
 }
 
@@ -923,15 +924,14 @@ fn validate_disappearing_message_policy(
         .get("trigger")
         .and_then(Value::as_str)
         .ok_or("disappearing_expiry_trigger_missing")?;
-    let policy = state
-        .projection
-        .lock()
-        .ok()
-        .and_then(|projection| {
+    let policy = {
+        let projection = state.projection.lock();
+        {
             projection
                 .realm_disappearing_policy_cell_value(operation.realm_id.as_str())
                 .cloned()
-        })
+        }
+    }
         .ok_or("disappearing_policy_unset")?;
     if !policy
         .get("enabled")
@@ -1013,12 +1013,11 @@ fn validate_reaction_scope_policy(
     let Some(target) = target else {
         return Ok(());
     };
-    let Some(target_realm) = state
-        .projection
-        .lock()
-        .ok()
-        .and_then(|projection| projection.message_realm(target))
-    else {
+    let target_realm = {
+        let projection = state.projection.lock();
+        projection.message_realm(target)
+    };
+    let Some(target_realm) = target_realm else {
         // Target not yet observed — reducer keeps the reaction pending.
         return Ok(());
     };
@@ -1153,18 +1152,15 @@ fn validate_circle_scope_membership(
     state: &AppState,
     operation: &Operation,
 ) -> Result<(), &'static str> {
-    let Ok(projection) = state.projection.lock() else {
-        // A poisoned projection lock is a server fault, not an authorization
-        // grant — fail closed rather than silently admitting the write.
-        return Err("circle_scope_membership_unavailable");
-    };
+    let projection = state.projection.lock();
     let Some(scope_circle_id) = operation_target_scope_circle_id(&projection, operation) else {
         return Ok(());
     };
     projection.validate_scope_circle_id(&scope_circle_id, operation.realm_id.as_str())?;
-    let Some(actor) = operation_actor(operation) else {
+    let Some(actor) = operation.actor() else {
         return Ok(());
     };
+    let actor = actor.as_str();
     if projection.circle_scope_visible_to_actor(&scope_circle_id, actor) {
         Ok(())
     } else {
@@ -1195,9 +1191,10 @@ async fn validate_applet_registration_authz(
     {
         return Ok(());
     }
-    let Some(actor) = operation_actor(operation) else {
+    let Some(actor) = operation.actor() else {
         return Ok(());
     };
+    let actor = actor.as_str();
     let realm_id = operation.realm_id.as_str();
     if realm_owner_matches(state, realm_id, actor).await {
         return Ok(());
@@ -1287,9 +1284,10 @@ async fn validate_message_edit_redact_window_policy(
     if !is_redact && !is_revise {
         return Ok(());
     }
-    let Some(actor) = operation_actor(operation) else {
+    let Some(actor) = operation.actor() else {
         return Ok(());
     };
+    let actor = actor.as_str();
     let realm_id = operation.realm_id.as_str();
 
     // Realm owner is exempt from the .own window (admin override).
@@ -1317,12 +1315,11 @@ async fn validate_message_edit_redact_window_policy(
     let Some(target_ref) = target_ref else {
         return Ok(());
     };
-    let Some(created_at) = state
-        .projection
-        .lock()
-        .ok()
-        .and_then(|projection| projection.message_origin(target_ref).map(|origin| origin.0))
-    else {
+    let created_at = {
+        let projection = state.projection.lock();
+        projection.message_origin(target_ref).map(|origin| origin.0)
+    };
+    let Some(created_at) = created_at else {
         // Unknown target — leave it to the reducer's dependency handling.
         return Ok(());
     };
@@ -1611,11 +1608,10 @@ fn agent_participation_parent_scope_keys(
                         .and_then(|object| object.get("id"))
                         .and_then(Value::as_str)
                 })?;
-            state
-                .projection
-                .lock()
-                .ok()
-                .and_then(|projection| projection.strand_scope_circle_id(strand_id))
+            {
+                let projection = state.projection.lock();
+                projection.strand_scope_circle_id(strand_id)
+            }
         });
     if let Some(circle_id) = scope_circle_id {
         parent_keys.push(crate::routing::agent_participation::circle_scope_key(
@@ -1748,11 +1744,10 @@ fn validate_agent_act_on_behalf_authorization_ref(
         return Err("agent_act_on_behalf_authorization_ref_inactive");
     };
     let action_allowed = grant.actions.iter().any(|candidate| candidate == action);
-    let resource_expr = state
-        .projection
-        .lock()
-        .ok()
-        .map(|projection| projection.authz_resource_expr(operation.realm_id.as_str(), resource))
+    let resource_expr = {
+        let projection = state.projection.lock();
+        Some(projection.authz_resource_expr(operation.realm_id.as_str(), resource))
+    }
         .unwrap_or_else(|| resource.to_owned());
     if !action_allowed || !crate::authz::resource_matches(&grant.resource, &resource_expr) {
         return Err("agent_act_on_behalf_authorization_ref_scope");
@@ -1820,9 +1815,7 @@ fn validate_agent_act_on_behalf_approval(
         .ok_or("agent_act_on_behalf_approval_nonce_missing")?;
     let action = agent_participation_action(operation)
         .ok_or("agent_act_on_behalf_approval_action_unsupported")?;
-    let Ok(projection) = state.projection.lock() else {
-        return Err("agent_act_on_behalf_approval_unavailable");
-    };
+    let projection = state.projection.lock();
     let request = projection
         .agent_action_requests
         .get(request_id)
@@ -1981,20 +1974,21 @@ async fn operation_agent_write_context(
         return Ok(Some((agent_id.to_owned(), mode)));
     }
     if operation_provenance_marks_agent(operation)
-        && let Some(agent_id) =
-            operation_provenance_agent_id(operation).or_else(|| operation_actor(operation))
+        && let Some(agent_id) = operation_provenance_agent_id(operation)
+            .map(ToOwned::to_owned)
+            .or_else(|| operation.actor().map(|did| did.to_string()))
     {
         let mode = if operation_executed_by(operation).is_some() {
             AgentParticipationMode::ActOnBehalf
         } else {
             AgentParticipationMode::Reply
         };
-        return Ok(Some((agent_id.to_owned(), mode)));
+        return Ok(Some((agent_id, mode)));
     }
-    if let Some(sender) = operation_actor(operation)
-        && native_agent_exists(state, sender).await?
+    if let Some(sender) = operation.actor()
+        && native_agent_exists(state, sender.as_str()).await?
     {
-        return Ok(Some((sender.to_owned(), AgentParticipationMode::Reply)));
+        return Ok(Some((sender.to_string(), AgentParticipationMode::Reply)));
     }
     Ok(None)
 }
@@ -2025,11 +2019,10 @@ fn validate_agent_context_authorization_ref(
         return Err("agent_context_authorization_ref_inactive");
     };
     let action_allowed = grant.actions.iter().any(|candidate| candidate == action);
-    let resource_expr = state
-        .projection
-        .lock()
-        .ok()
-        .map(|projection| projection.authz_resource_expr(operation.realm_id.as_str(), resource))
+    let resource_expr = {
+        let projection = state.projection.lock();
+        Some(projection.authz_resource_expr(operation.realm_id.as_str(), resource))
+    }
         .unwrap_or_else(|| resource.to_owned());
     if !action_allowed || !crate::authz::resource_matches(&grant.resource, &resource_expr) {
         return Err("agent_context_authorization_ref_scope");
@@ -2378,9 +2371,10 @@ async fn validate_realm_organization_policy(
     // Realm side — owner or `ck.realm.admin`. The executor identity comes from
     // the envelope sender / authorization.executed_by; a bare OIDC session is
     // not sufficient on its own.
-    let Some(actor) = operation_actor(operation) else {
+    let Some(actor) = operation.actor() else {
         return Err("missing_capability");
     };
+    let actor = actor.as_str();
     let realm_id = operation.realm_id.as_str();
     if realm_owner_matches(state, realm_id, actor).await {
         return Ok(());
@@ -2499,9 +2493,10 @@ async fn validate_call_recording_start_policy(
         return Ok(());
     }
     let action = call_recording_start_required_action(operation);
-    let Some(actor) = operation_actor(operation) else {
+    let Some(actor) = operation.actor() else {
         return Ok(());
     };
+    let actor = actor.as_str();
     let realm_id = operation.realm_id.as_str();
     let (owner, members) = realm_owner_and_members(state, realm_id).await;
     if state
@@ -2614,11 +2609,10 @@ fn moderation_close_is_appellant_withdrawal(
     let Some(appeal_id) = operation.payload.get("appeal_id").and_then(Value::as_str) else {
         return false;
     };
-    let appellant = state
-        .projection
-        .lock()
-        .ok()
-        .and_then(|proj| proj.moderation_appeal_appellant(appeal_id));
+    let appellant = {
+        let proj = state.projection.lock();
+        proj.moderation_appeal_appellant(appeal_id)
+    };
     matches!(appellant, Some(appellant) if appellant == actor)
 }
 
@@ -2656,7 +2650,6 @@ fn active_direct_conversation_binding_for_realm(
     state
         .direct_conversation_bindings
         .lock()
-        .expect("direct_conversation_bindings lock")
         .values()
         .find(|binding| binding.state == "active" && binding.realm_id == realm_id)
         .cloned()

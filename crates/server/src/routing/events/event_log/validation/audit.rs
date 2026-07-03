@@ -1,6 +1,6 @@
 use super::super::*;
 
-const MANAGE_OTHERS_AUDIT_MISSING: &str = "manage_others_audit_missing";
+use crate::error::reasons::WATCH_SET_OTHERS_AUDIT_MISSING;
 
 pub(crate) async fn append_encrypted_message_franking(
     state: &AppState,
@@ -305,7 +305,7 @@ pub(super) async fn validate_strand_watch_audit_pair(
     {
         return Err(event_validation_error(
             StatusCode::PRECONDITION_FAILED,
-            MANAGE_OTHERS_AUDIT_MISSING,
+            WATCH_SET_OTHERS_AUDIT_MISSING,
             "manage_others strand watch writes cannot set muted or public levels",
         ));
     }
@@ -395,7 +395,7 @@ fn event_refs_with_role(
 fn manage_others_audit_error(message: impl Into<String>) -> EventValidationError {
     event_validation_error(
         StatusCode::PRECONDITION_FAILED,
-        MANAGE_OTHERS_AUDIT_MISSING,
+        WATCH_SET_OTHERS_AUDIT_MISSING,
         message,
     )
 }

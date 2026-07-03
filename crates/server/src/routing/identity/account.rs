@@ -71,7 +71,7 @@ pub(crate) async fn record_handle_release(
         .handle_releases()
         .put(localpart, released_at)
         .await?;
-    let mut releases = state.handle_releases.lock().expect("handle_releases lock");
+    let mut releases = state.handle_releases.lock();
     releases.insert(localpart.to_owned(), released_at);
     Ok(())
 }
@@ -392,7 +392,6 @@ fn account_registration_policy_snapshot(state: &AppState) -> AccountRegistration
     state
         .account_registration_policy
         .lock()
-        .expect("account registration policy lock")
         .clone()
 }
 
@@ -573,8 +572,7 @@ fn account_registration_retry_after_ms(
     let window = chrono::Duration::seconds(rate_limit.window_seconds as i64);
     let mut tracker = state
         .account_registration_rate_tracker
-        .lock()
-        .expect("account registration rate tracker lock");
+        .lock();
     let entry = tracker.entry(did.to_owned()).or_insert((now, 0));
     if now.signed_duration_since(entry.0) >= window {
         *entry = (now, 0);

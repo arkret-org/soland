@@ -5,8 +5,10 @@
 //! protocol events submitted to `POST /_cokret/self/events` as self-authored
 //! Moves and converged by the data/control-plane reducer
 //! (`reducer/apply_moderation.rs`). The control plane holds no moderation
-//! truth (content-moderation.md §2.6 "不经任何 /_soland/admin 写路径;治理状态
-//! 完全由数据/控制面 reducer 收敛,运维管理面不持有 moderation 真相").
+//! truth (content-moderation.md §2.6: moderation state MUST NOT be
+//! written through any `/_soland/admin` path; governance state converges
+//! entirely in the data/control-plane reducer, and the operator admin
+//! surface holds no moderation truth of its own).
 //!
 //! The former `/decision`, `/decision/{id}/lift`,
 //! `/appeals/{id}/{review,decision,close}` **write** endpoints have therefore

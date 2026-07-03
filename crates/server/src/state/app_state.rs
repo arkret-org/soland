@@ -32,7 +32,7 @@ use super::records::{
 };
 use crate::authz::SolandAuthzEngine;
 use crate::config::{AppConfig, NotarySigningKeyOrigin};
-use crate::db::Db;
+use soland_data::Db;
 use crate::hlc::ServerHlc;
 use crate::object_storage::{ObjectStorage, build_object_storage};
 use crate::persistence::{
@@ -295,7 +295,6 @@ impl AppState {
         *self
             .notary_signing_key_origin
             .lock()
-            .expect("notary signing key origin lock")
     }
 
     /// Hot-rotate the NotaryWorker signing key. Writers swap
@@ -309,7 +308,8 @@ impl AppState {
     ) -> Arc<SigningKey> {
         let new_key = Arc::new(SigningKey::from_bytes(seed));
         self.notary_signing_key.store(new_key.clone());
-        if let Ok(mut guard) = self.notary_signing_key_origin.lock() {
+        {
+            let mut guard = self.notary_signing_key_origin.lock();
             *guard = origin;
         }
         new_key
@@ -724,7 +724,7 @@ impl AppState {
         )
         .await;
         {
-            let mut realms = self.realms.lock().expect("realms lock");
+            let mut realms = self.realms.lock();
             for (_, entry) in realm_updates.entries_iter() {
                 realms.upsert(entry.clone());
             }
@@ -738,7 +738,7 @@ impl AppState {
         )
         .await;
         {
-            let mut proj = self.projection.lock().expect("projection lock");
+            let mut proj = self.projection.lock();
             proj.space_containers.extend(proj_updates.space_containers);
             proj.strands.extend(proj_updates.strands);
             proj.morphs.extend(proj_updates.morphs);
@@ -749,7 +749,7 @@ impl AppState {
         }
 
         let hydrated_realm_ids: Vec<RealmId> = {
-            let realms = self.realms.lock().expect("realms lock");
+            let realms = self.realms.lock();
             realms
                 .search(Default::default())
                 .into_iter()
@@ -757,7 +757,7 @@ impl AppState {
                 .collect()
         };
         {
-            let mut proj = self.projection.lock().expect("projection lock");
+            let mut proj = self.projection.lock();
             for realm_id in hydrated_realm_ids {
                 if let Err(error) = proj.reload_cells_from_store(
                     &realm_id,
@@ -780,8 +780,7 @@ impl AppState {
         {
             let mut map = self
                 .invite_receive_policies
-                .lock()
-                .expect("invite_receive_policies lock");
+                .lock();
             for (subject_id, policy) in policies {
                 map.entry(subject_id).or_insert(policy);
             }
@@ -792,7 +791,7 @@ impl AppState {
         // the std Mutex across `.await`.
         let cells = self.persistence.consent_cells().snapshot_all().await?;
         {
-            let mut map = self.consent_cells.lock().expect("consent_cells lock");
+            let mut map = self.consent_cells.lock();
             for (key, record) in cells {
                 map.entry(key).or_insert(record);
             }
@@ -808,8 +807,7 @@ impl AppState {
         {
             let mut map = self
                 .direct_conversation_bindings
-                .lock()
-                .expect("direct_conversation_bindings lock");
+                .lock();
             for (participants_key, record) in bindings {
                 map.entry(participants_key).or_insert(record);
             }
@@ -819,8 +817,7 @@ impl AppState {
         {
             let mut map = self
                 .account_lifecycle
-                .lock()
-                .expect("account_lifecycle lock");
+                .lock();
             for (did, record) in lifecycle_records {
                 if record.state == "active" {
                     map.remove(&did);
@@ -832,7 +829,7 @@ impl AppState {
 
         let handle_releases = self.persistence.handle_releases().snapshot_all().await?;
         {
-            let mut map = self.handle_releases.lock().expect("handle_releases lock");
+            let mut map = self.handle_releases.lock();
             for (localpart, released_at) in handle_releases {
                 map.insert(localpart, released_at);
             }
@@ -842,8 +839,7 @@ impl AppState {
         {
             let mut map = self
                 .retention_policies
-                .lock()
-                .expect("retention_policies lock");
+                .lock();
             for record in retention_policies {
                 map.insert(record.realm_id.clone(), record);
             }
@@ -857,8 +853,7 @@ impl AppState {
         {
             let mut map = self
                 .retention_tombstones
-                .lock()
-                .expect("retention_tombstones lock");
+                .lock();
             for record in retention_tombstones {
                 map.insert(record.event_id.clone(), record);
             }
@@ -866,7 +861,7 @@ impl AppState {
 
         let organizations = self.persistence.organizations().list().await?;
         {
-            let mut map = self.organizations.lock().expect("organizations lock");
+            let mut map = self.organizations.lock();
             for record in organizations {
                 map.insert(record.organization_id.clone(), record);
             }
@@ -880,8 +875,7 @@ impl AppState {
         {
             let mut map = self
                 .organization_policies
-                .lock()
-                .expect("organization_policies lock");
+                .lock();
             for record in organization_policies {
                 map.insert(record.organization_id.clone(), record);
             }
@@ -895,12 +889,10 @@ impl AppState {
         {
             let mut realm_map = self
                 .realm_organizations
-                .lock()
-                .expect("realm_organizations lock");
+                .lock();
             let mut org_map = self
                 .organization_realms
-                .lock()
-                .expect("organization_realms lock");
+                .lock();
             for (realm_id, organization_ids) in realm_organizations {
                 for organization_id in &organization_ids {
                     org_map
@@ -921,7 +913,7 @@ impl AppState {
             .snapshot_all()
             .await?;
         {
-            let mut proj = self.projection.lock().expect("projection lock");
+            let mut proj = self.projection.lock();
             for record in realm_organization_statements {
                 let row = crate::reducer::RealmOrganizationStatementState {
                     realm_id: record.realm_id.clone(),
@@ -956,8 +948,7 @@ impl AppState {
         {
             let mut map = self
                 .realm_moderation_policies
-                .lock()
-                .expect("realm_moderation_policies lock");
+                .lock();
             for record in realm_moderation_policies {
                 map.insert(record.realm_id.clone(), record);
             }
@@ -978,8 +969,7 @@ impl AppState {
             Ok(revocations) => {
                 let mut cache = self
                     .sync_cursor_revocations
-                    .lock()
-                    .expect("sync cursor revocations lock");
+                    .lock();
                 cache.extend(revocations);
             }
             Err(error) => {
@@ -996,7 +986,6 @@ impl AppState {
     pub fn member_identity_registry(&self) -> MemberIdentityRegistry {
         self.member_identity
             .lock()
-            .expect("member_identity lock")
             .clone()
     }
 
@@ -1020,7 +1009,6 @@ impl AppState {
     pub fn account_lifecycle_record(&self, did: &str) -> AccountLifecycleRecord {
         self.account_lifecycle
             .lock()
-            .expect("account_lifecycle lock")
             .get(did)
             .cloned()
             .unwrap_or_else(|| AccountLifecycleRecord {
@@ -1043,8 +1031,7 @@ impl AppState {
     pub fn set_account_lifecycle_record(&self, did: &str, record: AccountLifecycleRecord) {
         let mut lifecycle = self
             .account_lifecycle
-            .lock()
-            .expect("account_lifecycle lock");
+            .lock();
         if record.state == "active" {
             lifecycle.remove(did);
         } else {
@@ -1059,8 +1046,7 @@ impl AppState {
     pub fn account_lockout_active_until(&self, did: &str) -> Option<chrono::DateTime<chrono::Utc>> {
         let mut map = self
             .failed_login_attempts
-            .lock()
-            .expect("failed_login_attempts lock");
+            .lock();
         let now = chrono::Utc::now();
         let record = map.get(did).cloned()?;
         match record.locked_until {
@@ -1081,8 +1067,7 @@ impl AppState {
     pub fn record_failed_login(&self, did: &str) -> FailedLoginRecord {
         let mut map = self
             .failed_login_attempts
-            .lock()
-            .expect("failed_login_attempts lock");
+            .lock();
         let now = chrono::Utc::now();
         let entry = map.entry(did.to_owned()).or_insert(FailedLoginRecord {
             attempts: 0,
@@ -1107,7 +1092,6 @@ impl AppState {
     pub fn clear_failed_login(&self, did: &str) {
         self.failed_login_attempts
             .lock()
-            .expect("failed_login_attempts lock")
             .remove(did);
     }
 
@@ -1120,8 +1104,7 @@ impl AppState {
     pub fn record_psi_probe(&self, requester: &str, holder: &str) -> PsiProbeOutcome {
         let mut map = self
             .psi_probe_tracker
-            .lock()
-            .expect("psi_probe_tracker lock");
+            .lock();
         let now = chrono::Utc::now();
         let entry = map
             .entry((requester.to_owned(), holder.to_owned()))
@@ -1166,8 +1149,7 @@ impl AppState {
     ) -> KeyBackupDownloadOutcome {
         let mut map = self
             .key_backup_download_tracker
-            .lock()
-            .expect("key_backup_download_tracker lock");
+            .lock();
         let now = chrono::Utc::now();
         let entry = map
             .entry(principal_id.to_owned())
@@ -1244,8 +1226,7 @@ impl AppState {
 
         let mut map = self
             .moderation_report_rate_tracker
-            .lock()
-            .expect("moderation_report_rate_tracker lock");
+            .lock();
         let now = chrono::Utc::now();
         let window = chrono::Duration::seconds(MODERATION_REPORT_RATE_WINDOW_SECS);
         let mut exceeded = None;
@@ -1296,8 +1277,7 @@ impl AppState {
     ) -> bool {
         let mut map = self
             .moderation_franking_replay_nonces
-            .lock()
-            .expect("moderation_franking_replay_nonces lock");
+            .lock();
         let now = chrono::Utc::now();
         let expires_before =
             now - chrono::Duration::seconds(MODERATION_FRANKING_REPLAY_WINDOW_SECS);
@@ -1344,8 +1324,7 @@ impl AppState {
         }
         let mut map = self
             .agent_approval_nonces
-            .lock()
-            .expect("agent_approval_nonces lock");
+            .lock();
         map.retain(|_, expiry| *expiry > now);
         let key = format!("{agent_principal_id}:{authorization_ref}:{request_id}:{approval_nonce}");
         if map.contains_key(&key) {

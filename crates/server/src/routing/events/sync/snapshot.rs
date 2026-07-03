@@ -22,7 +22,7 @@ pub(crate) async fn build_sync_snapshot(
     // the client SHOULD inline them via `identity_events[]` (gated on
     // `subject_id` disclosure).
     let candidate_realms: Vec<RealmDirectoryEntry> = {
-        let realms = state.realms.lock().expect("realms lock");
+        let realms = state.realms.lock();
         realms
             .search(Default::default())
             .into_iter()
@@ -91,7 +91,7 @@ pub(crate) async fn build_sync_snapshot(
     // Clone the projection so the per-Realm loop below can `.await` async
     // visibility/timeline helpers without holding the (non-Send) lock guard
     // across a suspension point.
-    let projection = state.projection.lock().expect("projection lock").clone();
+    let projection = state.projection.lock().clone();
     let mut sync_realms = std::collections::BTreeMap::new();
     let mut timeline_positions = BTreeMap::new();
     let mut account_positions = BTreeMap::new();
@@ -851,7 +851,7 @@ fn roster_membership_states_for_realm(
     realm_entry: &crate::state::RealmDirectoryEntry,
 ) -> BTreeMap<String, String> {
     let projected_states = {
-        let projection = state.projection.lock().expect("projection lock");
+        let projection = state.projection.lock();
         projection
             .members
             .iter()
@@ -1423,9 +1423,7 @@ pub(crate) async fn projection_record_visible_to_session(
     if personal_blocklist_blocks_sender_for_session(state, session, event.sender.as_deref()).await {
         return false;
     }
-    let Ok(projection) = state.projection.lock() else {
-        return false;
-    };
+    let projection = state.projection.lock();
     let scope_circle_id = projection_event_scope_circle_id(&projection, event);
     circle_scope_visible_to_session(
         &projection,

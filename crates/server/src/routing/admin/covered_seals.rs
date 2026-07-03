@@ -53,7 +53,7 @@ fn governance_seals_for_realm(state: &AppState, realm: &RealmId) -> Vec<String> 
 /// Pick the highest-epoch MLS group row scoped to `realm_id` and return its
 /// `(epoch, covered_seals, committed_at_unix)`.
 fn covered_state_for_realm(state: &AppState, realm_id: &str) -> Option<(u64, Vec<String>, i64)> {
-    let proj = state.projection.lock().ok()?;
+    let proj = state.projection.lock();
     proj.mls_commit_epochs
         .values()
         .filter(|row| row.effective_scope.get("realm_id").and_then(Value::as_str) == Some(realm_id))
@@ -147,8 +147,7 @@ async fn advance_covered_seals(
     let lag_count = {
         let mut proj = state
             .projection
-            .lock()
-            .map_err(|_| app_error!(InternalError, "projection lock poisoned"))?;
+            .lock();
         let target = proj
             .mls_commit_epochs
             .values_mut()

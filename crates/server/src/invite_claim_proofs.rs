@@ -334,6 +334,7 @@ fn resolve_current_ed25519_key(
     }
     crate::jws_verify::require_verification_method_in_document(&document, verification_method)?;
     cokret_sdk::jws::resolve_ed25519_pubkey(resolver, verification_method)
+        .map_err(|error| error.to_string())
 }
 
 fn decode_ed25519_multibase_key(value: &str) -> Result<VerifyingKey, String> {

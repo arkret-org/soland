@@ -17,7 +17,7 @@ pub async fn ensure_projected_realm(state: &AppState, origin: &str, operation: &
     let explicit_discoverability =
         operation_realm_discoverability(operation).filter(|value| is_valid_discoverability(value));
     let directory_public = {
-        let mut realms = state.realms.lock().expect("realms lock");
+        let mut realms = state.realms.lock();
         if let Some(existing) = realms.get(&realm_id) {
             let public = existing.public;
             // Admin rename: a realm patch may carry a new alias. Re-normalize it
@@ -328,7 +328,7 @@ pub async fn project_membership_operation(state: &AppState, origin: &str, operat
     }
 
     {
-        let mut realms = state.realms.lock().expect("realms lock");
+        let mut realms = state.realms.lock();
         let Some(mut entry) = realms.get(&realm_id).cloned() else {
             return;
         };
@@ -497,7 +497,6 @@ pub fn project_member_identity_update(state: &AppState, operation: &Operation) {
         let current = state
             .member_identity
             .lock()
-            .expect("member_identity lock")
             .current_state_digest_for_actor(&realm_id, &actor_id);
         if current.as_deref().is_some_and(|c| c != expected) {
             tracing::warn!(
@@ -536,7 +535,7 @@ pub fn project_member_identity_update(state: &AppState, operation: &Operation) {
         replaces,
         raw_event,
     };
-    let mut registry = state.member_identity.lock().expect("member_identity lock");
+    let mut registry = state.member_identity.lock();
     registry.insert(record);
     registry.upsert_handle_claims_from_identity_payload(identity_payload);
 }

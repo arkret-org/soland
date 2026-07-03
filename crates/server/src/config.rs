@@ -553,6 +553,91 @@ impl AppConfig {
     }
 }
 
+#[cfg(any(test, feature = "test-util"))]
+impl AppConfig {
+    /// Single source of truth for test configs. Defaults take the
+    /// production posture (`development_mode = false`, replay-window
+    /// enforcement and per-family overrides on, demo seeding off);
+    /// individual tests opt into relaxed settings explicitly via
+    /// struct-update syntax:
+    ///
+    /// ```ignore
+    /// let config = AppConfig {
+    ///     development_mode: true,
+    ///     jws_replay_window_seconds: 0,
+    ///     ..AppConfig::test_default()
+    /// };
+    /// ```
+    pub fn test_default() -> Self {
+        Self {
+            bind: "127.0.0.1:0".parse().unwrap(),
+            metrics_bind: "127.0.0.1:0".parse().unwrap(),
+            public_base_url: "http://server".to_owned(),
+            service_did: "did:web:soland.local".to_owned(),
+            tls_cert_path: None,
+            tls_key_path: None,
+            database_url: None,
+            object_storage: ObjectStorageConfig::local(
+                std::env::temp_dir().join("soland-test-blobs"),
+            ),
+            ice: IceServersConfig::default(),
+            livekit: LiveKitConfig::default(),
+            cors_allow_origin: None,
+            account_authority_url: None,
+            oidc_client_id: None,
+            development_mode: false,
+            session_grant_introspection_url: None,
+            session_grant_introspection_bearer: None,
+            // Test fixtures intentionally allow bare `did:web` — the spec
+            // conformance vectors use it. The production default
+            // (`default_did_resolver_allow_methods`) is webvh-only.
+            did_resolver_allow_methods: vec![
+                "web".to_owned(),
+                "key".to_owned(),
+                "uuid".to_owned(),
+            ],
+            embedded_webvh_provider_enabled: false,
+            embedded_webvh_registration_bearer: None,
+            external_webvh_provider_url: None,
+            external_webvh_provider_active: false,
+            default_webvh_provider_id: None,
+            jws_replay_window_seconds: 300,
+            jws_replay_window_per_family: Self::default_replay_overrides(),
+            notary_signing_key_seed: None,
+            agent_audit_binding_signing_seed: None,
+            use_keystore: false,
+            federation_policy: FederationPolicy::Mesh,
+            federation_peers: Vec::new(),
+            // Off so test binaries never spawn background federation HTTP
+            // traffic; the in-process enqueue path still writes outbox rows.
+            federation_outbound_enabled: false,
+            federation_replica_observer: false,
+            admin_default_page_limit: 100,
+            admin_max_page_limit: 1000,
+            admin_principal_dids: Vec::new(),
+            to_device_queue_capacity: 10_000,
+            push_bridge_cache_ttl_seconds: 900,
+            push_bridge_trusted_service_dids: Vec::new(),
+            resumable_upload_dir: PathBuf::from("./soland-resumable-uploads"),
+            resumable_upload_incomplete_ttl_seconds: 86_400,
+            seal_compaction_min_age_seconds: 604_800,
+            compaction_min_witnesses: 1,
+            compaction_preserve_genesis: true,
+            compaction_prune_only_singleton_successors: true,
+            compaction_prune_walk_interval_seconds: 0,
+            compaction_prune_walk_per_realm_limit: 50,
+            seed_demo_data: false,
+            trust_domain: "ck:trust_domain:soland.local".to_owned(),
+            receive_policy_constraints: None,
+            sovereign_enclave_enabled: false,
+            sovereign_enclave_allowed_outbound_hosts: Vec::new(),
+            candidate_join_policy_enabled: false,
+            erasure_propagation_window_ms: 604_800_000,
+            log_format: LogFormat::Plain,
+        }
+    }
+}
+
 impl AppConfig {
     pub fn from_env_and_args() -> anyhow::Result<Self> {
         let bind = arg_value("--bind")
@@ -1413,12 +1498,10 @@ fn env_csv(name: &str) -> Option<Vec<String>> {
 }
 
 fn default_did_resolver_allow_methods() -> Vec<String> {
-    vec![
-        "webvh".to_owned(),
-        "web".to_owned(),
-        "key".to_owned(),
-        "uuid".to_owned(),
-    ]
+    // did:webvh-only red line: `web` is intentionally absent from the default
+    // resolver allow-list. Deployments that must interoperate with bare
+    // did:web peers can opt in explicitly via SOLAND_DID_RESOLVER_ALLOW_METHODS.
+    vec!["webvh".to_owned(), "key".to_owned(), "uuid".to_owned()]
 }
 
 fn env_non_empty(name: &str) -> Option<String> {
@@ -1497,11 +1580,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn default_did_resolver_allow_methods_include_webvh() {
-        assert_eq!(
-            default_did_resolver_allow_methods(),
-            vec!["webvh", "web", "key", "uuid"]
-        );
+    fn default_did_resolver_allow_methods_webvh_only_no_bare_web() {
+        // did:webvh-only red line: bare `web` must never be in the default
+        // resolver allow-list; it is opt-in via env override only.
+        let methods = default_did_resolver_allow_methods();
+        assert_eq!(methods, vec!["webvh", "key", "uuid"]);
+        assert!(!methods.iter().any(|m| m == "web"));
     }
 
     #[test]

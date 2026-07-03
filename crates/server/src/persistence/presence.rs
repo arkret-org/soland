@@ -82,7 +82,6 @@ impl PresenceStore for MemoryPresenceStore {
         let key = (presence.actor.clone(), presence.device_id.clone());
         self.data
             .lock()
-            .expect("presence lock")
             .insert(key, presence);
         Ok(())
     }
@@ -91,7 +90,6 @@ impl PresenceStore for MemoryPresenceStore {
         Ok(self
             .data
             .lock()
-            .expect("presence lock")
             .values()
             .filter(|record| record.actor == actor)
             .cloned()
@@ -101,7 +99,6 @@ impl PresenceStore for MemoryPresenceStore {
     async fn delete(&self, actor: &str) -> PersistenceResult<()> {
         self.data
             .lock()
-            .expect("presence lock")
             .retain(|(record_actor, _), _| record_actor != actor);
         Ok(())
     }
@@ -122,14 +119,13 @@ impl MemoryTypingStore {
 impl TypingStore for MemoryTypingStore {
     async fn put(&self, typing: TypingRecord) -> PersistenceResult<()> {
         let key = (typing.actor.clone(), typing.realm_id.clone());
-        self.data.lock().expect("typing lock").insert(key, typing);
+        self.data.lock().insert(key, typing);
         Ok(())
     }
 
     async fn remove(&self, actor: &str, realm_id: &str) -> PersistenceResult<()> {
         self.data
             .lock()
-            .expect("typing lock")
             .remove(&(actor.to_owned(), realm_id.to_owned()));
         Ok(())
     }
@@ -139,7 +135,6 @@ impl TypingStore for MemoryTypingStore {
         Ok(self
             .data
             .lock()
-            .expect("typing lock")
             .values()
             .filter(|record| record.realm_id == realm_id && record.expires_at > now)
             .cloned()
@@ -148,7 +143,7 @@ impl TypingStore for MemoryTypingStore {
 
     async fn prune_expired(&self) -> PersistenceResult<usize> {
         let now = Utc::now();
-        let mut data = self.data.lock().expect("typing lock");
+        let mut data = self.data.lock();
         let before = data.len();
         data.retain(|_, record| record.expires_at > now);
         Ok(before - data.len())
@@ -184,14 +179,13 @@ impl CallSignalRelayStore for MemoryCallSignalRelayStore {
         let position = {
             let mut counters = self
                 .next_position
-                .lock()
-                .expect("call signal position lock");
+                .lock();
             let counter = counters.entry(realm_id.clone()).or_insert(0);
             *counter += 1;
             *counter
         };
         record.position = position;
-        let mut data = self.data.lock().expect("call signal relay lock");
+        let mut data = self.data.lock();
         let bucket = data.entry(realm_id).or_default();
         bucket.retain(|existing| existing.expires_at > now);
         bucket.push(record);
@@ -210,7 +204,6 @@ impl CallSignalRelayStore for MemoryCallSignalRelayStore {
         Ok(self
             .data
             .lock()
-            .expect("call signal relay lock")
             .get(realm_id)
             .map(|bucket| {
                 bucket
@@ -224,7 +217,7 @@ impl CallSignalRelayStore for MemoryCallSignalRelayStore {
 
     async fn prune_expired(&self) -> PersistenceResult<usize> {
         let now = Utc::now();
-        let mut data = self.data.lock().expect("call signal relay lock");
+        let mut data = self.data.lock();
         let mut removed = 0usize;
         for bucket in data.values_mut() {
             let before = bucket.len();
@@ -245,7 +238,6 @@ impl CallSignalRelayStore for MemoryCallSignalRelayStore {
         Ok(self
             .watermark
             .lock()
-            .expect("call signal watermark lock")
             .get(&key)
             .copied()
             .unwrap_or(0))
@@ -259,7 +251,7 @@ impl CallSignalRelayStore for MemoryCallSignalRelayStore {
         position: u64,
     ) -> PersistenceResult<()> {
         let key = (actor.to_owned(), device.to_owned(), realm_id.to_owned());
-        let mut watermark = self.watermark.lock().expect("call signal watermark lock");
+        let mut watermark = self.watermark.lock();
         let entry = watermark.entry(key).or_insert(0);
         if position > *entry {
             *entry = position;

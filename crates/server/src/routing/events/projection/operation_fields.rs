@@ -220,6 +220,5 @@ pub async fn project_retention_policy_from_operation(
     state
         .retention_policies
         .lock()
-        .expect("retention policies lock")
         .insert(record.realm_id.clone(), record);
 }

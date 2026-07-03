@@ -353,7 +353,6 @@ async fn fetch_remote_handle_from_peer(
         let _ = state
             .member_identity
             .lock()
-            .expect("member_identity lock")
             .upsert_handle_claim_envelope(envelope);
     }
     Ok(Some(outcome))
@@ -713,7 +712,6 @@ pub(super) async fn signed_handle_claim(
         let _ = state
             .member_identity
             .lock()
-            .expect("member_identity lock")
             .upsert_handle_claim_envelope(envelope);
     }
     Ok(claim)
@@ -779,7 +777,6 @@ pub(super) async fn list_handles_for_subject(
     let cached_claims = state
         .member_identity
         .lock()
-        .expect("member_identity lock")
         .handle_claims_for_subject(&subject);
     let mut claims = Vec::new();
     let mut seen = BTreeSet::new();

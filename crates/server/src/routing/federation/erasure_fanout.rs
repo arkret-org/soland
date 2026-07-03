@@ -66,9 +66,7 @@ struct ErasurePeerTarget {
 /// the federation membership projection grows that surface.
 pub async fn fanout_erasure_receipt(state: &AppState, receipt_id: &str) {
     let receipt_snapshot = {
-        let Ok(proj) = state.projection.lock() else {
-            return;
-        };
+        let proj = state.projection.lock();
         proj.erasure_receipts
             .iter()
             .rev()
@@ -124,9 +122,7 @@ pub async fn fanout_erasure_receipt_operation(state: &AppState, operation: &Oper
     // back, releasing in between so the outbox enqueue (which may
     // hit persistence) does not stall the projection lock.
     let receipt_snapshot = {
-        let Ok(proj) = state.projection.lock() else {
-            return;
-        };
+        let proj = state.projection.lock();
         proj.erasure_receipts
             .iter()
             .rev()
@@ -232,12 +228,13 @@ pub async fn fanout_erasure_receipt_operation(state: &AppState, operation: &Oper
     }
 
     // Write the seeded peer_status back onto the receipt record.
-    if let Ok(mut proj) = state.projection.lock()
-        && let Some(record) = proj
-            .erasure_receipts
-            .iter_mut()
-            .rev()
-            .find(|r| r.receipt_id.as_deref() == Some(receipt_id))
+    if let Some(record) = state
+        .projection
+        .lock()
+        .erasure_receipts
+        .iter_mut()
+        .rev()
+        .find(|r| r.receipt_id.as_deref() == Some(receipt_id))
     {
         record.peer_status = sent_statuses;
     }
@@ -345,9 +342,7 @@ pub fn sweep_erasure_fanout_timeouts(state: &AppState) -> usize {
     let now = Utc::now();
     let window = chrono::Duration::milliseconds(window_ms as i64);
 
-    let Ok(mut proj) = state.projection.lock() else {
-        return 0;
-    };
+    let mut proj = state.projection.lock();
     let mut flipped = 0_usize;
     for receipt in proj.erasure_receipts.iter_mut() {
         if receipt.fanout_status == "incomplete" || receipt.fanout_status == "complete" {
@@ -440,7 +435,7 @@ mod tests {
         let state = fake_state();
         // Inject a receipt with a scope.realm_id.
         {
-            let mut proj = state.projection.lock().unwrap();
+            let mut proj = state.projection.lock();
             proj.erasure_receipts.push(ErasureReceiptRecord {
                 receipt_id: Some("r1".to_owned()),
                 issuer: Some("did:web:origin.example".to_owned()),
@@ -466,7 +461,7 @@ mod tests {
         }
         fanout_erasure_receipt(&state, "r1").await;
         let (peer_status_len, peer_sent, peer_unacked) = {
-            let proj = state.projection.lock().unwrap();
+            let proj = state.projection.lock();
             let record = proj
                 .erasure_receipts
                 .iter()
@@ -506,7 +501,7 @@ mod tests {
         // Receipt is 1s old; window is 500ms (set by fake_state).
         let old = Utc::now() - chrono::Duration::seconds(1);
         {
-            let mut proj = state.projection.lock().unwrap();
+            let mut proj = state.projection.lock();
             let mut peers = std::collections::BTreeMap::new();
             peers.insert(
                 "did:web:peer1.example".to_owned(),
@@ -532,7 +527,7 @@ mod tests {
         }
         let flipped = sweep_erasure_fanout_timeouts(&state);
         assert_eq!(flipped, 1);
-        let proj = state.projection.lock().unwrap();
+        let proj = state.projection.lock();
         let record = proj
             .erasure_receipts
             .iter()

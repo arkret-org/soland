@@ -1087,7 +1087,11 @@ fn grant_call_capability(state: &AppState, realm_id: &str, subject: &str, action
 
 /// Register `bob` as a realm member and return a fresh `ck:call:<uuidv7>` id.
 /// The media token issuer is decoupled from any ephemeral signaling session
-/// (`media-service-binding.md` 落账时序): a brand-new call has no
+/// (`media-service-binding.md` §3 durable-roster ordering — after token
+/// exchange the client MUST land its `participant_binding` in a durable
+/// `ck.call.state.participants[]` event, accepted by the server, before
+/// the identity counts as a roster member or media is exposed): a
+/// brand-new call has no
 /// `ck.call.state` cell yet, and the issuer authorizes on realm membership +
 /// `ck.call.join` + the durable ban set. This mirrors the yougen flow, which
 /// redeems a media token before writing its first `ck.call.state` event.
@@ -1119,7 +1123,6 @@ fn seed_call_state(
     state
         .projection
         .lock()
-        .unwrap()
         .cells
         .insert(cell_id, CellState::Value(value));
 }
@@ -1129,7 +1132,7 @@ fn install_media_service_epoch(state: &AppState, media_service: Value) {
         "ck:cell:ck.component.realm.media_service.v1:{DEMO_REALM_ID}"
     ))
     .unwrap();
-    state.projection.lock().unwrap().cells.insert(
+    state.projection.lock().cells.insert(
         cell_id,
         CellState::Value(serde_json::json!({ "media_service": media_service })),
     );

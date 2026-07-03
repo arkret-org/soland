@@ -144,7 +144,7 @@ async fn list_realm_links(
         })
         .transpose()?;
 
-    let projection = state.projection.lock().expect("projection mutex");
+    let projection = state.projection.lock();
     let rows = projection.realm_links_query(realm_id.as_str(), direction_enum, allow.as_deref());
     let entries = rows
         .iter()
@@ -232,7 +232,7 @@ async fn list_member_applications(
         .map_err(|e| AppError::invalid_param(format!("realm_id: {e}")))?;
     let viewer = session.actor.clone();
     let (applications, viewer_is_reviewer, receipts) = {
-        let projection = state.projection.lock().expect("projection mutex");
+        let projection = state.projection.lock();
         let review_capability = projection
             .realm_join_policy_review_capability(realm_id.as_str())
             .unwrap_or_else(|| "ck.realm.join.review".to_owned());
@@ -303,7 +303,7 @@ async fn post_realm_link(
     // so the HTTP route must enforce admission itself by running the
     // same validators against a read-only snapshot of projection state.
     {
-        let projection = state.projection.lock().expect("projection mutex");
+        let projection = state.projection.lock();
         check_realm_link_admissible(
             &projection,
             realm_scope.as_str(),
@@ -397,7 +397,7 @@ async fn delete_realm_link(
     // Preflight (same reasoning as POST). Tombstones aren't
     // cycle-checked, but kind / status validation still applies.
     {
-        let projection = state.projection.lock().expect("projection mutex");
+        let projection = state.projection.lock();
         check_realm_link_admissible(
             &projection,
             realm_id.as_str(),
@@ -471,7 +471,7 @@ async fn get_effective_policy(
         .map_err(|error| AppError::internal(error.to_string()))?;
     let organization_policy = organizations::effective_policy_value_for_realm(state, &realm_id)
         .map_err(|error| AppError::internal(format!("organization effective policy: {error}")))?;
-    let projection = state.projection.lock().expect("projection mutex");
+    let projection = state.projection.lock();
     let ep = effective_policy_for_realm(&projection, &realm_id);
     let mut effective_policy = match ep.effective_policy {
         Value::Object(map) => map.into_iter().collect::<BTreeMap<_, _>>(),

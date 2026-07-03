@@ -32,7 +32,8 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, OnceLock};
+use parking_lot::Mutex;
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
@@ -135,7 +136,7 @@ static UPLOAD_LOCKS: OnceLock<Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>
 /// within this process.
 fn upload_lock(id: &str) -> Arc<tokio::sync::Mutex<()>> {
     let locks = UPLOAD_LOCKS.get_or_init(|| Mutex::new(HashMap::new()));
-    let mut map = locks.lock().expect("upload lock map poisoned");
+    let mut map = locks.lock();
     map.entry(id.to_owned())
         .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
         .clone()
@@ -145,7 +146,7 @@ fn upload_lock(id: &str) -> Arc<tokio::sync::Mutex<()>> {
 /// completed, or expired) so the map does not grow with upload churn.
 fn release_upload_lock(id: &str) {
     if let Some(locks) = UPLOAD_LOCKS.get() {
-        let mut map = locks.lock().expect("upload lock map poisoned");
+        let mut map = locks.lock();
         map.remove(id);
     }
 }

@@ -45,7 +45,7 @@ pub(crate) async fn relay_ephemeral_read_receipt(
         ));
     }
     {
-        let mut projection = state.projection.lock().expect("projection lock");
+        let mut projection = state.projection.lock();
         projection.observe_message_read_for_expiry(
             &session.actor,
             &normalized.event_id,
@@ -350,7 +350,6 @@ async fn active_realm_member(state: &AppState, realm_id: &str, actor: &str) -> b
     let projected_state = state
         .projection
         .lock()
-        .expect("projection lock")
         .member(realm_id, actor)
         .map(|member| member.state.clone());
     if let Some(projected_state) = projected_state {
@@ -371,7 +370,6 @@ fn read_scope_visible_to_session(
     state
         .projection
         .lock()
-        .expect("projection lock")
         .circle_scope_visible_to_actor_at(&circle_id, &session.actor, created_at)
 }
 
@@ -383,6 +381,5 @@ fn read_scope_circle_id(state: &AppState, read_scope: &Value) -> Option<String> 
     state
         .projection
         .lock()
-        .expect("projection lock")
         .strand_scope_circle_id(strand_id)
 }

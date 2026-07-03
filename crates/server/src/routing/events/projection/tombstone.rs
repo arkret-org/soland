@@ -182,7 +182,6 @@ pub fn retention_tombstone_for_event(
     state
         .retention_tombstones
         .lock()
-        .expect("retention tombstones lock")
         .get(event_id)
         .cloned()
 }

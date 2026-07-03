@@ -261,14 +261,15 @@ async fn submit_seal(
     ))
     .ok();
     let prev_epoch_value: Option<serde_json::Value> = mls_epoch_cell.as_ref().and_then(|cell_id| {
-        state
-            .projection
-            .lock()
-            .ok()
-            .and_then(|proj| proj.cell_value(cell_id).cloned())
+        {
+            let proj = state.projection.lock();
+            proj.cell_value(cell_id).cloned()
+        }
     });
-    if let Ok(mut proj) = state.projection.lock()
-        && let Err(error) = proj.reload_cells_from_store(&seal.realm_id, cell_store, registry)
+    if let Err(error) = state
+        .projection
+        .lock()
+        .reload_cells_from_store(&seal.realm_id, cell_store, registry)
     {
         tracing::warn!(error = %error, "failed to refresh ProjectionState::cells after apply_seal");
     }
@@ -283,11 +284,10 @@ async fn submit_seal(
         ));
     // 2. EpochRotation — only if mls.epoch cell value changed.
     if let Some(cell_id) = mls_epoch_cell {
-        let new_epoch_value: Option<serde_json::Value> = state
-            .projection
-            .lock()
-            .ok()
-            .and_then(|proj| proj.cell_value(&cell_id).cloned());
+        let new_epoch_value: Option<serde_json::Value> = {
+            let proj = state.projection.lock();
+            proj.cell_value(&cell_id).cloned()
+        };
         if let Some(new_epoch) = new_epoch_value
             && prev_epoch_value.as_ref() != Some(&new_epoch)
         {

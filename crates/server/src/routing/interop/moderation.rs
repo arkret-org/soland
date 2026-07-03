@@ -162,6 +162,11 @@ fn moderation_effective_scope_value(
                 "circle_id": circle_id.as_str(),
             }))
         }
+        // `EffectiveScope` is #[non_exhaustive]; fail closed on any scope
+        // kind this build does not understand rather than guessing a shape.
+        Some(_) => Err(AppError::invalid_param(
+            "effective_scope kind is not supported",
+        )),
     }
 }
 
@@ -180,8 +185,7 @@ fn moderation_target_effective_scope_value(
     }
     let projection = state
         .projection
-        .lock()
-        .map_err(|_| AppError::internal("projection state unavailable"))?;
+        .lock();
     let scope_circle_id = if let Some(message) = moderation_target_message(&projection, target_ref)
         .filter(|message| message.realm_id == realm_id)
     {
@@ -828,20 +832,14 @@ async fn moderation_routing_visible_to_actor(
     if owner.as_deref() == Some(actor) {
         return true;
     }
-    let members = state
-        .realms
-        .lock()
-        .ok()
-        .map(|realms| {
-            if let Some(realm) = RealmId::new(realm_id.to_owned())
-                .ok()
-                .and_then(|id| realms.get(&id))
-            {
-                return realm.members.iter().map(ToString::to_string).collect();
-            }
-            Vec::new()
-        })
-        .unwrap_or_default();
+    let members = {
+        let realms = state.realms.lock();
+        RealmId::new(realm_id.to_owned())
+            .ok()
+            .and_then(|id| realms.get(&id))
+            .map(|realm| realm.members.iter().map(ToString::to_string).collect::<Vec<String>>())
+            .unwrap_or_default()
+    };
     [
         "ck.moderation.decision",
         "ck.realm.moderation_policy",
@@ -1045,30 +1043,6 @@ async fn audit_plaintext_release_withheld_for_report(
             "reason_code": "sealed_decision_required",
         }),
         "withheld",
-    )
-    .await;
-}
-
-#[allow(dead_code)]
-async fn append_audit_agent_invite_log(
-    state: &AppState,
-    audit_agent_principal_id: &str,
-    report_payload: &Value,
-    response_body: &Value,
-) {
-    append_audit_log(
-        state,
-        None,
-        "org.cokret.soland.audit.agent_invite",
-        json!({
-            "kind": "org.cokret.soland.audit.agent_invite",
-            "realm_id": report_payload.get("realm_id").cloned().unwrap_or(Value::Null),
-            "report_id": report_payload.get("report_id").cloned().unwrap_or(Value::Null),
-            "target_ref": report_payload.get("target_ref").cloned().unwrap_or(Value::Null),
-            "audit_agent_principal_id": audit_agent_principal_id,
-            "mls_key_package": response_body.get("mls_key_package").cloned().unwrap_or(Value::Null),
-        }),
-        "accepted",
     )
     .await;
 }
@@ -1363,40 +1337,13 @@ async fn moderation_appeal_submit(
     })
 }
 
-/// Read the most recent state of an appeal by replaying the persisted event
-/// history. Returns the last-known `appeal_state` string, or `None` if the
-/// appeal does not exist.
-///
-/// Retained as a read helper over the moderation persistence table.
-/// The admin write path that consumed it was taken offline in the P2
-/// governance migration (moderation truth now lives in the reducer's
-/// `ck.component.moderation.appeal.v1` cell); kept for the interop read
-/// surface and any operational queue tooling.
-#[allow(dead_code)]
-pub(crate) async fn appeal_state(state: &AppState, appeal_id: &str) -> Option<String> {
-    state
-        .persistence
-        .moderation()
-        .appeal_history(appeal_id)
-        .await
-        .ok()?
-        .into_iter()
-        .last()
-        .and_then(|event| {
-            event
-                .get("appeal_state")
-                .and_then(Value::as_str)
-                .map(ToOwned::to_owned)
-        })
-}
-
 #[cfg(test)]
 mod report_safety_tests {
     use serde_json::{Value, json};
 
     use super::*;
     use crate::config::{AppConfig, IceServersConfig, LiveKitConfig, ObjectStorageConfig};
-    use crate::db::Db;
+    use soland_data::Db;
 
     const REALM: &str = "ck:realm:01904100-0000-7000-8000-d0d0d0d0d0d0";
     const TARGET: &str = "ck:message:01904100-0000-7000-8000-000000000777";
@@ -1407,72 +1354,19 @@ mod report_safety_tests {
     fn test_state() -> AppState {
         let state = AppState::new(
             AppConfig {
-                bind: "127.0.0.1:0".parse().unwrap(),
-                metrics_bind: "127.0.0.1:0".parse().unwrap(),
-                public_base_url: "http://server".to_owned(),
-                service_did: "did:web:soland.local".to_owned(),
-                tls_cert_path: None,
-                tls_key_path: None,
-                database_url: None,
                 object_storage: ObjectStorageConfig::local(
                     std::env::temp_dir().join("soland-moderation-tests"),
                 ),
-                ice: IceServersConfig::default(),
-                livekit: LiveKitConfig::default(),
-                cors_allow_origin: None,
-                account_authority_url: None,
-                oidc_client_id: None,
                 development_mode: true,
-                session_grant_introspection_url: None,
-                session_grant_introspection_bearer: None,
-                did_resolver_allow_methods: vec![
-                    "web".to_owned(),
-                    "key".to_owned(),
-                    "uuid".to_owned(),
-                ],
-                embedded_webvh_provider_enabled: false,
-                embedded_webvh_registration_bearer: None,
-                external_webvh_provider_url: None,
-                external_webvh_provider_active: false,
-                default_webvh_provider_id: None,
                 jws_replay_window_seconds: 0,
                 jws_replay_window_per_family: std::collections::BTreeMap::new(),
-                notary_signing_key_seed: None,
-                agent_audit_binding_signing_seed: None,
-                use_keystore: false,
-                federation_policy: crate::config::FederationPolicy::Mesh,
-                federation_peers: Vec::new(),
-                federation_outbound_enabled: false,
-                federation_replica_observer: false,
-                admin_default_page_limit: 100,
-                admin_max_page_limit: 1000,
-                admin_principal_dids: Vec::new(),
-                to_device_queue_capacity: 10_000,
-                push_bridge_cache_ttl_seconds: 900,
-                push_bridge_trusted_service_dids: Vec::new(),
-                resumable_upload_dir: std::path::PathBuf::from("./soland-resumable-uploads"),
-                resumable_upload_incomplete_ttl_seconds: 86_400,
-                seal_compaction_min_age_seconds: 604_800,
-                compaction_min_witnesses: 1,
-                compaction_preserve_genesis: true,
-                compaction_prune_only_singleton_successors: true,
-                compaction_prune_walk_interval_seconds: 0,
-                compaction_prune_walk_per_realm_limit: 50,
-                seed_demo_data: false,
-                trust_domain: "ck:trust_domain:soland.local".to_owned(),
-                receive_policy_constraints: None,
-                sovereign_enclave_enabled: false,
-                sovereign_enclave_allowed_outbound_hosts: Vec::new(),
-                candidate_join_policy_enabled: false,
-                erasure_propagation_window_ms: 604_800_000,
-                log_format: crate::config::LogFormat::Plain,
+                ..AppConfig::test_default()
             },
             Db { pool: None },
         );
         state
             .projection
             .lock()
-            .expect("projection")
             .messages
             .insert(
                 TARGET.replacen("ck:message:", "ck:event:", 1),

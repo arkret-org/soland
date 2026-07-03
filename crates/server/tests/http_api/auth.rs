@@ -32,8 +32,7 @@ async fn account_registration_policy_rejects_closed_and_audits() {
     {
         let mut policy = state
             .account_registration_policy
-            .lock()
-            .expect("account registration policy lock");
+            .lock();
         policy.enabled = false;
     }
 
@@ -72,8 +71,7 @@ async fn account_registration_policy_evidence_and_rate_limit_are_enforced() {
     {
         let mut policy = state
             .account_registration_policy
-            .lock()
-            .expect("account registration policy lock");
+            .lock();
         *policy = cokret_sdk::AccountRegistrationPolicy {
             verification_code: cokret_sdk::AccountRegistrationVerificationPolicy {
                 required: true,
@@ -181,8 +179,7 @@ async fn account_registration_policy_evidence_and_rate_limit_are_enforced() {
     {
         let mut policy = rate_limited_state
             .account_registration_policy
-            .lock()
-            .expect("account registration policy lock");
+            .lock();
         policy.rate_limit = Some(cokret_sdk::AccountRegistrationRateLimitPolicy {
             max_attempts: 1,
             window_seconds: 60,

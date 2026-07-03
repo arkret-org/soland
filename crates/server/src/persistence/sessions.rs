@@ -26,24 +26,24 @@ impl MemorySessionStore {
 #[async_trait]
 impl SessionStore for MemorySessionStore {
     async fn get(&self, token: &str) -> PersistenceResult<Option<SessionRecord>> {
-        let data = self.data.lock().expect("lock");
+        let data = self.data.lock();
         Ok(data.get(token).cloned())
     }
 
     async fn put(&self, record: &SessionRecord) -> PersistenceResult<()> {
-        let mut data = self.data.lock().expect("lock");
+        let mut data = self.data.lock();
         data.insert(record.token_hash.clone(), record.clone());
         Ok(())
     }
 
     async fn delete(&self, token: &str) -> PersistenceResult<()> {
-        let mut data = self.data.lock().expect("lock");
+        let mut data = self.data.lock();
         data.remove(token);
         Ok(())
     }
 
     async fn cleanup_expired(&self) -> PersistenceResult<usize> {
-        let mut data = self.data.lock().expect("lock");
+        let mut data = self.data.lock();
         let now = Utc::now();
         let before = data.len();
         data.retain(|_, session| session.expires_at > now);
@@ -51,7 +51,7 @@ impl SessionStore for MemorySessionStore {
     }
 
     async fn snapshot_all(&self) -> PersistenceResult<Vec<SessionRecord>> {
-        Ok(self.data.lock().expect("lock").values().cloned().collect())
+        Ok(self.data.lock().values().cloned().collect())
     }
 }
 

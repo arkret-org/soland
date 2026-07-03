@@ -37,7 +37,6 @@ fn event_digest_suite(
         state
             .projection
             .lock()
-            .expect("projection lock")
             .realm_digest_algorithm(realm_id)
     }
     .unwrap_or_else(|| "sha256".to_owned());
@@ -491,12 +490,10 @@ fn validate_data_event_joined_capability_view(
             }
         }
     }
-    if let Ok(projection) = state.projection.lock()
-        && matches!(
-            projection.cell(&cell_ref),
-            Some(cokret_sdk::lattice::CellState::Bottom(_))
-        )
-    {
+    if matches!(
+        state.projection.lock().cell(&cell_ref),
+        Some(cokret_sdk::lattice::CellState::Bottom(_))
+    ) {
         return Err(event_validation_error(
             StatusCode::PRECONDITION_FAILED,
             "failed_bottom",
@@ -756,9 +753,9 @@ fn grant_covers_data_event_effect(
 
 fn effect_resource_candidates(state: &AppState, cell: &str, realm_id: &str) -> Vec<String> {
     let mut resources = Vec::new();
-    let projection = state.projection.lock().ok();
-    append_authz_resource_candidates(&mut resources, projection.as_deref(), realm_id, realm_id);
-    append_authz_resource_candidates(&mut resources, projection.as_deref(), realm_id, cell);
+    let projection = state.projection.lock();
+    append_authz_resource_candidates(&mut resources, Some(&*projection), realm_id, realm_id);
+    append_authz_resource_candidates(&mut resources, Some(&*projection), realm_id, cell);
     let mut parts = cell.splitn(4, ':');
     if matches!(parts.next(), Some("ck"))
         && matches!(parts.next(), Some("cell"))
@@ -766,7 +763,7 @@ fn effect_resource_candidates(state: &AppState, cell: &str, realm_id: &str) -> V
         && let Some(subject) = parts.next()
         && (subject.starts_with("ck:") || subject.starts_with("did:"))
     {
-        append_authz_resource_candidates(&mut resources, projection.as_deref(), realm_id, subject);
+        append_authz_resource_candidates(&mut resources, Some(&*projection), realm_id, subject);
     }
     resources.sort();
     resources.dedup();
@@ -1081,12 +1078,12 @@ fn delegated_applet_resource_candidates(
     event_id: &str,
 ) -> Vec<String> {
     let mut resources = Vec::new();
-    let projection = state.projection.lock().ok();
-    append_authz_resource_candidates(&mut resources, projection.as_deref(), realm_id, realm_id);
-    append_authz_resource_candidates(&mut resources, projection.as_deref(), realm_id, actor_id);
-    append_authz_resource_candidates(&mut resources, projection.as_deref(), realm_id, event_id);
+    let projection = state.projection.lock();
+    append_authz_resource_candidates(&mut resources, Some(&*projection), realm_id, realm_id);
+    append_authz_resource_candidates(&mut resources, Some(&*projection), realm_id, actor_id);
+    append_authz_resource_candidates(&mut resources, Some(&*projection), realm_id, event_id);
     if let Some(redacts) = event_string_field(object, &["redacts"]) {
-        append_authz_resource_candidates(&mut resources, projection.as_deref(), realm_id, &redacts);
+        append_authz_resource_candidates(&mut resources, Some(&*projection), realm_id, &redacts);
     }
     if let Some(payload) = object.get("payload").and_then(Value::as_object) {
         for field in [
@@ -1099,7 +1096,7 @@ fn delegated_applet_resource_candidates(
             if let Some(value) = event_string_field(payload, &[field]) {
                 append_authz_resource_candidates(
                     &mut resources,
-                    projection.as_deref(),
+                    Some(&*projection),
                     realm_id,
                     &value,
                 );
@@ -1291,13 +1288,12 @@ pub(crate) async fn validate_event_envelope_with_context(
     // Round R2/R3 (T07) + Stream-F (Wave 1B) — Realm in terminal state
     // (`ck.realm.tombstone` OR `ck.realm.destroy` applied) refuses every
     // non-audit-class write. Spec `realm-and-space.md` §2.5 / §2.5.1.
-    // The projection lock is poison-free (`state::Mutex`), so this check is
+    // The projection lock is poison-free (`parking_lot::Mutex`), so this check is
     // always evaluated — a terminal Realm can never be written to because a
     // lock failure defaulted the answer to "not terminal" (fail-open).
     let realm_terminal = state
         .projection
         .lock()
-        .expect("projection lock")
         .realm_is_in_terminal_state(&realm_id);
     if let Some((code, reason)) = terminal_realm_check(realm_terminal, &kind) {
         return Err(event_validation_error(
@@ -1309,7 +1305,6 @@ pub(crate) async fn validate_event_envelope_with_context(
     let realm_frozen = state
         .projection
         .lock()
-        .expect("projection lock")
         .realm_is_frozen_at(&realm_id, chrono::Utc::now());
     if let Some(reason) = frozen_realm_check(realm_frozen, &kind) {
         return Err(event_validation_error(

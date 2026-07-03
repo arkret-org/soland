@@ -66,12 +66,12 @@ impl MemoryMessageStore {
 #[async_trait]
 impl MessageStore for MemoryMessageStore {
     async fn get(&self, event_id: &str) -> PersistenceResult<Option<MessageRecord>> {
-        let data = self.data.lock().expect("lock");
+        let data = self.data.lock();
         Ok(data.iter().find(|m| m.event_id == event_id).cloned())
     }
 
     async fn put(&self, record: &MessageRecord) -> PersistenceResult<()> {
-        let mut data = self.data.lock().expect("lock");
+        let mut data = self.data.lock();
         data.push(record.clone());
         Ok(())
     }
@@ -81,7 +81,7 @@ impl MessageStore for MemoryMessageStore {
         realm_id: &str,
         limit: usize,
     ) -> PersistenceResult<Vec<MessageRecord>> {
-        let data = self.data.lock().expect("lock");
+        let data = self.data.lock();
         let messages: Vec<_> = data
             .iter()
             .filter(|m| m.realm_id == realm_id)
@@ -97,7 +97,7 @@ impl MessageStore for MemoryMessageStore {
         thread_id: &str,
         limit: usize,
     ) -> PersistenceResult<Vec<MessageRecord>> {
-        let data = self.data.lock().expect("lock");
+        let data = self.data.lock();
         // Return in chronological order (oldest first) so thread readers get a
         // natural conversation timeline. The caller decides whether to reverse.
         let messages: Vec<_> = data
@@ -110,7 +110,7 @@ impl MessageStore for MemoryMessageStore {
     }
 
     async fn delete(&self, event_id: &str) -> PersistenceResult<()> {
-        let mut data = self.data.lock().expect("lock");
+        let mut data = self.data.lock();
         data.retain(|m| m.event_id != event_id);
         Ok(())
     }
@@ -131,7 +131,7 @@ impl MemoryEventStore {
 impl EventStore for MemoryEventStore {
     async fn put(&self, record: CanonicalEventRecord) -> PersistenceResult<()> {
         let id = record.event_id.clone();
-        let mut data = self.data.lock().expect("events lock");
+        let mut data = self.data.lock();
         if record.kind == "ck.realm.create"
             && record.realm_id.is_some()
             && data.values().any(|existing| {
@@ -150,7 +150,6 @@ impl EventStore for MemoryEventStore {
         Ok(self
             .data
             .lock()
-            .expect("events lock")
             .get(event_id)
             .cloned())
     }
@@ -159,7 +158,6 @@ impl EventStore for MemoryEventStore {
         Ok(self
             .data
             .lock()
-            .expect("events lock")
             .contains_key(event_id))
     }
 
@@ -167,7 +165,6 @@ impl EventStore for MemoryEventStore {
         Ok(self
             .data
             .lock()
-            .expect("events lock")
             .values()
             .filter(|record| record.actor_id == actor_id)
             .map(|record| record.actor_seq)
@@ -178,7 +175,6 @@ impl EventStore for MemoryEventStore {
         Ok(self
             .data
             .lock()
-            .expect("events lock")
             .values()
             .cloned()
             .collect())
@@ -188,7 +184,6 @@ impl EventStore for MemoryEventStore {
         let mut records = self
             .data
             .lock()
-            .expect("events lock")
             .values()
             .filter(|record| record_is_peer_authz_state_record(record))
             .cloned()
@@ -201,7 +196,7 @@ impl EventStore for MemoryEventStore {
         &self,
         query: &PeerEventsPageQuery,
     ) -> PersistenceResult<Vec<CanonicalEventRecord>> {
-        let data = self.data.lock().expect("events lock");
+        let data = self.data.lock();
         let realms = query
             .realms
             .iter()
@@ -242,7 +237,6 @@ impl EventStore for MemoryEventStore {
         let mut events: Vec<CanonicalEventRecord> = self
             .data
             .lock()
-            .expect("events lock")
             .values()
             .filter(|record| record.realm_id.as_deref() == Some(realm_id))
             .cloned()

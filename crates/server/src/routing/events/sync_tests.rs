@@ -270,7 +270,6 @@ async fn incremental_sync_includes_presence_only_for_presence_delta() {
     state
         .realms
         .lock()
-        .unwrap()
         .upsert(roster_realm(false, true));
     state
         .persistence
@@ -342,66 +341,21 @@ async fn incremental_sync_includes_presence_only_for_presence_delta() {
 
 fn test_config() -> crate::config::AppConfig {
     crate::config::AppConfig {
-        bind: "127.0.0.1:0".parse().unwrap(),
-        metrics_bind: "127.0.0.1:0".parse().unwrap(),
-        public_base_url: "http://server".to_owned(),
-        service_did: "did:web:soland.local".to_owned(),
-        tls_cert_path: None,
-        tls_key_path: None,
-        database_url: None,
         object_storage: crate::config::ObjectStorageConfig::local(
             std::env::temp_dir().join("soland-sync-cursor-test-blobs"),
         ),
-        ice: crate::config::IceServersConfig::default(),
-        livekit: crate::config::LiveKitConfig::default(),
-        cors_allow_origin: None,
-        account_authority_url: None,
-        oidc_client_id: None,
         development_mode: true,
-        session_grant_introspection_url: None,
-        session_grant_introspection_bearer: None,
         did_resolver_allow_methods: vec!["web".to_owned(), "key".to_owned()],
-        embedded_webvh_provider_enabled: false,
-        embedded_webvh_registration_bearer: None,
-        external_webvh_provider_url: None,
-        external_webvh_provider_active: false,
-        default_webvh_provider_id: None,
         jws_replay_window_seconds: 0,
         jws_replay_window_per_family: BTreeMap::new(),
         notary_signing_key_seed: Some([9u8; 32]),
-        agent_audit_binding_signing_seed: None,
-        use_keystore: false,
-        federation_policy: crate::config::FederationPolicy::Mesh,
-        federation_peers: Vec::new(),
-        federation_outbound_enabled: false,
-        federation_replica_observer: false,
-        admin_default_page_limit: 100,
-        admin_max_page_limit: 1000,
-        admin_principal_dids: Vec::new(),
-        to_device_queue_capacity: 10_000,
-        push_bridge_cache_ttl_seconds: 900,
-        push_bridge_trusted_service_dids: Vec::new(),
-        resumable_upload_dir: std::path::PathBuf::from("./soland-resumable-uploads"),
-        resumable_upload_incomplete_ttl_seconds: 86_400,
-        seal_compaction_min_age_seconds: 604_800,
-        compaction_min_witnesses: 1,
-        compaction_preserve_genesis: true,
-        compaction_prune_only_singleton_successors: true,
-        compaction_prune_walk_interval_seconds: 0,
-        compaction_prune_walk_per_realm_limit: 50,
         seed_demo_data: true,
-        trust_domain: "ck:trust_domain:soland.local".to_owned(),
-        receive_policy_constraints: None,
-        sovereign_enclave_enabled: false,
-        sovereign_enclave_allowed_outbound_hosts: Vec::new(),
-        candidate_join_policy_enabled: false,
-        erasure_propagation_window_ms: 604_800_000,
-        log_format: crate::config::LogFormat::Plain,
+        ..crate::config::AppConfig::test_default()
     }
 }
 
 fn test_state() -> AppState {
-    AppState::new(test_config(), crate::db::Db { pool: None })
+    AppState::new(test_config(), soland_data::Db { pool: None })
 }
 
 const ROSTER_REALM: &str = "ck:realm:01904100-0000-7000-8000-00000000a001";
@@ -465,7 +419,6 @@ fn insert_projected_membership(state: &AppState, actor: &str, membership: &str) 
     state
         .projection
         .lock()
-        .expect("projection lock")
         .members
         .insert(
             (ROSTER_REALM.to_owned(), actor.to_owned()),
@@ -499,7 +452,6 @@ fn insert_member_identity_subject(state: &AppState) {
     state
         .member_identity
         .lock()
-        .expect("member_identity lock")
         .insert(MemberIdentityEventRecord {
             event_id: "ck:operation:roster-identity-1".to_owned(),
             subject: MemberIdentitySubjectKey {
@@ -569,7 +521,6 @@ fn cache_claim(state: &AppState, claim: Value) -> String {
     state
         .member_identity
         .lock()
-        .expect("member_identity lock")
         .upsert_handle_claim_envelope(claim)
         .expect("claim cached")
 }
@@ -641,7 +592,7 @@ fn member_identity_projection_stores_typed_event_id_and_matches_event_replaces()
     project_member_identity_update(&state, &first_op);
 
     {
-        let registry = state.member_identity.lock().unwrap();
+        let registry = state.member_identity.lock();
         let snapshot = registry.snapshot_for_actor(realm, actor).unwrap();
         assert_eq!(snapshot.identity_event_ids, vec![first_event_id.to_owned()]);
     }
@@ -669,7 +620,7 @@ fn member_identity_projection_stores_typed_event_id_and_matches_event_replaces()
     );
     project_member_identity_update(&state, &second_op);
 
-    let registry = state.member_identity.lock().unwrap();
+    let registry = state.member_identity.lock();
     let snapshot = registry.snapshot_for_actor(realm, actor).unwrap();
     // The `ck:event:` replaces edge drops the predecessor: only the second
     // event remains effective, and the stored id is the typed event id.
@@ -887,12 +838,11 @@ fn roster_limits_large_inline_handle_claim_payloads() {
 async fn sync_snapshot_emits_device_list_baseline_changes_and_left_principals() {
     let mut config = test_config();
     config.seed_demo_data = false;
-    let state = AppState::new(config, crate::db::Db { pool: None });
+    let state = AppState::new(config, soland_data::Db { pool: None });
     let session = roster_session(&state, ROSTER_CALLER);
     state
         .realms
         .lock()
-        .unwrap()
         .upsert(roster_realm(false, true));
 
     let created_at = DateTime::parse_from_rfc3339("2026-06-18T00:00:00Z")
@@ -991,7 +941,6 @@ async fn sync_snapshot_emits_device_list_baseline_changes_and_left_principals() 
     state
         .realms
         .lock()
-        .unwrap()
         .upsert(roster_realm(false, false));
     let after_scope_loss = build_sync_snapshot(
         &state,
@@ -1012,12 +961,11 @@ async fn sync_snapshot_emits_device_list_baseline_changes_and_left_principals() 
 async fn sync_snapshot_emits_state_events_without_timeline_messages() {
     let mut config = test_config();
     config.seed_demo_data = false;
-    let state = AppState::new(config, crate::db::Db { pool: None });
+    let state = AppState::new(config, soland_data::Db { pool: None });
     let session = roster_session(&state, ROSTER_CALLER);
     state
         .realms
         .lock()
-        .unwrap()
         .upsert(roster_realm(false, true));
 
     let first_created_at = DateTime::parse_from_rfc3339("2026-06-24T10:00:00Z")
@@ -1544,7 +1492,6 @@ async fn revoked_cursor_returns_revoked_error() {
     state
         .sync_cursor_revocations
         .lock()
-        .unwrap()
         .push(crate::state::CursorRevocation {
             cursor_digest: sha256_hex(token.as_bytes()),
             principal_id: "did:web:alice.example".to_owned(),
@@ -1581,7 +1528,6 @@ async fn expired_revocation_entry_is_pruned_and_does_not_block() {
     state
         .sync_cursor_revocations
         .lock()
-        .unwrap()
         .push(crate::state::CursorRevocation {
             cursor_digest: sha256_hex(token.as_bytes()),
             principal_id: "did:web:alice.example".to_owned(),
@@ -1596,7 +1542,7 @@ async fn expired_revocation_entry_is_pruned_and_does_not_block() {
         .await
         .expect("expired revocation entry must be pruned, not block a valid cursor");
     assert!(
-        state.sync_cursor_revocations.lock().unwrap().is_empty(),
+        state.sync_cursor_revocations.lock().is_empty(),
         "expired revocation entry should have been pruned"
     );
 }

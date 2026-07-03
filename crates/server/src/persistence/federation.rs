@@ -183,12 +183,12 @@ impl FederationTransactionStore for MemoryFederationTransactionStore {
         origin: &str,
         txn_id: &str,
     ) -> PersistenceResult<Option<FederationTransactionRecord>> {
-        let data = self.data.lock().expect("lock");
+        let data = self.data.lock();
         Ok(data.get(&(origin.to_owned(), txn_id.to_owned())).cloned())
     }
 
     async fn try_begin(&self, record: &FederationTransactionRecord) -> PersistenceResult<bool> {
-        let mut data = self.data.lock().expect("lock");
+        let mut data = self.data.lock();
         let key = (record.origin.clone(), record.txn_id.clone());
         if data.contains_key(&key) {
             return Ok(false);
@@ -198,7 +198,7 @@ impl FederationTransactionStore for MemoryFederationTransactionStore {
     }
 
     async fn put(&self, record: &FederationTransactionRecord) -> PersistenceResult<()> {
-        let mut data = self.data.lock().expect("lock");
+        let mut data = self.data.lock();
         data.insert(
             (record.origin.clone(), record.txn_id.clone()),
             record.clone(),
@@ -207,7 +207,7 @@ impl FederationTransactionStore for MemoryFederationTransactionStore {
     }
 
     async fn snapshot_all(&self) -> PersistenceResult<Vec<FederationTransactionRecord>> {
-        let data = self.data.lock().expect("lock");
+        let data = self.data.lock();
         Ok(data.values().cloned().collect())
     }
 }
@@ -234,7 +234,7 @@ impl MemoryFederationOutboxStore {
 #[async_trait]
 impl FederationOutboxStore for MemoryFederationOutboxStore {
     async fn enqueue(&self, record: &FederationOutboxRecord) -> PersistenceResult<bool> {
-        let mut data = self.data.lock().expect("federation_outbox lock");
+        let mut data = self.data.lock();
         // Match the Pg `(peer_did, idempotency_key)` UNIQUE INDEX —
         // duplicate enqueue returns Ok(false) so re-broadcast on
         // restart is structurally idempotent.
@@ -254,7 +254,7 @@ impl FederationOutboxStore for MemoryFederationOutboxStore {
         now_unix_secs: i64,
         limit: usize,
     ) -> PersistenceResult<Vec<FederationOutboxRecord>> {
-        let data = self.data.lock().expect("federation_outbox lock");
+        let data = self.data.lock();
         let mut rows: Vec<FederationOutboxRecord> = data
             .values()
             .filter(|row| row.delivered_at.is_none() && row.next_attempt_at <= now_unix_secs)
@@ -266,18 +266,18 @@ impl FederationOutboxStore for MemoryFederationOutboxStore {
     }
 
     async fn update(&self, record: &FederationOutboxRecord) -> PersistenceResult<()> {
-        let mut data = self.data.lock().expect("federation_outbox lock");
+        let mut data = self.data.lock();
         data.insert(record.id.clone(), record.clone());
         Ok(())
     }
 
     async fn get(&self, id: &str) -> PersistenceResult<Option<FederationOutboxRecord>> {
-        let data = self.data.lock().expect("federation_outbox lock");
+        let data = self.data.lock();
         Ok(data.get(id).cloned())
     }
 
     async fn snapshot_all(&self) -> PersistenceResult<Vec<FederationOutboxRecord>> {
-        let data = self.data.lock().expect("federation_outbox lock");
+        let data = self.data.lock();
         Ok(data.values().cloned().collect())
     }
 
@@ -287,8 +287,7 @@ impl FederationOutboxStore for MemoryFederationOutboxStore {
     ) -> PersistenceResult<()> {
         let mut dead_letters = self
             .dead_letters
-            .lock()
-            .expect("federation_outbox_dead_letter lock");
+            .lock();
         dead_letters.insert(record.id.clone(), record.clone());
         Ok(())
     }
@@ -298,8 +297,7 @@ impl FederationOutboxStore for MemoryFederationOutboxStore {
     ) -> PersistenceResult<Vec<FederationOutboxDeadLetterRecord>> {
         let dead_letters = self
             .dead_letters
-            .lock()
-            .expect("federation_outbox_dead_letter lock");
+            .lock();
         Ok(dead_letters.values().cloned().collect())
     }
 }
@@ -329,7 +327,7 @@ impl FederationFrontierExchangeStore for MemoryFederationFrontierExchangeStore {
         realm_id: &str,
         peer_service_did: &str,
     ) -> PersistenceResult<Option<FederationFrontierExchangeRecord>> {
-        let data = self.data.lock().expect("federation_frontier_exchange lock");
+        let data = self.data.lock();
         Ok(data
             .get(&(realm_id.to_owned(), peer_service_did.to_owned()))
             .cloned())
@@ -342,7 +340,7 @@ impl FederationFrontierExchangeStore for MemoryFederationFrontierExchangeStore {
         frontier_root: &str,
         observed_at: i64,
     ) -> PersistenceResult<FederationFrontierExchangeRecord> {
-        let mut data = self.data.lock().expect("federation_frontier_exchange lock");
+        let mut data = self.data.lock();
         let key = (realm_id.to_owned(), peer_service_did.to_owned());
         let record = frontier_exchange_success_record(
             data.get(&key).cloned(),
@@ -362,7 +360,7 @@ impl FederationFrontierExchangeStore for MemoryFederationFrontierExchangeStore {
         reason: &str,
         observed_at: i64,
     ) -> PersistenceResult<FederationFrontierExchangeRecord> {
-        let mut data = self.data.lock().expect("federation_frontier_exchange lock");
+        let mut data = self.data.lock();
         let key = (realm_id.to_owned(), peer_service_did.to_owned());
         let record = frontier_exchange_failure_record(
             data.get(&key).cloned(),
@@ -376,7 +374,7 @@ impl FederationFrontierExchangeStore for MemoryFederationFrontierExchangeStore {
     }
 
     async fn snapshot_all(&self) -> PersistenceResult<Vec<FederationFrontierExchangeRecord>> {
-        let data = self.data.lock().expect("federation_frontier_exchange lock");
+        let data = self.data.lock();
         Ok(data.values().cloned().collect())
     }
 }
@@ -395,7 +393,7 @@ impl MemoryFederationOperationsStore {
 #[async_trait]
 impl FederationOperationsStore for MemoryFederationOperationsStore {
     async fn append(&self, operation: Operation) -> PersistenceResult<()> {
-        self.data.lock().expect("federation lock").push(operation);
+        self.data.lock().push(operation);
         Ok(())
     }
 
@@ -403,7 +401,6 @@ impl FederationOperationsStore for MemoryFederationOperationsStore {
         Ok(self
             .data
             .lock()
-            .expect("federation lock")
             .iter()
             .any(|known| known.operation_id.as_str() == operation_id))
     }
@@ -412,7 +409,6 @@ impl FederationOperationsStore for MemoryFederationOperationsStore {
         Ok(self
             .data
             .lock()
-            .expect("federation lock")
             .iter()
             .filter(|operation| operation.realm_id.as_str() == realm_id)
             .cloned()
@@ -420,7 +416,7 @@ impl FederationOperationsStore for MemoryFederationOperationsStore {
     }
 
     async fn snapshot_all(&self) -> PersistenceResult<Vec<Operation>> {
-        Ok(self.data.lock().expect("federation lock").clone())
+        Ok(self.data.lock().clone())
     }
 }
 

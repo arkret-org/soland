@@ -1191,7 +1191,6 @@ async fn recovery_complete_rejected_after_cross_signing_reset() {
     state
         .cross_signing
         .lock()
-        .unwrap()
         .record_cross_signing_reset(&content)
         .expect("record reset");
 

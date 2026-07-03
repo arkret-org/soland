@@ -52,15 +52,15 @@ pub(crate) fn reaction_target_event_id(operation: &Operation) -> Option<String> 
     })
 }
 
+/// Canonical acting-principal for message projections, via the SDK's
+/// [`Operation::actor`] alias-priority accessor (SOL-DRY-02 — the local
+/// alias-walk copy is deleted). Payloads without a valid DID actor fall
+/// back to the operation id string, preserving the projection's
+/// non-optional sender attribution.
 pub(crate) fn operation_actor_id(operation: &Operation) -> String {
     operation
-        .payload
-        .get("actor_id")
-        .or_else(|| operation.payload.get("sender"))
-        .or_else(|| operation.payload.get("created_by"))
-        .and_then(Value::as_str)
-        .filter(|value| !value.trim().is_empty())
-        .map(ToOwned::to_owned)
+        .actor()
+        .map(|did| did.to_string())
         .unwrap_or_else(|| operation.operation_id.to_string())
 }
 

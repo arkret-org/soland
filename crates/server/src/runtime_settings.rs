@@ -20,7 +20,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::config::{AppConfig, FederationPolicy};
-use crate::db::PgPool;
+use soland_data::PgPool;
 use crate::persistence::{QueryableByName, RunQueryDsl, Value, pg_conn, sql_query};
 use crate::ratelimit::RateLimiterConfig;
 

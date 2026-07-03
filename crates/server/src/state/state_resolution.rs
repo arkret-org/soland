@@ -12,7 +12,7 @@ use diesel_async::pooled_connection::deadpool::Object;
 use diesel_async::{AsyncPgConnection, RunQueryDsl};
 use serde_json::Value;
 
-use crate::db::PgPool;
+use soland_data::PgPool;
 
 pub(crate) struct StateResolutionStores {
     pub(crate) move_store: Arc<dyn MoveStore>,

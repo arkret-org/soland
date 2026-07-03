@@ -24,7 +24,8 @@
 //! by the RFC 9421 PoP hoop (`session_pop`).
 
 use std::collections::HashMap;
-use std::sync::{LazyLock, Mutex};
+use std::sync::LazyLock;
+use parking_lot::Mutex;
 use std::time::{Duration as StdDuration, Instant};
 
 use base64::Engine as _;
@@ -97,7 +98,7 @@ fn introspection_cache_key(grant_jwt: &str, audience: &str) -> String {
 }
 
 fn cache_lookup(key: &str) -> Option<SessionGrantIntrospectGrant> {
-    let mut cache = INTROSPECTION_CACHE.lock().ok()?;
+    let mut cache = INTROSPECTION_CACHE.lock();
     prune_introspection_cache_locked(&mut cache, Instant::now());
     match cache.get(key) {
         Some(entry) if entry.inserted_at.elapsed() < INTROSPECTION_CACHE_TTL => {
@@ -112,7 +113,8 @@ fn cache_lookup(key: &str) -> Option<SessionGrantIntrospectGrant> {
 }
 
 fn cache_store(key: String, grant: SessionGrantIntrospectGrant) {
-    if let Ok(mut cache) = INTROSPECTION_CACHE.lock() {
+    {
+        let mut cache = INTROSPECTION_CACHE.lock();
         prune_introspection_cache_locked(&mut cache, Instant::now());
         while cache.len() >= INTROSPECTION_CACHE_MAX_ENTRIES {
             let Some(oldest_key) = cache
@@ -146,7 +148,8 @@ fn prune_introspection_cache_locked(
 /// (account-lifecycle.md §4.1 step 3 — the local-side invalidation).
 pub(crate) fn invalidate_cached_grant(state: &AppState, grant_jwt: &str) {
     let key = introspection_cache_key(grant_jwt, &state.config.service_did);
-    if let Ok(mut cache) = INTROSPECTION_CACHE.lock() {
+    {
+        let mut cache = INTROSPECTION_CACHE.lock();
         cache.remove(&key);
     }
 }
@@ -282,9 +285,7 @@ enum DpopReplayRegistration {
 /// closed when the bounded replay ledger is full.
 fn register_dpop_jti(jti: &str, expires_at: DateTime<Utc>) -> DpopReplayRegistration {
     let now = crate::wire::now();
-    let Ok(mut seen) = DPOP_REPLAY.lock() else {
-        return DpopReplayRegistration::Full;
-    };
+    let mut seen = DPOP_REPLAY.lock();
     register_dpop_jti_locked(&mut seen, jti, expires_at, now, DPOP_REPLAY_MAX_ENTRIES)
 }
 

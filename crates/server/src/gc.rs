@@ -92,7 +92,7 @@ pub fn scan_gc_candidates(state: &AppState, realm_id: &RealmId) -> Vec<GcCandida
 /// `realm_id` is provided.
 pub fn scan_all_realms(state: &AppState) -> Vec<GcCandidate> {
     let realm_ids: Vec<RealmId> = {
-        let realms = state.realms.lock().expect("realms lock");
+        let realms = state.realms.lock();
         realms
             .search(Default::default())
             .into_iter()

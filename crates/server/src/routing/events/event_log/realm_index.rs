@@ -226,11 +226,7 @@ pub(super) fn realm_exists_in_index(state: &AppState, realm_id: &str) -> bool {
     let Ok(realm_id_typed) = cokret_sdk::RealmId::new(realm_id.to_owned()) else {
         return false;
     };
-    state
-        .realms
-        .lock()
-        .map(|realms| realms.get(&realm_id_typed).is_some())
-        .unwrap_or(false)
+    state.realms.lock().get(&realm_id_typed).is_some()
 }
 
 /// CKP-0008 — public read of the realm index used by the dev provisioning
@@ -347,7 +343,8 @@ pub(super) async fn bootstrap_realm_member_index(
     entry.description = summary.clone();
     entry.public = discoverability == "public";
     entry.members.insert(actor_typed);
-    if let Ok(mut realms) = state.realms.lock() {
+    {
+        let mut realms = state.realms.lock();
         realms.upsert(entry);
     }
     let meta = crate::state::RealmMetaRecord {

@@ -296,7 +296,6 @@ fn keys_query_actor_visible_to_requester(state: &AppState, requester: &str, acto
     state
         .realms
         .lock()
-        .expect("realms lock")
         .entries_iter()
         .any(|(_, entry)| {
             entry.members.contains(&requester_did) && entry.members.contains(&actor_did)

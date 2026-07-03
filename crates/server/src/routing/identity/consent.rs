@@ -118,7 +118,6 @@ async fn list_consent_cells(
     let mut cells = state
         .consent_cells
         .lock()
-        .expect("consent_cells lock")
         .values()
         .filter(|cell| cell.holder == session.actor || cell.peer == session.actor)
         .map(|cell| consent_response(cell, now))
@@ -169,7 +168,6 @@ async fn get_consent_cell(
     let cell = state
         .consent_cells
         .lock()
-        .expect("consent_cells lock")
         .get(&key)
         .cloned()
         .ok_or_else(|| AppError::not_found("consent cell not found"))?;
@@ -355,7 +353,6 @@ pub(super) fn consent_cell_snapshot(
     state
         .consent_cells
         .lock()
-        .expect("consent_cells lock")
         .get(&consent_key(holder, peer, scope))
         .cloned()
 }
@@ -393,7 +390,7 @@ fn restore_consent_cell_after_persist_failure(
     previous: Option<ConsentCellRecord>,
 ) -> bool {
     let key = consent_key(&record.holder, &record.peer, &record.scope);
-    let mut cells = state.consent_cells.lock().expect("consent_cells lock");
+    let mut cells = state.consent_cells.lock();
     if !cells.get(&key).is_some_and(|current| current == record) {
         return false;
     }
@@ -427,7 +424,7 @@ fn record_pending_request_with_cell_id(
     cell_id: Option<String>,
 ) -> ConsentCellRecord {
     let key = consent_key(holder, peer, scope);
-    let mut cells = state.consent_cells.lock().expect("consent_cells lock");
+    let mut cells = state.consent_cells.lock();
     let cell = cells
         .entry(key)
         .or_insert_with(|| empty_cell(holder, peer, scope, requested_at));
@@ -447,7 +444,7 @@ pub(crate) fn has_active_consent_for_scope(
     at: DateTime<Utc>,
 ) -> bool {
     let scope = normalize_scope(Some(scope)).unwrap_or_else(|_| scope.to_owned());
-    let cells = state.consent_cells.lock().expect("consent_cells lock");
+    let cells = state.consent_cells.lock();
     let exact_key = consent_key(holder, peer, &scope);
     let any_key = consent_key(holder, peer, "any");
     [exact_key, any_key].iter().any(|key| {
@@ -514,7 +511,6 @@ pub(crate) async fn materialize_mimi_consent_update_by_id(
     let existing = state
         .consent_cells
         .lock()
-        .expect("consent_cells lock")
         .values()
         .find(|cell| {
             cell.cell_id == consent_id || cell.cell_id == consent_cell_id_for_consent_id(consent_id)
@@ -562,7 +558,7 @@ pub(crate) fn has_active_consent_grant_evidence(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(consent_cell_id_for_consent_id);
-    let cells = state.consent_cells.lock().expect("consent_cells lock");
+    let cells = state.consent_cells.lock();
     cells.values().any(|cell| {
         if cell.holder != subject || cell.peer != inviter {
             return false;
@@ -633,7 +629,7 @@ pub(crate) fn active_invite_consent_grant_ref(
     peer: &str,
     at: DateTime<Utc>,
 ) -> Option<String> {
-    let cells = state.consent_cells.lock().expect("consent_cells lock");
+    let cells = state.consent_cells.lock();
     for scope in ["invite", "any"] {
         if let Some(cell) = cells.get(&consent_key(holder, peer, scope)) {
             for dot in active_grant_dots(cell, at) {
@@ -728,7 +724,7 @@ pub(crate) fn revoke_contact_managed_consent(
     // Resolve the target scope set: explicit `revoke_scopes` (normalized)
     // or every scope the holder currently has a cell for toward `peer`.
     let target_scopes: Vec<String> = if scopes.is_empty() {
-        let cells = state.consent_cells.lock().expect("consent_cells lock");
+        let cells = state.consent_cells.lock();
         cells
             .values()
             .filter(|cell| cell.holder == holder && cell.peer == peer)
@@ -751,7 +747,7 @@ pub(crate) fn revoke_contact_managed_consent(
     let mut mutated = Vec::new();
     for scope in target_scopes {
         let active_before = {
-            let cells = state.consent_cells.lock().expect("consent_cells lock");
+            let cells = state.consent_cells.lock();
             cells
                 .get(&consent_key(holder, peer, &scope))
                 .map(|cell| active_grant_dots(cell, revoked_at))
@@ -880,7 +876,7 @@ fn grant_cell_with_dot(
     granted_at: DateTime<Utc>,
 ) -> ConsentCellRecord {
     let key = consent_key(holder, peer, scope);
-    let mut cells = state.consent_cells.lock().expect("consent_cells lock");
+    let mut cells = state.consent_cells.lock();
     let cell = cells
         .entry(key)
         .or_insert_with(|| empty_cell(holder, peer, scope, granted_at));
@@ -971,7 +967,6 @@ fn grant_dots_for_cell(state: &AppState, holder: &str, peer: &str, scope: &str) 
     state
         .consent_cells
         .lock()
-        .expect("consent_cells lock")
         .get(&consent_key(holder, peer, scope))
         .map(|cell| cell.grant_dots.keys().cloned().collect())
         .unwrap_or_default()
@@ -985,7 +980,7 @@ fn mark_cell_superseded_by_any_revoke(
     revoked_at: DateTime<Utc>,
 ) -> ConsentCellRecord {
     let key = consent_key(holder, peer, scope);
-    let mut cells = state.consent_cells.lock().expect("consent_cells lock");
+    let mut cells = state.consent_cells.lock();
     let cell = cells
         .entry(key)
         .or_insert_with(|| empty_cell(holder, peer, scope, revoked_at));
@@ -1008,7 +1003,6 @@ fn revoke_cell(
         state
             .consent_cells
             .lock()
-            .expect("consent_cells lock")
             .get(&key)
             .map(|cell| cell.grant_dots.keys().cloned().collect::<Vec<_>>())
             .unwrap_or_default()
@@ -1025,7 +1019,7 @@ fn revoke_cell_with_dots(
     revoked_at: DateTime<Utc>,
 ) -> ConsentCellRecord {
     let key = consent_key(holder, peer, scope);
-    let mut cells = state.consent_cells.lock().expect("consent_cells lock");
+    let mut cells = state.consent_cells.lock();
     let cell = cells
         .entry(key)
         .or_insert_with(|| empty_cell(holder, peer, scope, revoked_at));
@@ -1178,7 +1172,6 @@ fn consent_revoke_target(
     state
         .consent_cells
         .lock()
-        .expect("consent_cells lock")
         .values()
         .find(|cell| cell.holder == holder && cell.cell_id == cell_id)
         .map(|cell| (cell.peer.clone(), cell.scope.clone()))
@@ -1652,7 +1645,7 @@ mod tests {
         AppConfig, FederationPolicy, IceServersConfig, LiveKitConfig, LogFormat,
         ObjectStorageConfig,
     };
-    use crate::db::Db;
+    use soland_data::Db;
 
     #[test]
     fn consent_revoke_cascade_table_stable() {
@@ -1663,59 +1656,18 @@ mod tests {
 
     fn test_config() -> AppConfig {
         AppConfig {
-            bind: SocketAddr::from_str("127.0.0.1:0").unwrap(),
-            metrics_bind: SocketAddr::from_str("127.0.0.1:0").unwrap(),
             public_base_url: "http://test".to_owned(),
             service_did: "did:web:test.local".to_owned(),
-            tls_cert_path: None,
-            tls_key_path: None,
-            database_url: None,
             object_storage: ObjectStorageConfig::local(std::env::temp_dir()),
-            ice: IceServersConfig::default(),
-            livekit: LiveKitConfig::default(),
-            cors_allow_origin: None,
-            account_authority_url: None,
-            oidc_client_id: None,
             development_mode: true,
-            session_grant_introspection_url: None,
-            session_grant_introspection_bearer: None,
             did_resolver_allow_methods: vec!["web".to_owned(), "key".to_owned()],
-            embedded_webvh_provider_enabled: false,
-            embedded_webvh_registration_bearer: None,
-            external_webvh_provider_url: None,
-            external_webvh_provider_active: false,
-            default_webvh_provider_id: None,
             jws_replay_window_seconds: 0,
             jws_replay_window_per_family: std::collections::BTreeMap::new(),
-            notary_signing_key_seed: None,
-            agent_audit_binding_signing_seed: None,
-            use_keystore: false,
-            federation_policy: FederationPolicy::Mesh,
-            federation_peers: Vec::new(),
-            federation_outbound_enabled: false,
-            federation_replica_observer: false,
-            admin_default_page_limit: 100,
-            admin_max_page_limit: 1000,
-            admin_principal_dids: Vec::new(),
-            to_device_queue_capacity: 10_000,
-            push_bridge_cache_ttl_seconds: 900,
-            push_bridge_trusted_service_dids: Vec::new(),
-            resumable_upload_dir: std::path::PathBuf::from("./soland-resumable-uploads"),
-            resumable_upload_incomplete_ttl_seconds: 86_400,
             seal_compaction_min_age_seconds: 0,
             compaction_min_witnesses: 0,
             compaction_preserve_genesis: false,
             compaction_prune_only_singleton_successors: false,
-            compaction_prune_walk_interval_seconds: 0,
-            compaction_prune_walk_per_realm_limit: 50,
-            seed_demo_data: false,
-            trust_domain: "ck:trust_domain:soland.local".to_owned(),
-            receive_policy_constraints: None,
-            sovereign_enclave_enabled: false,
-            sovereign_enclave_allowed_outbound_hosts: Vec::new(),
-            candidate_join_policy_enabled: false,
-            erasure_propagation_window_ms: 604_800_000,
-            log_format: LogFormat::Plain,
+            ..AppConfig::test_default()
         }
     }
 

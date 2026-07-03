@@ -527,7 +527,7 @@ async fn admin_realm_items(state: &AppState) -> Vec<Value> {
     // reach back into `state.realms`, and `Mutex` is non-reentrant — holding
     // the guard across the map closure deadlocks on the second resource pass.
     let realm_snapshot: Vec<RealmDirectoryEntry> = {
-        let realms = state.realms.lock().expect("realms lock");
+        let realms = state.realms.lock();
         realms
             .search(Default::default())
             .into_iter()
@@ -551,7 +551,7 @@ pub(super) async fn admin_get_realm_item(
     let realm_id_value = RealmId::new(realm_id.to_owned())
         .map_err(|error| AppError::invalid_param(format!("invalid realm_id: {error}")))?;
     let realm = {
-        let realms = state.realms.lock().expect("realms lock");
+        let realms = state.realms.lock();
         realms.get(&realm_id_value).cloned()
     }
     .ok_or_else(|| AppError::not_found("realm not found"))?;
@@ -571,7 +571,7 @@ pub(super) async fn admin_realm_member_items(
     let realm_id_value = RealmId::new(realm_id.to_owned())
         .map_err(|error| AppError::invalid_param(format!("invalid realm_id: {error}")))?;
     let members = {
-        let realms = state.realms.lock().expect("realms lock");
+        let realms = state.realms.lock();
         realms.get(&realm_id_value).map(|realm| {
             realm
                 .members
@@ -653,17 +653,14 @@ async fn admin_realm_item_value(
 
 fn admin_space_container_items(state: &AppState) -> Vec<Value> {
     let member_counts: BTreeMap<String, usize> = {
-        let realms = state.realms.lock().expect("realms lock");
+        let realms = state.realms.lock();
         realms
             .search(Default::default())
             .into_iter()
             .map(|realm| (realm.realm_id.as_str().to_owned(), realm.members.len()))
             .collect()
     };
-    let projection = match state.projection.lock() {
-        Ok(guard) => guard,
-        Err(_) => return Vec::new(),
-    };
+    let projection = state.projection.lock();
     projection
         .space_containers
         .values()
@@ -721,7 +718,7 @@ fn admin_capability_items(state: &AppState) -> Vec<Value> {
     // Same non-reentrant-lock concern as `admin_realm_items` — snapshot the
     // Realm list under lock, drop the guard, then call into authz.
     let realm_snapshot: Vec<RealmDirectoryEntry> = {
-        let realms = state.realms.lock().expect("realms lock");
+        let realms = state.realms.lock();
         realms
             .search(Default::default())
             .into_iter()
@@ -770,10 +767,7 @@ async fn admin_federation_items(state: &AppState) -> Vec<Value> {
 /// `ck.applet.discovery`). Empty until a `ck.applet.registration` or
 /// `ck.applet.discovery` event has been accepted.
 fn admin_applet_items(state: &AppState) -> Vec<Value> {
-    let proj = match state.projection.lock() {
-        Ok(guard) => guard,
-        Err(_) => return Vec::new(),
-    };
+    let proj = state.projection.lock();
     proj.applets
         .values()
         .map(|applet| {
@@ -793,10 +787,7 @@ fn admin_applet_items(state: &AppState) -> Vec<Value> {
 /// by `reducer::ProjectionState::agents`. One row per agent_id, with
 /// the latest `ck.agent.endpoint` metadata.
 fn admin_agent_items(state: &AppState) -> Vec<Value> {
-    let proj = match state.projection.lock() {
-        Ok(guard) => guard,
-        Err(_) => return Vec::new(),
-    };
+    let proj = state.projection.lock();
     proj.agents
         .values()
         .map(|agent| {

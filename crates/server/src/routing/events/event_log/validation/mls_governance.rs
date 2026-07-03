@@ -42,9 +42,7 @@ pub(crate) fn projected_mls_governance_binding_covers_policy_root(
     payload: &Value,
 ) -> bool {
     let expected_policy_root = payload_mls_governance_policy_root(payload);
-    let Some(projection) = state.projection.lock().ok() else {
-        return expected_policy_root.is_some();
-    };
+    let projection = state.projection.lock();
     let mut observed_realm_mls_cell = false;
     for (cell, cell_state) in &projection.cells {
         let cell_id = cell.as_str();
@@ -80,7 +78,7 @@ pub(super) fn projected_mls_governance_binding_metadata_digest(
     state: &AppState,
     realm_id: &str,
 ) -> Option<String> {
-    let projection = state.projection.lock().ok()?;
+    let projection = state.projection.lock();
     for (cell, cell_state) in &projection.cells {
         let cell_id = cell.as_str();
         let is_mls_cell = cell_id.contains("ck.component.mls.epoch.v1")

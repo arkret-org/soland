@@ -513,7 +513,8 @@ pub fn validate_witness_policy_for_log_with_window(
 /// Witness quorum (history visibility) is validated separately by
 /// [`validate_witness_policy_for_log`]; this function validates control
 /// authorisation (who may change the DID), which the spec keeps distinct from
-/// witnessing (§8.1: "Witness 证明历史可见性…quorum 证明治理授权").
+/// witnessing (§8.1: witnesses attest that the log history was visible,
+/// while the quorum attests that the change was governance-authorized).
 pub fn validate_rotation_authorization_for_log(
     log: &[WebvhLogEntry],
 ) -> Result<(), WebvhValidationError> {

@@ -401,7 +401,7 @@ async fn encrypted_realm_rejects_plaintext_strand_content_before_event_log_persi
     // the reducer projection then rejects plaintext private Strand content.
     {
         let hlc = soland::hlc::ServerHlc::new("lifecycle-test");
-        let mut projection = state.projection.lock().expect("projection lock");
+        let mut projection = state.projection.lock();
         projection.apply(
             &cokret_sdk::Operation::create(
                 cokret_sdk::OperationId::new(format!("ck:operation:{}", uuid::Uuid::now_v7()))
@@ -706,7 +706,7 @@ async fn redaction_targeting_strand_morph_flips_to_redacted_and_rejects_terminal
 
     // Confirm projection flipped to Redacted.
     {
-        let proj = state.projection.lock().unwrap();
+        let proj = state.projection.lock();
         let strand = proj.strands.get(strand_id).expect("strand projection");
         assert_eq!(
             strand.state.as_str(),
@@ -780,7 +780,7 @@ async fn redaction_targeting_strand_morph_flips_to_redacted_and_rejects_terminal
         .unwrap();
     assert_eq!(resp["status"], "accepted");
     {
-        let proj = state.projection.lock().unwrap();
+        let proj = state.projection.lock();
         let morph = proj.morphs.get(morph_id).expect("morph projection");
         assert_eq!(morph.state.as_str(), "redacted");
     }

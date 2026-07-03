@@ -116,7 +116,6 @@ async fn configure_retention_policy(
     state
         .retention_policies
         .lock()
-        .expect("retention policies lock")
         .insert(realm_id.clone(), record.clone());
     append_audit_log(
         state,
@@ -159,7 +158,6 @@ async fn sweep_retention_policy(
             state
                 .retention_policies
                 .lock()
-                .expect("retention policies lock")
                 .get(&realm_id)
                 .cloned()
         })
@@ -183,8 +181,7 @@ async fn sweep_retention_policy(
     let pending: Vec<_> = {
         let tombstones = state
             .retention_tombstones
-            .lock()
-            .expect("retention tombstones lock");
+            .lock();
         events
             .into_iter()
             .filter(|event| event.created_at <= cutoff && !tombstones.contains_key(&event.event_id))
@@ -225,8 +222,7 @@ async fn sweep_retention_policy(
         {
             let mut tombstones = state
                 .retention_tombstones
-                .lock()
-                .expect("retention tombstones lock");
+                .lock();
             if tombstones.contains_key(&event.event_id) {
                 continue;
             }

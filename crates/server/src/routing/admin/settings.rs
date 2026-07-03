@@ -34,22 +34,17 @@ pub(super) fn router() -> Router {
         .put(put_settings)
 }
 
-fn encode(settings: &RuntimeSettings) -> Result<Value, AppError> {
-    serde_json::to_value(settings)
-        .map_err(|error| AppError::internal(format!("encode settings: {error}")))
-}
-
 #[handler]
-async fn get_settings(depot: &mut Depot, req: &mut Request) -> JsonResult<Value> {
+async fn get_settings(depot: &mut Depot, req: &mut Request) -> JsonResult<RuntimeSettings> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let _session = AuthArgs::default()
         .authenticated_session(state, req)
         .await?;
-    json_ok(encode(&state.settings())?)
+    json_ok((*state.settings()).clone())
 }
 
 #[handler]
-async fn put_settings(depot: &mut Depot, req: &mut Request) -> JsonResult<Value> {
+async fn put_settings(depot: &mut Depot, req: &mut Request) -> JsonResult<RuntimeSettings> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = AuthArgs::default()
         .authenticated_session(state, req)
@@ -104,5 +99,5 @@ async fn put_settings(depot: &mut Depot, req: &mut Request) -> JsonResult<Value>
         "ok",
     )
     .await;
-    json_ok(encode(&next)?)
+    json_ok(next)
 }

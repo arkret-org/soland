@@ -1,10 +1,14 @@
 use cokret_sdk::lattice::CellState;
 use cokret_sdk::{CellRef, Did, EventId, GrantId, Operation, OperationId, RealmId};
-use salvo::oapi::ToSchema;
 use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
-use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+// SOL-DRY-03 — the coauth↔soland fanout wire contract is shared via
+// soland-core (same pattern as the sodmin admin seal DTOs); do not
+// re-declare these shapes locally.
+use soland_core::capability_fanout::{
+    CapabilityFanoutAuthzState, CapabilityFanoutBody, CapabilityFanoutResponse,
+};
 
 use crate::error::AppError;
 use crate::result::{JsonResult, json_ok};
@@ -24,37 +28,6 @@ struct CapabilityFanoutDraft {
     capability_grant_id: String,
     realm_id: String,
     subject: Option<String>,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-struct CapabilityFanoutBody {
-    kind: String,
-    operation: String,
-    issuer_service_did: String,
-    event_kind: String,
-    event_id: String,
-    capability_grant_id: String,
-    payload: Value,
-    #[serde(default)]
-    principal_servers: Vec<Value>,
-}
-
-#[derive(Clone, Debug, Serialize, ToSchema)]
-struct CapabilityFanoutResponse {
-    accepted: Vec<String>,
-    duplicate: Vec<String>,
-    event_id: String,
-    capability_grant_id: String,
-    operation: String,
-    authz_state: CapabilityFanoutAuthzState,
-}
-
-#[derive(Clone, Debug, Serialize, ToSchema)]
-struct CapabilityFanoutAuthzState {
-    projected: bool,
-    effective: bool,
-    revoked: bool,
-    grant_present: bool,
 }
 
 pub(super) fn router() -> Router {
@@ -438,9 +411,7 @@ fn projected_capability_cell_revoked(state: &AppState, grant_id: &str) -> bool {
     )) else {
         return false;
     };
-    let Ok(projection) = state.projection.lock() else {
-        return false;
-    };
+    let projection = state.projection.lock();
     let Some(CellState::Value(Value::Array(items))) = projection.cells.get(&cell_ref) else {
         return false;
     };

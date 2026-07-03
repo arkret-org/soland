@@ -885,8 +885,7 @@ pub(super) async fn account_cursor_revoke(
         let now_ms = revoked_at.timestamp_millis();
         let mut revocations = state
             .sync_cursor_revocations
-            .lock()
-            .expect("sync cursor revocations lock");
+            .lock();
         revocations.retain(|entry| entry.expires_at.timestamp_millis() > now_ms);
         revocations.push(record);
     }
@@ -909,8 +908,7 @@ fn cursor_authority_revoked(
 ) -> bool {
     let mut revocations = state
         .sync_cursor_revocations
-        .lock()
-        .expect("sync cursor revocations lock");
+        .lock();
     revocations.retain(|entry| entry.expires_at.timestamp_millis() > now_ms);
     if revocations.is_empty() {
         return false;

@@ -148,11 +148,10 @@ async fn admin_get_realm_media_service(
         "ck:cell:ck.component.realm.media_service.v1:{realm_id}"
     ))
     .map_err(|error| AppError::internal(format!("invalid media_service cell id: {error}")))?;
-    let value = state
-        .projection
-        .lock()
-        .ok()
-        .and_then(|proj| proj.cell_value(&cell_id).cloned());
+    let value = {
+        let proj = state.projection.lock();
+        proj.cell_value(&cell_id).cloned()
+    };
 
     append_audit_log(
         state,

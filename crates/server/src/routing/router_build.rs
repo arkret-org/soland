@@ -83,11 +83,6 @@ pub fn router_with_rate_limiter_and_request_size_config(
         .push(
             Router::with_path("_soland")
                 .push(admin::spec_router())
-                // Client telemetry/audit ingest is deployment-local but not
-                // a protocol `self` surface. It carries per-handler actor
-                // auth instead of the shared admin-scope hoop so ordinary
-                // authenticated clients can post their own user-action log.
-                .push(Router::with_path("admin").push(admin::audit_router()))
                 .push(admin::admin_router())
                 .push(admin::router())
                 .push(federation::admin_seal_sign_router())
@@ -218,7 +213,11 @@ fn soland_local_router() -> Router {
                 // (`/_soland/self/strands/{strand_id}`) + relation edge list
                 // (`/_soland/self/relations`). See `events::local_router`.
                 .push(events::local_router())
-                .push(admin::audit_router())
+                // Client telemetry/audit ingest (`/_soland/self/audit/*`)
+                // — per-handler actor auth plus the shared `self`
+                // session-PoP hoop above. Operator audit queries live under
+                // the admin-gated `/_soland/admin/audit/*` (SOL-NAME-02).
+                .push(admin::audit_ingest_router())
                 // Owner-scoped policy document storage CRUD
                 // (`/_soland/self/policies*`). Deployment-local management
                 // capability backing `ck.self.policy.query.check`; kept off

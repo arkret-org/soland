@@ -30,7 +30,6 @@ impl RealmInviteStore for MemoryRealmInviteStore {
         Ok(self
             .data
             .lock()
-            .expect("realm invites lock")
             .get(invite_id)
             .cloned())
     }
@@ -39,7 +38,6 @@ impl RealmInviteStore for MemoryRealmInviteStore {
         let id = record.invite_id.clone();
         self.data
             .lock()
-            .expect("realm invites lock")
             .insert(id, record);
         Ok(())
     }
@@ -49,7 +47,7 @@ impl RealmInviteStore for MemoryRealmInviteStore {
         token_digest: &str,
         now: chrono::DateTime<Utc>,
     ) -> PersistenceResult<Option<RealmInviteRecord>> {
-        let mut data = self.data.lock().expect("realm invites lock");
+        let mut data = self.data.lock();
         let Some(record) = data
             .values_mut()
             .find(|record| record.third_party_id.is_some() && record.invite_token == token_digest)
@@ -80,7 +78,6 @@ impl RealmInviteStore for MemoryRealmInviteStore {
         Ok(self
             .data
             .lock()
-            .expect("realm invites lock")
             .values()
             .cloned()
             .collect())

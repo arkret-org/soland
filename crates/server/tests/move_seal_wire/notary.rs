@@ -217,7 +217,7 @@ async fn notary_pass_populates_projection_cells_map() {
 
     // Inspect ProjectionState directly. The member_cell should now be in
     // the cells map with Value("join") (the FSM transition we sealed).
-    let proj = state.projection.lock().expect("projection lock");
+    let proj = state.projection.lock();
     let resolved = proj
         .cell(&member_cell())
         .expect("member.state cell should be in ProjectionState::cells after apply_seal");

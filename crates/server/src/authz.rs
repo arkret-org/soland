@@ -19,7 +19,8 @@ pub mod obligation_executor;
 pub mod policy_client;
 
 use std::collections::BTreeMap;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use parking_lot::Mutex;
 
 // Delegation primitives — `Grant`, `Constraint` (alias of `GrantConstraint`),
 // `DelegationError`, and the chain-integrity / cascade / expiry helpers —
@@ -177,7 +178,6 @@ impl SolandAuthzEngine {
         if grant_scope_valid(&grant).is_ok() {
             self.grants
                 .lock()
-                .expect("grants lock")
                 .insert(grant.grant_id.clone(), grant.clone());
         }
         grant
@@ -206,13 +206,9 @@ impl SolandAuthzEngine {
         expires_at: Option<chrono::DateTime<chrono::Utc>>,
     ) -> Result<Grant, DelegationError> {
         let delegated_realm_id = {
-            // SOL-REL-01 — the grants index is on the authorization hot path;
-            // recover a poisoned lock via `into_inner()` rather than cascading
-            // panics that would make every subsequent authz check crash.
-            let grants = self
-                .grants
-                .lock()
-                .unwrap_or_else(|error| error.into_inner());
+            // SOL-REL-01 / SOL-SOTA-01 — parking_lot mutex: no poisoning, so
+            // the authorization hot path cannot crash on a stale poison flag.
+            let grants = self.grants.lock();
             grants
                 .get(parent_grant_id)
                 .map(|g| g.realm_id.clone())
@@ -221,7 +217,6 @@ impl SolandAuthzEngine {
         let snapshot: Vec<Grant> = self
             .grants
             .lock()
-            .expect("grants lock")
             .values()
             .cloned()
             .collect();
@@ -256,7 +251,6 @@ impl SolandAuthzEngine {
         child.grant_id = ids::generate_grant_id();
         self.grants
             .lock()
-            .expect("grants lock")
             .insert(child.grant_id.clone(), child.clone());
         Ok(child)
     }
@@ -272,8 +266,7 @@ impl SolandAuthzEngine {
     pub fn revoke_grant_with_cascade(&self, grant_id: &str) -> (bool, Vec<String>) {
         let mut grants = self
             .grants
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
+            .lock();
         if !grants.contains_key(grant_id) {
             return (false, Vec::new());
         }
@@ -305,7 +298,6 @@ impl SolandAuthzEngine {
     pub fn upsert_projected_grant(&self, grant: Grant) {
         self.grants
             .lock()
-            .expect("grants lock")
             .insert(grant.grant_id.clone(), grant);
     }
 
@@ -317,7 +309,6 @@ impl SolandAuthzEngine {
         if let Some(grant) = self
             .grants
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
             .get_mut(grant_id)
         {
             grant.revoked = true;
@@ -328,8 +319,7 @@ impl SolandAuthzEngine {
         let mut count = 0usize;
         let mut grants = self
             .grants
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
+            .lock();
         for grant in grants.values_mut() {
             if grant.subject == subject && !grant.revoked {
                 grant.revoked = true;
@@ -343,7 +333,6 @@ impl SolandAuthzEngine {
     pub fn get_grant(&self, grant_id: &str) -> Option<Grant> {
         self.grants
             .lock()
-            .expect("grants lock")
             .get(grant_id)
             .cloned()
     }
@@ -355,7 +344,6 @@ impl SolandAuthzEngine {
         let snapshot: Vec<Grant> = self
             .grants
             .lock()
-            .expect("grants lock")
             .values()
             .cloned()
             .collect();
@@ -379,7 +367,6 @@ impl SolandAuthzEngine {
         let snapshot: Vec<Grant> = self
             .grants
             .lock()
-            .expect("grants lock")
             .values()
             .cloned()
             .collect();
@@ -400,7 +387,6 @@ impl SolandAuthzEngine {
     pub(crate) fn grants_snapshot(&self) -> Vec<Grant> {
         self.grants
             .lock()
-            .expect("grants lock")
             .values()
             .cloned()
             .collect()
@@ -437,7 +423,6 @@ impl SolandAuthzEngine {
         let snapshot: Vec<Grant> = self
             .grants
             .lock()
-            .expect("grants lock")
             .values()
             .cloned()
             .collect();

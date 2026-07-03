@@ -41,10 +41,11 @@ use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::{DateTime, TimeZone, Utc};
 use cokret_sdk::{
-    Did, Failure as KeypackageFailure, Hash, KeyPackagesClaimOutcome, KeyPackagesClaimRequestBody,
+    Did, Failure as KeypackageFailure, Hash, KeyOperationSignature, KeyPackageClaimRecord,
+    KeyPackageUploadEntry, KeyPackagesClaimOutcome, KeyPackagesClaimRequestBody,
     KeyPackagesConsumeOutcome, KeyPackagesConsumeRequestBody, KeyPackagesRevokeOutcome,
     KeyPackagesRevokeRequestBody, KeyPackagesUploadOutcome, KeyPackagesUploadRequestBody,
-    KeypackageClaimRecord, Operation, OperationId, RealmId, Signature2,
+    Operation, OperationId, RealmId,
 };
 use salvo::oapi::extract::{JsonBody, QueryParam};
 use salvo::prelude::*;
@@ -216,7 +217,7 @@ pub(crate) fn enqueue_device_revoke_mls_removals(
     revoke_event_id: &str,
 ) -> usize {
     let triggered_at = now();
-    let mut projection = state.projection.lock().expect("projection lock");
+    let mut projection = state.projection.lock();
     let mut queued = Vec::new();
     for row in projection.mls_commit_epochs.values() {
         let Some((realm_id, circle_id)) = mls_scope_parts(&row.effective_scope) else {
@@ -361,26 +362,24 @@ async fn upload_keypackage(
     let mut key_package_refs = Vec::new();
     let mut rejected = Vec::new();
     for entry in body.key_packages {
-        let keypackage_id = match entry_string(&entry, "keypackage_id") {
-            Ok(value) => value.to_owned(),
-            Err(reason) => {
-                rejected.push(keypackage_failure(&entry, &device_id, reason));
-                continue;
-            }
-        };
-        let keypackage_ref = match entry_string(&entry, "keypackage_ref") {
-            Ok(value) => value.to_owned(),
-            Err(reason) => {
-                rejected.push(keypackage_failure(&entry, &device_id, reason));
-                continue;
-            }
-        };
-        let key_package_bytes_b64 = match entry_string(&entry, "key_package") {
-            Ok(value) => value.to_owned(),
-            Err(reason) => {
-                rejected.push(keypackage_failure(&entry, &device_id, reason));
-                continue;
-            }
+        if entry.keypackage_id.is_empty() {
+            rejected.push(keypackage_failure(&entry, &device_id, "keypackage_id_missing"));
+            continue;
+        }
+        let keypackage_id = entry.keypackage_id.clone();
+        if entry.keypackage_ref.is_empty() {
+            rejected.push(keypackage_failure(&entry, &device_id, "keypackage_ref_missing"));
+            continue;
+        }
+        let keypackage_ref = entry.keypackage_ref.clone();
+        let Some(key_package_bytes_b64) = entry
+            .key_package
+            .as_str()
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+        else {
+            rejected.push(keypackage_failure(&entry, &device_id, "key_package_missing"));
+            continue;
         };
         let key_package_bytes = match decode_key_package(&key_package_bytes_b64) {
             Ok(bytes) => bytes,
@@ -389,13 +388,7 @@ async fn upload_keypackage(
                 continue;
             }
         };
-        let keypackage_digest = match entry_string(&entry, "keypackage_digest") {
-            Ok(value) => value.to_owned(),
-            Err(reason) => {
-                rejected.push(keypackage_failure(&entry, &device_id, reason));
-                continue;
-            }
-        };
+        let keypackage_digest = entry.keypackage_digest.to_string();
         let computed_keypackage_digest = cokret_sdk::canonical::sha256_digest(&key_package_bytes);
         if keypackage_digest != computed_keypackage_digest {
             rejected.push(keypackage_failure(
@@ -405,7 +398,7 @@ async fn upload_keypackage(
             ));
             continue;
         }
-        let capabilities = match entry_string_list(&entry, "capabilities") {
+        let capabilities = match validate_capabilities(&entry.capabilities) {
             Ok(value) => value,
             Err(reason) => {
                 rejected.push(keypackage_failure(&entry, &device_id, reason));
@@ -419,34 +412,19 @@ async fn upload_keypackage(
                 continue;
             }
         };
-        let device_signature = match entry_signature(&entry, &default_device_signature) {
+        let device_signature = match entry_signature(
+            entry.device_signature.as_ref(),
+            &default_device_signature,
+        ) {
             Ok(signature) => signature,
             Err(reason) => {
                 rejected.push(keypackage_failure(&entry, &device_id, reason));
                 continue;
             }
         };
-        let created_at = match entry_timestamp(&entry, "created_at") {
-            Ok(value) => value,
-            Err(reason) => {
-                rejected.push(keypackage_failure(&entry, &device_id, reason));
-                continue;
-            }
-        };
-        let expires_at = match entry_timestamp(&entry, "expires_at") {
-            Ok(value) => value,
-            Err(reason) => {
-                rejected.push(keypackage_failure(&entry, &device_id, reason));
-                continue;
-            }
-        };
-        let last_resort = match entry_bool(&entry, "last_resort") {
-            Ok(value) => value,
-            Err(reason) => {
-                rejected.push(keypackage_failure(&entry, &device_id, reason));
-                continue;
-            }
-        };
+        let created_at = entry.created_at.timestamp();
+        let expires_at = entry.expires_at.timestamp();
+        let last_resort = entry.last_resort.unwrap_or(false);
         if last_resort
             && expires_at.saturating_sub(created_at) > LAST_RESORT_KEYPACKAGE_MAX_LIFETIME_SECS
         {
@@ -482,7 +460,7 @@ async fn upload_keypackage(
         trust_binding.insert_into(&mut publish_payload);
         let op = build_op(cokret_sdk::events::kinds::MLS_KEYPACKAGE, publish_payload);
         let effect =
-            reducer::mls::apply_keypackage_publish(&mut state.projection.lock().unwrap(), &op);
+            reducer::mls::apply_keypackage_publish(&mut state.projection.lock(), &op);
         match effect {
             ProjectionEffect::Mls(MlsEffect::KeyPackagePublished { .. }) => {}
             ProjectionEffect::Rejected { reason } => {
@@ -500,7 +478,7 @@ async fn upload_keypackage(
         // projection row instead of re-parsing the body so persistence and
         // in-process state stay aligned.
         let snapshot = {
-            let projection = state.projection.lock().unwrap();
+            let projection = state.projection.lock();
             projection
                 .mls_key_packages
                 .get(&keypackage_id)
@@ -604,7 +582,7 @@ pub(crate) async fn claim_keypackages_for_request(
     );
     let now_secs = now().timestamp();
     let selected_keypackage = {
-        let projection = state.projection.lock().unwrap();
+        let projection = state.projection.lock();
         let ordinary = projection
             .mls_key_packages
             .values()
@@ -686,7 +664,7 @@ pub(crate) async fn claim_keypackages_for_request(
     });
     claim_binding.insert_into(&mut payload);
     let op = build_op(cokret_sdk::events::kinds::MLS_KEYPACKAGE, payload);
-    let effect = reducer::mls::apply_keypackage_claim(&mut state.projection.lock().unwrap(), &op);
+    let effect = reducer::mls::apply_keypackage_claim(&mut state.projection.lock(), &op);
     let (consumed_at, claimed_keypackage_id, claimed_group_id, claimed_realm_id) = match effect {
         ProjectionEffect::Mls(MlsEffect::KeyPackageClaimed {
             keypackage_id,
@@ -975,7 +953,6 @@ pub(crate) async fn retire_device_keypackages(
             if let Some(projected) = state
                 .projection
                 .lock()
-                .expect("projection lock")
                 .mls_key_packages
                 .get_mut(&row.id)
             {
@@ -1022,7 +999,7 @@ async fn pending_welcomes(
         .map_err(|err| AppError::internal(format!("mls_welcomes.drain_pending: {err}")))?;
 
     {
-        let mut projection = state.projection.lock().unwrap();
+        let mut projection = state.projection.lock();
         let key = MlsWelcomeQueueKey::new(session.actor.clone(), session.device_id.clone());
         if let Some(queue) = projection.mls_welcomes.get_mut(&key) {
             // Mark every undelivered row with the same now_secs the
@@ -1066,50 +1043,20 @@ async fn pending_welcomes(
 
 // ── helpers ───────────────────────────────────────────────────────────
 
-fn entry_string<'a>(entry: &'a Value, field: &'static str) -> Result<&'a str, String> {
-    entry
-        .get(field)
-        .and_then(Value::as_str)
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| format!("{field}_missing"))
-}
-
-fn entry_string_list(entry: &Value, field: &'static str) -> Result<Vec<String>, String> {
-    let values = entry
-        .get(field)
-        .and_then(Value::as_array)
-        .ok_or_else(|| format!("{field}_missing"))?;
-    if values.is_empty() {
-        return Err(format!("{field}_missing"));
+fn validate_capabilities(capabilities: &[String]) -> Result<Vec<String>, String> {
+    if capabilities.is_empty() {
+        return Err("capabilities_missing".to_owned());
     }
-    let mut out = Vec::with_capacity(values.len());
     let mut seen = BTreeSet::new();
-    for value in values {
-        let item = value
-            .as_str()
-            .filter(|value| !value.is_empty())
-            .ok_or_else(|| format!("{field}_invalid"))?;
-        if !seen.insert(item.to_owned()) {
-            return Err(format!("{field}_duplicate"));
+    for capability in capabilities {
+        if capability.is_empty() {
+            return Err("capabilities_invalid".to_owned());
         }
-        out.push(item.to_owned());
+        if !seen.insert(capability.clone()) {
+            return Err("capabilities_duplicate".to_owned());
+        }
     }
-    Ok(out)
-}
-
-fn entry_bool(entry: &Value, field: &'static str) -> Result<bool, String> {
-    entry
-        .get(field)
-        .map(|value| value.as_bool().ok_or_else(|| format!("{field}_invalid")))
-        .transpose()
-        .map(|value| value.unwrap_or(false))
-}
-
-fn entry_timestamp(entry: &Value, field: &'static str) -> Result<i64, String> {
-    let value = entry_string(entry, field)?;
-    DateTime::parse_from_rfc3339(value)
-        .map(|timestamp| timestamp.timestamp())
-        .map_err(|_| format!("{field}_invalid"))
+    Ok(capabilities.to_vec())
 }
 
 fn decode_key_package(encoded: &str) -> Result<Vec<u8>, String> {
@@ -1131,28 +1078,15 @@ fn canonical_capabilities_digest(capabilities: &[String]) -> Result<String, Stri
         .map_err(|_| "capabilities_digest_failed".to_owned())
 }
 
-fn entry_signature(entry: &Value, default_signature: &Value) -> Result<Value, String> {
-    let signature = entry.get("device_signature").unwrap_or(default_signature);
-    let object = signature
-        .as_object()
-        .ok_or_else(|| "device_signature_missing".to_owned())?;
-    let has_kid = object
-        .get("kid")
-        .and_then(Value::as_str)
-        .is_some_and(|value| !value.is_empty());
-    let has_signature = object
-        .get("jws")
-        .or_else(|| object.get("sig"))
-        .and_then(Value::as_str)
-        .is_some_and(|value| !value.is_empty());
-    if !has_kid || !has_signature {
+fn entry_signature(
+    entry_signature: Option<&KeyOperationSignature>,
+    default_signature: &KeyOperationSignature,
+) -> Result<KeyOperationSignature, String> {
+    let signature = entry_signature.unwrap_or(default_signature);
+    if signature.kid.is_empty() || signature.sig.is_empty() {
         return Err("device_signature_invalid".to_owned());
     }
-    if object
-        .get("alg")
-        .and_then(Value::as_str)
-        .is_some_and(str::is_empty)
-    {
+    if signature.alg.as_deref().is_some_and(str::is_empty) {
         return Err("device_signature_invalid".to_owned());
     }
     Ok(signature.clone())
@@ -1187,7 +1121,6 @@ fn current_accepted_ssk_generation(state: &AppState, principal: &cokret_sdk::Did
     state
         .cross_signing
         .lock()
-        .expect("cross_signing lock")
         .current_cross_signing(principal)
         .map(|publish| publish.generation)
         .filter(|generation| *generation >= 1)
@@ -1280,16 +1213,17 @@ fn device_authorize_trust_binding(
 }
 
 fn keypackage_failure(
-    entry: &Value,
+    entry: &KeyPackageUploadEntry,
     device_id: &str,
     reason_code: impl Into<String>,
 ) -> KeypackageFailure {
+    let keypackage_ref = if entry.keypackage_ref.is_empty() {
+        entry.keypackage_id.clone()
+    } else {
+        entry.keypackage_ref.clone()
+    };
     KeypackageFailure {
-        keypackage_ref: entry
-            .get("keypackage_ref")
-            .or_else(|| entry.get("keypackage_id"))
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned),
+        keypackage_ref: (!keypackage_ref.is_empty()).then_some(keypackage_ref),
         device_id: Some(device_id.to_owned()),
         reason_code: reason_code.into(),
         retry_after_ms: None,
@@ -1332,7 +1266,7 @@ fn available_keypackage_count(
     intended_realm_id: Option<&str>,
 ) -> u64 {
     let now_secs = now().timestamp();
-    let projection = state.projection.lock().unwrap();
+    let projection = state.projection.lock();
     projection
         .mls_key_packages
         .values()
@@ -1380,10 +1314,10 @@ fn last_resort_matches_realm(kp: &MlsKeyPackage, intended_realm_id: &str) -> boo
 fn keypackage_claim_record(
     record: &MlsKeyPackageRow,
     claim_nonce: &str,
-) -> Result<KeypackageClaimRecord, AppError> {
+) -> Result<KeyPackageClaimRecord, AppError> {
     let trust_binding = KeyPackageTrustBinding::from_row(record)?;
     let key_package = URL_SAFE_NO_PAD.encode(&record.key_package_bytes);
-    Ok(KeypackageClaimRecord {
+    Ok(KeyPackageClaimRecord {
         claim_id: format!("{}:{claim_nonce}", record.id),
         keypackage_ref: record.keypackage_ref.clone(),
         keypackage_digest: Hash::new(record.keypackage_digest.clone())
@@ -1398,7 +1332,7 @@ fn keypackage_claim_record(
         ssk_generation: trust_binding.ssk_generation,
         device_authorize_event_id: trust_binding.device_authorize_event_id,
         expires_at: unix_timestamp_datetime(record.lifetime_not_after)?,
-        device_signature: serde_json::from_value::<Signature2>(record.device_signature.clone())
+        device_signature: serde_json::from_value::<KeyOperationSignature>(record.device_signature.clone())
             .map_err(|error| AppError::internal(format!("invalid device_signature: {error}")))?,
         revocation_status: Some("active".to_owned()),
         last_resort: record.last_resort.then_some(true),

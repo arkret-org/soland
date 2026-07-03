@@ -2,65 +2,17 @@ use super::*;
 use crate::config::{
     AppConfig, FederationPolicy, IceServersConfig, LiveKitConfig, ObjectStorageConfig,
 };
-use crate::db::Db;
+use soland_data::Db;
 
 pub(super) fn make_state(development_mode: bool) -> AppState {
     let config = AppConfig {
-        bind: "127.0.0.1:0".parse().unwrap(),
-        metrics_bind: "127.0.0.1:0".parse().unwrap(),
-        public_base_url: "http://server".to_owned(),
-        service_did: "did:web:soland.local".to_owned(),
-        tls_cert_path: None,
-        tls_key_path: None,
-        database_url: None,
         object_storage: ObjectStorageConfig::local(std::env::temp_dir().join("soland-test")),
-        ice: IceServersConfig::default(),
-        livekit: LiveKitConfig::default(),
-        cors_allow_origin: None,
-        account_authority_url: None,
-        oidc_client_id: None,
         development_mode,
-        session_grant_introspection_url: None,
-        session_grant_introspection_bearer: None,
         did_resolver_allow_methods: vec!["web".to_owned(), "key".to_owned()],
-        embedded_webvh_provider_enabled: false,
-        embedded_webvh_registration_bearer: None,
-        external_webvh_provider_url: None,
-        external_webvh_provider_active: false,
-        default_webvh_provider_id: None,
         jws_replay_window_seconds: 0,
         jws_replay_window_per_family: std::collections::BTreeMap::new(),
-        notary_signing_key_seed: None,
-        agent_audit_binding_signing_seed: None,
-        use_keystore: false,
-        federation_policy: FederationPolicy::Mesh,
-        federation_peers: Vec::new(),
-        federation_outbound_enabled: false,
-        federation_replica_observer: false,
-        admin_default_page_limit: 100,
-        admin_max_page_limit: 1000,
-        admin_principal_dids: Vec::new(),
-        to_device_queue_capacity: 10_000,
-        push_bridge_cache_ttl_seconds: 900,
-        push_bridge_trusted_service_dids: Vec::new(),
-        resumable_upload_dir: std::path::PathBuf::from("./soland-resumable-uploads"),
-        resumable_upload_incomplete_ttl_seconds: 86_400,
-        seal_compaction_min_age_seconds: 604_800,
-        compaction_min_witnesses: 1,
-        compaction_preserve_genesis: true,
-        compaction_prune_only_singleton_successors: true,
-
-        compaction_prune_walk_interval_seconds: 0,
-
-        compaction_prune_walk_per_realm_limit: 50,
         seed_demo_data: true,
-        trust_domain: "ck:trust_domain:soland.local".to_owned(),
-        receive_policy_constraints: None,
-        sovereign_enclave_enabled: false,
-        sovereign_enclave_allowed_outbound_hosts: Vec::new(),
-        candidate_join_policy_enabled: false,
-        erasure_propagation_window_ms: 604_800_000,
-        log_format: crate::config::LogFormat::Plain,
+        ..AppConfig::test_default()
     };
     AppState::new(config, Db { pool: None })
 }
@@ -450,7 +402,7 @@ async fn circle_scoped_write_requires_circle_membership() {
 
     // Seed an active Circle whose only member is `member`.
     {
-        let mut projection = state.projection.lock().unwrap();
+        let mut projection = state.projection.lock();
         projection.circles.insert(
             circle_id.to_owned(),
             crate::reducer::CircleProjection {
@@ -533,7 +485,7 @@ async fn circle_scoped_reaction_requires_circle_membership() {
     let now = chrono::Utc::now();
 
     {
-        let mut projection = state.projection.lock().unwrap();
+        let mut projection = state.projection.lock();
         projection.circles.insert(
             circle_id.to_owned(),
             crate::reducer::CircleProjection {
@@ -637,7 +589,7 @@ async fn circle_scoped_morph_update_requires_circle_membership() {
     let now = chrono::Utc::now();
 
     {
-        let mut projection = state.projection.lock().unwrap();
+        let mut projection = state.projection.lock();
         projection.circles.insert(
             circle_id.to_owned(),
             crate::reducer::CircleProjection {
@@ -868,7 +820,7 @@ fn policy_components_mls_governance_reads_projection_cell() {
     let realm_id = "ck:realm:01904100-0000-7000-8000-a11ce0000001";
     let policy_root = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     {
-        let mut projection = state.projection.lock().unwrap();
+        let mut projection = state.projection.lock();
         projection.cells.insert(
             cokret_sdk::CellRef::new(
                 "ck:cell:ck.component.mls.epoch.v1:ck:mls_group:unit-test".to_owned(),

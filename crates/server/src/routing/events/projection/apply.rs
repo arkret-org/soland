@@ -40,11 +40,10 @@ pub(crate) async fn mirror_mls_effect_to_persistence(
 
     match effect {
         crate::reducer::MlsEffect::KeyPackagePublished { keypackage_id, .. } => {
-            let record = state
-                .projection
-                .lock()
-                .ok()
-                .and_then(|projection| projection.mls_key_packages.get(keypackage_id).cloned())
+            let record = {
+                let projection = state.projection.lock();
+                projection.mls_key_packages.get(keypackage_id).cloned()
+            }
                 .map(|kp| MlsKeyPackageRow {
                     id: kp.id,
                     keypackage_ref: kp.keypackage_ref,
@@ -100,11 +99,9 @@ pub(crate) async fn mirror_mls_effect_to_persistence(
             recipient_device_id,
             ..
         } => {
-            let record = state
-                .projection
-                .lock()
-                .ok()
-                .and_then(|projection| {
+            let record = {
+                let projection = state.projection.lock();
+                {
                     projection
                         .mls_welcomes
                         .get(&MlsWelcomeQueueKey::new(
@@ -113,7 +110,8 @@ pub(crate) async fn mirror_mls_effect_to_persistence(
                         ))
                         .and_then(|queue| queue.iter().find(|row| row.id == *welcome_id))
                         .cloned()
-                })
+                }
+            }
                 .map(|welcome| MlsWelcomeRecord {
                     id: welcome.id,
                     group_id: welcome.group_id,
@@ -233,7 +231,7 @@ fn bind_circle_mls_group(
         return;
     };
 
-    let mut projection = state.projection.lock().expect("projection lock");
+    let mut projection = state.projection.lock();
     {
         let Some(circle) = projection.circles.get_mut(&circle_id) else {
             tracing::warn!(%realm_id, %circle_id, %group_id, "MLS circle scope has no Circle projection");
@@ -350,9 +348,7 @@ async fn write_through_projection(state: &AppState, operation: &Operation) {
     }
 
     let snapshot = {
-        let Ok(proj) = state.projection.lock() else {
-            return;
-        };
+        let proj = state.projection.lock();
         let container_space_id_from_payload = operation
             .payload
             .get("space_id")
@@ -665,11 +661,10 @@ async fn project_accepted_operations_inner(
         // Also apply to the deterministic reducer.
         let reducer_effect =
             if actor_private_read_cursor_matches_origin(origin, source_device_id, operation) {
-                state
-                    .projection
-                    .lock()
-                    .ok()
-                    .map(|mut proj| apply_via_lattice_registry(state, &mut proj, operation))
+                {
+                    let mut proj = state.projection.lock();
+                    Some(apply_via_lattice_registry(state, &mut proj, operation))
+                }
             } else {
                 None
             };
@@ -829,11 +824,10 @@ pub(crate) async fn mirror_realm_organization_effect_to_persistence(
         organization_id.clone(),
         relationship.clone(),
     );
-    let row = state
-        .projection
-        .lock()
-        .ok()
-        .and_then(|proj| proj.realm_organization_statements.get(&key).cloned());
+    let row = {
+        let proj = state.projection.lock();
+        proj.realm_organization_statements.get(&key).cloned()
+    };
     let Some(row) = row else {
         return;
     };
@@ -1260,11 +1254,10 @@ fn refresh_authz_index_from_capability_effect(
         _ => return,
     };
     for grant_id in grant_ids {
-        let derived = state
-            .projection
-            .lock()
-            .ok()
-            .and_then(|proj| proj.effective_engine_grant(&grant_id));
+        let derived = {
+            let proj = state.projection.lock();
+            proj.effective_engine_grant(&grant_id)
+        };
         match derived {
             Some(grant) => state.authz.upsert_projected_grant(grant),
             // Cell present only as a revoke-before-grant tombstone (no

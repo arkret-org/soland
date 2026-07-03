@@ -58,7 +58,7 @@ fn cross_signing_publish(principal: &str, generation: u64) -> CrossSigningPublis
 }
 
 fn seed_cross_signing_generation(state: &AppState, principal: &str, generation: u64) {
-    let mut manager = state.cross_signing.lock().expect("cross_signing lock");
+    let mut manager = state.cross_signing.lock();
     for current in 1..=generation {
         manager
             .record_cross_signing_publish(cross_signing_publish(principal, current))
@@ -178,7 +178,6 @@ async fn direct_resolve_rejects_pairwise_did_without_stable_identity_link() {
     state
         .consent_cells
         .lock()
-        .expect("consent_cells lock")
         .insert(
             soland::state::ConsentCellKey {
                 holder: BOB_PAIRWISE_DID.to_owned(),
@@ -218,7 +217,6 @@ async fn direct_resolve_rejects_pairwise_did_without_stable_identity_link() {
         state
             .direct_conversation_bindings
             .lock()
-            .expect("direct_conversation_bindings lock")
             .is_empty()
     );
 }
@@ -302,7 +300,6 @@ async fn direct_resolve_create_requires_claimable_keypackage() {
         state
             .direct_conversation_bindings
             .lock()
-            .expect("direct_conversation_bindings lock")
             .is_empty()
     );
 }
@@ -536,7 +533,6 @@ async fn concurrent_direct_resolve_create_converges_to_one_binding() {
         state
             .direct_conversation_bindings
             .lock()
-            .expect("direct_conversation_bindings lock")
             .len(),
         1
     );

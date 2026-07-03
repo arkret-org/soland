@@ -33,7 +33,8 @@
 //!   shutdown handling under tokio).
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::{Mutex, OnceLock};
+use std::sync::OnceLock;
+use parking_lot::Mutex;
 
 use anyhow::Result;
 use base64::Engine as _;
@@ -265,19 +266,16 @@ impl NotaryWorker {
         .ok();
         let prev_epoch_value: Option<serde_json::Value> =
             mls_epoch_cell.as_ref().and_then(|cell_id| {
-                state
-                    .projection
-                    .lock()
-                    .ok()
-                    .and_then(|proj| proj.cell_value(cell_id).cloned())
+                {
+                    let proj = state.projection.lock();
+                    proj.cell_value(cell_id).cloned()
+                }
             });
-        if let Ok(mut proj) = state.projection.lock()
-            && let Err(error) = proj.reload_cells_from_store(
-                realm_id,
-                state.cell_store.as_ref(),
-                state.cell_registry.as_ref(),
-            )
-        {
+        if let Err(error) = state.projection.lock().reload_cells_from_store(
+            realm_id,
+            state.cell_store.as_ref(),
+            state.cell_registry.as_ref(),
+        ) {
             tracing::warn!(
                 error = %error,
                 "notary worker failed to refresh ProjectionState::cells after apply_seal"
@@ -292,11 +290,10 @@ impl NotaryWorker {
                 effect.post_state_root.as_str().to_owned(),
             ));
         if let Some(cell_id) = mls_epoch_cell {
-            let new_epoch_value: Option<serde_json::Value> = state
-                .projection
-                .lock()
-                .ok()
-                .and_then(|proj| proj.cell_value(&cell_id).cloned());
+            let new_epoch_value: Option<serde_json::Value> = {
+                let proj = state.projection.lock();
+                proj.cell_value(&cell_id).cloned()
+            };
             if let Some(new_epoch) = new_epoch_value
                 && prev_epoch_value.as_ref() != Some(&new_epoch)
             {
@@ -725,8 +722,7 @@ fn materialize_genesis_if_empty(
     realm_id: &RealmId,
 ) -> Result<Vec<SealId>, NotaryError> {
     let _guard = GENESIS_MATERIALIZE_LOCK
-        .lock()
-        .expect("genesis materialize lock poisoned");
+        .lock();
     let leaves = state.seal_store.list_leaves(realm_id)?;
     if !leaves.is_empty() {
         return Ok(leaves);

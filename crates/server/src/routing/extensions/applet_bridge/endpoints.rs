@@ -494,6 +494,9 @@ async fn provision_ghost_actor_endpoint(
     let applet_id = provision.applet_id.clone();
     let service_did = provision.service_did.clone();
     let ghost_actor_id = provision.ghost_actor_id.clone();
+    // G3.S9 — ghost actor DID recorded against the applet MUST be a
+    // well-formed bare DID scalar (no DID URL fragment).
+    crate::routing::extensions::bot_actor::validate_extension_actor_did(ghost_actor_id.as_str())?;
     let realm_id = provision.realm_id.clone();
 
     let record = applet_record(state, &path_applet_id)

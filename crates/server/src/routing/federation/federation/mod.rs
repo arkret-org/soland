@@ -11,7 +11,7 @@
 
 use super::{
     ingest_federation_operations, now, operation_is_visible, redaction_targets_from_operations,
-    sha256_hex, sync_token, validate_did,
+    sha256_hex, sync_token,
 };
 use crate::state::AppState;
 

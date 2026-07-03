@@ -36,7 +36,8 @@
 //! bucket on the TCP peer address.
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use parking_lot::Mutex;
 use std::time::{Duration, Instant};
 
 use salvo::prelude::*;
@@ -271,7 +272,7 @@ impl RateLimiter {
     /// from `RuntimeSettings` here so quota changes take effect immediately;
     /// the shared counter map is unaffected by the source of the window.
     fn check_with_ceiling_window(&self, key: &str, ceiling: u32, window: Duration) -> bool {
-        let mut state = self.state.lock().expect("rate limiter lock");
+        let mut state = self.state.lock();
         let now = Instant::now();
 
         if let Some((count, window_start)) = state.get_mut(key)
@@ -297,7 +298,7 @@ impl RateLimiter {
     /// [`Self::retry_after`] against an explicit window (the live window from
     /// `RuntimeSettings`).
     fn retry_after_window(&self, key: &str, window: Duration) -> Duration {
-        let state = self.state.lock().expect("rate limiter lock");
+        let state = self.state.lock();
         let now = Instant::now();
         state
             .get(key)
@@ -307,7 +308,7 @@ impl RateLimiter {
 
     /// Clean up expired entries.
     pub fn cleanup(&self) {
-        let mut state = self.state.lock().expect("rate limiter lock");
+        let mut state = self.state.lock();
         let now = Instant::now();
         state.retain(|_, (_, window_start)| now.duration_since(*window_start) < self.config.window);
     }

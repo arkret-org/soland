@@ -227,11 +227,10 @@ pub(crate) async fn admin_get_notary(
     let _session = aa.authenticated_session(state, req).await?;
     let realm_id = realm_id.into_inner();
     let cell = notary_cell_for(&realm_id)?;
-    let value = state
-        .projection
-        .lock()
-        .ok()
-        .and_then(|proj| proj.cell_value(&cell).cloned());
+    let value = {
+        let proj = state.projection.lock();
+        proj.cell_value(&cell).cloned()
+    };
     json_ok(notary_value_from_cell(
         value.as_ref(),
         &state.config.service_did,

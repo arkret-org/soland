@@ -191,7 +191,7 @@ pub(crate) async fn refresh_organization_projection(
 ) -> Result<(), crate::persistence::PersistenceError> {
     let organizations = state.persistence.organizations().list().await?;
     {
-        let mut map = state.organizations.lock().expect("organizations lock");
+        let mut map = state.organizations.lock();
         for record in organizations {
             map.insert(record.organization_id.clone(), record);
         }
@@ -205,8 +205,7 @@ pub(crate) async fn refresh_organization_projection(
     {
         let mut map = state
             .organization_policies
-            .lock()
-            .expect("organization policies lock");
+            .lock();
         for record in policies {
             map.insert(record.organization_id.clone(), record);
         }
@@ -220,12 +219,10 @@ pub(crate) async fn refresh_organization_projection(
     {
         let mut realm_map = state
             .realm_organizations
-            .lock()
-            .expect("realm organizations lock");
+            .lock();
         let mut organization_map = state
             .organization_realms
-            .lock()
-            .expect("organization realms lock");
+            .lock();
         for (realm_id, organization_ids) in links {
             for organization_id in &organization_ids {
                 organization_map
@@ -245,8 +242,7 @@ pub(crate) async fn refresh_organization_projection(
     {
         let mut map = state
             .realm_moderation_policies
-            .lock()
-            .expect("realm moderation policies lock");
+            .lock();
         for record in realm_policies {
             map.insert(record.realm_id.clone(), record);
         }
@@ -274,7 +270,6 @@ async fn list_organizations(
     let mut rows = state
         .organizations
         .lock()
-        .expect("organizations lock")
         .values()
         .map(|record| organization_record_view(state, record))
         .collect::<Vec<_>>();
@@ -350,7 +345,6 @@ async fn upsert_organization(
     state
         .organizations
         .lock()
-        .expect("organizations lock")
         .insert(organization_id, record.clone());
     json_ok(organization_record_view(state, &record))
 }
@@ -376,7 +370,6 @@ async fn get_organization(
     let record = state
         .organizations
         .lock()
-        .expect("organizations lock")
         .get(&organization_id)
         .cloned()
         .ok_or_else(|| AppError::not_found("organization not found"))?;
@@ -407,7 +400,6 @@ async fn get_organization_policy(
     let policy = state
         .organization_policies
         .lock()
-        .expect("organization policies lock")
         .get(&organization_id)
         .cloned()
         .ok_or_else(|| AppError::not_found("organization policy not found"))?;
@@ -469,7 +461,6 @@ async fn upsert_organization_policy(
             state
                 .organization_policies
                 .lock()
-                .expect("organization policies lock")
                 .get(&organization_id)
                 .cloned()
         })
@@ -503,7 +494,6 @@ async fn upsert_organization_policy(
     state
         .organization_policies
         .lock()
-        .expect("organization policies lock")
         .insert(organization_id, record.clone());
     json_ok(organization_policy_record_view(state, &record))
 }
@@ -593,14 +583,12 @@ pub(crate) async fn link_realm_to_organization(
     state
         .realm_organizations
         .lock()
-        .expect("realm organizations lock")
         .entry(realm_id.to_owned())
         .or_default()
         .insert(organization_id.to_owned());
     state
         .organization_realms
         .lock()
-        .expect("organization realms lock")
         .entry(organization_id.to_owned())
         .or_default()
         .insert(realm_id.to_owned());
@@ -613,7 +601,6 @@ pub(crate) fn realm_organization_ids(state: &AppState, realm_id: &str) -> Vec<St
     state
         .realm_organizations
         .lock()
-        .expect("realm organizations lock")
         .get(realm_id)
         .map(|set| set.iter().cloned().collect())
         .unwrap_or_default()
@@ -630,7 +617,7 @@ pub(crate) fn verified_moderation_organization_ids(
     realm_id: &str,
 ) -> Vec<String> {
     let now = Utc::now();
-    let proj = state.projection.lock().expect("projection lock");
+    let proj = state.projection.lock();
     let mut ids = proj.verified_organizations_with_scope(
         realm_id,
         cokret_sdk::models::RealmOrganizationControlScope::ModerationPolicy,
@@ -652,12 +639,10 @@ pub(crate) fn effective_policy_for_realm(
     let org_ids = verified_moderation_organization_ids(state, realm_id);
     let policies = state
         .organization_policies
-        .lock()
-        .expect("organization policies lock");
+        .lock();
     let links = state
         .organization_realms
-        .lock()
-        .expect("organization realms lock");
+        .lock();
     let org_layers = org_ids
         .iter()
         .filter_map(|org_id| policies.get(org_id).map(|policy| (org_id, policy)))
@@ -679,7 +664,6 @@ pub(crate) fn effective_policy_for_realm(
     let realm_policy = state
         .realm_moderation_policies
         .lock()
-        .expect("realm moderation policies lock")
         .get(realm_id)
         .map(realm_policy_record_outcome);
     let has_organization_inheritance = !org_ids.is_empty();
@@ -734,8 +718,7 @@ pub(crate) async fn organization_policy_blocks_join(
     }
     let policies = state
         .organization_policies
-        .lock()
-        .expect("organization policies lock");
+        .lock();
     org_ids.iter().any(|org_id| {
         policies
             .get(org_id)
@@ -771,8 +754,7 @@ fn realm_policy_override_requires_approval_cached(
     }
     let policies = state
         .organization_policies
-        .lock()
-        .expect("organization policies lock");
+        .lock();
     targets.iter().any(|target| {
         org_ids.iter().any(|org_id| {
             policies
@@ -828,8 +810,7 @@ fn organizations_denying_override_targets(
     let org_ids = verified_moderation_organization_ids(state, realm_id);
     let policies = state
         .organization_policies
-        .lock()
-        .expect("organization policies lock");
+        .lock();
     org_ids
         .into_iter()
         .filter(|org_id| {
@@ -862,7 +843,6 @@ pub(crate) async fn persist_realm_moderation_policy(
     state
         .realm_moderation_policies
         .lock()
-        .expect("realm moderation policies lock")
         .insert(realm_id.to_owned(), record.clone());
     Ok(record)
 }
@@ -871,7 +851,6 @@ pub(crate) fn organization_records_for_directory(state: &AppState) -> Vec<Value>
     state
         .organizations
         .lock()
-        .expect("organizations lock")
         .values()
         .map(|record| organization_record_json(state, record))
         .collect()
@@ -910,7 +889,6 @@ async fn ensure_organization_placeholder(
     state
         .organizations
         .lock()
-        .expect("organizations lock")
         .insert(organization_id.to_owned(), record);
     Ok(())
 }
@@ -919,7 +897,6 @@ fn organization_record_view(state: &AppState, record: &OrganizationRecord) -> Or
     let realms = state
         .organization_realms
         .lock()
-        .expect("organization realms lock")
         .get(&record.organization_id)
         .map(|set| set.iter().cloned().collect::<Vec<_>>())
         .unwrap_or_default();
@@ -954,7 +931,6 @@ fn organization_policy_record_view(
     let applies_to_realms = state
         .organization_realms
         .lock()
-        .expect("organization realms lock")
         .get(&record.organization_id)
         .map(|set| set.iter().cloned().collect::<Vec<_>>())
         .unwrap_or_default();
@@ -988,8 +964,7 @@ fn effective_rules(state: &AppState, realm_id: &str) -> Vec<Value> {
     let org_ids = verified_moderation_organization_ids(state, realm_id);
     let policies = state
         .organization_policies
-        .lock()
-        .expect("organization policies lock");
+        .lock();
     let mut rules = Vec::new();
     for org_id in org_ids {
         if let Some(policy) = policies.get(&org_id) {
@@ -1000,7 +975,6 @@ fn effective_rules(state: &AppState, realm_id: &str) -> Vec<Value> {
     if let Some(realm_policy) = state
         .realm_moderation_policies
         .lock()
-        .expect("realm moderation policies lock")
         .get(realm_id)
         .cloned()
     {
@@ -1063,7 +1037,6 @@ fn accepted_realm_override_allows_join(state: &AppState, realm_id: &str, actor: 
     state
         .realm_moderation_policies
         .lock()
-        .expect("realm moderation policies lock")
         .get(realm_id)
         .is_some_and(|record| allow_join_override_targets(&record.payload).contains(actor))
 }

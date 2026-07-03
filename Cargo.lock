@@ -572,6 +572,7 @@ dependencies = [
  "cokret-identifiers",
  "getrandom 0.4.2",
  "hex",
+ "hmac 0.13.0",
  "regex",
  "salvo",
  "salvo-oapi",
@@ -624,6 +625,7 @@ dependencies = [
  "cokret-core",
  "cokret-signatures",
  "futures-util",
+ "getrandom 0.4.2",
  "reqwest 0.13.4",
  "serde",
  "serde_json",
@@ -680,6 +682,7 @@ dependencies = [
  "subtle",
  "thiserror",
  "url",
+ "zeroize",
 ]
 
 [[package]]
@@ -4577,6 +4580,7 @@ dependencies = [
  "opentelemetry",
  "opentelemetry-otlp",
  "opentelemetry_sdk",
+ "parking_lot",
  "proptest",
  "rand 0.10.1",
  "reqwest 0.13.4",
@@ -4585,6 +4589,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.11.0",
+ "soland",
  "soland-core",
  "soland-data",
  "subtle",

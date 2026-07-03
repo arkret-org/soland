@@ -32,7 +32,6 @@ impl WebvhStore for MemoryWebvhStore {
         Ok(self
             .documents
             .lock()
-            .expect("webvh documents lock")
             .get(did)
             .cloned())
     }
@@ -53,7 +52,6 @@ impl WebvhStore for MemoryWebvhStore {
         Ok(self
             .documents
             .lock()
-            .expect("webvh documents lock")
             .values()
             .find(|record| {
                 record.did.ends_with(&suffix)
@@ -80,7 +78,6 @@ impl WebvhStore for MemoryWebvhStore {
         let did = record.did.clone();
         self.documents
             .lock()
-            .expect("webvh documents lock")
             .insert(did, record);
         Ok(())
     }
@@ -89,7 +86,6 @@ impl WebvhStore for MemoryWebvhStore {
         let did = event.did.clone();
         self.log
             .lock()
-            .expect("webvh log lock")
             .entry(did)
             .or_default()
             .push(event);
@@ -100,7 +96,6 @@ impl WebvhStore for MemoryWebvhStore {
         Ok(self
             .log
             .lock()
-            .expect("webvh log lock")
             .get(did)
             .cloned()
             .unwrap_or_default())

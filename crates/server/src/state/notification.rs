@@ -12,7 +12,7 @@ use serde_json::Value;
 use tokio::sync::broadcast;
 use tokio_postgres::{AsyncMessage, NoTls};
 
-use crate::db::PgPool;
+use soland_data::PgPool;
 
 pub(crate) const MAX_SUBSCRIBE_RECONNECT_WINDOW_MS: u64 = 86_400_000;
 const EVENT_NOTIFICATION_CHANNEL: &str = "soland_event_notifications";
@@ -21,42 +21,11 @@ const EVENT_NOTIFICATION_CHANNEL: &str = "soland_event_notifications";
 ///
 /// `std::sync::Mutex` poisons itself when the holding thread panics: every
 /// later `lock()` returns `Err` forever, which turned a single in-critical-
-/// section panic into either a process-wide 500 storm (`.expect("...lock")`
-/// paths) or a silent fail-open (`.lock().ok()` admission paths) until
-/// restart. This wrapper recovers the inner data via
-/// [`std::sync::PoisonError::into_inner`], so `lock()` never fails.
-///
-/// The `LockResult` return shape is kept identical to `std::sync::Mutex` so
-/// existing call sites (`.expect(...)`, `if let Ok(...)`, `.map(...)`)
-/// compile unchanged — their `Err` arms are now structurally unreachable,
-/// i.e. admission checks guarded by `if let Ok(guard)` always run
-/// (fail-closed instead of fail-open).
-#[derive(Debug)]
-pub struct Mutex<T: ?Sized>(std::sync::Mutex<T>);
-
-impl<T: Default> Default for Mutex<T> {
-    fn default() -> Self {
-        Self::new(T::default())
-    }
-}
-
-impl<T> Mutex<T> {
-    pub const fn new(value: T) -> Self {
-        Self(std::sync::Mutex::new(value))
-    }
-}
-
-impl<T: ?Sized> Mutex<T> {
-    /// Acquire the lock. Always returns `Ok`: a poisoned inner mutex is
-    /// recovered instead of propagating the poison flag. Callers may keep
-    /// using `.expect("...lock")` — it can no longer panic.
-    pub fn lock(&self) -> std::sync::LockResult<std::sync::MutexGuard<'_, T>> {
-        Ok(self
-            .0
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner))
-    }
-}
+/// section panic into either a process-wide 500 storm or a silent fail-open
+/// until restart. `parking_lot::Mutex` has no poisoning: `lock()` returns
+/// the guard directly, so admission checks always run (fail-closed) and no
+/// caller needs a failure branch.
+pub use parking_lot::Mutex;
 
 /// broadcast payload for the
 /// [`crate::state::AppState::event_broadcast`] channel. Subscribers filter by

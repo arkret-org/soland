@@ -5,7 +5,8 @@
 //!
 //! Format: `<12-hex-physical>-<4-hex-logical>-<8-hex-node>` (26 chars total)
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use parking_lot::Mutex;
 
 use cokret_sdk::HlcGenerator;
 
@@ -35,18 +36,15 @@ impl ServerHlc {
     ///
     /// Returns the HLC as a string in format `01970e589d21-00000004-a13f9c2e`.
     pub fn now(&self) -> String {
-        // SOL-REL-01 — recover from a poisoned lock instead of cascading
-        // panics: the HLC generator state is a plain clock and stays consistent
-        // across a prior panic, so re-acquiring its guard is safe and keeps the
-        // event-ordering hot path available after a single failure elsewhere.
-        let mut hlc_gen = self.inner.lock().unwrap_or_else(|error| error.into_inner());
+        // SOL-REL-01 / SOL-SOTA-01 — parking_lot mutex: no poisoning, so the
+        // event-ordering hot path stays available after a panic elsewhere.
+        let mut hlc_gen = self.inner.lock();
         hlc_gen.generate().to_string()
     }
 
     /// Get current HLC value without advancing the clock.
     pub fn current(&self) -> String {
-        // SOL-REL-01 — poison-tolerant; see `now`.
-        let hlc_gen = self.inner.lock().unwrap_or_else(|error| error.into_inner());
+        let hlc_gen = self.inner.lock();
         hlc_gen.current().to_string()
     }
 }

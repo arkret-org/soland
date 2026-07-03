@@ -81,7 +81,7 @@ pub async fn validate_cross_signing_publish(
     let principal =
         Did::new(content.principal_id.as_str().to_owned()).map_err(|_| "cross_signing_bad_did")?;
     let current = {
-        let mgr = state.cross_signing.lock().expect("cross_signing lock");
+        let mgr = state.cross_signing.lock();
         mgr.current_cross_signing(&principal)
             .map(|p| p.generation)
             .unwrap_or(0)
@@ -107,7 +107,7 @@ pub fn project_cross_signing_publish(state: &AppState, payload: &Value) {
             return;
         }
     };
-    let mut mgr = state.cross_signing.lock().expect("cross_signing lock");
+    let mut mgr = state.cross_signing.lock();
     if let Err(error) = mgr.record_cross_signing_publish(content) {
         tracing::warn!(%error, "cross_signing.publish projector: record rejected");
     }
@@ -134,7 +134,7 @@ pub async fn validate_cross_signing_reset(
 
     // CAS precondition against the currently accepted generation.
     let current = {
-        let mgr = state.cross_signing.lock().expect("cross_signing lock");
+        let mgr = state.cross_signing.lock();
         mgr.current_cross_signing(&principal)
             .map(|p| p.generation)
             .unwrap_or(0)
@@ -272,7 +272,7 @@ pub async fn project_cross_signing_reset(state: &AppState, payload: &Value) {
         }
     };
     let recorded = {
-        let mut mgr = state.cross_signing.lock().expect("cross_signing lock");
+        let mut mgr = state.cross_signing.lock();
         mgr.record_cross_signing_reset(&content)
     };
     if let Err(error) = recorded {
@@ -335,8 +335,7 @@ fn cross_signing_reset_replay_seen(state: &AppState, content: &CrossSigningReset
     let cutoff = now - chrono::Duration::seconds(CROSS_SIGNING_RESET_REPLAY_RETENTION_SECONDS);
     let mut replays = state
         .cross_signing_reset_replays
-        .lock()
-        .expect("cross_signing_reset_replays lock");
+        .lock();
     replays.retain(|_, seen_at| *seen_at >= cutoff);
     replays.contains_key(&(
         content.principal_id.as_str().to_owned(),
@@ -349,8 +348,7 @@ fn remember_cross_signing_reset_replay(state: &AppState, content: &CrossSigningR
     let cutoff = now - chrono::Duration::seconds(CROSS_SIGNING_RESET_REPLAY_RETENTION_SECONDS);
     let mut replays = state
         .cross_signing_reset_replays
-        .lock()
-        .expect("cross_signing_reset_replays lock");
+        .lock();
     replays.retain(|_, seen_at| *seen_at >= cutoff);
     replays.insert(
         (
@@ -588,7 +586,7 @@ pub(crate) fn check_device_cross_signing_binding(
         .and_then(Value::as_str)
         .ok_or("cross_signing_binding_missing_signature")?;
 
-    let mgr = state.cross_signing.lock().expect("cross_signing lock");
+    let mgr = state.cross_signing.lock();
     let publish = mgr
         .current_cross_signing(&principal)
         .ok_or("cross_signing_state_missing")?;
@@ -716,7 +714,7 @@ fn verify_mls_welcome_claim_envelope_ssk_signature(
     envelope_generation: u64,
 ) -> Result<(), &'static str> {
     let (accepted_generation, ssk_kid, ssk_public_key, ssk_key_format) = {
-        let mgr = state.cross_signing.lock().expect("cross_signing lock");
+        let mgr = state.cross_signing.lock();
         let publish = mgr
             .current_cross_signing(&envelope.requester_did)
             .ok_or(crate::error::reasons::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;
@@ -983,7 +981,7 @@ pub(crate) fn resolve_current_cross_signing_publish(
     principal_id: &str,
 ) -> Option<cokret_sdk::CrossSigningPublish> {
     let principal = Did::new(principal_id.to_owned()).ok()?;
-    let mgr = state.cross_signing.lock().expect("cross_signing lock");
+    let mgr = state.cross_signing.lock();
     let publish = mgr.current_cross_signing(&principal)?;
     // Re-serialize the SDK content type into the schema-counterpart publish
     // payload so both crates agree on the wire shape (fields are 1:1).

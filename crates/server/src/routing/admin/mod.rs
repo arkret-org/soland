@@ -94,11 +94,12 @@ pub(super) fn require_admin_principal(
     }
 }
 
-/// Audit endpoints (`/_soland/admin/audit/*`). These carry their own
-/// per-handler actor auth rather than the shared `RequireAdmin` hoop, so
-/// they are mounted separately from the admin branch below.
-pub fn audit_router() -> Router {
-    audit::router()
+/// Client audit ingest (`/_soland/self/audit/*`): user-action telemetry and
+/// franking-proof verification. Carries per-handler actor auth (plus the
+/// `self` session-PoP hoop at the mount point); operator audit queries live
+/// in the admin-gated branch below (see `admin_router`).
+pub fn audit_ingest_router() -> Router {
+    audit::ingest_router()
 }
 
 /// Deployment-local admin branch served at the bare `/admin/*`
@@ -200,4 +201,9 @@ pub fn admin_router() -> Router {
         .push(invite_tokens::router())
         .push(media::router())
         .push(moderation::router())
+        // Operator audit queries (`/_soland/admin/audit/events`,
+        // `/_soland/admin/audit/erasure-receipts`) under the shared
+        // `RequireAdmin` gate (SOL-NAME-02 — client ingest lives at
+        // `/_soland/self/audit/*` instead of a second mount of this tree).
+        .push(audit::ops_router())
 }

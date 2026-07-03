@@ -39,14 +39,17 @@ pub(crate) fn participation_from_value(row: &Value) -> AgentParticipation {
 }
 
 fn projected_strand_circle_id(state: &AppState, strand_id: &str) -> Option<Option<String>> {
-    state.projection.lock().ok().and_then(|projection| {
+    {
+        let projection = state.projection.lock();
+        {
         projection.strands.get(strand_id).map(|strand| {
             strand
                 .scope_circle_id
                 .clone()
                 .filter(|scope| scope.starts_with("ck:circle:"))
         })
-    })
+    }
+    }
 }
 
 pub(crate) fn scope_keys_for_message(

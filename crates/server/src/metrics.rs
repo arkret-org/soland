@@ -1,6 +1,7 @@
 use std::collections::BTreeSet;
 use std::net::SocketAddr;
-use std::sync::{Mutex, OnceLock};
+use std::sync::OnceLock;
+use parking_lot::Mutex;
 use std::time::{Duration, Instant};
 
 use metrics::{counter, describe_counter, describe_gauge, describe_histogram, gauge, histogram};
@@ -302,7 +303,7 @@ fn record_http_request(op: &str, status: u16, duration: Duration) {
     // upward drift typically means `normalize_path_for_metrics` failed to fold
     // an id segment and the time-series store is about to explode.
     let warning_payload = {
-        let mut card = op_cardinality().lock().expect("op cardinality lock");
+        let mut card = op_cardinality().lock();
         card.seen.insert(op.to_owned());
         let unique_ops = card.seen.len();
         if unique_ops > REQUEST_OP_LABEL_CARDINALITY_THRESHOLD && !card.warning_emitted {

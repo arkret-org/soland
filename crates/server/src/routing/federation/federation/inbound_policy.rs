@@ -3,7 +3,6 @@ use salvo::http::StatusCode;
 use serde_json::Value;
 
 use super::outbound::parse_peer_target;
-use super::validate_did;
 use crate::error::AppError;
 use crate::routing::policy_gate::{self, PolicyGateSurface};
 use crate::state::AppState;
@@ -108,10 +107,10 @@ pub(super) async fn enforce_inbound_operation_batch_policy(
         // peer's domain before any side effect, so a verified peer cannot speak
         // for an actor in another trust domain that is not a known member of the
         // target Realm.
-        if let Some(actor) = operation_actor_id(operation) {
+        if let Some(actor) = operation.actor() {
             if !federation_actor_origin_acceptable(
                 state,
-                actor,
+                actor.as_str(),
                 &origin_trust_domain,
                 operation.realm_id.as_str(),
             )
@@ -138,9 +137,13 @@ pub(super) async fn enforce_inbound_operation_batch_policy(
             None,
             FederationDirection::Inbound,
         )?;
+        let policy_actor = operation.actor();
         policy_gate::enforce_operation_policy_server(
             state,
-            operation_actor_id(operation).unwrap_or(origin_service_did),
+            policy_actor
+                .as_ref()
+                .map(cokret_sdk::Did::as_str)
+                .unwrap_or(origin_service_did),
             operation,
             PolicyGateSurface::FederationInbound {
                 origin_service_did: origin_service_did.to_owned(),
@@ -174,7 +177,6 @@ fn enforce_realm_federation_policy(
     let policy = state
         .projection
         .lock()
-        .map_err(|error| AppError::internal(format!("projection lock: {error}")))?
         .realm_federation_policy(realm_id)
         .unwrap_or_else(|| "open".to_owned());
     // realm.schema.json federation_policy enum: ["open","restricted","closed",
@@ -219,9 +221,6 @@ fn enforce_realm_moderation_federation_policy(
     let record = state
         .realm_moderation_policies
         .lock()
-        // SOL-REL-01 — federation inbound path: recover a poisoned lock instead
-        // of cascading panics that would make every federated delivery crash.
-        .unwrap_or_else(|error| error.into_inner())
         .get(realm_id)
         .cloned();
     let Some(record) = record else {
@@ -349,19 +348,4 @@ fn configured_peer_matches(state: &AppState, peer_did: &str, peer_url: Option<&s
                 || peer_url
                     .is_some_and(|url| peer.url.trim_end_matches('/') == url.trim_end_matches('/'))
         })
-}
-
-fn operation_actor_id(operation: &Operation) -> Option<&str> {
-    [
-        "sender",
-        "actor",
-        "actor_id",
-        "member",
-        "subject",
-        "created_by",
-        "updated_by",
-    ]
-    .iter()
-    .find_map(|field| operation.payload.get(*field).and_then(Value::as_str))
-    .filter(|did| validate_did(did).is_ok())
 }

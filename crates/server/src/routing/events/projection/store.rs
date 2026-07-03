@@ -64,7 +64,8 @@ pub async fn projected_event_page(
         .skip(start)
         .filter(|event| event_is_visible(event, &redacted))
         .collect::<Vec<_>>();
-    if let Ok(projection) = state.projection.lock() {
+    {
+        let projection = state.projection.lock();
         for event in &mut page_items {
             tombstone_projection_event_for_erased_actor(&projection, event);
             stub_projection_event_for_message_expiry(&projection, event, now());
@@ -259,11 +260,10 @@ pub async fn project_federation_operation(state: &AppState, origin: &str, operat
         project_membership_operation(state, origin, operation).await;
     }
     // Also apply to the deterministic reducer.
-    let reducer_effect = state
-        .projection
-        .lock()
-        .ok()
-        .map(|mut proj| apply_via_lattice_registry(state, &mut proj, operation));
+    let reducer_effect = {
+        let mut proj = state.projection.lock();
+        Some(apply_via_lattice_registry(state, &mut proj, operation))
+    };
     if let Some(effect) = reducer_effect {
         mirror_mls_effect_to_persistence(state, origin, "", operation, &effect).await;
     }

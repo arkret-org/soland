@@ -277,7 +277,9 @@ pub fn effective_policy_for_realm(state: &ProjectionState, realm_id: &str) -> Ef
 /// Each opted-in source contributes its own declared narrowed allow-list; a
 /// policy survives only when EVERY active source declares it (so adding a
 /// stricter governance source can only narrow, never widen, the derived set —
-/// the spec's "只能收窄" invariant). Sources whose underlying link is rejected
+/// the spec's narrow-only invariant — realm-links.md §2: an effective
+/// policy may only tighten, never widen, the linked Realm's policy).
+/// Sources whose underlying link is rejected
 /// / tombstoned do not participate. Returns `(narrowed_policies,
 /// narrowed_capability_bundles)` in deterministic sorted order. With zero
 /// active sources both sets are empty (nothing is inherited).

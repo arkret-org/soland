@@ -376,8 +376,7 @@ async fn get_space_cell(
     let (realm_id, value) = {
         let proj = state
             .projection
-            .lock()
-            .map_err(|_| AppError::internal("projection state unavailable"))?;
+            .lock();
         let realm_id = proj
             .space_containers
             .get(&space_id)
@@ -488,14 +487,14 @@ pub async fn realm_lifecycle_response(
     // Snapshot the member list off the realms lock before the async meta read
     // (the guard is not Send and must not cross the `.await`).
     let members: Vec<Did> = {
-        let realms = state.realms.lock().expect("realms lock");
+        let realms = state.realms.lock();
         realms
             .get(&realm_id_value)
             .map(|realm| realm.members.iter().cloned().collect())
             .unwrap_or_default()
     };
     let (archived, frozen, terminal_state, successor_realm_id, freeze_expires_at) = {
-        let projection = state.projection.lock().expect("projection lock");
+        let projection = state.projection.lock();
         projection
             .realm_states
             .get(realm_id)
@@ -730,7 +729,7 @@ pub async fn realm_has_member_by_id(state: &AppState, realm_id: &str, actor: &st
     if realm_id == crate::routing::identity::recovery::principal_control_realm_for_did(actor) {
         return true;
     }
-    let realms = state.realms.lock().expect("realms lock");
+    let realms = state.realms.lock();
     match realms.get(&realm_id_typed) {
         None => {
             let known: Vec<String> = realms
@@ -876,7 +875,7 @@ pub async fn realm_id_accessible_for_id(
     // Snapshot the membership/realm_id off the in-memory index before any
     // `.await` so we never hold the std::sync Mutex guard across a suspension.
     let (realm_id, members) = {
-        let realms = state.realms.lock().expect("realms lock");
+        let realms = state.realms.lock();
         let Some(realm) = realms.get(&realm_id_typed) else {
             return false;
         };
@@ -929,9 +928,7 @@ pub async fn realm_recovery_recipient_principal(
         return false;
     };
     let durability = {
-        let Ok(projection) = state.projection.lock() else {
-            return false;
-        };
+        let projection = state.projection.lock();
         projection.realm_durability_policy(&realm_id)
     };
     let Some(durability) = durability else {
@@ -986,7 +983,6 @@ fn directory_realm_is_public(state: &AppState, realm_id: &str) -> bool {
     state
         .realms
         .lock()
-        .expect("realms lock")
         .get(&realm_id)
         .is_some_and(|entry| entry.public)
 }
@@ -1002,11 +998,13 @@ pub async fn realm_member_joined_at_for_id(
     realm_id: &str,
     actor: &str,
 ) -> Option<DateTime<Utc>> {
-    if let Ok(projection) = state.projection.lock()
-        && let Some(member) = projection.member(realm_id, actor)
-        && member.state == "join"
     {
-        return Some(member.joined_at);
+        let projection = state.projection.lock();
+        if let Some(member) = projection.member(realm_id, actor)
+            && member.state == "join"
+        {
+            return Some(member.joined_at);
+        }
     }
     let meta = state
         .persistence
@@ -1037,14 +1035,15 @@ pub async fn realm_member_invited_or_joined_at_for_id(
     realm_id: &str,
     actor: &str,
 ) -> Option<DateTime<Utc>> {
-    if let Ok(projection) = state.projection.lock()
-        && let Some(member) = projection.member(realm_id, actor)
     {
-        if let Some(invited_at) = member.invited_at {
-            return Some(invited_at);
-        }
-        if matches!(member.state.as_str(), "invite" | "join") {
-            return Some(member.updated_at);
+        let projection = state.projection.lock();
+        if let Some(member) = projection.member(realm_id, actor) {
+            if let Some(invited_at) = member.invited_at {
+                return Some(invited_at);
+            }
+            if matches!(member.state.as_str(), "invite" | "join") {
+                return Some(member.updated_at);
+            }
         }
     }
     realm_member_joined_at_for_id(state, realm_id, actor).await
@@ -1057,10 +1056,11 @@ async fn realm_active_member_at_read_time(
 ) -> bool {
     match realm_scope_to_realm_id(realm_or_internal_id) {
         Some(realm_id) => {
-            if let Ok(projection) = state.projection.lock()
-                && let Some(member) = projection.member(&realm_id, actor)
             {
-                return member.state == "join";
+                let projection = state.projection.lock();
+                if let Some(member) = projection.member(&realm_id, actor) {
+                    return member.state == "join";
+                }
             }
             realm_has_member_by_id(state, &realm_id, actor).await
         }
@@ -1145,7 +1145,7 @@ pub async fn realm_allows_plaintext_service_for_data_class_id(
         return false;
     };
     let directory_realm_id = {
-        let realms = state.realms.lock().expect("realms lock");
+        let realms = state.realms.lock();
         realms
             .get(&realm_id_typed)
             .map(|realm| realm.realm_id.as_str().to_owned())
@@ -1187,7 +1187,7 @@ pub fn realm_member_count_excluding(state: &AppState, realm_id: &str, exclude_ac
     let Ok(realm_id_value) = RealmId::new(realm_id.to_owned()) else {
         return 0;
     };
-    let realms = state.realms.lock().expect("realms lock");
+    let realms = state.realms.lock();
     realms
         .get(&realm_id_value)
         .map(|realm| {
@@ -1330,8 +1330,7 @@ pub async fn typing_scope_allows_actor(
     }
     let projection = state
         .projection
-        .lock()
-        .map_err(|_| AppError::internal("projection state unavailable"))?;
+        .lock();
     let Some(strand) = projection.strands.get(strand_id) else {
         if strand_id == crate::routing::events::strand::strand_id_from_realm_id(realm_id) {
             return Ok(());

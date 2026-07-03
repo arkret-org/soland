@@ -87,12 +87,12 @@ impl MemorySyncCursorStore {
 #[async_trait]
 impl SyncCursorStore for MemorySyncCursorStore {
     async fn get(&self, handle: &str) -> PersistenceResult<Option<SyncCursorRecord>> {
-        let data = self.data.lock().expect("lock");
+        let data = self.data.lock();
         Ok(data.get(handle).cloned())
     }
 
     async fn upsert(&self, record: &SyncCursorRecord) -> PersistenceResult<()> {
-        let mut data = self.data.lock().expect("lock");
+        let mut data = self.data.lock();
         match data.get_mut(&record.handle) {
             // Dedup re-mint: refresh the expiry only; `issued_at_ms`
             // remains the pruning watermark for this handle (see trait doc).
@@ -105,7 +105,7 @@ impl SyncCursorStore for MemorySyncCursorStore {
     }
 
     async fn delete(&self, handle: &str) -> PersistenceResult<bool> {
-        let mut data = self.data.lock().expect("lock");
+        let mut data = self.data.lock();
         Ok(data.remove(handle).is_some())
     }
 
@@ -116,7 +116,7 @@ impl SyncCursorStore for MemorySyncCursorStore {
         filter_digest: &str,
         presented_issued_at_ms: i64,
     ) -> PersistenceResult<usize> {
-        let mut data = self.data.lock().expect("lock");
+        let mut data = self.data.lock();
         let before = data.len();
         data.retain(|_, record| {
             !(record.purpose == "stream"
@@ -129,14 +129,14 @@ impl SyncCursorStore for MemorySyncCursorStore {
     }
 
     async fn prune_expired(&self, now_ms: i64) -> PersistenceResult<usize> {
-        let mut data = self.data.lock().expect("lock");
+        let mut data = self.data.lock();
         let before = data.len();
         data.retain(|_, record| record.expires_at_ms > now_ms);
         Ok(before - data.len())
     }
 
     async fn record_revocation(&self, record: &CursorRevocation) -> PersistenceResult<()> {
-        let mut revocations = self.revocations.lock().expect("lock");
+        let mut revocations = self.revocations.lock();
         revocations.retain(|entry| entry.expires_at > record.revoked_at);
         revocations.push(record.clone());
         Ok(())
@@ -146,7 +146,7 @@ impl SyncCursorStore for MemorySyncCursorStore {
         &self,
         now: chrono::DateTime<Utc>,
     ) -> PersistenceResult<Vec<CursorRevocation>> {
-        let revocations = self.revocations.lock().expect("lock");
+        let revocations = self.revocations.lock();
         Ok(revocations
             .iter()
             .filter(|entry| entry.expires_at > now)

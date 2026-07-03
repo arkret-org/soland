@@ -22,7 +22,7 @@ pub(super) async fn search_realms(
     };
     let session = authenticated_session(state, req).await.ok();
     let candidates: Vec<RealmDirectoryEntry> = {
-        let realms = state.realms.lock().expect("realms lock");
+        let realms = state.realms.lock();
         realms.search(query).into_iter().cloned().collect()
     };
     let mut results = Vec::new();
@@ -74,7 +74,7 @@ pub(super) async fn resolve_realm(
         None => None,
     };
     let candidates: Vec<RealmDirectoryEntry> = {
-        let realms = state.realms.lock().expect("realms lock");
+        let realms = state.realms.lock();
         realms
             .search(Default::default())
             .into_iter()
@@ -257,7 +257,7 @@ pub(super) async fn resolve_realm_for_address(
     parsed: &cokret_sdk::ParsedAddress,
 ) -> Option<RealmDirectoryEntry> {
     let candidates: Vec<RealmDirectoryEntry> = {
-        let realms = state.realms.lock().expect("realms lock");
+        let realms = state.realms.lock();
         realms
             .search(Default::default())
             .into_iter()
@@ -317,9 +317,7 @@ pub(super) fn default_join_rule() -> &'static str {
 }
 
 pub(super) fn realm_join_rule(state: &AppState, realm_id: &str) -> String {
-    let Ok(projection) = state.projection.lock() else {
-        return default_join_rule().to_owned();
-    };
+    let projection = state.projection.lock();
     projection
         .realm_join_policy_cell_value(realm_id)
         .and_then(join_rule_from_value)

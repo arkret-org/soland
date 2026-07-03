@@ -448,8 +448,7 @@ async fn deployment_info(depot: &mut Depot) -> JsonResult<DeploymentInfoResponse
     let state = depot.obtain::<AppState>().expect("state injected");
     let guard = state
         .sovereign_deployment
-        .lock()
-        .expect("sovereign deployment lock");
+        .lock();
     let trusted_enclaves = guard
         .trusted_enclaves
         .values()
@@ -490,8 +489,7 @@ async fn configure_deployment(
     let body = body.into_inner();
     let mut guard = state
         .sovereign_deployment
-        .lock()
-        .expect("sovereign deployment lock");
+        .lock();
     if let Some(profile) = body.profile {
         if !matches!(profile.as_str(), "sovereign_main" | "enclave") {
             return Err(AppError::invalid_param(
@@ -544,8 +542,7 @@ async fn register_enclave(
     };
     let mut guard = state
         .sovereign_deployment
-        .lock()
-        .expect("sovereign deployment lock");
+        .lock();
     guard
         .trusted_enclaves
         .insert(body.server_id.clone(), record);
@@ -576,8 +573,7 @@ async fn realm_create(
     let now = chrono::Utc::now();
     let mut guard = state
         .sovereign_deployment
-        .lock()
-        .expect("sovereign deployment lock");
+        .lock();
     if !guard.trusted_enclaves.contains_key(&body.hosted_on)
         && deployment_profile(state, &guard) == "sovereign_main"
     {
@@ -626,8 +622,7 @@ async fn realm_info(
     let realm_id = realm_id.into_inner();
     let guard = state
         .sovereign_deployment
-        .lock()
-        .expect("sovereign deployment lock");
+        .lock();
     let Some(record) = guard.enclave_realms.get(&realm_id) else {
         return Err(AppError::not_found("realm not found"));
     };
@@ -657,8 +652,7 @@ async fn external_invite(
     validate_did_against_roots(state, &body.invitee, Some("enclave"))?;
     let mut guard = state
         .sovereign_deployment
-        .lock()
-        .expect("sovereign deployment lock");
+        .lock();
     let Some(realm) = guard.enclave_realms.get(&body.target_realm).cloned() else {
         return Err(AppError::not_found("target enclave realm not found"));
     };
@@ -718,8 +712,7 @@ async fn accept_external_invite(
     let now = chrono::Utc::now();
     let mut guard = state
         .sovereign_deployment
-        .lock()
-        .expect("sovereign deployment lock");
+        .lock();
     let invite = guard.external_invites.get_mut(&body.invite_token);
     let target_realm = invite
         .as_ref()
@@ -781,8 +774,7 @@ async fn external_account_status(
     let did = did.into_inner();
     let guard = state
         .sovereign_deployment
-        .lock()
-        .expect("sovereign deployment lock");
+        .lock();
     let Some(record) = guard.external_accounts.get(&did) else {
         return Err(AppError::not_found("account not found"));
     };
@@ -808,8 +800,7 @@ async fn guard_realm_access(
     let realm_id = realm_id.into_inner();
     let mut guard = state
         .sovereign_deployment
-        .lock()
-        .expect("sovereign deployment lock");
+        .lock();
     if guard.external_accounts.contains_key(&actor) {
         audit(
             &mut guard,
@@ -841,8 +832,7 @@ async fn directory_realms(
     let q = q.into_inner().unwrap_or_default();
     let guard = state
         .sovereign_deployment
-        .lock()
-        .expect("sovereign deployment lock");
+        .lock();
     if guard.external_accounts.contains_key(&actor) {
         return json_ok(DirectoryRealmsResponseBody {
             results: Vec::new(),
@@ -876,8 +866,7 @@ async fn enclave_proxy(
     let body = body.into_inner();
     let mut guard = state
         .sovereign_deployment
-        .lock()
-        .expect("sovereign deployment lock");
+        .lock();
     if deployment_profile(state, &guard) == "enclave" {
         let actor = body.actor.unwrap_or_else(|| "unknown".to_owned());
         audit(
@@ -909,8 +898,7 @@ async fn set_network_link(
     let body = body.into_inner();
     let mut guard = state
         .sovereign_deployment
-        .lock()
-        .expect("sovereign deployment lock");
+        .lock();
     guard.upstream_available = body.upstream_available;
     json_ok(NetworkLinkResponseBody {
         ok: true,
@@ -930,8 +918,7 @@ async fn store_forward_message(
     validate_did_against_roots(state, &body.actor, Some("enclave"))?;
     let mut guard = state
         .sovereign_deployment
-        .lock()
-        .expect("sovereign deployment lock");
+        .lock();
     let id = ids::generate("operation");
     let record = SovereignStoreForwardRecord {
         id: id.clone(),
@@ -984,8 +971,7 @@ async fn drain_store_forward(depot: &mut Depot) -> JsonResult<DrainStoreForwardR
     let state = depot.obtain::<AppState>().expect("state injected");
     let mut guard = state
         .sovereign_deployment
-        .lock()
-        .expect("sovereign deployment lock");
+        .lock();
     if !guard.upstream_available {
         return Err(AppError::capability_denied("upstream_unavailable")
             .with_status(StatusCode::PRECONDITION_FAILED)
@@ -1020,8 +1006,7 @@ async fn ingest_store_forward(
     let body = body.into_inner();
     let mut guard = state
         .sovereign_deployment
-        .lock()
-        .expect("sovereign deployment lock");
+        .lock();
     let mut ingested = 0_i64;
     for operation in body.operations {
         if operation.realm_id.is_empty() {
@@ -1074,8 +1059,7 @@ async fn enclave_frontier(
     let realm_id = realm_id.into_inner();
     let guard = state
         .sovereign_deployment
-        .lock()
-        .expect("sovereign deployment lock");
+        .lock();
     let (main_frontier, enclave_pos) = guard
         .enclave_realms
         .get(&realm_id)
@@ -1111,8 +1095,7 @@ async fn deployment_audit(
     let subject = subject.into_inner();
     let guard = state
         .sovereign_deployment
-        .lock()
-        .expect("sovereign deployment lock");
+        .lock();
     let entries = guard
         .audit_log
         .iter()
@@ -1144,8 +1127,7 @@ fn validate_did_against_roots(
 ) -> Result<(), AppError> {
     let guard = state
         .sovereign_deployment
-        .lock()
-        .expect("sovereign deployment lock");
+        .lock();
     let profile = deployment_profile(state, &guard);
     if let Some(expected) = expected_profile
         && profile != expected
@@ -1237,61 +1219,16 @@ mod tests {
 
     fn base_config() -> AppConfig {
         AppConfig {
-            bind: "127.0.0.1:0".parse().unwrap(),
-            metrics_bind: "127.0.0.1:0".parse().unwrap(),
-            public_base_url: "http://server".to_owned(),
-            service_did: "did:web:soland.local".to_owned(),
-            tls_cert_path: None,
-            tls_key_path: None,
-            database_url: None,
             object_storage: ObjectStorageConfig::local(
                 std::env::temp_dir().join("soland-enclave-tests"),
             ),
-            ice: IceServersConfig::default(),
-            livekit: LiveKitConfig::default(),
-            cors_allow_origin: None,
-            account_authority_url: None,
-            oidc_client_id: None,
             development_mode: true,
-            session_grant_introspection_url: None,
-            session_grant_introspection_bearer: None,
             did_resolver_allow_methods: vec!["web".to_owned()],
-            embedded_webvh_provider_enabled: false,
-            embedded_webvh_registration_bearer: None,
-            external_webvh_provider_url: None,
-            external_webvh_provider_active: false,
-            default_webvh_provider_id: None,
             jws_replay_window_seconds: 0,
             jws_replay_window_per_family: std::collections::BTreeMap::new(),
-            notary_signing_key_seed: None,
-            agent_audit_binding_signing_seed: None,
-            use_keystore: false,
-            federation_policy: FederationPolicy::Mesh,
-            federation_peers: Vec::new(),
-            federation_outbound_enabled: false,
-            federation_replica_observer: false,
-            admin_default_page_limit: 100,
-            admin_max_page_limit: 1000,
-            admin_principal_dids: Vec::new(),
-            to_device_queue_capacity: 10_000,
-            push_bridge_cache_ttl_seconds: 900,
-            push_bridge_trusted_service_dids: Vec::new(),
-            resumable_upload_dir: std::path::PathBuf::from("./soland-resumable-uploads"),
-            resumable_upload_incomplete_ttl_seconds: 86_400,
             seal_compaction_min_age_seconds: 0,
             compaction_min_witnesses: 0,
-            compaction_preserve_genesis: true,
-            compaction_prune_only_singleton_successors: true,
-            compaction_prune_walk_interval_seconds: 0,
-            compaction_prune_walk_per_realm_limit: 50,
-            seed_demo_data: false,
-            trust_domain: "ck:trust_domain:soland.local".to_owned(),
-            receive_policy_constraints: None,
-            sovereign_enclave_enabled: false,
-            sovereign_enclave_allowed_outbound_hosts: Vec::new(),
-            candidate_join_policy_enabled: false,
-            erasure_propagation_window_ms: 604_800_000,
-            log_format: crate::config::LogFormat::Plain,
+            ..AppConfig::test_default()
         }
     }
 

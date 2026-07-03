@@ -91,7 +91,7 @@ impl MemoryContactStore {
 #[async_trait]
 impl ContactStore for MemoryContactStore {
     async fn get(&self, requester: &str, target: &str) -> PersistenceResult<Option<ContactRecord>> {
-        let data = self.data.lock().expect("lock");
+        let data = self.data.lock();
         Ok(data
             .values()
             .find(|record| {
@@ -112,14 +112,14 @@ impl ContactStore for MemoryContactStore {
         target: &str,
         scope: &str,
     ) -> PersistenceResult<Option<ContactRecord>> {
-        let data = self.data.lock().expect("lock");
+        let data = self.data.lock();
         Ok(data
             .get(&(requester.to_owned(), target.to_owned(), scope.to_owned()))
             .cloned())
     }
 
     async fn put(&self, record: &ContactRecord) -> PersistenceResult<()> {
-        let mut data = self.data.lock().expect("lock");
+        let mut data = self.data.lock();
         data.insert(
             (
                 record.requester.clone(),
@@ -132,7 +132,7 @@ impl ContactStore for MemoryContactStore {
     }
 
     async fn list_for_actor(&self, actor: &str) -> PersistenceResult<Vec<ContactRecord>> {
-        let data = self.data.lock().expect("lock");
+        let data = self.data.lock();
         Ok(data
             .values()
             .filter(|c| c.requester == actor || c.target == actor)
@@ -141,7 +141,7 @@ impl ContactStore for MemoryContactStore {
     }
 
     async fn delete(&self, requester: &str, target: &str) -> PersistenceResult<()> {
-        let mut data = self.data.lock().expect("lock");
+        let mut data = self.data.lock();
         data.retain(|(row_requester, row_target, _), _| {
             row_requester != requester || row_target != target
         });
@@ -168,13 +168,12 @@ impl InviteReceivePolicyStore for MemoryInviteReceivePolicyStore {
         &self,
         subject_id: &str,
     ) -> PersistenceResult<Option<cokret_sdk::InviteReceivePolicy>> {
-        Ok(self.data.lock().expect("lock").get(subject_id).cloned())
+        Ok(self.data.lock().get(subject_id).cloned())
     }
 
     async fn put(&self, policy: &cokret_sdk::InviteReceivePolicy) -> PersistenceResult<()> {
         self.data
             .lock()
-            .expect("lock")
             .insert(policy.subject_id.as_str().to_owned(), policy.clone());
         Ok(())
     }
@@ -185,7 +184,6 @@ impl InviteReceivePolicyStore for MemoryInviteReceivePolicyStore {
         Ok(self
             .data
             .lock()
-            .expect("lock")
             .iter()
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect())
@@ -218,7 +216,7 @@ impl ConsentCellStore for MemoryConsentCellStore {
             peer: peer.to_owned(),
             scope: scope.to_owned(),
         };
-        Ok(self.data.lock().expect("lock").get(&key).cloned())
+        Ok(self.data.lock().get(&key).cloned())
     }
 
     async fn put(&self, record: &ConsentCellRecord) -> PersistenceResult<()> {
@@ -227,7 +225,7 @@ impl ConsentCellStore for MemoryConsentCellStore {
             peer: record.peer.clone(),
             scope: record.scope.clone(),
         };
-        self.data.lock().expect("lock").insert(key, record.clone());
+        self.data.lock().insert(key, record.clone());
         Ok(())
     }
 
@@ -235,7 +233,6 @@ impl ConsentCellStore for MemoryConsentCellStore {
         Ok(self
             .data
             .lock()
-            .expect("lock")
             .iter()
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect())
@@ -264,7 +261,6 @@ impl DirectConversationBindingStore for MemoryDirectConversationBindingStore {
         Ok(self
             .data
             .lock()
-            .expect("lock")
             .get(participants_key)
             .cloned())
     }
@@ -276,13 +272,12 @@ impl DirectConversationBindingStore for MemoryDirectConversationBindingStore {
     ) -> PersistenceResult<()> {
         self.data
             .lock()
-            .expect("lock")
             .insert(participants_key.to_owned(), record.clone());
         Ok(())
     }
 
     async fn delete(&self, participants_key: &str) -> PersistenceResult<()> {
-        self.data.lock().expect("lock").remove(participants_key);
+        self.data.lock().remove(participants_key);
         Ok(())
     }
 
@@ -292,7 +287,6 @@ impl DirectConversationBindingStore for MemoryDirectConversationBindingStore {
         Ok(self
             .data
             .lock()
-            .expect("lock")
             .iter()
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect())

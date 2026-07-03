@@ -72,7 +72,8 @@ pub fn project_read_receipt_policy(state: &AppState, operation: &Operation) {
         "allow_public_receipts_on_world_readable": allow_public_receipts_on_world_readable,
         "allow_forced_public_world_readable_receipts": allow_forced_public_world_readable_receipts,
     });
-    if let Ok(mut proj) = state.projection.lock() {
+    {
+        let mut proj = state.projection.lock();
         proj.cells
             .insert(cell_id, cokret_sdk::lattice::CellState::Value(value));
     }

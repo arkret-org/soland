@@ -1,11 +1,19 @@
 //! Audit-log surface.
 //!
-//! - `GET /_soland/admin/audit/events` — actor-scoped audit query (cursor-paginated).
-//!   Auth-restricted to the authenticated actor (no cross-actor reads).
-//! - `append_audit_log` — internal helper used everywhere a side-effect needs to be recorded (auth,
-//!   Realm lifecycle, message send, federation, etc.).
+//! Two disjoint mounts (no double-mounting; SOL-NAME-02):
 //!
-//! Both back onto `state.persistence.audit()`.
+//! - Client ingest ([`ingest_router`], mounted at `/_soland/self/audit/*`
+//!   under the session-PoP hoop): `POST audit/user-action`,
+//!   `POST audit/franking/verify`. Per-handler actor auth binds writes to
+//!   the authenticated actor.
+//! - Operator queries ([`ops_router`], mounted inside the `RequireAdmin`
+//!   gated `/_soland/admin/*` branch): `GET audit/events`,
+//!   `GET audit/erasure-receipts`.
+//!
+//! `append_audit_log` — internal helper used everywhere a side-effect needs
+//! to be recorded (auth, Realm lifecycle, message send, federation, etc.).
+//!
+//! All of it backs onto `state.persistence.audit()`.
 
 use std::collections::BTreeMap;
 
@@ -94,11 +102,18 @@ struct AuditEventsOutcome {
     next_cursor: Option<String>,
 }
 
-pub(super) fn router() -> Router {
+/// Client-facing audit ingest, mounted at `/_soland/self/audit/*`.
+pub(super) fn ingest_router() -> Router {
     Router::new()
-        .push(Router::with_path("audit/events").get(audit_events))
         .push(Router::with_path("audit/franking/verify").post(verify_franking_proof))
         .push(Router::with_path("audit/user-action").post(post_user_action))
+}
+
+/// Operator audit queries, mounted inside the admin-gated
+/// `/_soland/admin/*` branch.
+pub(super) fn ops_router() -> Router {
+    Router::new()
+        .push(Router::with_path("audit/events").get(audit_events))
         .push(Router::with_path("audit/erasure-receipts").get(audit_erasure_receipts))
 }
 
@@ -161,9 +176,7 @@ async fn audit_erasure_receipts(
     // receipt list is the auditable surface (see method doc above).
     let _session = aa.authenticated_session(state, req).await?;
     let receipts: Vec<AuditErasureReceiptItem> = {
-        let Ok(proj) = state.projection.lock() else {
-            return Err(AppError::internal("projection lock poisoned"));
-        };
+        let proj = state.projection.lock();
         proj.erasure_receipts
             .iter()
             .map(|r| {

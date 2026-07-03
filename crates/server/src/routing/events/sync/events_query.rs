@@ -437,7 +437,6 @@ pub(crate) fn reject_subscribe_reconnect(
     let retry_after_ms = state
         .subscribe_reconnect_gate
         .lock()
-        .expect("subscribe reconnect gate lock")
         .retry_after_ms(subscribe_scope_key, Utc::now());
     if let Some(retry_after_ms) = retry_after_ms {
         render_subscribe_rate_limited(res, retry_after_ms);
@@ -454,7 +453,6 @@ pub(crate) fn arm_subscribe_reconnect(
     state
         .subscribe_reconnect_gate
         .lock()
-        .expect("subscribe reconnect gate lock")
         .arm(
             subscribe_scope_key.to_owned(),
             Utc::now(),

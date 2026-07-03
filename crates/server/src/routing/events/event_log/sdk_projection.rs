@@ -793,7 +793,6 @@ fn circle_event_visible_to_session(
     state
         .projection
         .lock()
-        .expect("projection mutex")
         .circle_scope_visible_to_actor_at(&scope_circle_id, &session.actor, record.received_at)
 }
 
@@ -818,7 +817,8 @@ pub async fn effective_read_receipt_policy_for_realm(
     // read directly from there. (R1.2 renamed the cell family from
     // `ck.component.realm.read_receipt_policy.v1` along with the event
     // kind.)
-    if let Ok(proj) = state.projection.lock() {
+    {
+        let proj = state.projection.lock();
         let cell_id = cokret_sdk::CellRef::new(format!(
             "ck:cell:ck.component.realm.read_receipt_policy.v1:{realm_id}"
         ))

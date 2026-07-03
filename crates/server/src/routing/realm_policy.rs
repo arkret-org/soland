@@ -76,7 +76,7 @@ async fn get_realm_policy_server(
     let state = depot.obtain::<AppState>().expect("state injected");
     let _session = aa.authenticated_session(state, req).await?;
     let realm_id = realm_id.into_inner();
-    let projection = state.projection.lock().expect("projection mutex");
+    let projection = state.projection.lock();
     let direct = projection.realm_policy_servers.get(&realm_id);
     let (cfg, from_org_fallback) = match direct {
         Some(c) => (c.clone(), false),
@@ -147,7 +147,7 @@ async fn put_realm_policy_server(
         .await
         .map_err(reducer_reject_to_app_error)?;
 
-    let projection = state.projection.lock().expect("projection mutex");
+    let projection = state.projection.lock();
     let cfg = projection
         .realm_policy_servers
         .get(&realm_id)
@@ -190,7 +190,7 @@ async fn delete_realm_policy_server(
     // malformed (no did/url), but the cell write below will null the
     // structured cache directly. We use the projection-side delete
     // path for the tombstone effect.
-    let mut projection = state.projection.lock().expect("projection mutex");
+    let mut projection = state.projection.lock();
     if projection.realm_policy_servers.remove(&realm_id).is_none() {
         return Err(AppError::not_found(
             "no ck.realm.policy_server to tombstone for this realm",

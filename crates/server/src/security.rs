@@ -585,7 +585,9 @@ fn env_bool(name: &str) -> Option<bool> {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Mutex, OnceLock};
+    use std::sync::OnceLock;
+
+    use parking_lot::Mutex;
 
     use super::*;
 
@@ -596,7 +598,7 @@ mod tests {
 
     #[test]
     fn egress_guard_rejects_loopback_and_private_literals() {
-        let _guard = env_lock().lock().expect("env test lock");
+        let _guard = env_lock().lock();
         for raw in [
             "http://127.0.0.1:8080/x",
             "http://10.0.0.1/x",
@@ -619,14 +621,14 @@ mod tests {
 
     #[test]
     fn egress_guard_allows_private_when_explicitly_configured() {
-        let _guard = env_lock().lock().expect("env test lock");
+        let _guard = env_lock().lock();
         let url = Url::parse("http://127.0.0.1:8080/x").unwrap();
         assert!(validate_url_for_egress(&url, "test", true).is_ok());
     }
 
     #[test]
     fn egress_guard_rejects_metadata_even_when_private_allowed() {
-        let _guard = env_lock().lock().expect("env test lock");
+        let _guard = env_lock().lock();
         for raw in [
             "http://169.254.169.254/latest/meta-data",
             "http://169.254.1.1/x",
@@ -643,7 +645,7 @@ mod tests {
 
     #[test]
     fn egress_guard_rejects_dns_answers_that_resolve_private() {
-        let _guard = env_lock().lock().expect("env test lock");
+        let _guard = env_lock().lock();
         let url = Url::parse("https://relay.example/federation").unwrap();
         let error = validate_url_for_egress_with_resolver(&url, "test", false, |_host, _port| {
             Ok(vec![IpAddr::V4(Ipv4Addr::new(10, 42, 0, 12))])
@@ -654,7 +656,7 @@ mod tests {
 
     #[test]
     fn egress_guard_allows_public_dns_answers() {
-        let _guard = env_lock().lock().expect("env test lock");
+        let _guard = env_lock().lock();
         let url = Url::parse("https://relay.example/federation").unwrap();
         assert!(
             validate_url_for_egress_with_resolver(&url, "test", false, |_host, _port| {
@@ -666,7 +668,7 @@ mod tests {
 
     #[test]
     fn egress_guard_rejects_any_private_answer_to_limit_rebinding() {
-        let _guard = env_lock().lock().expect("env test lock");
+        let _guard = env_lock().lock();
         let url = Url::parse("https://relay.example/federation").unwrap();
         let error = validate_url_for_egress_with_resolver(&url, "test", false, |_host, _port| {
             Ok(vec![
@@ -680,7 +682,7 @@ mod tests {
 
     #[test]
     fn egress_guard_enforces_host_deny_and_allow_lists() {
-        let _guard = env_lock().lock().expect("env test lock");
+        let _guard = env_lock().lock();
         unsafe {
             std::env::set_var(SOLAND_EGRESS_DENYLIST, "blocked.example");
             std::env::set_var(SOLAND_EGRESS_ALLOWED_HOSTS, "*.allowed.example");
@@ -720,7 +722,7 @@ mod tests {
 
     #[test]
     fn federation_denylist_matches_did_domain_and_url_domain() {
-        let _guard = env_lock().lock().expect("env test lock");
+        let _guard = env_lock().lock();
         unsafe {
             std::env::set_var(
                 SOLAND_FEDERATION_DENYLIST,
@@ -744,7 +746,7 @@ mod tests {
 
     #[test]
     fn federation_denylist_matches_did_webvh_host_not_scid() {
-        let _guard = env_lock().lock().expect("env test lock");
+        let _guard = env_lock().lock();
         unsafe {
             std::env::set_var(
                 SOLAND_FEDERATION_DENYLIST,

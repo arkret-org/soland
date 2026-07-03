@@ -106,7 +106,7 @@ async fn authz_check(
             .ok()
             .flatten()
             .map(|m| m.owner);
-        let realms = state.realms.lock().expect("realms lock");
+        let realms = state.realms.lock();
         let members = cokret_sdk::RealmId::new(realm_id.clone())
             .ok()
             .and_then(|realm_id| realms.get(&realm_id))
@@ -120,11 +120,10 @@ async fn authz_check(
             .unwrap_or_default();
         (owner, members)
     };
-    let resource_expr = state
-        .projection
-        .lock()
-        .ok()
-        .map(|projection| projection.authz_resource_expr(&realm_id, &resource_str))
+    let resource_expr = {
+        let projection = state.projection.lock();
+        Some(projection.authz_resource_expr(&realm_id, &resource_str))
+    }
         .unwrap_or_else(|| resource_str.clone());
     let result = state.authz.check(
         body.actor_id.as_str(),

@@ -38,7 +38,7 @@ fn lookup_bridge_url(state: &AppState, applet_id: &str) -> Option<String> {
     if applet_id.is_empty() {
         return None;
     }
-    let projection = state.projection.lock().ok()?;
+    let projection = state.projection.lock();
     let applet = projection.applets.get(applet_id)?;
     let manifest = applet.manifest.as_ref()?.as_object()?;
     for key in ["bridge_url", "endpoint_url"] {

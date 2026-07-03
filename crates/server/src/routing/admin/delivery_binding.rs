@@ -124,10 +124,13 @@ pub(super) async fn admin_get_realm_delivery_binding_policy(
     }
     // Locking the projection mirrors how the seal admin reads notary
     // cells in the same module.
-    let value = state.projection.lock().ok().and_then(|proj| {
+    let value = {
+        let proj = state.projection.lock();
+        {
         proj.realm_delivery_binding_policy_cell_value(&realm_id)
             .cloned()
-    });
+    }
+    };
     json_ok(response_from_cell(&realm_id, value.as_ref()))
 }
 
@@ -187,7 +190,7 @@ pub(super) async fn admin_list_member_routability(
     })?;
 
     let members: Vec<String> = {
-        let realms = state.realms.lock().expect("realms lock");
+        let realms = state.realms.lock();
         realms
             .get(&realm_scope)
             .map(|realm| realm.members.iter().map(ToString::to_string).collect())
@@ -197,9 +200,7 @@ pub(super) async fn admin_list_member_routability(
     // Pull the allow-list + the per-actor recipient routes under one
     // projection lock so the view is internally consistent.
     let (allowed, routes_by_actor) = {
-        let guard = state.projection.lock();
-        match guard {
-            Ok(proj) => {
+        let proj = state.projection.lock();
                 let allowed: Vec<String> = proj
                     .realm_delivery_binding_policy_cell_value(&realm_id)
                     .and_then(|value| value.get("allowed_recipient_services").cloned())
@@ -223,10 +224,7 @@ pub(super) async fn admin_list_member_routability(
                         *entry = (subject.recipient_service_did.clone(), true);
                     }
                 }
-                (allowed, routes_by_actor)
-            }
-            Err(_) => (Vec::new(), std::collections::BTreeMap::new()),
-        }
+        (allowed, routes_by_actor)
     };
 
     let mut data: Vec<MemberRoutabilityRowOutcome> = members

@@ -91,7 +91,7 @@ pub(super) async fn anchor_key_backup_auth_data_trust_root(
     // Resolve the device public key and confirm it is anchored under the actor's
     // current published SSK generation (cross-signing trust root).
     let device_public_key = {
-        let mgr = state.cross_signing.lock().expect("cross_signing lock");
+        let mgr = state.cross_signing.lock();
         if mgr.is_device_revoked(&principal, &device) {
             return Err(key_backup_untrusted_signature());
         }
@@ -413,6 +413,19 @@ pub(super) fn verify_key_backup_unlock_proof_signature(
     })
 }
 
+/// Recovery-ceremony proof kinds whose transcript MUST be anchored to a
+/// verified/completed recovery session (key-management.md §7.7.1 / §7.8:
+/// an unbound proof MUST be rejected with `recovery_evidence_unbound`).
+/// `principal_signing` is exempt here only as a documented compatibility
+/// window: some deployed clients can provide only a device-signed decrypt
+/// proof until the policy-layer recovery-session driver is available.
+fn proof_kind_requires_recovery_session(proof_kind: &str) -> bool {
+    matches!(
+        proof_kind,
+        "recovery_unlock" | "threshold_recovery" | "device_quorum" | "trusted_recovery_service"
+    )
+}
+
 pub(super) async fn enforce_recovery_session_binding_when_present(
     state: &AppState,
     proof: &Value,
@@ -427,9 +440,16 @@ pub(super) async fn enforce_recovery_session_binding_when_present(
         .await
         .map_err(|error| AppError::internal(format!("recovery session lookup failed: {error}")))?
     else {
-        // Some deployed clients can only provide a device-signed decrypt proof
-        // until the policy-layer recovery-session driver is available. When a
-        // durable session is present, the checks below make the binding strict.
+        // Fail closed for recovery-ceremony proof kinds: a proof that claims
+        // a recovery session which does not exist locally cannot be anchored
+        // to a verified/completed ceremony (key-management.md §7.8).
+        let proof_kind = required_proof_string(proof, "proof_kind")?;
+        if proof_kind_requires_recovery_session(proof_kind) {
+            return Err(AppError::conflict(
+                "key backup unlock proof recovery session record is missing for a recovery-ceremony proof_kind",
+            )
+            .with_wire_code("recovery_evidence_unbound"));
+        }
         return Ok(());
     };
     if record.principal_id != actor_id || record.requesting_device_id != session_device_id {
@@ -475,4 +495,32 @@ pub(super) async fn verify_key_backup_unlock_proof(
     enforce_recovery_session_binding_when_present(state, proof, actor_id, session_device_id)
         .await?;
     verify_key_backup_unlock_proof_signature(state, proof)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::proof_kind_requires_recovery_session;
+
+    // key-management.md §7.7.1 / §7.8 — recovery-ceremony proof kinds fail
+    // closed when the claimed recovery session record is absent; only the
+    // documented `principal_signing` device-proof compatibility window may
+    // proceed without a durable session record.
+    #[test]
+    fn recovery_ceremony_proof_kinds_require_a_recovery_session() {
+        for kind in [
+            "recovery_unlock",
+            "threshold_recovery",
+            "device_quorum",
+            "trusted_recovery_service",
+        ] {
+            assert!(
+                proof_kind_requires_recovery_session(kind),
+                "{kind} must require a durable recovery session"
+            );
+        }
+        assert!(!proof_kind_requires_recovery_session("principal_signing"));
+        // Unknown kinds never reach this check (the shape validator rejects
+        // them first), but classify them as session-requiring anyway so a
+        // future closed-set widening cannot silently fail open here.
+    }
 }

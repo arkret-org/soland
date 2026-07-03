@@ -204,7 +204,7 @@ fn circle_projection_snapshot(
     state: &AppState,
     circle_id: &str,
 ) -> Result<CircleProjection, AppError> {
-    let projection = state.projection.lock().expect("projection mutex");
+    let projection = state.projection.lock();
     projection
         .circles
         .get(circle_id)
@@ -314,7 +314,7 @@ fn pending_mls_removals_for_circle(
     circle: &CircleProjection,
     expected_group_ref: Option<&str>,
 ) -> Vec<Did> {
-    let projection = state.projection.lock().expect("projection mutex");
+    let projection = state.projection.lock();
     projection
         .pending_mls_removals
         .iter()
@@ -347,7 +347,7 @@ async fn list_circles(
     let session = aa.authenticated_session(state, req).await?;
     let realm_id = RealmId::new(realm_id.into_inner())
         .map_err(|e| AppError::invalid_param(format!("realm_id: {e}")))?;
-    let projection = state.projection.lock().expect("projection mutex");
+    let projection = state.projection.lock();
     let circles = projection
         .circles_for_realm(realm_id.as_str())
         .iter()
@@ -372,7 +372,7 @@ async fn get_circle(
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let circle_id = circle_id.into_inner();
-    let projection = state.projection.lock().expect("projection mutex");
+    let projection = state.projection.lock();
     let circle = projection
         .circle(&circle_id)
         .ok_or_else(|| AppError::not_found("circle not found"))?;
@@ -429,7 +429,7 @@ async fn post_circle(
     accept_local_operations(state, &session.actor, std::slice::from_ref(&operation))
         .await
         .map_err(reducer_reject_to_app_error)?;
-    let projection = state.projection.lock().expect("projection mutex");
+    let projection = state.projection.lock();
     let circle = projection
         .circle(circle_id.as_str())
         .ok_or_else(|| AppError::internal("circle create accepted but not projected"))?;
@@ -470,7 +470,7 @@ async fn post_circle_member(
     if membership == CircleMembership::Join {
         let realm_id = realm_scope.to_string();
         let parent_joined = {
-            let projection = state.projection.lock().expect("projection mutex");
+            let projection = state.projection.lock();
             projection
                 .member(&realm_id, body.actor_id.as_str())
                 .map(|m| m.state == "join")
@@ -494,7 +494,7 @@ async fn post_circle_member(
     // self-service join (`actor == sender`) is left to the reducer's
     // `join_rule=open` gate.
     let join_rule = {
-        let projection = state.projection.lock().expect("projection mutex");
+        let projection = state.projection.lock();
         projection
             .circle(&circle_id)
             .map(|circle| circle.join_rule.clone())
@@ -684,7 +684,7 @@ async fn post_scope_rotate(
     }
 
     let mls_group_ref = {
-        let projection = state.projection.lock().expect("projection mutex");
+        let projection = state.projection.lock();
         let circle = projection
             .circles
             .get(&circle_id)
@@ -802,7 +802,7 @@ async fn submit_circle_lifecycle(
     accept_local_operations(state, &session.actor, std::slice::from_ref(&operation))
         .await
         .map_err(reducer_reject_to_app_error)?;
-    let projection = state.projection.lock().expect("projection mutex");
+    let projection = state.projection.lock();
     // For tombstone the read-helper hides the row; fall back to direct
     // map lookup so the response still surfaces the terminal state.
     let circle = projection
@@ -818,7 +818,7 @@ fn preflight_circle_lifecycle(
     circle_id: &str,
     kind: &'static str,
 ) -> Result<(), AppError> {
-    let projection = state.projection.lock().expect("projection mutex");
+    let projection = state.projection.lock();
     let circle = projection
         .circles
         .get(circle_id)
@@ -922,7 +922,7 @@ async fn circle_authz_principals(
         .flatten()
         .map(|m| m.owner);
     let members = {
-        let realms = state.realms.lock().expect("realms lock");
+        let realms = state.realms.lock();
         RealmId::new(realm_id.to_owned())
             .ok()
             .and_then(|realm_id| realms.get(&realm_id))
@@ -939,7 +939,7 @@ async fn circle_authz_principals(
 }
 
 fn circle_realm_scope(state: &AppState, circle_id: &str) -> Result<RealmId, AppError> {
-    let projection = state.projection.lock().expect("projection mutex");
+    let projection = state.projection.lock();
     let realm_id = projection
         .circles
         .get(circle_id)

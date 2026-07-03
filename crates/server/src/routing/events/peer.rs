@@ -591,7 +591,6 @@ impl PeerReadAuthz {
         let circles = state
             .projection
             .lock()
-            .map_err(|_| AppError::internal("projection mutex poisoned"))?
             .circles
             .iter()
             .map(|(circle_id, circle)| {

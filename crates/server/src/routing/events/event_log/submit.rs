@@ -2,6 +2,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::hash::Hasher;
 use std::sync::{Arc, OnceLock};
 
+use cokret_sdk::EventsSubmitRejectedItem;
+
 use super::*;
 use crate::invite_claim_proofs::{
     invite_claim_proof_context_from_projection, verify_invite_claim_proofs_for_operation,
@@ -259,11 +261,11 @@ pub(super) async fn submit_event_batch_outcome(
         let envelope = match serde_json::to_value(envelope) {
             Ok(value) => value,
             Err(error) => {
-                rejected.push(json!({
-                    "id": "unknown",
-                    "reason_code": "bad_json",
-                    "detail": format!("event envelope re-encode failed: {error}"),
-                }));
+                rejected.push(EventsSubmitRejectedItem {
+                    id: "unknown".to_owned(),
+                    reason_code: "bad_json".to_owned(),
+                    detail: Some(format!("event envelope re-encode failed: {error}")),
+                });
                 continue;
             }
         };
@@ -292,11 +294,11 @@ pub(super) async fn submit_event_batch_outcome(
                 if let Some(event_id) = error.quarantine_event_id {
                     quarantine.push(event_id);
                 } else {
-                    rejected.push(json!({
-                        "id": id,
-                        "reason_code": error.code,
-                        "detail": error.message,
-                    }));
+                    rejected.push(EventsSubmitRejectedItem {
+                        id,
+                        reason_code: error.code.to_owned(),
+                        detail: Some(error.message),
+                    });
                 }
             }
         }
@@ -544,13 +546,11 @@ pub(crate) async fn submit_federation_events(
                 let rejected = submit
                     .events
                     .iter()
-                    .map(|envelope| {
-                        json!({
-                            "id": event_string_field_from_value(envelope, "event_id")
-                                .unwrap_or_else(|| "unknown".to_owned()),
-                            "reason_code": rejection.code,
-                            "detail": rejection.message.clone(),
-                        })
+                    .map(|envelope| EventsSubmitRejectedItem {
+                        id: event_string_field_from_value(envelope, "event_id")
+                            .unwrap_or_else(|| "unknown".to_owned()),
+                        reason_code: rejection.code.to_owned(),
+                        detail: Some(rejection.message.clone()),
                     })
                     .collect::<Vec<_>>();
                 append_audit_log(
@@ -588,27 +588,27 @@ pub(crate) async fn submit_federation_events(
             .unwrap_or_else(|| "unknown".to_owned());
         let event_realm = event_string_field_from_value(&envelope, "realm_id");
         if event_realm.as_deref() != Some(binding_realm.as_str()) {
-            rejected.push(json!({
-                "id": id,
-                "reason_code": "schema_violation",
-                "detail": "event realm_id must match service_binding_ref.realm_id",
-            }));
+            rejected.push(EventsSubmitRejectedItem {
+                id,
+                reason_code: "schema_violation".to_owned(),
+                detail: Some("event realm_id must match service_binding_ref.realm_id".to_owned()),
+            });
             continue;
         }
         let Some(actor) = event_string_field_from_value(&envelope, "actor_id") else {
-            rejected.push(json!({
-                "id": id,
-                "reason_code": "missing_param",
-                "detail": "actor_id is required",
-            }));
+            rejected.push(EventsSubmitRejectedItem {
+                id,
+                reason_code: "missing_param".to_owned(),
+                detail: Some("actor_id is required".to_owned()),
+            });
             continue;
         };
         if validate_did(&actor).is_err() {
-            rejected.push(json!({
-                "id": id,
-                "reason_code": "invalid_param",
-                "detail": "actor_id must be a DID",
-            }));
+            rejected.push(EventsSubmitRejectedItem {
+                id,
+                reason_code: "invalid_param".to_owned(),
+                detail: Some("actor_id must be a DID".to_owned()),
+            });
             continue;
         }
         // SOL-02-007 — bind the envelope actor to the asserted source trust
@@ -628,19 +628,19 @@ pub(crate) async fn submit_federation_events(
         )
         .await
         {
-            rejected.push(json!({
-                "id": id,
-                "reason_code": "capability_denied",
-                "detail": "actor_id home domain does not match source-trust-domain and the actor is not a known member of the binding realm",
-            }));
+            rejected.push(EventsSubmitRejectedItem {
+                id,
+                reason_code: "capability_denied".to_owned(),
+                detail: Some("actor_id home domain does not match source-trust-domain and the actor is not a known member of the binding realm".to_owned()),
+            });
             continue;
         }
         if let Err(rejection) = profile_gate.enforce_event(&envelope) {
-            rejected.push(json!({
-                "id": id,
-                "reason_code": rejection.code,
-                "detail": rejection.message,
-            }));
+            rejected.push(EventsSubmitRejectedItem {
+                id,
+                reason_code: rejection.code.to_owned(),
+                detail: Some(rejection.message),
+            });
             continue;
         }
         let device_id = event_string_field_from_value(&envelope, "device_id")
@@ -667,11 +667,11 @@ pub(crate) async fn submit_federation_events(
                 if let Some(event_id) = error.quarantine_event_id {
                     quarantine.push(event_id);
                 } else {
-                    rejected.push(json!({
-                        "id": id,
-                        "reason_code": error.code,
-                        "detail": error.message,
-                    }));
+                    rejected.push(EventsSubmitRejectedItem {
+                        id,
+                        reason_code: error.code.to_owned(),
+                        detail: Some(error.message),
+                    });
                 }
             }
         }
@@ -730,7 +730,7 @@ async fn federation_service_binding_current_for_destination(
         return FederationServiceBindingCheck::Current;
     }
     let members = {
-        let projection = state.projection.lock().expect("projection lock");
+        let projection = state.projection.lock();
         projection
             .members_of_realm(binding.realm_id.as_str())
             .into_iter()
@@ -1049,7 +1049,7 @@ pub(super) fn events_submit_outcome(
     status: EventsSubmitStatus,
     accepted: Vec<String>,
     duplicate: Vec<String>,
-    rejected: Vec<Value>,
+    rejected: Vec<EventsSubmitRejectedItem>,
     quarantine: Vec<String>,
     cursor: Option<String>,
 ) -> EventsSubmitOutcome {
@@ -1346,10 +1346,10 @@ async fn submit_event_value_with_context(
         }
         let (invite_preflight_reject, invite_proof_context) = {
             // Admission checks below are mandatory and MUST NOT be skipped
-            // (fail-closed). The projection lock is the poison-free
-            // `state::Mutex`, so acquiring it cannot fail and this block
+            // (fail-closed). The projection lock is a `parking_lot::Mutex`
+            // (no poisoning), so acquiring it cannot fail and this block
             // always runs.
-            let proj = state.projection.lock().expect("projection lock");
+            let proj = state.projection.lock();
             if let Err(reason) = proj.check_space_container_lifecycle_transition(operation) {
                 return Err(SubmitOneError::new(
                     StatusCode::PRECONDITION_FAILED,
@@ -1715,11 +1715,10 @@ async fn submit_event_value_with_context(
         })
         .map(ToOwned::to_owned);
     if let Some(scope_strand_id) = scope_strand_id {
-        let scope = state
-            .projection
-            .lock()
-            .ok()
-            .and_then(|proj| proj.strand_scope_circle_id(&scope_strand_id));
+        let scope = {
+            let proj = state.projection.lock();
+            proj.strand_scope_circle_id(&scope_strand_id)
+        };
         if let Some(scope) = scope
             && let Some(object) = envelope.as_object_mut()
         {
@@ -2027,13 +2026,14 @@ fn dynamic_peer_event_targets(
     parsed: &ValidatedEventEnvelope,
 ) -> Vec<DynamicPeerEventTarget> {
     let service_frontiers = {
-        let projection = state.projection.lock().expect("projection lock");
+        let projection = state.projection.lock();
         // sync/federation.md §4.4 — peers whose federation service delegation
         // for this Realm has been revoked MUST NOT receive future outbound
         // pushes. Compute the revoked-peer set once under the projection lock.
         // The revoke / grant capability control events themselves still fan out
-        // so the peer can invalidate its allow cache (§4.4: "推送 payload MUST
-        // 包含原始 Event Envelope … 便于接收方立即失效 capability cache"); only
+        // so the peer can invalidate its allow cache (federation.md §4.4:
+        // the pushed payload MUST carry the original Event Envelope so the
+        // receiver can invalidate its capability cache immediately); only
         // non-capability events are gated.
         let is_capability_control_event = matches!(
             parsed.kind.as_str(),

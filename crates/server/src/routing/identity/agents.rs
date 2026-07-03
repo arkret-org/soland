@@ -941,11 +941,10 @@ async fn discover_agent_endpoint(
     let _session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
     let agent_id = body.agent_id.as_str().to_owned();
-    let snapshot = state
-        .projection
-        .lock()
-        .ok()
-        .and_then(|proj| proj.agents.get(&agent_id).cloned());
+    let snapshot = {
+        let proj = state.projection.lock();
+        proj.agents.get(&agent_id).cloned()
+    };
     let Some(projection) = snapshot else {
         // Fail closed: an agent with no accepted `ck.agent.endpoint`
         // cannot be discovered (spec §12 `discovery_failed`).
@@ -1041,11 +1040,10 @@ async fn lazily_expire_pairing(
     if state.config.development_mode
         && let Ok(realm) = ensure_self_realm(state, session).await
     {
-        let grant_ids = state
-            .projection
-            .lock()
-            .ok()
-            .map(|proj| proj.grant_ids_for_subject(&agent_principal_id))
+        let grant_ids = {
+            let proj = state.projection.lock();
+            Some(proj.grant_ids_for_subject(&agent_principal_id))
+        }
             .unwrap_or_default();
         let _ = submit_revoke_agent_grants(state, session, &realm, &grant_ids).await;
     }
@@ -1099,16 +1097,15 @@ async fn lifecycle_transition(
         )
         .await?;
         if event_kind == "ck.self.agent.deactivate" {
-            let (key_ids, grant_ids) = state
-                .projection
-                .lock()
-                .ok()
-                .map(|proj| {
+            let (key_ids, grant_ids) = {
+                let proj = state.projection.lock();
+                Some({
                     (
                         proj.authorized_key_ids_for(&agent_id),
                         proj.grant_ids_for_subject(&agent_id),
                     )
                 })
+            }
                 .unwrap_or_default();
             submit_revoke_agent_keys(state, &session, &realm, &agent_id, &key_ids).await?;
             submit_revoke_agent_grants(state, &session, &realm, &grant_ids).await?;
@@ -1486,15 +1483,14 @@ async fn authorize_sidecar_ensure(
 }
 
 fn realm_members_for_authz(state: &AppState, realm_id: &str) -> Vec<String> {
-    state
-        .realms
-        .lock()
-        .ok()
-        .and_then(|realms| {
+    {
+        let realms = state.realms.lock();
+        {
             RealmId::new(realm_id.to_owned())
                 .ok()
                 .and_then(|id| realms.get(&id).cloned())
-        })
+        }
+    }
         .map(|realm| {
             realm
                 .members
@@ -1506,15 +1502,14 @@ fn realm_members_for_authz(state: &AppState, realm_id: &str) -> Vec<String> {
 }
 
 fn realm_member_joined(state: &AppState, realm_id: &str, actor: &str) -> bool {
-    let in_realm_directory = state
-        .realms
-        .lock()
-        .ok()
-        .and_then(|realms| {
+    let in_realm_directory = {
+        let realms = state.realms.lock();
+        {
             RealmId::new(realm_id.to_owned())
                 .ok()
                 .and_then(|id| realms.get(&id).cloned())
-        })
+        }
+    }
         .and_then(|realm| {
             Did::new(actor.to_owned())
                 .ok()
@@ -1524,15 +1519,14 @@ fn realm_member_joined(state: &AppState, realm_id: &str, actor: &str) -> bool {
     if in_realm_directory {
         return true;
     }
-    state
-        .projection
-        .lock()
-        .ok()
-        .and_then(|projection| {
+    {
+        let projection = state.projection.lock();
+        {
             projection
                 .member(realm_id, actor)
                 .map(|membership| membership.state == "join")
-        })
+        }
+    }
         .unwrap_or(false)
 }
 
@@ -1580,8 +1574,7 @@ fn validate_sidecar_context_projection(
 ) -> Result<(), AppError> {
     let projection = state
         .projection
-        .lock()
-        .map_err(|_| AppError::internal("projection lock poisoned"))?;
+        .lock();
     let realm_id = context_ref.realm_id.as_str();
     if let Some(relation_id) = &context_ref.relation_id {
         let relation = projection
@@ -1706,12 +1699,11 @@ fn agent_record_is_sidecar_eligible(
     if !realm_member_joined(state, realm_id, agent_id) {
         return false;
     }
-    state.projection.lock().ok().is_some_and(|projection| {
-        !matches!(
-            projection.agent_lifecycles.get(agent_id),
-            Some(AgentLifecycleState::Paused | AgentLifecycleState::Deactivated)
-        ) && projection.agent_has_authorized_key(agent_id)
-    })
+    let projection = state.projection.lock();
+    !matches!(
+        projection.agent_lifecycles.get(agent_id),
+        Some(AgentLifecycleState::Paused | AgentLifecycleState::Deactivated)
+    ) && projection.agent_has_authorized_key(agent_id)
 }
 
 fn controller_agent_circle_key(realm_id: &str, controller: &str) -> String {
@@ -1728,7 +1720,7 @@ fn find_sidecar_circle(
     controller: &str,
     short_name: &str,
 ) -> Option<CircleId> {
-    let projection = state.projection.lock().ok()?;
+    let projection = state.projection.lock();
     projection
         .circles
         .values()
@@ -1818,16 +1810,15 @@ async fn ensure_sidecar_circle(
 }
 
 fn circle_has_member(state: &AppState, circle_id: &str, actor: &str) -> bool {
-    state
-        .projection
-        .lock()
-        .ok()
-        .and_then(|projection| {
+    {
+        let projection = state.projection.lock();
+        {
             projection
                 .circles
                 .get(circle_id)
                 .map(|circle| circle.members.contains(actor))
-        })
+        }
+    }
         .unwrap_or(false)
 }
 
@@ -1873,7 +1864,7 @@ fn find_sidecar_strand(
     circle_id: &str,
     normalized_context_ref_digest: &str,
 ) -> Option<StrandId> {
-    let projection = state.projection.lock().ok()?;
+    let projection = state.projection.lock();
     projection
         .strands
         .values()
@@ -1960,7 +1951,7 @@ fn find_sidecar_relation(
     private_strand_id: &str,
     target_ref: &str,
 ) -> Option<RelationId> {
-    let projection = state.projection.lock().ok()?;
+    let projection = state.projection.lock();
     projection
         .relations
         .values()

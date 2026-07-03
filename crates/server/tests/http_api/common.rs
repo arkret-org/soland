@@ -18,7 +18,7 @@ pub(crate) use salvo::test::{ResponseExt, TestClient};
 pub(crate) use serde_json::Value;
 pub(crate) use sha2::{Digest, Sha256};
 pub(crate) use soland::config::{AppConfig, IceServersConfig, LiveKitConfig, ObjectStorageConfig};
-pub(crate) use soland::db::Db;
+pub(crate) use soland_data::Db;
 pub(crate) use soland::ratelimit::RateLimiterConfig;
 pub(crate) use soland::state::{
     AppState, EventNotification, MessageRecord, PresenceRecord, RealmDirectoryEntry,
@@ -36,68 +36,20 @@ pub(crate) const SOLAND_TEST_TURN_SHARED_SECRET: &str = "soland-test-turn-shared
 pub(crate) static TEST_EVENT_SEQ: AtomicU64 = AtomicU64::new(10_000);
 pub(crate) fn test_config() -> AppConfig {
     AppConfig {
-        bind: "127.0.0.1:0".parse().unwrap(),
-        metrics_bind: "127.0.0.1:0".parse().unwrap(),
-        public_base_url: "http://server".to_owned(),
-        service_did: "did:web:soland.local".to_owned(),
-        tls_cert_path: None,
-        tls_key_path: None,
-        database_url: None,
-        object_storage: ObjectStorageConfig::local(std::env::temp_dir().join("soland-test-blobs")),
         ice: IceServersConfig {
             // `webrtc-signaling.md` §4.1 — fix the REST-style TURN shared secret
             // so the derived credential is deterministic for assertions.
             turn_shared_secret: Some(SOLAND_TEST_TURN_SHARED_SECRET.to_owned()),
             ..IceServersConfig::default()
         },
-        livekit: LiveKitConfig::default(),
-        cors_allow_origin: None,
-        account_authority_url: None,
-        oidc_client_id: None,
         development_mode: true,
-        session_grant_introspection_url: None,
-        session_grant_introspection_bearer: None,
-        did_resolver_allow_methods: vec!["web".to_owned(), "key".to_owned(), "uuid".to_owned()],
-        embedded_webvh_provider_enabled: false,
-        embedded_webvh_registration_bearer: None,
-        external_webvh_provider_url: None,
-        external_webvh_provider_active: false,
-        default_webvh_provider_id: None,
         // Tests use fixed-time HLC fixtures; window=0 disables replay-window
         // enforcement so they keep passing.
         jws_replay_window_seconds: 0,
         jws_replay_window_per_family: std::collections::BTreeMap::new(),
-        notary_signing_key_seed: None,
-        agent_audit_binding_signing_seed: None,
-        use_keystore: false,
-        federation_policy: soland::config::FederationPolicy::Mesh,
-        federation_peers: Vec::new(),
-        federation_outbound_enabled: false,
-        federation_replica_observer: false,
-        admin_default_page_limit: 100,
-        admin_max_page_limit: 1000,
-        admin_principal_dids: Vec::new(),
-        to_device_queue_capacity: 10_000,
-        push_bridge_cache_ttl_seconds: 900,
-        push_bridge_trusted_service_dids: Vec::new(),
         resumable_upload_dir: std::env::temp_dir().join("soland-test-resumable-uploads"),
-        resumable_upload_incomplete_ttl_seconds: 86_400,
-        seal_compaction_min_age_seconds: 604_800,
-        compaction_min_witnesses: 1,
-        compaction_preserve_genesis: true,
-        compaction_prune_only_singleton_successors: true,
-
-        compaction_prune_walk_interval_seconds: 0,
-
-        compaction_prune_walk_per_realm_limit: 50,
         seed_demo_data: true,
-        trust_domain: "ck:trust_domain:soland.local".to_owned(),
-        receive_policy_constraints: None,
-        sovereign_enclave_enabled: false,
-        sovereign_enclave_allowed_outbound_hosts: Vec::new(),
-        candidate_join_policy_enabled: false,
-        erasure_propagation_window_ms: 604_800_000,
-        log_format: soland::config::LogFormat::Plain,
+        ..AppConfig::test_default()
     }
 }
 
@@ -367,7 +319,7 @@ pub(crate) async fn seed_test_realm(
     entry.description = summary.map(ToOwned::to_owned);
     entry.public = discoverability == "public";
     entry.members.insert(owner_did);
-    state.realms.lock().unwrap().upsert(entry);
+    state.realms.lock().upsert(entry);
 
     let plaintext_visible_services: std::collections::BTreeSet<String> = plaintext_visible_services
         .iter()
@@ -459,13 +411,13 @@ pub(crate) fn add_test_realm_member(state: &AppState, realm_id: &str, member: &s
     let typed_realm_id = RealmId::new(realm_id.to_owned()).unwrap();
     let member_did = Did::new(member.to_owned()).unwrap();
     let now = chrono::Utc::now();
-    let mut realms = state.realms.lock().unwrap();
+    let mut realms = state.realms.lock();
     if let Some(mut entry) = realms.get(&typed_realm_id).cloned() {
         entry.members.insert(member_did);
         let members = realm_member_roster(&entry);
         realms.upsert(entry);
         drop(realms);
-        state.projection.lock().unwrap().members.insert(
+        state.projection.lock().members.insert(
             (realm_id.to_owned(), member.to_owned()),
             soland::reducer::SolandMembershipState {
                 member: member.to_owned(),
@@ -495,7 +447,7 @@ pub(crate) fn add_test_realm_member(state: &AppState, realm_id: &str, member: &s
 pub(crate) fn remove_test_realm_member(state: &AppState, realm_id: &str, member: &str) -> Value {
     let typed_realm_id = RealmId::new(realm_id.to_owned()).unwrap();
     let member_did = Did::new(member.to_owned()).unwrap();
-    let mut realms = state.realms.lock().unwrap();
+    let mut realms = state.realms.lock();
     if let Some(mut entry) = realms.get(&typed_realm_id).cloned() {
         entry.members.remove(&member_did);
         let members = realm_member_roster(&entry);
@@ -504,7 +456,6 @@ pub(crate) fn remove_test_realm_member(state: &AppState, realm_id: &str, member:
         state
             .projection
             .lock()
-            .unwrap()
             .members
             .remove(&(realm_id.to_owned(), member.to_owned()));
         serde_json::json!({

@@ -127,7 +127,7 @@ impl MemoryPushDeviceStore {
 #[async_trait]
 impl PushDeviceStore for MemoryPushDeviceStore {
     async fn register(&self, device: Value) -> PersistenceResult<()> {
-        self.data.lock().expect("push devices lock").push(device);
+        self.data.lock().push(device);
         Ok(())
     }
 
@@ -138,7 +138,7 @@ impl PushDeviceStore for MemoryPushDeviceStore {
         push_key: Option<&str>,
         app_id: Option<&str>,
     ) -> PersistenceResult<usize> {
-        let mut data = self.data.lock().expect("push devices lock");
+        let mut data = self.data.lock();
         let before = data.len();
         data.retain(|device| {
             let actor_matches = device.get("actor").and_then(Value::as_str) == Some(actor);
@@ -155,7 +155,7 @@ impl PushDeviceStore for MemoryPushDeviceStore {
     }
 
     async fn snapshot_all(&self) -> PersistenceResult<Vec<Value>> {
-        Ok(self.data.lock().expect("push devices lock").clone())
+        Ok(self.data.lock().clone())
     }
 }
 
@@ -174,14 +174,13 @@ impl MemoryPushRuleStore {
 impl PushRuleStore for MemoryPushRuleStore {
     async fn put(&self, rule: PushRuleRecord) -> PersistenceResult<()> {
         let key = (rule.actor.clone(), rule.rule_id.clone());
-        self.data.lock().expect("push rules lock").insert(key, rule);
+        self.data.lock().insert(key, rule);
         Ok(())
     }
 
     async fn delete(&self, actor: &str, rule_id: &str) -> PersistenceResult<()> {
         self.data
             .lock()
-            .expect("push rules lock")
             .remove(&(actor.to_owned(), rule_id.to_owned()));
         Ok(())
     }
@@ -190,7 +189,6 @@ impl PushRuleStore for MemoryPushRuleStore {
         Ok(self
             .data
             .lock()
-            .expect("push rules lock")
             .values()
             .filter(|rule| rule.actor == actor)
             .cloned()
@@ -218,7 +216,6 @@ impl PushBridgeCacheStore for MemoryPushBridgeCacheStore {
         Ok(self
             .data
             .lock()
-            .expect("push bridge cache lock")
             .get(bridge_describe_url)
             .cloned())
     }
@@ -230,7 +227,6 @@ impl PushBridgeCacheStore for MemoryPushBridgeCacheStore {
     ) -> PersistenceResult<()> {
         self.data
             .lock()
-            .expect("push bridge cache lock")
             .insert(bridge_describe_url.to_owned(), record);
         Ok(())
     }
@@ -239,13 +235,12 @@ impl PushBridgeCacheStore for MemoryPushBridgeCacheStore {
         Ok(self
             .data
             .lock()
-            .expect("push bridge cache lock")
             .remove(bridge_describe_url)
             .is_some())
     }
 
     async fn clear(&self) -> PersistenceResult<usize> {
-        let mut data = self.data.lock().expect("push bridge cache lock");
+        let mut data = self.data.lock();
         let removed = data.len();
         data.clear();
         Ok(removed)
@@ -255,14 +250,13 @@ impl PushBridgeCacheStore for MemoryPushBridgeCacheStore {
         Ok(self
             .data
             .lock()
-            .expect("push bridge cache lock")
             .values()
             .cloned()
             .collect())
     }
 
     async fn len(&self) -> PersistenceResult<usize> {
-        Ok(self.data.lock().expect("push bridge cache lock").len())
+        Ok(self.data.lock().len())
     }
 
     async fn record_contract_snapshot(
@@ -272,7 +266,7 @@ impl PushBridgeCacheStore for MemoryPushBridgeCacheStore {
         etag: &str,
         trust_level: &str,
     ) -> PersistenceResult<()> {
-        let mut data = self.data.lock().expect("push bridge cache lock");
+        let mut data = self.data.lock();
         let now = Utc::now();
         if let Some(existing) = data.get_mut(gateway_describe_url) {
             existing.contract_digest = digest.to_owned();
@@ -307,7 +301,6 @@ impl PushBridgeCacheStore for MemoryPushBridgeCacheStore {
         Ok(self
             .data
             .lock()
-            .expect("push bridge cache lock")
             .get(gateway_describe_url)
             .cloned())
     }
@@ -321,7 +314,6 @@ impl PushBridgeCacheStore for MemoryPushBridgeCacheStore {
         let snapshot = self
             .data
             .lock()
-            .expect("push bridge cache lock")
             .get(gateway_describe_url)
             .cloned();
         Ok(evaluate_drift(snapshot.as_ref(), observed_digest, max_age))

@@ -181,11 +181,10 @@ async fn admin_get_cell(
         cokret_sdk::state_res::BottomMode::Expose => "expose",
     };
 
-    let cell_state_opt = state
-        .projection
-        .lock()
-        .ok()
-        .and_then(|proj| proj.cell(&cell_ref).cloned());
+    let cell_state_opt = {
+        let proj = state.projection.lock();
+        proj.cell(&cell_ref).cloned()
+    };
 
     if cell_state_opt.is_none() {
         // Distinguish "registered family but never written" (absent) from
@@ -275,13 +274,7 @@ async fn admin_list_cells(
     // (in-memory hash lookup), but we want one lock acquisition for the
     // whole page rather than per-cell.
     let cell_states: Vec<(CellRef, Option<CellState>)> = {
-        let proj = state.projection.lock().map_err(|e| {
-            AppError::new(
-                ErrorCode::InternalError,
-                format!("projection lock poisoned: {e}"),
-            )
-            .with_status(StatusCode::INTERNAL_SERVER_ERROR)
-        })?;
+        let proj = state.projection.lock();
         page.into_iter()
             .map(|cell| {
                 let st = proj.cell(&cell).cloned();

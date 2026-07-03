@@ -5,7 +5,8 @@
 
 // Re-exports for submodules (`use super::*;`). These also serve the root module.
 pub(crate) use std::collections::{BTreeMap, BTreeSet, VecDeque};
-pub(crate) use std::sync::{Arc, Mutex};
+pub(crate) use std::sync::Arc;
+pub(crate) use parking_lot::Mutex;
 
 pub(crate) use async_trait::async_trait;
 pub(crate) use chrono::Utc;
@@ -22,7 +23,7 @@ pub(crate) use soland_data::query_rows::{
 };
 pub(crate) use uuid::Uuid;
 
-pub(crate) use crate::db::PgPool;
+pub(crate) use soland_data::PgPool;
 pub(crate) use crate::ids;
 pub(crate) use crate::state::*;
 

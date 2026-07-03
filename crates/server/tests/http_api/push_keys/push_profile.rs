@@ -1029,7 +1029,6 @@ fn insert_typing_scope_strand(state: AppState, strand_id: &str, discussion_enabl
     state
         .projection
         .lock()
-        .expect("projection mutex")
         .strands
         .insert(
             strand_id.to_owned(),

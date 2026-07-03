@@ -18,7 +18,8 @@
 //! tests working without an IdP dependency.
 
 use std::collections::HashMap;
-use std::sync::{Mutex, OnceLock};
+use std::sync::OnceLock;
+use parking_lot::Mutex;
 use std::time::{Duration, Instant};
 
 use cokret_sdk::{
@@ -45,7 +46,7 @@ fn cache() -> &'static Mutex<HashMap<String, CacheEntry>> {
 }
 
 fn read_cached(token_hash: &str) -> Option<SessionGrantIntrospection> {
-    let mut cache = cache().lock().ok()?;
+    let mut cache = cache().lock();
     prune_cache_locked(&mut cache, Instant::now());
     let entry = cache.get(token_hash)?;
     if entry.inserted_at.elapsed() > INTROSPECTION_CACHE_TTL {
@@ -55,7 +56,8 @@ fn read_cached(token_hash: &str) -> Option<SessionGrantIntrospection> {
 }
 
 fn cache_grant(token_hash: String, grant: SessionGrantIntrospection) {
-    if let Ok(mut cache) = cache().lock() {
+    {
+        let mut cache = cache().lock();
         prune_cache_locked(&mut cache, Instant::now());
         while cache.len() >= INTROSPECTION_CACHE_MAX_ENTRIES {
             let Some(oldest_key) = cache

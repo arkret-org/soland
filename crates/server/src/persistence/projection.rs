@@ -154,23 +154,23 @@ impl MemoryRealmMetaStore {
 #[async_trait]
 impl RealmMetaStore for MemoryRealmMetaStore {
     async fn get(&self, realm_id: &str) -> PersistenceResult<Option<RealmMetaRecord>> {
-        let data = self.data.lock().expect("lock");
+        let data = self.data.lock();
         Ok(data.get(realm_id).cloned())
     }
 
     async fn put(&self, realm_id: &str, record: &RealmMetaRecord) -> PersistenceResult<()> {
-        let mut data = self.data.lock().expect("lock");
+        let mut data = self.data.lock();
         data.insert(realm_id.to_owned(), record.clone());
         Ok(())
     }
 
     async fn list(&self) -> PersistenceResult<Vec<(String, RealmMetaRecord)>> {
-        let data = self.data.lock().expect("lock");
+        let data = self.data.lock();
         Ok(data.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
     }
 
     async fn delete(&self, realm_id: &str) -> PersistenceResult<()> {
-        let mut data = self.data.lock().expect("lock");
+        let mut data = self.data.lock();
         data.remove(realm_id);
         Ok(())
     }
@@ -196,12 +196,12 @@ impl SpaceContainerProjectionStore for MemorySpaceContainerProjectionStore {
         &self,
         container_space_id: &str,
     ) -> PersistenceResult<Option<SpaceContainerProjectionRecord>> {
-        let data = self.data.lock().expect("lock");
+        let data = self.data.lock();
         Ok(data.get(container_space_id).cloned())
     }
 
     async fn put(&self, record: &SpaceContainerProjectionRecord) -> PersistenceResult<()> {
-        let mut data = self.data.lock().expect("lock");
+        let mut data = self.data.lock();
         data.insert(record.container_space_id.clone(), record.clone());
         Ok(())
     }
@@ -210,7 +210,7 @@ impl SpaceContainerProjectionStore for MemorySpaceContainerProjectionStore {
         &self,
         realm_id: &str,
     ) -> PersistenceResult<Vec<SpaceContainerProjectionRecord>> {
-        let data = self.data.lock().expect("lock");
+        let data = self.data.lock();
         Ok(data
             .values()
             .filter(|r| r.realm_id == realm_id)
@@ -219,12 +219,12 @@ impl SpaceContainerProjectionStore for MemorySpaceContainerProjectionStore {
     }
 
     async fn snapshot_all(&self) -> PersistenceResult<Vec<SpaceContainerProjectionRecord>> {
-        let data = self.data.lock().expect("lock");
+        let data = self.data.lock();
         Ok(data.values().cloned().collect())
     }
 
     async fn delete(&self, container_space_id: &str) -> PersistenceResult<()> {
-        let mut data = self.data.lock().expect("lock");
+        let mut data = self.data.lock();
         data.remove(container_space_id);
         Ok(())
     }
@@ -245,12 +245,12 @@ impl MemoryStrandProjectionStore {
 #[async_trait]
 impl StrandProjectionStore for MemoryStrandProjectionStore {
     async fn get(&self, strand_id: &str) -> PersistenceResult<Option<StrandProjectionRecord>> {
-        let data = self.data.lock().expect("lock");
+        let data = self.data.lock();
         Ok(data.get(strand_id).cloned())
     }
 
     async fn put(&self, record: &StrandProjectionRecord) -> PersistenceResult<()> {
-        let mut data = self.data.lock().expect("lock");
+        let mut data = self.data.lock();
         data.insert(record.strand_id.clone(), record.clone());
         Ok(())
     }
@@ -259,7 +259,7 @@ impl StrandProjectionStore for MemoryStrandProjectionStore {
         &self,
         realm_id: &str,
     ) -> PersistenceResult<Vec<StrandProjectionRecord>> {
-        let data = self.data.lock().expect("lock");
+        let data = self.data.lock();
         Ok(data
             .values()
             .filter(|r| r.realm_id == realm_id)
@@ -268,12 +268,12 @@ impl StrandProjectionStore for MemoryStrandProjectionStore {
     }
 
     async fn snapshot_all(&self) -> PersistenceResult<Vec<StrandProjectionRecord>> {
-        let data = self.data.lock().expect("lock");
+        let data = self.data.lock();
         Ok(data.values().cloned().collect())
     }
 
     async fn delete(&self, strand_id: &str) -> PersistenceResult<()> {
-        let mut data = self.data.lock().expect("lock");
+        let mut data = self.data.lock();
         data.remove(strand_id);
         Ok(())
     }
@@ -294,12 +294,12 @@ impl MemoryMorphProjectionStore {
 #[async_trait]
 impl MorphProjectionStore for MemoryMorphProjectionStore {
     async fn get(&self, morph_id: &str) -> PersistenceResult<Option<MorphProjectionRecord>> {
-        let data = self.data.lock().expect("lock");
+        let data = self.data.lock();
         Ok(data.get(morph_id).cloned())
     }
 
     async fn put(&self, record: &MorphProjectionRecord) -> PersistenceResult<()> {
-        let mut data = self.data.lock().expect("lock");
+        let mut data = self.data.lock();
         data.insert(record.morph_id.clone(), record.clone());
         Ok(())
     }
@@ -308,7 +308,7 @@ impl MorphProjectionStore for MemoryMorphProjectionStore {
         &self,
         realm_id: &str,
     ) -> PersistenceResult<Vec<MorphProjectionRecord>> {
-        let data = self.data.lock().expect("lock");
+        let data = self.data.lock();
         Ok(data
             .values()
             .filter(|r| r.realm_id == realm_id)
@@ -317,12 +317,12 @@ impl MorphProjectionStore for MemoryMorphProjectionStore {
     }
 
     async fn snapshot_all(&self) -> PersistenceResult<Vec<MorphProjectionRecord>> {
-        let data = self.data.lock().expect("lock");
+        let data = self.data.lock();
         Ok(data.values().cloned().collect())
     }
 
     async fn delete(&self, morph_id: &str) -> PersistenceResult<()> {
-        let mut data = self.data.lock().expect("lock");
+        let mut data = self.data.lock();
         data.remove(morph_id);
         Ok(())
     }
@@ -344,20 +344,18 @@ impl ProjectionEventStore for MemoryProjectionEventStore {
     async fn append(&self, record: ProjectionEventRecord) -> PersistenceResult<()> {
         self.data
             .lock()
-            .expect("projection events lock")
             .push(record);
         Ok(())
     }
 
     async fn snapshot_all(&self) -> PersistenceResult<Vec<ProjectionEventRecord>> {
-        Ok(self.data.lock().expect("projection events lock").clone())
+        Ok(self.data.lock().clone())
     }
 
     async fn snapshot_capped(&self, limit: usize) -> PersistenceResult<Vec<ProjectionEventRecord>> {
         Ok(self
             .data
             .lock()
-            .expect("projection events lock")
             .iter()
             .take(limit)
             .cloned()

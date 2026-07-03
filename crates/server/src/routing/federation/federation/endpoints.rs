@@ -340,8 +340,7 @@ fn local_peer_policy_digest_for_transaction(
     let realm_policies = {
         let projection = state
             .projection
-            .lock()
-            .map_err(|error| AppError::internal(format!("projection lock: {error}")))?;
+            .lock();
         realm_ids
             .iter()
             .map(|realm_id| {
@@ -355,9 +354,7 @@ fn local_peer_policy_digest_for_transaction(
             .collect::<Vec<_>>()
     };
     let moderation_policies = {
-        let policies = state.realm_moderation_policies.lock().map_err(|error| {
-            AppError::internal(format!("realm moderation policies lock: {error}"))
-        })?;
+        let policies = state.realm_moderation_policies.lock();
         realm_ids
             .iter()
             .filter_map(|realm_id| {
@@ -467,7 +464,8 @@ pub(crate) async fn federation_actor_events(
             .then_with(|| left.event_id.cmp(&right.event_id))
     });
 
-    let erasure_receipts = if let Ok(projection) = state.projection.lock() {
+    let erasure_receipts = {
+        let projection = state.projection.lock();
         for event in &mut events {
             crate::routing::events::projection::tombstone_projection_event_for_erased_actor(
                 &projection,
@@ -480,8 +478,6 @@ pub(crate) async fn federation_actor_events(
             .filter(|receipt| receipt.subject_ref.as_deref() == Some(actor.as_str()))
             .map(|receipt| receipt.payload.clone())
             .collect::<Vec<_>>()
-    } else {
-        Vec::new()
     };
     let events = events
         .iter()
@@ -759,7 +755,6 @@ pub(crate) async fn federation_realm_members(
     let members = state
         .realms
         .lock()
-        .expect("realms lock")
         .get(&realm_id_value)
         .map(|realm| {
             realm
@@ -933,9 +928,16 @@ pub(crate) async fn federation_seals_push(
         AppError::internal(format!("federation seals push body serialize: {error}"))
     })?;
     super::verify_inbound_peer_http_signature(state, req, Some(&body_value)).await?;
+    //   3. bind every Move the Seal encapsulates (its `delta` entries) to the
+    //      authenticated origin, exactly like the sibling
+    //      `federation_transaction` / `federation_push_operations` tracks run
+    //      `federation_actor_origin_acceptable` per operation. A signed peer
+    //      MUST NOT be able to push Seals covering Moves authored in a trust
+    //      domain it does not speak for.
+    let origin_trust_domain = super::signature::trust_domain_from_service_did(&body.origin);
     let mut accepted: Vec<String> = Vec::new();
     let mut rejected: Vec<serde_json::Value> = Vec::new();
-    for seal in body.seals {
+    'seals: for seal in body.seals {
         let id_str = seal.id.to_string();
         // Only accept Seals whose declared id matches the canonical hash
         // — otherwise a peer could overwrite our DAG with junk.
@@ -944,6 +946,34 @@ pub(crate) async fn federation_seals_push(
             _ => {
                 rejected.push(json!({"id": id_str, "reason": "id_mismatch"}));
                 continue;
+            }
+        }
+        for move_id in &seal.delta {
+            let Ok(Some(enclosed_move)) = state.move_store.get(move_id) else {
+                // A Move we cannot resolve locally has no attributable
+                // author; accepting the Seal would smuggle unattributed
+                // writes into the DAG, so fail closed.
+                rejected.push(json!({
+                    "id": id_str,
+                    "reason": "missing_move",
+                    "move_id": move_id.as_str(),
+                }));
+                continue 'seals;
+            };
+            if !super::inbound_policy::federation_actor_origin_acceptable(
+                state,
+                enclosed_move.issuer.as_str(),
+                &origin_trust_domain,
+                seal.realm_id.as_str(),
+            )
+            .await
+            {
+                rejected.push(json!({
+                    "id": id_str,
+                    "reason": "federation_actor_origin_rejected",
+                    "move_id": move_id.as_str(),
+                }));
+                continue 'seals;
             }
         }
         if let Err(error) = state.seal_store.put(&seal) {

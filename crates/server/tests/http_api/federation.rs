@@ -773,7 +773,6 @@ fn install_test_circle(state: &AppState, circle_id: &str, members: &[&str]) {
     state
         .projection
         .lock()
-        .expect("projection mutex")
         .circles
         .insert(
             circle_id.to_owned(),

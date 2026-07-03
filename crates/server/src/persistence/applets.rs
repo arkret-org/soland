@@ -54,7 +54,6 @@ impl AppletStore for MemoryAppletStore {
         Ok(self
             .records
             .lock()
-            .expect("applet store lock")
             .get(applet_id)
             .cloned())
     }
@@ -62,7 +61,6 @@ impl AppletStore for MemoryAppletStore {
     async fn put(&self, applet_id: &str, record: Value) -> PersistenceResult<()> {
         self.records
             .lock()
-            .expect("applet store lock")
             .insert(applet_id.to_owned(), record);
         Ok(())
     }
@@ -71,7 +69,6 @@ impl AppletStore for MemoryAppletStore {
         Ok(self
             .records
             .lock()
-            .expect("applet store lock")
             .values()
             .cloned()
             .collect())
@@ -85,7 +82,7 @@ impl AppletStore for MemoryAppletStore {
             record.source_service_did.clone(),
             record.idempotency_key.clone(),
         );
-        let mut transactions = self.transactions.lock().expect("applet transaction lock");
+        let mut transactions = self.transactions.lock();
         if let Some(existing) = transactions.get(&key) {
             return Ok(AppletTransactionReplayBegin::Existing(existing.clone()));
         }
@@ -100,7 +97,7 @@ impl AppletStore for MemoryAppletStore {
         outcome: Value,
     ) -> PersistenceResult<()> {
         let key = (source_service_did.to_owned(), idempotency_key.to_owned());
-        let mut transactions = self.transactions.lock().expect("applet transaction lock");
+        let mut transactions = self.transactions.lock();
         let Some(record) = transactions.get_mut(&key) else {
             return Err(PersistenceError::NotFound(format!(
                 "applet transaction replay missing for {source_service_did}/{idempotency_key}"

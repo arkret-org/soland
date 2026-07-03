@@ -32,7 +32,8 @@
 //! Spec: `cokret-spec/spec/v1/zh/authz/policy-server.md` §5–§6.
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use parking_lot::Mutex;
 use std::time::{Duration, Instant};
 
 use base64::Engine as _;
@@ -179,7 +180,7 @@ impl PolicyCache {
     ) -> Option<PolicyCheckOutcome> {
         let now = Instant::now();
         let wall_now = chrono::Utc::now();
-        let mut guard = self.inner.lock().expect("policy cache mutex");
+        let mut guard = self.inner.lock();
         prune_policy_cache_locked(&mut guard, now);
         let key = (realm_id.to_owned(), canonical_hash.to_owned());
         if let Some(entry) = guard.get(&key)
@@ -201,7 +202,7 @@ impl PolicyCache {
         ttl: Duration,
     ) {
         let expires_at = Instant::now() + ttl;
-        let mut guard = self.inner.lock().expect("policy cache mutex");
+        let mut guard = self.inner.lock();
         prune_policy_cache_locked(&mut guard, Instant::now());
         while guard.len() >= POLICY_CACHE_MAX_ENTRIES {
             let Some(oldest_key) = guard

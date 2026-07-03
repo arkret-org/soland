@@ -93,10 +93,7 @@ fn collect_bottom_entries_for_realm(state: &AppState, realm_id: &str) -> Vec<Bot
     let Ok(realm) = RealmId::new(realm_id.to_owned()) else {
         return Vec::new();
     };
-    let proj = match state.projection.lock() {
-        Ok(p) => p,
-        Err(_) => return Vec::new(),
-    };
+    let proj = state.projection.lock();
     let mut cells: BTreeSet<CellRef> = state
         .cell_store
         .list_cells(&realm)
@@ -163,7 +160,7 @@ pub(crate) async fn admin_list_bottom_global(
     let _session = aa.authenticated_session(state, req).await?;
     let mut out = Vec::new();
     let realm_ids: Vec<String> = {
-        let realms = state.realms.lock().expect("realms lock");
+        let realms = state.realms.lock();
         realms
             .search(Default::default())
             .into_iter()

@@ -82,7 +82,7 @@ pub(super) async fn project_invite_accept_operation(
     if let (Ok(realm_id_typed), Ok(member_did)) =
         (RealmId::new(realm_id.clone()), Did::new(accepter.clone()))
     {
-        let mut realms = state.realms.lock().expect("realms lock");
+        let mut realms = state.realms.lock();
         if let Some(entry) = realms.get(&realm_id_typed) {
             let mut updated = entry.clone();
             if updated.members.insert(member_did) {

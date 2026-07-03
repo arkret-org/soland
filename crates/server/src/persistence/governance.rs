@@ -89,7 +89,6 @@ impl HandleReleaseStore for MemoryHandleReleaseStore {
     ) -> PersistenceResult<()> {
         self.data
             .lock()
-            .expect("handle release lock")
             .insert(localpart.to_owned(), released_at);
         Ok(())
     }
@@ -100,7 +99,6 @@ impl HandleReleaseStore for MemoryHandleReleaseStore {
         Ok(self
             .data
             .lock()
-            .expect("handle release lock")
             .iter()
             .map(|(localpart, released_at)| (localpart.clone(), *released_at))
             .collect())
@@ -125,7 +123,6 @@ impl RetentionPolicyStore for MemoryRetentionPolicyStore {
         Ok(self
             .data
             .lock()
-            .expect("retention policy lock")
             .get(realm_id)
             .cloned())
     }
@@ -133,7 +130,6 @@ impl RetentionPolicyStore for MemoryRetentionPolicyStore {
     async fn put(&self, record: &RetentionPolicyRecord) -> PersistenceResult<()> {
         self.data
             .lock()
-            .expect("retention policy lock")
             .insert(record.realm_id.clone(), record.clone());
         Ok(())
     }
@@ -142,7 +138,6 @@ impl RetentionPolicyStore for MemoryRetentionPolicyStore {
         Ok(self
             .data
             .lock()
-            .expect("retention policy lock")
             .values()
             .cloned()
             .collect())
@@ -167,7 +162,6 @@ impl RetentionTombstoneStore for MemoryRetentionTombstoneStore {
         Ok(self
             .data
             .lock()
-            .expect("retention tombstone lock")
             .get(event_id)
             .cloned())
     }
@@ -175,7 +169,6 @@ impl RetentionTombstoneStore for MemoryRetentionTombstoneStore {
     async fn put(&self, record: &RetentionTombstoneRecord) -> PersistenceResult<()> {
         self.data
             .lock()
-            .expect("retention tombstone lock")
             .insert(record.event_id.clone(), record.clone());
         Ok(())
     }
@@ -184,7 +177,6 @@ impl RetentionTombstoneStore for MemoryRetentionTombstoneStore {
         Ok(self
             .data
             .lock()
-            .expect("retention tombstone lock")
             .values()
             .cloned()
             .collect())
@@ -209,7 +201,6 @@ impl OrganizationStore for MemoryOrganizationStore {
         Ok(self
             .data
             .lock()
-            .expect("organization lock")
             .get(organization_id)
             .cloned())
     }
@@ -217,7 +208,6 @@ impl OrganizationStore for MemoryOrganizationStore {
     async fn put(&self, record: &OrganizationRecord) -> PersistenceResult<()> {
         self.data
             .lock()
-            .expect("organization lock")
             .insert(record.organization_id.clone(), record.clone());
         Ok(())
     }
@@ -226,7 +216,6 @@ impl OrganizationStore for MemoryOrganizationStore {
         Ok(self
             .data
             .lock()
-            .expect("organization lock")
             .values()
             .cloned()
             .collect())
@@ -254,7 +243,6 @@ impl OrganizationPolicyStore for MemoryOrganizationPolicyStore {
         Ok(self
             .data
             .lock()
-            .expect("organization policy lock")
             .get(organization_id)
             .cloned())
     }
@@ -262,7 +250,6 @@ impl OrganizationPolicyStore for MemoryOrganizationPolicyStore {
     async fn put(&self, record: &OrganizationPolicyRecord) -> PersistenceResult<()> {
         self.data
             .lock()
-            .expect("organization policy lock")
             .insert(record.organization_id.clone(), record.clone());
         Ok(())
     }
@@ -271,7 +258,6 @@ impl OrganizationPolicyStore for MemoryOrganizationPolicyStore {
         Ok(self
             .data
             .lock()
-            .expect("organization policy lock")
             .values()
             .cloned()
             .collect())
@@ -295,7 +281,6 @@ impl RealmOrganizationStore for MemoryRealmOrganizationStore {
     async fn link(&self, realm_id: &str, organization_id: &str) -> PersistenceResult<()> {
         self.data
             .lock()
-            .expect("realm organization lock")
             .entry(realm_id.to_owned())
             .or_default()
             .insert(organization_id.to_owned());
@@ -306,7 +291,6 @@ impl RealmOrganizationStore for MemoryRealmOrganizationStore {
         Ok(self
             .data
             .lock()
-            .expect("realm organization lock")
             .iter()
             .map(|(realm_id, organizations)| (realm_id.clone(), organizations.clone()))
             .collect())
@@ -330,7 +314,6 @@ impl RealmOrganizationStatementStore for MemoryRealmOrganizationStatementStore {
     async fn put(&self, record: &RealmOrganizationStatementRecord) -> PersistenceResult<()> {
         self.data
             .lock()
-            .expect("realm organization statement lock")
             .insert(
                 (
                     record.realm_id.clone(),
@@ -346,7 +329,6 @@ impl RealmOrganizationStatementStore for MemoryRealmOrganizationStatementStore {
         Ok(self
             .data
             .lock()
-            .expect("realm organization statement lock")
             .values()
             .cloned()
             .collect())
@@ -371,7 +353,6 @@ impl RealmModerationPolicyStore for MemoryRealmModerationPolicyStore {
         Ok(self
             .data
             .lock()
-            .expect("realm moderation policy lock")
             .get(realm_id)
             .cloned())
     }
@@ -379,7 +360,6 @@ impl RealmModerationPolicyStore for MemoryRealmModerationPolicyStore {
     async fn put(&self, record: &RealmModerationPolicyRecord) -> PersistenceResult<()> {
         self.data
             .lock()
-            .expect("realm moderation policy lock")
             .insert(record.realm_id.clone(), record.clone());
         Ok(())
     }
@@ -388,7 +368,6 @@ impl RealmModerationPolicyStore for MemoryRealmModerationPolicyStore {
         Ok(self
             .data
             .lock()
-            .expect("realm moderation policy lock")
             .values()
             .cloned()
             .collect())

@@ -160,7 +160,7 @@ async fn revoke_invite_token(
 }
 
 fn default_invite_realm_id(state: &AppState) -> Option<String> {
-    let realms = state.realms.lock().ok()?;
+    let realms = state.realms.lock();
     realms
         .search(Default::default())
         .first()
@@ -170,11 +170,7 @@ fn default_invite_realm_id(state: &AppState) -> Option<String> {
 fn ensure_realm_exists(state: &AppState, realm_id: &str) -> Result<(), AppError> {
     let realm_id = RealmId::new(realm_id.to_owned())
         .map_err(|error| AppError::invalid_param(format!("realm_id: {error}")))?;
-    let exists = state
-        .realms
-        .lock()
-        .map(|realms| realms.get(&realm_id).is_some())
-        .unwrap_or(false);
+    let exists = state.realms.lock().get(&realm_id).is_some();
     if exists {
         Ok(())
     } else {

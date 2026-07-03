@@ -6,7 +6,7 @@ use super::*;
 /// collect candidates first, drop the guard, then filter with `.await`.
 pub(super) async fn live_realm_entries(state: &AppState) -> Vec<RealmDirectoryEntry> {
     let candidates: Vec<RealmDirectoryEntry> = {
-        let realms = state.realms.lock().expect("realms lock");
+        let realms = state.realms.lock();
         realms
             .search(Default::default())
             .into_iter()

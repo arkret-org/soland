@@ -102,6 +102,11 @@ pub(super) async fn register_package_install(
     } else {
         "installed"
     };
+    // G3.S9 — bot actor DID recorded against the applet MUST be a
+    // well-formed bare DID scalar (no DID URL fragment).
+    crate::routing::extensions::bot_actor::validate_extension_actor_did(
+        package.bot_actor_id.as_str(),
+    )?;
     let install_id = ids::generate_install_id();
     let response = InstallCommitOutcome {
         ok: effective_status != "rejected",
@@ -512,7 +517,7 @@ pub(super) fn update_applet_projection(state: &AppState, record: &AppletRecord) 
         registered_at: now,
         updated_at: now,
     };
-    let mut guard = state.projection.lock().expect("projection lock");
+    let mut guard = state.projection.lock();
     guard
         .applets
         .insert(package.service_did.to_string(), projection.clone());
@@ -552,6 +557,9 @@ pub(super) async fn register_verified_applet(
 
     let now = chrono::Utc::now();
     let bot_actor_id = bot_actor_id_for(&namespace, &applet_id);
+    // G3.S9 — the minted bot actor DID MUST be a well-formed bare DID
+    // scalar before it is persisted on the applet record.
+    crate::routing::extensions::bot_actor::validate_extension_actor_did(&bot_actor_id)?;
     let portal_realm_id = portal_realm_id_for(&namespace, &applet_id);
     let record = AppletRecord {
         applet_id,
@@ -1283,20 +1291,14 @@ async fn realm_owner_and_members(
         .ok()
         .flatten()
         .map(|meta| meta.owner);
-    let members = state
-        .realms
-        .lock()
-        .ok()
-        .map(|realms| {
-            if let Some(realm) = RealmId::new(realm_id.to_owned())
-                .ok()
-                .and_then(|id| realms.get(&id))
-            {
-                return realm.members.iter().map(ToString::to_string).collect();
-            }
-            Vec::new()
-        })
-        .unwrap_or_default();
+    let members = {
+        let realms = state.realms.lock();
+        RealmId::new(realm_id.to_owned())
+            .ok()
+            .and_then(|id| realms.get(&id))
+            .map(|realm| realm.members.iter().map(ToString::to_string).collect())
+            .unwrap_or_default()
+    };
     (owner, members)
 }
 
@@ -1366,63 +1368,16 @@ mod tests {
     /// but with real-crypto verification enabled.
     fn production_test_state() -> AppState {
         let config = crate::config::AppConfig {
-            bind: "127.0.0.1:0".parse().unwrap(),
-            metrics_bind: "127.0.0.1:0".parse().unwrap(),
-            public_base_url: "http://server".to_owned(),
-            service_did: "did:web:soland.local".to_owned(),
-            tls_cert_path: None,
-            tls_key_path: None,
-            database_url: None,
             object_storage: crate::config::ObjectStorageConfig::local(
                 std::env::temp_dir().join("soland-applet-proof-test-blobs"),
             ),
-            ice: crate::config::IceServersConfig::default(),
-            livekit: crate::config::LiveKitConfig::default(),
-            cors_allow_origin: None,
-            account_authority_url: None,
-            oidc_client_id: None,
-            development_mode: false,
-            session_grant_introspection_url: None,
-            session_grant_introspection_bearer: None,
             did_resolver_allow_methods: vec!["web".to_owned(), "key".to_owned()],
-            embedded_webvh_provider_enabled: false,
-            embedded_webvh_registration_bearer: None,
-            external_webvh_provider_url: None,
-            external_webvh_provider_active: false,
-            default_webvh_provider_id: None,
             jws_replay_window_seconds: 0,
             jws_replay_window_per_family: std::collections::BTreeMap::new(),
             notary_signing_key_seed: Some([9u8; 32]),
-            agent_audit_binding_signing_seed: None,
-            use_keystore: false,
-            federation_policy: crate::config::FederationPolicy::Mesh,
-            federation_peers: Vec::new(),
-            federation_outbound_enabled: false,
-            federation_replica_observer: false,
-            admin_default_page_limit: 100,
-            admin_max_page_limit: 1000,
-            admin_principal_dids: Vec::new(),
-            to_device_queue_capacity: 10_000,
-            push_bridge_cache_ttl_seconds: 900,
-            push_bridge_trusted_service_dids: Vec::new(),
-            resumable_upload_dir: std::path::PathBuf::from("./soland-resumable-uploads"),
-            resumable_upload_incomplete_ttl_seconds: 86_400,
-            seal_compaction_min_age_seconds: 604_800,
-            compaction_min_witnesses: 1,
-            compaction_preserve_genesis: true,
-            compaction_prune_only_singleton_successors: true,
-            compaction_prune_walk_interval_seconds: 0,
-            compaction_prune_walk_per_realm_limit: 50,
-            seed_demo_data: false,
-            trust_domain: "ck:trust_domain:soland.local".to_owned(),
-            receive_policy_constraints: None,
-            sovereign_enclave_enabled: false,
-            sovereign_enclave_allowed_outbound_hosts: Vec::new(),
-            candidate_join_policy_enabled: false,
-            erasure_propagation_window_ms: 604_800_000,
-            log_format: crate::config::LogFormat::Plain,
+            ..crate::config::AppConfig::test_default()
         };
-        AppState::new(config, crate::db::Db { pool: None })
+        AppState::new(config, soland_data::Db { pool: None })
     }
 
     /// Derive a `did:key` DID + its `#`-fragment verification method for an

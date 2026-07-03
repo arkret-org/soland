@@ -68,7 +68,6 @@ pub(crate) async fn enforce_operation_policy_server(
     let realm_config = state
         .projection
         .lock()
-        .map_err(|error| PolicyGateRejection::internal(format!("projection lock: {error}")))?
         .realm_policy_server_config(realm_id)
         .cloned();
     let Some(realm_config) = realm_config else {
@@ -284,10 +283,7 @@ fn collect_realm_member_dids(state: &AppState, realm_id: &str) -> Vec<String> {
     let Ok(realm_id_typed) = RealmId::new(realm_id.to_owned()) else {
         return Vec::new();
     };
-    let realms = match state.realms.lock() {
-        Ok(guard) => guard,
-        Err(_) => return Vec::new(),
-    };
+    let realms = state.realms.lock();
     match realms.get(&realm_id_typed) {
         Some(space) => space
             .members

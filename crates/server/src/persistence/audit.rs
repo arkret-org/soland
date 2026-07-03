@@ -23,7 +23,7 @@ impl MemoryAuditStore {
 #[async_trait]
 impl AuditStore for MemoryAuditStore {
     async fn append(&self, entry: Value) -> PersistenceResult<()> {
-        self.data.lock().expect("audit lock").push(entry);
+        self.data.lock().push(entry);
         Ok(())
     }
 
@@ -31,7 +31,6 @@ impl AuditStore for MemoryAuditStore {
         Ok(self
             .data
             .lock()
-            .expect("audit lock")
             .iter()
             .filter(|event| event.get("actor").and_then(Value::as_str) == Some(actor))
             .cloned()
@@ -39,7 +38,7 @@ impl AuditStore for MemoryAuditStore {
     }
 
     async fn snapshot_all(&self) -> PersistenceResult<Vec<Value>> {
-        Ok(self.data.lock().expect("audit lock").clone())
+        Ok(self.data.lock().clone())
     }
 }
 

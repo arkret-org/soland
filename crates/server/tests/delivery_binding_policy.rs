@@ -118,6 +118,106 @@ fn delivery_binding_policy_rejects_disallowed_recipient_service() {
     );
 }
 
+// `allowed_recipient_services` is fail-closed (member-delivery-binding.md
+// §2 / §4): an empty array `[]` — and an omitted field, which defaults to
+// `[]` — rejects every recipient service; only the explicit sentinel
+// `["*"]` means unrestricted.
+
+#[test]
+fn delivery_binding_policy_empty_recipient_allow_list_rejects_all() {
+    let mut state = ProjectionState::new();
+    let hlc = ServerHlc::new("test");
+
+    apply_policy(
+        &mut state,
+        &hlc,
+        json!({
+            "allow_binding_sources": ["explicit"],
+            "allow_did_document_default": false,
+            "allowed_recipient_services": [],
+            "required_endorsers": [],
+        }),
+    );
+
+    let bad = join_op(
+        "did:web:ida",
+        json!({
+            "binding_source": "explicit",
+            "recipient_service_did": "did:web:principal.acme.example",
+            "service_acceptance_ref": "ck:event:01904100-0000-7000-8000-abcdefabcdef",
+        }),
+    );
+    match state.apply(&bad, &hlc) {
+        ProjectionEffect::Rejected { reason } => {
+            assert_eq!(reason, "recipient_service_not_allowed");
+        }
+        other => panic!("expected Rejected(recipient_service_not_allowed), got {other:?}"),
+    }
+}
+
+#[test]
+fn delivery_binding_policy_omitted_recipient_allow_list_rejects_all() {
+    let mut state = ProjectionState::new();
+    let hlc = ServerHlc::new("test");
+
+    apply_policy(
+        &mut state,
+        &hlc,
+        json!({
+            "allow_binding_sources": ["explicit"],
+            "allow_did_document_default": false,
+            // allowed_recipient_services omitted → defaults to [] (fail-closed).
+            "required_endorsers": [],
+        }),
+    );
+
+    let bad = join_op(
+        "did:web:jane",
+        json!({
+            "binding_source": "explicit",
+            "recipient_service_did": "did:web:principal.acme.example",
+            "service_acceptance_ref": "ck:event:01904100-0000-7000-8000-abcdefabcd00",
+        }),
+    );
+    match state.apply(&bad, &hlc) {
+        ProjectionEffect::Rejected { reason } => {
+            assert_eq!(reason, "recipient_service_not_allowed");
+        }
+        other => panic!("expected Rejected(recipient_service_not_allowed), got {other:?}"),
+    }
+}
+
+#[test]
+fn delivery_binding_policy_star_sentinel_is_unrestricted() {
+    let mut state = ProjectionState::new();
+    let hlc = ServerHlc::new("test");
+
+    apply_policy(
+        &mut state,
+        &hlc,
+        json!({
+            "allow_binding_sources": ["explicit"],
+            "allow_did_document_default": false,
+            "allowed_recipient_services": ["*"],
+            "required_endorsers": [],
+        }),
+    );
+
+    let good = join_op(
+        "did:web:kim",
+        json!({
+            "binding_source": "explicit",
+            "recipient_service_did": "did:web:principal.anywhere.example",
+            "service_acceptance_ref": "ck:event:01904100-0000-7000-8000-abcdefabcd11",
+        }),
+    );
+    let effect = state.apply(&good, &hlc);
+    assert!(
+        matches!(effect, ProjectionEffect::MembershipChanged { .. }),
+        "expected MembershipChanged under the [\"*\"] sentinel, got {effect:?}"
+    );
+}
+
 // `binding_source` not in `allow_binding_sources` → reject.
 #[test]
 fn delivery_binding_policy_rejects_disallowed_binding_source() {
@@ -163,7 +263,9 @@ fn delivery_binding_policy_rejects_missing_service_acceptance() {
         json!({
             "allow_binding_sources": ["explicit", "invite"],
             "allow_did_document_default": false,
-            "allowed_recipient_services": [],
+            // Sentinel ["*"] lifts only the recipient allow-list dimension so
+            // this test exercises the service_acceptance_ref check.
+            "allowed_recipient_services": ["*"],
             "required_endorsers": ["did:web:acme.example"],
         }),
     );
@@ -333,7 +435,7 @@ fn delivery_binding_handover_stale_when_frontier_absent() {
         json!({
             "allow_binding_sources": ["explicit"],
             "allow_did_document_default": false,
-            "allowed_recipient_services": [],
+            "allowed_recipient_services": ["did:web:principal.acme.example"],
             "required_endorsers": [],
             "policy_frontier": "ck:frontier:02000000",
         }),

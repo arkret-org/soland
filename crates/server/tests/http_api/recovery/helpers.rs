@@ -311,7 +311,6 @@ pub(crate) fn seed_cross_signing(
     state
         .cross_signing
         .lock()
-        .unwrap()
         .record_cross_signing_publish(content)
         .expect("seed cross-signing publish");
 }

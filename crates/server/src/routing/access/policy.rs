@@ -457,10 +457,7 @@ fn collect_realm_member_dids(state: &AppState, realm_id: &str) -> Vec<String> {
     let Ok(realm_id_typed) = RealmId::new(realm_id.to_owned()) else {
         return Vec::new();
     };
-    let realms = match state.realms.lock() {
-        Ok(guard) => guard,
-        Err(_) => return Vec::new(),
-    };
+    let realms = state.realms.lock();
     match realms.get(&realm_id_typed) {
         Some(space) => space
             .members
@@ -498,7 +495,7 @@ async fn policy_control_frontier_updated_at(
         .await
         .ok()
         .flatten()?;
-    let projection = state.projection.lock().ok()?;
+    let projection = state.projection.lock();
     let realm_state = projection.realm_states.get(realm_id)?;
     let member_updated_at = projection
         .members

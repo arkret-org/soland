@@ -5,7 +5,7 @@
 //! only mode currently supported (deletion is a follow-up).
 
 use soland::config::AppConfig;
-use soland::db::Db;
+use soland_data::Db;
 use soland::gc;
 use soland::state::AppState;
 
