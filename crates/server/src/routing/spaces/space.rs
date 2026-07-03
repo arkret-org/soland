@@ -128,9 +128,14 @@ async fn get_realm(
 
 fn operation_reject_to_app_error(reason: &'static str) -> AppError {
     let (status, wire_code) = operation_policy_reason_code(reason);
-    AppError::new(ErrorCode::FailedPrecondition, reason.to_owned())
+    let error = AppError::new(ErrorCode::FailedPrecondition, reason.to_owned())
         .with_status(status)
-        .with_wire_code(wire_code)
+        .with_wire_code(wire_code);
+    if wire_code == "failed_precondition" && reason != wire_code {
+        error.with_top_level_reason(reason)
+    } else {
+        error
+    }
 }
 
 async fn submit_realm_lifecycle_command(

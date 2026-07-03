@@ -195,7 +195,21 @@ pub(super) fn render_submit_one_error(res: &mut Response, error: SubmitOneError)
         )));
         return;
     }
-    render_error(res, error.status, &error.code, &error.message);
+    if error.status == StatusCode::PRECONDITION_FAILED
+        && error.code == "failed_precondition"
+        && error.message != error.code
+    {
+        crate::routing::system::util::render_error_with_top_level_reason(
+            res,
+            error.status,
+            &error.code,
+            &error.message,
+            &error.message,
+            None,
+        );
+    } else {
+        render_error(res, error.status, &error.code, &error.message);
+    }
 }
 
 pub(super) async fn submit_event_batch(

@@ -202,11 +202,11 @@ pub async fn error_catcher(res: &mut Response, ctrl: &mut FlowCtrl) {
     // error-code-registry.json alignment for typed-body extractor rejections
     // (`JsonBody<T>` surfaces a 400 StatusError caused by
     // `ParseError::SerdeJson`):
-    //   * body parses as JSON but violates the declared schema contract
-    //     (missing field / bad typed value) → 422 `schema_violation`;
-    //   * body is not valid JSON at all (syntax / EOF) → 400 `invalid_param`
-    //     — it never parsed, so `schema_violation` ("parsed input…") does not
-    //     apply, and `bad_request` is not a registered code.
+    //   * body parses as JSON but violates the declared schema contract (missing field / bad typed
+    //     value) → 422 `schema_violation`;
+    //   * body is not valid JSON at all (syntax / EOF) → 400 `invalid_param` — it never parsed, so
+    //     `schema_violation` ("parsed input…") does not apply, and `bad_request` is not a
+    //     registered code.
     if status == StatusCode::BAD_REQUEST
         && let salvo::http::ResBody::Error(status_error) = &res.body
         && let Some(parse_error) = status_error

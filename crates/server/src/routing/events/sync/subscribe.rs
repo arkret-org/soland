@@ -83,23 +83,11 @@ pub(crate) fn request_presents_auth_material(req: &Request) -> bool {
     auth_material_present(authorization, req.uri().query())
 }
 
-/// Resolve the optional session for a subscribe long-poll **without masking a
-/// failed authentication as anonymous**.
+/// Resolve the optional session for subscribe surfaces that allow anonymous
+/// public-Realm reads.
 ///
-/// Subscribe MAY run anonymously, but ONLY when the client presents no auth
-/// material at all. A request that DOES present a bearer which then fails
-/// authentication MUST NOT be silently downgraded to an anonymous session: the
-/// sync cursor is bound to the minting principal, so an anonymous replay of a
-/// principal-bound cursor surfaces as `cursor_integrity_invalid` ("cursor
-/// principal does not match request actor"). The client's sync engine treats
-/// that as "reset the cursor and retry" rather than "refresh the session", so a
-/// merely-expired bearer sends it into a non-recovering anonymous loop instead
-/// of re-authenticating. Fail closed: render the real 401 — preserving the
-/// `auth_expired` wire code the client keys its refresh on — and signal the
-/// handler to stop.
-///
-/// Returns `Some(session_opt)` to continue (anonymous when the inner option is
-/// `None`), or `None` when an auth error was already rendered to `res`.
+/// A request presenting bad auth material must surface its auth error instead
+/// of degrading to anonymous, because sync cursors are principal-bound.
 pub(crate) async fn subscribe_session_or_render(
     state: &AppState,
     req: &Request,
@@ -118,6 +106,25 @@ pub(crate) async fn subscribe_session_or_render(
     }
 }
 
+/// Resolve the required session for account subscribe long-poll.
+///
+/// client-sync.md requires `Authorization` on this surface. Fail closed on
+/// every auth error so clients observe the real 401/auth wire code instead of
+/// replaying as anonymous.
+pub(crate) async fn account_subscribe_session_or_render(
+    state: &AppState,
+    req: &Request,
+    res: &mut Response,
+) -> Option<SessionRecord> {
+    match authenticated_session(state, req).await {
+        Ok(session) => Some(session),
+        Err((status, code, message)) => {
+            render_error(res, status, code, message);
+            None
+        }
+    }
+}
+
 #[endpoint(
     operation_id = "ck.self.account.stream.subscribe",
     tags("sync"),
@@ -128,12 +135,12 @@ pub(super) async fn account_subscribe(depot: &mut Depot, req: &mut Request, res:
     let state = depot.obtain::<AppState>().expect("state injected").clone();
     let body = account_subscribe_query(req);
     let max_wait_ms = parse_max_wait_ms(req);
-    let session = match subscribe_session_or_render(&state, req, res).await {
+    let session = match account_subscribe_session_or_render(&state, req, res).await {
         Some(session) => session,
         None => return,
     };
     let filter_value = sync_filter_value(body.filter.as_ref());
-    let subscribe_scope_key = account_subscribe_scope_key(req, session.as_ref(), &body);
+    let subscribe_scope_key = account_subscribe_scope_key(req, Some(&session), &body);
     if reject_subscribe_reconnect(&state, &subscribe_scope_key, res) {
         return;
     }
@@ -141,7 +148,7 @@ pub(super) async fn account_subscribe(depot: &mut Depot, req: &mut Request, res:
         match parse_and_validate_sync_cursor(
             after,
             &state,
-            session.as_ref(),
+            Some(&session),
             filter_value.as_ref(),
             chrono::Utc::now().timestamp_millis(),
         )
@@ -188,9 +195,7 @@ pub(super) async fn account_subscribe(depot: &mut Depot, req: &mut Request, res:
     // persisted it, so every strictly-older handle row for this stream is
     // superseded and can go. Keeps the durable table at ~2 rows per active
     // (principal, device, filter) stream. Best-effort.
-    if let (Some(session), Some(presented_issued_at_ms)) =
-        (session.as_ref(), after_cursor.issued_at_ms)
-    {
+    if let Some(presented_issued_at_ms) = after_cursor.issued_at_ms {
         let _ = state
             .persistence
             .sync_cursors()
@@ -214,7 +219,7 @@ pub(super) async fn account_subscribe(depot: &mut Depot, req: &mut Request, res:
     // event landing between snapshot-build and long-poll subscribe is not
     // missed.
     let mut rx = state.event_broadcast.subscribe();
-    let mut response = build_sync_snapshot(&state, session.as_ref(), &body, &after_cursor).await;
+    let mut response = build_sync_snapshot(&state, Some(&session), &body, &after_cursor).await;
     let mut control_frame: Option<Value> = None;
 
     // Long-poll only when the client supplied an `after` cursor (true
@@ -238,7 +243,7 @@ pub(super) async fn account_subscribe(depot: &mut Depot, req: &mut Request, res:
                             if !account_subscribe_notification_should_wake(
                                 &state,
                                 &notification,
-                                session.as_ref(),
+                                Some(&session),
                                 &after_cursor,
                             )
                             .await
@@ -269,7 +274,7 @@ pub(super) async fn account_subscribe(depot: &mut Depot, req: &mut Request, res:
                                     }
                                 }
                             }
-                            response = build_sync_snapshot(&state, session.as_ref(), &body, &after_cursor).await;
+                            response = build_sync_snapshot(&state, Some(&session), &body, &after_cursor).await;
                             if !delta_is_empty(&response) {
                                 break;
                             }
@@ -291,7 +296,7 @@ pub(super) async fn account_subscribe(depot: &mut Depot, req: &mut Request, res:
                             // delta speak for itself. If the rebuilt delta is
                             // still empty, close with a terminal control frame
                             // and gate immediate reconnect for the same scope.
-                            response = build_sync_snapshot(&state, session.as_ref(), &body, &after_cursor).await;
+                            response = build_sync_snapshot(&state, Some(&session), &body, &after_cursor).await;
                             if !delta_is_empty(&response) {
                                 break;
                             }
@@ -605,8 +610,8 @@ pub(crate) fn presence_sync_event_json(
     aggregated: &AggregatedPresence,
     reveal_activity_detail: bool,
 ) -> Value {
-    let downgraded = !reveal_activity_detail
-        && matches!(aggregated.status.as_str(), "dnd" | "idle");
+    let downgraded =
+        !reveal_activity_detail && matches!(aggregated.status.as_str(), "dnd" | "idle");
     let status = if downgraded {
         "offline".to_owned()
     } else {
@@ -631,9 +636,7 @@ pub(crate) fn presence_sync_event_json(
     if aggregated.all_expired {
         object.insert(
             "last_active_at".to_owned(),
-            json!(presence_last_active_bucket_interval(
-                aggregated.updated_at
-            )),
+            json!(presence_last_active_bucket_interval(aggregated.updated_at)),
         );
         return event;
     }

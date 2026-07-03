@@ -843,8 +843,16 @@ async fn memory_presence_store_put_list_matches_trait() {
     store.put(other_device).await.unwrap();
     let after = store.list_for_actor("did:web:alice.example").await.unwrap();
     assert_eq!(after.len(), 2);
-    assert!(after.iter().any(|r| r.device_id == "ck:device:a" && r.status == "idle"));
-    assert!(after.iter().any(|r| r.device_id == "ck:device:b" && r.status == "dnd"));
+    assert!(
+        after
+            .iter()
+            .any(|r| r.device_id == "ck:device:a" && r.status == "idle")
+    );
+    assert!(
+        after
+            .iter()
+            .any(|r| r.device_id == "ck:device:b" && r.status == "dnd")
+    );
 
     // Delete clears every device row of the actor.
     store.delete("did:web:alice.example").await.unwrap();
@@ -857,7 +865,13 @@ async fn memory_presence_store_put_list_matches_trait() {
     );
 
     // Missing actor → empty.
-    assert!(store.list_for_actor("did:web:nobody").await.unwrap().is_empty());
+    assert!(
+        store
+            .list_for_actor("did:web:nobody")
+            .await
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[tokio::test]

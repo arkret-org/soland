@@ -242,10 +242,20 @@ fn submit_one_error_value(error: SubmitOneError) -> (StatusCode, Value) {
         );
         return (StatusCode::OK, submit_outcome_value(&outcome));
     }
-    let body = json!(
+    let mut body = json!(
         cokret_sdk::ErrorEnvelope::new(error.code.clone(), error.message.clone())
             .with_request_id(crate::ids::generate_request_id())
     );
+    if error.status == StatusCode::PRECONDITION_FAILED
+        && error.code == "failed_precondition"
+        && error.message != error.code
+        && let Some(object) = body.as_object_mut()
+    {
+        object.insert("reason".to_owned(), json!(error.message.clone()));
+        if let Some(error_body) = object.get_mut("error").and_then(Value::as_object_mut) {
+            error_body.insert("reason".to_owned(), json!(error.message.clone()));
+        }
+    }
     (error.status, body)
 }
 

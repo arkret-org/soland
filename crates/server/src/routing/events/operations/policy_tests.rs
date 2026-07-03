@@ -1848,7 +1848,7 @@ async fn mls_prejoin_history_rejects_non_history_capable_content_scheme() {
         operation_policy_reason_code(reason),
         (
             salvo::http::StatusCode::PRECONDITION_FAILED,
-            cokret_sdk::error::REASON_HISTORY_VISIBILITY_REQUIRES_HISTORY_CAPABLE_SCHEME
+            "failed_precondition"
         )
     );
 }

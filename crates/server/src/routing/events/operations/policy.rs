@@ -17,7 +17,7 @@ pub fn operation_policy_reason_code(message: &str) -> (salvo::http::StatusCode, 
     {
         (
             salvo::http::StatusCode::PRECONDITION_FAILED,
-            cokret_sdk::error::REASON_HISTORY_VISIBILITY_REQUIRES_HISTORY_CAPABLE_SCHEME,
+            "failed_precondition",
         )
     } else if message == "applet_registration_unauthorized" {
         // applet-integration.md §4 — surface the spec reason verbatim (matches

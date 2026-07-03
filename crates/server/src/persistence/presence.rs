@@ -80,7 +80,10 @@ impl MemoryPresenceStore {
 impl PresenceStore for MemoryPresenceStore {
     async fn put(&self, presence: PresenceRecord) -> PersistenceResult<()> {
         let key = (presence.actor.clone(), presence.device_id.clone());
-        self.data.lock().expect("presence lock").insert(key, presence);
+        self.data
+            .lock()
+            .expect("presence lock")
+            .insert(key, presence);
         Ok(())
     }
 
