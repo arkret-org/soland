@@ -823,6 +823,14 @@ fn apply_mls_genesis_dispatch(
     mls::apply_group_genesis(s, op)
 }
 
+fn apply_mls_proposal_dispatch(
+    s: &mut ProjectionState,
+    op: &Operation,
+    _hlc: &ServerHlc,
+) -> ProjectionEffect {
+    mls::apply_remove_proposal(s, op)
+}
+
 fn apply_mls_commit_dispatch(
     s: &mut ProjectionState,
     op: &Operation,
@@ -1278,6 +1286,10 @@ pub fn default_apply_registry() -> std::collections::HashMap<&'static str, Apply
     m.insert(
         cokret_sdk::events::kinds::MLS_GENESIS,
         apply_mls_genesis_dispatch,
+    );
+    m.insert(
+        cokret_sdk::events::kinds::MLS_PROPOSAL,
+        apply_mls_proposal_dispatch,
     );
     m.insert(
         cokret_sdk::events::kinds::MLS_COMMIT,

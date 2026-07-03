@@ -1091,7 +1091,7 @@ fn event_payload_validator_enforces_strand_update_patch_schema() {
 
 #[test]
 fn event_payload_validator_catalog_covers_active_standard_durable_events() {
-    let catalog = cokret_sdk::schema::event_payload_validator_catalog();
+    let catalog = cokret_sdk::schema::event_payload_validator_catalog().unwrap();
     let event_kinds = artifacts::active_durable_event_kinds()
         .iter()
         .map(String::as_str)
@@ -1110,7 +1110,7 @@ fn event_payload_validator_catalog_covers_active_standard_durable_events() {
 
 #[test]
 fn event_payload_validator_enforces_patch_family_schema() {
-    let catalog = cokret_sdk::schema::event_payload_validator_catalog();
+    let catalog = cokret_sdk::schema::event_payload_validator_catalog().unwrap();
     let patch_kinds = [
         "ck.realm.update",
         "ck.strand.update",

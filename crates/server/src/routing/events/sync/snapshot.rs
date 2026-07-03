@@ -7,6 +7,7 @@ pub(crate) async fn build_sync_snapshot(
     session: Option<&SessionRecord>,
     body: &SyncRequestBody,
     after_cursor: &SyncCursor,
+    include_presence_delta: bool,
 ) -> cokret_sdk::models::SyncOutcome {
     let filter_value = sync_filter_value(body.filter.as_ref());
     // SYNC-MEM-1 + ROST-SOL-1..3 (cokret-spec @ b56cab1) — `members[]` is
@@ -73,7 +74,7 @@ pub(crate) async fn build_sync_snapshot(
     if let Some(session) = session {
         visible_actors.insert(session.actor.clone());
     }
-    let presence = if body.after.is_none() {
+    let presence = if body.after.is_none() || include_presence_delta {
         presence_events_for_actors(state, visible_actors.clone(), session).await
     } else {
         Vec::new()

@@ -139,6 +139,7 @@ pub(crate) async fn mirror_mls_effect_to_persistence(
                 .await;
             }
         }
+        crate::reducer::MlsEffect::RemoveProposalRecorded { .. } => {}
         crate::reducer::MlsEffect::GroupGenesis {
             group_id,
             effective_scope,

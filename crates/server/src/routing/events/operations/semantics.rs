@@ -317,6 +317,7 @@ pub(crate) fn validate_operation_schema_from_sdk_artifact(
     operation: &Operation,
 ) -> Result<(), &'static str> {
     event_payload_validator_catalog()
+        .map_err(|_| "operation payload validator catalog unavailable")?
         .validate_payload(kind, &operation.payload)
         .map_err(|_| "operation payload violates SDK artifact schema")
 }

@@ -888,8 +888,9 @@ fn tier2_publish_and_authorize(
 async fn keys_query_exposes_tier2_cross_signing_chain_and_verifies() {
     use cokret_sdk::signatures::PublicKeyMaterial;
     use cokret_sdk::{
-        CrossSigningPublishContent, DeviceId, DeviceTrustBinding, DeviceTrustState,
-        QueryDeviceCrossSigningBinding, verify_device_cross_signing_chain,
+        CrossSigningPublishContent, DeviceCrossSigningChainVerification, DeviceId,
+        DeviceTrustBinding, DeviceTrustState, QueryDeviceCrossSigningBinding,
+        verify_device_cross_signing_chain,
     };
 
     let state = AppState::new(test_config(), Db { pool: None });
@@ -974,19 +975,20 @@ async fn keys_query_exposes_tier2_cross_signing_chain_and_verifies() {
     let anchored_psk = PublicKeyMaterial::Ed25519Multibase {
         value: psk_multibase,
     };
-    let state_ok = verify_device_cross_signing_chain(
-        &publish,
-        &trust_binding,
-        &principal_did,
-        &device_id_typed,
-        &device_public_key,
-        "z6LSTestTier2HpkeKey",
-        &[
-            "ck.hpke_x25519_aead_xchacha20poly1305.v1".to_owned(),
-            "ck.mls.v1".to_owned(),
-        ],
-        &anchored_psk,
-    );
+    let algorithms = [
+        "ck.hpke_x25519_aead_xchacha20poly1305.v1".to_owned(),
+        "ck.mls.v1".to_owned(),
+    ];
+    let state_ok = verify_device_cross_signing_chain(DeviceCrossSigningChainVerification {
+        publish: &publish,
+        binding: &trust_binding,
+        principal_id: &principal_did,
+        device_id: &device_id_typed,
+        device_public_key: &device_public_key,
+        hpke_key: "z6LSTestTier2HpkeKey",
+        algorithms: &algorithms,
+        anchored_psk: &anchored_psk,
+    });
     assert_eq!(state_ok, DeviceTrustState::CrossSigned);
 
     // Tampering the device binding signature → not CrossSigned (fail-closed).
@@ -994,19 +996,16 @@ async fn keys_query_exposes_tier2_cross_signing_chain_and_verifies() {
     let mut raw = cokret_sdk::base64url_decode(&tampered.signature).unwrap();
     raw[0] ^= 0xff;
     tampered.signature = cokret_sdk::base64url_encode(&raw);
-    let state_bad = verify_device_cross_signing_chain(
-        &publish,
-        &tampered,
-        &principal_did,
-        &device_id_typed,
-        &device_public_key,
-        "z6LSTestTier2HpkeKey",
-        &[
-            "ck.hpke_x25519_aead_xchacha20poly1305.v1".to_owned(),
-            "ck.mls.v1".to_owned(),
-        ],
-        &anchored_psk,
-    );
+    let state_bad = verify_device_cross_signing_chain(DeviceCrossSigningChainVerification {
+        publish: &publish,
+        binding: &tampered,
+        principal_id: &principal_did,
+        device_id: &device_id_typed,
+        device_public_key: &device_public_key,
+        hpke_key: "z6LSTestTier2HpkeKey",
+        algorithms: &algorithms,
+        anchored_psk: &anchored_psk,
+    });
     assert_ne!(state_bad, DeviceTrustState::CrossSigned);
 }
 

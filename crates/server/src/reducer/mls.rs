@@ -28,8 +28,8 @@ use cokret_sdk::Operation;
 use serde_json::{Map, Value};
 
 use super::{
-    KeyPackageLifetime, MlsCommitEpoch, MlsCommitEpochKey, MlsEffect, MlsKeyPackage, MlsWelcome,
-    MlsWelcomeQueueKey, ProjectionState,
+    KeyPackageLifetime, MlsCommitEpoch, MlsCommitEpochKey, MlsEffect, MlsKeyPackage,
+    MlsRemoveObligation, MlsRemoveProposal, MlsWelcome, MlsWelcomeQueueKey, ProjectionState,
 };
 
 /// Reason code emitted when a `ck.mls.keypackage` event with
@@ -71,6 +71,13 @@ pub const REASON_GOVERNANCE_BINDING_MISMATCH: &str =
 /// (concurrent commits, encryption-and-audit.md §2.5.2). Sends / decrypts on
 /// the contested epoch stay fail-closed until a resolving commit advances it.
 pub const REASON_DECRYPTION_PENDING: &str = cokret_sdk::error::REASON_MLS_DECRYPTION_PENDING;
+/// Reject code for a Remove commit whose governance binding does not cover the
+/// event frontier that created the pending remove obligation.
+pub const REASON_REMOVE_MISSING_GOVERNANCE_FRONTIER: &str =
+    "mls_remove_missing_governance_frontier";
+/// Reject code for a commit that advances while a remove obligation is pending
+/// but does not reference a matching `ck.mls.proposal{proposal_type="remove"}`.
+pub const REASON_REMOVE_PROPOSAL_MISSING: &str = "mls_remove_proposal_missing";
 
 /// G3.S1 — project a `ck.mls.keypackage` event with
 /// `payload.action == "publish"`.
@@ -229,6 +236,9 @@ pub fn apply_keypackage_claim(state: &mut ProjectionState, op: &Operation) -> Pr
     let Some(row) = state.mls_key_packages.get_mut(id) else {
         return reject(REASON_KEYPACKAGE_NOT_FOUND);
     };
+    if row.claimed_by.as_deref() == Some("revoked") {
+        return reject(REASON_KEYPACKAGE_NOT_FOUND);
+    }
     // CAS check — refuse if anyone has already claimed this row.
     if !row.last_resort && row.claimed_by.is_some() {
         return reject(REASON_KEYPACKAGE_ALREADY_CLAIMED);
@@ -397,6 +407,68 @@ pub fn apply_welcome_enqueue(state: &mut ProjectionState, op: &Operation) -> Pro
 /// registry. The reducer stores the epoch and covered_seals summary
 /// only; opaque GroupInfo / ratchet tree material remains in the
 /// durable event payload and object store references.
+/// Record a `ck.mls.proposal{proposal_type="remove"}` so a later commit can
+/// prove it is consuming a pending remove obligation.
+pub fn apply_remove_proposal(state: &mut ProjectionState, op: &Operation) -> ProjectionEffectOut {
+    let payload = &op.payload;
+    if payload.get("proposal_type").and_then(Value::as_str) != Some("remove") {
+        return ProjectionEffectOut::Ignored;
+    }
+    let Some(group_id) = payload
+        .get("group_id")
+        .or_else(|| payload.get("mls_group_id"))
+        .and_then(Value::as_str)
+    else {
+        return reject("mls_proposal_group_missing");
+    };
+    let Some(base_epoch) = payload.get("base_epoch").and_then(Value::as_u64) else {
+        return reject("mls_proposal_base_epoch_missing");
+    };
+    let Some(target_actor_id) = payload
+        .get("target_actor_id")
+        .or_else(|| payload.get("target_principal_id"))
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+    else {
+        return reject("mls_remove_proposal_target_missing");
+    };
+    let effective_scope = match proposal_effective_scope(state, payload, group_id, base_epoch) {
+        Ok(scope) => scope,
+        Err(reason) => return reject(reason),
+    };
+    let proposal_ref = payload
+        .get("event_id")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| op.operation_id.as_str())
+        .to_owned();
+    let target_device_id = payload
+        .get("target_device_id")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .map(ToOwned::to_owned);
+    state.mls_remove_proposals.insert(
+        proposal_ref.clone(),
+        MlsRemoveProposal {
+            proposal_ref: proposal_ref.clone(),
+            group_id: group_id.to_owned(),
+            effective_scope: effective_scope.clone(),
+            base_epoch,
+            target_actor_id: target_actor_id.to_owned(),
+            target_device_id: target_device_id.clone(),
+            created_at: op.created_at.timestamp(),
+        },
+    );
+
+    ProjectionEffectOut::Mls(MlsEffect::RemoveProposalRecorded {
+        proposal_ref,
+        group_id: group_id.to_owned(),
+        effective_scope,
+        target_actor_id: target_actor_id.to_owned(),
+        target_device_id,
+    })
+}
+
 pub fn apply_group_genesis(state: &mut ProjectionState, op: &Operation) -> ProjectionEffectOut {
     let payload = &op.payload;
     let Some(group_id) = payload
@@ -607,6 +679,32 @@ pub fn apply_commit_epoch(state: &mut ProjectionState, op: &Operation) -> Projec
         return reject(REASON_COMMIT_EPOCH_SKEW);
     }
 
+    let binding_membership_frontier = binding_membership_frontier(payload);
+    let proposal_refs = string_array(payload.get("proposal_refs"));
+    let pending_removals = matching_pending_remove_obligations(state, &effective_scope, group_id);
+    if !pending_removals.is_empty() {
+        if pending_removals.iter().any(|obligation| {
+            !frontier_covers_all(
+                &binding_membership_frontier,
+                &obligation.membership_frontier,
+            )
+        }) {
+            return reject(REASON_REMOVE_MISSING_GOVERNANCE_FRONTIER);
+        }
+        if pending_removals.iter().any(|obligation| {
+            !commit_references_matching_remove_proposal(
+                state,
+                &proposal_refs,
+                group_id,
+                expected_prev_epoch,
+                &effective_scope,
+                obligation,
+            )
+        }) {
+            return reject(REASON_REMOVE_PROPOSAL_MISSING);
+        }
+    }
+
     // Reaching here with `expected_prev_epoch == current` is a forward advance.
     // When the frontier was `⊥`, this is the resolving commit: the insert below
     // both bumps the epoch and resets `frontier_contested = false`.
@@ -629,6 +727,11 @@ pub fn apply_commit_epoch(state: &mut ProjectionState, op: &Operation) -> Projec
             frontier_contested: false,
         },
     );
+    if !pending_removals.is_empty() {
+        state
+            .pending_mls_removals
+            .retain(|obligation| !pending_removals.iter().any(|landed| landed == obligation));
+    }
 
     ProjectionEffectOut::Mls(MlsEffect::CommitEpochAdvanced {
         group_id: group_id.to_owned(),
@@ -681,6 +784,123 @@ pub(crate) fn effective_scope_key(scope: &Value) -> Result<String, &'static str>
         }
         _ => Err("mls_effective_scope_invalid"),
     }
+}
+
+fn proposal_effective_scope(
+    state: &ProjectionState,
+    payload: &Value,
+    group_id: &str,
+    base_epoch: u64,
+) -> Result<Value, &'static str> {
+    if let Some(binding) = payload
+        .get("governance_binding")
+        .or_else(|| payload.get("mls_governance_binding"))
+    {
+        if binding.get("mls_group_id").and_then(Value::as_str) != Some(group_id) {
+            return Err("mls_governance_binding_group_mismatch");
+        }
+        if binding.get("previous_epoch").and_then(Value::as_u64) != Some(base_epoch) {
+            return Err("mls_governance_binding_previous_epoch_mismatch");
+        }
+        let scope = binding
+            .get("effective_scope")
+            .ok_or("mls_governance_binding_scope_missing")?;
+        validate_effective_scope(scope)?;
+        return Ok(scope.clone());
+    }
+
+    let mut matches = state
+        .mls_commit_epochs
+        .values()
+        .filter(|row| row.group_id == group_id && row.epoch == base_epoch);
+    let Some(row) = matches.next() else {
+        return Err("mls_proposal_group_epoch_missing");
+    };
+    if matches.next().is_some() {
+        return Err("mls_proposal_scope_ambiguous");
+    }
+    Ok(row.effective_scope.clone())
+}
+
+fn binding_membership_frontier(payload: &Value) -> Vec<String> {
+    payload
+        .get("governance_binding")
+        .or_else(|| payload.get("mls_governance_binding"))
+        .and_then(|binding| binding.get("membership_frontier"))
+        .map(|frontier| {
+            let mut values = Vec::new();
+            push_frontier_values(Some(frontier), &mut values);
+            values.sort();
+            values.dedup();
+            values
+        })
+        .unwrap_or_default()
+}
+
+fn matching_pending_remove_obligations(
+    state: &ProjectionState,
+    effective_scope: &Value,
+    group_id: &str,
+) -> Vec<MlsRemoveObligation> {
+    let Some((realm_id, circle_id)) = effective_scope_parts(effective_scope) else {
+        return Vec::new();
+    };
+    state
+        .pending_mls_removals
+        .iter()
+        .filter(|obligation| {
+            obligation.realm_id == realm_id
+                && obligation.circle_id.as_deref() == circle_id.as_deref()
+                && obligation
+                    .mls_group_ref
+                    .as_deref()
+                    .is_none_or(|expected| expected == group_id)
+        })
+        .cloned()
+        .collect()
+}
+
+fn effective_scope_parts(effective_scope: &Value) -> Option<(String, Option<String>)> {
+    let object = effective_scope.as_object()?;
+    let realm_id = object.get("realm_id").and_then(Value::as_str)?.to_owned();
+    match object.get("kind").and_then(Value::as_str) {
+        Some("realm") => Some((realm_id, None)),
+        Some("circle") => Some((
+            realm_id,
+            Some(object.get("circle_id").and_then(Value::as_str)?.to_owned()),
+        )),
+        _ => None,
+    }
+}
+
+fn frontier_covers_all(frontier: &[String], required: &[String]) -> bool {
+    required
+        .iter()
+        .all(|needed| frontier.iter().any(|seen| seen == needed))
+}
+
+fn commit_references_matching_remove_proposal(
+    state: &ProjectionState,
+    proposal_refs: &[String],
+    group_id: &str,
+    base_epoch: u64,
+    effective_scope: &Value,
+    obligation: &MlsRemoveObligation,
+) -> bool {
+    proposal_refs.iter().any(|proposal_ref| {
+        state
+            .mls_remove_proposals
+            .get(proposal_ref)
+            .is_some_and(|proposal| {
+                proposal.group_id == group_id
+                    && proposal.base_epoch == base_epoch
+                    && proposal.target_actor_id == obligation.actor_id
+                    && obligation.device_id.as_deref().is_none_or(|device_id| {
+                        proposal.target_device_id.as_deref() == Some(device_id)
+                    })
+                    && proposal.effective_scope.eq(effective_scope)
+            })
+    })
 }
 
 fn genesis_effective_scope(payload: &Value) -> Result<Value, &'static str> {
@@ -1611,6 +1831,43 @@ mod tests {
     }
 
     #[test]
+    fn revoked_last_resort_keypackage_cannot_be_reused() {
+        let mut state = ProjectionState::default();
+        let mut payload = publish_payload(
+            "ck:mls_keypackage:revoked-last-resort",
+            "did:web:alice.example",
+            "ck:device:alice-desktop",
+            1_000_000,
+        );
+        payload["last_resort"] = json!(true);
+        let publish = op_at(100, "ck.mls.keypackage", payload);
+        let _ = apply_keypackage_publish(&mut state, &publish);
+        state
+            .mls_key_packages
+            .get_mut("ck:mls_keypackage:revoked-last-resort")
+            .unwrap()
+            .claimed_by = Some("revoked".to_owned());
+
+        let claim = op_at(
+            200,
+            "ck.mls.keypackage",
+            json!({
+                "action": "claim",
+                "keypackage_id": "ck:mls_keypackage:revoked-last-resort",
+                "group_id": "ck:mls_group:first",
+                "intended_realm_id": "ck:realm:alpha",
+                "ssk_generation": 7
+            }),
+        );
+        match apply_keypackage_claim(&mut state, &claim) {
+            ProjectionEffect::Rejected { reason } => {
+                assert_eq!(reason, REASON_KEYPACKAGE_NOT_FOUND);
+            }
+            other => panic!("expected Rejected, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn keypackage_claim_rejects_stale_cross_signing_generation() {
         let mut state = ProjectionState::default();
         let publish = op_at(
@@ -1893,6 +2150,133 @@ mod tests {
                 frontier_contested: false,
             }
         );
+    }
+
+    #[test]
+    fn pending_device_revoke_requires_remove_commit_frontier() {
+        let mut state = ProjectionState::default();
+        initialize_genesis(&mut state);
+        let revoke_event = "ck:event:0196419b-0000-7000-8000-00000000d002";
+        let proposal_ref = "ck:event:0196419b-0000-7000-8000-00000000d003";
+        state.pending_mls_removals.push(MlsRemoveObligation {
+            realm_id: "ck:realm:0196419b-0000-7000-8000-000000000000".to_owned(),
+            circle_id: None,
+            mls_group_ref: Some("ck:mls_group:abc".to_owned()),
+            actor_id: "did:web:alice.example".to_owned(),
+            device_id: Some("ck:device:lost".to_owned()),
+            membership_frontier: vec![revoke_event.to_owned()],
+            trigger_membership: "device_revoke".to_owned(),
+            triggered_at: Utc.timestamp_opt(500, 0).single().unwrap(),
+        });
+        assert!(matches!(
+            apply_remove_proposal(
+                &mut state,
+                &op_at(
+                    500,
+                    "ck.mls.proposal",
+                    json!({
+                        "event_id": proposal_ref,
+                        "mls_group_id": "ck:mls_group:abc",
+                        "base_epoch": 0,
+                        "proposal_type": "remove",
+                        "proposal_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                        "target_principal_id": "did:web:alice.example",
+                        "target_device_id": "ck:device:lost",
+                    }),
+                )
+            ),
+            ProjectionEffect::Mls(MlsEffect::RemoveProposalRecorded { .. })
+        ));
+
+        let effect = apply_commit_epoch(
+            &mut state,
+            &op_at(
+                501,
+                "ck.mls.commit",
+                json!({
+                    "group_id": "ck:mls_group:abc",
+                    "expected_prev_epoch": 0,
+                    "next_epoch": 1,
+                    "leader_actor_id": "did:web:alice.example",
+                    "commit_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                    "proposal_refs": [proposal_ref],
+                    "governance_binding": governance_binding(0),
+                }),
+            ),
+        );
+        assert!(matches!(
+            effect,
+            ProjectionEffect::Rejected { reason }
+                if reason == REASON_REMOVE_MISSING_GOVERNANCE_FRONTIER
+        ));
+        assert_eq!(state.pending_mls_removals.len(), 1);
+    }
+
+    #[test]
+    fn remove_commit_covering_device_revoke_advances_and_clears_obligation() {
+        let mut state = ProjectionState::default();
+        initialize_genesis(&mut state);
+        let revoke_event = "ck:event:0196419b-0000-7000-8000-00000000d102";
+        let proposal_ref = "ck:event:0196419b-0000-7000-8000-00000000d103";
+        state.pending_mls_removals.push(MlsRemoveObligation {
+            realm_id: "ck:realm:0196419b-0000-7000-8000-000000000000".to_owned(),
+            circle_id: None,
+            mls_group_ref: Some("ck:mls_group:abc".to_owned()),
+            actor_id: "did:web:alice.example".to_owned(),
+            device_id: Some("ck:device:lost".to_owned()),
+            membership_frontier: vec![revoke_event.to_owned()],
+            trigger_membership: "device_revoke".to_owned(),
+            triggered_at: Utc.timestamp_opt(500, 0).single().unwrap(),
+        });
+        assert!(matches!(
+            apply_remove_proposal(
+                &mut state,
+                &op_at(
+                    500,
+                    "ck.mls.proposal",
+                    json!({
+                        "event_id": proposal_ref,
+                        "mls_group_id": "ck:mls_group:abc",
+                        "base_epoch": 0,
+                        "proposal_type": "remove",
+                        "proposal_digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+                        "target_principal_id": "did:web:alice.example",
+                        "target_device_id": "ck:device:lost",
+                    }),
+                )
+            ),
+            ProjectionEffect::Mls(MlsEffect::RemoveProposalRecorded { .. })
+        ));
+        let mut binding = governance_binding(0);
+        binding["membership_frontier"] = json!([revoke_event]);
+
+        let effect = apply_commit_epoch(
+            &mut state,
+            &op_at(
+                501,
+                "ck.mls.commit",
+                json!({
+                    "group_id": "ck:mls_group:abc",
+                    "expected_prev_epoch": 0,
+                    "next_epoch": 1,
+                    "leader_actor_id": "did:web:alice.example",
+                    "commit_digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+                    "proposal_refs": [proposal_ref],
+                    "governance_binding": binding,
+                }),
+            ),
+        );
+        assert!(matches!(
+            effect,
+            ProjectionEffect::Mls(MlsEffect::CommitEpochAdvanced { new_epoch: 1, .. })
+        ));
+        assert!(state.pending_mls_removals.is_empty());
+        let row = state
+            .mls_commit_epochs
+            .get(&mls_epoch_key(&realm_scope(), "ck:mls_group:abc").unwrap())
+            .unwrap();
+        assert_eq!(row.epoch, 1);
+        assert!(row.covered_seals.iter().any(|seal| seal == revoke_event));
     }
 
     #[test]

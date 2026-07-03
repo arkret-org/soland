@@ -77,7 +77,7 @@ pub const CONFLICT_REPAIR: &str = "ck.conflict.repair";
 //   - `ck.mls.commit`        — MLS commit (bumps the group's stored epoch by +1 from
 //     `payload.expected_prev_epoch`). The "epoch" semantics live in the payload, not in the kind
 //     suffix.
-//   - `ck.mls.proposal`      — MLS proposal (wire-only; no reducer projection yet).
+//   - `ck.mls.proposal`      — MLS proposal (Remove proposals are indexed for commit validation).
 //   - `ck.mls.genesis`       — MLS group genesis (initializes epoch 0 and the covered_seals
 //     accumulator).
 //   - `ck.mls.commit_failed` — diagnostic of a failed commit / Welcome processing path (wire-only;

@@ -87,6 +87,10 @@ const REGISTERED_ACCOUNT_DATA_TYPES: &[AccountDataTypeSpec] = &[
         controller_private: true,
     },
     AccountDataTypeSpec {
+        data_type: "ck.presence.preference",
+        controller_private: true,
+    },
+    AccountDataTypeSpec {
         data_type: "ck.presence.visibility",
         controller_private: true,
     },
@@ -454,10 +458,23 @@ mod tests {
             )
             .is_ok()
         );
+        assert!(
+            validate_private_account_data_content(
+                "ck.presence.preference",
+                &json!({"encrypted_payload": encrypted_envelope()}),
+            )
+            .is_ok()
+        );
         assert!(validate_private_account_data_content(key, &json!({"tombstone": true})).is_ok());
         let err =
             validate_private_account_data_content("ck.dnd_schedule", &json!({"enabled": true}))
                 .unwrap_err();
+        assert!(err.to_string().contains("encrypted"));
+        let err = validate_private_account_data_content(
+            "ck.presence.preference",
+            &json!({"manual_state": "dnd", "status_message": "In a meeting"}),
+        )
+        .unwrap_err();
         assert!(err.to_string().contains("encrypted"));
         let err = validate_private_account_data_content(
             "ck.account.blocklist",

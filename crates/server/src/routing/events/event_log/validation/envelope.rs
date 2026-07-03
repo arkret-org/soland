@@ -82,6 +82,7 @@ pub(crate) fn preflight_mls_projection_reject(
         cokret_sdk::events::kinds::MLS_KEYPACKAGE
         | cokret_sdk::events::kinds::MLS_WELCOME
         | cokret_sdk::events::kinds::MLS_GENESIS
+        | cokret_sdk::events::kinds::MLS_PROPOSAL
         | cokret_sdk::events::kinds::MLS_COMMIT => {
             let mut snapshot = proj.clone();
             let effect = match kind.as_str() {
@@ -106,6 +107,9 @@ pub(crate) fn preflight_mls_projection_reject(
                 }
                 cokret_sdk::events::kinds::MLS_GENESIS => {
                     crate::reducer::mls::apply_group_genesis(&mut snapshot, operation)
+                }
+                cokret_sdk::events::kinds::MLS_PROPOSAL => {
+                    crate::reducer::mls::apply_remove_proposal(&mut snapshot, operation)
                 }
                 cokret_sdk::events::kinds::MLS_COMMIT => {
                     crate::reducer::mls::apply_commit_epoch(&mut snapshot, operation)
@@ -2016,6 +2020,13 @@ pub(crate) fn validate_event_schema_and_payload(
         return validate_space_container_lifecycle_payload(payload);
     }
     cokret_sdk::schema::event_payload_validator_catalog()
+        .map_err(|error| {
+            event_validation_error(
+                StatusCode::BAD_REQUEST,
+                "schema_violation",
+                format!("event payload validator catalog unavailable: {error}"),
+            )
+        })?
         .validate_payload(kind, payload)
         .map_err(|error| {
             event_validation_error(

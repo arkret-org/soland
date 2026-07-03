@@ -1007,6 +1007,44 @@ async fn preflight_mls_welcome_claim_signature_reject(
     .map(str::to_owned)
 }
 
+async fn preflight_mls_welcome_recipient_reject(
+    state: &AppState,
+    operation: &Operation,
+) -> Option<String> {
+    if kinds::canonical_kind_string(operation) != cokret_sdk::events::kinds::MLS_WELCOME {
+        return None;
+    }
+    let Some(recipient_actor_id) = operation
+        .payload
+        .get("recipient_actor_id")
+        .or_else(|| operation.payload.get("recipient_principal_id"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return None;
+    };
+    let Some(recipient_device_id) = operation
+        .payload
+        .get("recipient_device_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return None;
+    };
+    if crate::routing::identity::auth::is_device_revoked(
+        state,
+        recipient_actor_id,
+        recipient_device_id,
+    )
+    .await
+    {
+        return Some("device_revoked".to_owned());
+    }
+    None
+}
+
 pub(super) fn events_submit_outcome(
     status: EventsSubmitStatus,
     accepted: Vec<String>,
@@ -1290,6 +1328,13 @@ async fn submit_event_value_with_context(
                 rejection.message,
             ));
         }
+        if let Some(reason) = preflight_mls_welcome_recipient_reject(state, operation).await {
+            return Err(SubmitOneError::new(
+                StatusCode::PRECONDITION_FAILED,
+                reason.clone(),
+                reason,
+            ));
+        }
         if let Some(reason) =
             preflight_mls_welcome_claim_signature_reject(state, &parsed.actor_id, operation).await
         {
@@ -1553,12 +1598,31 @@ async fn submit_event_value_with_context(
                 format!("device revocation enforcement failed: {error}"),
             )
         })?;
+        let keypackages_retired = crate::routing::mls::retire_device_keypackages(
+            state,
+            &parsed.actor_id,
+            &target_device_id,
+        )
+        .await
+        .map_err(|error| {
+            SubmitOneError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                format!("device KeyPackage retirement failed: {error}"),
+            )
+        })?;
         // device-lifecycle.md §7 grace drop — a to-device message already queued
         // for the revoked device MUST be dropped on revocation: a lost or
         // compromised device that comes back online MUST NOT drain key-exchange
         // or verification bootstrap material queued before the revoke. Runs after
         // the record flip so `GET /_cokret/self/device_messages` for that device
         // returns nothing once the revoke is accepted.
+        let mls_remove_obligations = crate::routing::mls::enqueue_device_revoke_mls_removals(
+            state,
+            &parsed.actor_id,
+            &target_device_id,
+            &parsed.event_id,
+        );
         let purge_outcome = crate::routing::identity::auth::purge_device_delivery_state(
             state,
             &parsed.actor_id,
@@ -1574,6 +1638,8 @@ async fn submit_event_value_with_context(
                 "by_device_id": session.device_id.clone(),
                 "via": "ck.device.revoke",
                 "event_id": parsed.event_id.clone(),
+                "keypackages_retired": keypackages_retired,
+                "mls_remove_obligations": mls_remove_obligations,
                 "to_device_messages_dropped": purge_outcome.to_device_messages_dropped,
                 "push_registrations_removed": purge_outcome.push_registrations_removed,
             }),

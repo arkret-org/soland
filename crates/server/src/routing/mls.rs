@@ -53,7 +53,9 @@ use serde_json::{Value, json};
 
 use crate::error::{AppError, ErrorCode};
 use crate::persistence::MlsKeyPackageRow;
-use crate::reducer::{self, MlsEffect, MlsKeyPackage, MlsWelcomeQueueKey, ProjectionEffect};
+use crate::reducer::{
+    self, MlsEffect, MlsKeyPackage, MlsRemoveObligation, MlsWelcomeQueueKey, ProjectionEffect,
+};
 use crate::result::{JsonResult, json_ok};
 use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;
@@ -206,6 +208,119 @@ struct PendingWelcomesOutcome {
 }
 
 // ── publish ───────────────────────────────────────────────────────────
+
+pub(crate) fn enqueue_device_revoke_mls_removals(
+    state: &AppState,
+    actor_id: &str,
+    device_id: &str,
+    revoke_event_id: &str,
+) -> usize {
+    let triggered_at = now();
+    let mut projection = state.projection.lock().expect("projection lock");
+    let mut queued = Vec::new();
+    for row in projection.mls_commit_epochs.values() {
+        let Some((realm_id, circle_id)) = mls_scope_parts(&row.effective_scope) else {
+            continue;
+        };
+        if !actor_participates_in_mls_scope(&projection, &realm_id, circle_id.as_deref(), actor_id)
+        {
+            continue;
+        }
+        if pending_device_revoke_exists(
+            &projection.pending_mls_removals,
+            &realm_id,
+            circle_id.as_deref(),
+            &row.group_id,
+            actor_id,
+            device_id,
+            revoke_event_id,
+        ) || pending_device_revoke_exists(
+            &queued,
+            &realm_id,
+            circle_id.as_deref(),
+            &row.group_id,
+            actor_id,
+            device_id,
+            revoke_event_id,
+        ) {
+            continue;
+        }
+        queued.push(MlsRemoveObligation {
+            realm_id,
+            circle_id,
+            mls_group_ref: Some(row.group_id.clone()),
+            actor_id: actor_id.to_owned(),
+            device_id: Some(device_id.to_owned()),
+            membership_frontier: vec![revoke_event_id.to_owned()],
+            trigger_membership: "device_revoke".to_owned(),
+            triggered_at,
+        });
+    }
+    let count = queued.len();
+    projection.pending_mls_removals.extend(queued);
+    count
+}
+
+fn mls_scope_parts(effective_scope: &Value) -> Option<(String, Option<String>)> {
+    let object = effective_scope.as_object()?;
+    let realm_id = object.get("realm_id").and_then(Value::as_str)?.to_owned();
+    match object.get("kind").and_then(Value::as_str) {
+        Some("realm") => Some((realm_id, None)),
+        Some("circle") => Some((
+            realm_id,
+            Some(object.get("circle_id").and_then(Value::as_str)?.to_owned()),
+        )),
+        _ => None,
+    }
+}
+
+fn actor_participates_in_mls_scope(
+    projection: &crate::reducer::ProjectionState,
+    realm_id: &str,
+    circle_id: Option<&str>,
+    actor_id: &str,
+) -> bool {
+    match circle_id {
+        Some(circle_id) => projection.circles.get(circle_id).is_some_and(|circle| {
+            circle.realm_id == realm_id
+                && circle.encryption_profile == "mls_rfc9420"
+                && circle.members.contains(actor_id)
+        }),
+        None => {
+            projection
+                .member(realm_id, actor_id)
+                .is_some_and(|member| member.state == "join")
+                || projection
+                    .realm_states
+                    .get(realm_id)
+                    .and_then(|realm| realm.owner.as_deref())
+                    == Some(actor_id)
+        }
+    }
+}
+
+fn pending_device_revoke_exists(
+    obligations: &[MlsRemoveObligation],
+    realm_id: &str,
+    circle_id: Option<&str>,
+    group_id: &str,
+    actor_id: &str,
+    device_id: &str,
+    revoke_event_id: &str,
+) -> bool {
+    obligations.iter().any(|obligation| {
+        obligation.realm_id == realm_id
+            && obligation.circle_id.as_deref() == circle_id
+            && obligation.mls_group_ref.as_deref() == Some(group_id)
+            && obligation.actor_id == actor_id
+            && obligation.device_id.as_deref() == Some(device_id)
+            && obligation
+                .membership_frontier
+                .iter()
+                .any(|frontier| frontier == revoke_event_id)
+            && obligation.trigger_membership == "device_revoke"
+    })
+}
 
 #[endpoint(
     operation_id = "ck.self.keys.keypackages.upload.create",
@@ -828,6 +943,51 @@ async fn revoke_keypackages(
     json_ok(KeyPackagesRevokeOutcome { revoked, failures })
 }
 
+pub(crate) async fn retire_device_keypackages(
+    state: &AppState,
+    actor_id: &str,
+    device_id: &str,
+) -> Result<usize, AppError> {
+    let rows = state
+        .persistence
+        .mls_key_packages()
+        .snapshot_all()
+        .await
+        .map_err(|error| AppError::internal(format!("mls keypackage snapshot failed: {error}")))?;
+    let retired_at = now().timestamp();
+    let mut retired = 0usize;
+    for row in rows.into_iter().filter(|row| {
+        row.actor_id == actor_id
+            && row.device_id == device_id
+            && row.claimed_by_mls_group_id.is_none()
+            && row.consumed_at.is_none()
+    }) {
+        if state
+            .persistence
+            .mls_key_packages()
+            .try_claim(&row.id, "revoked", None, None, None, retired_at)
+            .await
+            .map_err(|error| {
+                AppError::internal(format!("mls keypackage retirement failed: {error}"))
+            })?
+            .is_some()
+        {
+            if let Some(projected) = state
+                .projection
+                .lock()
+                .expect("projection lock")
+                .mls_key_packages
+                .get_mut(&row.id)
+            {
+                projected.claimed_by = Some("revoked".to_owned());
+                projected.consumed_at = Some(retired_at);
+            }
+            retired += 1;
+        }
+    }
+    Ok(retired)
+}
+
 // ── welcomes/pending ──────────────────────────────────────────────────
 
 #[endpoint(
@@ -1188,6 +1348,7 @@ fn available_keypackage_count(
                 kp.claimed_by.is_none()
             }
         })
+        .filter(|kp| kp.claimed_by.as_deref() != Some("revoked"))
         .filter(|kp| kp.lifetime.not_after > now_secs)
         .count() as u64
 }
@@ -1202,6 +1363,7 @@ fn keypackage_matches_claim(
 ) -> bool {
     kp.actor_id == actor_id
         && (target_device_ids.is_empty() || target_device_ids.contains(kp.device_id.as_str()))
+        && kp.claimed_by.as_deref() != Some("revoked")
         && trust_selector.matches_keypackage(kp)
         && kp.lifetime.not_after > now_secs
         && capabilities_satisfy(&kp.capabilities, required_capabilities)

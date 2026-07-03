@@ -285,6 +285,7 @@ impl ProjectionState {
                     circle_id: Some(circle.circle_id.clone()),
                     mls_group_ref: circle.mls_group_ref.clone(),
                     actor_id: member.to_owned(),
+                    device_id: None,
                     membership_frontier: membership_frontier.clone(),
                     trigger_membership: trigger_membership.to_owned(),
                     triggered_at: now,

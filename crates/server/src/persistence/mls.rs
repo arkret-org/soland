@@ -195,6 +195,9 @@ impl MlsKeyPackageStore for MemoryMlsKeyPackageStore {
         let Some(row) = rows.get_mut(id) else {
             return Ok(None);
         };
+        if row.claimed_by_mls_group_id.as_deref() == Some("revoked") {
+            return Ok(None);
+        }
         if row.claimed_by_mls_group_id.is_some() && !(row.last_resort && group_id != "revoked") {
             // Already claimed — CAS loser path.
             return Ok(None);
@@ -613,6 +616,7 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
                  device_authorize_event_id = COALESCE($5, device_authorize_event_id), \
                  consumed_at = CASE WHEN last_resort AND $2 <> 'revoked' THEN consumed_at ELSE $6 END \
              WHERE id = $1 \
+               AND (claimed_by_mls_group_id IS NULL OR claimed_by_mls_group_id <> 'revoked') \
                AND (claimed_by_mls_group_id IS NULL OR (last_resort AND $2 <> 'revoked')) \
                AND ($4 IS NULL OR ssk_generation = $4) \
                AND ($5 IS NULL OR device_authorize_event_id = $5) \

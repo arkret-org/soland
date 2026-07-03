@@ -331,7 +331,7 @@ pub fn validate_message_operation_payload(operation: &Operation) -> Result<(), &
         // The encrypted content envelope SHAPE is owned by the registered spec schema
         // `ck.schema.encrypted_envelope.v1` (referenced from
         // `message_create_payload` and enforced via
-        // `event_payload_validator_catalog().validate_payload`). The spec
+        // `event_payload_validator_catalog()?.validate_payload`). The spec
         // schema is the single source of truth — we only assert presence here
         // and never re-derive a divergent hand-written envelope shape.
         if operation.payload.get("encrypted_content").is_none()

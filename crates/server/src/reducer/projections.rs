@@ -372,6 +372,23 @@ impl MlsWelcomeQueueKey {
     }
 }
 
+/// Reducer-side index for `ck.mls.proposal{proposal_type="remove"}`.
+///
+/// The opaque MLS proposal bytes stay client-owned; the reducer only keeps the
+/// canonical event ref and the target tuple needed to verify that a later
+/// `ck.mls.commit` consuming a pending remove obligation really references a
+/// Remove proposal for the revoked / removed leaf.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MlsRemoveProposal {
+    pub proposal_ref: String,
+    pub group_id: String,
+    pub effective_scope: Value,
+    pub base_epoch: u64,
+    pub target_actor_id: String,
+    pub target_device_id: Option<String>,
+    pub created_at: i64,
+}
+
 /// Projection key for one MLS epoch row inside one tagged scope.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct MlsCommitEpochKey {
@@ -440,6 +457,7 @@ pub struct MlsRemoveObligation {
     pub circle_id: Option<String>,
     pub mls_group_ref: Option<String>,
     pub actor_id: String,
+    pub device_id: Option<String>,
     pub membership_frontier: Vec<String>,
     pub trigger_membership: String,
     pub triggered_at: chrono::DateTime<chrono::Utc>,

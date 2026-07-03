@@ -263,6 +263,83 @@ fn presence_sync_event_carries_status_message_for_authorized_observer() {
     assert_eq!(event["last_active_at"], "2026-07-03T10:00:00Z/PT1H");
 }
 
+#[tokio::test]
+async fn incremental_sync_includes_presence_only_for_presence_delta() {
+    let state = test_state();
+    let session = roster_session(&state, ROSTER_ACTOR);
+    state
+        .realms
+        .lock()
+        .unwrap()
+        .upsert(roster_realm(false, true));
+    state
+        .persistence
+        .presence()
+        .put(PresenceRecord {
+            actor: ROSTER_ACTOR.to_owned(),
+            device_id: "ck:device:01904100-0000-7000-8000-a11ce0000001".to_owned(),
+            status: "dnd".to_owned(),
+            status_message: Some("In a meeting".to_owned()),
+            last_active_at: None,
+            expires_at: Some(now() + ChronoDuration::seconds(60)),
+            updated_at: now(),
+        })
+        .await
+        .expect("presence stored");
+
+    let body = roster_body(&state.config.service_did);
+    let initial =
+        build_sync_snapshot(&state, Some(&session), &body, &SyncCursor::default(), false).await;
+    assert!(
+        initial
+            .presence
+            .iter()
+            .any(|event| event["actor_id"] == ROSTER_ACTOR && event["presence"] == "dnd"),
+        "full sync carries visible presence: {:?}",
+        initial.presence
+    );
+
+    let filter_value = sync_filter_value(body.filter.as_ref());
+    let initial_cursor = parse_and_validate_sync_cursor(
+        &initial.cursor,
+        &state,
+        Some(&session),
+        filter_value.as_ref(),
+        chrono::Utc::now().timestamp_millis(),
+    )
+    .await
+    .expect("initial cursor parses");
+    let mut incremental_body = body.clone();
+    incremental_body.after = Some(initial.cursor.clone());
+
+    let quiet_incremental = build_sync_snapshot(
+        &state,
+        Some(&session),
+        &incremental_body,
+        &initial_cursor,
+        false,
+    )
+    .await;
+    assert!(quiet_incremental.presence.is_empty());
+
+    let presence_incremental = build_sync_snapshot(
+        &state,
+        Some(&session),
+        &incremental_body,
+        &initial_cursor,
+        true,
+    )
+    .await;
+    assert!(
+        presence_incremental
+            .presence
+            .iter()
+            .any(|event| event["actor_id"] == ROSTER_ACTOR && event["presence"] == "dnd"),
+        "presence-triggered incremental sync carries current presence: {:?}",
+        presence_incremental.presence
+    );
+}
+
 fn test_config() -> crate::config::AppConfig {
     crate::config::AppConfig {
         bind: "127.0.0.1:0".parse().unwrap(),
@@ -850,7 +927,8 @@ async fn sync_snapshot_emits_device_list_baseline_changes_and_left_principals() 
     }
 
     let body = roster_body(&state.config.service_did);
-    let initial = build_sync_snapshot(&state, Some(&session), &body, &SyncCursor::default()).await;
+    let initial =
+        build_sync_snapshot(&state, Some(&session), &body, &SyncCursor::default(), false).await;
     assert_eq!(
         initial.device_lists,
         json!({"changed": [ROSTER_ACTOR, ROSTER_CALLER], "left": []})
@@ -886,8 +964,14 @@ async fn sync_snapshot_emits_device_list_baseline_changes_and_left_principals() 
 
     let mut incremental_body = body.clone();
     incremental_body.after = Some(initial.cursor.clone());
-    let after_revocation =
-        build_sync_snapshot(&state, Some(&session), &incremental_body, &initial_cursor).await;
+    let after_revocation = build_sync_snapshot(
+        &state,
+        Some(&session),
+        &incremental_body,
+        &initial_cursor,
+        false,
+    )
+    .await;
     assert_eq!(
         after_revocation.device_lists,
         json!({"changed": [ROSTER_ACTOR], "left": []}),
@@ -914,6 +998,7 @@ async fn sync_snapshot_emits_device_list_baseline_changes_and_left_principals() 
         Some(&session),
         &incremental_body,
         &after_revocation_cursor,
+        false,
     )
     .await;
     assert_eq!(
@@ -986,7 +1071,8 @@ async fn sync_snapshot_emits_state_events_without_timeline_messages() {
         .expect("first state event appended");
 
     let body = roster_body(&state.config.service_did);
-    let initial = build_sync_snapshot(&state, Some(&session), &body, &SyncCursor::default()).await;
+    let initial =
+        build_sync_snapshot(&state, Some(&session), &body, &SyncCursor::default(), false).await;
     let initial_events = initial.realms[ROSTER_REALM]["state"]["events"]
         .as_array()
         .expect("state events array");
@@ -1025,8 +1111,14 @@ async fn sync_snapshot_emits_state_events_without_timeline_messages() {
 
     let mut incremental_body = body.clone();
     incremental_body.after = Some(initial.cursor.clone());
-    let incremental =
-        build_sync_snapshot(&state, Some(&session), &incremental_body, &initial_cursor).await;
+    let incremental = build_sync_snapshot(
+        &state,
+        Some(&session),
+        &incremental_body,
+        &initial_cursor,
+        false,
+    )
+    .await;
     let incremental_events = incremental.realms[ROSTER_REALM]["state"]["events"]
         .as_array()
         .expect("incremental state events array");

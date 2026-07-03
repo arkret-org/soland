@@ -10,6 +10,7 @@ const ACCOUNT_DATA_TYPE_AGENT_PARTICIPATION: &str = "ck.agent.participation.v1";
 const ACCOUNT_DATA_TYPE_BLOCKLIST: &str = "ck.account.blocklist";
 const ACCOUNT_DATA_TYPE_DND_SCHEDULE: &str = "ck.dnd_schedule";
 const ACCOUNT_DATA_TYPE_INVITE_QUARANTINE: &str = "ck.account.invite_quarantine";
+const ACCOUNT_DATA_TYPE_PRESENCE_PREFERENCE: &str = "ck.presence.preference";
 const ACCOUNT_DATA_TYPE_PRESENCE_VISIBILITY: &str = "ck.presence.visibility";
 const ACCOUNT_DATA_TYPE_PUSH_RULES: &str = "ck.push_rules";
 const ACCOUNT_DATA_TYPE_TAGS_REALM: &str = "ck.tags.realm";
@@ -18,6 +19,7 @@ const EXACT_ENCRYPTED_ACCOUNT_DATA_KEYS: &[&str] = &[
     ACCOUNT_DATA_TYPE_BLOCKLIST,
     ACCOUNT_DATA_TYPE_DND_SCHEDULE,
     ACCOUNT_DATA_TYPE_INVITE_QUARANTINE,
+    ACCOUNT_DATA_TYPE_PRESENCE_PREFERENCE,
     ACCOUNT_DATA_TYPE_PRESENCE_VISIBILITY,
     ACCOUNT_DATA_TYPE_PUSH_RULES,
 ];
@@ -482,6 +484,7 @@ mod tests {
             ACCOUNT_DATA_TYPE_BLOCKLIST,
             ACCOUNT_DATA_TYPE_DND_SCHEDULE,
             ACCOUNT_DATA_TYPE_PRESENCE_VISIBILITY,
+            ACCOUNT_DATA_TYPE_PRESENCE_PREFERENCE,
             ACCOUNT_DATA_TYPE_PUSH_RULES,
         ] {
             let err =

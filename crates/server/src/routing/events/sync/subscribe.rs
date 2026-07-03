@@ -219,7 +219,8 @@ pub(super) async fn account_subscribe(depot: &mut Depot, req: &mut Request, res:
     // event landing between snapshot-build and long-poll subscribe is not
     // missed.
     let mut rx = state.event_broadcast.subscribe();
-    let mut response = build_sync_snapshot(&state, Some(&session), &body, &after_cursor).await;
+    let mut response =
+        build_sync_snapshot(&state, Some(&session), &body, &after_cursor, false).await;
     let mut control_frame: Option<Value> = None;
 
     // Long-poll only when the client supplied an `after` cursor (true
@@ -257,6 +258,8 @@ pub(super) async fn account_subscribe(depot: &mut Depot, req: &mut Request, res:
                             // notifications need no individual handling — the
                             // rebuilt snapshot covers everything visible.
                             let mut lagged_during_drain = false;
+                            let mut include_presence_delta =
+                                account_subscribe_notification_is_presence(&notification);
                             let drain_until = (tokio::time::Instant::now()
                                 + Duration::from_millis(SUBSCRIBE_REBUILD_DEBOUNCE_MS))
                             .min(deadline);
@@ -265,16 +268,27 @@ pub(super) async fn account_subscribe(depot: &mut Depot, req: &mut Request, res:
                                     biased;
                                     _ = tokio::time::sleep_until(drain_until) => break,
                                     more = rx.recv() => match more {
-                                        Ok(_) => {}
+                                        Ok(more) => {
+                                            include_presence_delta |=
+                                                account_subscribe_notification_is_presence(&more);
+                                        }
                                         Err(RecvError::Lagged(_)) => {
                                             lagged_during_drain = true;
+                                            include_presence_delta = true;
                                             break;
                                         }
                                         Err(RecvError::Closed) => break,
                                     }
                                 }
                             }
-                            response = build_sync_snapshot(&state, Some(&session), &body, &after_cursor).await;
+                            response = build_sync_snapshot(
+                                &state,
+                                Some(&session),
+                                &body,
+                                &after_cursor,
+                                include_presence_delta,
+                            )
+                            .await;
                             if !delta_is_empty(&response) {
                                 break;
                             }
@@ -296,7 +310,14 @@ pub(super) async fn account_subscribe(depot: &mut Depot, req: &mut Request, res:
                             // delta speak for itself. If the rebuilt delta is
                             // still empty, close with a terminal control frame
                             // and gate immediate reconnect for the same scope.
-                            response = build_sync_snapshot(&state, Some(&session), &body, &after_cursor).await;
+                            response = build_sync_snapshot(
+                                &state,
+                                Some(&session),
+                                &body,
+                                &after_cursor,
+                                true,
+                            )
+                            .await;
                             if !delta_is_empty(&response) {
                                 break;
                             }
@@ -382,6 +403,15 @@ fn delta_is_empty(response: &cokret_sdk::models::SyncOutcome) -> bool {
         && response.to_device_lost != Some(true)
         && response.presence.is_empty()
         && notifications_delta_is_empty(&response.notifications)
+}
+
+fn account_subscribe_notification_is_presence(
+    notification: &crate::state::EventNotification,
+) -> bool {
+    matches!(
+        &notification.kind,
+        crate::state::EventNotificationKind::Ephemeral { kind } if kind == "ck.presence"
+    )
 }
 
 async fn account_subscribe_notification_should_wake(

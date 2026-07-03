@@ -239,6 +239,10 @@ pub struct ProjectionState {
     /// Entries gain a non-None `delivered_at` when the recipient device
     /// drains them via `GET /_soland/self/keys/keypackages/welcomes/pending`.
     pub mls_welcomes: BTreeMap<MlsWelcomeQueueKey, Vec<MlsWelcome>>,
+    /// G3.S1 — Remove proposals keyed by their canonical `ck.mls.proposal`
+    /// event id. Commit validation uses this to ensure pending remove
+    /// obligations are consumed by an explicit MLS Remove proposal reference.
+    pub mls_remove_proposals: BTreeMap<String, MlsRemoveProposal>,
     /// G3.S1 — per-scope MLS commit-epoch state. Keyed by tagged
     /// effective scope plus `mls_group_id` per the genesis uniqueness
     /// rule. The reducer keeps the monotonic epoch counter in lockstep

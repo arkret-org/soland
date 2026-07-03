@@ -366,6 +366,15 @@ pub enum MlsEffect {
         recipient_device_id: String,
         group_id: String,
     },
+    /// `apply_remove_proposal` — a `ck.mls.proposal{proposal_type="remove"}`
+    /// was recorded so a later commit can consume a pending remove obligation.
+    RemoveProposalRecorded {
+        proposal_ref: String,
+        group_id: String,
+        effective_scope: Value,
+        target_actor_id: String,
+        target_device_id: Option<String>,
+    },
     /// `apply_group_genesis` — the group was initialized at epoch 0.
     GroupGenesis {
         group_id: String,
