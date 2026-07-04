@@ -73,6 +73,14 @@ opentelemetry-otlp = {workspace = true,default-features = false,features = ["tra
 opentelemetry_sdk = {workspace = true,default-features = false,features = ["trace", "rt-tokio"],optional = true}
 parking_lot = {workspace = true}
 rand = {workspace = true}
+# `url::Url` to feed the shared SDK `webvh::prepare_service_inception` primitive
+# when self-bootstrapping the deployment's own service DID (identity-did §3.7).
+# Already present in the lock tree via cokret-sdk.
+url = "2.5"
+# ChaCha20 rng seeded from OS entropy for the self-bootstrap mint. Pinned to
+# 0.3 so its `rand_core` 0.6 `RngCore` matches the SDK inception primitive
+# (the dalek stack pins that ecosystem); already in the lock tree via the SDK.
+rand_chacha = "0.3.1"
 reqwest = {workspace = true,default-features = false,features = ["form", "json", "rustls"]}
 salvo = {workspace = true,default-features = false,features = ["cookie", "fix-http1-request-uri", "server", "server-handle", "http1", "http2", "test", "matched-path", "ring", "affix-state", "catch-panic", "cors", "oapi", "rustls"]}
 salvo-oapi = {workspace = true,features = ["yaml"]}

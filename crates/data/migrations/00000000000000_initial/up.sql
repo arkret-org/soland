@@ -1103,6 +1103,21 @@ CREATE TABLE public.webvh_log_events (
     created_at timestamp with time zone DEFAULT now() NOT NULL
 );
 
+-- The deployment's own authoritative service identity (identity-did.md §3.7).
+-- Singleton: at most one row keyed by the fixed id 'self'. `provenance` is
+-- 'bootstrapped_local' (soland self-minted its did:webvh + hosts the log) or
+-- 'adopted_config' (a pre-existing / external service_did recorded from config
+-- on first boot). This row is the fail-closed source of truth; a configured
+-- SOLAND_SERVICE_DID that disagrees with it MUST reject startup.
+CREATE TABLE public.service_identity (
+    id text NOT NULL,
+    service_did text NOT NULL,
+    provenance text NOT NULL,
+    did_document jsonb DEFAULT '{}'::jsonb NOT NULL,
+    update_key_seed_multibase text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
 ALTER TABLE ONLY public.projection_events ALTER COLUMN id SET DEFAULT nextval('public.projection_events_ordinal_seq'::regclass);
 
 ALTER TABLE ONLY public.account_datas
@@ -1412,6 +1427,9 @@ ALTER TABLE ONLY public.webvh_log_events
 
 ALTER TABLE ONLY public.webvh_log_events
     ADD CONSTRAINT webvh_log_events_pkey PRIMARY KEY (id);
+
+ALTER TABLE ONLY public.service_identity
+    ADD CONSTRAINT service_identity_pkey PRIMARY KEY (id);
 
 CREATE INDEX agent_grants_principal_idx ON public.agent_grants USING btree (agent_principal_id);
 

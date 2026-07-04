@@ -58,6 +58,14 @@ async fn main() -> anyhow::Result<()> {
             std::env::set_var("DATABASE_URL", database_url);
         }
     }
+    // Connect the database and resolve this deployment's own service identity
+    // (identity-did.md §3.7) BEFORE anything derived from `service_did` — notary
+    // key, HLC, DID resolver, trust domain — is constructed in AppState. This
+    // mutates `config.service_did` + `config.trust_domain` in place and returns
+    // the persistence instance the resolution used, so a self-minted / adopted
+    // identity is the one the running server serves.
+    let db = Db::from_env().await?;
+    let persistence = soland::bootstrap::resolve_and_build_persistence(&mut config, &db).await?;
     // Probe the optional external webvh provider before advertising it as
     // active. The configured URL remains visible in `/identity/describe` even
     // when the probe fails so coauth can show the operator's intended setup.
@@ -91,7 +99,7 @@ async fn main() -> anyhow::Result<()> {
             }
         }
     }
-    let state = AppState::new(config.clone(), Db::from_env().await?);
+    let state = AppState::new_with_persistence(config.clone(), db, persistence);
     // Finish boot: seed demo data + hydrate the Realm directory and
     // projections from the (now async) persistence store.
     state.hydrate().await?;

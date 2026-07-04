@@ -4583,6 +4583,7 @@ dependencies = [
  "parking_lot",
  "proptest",
  "rand 0.10.1",
+ "rand_chacha 0.3.1",
  "reqwest 0.13.4",
  "salvo",
  "salvo-oapi",
@@ -4600,6 +4601,7 @@ dependencies = [
  "tracing-appender",
  "tracing-opentelemetry",
  "tracing-subscriber",
+ "url",
  "uuid",
 ]
 

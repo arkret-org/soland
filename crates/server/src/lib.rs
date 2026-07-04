@@ -8,6 +8,7 @@
 
 pub mod artifacts;
 pub mod authz;
+pub mod bootstrap;
 pub mod compactor;
 pub mod config;
 pub mod error;

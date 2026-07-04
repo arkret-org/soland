@@ -673,9 +673,19 @@ impl AppConfig {
         // T1 — a production deployment MUST declare its own routable service
         // DID. Booting under the shared placeholder means every such
         // deployment signs and federates under the same fake identity.
-        if !development_mode && service_did == PLACEHOLDER_SERVICE_DID {
+        //
+        // Exception: service-identity self-bootstrap (identity-did.md §3.7).
+        // When `SOLAND_BOOTSTRAP_SERVICE_IDENTITY=1` the placeholder is
+        // tolerated at config load; the async boot resolve step then mints a
+        // fresh `did:webvh` (or adopts a previously-persisted one) and overwrites
+        // `service_did` + `trust_domain` before anything signs under them.
+        let bootstrap_service_identity = std::env::var("SOLAND_BOOTSTRAP_SERVICE_IDENTITY")
+            .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes"))
+            .unwrap_or(false);
+        if !development_mode && !bootstrap_service_identity && service_did == PLACEHOLDER_SERVICE_DID
+        {
             anyhow::bail!(
-                "SOLAND_SERVICE_DID is required when SOLAND_DEVELOPMENT_MODE is false; the built-in placeholder DID is a shared, non-routable identity"
+                "SOLAND_SERVICE_DID is required when SOLAND_DEVELOPMENT_MODE is false (or set SOLAND_BOOTSTRAP_SERVICE_IDENTITY=1 to self-bootstrap a did:webvh); the built-in placeholder DID is a shared, non-routable identity"
             );
         }
         // CORS posture per api-conventions.md §10 — browser clients SHOULD be
@@ -1302,7 +1312,7 @@ fn load_agent_audit_binding_signing_seed() -> anyhow::Result<Option<[u8; 32]>> {
 ///    [`cokret_sdk::TypedTrustDomainId`]).
 /// 2. Synthesised from the configured `service_did` — strip the DID method prefix and lowercase the
 ///    remainder, then prefix with `ck:trust_domain:`.
-fn derive_trust_domain(service_did: &str) -> anyhow::Result<String> {
+pub(crate) fn derive_trust_domain(service_did: &str) -> anyhow::Result<String> {
     if let Some(value) = env_non_empty("SOLAND_TRUST_DOMAIN") {
         // Validate via SDK typed id — rejects bad shape at boot.
         cokret_sdk::TypedTrustDomainId::new(value.clone()).map_err(|e| {

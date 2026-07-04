@@ -40,6 +40,7 @@ pub struct PgPersistenceStore {
     call_signal_relay: PgCallSignalRelayStore,
     read_receipt_relay: PgReadReceiptRelayStore,
     webvh: PgWebvhStore,
+    service_identity: PgServiceIdentityStore,
     realm_invites: PgRealmInviteStore,
     key_backups: PgKeyBackupStore,
     policy_documents: PgPolicyDocumentStore,
@@ -99,6 +100,7 @@ impl PgPersistenceStore {
             call_signal_relay: PgCallSignalRelayStore { pool: pool.clone() },
             read_receipt_relay: PgReadReceiptRelayStore { pool: pool.clone() },
             webvh: PgWebvhStore { pool: pool.clone() },
+            service_identity: PgServiceIdentityStore { pool: pool.clone() },
             realm_invites: PgRealmInviteStore { pool: pool.clone() },
             key_backups: PgKeyBackupStore { pool: pool.clone() },
             policy_documents: PgPolicyDocumentStore { pool: pool.clone() },
@@ -279,6 +281,10 @@ impl PersistenceStore for PgPersistenceStore {
 
     fn webvh(&self) -> &dyn WebvhStore {
         &self.webvh
+    }
+
+    fn service_identity(&self) -> &dyn ServiceIdentityStore {
+        &self.service_identity
     }
 
     fn realm_invites(&self) -> &dyn RealmInviteStore {

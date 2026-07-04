@@ -52,6 +52,7 @@ mod push;
 mod read_receipts;
 mod realm_invites;
 mod recovery;
+mod service_identity;
 mod sessions;
 mod sync_cursor;
 #[cfg(test)]
@@ -85,6 +86,7 @@ pub use realm_invites::*;
 pub use recovery::*;
 pub use sessions::*;
 pub use sync_cursor::*;
+pub use service_identity::*;
 pub use webvh::*;
 // `webvh_freshness_on_put` is `pub(crate)`; the glob above only re-exports
 // `pub` items, so re-export it explicitly for the webvh sub-store.
@@ -155,6 +157,7 @@ pub trait PersistenceStore: Send + Sync {
     fn recovery_receipts(&self) -> &dyn RecoveryReceiptStore;
     fn recovery_sessions(&self) -> &dyn RecoverySessionStore;
     fn webvh(&self) -> &dyn WebvhStore;
+    fn service_identity(&self) -> &dyn ServiceIdentityStore;
     fn realm_invites(&self) -> &dyn RealmInviteStore;
     fn events(&self) -> &dyn EventStore;
     fn projection_events(&self) -> &dyn ProjectionEventStore;

@@ -43,6 +43,7 @@ pub struct SolandMemoryPersistenceStore {
     recovery_receipts: MemoryRecoveryReceiptStore,
     recovery_sessions: MemoryRecoverySessionStore,
     webvh: MemoryWebvhStore,
+    service_identity: MemoryServiceIdentityStore,
     realm_invites: MemoryRealmInviteStore,
     events: MemoryEventStore,
     projection_events: MemoryProjectionEventStore,
@@ -110,6 +111,7 @@ impl SolandMemoryPersistenceStore {
             recovery_receipts: MemoryRecoveryReceiptStore::new(),
             recovery_sessions: MemoryRecoverySessionStore::new(),
             webvh: MemoryWebvhStore::new(),
+            service_identity: MemoryServiceIdentityStore::new(),
             realm_invites: MemoryRealmInviteStore::new(),
             events: MemoryEventStore::new(),
             projection_events: MemoryProjectionEventStore::new(),
@@ -296,6 +298,10 @@ impl PersistenceStore for SolandMemoryPersistenceStore {
 
     fn webvh(&self) -> &dyn WebvhStore {
         &self.webvh
+    }
+
+    fn service_identity(&self) -> &dyn ServiceIdentityStore {
+        &self.service_identity
     }
 
     fn realm_invites(&self) -> &dyn RealmInviteStore {
