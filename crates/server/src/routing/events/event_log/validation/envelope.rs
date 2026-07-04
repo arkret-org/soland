@@ -2412,6 +2412,10 @@ fn event_proof_binding_bytes(
     proof_object: &serde_json::Map<String, Value>,
 ) -> Result<Vec<u8>, EventValidationError> {
     let mut binding = serde_json::Map::new();
+    // encoding.md §2: the Event proof binding carries the fixed signing-context
+    // domain tag "ck-event-proof-v1" (mirrors cokret_sdk Proof::binding_object)
+    // so an Event proof cannot be confused with another proof family's binding.
+    binding.insert("context".to_owned(), json!("ck-event-proof-v1"));
     binding.insert("event_digest".to_owned(), json!(event_digest));
     binding.insert("actor_id".to_owned(), json!(actor_id));
     binding.insert("verification_method".to_owned(), json!(verification_method));
