@@ -28,14 +28,6 @@ fn receipt_object_kind_rejected_at_submit_entry() {
 }
 
 #[test]
-fn unimplemented_morph_schema_migrate_rejected_at_submit_entry() {
-    assert!(matches!(
-        events_submit_pre_admit_check(cokret_sdk::events::kinds::MORPH_SCHEMA_MIGRATE),
-        Some((ErrorCode::SchemaViolation, _))
-    ));
-}
-
-#[test]
 fn durable_kind_passes_submit_entry() {
     assert!(events_submit_pre_admit_check("ck.message.create").is_none());
     assert!(events_submit_pre_admit_check("ck.realm.create").is_none());

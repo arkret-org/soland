@@ -225,10 +225,9 @@ async fn validate_morph_schema_migrate_authz(
     state: &AppState,
     operation: &Operation,
 ) -> Result<(), &'static str> {
-    let Some(actor) = operation.actor() else {
+    let Some(actor) = policy_operation_sender(operation) else {
         return Err("capability_denied");
     };
-    let actor = actor.as_str();
     let realm_id = operation.realm_id.as_str();
     let (owner, members) = realm_owner_and_members(state, realm_id).await;
     if owner.as_deref() == Some(actor) {
@@ -262,10 +261,9 @@ async fn validate_circle_create_policy(
         return Ok(());
     }
     if payload_asserts_agent_sidecar_ensure(&operation.payload) {
-        let Some(actor) = operation.actor() else {
+        let Some(actor) = policy_operation_sender(operation) else {
             return Err("sidecar_create_denied");
         };
-        let actor = actor.as_str();
         if !sidecar_circle_create_shape_is_constrained(&operation.payload, operation, actor) {
             return Err("sidecar_create_denied");
         }
@@ -288,10 +286,9 @@ async fn validate_circle_create_policy(
         }
         return Err("sidecar_create_denied");
     }
-    let Some(actor) = operation.actor() else {
+    let Some(actor) = policy_operation_sender(operation) else {
         return Ok(());
     };
-    let actor = actor.as_str();
     let realm_id = operation.realm_id.as_str();
     let (owner, members) = realm_owner_and_members(state, realm_id).await;
     if state
@@ -336,10 +333,9 @@ async fn validate_circle_management_policy(
         }
         _ => return Ok(()),
     };
-    let Some(actor) = operation.actor() else {
+    let Some(actor) = policy_operation_sender(operation) else {
         return Ok(());
     };
-    let actor = actor.as_str();
     let Some(circle_id) = operation_circle_id(operation) else {
         return Ok(());
     };
@@ -363,6 +359,24 @@ async fn validate_circle_management_policy(
     Err(reason)
 }
 
+/// Policy-layer acting-principal accessor.
+///
+/// Unlike [`Operation::actor`], which probes `actor_id` before `sender`, the
+/// policy layer must resolve the *executing* principal. For membership events
+/// (e.g. CIRCLE_MEMBER_STATE) the `actor_id` field names the *target* member,
+/// not the executor, so preferring it would let a forged verdict pass its own
+/// authorization gate. This accessor therefore resolves the executor as
+/// `sender` → `actor_id` → `created_by`, matching the historical soland
+/// contract.
+fn policy_operation_sender(operation: &Operation) -> Option<&str> {
+    operation
+        .payload
+        .get("sender")
+        .or_else(|| operation.payload.get("actor_id"))
+        .or_else(|| operation.payload.get("created_by"))
+        .and_then(Value::as_str)
+}
+
 fn operation_circle_id(operation: &Operation) -> Option<&str> {
     operation
         .payload
@@ -378,10 +392,9 @@ fn operation_circle_id(operation: &Operation) -> Option<&str> {
 }
 
 fn circle_member_manage_required(state: &AppState, operation: &Operation) -> bool {
-    let Some(actor) = operation.actor() else {
+    let Some(actor) = policy_operation_sender(operation) else {
         return false;
     };
-    let actor = actor.as_str();
     let Some(target) = operation.payload.get("actor_id").and_then(Value::as_str) else {
         return false;
     };

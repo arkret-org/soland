@@ -61,7 +61,7 @@ fn builtin_operation_conformance_vectors_cover_registry() {
         OperationVector {
             name: "message revise",
             kind: cokret_sdk::events::kinds::MESSAGE_REVISE,
-            payload: json!({"target_event_id": "ck:event:01904100-0000-7000-8000-79a90338768b", "content": {"kind": "ck.content.text", "body": "edited"}}),
+            payload: json!({"target_ref": "ck:event:01904100-0000-7000-8000-79a90338768b", "content": {"kind": "ck.content.text", "body": "edited"}}),
             valid: true,
         },
         OperationVector {

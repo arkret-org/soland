@@ -82,15 +82,29 @@ impl ProjectionState {
             now,
             &NoDelegationResolver,
         ) {
-            tracing::warn!(
-                statement_id = %payload.statement_id,
-                organization_id = %payload.organization_id.as_str(),
-                error = %error,
-                "rejected ck.realm.organization: organization-side verification failed"
-            );
-            return ProjectionEffect::Rejected {
-                reason: organization_rejection_reason(&error.to_string()),
-            };
+            // A statement that fails ONLY because it is outside its validity
+            // window (expired or not-yet-valid) is still projected as an audit
+            // row: it is retained for history and simply excluded from the
+            // verified set by the read-side `is_effective_active` filter. The
+            // SDK verifier checks proof / issuer-role / delegation strictly
+            // before the validity window, so a validity-window error code means
+            // every structural and authorization check already passed. Any
+            // other failure (bad proof, unresolved delegation, status mismatch)
+            // fails closed and is not stored.
+            let reason = organization_rejection_reason(&error.to_string());
+            let window_only = (reason == cokret_sdk::REASON_TTL_EXPIRED
+                && payload.is_expired(now))
+                || (reason == cokret_sdk::ERROR_CODE_FAILED_PRECONDITION
+                    && payload.is_not_yet_valid(now));
+            if !window_only {
+                tracing::warn!(
+                    statement_id = %payload.statement_id,
+                    organization_id = %payload.organization_id.as_str(),
+                    error = %error,
+                    "rejected ck.realm.organization: organization-side verification failed"
+                );
+                return ProjectionEffect::Rejected { reason };
+            }
         }
 
         let realm_id = expected_realm_id.to_string();

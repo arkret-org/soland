@@ -1577,7 +1577,11 @@ mod federation_revoke_fanout_tests {
                 "realm_id": REALM,
                 "issuer": OWNER,
                 "subject": PEER_SERVICE_DID,
-                "actions": ["ck.realm.delivery_binding_policy"],
+                // The realm-level admin capability governs the delivery-binding
+                // policy. `ck.realm.delivery_binding_policy` is an event kind,
+                // not a registered capability action, so the grant carries the
+                // registered `ck.realm.admin` action that authorizes it.
+                "actions": ["ck.realm.admin"],
                 "resources": [{ "kind": "realm", "realm_id": REALM }],
             }
         })

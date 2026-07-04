@@ -173,8 +173,10 @@ fn realm_create_writes_both_structured_cache_and_ordered_log_cell() {
             "ck:realm:01904100-0000-7000-8000-cfc039892036",
             serde_json::json!({
                 "action": "create",
-                "owner": "did:web:alice",
-                "title": "Test Realm",
+                "object": {
+                    "created_by": "did:web:alice",
+                    "title": "Test Realm",
+                },
             }),
         ),
         &hlc,

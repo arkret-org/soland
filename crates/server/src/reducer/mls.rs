@@ -2553,13 +2553,17 @@ mod tests {
 
         // A racing commit that explicitly forks base epoch 0 with different
         // material drives covered_frontier_cell to ⊥ (CommitFrontierContested).
+        // The effect reports the group's current (untouched) stored epoch — 1,
+        // set by commit-a — because the contested-frontier mirror locates the
+        // durable epoch row by that value; the contention does not rewind it to
+        // the forked base.
         let contended = apply_commit_epoch(
             &mut state,
             &commit_op(501, b"commit-b", json!({ "concurrent_commit": true })),
         );
         assert!(matches!(
             contended,
-            ProjectionEffect::Mls(MlsEffect::CommitFrontierContested { epoch: 0, .. })
+            ProjectionEffect::Mls(MlsEffect::CommitFrontierContested { epoch: 1, .. })
         ));
         assert!(
             state
@@ -2582,13 +2586,19 @@ mod tests {
             ProjectionEffect::Rejected { reason } if reason == REASON_DECRYPTION_PENDING
         ));
 
-        // A resolving commit at the current epoch advances and clears ⊥.
+        // A resolving commit at the current epoch advances and clears ⊥. The
+        // governance binding's previous_epoch MUST match expected_prev_epoch
+        // (the reducer cross-checks them), so advance the binding to epoch 1.
         let resolve = apply_commit_epoch(
             &mut state,
             &commit_op(
                 503,
                 b"commit-resolve",
-                json!({ "expected_prev_epoch": 1, "next_epoch": 2 }),
+                json!({
+                    "expected_prev_epoch": 1,
+                    "next_epoch": 2,
+                    "governance_binding": governance_binding(1),
+                }),
             ),
         );
         assert!(matches!(

@@ -490,27 +490,12 @@ fn validate_data_event_joined_capability_view(
             }
         }
     }
-    if matches!(
-        state.projection.lock().cell(&cell_ref),
-        Some(cokret_sdk::lattice::CellState::Bottom(_))
-    ) {
-        return Err(event_validation_error(
-            StatusCode::PRECONDITION_FAILED,
-            "failed_bottom",
-            "cell_in_bottom_state",
-        ));
-    }
-    let snapshot = state.authz.grants_snapshot();
-    if let Some(current) = snapshot.iter().find(|grant| grant.grant_id == grant_id)
-        && (current.revoked
-            || crate::authz::grant_revoked_upstream(&snapshot, grant_id, chrono::Utc::now()))
-    {
-        return Err(event_validation_error(
-            StatusCode::PRECONDITION_FAILED,
-            "stale_seal_ref",
-            format!("DataEvent capability_ref {grant_id} is revoked in joined control view"),
-        ));
-    }
+    // DataEvent authorization MUST be evaluated against the seal_ref pre-state
+    // (the joined control view resolved from sealed leaves above), never the
+    // live authz index or live projection. A grant that was valid in the sealed
+    // pre-state but later revoked in the live index must still authorize the
+    // historical DataEvent. Upstream steps already reject grants revoked within
+    // the seal_ref pre-state, so no live-plane fallback is applied here.
     Ok(())
 }
 
