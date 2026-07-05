@@ -6,7 +6,6 @@
 // Re-exports for submodules (`use super::*;`). These also serve the root module.
 pub(crate) use std::collections::{BTreeMap, BTreeSet, VecDeque};
 pub(crate) use std::sync::Arc;
-pub(crate) use parking_lot::Mutex;
 
 pub(crate) use async_trait::async_trait;
 pub(crate) use chrono::Utc;
@@ -17,13 +16,14 @@ pub(crate) use diesel::sql_types::{
 pub(crate) use diesel::{OptionalExtension, QueryableByName, sql_query};
 pub(crate) use diesel_async::pooled_connection::deadpool::Object;
 pub(crate) use diesel_async::{AsyncPgConnection, RunQueryDsl};
+pub(crate) use parking_lot::Mutex;
 pub(crate) use serde_json::Value;
+pub(crate) use soland_data::PgPool;
 pub(crate) use soland_data::query_rows::{
     ClaimSeqRow, CountRow, ExistsRow, JsonPayloadRow, MaxSeqRow,
 };
 pub(crate) use uuid::Uuid;
 
-pub(crate) use soland_data::PgPool;
 pub(crate) use crate::ids;
 pub(crate) use crate::state::*;
 
@@ -84,9 +84,9 @@ pub use push::*;
 pub use read_receipts::*;
 pub use realm_invites::*;
 pub use recovery::*;
+pub use service_identity::*;
 pub use sessions::*;
 pub use sync_cursor::*;
-pub use service_identity::*;
 pub use webvh::*;
 // `webvh_freshness_on_put` is `pub(crate)`; the glob above only re-exports
 // `pub` items, so re-export it explicitly for the webvh sub-store.

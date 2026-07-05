@@ -1,9 +1,10 @@
 use std::net::SocketAddr;
 use std::str::FromStr;
 
+use soland_data::Db;
+
 use super::*;
 use crate::config::{AppConfig, FederationPolicy};
-use soland_data::Db;
 use crate::error::AppError;
 use crate::state::AppState;
 

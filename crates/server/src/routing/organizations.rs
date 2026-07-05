@@ -203,9 +203,7 @@ pub(crate) async fn refresh_organization_projection(
         .snapshot_all()
         .await?;
     {
-        let mut map = state
-            .organization_policies
-            .lock();
+        let mut map = state.organization_policies.lock();
         for record in policies {
             map.insert(record.organization_id.clone(), record);
         }
@@ -217,12 +215,8 @@ pub(crate) async fn refresh_organization_projection(
         .snapshot_all()
         .await?;
     {
-        let mut realm_map = state
-            .realm_organizations
-            .lock();
-        let mut organization_map = state
-            .organization_realms
-            .lock();
+        let mut realm_map = state.realm_organizations.lock();
+        let mut organization_map = state.organization_realms.lock();
         for (realm_id, organization_ids) in links {
             for organization_id in &organization_ids {
                 organization_map
@@ -240,9 +234,7 @@ pub(crate) async fn refresh_organization_projection(
         .snapshot_all()
         .await?;
     {
-        let mut map = state
-            .realm_moderation_policies
-            .lock();
+        let mut map = state.realm_moderation_policies.lock();
         for record in realm_policies {
             map.insert(record.realm_id.clone(), record);
         }
@@ -637,12 +629,8 @@ pub(crate) fn effective_policy_for_realm(
     // control scope drive the effective moderation policy. Declared
     // `owning_organizations` hints no longer qualify.
     let org_ids = verified_moderation_organization_ids(state, realm_id);
-    let policies = state
-        .organization_policies
-        .lock();
-    let links = state
-        .organization_realms
-        .lock();
+    let policies = state.organization_policies.lock();
+    let links = state.organization_realms.lock();
     let org_layers = org_ids
         .iter()
         .filter_map(|org_id| policies.get(org_id).map(|policy| (org_id, policy)))
@@ -716,9 +704,7 @@ pub(crate) async fn organization_policy_blocks_join(
     if org_ids.is_empty() {
         return false;
     }
-    let policies = state
-        .organization_policies
-        .lock();
+    let policies = state.organization_policies.lock();
     org_ids.iter().any(|org_id| {
         policies
             .get(org_id)
@@ -752,9 +738,7 @@ fn realm_policy_override_requires_approval_cached(
     if org_ids.is_empty() {
         return false;
     }
-    let policies = state
-        .organization_policies
-        .lock();
+    let policies = state.organization_policies.lock();
     targets.iter().any(|target| {
         org_ids.iter().any(|org_id| {
             policies
@@ -808,9 +792,7 @@ fn organizations_denying_override_targets(
         return BTreeSet::new();
     }
     let org_ids = verified_moderation_organization_ids(state, realm_id);
-    let policies = state
-        .organization_policies
-        .lock();
+    let policies = state.organization_policies.lock();
     org_ids
         .into_iter()
         .filter(|org_id| {
@@ -962,9 +944,7 @@ fn effective_rules(state: &AppState, realm_id: &str) -> Vec<Value> {
     // SOL-ORG-05 — effective rules are sourced only from verified
     // moderation-scoped organizations.
     let org_ids = verified_moderation_organization_ids(state, realm_id);
-    let policies = state
-        .organization_policies
-        .lock();
+    let policies = state.organization_policies.lock();
     let mut rules = Vec::new();
     for org_id in org_ids {
         if let Some(policy) = policies.get(&org_id) {

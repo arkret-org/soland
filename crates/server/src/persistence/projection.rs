@@ -342,9 +342,7 @@ impl MemoryProjectionEventStore {
 #[async_trait]
 impl ProjectionEventStore for MemoryProjectionEventStore {
     async fn append(&self, record: ProjectionEventRecord) -> PersistenceResult<()> {
-        self.data
-            .lock()
-            .push(record);
+        self.data.lock().push(record);
         Ok(())
     }
 
@@ -353,13 +351,7 @@ impl ProjectionEventStore for MemoryProjectionEventStore {
     }
 
     async fn snapshot_capped(&self, limit: usize) -> PersistenceResult<Vec<ProjectionEventRecord>> {
-        Ok(self
-            .data
-            .lock()
-            .iter()
-            .take(limit)
-            .cloned()
-            .collect())
+        Ok(self.data.lock().iter().take(limit).cloned().collect())
     }
 }
 

@@ -47,11 +47,7 @@ pub fn validate_operation_semantics(
         validate_typed_payload_shapes(kind, operation)?;
         validate_operation_patch_semantics(operation)?;
         validate_reaction_target_kind(kind, operation)?;
-        if let Some(schema) = operation_schema_for_kind(kind) {
-            validate_operation_schema(operation, schema)?;
-        } else {
-            validate_operation_schema_from_sdk_artifact(kind, operation)?;
-        }
+        validate_operation_payload_schema(kind, operation)?;
     }
     Ok(())
 }
@@ -322,6 +318,29 @@ pub(crate) fn validate_operation_schema_from_sdk_artifact(
         .map_err(|_| "operation payload violates SDK artifact schema")
 }
 
+fn operation_kind_has_sdk_payload_validator(kind: &str) -> Result<bool, &'static str> {
+    event_payload_validator_catalog()
+        .map_err(|_| "operation payload validator catalog unavailable")
+        .map(|catalog| catalog.has_payload_validator(kind))
+}
+
+pub(crate) fn validate_operation_payload_schema(
+    kind: &str,
+    operation: &Operation,
+) -> Result<(), &'static str> {
+    if operation_kind_has_sdk_payload_validator(kind)? {
+        validate_operation_schema_from_sdk_artifact(kind, operation)?;
+        if let Some(validate) = operation_extra_validator_for_kind(kind) {
+            validate(operation)?;
+        }
+        return Ok(());
+    }
+    if let Some(schema) = operation_schema_for_kind(kind) {
+        return validate_operation_schema(operation, schema);
+    }
+    validate_operation_schema_from_sdk_artifact(kind, operation)
+}
+
 pub(crate) fn validate_operation_payload_against_sdk_artifact(
     operation: &Operation,
 ) -> Result<(), &'static str> {
@@ -329,6 +348,45 @@ pub(crate) fn validate_operation_payload_against_sdk_artifact(
         return Err("unregistered operation kind");
     };
     validate_operation_schema_from_sdk_artifact(kind, operation)
+}
+
+fn operation_extra_validator_for_kind(kind: &str) -> Option<OperationValidator> {
+    match kind {
+        cokret_sdk::events::kinds::MESSAGE_CREATE | cokret_sdk::events::kinds::MESSAGE_REVISE => {
+            Some(validate_message_operation_payload)
+        }
+        cokret_sdk::events::kinds::RELATION_CREATE
+        | cokret_sdk::events::kinds::RELATION_UPDATE
+        | cokret_sdk::events::kinds::RELATION_TOMBSTONE => {
+            Some(validate_relation_operation_payload)
+        }
+        cokret_sdk::events::kinds::READ_CURSOR_ADVANCE => Some(validate_read_marker_payload),
+        cokret_sdk::events::kinds::ACCOUNT_DATA_SET => Some(validate_account_data_set_payload),
+        cokret_sdk::events::kinds::CONSENT_REVOKE => Some(validate_observed_dots_payload),
+        cokret_sdk::events::kinds::INVITE_CREATE => Some(validate_invite_create_payload),
+        cokret_sdk::events::kinds::INVITE_THIRD_PARTY => Some(validate_invite_third_party_payload),
+        cokret_sdk::events::kinds::INVITE_CLAIM => Some(validate_invite_claim_payload),
+        cokret_sdk::events::kinds::INVITE_CANCEL | cokret_sdk::events::kinds::INVITE_REVOKE => {
+            Some(validate_invite_ref_payload)
+        }
+        cokret_sdk::events::kinds::REALM_HISTORY_VISIBILITY => {
+            Some(validate_history_visibility_payload)
+        }
+        cokret_sdk::events::kinds::REALM_READ_RECEIPT_POLICY => {
+            Some(validate_read_receipt_policy_payload)
+        }
+        kinds::CONFLICT_REPAIR => Some(validate_conflict_repair_payload),
+        cokret_sdk::events::kinds::MORPH_CREATE => Some(validate_morph_create_payload),
+        cokret_sdk::events::kinds::MORPH_UPDATE => Some(validate_morph_update_payload),
+        cokret_sdk::events::kinds::MORPH_SCHEMA_MIGRATE => {
+            Some(validate_morph_schema_migrate_payload)
+        }
+        cokret_sdk::events::kinds::CROSS_SIGNING_RESET => {
+            Some(validate_cross_signing_reset_payload)
+        }
+        cokret_sdk::events::kinds::DEVICE_AUTHORIZE => Some(validate_device_authorize_payload),
+        _ => None,
+    }
 }
 
 pub fn operation_schema_for_kind(kind: &str) -> Option<OperationPayloadSchema> {

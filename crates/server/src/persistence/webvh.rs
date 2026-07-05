@@ -29,11 +29,7 @@ impl MemoryWebvhStore {
 #[async_trait]
 impl WebvhStore for MemoryWebvhStore {
     async fn get_document(&self, did: &str) -> PersistenceResult<Option<WebvhDocumentRecord>> {
-        Ok(self
-            .documents
-            .lock()
-            .get(did)
-            .cloned())
+        Ok(self.documents.lock().get(did).cloned())
     }
 
     async fn get_embedded_webvh_document_by_local_id(
@@ -76,29 +72,18 @@ impl WebvhStore for MemoryWebvhStore {
         record.fetched_at = fetched_at;
         record.expires_at = expires_at;
         let did = record.did.clone();
-        self.documents
-            .lock()
-            .insert(did, record);
+        self.documents.lock().insert(did, record);
         Ok(())
     }
 
     async fn append_log_event(&self, event: WebvhLogRecord) -> PersistenceResult<()> {
         let did = event.did.clone();
-        self.log
-            .lock()
-            .entry(did)
-            .or_default()
-            .push(event);
+        self.log.lock().entry(did).or_default().push(event);
         Ok(())
     }
 
     async fn list_log_events(&self, did: &str) -> PersistenceResult<Vec<WebvhLogRecord>> {
-        Ok(self
-            .log
-            .lock()
-            .get(did)
-            .cloned()
-            .unwrap_or_default())
+        Ok(self.log.lock().get(did).cloned().unwrap_or_default())
     }
 }
 

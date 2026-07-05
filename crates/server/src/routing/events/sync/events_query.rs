@@ -450,14 +450,11 @@ pub(crate) fn arm_subscribe_reconnect(
     subscribe_scope_key: &str,
     reconnect_after_ms: u64,
 ) {
-    state
-        .subscribe_reconnect_gate
-        .lock()
-        .arm(
-            subscribe_scope_key.to_owned(),
-            Utc::now(),
-            reconnect_after_ms,
-        );
+    state.subscribe_reconnect_gate.lock().arm(
+        subscribe_scope_key.to_owned(),
+        Utc::now(),
+        reconnect_after_ms,
+    );
 }
 
 fn render_subscribe_rate_limited(res: &mut Response, retry_after_ms: u64) {

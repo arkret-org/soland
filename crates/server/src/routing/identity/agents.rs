@@ -1044,7 +1044,7 @@ async fn lazily_expire_pairing(
             let proj = state.projection.lock();
             Some(proj.grant_ids_for_subject(&agent_principal_id))
         }
-            .unwrap_or_default();
+        .unwrap_or_default();
         let _ = submit_revoke_agent_grants(state, session, &realm, &grant_ids).await;
     }
     if let Some(obj) = record.as_object_mut() {
@@ -1106,7 +1106,7 @@ async fn lifecycle_transition(
                     )
                 })
             }
-                .unwrap_or_default();
+            .unwrap_or_default();
             submit_revoke_agent_keys(state, &session, &realm, &agent_id, &key_ids).await?;
             submit_revoke_agent_grants(state, &session, &realm, &grant_ids).await?;
         }
@@ -1491,14 +1491,14 @@ fn realm_members_for_authz(state: &AppState, realm_id: &str) -> Vec<String> {
                 .and_then(|id| realms.get(&id).cloned())
         }
     }
-        .map(|realm| {
-            realm
-                .members
-                .iter()
-                .map(ToString::to_string)
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default()
+    .map(|realm| {
+        realm
+            .members
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+    })
+    .unwrap_or_default()
 }
 
 fn realm_member_joined(state: &AppState, realm_id: &str, actor: &str) -> bool {
@@ -1510,12 +1510,12 @@ fn realm_member_joined(state: &AppState, realm_id: &str, actor: &str) -> bool {
                 .and_then(|id| realms.get(&id).cloned())
         }
     }
-        .and_then(|realm| {
-            Did::new(actor.to_owned())
-                .ok()
-                .map(|did| realm.members.contains(&did))
-        })
-        .unwrap_or(false);
+    .and_then(|realm| {
+        Did::new(actor.to_owned())
+            .ok()
+            .map(|did| realm.members.contains(&did))
+    })
+    .unwrap_or(false);
     if in_realm_directory {
         return true;
     }
@@ -1527,7 +1527,7 @@ fn realm_member_joined(state: &AppState, realm_id: &str, actor: &str) -> bool {
                 .map(|membership| membership.state == "join")
         }
     }
-        .unwrap_or(false)
+    .unwrap_or(false)
 }
 
 fn normalize_sidecar_context_ref(context_ref: &AgentSidecarContextRef) -> Result<Value, AppError> {
@@ -1572,9 +1572,7 @@ fn validate_sidecar_context_projection(
     state: &AppState,
     context_ref: &AgentSidecarContextRef,
 ) -> Result<(), AppError> {
-    let projection = state
-        .projection
-        .lock();
+    let projection = state.projection.lock();
     let realm_id = context_ref.realm_id.as_str();
     if let Some(relation_id) = &context_ref.relation_id {
         let relation = projection
@@ -1819,7 +1817,7 @@ fn circle_has_member(state: &AppState, circle_id: &str, actor: &str) -> bool {
                 .map(|circle| circle.members.contains(actor))
         }
     }
-        .unwrap_or(false)
+    .unwrap_or(false)
 }
 
 async fn ensure_sidecar_member(

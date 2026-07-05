@@ -6,9 +6,9 @@
 //! Format: `<12-hex-physical>-<4-hex-logical>-<8-hex-node>` (26 chars total)
 
 use std::sync::Arc;
-use parking_lot::Mutex;
 
 use cokret_sdk::HlcGenerator;
+use parking_lot::Mutex;
 
 /// Thread-safe HLC state for the server.
 ///

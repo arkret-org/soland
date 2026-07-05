@@ -376,9 +376,10 @@ mod tests {
     use std::net::SocketAddr;
     use std::str::FromStr;
 
+    use soland_data::Db;
+
     use super::*;
     use crate::config::AppConfig;
-    use soland_data::Db;
     use crate::state::AppState;
 
     fn test_state() -> AppState {

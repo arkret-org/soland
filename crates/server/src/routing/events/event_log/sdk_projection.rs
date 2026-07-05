@@ -790,10 +790,11 @@ fn circle_event_visible_to_session(
     if record.actor_id == session.actor {
         return true;
     }
-    state
-        .projection
-        .lock()
-        .circle_scope_visible_to_actor_at(&scope_circle_id, &session.actor, record.received_at)
+    state.projection.lock().circle_scope_visible_to_actor_at(
+        &scope_circle_id,
+        &session.actor,
+        record.received_at,
+    )
 }
 
 /// Scan the projected cell or durable Event store for the most recent

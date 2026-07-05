@@ -293,13 +293,9 @@ fn keys_query_actor_visible_to_requester(state: &AppState, requester: &str, acto
     let Ok(actor_did) = cokret_sdk::Did::new(actor.to_owned()) else {
         return false;
     };
-    state
-        .realms
-        .lock()
-        .entries_iter()
-        .any(|(_, entry)| {
-            entry.members.contains(&requester_did) && entry.members.contains(&actor_did)
-        })
+    state.realms.lock().entries_iter().any(|(_, entry)| {
+        entry.members.contains(&requester_did) && entry.members.contains(&actor_did)
+    })
 }
 
 fn keys_upload_signing_input(

@@ -775,9 +775,7 @@ async fn document_projection_relations(
     session: &SessionRecord,
 ) -> Result<Vec<Value>, AppError> {
     let snapshots = {
-        let projection = state
-            .projection
-            .lock();
+        let projection = state.projection.lock();
         projection
             .relations
             .values()
@@ -1202,9 +1200,7 @@ async fn get_strand_projection(
     StrandId::new(strand_id.clone())
         .map_err(|_| AppError::invalid_param("invalid strand_id format"))?;
     let realm_id = {
-        let proj = state
-            .projection
-            .lock();
+        let proj = state.projection.lock();
         let Some(strand) = proj.strands.get(&strand_id) else {
             return Err(AppError::not_found("strand not found"));
         };
@@ -1219,9 +1215,7 @@ async fn get_strand_projection(
     }
     let history_visibility = realm_history_visibility(state, &realm_id).await;
     let history_policy = realm_history_sharing_policy(state, &realm_id).await;
-    let proj = state
-        .projection
-        .lock();
+    let proj = state.projection.lock();
     let Some(strand) = proj.strands.get(&strand_id).cloned() else {
         return Err(AppError::not_found("strand not found"));
     };
@@ -1289,9 +1283,7 @@ async fn list_relation_projections(
         .unwrap_or_else(|| "active".to_owned());
 
     let candidates: Vec<SolandRelationState> = {
-        let proj = state
-            .projection
-            .lock();
+        let proj = state.projection.lock();
         proj.relations
             .values()
             .filter(|relation| match state_filter.as_str() {
@@ -1369,9 +1361,7 @@ async fn get_document_projection(
     MorphId::new(morph_id.clone())
         .map_err(|_| AppError::invalid_param("invalid morph_id format"))?;
     {
-        let proj = state
-            .projection
-            .lock();
+        let proj = state.projection.lock();
         let Some(morph) = proj.morphs.get(&morph_id) else {
             return Err(AppError::not_found("document Morph not found"));
         };
@@ -1389,9 +1379,7 @@ async fn get_document_projection(
     let history_visibility = realm_history_visibility(state, &realm_id).await;
     let history_policy = realm_history_sharing_policy(state, &realm_id).await;
     let (document, versions, comments) = {
-        let proj = state
-            .projection
-            .lock();
+        let proj = state.projection.lock();
         let Some(morph) = proj.morphs.get(&morph_id).cloned() else {
             return Err(AppError::not_found("document Morph not found"));
         };

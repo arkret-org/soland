@@ -213,11 +213,7 @@ impl PushBridgeCacheStore for MemoryPushBridgeCacheStore {
         &self,
         bridge_describe_url: &str,
     ) -> PersistenceResult<Option<OutboundPushBridgeCacheRecord>> {
-        Ok(self
-            .data
-            .lock()
-            .get(bridge_describe_url)
-            .cloned())
+        Ok(self.data.lock().get(bridge_describe_url).cloned())
     }
 
     async fn put(
@@ -232,11 +228,7 @@ impl PushBridgeCacheStore for MemoryPushBridgeCacheStore {
     }
 
     async fn delete(&self, bridge_describe_url: &str) -> PersistenceResult<bool> {
-        Ok(self
-            .data
-            .lock()
-            .remove(bridge_describe_url)
-            .is_some())
+        Ok(self.data.lock().remove(bridge_describe_url).is_some())
     }
 
     async fn clear(&self) -> PersistenceResult<usize> {
@@ -247,12 +239,7 @@ impl PushBridgeCacheStore for MemoryPushBridgeCacheStore {
     }
 
     async fn snapshot_all(&self) -> PersistenceResult<Vec<OutboundPushBridgeCacheRecord>> {
-        Ok(self
-            .data
-            .lock()
-            .values()
-            .cloned()
-            .collect())
+        Ok(self.data.lock().values().cloned().collect())
     }
 
     async fn len(&self) -> PersistenceResult<usize> {
@@ -298,11 +285,7 @@ impl PushBridgeCacheStore for MemoryPushBridgeCacheStore {
         &self,
         gateway_describe_url: &str,
     ) -> PersistenceResult<Option<OutboundPushBridgeCacheRecord>> {
-        Ok(self
-            .data
-            .lock()
-            .get(gateway_describe_url)
-            .cloned())
+        Ok(self.data.lock().get(gateway_describe_url).cloned())
     }
 
     async fn verify_contract_freshness(
@@ -311,11 +294,7 @@ impl PushBridgeCacheStore for MemoryPushBridgeCacheStore {
         observed_digest: &str,
         max_age: chrono::Duration,
     ) -> PersistenceResult<DriftResult> {
-        let snapshot = self
-            .data
-            .lock()
-            .get(gateway_describe_url)
-            .cloned();
+        let snapshot = self.data.lock().get(gateway_describe_url).cloned();
         Ok(evaluate_drift(snapshot.as_ref(), observed_digest, max_age))
     }
 }

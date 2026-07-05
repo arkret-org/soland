@@ -11,9 +11,9 @@ use salvo::http::StatusCode;
 use salvo::test::{ResponseExt, TestClient};
 use serde_json::{Value, json};
 use soland::config::{AppConfig, IceServersConfig, LiveKitConfig, ObjectStorageConfig};
-use soland_data::Db;
 use soland::service;
 use soland::state::AppState;
+use soland_data::Db;
 
 fn test_config() -> AppConfig {
     AppConfig {

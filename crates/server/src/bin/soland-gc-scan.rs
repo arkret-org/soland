@@ -5,9 +5,9 @@
 //! only mode currently supported (deletion is a follow-up).
 
 use soland::config::AppConfig;
-use soland_data::Db;
 use soland::gc;
 use soland::state::AppState;
+use soland_data::Db;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {

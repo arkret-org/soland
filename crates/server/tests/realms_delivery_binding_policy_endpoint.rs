@@ -13,9 +13,9 @@ use salvo::http::StatusCode;
 use salvo::test::{ResponseExt, TestClient};
 use serde_json::Value;
 use soland::config::{AppConfig, IceServersConfig, LiveKitConfig, ObjectStorageConfig};
-use soland_data::Db;
 use soland::service;
 use soland::state::AppState;
+use soland_data::Db;
 
 /// Build a minimal dev-mode `AppConfig`. Identical posture to the
 /// helper in `tests/http_api.rs` (kept in-line so this test file

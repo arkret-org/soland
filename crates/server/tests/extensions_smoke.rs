@@ -23,9 +23,9 @@ use sha2::{Digest, Sha256};
 use soland::config::{
     AppConfig, FederationPolicy, IceServersConfig, LiveKitConfig, ObjectStorageConfig,
 };
-use soland_data::Db;
 use soland::service;
 use soland::state::AppState;
+use soland_data::Db;
 
 const DEMO_REALM_ID: &str = "ck:realm:0196419b-0000-7000-8000-000000000000";
 

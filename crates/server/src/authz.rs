@@ -20,7 +20,6 @@ pub mod policy_client;
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
-use parking_lot::Mutex;
 
 // Delegation primitives — `Grant`, `Constraint` (alias of `GrantConstraint`),
 // `DelegationError`, and the chain-integrity / cascade / expiry helpers —
@@ -32,6 +31,7 @@ pub use cokret_sdk::authz::delegation::{
     is_grant_expired, max_delegation_depth, resource_within, revoke_with_cascade,
     validate_applet_delegation_binding,
 };
+use parking_lot::Mutex;
 use serde::Serialize;
 use serde_json::{Map, Value};
 
@@ -214,12 +214,7 @@ impl SolandAuthzEngine {
                 .map(|g| g.realm_id.clone())
                 .ok_or(DelegationError::ParentNotFound)?
         };
-        let snapshot: Vec<Grant> = self
-            .grants
-            .lock()
-            .values()
-            .cloned()
-            .collect();
+        let snapshot: Vec<Grant> = self.grants.lock().values().cloned().collect();
         let request = GrantRequestDraft {
             // Parent's realm_id is authoritative for delegated children
             // (the wire `realm_id` argument is informational only; the SDK
@@ -264,9 +259,7 @@ impl SolandAuthzEngine {
     /// [`cokret_sdk::authz::delegation::revoke_with_cascade`]; this method
     /// applies the resulting mutation to the engine's in-memory map.
     pub fn revoke_grant_with_cascade(&self, grant_id: &str) -> (bool, Vec<String>) {
-        let mut grants = self
-            .grants
-            .lock();
+        let mut grants = self.grants.lock();
         if !grants.contains_key(grant_id) {
             return (false, Vec::new());
         }
@@ -296,9 +289,7 @@ impl SolandAuthzEngine {
     /// `revoked = true` so the check filters it and the cascade helpers can
     /// still see the tombstone.
     pub fn upsert_projected_grant(&self, grant: Grant) {
-        self.grants
-            .lock()
-            .insert(grant.grant_id.clone(), grant);
+        self.grants.lock().insert(grant.grant_id.clone(), grant);
     }
 
     /// P1 — mark a projected grant revoked in the read index (idempotent).
@@ -306,20 +297,14 @@ impl SolandAuthzEngine {
     /// grant_id is unknown to the index (the cell tombstone is authoritative;
     /// the index simply has nothing to filter yet).
     pub fn mark_projected_grant_revoked(&self, grant_id: &str) {
-        if let Some(grant) = self
-            .grants
-            .lock()
-            .get_mut(grant_id)
-        {
+        if let Some(grant) = self.grants.lock().get_mut(grant_id) {
             grant.revoked = true;
         }
     }
 
     pub fn mark_projected_grants_revoked_for_subject(&self, subject: &str) -> usize {
         let mut count = 0usize;
-        let mut grants = self
-            .grants
-            .lock();
+        let mut grants = self.grants.lock();
         for grant in grants.values_mut() {
             if grant.subject == subject && !grant.revoked {
                 grant.revoked = true;
@@ -331,22 +316,14 @@ impl SolandAuthzEngine {
 
     /// Look up a grant by id. Returns `None` if unknown.
     pub fn get_grant(&self, grant_id: &str) -> Option<Grant> {
-        self.grants
-            .lock()
-            .get(grant_id)
-            .cloned()
+        self.grants.lock().get(grant_id).cloned()
     }
 
     /// Get all grants for a subject in a space. Filters out invalid,
     /// revoked, expired, and cascade-broken grants so callers see only the
     /// *effective* set (capabilities.md §11).
     pub fn grants_for_subject(&self, subject: &str, realm_id: &str) -> Vec<Grant> {
-        let snapshot: Vec<Grant> = self
-            .grants
-            .lock()
-            .values()
-            .cloned()
-            .collect();
+        let snapshot: Vec<Grant> = self.grants.lock().values().cloned().collect();
         let now = chrono::Utc::now();
         snapshot
             .iter()
@@ -364,12 +341,7 @@ impl SolandAuthzEngine {
 
     /// Get all valid, non-revoked, non-expired, chain-intact grants in a space.
     pub fn grants_in_realm(&self, realm_id: &str) -> Vec<Grant> {
-        let snapshot: Vec<Grant> = self
-            .grants
-            .lock()
-            .values()
-            .cloned()
-            .collect();
+        let snapshot: Vec<Grant> = self.grants.lock().values().cloned().collect();
         let now = chrono::Utc::now();
         snapshot
             .iter()
@@ -385,11 +357,7 @@ impl SolandAuthzEngine {
     }
 
     pub(crate) fn grants_snapshot(&self) -> Vec<Grant> {
-        self.grants
-            .lock()
-            .values()
-            .cloned()
-            .collect()
+        self.grants.lock().values().cloned().collect()
     }
 
     /// Check if an actor can perform an action on a resource.
@@ -420,12 +388,7 @@ impl SolandAuthzEngine {
         // Check explicit grants first. Delegated grants drop out if any
         // ancestor in the chain is revoked or expired (capabilities.md §3.3
         // cascade + §10 delegation chain integrity).
-        let snapshot: Vec<Grant> = self
-            .grants
-            .lock()
-            .values()
-            .cloned()
-            .collect();
+        let snapshot: Vec<Grant> = self.grants.lock().values().cloned().collect();
         let now = chrono::Utc::now();
         let matching_grants: Vec<Grant> = snapshot
             .iter()

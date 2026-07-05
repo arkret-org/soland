@@ -92,8 +92,7 @@ impl ProjectionState {
             // other failure (bad proof, unresolved delegation, status mismatch)
             // fails closed and is not stored.
             let reason = organization_rejection_reason(&error.to_string());
-            let window_only = (reason == cokret_sdk::REASON_TTL_EXPIRED
-                && payload.is_expired(now))
+            let window_only = (reason == cokret_sdk::REASON_TTL_EXPIRED && payload.is_expired(now))
                 || (reason == cokret_sdk::ERROR_CODE_FAILED_PRECONDITION
                     && payload.is_not_yet_valid(now));
             if !window_only {

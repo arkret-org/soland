@@ -28,10 +28,8 @@ pub async fn project_federated_message(state: &AppState, origin: &str, operation
         .get("strand_id")
         .and_then(Value::as_str)
         .and_then(|strand_id| {
-            {
-                let proj = state.projection.lock();
-                proj.strand_scope_circle_id(strand_id)
-            }
+            let proj = state.projection.lock();
+            proj.strand_scope_circle_id(strand_id)
         });
     let content = message_content_from_payload(&operation.payload, strand_scope);
     if matches!(

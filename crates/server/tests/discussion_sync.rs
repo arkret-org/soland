@@ -6,13 +6,13 @@ use salvo::test::{ResponseExt, TestClient};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use soland::config::{AppConfig, IceServersConfig, LiveKitConfig, ObjectStorageConfig};
-use soland_data::Db;
 use soland::reducer::{
     CircleLifecycleState, CircleMembershipState, CircleProjection, ObjectLifecycleState,
     StrandProjection,
 };
 use soland::service;
 use soland::state::{AppState, RealmDirectoryEntry, RealmMetaRecord};
+use soland_data::Db;
 
 static TEST_EVENT_SEQ: AtomicU64 = AtomicU64::new(1_000);
 
@@ -222,33 +222,29 @@ fn install_projected_circle_scope(
         .iter()
         .map(|member| (*member).to_owned())
         .collect::<BTreeSet<_>>();
-    state
-        .projection
-        .lock()
-        .circles
-        .insert(
-            circle_id.to_owned(),
-            CircleProjection {
-                circle_id: circle_id.to_owned(),
-                realm_id: realm_id.to_owned(),
-                title: "Need to know".to_owned(),
-                summary: None,
-                directory_visibility: "members".to_owned(),
-                join_rule: "invite".to_owned(),
-                history_visibility: "joined".to_owned(),
-                content_encryption_floor: Some("e2ee_required".to_owned()),
-                metadata_encryption_floor: Some("e2ee_required".to_owned()),
-                encryption_profile: "mls_rfc9420".to_owned(),
-                mls_group_ref: Some(format!("ck:mls:mls_rfc9420:{circle_id}")),
-                state: CircleLifecycleState::Active,
-                state_changed_at: None,
-                created_by: created_by.to_owned(),
-                created_at: now,
-                updated_by: None,
-                updated_at: None,
-                members,
-            },
-        );
+    state.projection.lock().circles.insert(
+        circle_id.to_owned(),
+        CircleProjection {
+            circle_id: circle_id.to_owned(),
+            realm_id: realm_id.to_owned(),
+            title: "Need to know".to_owned(),
+            summary: None,
+            directory_visibility: "members".to_owned(),
+            join_rule: "invite".to_owned(),
+            history_visibility: "joined".to_owned(),
+            content_encryption_floor: Some("e2ee_required".to_owned()),
+            metadata_encryption_floor: Some("e2ee_required".to_owned()),
+            encryption_profile: "mls_rfc9420".to_owned(),
+            mls_group_ref: Some(format!("ck:mls:mls_rfc9420:{circle_id}")),
+            state: CircleLifecycleState::Active,
+            state_changed_at: None,
+            created_by: created_by.to_owned(),
+            created_at: now,
+            updated_by: None,
+            updated_at: None,
+            members,
+        },
+    );
     let mut projection = state.projection.lock();
     for member in projection
         .circles
@@ -284,32 +280,28 @@ fn install_projected_strand_scope(
     created_by: &str,
 ) {
     let now = chrono::Utc::now();
-    state
-        .projection
-        .lock()
-        .strands
-        .insert(
-            strand_id.to_owned(),
-            StrandProjection {
-                strand_id: strand_id.to_owned(),
-                realm_id: realm_id.to_owned(),
-                tracks: std::collections::BTreeMap::from([(
-                    cokret_sdk::STRAND_TRACK_NAME_DISCUSSION.to_owned(),
-                    cokret_sdk::StrandTrackConfig::discussion_primary(),
-                )]),
-                title: "Confidential discussion".to_owned(),
-                summary: None,
-                fields: Default::default(),
-                state: ObjectLifecycleState::Active,
-                state_changed_at: None,
-                created_by: created_by.to_owned(),
-                created_at: now,
-                history_basis_seals: Vec::new(),
-                updated_by: None,
-                updated_at: None,
-                scope_circle_id: Some(circle_id.to_owned()),
-            },
-        );
+    state.projection.lock().strands.insert(
+        strand_id.to_owned(),
+        StrandProjection {
+            strand_id: strand_id.to_owned(),
+            realm_id: realm_id.to_owned(),
+            tracks: std::collections::BTreeMap::from([(
+                cokret_sdk::STRAND_TRACK_NAME_DISCUSSION.to_owned(),
+                cokret_sdk::StrandTrackConfig::discussion_primary(),
+            )]),
+            title: "Confidential discussion".to_owned(),
+            summary: None,
+            fields: Default::default(),
+            state: ObjectLifecycleState::Active,
+            state_changed_at: None,
+            created_by: created_by.to_owned(),
+            created_at: now,
+            history_basis_seals: Vec::new(),
+            updated_by: None,
+            updated_at: None,
+            scope_circle_id: Some(circle_id.to_owned()),
+        },
+    );
 }
 
 async fn send_circle_scoped_encrypted_message(

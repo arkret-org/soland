@@ -103,9 +103,7 @@ impl ModerationStore for MemoryModerationStore {
     }
 
     async fn append_action(&self, action: Value) -> PersistenceResult<()> {
-        self.actions
-            .lock()
-            .push(action);
+        self.actions.lock().push(action);
         Ok(())
     }
 
@@ -136,10 +134,7 @@ impl ModerationStore for MemoryModerationStore {
     }
 
     async fn list_decisions(&self) -> PersistenceResult<Vec<Value>> {
-        Ok(self
-            .decisions
-            .lock()
-            .clone())
+        Ok(self.decisions.lock().clone())
     }
 
     async fn get_decision(&self, decision_id: &str) -> PersistenceResult<Option<Value>> {
@@ -152,9 +147,7 @@ impl ModerationStore for MemoryModerationStore {
     }
 
     async fn append_decision_lift(&self, lift: Value) -> PersistenceResult<()> {
-        self.decision_lifts
-            .lock()
-            .push(lift);
+        self.decision_lifts.lock().push(lift);
         Ok(())
     }
 
@@ -179,10 +172,7 @@ impl ModerationStore for MemoryModerationStore {
     }
 
     async fn list_queue_items(&self) -> PersistenceResult<Vec<Value>> {
-        Ok(self
-            .queue_items
-            .lock()
-            .clone())
+        Ok(self.queue_items.lock().clone())
     }
 
     async fn get_queue_item(&self, id: &str) -> PersistenceResult<Option<Value>> {
@@ -200,19 +190,14 @@ impl ModerationStore for MemoryModerationStore {
                 "moderation appeal missing appeal_id".to_owned(),
             ));
         }
-        self.appeals
-            .lock()
-            .push(appeal);
+        self.appeals.lock().push(appeal);
         Ok(())
     }
 
     async fn list_appeals(&self) -> PersistenceResult<Vec<Value>> {
         // Collapse history → one record per appeal_id, keeping the
         // last-appended event (insertion order = chronological).
-        let all = self
-            .appeals
-            .lock()
-            .clone();
+        let all = self.appeals.lock().clone();
         let mut latest: std::collections::BTreeMap<String, Value> =
             std::collections::BTreeMap::new();
         for record in all {

@@ -381,13 +381,13 @@ fn active_read_receipt_parent_link(
         let projection = state.projection.lock();
         projection.realm_links.get(realm_id).cloned()
     }
-        .is_some_and(|links| {
-            links.iter().any(|link| {
-                link.target_realm_id == source_realm_id
-                    && link.status == "active"
-                    && read_receipt_parent_link_kind(&link.link_kind)
-            })
+    .is_some_and(|links| {
+        links.iter().any(|link| {
+            link.target_realm_id == source_realm_id
+                && link.status == "active"
+                && read_receipt_parent_link_kind(&link.link_kind)
         })
+    })
 }
 
 fn read_receipt_parent_link_kind(link_kind: &str) -> bool {
@@ -753,9 +753,7 @@ pub(crate) async fn validate_audience_mention_operation_policy(
     if mentions.is_empty() {
         return Ok(());
     }
-    let actor = operation
-        .actor()
-        .ok_or("audience_mention_actor_missing")?;
+    let actor = operation.actor().ok_or("audience_mention_actor_missing")?;
     let actor = actor.as_str();
     let realm_id = operation.realm_id.as_str();
     let resource = operation
@@ -894,7 +892,7 @@ pub(crate) fn estimate_audience_recipient_count(
                             .len()
                     })
                 }
-                    .unwrap_or(members.len())
+                .unwrap_or(members.len())
             })
             .unwrap_or(members.len()),
         // Conservative upper bound: when the dispatcher cannot cheaply derive

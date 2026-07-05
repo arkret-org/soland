@@ -34,7 +34,6 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::OnceLock;
-use parking_lot::Mutex;
 
 use anyhow::Result;
 use base64::Engine as _;
@@ -48,6 +47,7 @@ use cokret_sdk::{
     CellRef, Hash, Hlc, Move, MoveId, MoveSignature, NotarySig, RealmId, Seal, SealId,
 };
 use ed25519_dalek::SigningKey;
+use parking_lot::Mutex;
 
 use crate::config::NotarySigningKeyOrigin;
 use crate::routing::federation::move_seal::select_jws_verifier;
@@ -266,10 +266,8 @@ impl NotaryWorker {
         .ok();
         let prev_epoch_value: Option<serde_json::Value> =
             mls_epoch_cell.as_ref().and_then(|cell_id| {
-                {
-                    let proj = state.projection.lock();
-                    proj.cell_value(cell_id).cloned()
-                }
+                let proj = state.projection.lock();
+                proj.cell_value(cell_id).cloned()
             });
         if let Err(error) = state.projection.lock().reload_cells_from_store(
             realm_id,
@@ -721,8 +719,7 @@ fn materialize_genesis_if_empty(
     state: &AppState,
     realm_id: &RealmId,
 ) -> Result<Vec<SealId>, NotaryError> {
-    let _guard = GENESIS_MATERIALIZE_LOCK
-        .lock();
+    let _guard = GENESIS_MATERIALIZE_LOCK.lock();
     let leaves = state.seal_store.list_leaves(realm_id)?;
     if !leaves.is_empty() {
         return Ok(leaves);

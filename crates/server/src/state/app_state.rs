@@ -10,6 +10,7 @@ use cokret_sdk::{AccountRegistrationPolicy, AccountStatus, AppletPackage, Did, R
 use ed25519_dalek::SigningKey;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
+use soland_data::Db;
 
 use super::did_resolver_chain;
 use super::member_identity::MemberIdentityRegistry;
@@ -32,7 +33,6 @@ use super::records::{
 };
 use crate::authz::SolandAuthzEngine;
 use crate::config::{AppConfig, NotarySigningKeyOrigin};
-use soland_data::Db;
 use crate::hlc::ServerHlc;
 use crate::object_storage::{ObjectStorage, build_object_storage};
 use crate::persistence::{
@@ -292,9 +292,7 @@ impl AppState {
 
     /// Origin tag for diagnostics (`Configured` / `Ephemeral` / `Rotated`).
     pub fn notary_signing_key_origin(&self) -> NotarySigningKeyOrigin {
-        *self
-            .notary_signing_key_origin
-            .lock()
+        *self.notary_signing_key_origin.lock()
     }
 
     /// Hot-rotate the NotaryWorker signing key. Writers swap
@@ -778,9 +776,7 @@ impl AppState {
             .snapshot_all()
             .await?;
         {
-            let mut map = self
-                .invite_receive_policies
-                .lock();
+            let mut map = self.invite_receive_policies.lock();
             for (subject_id, policy) in policies {
                 map.entry(subject_id).or_insert(policy);
             }
@@ -805,9 +801,7 @@ impl AppState {
             .snapshot_all()
             .await?;
         {
-            let mut map = self
-                .direct_conversation_bindings
-                .lock();
+            let mut map = self.direct_conversation_bindings.lock();
             for (participants_key, record) in bindings {
                 map.entry(participants_key).or_insert(record);
             }
@@ -815,9 +809,7 @@ impl AppState {
 
         let lifecycle_records = self.persistence.account_lifecycle().snapshot_all().await?;
         {
-            let mut map = self
-                .account_lifecycle
-                .lock();
+            let mut map = self.account_lifecycle.lock();
             for (did, record) in lifecycle_records {
                 if record.state == "active" {
                     map.remove(&did);
@@ -837,9 +829,7 @@ impl AppState {
 
         let retention_policies = self.persistence.retention_policies().snapshot_all().await?;
         {
-            let mut map = self
-                .retention_policies
-                .lock();
+            let mut map = self.retention_policies.lock();
             for record in retention_policies {
                 map.insert(record.realm_id.clone(), record);
             }
@@ -851,9 +841,7 @@ impl AppState {
             .snapshot_all()
             .await?;
         {
-            let mut map = self
-                .retention_tombstones
-                .lock();
+            let mut map = self.retention_tombstones.lock();
             for record in retention_tombstones {
                 map.insert(record.event_id.clone(), record);
             }
@@ -873,9 +861,7 @@ impl AppState {
             .snapshot_all()
             .await?;
         {
-            let mut map = self
-                .organization_policies
-                .lock();
+            let mut map = self.organization_policies.lock();
             for record in organization_policies {
                 map.insert(record.organization_id.clone(), record);
             }
@@ -887,12 +873,8 @@ impl AppState {
             .snapshot_all()
             .await?;
         {
-            let mut realm_map = self
-                .realm_organizations
-                .lock();
-            let mut org_map = self
-                .organization_realms
-                .lock();
+            let mut realm_map = self.realm_organizations.lock();
+            let mut org_map = self.organization_realms.lock();
             for (realm_id, organization_ids) in realm_organizations {
                 for organization_id in &organization_ids {
                     org_map
@@ -946,9 +928,7 @@ impl AppState {
             .snapshot_all()
             .await?;
         {
-            let mut map = self
-                .realm_moderation_policies
-                .lock();
+            let mut map = self.realm_moderation_policies.lock();
             for record in realm_moderation_policies {
                 map.insert(record.realm_id.clone(), record);
             }
@@ -967,9 +947,7 @@ impl AppState {
             .await
         {
             Ok(revocations) => {
-                let mut cache = self
-                    .sync_cursor_revocations
-                    .lock();
+                let mut cache = self.sync_cursor_revocations.lock();
                 cache.extend(revocations);
             }
             Err(error) => {
@@ -984,9 +962,7 @@ impl AppState {
     /// describe payload). Callers that need to mutate state must lock
     /// `self.member_identity` directly.
     pub fn member_identity_registry(&self) -> MemberIdentityRegistry {
-        self.member_identity
-            .lock()
-            .clone()
+        self.member_identity.lock().clone()
     }
 
     pub fn next_to_device_position(&self) -> i64 {
@@ -1029,9 +1005,7 @@ impl AppState {
     }
 
     pub fn set_account_lifecycle_record(&self, did: &str, record: AccountLifecycleRecord) {
-        let mut lifecycle = self
-            .account_lifecycle
-            .lock();
+        let mut lifecycle = self.account_lifecycle.lock();
         if record.state == "active" {
             lifecycle.remove(did);
         } else {
@@ -1044,9 +1018,7 @@ impl AppState {
     /// auto-clear, so the caller can safely treat a `None` return as
     /// "proceed".
     pub fn account_lockout_active_until(&self, did: &str) -> Option<chrono::DateTime<chrono::Utc>> {
-        let mut map = self
-            .failed_login_attempts
-            .lock();
+        let mut map = self.failed_login_attempts.lock();
         let now = chrono::Utc::now();
         let record = map.get(did).cloned()?;
         match record.locked_until {
@@ -1065,9 +1037,7 @@ impl AppState {
     /// updated record so the caller can include lockout context in the
     /// audit trail.
     pub fn record_failed_login(&self, did: &str) -> FailedLoginRecord {
-        let mut map = self
-            .failed_login_attempts
-            .lock();
+        let mut map = self.failed_login_attempts.lock();
         let now = chrono::Utc::now();
         let entry = map.entry(did.to_owned()).or_insert(FailedLoginRecord {
             attempts: 0,
@@ -1090,9 +1060,7 @@ impl AppState {
     /// Clear a successful login's failure history so the rolling counter
     /// doesn't trip on a future stray failure.
     pub fn clear_failed_login(&self, did: &str) {
-        self.failed_login_attempts
-            .lock()
-            .remove(did);
+        self.failed_login_attempts.lock().remove(did);
     }
 
     /// SEC-09 — record a PSI / contact-discovery probe for the
@@ -1102,9 +1070,7 @@ impl AppState {
     /// fresh match result and surface `retry_after_ms`, so a requester cannot
     /// poll the holder's hit bit at high frequency to read grant/revoke timing.
     pub fn record_psi_probe(&self, requester: &str, holder: &str) -> PsiProbeOutcome {
-        let mut map = self
-            .psi_probe_tracker
-            .lock();
+        let mut map = self.psi_probe_tracker.lock();
         let now = chrono::Utc::now();
         let entry = map
             .entry((requester.to_owned(), holder.to_owned()))
@@ -1147,9 +1113,7 @@ impl AppState {
         principal_id: &str,
         limit: u32,
     ) -> KeyBackupDownloadOutcome {
-        let mut map = self
-            .key_backup_download_tracker
-            .lock();
+        let mut map = self.key_backup_download_tracker.lock();
         let now = chrono::Utc::now();
         let entry = map
             .entry(principal_id.to_owned())
@@ -1224,9 +1188,7 @@ impl AppState {
             ));
         }
 
-        let mut map = self
-            .moderation_report_rate_tracker
-            .lock();
+        let mut map = self.moderation_report_rate_tracker.lock();
         let now = chrono::Utc::now();
         let window = chrono::Duration::seconds(MODERATION_REPORT_RATE_WINDOW_SECS);
         let mut exceeded = None;
@@ -1275,9 +1237,7 @@ impl AppState {
         received_by: &str,
         replay_nonce: &str,
     ) -> bool {
-        let mut map = self
-            .moderation_franking_replay_nonces
-            .lock();
+        let mut map = self.moderation_franking_replay_nonces.lock();
         let now = chrono::Utc::now();
         let expires_before =
             now - chrono::Duration::seconds(MODERATION_FRANKING_REPLAY_WINDOW_SECS);
@@ -1322,9 +1282,7 @@ impl AppState {
         if expires_at <= now {
             return false;
         }
-        let mut map = self
-            .agent_approval_nonces
-            .lock();
+        let mut map = self.agent_approval_nonces.lock();
         map.retain(|_, expiry| *expiry > now);
         let key = format!("{agent_principal_id}:{authorization_ref}:{request_id}:{approval_nonce}");
         if map.contains_key(&key) {

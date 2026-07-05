@@ -18,9 +18,9 @@
 //! takes effect on the very next request with no lock contention.
 
 use serde::{Deserialize, Serialize};
+use soland_data::PgPool;
 
 use crate::config::{AppConfig, FederationPolicy};
-use soland_data::PgPool;
 use crate::persistence::{QueryableByName, RunQueryDsl, Value, pg_conn, sql_query};
 use crate::ratelimit::RateLimiterConfig;
 

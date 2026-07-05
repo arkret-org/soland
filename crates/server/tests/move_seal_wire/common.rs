@@ -37,9 +37,9 @@ pub(crate) use salvo::test::{ResponseExt, TestClient};
 pub(crate) use serde_json::{Value, json};
 pub(crate) use sha2::{Digest, Sha256};
 pub(crate) use soland::config::{AppConfig, IceServersConfig, LiveKitConfig, ObjectStorageConfig};
-pub(crate) use soland_data::Db;
 pub(crate) use soland::service;
 pub(crate) use soland::state::AppState;
+pub(crate) use soland_data::Db;
 
 pub(crate) fn test_config() -> AppConfig {
     AppConfig {

@@ -175,34 +175,31 @@ async fn direct_resolve_rejects_pairwise_did_without_stable_identity_link() {
         .await
         .unwrap();
     let grant_dot = "ck:event:0196419b-0000-7000-8000-000000000233".to_owned();
-    state
-        .consent_cells
-        .lock()
-        .insert(
-            soland::state::ConsentCellKey {
-                holder: BOB_PAIRWISE_DID.to_owned(),
-                peer: "did:web:alice.example".to_owned(),
-                scope: "direct_message".to_owned(),
-            },
-            soland::state::ConsentCellRecord {
-                holder: BOB_PAIRWISE_DID.to_owned(),
-                peer: "did:web:alice.example".to_owned(),
-                scope: "direct_message".to_owned(),
-                cell_id: "ck:consent:pairwise-direct".to_owned(),
-                requested_at: None,
-                grant_dots: BTreeMap::from([(
-                    grant_dot.clone(),
-                    soland::state::ConsentGrantDot {
-                        dot: grant_dot,
-                        expires_at: None,
-                        granted_at: now,
-                    },
-                )]),
-                revoked_dots: BTreeSet::new(),
-                revoked_at: None,
-                updated_at: now,
-            },
-        );
+    state.consent_cells.lock().insert(
+        soland::state::ConsentCellKey {
+            holder: BOB_PAIRWISE_DID.to_owned(),
+            peer: "did:web:alice.example".to_owned(),
+            scope: "direct_message".to_owned(),
+        },
+        soland::state::ConsentCellRecord {
+            holder: BOB_PAIRWISE_DID.to_owned(),
+            peer: "did:web:alice.example".to_owned(),
+            scope: "direct_message".to_owned(),
+            cell_id: "ck:consent:pairwise-direct".to_owned(),
+            requested_at: None,
+            grant_dots: BTreeMap::from([(
+                grant_dot.clone(),
+                soland::state::ConsentGrantDot {
+                    dot: grant_dot,
+                    expires_at: None,
+                    granted_at: now,
+                },
+            )]),
+            revoked_dots: BTreeSet::new(),
+            revoked_at: None,
+            updated_at: now,
+        },
+    );
 
     let mut response = TestClient::post("http://server/_cokret/self/direct-conversations/resolve")
         .add_header("authorization", format!("Bearer {alice}"), true)
@@ -213,12 +210,7 @@ async fn direct_resolve_rejects_pairwise_did_without_stable_identity_link() {
     assert_eq!(response.status_code.unwrap().as_u16(), 412);
     let body: Value = response.take_json().await.unwrap();
     assert_eq!(body["error"]["code"], "peer_unresolvable");
-    assert!(
-        state
-            .direct_conversation_bindings
-            .lock()
-            .is_empty()
-    );
+    assert!(state.direct_conversation_bindings.lock().is_empty());
 }
 
 #[tokio::test]
@@ -296,12 +288,7 @@ async fn direct_resolve_create_requires_claimable_keypackage() {
     assert_eq!(response.status_code.unwrap().as_u16(), 412);
     let body: Value = response.take_json().await.unwrap();
     assert_eq!(body["error"]["code"], "keypackage_unknown");
-    assert!(
-        state
-            .direct_conversation_bindings
-            .lock()
-            .is_empty()
-    );
+    assert!(state.direct_conversation_bindings.lock().is_empty());
 }
 
 #[tokio::test]
@@ -529,11 +516,5 @@ async fn concurrent_direct_resolve_create_converges_to_one_binding() {
         1,
         "exactly one concurrent request should create the binding: {first} {second}"
     );
-    assert_eq!(
-        state
-            .direct_conversation_bindings
-            .lock()
-            .len(),
-        1
-    );
+    assert_eq!(state.direct_conversation_bindings.lock().len(), 1);
 }

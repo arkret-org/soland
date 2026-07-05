@@ -27,18 +27,12 @@ impl MemoryRealmInviteStore {
 #[async_trait]
 impl RealmInviteStore for MemoryRealmInviteStore {
     async fn get(&self, invite_id: &str) -> PersistenceResult<Option<RealmInviteRecord>> {
-        Ok(self
-            .data
-            .lock()
-            .get(invite_id)
-            .cloned())
+        Ok(self.data.lock().get(invite_id).cloned())
     }
 
     async fn put(&self, record: RealmInviteRecord) -> PersistenceResult<()> {
         let id = record.invite_id.clone();
-        self.data
-            .lock()
-            .insert(id, record);
+        self.data.lock().insert(id, record);
         Ok(())
     }
 
@@ -75,12 +69,7 @@ impl RealmInviteStore for MemoryRealmInviteStore {
     }
 
     async fn snapshot_all(&self) -> PersistenceResult<Vec<RealmInviteRecord>> {
-        Ok(self
-            .data
-            .lock()
-            .values()
-            .cloned()
-            .collect())
+        Ok(self.data.lock().values().cloned().collect())
     }
 }
 

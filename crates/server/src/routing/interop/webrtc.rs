@@ -925,16 +925,12 @@ impl CallStateCell {
     async fn load(state: &AppState, call_id: &str) -> Result<Self, AppError> {
         let cell_id = call_state_cell_ref(call_id)?;
         let cached = {
-            let projection = state
-                .projection
-                .lock();
+            let projection = state.projection.lock();
             projection.cell_value(&cell_id).cloned()
         };
         let value = match call_state_from_event_log(state, call_id, &cell_id).await? {
             Some(value) => {
-                let mut projection = state
-                    .projection
-                    .lock();
+                let mut projection = state.projection.lock();
                 projection.cells.insert(
                     cell_id,
                     cokret_sdk::lattice::CellState::Value(value.clone()),
@@ -1114,9 +1110,7 @@ fn media_service_epoch_for_realm(
     ))
     .map_err(|error| AppError::internal(format!("invalid media_service cell id: {error}")))?;
     let value = {
-        let projection = state
-            .projection
-            .lock();
+        let projection = state.projection.lock();
         projection.cell_value(&cell_id).cloned()
     }
     .ok_or_else(|| {
@@ -1566,7 +1560,7 @@ async fn call_authz_principals(state: &AppState, realm_id: &str) -> (Option<Stri
                 .unwrap_or_default()
         })
     }
-        .unwrap_or_default();
+    .unwrap_or_default();
     (owner, members)
 }
 

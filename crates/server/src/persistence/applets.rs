@@ -51,27 +51,16 @@ impl MemoryAppletStore {
 #[async_trait]
 impl AppletStore for MemoryAppletStore {
     async fn get(&self, applet_id: &str) -> PersistenceResult<Option<Value>> {
-        Ok(self
-            .records
-            .lock()
-            .get(applet_id)
-            .cloned())
+        Ok(self.records.lock().get(applet_id).cloned())
     }
 
     async fn put(&self, applet_id: &str, record: Value) -> PersistenceResult<()> {
-        self.records
-            .lock()
-            .insert(applet_id.to_owned(), record);
+        self.records.lock().insert(applet_id.to_owned(), record);
         Ok(())
     }
 
     async fn list(&self) -> PersistenceResult<Vec<Value>> {
-        Ok(self
-            .records
-            .lock()
-            .values()
-            .cloned()
-            .collect())
+        Ok(self.records.lock().values().cloned().collect())
     }
 
     async fn begin_transaction_replay(

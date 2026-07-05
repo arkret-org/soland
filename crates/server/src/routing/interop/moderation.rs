@@ -183,9 +183,7 @@ fn moderation_target_effective_scope_value(
     if target_ref == realm_id {
         return Ok(json!({"kind": "realm", "realm_id": realm_id}));
     }
-    let projection = state
-        .projection
-        .lock();
+    let projection = state.projection.lock();
     let scope_circle_id = if let Some(message) = moderation_target_message(&projection, target_ref)
         .filter(|message| message.realm_id == realm_id)
     {
@@ -837,7 +835,13 @@ async fn moderation_routing_visible_to_actor(
         RealmId::new(realm_id.to_owned())
             .ok()
             .and_then(|id| realms.get(&id))
-            .map(|realm| realm.members.iter().map(ToString::to_string).collect::<Vec<String>>())
+            .map(|realm| {
+                realm
+                    .members
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<String>>()
+            })
             .unwrap_or_default()
     };
     [
@@ -1340,10 +1344,10 @@ async fn moderation_appeal_submit(
 #[cfg(test)]
 mod report_safety_tests {
     use serde_json::{Value, json};
+    use soland_data::Db;
 
     use super::*;
     use crate::config::{AppConfig, IceServersConfig, LiveKitConfig, ObjectStorageConfig};
-    use soland_data::Db;
 
     const REALM: &str = "ck:realm:01904100-0000-7000-8000-d0d0d0d0d0d0";
     const TARGET: &str = "ck:message:01904100-0000-7000-8000-000000000777";
@@ -1364,28 +1368,24 @@ mod report_safety_tests {
             },
             Db { pool: None },
         );
-        state
-            .projection
-            .lock()
-            .messages
-            .insert(
-                TARGET.replacen("ck:message:", "ck:event:", 1),
-                crate::reducer::MessageState {
-                    event_id: TARGET.replacen("ck:message:", "ck:event:", 1),
-                    message_id: TARGET.to_owned(),
-                    realm_id: REALM.to_owned(),
-                    sender: REPORTER.to_owned(),
-                    thread_id: REALM.to_owned(),
-                    content: json!({ "kind": "ck.content.text", "body": "reported" }),
-                    expiry: None,
-                    encrypted: false,
-                    operation_id: "ck:operation:01904100-0000-7000-8000-000000000777".to_owned(),
-                    created_at: chrono::Utc::now(),
-                    history_basis_seals: Vec::new(),
-                    revision_of: None,
-                    redacted_at: None,
-                },
-            );
+        state.projection.lock().messages.insert(
+            TARGET.replacen("ck:message:", "ck:event:", 1),
+            crate::reducer::MessageState {
+                event_id: TARGET.replacen("ck:message:", "ck:event:", 1),
+                message_id: TARGET.to_owned(),
+                realm_id: REALM.to_owned(),
+                sender: REPORTER.to_owned(),
+                thread_id: REALM.to_owned(),
+                content: json!({ "kind": "ck.content.text", "body": "reported" }),
+                expiry: None,
+                encrypted: false,
+                operation_id: "ck:operation:01904100-0000-7000-8000-000000000777".to_owned(),
+                created_at: chrono::Utc::now(),
+                history_basis_seals: Vec::new(),
+                revision_of: None,
+                redacted_at: None,
+            },
+        );
         state
     }
 

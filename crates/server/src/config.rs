@@ -591,11 +591,7 @@ impl AppConfig {
             // Test fixtures intentionally allow bare `did:web` — the spec
             // conformance vectors use it. The production default
             // (`default_did_resolver_allow_methods`) is webvh-only.
-            did_resolver_allow_methods: vec![
-                "web".to_owned(),
-                "key".to_owned(),
-                "uuid".to_owned(),
-            ],
+            did_resolver_allow_methods: vec!["web".to_owned(), "key".to_owned(), "uuid".to_owned()],
             embedded_webvh_provider_enabled: false,
             embedded_webvh_registration_bearer: None,
             external_webvh_provider_url: None,
@@ -682,7 +678,9 @@ impl AppConfig {
         let bootstrap_service_identity = std::env::var("SOLAND_BOOTSTRAP_SERVICE_IDENTITY")
             .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes"))
             .unwrap_or(false);
-        if !development_mode && !bootstrap_service_identity && service_did == PLACEHOLDER_SERVICE_DID
+        if !development_mode
+            && !bootstrap_service_identity
+            && service_did == PLACEHOLDER_SERVICE_DID
         {
             anyhow::bail!(
                 "SOLAND_SERVICE_DID is required when SOLAND_DEVELOPMENT_MODE is false (or set SOLAND_BOOTSTRAP_SERVICE_IDENTITY=1 to self-bootstrap a did:webvh); the built-in placeholder DID is a shared, non-routable identity"

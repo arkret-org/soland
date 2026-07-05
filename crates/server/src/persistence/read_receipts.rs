@@ -55,9 +55,7 @@ impl ReadReceiptRelayStore for MemoryReadReceiptRelayStore {
         let now = Utc::now();
         let realm_id = record.realm_id.clone();
         let position = {
-            let mut counters = self
-                .next_position
-                .lock();
+            let mut counters = self.next_position.lock();
             let counter = counters.entry(realm_id.clone()).or_insert(0);
             *counter += 1;
             *counter
@@ -129,12 +127,7 @@ impl ReadReceiptRelayStore for MemoryReadReceiptRelayStore {
         realm_id: &str,
     ) -> PersistenceResult<u64> {
         let key = (actor.to_owned(), device.to_owned(), realm_id.to_owned());
-        Ok(self
-            .watermark
-            .lock()
-            .get(&key)
-            .copied()
-            .unwrap_or(0))
+        Ok(self.watermark.lock().get(&key).copied().unwrap_or(0))
     }
 
     async fn advance(

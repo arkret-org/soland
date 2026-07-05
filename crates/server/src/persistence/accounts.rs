@@ -344,16 +344,12 @@ impl MemoryAccountLifecycleStore {
 #[async_trait]
 impl AccountLifecycleStore for MemoryAccountLifecycleStore {
     async fn put(&self, did: &str, record: &AccountLifecycleRecord) -> PersistenceResult<()> {
-        self.data
-            .lock()
-            .insert(did.to_owned(), record.clone());
+        self.data.lock().insert(did.to_owned(), record.clone());
         Ok(())
     }
 
     async fn delete(&self, did: &str) -> PersistenceResult<()> {
-        self.data
-            .lock()
-            .remove(did);
+        self.data.lock().remove(did);
         Ok(())
     }
 

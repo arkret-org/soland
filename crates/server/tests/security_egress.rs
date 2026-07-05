@@ -1,8 +1,8 @@
 use std::ffi::OsString;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::sync::OnceLock;
-use parking_lot::{Mutex, MutexGuard};
 
+use parking_lot::{Mutex, MutexGuard};
 use reqwest::Url;
 
 #[test]
@@ -152,9 +152,7 @@ impl Drop for CleanEgressEnvGuard {
 
 fn clean_egress_env() -> CleanEgressEnvGuard {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    let lock = LOCK
-        .get_or_init(|| Mutex::new(()))
-        .lock();
+    let lock = LOCK.get_or_init(|| Mutex::new(())).lock();
     let vars = [
         "SOLAND_EGRESS_ALLOW_PRIVATE_NETWORKS",
         "SOLAND_EGRESS_ALLOWED_HOSTS",

@@ -87,9 +87,7 @@ impl HandleReleaseStore for MemoryHandleReleaseStore {
         localpart: &str,
         released_at: chrono::DateTime<chrono::Utc>,
     ) -> PersistenceResult<()> {
-        self.data
-            .lock()
-            .insert(localpart.to_owned(), released_at);
+        self.data.lock().insert(localpart.to_owned(), released_at);
         Ok(())
     }
 
@@ -120,11 +118,7 @@ impl MemoryRetentionPolicyStore {
 #[async_trait]
 impl RetentionPolicyStore for MemoryRetentionPolicyStore {
     async fn get(&self, realm_id: &str) -> PersistenceResult<Option<RetentionPolicyRecord>> {
-        Ok(self
-            .data
-            .lock()
-            .get(realm_id)
-            .cloned())
+        Ok(self.data.lock().get(realm_id).cloned())
     }
 
     async fn put(&self, record: &RetentionPolicyRecord) -> PersistenceResult<()> {
@@ -135,12 +129,7 @@ impl RetentionPolicyStore for MemoryRetentionPolicyStore {
     }
 
     async fn snapshot_all(&self) -> PersistenceResult<Vec<RetentionPolicyRecord>> {
-        Ok(self
-            .data
-            .lock()
-            .values()
-            .cloned()
-            .collect())
+        Ok(self.data.lock().values().cloned().collect())
     }
 }
 
@@ -159,11 +148,7 @@ impl MemoryRetentionTombstoneStore {
 #[async_trait]
 impl RetentionTombstoneStore for MemoryRetentionTombstoneStore {
     async fn get(&self, event_id: &str) -> PersistenceResult<Option<RetentionTombstoneRecord>> {
-        Ok(self
-            .data
-            .lock()
-            .get(event_id)
-            .cloned())
+        Ok(self.data.lock().get(event_id).cloned())
     }
 
     async fn put(&self, record: &RetentionTombstoneRecord) -> PersistenceResult<()> {
@@ -174,12 +159,7 @@ impl RetentionTombstoneStore for MemoryRetentionTombstoneStore {
     }
 
     async fn snapshot_all(&self) -> PersistenceResult<Vec<RetentionTombstoneRecord>> {
-        Ok(self
-            .data
-            .lock()
-            .values()
-            .cloned()
-            .collect())
+        Ok(self.data.lock().values().cloned().collect())
     }
 }
 
@@ -198,11 +178,7 @@ impl MemoryOrganizationStore {
 #[async_trait]
 impl OrganizationStore for MemoryOrganizationStore {
     async fn get(&self, organization_id: &str) -> PersistenceResult<Option<OrganizationRecord>> {
-        Ok(self
-            .data
-            .lock()
-            .get(organization_id)
-            .cloned())
+        Ok(self.data.lock().get(organization_id).cloned())
     }
 
     async fn put(&self, record: &OrganizationRecord) -> PersistenceResult<()> {
@@ -213,12 +189,7 @@ impl OrganizationStore for MemoryOrganizationStore {
     }
 
     async fn list(&self) -> PersistenceResult<Vec<OrganizationRecord>> {
-        Ok(self
-            .data
-            .lock()
-            .values()
-            .cloned()
-            .collect())
+        Ok(self.data.lock().values().cloned().collect())
     }
 }
 
@@ -240,11 +211,7 @@ impl OrganizationPolicyStore for MemoryOrganizationPolicyStore {
         &self,
         organization_id: &str,
     ) -> PersistenceResult<Option<OrganizationPolicyRecord>> {
-        Ok(self
-            .data
-            .lock()
-            .get(organization_id)
-            .cloned())
+        Ok(self.data.lock().get(organization_id).cloned())
     }
 
     async fn put(&self, record: &OrganizationPolicyRecord) -> PersistenceResult<()> {
@@ -255,12 +222,7 @@ impl OrganizationPolicyStore for MemoryOrganizationPolicyStore {
     }
 
     async fn snapshot_all(&self) -> PersistenceResult<Vec<OrganizationPolicyRecord>> {
-        Ok(self
-            .data
-            .lock()
-            .values()
-            .cloned()
-            .collect())
+        Ok(self.data.lock().values().cloned().collect())
     }
 }
 
@@ -312,26 +274,19 @@ impl MemoryRealmOrganizationStatementStore {
 #[async_trait]
 impl RealmOrganizationStatementStore for MemoryRealmOrganizationStatementStore {
     async fn put(&self, record: &RealmOrganizationStatementRecord) -> PersistenceResult<()> {
-        self.data
-            .lock()
-            .insert(
-                (
-                    record.realm_id.clone(),
-                    record.organization_id.clone(),
-                    record.relationship.clone(),
-                ),
-                record.clone(),
-            );
+        self.data.lock().insert(
+            (
+                record.realm_id.clone(),
+                record.organization_id.clone(),
+                record.relationship.clone(),
+            ),
+            record.clone(),
+        );
         Ok(())
     }
 
     async fn snapshot_all(&self) -> PersistenceResult<Vec<RealmOrganizationStatementRecord>> {
-        Ok(self
-            .data
-            .lock()
-            .values()
-            .cloned()
-            .collect())
+        Ok(self.data.lock().values().cloned().collect())
     }
 }
 
@@ -350,11 +305,7 @@ impl MemoryRealmModerationPolicyStore {
 #[async_trait]
 impl RealmModerationPolicyStore for MemoryRealmModerationPolicyStore {
     async fn get(&self, realm_id: &str) -> PersistenceResult<Option<RealmModerationPolicyRecord>> {
-        Ok(self
-            .data
-            .lock()
-            .get(realm_id)
-            .cloned())
+        Ok(self.data.lock().get(realm_id).cloned())
     }
 
     async fn put(&self, record: &RealmModerationPolicyRecord) -> PersistenceResult<()> {
@@ -365,12 +316,7 @@ impl RealmModerationPolicyStore for MemoryRealmModerationPolicyStore {
     }
 
     async fn snapshot_all(&self) -> PersistenceResult<Vec<RealmModerationPolicyRecord>> {
-        Ok(self
-            .data
-            .lock()
-            .values()
-            .cloned()
-            .collect())
+        Ok(self.data.lock().values().cloned().collect())
     }
 }
 

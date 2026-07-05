@@ -147,18 +147,11 @@ impl EventStore for MemoryEventStore {
     }
 
     async fn get(&self, event_id: &str) -> PersistenceResult<Option<CanonicalEventRecord>> {
-        Ok(self
-            .data
-            .lock()
-            .get(event_id)
-            .cloned())
+        Ok(self.data.lock().get(event_id).cloned())
     }
 
     async fn contains(&self, event_id: &str) -> PersistenceResult<bool> {
-        Ok(self
-            .data
-            .lock()
-            .contains_key(event_id))
+        Ok(self.data.lock().contains_key(event_id))
     }
 
     async fn max_actor_seq(&self, actor_id: &str) -> PersistenceResult<Option<u64>> {
@@ -172,12 +165,7 @@ impl EventStore for MemoryEventStore {
     }
 
     async fn snapshot_all(&self) -> PersistenceResult<Vec<CanonicalEventRecord>> {
-        Ok(self
-            .data
-            .lock()
-            .values()
-            .cloned()
-            .collect())
+        Ok(self.data.lock().values().cloned().collect())
     }
 
     async fn peer_authz_state_records(&self) -> PersistenceResult<Vec<CanonicalEventRecord>> {

@@ -4,9 +4,9 @@ use salvo::test::{ResponseExt, TestClient};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use soland::config::{AppConfig, IceServersConfig, LiveKitConfig, ObjectStorageConfig};
-use soland_data::Db;
 use soland::state::AppState;
 use soland::{ids, service};
+use soland_data::Db;
 
 fn test_config() -> AppConfig {
     AppConfig {

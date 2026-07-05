@@ -145,9 +145,7 @@ async fn advance_covered_seals(
     // this Realm (or-set merge — idempotent, dedup preserved). This is an
     // operator maintenance override, not an MLS commit, so no epoch bump.
     let lag_count = {
-        let mut proj = state
-            .projection
-            .lock();
+        let mut proj = state.projection.lock();
         let target = proj
             .mls_commit_epochs
             .values_mut()

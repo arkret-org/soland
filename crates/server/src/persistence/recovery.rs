@@ -82,11 +82,7 @@ impl RecoveryPolicyStore for MemoryRecoveryPolicyStore {
         &self,
         policy_id: &str,
     ) -> PersistenceResult<Option<RecoveryPolicyRecord>> {
-        Ok(self
-            .data
-            .lock()
-            .get(policy_id)
-            .cloned())
+        Ok(self.data.lock().get(policy_id).cloned())
     }
 
     async fn get_active_for_principal(
@@ -169,11 +165,7 @@ impl RecoveryReceiptStore for MemoryRecoveryReceiptStore {
         &self,
         recovery_session_id: &str,
     ) -> PersistenceResult<Option<RecoveryReceiptRecord>> {
-        Ok(self
-            .by_session
-            .lock()
-            .get(recovery_session_id)
-            .cloned())
+        Ok(self.by_session.lock().get(recovery_session_id).cloned())
     }
 
     async fn list_for_principal(
@@ -228,11 +220,7 @@ impl RecoverySessionStore for MemoryRecoverySessionStore {
         &self,
         recovery_session_id: &str,
     ) -> PersistenceResult<Option<RecoverySessionRecord>> {
-        Ok(self
-            .by_id
-            .lock()
-            .get(recovery_session_id)
-            .cloned())
+        Ok(self.by_id.lock().get(recovery_session_id).cloned())
     }
 
     async fn insert(&self, record: RecoverySessionRecord) -> PersistenceResult<()> {

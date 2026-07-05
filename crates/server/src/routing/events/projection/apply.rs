@@ -44,26 +44,26 @@ pub(crate) async fn mirror_mls_effect_to_persistence(
                 let projection = state.projection.lock();
                 projection.mls_key_packages.get(keypackage_id).cloned()
             }
-                .map(|kp| MlsKeyPackageRow {
-                    id: kp.id,
-                    keypackage_ref: kp.keypackage_ref,
-                    keypackage_digest: kp.keypackage_digest,
-                    actor_id: kp.actor_id,
-                    device_id: kp.device_id,
-                    key_package_bytes: kp.key_package_bytes,
-                    capabilities: kp.capabilities,
-                    capabilities_digest: kp.capabilities_digest,
-                    device_signature: kp.device_signature,
-                    last_resort: kp.last_resort,
-                    last_resort_realm_id: kp.last_resort_realm_id,
-                    lifetime_not_before: kp.lifetime.not_before,
-                    lifetime_not_after: kp.lifetime.not_after,
-                    claimed_by_mls_group_id: kp.claimed_by,
-                    ssk_generation: kp.ssk_generation,
-                    device_authorize_event_id: kp.device_authorize_event_id,
-                    consumed_at: kp.consumed_at,
-                    created_at: kp.created_at,
-                });
+            .map(|kp| MlsKeyPackageRow {
+                id: kp.id,
+                keypackage_ref: kp.keypackage_ref,
+                keypackage_digest: kp.keypackage_digest,
+                actor_id: kp.actor_id,
+                device_id: kp.device_id,
+                key_package_bytes: kp.key_package_bytes,
+                capabilities: kp.capabilities,
+                capabilities_digest: kp.capabilities_digest,
+                device_signature: kp.device_signature,
+                last_resort: kp.last_resort,
+                last_resort_realm_id: kp.last_resort_realm_id,
+                lifetime_not_before: kp.lifetime.not_before,
+                lifetime_not_after: kp.lifetime.not_after,
+                claimed_by_mls_group_id: kp.claimed_by,
+                ssk_generation: kp.ssk_generation,
+                device_authorize_event_id: kp.device_authorize_event_id,
+                consumed_at: kp.consumed_at,
+                created_at: kp.created_at,
+            });
             if let Some(record) = record
                 && let Err(error) = state.persistence.mls_key_packages().put(&record).await
             {
@@ -112,16 +112,16 @@ pub(crate) async fn mirror_mls_effect_to_persistence(
                         .cloned()
                 }
             }
-                .map(|welcome| MlsWelcomeRecord {
-                    id: welcome.id,
-                    group_id: welcome.group_id,
-                    recipient_actor_id: welcome.recipient_actor_id,
-                    recipient_device_id: welcome.recipient_device_id,
-                    welcome_bytes: welcome.welcome_bytes,
-                    key_package_id: welcome.key_package_id,
-                    enqueued_at: welcome.enqueued_at,
-                    delivered_at: welcome.delivered_at,
-                });
+            .map(|welcome| MlsWelcomeRecord {
+                id: welcome.id,
+                group_id: welcome.group_id,
+                recipient_actor_id: welcome.recipient_actor_id,
+                recipient_device_id: welcome.recipient_device_id,
+                welcome_bytes: welcome.welcome_bytes,
+                key_package_id: welcome.key_package_id,
+                enqueued_at: welcome.enqueued_at,
+                delivered_at: welcome.delivered_at,
+            });
             if let Some(record) = record {
                 if let Err(error) = state.persistence.mls_welcomes().enqueue(&record).await {
                     tracing::warn!(%error, welcome_id = %welcome_id, "failed to mirror MLS Welcome enqueue");
@@ -1332,10 +1332,24 @@ mod tests {
             .await
             .expect("queued device messages");
         assert_eq!(queued.len(), 1);
-        assert_eq!(queued[0].content["kind"], cokret_sdk::events::kinds::REALM_KEY_SHARE);
-        assert_eq!(queued[0].content["content"]["payload"]["ciphertext"], "sealed");
-        assert!(queued[0].content["content"]["payload"].get("event_id").is_none());
-        assert!(queued[0].content["content"]["payload"].get("sender").is_none());
+        assert_eq!(
+            queued[0].content["kind"],
+            cokret_sdk::events::kinds::REALM_KEY_SHARE
+        );
+        assert_eq!(
+            queued[0].content["content"]["payload"]["ciphertext"],
+            "sealed"
+        );
+        assert!(
+            queued[0].content["content"]["payload"]
+                .get("event_id")
+                .is_none()
+        );
+        assert!(
+            queued[0].content["content"]["payload"]
+                .get("sender")
+                .is_none()
+        );
         assert!(queued[0].content["content"]["payload"].get("hlc").is_none());
     }
 
