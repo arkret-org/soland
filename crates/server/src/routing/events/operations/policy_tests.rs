@@ -1,8 +1,8 @@
 use serde_json::json;
 
 use super::*;
+use crate::state::{CanonicalEventRecord, DeviceInventoryRecord, DirectConversationBindingRecord};
 use soland_data::Db;
-use crate::state::{CanonicalEventRecord, DirectConversationBindingRecord};
 
 fn test_config() -> crate::config::AppConfig {
     crate::config::AppConfig {
@@ -2028,6 +2028,123 @@ async fn realm_key_share_rrk_targeted_is_accepted_for_recovery_recipient() {
     validate_realm_key_share_policy(&state, &share)
         .await
         .expect("RRK-targeted share to a recovery recipient must be accepted");
+}
+
+#[tokio::test]
+async fn realm_key_share_member_device_accepts_projection_metadata() {
+    let state = test_state();
+    let realm_id =
+        cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-00000000d300".to_owned())
+            .unwrap();
+    let now = chrono::DateTime::parse_from_rfc3339("2026-07-05T00:00:00Z")
+        .unwrap()
+        .with_timezone(&chrono::Utc);
+    let bob = "did:web:bob.example";
+    let bob_device = "ck:device:01904100-0000-7000-8000-00000000d3d1";
+
+    state
+        .persistence
+        .realm_meta()
+        .put(
+            realm_id.as_str(),
+            &crate::state::RealmMetaRecord {
+                owner: "did:web:alice.example".to_owned(),
+                deleted: false,
+                discoverability: "invite_only".to_owned(),
+                history_visibility: "shared".to_owned(),
+                history_sharing_policy: Some(json!({
+                    "version": 1,
+                    "default_key_share": "event_time_visibility",
+                    "pre_join_history": "allow_if_visibility_allows",
+                    "allowed_key_sources": ["verified_member_device"],
+                    "allowed_receiver_states": ["active_member"],
+                    "audit": {
+                        "share_audit_event_required": false,
+                        "access_audit_required": false
+                    }
+                })),
+                history_sharing_policy_digest: Some(
+                    "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+                        .to_owned(),
+                ),
+                preview_policy: None,
+                preview_policy_digest: None,
+                asset_privacy_policy: None,
+                asset_privacy_policy_digest: None,
+                encryption_profile: Some("mls_rfc9420".to_owned()),
+                plaintext_visible_services: std::collections::BTreeSet::new(),
+                plaintext_visible_service_classes: std::collections::BTreeMap::new(),
+                minimal_metadata_realm: false,
+                created_at: now,
+                updated_at: now,
+            },
+        )
+        .await
+        .expect("realm meta stored");
+    state
+        .persistence
+        .devices()
+        .put(&DeviceInventoryRecord {
+            actor: bob.to_owned(),
+            device_id: bob_device.to_owned(),
+            display_name: None,
+            verification_state: "verified".to_owned(),
+            payload: json!({"algorithms": ["ck.hpke_x25519_aead_chacha20poly1305.v1"]}),
+            created_at: now,
+            updated_at: now,
+            revoked_at: None,
+        })
+        .await
+        .expect("device stored");
+    {
+        let mut projection = state.projection.lock();
+        projection.members.insert(
+            (realm_id.to_string(), bob.to_owned()),
+            crate::reducer::SolandMembershipState {
+                member: bob.to_owned(),
+                realm_id: realm_id.to_string(),
+                state: "join".to_owned(),
+                role: "member".to_owned(),
+                delivery_status: Some("routable".to_owned()),
+                recipient_service_did: Some("did:web:local.host".to_owned()),
+                membership_event_ref: Some(
+                    "ck:event:01904100-0000-7000-8000-00000000d3aa".to_owned(),
+                ),
+                delivery_binding_frontier: None,
+                invited_at: Some(now),
+                joined_at: now,
+                updated_at: now,
+            },
+        );
+    }
+
+    let share = op(
+        realm_id.clone(),
+        "00000000d300",
+        cokret_sdk::events::kinds::REALM_KEY_SHARE,
+        json!({
+            "share_class": "member_device",
+            "recipient_principal_id": bob,
+            "recipient_device_id": bob_device,
+            "sender_device_id": "ck:device:01904100-0000-7000-8000-00000000d3d2",
+            "sender_device_signature": {"alg": "EdDSA", "kid": "k", "sig": "s"},
+            "key_scope": {
+                "effective_scope": {"kind": "realm", "realm_id": realm_id.as_str()},
+                "policy_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+                "from_epoch": 1,
+                "to_epoch": 3
+            },
+            "ciphertext": "sealed-history-secret",
+            "created_at": "2026-07-05T00:00:00Z",
+            "event_id": "ck:event:01904100-0000-7000-8000-00000000d300",
+            "sender": "did:web:alice.example",
+            "hlc": "2026-07-05T00:00:00Z/node/1"
+        }),
+    );
+
+    validate_realm_key_share_policy(&state, &share)
+        .await
+        .expect("projected member-device share metadata must not poison policy parsing");
 }
 
 // A non-recovery, non-member recipient with no history-sharing policy still

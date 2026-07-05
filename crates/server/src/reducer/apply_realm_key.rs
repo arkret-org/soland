@@ -9,7 +9,7 @@ impl ProjectionState {
         }
 
         let share: cokret_sdk::RealmKeySharePayload =
-            match serde_json::from_value(operation.payload.clone()) {
+            match serde_json::from_value(realm_key_share_wire_payload(&operation.payload)) {
                 Ok(share) => share,
                 Err(_) => return rejected("realm_key_share_payload_invalid"),
             };
@@ -49,6 +49,24 @@ impl ProjectionState {
             recipient_device_id: share.recipient_device_id,
         }
     }
+}
+
+fn realm_key_share_wire_payload(payload: &Value) -> Value {
+    let mut wire_payload = payload.clone();
+    if let Some(object) = wire_payload.as_object_mut() {
+        for field in [
+            "event_id",
+            "sender",
+            "hlc",
+            "executed_by",
+            "authorization_ref",
+            "seal_ref",
+            "seal_basis",
+        ] {
+            object.remove(field);
+        }
+    }
+    wire_payload
 }
 
 fn realm_key_scope_realm_id(scope: &Value) -> Result<&str, &'static str> {

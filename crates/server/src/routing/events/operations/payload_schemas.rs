@@ -209,6 +209,27 @@ pub(crate) const REALM_POLICY_VALUE_REQUIREMENTS: &[PayloadRequirement] =
         "value",
         "realm policy event requires value",
     )];
+pub(crate) const REALM_KEY_SHARE_REQUIREMENTS: &[PayloadRequirement] = &[
+    PayloadRequirement::Required("share_class", "ck.realm_key.share requires share_class"),
+    PayloadRequirement::Required(
+        "recipient_principal_id",
+        "ck.realm_key.share requires recipient_principal_id",
+    ),
+    PayloadRequirement::Required(
+        "sender_device_id",
+        "ck.realm_key.share requires sender_device_id",
+    ),
+    PayloadRequirement::Required(
+        "sender_device_signature",
+        "ck.realm_key.share requires sender_device_signature",
+    ),
+    PayloadRequirement::Required("key_scope", "ck.realm_key.share requires key_scope"),
+    PayloadRequirement::AnyOf(
+        &["ciphertext", "encrypted_key_ref"],
+        "ck.realm_key.share requires sealed key material",
+    ),
+    PayloadRequirement::Required("created_at", "ck.realm_key.share requires created_at"),
+];
 pub(crate) const REALM_DISAPPEARING_POLICY_REQUIREMENTS: &[PayloadRequirement] = &[
     PayloadRequirement::Required("enabled", "ck.realm.disappearing_policy requires enabled"),
     PayloadRequirement::Required(

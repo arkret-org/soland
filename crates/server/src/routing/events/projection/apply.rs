@@ -970,8 +970,10 @@ async fn project_realm_key_share_to_device(
     source_device_id: &str,
     operation: &Operation,
 ) {
+    let wire_payload =
+        crate::routing::events::operations::projection_context_stripped_payload(&operation.payload);
     let Ok(share) =
-        serde_json::from_value::<cokret_sdk::RealmKeySharePayload>(operation.payload.clone())
+        serde_json::from_value::<cokret_sdk::RealmKeySharePayload>(wire_payload.clone())
     else {
         return;
     };
@@ -997,7 +999,7 @@ async fn project_realm_key_share_to_device(
         sender_device_id,
         operation.realm_id.as_str(),
         operation.operation_id.as_str(),
-        &operation.payload,
+        &wire_payload,
     );
     let record = DeviceMessageRecord {
         idempotency_key: format!("realm_key_share:{}", operation.operation_id),
@@ -1279,6 +1281,63 @@ fn refresh_authz_index_from_capability_effect(
 mod tests {
     use super::*;
     use crate::routing::identity::device_messages::device_message_envelopes_after;
+
+    #[tokio::test]
+    async fn realm_key_share_device_projection_accepts_projected_payload_context() {
+        let state = AppState::new(
+            crate::config::AppConfig::test_default(),
+            soland_data::Db { pool: None },
+        );
+        let realm_id =
+            cokret_sdk::RealmId::new("ck:realm:0196419b-1000-7000-8000-000000000101".to_owned())
+                .unwrap();
+        let operation_id =
+            cokret_sdk::OperationId::new("ck:operation:0196419b-1000-7000-8000-000000000102")
+                .unwrap();
+        let sender = "did:web:alice.example";
+        let sender_device = "ck:device:01904100-0000-7000-8000-a11ce0000101";
+        let recipient = "did:web:bob.example";
+        let recipient_device = "ck:device:01904100-0000-7000-8000-b0b000000101";
+        let payload = json!({
+            "share_class": "member_device",
+            "recipient_principal_id": recipient,
+            "recipient_device_id": recipient_device,
+            "sender_device_id": sender_device,
+            "sender_device_signature": {"alg": "EdDSA", "kid": "k", "sig": "s"},
+            "key_scope": {
+                "effective_scope": {"kind": "realm", "realm_id": realm_id.as_str()},
+                "policy_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+                "from_epoch": 0,
+                "to_epoch": 0
+            },
+            "ciphertext": "sealed",
+            "created_at": "2026-07-05T00:00:00Z",
+            "event_id": "ck:event:01904100-0000-7000-8000-000000000101",
+            "sender": sender,
+            "hlc": "2026-07-05T00:00:00Z/node/1"
+        });
+        let operation = Operation::create(
+            operation_id.clone(),
+            realm_id,
+            cokret_sdk::events::kinds::REALM_KEY_SHARE,
+            payload,
+        );
+
+        project_realm_key_share_to_device(&state, sender, sender_device, &operation).await;
+
+        let queued = state
+            .persistence
+            .device_messages()
+            .list_after(recipient, recipient_device, 0)
+            .await
+            .expect("queued device messages");
+        assert_eq!(queued.len(), 1);
+        assert_eq!(queued[0].content["kind"], cokret_sdk::events::kinds::REALM_KEY_SHARE);
+        assert_eq!(queued[0].content["content"]["payload"]["ciphertext"], "sealed");
+        assert!(queued[0].content["content"]["payload"].get("event_id").is_none());
+        assert!(queued[0].content["content"]["payload"].get("sender").is_none());
+        assert!(queued[0].content["content"]["payload"].get("hlc").is_none());
+    }
 
     #[test]
     fn realm_key_share_device_projection_preserves_payload_in_envelope_content() {

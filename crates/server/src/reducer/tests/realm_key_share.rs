@@ -67,6 +67,32 @@ fn realm_key_share_dispatch_projects_effect() {
 }
 
 #[test]
+fn realm_key_share_dispatch_accepts_projection_metadata() {
+    let mut state = ProjectionState::new();
+    let hlc = ServerHlc::new("realm-key-share-projected-context");
+    let mut payload = realm_key_share_payload(realm_scope(REALM));
+    payload["event_id"] = json!("ck:event:01904100-0000-7000-8000-000000000701");
+    payload["sender"] = json!("did:web:alice.example");
+    payload["hlc"] = json!("2026-07-05T00:00:00Z/node/1");
+
+    let effect = state.apply(
+        &make_operation(cokret_sdk::events::kinds::REALM_KEY_SHARE, REALM, payload),
+        &hlc,
+    );
+
+    assert!(matches!(
+        effect,
+        ProjectionEffect::RealmKeyShareProjected {
+            ref realm_id,
+            ref recipient_principal_id,
+            ref recipient_device_id,
+        } if realm_id == REALM
+            && recipient_principal_id == RECIPIENT
+            && recipient_device_id.as_deref() == Some(RECIPIENT_DEVICE)
+    ));
+}
+
+#[test]
 fn realm_key_share_requires_material() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("realm-key-share-material");

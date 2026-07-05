@@ -127,6 +127,72 @@ mod invite_create_schema_tests {
     }
 }
 
+mod realm_key_share_schema_tests {
+    use cokret_sdk::Operation;
+    use serde_json::json;
+
+    use super::super::*;
+
+    fn op(payload: serde_json::Value) -> Operation {
+        Operation::create(
+            cokret_sdk::OperationId::new("ck:operation:01904100-0000-7000-8000-0000000007aa")
+                .unwrap(),
+            cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-0000000007aa".to_owned())
+                .unwrap(),
+            cokret_sdk::events::kinds::REALM_KEY_SHARE,
+            payload,
+        )
+    }
+
+    fn member_device_share_payload() -> serde_json::Value {
+        json!({
+            "share_class": "member_device",
+            "recipient_principal_id": "did:web:bob.example",
+            "recipient_device_id": "ck:device:01904100-0000-7000-8000-0000000000b1",
+            "sender_device_id": "ck:device:01904100-0000-7000-8000-0000000000a1",
+            "sender_device_signature": {
+                "alg": "Ed25519",
+                "signature": "c2lnbmF0dXJl",
+                "signer_public_key_multibase": "z6MkiTbzSR9vvoRMkuSWLUnx5QXNxoUwYkpxHxTtN77xuxNm"
+            },
+            "key_scope": {
+                "effective_scope": {
+                    "kind": "realm",
+                    "realm_id": "ck:realm:01904100-0000-7000-8000-0000000007aa"
+                },
+                "policy_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+                "from_epoch": 0,
+                "to_epoch": 2
+            },
+            "ciphertext": "sealed-history-secret",
+            "created_at": "2026-07-05T00:00:00Z"
+        })
+    }
+
+    #[test]
+    fn realm_key_share_uses_share_payload_schema_not_realm_policy_value_schema() {
+        let schema = operation_schema_for_kind(cokret_sdk::events::kinds::REALM_KEY_SHARE)
+            .expect("realm key share must build an Operation");
+        let operation = op(member_device_share_payload());
+
+        assert!(validate_operation_schema(&operation, schema).is_ok());
+    }
+
+    #[test]
+    fn realm_key_share_requires_sealed_key_material() {
+        let schema = operation_schema_for_kind(cokret_sdk::events::kinds::REALM_KEY_SHARE)
+            .expect("realm key share must build an Operation");
+        let mut payload = member_device_share_payload();
+        payload.as_object_mut().unwrap().remove("ciphertext");
+        let operation = op(payload);
+
+        assert_eq!(
+            validate_operation_schema(&operation, schema),
+            Err("ck.realm_key.share requires sealed key material")
+        );
+    }
+}
+
 mod read_receipt_policy_schema_tests {
     use cokret_sdk::Operation;
     use serde_json::json;

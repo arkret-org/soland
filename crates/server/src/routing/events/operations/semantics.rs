@@ -601,8 +601,8 @@ pub fn operation_schema_for_kind(kind: &str) -> Option<OperationPayloadSchema> {
                 validate: None,
             },
             cokret_sdk::events::kinds::REALM_KEY_SHARE => OperationPayloadSchema {
-                requirements: REALM_POLICY_VALUE_REQUIREMENTS,
-                validate: None,
+                requirements: REALM_KEY_SHARE_REQUIREMENTS,
+                validate: Some(validate_operation_payload_against_sdk_artifact),
             },
             kinds::CONFLICT_REPAIR => OperationPayloadSchema {
                 requirements: CONFLICT_REPAIR_REQUIREMENTS,

@@ -403,9 +403,10 @@ pub(crate) async fn validate_realm_key_share_policy(
     {
         return Ok(());
     }
-    let share =
-        serde_json::from_value::<cokret_sdk::RealmKeySharePayload>(operation.payload.clone())
-            .map_err(|_| "policy_denied")?;
+    let share = serde_json::from_value::<cokret_sdk::RealmKeySharePayload>(
+        projection_context_stripped_payload(&operation.payload),
+    )
+    .map_err(|_| "policy_denied")?;
     // encryption-and-audit.md §2.10.8 — a `ck.realm_key.share` with
     // `share_class=realm_recovery_key` is the Realm Recovery Key (RRK) eager-
     // sealing path: provider-initiated, the recipient is an OFFLINE recovery org
