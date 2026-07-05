@@ -199,9 +199,7 @@ fn validate_realm_lifecycle_write_gate(
 ) -> Result<(), &'static str> {
     let kind = kinds::canonical_kind_string(operation);
     let realm_id = operation.realm_id.as_str();
-    let projection = state
-        .projection
-        .lock();
+    let projection = state.projection.lock();
     if projection.realm_is_in_terminal_state(realm_id)
         && !cokret_sdk::events::kinds::is_audit_kind(&kind)
     {
@@ -417,7 +415,7 @@ fn circle_member_manage_required(state: &AppState, operation: &Operation) -> boo
                         .map(|circle| circle.join_rule != "open")
                 }
             }
-                .unwrap_or(false)
+            .unwrap_or(false)
         }
         _ => target != actor,
     }
@@ -432,7 +430,7 @@ fn policy_realm_member_joined(state: &AppState, realm_id: &str, actor: &str) -> 
                 .map(|membership| membership.state == "join")
         }
     }
-        .unwrap_or(false)
+    .unwrap_or(false)
 }
 
 fn payload_asserts_agent_sidecar_ensure(payload: &Value) -> bool {
@@ -945,7 +943,7 @@ fn validate_disappearing_message_policy(
                 .cloned()
         }
     }
-        .ok_or("disappearing_policy_unset")?;
+    .ok_or("disappearing_policy_unset")?;
     if !policy
         .get("enabled")
         .and_then(Value::as_bool)
@@ -1761,7 +1759,7 @@ fn validate_agent_act_on_behalf_authorization_ref(
         let projection = state.projection.lock();
         Some(projection.authz_resource_expr(operation.realm_id.as_str(), resource))
     }
-        .unwrap_or_else(|| resource.to_owned());
+    .unwrap_or_else(|| resource.to_owned());
     if !action_allowed || !crate::authz::resource_matches(&grant.resource, &resource_expr) {
         return Err("agent_act_on_behalf_authorization_ref_scope");
     }
@@ -1998,10 +1996,10 @@ async fn operation_agent_write_context(
         };
         return Ok(Some((agent_id, mode)));
     }
-    if let Some(sender) = operation.actor()
-        && native_agent_exists(state, sender.as_str()).await?
+    if let Some(sender) = policy_operation_sender(operation)
+        && native_agent_exists(state, sender).await?
     {
-        return Ok(Some((sender.to_string(), AgentParticipationMode::Reply)));
+        return Ok(Some((sender.to_owned(), AgentParticipationMode::Reply)));
     }
     Ok(None)
 }
@@ -2036,7 +2034,7 @@ fn validate_agent_context_authorization_ref(
         let projection = state.projection.lock();
         Some(projection.authz_resource_expr(operation.realm_id.as_str(), resource))
     }
-        .unwrap_or_else(|| resource.to_owned());
+    .unwrap_or_else(|| resource.to_owned());
     if !action_allowed || !crate::authz::resource_matches(&grant.resource, &resource_expr) {
         return Err("agent_context_authorization_ref_scope");
     }

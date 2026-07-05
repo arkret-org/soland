@@ -1,8 +1,8 @@
 use serde_json::json;
+use soland_data::Db;
 
 use super::*;
 use crate::state::{CanonicalEventRecord, DeviceInventoryRecord, DirectConversationBindingRecord};
-use soland_data::Db;
 
 fn test_config() -> crate::config::AppConfig {
     crate::config::AppConfig {
@@ -25,24 +25,21 @@ fn state_with_direct_binding() -> (AppState, cokret_sdk::RealmId) {
         cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-000000000601".to_owned())
             .unwrap();
     let now = chrono::Utc::now();
-    state
-        .direct_conversation_bindings
-        .lock()
-        .insert(
-            "did:web:alice.example\0did:web:bob.example".to_owned(),
-            DirectConversationBindingRecord {
-                participants_unordered: vec![
-                    "did:web:alice.example".to_owned(),
-                    "did:web:bob.example".to_owned(),
-                ],
-                realm_id: realm_id.to_string(),
-                main_strand_id: "ck:strand:01904100-0000-7000-8000-000000000601".to_owned(),
-                binding_event_ref: "ck:event:01904100-0000-7000-8000-000000000601".to_owned(),
-                state: "active".to_owned(),
-                created_at: now,
-                updated_at: now,
-            },
-        );
+    state.direct_conversation_bindings.lock().insert(
+        "did:web:alice.example\0did:web:bob.example".to_owned(),
+        DirectConversationBindingRecord {
+            participants_unordered: vec![
+                "did:web:alice.example".to_owned(),
+                "did:web:bob.example".to_owned(),
+            ],
+            realm_id: realm_id.to_string(),
+            main_strand_id: "ck:strand:01904100-0000-7000-8000-000000000601".to_owned(),
+            binding_event_ref: "ck:event:01904100-0000-7000-8000-000000000601".to_owned(),
+            state: "active".to_owned(),
+            created_at: now,
+            updated_at: now,
+        },
+    );
     (state, realm_id)
 }
 
@@ -545,36 +542,29 @@ fn insert_approved_agent_action(
     approval_nonce: &str,
 ) {
     let payload_digest = cokret_sdk::canonical::canonical_sha256(&message.payload).unwrap();
-    state
-        .projection
-        .lock()
-        .agent_action_requests
-        .insert(
-            request_id.to_owned(),
-            crate::reducer::AgentActionRequestProjection {
-                request_id: request_id.to_owned(),
-                agent_principal_id: agent_principal_id.to_owned(),
-                status: crate::reducer::AgentActionRequestStatus::Approved,
-                requested_at: message.created_at - chrono::Duration::minutes(1),
-                resolved_at: Some(message.created_at),
-                resolution_event_id: Some(
-                    "ck:event:01904100-0000-7000-8000-0000000007aa".to_owned(),
-                ),
-                cancel_reason: None,
-                approval: Some(crate::reducer::AgentActionApprovalProjection {
-                    approval_id: "ck:agent_approval:01904100-0000-7000-8000-0000000007aa"
-                        .to_owned(),
-                    proposed_action: kinds::canonical_kind_string(message),
-                    target: json!({
-                        "kind": "realm",
-                        "realm_id": message.realm_id.as_str(),
-                    }),
-                    approved_payload_digest: payload_digest,
-                    approval_nonce: approval_nonce.to_owned(),
-                    expires_at: message.created_at + chrono::Duration::minutes(10),
+    state.projection.lock().agent_action_requests.insert(
+        request_id.to_owned(),
+        crate::reducer::AgentActionRequestProjection {
+            request_id: request_id.to_owned(),
+            agent_principal_id: agent_principal_id.to_owned(),
+            status: crate::reducer::AgentActionRequestStatus::Approved,
+            requested_at: message.created_at - chrono::Duration::minutes(1),
+            resolved_at: Some(message.created_at),
+            resolution_event_id: Some("ck:event:01904100-0000-7000-8000-0000000007aa".to_owned()),
+            cancel_reason: None,
+            approval: Some(crate::reducer::AgentActionApprovalProjection {
+                approval_id: "ck:agent_approval:01904100-0000-7000-8000-0000000007aa".to_owned(),
+                proposed_action: kinds::canonical_kind_string(message),
+                target: json!({
+                    "kind": "realm",
+                    "realm_id": message.realm_id.as_str(),
                 }),
-            },
-        );
+                approved_payload_digest: payload_digest,
+                approval_nonce: approval_nonce.to_owned(),
+                expires_at: message.created_at + chrono::Duration::minutes(10),
+            }),
+        },
+    );
 }
 
 async fn insert_agent_interop_session_start(
@@ -805,6 +795,32 @@ async fn act_on_behalf_agent_strand_write_requires_agent_context() {
             .unwrap_err(),
         "agent_context_missing"
     );
+}
+
+#[tokio::test]
+async fn native_agent_member_target_uses_sender_for_agent_write_detection() {
+    let state = test_state();
+    let realm_id =
+        cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-0000000007b1".to_owned())
+            .unwrap();
+    let agent = "did:web:agent.example";
+    register_agent_selection(&state, &realm_id, agent, true, true).await;
+    let operation = op(
+        realm_id,
+        "0000000007b1",
+        cokret_sdk::events::kinds::MEMBER_STATE,
+        json!({
+            "sender": "did:web:alice.example",
+            "actor_id": agent,
+            "membership": "join",
+            "realm_id": "ck:realm:01904100-0000-7000-8000-0000000007b1",
+            "delivery_status": "unroutable"
+        }),
+    );
+
+    validate_agent_reply_participation(&state, &[operation])
+        .await
+        .expect("membership target must not be treated as the executing agent");
 }
 
 #[tokio::test]

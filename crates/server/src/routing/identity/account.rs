@@ -815,28 +815,8 @@ async fn local_account_register(
     if let Some(device_id) = body.device_id.as_deref() {
         let device_id = validate_device_id(device_id)
             .map_err(|_| AppError::invalid_param("invalid device_id"))?;
-        let registered_at = now();
-        let device = DeviceInventoryRecord {
-            actor: did.clone(),
-            device_id: device_id.as_str().to_owned(),
-            display_name: account.display_name.clone(),
-            verification_state: "unverified".to_owned(),
-            payload: json!({
-                "device_id": device_id.as_str(),
-                "display_name": account.display_name.clone(),
-                "verification": "unverified",
-                "registered_with_account": true,
-            }),
-            created_at: registered_at,
-            updated_at: registered_at,
-            revoked_at: None,
-        };
-        state
-            .persistence
-            .devices()
-            .put(&device)
-            .await
-            .map_err(|error| AppError::internal(error.to_string()))?;
+        put_account_device_placeholder(state, &did, account.display_name.clone(), device_id.as_str())
+            .await?;
     }
     append_audit_log(
         state,
@@ -1155,22 +1135,34 @@ async fn gate_account_register(
         .get(&did)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
-    if existing.is_some() {
-        let duplicate_audit = AccountRegistrationAudit {
-            outcome: AccountRegistrationAuditOutcome::DuplicateConflict,
-            policy_digest: registration_audit.policy_digest.clone(),
-            evidence: registration_audit.evidence.clone(),
-            retry_after_ms: None,
-        };
-        return Err(reject_account_registration(
-            state,
-            &did,
-            body.handle.as_deref(),
-            duplicate_audit,
-            crate::error::ErrorCode::DuplicateConflict,
-            "account already exists",
-        )
-        .await);
+    if let Some(existing_account) = existing {
+        if let Some(device_id) = body.device_id.as_ref() {
+            put_account_device_placeholder(
+                state,
+                &did,
+                existing_account
+                    .display_name
+                    .clone()
+                    .or_else(|| body.display_name.clone()),
+                device_id.as_str(),
+            )
+            .await?;
+        }
+        let audit_handle = (!existing_account.localpart.is_empty()).then(|| existing_account.handle());
+        append_account_registration_audit(state, &did, audit_handle.as_deref(), &registration_audit)
+            .await;
+        let devices = account_device_summaries(state, &did).await?;
+        let primary_handle_claim = account_primary_handle_claim(state, &existing_account).await;
+        return json_ok(AccountRegisterOutcome {
+            principal_id: body.principal_id,
+            state: AccountStatus::Active,
+            devices,
+            primary_handle_claim,
+            primary_handle_claim_ref: None,
+            handle_claim_digests: Vec::new(),
+            profile: None,
+            registration_audit: Some(registration_audit),
+        });
     }
     let localpart = match body.handle.as_deref() {
         Some(handle) => resolve_registration_localpart(state, handle).await?,
@@ -1498,6 +1490,39 @@ fn account_response(account: AccountRecord, state: &AppState) -> SolandAccountRe
         state: lifecycle_state,
         created_at: account.created_at,
     }
+}
+
+async fn put_account_device_placeholder(
+    state: &AppState,
+    actor: &str,
+    display_name: Option<String>,
+    device_id: &str,
+) -> Result<(), AppError> {
+    let registered_at = now();
+    // Device-identity B-model: account registration only creates an
+    // unverified placeholder. `ck.device.authorize` is still the only path
+    // that can attach a device public key and mark the device verified.
+    let device = DeviceInventoryRecord {
+        actor: actor.to_owned(),
+        device_id: device_id.to_owned(),
+        display_name: display_name.clone(),
+        verification_state: "unverified".to_owned(),
+        payload: json!({
+            "device_id": device_id,
+            "display_name": display_name,
+            "verification": "unverified",
+            "registered_with_account": true,
+        }),
+        created_at: registered_at,
+        updated_at: registered_at,
+        revoked_at: None,
+    };
+    state
+        .persistence
+        .devices()
+        .put(&device)
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))
 }
 
 async fn account_device_summaries(
