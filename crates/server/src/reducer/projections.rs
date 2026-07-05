@@ -37,6 +37,15 @@ pub struct PendingReplayEntry {
     pub queued_at: chrono::DateTime<chrono::Utc>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StrandWatchProjection {
+    pub strand_id: String,
+    pub actor_id: String,
+    pub level: Option<String>,
+    pub level_public: bool,
+    pub updated_at: chrono::DateTime<chrono::Utc>,
+}
+
 /// Stream-F (Wave 2C) — per-peer fanout status for a single
 /// `ck.audit.erasure_receipt`. One row per federation peer that has
 /// received content from the affected Realm.

@@ -440,17 +440,8 @@ async fn persisted_notification_delta(
         {
             continue;
         }
-        let Some(source_event_id) = row.get("source_event_id").and_then(Value::as_str) else {
-            continue;
-        };
-        let Some(source) = notification_source_message_value(
-            state,
-            projection,
-            realm_id,
-            source_event_id,
-            session,
-        )
-        .await
+        let Some(source) =
+            notification_source_value(state, projection, realm_id, &row, session).await
         else {
             continue;
         };
@@ -555,6 +546,97 @@ async fn notification_source_message_value(
     Some(event)
 }
 
+async fn notification_source_value(
+    state: &AppState,
+    projection: &ProjectionState,
+    realm_id: &str,
+    notification: &Value,
+    session: &SessionRecord,
+) -> Option<Value> {
+    let notification_type = notification
+        .get("notification_type")
+        .and_then(Value::as_str)
+        .unwrap_or("message");
+    let Some(source_event_id) = notification.get("source_event_id").and_then(Value::as_str) else {
+        return None;
+    };
+    if matches!(
+        notification_type,
+        "message" | "mention" | "reply" | "reaction"
+    ) {
+        return notification_source_message_value(
+            state,
+            projection,
+            realm_id,
+            source_event_id,
+            session,
+        )
+        .await;
+    }
+    notification_source_projection_value(state, projection, realm_id, notification, session).await
+}
+
+async fn notification_source_projection_value(
+    state: &AppState,
+    projection: &ProjectionState,
+    realm_id: &str,
+    notification: &Value,
+    session: &SessionRecord,
+) -> Option<Value> {
+    let source_event_id = notification.get("source_event_id")?.as_str()?;
+    let strand_id = notification.get("strand_id").and_then(Value::as_str);
+    if let Some(strand_id) = strand_id {
+        let strand = projection.strands.get(strand_id)?;
+        if strand.realm_id != realm_id {
+            return None;
+        }
+        if !realm_event_visible_to_session_with_projection(
+            state,
+            projection,
+            realm_id,
+            strand.created_at,
+            Some(&strand.created_by),
+            Some(session),
+        )
+        .await
+        {
+            return None;
+        }
+        if !circle_scope_visible_to_session(
+            projection,
+            strand.scope_circle_id.as_deref(),
+            strand.created_at,
+            Some(session),
+            Some(&strand.created_by),
+        ) {
+            return None;
+        }
+    }
+    let mut source = json!({
+        "event_id": source_event_id,
+        "realm_id": realm_id,
+        "event_kind": notification
+            .get("event_kind")
+            .and_then(Value::as_str)
+            .unwrap_or("ck.notification"),
+        "created_at": notification
+            .get("created_at")
+            .and_then(Value::as_str)
+            .unwrap_or_default(),
+        "encrypted": false,
+    });
+    if let Some(strand_id) = strand_id {
+        source["strand_id"] = json!(strand_id);
+    }
+    if let Some(track_name) = notification.get("track_name").and_then(Value::as_str) {
+        source["track_name"] = json!(track_name);
+    }
+    if let Some(actor_id) = notification.get("source_actor_id").and_then(Value::as_str) {
+        source["sender"] = json!(actor_id);
+    }
+    Some(source)
+}
+
 fn notification_value_from_row(notification: &Value, source: &Value) -> Option<Value> {
     let notification_id = notification.get("notification_id")?.as_str()?;
     let source_event_id = notification.get("source_event_id")?.as_str()?;
@@ -567,9 +649,18 @@ fn notification_value_from_row(notification: &Value, source: &Value) -> Option<V
         .and_then(Value::as_str)
         .or_else(|| source.get("realm_id").and_then(Value::as_str))
         .unwrap_or_default();
-    let strand_id = source.get("strand_id").and_then(Value::as_str);
-    let track_name = source.get("track_name").and_then(Value::as_str);
-    let actor_id = source.get("sender").and_then(Value::as_str);
+    let strand_id = notification
+        .get("strand_id")
+        .and_then(Value::as_str)
+        .or_else(|| source.get("strand_id").and_then(Value::as_str));
+    let track_name = notification
+        .get("track_name")
+        .and_then(Value::as_str)
+        .or_else(|| source.get("track_name").and_then(Value::as_str));
+    let actor_id = notification
+        .get("source_actor_id")
+        .and_then(Value::as_str)
+        .or_else(|| source.get("sender").and_then(Value::as_str));
     let encrypted = source
         .get("encrypted")
         .and_then(Value::as_bool)
@@ -584,7 +675,11 @@ fn notification_value_from_row(notification: &Value, source: &Value) -> Option<V
         "notification_kind": notification_type,
         "notification_type": notification_type,
         "kind": notification_type,
-        "event_kind": "ck.message.create",
+        "event_kind": notification
+            .get("event_kind")
+            .and_then(Value::as_str)
+            .or_else(|| source.get("event_kind").and_then(Value::as_str))
+            .unwrap_or("ck.message.create"),
         "realm_id": realm_id,
         "source_event_id": source_event_id,
         "timestamp": timestamp,
@@ -597,6 +692,14 @@ fn notification_value_from_row(notification: &Value, source: &Value) -> Option<V
     if notification_type == "mention" {
         value["title"] = json!("You were mentioned");
         value["mentions_actor"] = json!(true);
+    } else if notification_type == "assignment" {
+        value["title"] = json!("You were assigned");
+        value["body"] = json!("You were assigned to a Strand.");
+        value["assigned_to_actor"] = json!(true);
+    } else if notification_type == "schedule" {
+        value["title"] = json!("Schedule updated");
+        value["body"] = json!("A due date or calendar schedule changed.");
+        value["schedule_target"] = json!(true);
     }
     if let Some(strand_id) = strand_id {
         value["strand_id"] = json!(strand_id);
@@ -693,6 +796,71 @@ pub(crate) async fn pending_invite_notification_delta(
         })
     });
     (notifications, positions)
+}
+
+#[cfg(test)]
+mod notification_projection_tests {
+    use serde_json::json;
+
+    use super::notification_value_from_row;
+
+    #[test]
+    fn assignment_notification_projects_without_message_source() {
+        let row = json!({
+            "notification_id": "ck:notification:01904100-0000-7000-8000-000000000001",
+            "recipient_id": "did:web:bob.example",
+            "realm_id": "ck:realm:01904100-0000-7000-8000-000000000002",
+            "source_event_id": "ck:event:01904100-0000-7000-8000-000000000003",
+            "source_ref": "ck:relation:01904100-0000-7000-8000-000000000004",
+            "strand_id": "ck:strand:01904100-0000-7000-8000-000000000005",
+            "notification_type": "assignment",
+            "event_kind": "ck.relation.create",
+            "source_actor_id": "did:web:alice.example",
+            "created_at": "2026-07-05T00:00:00Z"
+        });
+        let source = json!({
+            "event_id": "ck:event:01904100-0000-7000-8000-000000000003",
+            "realm_id": "ck:realm:01904100-0000-7000-8000-000000000002",
+            "event_kind": "ck.relation.create"
+        });
+
+        let projected = notification_value_from_row(&row, &source).unwrap();
+
+        assert_eq!(projected["notification_type"], "assignment");
+        assert_eq!(projected["event_kind"], "ck.relation.create");
+        assert_eq!(projected["assigned_to_actor"], true);
+        assert_eq!(projected["actor_id"], "did:web:alice.example");
+    }
+
+    #[test]
+    fn schedule_notification_projects_without_message_source() {
+        let row = json!({
+            "notification_id": "ck:notification:01904100-0000-7000-8000-000000000006",
+            "recipient_id": "did:web:bob.example",
+            "realm_id": "ck:realm:01904100-0000-7000-8000-000000000002",
+            "source_event_id": "ck:event:01904100-0000-7000-8000-000000000007",
+            "strand_id": "ck:strand:01904100-0000-7000-8000-000000000005",
+            "notification_type": "schedule",
+            "event_kind": "ck.strand.update",
+            "source_actor_id": "did:web:alice.example",
+            "created_at": "2026-07-05T00:00:00Z"
+        });
+        let source = json!({
+            "event_id": "ck:event:01904100-0000-7000-8000-000000000007",
+            "realm_id": "ck:realm:01904100-0000-7000-8000-000000000002",
+            "event_kind": "ck.strand.update"
+        });
+
+        let projected = notification_value_from_row(&row, &source).unwrap();
+
+        assert_eq!(projected["notification_type"], "schedule");
+        assert_eq!(projected["event_kind"], "ck.strand.update");
+        assert_eq!(projected["schedule_target"], true);
+        assert_eq!(
+            projected["body"],
+            "A due date or calendar schedule changed."
+        );
+    }
 }
 
 fn invite_projection_position(invite: &crate::state::RealmInviteRecord) -> i64 {

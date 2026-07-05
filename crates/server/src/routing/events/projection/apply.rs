@@ -695,6 +695,13 @@ async fn project_accepted_operations_inner(
         // Mirrors the canonical wire kinds the reducer dispatches into
         // `ProjectionState::{space_containers,strands,morphs}`.
         write_through_projection(state, operation).await;
+        if kinds::canonical_kind_string(operation) == cokret_sdk::events::kinds::RELATION_CREATE {
+            crate::routing::events::notify::dispatch_assignment_notifications(state, operation)
+                .await;
+        }
+        if kinds::canonical_kind_string(operation) == cokret_sdk::events::kinds::STRAND_UPDATE {
+            crate::routing::events::notify::dispatch_schedule_notifications(state, operation).await;
+        }
         // CKP-0016 — mirror agent_participation ceiling changes into the
         // agent_participation_ceiling projection table (read by
         // participation.set / .get ceiling resolution).

@@ -1,12 +1,12 @@
-//! CKP-0016 §9.4.5 — message mention notification fanout + agent
-//! third-party mention gate.
+//! Notification fanout for message mentions, assignment targets, and schedule
+//! changes.
 //!
-//! Derives per-recipient `notification` rows from an accepted
-//! `ck.message.create`. A native personal agent is only notified of a
-//! third-party mention (author != its controller) when its effective
-//! `accept_third_party_mention` bit (selection ∩ ceiling) is true for the
-//! message scope; otherwise the mention is dropped for that agent. Human
-//! direct mention recipients are notified after the same message-scope checks.
+//! Message mention fanout keeps the CKP-0016 third-party agent gate: a native
+//! personal agent is only notified of a third-party mention (author != its
+//! controller) when its effective `accept_third_party_mention` bit (selection
+//! ∩ ceiling) is true for the message scope; otherwise the mention is dropped
+//! for that agent. Assignment and schedule fanout use the same per-recipient
+//! notification projection store and access gates.
 
 use std::collections::BTreeSet;
 
@@ -19,6 +19,66 @@ use crate::state::AppState;
 
 fn uuid_tail(typed_id: &str) -> &str {
     typed_id.rsplit(':').next().unwrap_or(typed_id)
+}
+
+fn value_string<'a>(value: &'a Value, keys: &[&str]) -> Option<&'a str> {
+    keys.iter()
+        .find_map(|key| value.get(*key).and_then(Value::as_str))
+}
+
+fn relation_value_string<'a>(payload: &'a Value, keys: &[&str]) -> Option<&'a str> {
+    value_string(payload, keys).or_else(|| {
+        payload
+            .get("relation")
+            .and_then(|relation| value_string(relation, keys))
+    })
+}
+
+fn operation_source_event_id(operation: &cokret_sdk::Operation) -> String {
+    operation
+        .payload
+        .get("event_id")
+        .and_then(Value::as_str)
+        .unwrap_or_else(|| operation.operation_id.as_str())
+        .to_owned()
+}
+
+fn operation_source_actor_id(operation: &cokret_sdk::Operation) -> Option<String> {
+    value_string(
+        &operation.payload,
+        &["sender", "actor_id", "created_by", "updated_by"],
+    )
+    .map(ToOwned::to_owned)
+}
+
+fn explicit_watch_level(state: &AppState, strand_id: &str, actor_id: &str) -> Option<String> {
+    state
+        .projection
+        .lock()
+        .strand_watches
+        .get(&(strand_id.to_owned(), actor_id.to_owned()))
+        .and_then(|watch| watch.level.clone())
+}
+
+fn actor_has_realm_access(state: &AppState, realm_id: &str, actor_id: &str) -> bool {
+    realm_joined_members(state, realm_id).contains(actor_id)
+}
+
+fn actor_can_see_strand(state: &AppState, realm_id: &str, strand_id: &str, actor_id: &str) -> bool {
+    if !actor_has_realm_access(state, realm_id, actor_id) {
+        return false;
+    }
+    let projection = state.projection.lock();
+    let Some(strand) = projection.strands.get(strand_id) else {
+        return false;
+    };
+    if strand.realm_id != realm_id {
+        return false;
+    }
+    if let Some(circle_id) = strand.scope_circle_id.as_deref() {
+        return projection.circle_scope_visible_to_actor(circle_id, actor_id);
+    }
+    true
 }
 
 /// Mention subject DIDs from a message payload's `content.mentions[]`
@@ -115,23 +175,72 @@ async fn agent_accepts_third_party_mention(
         .is_some_and(|resolved| resolved.effective.accept_third_party_mention)
 }
 
+async fn put_notification(
+    state: &AppState,
+    recipient_id: &str,
+    realm_id: &str,
+    source_event_id: &str,
+    notification_type: &str,
+    event_kind: &str,
+    source_ref: Option<&str>,
+    strand_id: Option<&str>,
+    track_name: Option<&str>,
+    source_actor_id: Option<&str>,
+    preview: Option<Value>,
+) {
+    let mut record = serde_json::json!({
+        "notification_id": crate::ids::generate_notification_id(),
+        "recipient_id": recipient_id,
+        "realm_id": realm_id,
+        "source_event_id": source_event_id,
+        "notification_type": notification_type,
+        "event_kind": event_kind,
+        "priority": "normal",
+        "state": "unread",
+    });
+    if let Some(source_ref) = source_ref {
+        record["source_ref"] = serde_json::json!(source_ref);
+    }
+    if let Some(strand_id) = strand_id {
+        record["strand_id"] = serde_json::json!(strand_id);
+    }
+    if let Some(track_name) = track_name {
+        record["track_name"] = serde_json::json!(track_name);
+    }
+    if let Some(source_actor_id) = source_actor_id {
+        record["source_actor_id"] = serde_json::json!(source_actor_id);
+    }
+    if let Some(preview) = preview {
+        record["preview"] = preview;
+    }
+    if let Err(error) = state.persistence.notifications().put(record).await {
+        tracing::warn!(%error, "failed to persist notification");
+    }
+}
+
 async fn put_message_notification(
     state: &AppState,
     recipient_id: &str,
     realm_id: &str,
     source_event_id: &str,
     notification_type: &str,
+    strand_id: Option<&str>,
+    source_actor_id: Option<&str>,
 ) {
-    let record = serde_json::json!({
-        "notification_id": crate::ids::generate_notification_id(),
-        "recipient_id": recipient_id,
-        "realm_id": realm_id,
-        "source_event_id": source_event_id,
-        "notification_type": notification_type,
-    });
-    if let Err(error) = state.persistence.notifications().put(record).await {
-        tracing::warn!(%error, "failed to persist message notification");
-    }
+    put_notification(
+        state,
+        recipient_id,
+        realm_id,
+        source_event_id,
+        notification_type,
+        cokret_sdk::events::kinds::MESSAGE_CREATE,
+        None,
+        strand_id,
+        None,
+        source_actor_id,
+        None,
+    )
+    .await;
 }
 
 /// Fan out message notifications for an accepted `ck.message.create`.
@@ -147,11 +256,7 @@ pub(crate) async fn dispatch_message_notifications(
         .to_owned();
     let realm_id = operation.realm_id.as_str().to_owned();
     let realm_uuid = uuid_tail(&realm_id).to_owned();
-    let source_event_id = payload
-        .get("event_id")
-        .and_then(Value::as_str)
-        .unwrap_or_else(|| operation.operation_id.as_str())
-        .to_owned();
+    let source_event_id = operation_source_event_id(operation);
     let strand_id = payload
         .get("strand_id")
         .and_then(Value::as_str)
@@ -202,7 +307,194 @@ pub(crate) async fn dispatch_message_notifications(
                 continue;
             }
         }
-        put_message_notification(state, &subject, &realm_id, &source_event_id, "mention").await;
+        put_message_notification(
+            state,
+            &subject,
+            &realm_id,
+            &source_event_id,
+            "mention",
+            strand_id.as_deref(),
+            Some(&sender),
+        )
+        .await;
+    }
+}
+
+/// Fan out assignment notifications for an accepted `ck.relation.create`.
+pub(crate) async fn dispatch_assignment_notifications(
+    state: &AppState,
+    operation: &cokret_sdk::Operation,
+) {
+    let payload = &operation.payload;
+    if relation_value_string(payload, &["relation_kind", "kind"]) != Some("assigned_to") {
+        return;
+    }
+    let Some(strand_id) = relation_value_string(payload, &["from_ref", "from"])
+        .filter(|value| value.starts_with("ck:strand:"))
+    else {
+        return;
+    };
+    let Some(assignee) =
+        relation_value_string(payload, &["to_ref", "to"]).filter(|value| value.starts_with("did:"))
+    else {
+        return;
+    };
+    let source_actor_id = operation_source_actor_id(operation);
+    if source_actor_id.as_deref() == Some(assignee) {
+        return;
+    }
+    let realm_id = operation.realm_id.as_str();
+    if explicit_watch_level(state, strand_id, assignee).as_deref() == Some("muted") {
+        return;
+    }
+    if !actor_can_see_strand(state, realm_id, strand_id, assignee) {
+        return;
+    }
+    let source_event_id = operation_source_event_id(operation);
+    let relation_id = relation_value_string(payload, &["relation_id", "id"]);
+    put_notification(
+        state,
+        assignee,
+        realm_id,
+        &source_event_id,
+        "assignment",
+        cokret_sdk::events::kinds::RELATION_CREATE,
+        relation_id,
+        Some(strand_id),
+        None,
+        source_actor_id.as_deref(),
+        None,
+    )
+    .await;
+}
+
+const SCHEDULE_FIELDS: &[&str] = &[
+    "due_at",
+    "start",
+    "end",
+    "timezone",
+    "all_day",
+    "recurrence",
+    "location",
+    "call_id",
+    "attendees",
+];
+
+fn patch_touches_schedule(payload: &Value) -> bool {
+    let Some(patch) = payload.get("patch").and_then(Value::as_object) else {
+        return false;
+    };
+    patch.iter().any(|(path, value)| {
+        if let Some(field) = path.strip_prefix("metadata.fields.") {
+            return SCHEDULE_FIELDS.contains(&field);
+        }
+        if path == "metadata.fields" {
+            return value
+                .get("value")
+                .or_else(|| value.get("$value"))
+                .or_else(|| value.get("fields"))
+                .or(Some(value))
+                .and_then(Value::as_object)
+                .is_some_and(|fields| {
+                    fields
+                        .keys()
+                        .any(|field| SCHEDULE_FIELDS.contains(&field.as_str()))
+                });
+        }
+        if path == "metadata" {
+            return value
+                .get("value")
+                .or_else(|| value.get("$value"))
+                .and_then(|metadata| metadata.get("fields"))
+                .and_then(Value::as_object)
+                .is_some_and(|fields| {
+                    fields
+                        .keys()
+                        .any(|field| SCHEDULE_FIELDS.contains(&field.as_str()))
+                });
+        }
+        false
+    })
+}
+
+fn schedule_recipients(state: &AppState, strand_id: &str) -> BTreeSet<String> {
+    let projection = state.projection.lock();
+    let mut recipients = projection
+        .relations
+        .values()
+        .filter(|relation| {
+            relation.relation_kind == "assigned_to"
+                && relation.state == "active"
+                && relation.from_ref.as_deref() == Some(strand_id)
+        })
+        .filter_map(|relation| relation.to_ref.clone())
+        .filter(|actor| actor.starts_with("did:"))
+        .collect::<BTreeSet<_>>();
+    if let Some(strand) = projection.strands.get(strand_id) {
+        if let Some(attendees) = strand.fields.get("attendees").and_then(Value::as_array) {
+            recipients.extend(
+                attendees
+                    .iter()
+                    .filter_map(|attendee| attendee.get("actor_id").and_then(Value::as_str))
+                    .filter(|actor| actor.starts_with("did:"))
+                    .map(ToOwned::to_owned),
+            );
+        }
+    }
+    recipients.extend(
+        projection
+            .strand_watches
+            .values()
+            .filter(|watch| watch.strand_id == strand_id && watch.level.as_deref() == Some("all"))
+            .map(|watch| watch.actor_id.clone()),
+    );
+    recipients
+}
+
+/// Fan out due-date and calendar schedule notifications for an accepted
+/// `ck.strand.update`.
+pub(crate) async fn dispatch_schedule_notifications(
+    state: &AppState,
+    operation: &cokret_sdk::Operation,
+) {
+    if !patch_touches_schedule(&operation.payload) {
+        return;
+    }
+    let Some(strand_id) = operation
+        .payload
+        .get("target_ref")
+        .or_else(|| operation.payload.get("strand_id"))
+        .and_then(Value::as_str)
+    else {
+        return;
+    };
+    let realm_id = operation.realm_id.as_str();
+    let source_actor_id = operation_source_actor_id(operation);
+    let source_event_id = operation_source_event_id(operation);
+    for recipient in schedule_recipients(state, strand_id) {
+        if source_actor_id.as_deref() == Some(recipient.as_str()) {
+            continue;
+        }
+        if explicit_watch_level(state, strand_id, &recipient).as_deref() == Some("muted") {
+            continue;
+        }
+        if !actor_can_see_strand(state, realm_id, strand_id, &recipient) {
+            continue;
+        }
+        put_notification(
+            state,
+            &recipient,
+            realm_id,
+            &source_event_id,
+            "schedule",
+            cokret_sdk::events::kinds::STRAND_UPDATE,
+            Some(strand_id),
+            Some(strand_id),
+            None,
+            source_actor_id.as_deref(),
+            None,
+        )
+        .await;
     }
 }
 
@@ -210,9 +502,9 @@ pub(crate) async fn dispatch_message_notifications(
 mod tests {
     use cokret_sdk::RealmId;
     use serde_json::{Value, json};
+    use soland_data::Db;
 
     use super::*;
-    use soland_data::Db;
 
     fn test_config() -> crate::config::AppConfig {
         crate::config::AppConfig {
@@ -350,29 +642,95 @@ mod tests {
     }
 
     fn seed_strand_scope(state: &AppState, realm_id: &str, strand_id: &str, circle_id: &str) {
-        state
-            .projection
-            .lock()
-            .strands
-            .insert(
-                strand_id.to_owned(),
-                crate::reducer::StrandProjection {
-                    strand_id: strand_id.to_owned(),
-                    realm_id: realm_id.to_owned(),
-                    tracks: Default::default(),
-                    title: "Scoped".to_owned(),
-                    summary: None,
-                    fields: Default::default(),
-                    state: crate::reducer::ObjectLifecycleState::Active,
-                    state_changed_at: None,
-                    created_by: "did:web:alice.example".to_owned(),
-                    created_at: chrono::Utc::now(),
-                    history_basis_seals: Vec::new(),
-                    updated_by: None,
-                    updated_at: None,
-                    scope_circle_id: Some(circle_id.to_owned()),
-                },
-            );
+        state.projection.lock().strands.insert(
+            strand_id.to_owned(),
+            crate::reducer::StrandProjection {
+                strand_id: strand_id.to_owned(),
+                realm_id: realm_id.to_owned(),
+                tracks: Default::default(),
+                title: "Scoped".to_owned(),
+                summary: None,
+                fields: Default::default(),
+                state: crate::reducer::ObjectLifecycleState::Active,
+                state_changed_at: None,
+                created_by: "did:web:alice.example".to_owned(),
+                created_at: chrono::Utc::now(),
+                history_basis_seals: Vec::new(),
+                updated_by: None,
+                updated_at: None,
+                scope_circle_id: Some(circle_id.to_owned()),
+            },
+        );
+    }
+
+    fn seed_strand(state: &AppState, realm_id: &str, strand_id: &str) {
+        state.projection.lock().strands.insert(
+            strand_id.to_owned(),
+            crate::reducer::StrandProjection {
+                strand_id: strand_id.to_owned(),
+                realm_id: realm_id.to_owned(),
+                tracks: Default::default(),
+                title: "Task".to_owned(),
+                summary: None,
+                fields: Default::default(),
+                state: crate::reducer::ObjectLifecycleState::Active,
+                state_changed_at: None,
+                created_by: "did:web:alice.example".to_owned(),
+                created_at: chrono::Utc::now(),
+                history_basis_seals: Vec::new(),
+                updated_by: None,
+                updated_at: None,
+                scope_circle_id: None,
+            },
+        );
+    }
+
+    fn relation_create(
+        realm_id: &str,
+        seed: &str,
+        sender: &str,
+        strand_id: &str,
+        assignee: &str,
+    ) -> cokret_sdk::Operation {
+        cokret_sdk::Operation::create(
+            cokret_sdk::OperationId::new(format!("ck:operation:01904100-0000-7000-8000-{seed}"))
+                .unwrap(),
+            cokret_sdk::RealmId::new(realm_id.to_owned()).unwrap(),
+            cokret_sdk::events::kinds::RELATION_CREATE,
+            json!({
+                "sender": sender,
+                "event_id": format!("ck:event:01904100-0000-7000-8000-{seed}"),
+                "relation_id": format!("ck:relation:01904100-0000-7000-8000-{seed}"),
+                "relation_kind": "assigned_to",
+                "from_ref": strand_id,
+                "to_ref": assignee,
+            }),
+        )
+    }
+
+    fn schedule_update(
+        realm_id: &str,
+        seed: &str,
+        sender: &str,
+        strand_id: &str,
+    ) -> cokret_sdk::Operation {
+        cokret_sdk::Operation::create(
+            cokret_sdk::OperationId::new(format!("ck:operation:01904100-0000-7000-8000-{seed}"))
+                .unwrap(),
+            cokret_sdk::RealmId::new(realm_id.to_owned()).unwrap(),
+            cokret_sdk::events::kinds::STRAND_UPDATE,
+            json!({
+                "sender": sender,
+                "event_id": format!("ck:event:01904100-0000-7000-8000-{seed}"),
+                "target_ref": strand_id,
+                "patch": {
+                    "metadata.fields.due_at": {
+                        "$op": "set",
+                        "value": "2026-07-06T00:00:00Z"
+                    }
+                }
+            }),
+        )
     }
 
     fn mention_message(
@@ -498,6 +856,101 @@ mod tests {
                 .get("notification_type")
                 .and_then(Value::as_str),
             Some("mention")
+        );
+    }
+
+    #[tokio::test]
+    async fn assignment_relation_create_notifies_new_assignee() {
+        let state = test_state();
+        let realm_id = "ck:realm:01904100-0000-7000-8000-000000009992";
+        let strand_id = "ck:strand:01904100-0000-7000-8000-000000009993";
+        let alice = "did:web:alice.example";
+        let bob = "did:web:bob.example";
+        seed_realm_members(&state, realm_id, &[alice, bob]);
+        seed_strand(&state, realm_id, strand_id);
+
+        let operation = relation_create(realm_id, "000000009994", alice, strand_id, bob);
+        state
+            .projection
+            .lock()
+            .apply_relation_create(&operation, chrono::Utc::now());
+        dispatch_assignment_notifications(&state, &operation).await;
+
+        let notifications = state
+            .persistence
+            .notifications()
+            .list_for_recipient(bob)
+            .await
+            .unwrap();
+        assert_eq!(notifications.len(), 1);
+        assert_eq!(
+            notifications[0]
+                .get("notification_type")
+                .and_then(Value::as_str),
+            Some("assignment")
+        );
+        assert_eq!(
+            notifications[0].get("strand_id").and_then(Value::as_str),
+            Some(strand_id)
+        );
+    }
+
+    #[tokio::test]
+    async fn schedule_update_notifies_assignees_and_all_watchers() {
+        let state = test_state();
+        let realm_id = "ck:realm:01904100-0000-7000-8000-000000009995";
+        let strand_id = "ck:strand:01904100-0000-7000-8000-000000009996";
+        let alice = "did:web:alice.example";
+        let bob = "did:web:bob.example";
+        let carol = "did:web:carol.example";
+        seed_realm_members(&state, realm_id, &[alice, bob, carol]);
+        seed_strand(&state, realm_id, strand_id);
+        let assignment = relation_create(realm_id, "000000009997", alice, strand_id, bob);
+        state
+            .projection
+            .lock()
+            .apply_relation_create(&assignment, chrono::Utc::now());
+        state.projection.lock().strand_watches.insert(
+            (strand_id.to_owned(), carol.to_owned()),
+            crate::reducer::StrandWatchProjection {
+                strand_id: strand_id.to_owned(),
+                actor_id: carol.to_owned(),
+                level: Some("all".to_owned()),
+                level_public: false,
+                updated_at: chrono::Utc::now(),
+            },
+        );
+
+        let operation = schedule_update(realm_id, "000000009998", alice, strand_id);
+        dispatch_schedule_notifications(&state, &operation).await;
+
+        for recipient in [bob, carol] {
+            let notifications = state
+                .persistence
+                .notifications()
+                .list_for_recipient(recipient)
+                .await
+                .unwrap();
+            assert_eq!(
+                notifications.len(),
+                1,
+                "{recipient} should receive schedule"
+            );
+            assert_eq!(
+                notifications[0]
+                    .get("notification_type")
+                    .and_then(Value::as_str),
+                Some("schedule")
+            );
+        }
+        assert!(
+            state
+                .persistence
+                .notifications()
+                .list_for_recipient(alice)
+                .await
+                .unwrap()
+                .is_empty()
         );
     }
 

@@ -715,8 +715,17 @@ CREATE TABLE public.notifications (
     recipient_id text NOT NULL,
     realm_id uuid NOT NULL,
     source_event_id text NOT NULL,
+    source_ref text,
+    strand_id text,
+    track_name text,
     notification_type text NOT NULL,
+    event_kind text,
+    source_actor_id text,
+    priority text DEFAULT 'normal'::text NOT NULL,
+    state text DEFAULT 'unread'::text NOT NULL,
+    preview jsonb,
     created_at timestamp with time zone NOT NULL,
+    updated_at timestamp with time zone,
     read_at timestamp with time zone
 );
 
@@ -1332,6 +1341,9 @@ ALTER TABLE ONLY public.multisig_pending
 ALTER TABLE ONLY public.notifications
     ADD CONSTRAINT notifications_pkey PRIMARY KEY (id);
 
+ALTER TABLE ONLY public.notifications
+    ADD CONSTRAINT notifications_recipient_source_type_key UNIQUE (recipient_id, source_event_id, notification_type);
+
 ALTER TABLE ONLY public.pending_agent_drafts
     ADD CONSTRAINT pending_agent_drafts_pkey PRIMARY KEY (id);
 
@@ -1595,6 +1607,8 @@ CREATE INDEX multisig_pending_space_idx ON public.multisig_pending USING btree (
 CREATE INDEX notifications_recipient_idx ON public.notifications USING btree (recipient_id, created_at DESC);
 
 CREATE INDEX notifications_source_idx ON public.notifications USING btree (source_event_id);
+
+CREATE INDEX notifications_strand_idx ON public.notifications USING btree (strand_id);
 
 CREATE INDEX pending_agent_drafts_controller_idx ON public.pending_agent_drafts USING btree (controller_id);
 

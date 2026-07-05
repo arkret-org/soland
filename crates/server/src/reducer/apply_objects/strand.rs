@@ -441,7 +441,7 @@ impl ProjectionState {
     pub(crate) fn apply_strand_watch_set(
         &mut self,
         operation: &Operation,
-        _now: chrono::DateTime<chrono::Utc>,
+        now: chrono::DateTime<chrono::Utc>,
     ) -> ProjectionEffect {
         let Some(strand_id) = operation
             .payload
@@ -477,6 +477,16 @@ impl ProjectionState {
             .payload
             .get("level_public")
             .and_then(|v| v.as_bool());
+        self.strand_watches.insert(
+            (strand_id.clone(), actor_id.clone()),
+            StrandWatchProjection {
+                strand_id: strand_id.clone(),
+                actor_id: actor_id.clone(),
+                level: level.clone(),
+                level_public: level_public.unwrap_or(false),
+                updated_at: now,
+            },
+        );
         ProjectionEffect::StrandWatchUpdated {
             strand_id,
             actor_id,

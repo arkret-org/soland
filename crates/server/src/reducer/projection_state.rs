@@ -44,6 +44,8 @@ pub struct ProjectionState {
     pub message_expiry_readers: BTreeMap<String, BTreeSet<String>>,
     /// Relations keyed by relation_id. LWW by HLC.
     pub relations: BTreeMap<String, SolandRelationState>,
+    /// Per-(Strand, Actor) notification watch preferences.
+    pub strand_watches: BTreeMap<(String, String), StrandWatchProjection>,
     /// Poll projections keyed by poll_id. Poll create is a message content
     /// block; responses are per-actor replacements until the poll is closed.
     pub polls: BTreeMap<String, PollState>,
