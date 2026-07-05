@@ -293,8 +293,9 @@ fn epoch_span(from_epoch: u64, to_epoch: u64) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use soland_data::Db;
+
+    use super::*;
 
     fn test_config() -> crate::config::AppConfig {
         crate::config::AppConfig {

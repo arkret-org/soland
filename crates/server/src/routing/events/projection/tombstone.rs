@@ -179,11 +179,7 @@ pub fn retention_tombstone_for_event(
     state: &AppState,
     event_id: &str,
 ) -> Option<RetentionTombstoneRecord> {
-    state
-        .retention_tombstones
-        .lock()
-        .get(event_id)
-        .cloned()
+    state.retention_tombstones.lock().get(event_id).cloned()
 }
 
 pub fn apply_message_expiry_timeline_projection(

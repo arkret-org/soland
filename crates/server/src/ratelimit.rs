@@ -37,9 +37,9 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use parking_lot::Mutex;
 use std::time::{Duration, Instant};
 
+use parking_lot::Mutex;
 use salvo::prelude::*;
 
 /// Canonical paths whose [`EndpointClass`] is pinned. Shared by

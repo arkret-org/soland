@@ -446,9 +446,7 @@ pub(super) fn router() -> Router {
 #[tracing::instrument(skip_all, fields(op = "deployment.info"))]
 async fn deployment_info(depot: &mut Depot) -> JsonResult<DeploymentInfoResponseBody> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let guard = state
-        .sovereign_deployment
-        .lock();
+    let guard = state.sovereign_deployment.lock();
     let trusted_enclaves = guard
         .trusted_enclaves
         .values()
@@ -487,9 +485,7 @@ async fn configure_deployment(
 ) -> JsonResult<ConfigureDeploymentResponseBody> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = body.into_inner();
-    let mut guard = state
-        .sovereign_deployment
-        .lock();
+    let mut guard = state.sovereign_deployment.lock();
     if let Some(profile) = body.profile {
         if !matches!(profile.as_str(), "sovereign_main" | "enclave") {
             return Err(AppError::invalid_param(
@@ -540,9 +536,7 @@ async fn register_enclave(
         trust_chain: body.trust_chain.clone(),
         registered_at: now,
     };
-    let mut guard = state
-        .sovereign_deployment
-        .lock();
+    let mut guard = state.sovereign_deployment.lock();
     guard
         .trusted_enclaves
         .insert(body.server_id.clone(), record);
@@ -571,9 +565,7 @@ async fn realm_create(
     let body = body.into_inner();
     let realm_id = body.realm_id.unwrap_or_else(ids::generate_realm_id);
     let now = chrono::Utc::now();
-    let mut guard = state
-        .sovereign_deployment
-        .lock();
+    let mut guard = state.sovereign_deployment.lock();
     if !guard.trusted_enclaves.contains_key(&body.hosted_on)
         && deployment_profile(state, &guard) == "sovereign_main"
     {
@@ -620,9 +612,7 @@ async fn realm_info(
 ) -> JsonResult<RealmInfoResponseBody> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let realm_id = realm_id.into_inner();
-    let guard = state
-        .sovereign_deployment
-        .lock();
+    let guard = state.sovereign_deployment.lock();
     let Some(record) = guard.enclave_realms.get(&realm_id) else {
         return Err(AppError::not_found("realm not found"));
     };
@@ -650,9 +640,7 @@ async fn external_invite(
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = body.into_inner();
     validate_did_against_roots(state, &body.invitee, Some("enclave"))?;
-    let mut guard = state
-        .sovereign_deployment
-        .lock();
+    let mut guard = state.sovereign_deployment.lock();
     let Some(realm) = guard.enclave_realms.get(&body.target_realm).cloned() else {
         return Err(AppError::not_found("target enclave realm not found"));
     };
@@ -710,9 +698,7 @@ async fn accept_external_invite(
     let body = body.into_inner();
     validate_did_against_roots(state, &body.actor_id, Some("enclave"))?;
     let now = chrono::Utc::now();
-    let mut guard = state
-        .sovereign_deployment
-        .lock();
+    let mut guard = state.sovereign_deployment.lock();
     let invite = guard.external_invites.get_mut(&body.invite_token);
     let target_realm = invite
         .as_ref()
@@ -772,9 +758,7 @@ async fn external_account_status(
 ) -> JsonResult<ExternalAccountStatusResponseBody> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let did = did.into_inner();
-    let guard = state
-        .sovereign_deployment
-        .lock();
+    let guard = state.sovereign_deployment.lock();
     let Some(record) = guard.external_accounts.get(&did) else {
         return Err(AppError::not_found("account not found"));
     };
@@ -798,9 +782,7 @@ async fn guard_realm_access(
     let state = depot.obtain::<AppState>().expect("state injected");
     let actor = actor.into_inner().unwrap_or_default();
     let realm_id = realm_id.into_inner();
-    let mut guard = state
-        .sovereign_deployment
-        .lock();
+    let mut guard = state.sovereign_deployment.lock();
     if guard.external_accounts.contains_key(&actor) {
         audit(
             &mut guard,
@@ -830,9 +812,7 @@ async fn directory_realms(
     let state = depot.obtain::<AppState>().expect("state injected");
     let actor = actor.into_inner().unwrap_or_default();
     let q = q.into_inner().unwrap_or_default();
-    let guard = state
-        .sovereign_deployment
-        .lock();
+    let guard = state.sovereign_deployment.lock();
     if guard.external_accounts.contains_key(&actor) {
         return json_ok(DirectoryRealmsResponseBody {
             results: Vec::new(),
@@ -864,9 +844,7 @@ async fn enclave_proxy(
 ) -> JsonResult<EnclaveProxyResponseBody> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = body.into_inner();
-    let mut guard = state
-        .sovereign_deployment
-        .lock();
+    let mut guard = state.sovereign_deployment.lock();
     if deployment_profile(state, &guard) == "enclave" {
         let actor = body.actor.unwrap_or_else(|| "unknown".to_owned());
         audit(
@@ -896,9 +874,7 @@ async fn set_network_link(
 ) -> JsonResult<NetworkLinkResponseBody> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = body.into_inner();
-    let mut guard = state
-        .sovereign_deployment
-        .lock();
+    let mut guard = state.sovereign_deployment.lock();
     guard.upstream_available = body.upstream_available;
     json_ok(NetworkLinkResponseBody {
         ok: true,
@@ -916,9 +892,7 @@ async fn store_forward_message(
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = body.into_inner();
     validate_did_against_roots(state, &body.actor, Some("enclave"))?;
-    let mut guard = state
-        .sovereign_deployment
-        .lock();
+    let mut guard = state.sovereign_deployment.lock();
     let id = ids::generate("operation");
     let record = SovereignStoreForwardRecord {
         id: id.clone(),
@@ -969,9 +943,7 @@ async fn store_forward_message(
 #[tracing::instrument(skip_all, fields(op = "deployment.store_forward_drain"))]
 async fn drain_store_forward(depot: &mut Depot) -> JsonResult<DrainStoreForwardResponseBody> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let mut guard = state
-        .sovereign_deployment
-        .lock();
+    let mut guard = state.sovereign_deployment.lock();
     if !guard.upstream_available {
         return Err(AppError::capability_denied("upstream_unavailable")
             .with_status(StatusCode::PRECONDITION_FAILED)
@@ -1004,9 +976,7 @@ async fn ingest_store_forward(
 ) -> JsonResult<IngestStoreForwardResponseBody> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = body.into_inner();
-    let mut guard = state
-        .sovereign_deployment
-        .lock();
+    let mut guard = state.sovereign_deployment.lock();
     let mut ingested = 0_i64;
     for operation in body.operations {
         if operation.realm_id.is_empty() {
@@ -1057,9 +1027,7 @@ async fn enclave_frontier(
 ) -> JsonResult<EnclaveFrontierResponseBody> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let realm_id = realm_id.into_inner();
-    let guard = state
-        .sovereign_deployment
-        .lock();
+    let guard = state.sovereign_deployment.lock();
     let (main_frontier, enclave_pos) = guard
         .enclave_realms
         .get(&realm_id)
@@ -1093,9 +1061,7 @@ async fn deployment_audit(
 ) -> JsonResult<DeploymentAuditResponseBody> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let subject = subject.into_inner();
-    let guard = state
-        .sovereign_deployment
-        .lock();
+    let guard = state.sovereign_deployment.lock();
     let entries = guard
         .audit_log
         .iter()
@@ -1125,9 +1091,7 @@ fn validate_did_against_roots(
     did: &str,
     expected_profile: Option<&str>,
 ) -> Result<(), AppError> {
-    let guard = state
-        .sovereign_deployment
-        .lock();
+    let guard = state.sovereign_deployment.lock();
     let profile = deployment_profile(state, &guard);
     if let Some(expected) = expected_profile
         && profile != expected

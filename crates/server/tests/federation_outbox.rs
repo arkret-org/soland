@@ -26,9 +26,9 @@ use sha2::{Digest, Sha256};
 use soland::config::{
     AppConfig, FederationPolicy, IceServersConfig, LiveKitConfig, ObjectStorageConfig,
 };
-use soland_data::Db;
 use soland::routing::federation::outbox::{FederationDispatcher, enqueue_outbound};
 use soland::state::AppState;
+use soland_data::Db;
 
 const PEER_DID: &str = "did:web:peer.example";
 const FEDERATION_ENDPOINT: &str = "/_cokret/peer/events";

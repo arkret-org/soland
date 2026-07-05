@@ -124,7 +124,7 @@ async fn authz_check(
         let projection = state.projection.lock();
         Some(projection.authz_resource_expr(&realm_id, &resource_str))
     }
-        .unwrap_or_else(|| resource_str.clone());
+    .unwrap_or_else(|| resource_str.clone());
     let result = state.authz.check(
         body.actor_id.as_str(),
         &body.action,

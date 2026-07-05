@@ -11,7 +11,6 @@ use diesel::{OptionalExtension, QueryableByName, sql_query};
 use diesel_async::pooled_connection::deadpool::Object;
 use diesel_async::{AsyncPgConnection, RunQueryDsl};
 use serde_json::Value;
-
 use soland_data::PgPool;
 
 pub(crate) struct StateResolutionStores {

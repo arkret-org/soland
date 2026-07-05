@@ -20,7 +20,7 @@ pub(crate) fn realm_content_floor_requires_e2ee(state: &AppState, realm_id: &str
         let projection = state.projection.lock();
         projection.realm_content_encryption_floor(realm_id)
     }
-        .as_deref()
+    .as_deref()
         == Some("e2ee_required")
 }
 

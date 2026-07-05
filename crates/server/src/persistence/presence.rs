@@ -80,9 +80,7 @@ impl MemoryPresenceStore {
 impl PresenceStore for MemoryPresenceStore {
     async fn put(&self, presence: PresenceRecord) -> PersistenceResult<()> {
         let key = (presence.actor.clone(), presence.device_id.clone());
-        self.data
-            .lock()
-            .insert(key, presence);
+        self.data.lock().insert(key, presence);
         Ok(())
     }
 
@@ -177,9 +175,7 @@ impl CallSignalRelayStore for MemoryCallSignalRelayStore {
         // Assign the monotonic per-Realm position before storing so every
         // delivered record carries a stable deliver-once key.
         let position = {
-            let mut counters = self
-                .next_position
-                .lock();
+            let mut counters = self.next_position.lock();
             let counter = counters.entry(realm_id.clone()).or_insert(0);
             *counter += 1;
             *counter
@@ -235,12 +231,7 @@ impl CallSignalRelayStore for MemoryCallSignalRelayStore {
         realm_id: &str,
     ) -> PersistenceResult<u64> {
         let key = (actor.to_owned(), device.to_owned(), realm_id.to_owned());
-        Ok(self
-            .watermark
-            .lock()
-            .get(&key)
-            .copied()
-            .unwrap_or(0))
+        Ok(self.watermark.lock().get(&key).copied().unwrap_or(0))
     }
 
     async fn advance(

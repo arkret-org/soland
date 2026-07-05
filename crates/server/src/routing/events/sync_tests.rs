@@ -267,10 +267,7 @@ fn presence_sync_event_carries_status_message_for_authorized_observer() {
 async fn incremental_sync_includes_presence_only_for_presence_delta() {
     let state = test_state();
     let session = roster_session(&state, ROSTER_ACTOR);
-    state
-        .realms
-        .lock()
-        .upsert(roster_realm(false, true));
+    state.realms.lock().upsert(roster_realm(false, true));
     state
         .persistence
         .presence()
@@ -416,26 +413,22 @@ fn roster_realm(public: bool, include_caller: bool) -> RealmDirectoryEntry {
 
 fn insert_projected_membership(state: &AppState, actor: &str, membership: &str) {
     let updated_at = now();
-    state
-        .projection
-        .lock()
-        .members
-        .insert(
-            (ROSTER_REALM.to_owned(), actor.to_owned()),
-            crate::reducer::SolandMembershipState {
-                member: actor.to_owned(),
-                realm_id: ROSTER_REALM.to_owned(),
-                state: membership.to_owned(),
-                role: "member".to_owned(),
-                delivery_status: None,
-                recipient_service_did: None,
-                membership_event_ref: None,
-                delivery_binding_frontier: None,
-                invited_at: (membership == "invite").then_some(updated_at),
-                joined_at: updated_at,
-                updated_at,
-            },
-        );
+    state.projection.lock().members.insert(
+        (ROSTER_REALM.to_owned(), actor.to_owned()),
+        crate::reducer::SolandMembershipState {
+            member: actor.to_owned(),
+            realm_id: ROSTER_REALM.to_owned(),
+            state: membership.to_owned(),
+            role: "member".to_owned(),
+            delivery_status: None,
+            recipient_service_did: None,
+            membership_event_ref: None,
+            delivery_binding_frontier: None,
+            invited_at: (membership == "invite").then_some(updated_at),
+            joined_at: updated_at,
+            updated_at,
+        },
+    );
 }
 
 fn insert_member_identity_subject(state: &AppState) {
@@ -840,10 +833,7 @@ async fn sync_snapshot_emits_device_list_baseline_changes_and_left_principals() 
     config.seed_demo_data = false;
     let state = AppState::new(config, soland_data::Db { pool: None });
     let session = roster_session(&state, ROSTER_CALLER);
-    state
-        .realms
-        .lock()
-        .upsert(roster_realm(false, true));
+    state.realms.lock().upsert(roster_realm(false, true));
 
     let created_at = DateTime::parse_from_rfc3339("2026-06-18T00:00:00Z")
         .unwrap()
@@ -938,10 +928,7 @@ async fn sync_snapshot_emits_device_list_baseline_changes_and_left_principals() 
     .await
     .expect("revocation cursor parses");
 
-    state
-        .realms
-        .lock()
-        .upsert(roster_realm(false, false));
+    state.realms.lock().upsert(roster_realm(false, false));
     let after_scope_loss = build_sync_snapshot(
         &state,
         Some(&session),
@@ -963,10 +950,7 @@ async fn sync_snapshot_emits_state_events_without_timeline_messages() {
     config.seed_demo_data = false;
     let state = AppState::new(config, soland_data::Db { pool: None });
     let session = roster_session(&state, ROSTER_CALLER);
-    state
-        .realms
-        .lock()
-        .upsert(roster_realm(false, true));
+    state.realms.lock().upsert(roster_realm(false, true));
 
     let first_created_at = DateTime::parse_from_rfc3339("2026-06-24T10:00:00Z")
         .unwrap()

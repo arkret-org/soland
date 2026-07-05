@@ -28,27 +28,17 @@ impl MemoryPolicyDocumentStore {
 #[async_trait]
 impl PolicyDocumentStore for MemoryPolicyDocumentStore {
     async fn get(&self, policy_id: &str) -> PersistenceResult<Option<PolicyDocumentRecord>> {
-        Ok(self
-            .data
-            .lock()
-            .get(policy_id)
-            .cloned())
+        Ok(self.data.lock().get(policy_id).cloned())
     }
 
     async fn put(&self, record: PolicyDocumentRecord) -> PersistenceResult<()> {
         let id = record.policy_id.clone();
-        self.data
-            .lock()
-            .insert(id, record);
+        self.data.lock().insert(id, record);
         Ok(())
     }
 
     async fn delete(&self, policy_id: &str) -> PersistenceResult<bool> {
-        Ok(self
-            .data
-            .lock()
-            .remove(policy_id)
-            .is_some())
+        Ok(self.data.lock().remove(policy_id).is_some())
     }
 
     async fn list_for_owner(&self, owner: &str) -> PersistenceResult<Vec<PolicyDocumentRecord>> {
@@ -62,12 +52,7 @@ impl PolicyDocumentStore for MemoryPolicyDocumentStore {
     }
 
     async fn snapshot_all(&self) -> PersistenceResult<Vec<PolicyDocumentRecord>> {
-        Ok(self
-            .data
-            .lock()
-            .values()
-            .cloned()
-            .collect())
+        Ok(self.data.lock().values().cloned().collect())
     }
 
     async fn list_active(&self) -> PersistenceResult<Vec<PolicyDocumentRecord>> {

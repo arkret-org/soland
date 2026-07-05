@@ -258,11 +258,7 @@ impl DirectConversationBindingStore for MemoryDirectConversationBindingStore {
         &self,
         participants_key: &str,
     ) -> PersistenceResult<Option<DirectConversationBindingRecord>> {
-        Ok(self
-            .data
-            .lock()
-            .get(participants_key)
-            .cloned())
+        Ok(self.data.lock().get(participants_key).cloned())
     }
 
     async fn put(

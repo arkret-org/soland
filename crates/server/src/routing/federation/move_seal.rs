@@ -261,15 +261,14 @@ async fn submit_seal(
     ))
     .ok();
     let prev_epoch_value: Option<serde_json::Value> = mls_epoch_cell.as_ref().and_then(|cell_id| {
-        {
-            let proj = state.projection.lock();
-            proj.cell_value(cell_id).cloned()
-        }
+        let proj = state.projection.lock();
+        proj.cell_value(cell_id).cloned()
     });
-    if let Err(error) = state
-        .projection
-        .lock()
-        .reload_cells_from_store(&seal.realm_id, cell_store, registry)
+    if let Err(error) =
+        state
+            .projection
+            .lock()
+            .reload_cells_from_store(&seal.realm_id, cell_store, registry)
     {
         tracing::warn!(error = %error, "failed to refresh ProjectionState::cells after apply_seal");
     }

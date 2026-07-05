@@ -89,9 +89,7 @@ impl AgentParticipationStore for MemoryAgentParticipationStore {
             .get("scope_key")
             .and_then(Value::as_str)
             .map(ToOwned::to_owned);
-        let mut guard = self
-            .ceilings
-            .lock();
+        let mut guard = self.ceilings.lock();
         guard.retain(|existing| {
             existing
                 .get("scope_key")
@@ -339,11 +337,7 @@ impl AgentStore for MemoryAgentStore {
     }
 
     async fn get(&self, agent_principal_id: &str) -> PersistenceResult<Option<Value>> {
-        Ok(self
-            .data
-            .lock()
-            .get(agent_principal_id)
-            .cloned())
+        Ok(self.data.lock().get(agent_principal_id).cloned())
     }
 
     async fn list_for_controller(&self, controller_did: &str) -> PersistenceResult<Vec<Value>> {

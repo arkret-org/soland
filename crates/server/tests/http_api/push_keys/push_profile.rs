@@ -1026,37 +1026,33 @@ async fn typing_fanout_hides_cached_record_when_discussion_track_disabled() {
 
 fn insert_typing_scope_strand(state: AppState, strand_id: &str, discussion_enabled: Option<bool>) {
     let now = chrono::Utc::now();
-    state
-        .projection
-        .lock()
-        .strands
-        .insert(
-            strand_id.to_owned(),
-            soland::reducer::StrandProjection {
-                strand_id: strand_id.to_owned(),
-                realm_id: DEMO_REALM_ID.to_owned(),
-                tracks: std::collections::BTreeMap::from([(
-                    cokret_sdk::STRAND_TRACK_NAME_DISCUSSION.to_owned(),
-                    cokret_sdk::StrandTrackConfig {
-                        enabled: discussion_enabled,
-                        is_primary: Some(true),
-                        profile: Some("discussion".to_owned()),
-                        ..Default::default()
-                    },
-                )]),
-                title: "Typing scope".to_owned(),
-                summary: None,
-                fields: Default::default(),
-                state: soland::reducer::ObjectLifecycleState::Active,
-                state_changed_at: None,
-                created_by: "did:web:alice.example".to_owned(),
-                created_at: now,
-                history_basis_seals: Vec::new(),
-                updated_by: None,
-                updated_at: None,
-                scope_circle_id: None,
-            },
-        );
+    state.projection.lock().strands.insert(
+        strand_id.to_owned(),
+        soland::reducer::StrandProjection {
+            strand_id: strand_id.to_owned(),
+            realm_id: DEMO_REALM_ID.to_owned(),
+            tracks: std::collections::BTreeMap::from([(
+                cokret_sdk::STRAND_TRACK_NAME_DISCUSSION.to_owned(),
+                cokret_sdk::StrandTrackConfig {
+                    enabled: discussion_enabled,
+                    is_primary: Some(true),
+                    profile: Some("discussion".to_owned()),
+                    ..Default::default()
+                },
+            )]),
+            title: "Typing scope".to_owned(),
+            summary: None,
+            fields: Default::default(),
+            state: soland::reducer::ObjectLifecycleState::Active,
+            state_changed_at: None,
+            created_by: "did:web:alice.example".to_owned(),
+            created_at: now,
+            history_basis_seals: Vec::new(),
+            updated_by: None,
+            updated_at: None,
+            scope_circle_id: None,
+        },
+    );
 }
 
 #[tokio::test]

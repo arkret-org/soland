@@ -363,12 +363,20 @@ async fn upload_keypackage(
     let mut rejected = Vec::new();
     for entry in body.key_packages {
         if entry.keypackage_id.is_empty() {
-            rejected.push(keypackage_failure(&entry, &device_id, "keypackage_id_missing"));
+            rejected.push(keypackage_failure(
+                &entry,
+                &device_id,
+                "keypackage_id_missing",
+            ));
             continue;
         }
         let keypackage_id = entry.keypackage_id.clone();
         if entry.keypackage_ref.is_empty() {
-            rejected.push(keypackage_failure(&entry, &device_id, "keypackage_ref_missing"));
+            rejected.push(keypackage_failure(
+                &entry,
+                &device_id,
+                "keypackage_ref_missing",
+            ));
             continue;
         }
         let keypackage_ref = entry.keypackage_ref.clone();
@@ -378,7 +386,11 @@ async fn upload_keypackage(
             .filter(|value| !value.is_empty())
             .map(ToOwned::to_owned)
         else {
-            rejected.push(keypackage_failure(&entry, &device_id, "key_package_missing"));
+            rejected.push(keypackage_failure(
+                &entry,
+                &device_id,
+                "key_package_missing",
+            ));
             continue;
         };
         let key_package_bytes = match decode_key_package(&key_package_bytes_b64) {
@@ -412,16 +424,14 @@ async fn upload_keypackage(
                 continue;
             }
         };
-        let device_signature = match entry_signature(
-            entry.device_signature.as_ref(),
-            &default_device_signature,
-        ) {
-            Ok(signature) => signature,
-            Err(reason) => {
-                rejected.push(keypackage_failure(&entry, &device_id, reason));
-                continue;
-            }
-        };
+        let device_signature =
+            match entry_signature(entry.device_signature.as_ref(), &default_device_signature) {
+                Ok(signature) => signature,
+                Err(reason) => {
+                    rejected.push(keypackage_failure(&entry, &device_id, reason));
+                    continue;
+                }
+            };
         let created_at = entry.created_at.timestamp();
         let expires_at = entry.expires_at.timestamp();
         let last_resort = entry.last_resort.unwrap_or(false);
@@ -459,8 +469,7 @@ async fn upload_keypackage(
         });
         trust_binding.insert_into(&mut publish_payload);
         let op = build_op(cokret_sdk::events::kinds::MLS_KEYPACKAGE, publish_payload);
-        let effect =
-            reducer::mls::apply_keypackage_publish(&mut state.projection.lock(), &op);
+        let effect = reducer::mls::apply_keypackage_publish(&mut state.projection.lock(), &op);
         match effect {
             ProjectionEffect::Mls(MlsEffect::KeyPackagePublished { .. }) => {}
             ProjectionEffect::Rejected { reason } => {
@@ -950,12 +959,7 @@ pub(crate) async fn retire_device_keypackages(
             })?
             .is_some()
         {
-            if let Some(projected) = state
-                .projection
-                .lock()
-                .mls_key_packages
-                .get_mut(&row.id)
-            {
+            if let Some(projected) = state.projection.lock().mls_key_packages.get_mut(&row.id) {
                 projected.claimed_by = Some("revoked".to_owned());
                 projected.consumed_at = Some(retired_at);
             }
@@ -1332,8 +1336,10 @@ fn keypackage_claim_record(
         ssk_generation: trust_binding.ssk_generation,
         device_authorize_event_id: trust_binding.device_authorize_event_id,
         expires_at: unix_timestamp_datetime(record.lifetime_not_after)?,
-        device_signature: serde_json::from_value::<KeyOperationSignature>(record.device_signature.clone())
-            .map_err(|error| AppError::internal(format!("invalid device_signature: {error}")))?,
+        device_signature: serde_json::from_value::<KeyOperationSignature>(
+            record.device_signature.clone(),
+        )
+        .map_err(|error| AppError::internal(format!("invalid device_signature: {error}")))?,
         revocation_status: Some("active".to_owned()),
         last_resort: record.last_resort.then_some(true),
     })

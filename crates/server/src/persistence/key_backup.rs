@@ -43,35 +43,20 @@ impl MemoryKeyBackupStore {
 #[async_trait]
 impl KeyBackupStore for MemoryKeyBackupStore {
     async fn put(&self, backup_id: String, payload: Value) -> PersistenceResult<()> {
-        self.backups
-            .lock()
-            .insert(backup_id, payload);
+        self.backups.lock().insert(backup_id, payload);
         Ok(())
     }
 
     async fn get(&self, backup_id: &str) -> PersistenceResult<Option<Value>> {
-        Ok(self
-            .backups
-            .lock()
-            .get(backup_id)
-            .cloned())
+        Ok(self.backups.lock().get(backup_id).cloned())
     }
 
     async fn delete(&self, backup_id: &str) -> PersistenceResult<bool> {
-        Ok(self
-            .backups
-            .lock()
-            .remove(backup_id)
-            .is_some())
+        Ok(self.backups.lock().remove(backup_id).is_some())
     }
 
     async fn snapshot_all(&self) -> PersistenceResult<Vec<Value>> {
-        Ok(self
-            .backups
-            .lock()
-            .values()
-            .cloned()
-            .collect())
+        Ok(self.backups.lock().values().cloned().collect())
     }
 }
 

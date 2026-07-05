@@ -6,9 +6,9 @@ use salvo::test::{ResponseExt, TestClient};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use soland::config::{AppConfig, IceServersConfig, LiveKitConfig, ObjectStorageConfig};
-use soland_data::Db;
 use soland::service;
 use soland::state::{AppState, RealmDirectoryEntry, RealmMetaRecord};
+use soland_data::Db;
 
 static TEST_EVENT_SEQ: AtomicU64 = AtomicU64::new(2_000);
 

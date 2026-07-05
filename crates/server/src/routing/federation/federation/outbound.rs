@@ -553,8 +553,9 @@ pub(crate) fn test_app_state_with_peers(
     use std::net::SocketAddr;
     use std::str::FromStr;
 
-    use crate::config::{AppConfig, FederationPolicy};
     use soland_data::Db;
+
+    use crate::config::{AppConfig, FederationPolicy};
     use crate::state::AppState;
 
     let cfg = AppConfig {

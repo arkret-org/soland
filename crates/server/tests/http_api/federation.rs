@@ -770,31 +770,27 @@ fn install_test_circle(state: &AppState, circle_id: &str, members: &[&str]) {
         .iter()
         .map(|member| (*member).to_owned())
         .collect::<BTreeSet<_>>();
-    state
-        .projection
-        .lock()
-        .circles
-        .insert(
-            circle_id.to_owned(),
-            CircleProjection {
-                circle_id: circle_id.to_owned(),
-                realm_id: TEST_REALM_ID.to_owned(),
-                title: "Need to know".to_owned(),
-                summary: None,
-                directory_visibility: "members".to_owned(),
-                join_rule: "invite".to_owned(),
-                history_visibility: "joined".to_owned(),
-                content_encryption_floor: None,
-                metadata_encryption_floor: None,
-                encryption_profile: "none".to_owned(),
-                mls_group_ref: None,
-                state: CircleLifecycleState::Active,
-                state_changed_at: None,
-                created_by: "did:web:admin.example".to_owned(),
-                created_at: Utc::now() - ChronoDuration::seconds(30),
-                updated_by: None,
-                updated_at: None,
-                members,
-            },
-        );
+    state.projection.lock().circles.insert(
+        circle_id.to_owned(),
+        CircleProjection {
+            circle_id: circle_id.to_owned(),
+            realm_id: TEST_REALM_ID.to_owned(),
+            title: "Need to know".to_owned(),
+            summary: None,
+            directory_visibility: "members".to_owned(),
+            join_rule: "invite".to_owned(),
+            history_visibility: "joined".to_owned(),
+            content_encryption_floor: None,
+            metadata_encryption_floor: None,
+            encryption_profile: "none".to_owned(),
+            mls_group_ref: None,
+            state: CircleLifecycleState::Active,
+            state_changed_at: None,
+            created_by: "did:web:admin.example".to_owned(),
+            created_at: Utc::now() - ChronoDuration::seconds(30),
+            updated_by: None,
+            updated_at: None,
+            members,
+        },
+    );
 }

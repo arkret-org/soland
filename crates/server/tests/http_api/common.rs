@@ -18,7 +18,6 @@ pub(crate) use salvo::test::{ResponseExt, TestClient};
 pub(crate) use serde_json::Value;
 pub(crate) use sha2::{Digest, Sha256};
 pub(crate) use soland::config::{AppConfig, IceServersConfig, LiveKitConfig, ObjectStorageConfig};
-pub(crate) use soland_data::Db;
 pub(crate) use soland::ratelimit::RateLimiterConfig;
 pub(crate) use soland::state::{
     AppState, EventNotification, MessageRecord, PresenceRecord, RealmDirectoryEntry,
@@ -27,6 +26,7 @@ pub(crate) use soland::state::{
 pub(crate) use soland::{
     artifacts, service, service_with_rate_limiter_config, service_with_request_size_limit,
 };
+pub(crate) use soland_data::Db;
 
 pub(crate) const DEMO_REALM_ID: &str = "ck:realm:0196419b-0000-7000-8000-000000000000";
 /// Fixed REST-style TURN shared secret installed by `test_config()` so the

@@ -182,11 +182,7 @@ async fn get_server_status(
         .await
         .map(|items| items.len())
         .ok();
-    let realm_count = state
-        .realms
-        .lock()
-        .search(Default::default())
-        .len();
+    let realm_count = state.realms.lock().search(Default::default()).len();
     json_ok(AdminServerStatusOutcome {
         status: "ok".to_owned(),
         service_did: state.config.service_did.clone(),
@@ -225,10 +221,7 @@ async fn get_server_info(
         service_did: state.config.service_did.clone(),
         trust_domain: state.config.trust_domain.clone(),
         development_mode: state.config.development_mode,
-        allow_public_registration: state
-            .account_registration_policy
-            .lock()
-            .enabled,
+        allow_public_registration: state.account_registration_policy.lock().enabled,
     })
 }
 
@@ -259,11 +252,7 @@ async fn get_server_stats(
         .iter()
         .filter(|account| state.account_lifecycle_state(&account.did) == "active")
         .count() as u64;
-    let realm_count = state
-        .realms
-        .lock()
-        .search(Default::default())
-        .len() as u64;
+    let realm_count = state.realms.lock().search(Default::default()).len() as u64;
     let device_count = state
         .persistence
         .devices()

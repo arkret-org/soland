@@ -30,9 +30,7 @@ async fn external_bearer_without_dpop_is_rejected() {
 async fn account_registration_policy_rejects_closed_and_audits() {
     let state = AppState::new(test_config(), Db { pool: None });
     {
-        let mut policy = state
-            .account_registration_policy
-            .lock();
+        let mut policy = state.account_registration_policy.lock();
         policy.enabled = false;
     }
 
@@ -69,9 +67,7 @@ async fn account_registration_policy_rejects_closed_and_audits() {
 async fn account_registration_policy_evidence_and_rate_limit_are_enforced() {
     let state = AppState::new(test_config(), Db { pool: None });
     {
-        let mut policy = state
-            .account_registration_policy
-            .lock();
+        let mut policy = state.account_registration_policy.lock();
         *policy = cokret_sdk::AccountRegistrationPolicy {
             verification_code: cokret_sdk::AccountRegistrationVerificationPolicy {
                 required: true,
@@ -177,9 +173,7 @@ async fn account_registration_policy_evidence_and_rate_limit_are_enforced() {
 
     let rate_limited_state = AppState::new(test_config(), Db { pool: None });
     {
-        let mut policy = rate_limited_state
-            .account_registration_policy
-            .lock();
+        let mut policy = rate_limited_state.account_registration_policy.lock();
         policy.rate_limit = Some(cokret_sdk::AccountRegistrationRateLimitPolicy {
             max_attempts: 1,
             window_seconds: 60,

@@ -127,9 +127,9 @@ pub(super) async fn admin_get_realm_delivery_binding_policy(
     let value = {
         let proj = state.projection.lock();
         {
-        proj.realm_delivery_binding_policy_cell_value(&realm_id)
-            .cloned()
-    }
+            proj.realm_delivery_binding_policy_cell_value(&realm_id)
+                .cloned()
+        }
     };
     json_ok(response_from_cell(&realm_id, value.as_ref()))
 }
@@ -201,29 +201,29 @@ pub(super) async fn admin_list_member_routability(
     // projection lock so the view is internally consistent.
     let (allowed, routes_by_actor) = {
         let proj = state.projection.lock();
-                let allowed: Vec<String> = proj
-                    .realm_delivery_binding_policy_cell_value(&realm_id)
-                    .and_then(|value| value.get("allowed_recipient_services").cloned())
-                    .and_then(|value| value.as_array().cloned())
-                    .map(|items| {
-                        items
-                            .iter()
-                            .filter_map(|v| v.as_str().map(str::to_owned))
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                let mut routes_by_actor: std::collections::BTreeMap<String, (String, bool)> =
-                    std::collections::BTreeMap::new();
-                for (subject, cell) in proj.push_routes.iter() {
-                    // Keep the first live route per principal; revoked
-                    // routes only register if no live route was seen.
-                    let entry = routes_by_actor
-                        .entry(subject.principal_id.clone())
-                        .or_insert_with(|| (subject.recipient_service_did.clone(), false));
-                    if !cell.revoked {
-                        *entry = (subject.recipient_service_did.clone(), true);
-                    }
-                }
+        let allowed: Vec<String> = proj
+            .realm_delivery_binding_policy_cell_value(&realm_id)
+            .and_then(|value| value.get("allowed_recipient_services").cloned())
+            .and_then(|value| value.as_array().cloned())
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(|v| v.as_str().map(str::to_owned))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let mut routes_by_actor: std::collections::BTreeMap<String, (String, bool)> =
+            std::collections::BTreeMap::new();
+        for (subject, cell) in proj.push_routes.iter() {
+            // Keep the first live route per principal; revoked
+            // routes only register if no live route was seen.
+            let entry = routes_by_actor
+                .entry(subject.principal_id.clone())
+                .or_insert_with(|| (subject.recipient_service_did.clone(), false));
+            if !cell.revoked {
+                *entry = (subject.recipient_service_did.clone(), true);
+            }
+        }
         (allowed, routes_by_actor)
     };
 

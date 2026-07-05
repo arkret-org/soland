@@ -174,11 +174,7 @@ impl MlsKeyPackageStore for MemoryMlsKeyPackageStore {
     }
 
     async fn get(&self, id: &str) -> PersistenceResult<Option<MlsKeyPackageRow>> {
-        Ok(self
-            .rows
-            .lock()
-            .get(id)
-            .cloned())
+        Ok(self.rows.lock().get(id).cloned())
     }
 
     async fn try_claim(
@@ -233,12 +229,7 @@ impl MlsKeyPackageStore for MemoryMlsKeyPackageStore {
     }
 
     async fn snapshot_all(&self) -> PersistenceResult<Vec<MlsKeyPackageRow>> {
-        Ok(self
-            .rows
-            .lock()
-            .values()
-            .cloned()
-            .collect())
+        Ok(self.rows.lock().values().cloned().collect())
     }
 }
 
@@ -256,9 +247,7 @@ impl MemoryMlsWelcomeStore {
 #[async_trait]
 impl MlsWelcomeStore for MemoryMlsWelcomeStore {
     async fn enqueue(&self, record: &MlsWelcomeRecord) -> PersistenceResult<()> {
-        self.queue
-            .lock()
-            .push_back(record.clone());
+        self.queue.lock().push_back(record.clone());
         Ok(())
     }
 
@@ -290,12 +279,7 @@ impl MlsWelcomeStore for MemoryMlsWelcomeStore {
     }
 
     async fn snapshot_all(&self) -> PersistenceResult<Vec<MlsWelcomeRecord>> {
-        Ok(self
-            .queue
-            .lock()
-            .iter()
-            .cloned()
-            .collect())
+        Ok(self.queue.lock().iter().cloned().collect())
     }
 }
 
@@ -408,11 +392,7 @@ impl MlsCommitStore for MemoryMlsCommitStore {
         group_id: &str,
     ) -> PersistenceResult<Option<MlsCommitEpochRecord>> {
         let key = mls_epoch_key(effective_scope, group_id)?;
-        Ok(self
-            .rows
-            .lock()
-            .get(&key)
-            .cloned())
+        Ok(self.rows.lock().get(&key).cloned())
     }
 
     async fn initialize_genesis(
@@ -505,12 +485,7 @@ impl MlsCommitStore for MemoryMlsCommitStore {
     }
 
     async fn snapshot_all(&self) -> PersistenceResult<Vec<MlsCommitEpochRecord>> {
-        Ok(self
-            .rows
-            .lock()
-            .values()
-            .cloned()
-            .collect())
+        Ok(self.rows.lock().values().cloned().collect())
     }
 }
 

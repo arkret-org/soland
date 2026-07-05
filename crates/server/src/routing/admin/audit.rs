@@ -2,13 +2,11 @@
 //!
 //! Two disjoint mounts (no double-mounting; SOL-NAME-02):
 //!
-//! - Client ingest ([`ingest_router`], mounted at `/_soland/self/audit/*`
-//!   under the session-PoP hoop): `POST audit/user-action`,
-//!   `POST audit/franking/verify`. Per-handler actor auth binds writes to
-//!   the authenticated actor.
-//! - Operator queries ([`ops_router`], mounted inside the `RequireAdmin`
-//!   gated `/_soland/admin/*` branch): `GET audit/events`,
-//!   `GET audit/erasure-receipts`.
+//! - Client ingest ([`ingest_router`], mounted at `/_soland/self/audit/*` under the session-PoP
+//!   hoop): `POST audit/user-action`, `POST audit/franking/verify`. Per-handler actor auth binds
+//!   writes to the authenticated actor.
+//! - Operator queries ([`ops_router`], mounted inside the `RequireAdmin` gated `/_soland/admin/*`
+//!   branch): `GET audit/events`, `GET audit/erasure-receipts`.
 //!
 //! `append_audit_log` — internal helper used everywhere a side-effect needs
 //! to be recorded (auth, Realm lifecycle, message send, federation, etc.).

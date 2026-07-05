@@ -285,9 +285,7 @@ impl FederationOutboxStore for MemoryFederationOutboxStore {
         &self,
         record: &FederationOutboxDeadLetterRecord,
     ) -> PersistenceResult<()> {
-        let mut dead_letters = self
-            .dead_letters
-            .lock();
+        let mut dead_letters = self.dead_letters.lock();
         dead_letters.insert(record.id.clone(), record.clone());
         Ok(())
     }
@@ -295,9 +293,7 @@ impl FederationOutboxStore for MemoryFederationOutboxStore {
     async fn dead_letters_snapshot(
         &self,
     ) -> PersistenceResult<Vec<FederationOutboxDeadLetterRecord>> {
-        let dead_letters = self
-            .dead_letters
-            .lock();
+        let dead_letters = self.dead_letters.lock();
         Ok(dead_letters.values().cloned().collect())
     }
 }

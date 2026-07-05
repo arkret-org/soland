@@ -33,9 +33,9 @@ use sha2::{Digest, Sha256};
 use soland::config::{
     AppConfig, FederationPolicy, IceServersConfig, LiveKitConfig, ObjectStorageConfig,
 };
-use soland_data::Db;
 use soland::service;
 use soland::state::AppState;
+use soland_data::Db;
 
 fn test_config() -> AppConfig {
     AppConfig {

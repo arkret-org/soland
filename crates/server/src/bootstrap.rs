@@ -7,14 +7,13 @@
 //! downstream consumer sees the final value.
 //!
 //! Invariants (identity-did.md §3.7):
-//!   * I-1 key custody — soland self-generates its own signing keys and hosts
-//!     its own `did.jsonl`; it never holds another subject's private key.
-//!   * I-2 persisted identity is authoritative, config `service_did` is a
-//!     fail-closed pin (a mismatch rejects startup).
-//!   * I-3 explicit bootstrap gate — self-mint only on an explicit opt-in;
-//!     first boot with a configured DID adopts it (backward-compatible
-//!     migration); a present store with a missing/mismatched row rejects
-//!     startup rather than silently re-minting.
+//!   * I-1 key custody — soland self-generates its own signing keys and hosts its own `did.jsonl`;
+//!     it never holds another subject's private key.
+//!   * I-2 persisted identity is authoritative, config `service_did` is a fail-closed pin (a
+//!     mismatch rejects startup).
+//!   * I-3 explicit bootstrap gate — self-mint only on an explicit opt-in; first boot with a
+//!     configured DID adopts it (backward-compatible migration); a present store with a
+//!     missing/mismatched row rejects startup rather than silently re-minting.
 //!
 //! [`AppState`]: crate::state::AppState
 

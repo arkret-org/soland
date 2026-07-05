@@ -1,9 +1,9 @@
 use cokret_sdk::lattice::CellState;
 use cokret_sdk::{CellRef, Operation};
 use serde_json::{Value, json};
+use soland_data::Db;
 
 use super::*;
-use soland_data::Db;
 use crate::routing::interop::participant_binding;
 
 const REALM_ID: &str = "ck:realm:01904100-0000-7000-8000-c0ffeec0ffec";

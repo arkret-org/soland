@@ -338,9 +338,7 @@ fn local_peer_policy_digest_for_transaction(
         .map(|operation| operation.realm_id.as_str().to_owned())
         .collect::<BTreeSet<_>>();
     let realm_policies = {
-        let projection = state
-            .projection
-            .lock();
+        let projection = state.projection.lock();
         realm_ids
             .iter()
             .map(|realm_id| {
@@ -928,12 +926,10 @@ pub(crate) async fn federation_seals_push(
         AppError::internal(format!("federation seals push body serialize: {error}"))
     })?;
     super::verify_inbound_peer_http_signature(state, req, Some(&body_value)).await?;
-    //   3. bind every Move the Seal encapsulates (its `delta` entries) to the
-    //      authenticated origin, exactly like the sibling
-    //      `federation_transaction` / `federation_push_operations` tracks run
-    //      `federation_actor_origin_acceptable` per operation. A signed peer
-    //      MUST NOT be able to push Seals covering Moves authored in a trust
-    //      domain it does not speak for.
+    //   3. bind every Move the Seal encapsulates (its `delta` entries) to the authenticated origin,
+    //      exactly like the sibling `federation_transaction` / `federation_push_operations` tracks
+    //      run `federation_actor_origin_acceptable` per operation. A signed peer MUST NOT be able
+    //      to push Seals covering Moves authored in a trust domain it does not speak for.
     let origin_trust_domain = super::signature::trust_domain_from_service_did(&body.origin);
     let mut accepted: Vec<String> = Vec::new();
     let mut rejected: Vec<serde_json::Value> = Vec::new();

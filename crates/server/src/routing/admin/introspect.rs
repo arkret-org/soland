@@ -19,13 +19,13 @@
 
 use std::collections::HashMap;
 use std::sync::OnceLock;
-use parking_lot::Mutex;
 use std::time::{Duration, Instant};
 
 use cokret_sdk::{
     SessionGrantIntrospectOutcome, SessionGrantIntrospectRequestBody, SessionGrantIntrospectStatus,
     SessionGrantIntrospection,
 };
+use parking_lot::Mutex;
 use salvo::http::StatusCode;
 use salvo::prelude::Request;
 

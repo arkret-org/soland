@@ -291,11 +291,12 @@ mod tests {
     use std::net::SocketAddr;
     use std::str::FromStr;
 
+    use soland_data::Db;
+
     use super::*;
     use crate::config::{
         AppConfig, FederationPolicy, IceServersConfig, LiveKitConfig, ObjectStorageConfig,
     };
-    use soland_data::Db;
 
     fn test_config() -> AppConfig {
         AppConfig {

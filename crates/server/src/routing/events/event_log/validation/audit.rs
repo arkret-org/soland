@@ -1,5 +1,4 @@
 use super::super::*;
-
 use crate::error::reasons::WATCH_SET_OTHERS_AUDIT_MISSING;
 
 pub(crate) async fn append_encrypted_message_franking(

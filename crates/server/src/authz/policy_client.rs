@@ -33,7 +33,6 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use parking_lot::Mutex;
 use std::time::{Duration, Instant};
 
 use base64::Engine as _;
@@ -45,6 +44,7 @@ use cokret_sdk::{
     PolicyCheckSignature, PolicyCheckSource, RealmId,
 };
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+use parking_lot::Mutex;
 use serde::Serialize;
 use serde_json::Value;
 use subtle::ConstantTimeEq as _;

@@ -389,10 +389,7 @@ async fn account_exists(state: &AppState, account_did: &str) -> Result<(), AppEr
 }
 
 fn account_registration_policy_snapshot(state: &AppState) -> AccountRegistrationPolicy {
-    state
-        .account_registration_policy
-        .lock()
-        .clone()
+    state.account_registration_policy.lock().clone()
 }
 
 fn account_registration_policy_digest(
@@ -570,9 +567,7 @@ fn account_registration_retry_after_ms(
     }
     let now = now();
     let window = chrono::Duration::seconds(rate_limit.window_seconds as i64);
-    let mut tracker = state
-        .account_registration_rate_tracker
-        .lock();
+    let mut tracker = state.account_registration_rate_tracker.lock();
     let entry = tracker.entry(did.to_owned()).or_insert((now, 0));
     if now.signed_duration_since(entry.0) >= window {
         *entry = (now, 0);
@@ -815,8 +810,13 @@ async fn local_account_register(
     if let Some(device_id) = body.device_id.as_deref() {
         let device_id = validate_device_id(device_id)
             .map_err(|_| AppError::invalid_param("invalid device_id"))?;
-        put_account_device_placeholder(state, &did, account.display_name.clone(), device_id.as_str())
-            .await?;
+        put_account_device_placeholder(
+            state,
+            &did,
+            account.display_name.clone(),
+            device_id.as_str(),
+        )
+        .await?;
     }
     append_audit_log(
         state,
@@ -1148,9 +1148,15 @@ async fn gate_account_register(
             )
             .await?;
         }
-        let audit_handle = (!existing_account.localpart.is_empty()).then(|| existing_account.handle());
-        append_account_registration_audit(state, &did, audit_handle.as_deref(), &registration_audit)
-            .await;
+        let audit_handle =
+            (!existing_account.localpart.is_empty()).then(|| existing_account.handle());
+        append_account_registration_audit(
+            state,
+            &did,
+            audit_handle.as_deref(),
+            &registration_audit,
+        )
+        .await;
         let devices = account_device_summaries(state, &did).await?;
         let primary_handle_claim = account_primary_handle_claim(state, &existing_account).await;
         return json_ok(AccountRegisterOutcome {

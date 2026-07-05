@@ -765,9 +765,7 @@ fn blocked_invite_policy_update(
     peer: &str,
 ) -> Option<cokret_sdk::InviteReceivePolicy> {
     let peer_did = Did::new(peer.to_owned()).ok()?;
-    let policies = state
-        .invite_receive_policies
-        .lock();
+    let policies = state.invite_receive_policies.lock();
     let mut policy = policies
         .get(holder)
         .cloned()
@@ -1308,9 +1306,7 @@ pub(crate) async fn create_direct_binding_with_realm(
     // generated realm/strand ids; we release the lock before the (async) event
     // submission so projection writes don't deadlock against the guard.
     let reservation = {
-        let mut guard = state
-            .direct_conversation_bindings
-            .lock();
+        let mut guard = state.direct_conversation_bindings.lock();
         if let Some(existing) = guard.get(pair_key) {
             if existing.state == "active" && valid_contact_event_ref(&existing.binding_event_ref) {
                 DirectBindingReservation::Existing(existing.clone())
@@ -1434,9 +1430,7 @@ pub(crate) async fn create_direct_binding_with_realm(
         .await
     {
         let removed = {
-            let mut guard = state
-                .direct_conversation_bindings
-                .lock();
+            let mut guard = state.direct_conversation_bindings.lock();
             let removed = guard
                 .get(pair_key)
                 .is_some_and(|binding| binding.binding_event_ref == reserved.binding_event_ref);
@@ -1552,9 +1546,7 @@ fn activate_reserved_direct_binding(
     let mut active = reserved.clone();
     active.state = "active".to_owned();
     active.updated_at = now();
-    let guard = state
-        .direct_conversation_bindings
-        .lock();
+    let guard = state.direct_conversation_bindings.lock();
     let still_reserved = guard
         .get(pair_key)
         .is_some_and(|binding| binding.binding_event_ref == reserved.binding_event_ref);
@@ -1572,9 +1564,7 @@ fn publish_reserved_direct_binding(
     pair_key: &str,
     active: &DirectConversationBindingRecord,
 ) -> Result<(), AppError> {
-    let mut guard = state
-        .direct_conversation_bindings
-        .lock();
+    let mut guard = state.direct_conversation_bindings.lock();
     let still_reserved = guard
         .get(pair_key)
         .is_some_and(|binding| binding.binding_event_ref == active.binding_event_ref);
@@ -1630,9 +1620,7 @@ async fn rollback_reserved_direct_binding(
     reserved: &DirectConversationBindingRecord,
 ) {
     let removed = {
-        let mut guard = state
-            .direct_conversation_bindings
-            .lock();
+        let mut guard = state.direct_conversation_bindings.lock();
         let removed = guard
             .get(pair_key)
             .is_some_and(|binding| binding.binding_event_ref == reserved.binding_event_ref);
@@ -1736,8 +1724,7 @@ async fn submit_direct_mls_genesis(
         "created_at": now().to_rfc3339_opts(SecondsFormat::Secs, true),
     });
     let op = direct_mls_operation(realm_id, cokret_sdk::events::kinds::MLS_GENESIS, payload)?;
-    let effect =
-        crate::reducer::mls::apply_group_genesis(&mut state.projection.lock(), &op);
+    let effect = crate::reducer::mls::apply_group_genesis(&mut state.projection.lock(), &op);
     match &effect {
         crate::reducer::ProjectionEffect::Mls(crate::reducer::MlsEffect::GroupGenesis {
             ..
@@ -1817,13 +1804,11 @@ async fn submit_direct_mls_welcome(
     let requester_ssk_generation = cokret_sdk::Did::new(actor.to_owned())
         .ok()
         .and_then(|did| {
+            let manager = state.cross_signing.lock();
             {
-                let manager = state.cross_signing.lock();
-                {
                 manager
                     .current_cross_signing(&did)
                     .map(|publish| publish.generation)
-            }
             }
         })
         .filter(|generation| *generation >= 1);
@@ -1849,8 +1834,7 @@ async fn submit_direct_mls_welcome(
         "governance_binding": governance_binding,
     });
     let op = direct_mls_operation(realm_id, cokret_sdk::events::kinds::MLS_WELCOME, payload)?;
-    let effect =
-        crate::reducer::mls::apply_welcome_enqueue(&mut state.projection.lock(), &op);
+    let effect = crate::reducer::mls::apply_welcome_enqueue(&mut state.projection.lock(), &op);
     match &effect {
         crate::reducer::ProjectionEffect::Mls(crate::reducer::MlsEffect::WelcomeEnqueued {
             ..

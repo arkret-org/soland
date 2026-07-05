@@ -1,11 +1,11 @@
 use std::collections::BTreeSet;
 use std::net::SocketAddr;
 use std::sync::OnceLock;
-use parking_lot::Mutex;
 use std::time::{Duration, Instant};
 
 use metrics::{counter, describe_counter, describe_gauge, describe_histogram, gauge, histogram};
 use metrics_exporter_prometheus::{Matcher, PrometheusBuilder, PrometheusHandle};
+use parking_lot::Mutex;
 use salvo::prelude::*;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};

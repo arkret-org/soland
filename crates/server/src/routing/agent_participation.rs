@@ -42,13 +42,13 @@ fn projected_strand_circle_id(state: &AppState, strand_id: &str) -> Option<Optio
     {
         let projection = state.projection.lock();
         {
-        projection.strands.get(strand_id).map(|strand| {
-            strand
-                .scope_circle_id
-                .clone()
-                .filter(|scope| scope.starts_with("ck:circle:"))
-        })
-    }
+            projection.strands.get(strand_id).map(|strand| {
+                strand
+                    .scope_circle_id
+                    .clone()
+                    .filter(|scope| scope.starts_with("ck:circle:"))
+            })
+        }
     }
 }
 

@@ -9,10 +9,9 @@ use diesel_async::RunQueryDsl;
 use futures_util::future::poll_fn;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use soland_data::PgPool;
 use tokio::sync::broadcast;
 use tokio_postgres::{AsyncMessage, NoTls};
-
-use soland_data::PgPool;
 
 pub(crate) const MAX_SUBSCRIBE_RECONNECT_WINDOW_MS: u64 = 86_400_000;
 const EVENT_NOTIFICATION_CHANNEL: &str = "soland_event_notifications";

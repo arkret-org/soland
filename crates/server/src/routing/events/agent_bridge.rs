@@ -481,10 +481,10 @@ mod tests {
     use std::str::FromStr;
 
     use cokret_sdk::{Operation, OperationId, RealmId};
+    use soland_data::Db;
 
     use super::*;
     use crate::config::AppConfig;
-    use soland_data::Db;
     use crate::state::AppState;
 
     fn test_state() -> AppState {

@@ -1,5 +1,6 @@
-use super::*;
 use chrono::DateTime;
+
+use super::*;
 
 /// The deployment's own authoritative service identity (identity-did.md §3.7).
 ///

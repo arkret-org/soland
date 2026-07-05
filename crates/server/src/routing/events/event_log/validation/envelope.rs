@@ -34,10 +34,7 @@ fn event_digest_suite(
     let suite = if kind == cokret_sdk::events::kinds::REALM_CREATE {
         realm_create_digest_algorithm(object)
     } else {
-        state
-            .projection
-            .lock()
-            .realm_digest_algorithm(realm_id)
+        state.projection.lock().realm_digest_algorithm(realm_id)
     }
     .unwrap_or_else(|| "sha256".to_owned());
     cokret_sdk::canonical::digest_suite(&suite)

@@ -235,17 +235,12 @@ fn cross_signing_reset_blocks_queued_message(content: &Value, new_generation: u6
 #[async_trait]
 impl DeviceMessageStore for MemoryDeviceMessageStore {
     async fn append(&self, message: DeviceMessageRecord) -> PersistenceResult<()> {
-        self.queue
-            .lock()
-            .push_back(message);
+        self.queue.lock().push_back(message);
         Ok(())
     }
 
     async fn try_register_txn(&self, key: String) -> PersistenceResult<bool> {
-        Ok(self
-            .txns
-            .lock()
-            .insert(key))
+        Ok(self.txns.lock().insert(key))
     }
 
     async fn issue_ack_token(
@@ -326,9 +321,7 @@ impl DeviceMessageStore for MemoryDeviceMessageStore {
     async fn prune_expired(&self, now: chrono::DateTime<Utc>) -> PersistenceResult<usize> {
         let mut queue = self.queue.lock();
         let before = queue.len();
-        let mut watermarks = self
-            .lost_watermarks
-            .lock();
+        let mut watermarks = self.lost_watermarks.lock();
         for message in queue.iter() {
             if device_message_expires_at(message) <= now {
                 let key = (message.recipient.clone(), message.device_id.clone());
@@ -371,9 +364,7 @@ impl DeviceMessageStore for MemoryDeviceMessageStore {
             return Ok(0);
         }
         {
-            let mut watermarks = self
-                .lost_watermarks
-                .lock();
+            let mut watermarks = self.lost_watermarks.lock();
             for (key, lost_through) in &lost_through_by_device {
                 let entry = watermarks.entry(key.clone()).or_default();
                 *entry = (*entry).max(*lost_through);
@@ -428,9 +419,7 @@ impl DeviceMessageStore for MemoryDeviceMessageStore {
             return Ok(0);
         }
         {
-            let mut watermarks = self
-                .lost_watermarks
-                .lock();
+            let mut watermarks = self.lost_watermarks.lock();
             for (device_id, lost_through) in &lost_by_device {
                 let key = (recipient.to_owned(), device_id.clone());
                 let entry = watermarks.entry(key).or_default();
@@ -825,9 +814,7 @@ impl MemoryDeviceKeyStore {
 #[async_trait]
 impl DeviceKeyStore for MemoryDeviceKeyStore {
     async fn put(&self, actor: String, device_id: String, payload: Value) -> PersistenceResult<()> {
-        self.data
-            .lock()
-            .insert((actor, device_id), payload);
+        self.data.lock().insert((actor, device_id), payload);
         Ok(())
     }
 
@@ -859,9 +846,7 @@ impl OneTimeKeyStore for MemoryOneTimeKeyStore {
         device_id: String,
         keys: Vec<Value>,
     ) -> PersistenceResult<()> {
-        self.data
-            .lock()
-            .insert((actor, device_id), keys);
+        self.data.lock().insert((actor, device_id), keys);
         Ok(())
     }
 

@@ -333,9 +333,7 @@ async fn active_reset_recovery_policy(
 fn cross_signing_reset_replay_seen(state: &AppState, content: &CrossSigningResetContent) -> bool {
     let now = chrono::Utc::now();
     let cutoff = now - chrono::Duration::seconds(CROSS_SIGNING_RESET_REPLAY_RETENTION_SECONDS);
-    let mut replays = state
-        .cross_signing_reset_replays
-        .lock();
+    let mut replays = state.cross_signing_reset_replays.lock();
     replays.retain(|_, seen_at| *seen_at >= cutoff);
     replays.contains_key(&(
         content.principal_id.as_str().to_owned(),
@@ -346,9 +344,7 @@ fn cross_signing_reset_replay_seen(state: &AppState, content: &CrossSigningReset
 fn remember_cross_signing_reset_replay(state: &AppState, content: &CrossSigningResetContent) {
     let now = chrono::Utc::now();
     let cutoff = now - chrono::Duration::seconds(CROSS_SIGNING_RESET_REPLAY_RETENTION_SECONDS);
-    let mut replays = state
-        .cross_signing_reset_replays
-        .lock();
+    let mut replays = state.cross_signing_reset_replays.lock();
     replays.retain(|_, seen_at| *seen_at >= cutoff);
     replays.insert(
         (

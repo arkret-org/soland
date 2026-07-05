@@ -154,13 +154,7 @@ async fn sweep_retention_policy(
         .get(&realm_id)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
-        .or_else(|| {
-            state
-                .retention_policies
-                .lock()
-                .get(&realm_id)
-                .cloned()
-        })
+        .or_else(|| state.retention_policies.lock().get(&realm_id).cloned())
         .ok_or_else(|| AppError::not_found("retention policy not found"))?;
     let cutoff = now - Duration::seconds(policy.ttl_seconds);
     let events = state
@@ -179,9 +173,7 @@ async fn sweep_retention_policy(
     // lock, then release it before doing the async `contains` reads (the
     // MutexGuard is not Send and cannot cross an `.await`).
     let pending: Vec<_> = {
-        let tombstones = state
-            .retention_tombstones
-            .lock();
+        let tombstones = state.retention_tombstones.lock();
         events
             .into_iter()
             .filter(|event| event.created_at <= cutoff && !tombstones.contains_key(&event.event_id))
@@ -220,9 +212,7 @@ async fn sweep_retention_policy(
             .await
             .map_err(|error| AppError::internal(error.to_string()))?;
         {
-            let mut tombstones = state
-                .retention_tombstones
-                .lock();
+            let mut tombstones = state.retention_tombstones.lock();
             if tombstones.contains_key(&event.event_id) {
                 continue;
             }

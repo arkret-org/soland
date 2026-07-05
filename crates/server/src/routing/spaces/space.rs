@@ -374,9 +374,7 @@ async fn get_space_cell(
     // Snapshot everything we need out of the projection under a short lock so
     // we never hold the (non-Send) guard across the async access check.
     let (realm_id, value) = {
-        let proj = state
-            .projection
-            .lock();
+        let proj = state.projection.lock();
         let realm_id = proj
             .space_containers
             .get(&space_id)
@@ -1328,9 +1326,7 @@ pub async fn typing_scope_allows_actor(
             "ck.typing strand_id must name a visible ck:strand",
         ));
     }
-    let projection = state
-        .projection
-        .lock();
+    let projection = state.projection.lock();
     let Some(strand) = projection.strands.get(strand_id) else {
         if strand_id == crate::routing::events::strand::strand_id_from_realm_id(realm_id) {
             return Ok(());
