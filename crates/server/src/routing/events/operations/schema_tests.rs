@@ -179,6 +179,17 @@ mod realm_key_share_schema_tests {
     }
 
     #[test]
+    fn realm_key_share_semantics_dispatches_through_sdk_payload_schema() {
+        let state = crate::state::AppState::new(
+            crate::config::AppConfig::test_default(),
+            soland_data::Db { pool: None },
+        );
+        let operation = op(member_device_share_payload());
+
+        assert!(validate_operation_semantics(&state, &[operation]).is_ok());
+    }
+
+    #[test]
     fn realm_key_share_requires_sealed_key_material() {
         let schema = operation_schema_for_kind(cokret_sdk::events::kinds::REALM_KEY_SHARE)
             .expect("realm key share must build an Operation");
