@@ -17,6 +17,20 @@ fn device_message_target(kind: &str, content: Value) -> Value {
     })
 }
 
+fn pair_device_pubkey(device_id: &str) -> Value {
+    let mut seed = [0_u8; 32];
+    for (index, byte) in device_id.as_bytes().iter().take(32).enumerate() {
+        seed[index] = *byte;
+    }
+    let signing = SigningKey::from_bytes(&seed);
+    serde_json::json!({
+        "kty": "OKP",
+        "kid": device_id,
+        "alg": "EdDSA",
+        "public_key": test_ed25519_multibase_public(&signing)
+    })
+}
+
 async fn post_account_device_pair(
     state: AppState,
     token: &str,
@@ -27,12 +41,7 @@ async fn post_account_device_pair(
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
             "pairing_code": "pairing-code",
-            "new_device_pubkey": {
-                "kty": "OKP",
-                "kid": new_device_id,
-                "alg": "EdDSA",
-                "public_key": "emtleQ"
-            },
+            "new_device_pubkey": pair_device_pubkey(new_device_id),
             "challenge_signature": challenge_signature
         }))
         .send(&app_from_state(state))
@@ -47,16 +56,13 @@ async fn account_device_pair_registers_sibling_via_canonical_gate_route() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
     let sibling = "ck:device:01904100-0000-7000-8000-9b04e0000008";
+    let sibling_pubkey = pair_device_pubkey(sibling);
+    let sibling_device_public_key = sibling_pubkey["public_key"].as_str().unwrap();
 
     let unauthenticated = TestClient::post("http://server/_cokret/gate/account/device-pair")
         .json(&serde_json::json!({
             "pairing_code": "pairing-code",
-            "new_device_pubkey": {
-                "kty": "OKP",
-                "kid": sibling,
-                "alg": "EdDSA",
-                "public_key": "emtleQ"
-            },
+            "new_device_pubkey": sibling_pubkey.clone(),
             "challenge_signature": "c2ln"
         }))
         .send(&app_from_state(state.clone()))
@@ -67,12 +73,7 @@ async fn account_device_pair_registers_sibling_via_canonical_gate_route() {
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
             "pairing_code": "pairing-code",
-            "new_device_pubkey": {
-                "kty": "OKP",
-                "kid": sibling,
-                "alg": "EdDSA",
-                "public_key": "emtleQ"
-            },
+            "new_device_pubkey": sibling_pubkey,
             "challenge_signature": "c2ln",
             "display_name": "Paired Phone",
             "device_metadata": {
@@ -105,6 +106,21 @@ async fn account_device_pair_registers_sibling_via_canonical_gate_route() {
             && device["status"] == "active"
             && device["display_name"] == "Paired Phone"
     }));
+    let stored = state
+        .persistence
+        .devices()
+        .get("did:web:alice.example", sibling)
+        .await
+        .unwrap()
+        .expect("paired device inventory record");
+    assert_eq!(
+        stored.payload["device_public_key"],
+        sibling_device_public_key
+    );
+    assert_eq!(
+        stored.payload["authorization"]["device_public_key"],
+        sibling_device_public_key
+    );
     assert!(
         state
             .persistence
@@ -228,12 +244,7 @@ async fn to_device_pairing_request_reaches_existing_device_and_gate_pair_authori
         "methods": ["ck.sas.v1", "ck.qr.v1"],
         "purpose": "same_principal_device_authorization",
         "pairing_code": "pairing-code",
-        "new_device_pubkey": {
-            "kty": "OKP",
-            "kid": new_device,
-            "alg": "EdDSA",
-            "public_key": "emtleQ"
-        },
+        "new_device_pubkey": pair_device_pubkey(new_device),
         "challenge_signature": "c2ln",
         "gate_audience": "http://server",
         "request_canonical_digest": "sha256:test",

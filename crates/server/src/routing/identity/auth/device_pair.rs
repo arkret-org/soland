@@ -33,7 +33,8 @@ async fn authorize_account_device_pair(
             "challenge_signature must be non-empty base64url",
         ));
     }
-    let device_id = device_id_from_pair_pubkey(&body.new_device_pubkey)?;
+    let pair_pubkey = pair_pubkey_material(&body.new_device_pubkey)?;
+    let device_id = pair_pubkey.device_id.clone();
     if device_id == session.device_id {
         return Err(AppError::conflict(
             "new device id must differ from the authorizing session device",
@@ -77,6 +78,10 @@ async fn authorize_account_device_pair(
         display_name: display_name.clone(),
         verification_state: "verified".to_owned(),
         payload: json!({
+            "device_id": device_id.clone(),
+            "device_public_key": pair_pubkey.device_public_key.clone(),
+            "device_authorize_projected": true,
+            "device_authorize_event_id": authorized_event_ref.clone(),
             "authorization": {
                 "event_kind": "ck.device.authorize",
                 "authorized_event_ref": authorized_event_ref.clone(),
@@ -85,6 +90,7 @@ async fn authorize_account_device_pair(
                 "pairing_code": pairing_code,
                 "challenge_signature": body.challenge_signature,
                 "new_device_pubkey": body.new_device_pubkey,
+                "device_public_key": pair_pubkey.device_public_key,
                 "device_metadata": body.device_metadata,
             }
         }),
@@ -166,7 +172,12 @@ async fn ensure_authorizing_device_verified(
     Ok(())
 }
 
-fn device_id_from_pair_pubkey(new_device_pubkey: &Value) -> Result<String, AppError> {
+struct PairPubkeyMaterial {
+    device_id: String,
+    device_public_key: String,
+}
+
+fn pair_pubkey_material(new_device_pubkey: &Value) -> Result<PairPubkeyMaterial, AppError> {
     let object = new_device_pubkey
         .as_object()
         .ok_or_else(|| AppError::invalid_param("new_device_pubkey must be an object"))?;
@@ -188,19 +199,49 @@ fn device_id_from_pair_pubkey(new_device_pubkey: &Value) -> Result<String, AppEr
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .ok_or_else(|| AppError::missing_param("new_device_pubkey.public_key is required"))?;
-    if !is_base64url_non_empty(public_key) {
-        return Err(AppError::invalid_param(
-            "new_device_pubkey.public_key must be base64url",
-        ));
-    }
+    let device_public_key = normalize_pair_device_public_key(public_key)?;
     let kid = object
         .get("kid")
         .and_then(Value::as_str)
         .map(str::trim)
         .unwrap_or_default();
     DeviceId::new(kid.to_owned())
-        .map(|device_id| device_id.to_string())
+        .map(|device_id| PairPubkeyMaterial {
+            device_id: device_id.to_string(),
+            device_public_key,
+        })
         .map_err(|_| AppError::invalid_param("new_device_pubkey.kid must be a ck:device id"))
+}
+
+fn normalize_pair_device_public_key(public_key: &str) -> Result<String, AppError> {
+    let public_key = public_key.trim();
+    let multibase = public_key
+        .strip_prefix("did:key:")
+        .and_then(|body| body.split('#').next())
+        .unwrap_or(public_key);
+    if multibase.starts_with('z') {
+        cokret_sdk::decode_ed25519_multibase(multibase).map_err(|error| {
+            AppError::invalid_param(format!(
+                "new_device_pubkey.public_key is not an Ed25519 multibase key: {error}"
+            ))
+        })?;
+        return Ok(multibase.to_owned());
+    }
+
+    let bytes = cokret_sdk::base64url_decode(public_key).map_err(|error| {
+        AppError::invalid_param(format!(
+            "new_device_pubkey.public_key must be Ed25519 multibase or base64url: {error}"
+        ))
+    })?;
+    let public_key_bytes: [u8; 32] = bytes.try_into().map_err(|bytes: Vec<u8>| {
+        AppError::invalid_param(format!(
+            "new_device_pubkey.public_key decoded to {} bytes, expected 32",
+            bytes.len()
+        ))
+    })?;
+    Ok(cokret_sdk::ed25519_pubkey_to_did_key_multibase(
+        &public_key_bytes,
+    ))
 }
 
 fn is_base64url_non_empty(value: &str) -> bool {
