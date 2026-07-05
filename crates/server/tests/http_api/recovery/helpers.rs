@@ -242,7 +242,7 @@ pub(crate) fn device_authorize_material(session: &Value, ssk: &SigningKey) -> Va
     let device_public_key = test_ed25519_multibase_public(&recovery_device_key());
     let hpke_key = "z6LSTestRecoveryHpkeKey";
     let algorithms = [
-        "ck.hpke_x25519_aead_xchacha20poly1305.v1".to_owned(),
+        "ck.hpke_x25519_aead_chacha20poly1305.v1".to_owned(),
         "ck.mls.v1".to_owned(),
     ];
     let input = cokret_sdk::DeviceTrustBinding::canonical_input(

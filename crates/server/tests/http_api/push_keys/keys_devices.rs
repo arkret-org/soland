@@ -850,7 +850,7 @@ fn tier2_publish_and_authorize(
         &device_public_key,
         "z6LSTestTier2HpkeKey",
         &[
-            "ck.hpke_x25519_aead_xchacha20poly1305.v1".to_owned(),
+            "ck.hpke_x25519_aead_chacha20poly1305.v1".to_owned(),
             "ck.mls.v1".to_owned(),
         ],
         1,
@@ -864,7 +864,7 @@ fn tier2_publish_and_authorize(
         "device_id": device,
         "device_public_key": device_public_key,
         "hpke_key": "z6LSTestTier2HpkeKey",
-        "algorithms": ["ck.hpke_x25519_aead_xchacha20poly1305.v1", "ck.mls.v1"],
+        "algorithms": ["ck.hpke_x25519_aead_chacha20poly1305.v1", "ck.mls.v1"],
         "cross_signing_binding": {
             "verification_method": format!("{principal}#ck_self_signing_v1"),
             "alg": "EdDSA",
@@ -976,7 +976,7 @@ async fn keys_query_exposes_tier2_cross_signing_chain_and_verifies() {
         value: psk_multibase,
     };
     let algorithms = [
-        "ck.hpke_x25519_aead_xchacha20poly1305.v1".to_owned(),
+        "ck.hpke_x25519_aead_chacha20poly1305.v1".to_owned(),
         "ck.mls.v1".to_owned(),
     ];
     let state_ok = verify_device_cross_signing_chain(DeviceCrossSigningChainVerification {

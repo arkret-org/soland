@@ -212,9 +212,9 @@ mod tests {
             "recipient_key_ref": "did:web:alice.example#recovery",
             "aead": {
                 // Absent hpke_suite selector denotes the v1 default-MUST HPKE suite
-                // ck.hpke_x25519_aead_xchacha20poly1305.v1, whose AEAD is xchacha20_poly1305.
-                "name": "xchacha20_poly1305",
-                "aead_profile": "ck.aead.xchacha20_poly1305.v1",
+                // ck.hpke_x25519_aead_chacha20poly1305.v1, whose AEAD is chacha20_poly1305.
+                "name": "chacha20_poly1305",
+                "aead_profile": "ck.aead.chacha20_poly1305.v1",
                 "enc": "ZW5jYXBzdWxhdGVka2V5"
             }
         })

@@ -44,7 +44,7 @@ fn accepts_secret_share_content() {
             "request_id": "r1",
             "secret_id": "yougen_mls_account_secret",
             "from_device": "ck:device:old",
-            "scheme": "ck.hpke_x25519_aead_xchacha20poly1305.v1",
+            "scheme": "ck.hpke_x25519_aead_chacha20poly1305.v1",
             "enc": "ZW5j",
             "ciphertext": "Y2lwaGVy"
         }),
