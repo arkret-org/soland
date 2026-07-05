@@ -16,7 +16,7 @@ use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use cokret_sdk::{
     CrossSigningPublishContent, CrossSigningResetContent, CrossSigningResetProof,
     DeviceEnrollmentAuthorityBinding, DeviceId, DeviceQuorumSignature, DeviceStatus,
-    DeviceTrustBinding, Did, EventId, MlsWelcomeClaimEnvelope,
+    DeviceTrustBinding, Did, EventId, MlsWelcomeClaimEnvelope, SignatureMaterial,
 };
 use ed25519_dalek::{Signature, Verifier as _, VerifyingKey};
 use serde_json::{Map, Value};
@@ -333,9 +333,7 @@ async fn active_reset_recovery_policy(
 fn cross_signing_reset_replay_seen(state: &AppState, content: &CrossSigningResetContent) -> bool {
     let now = chrono::Utc::now();
     let cutoff = now - chrono::Duration::seconds(CROSS_SIGNING_RESET_REPLAY_RETENTION_SECONDS);
-    let mut replays = state
-        .cross_signing_reset_replays
-        .lock();
+    let mut replays = state.cross_signing_reset_replays.lock();
     replays.retain(|_, seen_at| *seen_at >= cutoff);
     replays.contains_key(&(
         content.principal_id.as_str().to_owned(),
@@ -346,9 +344,7 @@ fn cross_signing_reset_replay_seen(state: &AppState, content: &CrossSigningReset
 fn remember_cross_signing_reset_replay(state: &AppState, content: &CrossSigningResetContent) {
     let now = chrono::Utc::now();
     let cutoff = now - chrono::Duration::seconds(CROSS_SIGNING_RESET_REPLAY_RETENTION_SECONDS);
-    let mut replays = state
-        .cross_signing_reset_replays
-        .lock();
+    let mut replays = state.cross_signing_reset_replays.lock();
     replays.retain(|_, seen_at| *seen_at >= cutoff);
     replays.insert(
         (
@@ -631,6 +627,7 @@ pub fn validate_device_authorize_binding(
     // (bytewise-sorted, deduplicated) algorithms array that entered the
     // trust binding transcript.
     payload_shape.validate_canonical_algorithms()?;
+    verify_device_authorize_device_signature(&payload_shape)?;
     let Some(binding) = payload
         .get("cross_signing_binding")
         .and_then(Value::as_object)
@@ -658,6 +655,47 @@ pub fn validate_device_authorize_binding(
         &payload_shape.algorithms,
         binding,
     )
+}
+
+fn verify_device_authorize_device_signature(
+    payload: &cokret_sdk::DeviceAuthorizePayload,
+) -> Result<(), &'static str> {
+    let Some(signature_material) = &payload.device_signature else {
+        if payload.recovery_session_id.is_some() {
+            return Err("device_authorize_device_signature_required");
+        }
+        return Ok(());
+    };
+    let signature_b64 = device_authorize_signature_value(signature_material)?;
+    let device_key = decode_ed25519_key(&payload.device_public_key, "multibase")
+        .map_err(|_| "device_authorize_device_public_key_invalid")?;
+    let input = payload
+        .device_possession_signature_input()
+        .map_err(|_| "device_authorize_device_signature_input_failed")?;
+    if !ed25519_verify(&device_key, &input, signature_b64) {
+        return Err("device_authorize_device_signature_invalid");
+    }
+    Ok(())
+}
+
+fn device_authorize_signature_value(
+    signature_material: &SignatureMaterial,
+) -> Result<&str, &'static str> {
+    match signature_material {
+        SignatureMaterial::NonEmptyString(value) => Ok(value.as_str()),
+        SignatureMaterial::Variant1(object) => {
+            if let Some(alg) = object.get("alg").and_then(Value::as_str)
+                && !matches!(alg, "EdDSA" | "Ed25519")
+            {
+                return Err("device_authorize_device_signature_alg_unsupported");
+            }
+            object
+                .get("signature")
+                .or_else(|| object.get("sig"))
+                .and_then(Value::as_str)
+                .ok_or("device_authorize_device_signature_missing_signature")
+        }
+    }
 }
 
 /// Strip the reducer/projection-injected envelope fields so the remaining

@@ -1,3 +1,6 @@
+use base64::Engine as _;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use ed25519_dalek::{Signer as _, SigningKey};
 use serde_json::json;
 use soland_data::Db;
 
@@ -87,6 +90,62 @@ fn service_attested_device_authorize_binding_accepts_projection_metadata() {
 
     crate::routing::identity::cross_signing::validate_device_authorize_binding(&state, &payload)
         .unwrap();
+}
+
+fn signed_service_attested_device_authorize_payload(
+    device_signer: &SigningKey,
+    signing_key: &SigningKey,
+) -> serde_json::Value {
+    let device_public_key =
+        cokret_sdk::ed25519_pubkey_to_did_key_multibase(device_signer.verifying_key().as_bytes());
+    let mut payload = json!({
+        "principal_id": "did:webvh:zQmZcDaFwUR8yQCZRkXoYEBi9hdzMSCCLASUVdwT1J4Qyc6:local.host:webvh:01kvqwpxssfq3bqm15rcd0g99x",
+        "device_id": "ck:device:019eefcb-5882-7861-bc30-3033fa32dcf6",
+        "device_public_key": device_public_key,
+        "hpke_key": "z6LSgy7T8CEsMDMzk1e4EBFVX8CDXWWzvkFZWSXhsC97zjcM",
+        "algorithms": ["ck.hpke_x25519_aead_chacha20poly1305.v1", "ck.mls.v1"],
+        "device_key_algorithm": "EdDSA",
+        "authorized_by": "did:key:z6MknBuwKMPAzbhp6EwCnaxsEDk4G2KFeWRu273gYVuTY5jw",
+        "not_before": "2026-06-22T14:45:51Z",
+        "enrollment_authority_binding": {
+            "kind": "service_attested",
+            "authority_did": "did:key:z6MknBuwKMPAzbhp6EwCnaxsEDk4G2KFeWRu273gYVuTY5jw",
+            "authorization_ref": "did:webvh:zQmZcDaFwUR8yQCZRkXoYEBi9hdzMSCCLASUVdwT1J4Qyc6:local.host:webvh:01kvqwpxssfq3bqm15rcd0g99x#enrollment-authority"
+        }
+    });
+    let typed: cokret_sdk::DeviceAuthorizePayload =
+        serde_json::from_value(payload.clone()).expect("typed device authorize payload");
+    let input = typed
+        .device_possession_signature_input()
+        .expect("device signature input");
+    let signature = signing_key.sign(&input);
+    payload["device_signature"] = json!(URL_SAFE_NO_PAD.encode(signature.to_bytes()));
+    payload
+}
+
+#[test]
+fn device_authorize_validates_device_possession_signature() {
+    let state = test_state();
+    let device_signer = SigningKey::from_bytes(&[7u8; 32]);
+    let payload = signed_service_attested_device_authorize_payload(&device_signer, &device_signer);
+
+    crate::routing::identity::cross_signing::validate_device_authorize_binding(&state, &payload)
+        .unwrap();
+}
+
+#[test]
+fn device_authorize_rejects_signature_from_wrong_device_key() {
+    let state = test_state();
+    let device_signer = SigningKey::from_bytes(&[7u8; 32]);
+    let wrong_signer = SigningKey::from_bytes(&[8u8; 32]);
+    let payload = signed_service_attested_device_authorize_payload(&device_signer, &wrong_signer);
+
+    assert_eq!(
+        crate::routing::identity::cross_signing::validate_device_authorize_binding(
+            &state, &payload
+        ),
+        Err("device_authorize_device_signature_invalid")
+    );
 }
 
 fn grant_circle_action(
