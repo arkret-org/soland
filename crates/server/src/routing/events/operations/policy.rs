@@ -372,6 +372,13 @@ fn policy_operation_sender(operation: &Operation) -> Option<&str> {
         .get("sender")
         .or_else(|| operation.payload.get("actor_id"))
         .or_else(|| operation.payload.get("created_by"))
+        // Full-object create payloads keep the executor on the object.
+        .or_else(|| {
+            operation
+                .payload
+                .get("object")
+                .and_then(|object| object.get("created_by"))
+        })
         .and_then(Value::as_str)
 }
 
@@ -2678,6 +2685,18 @@ mod tests {
             cokret_sdk::events::kinds::CIRCLE_CREATE,
             payload,
         )
+    }
+
+    #[test]
+    fn policy_sender_uses_object_created_by_for_full_object_create_payload() {
+        let actor = "did:web:example.com:users:alice";
+        let op = circle_create_with_payload(serde_json::json!({
+            "object": {
+                "created_by": actor,
+            },
+        }));
+
+        assert_eq!(policy_operation_sender(&op), Some(actor));
     }
 
     #[test]

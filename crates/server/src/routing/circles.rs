@@ -29,10 +29,12 @@
 //! acknowledge a rotation without actually changing the cryptographic scope.
 
 use cokret_sdk::{
-    CircleCreateRequestBody, CircleDirectoryVisibility, CircleId, CircleList,
+    Circle, CircleColorToken, CircleCreatePayload, CircleCreateRequestBody,
+    CircleDirectoryVisibility, CircleDisplay, CircleGlyph, CircleId, CircleJoinRule, CircleList,
     CircleMemberRequestBody, CircleMembership, CircleMembershipOutcome, CirclePendingMlsRemoval,
-    CircleScopeRotateOutcome, CircleScopeRotateRequestBody, CircleView, Did, EncryptionFloor,
-    EncryptionProfile, Event, EventId, HistoryVisibility, Operation, OperationId, RealmId,
+    CircleScopeRotateOutcome, CircleScopeRotateRequestBody, CircleState, CircleSymbol, CircleView,
+    Did, EncryptionFloor, EncryptionProfile, Event, EventId, HistoryVisibility, Operation,
+    OperationId, RealmId,
 };
 use salvo::http::StatusCode;
 use salvo::oapi::extract::{JsonBody, PathParam, QueryParam};
@@ -73,6 +75,65 @@ where
 {
     serde_json::from_value(json!(value))
         .map_err(|e| AppError::internal(format!("stored circle {field}: {e}")))
+}
+
+fn circle_short_name_from_title(title: &str) -> String {
+    let mut short_name: String = title
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric() || matches!(ch, ' ' | '_' | '-'))
+        .collect();
+    short_name = short_name.trim().to_owned();
+    if short_name.is_empty() {
+        short_name = "Circle".to_owned();
+    }
+    if let Some(first) = short_name.as_bytes().first().copied() {
+        if first.is_ascii_lowercase() {
+            short_name.replace_range(0..1, &(first as char).to_ascii_uppercase().to_string());
+        } else if !first.is_ascii_uppercase() {
+            short_name.insert_str(0, "C ");
+        }
+    }
+    if short_name.len() > 24 {
+        short_name.truncate(24);
+    }
+    short_name.trim_end().to_owned()
+}
+
+fn utc_now_seconds() -> chrono::DateTime<chrono::Utc> {
+    let now = chrono::Utc::now();
+    chrono::DateTime::from_timestamp(now.timestamp(), 0).unwrap_or(now)
+}
+
+fn circle_create_payload_from_request(
+    circle_id: CircleId,
+    body: CircleCreateRequestBody,
+    created_by: Did,
+    created_at: chrono::DateTime<chrono::Utc>,
+) -> Result<Value, AppError> {
+    let display = CircleDisplay {
+        short_name: circle_short_name_from_title(&body.title),
+        color_token: CircleColorToken::Slate,
+        symbol: CircleSymbol::Glyph {
+            glyph: CircleGlyph::Ring,
+        },
+    };
+    let mut circle = Circle::new(circle_id, body.realm_id, body.title, display, created_by);
+    circle.summary = body.summary;
+    circle.directory_visibility = body
+        .directory_visibility
+        .unwrap_or(CircleDirectoryVisibility::Members);
+    circle.join_rule = body.join_rule.unwrap_or(CircleJoinRule::Invite);
+    circle.history_visibility = body.history_visibility.unwrap_or(HistoryVisibility::Joined);
+    circle.content_encryption_floor = body.content_encryption_floor;
+    circle.metadata_encryption_floor = body.metadata_encryption_floor;
+    circle.agent_participation = body.agent_participation;
+    circle.encryption_profile = body
+        .encryption_profile
+        .unwrap_or(EncryptionProfile::MlsRfc9420);
+    circle.state = CircleState::Active;
+    circle.created_at = created_at;
+    serde_json::to_value(CircleCreatePayload { object: circle })
+        .map_err(|e| AppError::internal(format!("circle create payload: {e}")))
 }
 
 fn circle_view_from_projection(
@@ -404,28 +465,19 @@ async fn post_circle(
     let realm_scope = body.realm_id.clone();
     let circle_id = CircleId::new(ids::generate_circle_id())
         .map_err(|e| AppError::invalid_param(format!("circle_id: {e}")))?;
-    let object = json!({
-        "id": circle_id,
-        "realm_id": body.realm_id,
-        "title": body.title,
-        "summary": body.summary,
-        "directory_visibility": body.directory_visibility.unwrap_or(CircleDirectoryVisibility::Members),
-        "join_rule": body.join_rule.unwrap_or(cokret_sdk::CircleJoinRule::Invite),
-        "history_visibility": body.history_visibility.unwrap_or(HistoryVisibility::Joined),
-        "content_encryption_floor": body.content_encryption_floor,
-        "metadata_encryption_floor": body.metadata_encryption_floor,
-        "encryption_profile": body.encryption_profile.unwrap_or(EncryptionProfile::MlsRfc9420),
-        "created_by": session.actor.clone(),
-    });
-    let payload = json!({"object": object, "sender": session.actor.clone()});
+    let created_at = utc_now_seconds();
+    let created_by = parse_sdk_field::<Did>("created_by", &session.actor)?;
+    let payload =
+        circle_create_payload_from_request(circle_id.clone(), body, created_by, created_at)?;
     let op_id = OperationId::new(ids::generate_operation_id())
         .map_err(|e| AppError::invalid_param(format!("operation_id: {e}")))?;
-    let operation = Operation::create(
+    let mut operation = Operation::create(
         op_id,
         realm_scope,
         cokret_sdk::events::kinds::CIRCLE_CREATE,
         payload,
     );
+    operation.created_at = created_at;
     accept_local_operations(state, &session.actor, std::slice::from_ref(&operation))
         .await
         .map_err(reducer_reject_to_app_error)?;
@@ -960,4 +1012,61 @@ fn reducer_reject_to_app_error(reason: &'static str) -> AppError {
     )
     .with_status(StatusCode::UNPROCESSABLE_ENTITY)
     .with_wire_code(reason)
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::TimeZone;
+
+    use super::*;
+
+    #[test]
+    fn circle_create_payload_builder_outputs_sdk_valid_payload() {
+        let created_at = chrono::Utc.with_ymd_and_hms(2026, 7, 6, 0, 0, 0).unwrap();
+        let payload = circle_create_payload_from_request(
+            CircleId::new("ck:circle:01964137-0000-7000-8000-000000000041").unwrap(),
+            CircleCreateRequestBody {
+                realm_id: RealmId::new("ck:realm:01964137-0000-7000-8000-000000000030").unwrap(),
+                title: "S8 restore circle 1783309323913".to_owned(),
+                summary: None,
+                directory_visibility: None,
+                join_rule: None,
+                history_visibility: None,
+                content_encryption_floor: None,
+                metadata_encryption_floor: None,
+                agent_participation: None,
+                encryption_profile: None,
+            },
+            Did::new("did:web:alice.example".to_owned()).unwrap(),
+            created_at,
+        )
+        .unwrap();
+
+        cokret_sdk::schema::event_payload_validator_catalog()
+            .unwrap()
+            .validate_payload(cokret_sdk::events::kinds::CIRCLE_CREATE, &payload)
+            .unwrap();
+        assert!(payload.get("sender").is_none());
+
+        let object = payload
+            .get("object")
+            .and_then(Value::as_object)
+            .expect("circle object");
+        assert_eq!(
+            object.get("schema").and_then(Value::as_str),
+            Some(cokret_sdk::CIRCLE_SCHEMA_ID)
+        );
+        assert_eq!(object.get("state").and_then(Value::as_str), Some("active"));
+        assert_eq!(
+            object.get("created_at").and_then(Value::as_str),
+            Some("2026-07-06T00:00:00Z")
+        );
+        let short_name = object
+            .get("display")
+            .and_then(|display| display.get("short_name"))
+            .and_then(Value::as_str)
+            .expect("display.short_name");
+        assert!(short_name.len() <= 24);
+        assert!(short_name.starts_with('S'));
+    }
 }
