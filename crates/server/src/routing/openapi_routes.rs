@@ -103,9 +103,9 @@ fn path_item_type_to_method(ty: &PathItemType) -> Option<Method> {
         PathItemType::Patch => Method::PATCH,
         PathItemType::Head => Method::HEAD,
         PathItemType::Options => Method::OPTIONS,
-        // TRACE / CONNECT are not part of the Cokret HTTP binding;
-        // exclude them so they don't pollute the `Allow` header.
-        PathItemType::Trace | PathItemType::Connect => return None,
+        // TRACE is not part of the Cokret HTTP binding; exclude it so it
+        // doesn't pollute the `Allow` header.
+        PathItemType::Trace => return None,
     })
 }
 
