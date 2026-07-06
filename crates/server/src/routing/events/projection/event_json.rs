@@ -38,6 +38,8 @@ pub(super) struct ProjectionEventRow {
     pub(super) payload: serde_json::Value,
     #[diesel(sql_type = Timestamptz)]
     pub(super) created_at: chrono::DateTime<chrono::Utc>,
+    #[diesel(sql_type = Timestamptz)]
+    pub(super) received_at: chrono::DateTime<chrono::Utc>,
 }
 
 pub fn projection_event_json(event: &ProjectionEventRecord) -> serde_json::Value {

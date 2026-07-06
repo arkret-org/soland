@@ -357,6 +357,7 @@ pub(super) fn formal_event_from_sdk_event(
         sender: sender.map(ToOwned::to_owned),
         payload: projection_payload,
         created_at: received_at,
+        received_at,
     };
     Ok(FormalAppletEvent {
         event_id,

@@ -796,6 +796,7 @@ mod tests {
                 }
             }),
             created_at: fixed_time("2020-01-01T00:00:00Z"),
+            received_at: fixed_time("2020-01-01T00:00:00Z"),
         };
 
         stub_projection_event_for_message_expiry(
@@ -953,6 +954,7 @@ mod tests {
                 "note": "secret note"
             }),
             created_at: now,
+            received_at: now,
         };
 
         stub_pin_projection_event_for_invisible_target(&projection, &mut event);
@@ -986,6 +988,7 @@ mod tests {
                 "note": "secret note"
             }),
             created_at: now,
+            received_at: now,
         };
 
         stub_pin_projection_event_for_invisible_target(&projection, &mut event);

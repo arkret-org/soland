@@ -248,6 +248,7 @@ pub fn projection_event_from_operation(
             .map(ToOwned::to_owned),
         payload: operation.payload.clone(),
         created_at: operation.created_at,
+        received_at: now(),
     }
 }
 

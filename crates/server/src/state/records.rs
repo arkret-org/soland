@@ -608,6 +608,7 @@ pub struct ProjectionEventRecord {
     pub sender: Option<String>,
     pub payload: Value,
     pub created_at: chrono::DateTime<chrono::Utc>,
+    pub received_at: chrono::DateTime<chrono::Utc>,
 }
 
 #[derive(Clone, Debug)]

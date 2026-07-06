@@ -930,6 +930,8 @@ struct ProjectionEventRow {
     payload: Value,
     #[diesel(sql_type = Timestamptz)]
     created_at: chrono::DateTime<chrono::Utc>,
+    #[diesel(sql_type = Timestamptz)]
+    received_at: chrono::DateTime<chrono::Utc>,
 }
 
 impl From<ProjectionEventRow> for ProjectionEventRecord {
@@ -946,6 +948,7 @@ impl From<ProjectionEventRow> for ProjectionEventRecord {
             sender: row.sender,
             payload: row.payload,
             created_at: row.created_at,
+            received_at: row.received_at,
         }
     }
 }
@@ -956,8 +959,8 @@ impl ProjectionEventStore for PgProjectionEventStore {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(
             "INSERT INTO projection_events \
-             (event_id, realm_id, event_kind, operation_type, operation_id, sender_id, payload, created_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+             (event_id, realm_id, event_kind, operation_type, operation_id, sender_id, payload, created_at, received_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
         )
         .bind::<SqlUuid, _>(ids::typed_uuid_part_expect_internal(&record.event_id))
         .bind::<SqlUuid, _>(ids::typed_uuid_part_expect_internal(&record.realm_id))
@@ -972,6 +975,7 @@ impl ProjectionEventStore for PgProjectionEventStore {
         .bind::<Nullable<Text>, _>(&record.sender)
         .bind::<Jsonb, _>(&record.payload)
         .bind::<Timestamptz, _>(record.created_at)
+        .bind::<Timestamptz, _>(record.received_at)
         .execute(&mut *conn).await
         .map(|_| ())
         .map_err(PersistenceError::from)
@@ -980,7 +984,7 @@ impl ProjectionEventStore for PgProjectionEventStore {
     async fn snapshot_all(&self) -> PersistenceResult<Vec<ProjectionEventRecord>> {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(
-            "SELECT event_id, realm_id, event_kind, operation_type, operation_id, sender_id AS sender, payload, created_at \
+            "SELECT event_id, realm_id, event_kind, operation_type, operation_id, sender_id AS sender, payload, created_at, received_at \
              FROM projection_events ORDER BY id",
         )
         .load::<ProjectionEventRow>(&mut *conn).await
@@ -991,7 +995,7 @@ impl ProjectionEventStore for PgProjectionEventStore {
     async fn snapshot_capped(&self, limit: usize) -> PersistenceResult<Vec<ProjectionEventRecord>> {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(
-            "SELECT event_id, realm_id, event_kind, operation_type, operation_id, sender_id AS sender, payload, created_at \
+            "SELECT event_id, realm_id, event_kind, operation_type, operation_id, sender_id AS sender, payload, created_at, received_at \
              FROM projection_events ORDER BY id LIMIT $1",
         )
         .bind::<BigInt, _>(limit as i64)

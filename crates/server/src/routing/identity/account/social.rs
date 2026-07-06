@@ -368,6 +368,7 @@ async fn append_contact_fact_projection_event(
             sender: Some(issuer.to_owned()),
             payload,
             created_at,
+            received_at: chrono::Utc::now(),
         },
     )
     .await;
@@ -1486,6 +1487,7 @@ pub(crate) async fn create_direct_binding_with_realm(
             sender: Some(actor.to_owned()),
             payload: binding_fact_payload.clone(),
             created_at: active_binding.created_at,
+            received_at: chrono::Utc::now(),
         },
     )
     .await;

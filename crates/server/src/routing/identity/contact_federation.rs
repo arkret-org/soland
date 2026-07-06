@@ -493,6 +493,7 @@ async fn append_delivered_contact_fact_projection_event(
             sender: Some(issuer.to_owned()),
             payload,
             created_at: now(),
+            received_at: now(),
         },
     )
     .await;

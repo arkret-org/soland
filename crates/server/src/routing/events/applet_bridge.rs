@@ -137,6 +137,7 @@ pub async fn maybe_emit_echo_status_for_session_start(
         sender: Some(origin.to_owned()),
         payload,
         created_at: chrono::Utc::now(),
+        received_at: chrono::Utc::now(),
     };
     let _ = state.event_broadcast.send(EventNotification::event(
         record.realm_id.clone(),
@@ -271,6 +272,7 @@ async fn emit_applet_outcome_event(
         sender: Some(origin.to_owned()),
         payload,
         created_at: chrono::Utc::now(),
+        received_at: chrono::Utc::now(),
     };
     let _ = state.event_broadcast.send(EventNotification::event(
         record.realm_id.clone(),

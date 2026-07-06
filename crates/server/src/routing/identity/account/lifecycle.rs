@@ -555,6 +555,7 @@ async fn append_account_deactivation_propagation_state(
             sender: Some(changed_by.to_owned()),
             payload: payload.clone(),
             created_at: changed_at,
+            received_at: chrono::Utc::now(),
         },
     )
     .await;

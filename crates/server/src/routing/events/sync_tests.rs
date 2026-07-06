@@ -394,6 +394,22 @@ fn roster_session(state: &AppState, actor: &str) -> SessionRecord {
     }
 }
 
+fn sync_test_operation_at(
+    operation_id: &str,
+    kind: &str,
+    payload: Value,
+    created_at: DateTime<Utc>,
+) -> cokret_sdk::Operation {
+    let mut operation = cokret_sdk::Operation::create(
+        cokret_sdk::OperationId::new(operation_id.to_owned()).unwrap(),
+        RealmId::new(ROSTER_REALM.to_owned()).unwrap(),
+        kind,
+        payload,
+    );
+    operation.created_at = created_at;
+    operation
+}
+
 fn roster_realm(public: bool, include_caller: bool) -> RealmDirectoryEntry {
     let mut entry = RealmDirectoryEntry::new(
         RealmId::new(ROSTER_REALM.to_owned()).unwrap(),
@@ -998,6 +1014,7 @@ async fn sync_snapshot_emits_state_events_without_timeline_messages() {
                 "patch": {"synthesis": {"$op": "set", "value": "first"}}
             }),
             created_at: first_created_at,
+            received_at: first_created_at,
         })
         .await
         .expect("first state event appended");
@@ -1037,6 +1054,7 @@ async fn sync_snapshot_emits_state_events_without_timeline_messages() {
                 "patch": {"synthesis": {"$op": "set", "value": "first\n\n---\n\nsecond"}}
             }),
             created_at: second_created_at,
+            received_at: second_created_at,
         })
         .await
         .expect("second state event appended");
@@ -1066,6 +1084,129 @@ async fn sync_snapshot_emits_state_events_without_timeline_messages() {
             .expect("timeline events")
             .len(),
         0
+    );
+}
+
+#[tokio::test]
+async fn sync_snapshot_includes_shared_pin_events_for_joined_member() {
+    let mut config = test_config();
+    config.seed_demo_data = false;
+    let state = AppState::new(config, soland_data::Db { pool: None });
+    let session = roster_session(&state, ROSTER_CALLER);
+    let strand_id = strand_id_from_realm_id(ROSTER_REALM);
+    let message_event_id = "ck:event:01904100-0000-7000-8000-0000000000d1";
+    let message_id = "ck:message:01904100-0000-7000-8000-0000000000d1";
+    let base = DateTime::parse_from_rfc3339("2026-06-24T10:00:00Z")
+        .unwrap()
+        .with_timezone(&Utc);
+    let realm_create = sync_test_operation_at(
+        "ck:operation:01904100-0000-7000-8000-0000000000c1",
+        cokret_sdk::events::kinds::REALM_CREATE,
+        json!({
+            "object": {
+                "id": ROSTER_REALM,
+                "title": "Pinned welcome space",
+                "created_by": ROSTER_ACTOR,
+                "join_rule": "invite",
+                "history_visibility": "joined",
+                "encryption_profile": "none"
+            }
+        }),
+        base,
+    );
+    let member_join = sync_test_operation_at(
+        "ck:operation:01904100-0000-7000-8000-0000000000c2",
+        cokret_sdk::events::kinds::MEMBER_STATE,
+        json!({
+            "realm_id": ROSTER_REALM,
+            "actor_id": ROSTER_CALLER,
+            "membership": "join",
+            "sender": ROSTER_CALLER
+        }),
+        base + ChronoDuration::seconds(1),
+    );
+    let strand_create = sync_test_operation_at(
+        "ck:operation:01904100-0000-7000-8000-0000000000c3",
+        cokret_sdk::events::kinds::STRAND_CREATE,
+        json!({
+            "object": {
+                "id": strand_id,
+                "realm_id": ROSTER_REALM,
+                "created_by": ROSTER_ACTOR,
+                "metadata": {"title": "Discussion"}
+            }
+        }),
+        base + ChronoDuration::seconds(2),
+    );
+    let message_create = sync_test_operation_at(
+        "ck:operation:01904100-0000-7000-8000-0000000000c4",
+        cokret_sdk::events::kinds::MESSAGE_CREATE,
+        json!({
+            "event_id": message_event_id,
+            "message_id": message_id,
+            "realm_id": ROSTER_REALM,
+            "strand_id": strand_id,
+            "thread_id": strand_id,
+            "sender": ROSTER_ACTOR,
+            "content": {"kind": "ck.content.text", "body": "Pinned welcome"}
+        }),
+        base + ChronoDuration::seconds(3),
+    );
+    crate::routing::events::projection::project_accepted_operations(
+        &state,
+        ROSTER_ACTOR,
+        &[realm_create, member_join, strand_create, message_create],
+    )
+    .await;
+
+    let body = roster_body(&state.config.service_did);
+    let initial =
+        build_sync_snapshot(&state, Some(&session), &body, &SyncCursor::default(), false).await;
+    let filter_value = sync_filter_value(body.filter.as_ref());
+    let initial_cursor = parse_and_validate_sync_cursor(
+        &initial.cursor,
+        &state,
+        Some(&session),
+        filter_value.as_ref(),
+        chrono::Utc::now().timestamp_millis(),
+    )
+    .await
+    .expect("initial cursor parses");
+
+    let pin_add = sync_test_operation_at(
+        "ck:operation:01904100-0000-7000-8000-0000000000c5",
+        cokret_sdk::events::kinds::PIN_ADD,
+        json!({
+            "event_id": "ck:event:01904100-0000-7000-8000-0000000000d5",
+            "pin_scope": {"kind": "strand", "id": strand_id},
+            "target_ref": message_id,
+            "rank": "r1",
+            "sender": ROSTER_ACTOR
+        }),
+        base + ChronoDuration::seconds(4),
+    );
+    crate::routing::events::projection::project_accepted_operations(&state, ROSTER_ACTOR, &[pin_add])
+        .await;
+
+    let mut incremental_body = body.clone();
+    incremental_body.after = Some(initial.cursor.clone());
+    let incremental = build_sync_snapshot(
+        &state,
+        Some(&session),
+        &incremental_body,
+        &initial_cursor,
+        false,
+    )
+    .await;
+    let state_events = incremental.realms[ROSTER_REALM]["state"]["events"]
+        .as_array()
+        .expect("state events array");
+    assert!(
+        state_events
+            .iter()
+            .any(|event| event["event_kind"] == cokret_sdk::events::kinds::PIN_ADD
+                && event["payload"]["target_ref"] == message_id),
+        "joined members must receive shared pin state events through account sync"
     );
 }
 

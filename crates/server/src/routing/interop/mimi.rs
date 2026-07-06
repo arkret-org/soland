@@ -557,6 +557,7 @@ async fn mimi_notify(
             "facade": "soland.mimi.v1",
         }),
         created_at: chrono::Utc::now(),
+        received_at: chrono::Utc::now(),
     };
     let _ = state.event_broadcast.send(EventNotification::event(
         notify_record.realm_id.clone(),
@@ -716,6 +717,7 @@ async fn mimi_room_message(
         sender: Some(sender.clone()),
         payload: projection_payload,
         created_at,
+        received_at: chrono::Utc::now(),
     };
     let _ = state.event_broadcast.send(EventNotification::event(
         projection_record.realm_id.clone(),
@@ -1169,6 +1171,7 @@ async fn mimi_report_abuse(
         sender: Some(reporter.to_owned()),
         payload: Value::Object(projection_payload),
         created_at: chrono::Utc::now(),
+        received_at: chrono::Utc::now(),
     };
     let _ = state.event_broadcast.send(EventNotification::event(
         report_record.realm_id.clone(),
@@ -2340,6 +2343,7 @@ async fn emit_mimi_room_binding_event(
             },
         }),
         created_at: chrono::Utc::now(),
+        received_at: chrono::Utc::now(),
     };
     let _ = state.event_broadcast.send(EventNotification::event(
         record.realm_id.clone(),

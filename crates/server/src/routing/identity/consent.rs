@@ -1412,6 +1412,7 @@ pub(super) async fn emit_consent_revoke_invalidation(
             sender: Some(holder.to_owned()),
             payload: payload.clone(),
             created_at: revoked_at,
+            received_at: now(),
         },
     )
     .await;

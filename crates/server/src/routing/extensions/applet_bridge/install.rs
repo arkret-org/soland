@@ -484,6 +484,7 @@ pub(super) async fn append_applet_registration_projection(
         sender: Some(record.owner_actor_id.clone()),
         payload: registration_payload_from_package(package)?,
         created_at: chrono::Utc::now(),
+        received_at: chrono::Utc::now(),
     };
     let _ = state.event_broadcast.send(EventNotification::event(
         projection_record.realm_id.clone(),
@@ -658,6 +659,7 @@ pub(super) async fn append_portal_message(
             "external_id": ghost.external_id,
         }),
         created_at,
+        received_at: chrono::Utc::now(),
     };
     let _ = state.event_broadcast.send(EventNotification::event(
         projection_record.realm_id.clone(),
@@ -1147,6 +1149,7 @@ async fn append_applet_e2ee_authorization_projection(
         sender: Some(record.owner_actor_id.clone()),
         payload,
         created_at: record.registered_at,
+        received_at: chrono::Utc::now(),
     };
     let _ = state.event_broadcast.send(EventNotification::event(
         projection_record.realm_id.clone(),

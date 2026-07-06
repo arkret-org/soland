@@ -625,6 +625,7 @@ diesel::table! {
         sender_id -> Nullable<Text>,
         payload -> Jsonb,
         created_at -> Timestamptz,
+        received_at -> Timestamptz,
     }
 }
 

@@ -116,6 +116,7 @@ mod tests {
                 "patch": {"synthesis": {"$op": "set", "value": "bob update"}}
             }),
             created_at,
+            received_at: created_at,
         };
 
         let json = projection_event_json(&event);

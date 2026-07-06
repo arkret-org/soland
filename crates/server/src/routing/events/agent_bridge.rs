@@ -172,6 +172,7 @@ pub async fn maybe_emit_echo_result_for_session_start(
                 sender: Some(origin.to_owned()),
                 payload: error_payload,
                 created_at: chrono::Utc::now(),
+                received_at: chrono::Utc::now(),
             };
             let _ = state.event_broadcast.send(EventNotification::event(
                 error_record.realm_id.clone(),
@@ -207,6 +208,7 @@ pub async fn maybe_emit_echo_result_for_session_start(
         sender: Some(origin.to_owned()),
         payload: status_payload,
         created_at: chrono::Utc::now(),
+        received_at: chrono::Utc::now(),
     };
     let _ = state.event_broadcast.send(EventNotification::event(
         status_record.realm_id.clone(),
@@ -466,6 +468,7 @@ async fn emit_agent_result_envelope(
         sender: Some(origin.to_owned()),
         payload: result_payload,
         created_at: chrono::Utc::now(),
+        received_at: chrono::Utc::now(),
     };
     let _ = state.event_broadcast.send(EventNotification::event(
         record.realm_id.clone(),

@@ -103,10 +103,10 @@ pub async fn load_projected_events_from_pg(
     let mut conn = pool.get().await?;
     let realm_id_uuid = ids::typed_uuid_part_expect_internal(realm_id);
     let rows = sql_query(
-        "SELECT id AS event_id, realm_id, event_type AS event_kind, 'event' AS operation_type, operation_id, sender_id AS sender, payload, created_at \
+        "SELECT id AS event_id, realm_id, event_type AS event_kind, 'event' AS operation_type, operation_id, sender_id AS sender, payload, created_at, created_at AS received_at \
          FROM events WHERE realm_id = $1 \
          UNION ALL \
-         SELECT id AS event_id, realm_id, event_type AS event_kind, 'state' AS operation_type, operation_id, sender_id AS sender, payload, created_at \
+         SELECT id AS event_id, realm_id, event_type AS event_kind, 'state' AS operation_type, operation_id, sender_id AS sender, payload, created_at, created_at AS received_at \
          FROM space_state_events WHERE realm_id = $1 \
          ORDER BY created_at ASC, event_id ASC",
     )
@@ -126,6 +126,7 @@ pub async fn load_projected_events_from_pg(
             sender: row.sender,
             payload: row.payload,
             created_at: row.created_at,
+            received_at: row.received_at,
         })
         .collect())
 }

@@ -1319,7 +1319,7 @@ async fn state_events_for_realm(
 }
 
 fn projection_event_position(event: &crate::state::ProjectionEventRecord) -> i64 {
-    timestamp_position_with_tie_breaker(event.created_at, &event.event_id)
+    timestamp_position_with_tie_breaker(event.received_at, &event.event_id)
 }
 
 fn account_realm_projection_position(meta: Option<&RealmMetaRecord>, realm_id: &str) -> i64 {
