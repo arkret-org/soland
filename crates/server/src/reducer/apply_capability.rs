@@ -530,6 +530,9 @@ impl ProjectionState {
         let parent = self
             .effective_engine_grant(parent_grant_id)
             .ok_or("grant_revoked_upstream")?;
+        if parent.revoked || crate::authz::is_grant_expired(&parent, operation.created_at) {
+            return Err("grant_revoked_upstream");
+        }
         let body = grant_body(&operation.payload);
         let issuer = grant_issuer(&operation.payload).ok_or("capability_grant_issuer_missing")?;
         if issuer != parent.subject {
@@ -567,10 +570,10 @@ impl ProjectionState {
         let child_expires_at = body_effective_expires_at(body);
         if let Some(parent_expires_at) = crate::authz::grant_effective_expiry(&parent) {
             let Some(child_expires_at) = child_expires_at else {
-                return Err("grant_exceeds_issuer_authority");
+                return Err("delegation_expiry_widening");
             };
             if child_expires_at > parent_expires_at {
-                return Err("grant_exceeds_issuer_authority");
+                return Err("delegation_expiry_widening");
             }
         }
         Ok(())
@@ -1330,6 +1333,90 @@ mod agent_key_flag_tests {
             denied,
             crate::reducer::ProjectionEffect::Rejected { reason }
                 if reason == "grant_exceeds_issuer_authority"
+        ));
+    }
+
+    #[test]
+    fn delegated_grant_cannot_outlive_parent_expiry() {
+        let mut state = ProjectionState::default();
+        seed_realm_owner(&mut state);
+        let parent_expiry = chrono::Utc::now() + chrono::Duration::hours(1);
+        let child_expiry = parent_expiry + chrono::Duration::hours(1);
+        let mut parent = grant_payload(
+            GRANT,
+            "did:web:alice.example",
+            "did:web:bob.example",
+            json!(["ck.message.create"]),
+            json!([{ "kind": "realm", "realm_id": REALM }]),
+        );
+        parent["grant"]["expires_at"] = json!(parent_expiry.to_rfc3339());
+        let parent_effect =
+            state.apply_capability_grant(&op("capability_grant", parent), chrono::Utc::now());
+        assert!(matches!(
+            parent_effect,
+            crate::reducer::ProjectionEffect::CapabilityGrantProjected { .. }
+        ));
+
+        let mut child = grant_payload(
+            GRANT_2,
+            "did:web:bob.example",
+            AGENT,
+            json!(["ck.message.create"]),
+            json!([{ "kind": "realm", "realm_id": REALM }]),
+        );
+        child["grant"]["parent_grant_id"] = json!(GRANT);
+        child["grant"]["expires_at"] = json!(child_expiry.to_rfc3339());
+        let child_effect =
+            state.apply_capability_grant(&op("capability_grant", child), chrono::Utc::now());
+        assert!(matches!(
+            child_effect,
+            crate::reducer::ProjectionEffect::Rejected { reason }
+                if reason == "delegation_expiry_widening"
+        ));
+    }
+
+    #[test]
+    fn delegated_grant_from_revoked_parent_is_rejected() {
+        let mut state = ProjectionState::default();
+        seed_realm_owner(&mut state);
+        let parent = grant_payload(
+            GRANT,
+            "did:web:alice.example",
+            "did:web:bob.example",
+            json!(["ck.message.create"]),
+            json!([{ "kind": "realm", "realm_id": REALM }]),
+        );
+        let parent_effect =
+            state.apply_capability_grant(&op("capability_grant", parent), chrono::Utc::now());
+        assert!(matches!(
+            parent_effect,
+            crate::reducer::ProjectionEffect::CapabilityGrantProjected { .. }
+        ));
+        let revoke_effect = state.apply_capability_revoke(
+            &op("capability_revoke", json!({ "grant_id": GRANT })),
+            chrono::Utc::now(),
+        );
+        assert!(matches!(
+            revoke_effect,
+            crate::reducer::ProjectionEffect::CapabilityRevokeProjected { .. }
+        ));
+
+        let mut child = grant_payload(
+            GRANT_2,
+            "did:web:bob.example",
+            AGENT,
+            json!(["ck.message.create"]),
+            json!([{ "kind": "realm", "realm_id": REALM }]),
+        );
+        child["grant"]["parent_grant_id"] = json!(GRANT);
+        child["grant"]["expires_at"] =
+            json!((chrono::Utc::now() + chrono::Duration::minutes(30)).to_rfc3339());
+        let child_effect =
+            state.apply_capability_grant(&op("capability_grant", child), chrono::Utc::now());
+        assert!(matches!(
+            child_effect,
+            crate::reducer::ProjectionEffect::Rejected { reason }
+                if reason == "grant_revoked_upstream"
         ));
     }
 }

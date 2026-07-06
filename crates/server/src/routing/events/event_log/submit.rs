@@ -1487,6 +1487,15 @@ async fn submit_event_value_with_context(
                     reason,
                 ));
             }
+            if let Some(reason) =
+                preflight_capability_projection_reject(&proj, operation, &state.hlc)
+            {
+                return Err(SubmitOneError::new(
+                    StatusCode::PRECONDITION_FAILED,
+                    reason.clone(),
+                    reason,
+                ));
+            }
             if let Some(reason) = preflight_calendar_projection_reject(&proj, operation, &state.hlc)
             {
                 return Err(SubmitOneError::new(

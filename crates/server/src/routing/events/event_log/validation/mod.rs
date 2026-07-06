@@ -10,7 +10,8 @@ pub(super) use enrollment::validate_device_enrollment_authority_binding;
 #[cfg(test)]
 pub(crate) use envelope::validate_event_envelope;
 pub(crate) use envelope::{
-    canonical_json_hash, preflight_calendar_projection_reject, preflight_invite_projection_reject,
+    canonical_json_hash, preflight_calendar_projection_reject,
+    preflight_capability_projection_reject, preflight_invite_projection_reject,
     preflight_mls_projection_reject, preflight_moderation_projection_reject,
     validate_event_envelope_with_context,
 };

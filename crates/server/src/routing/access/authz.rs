@@ -54,48 +54,11 @@ async fn authz_check(
     let _ = &session;
     let body = body.into_inner();
     let resource = body.resource.clone().unwrap_or(Value::Null);
-    let (resource_str, realm_id, resource_facets) = if let Some(s) = resource.as_str() {
-        (s.to_owned(), s.to_owned(), Vec::new())
-    } else if let Some(obj) = resource.as_object() {
-        let kind = obj.get("kind").and_then(|v| v.as_str()).unwrap_or("realm");
-        let sid = obj
-            .get("realm_id")
-            .and_then(|v| v.as_str())
-            .map(ToOwned::to_owned)
-            .or_else(|| {
-                (kind == "realm")
-                    .then(|| {
-                        obj.get("id")
-                            .and_then(|v| v.as_str())
-                            .map(ToOwned::to_owned)
-                    })
-                    .flatten()
-            })
-            .unwrap_or_default();
-        // SEL-1 (R3 spec-sync 2026-05-27, cokret-spec b47ff6ec) —
-        // `kind=circle` resources MUST carry a `ck:circle:<uuid>`
-        // identifier; accept either `circle_id` or the canonical `id`
-        // field. The Circle is scoped to its parent Realm; the resource
-        // resolver pairs it with the calling realm_id below.
-        let resource = obj
-            .get("id")
-            .and_then(|v| v.as_str())
-            .map(ToOwned::to_owned)
-            .or_else(|| {
-                (kind == "circle")
-                    .then(|| {
-                        obj.get("circle_id")
-                            .and_then(|v| v.as_str())
-                            .map(ToOwned::to_owned)
-                    })
-                    .flatten()
-            })
-            .unwrap_or_else(|| format!("{kind}:{sid}"));
-        let facets = facet_names_from_value(obj.get("facets"));
-        (resource, sid, facets)
-    } else {
-        (String::new(), String::new(), Vec::new())
-    };
+    let ParsedAuthzResource {
+        resource: resource_str,
+        realm_id,
+        facets: resource_facets,
+    } = parse_authz_resource(&resource);
     // Look up Realm owner and members.
     let (owner, members) = {
         let owner = state
@@ -197,6 +160,127 @@ fn facet_names_from_value(value: Option<&serde_json::Value>) -> Vec<String> {
         Some(serde_json::Value::Object(values)) => values.keys().cloned().collect(),
         Some(serde_json::Value::String(value)) => vec![value.clone()],
         _ => Vec::new(),
+    }
+}
+
+struct ParsedAuthzResource {
+    resource: String,
+    realm_id: String,
+    facets: Vec<String>,
+}
+
+fn parse_authz_resource(resource: &Value) -> ParsedAuthzResource {
+    if let Some(s) = resource.as_str() {
+        return ParsedAuthzResource {
+            resource: s.to_owned(),
+            realm_id: s.to_owned(),
+            facets: Vec::new(),
+        };
+    }
+    let Some(obj) = resource.as_object() else {
+        return ParsedAuthzResource {
+            resource: String::new(),
+            realm_id: String::new(),
+            facets: Vec::new(),
+        };
+    };
+    let kind = obj.get("kind").and_then(|v| v.as_str()).unwrap_or("realm");
+    let realm_id = obj
+        .get("realm_id")
+        .and_then(|v| v.as_str())
+        .map(ToOwned::to_owned)
+        .or_else(|| {
+            (kind == "realm")
+                .then(|| {
+                    obj.get("id")
+                        .and_then(|v| v.as_str())
+                        .map(ToOwned::to_owned)
+                })
+                .flatten()
+        })
+        .unwrap_or_default();
+    let resource = selector_resource_id(obj, kind, &realm_id);
+    ParsedAuthzResource {
+        resource,
+        realm_id,
+        facets: facet_names_from_value(obj.get("facets")),
+    }
+}
+
+fn selector_resource_id(
+    obj: &serde_json::Map<String, Value>,
+    kind: &str,
+    realm_id: &str,
+) -> String {
+    if kind == "realm" {
+        return obj
+            .get("id")
+            .and_then(Value::as_str)
+            .or_else(|| obj.get("realm_id").and_then(Value::as_str))
+            .unwrap_or(realm_id)
+            .to_owned();
+    }
+    let kind_specific = match kind {
+        "space" => "space_id",
+        "circle" => "circle_id",
+        "strand" => "strand_id",
+        "message" => "message_id",
+        "morph" => "morph_id",
+        "relation" => "relation_id",
+        "view" => "view_id",
+        "event" => "event_id",
+        "actor" => "actor_id",
+        "schema" => "schema_ref",
+        "policy" => "policy_id",
+        "invite" => "invite_id",
+        "blob" => "blob_ref",
+        "object" => "object_ref",
+        _ => "id",
+    };
+    obj.get("id")
+        .and_then(Value::as_str)
+        .or_else(|| obj.get(kind_specific).and_then(Value::as_str))
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| format!("{kind}:{realm_id}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::parse_authz_resource;
+
+    #[test]
+    fn realm_selector_uses_realm_id_as_resource() {
+        let parsed = parse_authz_resource(&json!({
+            "kind": "realm",
+            "realm_id": "ck:realm:01970000-0000-7000-8000-000000000001"
+        }));
+        assert_eq!(
+            parsed.realm_id,
+            "ck:realm:01970000-0000-7000-8000-000000000001"
+        );
+        assert_eq!(
+            parsed.resource,
+            "ck:realm:01970000-0000-7000-8000-000000000001"
+        );
+    }
+
+    #[test]
+    fn object_selector_uses_kind_specific_typed_id() {
+        let parsed = parse_authz_resource(&json!({
+            "kind": "strand",
+            "realm_id": "ck:realm:01970000-0000-7000-8000-000000000001",
+            "strand_id": "ck:strand:01970000-0000-7000-8000-000000000002"
+        }));
+        assert_eq!(
+            parsed.realm_id,
+            "ck:realm:01970000-0000-7000-8000-000000000001"
+        );
+        assert_eq!(
+            parsed.resource,
+            "ck:strand:01970000-0000-7000-8000-000000000002"
+        );
     }
 }
 
