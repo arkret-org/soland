@@ -1919,7 +1919,7 @@ async fn submit_direct_realm_genesis(
     // encryption profile, fail-closed join rule, direct-conversation
     // discriminator in `fields`. The creator is treated as a member by the
     // genesis bootstrap.
-    let realm_op = direct_realm_create_operation(state, realm_scope.clone(), realm_id, actor)?;
+    let realm_op = direct_realm_create_operation(state, realm_scope.clone(), actor)?;
     crate::routing::accept_local_operations(state, actor, std::slice::from_ref(&realm_op)).await?;
 
     // ck.member.state{join} — add the peer so both participants are active
@@ -1929,7 +1929,7 @@ async fn submit_direct_realm_genesis(
 
     // ck.strand.create — main discussion Strand (spec §8): discussion track is
     // primary; no Circle scope.
-    let strand_op = direct_strand_create_operation(realm_scope, main_strand_id)?;
+    let strand_op = direct_strand_create_operation(realm_scope, main_strand_id, actor)?;
     crate::routing::accept_local_operations(state, actor, std::slice::from_ref(&strand_op)).await?;
 
     Ok(())
@@ -1940,95 +1940,361 @@ fn direct_operation_id() -> Result<cokret_sdk::OperationId, &'static str> {
         .map_err(|_| "generated invalid operation id")
 }
 
+fn direct_now_seconds() -> chrono::DateTime<chrono::Utc> {
+    let now = now();
+    chrono::DateTime::from_timestamp(now.timestamp(), 0).unwrap_or(now)
+}
+
+fn direct_realm_create_payload(
+    state: &AppState,
+    realm_scope: cokret_sdk::RealmId,
+    creator: &str,
+    created_at: chrono::DateTime<chrono::Utc>,
+) -> Result<Value, &'static str> {
+    let creator_did =
+        cokret_sdk::Did::new(creator.to_owned()).map_err(|_| "invalid direct realm creator DID")?;
+    let trust_domain = cokret_sdk::TypedTrustDomainId::new(state.config.trust_domain.clone())
+        .map_err(|_| "invalid direct realm trust domain")?;
+    let mut realm = cokret_sdk::models::Realm::new(
+        realm_scope,
+        "Direct conversation",
+        creator_did.clone(),
+        trust_domain,
+        cokret_sdk::NotaryProfile::SingleDid,
+        cokret_sdk::NotaryValue::single_did(creator_did),
+    );
+    realm.security_class = Some(cokret_sdk::SecurityClass::Standard);
+    realm.default_discoverability = cokret_sdk::Discoverability::InviteOnly;
+    realm.default_join_rule = cokret_sdk::JoinRule::Closed;
+    realm.history_visibility = cokret_sdk::HistoryVisibility::Joined;
+    realm.encryption_profile = cokret_sdk::EncryptionProfile::MlsRfc9420;
+    realm.federation_policy = Some(cokret_sdk::FederationPolicy::Restricted);
+    realm.created_at = created_at;
+    realm.extra.insert(
+        "fields".to_owned(),
+        json!({
+            "conversation_kind": "direct_message",
+        }),
+    );
+    serde_json::to_value(cokret_sdk::models::RealmCreatePayload {
+        object: realm,
+        initial_relations: None,
+    })
+    .map_err(|_| "direct realm create payload serialization failed")
+}
+
 fn direct_realm_create_operation(
     state: &AppState,
     realm_scope: cokret_sdk::RealmId,
-    realm_id: &str,
     creator: &str,
 ) -> Result<cokret_sdk::Operation, &'static str> {
-    let payload = json!({
-        "object": {
-            "id": realm_id,
-            "schema": "ck.schema.realm.v1",
-            "title": "Direct conversation",
-            "trust_domain": state.config.trust_domain.clone(),
-            "created_by": creator,
-            "schema_refs": ["ck.schema.realm.v1"],
-            "default_discoverability": "invite",
-            // DM Realms are fail-closed: third-party invite / member_add MUST
-            // be refused (spec §7).
-            "default_join_rule": "closed",
-            // The peer is joined before the first discussion Strand is
-            // created, so `joined` preserves full DM history without requiring
-            // a pre-join history_secret delivery scheme.
-            "history_visibility": "joined",
-            // DM Realms use the MLS RFC 9420 profile (spec §7).
-            "encryption_profile": "mls_rfc9420",
-            "security_class": "standard",
-            "federation_policy": "restricted",
-            "notary_profile": "single_did",
-            "digest_algorithm": "sha256",
-            "notary": {
-                "type": "single_did",
-                "did": creator,
-            },
-            // Registered direct-conversation discriminator (spec §7) — NOT
-            // `fields.purpose`, which Principal Control Realm semantics own.
-            "fields": {
-                "conversation_kind": "direct_message",
-            },
-            "created_at": now().to_rfc3339_opts(SecondsFormat::Secs, true),
-        },
-        // The hosting Principal Server must be able to route plaintext
-        // direct-message content for its own members (spec §7 minimal
-        // `is_direct_message` projection without decrypting user content).
-        // Both participants live on this PS, so it is the sole entry. This is
-        // read at the payload root by `ensure_projected_realm` (the local
-        // operation acceptance path), mirroring the realm.create wire shape
-        // soland's submit bootstrap also accepts at the root.
-        "plaintext_visible_services": [state.config.service_did.clone()],
-    });
-    Ok(cokret_sdk::Operation::create(
+    let created_at = direct_now_seconds();
+    let payload = direct_realm_create_payload(state, realm_scope.clone(), creator, created_at)?;
+    let mut operation = cokret_sdk::Operation::create(
         direct_operation_id()?,
         realm_scope,
         cokret_sdk::events::kinds::REALM_CREATE,
         payload,
-    ))
+    );
+    operation.created_at = created_at;
+    Ok(operation)
 }
 
 fn direct_member_join_operation(
     realm_scope: cokret_sdk::RealmId,
     member: &str,
 ) -> Result<cokret_sdk::Operation, &'static str> {
-    let payload = json!({
-        "actor_id": member,
-        "membership": "join",
-    });
-    Ok(cokret_sdk::Operation::create(
+    let created_at = direct_now_seconds();
+    let payload = direct_member_join_payload(realm_scope.clone(), member)?;
+    let mut operation = cokret_sdk::Operation::create(
         direct_operation_id()?,
         realm_scope,
         cokret_sdk::events::kinds::MEMBER_STATE,
         payload,
-    ))
+    );
+    operation.created_at = created_at;
+    Ok(operation)
+}
+
+fn direct_member_join_payload(
+    realm_scope: cokret_sdk::RealmId,
+    member: &str,
+) -> Result<Value, &'static str> {
+    let member_did =
+        cokret_sdk::Did::new(member.to_owned()).map_err(|_| "invalid direct peer member DID")?;
+    cokret_sdk::models::MembershipPayload::join(
+        realm_scope,
+        member_did,
+        cokret_sdk::models::DeliveryStatus::Unroutable,
+        "direct_conversation_peer_bootstrap",
+    )
+    .to_value()
+    .map_err(|_| "direct peer member join payload serialization failed")
+}
+
+fn direct_strand_create_payload(
+    realm_scope: cokret_sdk::RealmId,
+    main_strand_id: &str,
+    creator: &str,
+    created_at: chrono::DateTime<chrono::Utc>,
+) -> Result<Value, &'static str> {
+    let strand_id = cokret_sdk::StrandId::new(main_strand_id.to_owned())
+        .map_err(|_| "generated invalid direct conversation strand id")?;
+    let creator_did = cokret_sdk::Did::new(creator.to_owned())
+        .map_err(|_| "invalid direct strand creator DID")?;
+    let mut strand = cokret_sdk::models::Strand::discussion(
+        strand_id,
+        realm_scope,
+        "Direct conversation",
+        creator_did,
+    );
+    strand.created_at = created_at;
+    serde_json::to_value(cokret_sdk::models::StrandCreatePayload {
+        object: strand,
+        initial_relations: None,
+    })
+    .map_err(|_| "direct strand create payload serialization failed")
 }
 
 fn direct_strand_create_operation(
     realm_scope: cokret_sdk::RealmId,
     main_strand_id: &str,
+    creator: &str,
 ) -> Result<cokret_sdk::Operation, &'static str> {
-    let payload = json!({
-        "object": {
-            "id": main_strand_id,
-            "kind": "discussion",
-            "title": "Direct conversation",
-        }
-    });
-    Ok(cokret_sdk::Operation::create(
+    let created_at = direct_now_seconds();
+    let payload =
+        direct_strand_create_payload(realm_scope.clone(), main_strand_id, creator, created_at)?;
+    let mut operation = cokret_sdk::Operation::create(
         direct_operation_id()?,
         realm_scope,
         cokret_sdk::events::kinds::STRAND_CREATE,
         payload,
-    ))
+    );
+    operation.created_at = created_at;
+    Ok(operation)
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::{TimeZone, Timelike};
+    use soland_data::Db;
+
+    use super::*;
+    use crate::config::AppConfig;
+
+    fn test_state() -> AppState {
+        AppState::new(AppConfig::test_default(), Db { pool: None })
+    }
+
+    #[test]
+    fn direct_realm_create_payload_is_sdk_schema_valid() {
+        let state = test_state();
+        let created_at = chrono::Utc.with_ymd_and_hms(2026, 7, 6, 0, 0, 0).unwrap();
+        let payload = direct_realm_create_payload(
+            &state,
+            cokret_sdk::RealmId::new("ck:realm:01964137-0000-7000-8000-000000000101").unwrap(),
+            "did:web:alice.example",
+            created_at,
+        )
+        .unwrap();
+
+        cokret_sdk::schema::event_payload_validator_catalog()
+            .unwrap()
+            .validate_payload(cokret_sdk::events::kinds::REALM_CREATE, &payload)
+            .unwrap();
+        assert!(payload.get("plaintext_visible_services").is_none());
+
+        let object = payload
+            .get("object")
+            .and_then(Value::as_object)
+            .expect("realm object");
+        assert_eq!(
+            object
+                .get("default_discoverability")
+                .and_then(Value::as_str),
+            Some("invite_only")
+        );
+        assert_eq!(
+            object
+                .get("fields")
+                .and_then(|fields| fields.get("conversation_kind"))
+                .and_then(Value::as_str),
+            Some("direct_message")
+        );
+        assert_eq!(
+            object.get("created_at").and_then(Value::as_str),
+            Some("2026-07-06T00:00:00Z")
+        );
+    }
+
+    #[test]
+    fn direct_member_join_payload_is_sdk_schema_valid() {
+        let payload = direct_member_join_payload(
+            cokret_sdk::RealmId::new("ck:realm:01964137-0000-7000-8000-000000000101").unwrap(),
+            "did:web:bob.example",
+        )
+        .unwrap();
+
+        cokret_sdk::schema::event_payload_validator_catalog()
+            .unwrap()
+            .validate_payload(cokret_sdk::events::kinds::MEMBER_STATE, &payload)
+            .unwrap();
+        assert_eq!(
+            payload.get("membership").and_then(Value::as_str),
+            Some("join")
+        );
+        assert_eq!(
+            payload.get("realm_id").and_then(Value::as_str),
+            Some("ck:realm:01964137-0000-7000-8000-000000000101")
+        );
+        assert_eq!(
+            payload.get("actor_id").and_then(Value::as_str),
+            Some("did:web:bob.example")
+        );
+        assert_eq!(
+            payload.get("delivery_status").and_then(Value::as_str),
+            Some("unroutable")
+        );
+        assert!(payload.get("delivery_binding").is_none());
+    }
+
+    #[test]
+    fn direct_strand_create_payload_is_sdk_schema_valid() {
+        let created_at = chrono::Utc.with_ymd_and_hms(2026, 7, 6, 0, 0, 0).unwrap();
+        let payload = direct_strand_create_payload(
+            cokret_sdk::RealmId::new("ck:realm:01964137-0000-7000-8000-000000000101").unwrap(),
+            "ck:strand:01964137-0000-7000-8000-000000000102",
+            "did:web:alice.example",
+            created_at,
+        )
+        .unwrap();
+
+        cokret_sdk::schema::event_payload_validator_catalog()
+            .unwrap()
+            .validate_payload(cokret_sdk::events::kinds::STRAND_CREATE, &payload)
+            .unwrap();
+
+        let object = payload
+            .get("object")
+            .and_then(Value::as_object)
+            .expect("strand object");
+        assert!(object.get("kind").is_none());
+        assert!(object.get("title").is_none());
+        assert_eq!(
+            payload
+                .pointer("/object/metadata/title")
+                .and_then(Value::as_str),
+            Some("Direct conversation")
+        );
+        assert_eq!(
+            payload
+                .pointer("/object/tracks/discussion/is_primary")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            object.get("created_at").and_then(Value::as_str),
+            Some("2026-07-06T00:00:00Z")
+        );
+    }
+
+    #[tokio::test]
+    async fn direct_realm_genesis_projects_peer_as_timeline_reader() {
+        let state = test_state();
+        let realm_id = crate::ids::generate_realm_id();
+        let main_strand_id = crate::ids::generate("strand");
+        let alice = "did:web:alice.example";
+        let bob = "did:web:bob.example";
+
+        submit_direct_realm_genesis(&state, &realm_id, &main_strand_id, alice, bob)
+            .await
+            .unwrap();
+
+        assert!(
+            crate::routing::spaces::space::realm_has_member_by_id(&state, &realm_id, bob).await,
+            "direct peer must be present in the realm member index"
+        );
+        let joined_at =
+            crate::routing::spaces::space::realm_member_joined_at_for_id(&state, &realm_id, bob)
+                .await
+                .expect("direct peer joined_at projection");
+        {
+            let projection = state.projection.lock();
+            let member = projection.member(&realm_id, bob).expect("projected peer");
+            assert_eq!(member.state, "join");
+        }
+
+        let event_id = crate::ids::generate_event_id();
+        let mut message_op = cokret_sdk::Operation::create(
+            direct_operation_id().unwrap(),
+            cokret_sdk::RealmId::new(realm_id.clone()).unwrap(),
+            cokret_sdk::events::kinds::MESSAGE_CREATE,
+            json!({
+                "event_id": event_id,
+                "sender": alice,
+                "strand_id": main_strand_id,
+                "track_name": "discussion",
+                "encrypted_content": {
+                    "scheme": "mls-rfc9420",
+                    "version": "1.0",
+                    "group_id": "mls_test",
+                    "epoch": 1,
+                    "content_type": "application/vnd.cokret.message+json",
+                    "aad_visibility_event_id": "hidden",
+                    "aad": {
+                        "realm_id": realm_id,
+                        "event_kind": "ck.message.create"
+                    },
+                    "key_ref": {
+                        "algorithm": "MLS",
+                        "group_state_ref": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+                    },
+                    "ciphertext": "b3BhcXVl",
+                    "aad_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+                    "payload_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+                }
+            }),
+        );
+        message_op.created_at = joined_at
+            .with_nanosecond(0)
+            .expect("joined_at can be rounded to canonical seconds");
+        crate::routing::accept_local_operations(&state, alice, std::slice::from_ref(&message_op))
+            .await
+            .unwrap();
+
+        let page =
+            crate::routing::events::projection::projected_event_page(&state, &realm_id, None, 50)
+                .await
+                .unwrap()
+                .expect("direct timeline projection page");
+        let message = page
+            .items
+            .iter()
+            .find(|event| event.event_id == event_id)
+            .expect("message projection event");
+        let bob_session = crate::state::SessionRecord {
+            token_hash: "test".to_owned(),
+            actor: bob.to_owned(),
+            device_id: "ck:device:01904100-0000-7000-8000-000000000001".to_owned(),
+            audience: "test".to_owned(),
+            session_public_key: None,
+            agent_session: None,
+            expires_at: joined_at + chrono::TimeDelta::hours(1),
+            created_at: joined_at,
+            revoked_at: None,
+        };
+        assert!(
+            crate::routing::spaces::space::realm_event_visible_to_session(
+                &state,
+                &realm_id,
+                message.created_at,
+                message.sender.as_deref(),
+                Some(&bob_session),
+            )
+            .await,
+            "direct peer must pass realm event visibility for post-join messages"
+        );
+    }
 }
 
 fn direct_summary(binding: DirectConversationBindingRecord) -> DirectConversationSummary {
