@@ -324,10 +324,19 @@ fn operation_kind_has_sdk_payload_validator(kind: &str) -> Result<bool, &'static
         .map(|catalog| catalog.has_payload_validator(kind))
 }
 
+fn operation_kind_prefers_projection_schema(kind: &str) -> bool {
+    matches!(kind, cokret_sdk::events::kinds::REALM_INHERITANCE_POLICY)
+}
+
 pub(crate) fn validate_operation_payload_schema(
     kind: &str,
     operation: &Operation,
 ) -> Result<(), &'static str> {
+    if operation_kind_prefers_projection_schema(kind)
+        && let Some(schema) = operation_schema_for_kind(kind)
+    {
+        return validate_operation_schema(operation, schema);
+    }
     if operation_kind_has_sdk_payload_validator(kind)? {
         validate_operation_schema_from_sdk_artifact(kind, operation)?;
         if let Some(validate) = operation_extra_validator_for_kind(kind) {
@@ -374,6 +383,9 @@ fn operation_extra_validator_for_kind(kind: &str) -> Option<OperationValidator> 
         }
         cokret_sdk::events::kinds::REALM_READ_RECEIPT_POLICY => {
             Some(validate_read_receipt_policy_payload)
+        }
+        cokret_sdk::events::kinds::REALM_INHERITANCE_POLICY => {
+            Some(validate_realm_inheritance_policy_payload)
         }
         kinds::CONFLICT_REPAIR => Some(validate_conflict_repair_payload),
         cokret_sdk::events::kinds::MORPH_CREATE => Some(validate_morph_create_payload),
@@ -649,6 +661,10 @@ pub fn operation_schema_for_kind(kind: &str) -> Option<OperationPayloadSchema> {
             // cell; without a projection-operation schema entry the event is never
             // turned into an Operation, the policy cell is never set, and every
             // routable member join fails closed with `delivery_binding_policy_unset`.
+            cokret_sdk::events::kinds::REALM_INHERITANCE_POLICY => OperationPayloadSchema {
+                requirements: REALM_INHERITANCE_POLICY_REQUIREMENTS,
+                validate: Some(validate_realm_inheritance_policy_payload),
+            },
             cokret_sdk::events::kinds::REALM_DELIVERY_BINDING_POLICY => OperationPayloadSchema {
                 requirements: &[],
                 validate: None,

@@ -124,6 +124,14 @@ pub(crate) const REALM_LINK_REQUIREMENTS: &[PayloadRequirement] = &[
     ),
     PayloadRequirement::AnyOf(REALM_LINK_KIND_FIELDS, "ck.realm.link requires link_kind"),
 ];
+pub(crate) const REALM_INHERITANCE_POLICY_REQUIREMENTS: &[PayloadRequirement] = &[
+    PayloadRequirement::Required(
+        "source_realm_id",
+        "ck.realm.inheritance_policy requires source_realm_id",
+    ),
+    PayloadRequirement::Required("inherits", "ck.realm.inheritance_policy requires inherits"),
+    PayloadRequirement::Required("mode", "ck.realm.inheritance_policy requires mode"),
+];
 pub(crate) const CAPABILITY_GRANT_ID_FIELDS: &[&str] = &["grant_id"];
 pub(crate) const CAPABILITY_GRANT_REQUIREMENTS: &[PayloadRequirement] =
     &[PayloadRequirement::AnyOf(

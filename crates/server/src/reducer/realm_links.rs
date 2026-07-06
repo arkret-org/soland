@@ -511,6 +511,21 @@ mod tests {
         )
     }
 
+    fn inherit_op_spec_payload(child: &str, parent: &str, policy_rules: &[&str]) -> Operation {
+        op(
+            cokret_sdk::events::kinds::REALM_INHERITANCE_POLICY,
+            child,
+            json!({
+                "source_realm_id": parent,
+                "inherits": {
+                    "policy_rules": policy_rules,
+                },
+                "mode": "narrow_only",
+                "max_depth": 1,
+            }),
+        )
+    }
+
     #[test]
     fn apply_link_active_succeeds_when_no_cycle() {
         let mut state = ProjectionState::new();
@@ -655,6 +670,38 @@ mod tests {
         // B's own declared allow-list contributes too, since the walk
         // reached B via the governed_by edge.
         assert!(allow_strs.contains(&"b.policy"));
+    }
+
+    #[test]
+    fn effective_policy_accepts_spec_inheritance_policy_payload() {
+        let mut state = ProjectionState::new();
+        let hlc = ServerHlc::new("test");
+
+        state.apply(&link_op(REALM_D, REALM_C, "governed_by", "active"), &hlc);
+        state.apply(
+            &inherit_op_spec_payload(REALM_C, REALM_C, &["parent.policy"]),
+            &hlc,
+        );
+        state.apply(
+            &inherit_op_spec_payload(REALM_D, REALM_C, &["child.policy"]),
+            &hlc,
+        );
+
+        let ep = effective_policy_for_realm(&state, REALM_D);
+        assert_eq!(ep.inheritance_mode, "explicit");
+        assert!(
+            ep.inheritance_chain.contains(&REALM_C.to_owned()),
+            "expected REALM_C in chain: {:?}",
+            ep.inheritance_chain
+        );
+        let allow = ep
+            .effective_policy
+            .get("allowed_policies")
+            .and_then(Value::as_array)
+            .expect("allowed_policies array");
+        let allow_strs: Vec<&str> = allow.iter().filter_map(Value::as_str).collect();
+        assert!(allow_strs.contains(&"child.policy"));
+        assert!(allow_strs.contains(&"parent.policy"));
     }
 
     #[test]

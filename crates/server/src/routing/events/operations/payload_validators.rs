@@ -443,6 +443,58 @@ pub(crate) fn validate_read_receipt_policy_payload(
     Ok(())
 }
 
+pub(crate) fn validate_realm_inheritance_policy_payload(
+    operation: &Operation,
+) -> Result<(), &'static str> {
+    let wire_payload = projection_context_stripped_payload(&operation.payload);
+    let payload: cokret_sdk::RealmInheritancePolicyPayload =
+        serde_json::from_value(wire_payload)
+            .map_err(|_| "ck.realm.inheritance_policy payload violates SDK artifact schema")?;
+    if payload.mode != "narrow_only" {
+        return Err("ck.realm.inheritance_policy mode must be narrow_only");
+    }
+    let has_inherits = payload.inherits.membership.is_some()
+        || payload.inherits.capability_bundles.is_some()
+        || payload.inherits.policy_rules.is_some()
+        || payload.inherits.notification_defaults.is_some();
+    if !has_inherits {
+        return Err("ck.realm.inheritance_policy inherits must not be empty");
+    }
+    validate_unique_non_empty_strings(
+        payload.inherits.capability_bundles.as_deref(),
+        "ck.realm.inheritance_policy capability_bundles must be unique non-empty strings",
+    )?;
+    validate_unique_non_empty_strings(
+        payload.inherits.policy_rules.as_deref(),
+        "ck.realm.inheritance_policy policy_rules must be unique non-empty strings",
+    )?;
+    if let Some(max_depth) = payload.max_depth {
+        if max_depth == 0 {
+            return Err("ck.realm.inheritance_policy max_depth must be >= 1");
+        }
+        if max_depth > u64::from(cokret_sdk::RealmInheritancePolicy::MAX_DEPTH_CAP) {
+            return Err("ck.realm.inheritance_policy max_depth exceeds v1 cap");
+        }
+    }
+    Ok(())
+}
+
+fn validate_unique_non_empty_strings(
+    values: Option<&[String]>,
+    message: &'static str,
+) -> Result<(), &'static str> {
+    let Some(values) = values else {
+        return Ok(());
+    };
+    let mut seen = std::collections::BTreeSet::new();
+    for value in values {
+        if value.trim().is_empty() || !seen.insert(value) {
+            return Err(message);
+        }
+    }
+    Ok(())
+}
+
 pub(crate) fn validate_read_marker_payload(operation: &Operation) -> Result<(), &'static str> {
     let read_scope = operation
         .payload

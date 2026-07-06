@@ -303,6 +303,61 @@ mod realm_plaintext_visible_services_schema_tests {
     }
 
     #[test]
+    fn realm_inheritance_policy_is_registered_for_projection() {
+        let operation = Operation::create(
+            cokret_sdk::OperationId::new("ck:operation:01904100-0000-7000-8000-000000000904")
+                .unwrap(),
+            cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-000000000904".to_owned())
+                .unwrap(),
+            cokret_sdk::events::kinds::REALM_INHERITANCE_POLICY,
+            json!({
+                "source_realm_id": "ck:realm:01904100-0000-7000-8000-000000000905",
+                "inherits": {
+                    "policy_rules": ["moderation.banned_keywords"]
+                },
+                "mode": "narrow_only",
+                "max_depth": 1,
+                "event_id": "ck:event:01904100-0000-7000-8000-000000000904",
+                "sender": "did:web:alice.example",
+                "hlc": "2026-07-06T00:00:00Z/node/1"
+            }),
+        );
+        let schema = operation_schema_for_kind(cokret_sdk::events::kinds::REALM_INHERITANCE_POLICY)
+            .expect("inheritance_policy event kind must build a projection Operation");
+
+        validate_operation_schema(&operation, schema).unwrap();
+        validate_operation_payload_schema(
+            cokret_sdk::events::kinds::REALM_INHERITANCE_POLICY,
+            &operation,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn realm_inheritance_policy_rejects_legacy_allowed_policies_wire_shape() {
+        let operation = Operation::create(
+            cokret_sdk::OperationId::new("ck:operation:01904100-0000-7000-8000-000000000906")
+                .unwrap(),
+            cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-000000000906".to_owned())
+                .unwrap(),
+            cokret_sdk::events::kinds::REALM_INHERITANCE_POLICY,
+            json!({
+                "source_realm_id": "ck:realm:01904100-0000-7000-8000-000000000905",
+                "allowed_policies": ["moderation.banned_keywords"],
+                "max_depth": 1
+            }),
+        );
+
+        assert_eq!(
+            validate_operation_payload_schema(
+                cokret_sdk::events::kinds::REALM_INHERITANCE_POLICY,
+                &operation,
+            ),
+            Err("ck.realm.inheritance_policy requires inherits")
+        );
+    }
+
+    #[test]
     fn moderation_control_kinds_are_registered_for_projection() {
         let realm_id =
             cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-000000000903".to_owned())
