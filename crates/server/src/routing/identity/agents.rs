@@ -2883,6 +2883,47 @@ mod tests {
     }
 
     #[test]
+    fn key_authorize_event_rejects_wrong_controller_actor() {
+        let controller = "did:web:controller.example";
+        let agent = "did:web:agent.example";
+        let verification_method = "did:web:agent.example#runtime-key-1";
+        let service_did = "did:web:soland.local";
+        let public_key_digest =
+            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let scope = requested_agent_scope();
+        let record = pending_pairing_record(
+            agent,
+            controller,
+            scope.clone(),
+            "12345678",
+            "2999-01-01T00:00:00Z",
+        );
+        let envelope = key_authorize_envelope(
+            &record,
+            "did:web:mallory.example",
+            agent,
+            verification_method,
+            public_key_digest,
+            service_did,
+            scope,
+        );
+
+        let err = ensure_key_authorize_event_matches_request(
+            &envelope,
+            controller,
+            &record,
+            agent,
+            verification_method,
+            public_key_digest,
+            service_did,
+        )
+        .expect_err("authorize_event actor must match authenticated controller");
+
+        assert_eq!(err.wire_code(), "capability_denied");
+        assert!(err.message.contains("actor_id"));
+    }
+
+    #[test]
     fn key_authorize_event_rejects_expired_pairing() {
         let record = pending_pairing_record(
             "did:web:agent.example",
