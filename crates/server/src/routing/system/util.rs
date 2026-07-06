@@ -316,14 +316,6 @@ pub fn is_valid_discoverability(value: &str) -> bool {
     )
 }
 
-// ── Misc JSON helpers ───────────────────────────────────────────────────────
-
-/// `serde_json::Number`s come back as either i64 or u64 depending on sign /
-/// magnitude. Either is integer-shaped for our purposes.
-pub fn is_json_integer(value: &serde_json::Value) -> bool {
-    value.as_i64().is_some() || value.as_u64().is_some()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

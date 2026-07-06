@@ -274,9 +274,6 @@ pub fn validate_device_message_target(target: &DeviceMessageTarget) -> Result<()
 }
 
 pub fn validate_content_blocks(content: &serde_json::Value) -> Result<(), &'static str> {
-    if content.get("blocks").is_some() {
-        return Err("content.blocks is not permitted; use content.parts");
-    }
     validate_content_block(content)
 }
 
@@ -681,111 +678,5 @@ pub fn validate_canonical_json_value_inner(
 }
 
 pub fn validate_content_block(block: &serde_json::Value) -> Result<(), &'static str> {
-    let Some(block) = block.as_object() else {
-        return Err("content block must be a JSON object");
-    };
-    let Some(block_kind) = block.get("kind").and_then(|value| value.as_str()) else {
-        return Err("content block requires kind");
-    };
-    if block.get("blocks").is_some() {
-        return Err("content.blocks is not permitted; use content.parts");
-    }
-    let block_kind = block_kind.strip_prefix("ck.content.").unwrap_or(block_kind);
-    match block_kind {
-        "composite" => {
-            let Some(parts) = block.get("parts").and_then(|value| value.as_array()) else {
-                return Err("composite content block requires parts");
-            };
-            if parts.is_empty() {
-                return Err("content.parts must not be empty");
-            }
-            for part in parts {
-                validate_content_block(part)?;
-            }
-        }
-        "text" | "formatted_text" => {
-            if block
-                .get("text")
-                .or_else(|| block.get("body"))
-                .and_then(|value| value.as_str())
-                .is_none_or(|value| value.trim().is_empty())
-            {
-                return Err("text content block requires text");
-            }
-        }
-        "code" => {
-            if block
-                .get("text")
-                .or_else(|| block.get("body"))
-                .and_then(|value| value.as_str())
-                .is_none_or(str::is_empty)
-            {
-                return Err("code content block requires text");
-            }
-        }
-        "image" | "video" | "audio" | "file" => {
-            let has_blob_ref = block
-                .get("blob_ref")
-                .and_then(|value| value.as_str())
-                .is_some_and(|value| value.starts_with("ck:blob:sha256:"));
-            let has_url = block
-                .get("url")
-                .and_then(|value| value.as_str())
-                .is_some_and(|value| !value.trim().is_empty());
-            if !has_blob_ref && !has_url {
-                return Err("media content block requires blob_ref or url");
-            }
-        }
-        "location" => {
-            if !block.get("latitude").is_some_and(is_json_integer)
-                || !block.get("longitude").is_some_and(is_json_integer)
-            {
-                return Err("location content block requires latitude and longitude");
-            }
-        }
-        "poll" => {
-            if block
-                .get("question")
-                .and_then(|value| value.as_str())
-                .is_none_or(|value| value.trim().is_empty())
-                || block
-                    .get("options")
-                    .and_then(|value| value.as_array())
-                    .is_none_or(|options| options.len() < 2)
-            {
-                return Err("poll content block requires question and at least two options");
-            }
-        }
-        "poll.response" => {
-            if block
-                .get("poll_id")
-                .and_then(|value| value.as_str())
-                .is_none_or(|value| value.trim().is_empty())
-                || !(block
-                    .get("choice")
-                    .and_then(|value| value.as_str())
-                    .is_some()
-                    || block
-                        .get("choices")
-                        .and_then(|value| value.as_array())
-                        .is_some_and(|choices| !choices.is_empty()))
-            {
-                return Err("poll response content block requires poll_id and choice");
-            }
-        }
-        "poll.close" => {
-            if block
-                .get("poll_id")
-                .and_then(|value| value.as_str())
-                .is_none_or(|value| value.trim().is_empty())
-            {
-                return Err("poll close content block requires poll_id");
-            }
-        }
-        "audience_mention" => {
-            validate_audience_mention_object(block)?;
-        }
-        _ => return Err("unsupported content block type"),
-    }
-    Ok(())
+    cokret_sdk::validate_content_block(block).map_err(|error| error.message())
 }

@@ -33,7 +33,7 @@ use strand::{
 use super::{
     TO_DEVICE_PAGE_LIMIT, append_audit_log, auth_or_render, authenticated_session,
     device_message_envelopes_after, has_pending_call_signals_for_subscriber,
-    has_pending_typing_for_subscriber, is_json_integer, is_realm_deleted, is_valid_discoverability,
+    has_pending_typing_for_subscriber, is_realm_deleted, is_valid_discoverability,
     is_valid_hash_digest, now, prune_expired_typing, query_param, query_param_all,
     realm_allows_plaintext_service_for_data_class, realm_discoverability,
     realm_event_visible_to_session, realm_has_member, realm_history_visibility,

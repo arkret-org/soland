@@ -56,7 +56,7 @@ use spaces::space::{
 };
 use system::extract::AuthArgs;
 use system::util::{
-    bearer_token, handle_for_did, is_json_integer, is_valid_discoverability, is_valid_hash_digest,
+    bearer_token, handle_for_did, is_valid_discoverability, is_valid_hash_digest,
     is_valid_sha256_digest, is_valid_sha256_hex, is_valid_sync_token, normalize_localpart,
     query_param, query_param_all, render_error, sha256_hex, validate_device_id, validate_did,
     validate_space_id,

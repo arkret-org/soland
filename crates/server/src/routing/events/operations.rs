@@ -34,7 +34,7 @@
 use cokret_sdk::{DeviceMessageTarget, Operation};
 use serde_json::Value;
 
-use super::{is_json_integer, is_valid_hash_digest, validate_did};
+use super::{is_valid_hash_digest, validate_did};
 use crate::kinds;
 use crate::routing::interop::participant_binding;
 use crate::state::AppState;

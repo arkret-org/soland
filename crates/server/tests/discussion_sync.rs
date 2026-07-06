@@ -112,6 +112,29 @@ async fn seed_realm(
     realm_id
 }
 
+async fn allow_service_message_plaintext(state: &AppState, realm_id: &str) {
+    let service_did = state.config.service_did.clone();
+    let mut meta = state
+        .persistence
+        .realm_meta()
+        .get(realm_id)
+        .await
+        .unwrap()
+        .unwrap();
+    meta.plaintext_visible_services.insert(service_did.clone());
+    meta.plaintext_visible_service_classes.insert(
+        service_did,
+        BTreeSet::from([cokret_sdk::PlaintextDataClassKind::MessageContent]),
+    );
+    meta.updated_at = chrono::Utc::now();
+    state
+        .persistence
+        .realm_meta()
+        .put(realm_id, &meta)
+        .await
+        .unwrap();
+}
+
 /// Have the owner admit a new member by submitting a
 /// `ck.member.state{membership:"join", actor_id: new_member}` event. The
 /// projection layer records `member.joined_at` (used by sync's
@@ -937,6 +960,7 @@ async fn poll_content_projection_replaces_votes_and_rejects_after_close() {
     let carol_device_id = "ck:device:01904100-0000-7000-8000-ca2010000022";
     let carol = dev_token(state.clone(), carol_did, "ca2010000022").await;
     let realm_id = seed_realm(&state, alice_did, "poll content reducer", "shared").await;
+    allow_service_message_plaintext(&state, &realm_id).await;
     admit_member(
         state.clone(),
         &alice,
@@ -956,7 +980,6 @@ async fn poll_content_projection_replaces_votes_and_rejects_after_close() {
     )
     .await;
 
-    let poll_id = "poll-content-fixture";
     let poll_event_id = submit_projection_event(
         state.clone(),
         &alice,
@@ -970,13 +993,36 @@ async fn poll_content_projection_replaces_votes_and_rejects_after_close() {
             "content": {
                 "kind": "ck.content.poll",
                 "body": "Which window?",
-                "poll_id": poll_id,
-                "question": "Which window?",
-                "options": [
-                    {"id": "now", "label": "Now"},
-                    {"id": "backup", "label": "After backup"}
-                ],
-                "max_selections": 1
+                "poll": {
+                    "kind": "disclosed",
+                    "max_selections": 1,
+                    "answers": [
+                        {"id": "now", "text": {"kind": "ck.content.text", "body": "Now"}},
+                        {"id": "backup", "text": {"kind": "ck.content.text", "body": "After backup"}}
+                    ]
+                }
+            }
+        }),
+    )
+    .await;
+    let poll_ref = poll_event_id.replacen("ck:event:", "ck:message:", 1);
+    submit_projection_event(
+        state.clone(),
+        &bob,
+        bob_did,
+        bob_device_id,
+        &realm_id,
+        "ck.message.create",
+        json!({
+            "strand_id": strand_id_for_realm(&realm_id),
+            "track_name": "discussion",
+            "content": {
+                "kind": "ck.content.poll.response",
+                "body": "poll response",
+                "poll_response": {
+                    "poll_ref": poll_ref,
+                    "selections": ["now"]
+                }
             }
         }),
     )
@@ -994,27 +1040,10 @@ async fn poll_content_projection_replaces_votes_and_rejects_after_close() {
             "content": {
                 "kind": "ck.content.poll.response",
                 "body": "poll response",
-                "poll_id": poll_id,
-                "choice": "now"
-            }
-        }),
-    )
-    .await;
-    submit_projection_event(
-        state.clone(),
-        &bob,
-        bob_did,
-        bob_device_id,
-        &realm_id,
-        "ck.message.create",
-        json!({
-            "strand_id": strand_id_for_realm(&realm_id),
-            "track_name": "discussion",
-            "content": {
-                "kind": "ck.content.poll.response",
-                "body": "poll response",
-                "poll_id": poll_id,
-                "choice": "backup"
+                "poll_response": {
+                    "poll_ref": poll_ref,
+                    "selections": ["backup"]
+                }
             }
         }),
     )
@@ -1032,8 +1061,10 @@ async fn poll_content_projection_replaces_votes_and_rejects_after_close() {
             "content": {
                 "kind": "ck.content.poll.response",
                 "body": "poll response",
-                "poll_id": poll_id,
-                "choice": "backup"
+                "poll_response": {
+                    "poll_ref": poll_ref,
+                    "selections": ["backup"]
+                }
             }
         }),
     )
@@ -1067,7 +1098,7 @@ async fn poll_content_projection_replaces_votes_and_rejects_after_close() {
             "content": {
                 "kind": "ck.content.poll.close",
                 "body": "poll closed",
-                "poll_id": poll_id
+                "poll_id": poll_ref
             }
         }),
     )
@@ -1085,8 +1116,10 @@ async fn poll_content_projection_replaces_votes_and_rejects_after_close() {
             "content": {
                 "kind": "ck.content.poll.response",
                 "body": "poll response",
-                "poll_id": poll_id,
-                "choice": "now"
+                "poll_response": {
+                    "poll_ref": poll_ref,
+                    "selections": ["now"]
+                }
             }
         }),
     )
