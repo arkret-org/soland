@@ -1,11 +1,11 @@
 use std::collections::BTreeSet;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use cokret_sdk::{Did, RealmId, new_prefixed_uuid7};
+use cokret_sdk::{Did, PlaintextDataClassKind, RealmId, new_prefixed_uuid7};
 use salvo::test::{ResponseExt, TestClient};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use soland::config::{AppConfig, IceServersConfig, LiveKitConfig, ObjectStorageConfig};
+use soland::config::AppConfig;
 use soland::reducer::{
     CircleLifecycleState, CircleMembershipState, CircleProjection, ObjectLifecycleState,
     StrandProjection,
@@ -94,8 +94,13 @@ async fn seed_realm(
                 asset_privacy_policy: None,
                 asset_privacy_policy_digest: None,
                 encryption_profile: None,
-                plaintext_visible_services: std::collections::BTreeSet::new(),
-                plaintext_visible_service_classes: Default::default(),
+                plaintext_visible_services: std::collections::BTreeSet::from([
+                    "did:web:soland.local".to_owned(),
+                ]),
+                plaintext_visible_service_classes: std::collections::BTreeMap::from([(
+                    "did:web:soland.local".to_owned(),
+                    std::collections::BTreeSet::from([PlaintextDataClassKind::MessageContent]),
+                )]),
                 minimal_metadata_realm: false,
                 created_at: now,
                 updated_at: now,
@@ -570,6 +575,55 @@ async fn joined_history_hides_pre_join_messages_from_sync_and_events_query() {
     assert!(
         bodies.contains(&"after bob joined".to_owned()),
         "{bodies:?}"
+    );
+}
+
+#[tokio::test]
+async fn joined_history_incremental_sync_includes_post_join_messages_after_cursor() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let alice_did = "did:web:alice.example";
+    let alice_device_id = "ck:device:01904100-0000-7000-8000-a11ce0000001";
+    let alice = dev_token(state.clone(), alice_did, "a11ce0000001").await;
+    let bob_did = "did:web:bob.example";
+    let bob = dev_token(state.clone(), bob_did, "b0b000000020").await;
+    let realm_id = seed_realm(&state, alice_did, "joined incremental history", "joined").await;
+
+    send_message(state.clone(), &alice, &realm_id, "before bob joined").await;
+    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    admit_member(
+        state.clone(),
+        &alice,
+        alice_did,
+        alice_device_id,
+        bob_did,
+        &realm_id,
+    )
+    .await;
+
+    let baseline = account_subscribe_frame(state.clone(), &bob, "catchup=true").await;
+    let baseline_bodies = sync_bodies(&baseline, &realm_id);
+    assert!(
+        !baseline_bodies.contains(&"before bob joined".to_owned()),
+        "{baseline:?}"
+    );
+    let cursor = baseline["cursor"]
+        .as_str()
+        .expect("baseline cursor")
+        .to_owned();
+
+    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    send_message(state.clone(), &alice, &realm_id, "after bob baseline").await;
+
+    let delta = account_subscribe_frame(
+        state.clone(),
+        &bob,
+        &format!("catchup=true&max_wait_ms=0&after={cursor}"),
+    )
+    .await;
+    let delta_bodies = sync_bodies(&delta, &realm_id);
+    assert!(
+        delta_bodies.contains(&"after bob baseline".to_owned()),
+        "{delta:?}"
     );
 }
 

@@ -175,17 +175,32 @@ impl ProjectionState {
         operation: &Operation,
         now: chrono::DateTime<chrono::Utc>,
     ) -> ProjectionEffect {
-        let original_id = operation
+        let target_ref = operation
             .payload
             .get("message_id")
             .or_else(|| operation.payload.get("target_ref"))
             .or_else(|| operation.payload.get("revision_of"))
             .and_then(|v| v.as_str())
-            .map(message_event_id_from_ref)
             .unwrap_or_default();
-        let new_event_id = operation.operation_id.to_string();
+        let original_id = self
+            .message_by_target_ref(target_ref)
+            .map(|message| message.event_id.clone());
+        let new_event_id = operation
+            .payload
+            .get("event_id")
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .map(ToOwned::to_owned)
+            .unwrap_or_else(|| operation.operation_id.to_string());
 
-        if let Some(original) = self.messages.get(&original_id) {
+        if let Some(original_id) = original_id {
+            let Some(original) = self.messages.get(&original_id) else {
+                return self.queue_pending_replay(
+                    original_id,
+                    operation,
+                    "message_revision_target_unknown",
+                );
+            };
             let mut revised = original.clone();
             revised.event_id = new_event_id.clone();
             revised.revision_of = Some(original_id.clone());
@@ -204,10 +219,10 @@ impl ProjectionState {
             };
             self.messages.insert(new_event_id, revised);
             effect
-        } else if original_id.is_empty() {
+        } else if target_ref.trim().is_empty() {
             self.apply_message(operation, now)
         } else {
-            self.queue_pending_replay(original_id, operation, "message_revision_target_unknown")
+            self.queue_pending_replay(target_ref, operation, "message_revision_target_unknown")
         }
     }
 
@@ -229,14 +244,8 @@ impl ProjectionState {
     /// Space containers are intentionally excluded: they have no Redacted
     /// terminal, and removal routes through `ck.space.tombstone` only.
     pub(crate) fn apply_redaction(&mut self, operation: &Operation) -> ProjectionEffect {
-        let target = operation
-            .payload
-            .get("target_event_id")
-            .or_else(|| operation.payload.get("target"))
-            .or_else(|| operation.payload.get("redacts"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_owned();
+        let target_ref = message_redaction_target_ref(&operation.payload).unwrap_or_default();
+        let target = self.redaction_key_for_message_target(&target_ref);
         if target.is_empty() {
             return ProjectionEffect::Ignored;
         }
@@ -655,11 +664,7 @@ impl ProjectionState {
     }
 
     fn pin_target_effective_scope(&self, target_ref: &str) -> Option<PinEffectiveScope> {
-        if let Some(message) = self
-            .messages
-            .get(&message_event_id_from_ref(target_ref))
-            .or_else(|| self.messages.get(target_ref))
-        {
+        if let Some(message) = self.message_by_target_ref(target_ref) {
             if self.pin_target_is_blocked_by_moderation(target_ref) {
                 return None;
             }
@@ -883,12 +888,7 @@ impl ProjectionState {
         if actor_id.is_empty() || anchor_hlc.is_empty() {
             return false;
         }
-        let event_id = message_event_id_from_ref(target_ref);
-        let Some(message) = self
-            .messages
-            .get(&event_id)
-            .or_else(|| self.messages.get(target_ref))
-        else {
+        let Some(message) = self.message_by_target_ref(target_ref) else {
             return false;
         };
         let Some(trigger) = message_expiry_trigger(message.expiry.as_ref()) else {

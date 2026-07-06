@@ -382,3 +382,165 @@ fn message_revise_creates_chain() {
         Some("ck:event:01904100-0000-7000-8000-caaa6a15bce1")
     );
 }
+
+#[test]
+fn message_revise_resolves_schema_message_id_and_preserves_event_id() {
+    let mut state = ProjectionState::new();
+    let hlc = ServerHlc::new("test");
+    let event_id = "ck:event:01904100-0000-7000-8000-caaa6a15bce1";
+    let message_id = "ck:message:01904100-0001-7000-8000-caaa6a15bce1";
+    let revision_event_id = "ck:event:01904100-0002-7000-8000-caaa6a15bce1";
+
+    state.apply(
+        &make_operation(
+            cokret_sdk::events::kinds::MESSAGE_CREATE,
+            "ck:realm:01904100-0000-7000-8000-cfc039892036",
+            serde_json::json!({
+                "event_id": event_id,
+                "message_id": message_id,
+                "sender": "did:web:alice",
+                "thread_id": "ck:strand:1",
+                "content": {"kind": "ck.content.text", "body": "original"}
+            }),
+        ),
+        &hlc,
+    );
+
+    let effect = state.apply(
+        &make_operation(
+            cokret_sdk::events::kinds::MESSAGE_REVISE,
+            "ck:realm:01904100-0000-7000-8000-cfc039892036",
+            serde_json::json!({
+                "event_id": revision_event_id,
+                "target_ref": message_id,
+                "content": {"kind": "ck.content.text", "body": "revised"}
+            }),
+        ),
+        &hlc,
+    );
+
+    assert!(matches!(
+        effect,
+        ProjectionEffect::MessageRevised { ref original_id, ref revision }
+            if original_id == event_id && revision.event_id == revision_event_id
+    ));
+    let msgs = state.messages_for_realm("ck:realm:01904100-0000-7000-8000-cfc039892036");
+    assert_eq!(msgs.len(), 1);
+    assert_eq!(msgs[0].event_id, revision_event_id);
+    assert_eq!(msgs[0].message_id, message_id);
+    assert_eq!(msgs[0].revision_of.as_deref(), Some(event_id));
+    assert_eq!(msgs[0].content["body"], "revised");
+}
+
+#[test]
+fn redaction_accepts_schema_message_id_target() {
+    let mut state = ProjectionState::new();
+    let hlc = ServerHlc::new("test");
+    let event_id = "ck:event:01904100-0000-7000-8000-caaa6a15bce2";
+    let message_id = "ck:message:01904100-0001-7000-8000-caaa6a15bce2";
+    let redaction_event_id = "ck:event:01904100-0002-7000-8000-caaa6a15bce2";
+
+    state.apply(
+        &make_operation(
+            cokret_sdk::events::kinds::MESSAGE_CREATE,
+            "ck:realm:01904100-0000-7000-8000-cfc039892036",
+            serde_json::json!({
+                "event_id": event_id,
+                "message_id": message_id,
+                "sender": "did:web:alice",
+                "thread_id": "ck:strand:1",
+                "content": {"kind": "ck.content.text", "body": "hello"}
+            }),
+        ),
+        &hlc,
+    );
+    let effect = state.apply(
+        &make_operation(
+            cokret_sdk::events::kinds::MESSAGE_REDACT,
+            "ck:realm:01904100-0000-7000-8000-cfc039892036",
+            serde_json::json!({
+                "event_id": redaction_event_id,
+                "message_id": message_id,
+                "by": "did:web:alice",
+                "reason": "wrong room"
+            }),
+        ),
+        &hlc,
+    );
+
+    assert!(matches!(
+        effect,
+        ProjectionEffect::MessageRedacted { event_id: target } if target == event_id
+    ));
+    assert!(state.redactions.contains(event_id));
+    assert!(!state.redactions.contains(redaction_event_id));
+    assert!(
+        state
+            .projected_message(event_id, false)
+            .unwrap()
+            .content
+            .is_none()
+    );
+}
+
+#[test]
+fn redaction_by_message_id_hides_latest_revision() {
+    let mut state = ProjectionState::new();
+    let hlc = ServerHlc::new("test");
+    let event_id = "ck:event:01904100-0000-7000-8000-caaa6a15bce3";
+    let message_id = "ck:message:01904100-0001-7000-8000-caaa6a15bce3";
+    let revision_event_id = "ck:event:01904100-0002-7000-8000-caaa6a15bce3";
+
+    state.apply(
+        &make_operation(
+            cokret_sdk::events::kinds::MESSAGE_CREATE,
+            "ck:realm:01904100-0000-7000-8000-cfc039892036",
+            serde_json::json!({
+                "event_id": event_id,
+                "message_id": message_id,
+                "sender": "did:web:alice",
+                "thread_id": "ck:strand:1",
+                "content": {"kind": "ck.content.text", "body": "original"}
+            }),
+        ),
+        &hlc,
+    );
+    state.apply(
+        &make_operation(
+            cokret_sdk::events::kinds::MESSAGE_REVISE,
+            "ck:realm:01904100-0000-7000-8000-cfc039892036",
+            serde_json::json!({
+                "event_id": revision_event_id,
+                "target_ref": message_id,
+                "content": {"kind": "ck.content.text", "body": "revised"}
+            }),
+        ),
+        &hlc,
+    );
+    state.apply(
+        &make_operation(
+            cokret_sdk::events::kinds::MESSAGE_REDACT,
+            "ck:realm:01904100-0000-7000-8000-cfc039892036",
+            serde_json::json!({
+                "event_id": "ck:event:01904100-0003-7000-8000-caaa6a15bce3",
+                "message_id": message_id,
+                "by": "did:web:alice",
+                "reason": "wrong room"
+            }),
+        ),
+        &hlc,
+    );
+
+    assert!(
+        state
+            .messages_for_realm("ck:realm:01904100-0000-7000-8000-cfc039892036")
+            .is_empty()
+    );
+    assert!(
+        state
+            .projected_message(revision_event_id, false)
+            .unwrap()
+            .content
+            .is_none()
+    );
+}

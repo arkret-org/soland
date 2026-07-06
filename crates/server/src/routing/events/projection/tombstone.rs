@@ -50,20 +50,7 @@ pub fn redaction_targets_from_events(events: &[ProjectionEventRecord]) -> HashSe
     events
         .iter()
         .filter(|event| cokret_sdk::events::kinds::is_redaction_kind(&event.event_kind))
-        .filter_map(|event| {
-            event
-                .payload
-                .get("target_event_id")
-                .and_then(|value| value.as_str())
-                .or_else(|| event.payload.get("target").and_then(|value| value.as_str()))
-                .or_else(|| {
-                    event
-                        .payload
-                        .get("redacts")
-                        .and_then(|value| value.as_str())
-                })
-                .map(ToOwned::to_owned)
-        })
+        .filter_map(|event| crate::reducer::message_redaction_target_ref(&event.payload))
         .collect()
 }
 
@@ -137,23 +124,14 @@ pub fn apply_message_redaction_timeline_projection(
     event_id: &str,
     projection: &crate::reducer::ProjectionState,
 ) -> bool {
-    if !projection.redactions.contains(event_id) {
+    let Some(message) = projection.messages.get(event_id) else {
         return false;
-    }
-    let cell = projection
-        .redaction_cells
-        .get(event_id)
-        .and_then(|value| value.as_ref());
-    let redacted_at = cell
-        .map(|cell| cell.redacted_at)
-        .or_else(|| {
-            projection
-                .messages
-                .get(event_id)
-                .and_then(|m| m.redacted_at)
-        })
-        .unwrap_or_else(chrono::Utc::now);
-    let redaction_ref = cell.and_then(|cell| cell.redaction_event_id.as_deref());
+    };
+    let Some(cell) = projection.redaction_cell_for_message(message) else {
+        return false;
+    };
+    let redacted_at = cell.redacted_at;
+    let redaction_ref = cell.redaction_event_id.as_deref();
     cokret_sdk::events::redaction_tombstone_message_value(event, redacted_at, redaction_ref);
     true
 }
@@ -1067,5 +1045,56 @@ mod tests {
         assert_eq!(event["redaction_ref"], json!(redaction_id));
         assert_ne!(event["content"]["body"], json!("secret"));
         assert!(event.get("reactions").is_none());
+    }
+
+    #[test]
+    fn timeline_message_for_redacted_revision_surfaces_tombstone() {
+        let original_id = "ck:event:01904100-0000-7000-8000-0000000000f1";
+        let revision_id = "ck:event:01904100-0001-7000-8000-0000000000f1";
+        let message_id = "ck:message:01904100-0002-7000-8000-0000000000f1";
+        let redaction_id = "ck:event:01904100-0003-7000-8000-0000000000f1";
+        let realm_id = "ck:realm:01904100-0000-7000-8000-cfc039892036";
+        let now = chrono::Utc::now();
+        let mut projection = ProjectionState::new();
+        projection.messages.insert(
+            revision_id.to_owned(),
+            MessageState {
+                event_id: revision_id.to_owned(),
+                message_id: message_id.to_owned(),
+                realm_id: realm_id.to_owned(),
+                sender: "did:web:bob.example".to_owned(),
+                thread_id: realm_id.to_owned(),
+                content: json!({"kind": "ck.content.text", "body": "edited secret"}),
+                expiry: None,
+                encrypted: false,
+                operation_id: "ck:operation:01904100-0001-7000-8000-0000000000f1".to_owned(),
+                created_at: now,
+                history_basis_seals: Vec::new(),
+                revision_of: Some(original_id.to_owned()),
+                redacted_at: None,
+            },
+        );
+        projection.redactions.insert(original_id.to_owned());
+        projection.redaction_cells.insert(
+            original_id.to_owned(),
+            Some(RedactionCellValue {
+                redacted_at: now,
+                by: "did:web:bob.example".to_owned(),
+                reason: Some("author_redaction".to_owned()),
+                redaction_event_id: Some(redaction_id.to_owned()),
+            }),
+        );
+        let message = projection.messages.get(revision_id).cloned().unwrap();
+
+        let event = crate::routing::events::projection::sync_timeline_message_json_with_projection(
+            &message,
+            &projection,
+        );
+
+        assert_eq!(event["event_id"], json!(revision_id));
+        assert_eq!(event["redacted"], json!(true));
+        assert_eq!(event["state"], json!("redacted"));
+        assert_eq!(event["redaction_ref"], json!(redaction_id));
+        assert_ne!(event["content"]["body"], json!("edited secret"));
     }
 }

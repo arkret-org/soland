@@ -3,7 +3,14 @@ use super::*;
 pub(crate) const MESSAGE_CREATE_FIELDS: &[&str] = &["content", "encrypted_content"];
 pub(crate) const MESSAGE_TARGET_FIELDS: &[&str] = &["message_id", "target_ref", "revision_of"];
 pub(crate) const MESSAGE_CONTENT_FIELDS: &[&str] = &["content", "encrypted_content"];
-pub(crate) const REDACTION_TARGET_FIELDS: &[&str] = &["target_event_id", "target", "redacts"];
+pub(crate) const REDACTION_TARGET_FIELDS: &[&str] = &[
+    "target_event_id",
+    "message_id",
+    "target_ref",
+    "target",
+    "redacts",
+    "event_id",
+];
 pub(crate) const REACTION_TARGET_FIELDS: &[&str] = &[
     "target_ref",
     "event_id",
@@ -83,7 +90,7 @@ pub(crate) const MESSAGE_REVISE_REQUIREMENTS: &[PayloadRequirement] = &[
 ];
 pub(crate) const REDACTION_REQUIREMENTS: &[PayloadRequirement] = &[PayloadRequirement::AnyOf(
     REDACTION_TARGET_FIELDS,
-    "redaction operation requires target_event_id",
+    "redaction operation requires message_id, target_ref, event_id, or target_event_id",
 )];
 pub(crate) const REACTION_REQUIREMENTS: &[PayloadRequirement] = &[
     PayloadRequirement::AnyOf(

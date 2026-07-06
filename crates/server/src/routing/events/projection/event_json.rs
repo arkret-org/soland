@@ -85,25 +85,7 @@ pub fn redaction_targets_from_operations(operations: &[Operation]) -> HashSet<St
     operations
         .iter()
         .filter(|operation| kinds::operation_is_redaction(operation))
-        .filter_map(|operation| {
-            operation
-                .payload
-                .get("target_event_id")
-                .and_then(|value| value.as_str())
-                .or_else(|| {
-                    operation
-                        .payload
-                        .get("target")
-                        .and_then(|value| value.as_str())
-                })
-                .or_else(|| {
-                    operation
-                        .payload
-                        .get("redacts")
-                        .and_then(|value| value.as_str())
-                })
-                .map(ToOwned::to_owned)
-        })
+        .filter_map(|operation| crate::reducer::message_redaction_target_ref(&operation.payload))
         .collect()
 }
 

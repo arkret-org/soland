@@ -6,6 +6,58 @@
 use super::*;
 
 impl ProjectionState {
+    pub(crate) fn message_by_target_ref(&self, target_ref: &str) -> Option<&MessageState> {
+        if target_ref.starts_with("ck:message:") {
+            return self
+                .messages
+                .values()
+                .find(|message| message.message_id == target_ref)
+                .or_else(|| self.messages.get(target_ref))
+                .or_else(|| {
+                    let event_id = message_event_id_from_ref(target_ref);
+                    self.messages.get(&event_id)
+                });
+        }
+        if target_ref.starts_with("ck:event:") {
+            return self.messages.get(target_ref);
+        }
+        self.messages.get(target_ref).or_else(|| {
+            let event_id = message_event_id_from_ref(target_ref);
+            self.messages.get(&event_id).or_else(|| {
+                self.messages
+                    .values()
+                    .find(|message| message.message_id == target_ref)
+            })
+        })
+    }
+
+    pub(crate) fn redaction_key_for_message_target(&self, target_ref: &str) -> String {
+        if target_ref.trim().is_empty() {
+            return String::new();
+        }
+        self.message_by_target_ref(target_ref)
+            .map(|message| message.event_id.clone())
+            .unwrap_or_else(|| target_ref.to_owned())
+    }
+
+    pub(crate) fn redaction_cell_for_message(
+        &self,
+        message: &MessageState,
+    ) -> Option<&RedactionCellValue> {
+        self.redaction_cells
+            .get(&message.event_id)
+            .or_else(|| self.redaction_cells.get(&message.message_id))
+            .or_else(|| {
+                message
+                    .revision_of
+                    .as_deref()
+                    .and_then(|original_id| self.redaction_cells.get(original_id))
+            })
+            .and_then(|cell| cell.as_ref())
+    }
+}
+
+impl ProjectionState {
     // ── Query helpers ──
 
     /// Get all non-redacted messages for a Realm, sorted by creation time.
@@ -17,11 +69,7 @@ impl ProjectionState {
             .filter(|m| {
                 m.realm_id == realm_id
                     && !superseded.contains(m.event_id.as_str())
-                    && self
-                        .redaction_cells
-                        .get(&m.event_id)
-                        .and_then(|cell| cell.as_ref())
-                        .is_none()
+                    && self.redaction_cell_for_message(m).is_none()
             })
             .collect();
         msgs.sort_by_key(|a| a.created_at);
@@ -54,11 +102,7 @@ impl ProjectionState {
             .filter(|m| {
                 m.thread_id == thread_id
                     && !superseded.contains(m.event_id.as_str())
-                    && self
-                        .redaction_cells
-                        .get(&m.event_id)
-                        .and_then(|cell| cell.as_ref())
-                        .is_none()
+                    && self.redaction_cell_for_message(m).is_none()
             })
             .collect();
         msgs.sort_by_key(|a| a.created_at);
@@ -81,11 +125,7 @@ impl ProjectionState {
         &self,
         target_ref: &str,
     ) -> Option<(chrono::DateTime<chrono::Utc>, String, String)> {
-        let event_id = message_event_id_from_ref(target_ref);
-        let msg = self
-            .messages
-            .get(&event_id)
-            .or_else(|| self.messages.get(target_ref))?;
+        let msg = self.message_by_target_ref(target_ref)?;
         Some((msg.created_at, msg.sender.clone(), msg.thread_id.clone()))
     }
 
@@ -95,10 +135,7 @@ impl ProjectionState {
     /// `None` for unknown targets (the reducer's dependency handling then
     /// keeps the reaction pending).
     pub fn message_realm(&self, target_ref: &str) -> Option<String> {
-        let event_id = message_event_id_from_ref(target_ref);
-        self.messages
-            .get(&event_id)
-            .or_else(|| self.messages.get(target_ref))
+        self.message_by_target_ref(target_ref)
             .map(|msg| msg.realm_id.clone())
     }
 
@@ -118,11 +155,7 @@ impl ProjectionState {
         viewer_is_author: bool,
     ) -> Option<ProjectedMessageView> {
         let msg = self.messages.get(event_id)?;
-        let redaction = self
-            .redaction_cells
-            .get(event_id)
-            .and_then(|cell| cell.as_ref())
-            .cloned();
+        let redaction = self.redaction_cell_for_message(msg).cloned();
         let expired = self.message_requires_expiry_stub_at(msg, chrono::Utc::now());
         let content = match (&redaction, viewer_is_author, expired) {
             // Expiry applies to authors too; it is projection state, not a

@@ -1318,8 +1318,11 @@ async fn validate_message_edit_redact_window_policy(
         operation
             .payload
             .get("target_event_id")
+            .or_else(|| operation.payload.get("message_id"))
+            .or_else(|| operation.payload.get("target_ref"))
             .or_else(|| operation.payload.get("target"))
             .or_else(|| operation.payload.get("redacts"))
+            .or_else(|| operation.payload.get("event_id"))
     } else {
         operation
             .payload

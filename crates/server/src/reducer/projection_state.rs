@@ -354,8 +354,7 @@ impl ProjectionState {
             return self.relations.contains_key(target_ref);
         }
         if target_ref.starts_with("ck:event:") || target_ref.starts_with("ck:message:") {
-            let event_id = message_event_id_from_ref(target_ref);
-            return self.messages.contains_key(target_ref) || self.messages.contains_key(&event_id);
+            return self.message_by_target_ref(target_ref).is_some();
         }
         false
     }
