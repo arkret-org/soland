@@ -31,7 +31,7 @@ use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::{DateTime, Duration, Utc};
 use cokret_sdk::http_signature::{Ed25519PublicKey, public_key_from_bytes};
-use cokret_sdk::{DeviceId, FreshnessState, SessionGrantProofKind};
+use cokret_sdk::{DeviceId, Did, FreshnessState, SessionGrantProofKind};
 use ed25519_dalek::{Signature, Verifier};
 use parking_lot::Mutex;
 use salvo::http::StatusCode;
@@ -448,11 +448,7 @@ fn session_binding_from_introspection(
 ) -> Result<(String, Option<AgentSessionRecord>), AuthError> {
     let is_agent_session = grant.proof_kind == Some(SessionGrantProofKind::AgentKeyProof);
     if is_agent_session {
-        if !grant.scope_details.is_object() {
-            return Err(unauthenticated(
-                "agent session grant omitted resource scope metadata",
-            ));
-        }
+        validate_agent_session_scope_details(grant)?;
         match grant.freshness_state.unwrap_or(FreshnessState::Unknown) {
             FreshnessState::Fresh => {}
             FreshnessState::Stale => {
@@ -474,6 +470,7 @@ fn session_binding_from_introspection(
         return Ok((
             format!("agent-session:{}", grant.id.as_str()),
             Some(AgentSessionRecord {
+                granted_scope: grant.scopes.clone(),
                 scope_details,
                 freshness_state: FreshnessState::Fresh,
             }),
@@ -508,6 +505,49 @@ fn session_binding_from_introspection(
         None => scope_device_id,
     };
     Ok((device_id, None))
+}
+
+fn validate_agent_session_scope_details(
+    grant: &SessionGrantIntrospectGrant,
+) -> Result<(), AuthError> {
+    let Some(details) = grant.scope_details.as_object() else {
+        return Err(agent_scope_metadata_error());
+    };
+    if Did::new(grant.subject.clone()).is_err() {
+        return Err(agent_scope_metadata_error());
+    }
+    let Some(controller_did) = details
+        .get("controller_did")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return Err(agent_scope_metadata_error());
+    };
+    if Did::new(controller_did.to_owned()).is_err() {
+        return Err(agent_scope_metadata_error());
+    }
+    let Some(resources) = details.get("resources").and_then(Value::as_object) else {
+        return Err(agent_scope_metadata_error());
+    };
+    if !matches!(resources.get("realm_refs"), Some(Value::Array(_)))
+        || !matches!(resources.get("strand_refs"), Some(Value::Array(_)))
+    {
+        return Err(agent_scope_metadata_error());
+    }
+    if !details.get("constraints").is_some_and(Value::is_object)
+        || !details
+            .get("capability_grant_refs")
+            .is_some_and(Value::is_array)
+        || !details.get("policy_refs").is_some_and(Value::is_array)
+    {
+        return Err(agent_scope_metadata_error());
+    }
+    Ok(())
+}
+
+fn agent_scope_metadata_error() -> AuthError {
+    unauthenticated("agent session grant omitted resource scope metadata")
 }
 
 fn agent_session_scope_details(grant: &SessionGrantIntrospectGrant) -> Value {
@@ -896,15 +936,23 @@ mod tests {
     fn agent_session_binding_materializes_scope_details() {
         let mut grant = test_introspection_grant();
         grant.id = GrantId::new("ck:grant:0196419b-0000-7000-8000-000000000002").unwrap();
+        grant.subject = "did:web:agent.example".to_owned();
         grant.device_id = None;
         grant.scopes = vec!["ck.agent.action:message.send".to_owned()];
         grant.proof_kind = Some(SessionGrantProofKind::AgentKeyProof);
         grant.scope_details = serde_json::json!({
-            "agent_principal_id": "did:web:agent.example",
             "controller_did": "did:web:alice.example",
             "resources": {
                 "realm_refs": ["ck:realm:team"],
+                "strand_refs": [],
             },
+            "constraints": {
+                "allowed_tracks": [],
+                "allowed_data_classes": [],
+                "allowed_endpoints": [],
+            },
+            "capability_grant_refs": [],
+            "policy_refs": [],
         });
         grant.freshness_state = Some(FreshnessState::Fresh);
 
@@ -917,8 +965,12 @@ mod tests {
         let agent_session = agent_session.unwrap();
         assert_eq!(agent_session.freshness_state, FreshnessState::Fresh);
         assert_eq!(
-            agent_session.scope_details["agent_principal_id"],
-            "did:web:agent.example"
+            agent_session.granted_scope,
+            vec!["ck.agent.action:message.send"]
+        );
+        assert_eq!(
+            agent_session.scope_details["controller_did"],
+            "did:web:alice.example"
         );
     }
 
@@ -936,11 +988,38 @@ mod tests {
     }
 
     #[test]
+    fn agent_session_binding_rejects_empty_scope_details() {
+        let mut grant = test_introspection_grant();
+        grant.subject = "did:web:agent.example".to_owned();
+        grant.proof_kind = Some(SessionGrantProofKind::AgentKeyProof);
+        grant.scope_details = serde_json::json!({});
+        grant.freshness_state = Some(FreshnessState::Fresh);
+
+        let err = session_binding_from_introspection(&grant).unwrap_err();
+
+        assert_eq!(err.0, StatusCode::UNAUTHORIZED);
+        assert_eq!(err.1, "unauthenticated");
+        assert_eq!(err.2, "agent session grant omitted resource scope metadata");
+    }
+
+    #[test]
     fn agent_session_binding_requires_fresh_introspection() {
         let mut grant = test_introspection_grant();
+        grant.subject = "did:web:agent.example".to_owned();
         grant.proof_kind = Some(SessionGrantProofKind::AgentKeyProof);
         grant.scope_details = serde_json::json!({
-            "agent_principal_id": "did:web:agent.example",
+            "controller_did": "did:web:alice.example",
+            "resources": {
+                "realm_refs": [],
+                "strand_refs": [],
+            },
+            "constraints": {
+                "allowed_tracks": [],
+                "allowed_data_classes": [],
+                "allowed_endpoints": [],
+            },
+            "capability_grant_refs": [],
+            "policy_refs": [],
         });
 
         let err = session_binding_from_introspection(&grant).unwrap_err();

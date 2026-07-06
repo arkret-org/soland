@@ -95,6 +95,13 @@ async fn submit_event(depot: &mut Depot, req: &mut Request, res: &mut Response) 
     let Some(session) = auth_or_render(state, req, res).await else {
         return;
     };
+    if let Err(error) = super::super::require_agent_session_scope(
+        &session,
+        super::super::AGENT_SCOPE_EVENTS_COMMAND_SUBMIT,
+    ) {
+        render_error(res, error.http_status(), error.wire_code(), &error.message);
+        return;
+    }
 
     // §6 generic idempotency key path. When present, the key is scoped to the
     // authenticated principal: a replay carrying the SAME canonical body

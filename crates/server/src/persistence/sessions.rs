@@ -200,6 +200,10 @@ mod tests {
             audience: "did:web:soland.local".to_owned(),
             session_public_key: Some("{}".to_owned()),
             agent_session: Some(AgentSessionRecord {
+                granted_scope: vec![
+                    "ck.self.events.stream.subscribe".to_owned(),
+                    "ck.self.events.query.scan".to_owned(),
+                ],
                 scope_details: serde_json::json!({
                     "agent_principal_id": "did:web:agent.example",
                     "applet_id": "ck:applet:01904100-0000-7000-8000-000000000001"
@@ -215,6 +219,13 @@ mod tests {
         let restored = decode_session_agent_payload(&payload).expect("agent session decodes");
 
         assert_eq!(restored.freshness_state, FreshnessState::Fresh);
+        assert_eq!(
+            restored.granted_scope,
+            vec![
+                "ck.self.events.stream.subscribe".to_owned(),
+                "ck.self.events.query.scan".to_owned()
+            ]
+        );
         assert_eq!(
             restored.scope_details["applet_id"],
             "ck:applet:01904100-0000-7000-8000-000000000001"

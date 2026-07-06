@@ -6,6 +6,7 @@ use serde_json::Value;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AgentSessionRecord {
+    pub granted_scope: Vec<String>,
     pub scope_details: Value,
     pub freshness_state: FreshnessState,
 }

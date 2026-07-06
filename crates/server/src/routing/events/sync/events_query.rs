@@ -52,6 +52,15 @@ pub(crate) async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: 
         Some(session) => session,
         None => return,
     };
+    if let Some(session) = session.as_ref() {
+        if let Err(error) = super::super::require_agent_session_scope(
+            session,
+            super::super::AGENT_SCOPE_EVENTS_STREAM_SUBSCRIBE,
+        ) {
+            render_error(res, error.http_status(), error.wire_code(), &error.message);
+            return;
+        }
+    }
     let mut accessible_realms: Vec<String> = Vec::with_capacity(realms.len());
     for realm in realms {
         if realm_id_accessible(&state, &realm, session.as_ref()).await {
@@ -767,6 +776,12 @@ async fn events_query_impl(
             }
         }
     };
+    if let Some(session) = session.as_ref() {
+        super::super::require_agent_session_scope(
+            session,
+            super::super::AGENT_SCOPE_EVENTS_QUERY_SCAN,
+        )?;
+    }
     let filter_digest =
         events_query_scope_digest(&realms, &parts.actors, parts.filters.as_ref(), &parts.order);
     let (cursor_token, stop_cursor_token, backward) = events_query_cursor_and_stop(&parts);

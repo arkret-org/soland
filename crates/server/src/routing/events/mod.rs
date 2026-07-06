@@ -1,5 +1,7 @@
 use salvo::prelude::*;
 
+use crate::state::SessionRecord;
+
 pub(crate) mod agent_bridge;
 pub(super) mod applet_bridge;
 pub(super) mod event_log;
@@ -48,6 +50,29 @@ pub fn router() -> Router {
         .push(projection_query::protocol_router())
 }
 
+pub(crate) const AGENT_SCOPE_EVENTS_STREAM_SUBSCRIBE: &str = "ck.self.events.stream.subscribe";
+pub(crate) const AGENT_SCOPE_EVENTS_QUERY_SCAN: &str = "ck.self.events.query.scan";
+pub(crate) const AGENT_SCOPE_EVENTS_COMMAND_SUBMIT: &str = "ck.self.events.command.submit";
+
+pub(crate) fn require_agent_session_scope(
+    session: &SessionRecord,
+    required_scope: &str,
+) -> Result<(), crate::error::AppError> {
+    let Some(agent_session) = session.agent_session.as_ref() else {
+        return Ok(());
+    };
+    if agent_session
+        .granted_scope
+        .iter()
+        .any(|scope| scope == required_scope)
+    {
+        return Ok(());
+    }
+    Err(crate::error::AppError::capability_denied(format!(
+        "agent session scope {required_scope} is required"
+    )))
+}
+
 /// Product-private (`/_soland/self/*`) projection read surface: single-Strand
 /// object read with materialized `fields`, and the relation edge list. These
 /// stay off the canonical `/_cokret/*` protocol root per
@@ -60,4 +85,116 @@ pub fn local_router() -> Router {
 
 pub fn peer_router() -> Router {
     peer::router()
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::Utc;
+    use cokret_sdk::FreshnessState;
+
+    use super::*;
+    use crate::state::AgentSessionRecord;
+
+    fn session_with_agent_scopes(scopes: &[&str]) -> SessionRecord {
+        SessionRecord {
+            token_hash: "grant".to_owned(),
+            actor: "did:web:agent.example".to_owned(),
+            device_id: "agent-session:ck:grant:0196419b-0000-7000-8000-000000000001".to_owned(),
+            audience: "did:web:soland.local".to_owned(),
+            session_public_key: Some("{}".to_owned()),
+            agent_session: Some(AgentSessionRecord {
+                granted_scope: scopes.iter().map(|scope| (*scope).to_owned()).collect(),
+                scope_details: serde_json::json!({
+                    "controller_did": "did:web:alice.example",
+                    "resources": {
+                        "realm_refs": [],
+                        "strand_refs": [],
+                    },
+                    "constraints": {},
+                    "capability_grant_refs": [],
+                    "policy_refs": [],
+                }),
+                freshness_state: FreshnessState::Fresh,
+            }),
+            expires_at: Utc::now() + chrono::Duration::minutes(5),
+            created_at: Utc::now(),
+            revoked_at: None,
+        }
+    }
+
+    fn human_session() -> SessionRecord {
+        SessionRecord {
+            token_hash: "human".to_owned(),
+            actor: "did:web:alice.example".to_owned(),
+            device_id: "ck:device:0196419b-0000-7000-8000-000000000001".to_owned(),
+            audience: "did:web:soland.local".to_owned(),
+            session_public_key: None,
+            agent_session: None,
+            expires_at: Utc::now() + chrono::Duration::minutes(5),
+            created_at: Utc::now(),
+            revoked_at: None,
+        }
+    }
+
+    #[test]
+    fn human_sessions_are_not_limited_by_agent_service_scopes() {
+        assert!(
+            require_agent_session_scope(&human_session(), AGENT_SCOPE_EVENTS_COMMAND_SUBMIT)
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn agent_session_requires_stream_subscribe_scope() {
+        assert!(
+            require_agent_session_scope(
+                &session_with_agent_scopes(&[AGENT_SCOPE_EVENTS_QUERY_SCAN]),
+                AGENT_SCOPE_EVENTS_STREAM_SUBSCRIBE,
+            )
+            .is_err()
+        );
+        assert!(
+            require_agent_session_scope(
+                &session_with_agent_scopes(&[AGENT_SCOPE_EVENTS_STREAM_SUBSCRIBE]),
+                AGENT_SCOPE_EVENTS_STREAM_SUBSCRIBE,
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn agent_session_requires_query_scan_scope() {
+        assert!(
+            require_agent_session_scope(
+                &session_with_agent_scopes(&[AGENT_SCOPE_EVENTS_STREAM_SUBSCRIBE]),
+                AGENT_SCOPE_EVENTS_QUERY_SCAN,
+            )
+            .is_err()
+        );
+        assert!(
+            require_agent_session_scope(
+                &session_with_agent_scopes(&[AGENT_SCOPE_EVENTS_QUERY_SCAN]),
+                AGENT_SCOPE_EVENTS_QUERY_SCAN,
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn agent_session_requires_command_submit_scope() {
+        assert!(
+            require_agent_session_scope(
+                &session_with_agent_scopes(&[AGENT_SCOPE_EVENTS_QUERY_SCAN]),
+                AGENT_SCOPE_EVENTS_COMMAND_SUBMIT,
+            )
+            .is_err()
+        );
+        assert!(
+            require_agent_session_scope(
+                &session_with_agent_scopes(&[AGENT_SCOPE_EVENTS_COMMAND_SUBMIT]),
+                AGENT_SCOPE_EVENTS_COMMAND_SUBMIT,
+            )
+            .is_ok()
+        );
+    }
 }

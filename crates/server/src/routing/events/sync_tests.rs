@@ -1185,8 +1185,12 @@ async fn sync_snapshot_includes_shared_pin_events_for_joined_member() {
         }),
         base + ChronoDuration::seconds(4),
     );
-    crate::routing::events::projection::project_accepted_operations(&state, ROSTER_ACTOR, &[pin_add])
-        .await;
+    crate::routing::events::projection::project_accepted_operations(
+        &state,
+        ROSTER_ACTOR,
+        &[pin_add],
+    )
+    .await;
 
     let mut incremental_body = body.clone();
     incremental_body.after = Some(initial.cursor.clone());
@@ -1202,10 +1206,10 @@ async fn sync_snapshot_includes_shared_pin_events_for_joined_member() {
         .as_array()
         .expect("state events array");
     assert!(
-        state_events
-            .iter()
-            .any(|event| event["event_kind"] == cokret_sdk::events::kinds::PIN_ADD
-                && event["payload"]["target_ref"] == message_id),
+        state_events.iter().any(
+            |event| event["event_kind"] == cokret_sdk::events::kinds::PIN_ADD
+                && event["payload"]["target_ref"] == message_id
+        ),
         "joined members must receive shared pin state events through account sync"
     );
 }
