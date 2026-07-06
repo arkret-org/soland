@@ -5,6 +5,79 @@
 #![allow(unused_imports)]
 use super::common::*;
 
+fn test_session_credential_hash(token: &str, audience: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(audience.as_bytes());
+    hasher.update(b":");
+    hasher.update(token.as_bytes());
+    format!("sha256:{}", URL_SAFE_NO_PAD.encode(hasher.finalize()))
+}
+
+async fn seed_agent_session_with_scopes(state: &AppState, token: &str, scopes: &[&str]) {
+    let actor = "did:web:agent.example";
+    let device_id = "agent-session:ck:grant:0196419b-0000-7000-8000-000000000001";
+    let now = chrono::Utc::now();
+    state
+        .persistence
+        .sessions()
+        .put(&soland::state::SessionRecord {
+            token_hash: test_session_credential_hash(token, &state.config.service_did),
+            actor: actor.to_owned(),
+            device_id: device_id.to_owned(),
+            audience: state.config.service_did.clone(),
+            session_public_key: Some("{}".to_owned()),
+            agent_session: Some(soland::state::AgentSessionRecord {
+                granted_scope: scopes.iter().map(|scope| (*scope).to_owned()).collect(),
+                scope_details: serde_json::json!({
+                    "controller_did": "did:web:alice.example",
+                    "resources": {
+                        "realm_refs": [DEMO_REALM_ID],
+                        "strand_refs": [],
+                    },
+                    "constraints": {
+                        "allowed_tracks": [],
+                        "allowed_data_classes": [],
+                        "allowed_endpoints": [],
+                    },
+                    "capability_grant_refs": [],
+                    "policy_refs": [],
+                }),
+                freshness_state: cokret_sdk::FreshnessState::Fresh,
+            }),
+            expires_at: now + chrono::Duration::minutes(5),
+            created_at: now,
+            revoked_at: None,
+        })
+        .await
+        .unwrap();
+    state
+        .persistence
+        .devices()
+        .put(&soland::state::DeviceInventoryRecord {
+            actor: actor.to_owned(),
+            device_id: device_id.to_owned(),
+            display_name: Some("Agent Session".to_owned()),
+            verification_state: "verified".to_owned(),
+            payload: serde_json::json!({}),
+            created_at: now,
+            updated_at: now,
+            revoked_at: None,
+        })
+        .await
+        .unwrap();
+}
+
+fn assert_agent_scope_denied(body: &Value, scope: &str) {
+    assert_eq!(body["ok"], false, "{body}");
+    assert_eq!(body["error"]["code"], "capability_denied", "{body}");
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains(scope)),
+        "{body}"
+    );
+}
+
 async fn optional_pg_app_state() -> Option<AppState> {
     if std::env::var("DATABASE_URL")
         .ok()
@@ -43,6 +116,64 @@ async fn account_subscribe_first_frame_with_status(
         panic!("account subscribe returned non-json frame: {error}: {body}")
     });
     (status, frame)
+}
+
+#[tokio::test]
+async fn agent_session_without_stream_scope_cannot_subscribe_events() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let token = "agent-local-session-stream";
+    seed_agent_session_with_scopes(&state, token, &["ck.self.events.query.scan"]).await;
+
+    let mut response = TestClient::get(format!(
+        "http://server/_cokret/self/events/subscribe?realms={DEMO_REALM_ID}&include_history=false&max_duration_ms=100",
+    ))
+    .add_header("authorization", format!("Bearer {token}"), true)
+    .send(&app_from_state(state))
+    .await;
+
+    assert_eq!(response.status_code.unwrap(), StatusCode::FORBIDDEN);
+    let body: Value = response.take_json().await.unwrap();
+    assert_agent_scope_denied(&body, "ck.self.events.stream.subscribe");
+}
+
+#[tokio::test]
+async fn agent_session_without_query_scope_cannot_scan_events() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let token = "agent-local-session-query";
+    seed_agent_session_with_scopes(&state, token, &["ck.self.events.stream.subscribe"]).await;
+
+    let mut response = TestClient::get(format!(
+        "http://server/_cokret/self/events?realms={DEMO_REALM_ID}"
+    ))
+    .add_header("authorization", format!("Bearer {token}"), true)
+    .send(&app_from_state(state))
+    .await;
+
+    assert_eq!(response.status_code.unwrap(), StatusCode::FORBIDDEN);
+    let body: Value = response.take_json().await.unwrap();
+    assert_agent_scope_denied(&body, "ck.self.events.query.scan");
+}
+
+#[tokio::test]
+async fn agent_session_without_submit_scope_cannot_submit_events() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let token = "agent-local-session-submit";
+    seed_agent_session_with_scopes(&state, token, &["ck.self.events.query.scan"]).await;
+    let event = signed_event_envelope(
+        "ck:event:01904100-0000-7000-8000-5c0fedead001",
+        1,
+        Vec::new(),
+    );
+
+    let mut response = TestClient::post("http://server/_cokret/self/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&event)
+        .send(&app_from_state(state))
+        .await;
+
+    assert_eq!(response.status_code.unwrap(), StatusCode::FORBIDDEN);
+    let body: Value = response.take_json().await.unwrap();
+    assert_agent_scope_denied(&body, "ck.self.events.command.submit");
 }
 
 #[tokio::test]
