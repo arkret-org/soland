@@ -248,6 +248,7 @@ async fn events_subscribe_frames_are_sdk_typed_and_cursor_advances() {
             sender: Some("did:web:admin.example".to_owned()),
             payload: json!({"content": {"body": "durable history"}}),
             created_at: chrono::Utc::now(),
+            received_at: chrono::Utc::now(),
         })
         .await
         .expect("seed projection event");
