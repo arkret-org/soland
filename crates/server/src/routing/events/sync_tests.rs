@@ -1121,6 +1121,7 @@ async fn sync_snapshot_includes_shared_pin_events_for_joined_member() {
             "realm_id": ROSTER_REALM,
             "actor_id": ROSTER_CALLER,
             "membership": "join",
+            "delivery_status": "unroutable",
             "sender": ROSTER_CALLER
         }),
         base + ChronoDuration::seconds(1),
