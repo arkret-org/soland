@@ -36,7 +36,7 @@ pub(super) fn router() -> Router {
 
 #[handler]
 async fn get_settings(depot: &mut Depot, req: &mut Request) -> JsonResult<RuntimeSettings> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let _session = AuthArgs::default()
         .authenticated_session(state, req)
         .await?;
@@ -45,7 +45,7 @@ async fn get_settings(depot: &mut Depot, req: &mut Request) -> JsonResult<Runtim
 
 #[handler]
 async fn put_settings(depot: &mut Depot, req: &mut Request) -> JsonResult<RuntimeSettings> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = AuthArgs::default()
         .authenticated_session(state, req)
         .await?;

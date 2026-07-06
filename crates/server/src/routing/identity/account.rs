@@ -748,7 +748,7 @@ async fn local_account_register(
     depot: &mut Depot,
     body: JsonBody<LocalAccountRegisterRequestBody>,
 ) -> JsonResult<SolandAccountRegisterOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let body = body.into_inner();
     let did = validate_did(&body.did)
         .map_err(|_| AppError::invalid_param("invalid account DID"))?
@@ -842,7 +842,7 @@ async fn local_account_me(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<SolandAccountRegisterOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let account = state
         .persistence
@@ -867,7 +867,7 @@ async fn list_account_localparts(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<AccountLocalpartListOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     require_account_localparts_bearer(state, req)?;
     let account_did = account_did.into_inner();
     validate_did(&account_did).map_err(|_| AppError::invalid_param("invalid account DID"))?;
@@ -902,7 +902,7 @@ async fn add_account_localpart(
     req: &mut Request,
     body: JsonBody<AccountLocalpartAddRequestBody>,
 ) -> JsonResult<AccountLocalpartMutationOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     require_account_localparts_bearer(state, req)?;
     let account_did = account_did.into_inner();
     validate_did(&account_did).map_err(|_| AppError::invalid_param("invalid account DID"))?;
@@ -953,7 +953,7 @@ async fn update_account_localpart(
     req: &mut Request,
     body: JsonBody<AccountLocalpartUpdateRequestBody>,
 ) -> JsonResult<AccountLocalpartMutationOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     require_account_localparts_bearer(state, req)?;
     let account_did = account_did.into_inner();
     validate_did(&account_did).map_err(|_| AppError::invalid_param("invalid account DID"))?;
@@ -1000,7 +1000,7 @@ async fn delete_account_localpart(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<AccountLocalpartDeleteOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     require_account_localparts_bearer(state, req)?;
     let account_did = account_did.into_inner();
     validate_did(&account_did).map_err(|_| AppError::invalid_param("invalid account DID"))?;
@@ -1068,7 +1068,7 @@ async fn account_viewer(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<AccountView> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let account = state
         .persistence
@@ -1118,7 +1118,7 @@ async fn gate_account_register(
     depot: &mut Depot,
     body: JsonBody<AccountRegisterRequestBody>,
 ) -> JsonResult<AccountRegisterOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let body = body.into_inner();
     let did = body.principal_id.as_str().to_owned();
     crate::routing::extensions::sovereign::validate_sovereign_did_registration(state, &did)?;
@@ -1269,7 +1269,7 @@ async fn update_profile(
     // fan out through the directory's actor projection. We store the
     // updates on the `AccountRecord` directly; `demo_actors()` reads
     // them when serving `/_cokret/find/directory/search-actors`.
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
     let accounts_store = state.persistence.accounts();
@@ -1424,7 +1424,7 @@ async fn direct_conversation_resolve(
     req: &mut Request,
     body: JsonBody<DirectConversationResolveRequestBody>,
 ) -> JsonResult<DirectConversationResolveOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
     if body.peer.as_str() == session.actor {

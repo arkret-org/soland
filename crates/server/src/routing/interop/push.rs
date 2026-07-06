@@ -114,7 +114,7 @@ pub(super) async fn push_register(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<cokret_sdk::PushRegisterDeviceOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let auth_result = authenticated_session(state, req);
     let body = body.into_inner();
     let (session, auth_warning) = match auth_result.await {
@@ -348,7 +348,7 @@ pub(super) async fn push_unregister(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<cokret_sdk::PushUnregisterDeviceOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
     if body.device_id.as_str().trim().is_empty() {
@@ -391,7 +391,7 @@ pub(super) async fn push_rules(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<PushRulesOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let rules = list_push_rule_records(state, &session.actor)
         .await
@@ -416,7 +416,7 @@ pub(super) async fn upsert_push_rule(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<UpsertPushRuleOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
     if !is_valid_push_rule_id(&body.rule_id) {
@@ -470,7 +470,7 @@ pub(super) async fn delete_push_rule(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<OkOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let rule_id = rule_id.into_inner();
     if !is_valid_push_rule_id(&rule_id) {
@@ -495,7 +495,7 @@ pub(super) async fn push_notify(
     body: JsonBody<PushNotifyRequestBody>,
     depot: &mut Depot,
 ) -> JsonResult<PushNotifyOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let body = body.into_inner();
     let push_target_id = body
         .notification

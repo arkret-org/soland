@@ -91,7 +91,7 @@ async fn admin_emit_resync_required(
     req: &mut Request,
     body: JsonBody<AdminControlFrameRequestBody>,
 ) -> JsonResult<AdminControlFrameOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let _session = aa.authenticated_session(state, req).await?;
 
     let AdminControlFrameRequestBody {
@@ -142,7 +142,7 @@ async fn admin_emit_unauthorized(
     req: &mut Request,
     body: JsonBody<AdminControlFrameRequestBody>,
 ) -> JsonResult<AdminControlFrameOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let _session = aa.authenticated_session(state, req).await?;
 
     let AdminControlFrameRequestBody {

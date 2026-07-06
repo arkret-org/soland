@@ -195,7 +195,7 @@ async fn put_account_data(
     data_type: PathParam<String>,
     body: JsonBody<AccountDataReplaceRequestBody>,
 ) -> JsonResult<AccountDataEntry> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let data_type = data_type.into_inner();
     validate_data_type(&data_type)?;
@@ -289,7 +289,7 @@ async fn get_account_data(
     req: &mut Request,
     data_type: PathParam<String>,
 ) -> JsonResult<AccountDataEntry> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let data_type = data_type.into_inner();
     validate_data_type(&data_type)?;
@@ -318,7 +318,7 @@ async fn list_account_data(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<AccountDataList> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let entries = state
         .persistence
@@ -344,7 +344,7 @@ async fn delete_account_data(
     req: &mut Request,
     data_type: PathParam<String>,
 ) -> JsonResult<AccountDataDeleteOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let data_type = data_type.into_inner();
     validate_data_type(&data_type)?;

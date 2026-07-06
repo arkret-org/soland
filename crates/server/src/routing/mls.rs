@@ -335,7 +335,7 @@ async fn upload_keypackage(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<KeyPackagesUploadOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
 
     let body = body.into_inner();
@@ -533,7 +533,7 @@ async fn claim_keypackage(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<KeyPackagesClaimOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
 
     let body = body.into_inner();
@@ -777,7 +777,7 @@ async fn consume_keypackages(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<KeyPackagesConsumeOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
     if body.consumer_device_id.to_string() != session.device_id {
@@ -874,7 +874,7 @@ async fn revoke_keypackages(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<KeyPackagesRevokeOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
     let device_id = body.device_id.to_string();
@@ -983,7 +983,7 @@ async fn pending_welcomes(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<PendingWelcomesOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
 
     let cap = limit

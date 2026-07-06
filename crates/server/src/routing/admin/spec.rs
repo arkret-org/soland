@@ -165,7 +165,7 @@ async fn get_server_status(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<AdminServerStatusOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let session = require_admin_principal(state, session)?;
     let account_count = state
@@ -210,7 +210,7 @@ async fn get_server_info(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<AdminServerInfoOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let _ = require_admin_principal(state, session)?;
     json_ok(AdminServerInfoOutcome {
@@ -237,7 +237,7 @@ async fn get_server_stats(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<AdminServerStatsOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let _ = require_admin_principal(state, session)?;
 
@@ -310,7 +310,7 @@ async fn update_account_status(
     account_id: PathParam<String>,
     body: JsonBody<AdminAccountStatusRequestBody>,
 ) -> JsonResult<AdminAccountLifecycleOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let session = require_admin_principal(state, session)?;
     let account_id = account_id.into_inner();
@@ -416,7 +416,7 @@ async fn admin_account_state_action(
     body: JsonBody<AdminAccountStateActionRequestBody>,
     next_state: &str,
 ) -> JsonResult<AdminAccountLifecycleOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let session = require_admin_principal(state, session)?;
     admin_set_account_status(
@@ -550,7 +550,7 @@ async fn revoke_device(
     device_id: PathParam<String>,
     body: JsonBody<AdminRevokeDeviceRequestBody>,
 ) -> JsonResult<AdminRevokeDeviceOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let session = require_admin_principal(state, session)?;
     let device_id = device_id.into_inner();
@@ -606,7 +606,7 @@ async fn get_moderation_queue(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<AdminModerationQueueOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let _ = require_admin_principal(state, session)?;
     let items = state

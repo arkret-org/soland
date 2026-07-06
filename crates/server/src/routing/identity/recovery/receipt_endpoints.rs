@@ -16,7 +16,7 @@ pub(super) async fn recovery_receipts_get(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<SolandRecoveryReceiptsOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let principal =
         resolve_recovery_read_principal(&aa, state, req, principal_id.into_inner()).await?;
     let receipts = state
@@ -68,7 +68,7 @@ pub(super) async fn recovery_receipt_put(
     res: &mut Response,
     req: &mut Request,
 ) -> JsonResult<SolandRecoveryReceiptPutOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let payload = body.into_inner().0;
 

@@ -62,7 +62,7 @@ async fn submit_fanout(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<CapabilityFanoutResponse> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     require_fanout_bearer(state, req)?;
 
     let body_value = body.into_inner();

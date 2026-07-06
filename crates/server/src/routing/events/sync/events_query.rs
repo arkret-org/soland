@@ -26,7 +26,10 @@ use super::*;
 #[endpoint]
 #[tracing::instrument(skip_all, fields(op = "events_subscribe"))]
 pub(crate) async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: &mut Response) {
-    let state = depot.obtain::<AppState>().expect("state injected").clone();
+    let state = depot
+        .get_typed::<AppState>()
+        .expect("state injected")
+        .clone();
     let realms = super::super::query_param_all(req, "realms");
     if realms.is_empty() {
         render_error(
@@ -662,7 +665,7 @@ pub(crate) async fn events_query(
     depot: &mut Depot,
     req: &mut Request,
 ) -> crate::result::JsonResult<EventsQueryOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     reject_events_query_filter_digest_query_params(req)?;
     let filters = events_query_filters_param(req)?;
     let limit = query_param(req, "limit")
@@ -692,7 +695,7 @@ pub(crate) async fn events_query_post(
     depot: &mut Depot,
     req: &mut Request,
 ) -> crate::result::JsonResult<EventsQueryOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let body = body.into_inner();
     let parts = EventsQueryParts {
         realms: body
@@ -1152,7 +1155,7 @@ pub(super) async fn snapshot_head(
     depot: &mut Depot,
     req: &mut Request,
 ) -> crate::result::JsonResult<cokret_sdk::SnapshotManifest> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let realm_id = query_param(req, "realm_id")
         .ok_or_else(|| crate::error::AppError::missing_param("realm_id is required"))?;
     let realm_id = scope_selector_to_realm_id(&realm_id)?;

@@ -91,7 +91,7 @@ async fn list_policy_documents(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<PolicyDocumentsOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let scope = scope.into_inner();
     let subject_ref = subject_ref.into_inner();
@@ -133,7 +133,7 @@ async fn get_policy_document(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<PolicyDocumentOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let policy_id = policy_id.into_inner();
     state
@@ -163,7 +163,7 @@ async fn upsert_policy_document(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<PolicyDocumentOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
     if !is_valid_policy_scope(&body.scope) {
@@ -243,7 +243,7 @@ async fn delete_policy_document(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<OkOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let policy_id = policy_id.into_inner();
     let store = state.persistence.policy_documents();
@@ -274,7 +274,7 @@ async fn policy_check(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<PolicyCheckOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
     if !policy_check_actor_bound_to_session(&body, &session.actor) {

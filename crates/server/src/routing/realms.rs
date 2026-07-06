@@ -115,7 +115,7 @@ async fn list_realm_links(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<RealmLinkList> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let _session = aa.authenticated_session(state, req).await?;
     let realm_id = RealmId::new(realm_id.into_inner())
         .map_err(|e| AppError::invalid_param(format!("realm_id: {e}")))?;
@@ -220,7 +220,7 @@ async fn list_member_applications(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<MemberApplicationListOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     // Fail-closed unless the candidate join-policy profile is declared:
     // surface a canonical 404 so the candidate read surface is indistinguishable
     // from an unrecognised endpoint when the profile is off.
@@ -293,7 +293,7 @@ async fn post_realm_link(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<RealmLinkMutationOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let realm_scope = RealmId::new(realm_id.into_inner())
         .map_err(|e| AppError::invalid_param(format!("realm_id: {e}")))?;
@@ -376,7 +376,7 @@ async fn delete_realm_link(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<RealmLinkMutationOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let realm_id = RealmId::new(realm_id.into_inner())
         .map_err(|e| AppError::invalid_param(format!("realm_id: {e}")))?;
@@ -463,7 +463,7 @@ async fn get_effective_policy(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<RealmEffectivePolicyOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let _session = aa.authenticated_session(state, req).await?;
     let realm_id = realm_id.into_inner();
     organizations::refresh_organization_projection(state)

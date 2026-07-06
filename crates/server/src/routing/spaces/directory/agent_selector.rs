@@ -144,7 +144,7 @@ pub(super) async fn resolve_agent_selector(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<DirectoryAgentSelectorResolutionOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     require_demo_directory_provider(state)?;
     let body = body.into_inner();
     validate_agent_slug(&body.agent_slug).map_err(|_| selector_not_found())?;

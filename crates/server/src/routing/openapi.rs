@@ -737,7 +737,7 @@ const SOLAND_EXTENSION_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &
 #[tracing::instrument(skip_all, fields(op = "cokret_openapi_yaml"))]
 pub(crate) async fn cokret_openapi_yaml(depot: &mut Depot, res: &mut Response) {
     let doc = depot
-        .obtain::<CokretOpenApiDoc>()
+        .get_typed::<CokretOpenApiDoc>()
         .expect("openapi doc injected");
     let spec = doc.0.to_yaml().unwrap_or_else(|error| {
         tracing::error!(%error, "failed to render openapi yaml");

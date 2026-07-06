@@ -188,7 +188,7 @@ async fn assign_queue_item(
     let item_id = req
         .param::<String>("id")
         .ok_or_else(|| AppError::invalid_param("id required"))?;
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let session = require_admin_principal(state, session)?;
     let mut item = state
@@ -245,7 +245,7 @@ async fn prioritise_queue_item(
     let item_id = req
         .param::<String>("id")
         .ok_or_else(|| AppError::invalid_param("id required"))?;
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let session = require_admin_principal(state, session)?;
     let priority = body.into_inner().priority;
@@ -299,7 +299,7 @@ async fn list_appeals(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<ModerationAppealsOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let _ = require_admin_principal(state, session)?;
     let items = state
@@ -331,7 +331,7 @@ async fn get_appeal(
     let appeal_id = req
         .param::<String>("appeal_id")
         .ok_or_else(|| AppError::invalid_param("appeal_id required"))?;
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let _ = require_admin_principal(state, session)?;
     let history = state

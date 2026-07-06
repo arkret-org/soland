@@ -56,7 +56,7 @@ async fn list_realm_organizations(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<RealmOrganizationRelationshipList> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let _session = aa.authenticated_session(state, req).await?;
     let realm_id = realm_id.into_inner();
     let now = chrono::Utc::now();

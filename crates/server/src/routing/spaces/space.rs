@@ -118,7 +118,7 @@ async fn get_realm(
     req: &mut Request,
     realm_id: PathParam<String>,
 ) -> JsonResult<RealmLifecycleView> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let _session = aa.authenticated_session(state, req).await?;
     let realm_id = realm_id.into_inner();
     realm_lifecycle_response(state, &realm_id)
@@ -169,7 +169,7 @@ async fn archive_realm(
     realm_id: PathParam<String>,
     body: JsonBody<RealmArchivePayload>,
 ) -> JsonResult<RealmLifecycleView> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let payload = body
         .into_inner()
@@ -199,7 +199,7 @@ async fn freeze_realm(
     realm_id: PathParam<String>,
     body: JsonBody<RealmFreezePayload>,
 ) -> JsonResult<RealmLifecycleView> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let payload = body
         .into_inner()
@@ -229,7 +229,7 @@ async fn tombstone_realm(
     realm_id: PathParam<String>,
     body: JsonBody<RealmTombstonePayload>,
 ) -> JsonResult<RealmLifecycleView> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let payload = body
         .into_inner()
@@ -259,7 +259,7 @@ async fn destroy_realm(
     realm_id: PathParam<String>,
     body: JsonBody<RealmDestroyPayload>,
 ) -> JsonResult<RealmLifecycleView> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let payload = body
         .into_inner()
@@ -291,7 +291,7 @@ async fn get_realm_effective_moderation_policy(
     req: &mut Request,
     realm_id: PathParam<String>,
 ) -> JsonResult<organizations::RealmEffectiveModerationPolicyOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let realm_id = realm_id.into_inner();
     RealmId::new(realm_id.clone()).map_err(|_| AppError::invalid_param("invalid realm_id"))?;
@@ -320,7 +320,7 @@ async fn upsert_realm_moderation_policy(
     realm_id: PathParam<String>,
     body: JsonBody<RealmModerationPolicyReplaceRequestBody>,
 ) -> JsonResult<organizations::RealmModerationPolicyOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let realm_id = realm_id.into_inner();
     RealmId::new(realm_id.clone()).map_err(|_| AppError::invalid_param("invalid realm_id"))?;
@@ -362,7 +362,7 @@ async fn get_space_cell(
     space_id: PathParam<String>,
     cell_family: PathParam<String>,
 ) -> JsonResult<SpaceCellOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let space_id = space_id.into_inner();
     let cell_family = cell_family.into_inner();
@@ -415,7 +415,7 @@ async fn export_realm(
     req: &mut Request,
     realm_id: PathParam<String>,
 ) -> JsonResult<RealmExportOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let realm_id = realm_id.into_inner();
     RealmId::new(realm_id.clone()).map_err(|_| AppError::invalid_param("invalid realm_id"))?;

@@ -381,7 +381,7 @@ fn mimi_signature_error_window(message: impl Into<String>) -> AppError {
 #[endpoint]
 #[tracing::instrument(skip_all, fields(op = "mimi_protocol_directory"))]
 async fn mimi_protocol_directory(depot: &mut Depot, res: &mut Response) {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     res.render(Json(mimi_provider_directory_value(state)));
 }
 
@@ -392,7 +392,7 @@ async fn mimi_protocol_directory(depot: &mut Depot, res: &mut Response) {
 )]
 #[tracing::instrument(skip_all, fields(op = "mimi_provider_directory"))]
 async fn mimi_provider_directory(depot: &mut Depot, res: &mut Response) {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     res.render(Json(mimi_provider_directory_value(state)));
 }
 
@@ -407,7 +407,7 @@ async fn mimi_key_material(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<MimiKeyMaterialOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let body = typed_body_value(body.into_inner(), "mimi key material")?;
     verify_mimi_write_service_proof(state, req, &body, None)?;
     if let Some(message) = unsupported_mimi_draft(&body) {
@@ -449,7 +449,7 @@ async fn mimi_room_update(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<MimiRoomUpdateOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let room_id = strand_id.into_inner();
     let body = typed_body_value(body.into_inner(), "mimi room update")?;
     let room_uri = mimi_room_uri(state, &room_id);
@@ -521,7 +521,7 @@ async fn mimi_notify(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<MimiNotifyOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let room_id = strand_id.into_inner();
     let body = typed_body_value(body.into_inner(), "mimi notify")?;
     let room_uri = mimi_room_uri(state, &room_id);
@@ -593,7 +593,7 @@ async fn mimi_room_message(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<MimiSubmitMessageOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let room_id = strand_id.into_inner();
     let body = typed_body_value(body.into_inner(), "mimi submit message")?;
     let room_uri = mimi_room_uri(state, &room_id);
@@ -783,7 +783,7 @@ async fn mimi_group_info(
     strand_id: PathParam<String>,
     depot: &mut Depot,
 ) -> JsonResult<MimiGroupInfoOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let room_id = strand_id.into_inner();
     if !valid_mimi_room_id(&room_id) {
         return Err(AppError::invalid_param("invalid MIMI room id"));
@@ -821,7 +821,7 @@ async fn mimi_consent_request(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<MimiRequestConsentOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let body = typed_body_value(body.into_inner(), "mimi consent request")?;
     if let Some(message) = unsupported_mimi_draft(&body) {
         return Err(AppError::invalid_param(message).with_wire_code("mimi_draft_unsupported"));
@@ -876,7 +876,7 @@ async fn mimi_consent_update(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<MimiUpdateConsentOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let body = typed_body_value(body.into_inner(), "mimi consent update")?;
     if let Some(message) = unsupported_mimi_draft(&body) {
         return Err(AppError::invalid_param(message).with_wire_code("mimi_draft_unsupported"));
@@ -973,7 +973,7 @@ async fn mimi_identifiers_query(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<MimiIdentifierQueryOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let body = typed_body_value(body.into_inner(), "mimi identifiers query")?;
     verify_mimi_write_service_proof(state, req, &body, None)?;
     if let Some(message) = unsupported_mimi_draft(&body) {
@@ -1039,7 +1039,7 @@ async fn mimi_report_abuse(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<MimiReportAbuseOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let body = typed_body_value(body.into_inner(), "mimi report abuse")?;
     verify_mimi_write_service_proof(state, req, &body, None)?;
     if let Some(message) = unsupported_mimi_draft(&body) {
@@ -1260,7 +1260,7 @@ async fn mimi_proxy_download(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<MimiProxyDownloadOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let body = typed_body_value(body.into_inner(), "mimi proxy download")?;
     verify_mimi_write_service_proof(state, req, &body, None)?;
     if let Some(message) = unsupported_mimi_draft(&body) {

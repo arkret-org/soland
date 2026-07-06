@@ -18,7 +18,7 @@ pub(in crate::routing::events) fn router() -> Router {
 #[endpoint]
 #[tracing::instrument(skip_all, fields(op = "events_describe"))]
 async fn events_describe(depot: &mut Depot) -> JsonResult<cokret_sdk::ServerDescription> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let mut description = describe(
         &state.config.service_did,
         &state.config.public_base_url,
@@ -60,7 +60,7 @@ async fn events_describe(depot: &mut Depot) -> JsonResult<cokret_sdk::ServerDesc
 #[endpoint]
 #[tracing::instrument(skip_all, fields(op = "submit_event"))]
 async fn submit_event(depot: &mut Depot, req: &mut Request, res: &mut Response) {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     // api-conventions.md §6 — read the generic `Idempotency-Key` header before
     // the body is consumed; an empty / blank value is treated as absent so a
     // misconfigured client does not collapse every write onto one key.
@@ -351,7 +351,7 @@ async fn get_event(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<EventView> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let event_id = event_id.into_inner();
     let record = state
@@ -380,7 +380,7 @@ async fn resolve_events(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<EventsResolveOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
     if body.event_ids.len() + body.event_digests.len() > MAX_EVENT_RESOLVE {
@@ -561,7 +561,7 @@ async fn events_query_durable_scope(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<EventsQueryOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let response = events_query_durable_scope_impl(state, &session, req).await?;
     json_ok(response)
@@ -578,7 +578,7 @@ async fn events_frontier(
     depot: &mut Depot,
     req: &mut Request,
 ) -> crate::result::JsonResult<EventsFrontierAccountClientState> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let actor_id = query_param(req, "actor_id").or_else(|| query_param(req, "actor"));
     let realm_selector = query_param(req, "realm_id");

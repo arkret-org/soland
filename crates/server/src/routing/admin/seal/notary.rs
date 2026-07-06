@@ -223,7 +223,7 @@ pub(crate) async fn admin_get_notary(
     req: &mut Request,
     realm_id: PathParam<String>,
 ) -> JsonResult<NotaryValue> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let _session = aa.authenticated_session(state, req).await?;
     let realm_id = realm_id.into_inner();
     let cell = notary_cell_for(&realm_id)?;
@@ -270,7 +270,7 @@ pub(crate) async fn admin_reconfigure_notary(
     realm_id: PathParam<String>,
     body: JsonBody<NotaryReconfigRequestBody>,
 ) -> JsonResult<SubmitControlMoveOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let admin_session = super::super::require_admin_principal(state, session)?;
     super::super::require_admin_scope(

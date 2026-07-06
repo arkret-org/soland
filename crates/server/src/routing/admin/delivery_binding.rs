@@ -111,7 +111,7 @@ pub(super) async fn admin_get_realm_delivery_binding_policy(
     req: &mut Request,
     realm_id: PathParam<String>,
 ) -> JsonResult<RealmDeliveryBindingPolicyOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let _admin_session = super::require_admin_principal(state, session)?;
     let realm_id = realm_id.into_inner();
@@ -177,7 +177,7 @@ pub(super) async fn admin_list_member_routability(
     req: &mut Request,
     realm_id: PathParam<String>,
 ) -> JsonResult<MemberRoutabilityListOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let _ = super::require_admin_principal(state, session)?;
     let realm_id = realm_id.into_inner();
@@ -312,7 +312,7 @@ pub(super) async fn admin_list_delivery_binding_handovers(
     req: &mut Request,
     realm_id: PathParam<String>,
 ) -> JsonResult<DeliveryBindingHandoverListOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let _ = super::require_admin_principal(state, session)?;
     let realm_id = realm_id.into_inner();

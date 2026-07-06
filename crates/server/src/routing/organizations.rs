@@ -254,7 +254,7 @@ async fn list_organizations(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<OrganizationListOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let _session = aa.authenticated_session(state, req).await?;
     refresh_organization_projection(state)
         .await
@@ -285,7 +285,7 @@ async fn upsert_organization(
     req: &mut Request,
     body: JsonBody<UpsertOrganizationRequestBody>,
 ) -> JsonResult<OrganizationView> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     // Registering an organization (a verified, listable org-principal record) is
     // a deployment-governance act, gated to the server's configured admin
@@ -353,7 +353,7 @@ async fn get_organization(
     req: &mut Request,
     organization_did: PathParam<String>,
 ) -> JsonResult<OrganizationView> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let _session = aa.authenticated_session(state, req).await?;
     refresh_organization_projection(state)
         .await
@@ -383,7 +383,7 @@ async fn get_organization_policy(
     req: &mut Request,
     organization_did: PathParam<String>,
 ) -> JsonResult<OrganizationPolicyView> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let _session = aa.authenticated_session(state, req).await?;
     refresh_organization_projection(state)
         .await
@@ -414,7 +414,7 @@ async fn upsert_organization_policy(
     organization_did: PathParam<String>,
     body: JsonBody<OrganizationModerationPolicyReplaceRequestBody>,
 ) -> JsonResult<OrganizationPolicyView> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let organization_id = normalized_organization_id(&organization_did.into_inner())?;
     ensure_organization_placeholder(state, &organization_id, &session.actor)
@@ -506,7 +506,7 @@ async fn link_organization_realm(
     organization_did: PathParam<String>,
     body: JsonBody<LinkOrganizationRealmRequestBody>,
 ) -> JsonResult<OrganizationRealmLinkOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let organization_id = normalized_organization_id(&organization_did.into_inner())?;
     let body = body.into_inner();

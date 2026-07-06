@@ -44,7 +44,7 @@ struct WellKnownCokretOutcome {
 )]
 #[tracing::instrument(skip_all, fields(op = "org.cokret.soland.well_known.cokret"))]
 async fn well_known_cokret(depot: &mut Depot) -> JsonResult<WellKnownCokretOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     // Spec: B.3 — server description endpoint. Returns the small set
     // of identifiers a peer needs before opening an authenticated
     // session: service DID, trust domain, public base URL, and the

@@ -506,7 +506,7 @@ pub(super) async fn resolve_handle(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<DirectoryHandleResolutionOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let body = body.into_inner();
     if body.handle.trim().is_empty() {
         return Err(AppError::missing_param("handle is required"));
@@ -731,7 +731,7 @@ pub(super) async fn list_handles_for_subject(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<DirectorySubjectHandleList> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     require_demo_directory_provider(state)?;
     let body = body.into_inner();
     let subject_did = body.subject.clone();

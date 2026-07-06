@@ -11,7 +11,7 @@ pub(super) async fn search_actors(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<DirectoryActorSearchOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     require_demo_directory_provider(state)?;
     let body = body.into_inner();
     let limit = checked_limit(body.limit.map(|limit| limit as usize))?;
@@ -59,7 +59,7 @@ pub(super) async fn search_users(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<DirectoryUserSearchOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     require_demo_directory_provider(state)?;
     let body = body.into_inner();
     let limit = checked_limit(body.limit.map(|limit| limit as usize))?;

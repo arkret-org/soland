@@ -200,7 +200,7 @@ pub(super) async fn admin_collection(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<AdminCollectionOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     if !state.config.development_mode && !state.is_admin_principal(&session.actor) {
         return Err(AppError::capability_denied(
@@ -352,7 +352,7 @@ pub(super) async fn admin_create_realm(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<AdminRealmItem> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
     let title = body.title.trim();
@@ -419,7 +419,7 @@ pub(super) async fn admin_get_realm(
     realm_id: PathParam<String>,
     depot: &mut Depot,
 ) -> JsonResult<AdminRealmItem> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let realm_id = realm_id.into_inner();
     json_ok(admin_get_realm_item(state, &realm_id).await?)
 }
@@ -436,7 +436,7 @@ pub(super) async fn admin_delete_realm(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<AdminRealmDeleteOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let realm_id = realm_id.into_inner();
     let realm_scope = RealmId::new(realm_id.clone())
@@ -472,7 +472,7 @@ pub(super) async fn admin_list_realm_members(
     realm_id: PathParam<String>,
     depot: &mut Depot,
 ) -> JsonResult<Vec<AdminRealmMemberItem>> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let realm_id = realm_id.into_inner();
     json_ok(admin_realm_member_items(state, &realm_id).await?)
 }

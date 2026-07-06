@@ -134,7 +134,7 @@ async fn admin_get_cell(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<AdminCellStateOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let _session = aa.authenticated_session(state, req).await?;
 
     let Some(cell_id_str) = req.param::<String>("cell_id") else {
@@ -231,7 +231,7 @@ async fn admin_list_cells(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<AdminCellListOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let _session = aa.authenticated_session(state, req).await?;
 
     let realm = required_realm_scope(req)?;

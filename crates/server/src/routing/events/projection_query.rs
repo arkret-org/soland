@@ -950,7 +950,7 @@ async fn list_space_container_projections(
     realm_id: PathParam<String>,
     include_terminal: QueryParam<bool, false>,
 ) -> JsonResult<ProjectionSpaceList> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let realm_id = validate_realm_id(realm_id.into_inner())?;
     let response_realm_id = RealmId::new(realm_id.clone())
@@ -1035,7 +1035,7 @@ async fn list_strand_projections(
     realm_id: PathParam<String>,
     include_terminal: QueryParam<bool, false>,
 ) -> JsonResult<ProjectionStrandList> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let realm_id = validate_realm_id(realm_id.into_inner())?;
     let response_realm_id = RealmId::new(realm_id.clone())
@@ -1194,7 +1194,7 @@ async fn get_strand_projection(
     req: &mut Request,
     strand_id: PathParam<String>,
 ) -> JsonResult<StrandProjectionView> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let strand_id = strand_id.into_inner();
     StrandId::new(strand_id.clone())
@@ -1274,7 +1274,7 @@ async fn list_relation_projections(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<RelationEdgeList> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let from_ref = crate::routing::system::util::query_param(req, "from_ref");
     let to_ref = crate::routing::system::util::query_param(req, "to_ref");
@@ -1354,7 +1354,7 @@ async fn get_document_projection(
     realm_id: PathParam<String>,
     morph_id: PathParam<String>,
 ) -> JsonResult<DocumentMorphProjectionOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let realm_id = validate_realm_id(realm_id.into_inner())?;
     let morph_id = morph_id.into_inner();
@@ -1442,7 +1442,7 @@ async fn list_morph_projections(
     realm_id: PathParam<String>,
     include_terminal: QueryParam<bool, false>,
 ) -> JsonResult<ProjectionMorphList> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let realm_id = validate_realm_id(realm_id.into_inner())?;
     let response_realm_id = RealmId::new(realm_id.clone())

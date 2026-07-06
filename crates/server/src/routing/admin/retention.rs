@@ -95,7 +95,7 @@ async fn configure_retention_policy(
     req: &mut Request,
     body: JsonBody<ConfigureRetentionPolicyRequestBody>,
 ) -> JsonResult<RetentionPolicyOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
     let realm_id = required_string(body.realm_id.as_deref(), "realm_id")?;
@@ -143,7 +143,7 @@ async fn sweep_retention_policy(
     req: &mut Request,
     body: JsonBody<SweepRetentionPolicyRequestBody>,
 ) -> JsonResult<RetentionSweepOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
     let realm_id = required_string(body.realm_id.as_deref(), "realm_id")?;

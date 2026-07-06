@@ -66,7 +66,7 @@ pub(super) fn router() -> Router {
 )]
 #[tracing::instrument(skip_all, fields(op = "ck.peer.events.query.describe"))]
 async fn peer_events_describe(depot: &mut Depot) -> JsonResult<PeerEventsDescribeOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let service_did = Did::new(state.config.service_did.clone())
         .map_err(|_| AppError::internal("service_did is invalid"))?;
     json_ok(PeerEventsDescribeOutcome {
@@ -102,7 +102,7 @@ async fn peer_events_describe(depot: &mut Depot) -> JsonResult<PeerEventsDescrib
 #[handler]
 #[tracing::instrument(skip_all, fields(op = "ck.peer.events.command.submit"))]
 async fn peer_events_submit(depot: &mut Depot, req: &mut Request, res: &mut Response) {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let body_value = match req.parse_json::<Value>().await {
         Ok(body) => body,
         Err(_) => {
@@ -129,7 +129,7 @@ async fn peer_events_submit(depot: &mut Depot, req: &mut Request, res: &mut Resp
 )]
 #[tracing::instrument(skip_all, fields(op = "ck.peer.events.query.scan"))]
 async fn peer_events_query(depot: &mut Depot, req: &mut Request) -> JsonResult<EventsQueryOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     validate_peer_request(state, req, None).await?;
     let source_service_did = source_service_did_from_request(req)?;
     let parts = PeerEventsQueryParts::from_query(req)?;
@@ -146,7 +146,7 @@ async fn peer_events_query_post(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<EventsQueryOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let request = parse_json_body::<EventsQueryPostRequestBody>(
         req,
         "invalid ck.peer.events.query.scan request body",
@@ -171,7 +171,7 @@ async fn peer_events_resolve(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<EventsResolveOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let request = parse_json_body::<EventsResolveRequestBody>(
         req,
         "invalid ck.peer.events.query.resolve request body",
@@ -263,7 +263,7 @@ async fn peer_events_frontier(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<EventsFrontierFederationPeerState> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     validate_peer_request(state, req, None).await?;
     let source_service_did = source_service_did_from_request(req)?;
     let realm_id = query_param(req, "realm_id")
@@ -381,7 +381,7 @@ async fn peer_snapshot_head(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<PeerSnapshotHeadOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     validate_peer_request(state, req, None).await?;
     Err(AppError::new(
         crate::error::ErrorCode::NotImplemented,

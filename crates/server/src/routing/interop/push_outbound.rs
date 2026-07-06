@@ -77,7 +77,7 @@ pub(super) fn router() -> Router {
 #[endpoint]
 #[tracing::instrument(skip_all, fields(op = "outbound_push_bridge_describe"))]
 async fn outbound_push_bridge_describe(depot: &mut Depot, res: &mut Response) {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     res.render(Json(OutboundPushBridgeDescribeOutcome {
         contract: "cokret.rest.outbound_push_bridge.v1".to_owned(),
         version: "2026-05-04-scaffold".to_owned(),
@@ -179,7 +179,7 @@ async fn outbound_push_bridge_resolve(
     body: JsonBody<OutboundPushBridgeResolveRequestBody>,
     depot: &mut Depot,
 ) -> JsonResult<OutboundPushBridgeResolveOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let body = body.into_inner();
 
     let push_gateway_url = body.push_gateway_url.trim().to_owned();
@@ -246,7 +246,7 @@ async fn outbound_push_bridge_fetch(
     body: JsonBody<OutboundPushBridgeFetchRequestBody>,
     depot: &mut Depot,
 ) -> JsonResult<OutboundPushBridgeFetchOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let body = body.into_inner();
 
     let push_gateway_url = body.push_gateway_url.trim().to_owned();
@@ -388,7 +388,7 @@ async fn outbound_push_bridge_fetch(
 #[endpoint]
 #[tracing::instrument(skip_all, fields(op = "outbound_push_bridge_cache_status"))]
 async fn outbound_push_bridge_cache_status(depot: &mut Depot, res: &mut Response) {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let entries = state
         .persistence
         .push_bridge_cache()
@@ -404,7 +404,7 @@ async fn outbound_push_bridge_cache_status(depot: &mut Depot, res: &mut Response
 #[endpoint]
 #[tracing::instrument(skip_all, fields(op = "outbound_push_bridge_cache_export"))]
 async fn outbound_push_bridge_cache_export(depot: &mut Depot, res: &mut Response) {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let entries = state
         .persistence
         .push_bridge_cache()
@@ -434,7 +434,7 @@ async fn outbound_push_bridge_cache_import(
     body: JsonBody<OutboundPushBridgeCacheImportRequestBody>,
     depot: &mut Depot,
 ) -> JsonResult<OutboundPushBridgeCacheImportOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let body = body.into_inner();
     let replace_existing = body.replace_existing;
     let cache = state.persistence.push_bridge_cache();
@@ -501,7 +501,7 @@ async fn outbound_push_bridge_cache_invalidate(
     body: JsonBody<OutboundPushBridgeCacheInvalidateRequestBody>,
     depot: &mut Depot,
 ) -> JsonResult<OutboundPushBridgeCacheInvalidateOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let body = body.into_inner();
     let cache = state.persistence.push_bridge_cache();
     let removed_count = if let Some(push_gateway_url) = body

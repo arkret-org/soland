@@ -12,7 +12,7 @@ use crate::routing::spaces::space::{
 pub(super) async fn account_describe(
     depot: &mut Depot,
 ) -> crate::result::JsonResult<SyncDescription> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let supported_sync_profiles = vec![
         "initial".to_owned(),
         "incremental".to_owned(),
@@ -132,7 +132,10 @@ pub(crate) async fn account_subscribe_session_or_render(
 )]
 #[tracing::instrument(skip_all, fields(op = "ck.self.account.stream.subscribe"))]
 pub(super) async fn account_subscribe(depot: &mut Depot, req: &mut Request, res: &mut Response) {
-    let state = depot.obtain::<AppState>().expect("state injected").clone();
+    let state = depot
+        .get_typed::<AppState>()
+        .expect("state injected")
+        .clone();
     let body = account_subscribe_query(req);
     let max_wait_ms = parse_max_wait_ms(req);
     let session = match account_subscribe_session_or_render(&state, req, res).await {

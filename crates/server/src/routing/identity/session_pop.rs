@@ -65,7 +65,10 @@ pub async fn verify_session_pop(
     res: &mut Response,
     ctrl: &mut FlowCtrl,
 ) {
-    let state = depot.obtain::<AppState>().expect("state injected").clone();
+    let state = depot
+        .get_typed::<AppState>()
+        .expect("state injected")
+        .clone();
     match enforce_session_pop(&state, req).await {
         Ok(()) => {
             ctrl.call_next(req, depot, res).await;

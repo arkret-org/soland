@@ -96,7 +96,7 @@ pub(crate) async fn federation_transaction(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<cokret_sdk::FederationTransactionOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     ensure_private_inbound_write_rail_local(state)?;
     let txn_id = txn_id.into_inner();
     if !is_valid_federation_txn_id(&txn_id) {
@@ -398,7 +398,7 @@ pub(crate) async fn federation_push_operations(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<cokret_sdk::FederationPushOperationsOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     ensure_private_inbound_write_rail_local(state)?;
     let body = body.into_inner();
     if !verify_federation_origin(body.origin.as_str()) {
@@ -438,7 +438,7 @@ pub(crate) async fn federation_actor_events(
     actor_id: PathParam<String>,
     depot: &mut Depot,
 ) -> JsonResult<FederationActorEventsOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     ensure_private_inbound_read_rail_local(state)?;
     let actor = actor_id.into_inner();
     if Did::new(actor.clone()).is_err() {
@@ -515,7 +515,7 @@ pub(crate) async fn federation_pull_operations(
     snapshot_bootstrap: QueryParam<bool, false>,
     depot: &mut Depot,
 ) -> JsonResult<cokret_sdk::FederationPullOperationsOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     ensure_private_inbound_read_rail_local(state)?;
     let realm_id = realm_id.into_inner();
     if cokret_sdk::RealmId::new(realm_id.clone()).is_err() {
@@ -622,7 +622,7 @@ pub(crate) async fn federation_backfill_operations(
     body: JsonBody<FederationBackfillOperationsRequestBody>,
     depot: &mut Depot,
 ) -> JsonResult<FederationBackfillOperationsOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     ensure_private_inbound_write_rail_local(state)?;
     let body = body.into_inner();
     let realm_id = body.realm_id.trim().to_owned();
@@ -727,7 +727,7 @@ pub(crate) async fn federation_operation_frontier(
     realm_id: QueryParam<String, true>,
     depot: &mut Depot,
 ) -> JsonResult<FederationOperationFrontierOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     ensure_private_inbound_read_rail_local(state)?;
     let realm_id = realm_id.into_inner();
     if cokret_sdk::RealmId::new(realm_id.clone()).is_err() {
@@ -746,7 +746,7 @@ pub(crate) async fn federation_realm_members(
     realm_id: QueryParam<String, true>,
     depot: &mut Depot,
 ) -> JsonResult<cokret_sdk::FederationRealmMemberList> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     ensure_private_inbound_read_rail_local(state)?;
     let realm_id_value = RealmId::new(realm_id.into_inner())
         .map_err(|_| AppError::invalid_param("invalid realm_id"))?;
@@ -783,7 +783,7 @@ pub(crate) async fn federation_verify_actor(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<cokret_sdk::FederationVerifyActorOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let body = body.into_inner();
     let request_hash = federation_verify_actor_digest(&body).map_err(|message| {
         AppError::new(crate::error::ErrorCode::SchemaViolation, message)
@@ -866,7 +866,7 @@ pub(crate) async fn federation_seals_pull(
     depot: &mut Depot,
     realm_id: QueryParam<String, true>,
 ) -> JsonResult<FederationSealsOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     ensure_private_inbound_read_rail_local(state)?;
     let realm_id = realm_id.into_inner();
     if cokret_sdk::RealmId::new(realm_id.clone()).is_err() {
@@ -898,7 +898,7 @@ pub(crate) async fn federation_seals_push(
     depot: &mut Depot,
     body: JsonBody<FederationSealsPushRequestBody>,
 ) -> JsonResult<FederationSealsPushOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     ensure_private_inbound_write_rail_local(state)?;
     let body = body.into_inner();
     if !verify_federation_origin(&body.origin) {

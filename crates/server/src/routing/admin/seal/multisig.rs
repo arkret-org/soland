@@ -57,7 +57,7 @@ pub(crate) async fn admin_submit_multisig_partial(
     seal_id: PathParam<String>,
     body: JsonBody<PartialSignatureBody>,
 ) -> JsonResult<PartialSubmitOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let _session = super::super::require_admin_principal(state, session)?;
     let realm_id_str = realm_id.into_inner();
@@ -175,7 +175,7 @@ pub(crate) async fn admin_list_multisig_pending(
     req: &mut Request,
     realm_id: PathParam<String>,
 ) -> JsonResult<MultisigPendingOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let _session = aa.authenticated_session(state, req).await?;
     let realm_id_str = realm_id.into_inner();
     let _realm_id = RealmId::new(realm_id_str.clone()).map_err(|e| {
@@ -269,7 +269,7 @@ pub(crate) async fn admin_rotate_signing_key(
     req: &mut Request,
     realm_id: PathParam<String>,
 ) -> JsonResult<RotateSigningKeyOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let admin_session = super::super::require_admin_principal(state, session)?;
     super::super::require_admin_scope(

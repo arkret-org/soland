@@ -134,7 +134,7 @@ async fn admin_get_realm_media_service(
     req: &mut Request,
     realm_id: PathParam<String>,
 ) -> JsonResult<RealmMediaServiceOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let session = require_admin_principal(state, session)?;
     let realm_id = realm_id.into_inner();
@@ -180,7 +180,7 @@ async fn get_media_statistics(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<MediaStatisticsOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let session = require_admin_principal(state, session)?;
     let blobs = media_snapshot(state).await;
@@ -238,7 +238,7 @@ async fn get_media_by_actor(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<MediaByActorOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let session = require_admin_principal(state, session)?;
     let blobs = media_snapshot(state).await;

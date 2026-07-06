@@ -231,7 +231,7 @@ async fn peer_contacts_submit(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<PeerContactDeliveryOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let delivery = req
         .parse_json::<PeerContactDeliveryRequest>()
         .await

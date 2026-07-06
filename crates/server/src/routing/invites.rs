@@ -60,7 +60,7 @@ async fn peer_invites_submit(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<InviteDeliveryOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let delivery = req
         .parse_json::<InviteDeliveryRequest>()
         .await
@@ -240,7 +240,7 @@ async fn resolve_invite_locator(
         .with_status(StatusCode::BAD_REQUEST)
         .with_wire_code("schema_violation"));
     }
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let body = req
         .parse_json::<InviteLocatorResolveRequestBody>()
         .await

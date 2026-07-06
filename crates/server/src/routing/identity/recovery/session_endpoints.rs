@@ -189,7 +189,7 @@ pub(super) async fn recovery_session_create(
     res: &mut Response,
     req: &mut Request,
 ) -> JsonResult<RecoverySessionState> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let principal = session.actor.clone();
     let payload = body.into_inner();
@@ -328,7 +328,7 @@ pub(super) async fn recovery_session_get(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<RecoverySessionState> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let mut record =
         load_owned_recovery_session(&aa, state, req, &recovery_session_id.into_inner()).await?;
     record = expire_if_elapsed(state, record).await?;
@@ -352,7 +352,7 @@ pub(super) async fn recovery_session_proof_submit(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<RecoverySessionProofSubmitOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session_id = recovery_session_id.into_inner();
     let record = load_owned_recovery_session(&aa, state, req, &session_id).await?;
     let record = expire_if_elapsed(state, record).await?;
@@ -983,7 +983,7 @@ pub(super) async fn recovery_session_complete(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<RecoverySessionCompleteOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session_id = recovery_session_id.into_inner();
     let complete_request = body.into_inner();
     let authorization_event_id_typed = complete_request.authorization_event_id.clone();

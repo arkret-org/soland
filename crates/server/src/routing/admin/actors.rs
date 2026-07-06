@@ -27,7 +27,7 @@ async fn get_actor(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<super::collection::AdminActorProjection> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let session = require_admin_principal(state, session)?;
     let actor_id = actor_id.into_inner();

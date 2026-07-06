@@ -57,7 +57,7 @@ async fn keys_upload(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<KeysUploadOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     if is_device_revoked(state, &session.actor, &session.device_id).await {
         return Err(AppError::unauthenticated("device revoked"));
@@ -200,7 +200,7 @@ async fn keys_query(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<KeysQueryOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
 
     let body = body.into_inner();
@@ -454,7 +454,7 @@ async fn keys_claim(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<KeysClaimOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let _ = aa.authenticated_session(state, req).await?;
 
     let body = body.into_inner();
@@ -527,7 +527,7 @@ async fn device_signing_keys_query(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<DeviceSigningKeyDirectoryOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     require_device_directory_bearer(state, req)?;
 
     let body = body.into_inner();

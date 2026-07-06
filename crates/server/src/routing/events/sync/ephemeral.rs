@@ -26,7 +26,7 @@ pub(super) async fn submit_ephemeral(
     depot: &mut Depot,
     req: &mut Request,
 ) -> crate::result::JsonResult<EphemeralSubmitOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let envelope = body.into_inner();
 

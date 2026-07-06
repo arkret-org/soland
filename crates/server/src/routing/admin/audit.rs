@@ -127,7 +127,7 @@ async fn verify_franking_proof(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<FrankingProofVerifyOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let _session = aa.authenticated_session(state, req).await?;
     let proof = body.into_inner();
     let declared = proof
@@ -168,7 +168,7 @@ async fn audit_erasure_receipts(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<AuditErasureReceiptsOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     // Authenticate the session so the endpoint isn't usable
     // unauthenticated; we don't restrict cross-actor reads because the
     // receipt list is the auditable surface (see method doc above).
@@ -234,7 +234,7 @@ async fn post_user_action(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<OkOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
     let actor = body
@@ -286,7 +286,7 @@ async fn audit_events(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<AuditEventsOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let realm_id_filter = query_param(req, "realm_id");
     let kind_filter = query_param(req, "kind");

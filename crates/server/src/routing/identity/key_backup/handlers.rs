@@ -249,7 +249,7 @@ pub(super) async fn put_key_backup(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<KeysBackupsReplaceOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let backup_id = backup_id.into_inner();
     if backup_id.trim().is_empty() {
@@ -353,7 +353,7 @@ pub(super) async fn list_key_backups(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<KeysBackupsList> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let series_filter = series_id.into_inner();
     let backup_class_filter = backup_class.into_inner();
@@ -416,7 +416,7 @@ pub(super) async fn unlock_key_backup(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<KeyBackup> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let backup_id = backup_id.into_inner();
     // spec `keys_backups_unlock_request_body` (additionalProperties: false):
@@ -501,7 +501,7 @@ pub(super) async fn delete_key_backup(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<KeysBackupsDeleteOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let backup_id = backup_id.into_inner();
     let store = state.persistence.key_backups();

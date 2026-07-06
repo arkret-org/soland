@@ -49,7 +49,7 @@ async fn create_invite_token(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<super::collection::AdminInviteTokenItem> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let session = require_admin_principal(state, session)?;
     let body = body.into_inner();
@@ -125,7 +125,7 @@ async fn revoke_invite_token(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<super::collection::AdminInviteTokenItem> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let session = require_admin_principal(state, session)?;
     let invite_id = invite_id.into_inner();

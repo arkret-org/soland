@@ -833,7 +833,7 @@ pub(super) async fn account_cursor_revoke(
     req: &mut Request,
 ) -> crate::result::JsonResult<cokret_sdk::AccountCursorRevokeOutcome> {
     use crate::error::AppError;
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
 

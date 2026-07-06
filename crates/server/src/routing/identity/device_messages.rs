@@ -68,7 +68,7 @@ async fn send_device_messages(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<DeviceMessagesSendOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let idempotency_key = req
         .headers()
@@ -251,7 +251,7 @@ async fn get_device_messages(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<DeviceMessagesGetOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let cursor = from.into_inner();
     let cursor_position = match cursor {
@@ -382,7 +382,7 @@ async fn ack_device_messages(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<DeviceMessagesAckOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
     let ack_token = body.ack_token.trim();

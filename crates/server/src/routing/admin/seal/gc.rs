@@ -32,7 +32,7 @@ pub(crate) async fn admin_list_gc_candidates(
     req: &mut Request,
     realm_id: PathParam<String>,
 ) -> JsonResult<GcCandidatesOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let _session = aa.authenticated_session(state, req).await?;
     let realm_id_str = realm_id.into_inner();
     let realm = RealmId::new(realm_id_str.clone()).map_err(|e| {

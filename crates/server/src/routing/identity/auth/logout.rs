@@ -37,7 +37,7 @@ pub(super) async fn logout(
     req: &mut Request,
 ) -> JsonResult<LogoutOutcome> {
     let _ = &aa; // header presence registered with the OpenAPI doc
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
 
     // §4.1 — the Authorization Bearer is the ck.session.grant, not a soland
     // principal bearer. Identify the grant's subject + device by introspecting
@@ -368,7 +368,7 @@ pub(super) async fn session_revoke(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<SessionRevokeOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     // The empty-body form is valid, so parse by hand instead of `JsonBody`
     // (which answers a missing body with a 400 before the handler runs).

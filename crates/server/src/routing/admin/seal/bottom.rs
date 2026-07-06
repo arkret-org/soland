@@ -135,7 +135,7 @@ pub(crate) async fn admin_list_realm_bottom(
     req: &mut Request,
     realm_id: PathParam<String>,
 ) -> JsonResult<Vec<BottomEntry>> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let _session = aa.authenticated_session(state, req).await?;
     let realm_id = realm_id.into_inner();
     let _ = RealmId::new(realm_id.clone()).map_err(|e| {
@@ -156,7 +156,7 @@ pub(crate) async fn admin_list_bottom_global(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<Vec<BottomEntry>> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let _session = aa.authenticated_session(state, req).await?;
     let mut out = Vec::new();
     let realm_ids: Vec<String> = {
@@ -198,7 +198,7 @@ pub(crate) async fn admin_repair_bottom(
     cell_id: PathParam<String>,
     body: JsonBody<BottomRepairRequestBody>,
 ) -> JsonResult<SubmitControlMoveOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let admin_session = super::super::require_admin_principal(state, session)?;
     super::super::require_admin_scope(

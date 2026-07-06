@@ -14,7 +14,7 @@ pub(super) async fn private_contact_discovery(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<DirectoryPrivateContactDiscoveryOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     require_demo_directory_provider(state)?;
     let _ = authenticated_session(state, req).await.ok();
     let _ = body.into_inner();
@@ -34,7 +34,7 @@ pub(super) async fn directory_announce(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<DirectoryAnnounceOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = authenticated_session(state, req)
         .await
         .map_err(|(status, code, message)| {
@@ -82,7 +82,7 @@ pub(super) async fn directory_withdraw(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<DirectoryWithdrawOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = authenticated_session(state, req)
         .await
         .map_err(|(status, code, message)| {
@@ -112,7 +112,7 @@ pub(super) async fn directory_subscribe(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<DirectoryPushRegisterOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let _session = authenticated_session(state, req).await.ok();
     let body = body.into_inner();
     let _ = body;

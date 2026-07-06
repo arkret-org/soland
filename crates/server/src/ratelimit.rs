@@ -378,7 +378,7 @@ impl Handler for RateLimiterMiddleware {
         // limiter's boot config only matters in unit tests that exercise the
         // middleware without injected state.
         let effective = depot
-            .obtain::<crate::state::AppState>()
+            .get_typed::<crate::state::AppState>()
             .ok()
             .map(|state| state.settings().rate_limit.to_limiter_config())
             .unwrap_or_else(|| self.limiter.config.clone());

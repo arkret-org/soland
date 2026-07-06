@@ -272,7 +272,7 @@ async fn tus_options(res: &mut Response) {
 #[handler]
 #[tracing::instrument(skip_all, fields(op = "blob_resumable_create"))]
 async fn tus_create(depot: &mut Depot, req: &mut Request, res: &mut Response) {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let Some(session) = auth_or_render(state, req, res).await else {
         return;
     };
@@ -475,7 +475,7 @@ async fn load_gated(
 #[handler]
 #[tracing::instrument(skip_all, fields(op = "blob_resumable_head"))]
 async fn tus_head(depot: &mut Depot, req: &mut Request, res: &mut Response) {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let Some(session) = auth_or_render(state, req, res).await else {
         return;
     };
@@ -509,7 +509,7 @@ async fn tus_head(depot: &mut Depot, req: &mut Request, res: &mut Response) {
 #[handler]
 #[tracing::instrument(skip_all, fields(op = "blob_resumable_patch"))]
 async fn tus_patch(depot: &mut Depot, req: &mut Request, res: &mut Response) {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let Some(session) = auth_or_render(state, req, res).await else {
         return;
     };
@@ -635,7 +635,7 @@ async fn tus_patch(depot: &mut Depot, req: &mut Request, res: &mut Response) {
 #[handler]
 #[tracing::instrument(skip_all, fields(op = "blob_resumable_finalize"))]
 async fn tus_finalize(depot: &mut Depot, req: &mut Request, res: &mut Response) {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let Some(session) = auth_or_render(state, req, res).await else {
         return;
     };
@@ -651,7 +651,7 @@ async fn tus_finalize(depot: &mut Depot, req: &mut Request, res: &mut Response) 
 #[handler]
 #[tracing::instrument(skip_all, fields(op = "blob_resumable_delete"))]
 async fn tus_delete(depot: &mut Depot, req: &mut Request, res: &mut Response) {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let Some(session) = auth_or_render(state, req, res).await else {
         return;
     };

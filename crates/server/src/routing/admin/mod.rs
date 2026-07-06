@@ -54,7 +54,7 @@ impl Handler for RequireAdmin {
         res: &mut Response,
         ctrl: &mut FlowCtrl,
     ) {
-        let result = match depot.obtain::<AppState>() {
+        let result = match depot.get_typed::<AppState>() {
             Ok(state) => match AuthArgs::default().authenticated_session(state, req).await {
                 Ok(session) => require_admin_scope(state, req, &session, self.scope)
                     .await

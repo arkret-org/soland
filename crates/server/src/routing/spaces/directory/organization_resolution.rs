@@ -10,7 +10,7 @@ pub(super) async fn search_organizations(
     body: JsonBody<DirectorySearchOrganizationsRequestBody>,
     depot: &mut Depot,
 ) -> JsonResult<DirectoryOrganizationSearchOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let body = body.into_inner();
     let limit = checked_limit(body.limit.map(|limit| limit as usize))?;
     organizations::refresh_organization_projection(state)
@@ -48,7 +48,7 @@ pub(super) async fn resolve_organization(
     body: JsonBody<DirectoryResolveOrganizationRequestBody>,
     depot: &mut Depot,
 ) -> JsonResult<DirectoryOrganizationResolutionOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let body = body.into_inner();
     if body.organization_did.is_none() && body.handle.is_none() {
         return Err(AppError::missing_param(

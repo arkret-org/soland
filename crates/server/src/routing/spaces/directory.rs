@@ -147,7 +147,7 @@ pub(crate) fn protocol_router() -> Router {
 #[endpoint]
 #[tracing::instrument(skip_all, fields(op = "directory_describe"))]
 async fn directory_describe(depot: &mut Depot) -> JsonResult<DirectoryDescription> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let service_did = Did::new(state.config.service_did.clone())
         .map_err(|error| AppError::internal(format!("invalid configured service_did: {error}")))?;
     let trust_domain = cokret_sdk::TypedTrustDomainId::new(state.config.trust_domain.clone())

@@ -28,7 +28,7 @@ pub(crate) async fn admin_get_seal_dag(
     req: &mut Request,
     realm_id: PathParam<String>,
 ) -> JsonResult<SealDagSnapshot> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let _session = aa.authenticated_session(state, req).await?;
     let realm_id = realm_id.into_inner();
     let realm = RealmId::new(realm_id.clone()).map_err(|e| {
@@ -117,7 +117,7 @@ pub(crate) async fn admin_compact_seal_dag(
     realm_id: PathParam<String>,
     body: JsonBody<CompactionRequestBody>,
 ) -> JsonResult<CompactionOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let admin_session = super::super::require_admin_principal(state, session)?;
     super::super::require_admin_scope(
@@ -251,7 +251,7 @@ pub(crate) async fn admin_prune_seal_dag(
     realm_id: PathParam<String>,
     body: JsonBody<SealPruneRequestBody>,
 ) -> JsonResult<SealPruneOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let admin_session = super::super::require_admin_principal(state, session)?;
     super::super::require_admin_scope(

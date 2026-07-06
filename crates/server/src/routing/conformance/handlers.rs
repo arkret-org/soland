@@ -845,7 +845,7 @@ pub async fn chaos_operation(
     req: &Request,
 ) -> JsonResult<ChaosOperationOutcome> {
     super::ensure_enabled()?;
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     if !state.config.development_mode {
         return Err(AppError::not_found(
             "chaos diagnostics are only available in development_mode",

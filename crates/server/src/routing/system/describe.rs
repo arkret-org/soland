@@ -110,7 +110,7 @@ pub(super) fn local_router() -> Router {
 )]
 #[tracing::instrument(skip_all, fields(op = "org.cokret.soland.system.health"))]
 async fn health(depot: &mut Depot, res: &mut Response) -> JsonResult<HealthOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let database_ok = database_ready(state).await;
     let ok = database_ok;
     if !ok {
@@ -143,7 +143,7 @@ async fn health(depot: &mut Depot, res: &mut Response) -> JsonResult<HealthOutco
 )]
 #[tracing::instrument(skip_all, fields(op = "org.cokret.soland.system.readyz"))]
 async fn readyz(depot: &mut Depot, res: &mut Response) -> JsonResult<ReadyzOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let database_ok = database_ready(state).await;
     // P5 (5.4 readiness gate for migrations) — keep /readyz in 503 until the
     // embedded diesel batch has been applied. Before this gate landed,
@@ -243,7 +243,7 @@ struct HealthCheckRow {
 )]
 #[tracing::instrument(skip_all, fields(op = "ck.server.query.describe"))]
 async fn server_describe(depot: &mut Depot) -> JsonResult<ServerDescribeOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     json_ok(ServerDescribeOutcome(build_server_description(state)))
 }
 
@@ -254,7 +254,7 @@ async fn server_describe(depot: &mut Depot) -> JsonResult<ServerDescribeOutcome>
 )]
 #[tracing::instrument(skip_all, fields(op = "org.cokret.soland.system.describe"))]
 async fn soland_describe(depot: &mut Depot) -> JsonResult<SolandServerDescribeOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let service = build_server_description(state);
     let unsupported_profiles = unsupported_profiles_from_limits(&service.limits);
     json_ok(SolandServerDescribeOutcome {

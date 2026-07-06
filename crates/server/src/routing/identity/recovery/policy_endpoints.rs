@@ -72,7 +72,7 @@ pub(super) async fn recovery_policy_get(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<RecoveryPolicyActiveOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let principal =
         resolve_recovery_read_principal(&aa, state, req, principal_id.into_inner()).await?;
     let active = state
@@ -114,7 +114,7 @@ pub(super) async fn recovery_policies_get(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<SolandRecoveryPoliciesOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let principal =
         resolve_recovery_read_principal(&aa, state, req, principal_id.into_inner()).await?;
     let policies = state
@@ -147,7 +147,7 @@ pub(super) async fn recovery_policy_put(
     res: &mut Response,
     req: &mut Request,
 ) -> JsonResult<RecoveryPolicyPublishOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let payload = serde_json::to_value(body.into_inner())
         .map_err(|error| AppError::internal(format!("recovery policy serialize: {error}")))?;

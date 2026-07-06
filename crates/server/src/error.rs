@@ -481,7 +481,7 @@ impl Writer for AppError {
         let status = self.http_status();
         let wire = self.wire_code().to_owned();
         let development_mode = depot
-            .obtain::<crate::state::AppState>()
+            .get_typed::<crate::state::AppState>()
             .map(|state| state.config.development_mode)
             .unwrap_or(false);
         let redact_internal = self.code == ErrorCode::InternalError && !development_mode;

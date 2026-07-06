@@ -113,7 +113,7 @@ pub struct IdentityRegistryVisibility {
 pub(crate) async fn identity_describe(
     depot: &mut Depot,
 ) -> JsonResult<IdentityRegistryDescription> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let did_webvh = did_webvh_descriptor(state);
     let mut profiles = vec![
         "ck.profile.identity_registry.v1".to_owned(),
@@ -285,7 +285,7 @@ pub(crate) async fn embedded_webvh_register(
     res: &mut Response,
     body: JsonBody<EmbeddedWebvhRegisterRequestBody>,
 ) -> JsonResult<EmbeddedWebvhRegisterOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     if !state.config.embedded_webvh_provider_enabled {
         return Err(AppError::not_found(
             "embedded did:webvh provider is disabled",
@@ -556,7 +556,7 @@ pub(crate) async fn embedded_webvh_rotate(
     req: &mut Request,
     body: JsonBody<EmbeddedWebvhRotateRequestBody>,
 ) -> JsonResult<EmbeddedWebvhRotateOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     if !state.config.embedded_webvh_provider_enabled {
         return Err(AppError::not_found(
             "embedded did:webvh provider is disabled",
@@ -691,7 +691,7 @@ pub(crate) async fn embedded_webvh_document(
     req: &mut Request,
     res: &mut Response,
 ) {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let Some(record) = embedded_webvh_record_for_request(state, req, res).await else {
         return;
     };
@@ -705,7 +705,7 @@ pub(crate) async fn embedded_webvh_document(
 #[endpoint]
 #[tracing::instrument(skip_all, fields(op = "embedded_webvh_log"))]
 pub(crate) async fn embedded_webvh_log(depot: &mut Depot, req: &mut Request, res: &mut Response) {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let Some(record) = embedded_webvh_record_for_request(state, req, res).await else {
         return;
     };
@@ -745,7 +745,7 @@ pub(crate) async fn identity_resolve(
     body: JsonBody<IdentityResolveRequestBody>,
     depot: &mut Depot,
 ) -> JsonResult<IdentityResolveOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let body = body.into_inner();
     let did = body.did.as_str();
     if let Ok(Some(record)) = state.persistence.webvh().get_document(did).await {
@@ -803,7 +803,7 @@ pub(crate) async fn identity_document(
     did: salvo::oapi::extract::QueryParam<String, true>,
     depot: &mut Depot,
 ) -> JsonResult<IdentityDocumentViewOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let did = did.into_inner();
     if validate_did(&did).is_err() {
         return Err(AppError::invalid_param("invalid did"));
@@ -858,7 +858,7 @@ pub(crate) async fn identity_did_document(
     req: &mut Request,
     depot: &mut Depot,
 ) -> JsonResult<RawDidDocumentJson> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let did = req
         .param::<String>("did")
         .ok_or_else(|| AppError::missing_param("did path segment required"))?;
@@ -885,7 +885,7 @@ pub(crate) async fn identity_log(
     did: salvo::oapi::extract::QueryParam<String, true>,
     depot: &mut Depot,
 ) -> JsonResult<IdentityLogListOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let did = did.into_inner();
     if validate_did(&did).is_err() {
         return Err(AppError::invalid_param("invalid did"));
@@ -924,7 +924,7 @@ pub(crate) async fn identity_receipts(
     did: salvo::oapi::extract::QueryParam<String, true>,
     depot: &mut Depot,
 ) -> JsonResult<IdentityReceiptListOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let did = did.into_inner();
     if validate_did(&did).is_err() {
         return Err(AppError::invalid_param("invalid did"));
@@ -963,7 +963,7 @@ pub(crate) async fn identity_submit_did_operation(
     depot: &mut Depot,
     body: JsonBody<DidOperationSubmitRequestBody>,
 ) -> JsonResult<DidOperationSubmitOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let body = serde_json::to_value(body.into_inner())
         .map_err(|error| AppError::internal(format!("DID operation serialize: {error}")))?;
     let did = string_field(&body, "did")

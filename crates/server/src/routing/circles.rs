@@ -404,7 +404,7 @@ async fn list_circles(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<CircleList> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let realm_id = RealmId::new(realm_id.into_inner())
         .map_err(|e| AppError::invalid_param(format!("realm_id: {e}")))?;
@@ -430,7 +430,7 @@ async fn get_circle(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<CircleView> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let circle_id = circle_id.into_inner();
     let projection = state.projection.lock();
@@ -459,7 +459,7 @@ async fn post_circle(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<CircleView> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
     let realm_scope = body.realm_id.clone();
@@ -505,7 +505,7 @@ async fn post_circle_member(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<CircleMembershipOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let circle_id = circle_id.into_inner();
     let body = body.into_inner();
@@ -616,7 +616,7 @@ async fn delete_circle_member(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<CircleMembershipOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let circle_id = circle_id.into_inner();
     let actor_id = actor_id.into_inner();
@@ -672,7 +672,7 @@ async fn post_scope_rotate(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<CircleScopeRotateOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let circle_id = circle_id.into_inner();
     let body = body.into_inner();
@@ -830,7 +830,7 @@ async fn submit_circle_lifecycle(
     circle_id: String,
     kind: &'static str,
 ) -> JsonResult<CircleView> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let realm_scope = circle_realm_scope(state, &circle_id)?;
     let realm_id = realm_scope.to_string();

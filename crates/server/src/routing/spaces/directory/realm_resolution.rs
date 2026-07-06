@@ -11,7 +11,7 @@ pub(super) async fn search_realms(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<DirectoryRealmSearchOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let body = body.into_inner();
     let requested_limit = body.limit.unwrap_or(20).clamp(1, 100) as usize;
     let query = RealmDirectoryQuery {
@@ -56,7 +56,7 @@ pub(super) async fn resolve_realm(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<DirectoryRealmResolutionOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let body = body.into_inner();
     if body.realm_id.is_none()
         && body.alias.is_none()
@@ -144,7 +144,7 @@ pub(super) async fn resolve_target(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<DirectoryTargetResolutionOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let body = body.into_inner();
     let address = body.address.trim();
     if address.is_empty() {

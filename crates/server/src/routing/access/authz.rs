@@ -46,7 +46,7 @@ async fn authz_check(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<AuthzCheckOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     // TODO(authz-scoping): service-http-binding.md §account_auth / §self authorization
     // requires caller-shape scoping (principal session vs service signature).
     // Until that is fully wired, anonymous access remains closed.
@@ -295,7 +295,7 @@ async fn effective_grants(
     depot: &mut Depot,
     req: &mut Request,
 ) -> crate::result::JsonResult<GrantList> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let subject = query_param(req, "subject").unwrap_or_else(|| session.actor.clone());
     let realm_id = query_param(req, "realm_id").unwrap_or_else(|| "*".to_owned());
@@ -439,7 +439,7 @@ async fn invites(
     depot: &mut Depot,
     req: &mut Request,
 ) -> crate::result::JsonResult<AuthzInviteList> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let subject = query_param(req, "subject").unwrap_or_else(|| session.actor.clone());
     let realm_filter = query_param(req, "realm_id");

@@ -104,7 +104,7 @@ pub(in crate::routing::extensions) fn protocol_router() -> Router {
 )]
 #[tracing::instrument(skip_all, fields(op = "ck.edge.applet.query.ping"))]
 async fn protocol_ping_endpoint(depot: &mut Depot) -> JsonResult<AppletPingOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let service_did = Did::new(state.config.service_did.clone()).map_err(|error| {
         AppError::internal(format!("configured service_did is invalid: {error}"))
     })?;
@@ -172,7 +172,7 @@ async fn install_preview_endpoint(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<InstallPlan> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let _session = aa.authenticated_session(state, req).await?;
     let preview = body.into_inner();
     validate_applet_package(state, &preview.applet_package)?;
@@ -205,7 +205,7 @@ async fn install_endpoint(
     req: &mut Request,
     res: &mut Response,
 ) -> JsonResult<InstallCommitOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let idempotency_key = idempotency_key(req)
         .ok_or_else(|| AppError::missing_param("Idempotency-Key header is required"))?;
@@ -269,7 +269,7 @@ async fn revoke_install_endpoint(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<AppletRevokeOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let applet_id = applet_id_param(req)?;
     let revoke = body.into_inner();
@@ -484,7 +484,7 @@ async fn provision_ghost_actor_endpoint(
     req: &mut Request,
     res: &mut Response,
 ) -> JsonResult<GhostActorProvisionOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let _session = aa.authenticated_session(state, req).await?;
     let path_applet_id = applet_id_param(req)?;
     let provision = body.into_inner();
@@ -606,7 +606,7 @@ async fn transaction_endpoint(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<AppletTransactionOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let idempotency_key = idempotency_key(req)
         .ok_or_else(|| AppError::missing_param("Idempotency-Key header is required"))?;
     if idempotency_key.len() > 128 {
@@ -644,7 +644,7 @@ async fn resolve_actor_endpoint(
     req: &mut Request,
     depot: &mut Depot,
 ) -> JsonResult<AppletActorView> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let actor_id = req
         .param::<String>("actor_id")
         .ok_or_else(|| AppError::missing_param("actor_id path segment required"))?;
@@ -682,7 +682,7 @@ async fn resolve_realm_endpoint(
     req: &mut Request,
     depot: &mut Depot,
 ) -> JsonResult<AppletRealmView> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let realm_id_or_alias = req
         .param::<String>("realm_id_or_alias")
         .ok_or_else(|| AppError::missing_param("realm_id_or_alias path segment required"))?;
@@ -720,7 +720,7 @@ async fn protocol_metadata_endpoint(
     req: &mut Request,
     depot: &mut Depot,
 ) -> JsonResult<AppletProtocolMetadata> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let protocol = req
         .param::<String>("protocol")
         .ok_or_else(|| AppError::missing_param("protocol path segment required"))?;
@@ -775,7 +775,7 @@ async fn third_party_users_endpoint(
     req: &mut Request,
     depot: &mut Depot,
 ) -> JsonResult<AppletActorView> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let external_id = query_value(req, "user")
         .or_else(|| query_value(req, "user_id"))
         .or_else(|| query_value(req, "external_id"));
@@ -822,7 +822,7 @@ async fn third_party_locations_endpoint(
     req: &mut Request,
     depot: &mut Depot,
 ) -> JsonResult<AppletRealmView> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let location = query_value(req, "location")
         .or_else(|| query_value(req, "channel"))
         .or_else(|| query_value(req, "realm"));
@@ -864,7 +864,7 @@ async fn register_endpoint(
     req: &mut Request,
     res: &mut Response,
 ) -> JsonResult<AppletView> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
     let manifest = parse_manifest(&body)?;
@@ -897,7 +897,7 @@ async fn register_endpoint(
 )]
 #[tracing::instrument(skip_all, fields(op = "org.cokret.soland.applets.get"))]
 async fn get_endpoint(req: &mut Request, depot: &mut Depot) -> JsonResult<AppletView> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let applet_id = applet_id_param(req)?;
     let record = applet_record(state, &applet_id)
         .await?
@@ -917,7 +917,7 @@ async fn ghost_endpoint(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<AppletGhostIngressOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let _session = aa.authenticated_session(state, req).await?;
     let applet_id = applet_id_param(req)?;
     let body = body.into_inner();
@@ -969,7 +969,7 @@ async fn bot_message_endpoint(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<AppletPortalMessageOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let _session = aa.authenticated_session(state, req).await?;
     let applet_id = applet_id_param(req)?;
     let body = body.into_inner();
@@ -1007,7 +1007,7 @@ async fn revoke_endpoint(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<AppletRevokeRecordOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let applet_id = applet_id_param(req)?;
     json_ok(revoke_applet_record(state, &session.actor, &applet_id).await?)

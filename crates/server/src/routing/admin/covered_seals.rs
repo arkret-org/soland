@@ -77,7 +77,7 @@ async fn get_covered_seals(
     req: &mut Request,
     realm_id: PathParam<String>,
 ) -> JsonResult<CoveredSealsSnapshotOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let _ = require_admin_principal(state, session)?;
     let realm_id = realm_id.into_inner();
@@ -127,7 +127,7 @@ async fn advance_covered_seals(
     req: &mut Request,
     realm_id: PathParam<String>,
 ) -> JsonResult<CoveredSealsAdvanceOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let session = require_admin_principal(state, session)?;
     let realm_id = realm_id.into_inner();

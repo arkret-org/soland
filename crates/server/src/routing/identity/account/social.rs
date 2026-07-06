@@ -29,7 +29,7 @@ pub(crate) async fn contact_request(
     res: &mut Response,
     body: JsonBody<ContactRequestRequestBody>,
 ) -> JsonResult<ContactRequestOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
     if body.target.as_str() == session.actor {
@@ -385,7 +385,7 @@ pub(crate) async fn contact_respond(
     req: &mut Request,
     body: JsonBody<ContactRespondRequestBody>,
 ) -> JsonResult<ContactRespondOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
     if !matches!(body.action.as_str(), "accept" | "reject") {
@@ -567,7 +567,7 @@ pub(crate) async fn contact_tombstone(
     // every scope, or the explicit `revoke_scopes[]`), and — when
     // `block_peer` — adds the peer DID to the holder's private
     // `invite_receive_policy.blocked_subjects` (hard block).
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
     let holder = session.actor.clone();
@@ -793,7 +793,7 @@ pub(crate) async fn get_invite_receive_policy(
     // from the shared in-memory store (the same store
     // `ck.self.contact.command.tombstone(block_peer)` writes `blocked_subjects` to),
     // falling back to the recommended default when none is set.
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let policy = state
         .invite_receive_policies
@@ -824,7 +824,7 @@ pub(crate) async fn set_invite_receive_policy(
     // policy: `subject_id` MUST equal the session actor. The override lands
     // in the same store as the tombstone `blocked_subjects` writes, so the
     // two stay consistent.
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let policy = body.into_inner();
     if policy.subject_id.as_str() != session.actor {
@@ -861,7 +861,7 @@ pub(crate) async fn list_contacts(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<ContactList> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let records = state
         .persistence

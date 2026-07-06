@@ -73,7 +73,7 @@ async fn get_realm_policy_server(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<RealmPolicyServerOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let _session = aa.authenticated_session(state, req).await?;
     let realm_id = realm_id.into_inner();
     let projection = state.projection.lock();
@@ -114,7 +114,7 @@ async fn put_realm_policy_server(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<RealmPolicyServerOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let realm_id = realm_id.into_inner();
     let body = body.into_inner();
@@ -182,7 +182,7 @@ async fn delete_realm_policy_server(
     depot: &mut Depot,
     req: &mut Request,
 ) -> EmptyResult {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let realm_id = realm_id.into_inner();
 

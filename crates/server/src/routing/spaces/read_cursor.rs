@@ -33,7 +33,7 @@ pub(super) async fn set_read_cursor(
     req: &mut Request,
     body: JsonBody<ReadCursorAdvanceRequestBody>,
 ) -> JsonResult<ReadMarkerOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
     let realm_id = body.realm_id.clone();
@@ -108,7 +108,7 @@ pub(super) async fn get_read_cursors(
     req: &mut Request,
     realm_id: QueryParam<String, false>,
 ) -> JsonResult<ReadCursorList> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let realm_id = realm_id.into_inner().unwrap_or_default();
     let markers = {

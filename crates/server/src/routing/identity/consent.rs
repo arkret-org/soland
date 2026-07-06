@@ -112,7 +112,7 @@ async fn list_consent_cells(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<ConsentCellList> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let now = now();
     let mut cells = state
@@ -144,7 +144,7 @@ async fn get_consent_cell(
     req: &mut Request,
     holder_did: PathParam<String>,
 ) -> JsonResult<ConsentCellView> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let holder = holder_did.into_inner();
     if validate_did(&holder).is_err() {
@@ -188,7 +188,7 @@ async fn grant_consent_cell(
     holder_did: PathParam<String>,
     body: JsonBody<ConsentUpdateRequestBody>,
 ) -> JsonResult<ConsentCellView> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let holder = holder_did.into_inner();
     let body = body.into_inner();
@@ -234,7 +234,7 @@ async fn revoke_consent_cell(
     holder_did: PathParam<String>,
     body: JsonBody<ConsentUpdateRequestBody>,
 ) -> JsonResult<ConsentCellView> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let holder = holder_did.into_inner();
     let body = body.into_inner();
@@ -289,7 +289,7 @@ async fn request_consent_cell(
     res: &mut Response,
     body: JsonBody<ConsentRequestRequestBody>,
 ) -> JsonResult<ConsentCellView> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
     let peer = match body.peer_did {

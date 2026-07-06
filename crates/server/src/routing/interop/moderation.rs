@@ -596,7 +596,7 @@ async fn moderation_report(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<ModerationReportOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
     if body.reporter.as_str() != session.actor {
@@ -751,7 +751,7 @@ async fn moderation_reports(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<ModerationReportsOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let realm_id = query_param(req, "realm_id");
     if let Some(realm_id) = realm_id.as_deref()
@@ -1264,7 +1264,7 @@ async fn moderation_appeal_submit(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<ModerationAppealSubmitOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
     if body.reason_text_ref.trim().is_empty() {

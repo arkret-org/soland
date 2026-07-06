@@ -28,7 +28,7 @@ pub(super) async fn export_account(
     // bundle is shipped as a single JSON blob, and a `org.cokret.soland.audit.exported`
     // audit entry records the operation so subsequent governance reviews
     // can see who requested an export.
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let actor = session.actor.clone();
 
@@ -652,7 +652,7 @@ pub(super) async fn deactivate_account(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<AccountDeactivateOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let actor = session.actor.clone();
     let change = set_account_lifecycle_state(
@@ -715,7 +715,7 @@ pub(super) async fn erase_account(
     // `account_erased`. The implementation here is the v1 "memory ledger"
     // variant — full pseudonymization of historical events lands once
     // the projection rewrite worker ships.
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let actor = session.actor.clone();
     let affected_realms = affected_erasure_realms_for_actor(state, &actor).await;

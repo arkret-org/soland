@@ -13,7 +13,7 @@ pub(super) async fn account_device_pair(
     req: &mut Request,
     body: JsonBody<AccountDevicePairRequestBody>,
 ) -> JsonResult<AccountDevicePairOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     json_ok(authorize_account_device_pair(state, &session, body.into_inner()).await?)
 }

@@ -166,7 +166,7 @@ async fn cokret_ice_config(
     res: &mut Response,
 ) -> JsonResult<SolandIceConfigOutcome> {
     set_ice_config_cache_headers(res);
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
     issue_ice_config(
@@ -1451,7 +1451,7 @@ async fn cokret_rtc_token(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<CallMediaTokenExchangeOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     handle_rtc_token(state, &session, body.into_inner()).await
 }
