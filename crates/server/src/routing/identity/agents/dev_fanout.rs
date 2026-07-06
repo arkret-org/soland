@@ -220,7 +220,7 @@ pub(super) async fn fanout_provision_subevents(
 
 /// Expand `requested_scope` (the provision request DSL) into a minimal
 /// capability action set. With no preset / explicit actions we grant the
-/// least-privilege read-only baseline (CKP-0008 §4.7 `read_only`).
+/// least-privilege read baseline (CKP-0008 §4.7 `read`).
 fn initial_grant_actions(requested_scope: &Value) -> Vec<String> {
     let mut actions: Vec<String> = requested_scope
         .get("actions")
