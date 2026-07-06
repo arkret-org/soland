@@ -21,6 +21,13 @@ use crate::ids;
 use crate::routing::events::event_log::submit_event_value;
 use crate::state::AppState;
 
+const SCOPE_EVENTS_QUERY_SCAN: &str = "ck.self.events.query.scan";
+const SCOPE_EVENTS_STREAM_SUBSCRIBE: &str = "ck.self.events.stream.subscribe";
+const SCOPE_EVENTS_COMMAND_SUBMIT: &str = "ck.self.events.command.submit";
+const ACTION_EVENT_READ: &str = "ck.event.read";
+const ACTION_MESSAGE_CREATE: &str = "ck.message.create";
+const ACTION_REACTION_ADD: &str = "ck.reaction.add";
+
 /// Deterministic self realm for a controller principal. Reuses the
 /// principal-control realm derivation so the realm id is a stable
 /// UUIDv7-shaped value and `realm_has_member_by_id` already treats the
@@ -154,7 +161,7 @@ pub(super) async fn fanout_provision_subevents(
     agent_principal_id: &str,
     display_name: Option<&str>,
     requested_scope: &Value,
-) -> Result<(String, String, String), AppError> {
+) -> Result<(String, String, Vec<String>), AppError> {
     let controller = session.actor.clone();
     // 1. Agent actor profile (`ck.profile.create`), authored by the controller with the agent
     //    principal as the profile subject. The `profile_create_payload` def resolves to
@@ -205,24 +212,30 @@ pub(super) async fn fanout_provision_subevents(
     // 3. Initial capability grant (`ck.capability.grant`), issuer = controller, subject = agent,
     //    flagged inactive until pairing.
     let actions = initial_grant_actions(requested_scope);
-    let grant_id = ids::generate_grant_id();
-    let grant_payload = capability_grant_payload(
-        &grant_id,
-        realm_id,
-        &controller,
-        agent_principal_id,
-        &actions,
-        true,
-    );
-    materialize_grant(state, session, realm_id, grant_payload).await?;
-    Ok((profile_event, accountability_event, grant_id))
+    let mut grant_ids = Vec::new();
+    if !actions.is_empty() {
+        let grant_id = ids::generate_grant_id();
+        let grant_payload = capability_grant_payload(
+            &grant_id,
+            realm_id,
+            &controller,
+            agent_principal_id,
+            &actions,
+            true,
+        );
+        materialize_grant(state, session, realm_id, grant_payload).await?;
+        grant_ids.push(grant_id);
+    }
+    Ok((profile_event, accountability_event, grant_ids))
 }
 
 /// Expand `requested_scope` (the provision request DSL) into a minimal
-/// capability action set. With no preset / explicit actions we grant the
+/// content capability action set. Service-surface actions may be present in
+/// `agent_key_scope.actions`, but they are never materialized as
+/// `ck.capability.grant.actions`. With no explicit actions we grant the
 /// least-privilege read baseline (CKP-0008 §4.7 `read`).
 fn initial_grant_actions(requested_scope: &Value) -> Vec<String> {
-    let mut actions: Vec<String> = requested_scope
+    let explicit_actions: Vec<String> = requested_scope
         .get("actions")
         .and_then(Value::as_array)
         .map(|arr| {
@@ -231,13 +244,27 @@ fn initial_grant_actions(requested_scope: &Value) -> Vec<String> {
                 .collect()
         })
         .unwrap_or_default();
-    if actions.is_empty() {
-        actions = vec![
-            "ck.self.events.subscribe".to_owned(),
-            "ck.event.read".to_owned(),
-        ];
+    if explicit_actions.is_empty() {
+        return vec![ACTION_EVENT_READ.to_owned()];
     }
-    actions
+    explicit_actions
+        .into_iter()
+        .filter(|action| initial_capability_grant_action(action))
+        .collect()
+}
+
+fn initial_capability_grant_action(action: &str) -> bool {
+    matches!(
+        action,
+        ACTION_EVENT_READ
+            | ACTION_MESSAGE_CREATE
+            | ACTION_REACTION_ADD
+            | "ck.agent.draft.propose"
+            | "ck.agent.action_request"
+            | "ck.strand.create"
+            | "ck.strand.update"
+            | "ck.relation.create"
+    )
 }
 
 /// Build a `capability_grant_payload` (`{grant_id, grant}`) whose embedded
@@ -366,7 +393,14 @@ pub(super) async fn submit_durable_key_authorize(
         "verification_method": verification_method,
         "accountable_principal_id": controller,
         "agent_key_scope": {
-            "actions": ["ck.self.events.subscribe", "ck.message.create", "ck.reaction.add"],
+            "actions": [
+                SCOPE_EVENTS_STREAM_SUBSCRIBE,
+                SCOPE_EVENTS_QUERY_SCAN,
+                SCOPE_EVENTS_COMMAND_SUBMIT,
+                ACTION_EVENT_READ,
+                ACTION_MESSAGE_CREATE,
+                ACTION_REACTION_ADD,
+            ],
             "resources": [{ "kind": "realm", "realm_id": realm_id }],
         },
         "audience": [state.config.service_did.clone()],
@@ -537,4 +571,56 @@ pub(super) fn default_agent_key_id(agent_principal_id: &str) -> String {
     hasher.update(agent_principal_id.as_bytes());
     let digest = hasher.finalize();
     format!("ck:agent_key:{}", hex::encode(&digest[..16]))
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    #[test]
+    fn initial_grant_default_uses_content_read_only() {
+        let actions = initial_grant_actions(&Value::Null);
+
+        assert_eq!(actions, vec![ACTION_EVENT_READ.to_owned()]);
+    }
+
+    #[test]
+    fn runtime_agent_key_scope_service_actions_are_registered() {
+        let registry = crate::artifacts::operation_ids();
+        for action in [
+            SCOPE_EVENTS_STREAM_SUBSCRIBE,
+            SCOPE_EVENTS_QUERY_SCAN,
+            SCOPE_EVENTS_COMMAND_SUBMIT,
+        ] {
+            assert!(
+                registry.contains(action),
+                "dev fanout agent_key_scope action `{action}` must exist in operation registry"
+            );
+        }
+    }
+
+    #[test]
+    fn requested_scope_actions_filter_service_surface_from_content_grant() {
+        let requested = json!({
+            "actions": [SCOPE_EVENTS_STREAM_SUBSCRIBE, SCOPE_EVENTS_QUERY_SCAN, ACTION_MESSAGE_CREATE],
+            "resources": [{ "kind": "realm", "realm_id": "ck:realm:test" }]
+        });
+
+        assert_eq!(
+            initial_grant_actions(&requested),
+            vec![ACTION_MESSAGE_CREATE.to_owned()]
+        );
+    }
+
+    #[test]
+    fn requested_scope_service_only_creates_no_content_grant() {
+        let requested = json!({
+            "actions": [SCOPE_EVENTS_STREAM_SUBSCRIBE, SCOPE_EVENTS_QUERY_SCAN],
+            "resources": [{ "kind": "realm", "realm_id": "ck:realm:test" }]
+        });
+
+        assert!(initial_grant_actions(&requested).is_empty());
+    }
 }

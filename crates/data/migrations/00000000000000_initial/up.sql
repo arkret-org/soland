@@ -99,6 +99,13 @@ CREATE TABLE public.agent_principals (
     display_name text NOT NULL,
     agent_slug text,
     state text DEFAULT 'active'::text NOT NULL,
+    requested_scope jsonb,
+    accountability jsonb,
+    self_realm_id text,
+    provision_event_refs jsonb,
+    pairing_request_id text,
+    pairing_code text,
+    pairing_expires_at timestamp with time zone,
     state_changed_at timestamp with time zone,
     created_at timestamp with time zone NOT NULL,
     updated_at timestamp with time zone NOT NULL,
@@ -1463,6 +1470,8 @@ CREATE INDEX agent_participation_realm_idx ON public.agent_participation USING b
 
 CREATE INDEX agent_principals_controller_idx ON public.agent_principals USING btree (controller_id);
 CREATE INDEX agent_principals_controller_agent_slug_idx ON public.agent_principals USING btree (controller_id, agent_slug) WHERE (agent_slug IS NOT NULL);
+
+CREATE UNIQUE INDEX agent_principals_pairing_request_idx ON public.agent_principals USING btree (pairing_request_id) WHERE (pairing_request_id IS NOT NULL);
 
 CREATE INDEX agent_principals_state_idx ON public.agent_principals USING btree (state);
 

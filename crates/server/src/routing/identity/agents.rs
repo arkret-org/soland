@@ -589,7 +589,9 @@ async fn agent_key_pair(
             "verification_method DID must match agent_principal_id",
         ));
     }
-    require_agent_controller(state, &session, agent_principal_id).await?;
+    let agent_record = require_agent_controller(state, &session, agent_principal_id).await?;
+    ensure_pairing_request_open(&agent_record)?;
+    let runtime_public_key_digest = runtime_public_key_digest(&body.public_key)?;
     // The runtime-attestation verifier is not wired yet. Refuse every
     // supplied attestation fail-closed instead of accepting a shape-only
     // `self_asserted` placeholder as if it were a verified binding.
@@ -626,8 +628,10 @@ async fn agent_key_pair(
             state,
             &session,
             &body.authorize_event,
+            &agent_record,
             agent_principal_id,
             &body.verification_method,
+            &runtime_public_key_digest,
         )
         .await?
     };
@@ -637,11 +641,17 @@ async fn agent_key_pair(
     // flip to `active` ONLY after the durable key authorization has been
     // accepted (a failed submit above propagates via `?` and MUST NOT leave
     // the agent flipped to active).
-    let _ = state
+    let updated = state
         .persistence
         .agents()
         .set_state(agent_principal_id, "active", &authorized_at)
-        .await;
+        .await
+        .map_err(|err| AppError::internal(format!("agent state activation failed: {err}")))?;
+    if !updated {
+        return Err(AppError::internal(
+            "agent state activation failed: agent principal disappeared",
+        ));
+    }
     json_ok(AgentKeyPairOutcome {
         ok: true,
         authorized_event_ref,
@@ -652,8 +662,10 @@ async fn submit_production_key_authorize_event(
     state: &AppState,
     session: &SessionRecord,
     authorize_event: &Option<Value>,
+    agent_record: &Value,
     agent_principal_id: &str,
     verification_method: &str,
+    runtime_public_key_digest: &str,
 ) -> Result<String, AppError> {
     let envelope = authorize_event.as_ref().ok_or_else(|| {
         AppError::missing_param(
@@ -663,8 +675,11 @@ async fn submit_production_key_authorize_event(
     ensure_key_authorize_event_matches_request(
         envelope,
         &session.actor,
+        agent_record,
         agent_principal_id,
         verification_method,
+        runtime_public_key_digest,
+        &state.config.service_did,
     )?;
     let outcome = submit_event_value(state, session, envelope.clone())
         .await
@@ -682,8 +697,11 @@ async fn submit_production_key_authorize_event(
 fn ensure_key_authorize_event_matches_request(
     envelope: &Value,
     controller: &str,
+    agent_record: &Value,
     agent_principal_id: &str,
     verification_method: &str,
+    runtime_public_key_digest: &str,
+    service_did: &str,
 ) -> Result<(), AppError> {
     if envelope.get("kind").and_then(Value::as_str) != Some("ck.agent.key.authorize") {
         return Err(AppError::invalid_param(
@@ -708,7 +726,193 @@ fn ensure_key_authorize_event_matches_request(
             "authorize_event.payload.verification_method must match the pairing request",
         ));
     }
+    if payload
+        .get("accountable_principal_id")
+        .and_then(Value::as_str)
+        != Some(controller)
+    {
+        return Err(AppError::capability_denied(
+            "authorize_event.payload.accountable_principal_id must match the authenticated controller",
+        ));
+    }
+    ensure_authorize_event_scope_matches_requested(agent_record, payload)?;
+    let audience = payload
+        .get("audience")
+        .and_then(Value::as_array)
+        .ok_or_else(|| AppError::invalid_param("authorize_event.payload.audience is required"))?;
+    if !audience
+        .iter()
+        .any(|value| value.as_str() == Some(service_did))
+    {
+        return Err(AppError::invalid_param(
+            "authorize_event.payload.audience must include this principal server",
+        ));
+    }
+    let expires_at = payload
+        .get("expires_at")
+        .and_then(Value::as_str)
+        .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+        .ok_or_else(|| {
+            AppError::invalid_param("authorize_event.payload.expires_at must be rfc3339")
+        })?;
+    if expires_at.with_timezone(&chrono::Utc) <= chrono::Utc::now() {
+        return Err(pairing_failed_precondition(
+            "authorize_event payload has expired",
+        ));
+    }
+    if payload.get("public_key_digest").and_then(Value::as_str) != Some(runtime_public_key_digest) {
+        return Err(AppError::invalid_param(
+            "authorize_event.payload.public_key_digest must bind the runtime public_key",
+        ));
+    }
+    let expected_digest = pairing_request_binding_digest(
+        agent_record,
+        controller,
+        agent_principal_id,
+        verification_method,
+        runtime_public_key_digest,
+        service_did,
+    )?;
+    if payload
+        .get("approval_evidence")
+        .and_then(|value| value.get("request_canonical_digest"))
+        .and_then(Value::as_str)
+        != Some(expected_digest.as_str())
+    {
+        return Err(AppError::invalid_param(
+            "authorize_event.payload.approval_evidence.request_canonical_digest must bind the pairing request",
+        ));
+    }
     Ok(())
+}
+
+fn ensure_pairing_request_open(agent_record: &Value) -> Result<(), AppError> {
+    match agent_record.get("state").and_then(Value::as_str) {
+        Some("pending_runtime_key") => {}
+        Some("pairing_expired") => {
+            return Err(pairing_failed_precondition("pairing request has expired"));
+        }
+        Some("active") => {
+            return Err(pairing_failed_precondition(
+                "agent runtime key is already active",
+            ));
+        }
+        Some("paused" | "deactivated") => {
+            return Err(pairing_failed_precondition(
+                "agent is not accepting runtime key pairing",
+            ));
+        }
+        _ => {
+            return Err(pairing_failed_precondition(
+                "agent pairing state is not pending_runtime_key",
+            ));
+        }
+    }
+    let expires_at = pairing_record_timestamp(agent_record, "pairing_expires_at")?;
+    if expires_at <= chrono::Utc::now() {
+        return Err(pairing_failed_precondition("pairing request has expired"));
+    }
+    Ok(())
+}
+
+fn pairing_failed_precondition(reason: &'static str) -> AppError {
+    AppError::new(ErrorCode::FailedPrecondition, reason)
+        .with_status(StatusCode::PRECONDITION_FAILED)
+        .with_reason_detail(reason)
+}
+
+fn pairing_record_string<'a>(record: &'a Value, key: &str) -> Result<&'a str, AppError> {
+    record
+        .get(key)
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| {
+            pairing_failed_precondition("agent pairing metadata is incomplete")
+                .with_reason_detail(format!("missing {key}"))
+        })
+}
+
+fn pairing_record_timestamp(
+    record: &Value,
+    key: &str,
+) -> Result<chrono::DateTime<chrono::Utc>, AppError> {
+    let value = pairing_record_string(record, key)?;
+    chrono::DateTime::parse_from_rfc3339(value)
+        .map(|timestamp| timestamp.with_timezone(&chrono::Utc))
+        .map_err(|_| AppError::invalid_param(format!("agent pairing metadata {key} is invalid")))
+}
+
+fn runtime_public_key_digest(public_key: &Value) -> Result<String, AppError> {
+    if public_key.is_null() {
+        return Err(AppError::missing_param("public_key is required"));
+    }
+    cokret_sdk::canonical::canonical_sha256(public_key).map_err(|error| {
+        AppError::invalid_param(format!("public_key is not canonicalizable: {error}"))
+    })
+}
+
+fn ensure_authorize_event_scope_matches_requested(
+    agent_record: &Value,
+    payload: &Value,
+) -> Result<(), AppError> {
+    let scope = payload.get("agent_key_scope").ok_or_else(|| {
+        AppError::invalid_param("authorize_event.payload.agent_key_scope is required")
+    })?;
+    let actions = scope
+        .get("actions")
+        .and_then(Value::as_array)
+        .filter(|actions| !actions.is_empty())
+        .ok_or_else(|| {
+            AppError::invalid_param("authorize_event.payload.agent_key_scope.actions is required")
+        })?;
+    if actions
+        .iter()
+        .any(|action| action.as_str().is_none_or(str::is_empty))
+    {
+        return Err(AppError::invalid_param(
+            "authorize_event.payload.agent_key_scope.actions must be non-empty strings",
+        ));
+    }
+    if let Some(expected) = agent_record
+        .get("requested_scope")
+        .filter(|value| !value.is_null())
+        && scope != expected
+    {
+        return Err(AppError::invalid_param(
+            "authorize_event.payload.agent_key_scope must match the provisioned requested_scope",
+        ));
+    }
+    Ok(())
+}
+
+fn pairing_request_binding_digest(
+    agent_record: &Value,
+    controller: &str,
+    agent_principal_id: &str,
+    verification_method: &str,
+    runtime_public_key_digest: &str,
+    service_did: &str,
+) -> Result<String, AppError> {
+    let pairing_request_id = pairing_record_string(agent_record, "pairing_request_id")?;
+    let pairing_code = pairing_record_string(agent_record, "pairing_code")?;
+    let expires_at = pairing_record_string(agent_record, "pairing_expires_at")?;
+    let binding = json!({
+        "kind": "ck.agent.key_pairing_request_binding.v1",
+        "operation_id": "ck.gate.account.command.pair_agent_key",
+        "controller_principal_id": controller,
+        "agent_principal_id": agent_principal_id,
+        "verification_method": verification_method,
+        "runtime_public_key_digest": runtime_public_key_digest,
+        "pairing_request_id": pairing_request_id,
+        "pairing_code": pairing_code,
+        "expires_at": expires_at,
+        "audience": service_did,
+    });
+    cokret_sdk::canonical::canonical_sha256(&binding).map_err(|error| {
+        AppError::internal(format!(
+            "pairing binding digest canonicalization failed: {error}"
+        ))
+    })
 }
 
 /// Generate a short human-relayable pairing code for the provision
@@ -818,7 +1022,7 @@ async fn provision_agent(
     let mut provision_event_refs = json!({});
     if state.config.development_mode {
         let realm = ensure_self_realm(state, &session).await?;
-        let (profile_event, accountability_event, grant_id) = fanout_provision_subevents(
+        let (profile_event, accountability_event, grant_ids) = fanout_provision_subevents(
             state,
             &session,
             &realm,
@@ -830,7 +1034,7 @@ async fn provision_agent(
         provision_event_refs = json!({
             "agent_profile_event_id": profile_event,
             "accountability_grant_event_id": accountability_event,
-            "initial_capability_grant_ids": [grant_id],
+            "initial_capability_grant_ids": grant_ids,
         });
         self_realm_id = Some(realm);
     }
@@ -2152,6 +2356,80 @@ mod tests {
         })
     }
 
+    fn pending_pairing_record(
+        agent_principal_id: &str,
+        controller_did: &str,
+        requested_scope: Value,
+        pairing_code: &str,
+        pairing_expires_at: &str,
+    ) -> Value {
+        json!({
+            "agent_principal_id": agent_principal_id,
+            "controller_did": controller_did,
+            "agent_id": agent_principal_id,
+            "display_name": "Test Agent",
+            "state": "pending_runtime_key",
+            "requested_scope": requested_scope,
+            "pairing_request_id": "agent_pairing_request:01999999-0000-7000-8000-00000000feed",
+            "pairing_code": pairing_code,
+            "pairing_expires_at": pairing_expires_at,
+        })
+    }
+
+    fn requested_agent_scope() -> Value {
+        json!({
+            "actions": [
+                "ck.self.events.stream.subscribe",
+                "ck.self.events.query.scan",
+                "ck.self.events.command.submit",
+                "ck.event.read",
+                "ck.message.create"
+            ],
+            "resources": [{ "kind": "service", "service_did": "did:web:soland.local" }]
+        })
+    }
+
+    fn key_authorize_envelope(
+        record: &Value,
+        controller: &str,
+        agent_principal_id: &str,
+        verification_method: &str,
+        public_key_digest: &str,
+        service_did: &str,
+        scope: Value,
+    ) -> Value {
+        let request_canonical_digest = pairing_request_binding_digest(
+            record,
+            controller,
+            agent_principal_id,
+            verification_method,
+            public_key_digest,
+            service_did,
+        )
+        .expect("pairing binding digest");
+        json!({
+            "kind": "ck.agent.key.authorize",
+            "actor_id": controller,
+            "payload": {
+                "agent_principal_id": agent_principal_id,
+                "key_id": "ck:agent_key:01999999000070008000000000000001",
+                "verification_method": verification_method,
+                "public_key_digest": public_key_digest,
+                "accountable_principal_id": controller,
+                "agent_key_scope": scope,
+                "audience": [service_did],
+                "issued_at": "2026-07-06T00:00:00Z",
+                "expires_at": "2999-01-01T00:00:00Z",
+                "approval_evidence": {
+                    "kind": "approval_event",
+                    "ref": "ck:event:01999999-0000-7000-8000-000000000001",
+                    "request_canonical_digest": request_canonical_digest,
+                    "approved_by": controller,
+                },
+            },
+        })
+    }
+
     #[test]
     fn agent_principal_id_is_did_not_typed_id() {
         validate_agent_principal_id("did:web:agent.example").expect("DID-as-id must be accepted");
@@ -2258,6 +2536,194 @@ mod tests {
             .expect_err("non-controller session must be rejected");
 
         assert_eq!(err.wire_code(), "capability_denied");
+    }
+
+    #[test]
+    fn key_authorize_event_binds_pairing_transcript_and_scope() {
+        let controller = "did:web:controller.example";
+        let agent = "did:web:agent.example";
+        let verification_method = "did:web:agent.example#runtime-key-1";
+        let service_did = "did:web:soland.local";
+        let public_key_digest =
+            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let scope = requested_agent_scope();
+        let record = pending_pairing_record(
+            agent,
+            controller,
+            scope.clone(),
+            "12345678",
+            "2999-01-01T00:00:00Z",
+        );
+        let envelope = key_authorize_envelope(
+            &record,
+            controller,
+            agent,
+            verification_method,
+            public_key_digest,
+            service_did,
+            scope,
+        );
+
+        ensure_pairing_request_open(&record).expect("pending pairing should be open");
+        ensure_key_authorize_event_matches_request(
+            &envelope,
+            controller,
+            &record,
+            agent,
+            verification_method,
+            public_key_digest,
+            service_did,
+        )
+        .expect("matching authorize_event should pass");
+    }
+
+    #[test]
+    fn key_authorize_event_rejects_wrong_pairing_code_digest() {
+        let controller = "did:web:controller.example";
+        let agent = "did:web:agent.example";
+        let verification_method = "did:web:agent.example#runtime-key-1";
+        let service_did = "did:web:soland.local";
+        let public_key_digest =
+            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let scope = requested_agent_scope();
+        let record = pending_pairing_record(
+            agent,
+            controller,
+            scope.clone(),
+            "12345678",
+            "2999-01-01T00:00:00Z",
+        );
+        let mut mismatched_record = record.clone();
+        mismatched_record["pairing_code"] = json!("87654321");
+        let envelope = key_authorize_envelope(
+            &record,
+            controller,
+            agent,
+            verification_method,
+            public_key_digest,
+            service_did,
+            scope,
+        );
+
+        let err = ensure_key_authorize_event_matches_request(
+            &envelope,
+            controller,
+            &mismatched_record,
+            agent,
+            verification_method,
+            public_key_digest,
+            service_did,
+        )
+        .expect_err("wrong pairing code must change the expected digest");
+
+        assert_eq!(err.wire_code(), "invalid_param");
+        assert!(err.message.contains("request_canonical_digest"));
+    }
+
+    #[test]
+    fn key_authorize_event_rejects_expired_pairing() {
+        let record = pending_pairing_record(
+            "did:web:agent.example",
+            "did:web:controller.example",
+            requested_agent_scope(),
+            "12345678",
+            "2000-01-01T00:00:00Z",
+        );
+
+        let err = ensure_pairing_request_open(&record)
+            .expect_err("expired pairing request must fail closed");
+
+        assert_eq!(err.wire_code(), "failed_precondition");
+        assert_eq!(
+            err.reason_detail.as_deref(),
+            Some("pairing request has expired")
+        );
+    }
+
+    #[test]
+    fn key_authorize_event_rejects_scope_mismatch() {
+        let controller = "did:web:controller.example";
+        let agent = "did:web:agent.example";
+        let verification_method = "did:web:agent.example#runtime-key-1";
+        let service_did = "did:web:soland.local";
+        let public_key_digest =
+            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let expected_scope = requested_agent_scope();
+        let record = pending_pairing_record(
+            agent,
+            controller,
+            expected_scope,
+            "12345678",
+            "2999-01-01T00:00:00Z",
+        );
+        let weaker_scope = json!({
+            "actions": ["ck.self.events.stream.subscribe"],
+            "resources": [{ "kind": "service", "service_did": service_did }]
+        });
+        let envelope = key_authorize_envelope(
+            &record,
+            controller,
+            agent,
+            verification_method,
+            public_key_digest,
+            service_did,
+            weaker_scope,
+        );
+
+        let err = ensure_key_authorize_event_matches_request(
+            &envelope,
+            controller,
+            &record,
+            agent,
+            verification_method,
+            public_key_digest,
+            service_did,
+        )
+        .expect_err("agent_key_scope must match provisioned requested_scope");
+
+        assert_eq!(err.wire_code(), "invalid_param");
+        assert!(err.message.contains("agent_key_scope"));
+    }
+
+    #[test]
+    fn key_authorize_event_rejects_wrong_runtime_public_key_digest() {
+        let controller = "did:web:controller.example";
+        let agent = "did:web:agent.example";
+        let verification_method = "did:web:agent.example#runtime-key-1";
+        let service_did = "did:web:soland.local";
+        let public_key_digest =
+            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let scope = requested_agent_scope();
+        let record = pending_pairing_record(
+            agent,
+            controller,
+            scope.clone(),
+            "12345678",
+            "2999-01-01T00:00:00Z",
+        );
+        let envelope = key_authorize_envelope(
+            &record,
+            controller,
+            agent,
+            verification_method,
+            public_key_digest,
+            service_did,
+            scope,
+        );
+
+        let err = ensure_key_authorize_event_matches_request(
+            &envelope,
+            controller,
+            &record,
+            agent,
+            verification_method,
+            "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            service_did,
+        )
+        .expect_err("authorize_event public key digest must bind request public_key");
+
+        assert_eq!(err.wire_code(), "invalid_param");
+        assert!(err.message.contains("public_key_digest"));
     }
 
     #[test]

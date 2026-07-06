@@ -386,6 +386,20 @@ struct AgentPrincipalRow {
     agent_slug: Option<String>,
     #[diesel(sql_type = Text)]
     state: String,
+    #[diesel(sql_type = Nullable<Jsonb>)]
+    requested_scope: Option<Value>,
+    #[diesel(sql_type = Nullable<Jsonb>)]
+    accountability: Option<Value>,
+    #[diesel(sql_type = Nullable<Text>)]
+    self_realm_id: Option<String>,
+    #[diesel(sql_type = Nullable<Jsonb>)]
+    provision_event_refs: Option<Value>,
+    #[diesel(sql_type = Nullable<Text>)]
+    pairing_request_id: Option<String>,
+    #[diesel(sql_type = Nullable<Text>)]
+    pairing_code: Option<String>,
+    #[diesel(sql_type = Nullable<Timestamptz>)]
+    pairing_expires_at: Option<chrono::DateTime<chrono::Utc>>,
     #[diesel(sql_type = Timestamptz)]
     created_at: chrono::DateTime<chrono::Utc>,
     #[diesel(sql_type = Timestamptz)]
@@ -401,6 +415,14 @@ impl From<AgentPrincipalRow> for Value {
             "display_name": row.display_name,
             "agent_slug": row.agent_slug,
             "state": row.state,
+            "requested_scope": row.requested_scope,
+            "accountability": row.accountability,
+            "self_realm_id": row.self_realm_id,
+            "provision_event_refs": row.provision_event_refs,
+            "pairing_request_id": row.pairing_request_id,
+            "pairing_code": row.pairing_code,
+            "pairing_expires_at": row.pairing_expires_at
+                .map(|value| value.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)),
             "created_at": row.created_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
             "updated_at": row.updated_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
         })
@@ -435,14 +457,57 @@ impl AgentStore for PgAgentStore {
             .and_then(Value::as_str)
             .unwrap_or("active")
             .to_owned();
+        let requested_scope = record
+            .get("requested_scope")
+            .cloned()
+            .filter(|value| !value.is_null());
+        let accountability = record
+            .get("accountability")
+            .cloned()
+            .filter(|value| !value.is_null());
+        let self_realm_id = record
+            .get("self_realm_id")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned);
+        let provision_event_refs = record
+            .get("provision_event_refs")
+            .cloned()
+            .filter(|value| !value.is_null());
+        let pairing_request_id = record
+            .get("pairing_request_id")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned);
+        let pairing_code = record
+            .get("pairing_code")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned);
+        let pairing_expires_at = record
+            .get("pairing_expires_at")
+            .and_then(Value::as_str)
+            .map(|value| {
+                chrono::DateTime::parse_from_rfc3339(value)
+                    .map(|timestamp| timestamp.with_timezone(&chrono::Utc))
+                    .map_err(|err| {
+                        PersistenceError::Internal(format!(
+                            "agent record pairing_expires_at invalid: {err}"
+                        ))
+                    })
+            })
+            .transpose()?;
         sql_query(
             "INSERT INTO agent_principals \
-             (id, controller_id, agent_id, display_name, agent_slug, state, created_at, updated_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, NOW(), NOW()) \
+             (id, controller_id, agent_id, display_name, agent_slug, state, requested_scope, \
+              accountability, self_realm_id, provision_event_refs, pairing_request_id, \
+              pairing_code, pairing_expires_at, created_at, updated_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, NOW(), NOW()) \
              ON CONFLICT (id) DO UPDATE SET \
              controller_id = EXCLUDED.controller_id, agent_id = EXCLUDED.agent_id, \
              display_name = EXCLUDED.display_name, agent_slug = EXCLUDED.agent_slug, \
-             state = EXCLUDED.state, updated_at = NOW()",
+             state = EXCLUDED.state, requested_scope = EXCLUDED.requested_scope, \
+             accountability = EXCLUDED.accountability, self_realm_id = EXCLUDED.self_realm_id, \
+             provision_event_refs = EXCLUDED.provision_event_refs, \
+             pairing_request_id = EXCLUDED.pairing_request_id, pairing_code = EXCLUDED.pairing_code, \
+             pairing_expires_at = EXCLUDED.pairing_expires_at, updated_at = NOW()",
         )
         .bind::<Text, _>(&agent_principal_id)
         .bind::<Text, _>(&controller_did)
@@ -450,6 +515,13 @@ impl AgentStore for PgAgentStore {
         .bind::<Text, _>(&display_name)
         .bind::<Nullable<Text>, _>(&agent_slug)
         .bind::<Text, _>(&state)
+        .bind::<Nullable<Jsonb>, _>(&requested_scope)
+        .bind::<Nullable<Jsonb>, _>(&accountability)
+        .bind::<Nullable<Text>, _>(&self_realm_id)
+        .bind::<Nullable<Jsonb>, _>(&provision_event_refs)
+        .bind::<Nullable<Text>, _>(&pairing_request_id)
+        .bind::<Nullable<Text>, _>(&pairing_code)
+        .bind::<Nullable<Timestamptz>, _>(&pairing_expires_at)
         .execute(&mut *conn)
         .await
         .map(|_| ())
@@ -460,6 +532,8 @@ impl AgentStore for PgAgentStore {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(
             "SELECT id AS agent_principal_id, controller_id AS controller_did, agent_id, display_name, agent_slug, state, \
+             requested_scope, accountability, self_realm_id, provision_event_refs, \
+             pairing_request_id, pairing_code, pairing_expires_at, \
              created_at, updated_at FROM agent_principals WHERE id = $1",
         )
         .bind::<Text, _>(agent_principal_id)
@@ -474,6 +548,8 @@ impl AgentStore for PgAgentStore {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(
             "SELECT id AS agent_principal_id, controller_id AS controller_did, agent_id, display_name, agent_slug, state, \
+             requested_scope, accountability, self_realm_id, provision_event_refs, \
+             pairing_request_id, pairing_code, pairing_expires_at, \
              created_at, updated_at FROM agent_principals WHERE controller_id = $1 \
              ORDER BY created_at",
         )
