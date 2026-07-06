@@ -120,7 +120,8 @@ pub(crate) fn content_kind(content: &Value) -> Option<&str> {
 
 pub(crate) fn poll_id_from_content(content: &Value) -> Option<String> {
     content
-        .get("poll_id")
+        .get("poll_response")
+        .and_then(|poll_response| poll_response.get("poll_ref"))
         .and_then(Value::as_str)
         .filter(|value| !value.trim().is_empty())
         .map(ToOwned::to_owned)
@@ -128,6 +129,13 @@ pub(crate) fn poll_id_from_content(content: &Value) -> Option<String> {
             content
                 .get("poll")
                 .and_then(|poll| poll.get("id"))
+                .and_then(Value::as_str)
+                .filter(|value| !value.trim().is_empty())
+                .map(ToOwned::to_owned)
+        })
+        .or_else(|| {
+            content
+                .get("poll_id")
                 .and_then(Value::as_str)
                 .filter(|value| !value.trim().is_empty())
                 .map(ToOwned::to_owned)
@@ -204,7 +212,8 @@ pub(crate) fn poll_options_from_content(content: &Value) -> Vec<PollOptionState>
 
 pub(crate) fn poll_choices_from_content(content: &Value) -> Vec<String> {
     content
-        .get("choices")
+        .get("poll_response")
+        .and_then(|poll_response| poll_response.get("selections"))
         .and_then(Value::as_array)
         .map(|items| {
             items
@@ -213,6 +222,19 @@ pub(crate) fn poll_choices_from_content(content: &Value) -> Vec<String> {
                 .filter(|value| !value.trim().is_empty())
                 .map(ToOwned::to_owned)
                 .collect::<Vec<_>>()
+        })
+        .or_else(|| {
+            content
+                .get("choices")
+                .and_then(Value::as_array)
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .filter(|value| !value.trim().is_empty())
+                        .map(ToOwned::to_owned)
+                        .collect::<Vec<_>>()
+                })
         })
         .or_else(|| {
             content

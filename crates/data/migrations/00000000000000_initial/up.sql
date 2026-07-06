@@ -106,6 +106,7 @@ CREATE TABLE public.agent_principals (
     pairing_request_id text,
     pairing_code text,
     pairing_expires_at timestamp with time zone,
+    authorized_event_ref text,
     state_changed_at timestamp with time zone,
     created_at timestamp with time zone NOT NULL,
     updated_at timestamp with time zone NOT NULL,

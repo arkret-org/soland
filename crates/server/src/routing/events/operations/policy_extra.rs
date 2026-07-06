@@ -5,6 +5,7 @@ use cokret_sdk::{
 use serde_json::Value;
 
 use super::*;
+use crate::reducer::poll_id_from_content;
 
 pub(crate) async fn validate_history_visibility_policy(
     state: &AppState,
@@ -728,11 +729,11 @@ pub(crate) fn validate_poll_operation_policy(
     if content.get("kind").and_then(serde_json::Value::as_str) != Some("ck.content.poll.response") {
         return Ok(());
     }
-    let Some(poll_id) = content.get("poll_id").and_then(serde_json::Value::as_str) else {
+    let Some(poll_id) = poll_id_from_content(content) else {
         return Ok(());
     };
     let projection = state.projection.lock();
-    if projection.poll(poll_id).is_some_and(|poll| poll.closed) {
+    if projection.poll(&poll_id).is_some_and(|poll| poll.closed) {
         Err("poll_closed")
     } else {
         Ok(())

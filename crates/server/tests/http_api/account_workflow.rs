@@ -721,7 +721,18 @@ async fn account_contacts_and_realm_lifecycle_workflow() {
             "parts": [
                 {"kind": "ck.content.text", "body": "structured hello"},
                 {"kind": "ck.content.location", "body": "location", "latitude": 312304000, "longitude": 1214737000},
-                {"kind": "ck.content.poll", "body": "ship?", "question": "ship?", "options": ["yes", "no"]}
+                {
+                    "kind": "ck.content.poll",
+                    "body": "ship?",
+                    "poll": {
+                        "kind": "disclosed",
+                        "max_selections": 1,
+                        "answers": [
+                            {"id": "yes", "text": {"kind": "ck.content.text", "body": "yes"}},
+                            {"id": "no", "text": {"kind": "ck.content.text", "body": "no"}}
+                        ]
+                    }
+                }
             ]
         }),
         false,

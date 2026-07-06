@@ -29,6 +29,7 @@
 
 use std::collections::BTreeSet;
 
+use base64::Engine as _;
 use chrono::SecondsFormat;
 use cokret_sdk::models::{
     AgentDeactivateRequestBody, AgentGrantAttachOutcome, AgentGrantAttachRequestBody,
@@ -39,12 +40,13 @@ use cokret_sdk::models::{
     AgentProtocolDiscoverOutcome, AgentProtocolDiscoverRequestBody, AgentProvisionOutcome,
     AgentProvisionRequestBody, AgentResumeRequestBody, AgentRotateKeyOutcome,
     AgentRotateKeyRequestBody, AgentSidecarContextRef, AgentSidecarExposureAck,
-    AgentSidecarThreadEnsureOutcome, AgentSidecarThreadEnsureRequestBody, AgentView,
+    AgentSidecarThreadEnsureOutcome, AgentSidecarThreadEnsureRequestBody, AgentView, PublicKey,
     effective_participation, validate_agent_slug, validate_selection_within_ceiling,
 };
 use cokret_sdk::{
-    CircleId, Did, EventId, GrantId, Operation, OperationId, RealmId, RelationId, StrandId,
+    CircleId, Did, EventId, GrantId, Hash, Operation, OperationId, RealmId, RelationId, StrandId,
 };
+use ed25519_dalek::Verifier as _;
 use salvo::http::StatusCode;
 use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
@@ -261,12 +263,57 @@ fn agent_view_from_record(record: &Value) -> AgentView {
         .and_then(Value::as_str)
         .unwrap_or("active")
         .to_owned();
+    let key_state = agent_key_state_from_record(record);
     AgentView {
         agent: agent_projection_from_record(record),
         status,
         grants: Vec::new(),
-        key_state: Value::Null,
+        key_state,
     }
+}
+
+fn agent_key_state_from_record(record: &Value) -> Value {
+    let status = record
+        .get("state")
+        .and_then(Value::as_str)
+        .unwrap_or("active");
+    let mut state = serde_json::Map::new();
+    state.insert("status".to_owned(), json!(status));
+    if let Some(value) = record
+        .get("requested_scope")
+        .filter(|value| !value.is_null())
+    {
+        state.insert("requested_scope".to_owned(), value.clone());
+    }
+    if let Some(value) = record
+        .get("pairing_request_id")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+    {
+        state.insert("pairing_request_id".to_owned(), json!(value));
+    }
+    if let Some(value) = record
+        .get("pairing_code")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+    {
+        state.insert("pairing_code".to_owned(), json!(value));
+    }
+    if let Some(value) = record
+        .get("pairing_expires_at")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+    {
+        state.insert("pairing_expires_at".to_owned(), json!(value));
+    }
+    if let Some(value) = record
+        .get("authorized_event_ref")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+    {
+        state.insert("authorized_event_ref".to_owned(), json!(value));
+    }
+    Value::Object(state)
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -591,7 +638,14 @@ async fn agent_key_pair(
     }
     let agent_record = require_agent_controller(state, &session, agent_principal_id).await?;
     ensure_pairing_request_open(&agent_record)?;
-    let runtime_public_key_digest = runtime_public_key_digest(&body.public_key)?;
+    ensure_pairing_request_id_matches(&agent_record, &body.pairing_request_id)?;
+    let runtime_public_key_digest =
+        runtime_public_key_digest(&body.public_key, &body.verification_method)?;
+    verify_runtime_key_pair_proof_of_possession(
+        &body,
+        agent_principal_id,
+        &state.config.service_did,
+    )?;
     // The runtime-attestation verifier is not wired yet. Refuse every
     // supplied attestation fail-closed instead of accepting a shape-only
     // `self_asserted` placeholder as if it were a verified binding.
@@ -641,17 +695,21 @@ async fn agent_key_pair(
     // flip to `active` ONLY after the durable key authorization has been
     // accepted (a failed submit above propagates via `?` and MUST NOT leave
     // the agent flipped to active).
-    let updated = state
+    let mut updated_record = agent_record;
+    if let Some(object) = updated_record.as_object_mut() {
+        object.insert("state".to_owned(), json!("active"));
+        object.insert("updated_at".to_owned(), json!(authorized_at));
+        object.insert(
+            "authorized_event_ref".to_owned(),
+            json!(authorized_event_ref.as_str()),
+        );
+    }
+    state
         .persistence
         .agents()
-        .set_state(agent_principal_id, "active", &authorized_at)
+        .put(updated_record)
         .await
         .map_err(|err| AppError::internal(format!("agent state activation failed: {err}")))?;
-    if !updated {
-        return Err(AppError::internal(
-            "agent state activation failed: agent principal disappeared",
-        ));
-    }
     json_ok(AgentKeyPairOutcome {
         ok: true,
         authorized_event_ref,
@@ -810,6 +868,120 @@ fn ensure_pairing_request_open(agent_record: &Value) -> Result<(), AppError> {
     Ok(())
 }
 
+fn ensure_pairing_request_id_matches(
+    agent_record: &Value,
+    supplied_pairing_request_id: &str,
+) -> Result<(), AppError> {
+    let expected = pairing_record_string(agent_record, "pairing_request_id")?;
+    if expected != supplied_pairing_request_id {
+        return Err(pairing_failed_precondition(
+            "pairing_request_id does not match the open pairing request",
+        ));
+    }
+    Ok(())
+}
+
+#[derive(serde::Deserialize)]
+struct AgentKeyPairProofOfPossession {
+    challenge: String,
+    audience: String,
+    request_canonical_digest: String,
+    expires_at: chrono::DateTime<chrono::Utc>,
+    signature: String,
+}
+
+fn runtime_ed25519_public_key(
+    public_key: &Value,
+    verification_method: &str,
+) -> Result<[u8; 32], AppError> {
+    let key: PublicKey = serde_json::from_value(public_key.clone())
+        .map_err(|error| AppError::invalid_param(format!("public_key invalid: {error}")))?;
+    if key.kty != "OKP" {
+        return Err(AppError::invalid_param("public_key.kty must be OKP"));
+    }
+    if key.alg != "Ed25519" && key.alg != "EdDSA" {
+        return Err(AppError::invalid_param(
+            "public_key.alg must be Ed25519 or EdDSA",
+        ));
+    }
+    if key.kid != verification_method {
+        return Err(AppError::invalid_param(
+            "public_key.kid must match verification_method",
+        ));
+    }
+    let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(key.key.as_bytes())
+        .map_err(|_| AppError::invalid_param("public_key.key is not base64url"))?;
+    bytes
+        .try_into()
+        .map_err(|_| AppError::invalid_param("public_key.key must be a 32-byte Ed25519 key"))
+}
+
+fn verify_runtime_key_pair_proof_of_possession(
+    body: &AgentKeyPairRequestBody,
+    agent_principal_id: &str,
+    service_did: &str,
+) -> Result<(), AppError> {
+    let agent_id = Did::new(agent_principal_id.to_owned())
+        .map_err(|error| AppError::invalid_param(format!("agent_principal_id invalid: {error}")))?;
+    let public_key_bytes = runtime_ed25519_public_key(&body.public_key, &body.verification_method)?;
+    let proof: AgentKeyPairProofOfPossession =
+        serde_json::from_value(body.proof_of_possession.clone()).map_err(|error| {
+            AppError::invalid_param(format!("proof_of_possession invalid: {error}"))
+        })?;
+    if proof.audience != service_did {
+        return Err(AppError::invalid_param(
+            "proof_of_possession.audience must match this principal server",
+        ));
+    }
+    if proof.expires_at <= chrono::Utc::now() {
+        return Err(pairing_failed_precondition(
+            "proof_of_possession has expired",
+        ));
+    }
+    let expected_digest = cokret_sdk::agent::agent_key_pair_proof_request_binding_digest(
+        &body.pairing_request_id,
+        &agent_id,
+        &body.verification_method,
+        &body.public_key,
+        body.runtime_attestation.as_ref(),
+    )
+    .map_err(|error| {
+        AppError::invalid_param(format!(
+            "proof_of_possession request binding failed: {error}"
+        ))
+    })?;
+    if proof.request_canonical_digest != expected_digest.as_str() {
+        return Err(AppError::invalid_param(
+            "proof_of_possession.request_canonical_digest must bind the runtime key request",
+        ));
+    }
+    let request_digest = Hash::new(proof.request_canonical_digest.clone())
+        .map_err(|_| AppError::invalid_param("proof_of_possession digest is invalid"))?;
+    let signing_input = cokret_sdk::agent::agent_key_pair_proof_signing_input(
+        body.verification_method.clone(),
+        proof.challenge,
+        proof.audience,
+        proof.expires_at,
+        request_digest,
+    );
+    let signing_bytes = signing_input.canonical_bytes().map_err(|error| {
+        AppError::invalid_param(format!("proof_of_possession signing input failed: {error}"))
+    })?;
+    let verifying_key = ed25519_dalek::VerifyingKey::from_bytes(&public_key_bytes)
+        .map_err(|error| AppError::invalid_param(format!("public_key invalid: {error}")))?;
+    let signature_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(proof.signature.as_bytes())
+        .map_err(|_| AppError::invalid_param("proof_of_possession.signature is not base64url"))?;
+    let signature = ed25519_dalek::Signature::from_slice(&signature_bytes).map_err(|_| {
+        AppError::invalid_param("proof_of_possession.signature must be a 64-byte Ed25519 signature")
+    })?;
+    verifying_key
+        .verify(&signing_bytes, &signature)
+        .map_err(|_| AppError::invalid_param("proof_of_possession.signature is invalid"))?;
+    Ok(())
+}
+
 fn pairing_failed_precondition(reason: &'static str) -> AppError {
     AppError::new(ErrorCode::FailedPrecondition, reason)
         .with_status(StatusCode::PRECONDITION_FAILED)
@@ -837,13 +1009,14 @@ fn pairing_record_timestamp(
         .map_err(|_| AppError::invalid_param(format!("agent pairing metadata {key} is invalid")))
 }
 
-fn runtime_public_key_digest(public_key: &Value) -> Result<String, AppError> {
-    if public_key.is_null() {
-        return Err(AppError::missing_param("public_key is required"));
-    }
-    cokret_sdk::canonical::canonical_sha256(public_key).map_err(|error| {
-        AppError::invalid_param(format!("public_key is not canonicalizable: {error}"))
-    })
+fn runtime_public_key_digest(
+    public_key: &Value,
+    verification_method: &str,
+) -> Result<String, AppError> {
+    runtime_ed25519_public_key(public_key, verification_method)?;
+    cokret_sdk::agent::agent_runtime_public_key_digest(public_key)
+        .map(|digest| digest.as_str().to_owned())
+        .map_err(|error| AppError::invalid_param(format!("public_key is invalid: {error}")))
 }
 
 fn ensure_authorize_event_scope_matches_requested(
@@ -891,19 +1064,24 @@ fn pairing_request_binding_digest(
     let pairing_request_id = pairing_record_string(agent_record, "pairing_request_id")?;
     let pairing_code = pairing_record_string(agent_record, "pairing_code")?;
     let expires_at = pairing_record_string(agent_record, "pairing_expires_at")?;
-    let binding = json!({
-        "kind": "ck.agent.key_pairing_request_binding.v1",
-        "operation_id": "ck.gate.account.command.pair_agent_key",
-        "controller_principal_id": controller,
-        "agent_principal_id": agent_principal_id,
-        "verification_method": verification_method,
-        "runtime_public_key_digest": runtime_public_key_digest,
-        "pairing_request_id": pairing_request_id,
-        "pairing_code": pairing_code,
-        "expires_at": expires_at,
-        "audience": service_did,
-    });
-    cokret_sdk::canonical::canonical_sha256(&binding).map_err(|error| {
+    let controller = Did::new(controller.to_owned())
+        .map_err(|error| AppError::invalid_param(format!("controller DID invalid: {error}")))?;
+    let agent_principal_id = Did::new(agent_principal_id.to_owned())
+        .map_err(|error| AppError::invalid_param(format!("agent DID invalid: {error}")))?;
+    let runtime_public_key_digest = Hash::new(runtime_public_key_digest.to_owned())
+        .map_err(|_| AppError::invalid_param("runtime_public_key_digest is invalid"))?;
+    cokret_sdk::agent::agent_key_pairing_request_binding_digest(
+        &controller,
+        &agent_principal_id,
+        verification_method,
+        &runtime_public_key_digest,
+        pairing_request_id,
+        pairing_code,
+        expires_at,
+        service_did,
+    )
+    .map(|digest| digest.as_str().to_owned())
+    .map_err(|error| {
         AppError::internal(format!(
             "pairing binding digest canonicalization failed: {error}"
         ))
@@ -2425,6 +2603,65 @@ mod tests {
         })
     }
 
+    fn key_pair_request_body(
+        agent: &str,
+        verification_method: &str,
+        service_did: &str,
+    ) -> AgentKeyPairRequestBody {
+        use base64::Engine as _;
+        use ed25519_dalek::{Signer as _, SigningKey};
+
+        let signing_key = SigningKey::from_bytes(&[42u8; 32]);
+        let public_key = json!({
+            "kty": "OKP",
+            "kid": verification_method,
+            "alg": "Ed25519",
+            "key": base64::engine::general_purpose::URL_SAFE_NO_PAD
+                .encode(signing_key.verifying_key().as_bytes()),
+        });
+        let agent_id = Did::new(agent.to_owned()).expect("agent did");
+        let pairing_request_id = "agent_pairing_request:01999999-0000-7000-8000-00000000feed";
+        let request_digest = cokret_sdk::agent::agent_key_pair_proof_request_binding_digest(
+            pairing_request_id,
+            &agent_id,
+            verification_method,
+            &public_key,
+            None,
+        )
+        .expect("pop digest");
+        let expires_at = chrono::DateTime::parse_from_rfc3339("2999-01-01T00:00:00.000Z")
+            .expect("fixed future expiry")
+            .with_timezone(&chrono::Utc);
+        let signing_input = cokret_sdk::agent::agent_key_pair_proof_signing_input(
+            verification_method.to_owned(),
+            pairing_request_id,
+            service_did.to_owned(),
+            expires_at,
+            request_digest.clone(),
+        );
+        let signature = signing_key.sign(
+            &signing_input
+                .canonical_bytes()
+                .expect("pop signing canonical bytes"),
+        );
+        AgentKeyPairRequestBody {
+            pairing_request_id: pairing_request_id.to_owned(),
+            agent_principal_id: agent_id,
+            verification_method: verification_method.to_owned(),
+            public_key,
+            proof_of_possession: json!({
+                "challenge": pairing_request_id,
+                "audience": service_did,
+                "request_canonical_digest": request_digest.as_str(),
+                "expires_at": expires_at.to_rfc3339_opts(SecondsFormat::Millis, true),
+                "signature": base64::engine::general_purpose::URL_SAFE_NO_PAD
+                    .encode(signature.to_bytes()),
+            }),
+            runtime_attestation: None,
+            authorize_event: Value::Null,
+        }
+    }
+
     #[test]
     fn agent_principal_id_is_did_not_typed_id() {
         validate_agent_principal_id("did:web:agent.example").expect("DID-as-id must be accepted");
@@ -2570,6 +2807,36 @@ mod tests {
             service_did,
         )
         .expect("matching authorize_event should pass");
+    }
+
+    #[test]
+    fn key_pair_proof_of_possession_verifies_runtime_key() {
+        let agent = "did:web:agent.example";
+        let verification_method = "did:web:agent.example#runtime-key-1";
+        let service_did = "did:web:soland.local";
+        let body = key_pair_request_body(agent, verification_method, service_did);
+
+        verify_runtime_key_pair_proof_of_possession(&body, agent, service_did)
+            .expect("runtime PoP must verify");
+    }
+
+    #[test]
+    fn key_pair_rejects_wrong_pairing_request_id() {
+        let record = pending_pairing_record(
+            "did:web:agent.example",
+            "did:web:controller.example",
+            requested_agent_scope(),
+            "12345678",
+            "2999-01-01T00:00:00Z",
+        );
+
+        let err = ensure_pairing_request_id_matches(
+            &record,
+            "agent_pairing_request:01999999-0000-7000-8000-00000000bad1",
+        )
+        .expect_err("wrong pairing request must fail closed");
+
+        assert_eq!(err.wire_code(), "failed_precondition");
     }
 
     #[test]

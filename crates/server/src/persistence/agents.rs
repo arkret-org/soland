@@ -400,6 +400,8 @@ struct AgentPrincipalRow {
     pairing_code: Option<String>,
     #[diesel(sql_type = Nullable<Timestamptz>)]
     pairing_expires_at: Option<chrono::DateTime<chrono::Utc>>,
+    #[diesel(sql_type = Nullable<Text>)]
+    authorized_event_ref: Option<String>,
     #[diesel(sql_type = Timestamptz)]
     created_at: chrono::DateTime<chrono::Utc>,
     #[diesel(sql_type = Timestamptz)]
@@ -423,6 +425,7 @@ impl From<AgentPrincipalRow> for Value {
             "pairing_code": row.pairing_code,
             "pairing_expires_at": row.pairing_expires_at
                 .map(|value| value.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)),
+            "authorized_event_ref": row.authorized_event_ref,
             "created_at": row.created_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
             "updated_at": row.updated_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
         })
@@ -494,12 +497,16 @@ impl AgentStore for PgAgentStore {
                     })
             })
             .transpose()?;
+        let authorized_event_ref = record
+            .get("authorized_event_ref")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned);
         sql_query(
             "INSERT INTO agent_principals \
              (id, controller_id, agent_id, display_name, agent_slug, state, requested_scope, \
               accountability, self_realm_id, provision_event_refs, pairing_request_id, \
-              pairing_code, pairing_expires_at, created_at, updated_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, NOW(), NOW()) \
+              pairing_code, pairing_expires_at, authorized_event_ref, created_at, updated_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, NOW(), NOW()) \
              ON CONFLICT (id) DO UPDATE SET \
              controller_id = EXCLUDED.controller_id, agent_id = EXCLUDED.agent_id, \
              display_name = EXCLUDED.display_name, agent_slug = EXCLUDED.agent_slug, \
@@ -507,7 +514,8 @@ impl AgentStore for PgAgentStore {
              accountability = EXCLUDED.accountability, self_realm_id = EXCLUDED.self_realm_id, \
              provision_event_refs = EXCLUDED.provision_event_refs, \
              pairing_request_id = EXCLUDED.pairing_request_id, pairing_code = EXCLUDED.pairing_code, \
-             pairing_expires_at = EXCLUDED.pairing_expires_at, updated_at = NOW()",
+             pairing_expires_at = EXCLUDED.pairing_expires_at, \
+             authorized_event_ref = EXCLUDED.authorized_event_ref, updated_at = NOW()",
         )
         .bind::<Text, _>(&agent_principal_id)
         .bind::<Text, _>(&controller_did)
@@ -522,6 +530,7 @@ impl AgentStore for PgAgentStore {
         .bind::<Nullable<Text>, _>(&pairing_request_id)
         .bind::<Nullable<Text>, _>(&pairing_code)
         .bind::<Nullable<Timestamptz>, _>(&pairing_expires_at)
+        .bind::<Nullable<Text>, _>(&authorized_event_ref)
         .execute(&mut *conn)
         .await
         .map(|_| ())
@@ -533,7 +542,7 @@ impl AgentStore for PgAgentStore {
         sql_query(
             "SELECT id AS agent_principal_id, controller_id AS controller_did, agent_id, display_name, agent_slug, state, \
              requested_scope, accountability, self_realm_id, provision_event_refs, \
-             pairing_request_id, pairing_code, pairing_expires_at, \
+             pairing_request_id, pairing_code, pairing_expires_at, authorized_event_ref, \
              created_at, updated_at FROM agent_principals WHERE id = $1",
         )
         .bind::<Text, _>(agent_principal_id)
@@ -549,7 +558,7 @@ impl AgentStore for PgAgentStore {
         sql_query(
             "SELECT id AS agent_principal_id, controller_id AS controller_did, agent_id, display_name, agent_slug, state, \
              requested_scope, accountability, self_realm_id, provision_event_refs, \
-             pairing_request_id, pairing_code, pairing_expires_at, \
+             pairing_request_id, pairing_code, pairing_expires_at, authorized_event_ref, \
              created_at, updated_at FROM agent_principals WHERE controller_id = $1 \
              ORDER BY created_at",
         )
