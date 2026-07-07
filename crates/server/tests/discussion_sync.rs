@@ -11,7 +11,7 @@ use soland::reducer::{
     StrandProjection,
 };
 use soland::service;
-use soland::state::{AppState, RealmDirectoryEntry, RealmMetaRecord};
+use soland::state::{AppState, RealmDirectoryEntry, RealmInviteRecord, RealmMetaRecord};
 use soland_data::Db;
 
 static TEST_EVENT_SEQ: AtomicU64 = AtomicU64::new(1_000);
@@ -191,6 +191,90 @@ async fn admit_member(
     assert!(
         resp["accepted"][0].is_string(),
         "ck.member.state{{join}} admit failed: {resp:?}"
+    );
+}
+
+async fn seed_pending_invite(
+    state: &AppState,
+    realm_id: &str,
+    inviter: &str,
+    invitee: &str,
+) -> String {
+    let now = chrono::Utc::now();
+    let invite_id = new_prefixed_uuid7("ck:invite:");
+    state
+        .persistence
+        .realm_invites()
+        .put(RealmInviteRecord {
+            invite_id: invite_id.clone(),
+            realm_id: realm_id.to_owned(),
+            inviter: inviter.to_owned(),
+            invitee: Some(invitee.to_owned()),
+            invite_delivery_target: Some(json!({
+                "recipient_service_did": state.config.service_did.clone(),
+                "recipient_service_type": "principal_server"
+            })),
+            introduction_evidence_digest: Some(format!("sha256:{}", "1".repeat(64))),
+            third_party_id: None,
+            join_rule_snapshot: Some(json!({"join_rule": "invite"})),
+            invite_token: new_prefixed_uuid7("ck:invite-token:"),
+            status: "pending".to_owned(),
+            claim_nonces: std::collections::BTreeMap::new(),
+            expires_at: Some(now + chrono::Duration::days(1)),
+            created_at: now,
+            updated_at: None,
+        })
+        .await
+        .unwrap();
+    invite_id
+}
+
+async fn accept_invite(
+    state: AppState,
+    token: &str,
+    actor_did: &str,
+    device_id: &str,
+    realm_id: &str,
+    invite_id: &str,
+) {
+    let payload = json!({
+        "invite_id": invite_id,
+    });
+    let mut event = json!({
+        "event_id": new_prefixed_uuid7("ck:event:"),
+        "kind": "ck.invite.accept",
+        "schema_id": "ck.schema.invite.v1",
+        "actor_id": actor_did,
+        "actor_seq": TEST_EVENT_SEQ.fetch_add(1, Ordering::Relaxed),
+        "realm_id": realm_id,
+        "device_id": device_id,
+        "audience": "did:web:soland.local",
+        "domain": "did:web:soland.local",
+        "prev_refs": [],
+        "auth_refs": [],
+        "refs": [],
+        "payload": payload,
+        "proofs": [{
+            "type": "dev-proof",
+            "verification_method": format!("{actor_did}#{device_id}"),
+            "device_id": device_id,
+            "audience": "did:web:soland.local",
+            "domain": "did:web:soland.local",
+            "payload_digest": sha256_json(&payload)
+        }]
+    });
+    event["canonical_digest"] = Value::String(event_canonical_digest(&event));
+    let resp: Value = TestClient::post("http://server/_cokret/self/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&event)
+        .send(&app_from_state(state))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert!(
+        resp["accepted"][0].is_string(),
+        "ck.invite.accept failed: {resp:?}"
     );
 }
 
@@ -647,6 +731,51 @@ async fn joined_history_incremental_sync_includes_post_join_messages_after_curso
     assert!(
         delta_bodies.contains(&"after bob baseline".to_owned()),
         "{delta:?}"
+    );
+}
+
+#[tokio::test]
+async fn invite_accept_member_receives_joined_history_messages_after_accept() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let alice_did = "did:web:alice.example";
+    let alice = dev_token(state.clone(), alice_did, "a11ce0000001").await;
+    let bob_did = "did:web:bob.example";
+    let bob_device_id = "ck:device:01904100-0000-7000-8000-b0b000000003";
+    let bob = dev_token(state.clone(), bob_did, "b0b000000003").await;
+    let realm_id = seed_realm(&state, alice_did, "invite accept joined history", "joined").await;
+
+    let invite_id = seed_pending_invite(&state, &realm_id, alice_did, bob_did).await;
+    accept_invite(
+        state.clone(),
+        &bob,
+        bob_did,
+        bob_device_id,
+        &realm_id,
+        &invite_id,
+    )
+    .await;
+    assert!(
+        state
+            .projection
+            .lock()
+            .member(&realm_id, bob_did)
+            .is_some_and(|member| member.state == "join"),
+        "ck.invite.accept must project joined membership"
+    );
+
+    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    send_message(
+        state.clone(),
+        &alice,
+        &realm_id,
+        "after invite accept joined history",
+    )
+    .await;
+
+    let sync = account_subscribe_frame(state.clone(), &bob, "catchup=true").await;
+    assert!(
+        sync_bodies(&sync, &realm_id).contains(&"after invite accept joined history".to_owned()),
+        "{sync:?}"
     );
 }
 

@@ -1,11 +1,13 @@
 use std::collections::{BTreeMap, BTreeSet};
 
+use cokret_sdk::lattice::CellState;
 use cokret_sdk::{
-    Did, Operation, PlaintextDataClassKind, PlaintextVisibleServicesPayload, RealmId,
+    CellRef, Did, Operation, PlaintextDataClassKind, PlaintextVisibleServicesPayload, RealmId,
 };
 use serde_json::Value;
 
 use super::*;
+use crate::reducer::SolandMembershipState;
 use crate::state::{AppState, RealmInviteRecord};
 use crate::{ids, kinds};
 
@@ -56,6 +58,15 @@ pub(super) async fn project_invite_accept_operation(
         );
         return;
     }
+    if record.realm_id != operation.realm_id.as_str() {
+        tracing::warn!(
+            invite_id = %invite_id,
+            record_realm = %record.realm_id,
+            operation_realm = %operation.realm_id,
+            "ck.invite.accept realm mismatch; ignored"
+        );
+        return;
+    }
     if !matches!(record.status.as_str(), "pending" | "claimed") {
         tracing::debug!(
             invite_id = %invite_id,
@@ -72,7 +83,11 @@ pub(super) async fn project_invite_accept_operation(
         return;
     }
     record.status = "accepted".to_owned();
+    record.updated_at = Some(operation.created_at);
+    record.invite_token.clear();
     let realm_id = record.realm_id.clone();
+    let invite_created_at = record.created_at;
+    let invite_delivery_target = record.invite_delivery_target.clone();
     if let Err(error) = invites.put(record).await {
         tracing::warn!(%error, invite_id = %invite_id, "failed to mark invite accepted");
         return;
@@ -90,6 +105,14 @@ pub(super) async fn project_invite_accept_operation(
             }
         }
     }
+    project_invite_accept_membership(
+        state,
+        &realm_id,
+        &accepter,
+        invite_created_at,
+        invite_delivery_target.as_ref(),
+        operation,
+    );
     touch_realm(state, &realm_id).await;
     tracing::info!(
         invite_id = %invite_id,
@@ -97,6 +120,62 @@ pub(super) async fn project_invite_accept_operation(
         realm_id = %realm_id,
         "ck.invite.accept projected: invite accepted + membership cascaded"
     );
+}
+
+fn project_invite_accept_membership(
+    state: &AppState,
+    realm_id: &str,
+    member: &str,
+    invite_created_at: chrono::DateTime<chrono::Utc>,
+    invite_delivery_target: Option<&Value>,
+    operation: &Operation,
+) {
+    let recipient_service_did = invite_delivery_target
+        .and_then(|target| target.get("recipient_service_did"))
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .map(ToOwned::to_owned);
+    let delivery_status = recipient_service_did
+        .as_ref()
+        .map(|_| "routable".to_owned())
+        .or_else(|| Some("unroutable".to_owned()));
+    let membership_event_ref = Some(operation.operation_id.as_str().to_owned());
+    let delivery_binding_frontier = recipient_service_did
+        .as_ref()
+        .and(membership_event_ref.clone());
+
+    let mut projection = state.projection.lock();
+    let key = (realm_id.to_owned(), member.to_owned());
+    let previous = projection.members.get(&key).cloned();
+    let joined_at = previous
+        .as_ref()
+        .filter(|membership| membership.state == "join")
+        .map(|membership| membership.joined_at)
+        .unwrap_or(operation.created_at);
+    projection.members.insert(
+        key,
+        SolandMembershipState {
+            member: member.to_owned(),
+            realm_id: realm_id.to_owned(),
+            state: "join".to_owned(),
+            role: "member".to_owned(),
+            delivery_status,
+            recipient_service_did,
+            membership_event_ref,
+            delivery_binding_frontier,
+            invited_at: previous
+                .as_ref()
+                .and_then(|membership| membership.invited_at)
+                .or(Some(invite_created_at)),
+            joined_at,
+            updated_at: operation.created_at,
+        },
+    );
+    if let Ok(cell_id) = CellRef::new(format!("ck:cell:ck.component.member.state.v1:{member}")) {
+        projection
+            .cells
+            .insert(cell_id, CellState::Value(Value::String("join".to_owned())));
+    }
 }
 
 pub(super) async fn project_invite_cancel_operation(
