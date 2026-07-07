@@ -498,7 +498,8 @@ impl AccountStore for PgAccountStore {
             .await
             .optional()
             .map_err(PersistenceError::from)?;
-            if assigned.is_none() {
+            let assigned_localpart = assigned.map(|row| row.localpart);
+            if assigned_localpart.is_none() {
                 return Err(PersistenceError::Conflict(format!(
                     "localpart `{}` is already assigned",
                     record.localpart
@@ -900,7 +901,6 @@ struct AccountLocalpartRow {
 #[derive(QueryableByName)]
 struct LocalpartOnlyRow {
     #[diesel(sql_type = Text)]
-    #[allow(dead_code)]
     localpart: String,
 }
 

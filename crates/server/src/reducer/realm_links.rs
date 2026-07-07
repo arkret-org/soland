@@ -246,7 +246,7 @@ pub fn effective_policy_for_realm(state: &ProjectionState, realm_id: &str) -> Ef
     }
 
     // realm-links.md §6.2 — derived grants MUST NOT be wider than ANY source.
-    // The union above stays for the legacy single-source read; alongside it we
+    // The union above stays for the single-source aggregate read; alongside it we
     // surface the narrow-only INTERSECTION across every source the child has
     // opted into via a currently-active governance link. A policy survives the
     // narrowing only when EVERY opted-in source declares it, which is the

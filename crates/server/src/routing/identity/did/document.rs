@@ -287,7 +287,7 @@ pub(super) fn ensure_did_document_id(did: &str, document: &mut Value) -> Result<
     }
 }
 
-#[allow(dead_code)] // used by routing::tests::did_*; production path runs through validate_did_document
+#[cfg(test)]
 pub(in crate::routing) fn validate_did_document_services(
     did: &str,
     document: &Value,

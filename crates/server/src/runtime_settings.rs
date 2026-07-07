@@ -20,7 +20,7 @@
 use serde::{Deserialize, Serialize};
 use soland_data::PgPool;
 
-use crate::config::{AppConfig, FederationPolicy};
+use crate::config::{AppConfig, FederationFanoutTopology};
 use crate::persistence::{QueryableByName, RunQueryDsl, Value, pg_conn, sql_query};
 use crate::ratelimit::RateLimiterConfig;
 
@@ -78,8 +78,8 @@ pub struct RuntimeSettings {
     pub admin_principal_dids: Vec<String>,
     /// Federation broadcast / hub-upstream target set (`base_url|service_did`).
     pub federation_peers: Vec<String>,
-    /// Mesh vs hub outbound fanout policy.
-    pub federation_policy: FederationPolicy,
+    /// Mesh vs hub outbound fanout topology.
+    pub federation_fanout_topology: FederationFanoutTopology,
     /// Service DIDs promotable from `pending` to `trusted` on push-bridge
     /// snapshot import.
     pub push_bridge_trusted_service_dids: Vec<String>,
@@ -99,7 +99,7 @@ impl RuntimeSettings {
         Self {
             admin_principal_dids: config.admin_principal_dids.clone(),
             federation_peers: config.federation_peers.clone(),
-            federation_policy: config.federation_policy,
+            federation_fanout_topology: config.federation_fanout_topology,
             push_bridge_trusted_service_dids: config.push_bridge_trusted_service_dids.clone(),
             candidate_join_policy_enabled: config.candidate_join_policy_enabled,
             federation_replica_observer: config.federation_replica_observer,
@@ -134,7 +134,9 @@ impl RuntimeSettings {
         match key {
             keys::ADMIN_PRINCIPAL_DIDS => self.admin_principal_dids = decode(key, value)?,
             keys::FEDERATION_PEERS => self.federation_peers = decode(key, value)?,
-            keys::FEDERATION_POLICY => self.federation_policy = decode(key, value)?,
+            keys::FEDERATION_FANOUT_TOPOLOGY => {
+                self.federation_fanout_topology = decode(key, value)?
+            }
             keys::PUSH_BRIDGE_TRUSTED_SERVICE_DIDS => {
                 self.push_bridge_trusted_service_dids = decode(key, value)?
             }
@@ -160,7 +162,9 @@ impl RuntimeSettings {
         let value = match key {
             keys::ADMIN_PRINCIPAL_DIDS => serde_json::to_value(&self.admin_principal_dids),
             keys::FEDERATION_PEERS => serde_json::to_value(&self.federation_peers),
-            keys::FEDERATION_POLICY => serde_json::to_value(self.federation_policy),
+            keys::FEDERATION_FANOUT_TOPOLOGY => {
+                serde_json::to_value(self.federation_fanout_topology)
+            }
             keys::PUSH_BRIDGE_TRUSTED_SERVICE_DIDS => {
                 serde_json::to_value(&self.push_bridge_trusted_service_dids)
             }
@@ -193,7 +197,7 @@ impl RuntimeSettings {
 pub mod keys {
     pub const ADMIN_PRINCIPAL_DIDS: &str = "admin_principal_dids";
     pub const FEDERATION_PEERS: &str = "federation_peers";
-    pub const FEDERATION_POLICY: &str = "federation_policy";
+    pub const FEDERATION_FANOUT_TOPOLOGY: &str = "federation_fanout_topology";
     pub const PUSH_BRIDGE_TRUSTED_SERVICE_DIDS: &str = "push_bridge_trusted_service_dids";
     pub const CANDIDATE_JOIN_POLICY_ENABLED: &str = "candidate_join_policy_enabled";
     pub const FEDERATION_REPLICA_OBSERVER: &str = "federation_replica_observer";
@@ -203,7 +207,7 @@ pub mod keys {
     pub const ALL: &[&str] = &[
         ADMIN_PRINCIPAL_DIDS,
         FEDERATION_PEERS,
-        FEDERATION_POLICY,
+        FEDERATION_FANOUT_TOPOLOGY,
         PUSH_BRIDGE_TRUSTED_SERVICE_DIDS,
         CANDIDATE_JOIN_POLICY_ENABLED,
         FEDERATION_REPLICA_OBSERVER,
@@ -274,7 +278,7 @@ mod tests {
         RuntimeSettings {
             admin_principal_dids: vec!["did:web:ops.example".to_owned()],
             federation_peers: vec!["https://peer.example|did:web:peer.example".to_owned()],
-            federation_policy: FederationPolicy::Hub,
+            federation_fanout_topology: FederationFanoutTopology::Hub,
             push_bridge_trusted_service_dids: vec!["did:web:push.example".to_owned()],
             candidate_join_policy_enabled: true,
             federation_replica_observer: false,
@@ -292,9 +296,9 @@ mod tests {
     fn runtime_settings_json_round_trips() {
         let original = sample();
         let json = serde_json::to_value(&original).expect("encode");
-        // `federation_policy` serializes as a lowercase string, matching the
+        // `federation_fanout_topology` serializes as a lowercase string, matching the
         // env grammar (`mesh` | `hub`).
-        assert_eq!(json["federation_policy"], "hub");
+        assert_eq!(json["federation_fanout_topology"], "hub");
         let decoded: RuntimeSettings = serde_json::from_value(json).expect("decode");
         assert_eq!(decoded, original);
     }
@@ -323,7 +327,10 @@ mod tests {
             settings.admin_principal_dids,
             vec!["did:web:a", "did:web:b"]
         );
-        assert_eq!(settings.federation_policy, FederationPolicy::Hub);
+        assert_eq!(
+            settings.federation_fanout_topology,
+            FederationFanoutTopology::Hub
+        );
         assert!(settings.candidate_join_policy_enabled);
     }
 
@@ -369,7 +376,7 @@ mod tests {
             let mut fresh = RuntimeSettings {
                 admin_principal_dids: vec![],
                 federation_peers: vec![],
-                federation_policy: FederationPolicy::Mesh,
+                federation_fanout_topology: FederationFanoutTopology::Mesh,
                 push_bridge_trusted_service_dids: vec![],
                 candidate_join_policy_enabled: false,
                 federation_replica_observer: false,

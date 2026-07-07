@@ -12,6 +12,7 @@ pub(crate) mod events;
 // G3.S9: extensions (applet manifest verifier, bot/ghost actor, TSP, sovereign enclave).
 pub mod extensions;
 pub mod federation;
+pub(crate) mod http_signature;
 pub(crate) mod identity;
 mod interop;
 pub(crate) mod invites;

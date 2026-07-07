@@ -773,7 +773,7 @@ impl ProjectionState {
         // realm-links.md §6.2 — retain the per-(child, source) declaration so
         // a child opted into multiple governance sources keeps each source's
         // narrowed allow-list for the narrow-only intersection read; the
-        // single last-write map below preserves the legacy single-source walk.
+        // single last-write map below preserves the single-source aggregate read.
         self.realm_inheritance_policies_by_source.insert(
             (realm_id.clone(), source_realm_id.to_owned()),
             state_row.clone(),

@@ -92,10 +92,25 @@ async fn pg_conn(pool: &PgPool) -> StoreResult<Object<AsyncPgConnection>> {
 
 fn run_blocking<F, T>(future: F) -> StoreResult<T>
 where
-    F: Future<Output = StoreResult<T>>,
+    F: Future<Output = StoreResult<T>> + Send + 'static,
+    T: Send + 'static,
 {
-    if let Ok(handle) = tokio::runtime::Handle::try_current() {
-        return tokio::task::block_in_place(|| handle.block_on(future));
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle) if handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread => {
+            return tokio::task::block_in_place(|| handle.block_on(future));
+        }
+        Ok(_) => {
+            return std::thread::spawn(move || {
+                tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .map_err(|error| StoreError::Backend(format!("build runtime: {error}")))?
+                    .block_on(future)
+            })
+            .join()
+            .map_err(|_| StoreError::Backend("state store worker panicked".to_owned()))?;
+        }
+        Err(_) => {}
     }
 
     tokio::runtime::Builder::new_current_thread()

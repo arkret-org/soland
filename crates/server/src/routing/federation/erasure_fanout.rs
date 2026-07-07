@@ -289,11 +289,11 @@ async fn persist_erasure_operation_for_pull(state: &AppState, operation: &Operat
 }
 
 fn configured_erasure_peer_targets(state: &AppState) -> Vec<ErasurePeerTarget> {
-    use crate::config::FederationPolicy;
+    use crate::config::FederationFanoutTopology;
     let settings = state.settings();
-    let entries: Vec<String> = match settings.federation_policy {
-        FederationPolicy::Mesh => settings.federation_peers.clone(),
-        FederationPolicy::Hub => settings
+    let entries: Vec<String> = match settings.federation_fanout_topology {
+        FederationFanoutTopology::Mesh => settings.federation_peers.clone(),
+        FederationFanoutTopology::Hub => settings
             .federation_peers
             .first()
             .cloned()

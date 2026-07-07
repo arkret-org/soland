@@ -182,7 +182,7 @@ async fn submit_event(depot: &mut Depot, req: &mut Request, res: &mut Response) 
             submit_event_batch(state, &session, batch.events, res).await;
         }
         SolandEventsSubmitRequestBody::Single(envelope) => {
-            let envelope_for_chaos = match event_to_legacy_value(envelope.clone()) {
+            let envelope_for_chaos = match event_to_canonical_value(envelope.clone()) {
                 Ok(value) => value,
                 Err(error) => {
                     render_submit_one_error(res, error);
@@ -224,7 +224,7 @@ async fn submit_event_dispatch(
             }
         }
         SolandEventsSubmitRequestBody::Single(envelope) => {
-            let envelope_for_chaos = match event_to_legacy_value(envelope.clone()) {
+            let envelope_for_chaos = match event_to_canonical_value(envelope.clone()) {
                 Ok(value) => value,
                 Err(error) => return submit_one_error_value(error),
             };

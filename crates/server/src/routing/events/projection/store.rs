@@ -1,12 +1,9 @@
 use cokret_sdk::{Operation, OperationId};
-use diesel::sql_query;
-use diesel::sql_types::{Jsonb, Nullable, Text, Timestamptz, Uuid as SqlUuid};
-use diesel_async::RunQueryDsl;
 use serde_json::{Value, json};
 
 use super::*;
+use crate::kinds;
 use crate::state::{AppState, ProjectionEventRecord};
-use crate::{ids, kinds};
 
 pub async fn append_projection_event(state: &AppState, event: ProjectionEventRecord) {
     let store = state.persistence.projection_events();
@@ -104,35 +101,9 @@ pub async fn load_projected_events_from_pg(
     let Some(pool) = state.db.pool.as_ref() else {
         return Ok(Vec::new());
     };
-    let mut conn = pool.get().await?;
-    let realm_id_uuid = ids::typed_uuid_part_expect_internal(realm_id);
-    let rows = sql_query(
-        "SELECT e.id AS event_id, e.realm_id, e.event_type AS event_kind, 'event' AS operation_type, e.operation_id, e.sender_id AS sender, e.payload, e.created_at, COALESCE(ce.received_at, e.created_at) AS received_at \
-         FROM events e LEFT JOIN canonical_events ce ON ce.id = e.id WHERE e.realm_id = $1 \
-         UNION ALL \
-         SELECT s.id AS event_id, s.realm_id, s.event_type AS event_kind, 'state' AS operation_type, s.operation_id, s.sender_id AS sender, s.payload, s.created_at, COALESCE(ce.received_at, s.created_at) AS received_at \
-         FROM space_state_events s LEFT JOIN canonical_events ce ON ce.id = s.id OR ce.id = s.operation_id WHERE s.realm_id = $1 \
-         ORDER BY received_at ASC, event_id ASC",
-    )
-    .bind::<SqlUuid, _>(realm_id_uuid)
-    .load::<ProjectionEventRow>(&mut *conn).await?;
-    Ok(rows
-        .into_iter()
-        .map(|row| ProjectionEventRecord {
-            event_id: ids::format_typed_uuid("event", &row.event_id),
-            realm_id: ids::format_typed_uuid("realm", &row.realm_id),
-            event_kind: row.event_kind,
-            operation_type: row.operation_type,
-            operation_id: row
-                .operation_id
-                .as_ref()
-                .map(|u| ids::format_typed_uuid("operation", u)),
-            sender: row.sender,
-            payload: row.payload,
-            created_at: row.created_at,
-            received_at: row.received_at,
-        })
-        .collect())
+    crate::persistence::load_projected_events_from_pg(pool, realm_id)
+        .await
+        .map_err(Into::into)
 }
 
 pub struct FederationIngestResult {
@@ -299,146 +270,7 @@ pub async fn persist_projected_operation(
     let Some(pool) = state.db.pool.as_ref() else {
         return Ok(());
     };
-    let mut conn = pool.get().await?;
-    let event_type = kinds::canonical_kind_string(operation);
-    if kinds::operation_is_message_create(operation) {
-        let event_id = operation
-            .payload
-            .get("event_id")
-            .and_then(|value| value.as_str())
-            .map(ToOwned::to_owned)
-            .unwrap_or_else(|| {
-                let op_uuid = ids::typed_uuid_part_expect_internal(operation.operation_id.as_str());
-                ids::format_typed_uuid("event", &op_uuid)
-            });
-        let sender = operation
-            .payload
-            .get("sender")
-            .and_then(|value| value.as_str())
-            .unwrap_or(origin);
-        let thread_id = operation
-            .payload
-            .get("thread_id")
-            .and_then(|value| value.as_str());
-        // SOL-COR-02: `event_id` may originate from the raw event payload
-        // (untrusted), so a malformed value must degrade to `schema_violation`
-        // rather than panic the request task.
-        let event_id_uuid = ids::typed_uuid_part_or_schema_violation(&event_id)?;
-        let realm_id_uuid = ids::typed_uuid_part_expect_internal(operation.realm_id.as_str());
-        let operation_id_uuid =
-            ids::typed_uuid_part_expect_internal(operation.operation_id.as_str());
-        sql_query(
-                "INSERT INTO events (id, realm_id, event_type, sender_id, thread_id, operation_id, payload, created_at) \
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
-                 ON CONFLICT (id) DO NOTHING",
-            )
-            .bind::<SqlUuid, _>(event_id_uuid)
-            .bind::<SqlUuid, _>(realm_id_uuid)
-            .bind::<Text, _>(&event_type)
-            .bind::<Nullable<Text>, _>(Some(sender))
-            .bind::<Nullable<Text>, _>(thread_id)
-            .bind::<Nullable<SqlUuid>, _>(Some(operation_id_uuid))
-            .bind::<Jsonb, _>(&operation.payload)
-            .bind::<Timestamptz, _>(operation.created_at)
-            .execute(&mut *conn).await?;
-    } else if kinds::operation_is_membership(operation)
-        || kinds::operation_is_realm_lifecycle(operation)
-    {
-        let title = operation_realm_title(operation);
-        let title_for_insert = title.unwrap_or_else(|| operation.realm_id.as_str());
-        let summary = operation_realm_summary(operation);
-        let discoverability = operation_realm_discoverability(operation).unwrap_or_else(|| {
-            if operation
-                .payload
-                .get("public")
-                .and_then(|value| value.as_bool())
-                .unwrap_or(false)
-            {
-                "public"
-            } else {
-                "invite_only"
-            }
-        });
-        let realm_id_uuid = ids::typed_uuid_part_expect_internal(operation.realm_id.as_str());
-        let operation_id_uuid =
-            ids::typed_uuid_part_expect_internal(operation.operation_id.as_str());
-        if title.is_some() {
-            sql_query(
-                    "INSERT INTO spaces (id, title, summary, owner_id, discoverability, payload, created_at, updated_at) \
-                     VALUES ($1, $2, $3, $4, $5, $6, $7, $7) \
-                     ON CONFLICT (id) DO UPDATE SET title = EXCLUDED.title, summary = COALESCE(EXCLUDED.summary, spaces.summary), updated_at = EXCLUDED.updated_at",
-                )
-                .bind::<SqlUuid, _>(realm_id_uuid)
-                .bind::<Text, _>(title_for_insert)
-                .bind::<Nullable<Text>, _>(summary)
-                .bind::<Nullable<Text>, _>(Some(origin))
-                .bind::<Text, _>(discoverability)
-                .bind::<Jsonb, _>(&operation.payload)
-                .bind::<Timestamptz, _>(operation.created_at)
-                .execute(&mut *conn).await?;
-        } else {
-            sql_query(
-                    "INSERT INTO spaces (id, title, summary, owner_id, discoverability, payload, created_at, updated_at) \
-                     VALUES ($1, $2, $3, $4, $5, $6, $7, $7) \
-                     ON CONFLICT (id) DO UPDATE SET summary = COALESCE(EXCLUDED.summary, spaces.summary), updated_at = EXCLUDED.updated_at",
-                )
-                .bind::<SqlUuid, _>(realm_id_uuid)
-                .bind::<Text, _>(title_for_insert)
-                .bind::<Nullable<Text>, _>(summary)
-                .bind::<Nullable<Text>, _>(Some(origin))
-                .bind::<Text, _>(discoverability)
-                .bind::<Jsonb, _>(&operation.payload)
-                .bind::<Timestamptz, _>(operation.created_at)
-                .execute(&mut *conn).await?;
-        }
-
-        if let Some(member) = operation
-            .payload
-            .get("actor_id")
-            .and_then(|value| value.as_str())
-        {
-            let membership = operation
-                .payload
-                .get("membership")
-                .and_then(|value| value.as_str())
-                .unwrap_or("join");
-            sql_query(
-                    "INSERT INTO space_members (id, realm_id, actor_id, membership, payload, joined_at, left_at, updated_at) \
-                     VALUES ($1, $2, $3, $4, $5, CASE WHEN $4 = 'join' THEN $6 ELSE NULL END, CASE WHEN $4 <> 'join' THEN $6 ELSE NULL END, $6) \
-                     ON CONFLICT (realm_id, actor_id) DO UPDATE SET membership = EXCLUDED.membership, payload = EXCLUDED.payload, left_at = EXCLUDED.left_at, updated_at = EXCLUDED.updated_at",
-                )
-                .bind::<diesel::sql_types::Uuid, _>(uuid::Uuid::now_v7())
-                .bind::<SqlUuid, _>(realm_id_uuid)
-                .bind::<Text, _>(member)
-                .bind::<Text, _>(membership)
-                .bind::<Jsonb, _>(&operation.payload)
-                .bind::<Timestamptz, _>(operation.created_at)
-                .execute(&mut *conn).await?;
-        }
-
-        // The DB column matches the canonical projection-cell key
-        // model: `(realm_id, event_type, subject)` identifies the cell.
-        // The space_state_events row reuses the operation_id as its primary
-        // key — same UUID, different typed wire form (operation vs event).
-        sql_query(
-                "INSERT INTO space_state_events (id, realm_id, event_type, subject, sender_id, operation_id, payload, created_at) \
-                 VALUES ($1, $2, $3, $4, $5, $1, $6, $7) \
-                 ON CONFLICT (id) DO NOTHING",
-            )
-            .bind::<SqlUuid, _>(operation_id_uuid)
-            .bind::<SqlUuid, _>(realm_id_uuid)
-            .bind::<Text, _>(&event_type)
-            .bind::<Text, _>(
-                operation
-                    .payload
-                    .get("member")
-                    .and_then(|value| value.as_str())
-                    .unwrap_or(""),
-            )
-            .bind::<Nullable<Text>, _>(Some(origin))
-            .bind::<Jsonb, _>(&operation.payload)
-            .bind::<Timestamptz, _>(operation.created_at)
-            .execute(&mut *conn).await?;
-    }
-    Ok(())
+    crate::persistence::persist_projected_operation_to_pg(pool, origin, operation)
+        .await
+        .map_err(Into::into)
 }

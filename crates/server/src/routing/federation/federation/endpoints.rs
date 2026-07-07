@@ -371,7 +371,7 @@ fn local_peer_policy_digest_for_transaction(
         "source_service_did": origin_service_did,
         "destination_service_did": body.destination.as_str(),
         "service_binding_ref": body.service_binding_ref.as_str(),
-        "federation_policy": live_settings.federation_policy.as_str(),
+        "fanout_topology": live_settings.federation_fanout_topology.as_str(),
         "federation_peers": federation_peers,
         "source_denied": crate::security::federation_origin_denied(origin_service_did),
         "max_inbound_operations": MAX_INBOUND_FEDERATION_OPERATIONS,
@@ -582,7 +582,7 @@ pub(crate) async fn federation_pull_operations(
         if !operation_is_visible(&operation, &redacted) {
             continue;
         }
-        if !operation_history_visible_for_legacy_federation_pull(state, &operation).await {
+        if !operation_history_visible_for_federation_pull(state, &operation).await {
             continue;
         }
         if operations.len() == limit + 1 {
@@ -654,7 +654,7 @@ pub(crate) async fn federation_backfill_operations(
         peer_has_more = page.has_more;
         let mut visible_operations = Vec::new();
         for operation in page.operations {
-            if operation_history_visible_for_legacy_federation_pull(state, &operation).await {
+            if operation_history_visible_for_federation_pull(state, &operation).await {
                 visible_operations.push(operation);
             } else {
                 rejected.push(json!({
@@ -694,7 +694,7 @@ pub(crate) async fn federation_backfill_operations(
     })
 }
 
-async fn operation_history_visible_for_legacy_federation_pull(
+async fn operation_history_visible_for_federation_pull(
     state: &AppState,
     operation: &cokret_sdk::Operation,
 ) -> bool {
@@ -838,9 +838,9 @@ pub(crate) async fn federation_verify_actor(
 #[derive(Clone, Debug, Default, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct FederationSealsOutcome {
     pub seals: Vec<cokret_sdk::Seal>,
-    /// Echo of [`crate::config::FederationPolicy::as_str`] so the calling
+    /// Echo of [`crate::config::FederationFanoutTopology::as_str`] so the calling
     /// peer can reason about whether to fan out to other nodes.
-    pub policy: String,
+    pub fanout_topology: String,
     pub next_cursor: Option<String>,
 }
 
@@ -882,7 +882,11 @@ pub(crate) async fn federation_seals_pull(
     }
     json_ok(FederationSealsOutcome {
         seals,
-        policy: state.settings().federation_policy.as_str().to_owned(),
+        fanout_topology: state
+            .settings()
+            .federation_fanout_topology
+            .as_str()
+            .to_owned(),
         next_cursor: None,
     })
 }

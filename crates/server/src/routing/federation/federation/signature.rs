@@ -2,16 +2,15 @@ use std::time::{Duration as StdDuration, Instant};
 
 use base64::Engine as _;
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
-use chrono::Utc;
-use ed25519_dalek::{Signature, SigningKey, Verifier as _, VerifyingKey};
+use ed25519_dalek::{SigningKey, VerifyingKey};
 use salvo::http::StatusCode;
 use salvo::prelude::*;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
-use super::outbound::content_digest_header;
 use super::wire::FederationTrustHeaders;
 use crate::error::AppError;
+use crate::routing::http_signature::{self, SignatureBaseComponent, SignatureWindowViolation};
 use crate::state::AppState;
 
 pub(super) const FEDERATION_AUTH_FAILURE_MESSAGE: &str = "federation request authentication failed";
@@ -149,15 +148,15 @@ fn verify_inbound_federation_http_signature_inner(
     body_destination: &str,
     metric_label: &'static str,
 ) -> Result<(), AppError> {
-    let body_bytes = cokret_sdk::canonical::canonical_json_bytes(body_value).map_err(|error| {
+    let body_digests = http_signature::canonical_body_digests(body_value, |error| {
         AppError::new(
             crate::error::ErrorCode::SchemaViolation,
             format!("federation request body is not canonical JSON: {error}"),
         )
         .with_status(StatusCode::BAD_REQUEST)
     })?;
-    let expected_content_digest = content_digest_header(&body_bytes);
-    let expected_request_digest = cokret_sdk::canonical::sha256_digest(&body_bytes);
+    let expected_content_digest = body_digests.content_digest;
+    let expected_request_digest = body_digests.request_digest;
     validate_federation_request_binding(&state.config.trust_domain, req, &expected_request_digest)?;
 
     let content_digest = required_header(req, "content-digest")?;
@@ -278,46 +277,42 @@ fn verify_inbound_peer_http_signature_inner(
 ) -> Result<(), AppError> {
     let body_digests = match body {
         Some(value) => {
-            let body_bytes =
-                cokret_sdk::canonical::canonical_json_bytes(value).map_err(|error| {
-                    AppError::new(
-                        crate::error::ErrorCode::SchemaViolation,
-                        format!("peer request body is not canonical JSON: {error}"),
-                    )
-                    .with_status(StatusCode::BAD_REQUEST)
-                })?;
-            let expected_content_digest = content_digest_header(&body_bytes);
-            let expected_request_digest = cokret_sdk::canonical::sha256_digest(&body_bytes);
+            let body_digests = http_signature::canonical_body_digests(value, |error| {
+                AppError::new(
+                    crate::error::ErrorCode::SchemaViolation,
+                    format!("peer request body is not canonical JSON: {error}"),
+                )
+                .with_status(StatusCode::BAD_REQUEST)
+            })?;
             validate_federation_request_binding(
                 &state.config.trust_domain,
                 req,
-                &expected_request_digest,
+                &body_digests.request_digest,
             )?;
-            Some((expected_content_digest, expected_request_digest))
+            Some(body_digests)
         }
         None => None,
     };
 
-    let (content_digest, request_digest) =
-        if let Some((expected_content_digest, expected_request_digest)) = body_digests {
-            let content_digest = required_header(req, "content-digest")?;
-            if content_digest != expected_content_digest {
-                crate::metrics::record_digest_mismatch("peer_request_content_digest");
-                return Err(signature_error(
-                    "Content-Digest does not match peer canonical request body",
-                ));
-            }
-            let request_digest = required_header(req, "request-canonical-digest")?;
-            if request_digest != expected_request_digest {
-                crate::metrics::record_digest_mismatch("peer_request_request_digest");
-                return Err(signature_error(
-                    "Request-Canonical-Digest does not match peer canonical request body",
-                ));
-            }
-            (Some(content_digest), Some(request_digest))
-        } else {
-            (None, None)
-        };
+    let (content_digest, request_digest) = if let Some(expected) = body_digests {
+        let content_digest = required_header(req, "content-digest")?;
+        if content_digest != expected.content_digest {
+            crate::metrics::record_digest_mismatch("peer_request_content_digest");
+            return Err(signature_error(
+                "Content-Digest does not match peer canonical request body",
+            ));
+        }
+        let request_digest = required_header(req, "request-canonical-digest")?;
+        if request_digest != expected.request_digest {
+            crate::metrics::record_digest_mismatch("peer_request_request_digest");
+            return Err(signature_error(
+                "Request-Canonical-Digest does not match peer canonical request body",
+            ));
+        }
+        (Some(content_digest), Some(request_digest))
+    } else {
+        (None, None)
+    };
 
     let source_service_did = required_header(req, "source-service-did")?;
     let destination_service_did = required_header(req, "destination-service-did")?;
@@ -391,15 +386,17 @@ fn verify_relay_inner_signature(
 ) -> Result<(), AppError> {
     let inner_params = signature_params(req, "relay-inner-signature-input")?;
     validate_signature_params(&inner_params, origin_service_did, "relay inner")?;
-    let inner_base = format!(
-        "\"@method\": {method}\n\
-         \"@target-uri\": {target_uri}\n\
-         \"content-digest\": {content_digest}\n\
-         \"origin-service-did\": {origin_service_did}\n\
-         \"relay-service-did\": {relay_service_did}\n\
-         \"destination-service-did\": {destination_service_did}\n\
-         \"request-canonical-digest\": {request_digest}\n\
-         \"@signature-params\": {inner_params}",
+    let inner_base = http_signature::signature_base(
+        &[
+            SignatureBaseComponent::required("@method", method),
+            SignatureBaseComponent::required("@target-uri", target_uri),
+            SignatureBaseComponent::required("content-digest", content_digest),
+            SignatureBaseComponent::required("origin-service-did", origin_service_did),
+            SignatureBaseComponent::required("relay-service-did", relay_service_did),
+            SignatureBaseComponent::required("destination-service-did", destination_service_did),
+            SignatureBaseComponent::required("request-canonical-digest", request_digest),
+        ],
+        &inner_params,
     );
     verify_signature_header(
         state,
@@ -425,26 +422,23 @@ fn federation_http_signature_base(
     destination_service_endpoint_digest: Option<&str>,
     signature_params: &str,
 ) -> String {
-    // federation.md §3.2 line 180/185: when a Destination-Service-Endpoint-Digest
-    // is present it MUST be a covered component of the signature transcript so the
-    // signer commits to the destination endpoint (anti virtual-host confusion on
-    // shared ingress). Single-endpoint deployments omit it and the component is
-    // simply absent from the base.
-    let endpoint_component = destination_service_endpoint_digest
-        .map(|digest| format!("\"destination-service-endpoint-digest\": {digest}\n"))
-        .unwrap_or_default();
-    format!(
-        "\"@method\": {method}\n\
-         \"@target-uri\": {target_uri}\n\
-         \"@authority\": {authority}\n\
-         \"content-digest\": {content_digest}\n\
-         \"source-service-did\": {source_service_did}\n\
-         \"destination-service-did\": {destination_service_did}\n\
-         \"source-trust-domain\": {source_trust_domain}\n\
-         \"destination-trust-domain\": {destination_trust_domain}\n\
-         \"request-canonical-digest\": {request_digest}\n\
-         {endpoint_component}\
-         \"@signature-params\": {signature_params}",
+    http_signature::signature_base(
+        &[
+            SignatureBaseComponent::required("@method", method),
+            SignatureBaseComponent::required("@target-uri", target_uri),
+            SignatureBaseComponent::required("@authority", authority),
+            SignatureBaseComponent::required("content-digest", content_digest),
+            SignatureBaseComponent::required("source-service-did", source_service_did),
+            SignatureBaseComponent::required("destination-service-did", destination_service_did),
+            SignatureBaseComponent::required("source-trust-domain", source_trust_domain),
+            SignatureBaseComponent::required("destination-trust-domain", destination_trust_domain),
+            SignatureBaseComponent::required("request-canonical-digest", request_digest),
+            SignatureBaseComponent::optional(
+                "destination-service-endpoint-digest",
+                destination_service_endpoint_digest,
+            ),
+        ],
+        signature_params,
     )
 }
 
@@ -462,27 +456,23 @@ fn peer_http_signature_base(
     destination_service_endpoint_digest: Option<&str>,
     signature_params: &str,
 ) -> String {
-    let content_component = content_digest
-        .map(|digest| format!("\"content-digest\": {digest}\n"))
-        .unwrap_or_default();
-    let request_digest_component = request_digest
-        .map(|digest| format!("\"request-canonical-digest\": {digest}\n"))
-        .unwrap_or_default();
-    let endpoint_component = destination_service_endpoint_digest
-        .map(|digest| format!("\"destination-service-endpoint-digest\": {digest}\n"))
-        .unwrap_or_default();
-    format!(
-        "\"@method\": {method}\n\
-         \"@target-uri\": {target_uri}\n\
-         \"@authority\": {authority}\n\
-         {content_component}\
-         \"source-service-did\": {source_service_did}\n\
-         \"destination-service-did\": {destination_service_did}\n\
-         \"source-trust-domain\": {source_trust_domain}\n\
-         \"destination-trust-domain\": {destination_trust_domain}\n\
-         {request_digest_component}\
-         {endpoint_component}\
-         \"@signature-params\": {signature_params}",
+    http_signature::signature_base(
+        &[
+            SignatureBaseComponent::required("@method", method),
+            SignatureBaseComponent::required("@target-uri", target_uri),
+            SignatureBaseComponent::required("@authority", authority),
+            SignatureBaseComponent::optional("content-digest", content_digest),
+            SignatureBaseComponent::required("source-service-did", source_service_did),
+            SignatureBaseComponent::required("destination-service-did", destination_service_did),
+            SignatureBaseComponent::required("source-trust-domain", source_trust_domain),
+            SignatureBaseComponent::required("destination-trust-domain", destination_trust_domain),
+            SignatureBaseComponent::optional("request-canonical-digest", request_digest),
+            SignatureBaseComponent::optional(
+                "destination-service-endpoint-digest",
+                destination_service_endpoint_digest,
+            ),
+        ],
+        signature_params,
     )
 }
 
@@ -541,20 +531,18 @@ fn validate_destination_authority(
 }
 
 fn required_header(req: &Request, name: &str) -> Result<String, AppError> {
-    req.headers()
-        .get(name)
-        .and_then(|value| value.to_str().ok())
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
-        .ok_or_else(|| signature_error(format!("missing required federation header: {name}")))
+    http_signature::required_header(req, name, |name| {
+        signature_error(format!("missing required federation header: {name}"))
+    })
 }
 
 fn signature_params(req: &Request, header_name: &str) -> Result<String, AppError> {
-    required_header(req, header_name)?
-        .strip_prefix("sig1=")
-        .map(ToOwned::to_owned)
-        .ok_or_else(|| signature_error(format!("{header_name} must contain sig1 parameters")))
+    http_signature::signature_params(
+        req,
+        header_name,
+        || signature_error(format!("missing required federation header: {header_name}")),
+        || signature_error(format!("{header_name} must contain sig1 parameters")),
+    )
 }
 
 pub(super) fn validate_signature_params(
@@ -563,67 +551,40 @@ pub(super) fn validate_signature_params(
     label: &str,
 ) -> Result<(), AppError> {
     let expected_keyid = format!("{expected_service_did}#federation-fanout-key");
-    let observed_keyid = signature_param_value(signature_params, "keyid").ok_or_else(|| {
-        signature_error(format!(
-            "{label} Signature-Input missing keyid; key_rotation_hint=refresh_origin_service_did"
-        ))
-    })?;
+    let observed_keyid =
+        http_signature::signature_param_value(signature_params, "keyid").ok_or_else(|| {
+            signature_error(format!(
+                "{label} Signature-Input missing keyid; key_rotation_hint=refresh_origin_service_did"
+            ))
+        })?;
     if observed_keyid != expected_keyid {
         return Err(signature_error(format!(
             "{label} Signature-Input keyid mismatch; key_rotation_hint=refresh_origin_service_did"
         )));
     }
-    if signature_param_value(signature_params, "alg").as_deref() != Some("ed25519") {
+    if http_signature::signature_param_value(signature_params, "alg").as_deref() != Some("ed25519")
+    {
         return Err(signature_error(format!(
             "{label} Signature-Input alg must be ed25519"
         )));
     }
-    let now = Utc::now().timestamp();
-    // federation.md §3.2: `created` and `expires` are MUST-present signature
-    // parameters; the freshness window is normative and is the only protocol-level
-    // replay backstop on the inbound write path (an evicted replay cache MUST NOT
-    // allow a byte-for-byte replay that falls outside this window). Fail closed when
-    // either is absent or unparsable rather than silently accepting the signature.
-    let created = signature_param_value(signature_params, "created")
-        .and_then(|value| value.parse::<i64>().ok())
-        .ok_or_else(|| {
-            signature_error(format!(
-                "{label} Signature-Input missing required `created` parameter"
-            ))
-        })?;
-    let expires = signature_param_value(signature_params, "expires")
-        .and_then(|value| value.parse::<i64>().ok())
-        .ok_or_else(|| {
-            signature_error(format!(
-                "{label} Signature-Input missing required `expires` parameter"
-            ))
-        })?;
-    // `created` MUST be within ±30s of local clock (both directions).
-    if (created - now).abs() > 30 {
-        return Err(signature_error(format!(
-            "{label} signature created timestamp outside ±30s clock-skew window"
-        )));
-    }
-    // Window width MUST NOT exceed 300s.
-    if expires < created || expires - created > 300 {
-        return Err(signature_error(format!(
-            "{label} signature validity window exceeds 300s"
-        )));
-    }
-    // `expires` MUST be in the future relative to local clock.
-    if expires < now {
-        return Err(signature_error(format!("{label} signature is expired")));
-    }
-    Ok(())
-}
-
-fn signature_param_value(signature_params: &str, key: &str) -> Option<String> {
-    signature_params.split(';').skip(1).find_map(|part| {
-        let (name, value) = part.split_once('=')?;
-        if name.trim() != key {
-            return None;
-        }
-        Some(value.trim().trim_matches('"').to_owned())
+    http_signature::validate_signature_freshness(signature_params).map_err(|violation| {
+        let message = match violation {
+            SignatureWindowViolation::MissingCreated => {
+                format!("{label} Signature-Input missing required `created` parameter")
+            }
+            SignatureWindowViolation::MissingExpires => {
+                format!("{label} Signature-Input missing required `expires` parameter")
+            }
+            SignatureWindowViolation::CreatedOutsideSkew => {
+                format!("{label} signature created timestamp outside ±30s clock-skew window")
+            }
+            SignatureWindowViolation::InvalidValidityWindow => {
+                format!("{label} signature validity window exceeds 300s")
+            }
+            SignatureWindowViolation::Expired => format!("{label} signature is expired"),
+        };
+        signature_error(message)
     })
 }
 
@@ -635,20 +596,23 @@ fn verify_signature_header(
     signature_base: &str,
     label: &str,
 ) -> Result<(), AppError> {
-    let signature_header = required_header(req, header_name)?;
-    let signature = decode_signature_header(&signature_header).map_err(|message| {
-        signature_error(format!(
-            "{label} signature decode failed: {message}; key_rotation_hint=refresh_origin_service_did"
-        ))
-    })?;
-    let verifying_key = verifying_key_for_service_did(state, service_did)?;
-    verifying_key
-        .verify(signature_base.as_bytes(), &signature)
-        .map_err(|_| {
+    http_signature::verify_signature_header(
+        req,
+        header_name,
+        signature_base,
+        |name| signature_error(format!("missing required federation header: {name}")),
+        |message| {
+            signature_error(format!(
+                "{label} signature decode failed: {message}; key_rotation_hint=refresh_origin_service_did"
+            ))
+        },
+        || {
             signature_error(format!(
                 "{label} signature verification failed; key_rotation_hint=refresh_origin_service_did"
             ))
-        })
+        },
+        || verifying_key_for_service_did(state, service_did),
+    )
 }
 
 pub(super) fn origin_key_state_digest_for_service(
@@ -661,17 +625,6 @@ pub(super) fn origin_key_state_digest_for_service(
     hasher.update(service_did.as_bytes());
     hasher.update(verifying_key.to_bytes());
     Ok(format!("sha256:{}", hex::encode(hasher.finalize())))
-}
-
-fn decode_signature_header(value: &str) -> Result<Signature, &'static str> {
-    let signature_b64 = value
-        .strip_prefix("sig1=:")
-        .and_then(|value| value.strip_suffix(':'))
-        .ok_or("Signature header must use sig1=:base64: form")?;
-    let signature_bytes = STANDARD
-        .decode(signature_b64)
-        .map_err(|_| "Signature header base64 is invalid")?;
-    Signature::from_slice(&signature_bytes).map_err(|_| "Signature header is not Ed25519 length")
 }
 
 fn verifying_key_for_service_did(
@@ -744,11 +697,7 @@ fn decode_peer_verifying_key(material: &str) -> Result<VerifyingKey, String> {
 }
 
 fn development_service_signing_key(service_did: &str) -> SigningKey {
-    let mut hasher = Sha256::new();
-    hasher.update(b"soland:notary-ephemeral:");
-    hasher.update(service_did.as_bytes());
-    let seed: [u8; 32] = hasher.finalize().into();
-    SigningKey::from_bytes(&seed)
+    http_signature::deterministic_development_signing_key(b"soland:notary-ephemeral:", service_did)
 }
 
 pub(in crate::routing) fn signature_target_uri(req: &Request, state: &AppState) -> String {

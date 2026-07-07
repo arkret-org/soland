@@ -4,13 +4,13 @@ use std::str::FromStr;
 use soland_data::Db;
 
 use super::*;
-use crate::config::{AppConfig, FederationPolicy};
+use crate::config::{AppConfig, FederationFanoutTopology};
 use crate::error::AppError;
 use crate::state::AppState;
 
 const FEDERATION_AUTH_FAILURE_MESSAGE_FOR_TEST: &str = "federation request authentication failed";
 
-fn config_with_policy(policy: FederationPolicy, peers: Vec<String>) -> AppConfig {
+fn config_with_policy(topology: FederationFanoutTopology, peers: Vec<String>) -> AppConfig {
     AppConfig {
         public_base_url: "http://test".to_owned(),
         service_did: "did:web:test.local".to_owned(),
@@ -18,7 +18,7 @@ fn config_with_policy(policy: FederationPolicy, peers: Vec<String>) -> AppConfig
         development_mode: true,
         did_resolver_allow_methods: vec!["web".to_owned()],
         jws_replay_window_seconds: 0,
-        federation_policy: policy,
+        federation_fanout_topology: topology,
         federation_peers: peers,
         seed_demo_data: true,
         ..AppConfig::test_default()
@@ -115,7 +115,7 @@ fn verify_actor_headers_reject_destination_mismatch() {
 
 #[test]
 fn private_inbound_write_rail_fails_closed_outside_development_mode() {
-    let mut config = config_with_policy(FederationPolicy::Mesh, Vec::new());
+    let mut config = config_with_policy(FederationFanoutTopology::Mesh, Vec::new());
     config.development_mode = false;
     let state = AppState::new(config, Db { pool: None });
 
@@ -129,7 +129,7 @@ fn private_inbound_write_rail_fails_closed_outside_development_mode() {
 #[tokio::test]
 async fn mesh_policy_broadcasts_to_every_peer() {
     let cfg = config_with_policy(
-        FederationPolicy::Mesh,
+        FederationFanoutTopology::Mesh,
         vec![
             "https://peer-a.example".to_owned(),
             "https://peer-b.example".to_owned(),
@@ -200,7 +200,7 @@ async fn mesh_policy_broadcasts_to_every_peer() {
 #[tokio::test]
 async fn hub_policy_broadcasts_to_hub_only() {
     let cfg = config_with_policy(
-        FederationPolicy::Hub,
+        FederationFanoutTopology::Hub,
         vec![
             "https://hub.example".to_owned(),
             "https://peer-b.example".to_owned(),
@@ -214,7 +214,7 @@ async fn hub_policy_broadcasts_to_hub_only() {
 
 #[tokio::test]
 async fn empty_peers_list_is_a_no_op() {
-    let cfg = config_with_policy(FederationPolicy::Mesh, Vec::new());
+    let cfg = config_with_policy(FederationFanoutTopology::Mesh, Vec::new());
     let state = AppState::new(cfg, Db { pool: None });
     let targets = broadcast_seal_to_peers(&state, "ck:seal:sha256:01").await;
     assert!(targets.is_empty());
@@ -223,7 +223,7 @@ async fn empty_peers_list_is_a_no_op() {
 #[tokio::test]
 async fn local_invite_membership_and_message_operations_project_invite() {
     let cfg = config_with_policy(
-        FederationPolicy::Mesh,
+        FederationFanoutTopology::Mesh,
         vec!["http://127.0.0.1:9|did:web:peer.example".to_owned()],
     );
     let state = AppState::new(cfg, Db { pool: None });
@@ -302,7 +302,7 @@ async fn local_invite_membership_and_message_operations_project_invite() {
 
 #[tokio::test]
 async fn operation_frontier_tracks_persisted_operation_ids() {
-    let cfg = config_with_policy(FederationPolicy::Mesh, Vec::new());
+    let cfg = config_with_policy(FederationFanoutTopology::Mesh, Vec::new());
     let state = AppState::new(cfg, Db { pool: None });
     let realm_id = RealmId::new("ck:realm:01904100-0000-7000-8000-000000000061").unwrap();
     let first = Operation::create(
@@ -353,7 +353,7 @@ async fn operation_frontier_tracks_persisted_operation_ids() {
 #[tokio::test]
 async fn seal_fanout_records_seal_target_and_retry_metadata() {
     let cfg = config_with_policy(
-        FederationPolicy::Mesh,
+        FederationFanoutTopology::Mesh,
         vec!["https://peer-seal.example".to_owned()],
     );
     let state = AppState::new(cfg, Db { pool: None });
@@ -382,7 +382,7 @@ async fn seal_fanout_records_seal_target_and_retry_metadata() {
 #[tokio::test]
 async fn retry_pass_claims_due_outbound_transcript_and_reschedules() {
     let cfg = config_with_policy(
-        FederationPolicy::Mesh,
+        FederationFanoutTopology::Mesh,
         vec!["https://peer-retry.example".to_owned()],
     );
     let state = AppState::new(cfg, Db { pool: None });

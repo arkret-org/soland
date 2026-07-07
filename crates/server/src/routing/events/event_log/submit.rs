@@ -269,7 +269,7 @@ pub(super) async fn submit_event_batch_outcome(
     let mut realm_bootstrap_contexts: Vec<RealmBootstrapBatchContext> = Vec::new();
 
     for envelope in envelopes {
-        let envelope = match event_to_legacy_value(envelope) {
+        let envelope = match event_to_canonical_value(envelope) {
             Ok(envelope) => envelope,
             Err(error) => {
                 rejected.push(EventsSubmitRejectedItem {
@@ -446,7 +446,7 @@ pub(crate) async fn submit_federation_events(
     }
     let events = match events
         .into_iter()
-        .map(event_to_legacy_value)
+        .map(event_to_canonical_value)
         .collect::<Result<Vec<_>, _>>()
     {
         Ok(events) => events,
@@ -1161,7 +1161,9 @@ fn prev_frontier_digest(prev_refs: &[String]) -> Result<String, SubmitOneError> 
     })
 }
 
-pub(in crate::routing) fn event_to_legacy_value(envelope: Event) -> Result<Value, SubmitOneError> {
+pub(in crate::routing) fn event_to_canonical_value(
+    envelope: Event,
+) -> Result<Value, SubmitOneError> {
     serde_json::to_value(envelope).map_err(|error| {
         SubmitOneError::new(
             StatusCode::BAD_REQUEST,
@@ -1176,7 +1178,7 @@ pub(in crate::routing) async fn submit_event_envelope(
     session: &SessionRecord,
     envelope: Event,
 ) -> Result<SubmittedEventOutcome, SubmitOneError> {
-    let envelope = event_to_legacy_value(envelope)?;
+    let envelope = event_to_canonical_value(envelope)?;
     submit_event_value(state, session, envelope).await
 }
 

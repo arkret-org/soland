@@ -953,6 +953,213 @@ impl From<ProjectionEventRow> for ProjectionEventRecord {
     }
 }
 
+pub async fn load_projected_events_from_pg(
+    pool: &PgPool,
+    realm_id: &str,
+) -> PersistenceResult<Vec<ProjectionEventRecord>> {
+    let mut conn = pg_conn(pool).await?;
+    let realm_id_uuid = ids::typed_uuid_part_expect_internal(realm_id);
+    sql_query(
+        "SELECT e.id AS event_id, e.realm_id, e.event_type AS event_kind, 'event' AS operation_type, e.operation_id, e.sender_id AS sender, e.payload, e.created_at, COALESCE(ce.received_at, e.created_at) AS received_at \
+         FROM events e LEFT JOIN canonical_events ce ON ce.id = e.id WHERE e.realm_id = $1 \
+         UNION ALL \
+         SELECT s.id AS event_id, s.realm_id, s.event_type AS event_kind, 'state' AS operation_type, s.operation_id, s.sender_id AS sender, s.payload, s.created_at, COALESCE(ce.received_at, s.created_at) AS received_at \
+         FROM space_state_events s LEFT JOIN canonical_events ce ON ce.id = s.id OR ce.id = s.operation_id WHERE s.realm_id = $1 \
+         ORDER BY received_at ASC, event_id ASC",
+    )
+    .bind::<SqlUuid, _>(realm_id_uuid)
+    .load::<ProjectionEventRow>(&mut *conn)
+    .await
+    .map(|rows| rows.into_iter().map(ProjectionEventRecord::from).collect())
+    .map_err(PersistenceError::from)
+}
+
+pub async fn persist_projected_operation_to_pg(
+    pool: &PgPool,
+    origin: &str,
+    operation: &Operation,
+) -> PersistenceResult<()> {
+    let mut conn = pg_conn(pool).await?;
+    let event_type = crate::kinds::canonical_kind_string(operation);
+    if crate::kinds::operation_is_message_create(operation) {
+        let event_id = operation
+            .payload
+            .get("event_id")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned)
+            .unwrap_or_else(|| {
+                let op_uuid = ids::typed_uuid_part_expect_internal(operation.operation_id.as_str());
+                ids::format_typed_uuid("event", &op_uuid)
+            });
+        let sender = operation
+            .payload
+            .get("sender")
+            .and_then(Value::as_str)
+            .unwrap_or(origin);
+        let thread_id = operation.payload.get("thread_id").and_then(Value::as_str);
+        let event_id_uuid = ids::typed_uuid_part_or_schema_violation(&event_id)?;
+        let realm_id_uuid = ids::typed_uuid_part_expect_internal(operation.realm_id.as_str());
+        let operation_id_uuid =
+            ids::typed_uuid_part_expect_internal(operation.operation_id.as_str());
+        sql_query(
+            "INSERT INTO events (id, realm_id, event_type, sender_id, thread_id, operation_id, payload, created_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
+             ON CONFLICT (id) DO NOTHING",
+        )
+        .bind::<SqlUuid, _>(event_id_uuid)
+        .bind::<SqlUuid, _>(realm_id_uuid)
+        .bind::<Text, _>(&event_type)
+        .bind::<Nullable<Text>, _>(Some(sender))
+        .bind::<Nullable<Text>, _>(thread_id)
+        .bind::<Nullable<SqlUuid>, _>(Some(operation_id_uuid))
+        .bind::<Jsonb, _>(&operation.payload)
+        .bind::<Timestamptz, _>(operation.created_at)
+        .execute(&mut *conn)
+        .await?;
+    } else if crate::kinds::operation_is_membership(operation)
+        || crate::kinds::operation_is_realm_lifecycle(operation)
+    {
+        let title = projected_operation_realm_title(operation);
+        let title_for_insert = title.unwrap_or_else(|| operation.realm_id.as_str());
+        let summary = projected_operation_realm_summary(operation);
+        let discoverability =
+            projected_operation_realm_discoverability(operation).unwrap_or_else(|| {
+                if operation
+                    .payload
+                    .get("public")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
+                {
+                    "public"
+                } else {
+                    "invite_only"
+                }
+            });
+        let realm_id_uuid = ids::typed_uuid_part_expect_internal(operation.realm_id.as_str());
+        let operation_id_uuid =
+            ids::typed_uuid_part_expect_internal(operation.operation_id.as_str());
+        if title.is_some() {
+            sql_query(
+                "INSERT INTO spaces (id, title, summary, owner_id, discoverability, payload, created_at, updated_at) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $7) \
+                 ON CONFLICT (id) DO UPDATE SET title = EXCLUDED.title, summary = COALESCE(EXCLUDED.summary, spaces.summary), updated_at = EXCLUDED.updated_at",
+            )
+            .bind::<SqlUuid, _>(realm_id_uuid)
+            .bind::<Text, _>(title_for_insert)
+            .bind::<Nullable<Text>, _>(summary)
+            .bind::<Nullable<Text>, _>(Some(origin))
+            .bind::<Text, _>(discoverability)
+            .bind::<Jsonb, _>(&operation.payload)
+            .bind::<Timestamptz, _>(operation.created_at)
+            .execute(&mut *conn)
+            .await?;
+        } else {
+            sql_query(
+                "INSERT INTO spaces (id, title, summary, owner_id, discoverability, payload, created_at, updated_at) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $7) \
+                 ON CONFLICT (id) DO UPDATE SET summary = COALESCE(EXCLUDED.summary, spaces.summary), updated_at = EXCLUDED.updated_at",
+            )
+            .bind::<SqlUuid, _>(realm_id_uuid)
+            .bind::<Text, _>(title_for_insert)
+            .bind::<Nullable<Text>, _>(summary)
+            .bind::<Nullable<Text>, _>(Some(origin))
+            .bind::<Text, _>(discoverability)
+            .bind::<Jsonb, _>(&operation.payload)
+            .bind::<Timestamptz, _>(operation.created_at)
+            .execute(&mut *conn)
+            .await?;
+        }
+
+        if let Some(member) = operation.payload.get("actor_id").and_then(Value::as_str) {
+            let membership = operation
+                .payload
+                .get("membership")
+                .and_then(Value::as_str)
+                .unwrap_or("join");
+            sql_query(
+                "INSERT INTO space_members (id, realm_id, actor_id, membership, payload, joined_at, left_at, updated_at) \
+                 VALUES ($1, $2, $3, $4, $5, CASE WHEN $4 = 'join' THEN $6 ELSE NULL END, CASE WHEN $4 <> 'join' THEN $6 ELSE NULL END, $6) \
+                 ON CONFLICT (realm_id, actor_id) DO UPDATE SET membership = EXCLUDED.membership, payload = EXCLUDED.payload, left_at = EXCLUDED.left_at, updated_at = EXCLUDED.updated_at",
+            )
+            .bind::<SqlUuid, _>(Uuid::now_v7())
+            .bind::<SqlUuid, _>(realm_id_uuid)
+            .bind::<Text, _>(member)
+            .bind::<Text, _>(membership)
+            .bind::<Jsonb, _>(&operation.payload)
+            .bind::<Timestamptz, _>(operation.created_at)
+            .execute(&mut *conn)
+            .await?;
+        }
+
+        sql_query(
+            "INSERT INTO space_state_events (id, realm_id, event_type, subject, sender_id, operation_id, payload, created_at) \
+             VALUES ($1, $2, $3, $4, $5, $1, $6, $7) \
+             ON CONFLICT (id) DO NOTHING",
+        )
+        .bind::<SqlUuid, _>(operation_id_uuid)
+        .bind::<SqlUuid, _>(realm_id_uuid)
+        .bind::<Text, _>(&event_type)
+        .bind::<Text, _>(
+            operation
+                .payload
+                .get("member")
+                .and_then(Value::as_str)
+                .unwrap_or(""),
+        )
+        .bind::<Nullable<Text>, _>(Some(origin))
+        .bind::<Jsonb, _>(&operation.payload)
+        .bind::<Timestamptz, _>(operation.created_at)
+        .execute(&mut *conn)
+        .await?;
+    }
+    Ok(())
+}
+
+fn first_string_field<'a>(value: &'a Value, keys: &[&str]) -> Option<&'a str> {
+    keys.iter()
+        .find_map(|key| value.get(*key).and_then(Value::as_str))
+}
+
+fn object_string_field<'a>(operation: &'a Operation, keys: &[&str]) -> Option<&'a str> {
+    operation
+        .payload
+        .get("object")
+        .and_then(|object| first_string_field(object, keys))
+}
+
+fn patch_string_field<'a>(operation: &'a Operation, field: &str) -> Option<&'a str> {
+    let patch_value = operation
+        .payload
+        .get("patch")
+        .and_then(|patch| patch.get(field))?;
+    match patch_value {
+        Value::String(value) => Some(value.as_str()),
+        Value::Object(op) if op.get("$op").and_then(Value::as_str) == Some("set") => {
+            op.get("value").and_then(Value::as_str)
+        }
+        _ => None,
+    }
+}
+
+fn projected_operation_realm_title(operation: &Operation) -> Option<&str> {
+    first_string_field(&operation.payload, &["realm_title", "title"])
+        .or_else(|| object_string_field(operation, &["title"]))
+        .or_else(|| patch_string_field(operation, "title"))
+}
+
+fn projected_operation_realm_summary(operation: &Operation) -> Option<&str> {
+    first_string_field(&operation.payload, &["realm_summary", "summary"])
+        .or_else(|| object_string_field(operation, &["summary"]))
+        .or_else(|| patch_string_field(operation, "summary"))
+}
+
+fn projected_operation_realm_discoverability(operation: &Operation) -> Option<&str> {
+    first_string_field(&operation.payload, &["discoverability"])
+        .or_else(|| object_string_field(operation, &["default_discoverability", "discoverability"]))
+        .or_else(|| patch_string_field(operation, "default_discoverability"))
+        .or_else(|| patch_string_field(operation, "discoverability"))
+}
+
 #[async_trait]
 impl ProjectionEventStore for PgProjectionEventStore {
     async fn append(&self, record: ProjectionEventRecord) -> PersistenceResult<()> {

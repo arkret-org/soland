@@ -213,7 +213,7 @@ pub struct ProjectionState {
     /// `(child, source)` replaces only that pair. This is the substrate the
     /// effective-policy read uses to compute the narrow-only intersection
     /// across all opted-in sources, distinct from the single last-write
-    /// `realm_inheritance_policies` map used by the legacy single-source walk.
+    /// `realm_inheritance_policies` map used by the single-source aggregate read.
     pub realm_inheritance_policies_by_source:
         BTreeMap<(String, String), RealmInheritancePolicyState>,
     /// R3.2 — `ck.capability.derived` projection, keyed by

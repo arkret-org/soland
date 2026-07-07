@@ -1,7 +1,7 @@
 //! Federation discovery for the peer service surface.
 //!
 //! - `GET /.well-known/cokret` — server description. Spec-aligned shape so peers can discover the
-//!   service DID, trust domain, public base URL, and federation policy without an auth round-trip.
+//!   service DID, trust domain, public base URL, and fanout topology without an auth round-trip.
 //!   The body is built from the live `AppConfig`; the route is unauthenticated.
 
 use salvo::prelude::*;
@@ -32,7 +32,7 @@ struct WellKnownCokretOutcome {
     service_did: String,
     trust_domain: String,
     public_base_url: String,
-    federation_policy: String,
+    fanout_topology: String,
     endpoints: WellKnownCokretEndpoints,
     version: String,
 }
@@ -48,20 +48,17 @@ async fn well_known_cokret(depot: &mut Depot) -> JsonResult<WellKnownCokretOutco
     // Spec: B.3 — server description endpoint. Returns the small set
     // of identifiers a peer needs before opening an authenticated
     // session: service DID, trust domain, public base URL, and the
-    // federation policy advertised to peers. The body is deliberately
+    // fanout topology advertised to peers. The body is deliberately
     // stable + minimal so cache/proxy layers can serve it without
     // re-validating on every request.
-    let policy = match state.settings().federation_policy {
-        crate::config::FederationPolicy::Mesh => "mesh",
-        crate::config::FederationPolicy::Hub => "hub",
-    };
+    let fanout_topology = state.settings().federation_fanout_topology.as_str();
     let public_base_url = state.config.public_base_url.trim_end_matches('/');
     json_ok(WellKnownCokretOutcome {
         schema: "ck.schema.server_description.v1".to_owned(),
         service_did: state.config.service_did.clone(),
         trust_domain: state.config.trust_domain.clone(),
         public_base_url: state.config.public_base_url.clone(),
-        federation_policy: policy.to_owned(),
+        fanout_topology: fanout_topology.to_owned(),
         endpoints: WellKnownCokretEndpoints {
             openapi: format!("{}/.well-known/cokret/openapi.json", public_base_url),
             peer_events: format!("{}/_cokret/peer/events", public_base_url),

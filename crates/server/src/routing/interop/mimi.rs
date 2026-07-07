@@ -20,8 +20,6 @@
 
 use std::collections::BTreeMap;
 
-use base64::Engine as _;
-use base64::engine::general_purpose::STANDARD;
 use chrono::Duration;
 use cokret_sdk::models::proof_kind;
 use cokret_sdk::{
@@ -33,13 +31,11 @@ use cokret_sdk::{
     MimiRoomUpdateRequestBody, MimiSubmitMessageOutcome, MimiSubmitMessageRequestBody,
     MimiUpdateConsentOutcome, MimiUpdateConsentRequestBody, Proof, ReportId, canonical,
 };
-use ed25519_dalek::Verifier as _;
 use salvo::http::StatusCode;
 use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
 use serde::Serialize;
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
 
 use super::moderation::{
     moderation_request_source_ip_hash, moderation_request_source_service,
@@ -50,6 +46,7 @@ use crate::error::AppError;
 use crate::ids;
 use crate::result::{JsonResult, json_ok};
 use crate::routing::events::projection::{append_projection_event, projection_event_json};
+use crate::routing::http_signature::{self, SignatureBaseComponent, SignatureWindowViolation};
 use crate::routing::identity::consent::{
     materialize_mimi_consent_request, materialize_mimi_consent_update_by_id,
 };
@@ -105,17 +102,17 @@ fn verify_mimi_write_service_proof(
         ));
     }
 
-    let body_bytes = cokret_sdk::canonical::canonical_json_bytes(body).map_err(|error| {
+    let body_digests = http_signature::canonical_body_digests(body, |error| {
         AppError::invalid_param(format!("MIMI request body is not canonical JSON: {error}"))
     })?;
-    let expected_content_digest = mimi_content_digest_header(&body_bytes);
+    let expected_content_digest = body_digests.content_digest;
     let content_digest = mimi_required_header(req, "content-digest")?;
     if content_digest != expected_content_digest {
         return Err(mimi_signature_error_invalid(
             "Content-Digest does not cover the canonical MIMI request body",
         ));
     }
-    let expected_request_digest = cokret_sdk::canonical::sha256_digest(&body_bytes);
+    let expected_request_digest = body_digests.request_digest;
     let request_digest = mimi_required_header(req, "request-canonical-digest")?;
     if request_digest != expected_request_digest {
         return Err(mimi_signature_error_invalid(
@@ -175,43 +172,23 @@ fn verify_mimi_write_service_proof(
     mimi_verify_signature_header(state, req, &verification_method, &signature_base)
 }
 
-fn mimi_content_digest_header(bytes: &[u8]) -> String {
-    let raw = Sha256::digest(bytes);
-    format!("sha-256=:{}:", STANDARD.encode(raw))
-}
-
 fn mimi_required_header(req: &Request, name: &str) -> Result<String, AppError> {
-    req.headers()
-        .get(name)
-        .and_then(|value| value.to_str().ok())
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
-        .ok_or_else(|| {
-            mimi_signature_error_invalid(format!("missing required MIMI signature header: {name}"))
-        })
+    http_signature::required_header(req, name, |name| {
+        mimi_signature_error_invalid(format!("missing required MIMI signature header: {name}"))
+    })
 }
 
 fn mimi_signature_params(req: &Request) -> Result<String, AppError> {
-    req.headers()
-        .get("signature-input")
-        .and_then(|value| value.to_str().ok())
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| mimi_signature_error_required("missing Signature-Input header"))?
-        .strip_prefix("sig1=")
-        .map(ToOwned::to_owned)
-        .ok_or_else(|| mimi_signature_error_invalid("Signature-Input must carry sig1 parameters"))
+    http_signature::signature_params(
+        req,
+        "signature-input",
+        || mimi_signature_error_required("missing Signature-Input header"),
+        || mimi_signature_error_invalid("Signature-Input must carry sig1 parameters"),
+    )
 }
 
 fn mimi_signature_param_value(signature_params: &str, key: &str) -> Option<String> {
-    signature_params.split(';').skip(1).find_map(|part| {
-        let (name, value) = part.split_once('=')?;
-        if name.trim() != key {
-            return None;
-        }
-        Some(value.trim().trim_matches('"').to_owned())
-    })
+    http_signature::signature_param_value(signature_params, key)
 }
 
 fn mimi_validate_signature_params(
@@ -256,30 +233,24 @@ fn mimi_validate_signature_params(
         ));
     }
 
-    let now = chrono::Utc::now().timestamp();
-    let created = mimi_signature_param_value(signature_params, "created")
-        .and_then(|value| value.parse::<i64>().ok())
-        .ok_or_else(|| {
-            mimi_signature_error_window("Signature-Input missing required `created` parameter")
-        })?;
-    let expires = mimi_signature_param_value(signature_params, "expires")
-        .and_then(|value| value.parse::<i64>().ok())
-        .ok_or_else(|| {
-            mimi_signature_error_window("Signature-Input missing required `expires` parameter")
-        })?;
-    if (created - now).abs() > 30 {
-        return Err(mimi_signature_error_window(
-            "signature created timestamp outside +/-30s clock-skew window",
-        ));
-    }
-    if expires < created || expires - created > 300 {
-        return Err(mimi_signature_error_window(
-            "signature validity window exceeds 300s",
-        ));
-    }
-    if expires < now {
-        return Err(mimi_signature_error_window("signature is expired"));
-    }
+    http_signature::validate_signature_freshness(signature_params).map_err(|violation| {
+        let message = match violation {
+            SignatureWindowViolation::MissingCreated => {
+                "Signature-Input missing required `created` parameter"
+            }
+            SignatureWindowViolation::MissingExpires => {
+                "Signature-Input missing required `expires` parameter"
+            }
+            SignatureWindowViolation::CreatedOutsideSkew => {
+                "signature created timestamp outside +/-30s clock-skew window"
+            }
+            SignatureWindowViolation::InvalidValidityWindow => {
+                "signature validity window exceeds 300s"
+            }
+            SignatureWindowViolation::Expired => "signature is expired",
+        };
+        mimi_signature_error_window(message)
+    })?;
     Ok(verification_method)
 }
 
@@ -296,20 +267,19 @@ fn mimi_http_signature_base(
     room_uri: Option<&str>,
     signature_params: &str,
 ) -> String {
-    let room_component = room_uri
-        .map(|room_uri| format!("\"mimi-room-uri\": {room_uri}\n"))
-        .unwrap_or_default();
-    format!(
-        "\"@method\": {method}\n\
-         \"@target-uri\": {target_uri}\n\
-         \"@authority\": {authority}\n\
-         \"content-digest\": {content_digest}\n\
-         \"request-canonical-digest\": {request_digest}\n\
-         \"source-service-did\": {source_service_did}\n\
-         \"destination-service-did\": {destination_service_did}\n\
-         \"provider-id\": {provider_id}\n\
-         {room_component}\
-         \"@signature-params\": {signature_params}",
+    http_signature::signature_base(
+        &[
+            SignatureBaseComponent::required("@method", method),
+            SignatureBaseComponent::required("@target-uri", target_uri),
+            SignatureBaseComponent::required("@authority", authority),
+            SignatureBaseComponent::required("content-digest", content_digest),
+            SignatureBaseComponent::required("request-canonical-digest", request_digest),
+            SignatureBaseComponent::required("source-service-did", source_service_did),
+            SignatureBaseComponent::required("destination-service-did", destination_service_did),
+            SignatureBaseComponent::required("provider-id", provider_id),
+            SignatureBaseComponent::optional("mimi-room-uri", room_uri),
+        ],
+        signature_params,
     )
 }
 
@@ -319,25 +289,17 @@ fn mimi_verify_signature_header(
     verification_method: &str,
     signature_base: &str,
 ) -> Result<(), AppError> {
-    let signature_header = mimi_required_header(req, "signature")?;
-    let signature = mimi_decode_signature_header(&signature_header)
-        .map_err(|message| mimi_signature_error_invalid(format!("signature decode: {message}")))?;
-    let verifying_key = mimi_resolve_verifying_key(state, verification_method)?;
-    verifying_key
-        .verify(signature_base.as_bytes(), &signature)
-        .map_err(|_| mimi_signature_error_invalid("signature verification failed"))
-}
-
-fn mimi_decode_signature_header(value: &str) -> Result<ed25519_dalek::Signature, &'static str> {
-    let signature_b64 = value
-        .strip_prefix("sig1=:")
-        .and_then(|value| value.strip_suffix(':'))
-        .ok_or("Signature header must use sig1=:base64: form")?;
-    let signature_bytes = STANDARD
-        .decode(signature_b64)
-        .map_err(|_| "Signature header base64 is invalid")?;
-    ed25519_dalek::Signature::from_slice(&signature_bytes)
-        .map_err(|_| "Signature header is not Ed25519 length")
+    http_signature::verify_signature_header(
+        req,
+        "signature",
+        signature_base,
+        |name| {
+            mimi_signature_error_invalid(format!("missing required MIMI signature header: {name}"))
+        },
+        |message| mimi_signature_error_invalid(format!("signature decode: {message}")),
+        || mimi_signature_error_invalid("signature verification failed"),
+        || mimi_resolve_verifying_key(state, verification_method),
+    )
 }
 
 fn mimi_resolve_verifying_key(
@@ -348,11 +310,10 @@ fn mimi_resolve_verifying_key(
         return Ok(key);
     }
     if state.config.development_mode {
-        let mut hasher = Sha256::new();
-        hasher.update(b"soland:mimi-provider-key:");
-        hasher.update(verification_method.as_bytes());
-        let seed: [u8; 32] = hasher.finalize().into();
-        let signing = ed25519_dalek::SigningKey::from_bytes(&seed);
+        let signing = http_signature::deterministic_development_signing_key(
+            b"soland:mimi-provider-key:",
+            verification_method,
+        );
         return Ok(signing.verifying_key());
     }
     Err(mimi_signature_error_invalid(

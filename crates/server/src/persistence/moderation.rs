@@ -17,7 +17,6 @@ pub trait ModerationStore: Send + Sync {
     async fn append_report(&self, report: Value) -> PersistenceResult<()>;
     async fn append_action(&self, action: Value) -> PersistenceResult<()>;
     async fn list_reports(&self) -> PersistenceResult<Vec<Value>>;
-    #[allow(dead_code)]
     async fn list_actions(&self) -> PersistenceResult<Vec<Value>>;
 
     /// Append a `ck.moderation.decision` record. The JSON must carry at

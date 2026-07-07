@@ -147,8 +147,8 @@ pub(super) fn federation_request_digest(
 
 /// Outbound Move broadcast helper. Each accepted Move
 /// goes to:
-/// - [`FederationPolicy::Mesh`]: every peer in `state.config.federation_peers`.
-/// - [`FederationPolicy::Hub`]: only the first peer (`federation_peers[0]`).
+/// - [`FederationFanoutTopology::Mesh`]: every peer in `state.config.federation_peers`.
+/// - [`FederationFanoutTopology::Hub`]: only the first peer (`federation_peers[0]`).
 ///
 /// Returns the list of peer URLs the broadcast targeted. This helper persists
 /// the retry transcript and durable outbox row; the actual HTTP dispatch still

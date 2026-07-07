@@ -8,6 +8,10 @@
 //! This is a derivation layer the server fakes for clients that already
 //! speak the strand protocol; a future real `ck.strand.*` reducer state
 //! will replace it once the wire schema lands.
+//!
+//! Naming boundary: a Strand is the object/container projected for a Realm.
+//! Message `thread_id` is a message-layer discussion grouping within that
+//! container; it is not a synonym for `strand_id`.
 
 use serde_json::json;
 

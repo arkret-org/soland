@@ -852,8 +852,7 @@ mod tests {
 
     use super::*;
     use crate::config::{
-        AppConfig, FederationPolicy, IceServersConfig, LiveKitConfig, LogFormat,
-        ObjectStorageConfig,
+        AppConfig, IceServersConfig, LiveKitConfig, LogFormat, ObjectStorageConfig,
     };
 
     fn test_config() -> AppConfig {

@@ -520,6 +520,8 @@ pub struct SolandAccountRegisterOutcome {
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 pub struct SendMessageRequestBody {
     pub realm_id: String,
+    /// Message-layer discussion grouping inside the projected Strand; this is
+    /// not the Strand object's `strand_id`.
     #[serde(default)]
     pub thread_id: Option<String>,
     pub content: Value,

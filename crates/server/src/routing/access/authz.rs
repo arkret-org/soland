@@ -11,7 +11,10 @@
 //! `/_cokret/self/policy/check`.
 
 use cokret_sdk::models::{
-    AuthzDecision, CapabilityGrant, CapabilitySubject, GrantList, Invite, InviteDeliveryTarget,
+    AuthzDecision, CapabilityGrant, CapabilitySubject, Facet,
+    GrantConstraint as WireGrantConstraint, GrantConstraintEffect as WireGrantConstraintEffect,
+    GrantConstraintExtensionKey, GrantConstraintSubtype as WireGrantConstraintSubtype,
+    GrantConstraintType as WireGrantConstraintType, GrantList, Invite, InviteDeliveryTarget,
     InviteState,
 };
 use cokret_sdk::{AuthzInviteList, Did, GrantId, Hash, InviteId, RealmId};
@@ -20,6 +23,7 @@ use salvo::prelude::*;
 use serde_json::{Value, json};
 
 use super::{now, query_param};
+use crate::authz::{Constraint, GrantDecisionVerdict};
 use crate::error::AppError;
 use crate::result::{JsonResult, json_ok};
 use crate::routing::spaces::space::realm_has_member_by_id;
@@ -353,9 +357,7 @@ fn capability_grant_from_authz_grant(
     let constraints = grant
         .constraints
         .into_iter()
-        .map(|constraint| {
-            serde_json::to_value(constraint).map_err(|error| AppError::internal(error.to_string()))
-        })
+        .map(wire_constraint_from_authz_constraint)
         .collect::<Result<Vec<_>, _>>()?;
     Ok(CapabilityGrant {
         id: GrantId::new(grant.grant_id.clone())
@@ -382,6 +384,162 @@ fn capability_grant_from_authz_grant(
         revoked_at: grant.revoked.then_some(now()),
         proofs: Vec::new(),
     })
+}
+
+fn wire_constraint_from_authz_constraint(
+    constraint: Constraint,
+) -> Result<WireGrantConstraint, AppError> {
+    match constraint {
+        Constraint::Decision { decision } => {
+            let mut wire = WireGrantConstraint::new(
+                WireGrantConstraintType::ScopeLimitation,
+                wire_effect_from_decision(decision),
+            );
+            insert_constraint_extension(
+                &mut wire,
+                "x_soland_decision",
+                serde_json::to_value(decision)
+                    .map_err(|error| AppError::internal(error.to_string()))?,
+            )?;
+            Ok(wire)
+        }
+        Constraint::Temporal {
+            expires_at,
+            subtype,
+            message_edit_window,
+            message_redact_window,
+            allow_redact_after_window,
+        } => {
+            let mut wire = WireGrantConstraint::new(
+                WireGrantConstraintType::Temporal,
+                WireGrantConstraintEffect::Allow,
+            );
+            wire.expires_at = expires_at;
+            if let Some(subtype) = subtype {
+                match subtype.as_str() {
+                    "edit_window" => wire.subtype = Some(WireGrantConstraintSubtype::EditWindow),
+                    "redact_window" => {
+                        wire.subtype = Some(WireGrantConstraintSubtype::RedactWindow)
+                    }
+                    "window" => wire.subtype = Some(WireGrantConstraintSubtype::Window),
+                    _ => insert_constraint_extension(
+                        &mut wire,
+                        "x_soland_temporal_subtype",
+                        Value::String(subtype),
+                    )?,
+                }
+            }
+            wire.message_edit_window =
+                message_edit_window.map(|duration| format!("{}{}", duration.value, duration.unit));
+            wire.message_redact_window = message_redact_window
+                .map(|duration| format!("{}{}", duration.value, duration.unit));
+            wire.allow_redact_after_window = Some(allow_redact_after_window);
+            Ok(wire)
+        }
+        Constraint::AllowedCircleIds { allowed_circle_ids } => {
+            let mut wire = WireGrantConstraint::new(
+                WireGrantConstraintType::ScopeLimitation,
+                WireGrantConstraintEffect::Allow,
+            );
+            wire.allowed_circle_ids = allowed_circle_ids.into_iter().collect();
+            Ok(wire)
+        }
+        Constraint::AllowedSessionIds {
+            allowed_session_ids,
+        } => {
+            let mut wire = WireGrantConstraint::new(
+                WireGrantConstraintType::ScopeLimitation,
+                WireGrantConstraintEffect::Allow,
+            );
+            wire.subtype = Some(WireGrantConstraintSubtype::Session);
+            wire.allowed_session_ids = allowed_session_ids.into_iter().collect();
+            Ok(wire)
+        }
+        Constraint::AllowedObjectFacets { facets } => {
+            let mut wire = WireGrantConstraint::new(
+                WireGrantConstraintType::TypeRestriction,
+                WireGrantConstraintEffect::Allow,
+            );
+            let mut unparsed = Vec::new();
+            for facet in facets {
+                match serde_json::from_value::<Facet>(Value::String(facet.clone())) {
+                    Ok(facet) => wire.allowed_facets.push(facet),
+                    Err(_) => unparsed.push(Value::String(facet)),
+                }
+            }
+            if !unparsed.is_empty() {
+                insert_constraint_extension(
+                    &mut wire,
+                    "x_soland_allowed_object_facets",
+                    Value::Array(unparsed),
+                )?;
+            }
+            Ok(wire)
+        }
+        Constraint::RateLimiting {
+            max_operations,
+            period,
+        } => {
+            let mut wire = WireGrantConstraint::new(
+                WireGrantConstraintType::Quota,
+                WireGrantConstraintEffect::Allow,
+            );
+            wire.subtype = Some(WireGrantConstraintSubtype::Rate);
+            wire.max_operations = Some(max_operations);
+            wire.period = Some(period);
+            Ok(wire)
+        }
+        Constraint::DelegationControl {
+            max_delegation_depth,
+        } => {
+            let mut wire = WireGrantConstraint::new(
+                WireGrantConstraintType::DelegationControl,
+                WireGrantConstraintEffect::Allow,
+            );
+            wire.max_delegation_depth = max_delegation_depth.map(u64::from);
+            Ok(wire)
+        }
+        Constraint::AppletDelegationBinding {
+            applet_id,
+            executed_by,
+            registration_epoch,
+        } => {
+            let mut wire = WireGrantConstraint::new(
+                WireGrantConstraintType::DelegationControl,
+                WireGrantConstraintEffect::Allow,
+            );
+            insert_constraint_extension(
+                &mut wire,
+                "x_soland_applet_delegation_binding",
+                json!({
+                    "applet_id": applet_id,
+                    "executed_by": executed_by,
+                    "registration_epoch": registration_epoch,
+                }),
+            )?;
+            Ok(wire)
+        }
+    }
+}
+
+fn wire_effect_from_decision(decision: GrantDecisionVerdict) -> WireGrantConstraintEffect {
+    match decision {
+        GrantDecisionVerdict::Allow => WireGrantConstraintEffect::Allow,
+        GrantDecisionVerdict::Deny => WireGrantConstraintEffect::Deny,
+        GrantDecisionVerdict::Quarantine => WireGrantConstraintEffect::Quarantine,
+        GrantDecisionVerdict::RequireReview => WireGrantConstraintEffect::RequireReview,
+    }
+}
+
+fn insert_constraint_extension(
+    constraint: &mut WireGrantConstraint,
+    key: &'static str,
+    value: Value,
+) -> Result<(), AppError> {
+    let key = GrantConstraintExtensionKey::new(key)
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    constraint.extensions.insert(key, value);
+    Ok(())
 }
 
 async fn session_owns_realm(state: &AppState, actor: &str, realm_id: &str) -> bool {

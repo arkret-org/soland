@@ -216,6 +216,9 @@ pub const PSI_PROBE_WINDOW: chrono::Duration = chrono::Duration::minutes(10);
 /// Max PSI probes a single `(requester, holder)` pair MAY make within
 /// [`PSI_PROBE_WINDOW`] before further probes are rate-limited. SEC-09.
 pub const PSI_PROBE_MAX_PER_WINDOW: u32 = 20;
+/// Bounded PSI probe limiter table size. The key space includes caller-chosen
+/// holder IDs, so the process-local ledger must not grow without limit.
+pub const PSI_PROBE_TRACKER_MAX_ENTRIES: usize = 16_384;
 
 /// Spec `identity/key-management.md` §7.8 — default per-principal ceiling on
 /// full-ciphertext key-backup downloads
@@ -238,6 +241,8 @@ pub const KEY_BACKUP_DAILY_DOWNLOAD_LIMIT_MAX: u32 = 256;
 /// accumulate before further reads are rejected. Spec §7.8 phrases the limit
 /// as "per principal per 24h".
 pub const KEY_BACKUP_DOWNLOAD_WINDOW: chrono::Duration = chrono::Duration::hours(24);
+/// Bounded key-backup download limiter table size.
+pub const KEY_BACKUP_DOWNLOAD_TRACKER_MAX_ENTRIES: usize = 16_384;
 
 pub(crate) fn key_backup_daily_download_limit() -> u32 {
     let configured = std::env::var("SOLAND_KEY_BACKUP_DAILY_DOWNLOAD_LIMIT")
@@ -353,6 +358,9 @@ pub const MODERATION_REPORT_MAX_PER_REPORTER_REALM_WINDOW: u32 = 10;
 pub const MODERATION_REPORT_MAX_PER_SOURCE_IP_WINDOW: u32 = 80;
 /// Duplicate reports for the same target by the same reporter in one window.
 pub const MODERATION_REPORT_MAX_PER_REPORTER_TARGET_WINDOW: u32 = 1;
+/// Bounded moderation report limiter table size. A single report touches
+/// several buckets, and some bucket labels include caller-controlled values.
+pub const MODERATION_REPORT_RATE_TRACKER_MAX_ENTRIES: usize = 32_768;
 /// Bounded franking replay nonce retention horizon.
 pub const MODERATION_FRANKING_REPLAY_WINDOW_SECS: i64 = 24 * 60 * 60;
 /// Bounded franking replay nonce ledger size.

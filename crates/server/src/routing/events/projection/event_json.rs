@@ -1,10 +1,7 @@
 use std::collections::HashSet;
 
 use cokret_sdk::Operation;
-use diesel::QueryableByName;
-use diesel::sql_types::{Jsonb, Nullable, Text, Timestamptz, Uuid as SqlUuid};
 use serde_json::json;
-use uuid::Uuid;
 
 use super::*;
 use crate::kinds;
@@ -15,31 +12,6 @@ pub struct ProjectedEventPage {
     pub items: Vec<ProjectionEventRecord>,
     pub next_cursor: Option<String>,
     pub has_more: bool,
-}
-
-#[derive(QueryableByName)]
-pub(super) struct ProjectionEventRow {
-    #[diesel(sql_type = SqlUuid)]
-    pub(super) event_id: Uuid,
-    #[diesel(sql_type = SqlUuid)]
-    pub(super) realm_id: Uuid,
-    /// DB column is still `event_type` (a rename to `event_kind` is a
-    /// future schema migration); SQL queries alias it as `event_kind` so
-    /// the in-memory struct uses the canonical name.
-    #[diesel(sql_type = Text)]
-    pub(super) event_kind: String,
-    #[diesel(sql_type = Text)]
-    pub(super) operation_type: String,
-    #[diesel(sql_type = Nullable<SqlUuid>)]
-    pub(super) operation_id: Option<Uuid>,
-    #[diesel(sql_type = Nullable<Text>)]
-    pub(super) sender: Option<String>,
-    #[diesel(sql_type = Jsonb)]
-    pub(super) payload: serde_json::Value,
-    #[diesel(sql_type = Timestamptz)]
-    pub(super) created_at: chrono::DateTime<chrono::Utc>,
-    #[diesel(sql_type = Timestamptz)]
-    pub(super) received_at: chrono::DateTime<chrono::Utc>,
 }
 
 pub fn projection_event_json(event: &ProjectionEventRecord) -> serde_json::Value {

@@ -114,6 +114,25 @@ pub enum PersistenceError {
 /// Result type for persistence operations.
 pub type PersistenceResult<T> = Result<T, PersistenceError>;
 
+#[derive(QueryableByName)]
+struct DatabaseReadyRow {
+    #[diesel(sql_type = Integer)]
+    ok: i32,
+}
+
+pub async fn database_ready(pool: Option<&PgPool>) -> bool {
+    match pool {
+        Some(pool) => match pool.get().await {
+            Ok(mut conn) => sql_query("SELECT 1 AS ok")
+                .get_result::<DatabaseReadyRow>(&mut *conn)
+                .await
+                .is_ok_and(|row| row.ok == 1),
+            Err(_) => false,
+        },
+        None => true,
+    }
+}
+
 /// Combined persistence store trait. Every state surface that used to live
 /// behind an `Arc<Mutex<...>>` on `AppState` is reachable through one of
 /// these accessors.

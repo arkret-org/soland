@@ -156,14 +156,14 @@ pub struct AppConfig {
     ///
     /// Behavior when `use_keystore=false`: only the env-loaded seed is honored.
     pub use_keystore: bool,
-    /// Federation routing policy. The on-the-wire shape is `ck.peer.events.command.submit`
-    /// under `/_cokret/peer/events`; the policy only changes which peer set
+    /// Federation fanout topology. The on-the-wire shape is `ck.peer.events.command.submit`
+    /// under `/_cokret/peer/events`; the topology only changes which peer set
     /// receives accepted Event fanout.
     ///
-    /// - [`FederationPolicy::Mesh`] — broadcast each accepted Event to every known peer.
-    /// - [`FederationPolicy::Hub`] — push only to a single configured upstream hub; rely on the
-    ///   hub for outbound dissemination.
-    pub federation_policy: FederationPolicy,
+    /// - [`FederationFanoutTopology::Mesh`] — broadcast each accepted Event to every known peer.
+    /// - [`FederationFanoutTopology::Hub`] — push only to a single configured upstream hub; rely
+    ///   on the hub for outbound dissemination.
+    pub federation_fanout_topology: FederationFanoutTopology,
     /// Federation peers the outbound layer considers as broadcast targets
     /// (mesh) or hub upstream (hub). Entries must be `base_url|service_did`
     /// so peer requests can bind destination-service-did. Empty disables
@@ -495,11 +495,11 @@ fn load_livekit_config() -> anyhow::Result<LiveKitConfig> {
     })
 }
 
-/// Federation routing policy. Selected at config-load
-/// time via `SOLAND_FEDERATION_POLICY` env var (`mesh` | `hub`).
+/// Federation fanout topology. Selected at config-load
+/// time via `SOLAND_FEDERATION_FANOUT_TOPOLOGY` env var (`mesh` | `hub`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
-pub enum FederationPolicy {
+pub enum FederationFanoutTopology {
     /// Default — broadcast every accepted Event to every peer in
     /// [`AppConfig::federation_peers`].
     Mesh,
@@ -508,7 +508,7 @@ pub enum FederationPolicy {
     Hub,
 }
 
-impl FederationPolicy {
+impl FederationFanoutTopology {
     pub fn from_env_value(value: &str) -> Self {
         match value.trim().to_ascii_lowercase().as_str() {
             "hub" => Self::Hub,
@@ -602,7 +602,7 @@ impl AppConfig {
             notary_signing_key_seed: None,
             agent_audit_binding_signing_seed: None,
             use_keystore: false,
-            federation_policy: FederationPolicy::Mesh,
+            federation_fanout_topology: FederationFanoutTopology::Mesh,
             federation_peers: Vec::new(),
             // Off so test binaries never spawn background federation HTTP
             // traffic; the in-process enqueue path still writes outbox rows.
@@ -744,10 +744,10 @@ impl AppConfig {
                 "SOLAND_NOTARY_SIGNING_KEY (or SOLAND_USE_KEYSTORE=true) is required when SOLAND_DEVELOPMENT_MODE is false; an ephemeral notary key breaks the Seal signature chain across restarts"
             );
         }
-        let federation_policy = std::env::var("SOLAND_FEDERATION_POLICY")
+        let federation_fanout_topology = std::env::var("SOLAND_FEDERATION_FANOUT_TOPOLOGY")
             .ok()
-            .map(|value| FederationPolicy::from_env_value(&value))
-            .unwrap_or(FederationPolicy::Mesh);
+            .map(|value| FederationFanoutTopology::from_env_value(&value))
+            .unwrap_or(FederationFanoutTopology::Mesh);
         let federation_peers = std::env::var("SOLAND_FEDERATION_PEERS")
             .ok()
             .map(|value| {
@@ -891,7 +891,7 @@ impl AppConfig {
             notary_signing_key_seed,
             agent_audit_binding_signing_seed,
             use_keystore,
-            federation_policy,
+            federation_fanout_topology,
             federation_peers,
             federation_outbound_enabled,
             federation_replica_observer,

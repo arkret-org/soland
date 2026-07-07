@@ -20,16 +20,17 @@ use super::records::{
     ACCOUNT_LOCKOUT_DURATION, ACCOUNT_LOCKOUT_THRESHOLD, ACCOUNT_LOCKOUT_WINDOW,
     AccountLifecycleRecord, AccountRecord, CanonicalEventRecord, ConsentCellKey, ConsentCellRecord,
     CursorRevocation, DirectConversationBindingRecord, FailedLoginRecord,
-    KEY_BACKUP_DOWNLOAD_WINDOW, KeyBackupDownloadOutcome, KeyBackupDownloadRecord,
-    MODERATION_FRANKING_REPLAY_MAX_ENTRIES, MODERATION_FRANKING_REPLAY_WINDOW_SECS,
-    MODERATION_REPORT_MAX_PER_REPORTER_REALM_WINDOW,
+    KEY_BACKUP_DOWNLOAD_TRACKER_MAX_ENTRIES, KEY_BACKUP_DOWNLOAD_WINDOW, KeyBackupDownloadOutcome,
+    KeyBackupDownloadRecord, MODERATION_FRANKING_REPLAY_MAX_ENTRIES,
+    MODERATION_FRANKING_REPLAY_WINDOW_SECS, MODERATION_REPORT_MAX_PER_REPORTER_REALM_WINDOW,
     MODERATION_REPORT_MAX_PER_REPORTER_TARGET_WINDOW, MODERATION_REPORT_MAX_PER_REPORTER_WINDOW,
     MODERATION_REPORT_MAX_PER_SOURCE_IP_WINDOW, MODERATION_REPORT_MAX_PER_SOURCE_SERVICE_WINDOW,
-    MODERATION_REPORT_RATE_WINDOW_SECS, ModerationFrankingReplayRecord,
-    ModerationReportRateOutcome, ModerationReportRateRecord, OrganizationPolicyRecord,
-    OrganizationRecord, PSI_HIT_BUCKET_SECS, PSI_PROBE_MAX_PER_WINDOW, PSI_PROBE_WINDOW,
-    PsiProbeOutcome, PsiProbeRecord, RealmMetaRecord, RealmModerationPolicyRecord,
-    RetentionPolicyRecord, RetentionTombstoneRecord, SovereignDeploymentState,
+    MODERATION_REPORT_RATE_TRACKER_MAX_ENTRIES, MODERATION_REPORT_RATE_WINDOW_SECS,
+    ModerationFrankingReplayRecord, ModerationReportRateOutcome, ModerationReportRateRecord,
+    OrganizationPolicyRecord, OrganizationRecord, PSI_HIT_BUCKET_SECS, PSI_PROBE_MAX_PER_WINDOW,
+    PSI_PROBE_TRACKER_MAX_ENTRIES, PSI_PROBE_WINDOW, PsiProbeOutcome, PsiProbeRecord,
+    RealmMetaRecord, RealmModerationPolicyRecord, RetentionPolicyRecord, RetentionTombstoneRecord,
+    SovereignDeploymentState,
 };
 use crate::authz::SolandAuthzEngine;
 use crate::config::{AppConfig, NotarySigningKeyOrigin};
@@ -267,6 +268,30 @@ pub struct AppState {
     /// fail-closed. Reducer-shape validation (digest binding, segment
     /// whitelist) IS real per MID-2.
     pub member_identity: Arc<Mutex<MemberIdentityRegistry>>,
+}
+
+fn evict_oldest_entries<K, V, O>(
+    map: &mut BTreeMap<K, V>,
+    max_entries: usize,
+    mut sort_key: impl FnMut(&V) -> O,
+) where
+    K: Ord + Clone,
+    O: Ord,
+{
+    if max_entries == 0 {
+        map.clear();
+        return;
+    }
+    while map.len() >= max_entries {
+        let Some(oldest_key) = map
+            .iter()
+            .min_by_key(|(_, record)| sort_key(record))
+            .map(|(key, _)| key.clone())
+        else {
+            break;
+        };
+        map.remove(&oldest_key);
+    }
 }
 
 impl AppState {
@@ -1072,13 +1097,19 @@ impl AppState {
     pub fn record_psi_probe(&self, requester: &str, holder: &str) -> PsiProbeOutcome {
         let mut map = self.psi_probe_tracker.lock();
         let now = chrono::Utc::now();
-        let entry = map
-            .entry((requester.to_owned(), holder.to_owned()))
-            .or_insert(PsiProbeRecord {
-                count: 0,
-                window_started_at: now,
-                last_probe_at: now,
+        let expires_before = now - PSI_PROBE_WINDOW;
+        map.retain(|_, record| record.last_probe_at >= expires_before);
+        let key = (requester.to_owned(), holder.to_owned());
+        if !map.contains_key(&key) {
+            evict_oldest_entries(&mut map, PSI_PROBE_TRACKER_MAX_ENTRIES, |record| {
+                record.last_probe_at.timestamp_millis()
             });
+        }
+        let entry = map.entry(key).or_insert(PsiProbeRecord {
+            count: 0,
+            window_started_at: now,
+            last_probe_at: now,
+        });
         // Roll the window if the current one has elapsed.
         if now - entry.window_started_at > PSI_PROBE_WINDOW {
             entry.count = 0;
@@ -1115,13 +1146,21 @@ impl AppState {
     ) -> KeyBackupDownloadOutcome {
         let mut map = self.key_backup_download_tracker.lock();
         let now = chrono::Utc::now();
-        let entry = map
-            .entry(principal_id.to_owned())
-            .or_insert(KeyBackupDownloadRecord {
-                count: 0,
-                window_started_at: now,
-                last_download_at: now,
-            });
+        let expires_before = now - KEY_BACKUP_DOWNLOAD_WINDOW;
+        map.retain(|_, record| record.last_download_at >= expires_before);
+        let key = principal_id.to_owned();
+        if !map.contains_key(&key) {
+            evict_oldest_entries(
+                &mut map,
+                KEY_BACKUP_DOWNLOAD_TRACKER_MAX_ENTRIES,
+                |record| record.last_download_at.timestamp_millis(),
+            );
+        }
+        let entry = map.entry(key).or_insert(KeyBackupDownloadRecord {
+            count: 0,
+            window_started_at: now,
+            last_download_at: now,
+        });
         // Roll the window if the current one has elapsed.
         if now - entry.window_started_at > KEY_BACKUP_DOWNLOAD_WINDOW {
             entry.count = 0;
@@ -1191,8 +1230,17 @@ impl AppState {
         let mut map = self.moderation_report_rate_tracker.lock();
         let now = chrono::Utc::now();
         let window = chrono::Duration::seconds(MODERATION_REPORT_RATE_WINDOW_SECS);
+        let expires_before = now - window;
+        map.retain(|_, record| record.last_report_at >= expires_before);
         let mut exceeded = None;
         for (bucket, limit) in buckets {
+            if !map.contains_key(&bucket) {
+                evict_oldest_entries(
+                    &mut map,
+                    MODERATION_REPORT_RATE_TRACKER_MAX_ENTRIES,
+                    |record| record.last_report_at.timestamp_millis(),
+                );
+            }
             let entry = map
                 .entry(bucket.clone())
                 .or_insert(ModerationReportRateRecord {

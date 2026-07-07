@@ -6,13 +6,13 @@ pub(crate) mod federation;
 pub mod frontier_exchange;
 pub(crate) mod move_seal;
 pub mod outbox;
-pub(crate) mod stubs;
+pub(crate) mod well_known;
 
 // SPEC-CR-001 — reused by `identity::session_pop` so self-PoP and the
 // federation rail reconstruct the signed `@target-uri` / `@authority`
 // identically.
 pub(in crate::routing) use federation::{signature_authority, signature_target_uri};
-pub use stubs::well_known_cokret_router;
+pub use well_known::well_known_cokret_router;
 
 use super::{
     AuthArgs, ingest_federation_operations, now, operation_is_visible,
@@ -28,10 +28,7 @@ use super::{
 /// never drift between sign and verify. Callers decide which bytes to feed (raw
 /// body vs canonical JSON); this only maps `bytes -> header string`.
 pub(crate) fn rfc9530_content_digest(bytes: &[u8]) -> String {
-    use base64::Engine as _;
-    use base64::engine::general_purpose::STANDARD;
-    use sha2::{Digest, Sha256};
-    format!("sha-256=:{}:", STANDARD.encode(Sha256::digest(bytes)))
+    crate::routing::http_signature::rfc9530_content_digest(bytes)
 }
 
 /// Operator seal-signing endpoint (`POST /_soland/admin/seals/sign`). Mounted

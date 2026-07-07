@@ -18,9 +18,6 @@
 
 use cokret_sdk::ServerDescription;
 use cokret_sdk::http::ServerDescribeOutcome;
-use diesel::sql_types::Integer;
-use diesel::{QueryableByName, sql_query};
-use diesel_async::RunQueryDsl;
 use salvo::http::StatusCode;
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -218,22 +215,7 @@ async fn readyz(depot: &mut Depot, res: &mut Response) -> JsonResult<ReadyzOutco
 }
 
 async fn database_ready(state: &AppState) -> bool {
-    match state.db.pool.as_ref() {
-        Some(pool) => match pool.get().await {
-            Ok(mut conn) => sql_query("SELECT 1 AS ok")
-                .get_result::<HealthCheckRow>(&mut *conn)
-                .await
-                .is_ok_and(|row| row.ok == 1),
-            Err(_) => false,
-        },
-        None => true,
-    }
-}
-
-#[derive(QueryableByName)]
-struct HealthCheckRow {
-    #[diesel(sql_type = Integer)]
-    ok: i32,
+    crate::persistence::database_ready(state.db.pool.as_ref()).await
 }
 
 #[endpoint(

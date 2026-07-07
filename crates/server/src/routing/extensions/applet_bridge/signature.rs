@@ -9,6 +9,7 @@ use salvo::prelude::*;
 use super::record::applet_records;
 use super::types::AppletRecord;
 use crate::error::AppError;
+use crate::routing::http_signature::{self, SignatureBaseComponent, SignatureWindowViolation};
 use crate::state::AppState;
 
 #[derive(Clone, Debug)]
@@ -61,13 +62,13 @@ pub(super) async fn verify_inbound_transaction_signature(
             "applet transaction body serialization failed: {error}"
         ))
     })?;
-    let body_bytes = canonical::canonical_json_bytes(&body_value).map_err(|error| {
+    let body_digests = http_signature::canonical_body_digests(&body_value, |error| {
         AppError::invalid_param(format!(
             "applet transaction body is not canonical JSON: {error}"
         ))
     })?;
-    let request_digest = canonical::sha256_digest(&body_bytes);
-    let expected_content_digest = applet_content_digest_header(&body_bytes);
+    let request_digest = body_digests.request_digest;
+    let expected_content_digest = body_digests.content_digest;
     let content_digest = applet_required_header(req, "content-digest")?;
     if content_digest != expected_content_digest {
         return Err(applet_signature_error_invalid(
@@ -217,14 +218,7 @@ pub(super) fn applet_registration_verification_method(
 }
 
 pub(super) fn applet_content_digest_header(bytes: &[u8]) -> String {
-    use base64::Engine as _;
-    use sha2::{Digest, Sha256};
-    // RFC 9421 Content-Digest: `sha-256=:<base64(sha256(body))>:`.
-    let raw = Sha256::digest(bytes);
-    format!(
-        "sha-256=:{}:",
-        base64::engine::general_purpose::STANDARD.encode(raw)
-    )
+    crate::routing::federation::rfc9530_content_digest(bytes)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -264,40 +258,22 @@ pub(super) fn applet_source_signature_anchor(
 }
 
 pub(super) fn applet_required_header(req: &Request, name: &str) -> Result<String, AppError> {
-    req.headers()
-        .get(name)
-        .and_then(|value| value.to_str().ok())
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
-        .ok_or_else(|| {
-            applet_signature_error_invalid(format!(
-                "missing required inbound signature header: {name}"
-            ))
-        })
+    http_signature::required_header(req, name, |name| {
+        applet_signature_error_invalid(format!("missing required inbound signature header: {name}"))
+    })
 }
 
 pub(super) fn applet_signature_params(req: &Request) -> Result<String, AppError> {
-    let raw = req
-        .headers()
-        .get("signature-input")
-        .and_then(|value| value.to_str().ok())
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| applet_signature_error_required("missing Signature-Input header"))?;
-    raw.strip_prefix("sig1=")
-        .map(ToOwned::to_owned)
-        .ok_or_else(|| applet_signature_error_invalid("Signature-Input must carry sig1 parameters"))
+    http_signature::signature_params(
+        req,
+        "signature-input",
+        || applet_signature_error_required("missing Signature-Input header"),
+        || applet_signature_error_invalid("Signature-Input must carry sig1 parameters"),
+    )
 }
 
 pub(super) fn applet_signature_param_value(signature_params: &str, key: &str) -> Option<String> {
-    signature_params.split(';').skip(1).find_map(|part| {
-        let (name, value) = part.split_once('=')?;
-        if name.trim() != key {
-            return None;
-        }
-        Some(value.trim().trim_matches('"').to_owned())
-    })
+    http_signature::signature_param_value(signature_params, key)
 }
 
 /// Validate the RFC 9421 signature params (§7.3.1): `alg=ed25519`, `keyid`
@@ -321,31 +297,24 @@ pub(super) fn applet_validate_signature_params(
             "Signature-Input alg must be ed25519",
         ));
     }
-    let now = chrono::Utc::now().timestamp();
-    let created = applet_signature_param_value(signature_params, "created")
-        .and_then(|value| value.parse::<i64>().ok())
-        .ok_or_else(|| {
-            applet_signature_error_window("Signature-Input missing required `created` parameter")
-        })?;
-    let expires = applet_signature_param_value(signature_params, "expires")
-        .and_then(|value| value.parse::<i64>().ok())
-        .ok_or_else(|| {
-            applet_signature_error_window("Signature-Input missing required `expires` parameter")
-        })?;
-    if (created - now).abs() > 30 {
-        return Err(applet_signature_error_window(
-            "signature created timestamp outside ±30s clock-skew window",
-        ));
-    }
-    if expires < created || expires - created > 300 {
-        return Err(applet_signature_error_window(
-            "signature validity window exceeds 300s",
-        ));
-    }
-    if expires < now {
-        return Err(applet_signature_error_window("signature is expired"));
-    }
-    Ok(())
+    http_signature::validate_signature_freshness(signature_params).map_err(|violation| {
+        let message = match violation {
+            SignatureWindowViolation::MissingCreated => {
+                "Signature-Input missing required `created` parameter"
+            }
+            SignatureWindowViolation::MissingExpires => {
+                "Signature-Input missing required `expires` parameter"
+            }
+            SignatureWindowViolation::CreatedOutsideSkew => {
+                "signature created timestamp outside ±30s clock-skew window"
+            }
+            SignatureWindowViolation::InvalidValidityWindow => {
+                "signature validity window exceeds 300s"
+            }
+            SignatureWindowViolation::Expired => "signature is expired",
+        };
+        applet_signature_error_window(message)
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -359,15 +328,17 @@ pub(super) fn applet_http_signature_base(
     idempotency_key: &str,
     signature_params: &str,
 ) -> String {
-    format!(
-        "\"@method\": {method}\n\
-         \"@target-uri\": {target_uri}\n\
-         \"@authority\": {authority}\n\
-         \"content-digest\": {content_digest}\n\
-         \"source-service-did\": {source_service_did}\n\
-         \"destination-service-did\": {destination_service_did}\n\
-         \"idempotency-key\": {idempotency_key}\n\
-         \"@signature-params\": {signature_params}",
+    http_signature::signature_base(
+        &[
+            SignatureBaseComponent::required("@method", method),
+            SignatureBaseComponent::required("@target-uri", target_uri),
+            SignatureBaseComponent::required("@authority", authority),
+            SignatureBaseComponent::required("content-digest", content_digest),
+            SignatureBaseComponent::required("source-service-did", source_service_did),
+            SignatureBaseComponent::required("destination-service-did", destination_service_did),
+            SignatureBaseComponent::required("idempotency-key", idempotency_key),
+        ],
+        signature_params,
     )
 }
 
@@ -377,30 +348,25 @@ pub(super) fn applet_verify_signature_header(
     verification_method: &str,
     signature_base: &str,
 ) -> Result<(), AppError> {
-    use ed25519_dalek::Verifier as _;
-    let signature_header = applet_required_header(req, "signature")?;
-    let signature = applet_decode_signature_header(&signature_header).map_err(|message| {
-        applet_signature_error_invalid(format!("signature decode: {message}"))
-    })?;
-    let verifying_key = applet_resolve_verifying_key(state, verification_method)?;
-    verifying_key
-        .verify(signature_base.as_bytes(), &signature)
-        .map_err(|_| applet_signature_error_invalid("signature verification failed"))
+    http_signature::verify_signature_header(
+        req,
+        "signature",
+        signature_base,
+        |name| {
+            applet_signature_error_invalid(format!(
+                "missing required inbound signature header: {name}"
+            ))
+        },
+        |message| applet_signature_error_invalid(format!("signature decode: {message}")),
+        || applet_signature_error_invalid("signature verification failed"),
+        || applet_resolve_verifying_key(state, verification_method),
+    )
 }
 
 pub(super) fn applet_decode_signature_header(
     value: &str,
 ) -> Result<ed25519_dalek::Signature, &'static str> {
-    use base64::Engine as _;
-    let signature_b64 = value
-        .strip_prefix("sig1=:")
-        .and_then(|value| value.strip_suffix(':'))
-        .ok_or("Signature header must use sig1=:base64: form")?;
-    let signature_bytes = base64::engine::general_purpose::STANDARD
-        .decode(signature_b64)
-        .map_err(|_| "Signature header base64 is invalid")?;
-    ed25519_dalek::Signature::from_slice(&signature_bytes)
-        .map_err(|_| "Signature header is not Ed25519 length")
+    http_signature::decode_signature_header(value)
 }
 
 /// Resolve the Ed25519 public key for the registration verification method via
@@ -416,12 +382,10 @@ pub(super) fn applet_resolve_verifying_key(
         return Ok(key);
     }
     if state.config.development_mode {
-        use sha2::{Digest, Sha256};
-        let mut hasher = Sha256::new();
-        hasher.update(b"soland:applet-service-key:");
-        hasher.update(verification_method.as_bytes());
-        let seed: [u8; 32] = hasher.finalize().into();
-        let signing = ed25519_dalek::SigningKey::from_bytes(&seed);
+        let signing = http_signature::deterministic_development_signing_key(
+            b"soland:applet-service-key:",
+            verification_method,
+        );
         return Ok(signing.verifying_key());
     }
     Err(applet_signature_error_invalid(
