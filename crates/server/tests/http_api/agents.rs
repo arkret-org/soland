@@ -1,0 +1,101 @@
+//! Integration tests - personal-agent HTTP surfaces.
+
+use super::common::*;
+
+fn test_session_credential_hash(token: &str, audience: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(audience.as_bytes());
+    hasher.update(b":");
+    hasher.update(token.as_bytes());
+    format!("sha256:{}", URL_SAFE_NO_PAD.encode(hasher.finalize()))
+}
+
+async fn seed_controller_session(state: &AppState, token: &str, actor: &str) {
+    let now = chrono::Utc::now();
+    let device_id = "ck:device:01904100-0000-7000-8000-a11ce0000001";
+    state
+        .persistence
+        .sessions()
+        .put(&soland::state::SessionRecord {
+            token_hash: test_session_credential_hash(token, &state.config.service_did),
+            actor: actor.to_owned(),
+            device_id: device_id.to_owned(),
+            audience: state.config.service_did.clone(),
+            session_public_key: None,
+            agent_session: None,
+            expires_at: now + chrono::Duration::minutes(5),
+            created_at: now,
+            revoked_at: None,
+        })
+        .await
+        .unwrap();
+    state
+        .persistence
+        .devices()
+        .put(&soland::state::DeviceInventoryRecord {
+            actor: actor.to_owned(),
+            device_id: device_id.to_owned(),
+            display_name: Some("Alice Desktop".to_owned()),
+            verification_state: "verified".to_owned(),
+            payload: serde_json::json!({
+                "device_id": device_id,
+                "display_name": "Alice Desktop",
+                "verification": "verified",
+                "last_seen_at": now,
+            }),
+            created_at: now,
+            updated_at: now,
+            revoked_at: None,
+        })
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn production_agent_provision_fails_closed_without_durable_fanout() {
+    let mut config = test_config();
+    config.development_mode = false;
+    let state = AppState::new(config, Db { pool: None });
+    let controller = "did:web:alice.example";
+    let token = "prod-agent-provision-session";
+    seed_controller_session(&state, token, controller).await;
+
+    let mut response = TestClient::post("http://server/_cokret/self/agents")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&serde_json::json!({
+            "display_name": "Production Agent",
+            "requested_scope": {
+                "actions": [
+                    "ck.self.events.stream.subscribe",
+                    "ck.self.events.query.scan",
+                    "ck.self.events.command.submit",
+                    "ck.event.read",
+                    "ck.message.create"
+                ],
+                "resources": [{
+                    "kind": "service",
+                    "service_did": "did:web:soland.local"
+                }]
+            }
+        }))
+        .send(&app_from_state(state.clone()))
+        .await;
+
+    assert_eq!(response.status_code.unwrap(), StatusCode::NOT_IMPLEMENTED);
+    let body: Value = response.take_json().await.unwrap();
+    assert_eq!(body["ok"], false, "{body}");
+    assert_eq!(
+        body["error"]["code"], "agent_provision_fanout_unavailable",
+        "{body}"
+    );
+    assert!(
+        state
+            .persistence
+            .agents()
+            .list_for_controller(controller)
+            .await
+            .unwrap()
+            .is_empty(),
+        "production fail-closed must not persist a pairing-only agent row"
+    );
+}

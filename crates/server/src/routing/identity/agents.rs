@@ -1181,36 +1181,36 @@ async fn provision_agent(
         .requested_scope
         .map(|scope| serde_json::to_value(scope).unwrap_or(Value::Null))
         .unwrap_or(Value::Null);
+    if !state.config.development_mode {
+        return Err(AppError::unsupported_feature(
+            "production agent provisioning requires protocol-valid delegated fan-out",
+        )
+        .with_wire_code("agent_provision_fanout_unavailable"));
+    }
     // Persist the agent_principal row so list/get/lifecycle + grant/session
     // paths have a real principal to operate on (CKP-0008). Per the spec
     // agent lifecycle the agent starts `pending_runtime_key`; the gate
     // `ck.gate.account.command.pair_agent_key` flips it to `active` once the
     // runtime key is authorized.
-    // CKP-0008 D1 (dev option B): provision the agent's identity sub-events
-    // into the controller's self realm. `ensure_self_realm` is idempotent and
-    // the three sub-events (profile / accountability / initial capability
-    // grant) are authored by the controller. Production (option A) submits
-    // these from yougen and never enters this branch.
-    let mut self_realm_id: Option<String> = None;
-    let mut provision_event_refs = json!({});
-    if state.config.development_mode {
-        let realm = ensure_self_realm(state, &session).await?;
-        let (profile_event, accountability_event, grant_ids) = fanout_provision_subevents(
-            state,
-            &session,
-            &realm,
-            &agent_principal_id,
-            display_name.as_deref(),
-            &requested_scope,
-        )
-        .await?;
-        provision_event_refs = json!({
-            "agent_profile_event_id": profile_event,
-            "accountability_grant_event_id": accountability_event,
-            "initial_capability_grant_ids": grant_ids,
-        });
-        self_realm_id = Some(realm);
-    }
+    // CKP-0008 D1: development can materialize the agent's identity sub-events
+    // with dev proofs. Production fails closed above until the delegated
+    // fan-out has a protocol-valid authorization_ref + detached-JWS path.
+    let realm = ensure_self_realm(state, &session).await?;
+    let (profile_event, accountability_event, grant_ids) = fanout_provision_subevents(
+        state,
+        &session,
+        &realm,
+        &agent_principal_id,
+        display_name.as_deref(),
+        &requested_scope,
+    )
+    .await?;
+    let provision_event_refs = json!({
+        "agent_profile_event_id": profile_event,
+        "accountability_grant_event_id": accountability_event,
+        "initial_capability_grant_ids": grant_ids,
+    });
+    let self_realm_id = Some(realm);
     state
         .persistence
         .agents()

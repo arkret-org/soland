@@ -602,6 +602,22 @@ mod tests {
     }
 
     #[test]
+    fn deprecated_self_events_scope_tokens_are_not_registered() {
+        let registry = crate::artifacts::operation_ids();
+        for action in [
+            "events.subscribe",
+            "ck.self.events.subscribe",
+            "ck.self-events.subscribe",
+            "ck.self-events.stream.subscribe",
+        ] {
+            assert!(
+                !registry.contains(action),
+                "deprecated self-events shortcut `{action}` must not be used as an agent runtime scope"
+            );
+        }
+    }
+
+    #[test]
     fn requested_scope_actions_filter_service_surface_from_content_grant() {
         let requested = json!({
             "actions": [SCOPE_EVENTS_STREAM_SUBSCRIBE, SCOPE_EVENTS_QUERY_SCAN, ACTION_MESSAGE_CREATE],

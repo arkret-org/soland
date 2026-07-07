@@ -12,6 +12,7 @@ mod account_data;
 mod account_workflow;
 mod admin_b_track;
 mod agent_bridge;
+mod agents;
 mod auth;
 mod blob_resumable;
 mod cors_config;
