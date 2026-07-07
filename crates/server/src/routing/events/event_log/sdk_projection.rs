@@ -70,15 +70,17 @@ pub(crate) fn event_semantic_refs(
 }
 
 fn event_canonical_source(envelope: &Value) -> Value {
-    // Per cokret-spec conformance-vectors.md §1.6: both the event digest and
-    // every proof's `event_digest` MUST be derived from canonical event bytes
-    // with `proofs` and `unsigned` removed. Stripping derived `canonical_*`
-    // slots as well keeps fixtures that round-trip them in the envelope from
-    // poisoning the digest.
+    // Per cokret-spec event-and-patch.md §3: both the event digest and every
+    // proof's `event_digest` derive from producer canonical event bytes with
+    // `proofs`, `unsigned`, and reducer-stamped top-level fields removed.
+    // Stripping derived `canonical_*` slots keeps fixtures that round-trip
+    // them in the envelope from poisoning the digest.
     let mut value = envelope.clone();
     if let Value::Object(object) = &mut value {
         object.remove("proofs");
         object.remove("unsigned");
+        object.remove("effective_scope");
+        object.remove("actor_kind");
         object.remove("canonical_digest");
         object.remove("canonical_hash");
     }

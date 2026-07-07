@@ -934,6 +934,11 @@ fn event_canonical_bytes_use_sdk_canonical_json() {
         "a": {"b": 2, "a": 1},
         "unsigned": {"age_ms": 10},
         "proofs": [{"type": "dev-proof"}],
+        "effective_scope": {
+            "kind": "realm",
+            "realm_id": "ck:realm:01904100-0000-7000-8000-a11ce0000001"
+        },
+        "actor_kind": "native",
         "canonical_digest": "sha256:old"
     });
     let bytes = event_canonical_bytes(&envelope).unwrap();

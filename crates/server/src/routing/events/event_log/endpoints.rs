@@ -182,14 +182,8 @@ async fn submit_event(depot: &mut Depot, req: &mut Request, res: &mut Response) 
             submit_event_batch(state, &session, batch.events, res).await;
         }
         SolandEventsSubmitRequestBody::Single(envelope) => {
-            let envelope_for_chaos = match event_to_canonical_value(envelope.clone()) {
-                Ok(value) => value,
-                Err(error) => {
-                    render_submit_one_error(res, error);
-                    return;
-                }
-            };
-            match submit_event_envelope(state, &session, envelope).await {
+            let envelope_for_chaos = envelope.clone();
+            match submit_event_value(state, &session, envelope).await {
                 Ok(response) => {
                     maybe_delay_test_chaos_breakpoint(state, &envelope_for_chaos, &response).await;
                     res.render(Json(response.outcome));
@@ -224,11 +218,8 @@ async fn submit_event_dispatch(
             }
         }
         SolandEventsSubmitRequestBody::Single(envelope) => {
-            let envelope_for_chaos = match event_to_canonical_value(envelope.clone()) {
-                Ok(value) => value,
-                Err(error) => return submit_one_error_value(error),
-            };
-            match submit_event_envelope(state, session, envelope).await {
+            let envelope_for_chaos = envelope.clone();
+            match submit_event_value(state, session, envelope).await {
                 Ok(response) => {
                     maybe_delay_test_chaos_breakpoint(state, &envelope_for_chaos, &response).await;
                     (StatusCode::OK, submit_outcome_value(&response.outcome))

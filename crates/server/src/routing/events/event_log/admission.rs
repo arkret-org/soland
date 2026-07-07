@@ -5,9 +5,11 @@ use super::*;
 // (spec B1.6 / T02 / T07 / T08 / T09 / T12 / T23).
 // ════════════════════════════════════════════════════════════════════════
 
-/// Spec B1.6 — discriminated `/_cokret/self/events` POST body. Single is the
-/// pre-existing canonical Event Envelope; batch and federation are the new
-/// typed shapes.
+/// Spec B1.6 — discriminated `/_cokret/self/events` POST body. Account-client
+/// event envelopes stay as raw JSON Values until proof validation, because
+/// `proof.event_digest` binds the producer's canonical envelope bytes. Parsing
+/// into SDK `Event` here would reserialize defaults and change the signed
+/// object before verification.
 ///
 /// Wire-breaking: producers MUST use spec `events[]`; producers that
 /// include the `service_binding_ref` are routed to [`Self::Federation`].
@@ -20,9 +22,16 @@ pub enum SolandEventsSubmitRequestBody {
     /// fields validated.
     Federation(EventsSubmitFederationRequestBody),
     /// Batch form — multiple envelopes, optional `idempotency_key`.
-    Batch(cokret_sdk::EventsSubmitBatchRequestBody),
+    Batch(SolandEventsSubmitBatchRequestBody),
     /// Single Event Envelope (dominant shape).
-    Single(cokret_sdk::Event),
+    Single(Value),
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct SolandEventsSubmitBatchRequestBody {
+    pub events: Vec<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub idempotency_key: Option<String>,
 }
 
 impl SolandEventsSubmitRequestBody {

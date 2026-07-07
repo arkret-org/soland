@@ -228,7 +228,7 @@ pub(super) fn render_submit_one_error(res: &mut Response, error: SubmitOneError)
 pub(super) async fn submit_event_batch(
     state: &AppState,
     session: &SessionRecord,
-    envelopes: Vec<Event>,
+    envelopes: Vec<Value>,
     res: &mut Response,
 ) {
     match submit_event_batch_outcome(state, session, envelopes).await {
@@ -246,7 +246,7 @@ pub(super) async fn submit_event_batch(
 pub(super) async fn submit_event_batch_outcome(
     state: &AppState,
     session: &SessionRecord,
-    envelopes: Vec<Event>,
+    envelopes: Vec<Value>,
 ) -> Result<EventsSubmitOutcome, SubmitOneError> {
     if envelopes.is_empty() {
         return Err(SubmitOneError::new(
@@ -269,17 +269,6 @@ pub(super) async fn submit_event_batch_outcome(
     let mut realm_bootstrap_contexts: Vec<RealmBootstrapBatchContext> = Vec::new();
 
     for envelope in envelopes {
-        let envelope = match event_to_canonical_value(envelope) {
-            Ok(envelope) => envelope,
-            Err(error) => {
-                rejected.push(EventsSubmitRejectedItem {
-                    id: "unknown".to_owned(),
-                    reason_code: error.code,
-                    detail: Some(error.message),
-                });
-                continue;
-            }
-        };
         let id = event_string_field_from_value(&envelope, "event_id")
             .unwrap_or_else(|| "unknown".to_owned());
         let kind = event_string_field_from_value(&envelope, "kind");
@@ -446,7 +435,7 @@ pub(crate) async fn submit_federation_events(
     }
     let events = match events
         .into_iter()
-        .map(event_to_canonical_value)
+        .map(typed_event_to_canonical_value)
         .collect::<Result<Vec<_>, _>>()
     {
         Ok(events) => events,
@@ -1161,9 +1150,7 @@ fn prev_frontier_digest(prev_refs: &[String]) -> Result<String, SubmitOneError> 
     })
 }
 
-pub(in crate::routing) fn event_to_canonical_value(
-    envelope: Event,
-) -> Result<Value, SubmitOneError> {
+fn typed_event_to_canonical_value(envelope: Event) -> Result<Value, SubmitOneError> {
     serde_json::to_value(envelope).map_err(|error| {
         SubmitOneError::new(
             StatusCode::BAD_REQUEST,
@@ -1171,15 +1158,6 @@ pub(in crate::routing) fn event_to_canonical_value(
             format!("event envelope re-encode failed: {error}"),
         )
     })
-}
-
-pub(in crate::routing) async fn submit_event_envelope(
-    state: &AppState,
-    session: &SessionRecord,
-    envelope: Event,
-) -> Result<SubmittedEventOutcome, SubmitOneError> {
-    let envelope = event_to_canonical_value(envelope)?;
-    submit_event_value(state, session, envelope).await
 }
 
 pub(in crate::routing) async fn submit_event_value(
