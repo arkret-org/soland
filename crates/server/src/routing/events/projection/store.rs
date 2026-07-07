@@ -49,7 +49,10 @@ pub async fn projected_event_page(
             .cmp(&right.created_at)
             .then_with(|| left.event_id.cmp(&right.event_id))
     });
-    let redacted = redaction_targets_from_events(&events);
+    let redacted = {
+        let projection = state.projection.lock();
+        redaction_target_event_ids_from_events(&events, &projection)
+    };
     let start = if let Some(cursor) = cursor {
         events
             .iter()
@@ -68,6 +71,7 @@ pub async fn projected_event_page(
         let projection = state.projection.lock();
         for event in &mut page_items {
             tombstone_projection_event_for_erased_actor(&projection, event);
+            tombstone_projection_event_for_message_redaction(&projection, event);
             stub_projection_event_for_message_expiry(&projection, event, now());
             stub_pin_projection_event_for_invisible_target(&projection, event);
         }

@@ -46,17 +46,21 @@ const EXPIRY_DERIVED_FIELD_KEYS: &[&str] = &[
     "thumbnails",
 ];
 
-pub fn redaction_targets_from_events(events: &[ProjectionEventRecord]) -> HashSet<String> {
+pub fn redaction_target_event_ids_from_events(
+    events: &[ProjectionEventRecord],
+    projection: &crate::reducer::ProjectionState,
+) -> HashSet<String> {
     events
         .iter()
         .filter(|event| cokret_sdk::events::kinds::is_redaction_kind(&event.event_kind))
         .filter_map(|event| crate::reducer::message_redaction_target_ref(&event.payload))
+        .map(|target_ref| projection.redaction_key_for_message_target(&target_ref))
+        .filter(|target_ref| !target_ref.trim().is_empty())
         .collect()
 }
 
-pub fn event_is_visible(event: &ProjectionEventRecord, redacted: &HashSet<String>) -> bool {
+pub fn event_is_visible(event: &ProjectionEventRecord, _redacted: &HashSet<String>) -> bool {
     !cokret_sdk::events::kinds::is_redaction_kind(&event.event_kind)
-        && !redacted.contains(&event.event_id)
 }
 
 pub fn actor_erased_in_realm(
@@ -134,6 +138,29 @@ pub fn apply_message_redaction_timeline_projection(
     let redaction_ref = cell.redaction_event_id.as_deref();
     cokret_sdk::events::redaction_tombstone_message_value(event, redacted_at, redaction_ref);
     true
+}
+
+pub fn tombstone_projection_event_for_message_redaction(
+    projection: &crate::reducer::ProjectionState,
+    event: &mut ProjectionEventRecord,
+) {
+    if !matches!(
+        event.event_kind.as_str(),
+        cokret_sdk::events::kinds::MESSAGE_CREATE | cokret_sdk::events::kinds::MESSAGE_REVISE
+    ) {
+        return;
+    }
+    let Some(message) = projection.messages.get(&event.event_id) else {
+        return;
+    };
+    let Some(cell) = projection.redaction_cell_for_message(message) else {
+        return;
+    };
+    cokret_sdk::events::redaction_tombstone_message_value(
+        &mut event.payload,
+        cell.redacted_at,
+        cell.redaction_event_id.as_deref(),
+    );
 }
 
 pub fn tombstone_timeline_event_value(event: &mut Value) {

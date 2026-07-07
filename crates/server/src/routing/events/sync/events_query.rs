@@ -1026,6 +1026,12 @@ async fn full_events_from_projection_json(
         let Some(event_id) = row.get("event_id").and_then(Value::as_str) else {
             continue;
         };
+        if projection_row_is_redacted_message_tombstone(row) {
+            if let Some(event) = projection_only_event_from_row(state, row) {
+                events.push(event);
+            }
+            continue;
+        }
         if let Ok(Some(record)) = state.persistence.events().get(event_id).await
             && let Ok(event) = super::super::event_log::sdk_event_for_state(state, &record)
         {
@@ -1037,6 +1043,16 @@ async fn full_events_from_projection_json(
         }
     }
     events
+}
+
+fn projection_row_is_redacted_message_tombstone(row: &Value) -> bool {
+    matches!(
+        row.get("event_kind").and_then(Value::as_str),
+        Some(cokret_sdk::events::kinds::MESSAGE_CREATE | cokret_sdk::events::kinds::MESSAGE_REVISE)
+    ) && row.get("payload").is_some_and(|payload| {
+        payload.get("redacted").and_then(Value::as_bool) == Some(true)
+            || payload.get("state").and_then(Value::as_str) == Some("redacted")
+    })
 }
 
 fn projection_only_event_from_row(state: &AppState, row: &Value) -> Option<cokret_sdk::Event> {
@@ -1073,6 +1089,211 @@ fn projection_only_event_from_row(state: &AppState, row: &Value) -> Option<cokre
         "proofs": [],
     });
     serde_json::from_value(event).ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::state::CanonicalEventRecord;
+
+    const TEST_REALM: &str = "ck:realm:01904100-0000-7000-8000-00000000aa01";
+    const TEST_ACTOR: &str = "did:web:alice.example";
+    const TEST_MESSAGE_EVENT: &str = "ck:event:01904100-0000-7000-8000-00000000aa11";
+    const TEST_REVISE_EVENT: &str = "ck:event:01904100-0000-7000-8000-00000000aa12";
+    const TEST_MESSAGE_ID: &str = "ck:message:01904100-0000-7000-8000-00000000aa21";
+    const TEST_REDACTION_EVENT: &str = "ck:event:01904100-0000-7000-8000-00000000aa31";
+
+    fn test_state() -> AppState {
+        let mut config = crate::config::AppConfig::test_default();
+        config.seed_demo_data = false;
+        AppState::new(config, soland_data::Db { pool: None })
+    }
+
+    fn operation_at(
+        operation_id: &str,
+        kind: &str,
+        payload: Value,
+        created_at: DateTime<Utc>,
+    ) -> cokret_sdk::Operation {
+        let mut operation = cokret_sdk::Operation::create(
+            cokret_sdk::OperationId::new(operation_id.to_owned()).unwrap(),
+            RealmId::new(TEST_REALM.to_owned()).unwrap(),
+            kind,
+            payload,
+        );
+        operation.created_at = created_at;
+        operation
+    }
+
+    async fn put_durable_event(
+        state: &AppState,
+        event_id: &str,
+        kind: &str,
+        envelope: Value,
+        created_at: DateTime<Utc>,
+    ) {
+        let canonical_bytes = serde_json::to_vec(&envelope).unwrap();
+        state
+            .persistence
+            .events()
+            .put(CanonicalEventRecord {
+                event_id: event_id.to_owned(),
+                actor_id: TEST_ACTOR.to_owned(),
+                actor_seq: 1,
+                realm_id: Some(TEST_REALM.to_owned()),
+                kind: kind.to_owned(),
+                schema_id: "ck.schema.event.v1".to_owned(),
+                canonical_digest: format!("sha256:test-{}", event_id.rsplit(':').next().unwrap()),
+                canonical_bytes,
+                envelope,
+                received_at: created_at,
+            })
+            .await
+            .expect("durable event stored");
+    }
+
+    #[tokio::test]
+    async fn events_query_enrich_keeps_redaction_tombstone_over_durable_plaintext() {
+        let state = test_state();
+        let created_at = DateTime::parse_from_rfc3339("2026-07-06T10:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let revised_at = created_at + chrono::Duration::seconds(30);
+        let redacted_at = created_at + chrono::Duration::minutes(1);
+        let strand_id = strand_id_from_realm_id(TEST_REALM);
+        let plaintext_payload = json!({
+            "event_id": TEST_MESSAGE_EVENT,
+            "message_id": TEST_MESSAGE_ID,
+            "realm_id": TEST_REALM,
+            "strand_id": strand_id,
+            "track_name": "discussion",
+            "sender": TEST_ACTOR,
+            "content": {"kind": "ck.content.text", "body": "secret that must not leak"}
+        });
+        let revised_payload = json!({
+            "event_id": TEST_REVISE_EVENT,
+            "target_ref": TEST_MESSAGE_ID,
+            "realm_id": TEST_REALM,
+            "strand_id": strand_id,
+            "track_name": "discussion",
+            "sender": TEST_ACTOR,
+            "content": {"kind": "ck.content.text", "body": "revised secret that must not leak"}
+        });
+        let message = operation_at(
+            "ck:operation:01904100-0000-7000-8000-00000000aa41",
+            cokret_sdk::events::kinds::MESSAGE_CREATE,
+            plaintext_payload.clone(),
+            created_at,
+        );
+        let revise = operation_at(
+            "ck:operation:01904100-0000-7000-8000-00000000aa43",
+            cokret_sdk::events::kinds::MESSAGE_REVISE,
+            revised_payload.clone(),
+            revised_at,
+        );
+        let redaction = operation_at(
+            "ck:operation:01904100-0000-7000-8000-00000000aa42",
+            cokret_sdk::events::kinds::MESSAGE_REDACT,
+            json!({
+                "event_id": TEST_REDACTION_EVENT,
+                "message_id": TEST_MESSAGE_ID,
+                "reason": "test redaction",
+                "sender": TEST_ACTOR
+            }),
+            redacted_at,
+        );
+        crate::routing::events::projection::project_accepted_operations(
+            &state,
+            TEST_ACTOR,
+            &[message, revise, redaction],
+        )
+        .await;
+        put_durable_event(
+            &state,
+            TEST_MESSAGE_EVENT,
+            cokret_sdk::events::kinds::MESSAGE_CREATE,
+            json!({
+                "event_id": TEST_MESSAGE_EVENT,
+                "kind": cokret_sdk::events::kinds::MESSAGE_CREATE,
+                "realm_id": TEST_REALM,
+                "actor_id": TEST_ACTOR,
+                "actor_seq": 1,
+                "created_at": created_at,
+                "hlc": "019041000000-0000-00000000",
+                "prev_refs": [],
+                "payload": plaintext_payload,
+                "proofs": []
+            }),
+            created_at,
+        )
+        .await;
+        put_durable_event(
+            &state,
+            TEST_REVISE_EVENT,
+            cokret_sdk::events::kinds::MESSAGE_REVISE,
+            json!({
+                "event_id": TEST_REVISE_EVENT,
+                "kind": cokret_sdk::events::kinds::MESSAGE_REVISE,
+                "realm_id": TEST_REALM,
+                "actor_id": TEST_ACTOR,
+                "actor_seq": 2,
+                "created_at": revised_at,
+                "hlc": "019041000000-0001-00000000",
+                "prev_refs": [TEST_MESSAGE_EVENT],
+                "payload": revised_payload,
+                "proofs": []
+            }),
+            revised_at,
+        )
+        .await;
+
+        let page = projected_event_page(&state, TEST_REALM, None, 100)
+            .await
+            .expect("projected page")
+            .expect("projected events");
+        let rows = page
+            .items
+            .iter()
+            .map(projection_event_json)
+            .collect::<Vec<_>>();
+        let message_row = rows
+            .iter()
+            .find(|row| row["event_id"] == TEST_MESSAGE_EVENT)
+            .expect("message row retained as tombstone");
+        assert_eq!(message_row["payload"]["redacted"], json!(true));
+        let revise_row = rows
+            .iter()
+            .find(|row| row["event_id"] == TEST_REVISE_EVENT)
+            .expect("revision row retained as tombstone");
+        assert_eq!(revise_row["payload"]["redacted"], json!(true));
+
+        let events = full_events_from_projection_json(&state, &rows).await;
+        let message_event = events
+            .iter()
+            .find(|event| event.event_id.as_str() == TEST_MESSAGE_EVENT)
+            .expect("message event returned");
+        assert_eq!(message_event.content["redacted"], json!(true));
+        assert_eq!(
+            message_event.content["content"]["body"],
+            json!("[redacted]")
+        );
+        assert!(
+            !serde_json::to_string(&message_event.content)
+                .unwrap()
+                .contains("secret that must not leak")
+        );
+        let revise_event = events
+            .iter()
+            .find(|event| event.event_id.as_str() == TEST_REVISE_EVENT)
+            .expect("revision event returned");
+        assert_eq!(revise_event.content["redacted"], json!(true));
+        assert_eq!(revise_event.content["content"]["body"], json!("[redacted]"));
+        assert!(
+            !serde_json::to_string(&revise_event.content)
+                .unwrap()
+                .contains("revised secret that must not leak")
+        );
+    }
 }
 
 async fn durable_events_query_from_parts(
