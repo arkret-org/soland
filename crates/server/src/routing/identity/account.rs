@@ -1538,7 +1538,7 @@ async fn account_device_summaries(
     let devices = state
         .persistence
         .devices()
-        .list_for_actor(actor)
+        .list_for_actor_including_revoked(actor)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
     devices.into_iter().map(account_device_summary).collect()

@@ -23,9 +23,7 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use ed25519_dalek::{Signature, SigningKey, Verifier as _, VerifyingKey};
 use sha2::{Digest, Sha256};
-use soland::config::{
-    AppConfig, FederationPolicy, IceServersConfig, LiveKitConfig, ObjectStorageConfig,
-};
+use soland::config::{AppConfig, ObjectStorageConfig};
 use soland::routing::federation::outbox::{FederationDispatcher, enqueue_outbound};
 use soland::state::AppState;
 use soland_data::Db;

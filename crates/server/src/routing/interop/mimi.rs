@@ -1579,12 +1579,23 @@ fn mimi_base_url(state: &AppState) -> String {
 }
 
 fn mimi_provider_id(state: &AppState) -> String {
-    state
-        .config
-        .service_did
-        .strip_prefix("did:web:")
-        .map(|domain| format!("mimi://{}", domain.replace(':', "/")))
-        .unwrap_or_else(|| format!("mimi://{}", state.config.service_did.replace(':', ".")))
+    service_did_mimi_provider_id(&state.config.service_did)
+}
+
+fn service_did_mimi_provider_id(service_did: &str) -> String {
+    if let Some(domain) = service_did.strip_prefix("did:web:") {
+        return format!("mimi://{}", domain.replace(':', "/"));
+    }
+    if let Some(rest) = service_did.strip_prefix("did:webvh:") {
+        let mut parts = rest.splitn(2, ':');
+        if parts.next().is_some_and(|scid| !scid.is_empty())
+            && let Some(authority_and_path) = parts.next()
+            && !authority_and_path.is_empty()
+        {
+            return format!("mimi://{}", authority_and_path.replace(':', "/"));
+        }
+    }
+    format!("mimi://{}", service_did.replace(':', "."))
 }
 
 fn mimi_room_uri(state: &AppState, room_id: &str) -> String {
