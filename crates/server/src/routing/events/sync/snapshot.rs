@@ -480,11 +480,13 @@ async fn notification_source_message_value(
         if message.realm_id != realm_id {
             return None;
         }
+        let event_received_at =
+            timeline_event_received_at(state, &message.event_id, message.created_at).await;
         if !realm_event_visible_to_session_with_projection(
             state,
             projection,
             realm_id,
-            message.created_at,
+            event_received_at,
             Some(&message.sender),
             Some(session),
         )
@@ -495,7 +497,7 @@ async fn notification_source_message_value(
         if !circle_scope_visible_to_session(
             projection,
             message_scope_circle_id(&message.content),
-            message.created_at,
+            event_received_at,
             Some(session),
             Some(&message.sender),
         ) {
@@ -518,11 +520,13 @@ async fn notification_source_message_value(
     if message.realm_id != realm_id {
         return None;
     }
+    let event_received_at =
+        timeline_event_received_at(state, &message.event_id, message.created_at).await;
     if !realm_event_visible_to_session_with_projection(
         state,
         projection,
         realm_id,
-        message.created_at,
+        event_received_at,
         Some(&message.sender),
         Some(session),
     )
@@ -533,7 +537,7 @@ async fn notification_source_message_value(
     if !circle_scope_visible_to_session(
         projection,
         message_scope_circle_id(&message.content),
-        message.created_at,
+        event_received_at,
         Some(session),
         Some(&message.sender),
     ) {
@@ -1191,7 +1195,9 @@ async fn timeline_events_for_realm(
     let mut timeline_entries = Vec::new();
 
     for message in projection.messages_for_realm_including_redacted(realm_id) {
-        let position = timeline_event_position(state, &message.event_id, message.created_at).await;
+        let event_received_at =
+            timeline_event_received_at(state, &message.event_id, message.created_at).await;
+        let position = timestamp_position_with_tie_breaker(event_received_at, &message.event_id);
         newest_position = newest_position.max(position);
         if position <= after_position
             || !seen.insert(message.event_id.clone())
@@ -1203,7 +1209,7 @@ async fn timeline_events_for_realm(
             state,
             projection,
             realm_id,
-            message.created_at,
+            event_received_at,
             Some(&message.sender),
             session,
         )
@@ -1214,7 +1220,7 @@ async fn timeline_events_for_realm(
         if !circle_scope_visible_to_session(
             projection,
             message_scope_circle_id(&message.content),
-            message.created_at,
+            event_received_at,
             session,
             Some(&message.sender),
         ) {
@@ -1234,7 +1240,9 @@ async fn timeline_events_for_realm(
         .await
         .unwrap_or_default()
     {
-        let position = timeline_event_position(state, &message.event_id, message.created_at).await;
+        let event_received_at =
+            timeline_event_received_at(state, &message.event_id, message.created_at).await;
+        let position = timestamp_position_with_tie_breaker(event_received_at, &message.event_id);
         newest_position = newest_position.max(position);
         if position <= after_position
             || !seen.insert(message.event_id.clone())
@@ -1246,7 +1254,7 @@ async fn timeline_events_for_realm(
             state,
             projection,
             realm_id,
-            message.created_at,
+            event_received_at,
             Some(&message.sender),
             session,
         )
@@ -1257,7 +1265,7 @@ async fn timeline_events_for_realm(
         if !circle_scope_visible_to_session(
             projection,
             message_scope_circle_id(&message.content),
-            message.created_at,
+            event_received_at,
             session,
             Some(&message.sender),
         ) {
@@ -1410,12 +1418,12 @@ fn stable_position_tie_breaker(key: &str) -> i64 {
     i64::from_str_radix(&digest[..3], 16).unwrap_or_default() & 0x03ff
 }
 
-pub(crate) async fn timeline_event_position(
+async fn timeline_event_received_at(
     state: &AppState,
     event_id: &str,
     created_at: DateTime<Utc>,
-) -> i64 {
-    let timestamp = state
+) -> DateTime<Utc> {
+    state
         .persistence
         .events()
         .get(event_id)
@@ -1423,8 +1431,7 @@ pub(crate) async fn timeline_event_position(
         .ok()
         .flatten()
         .map(|record| record.received_at)
-        .unwrap_or(created_at);
-    timestamp_position_with_tie_breaker(timestamp, event_id)
+        .unwrap_or(created_at)
 }
 
 pub(super) fn timestamp_position_with_tie_breaker(timestamp: DateTime<Utc>, event_id: &str) -> i64 {

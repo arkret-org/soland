@@ -535,6 +535,179 @@ async fn projection_visibility_uses_received_at_for_joined_history_cutoff() {
     );
 }
 
+async fn put_canonical_event_received_at(
+    state: &AppState,
+    event_id: &str,
+    actor_seq: u64,
+    kind: &str,
+    payload: Value,
+    created_at: DateTime<Utc>,
+    received_at: DateTime<Utc>,
+) {
+    let envelope = json!({
+        "event_id": event_id,
+        "actor_id": ROSTER_ACTOR,
+        "actor_seq": actor_seq,
+        "realm_id": ROSTER_REALM,
+        "kind": kind,
+        "payload": payload,
+        "created_at": created_at,
+    });
+    let canonical_bytes = serde_json::to_vec(&envelope).expect("canonical event test envelope");
+    state
+        .persistence
+        .events()
+        .put(crate::state::CanonicalEventRecord {
+            event_id: event_id.to_owned(),
+            actor_id: ROSTER_ACTOR.to_owned(),
+            actor_seq,
+            realm_id: Some(ROSTER_REALM.to_owned()),
+            kind: kind.to_owned(),
+            schema_id: "ck.event.v1".to_owned(),
+            canonical_digest: cokret_sdk::canonical::sha256_digest(&canonical_bytes),
+            canonical_bytes,
+            envelope,
+            received_at,
+        })
+        .await
+        .expect("canonical event stored");
+}
+
+#[tokio::test]
+async fn sync_timeline_visibility_uses_received_at_for_joined_history_cutoff() {
+    let mut config = test_config();
+    config.seed_demo_data = false;
+    let state = AppState::new(config, soland_data::Db { pool: None });
+    state.realms.lock().upsert(roster_realm(false, true));
+    let session = roster_session(&state, ROSTER_CALLER);
+    let strand_id = strand_id_from_realm_id(ROSTER_REALM);
+    let created_at = DateTime::parse_from_rfc3339("2026-06-24T10:00:00Z")
+        .unwrap()
+        .with_timezone(&Utc);
+    let pre_join_received_at = created_at + ChronoDuration::milliseconds(100);
+    let joined_at = created_at + ChronoDuration::milliseconds(200);
+    let post_join_received_at = created_at + ChronoDuration::milliseconds(300);
+
+    state
+        .persistence
+        .realm_meta()
+        .put(
+            ROSTER_REALM,
+            &crate::state::RealmMetaRecord {
+                owner: ROSTER_ACTOR.to_owned(),
+                deleted: false,
+                discoverability: "invite_only".to_owned(),
+                history_visibility: "joined".to_owned(),
+                history_sharing_policy: None,
+                history_sharing_policy_digest: None,
+                preview_policy: None,
+                preview_policy_digest: None,
+                asset_privacy_policy: None,
+                asset_privacy_policy_digest: None,
+                encryption_profile: Some("none".to_owned()),
+                plaintext_visible_services: BTreeSet::new(),
+                plaintext_visible_service_classes: BTreeMap::new(),
+                minimal_metadata_realm: false,
+                created_at,
+                updated_at: created_at,
+            },
+        )
+        .await
+        .expect("realm meta stored");
+
+    let mut member_join = sync_test_operation_at(
+        "ck:operation:01904100-0000-7000-8000-0000000002ef",
+        cokret_sdk::events::kinds::MEMBER_STATE,
+        json!({
+            "realm_id": ROSTER_REALM,
+            "actor_id": ROSTER_CALLER,
+            "membership": "join",
+            "delivery_status": "unroutable",
+            "event_received_at": joined_at.to_rfc3339()
+        }),
+        created_at,
+    );
+    member_join.created_at = created_at;
+    state.projection.lock().apply(&member_join, &state.hlc);
+
+    let pre_join_event_id = "ck:event:01904100-0000-7000-8000-0000000002e1";
+    let post_join_event_id = "ck:event:01904100-0000-7000-8000-0000000002e2";
+    let pre_join_payload = json!({
+        "event_id": pre_join_event_id,
+        "message_id": "ck:message:01904100-0000-7000-8000-0000000002e1",
+        "realm_id": ROSTER_REALM,
+        "strand_id": strand_id,
+        "thread_id": strand_id,
+        "sender": ROSTER_ACTOR,
+        "content": {"kind": "ck.content.text", "body": "before join"}
+    });
+    let post_join_payload = json!({
+        "event_id": post_join_event_id,
+        "message_id": "ck:message:01904100-0000-7000-8000-0000000002e2",
+        "realm_id": ROSTER_REALM,
+        "strand_id": strand_id,
+        "thread_id": strand_id,
+        "sender": ROSTER_ACTOR,
+        "content": {"kind": "ck.content.text", "body": "after join"}
+    });
+    let pre_join_message = sync_test_operation_at(
+        "ck:operation:01904100-0000-7000-8000-0000000002e1",
+        cokret_sdk::events::kinds::MESSAGE_CREATE,
+        pre_join_payload.clone(),
+        created_at,
+    );
+    let post_join_message = sync_test_operation_at(
+        "ck:operation:01904100-0000-7000-8000-0000000002e2",
+        cokret_sdk::events::kinds::MESSAGE_CREATE,
+        post_join_payload.clone(),
+        created_at,
+    );
+    {
+        let mut projection = state.projection.lock();
+        projection.apply(&pre_join_message, &state.hlc);
+        projection.apply(&post_join_message, &state.hlc);
+    }
+    put_canonical_event_received_at(
+        &state,
+        pre_join_event_id,
+        1,
+        cokret_sdk::events::kinds::MESSAGE_CREATE,
+        pre_join_payload,
+        created_at,
+        pre_join_received_at,
+    )
+    .await;
+    put_canonical_event_received_at(
+        &state,
+        post_join_event_id,
+        2,
+        cokret_sdk::events::kinds::MESSAGE_CREATE,
+        post_join_payload,
+        created_at,
+        post_join_received_at,
+    )
+    .await;
+
+    let body = roster_body(&state.config.service_did);
+    let snapshot =
+        build_sync_snapshot(&state, Some(&session), &body, &SyncCursor::default(), false).await;
+    let timeline_events = snapshot.realms[ROSTER_REALM]["timeline"]["events"]
+        .as_array()
+        .expect("timeline events array");
+    assert!(
+        !timeline_events
+            .iter()
+            .any(|event| event["event_id"] == pre_join_event_id),
+        "joined history must hide messages received before the member joined"
+    );
+    assert!(
+        timeline_events
+            .iter()
+            .any(|event| event["event_id"] == post_join_event_id),
+        "joined history must include messages received after the member joined even when created_at predates joined_at"
+    );
+}
+
 fn insert_member_identity_subject(state: &AppState) {
     use crate::state::{MemberIdentityEventRecord, MemberIdentitySubjectKey};
     let identity_payload = json!({
