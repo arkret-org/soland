@@ -1730,6 +1730,39 @@ async fn native_agent_exists(state: &AppState, principal_id: &str) -> Result<boo
         .map_err(|_| "agent_principal_lookup_unavailable")
 }
 
+async fn agent_lifecycle_rejection_reason(
+    state: &AppState,
+    agent_principal_id: &str,
+) -> Result<Option<&'static str>, &'static str> {
+    let record_state = state
+        .persistence
+        .agents()
+        .get(agent_principal_id)
+        .await
+        .map_err(|_| "agent_principal_lookup_unavailable")?
+        .and_then(|record| {
+            record
+                .get("state")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+        });
+    match record_state.as_deref() {
+        Some("paused") => return Ok(Some("agent_paused")),
+        Some("deactivated") => return Ok(Some("agent_deactivated")),
+        _ => {}
+    }
+
+    let projected = {
+        let projection = state.projection.lock();
+        projection.agent_lifecycles.get(agent_principal_id).copied()
+    };
+    Ok(match projected {
+        Some(cokret_sdk::AgentLifecycleState::Paused) => Some("agent_paused"),
+        Some(cokret_sdk::AgentLifecycleState::Deactivated) => Some("agent_deactivated"),
+        _ => None,
+    })
+}
+
 fn agent_participation_action(operation: &Operation) -> Option<&str> {
     kinds::canonical_kind_for_operation(operation)
 }
@@ -2107,6 +2140,9 @@ pub async fn validate_agent_reply_participation(
         else {
             continue;
         };
+        if let Some(reason) = agent_lifecycle_rejection_reason(state, &agent_principal_id).await? {
+            return Err(reason);
+        }
         let authorization_ref = if mode == AgentParticipationMode::ActOnBehalf {
             Some(validate_agent_act_on_behalf_authorization_ref(
                 state,

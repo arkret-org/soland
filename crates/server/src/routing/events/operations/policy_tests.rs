@@ -560,6 +560,24 @@ fn agent_context(agent_principal_id: &str, authorization_ref: &str) -> serde_jso
     })
 }
 
+fn reply_message(
+    realm_id: cokret_sdk::RealmId,
+    seed: &str,
+    agent_principal_id: &str,
+    authorization_ref: &str,
+) -> Operation {
+    op(
+        realm_id,
+        seed,
+        cokret_sdk::events::kinds::MESSAGE_CREATE,
+        json!({
+            "sender": agent_principal_id,
+            "content": [{"type": "text", "text": "agent reply"}],
+            "agent_context": agent_context(agent_principal_id, authorization_ref),
+        }),
+    )
+}
+
 fn act_on_behalf_message(
     realm_id: cokret_sdk::RealmId,
     seed: &str,
@@ -1067,6 +1085,76 @@ async fn reply_agent_unknown_kind_rejects_context_authorization_action() {
             .await
             .unwrap_err(),
         "agent_context_authorization_action_unsupported"
+    );
+}
+
+#[tokio::test]
+async fn reply_agent_lifecycle_state_blocks_writes_even_with_participation() {
+    let state = test_state();
+    let realm_id =
+        cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-0000000007c7".to_owned())
+            .unwrap();
+    let agent = "did:web:agent.example";
+    register_agent_selection(&state, &realm_id, agent, true, false).await;
+    let grant = state.authz.create_grant(
+        realm_id.to_string(),
+        "did:web:alice.example".to_owned(),
+        agent.to_owned(),
+        realm_id.to_string(),
+        vec![cokret_sdk::events::kinds::MESSAGE_CREATE.to_owned()],
+        Vec::new(),
+    );
+    let mut record = state
+        .persistence
+        .agents()
+        .get(agent)
+        .await
+        .expect("agent lookup")
+        .expect("agent record");
+    record["state"] = json!("paused");
+    state
+        .persistence
+        .agents()
+        .put(record)
+        .await
+        .expect("agent record update");
+    let operation = reply_message(realm_id, "0000000007c7", agent, grant.grant_id.as_str());
+
+    assert_eq!(
+        validate_agent_reply_participation(&state, &[operation])
+            .await
+            .unwrap_err(),
+        "agent_paused"
+    );
+}
+
+#[tokio::test]
+async fn reply_agent_projected_deactivation_blocks_writes_even_with_active_record() {
+    let state = test_state();
+    let realm_id =
+        cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-0000000007c8".to_owned())
+            .unwrap();
+    let agent = "did:web:agent.example";
+    register_agent_selection(&state, &realm_id, agent, true, false).await;
+    let grant = state.authz.create_grant(
+        realm_id.to_string(),
+        "did:web:alice.example".to_owned(),
+        agent.to_owned(),
+        realm_id.to_string(),
+        vec![cokret_sdk::events::kinds::MESSAGE_CREATE.to_owned()],
+        Vec::new(),
+    );
+    state.projection.lock().agent_lifecycles.insert(
+        agent.to_owned(),
+        cokret_sdk::AgentLifecycleState::Deactivated,
+    );
+    let operation = reply_message(realm_id, "0000000007c8", agent, grant.grant_id.as_str());
+
+    assert_eq!(
+        validate_agent_reply_participation(&state, &[operation])
+            .await
+            .unwrap_err(),
+        "agent_deactivated"
     );
 }
 
