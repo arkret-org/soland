@@ -300,6 +300,10 @@ impl AgentParticipationStore for PgAgentParticipationStore {
 pub trait AgentStore: Send + Sync {
     async fn put(&self, record: Value) -> PersistenceResult<()>;
     async fn get(&self, agent_principal_id: &str) -> PersistenceResult<Option<Value>>;
+    async fn get_by_pairing_request_id(
+        &self,
+        pairing_request_id: &str,
+    ) -> PersistenceResult<Option<Value>>;
     async fn list_for_controller(&self, controller_did: &str) -> PersistenceResult<Vec<Value>>;
     async fn set_state(
         &self,
@@ -338,6 +342,20 @@ impl AgentStore for MemoryAgentStore {
 
     async fn get(&self, agent_principal_id: &str) -> PersistenceResult<Option<Value>> {
         Ok(self.data.lock().get(agent_principal_id).cloned())
+    }
+
+    async fn get_by_pairing_request_id(
+        &self,
+        pairing_request_id: &str,
+    ) -> PersistenceResult<Option<Value>> {
+        Ok(self
+            .data
+            .lock()
+            .values()
+            .find(|record| {
+                record.get("pairing_request_id").and_then(Value::as_str) == Some(pairing_request_id)
+            })
+            .cloned())
     }
 
     async fn list_for_controller(&self, controller_did: &str) -> PersistenceResult<Vec<Value>> {
@@ -546,6 +564,25 @@ impl AgentStore for PgAgentStore {
              created_at, updated_at FROM agent_principals WHERE id = $1",
         )
         .bind::<Text, _>(agent_principal_id)
+        .get_result::<AgentPrincipalRow>(&mut *conn)
+        .await
+        .optional()
+        .map(|row| row.map(Value::from))
+        .map_err(PersistenceError::from)
+    }
+
+    async fn get_by_pairing_request_id(
+        &self,
+        pairing_request_id: &str,
+    ) -> PersistenceResult<Option<Value>> {
+        let mut conn = pg_conn(&self.pool).await?;
+        sql_query(
+            "SELECT id AS agent_principal_id, controller_id AS controller_did, agent_id, display_name, agent_slug, state, \
+             requested_scope, accountability, self_realm_id, provision_event_refs, \
+             pairing_request_id, pairing_code, pairing_expires_at, authorized_event_ref, \
+             created_at, updated_at FROM agent_principals WHERE pairing_request_id = $1",
+        )
+        .bind::<Text, _>(pairing_request_id)
         .get_result::<AgentPrincipalRow>(&mut *conn)
         .await
         .optional()
