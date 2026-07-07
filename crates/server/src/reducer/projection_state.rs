@@ -653,7 +653,7 @@ impl ProjectionState {
             let Some(cell_ref) = precondition.get("cell").and_then(Value::as_str) else {
                 return Err("failed_precondition");
             };
-            let Some(expected) = predicate.get("value").and_then(Value::as_object) else {
+            let Some(expected) = predicate.get("value") else {
                 return Err("failed_precondition");
             };
             if !self.head_eq_holds(cell_ref, expected) {
@@ -663,12 +663,9 @@ impl ProjectionState {
         Ok(())
     }
 
-    /// Resolve every `<field-path> -> <expected>` entry in a `head_eq`
-    /// predicate against the current materialized head for `cell_ref` and
-    /// return `true` iff all hold. Strand-fields cells resolve against the
-    /// materialized strand `fields`; other cells resolve against the cell's
-    /// resolved JSON value.
-    fn head_eq_holds(&self, cell_ref: &str, expected: &serde_json::Map<String, Value>) -> bool {
+    /// Compare `predicate.value` with the current cell head. Missing cells are
+    /// the JSON null head used by genesis CAS writes.
+    fn head_eq_holds(&self, cell_ref: &str, expected: &Value) -> bool {
         const STRAND_FIELDS_FAMILY: &str = "ck.component.strand.fields.v1";
         if let Some(strand_id) = cell_ref
             .strip_prefix("ck:cell:")
@@ -676,23 +673,50 @@ impl ProjectionState {
             .and_then(|rest| rest.strip_prefix(':'))
         {
             let Some(strand) = self.strands.get(strand_id) else {
-                return false;
+                return expected.is_null();
             };
-            return expected.iter().all(|(path, want)| {
-                let key = path.strip_prefix("fields.").unwrap_or(path);
-                strand.fields.get(key) == Some(want)
-            });
+            let observed = Value::Object(
+                strand
+                    .fields
+                    .iter()
+                    .map(|(key, value)| (key.clone(), value.clone()))
+                    .collect(),
+            );
+            return Self::observed_head_eq(&observed, expected)
+                || expected.as_object().is_some_and(|paths| {
+                    !paths.is_empty()
+                        && paths.iter().all(|(path, want)| {
+                            let key = path.strip_prefix("fields.").unwrap_or(path);
+                            strand.fields.get(key) == Some(want)
+                        })
+                });
         }
         let Ok(cell_id) = CellRef::new(cell_ref.to_owned()) else {
             return false;
         };
         let Some(value) = self.cell_value(&cell_id) else {
-            return false;
+            return expected.is_null();
         };
+        if Self::observed_head_eq(value, expected) {
+            return true;
+        }
+        expected
+            .as_object()
+            .is_some_and(|paths| !paths.is_empty() && Self::field_path_head_eq_holds(value, paths))
+    }
+
+    fn observed_head_eq(observed: &Value, expected: &Value) -> bool {
+        observed == expected || observed.get("head") == Some(expected)
+    }
+
+    fn field_path_head_eq_holds(
+        observed: &Value,
+        expected: &serde_json::Map<String, Value>,
+    ) -> bool {
         expected.iter().all(|(path, want)| {
             let resolved = path
                 .split('.')
-                .try_fold(value, |current, segment| current.get(segment));
+                .try_fold(observed, |current, segment| current.get(segment));
             resolved == Some(want)
         })
     }

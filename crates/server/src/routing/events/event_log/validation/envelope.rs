@@ -1894,6 +1894,7 @@ fn service_declared_event_requirement_features(
     crate::routing::system::describe::apply_claim_level_partition(
         &mut description,
         state.verified_profiles.as_ref(),
+        state.settings().candidate_join_policy_enabled,
     );
     declared.extend(description.supported_features);
     declared.extend(description.implemented_features);

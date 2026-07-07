@@ -242,7 +242,16 @@ pub(crate) fn projection_operation_from_event(
             .entry("seal_basis".to_owned())
             .or_insert_with(|| seal_basis.clone());
     }
-
+    if let Some(preconditions) = envelope.get("preconditions") {
+        payload_object
+            .entry("preconditions".to_owned())
+            .or_insert_with(|| preconditions.clone());
+    }
+    if let Some(effects) = envelope.get("effects") {
+        payload_object
+            .entry("effects".to_owned())
+            .or_insert_with(|| effects.clone());
+    }
     let Some(operation_id) = event_operation_id(envelope, &parsed.event_id) else {
         tracing::debug!(kind = %parsed.kind, event_id = %parsed.event_id, "projection: event_operation_id failed");
         return None;
@@ -253,6 +262,7 @@ pub(crate) fn projection_operation_from_event(
         parsed.kind.clone(),
         Value::Object(payload_object.clone()),
     );
+    operation.refs = event_refs(envelope.get("refs"));
     operation.canonical_event_digest = Some(parsed.canonical_digest.clone());
     operation.created_at = envelope
         .get("created_at")

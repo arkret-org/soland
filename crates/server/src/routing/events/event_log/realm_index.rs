@@ -202,16 +202,19 @@ pub(super) async fn invite_claim_actor_claims_pending_third_party_invite(
     let Ok(Some(invite)) = state.persistence.realm_invites().get(invite_id).await else {
         return false;
     };
-    if invite.realm_id != realm_id || invite.status != "pending" || invite.third_party_id.is_none()
-    {
+    if invite.realm_id != realm_id {
         return false;
     }
-    if invite
-        .expires_at
-        .is_some_and(|expires_at| expires_at <= now())
-    {
+    let actor_is_invitee = invite.invitee.as_deref() == Some(actor);
+    let is_pending_third_party = invite.status == "pending" && invite.third_party_id.is_some();
+    let is_duplicate_claim_by_invitee = invite.status == "claimed" && actor_is_invitee;
+    if !is_pending_third_party && !is_duplicate_claim_by_invitee {
         return false;
     }
+    // third-party-invites.md §4.3 step 2: expiry is a reducer state
+    // transition (`pending -> expired`) that also scrubs active token material.
+    // Do not short-circuit expired pending invites at the membership gate; let
+    // the invite reducer observe the claim and produce `expired_invite_token`.
     invite
         .invitee
         .as_deref()

@@ -1151,6 +1151,7 @@ mod agent_key_flag_tests {
             object_id: None,
             object_type: kind_object_type.to_owned(),
             payload,
+            refs: Vec::new(),
             idempotency_key: None,
             created_at: chrono::Utc::now(),
             canonical_event_digest: None,

@@ -178,18 +178,21 @@ async fn mint_local_service_identity(
         .get("state")
         .cloned()
         .unwrap_or_else(|| serde_json::json!({ "id": prepared.did.clone() }));
+    let event_digest = cokret_sdk::canonical::canonical_sha256(&prepared.log_entry)
+        .map_err(|error| anyhow::anyhow!("service DID log digest failed: {error}"))?;
 
     persistence
         .webvh()
         .put_document(WebvhDocumentRecord {
             did: prepared.did.clone(),
             did_document: did_document.clone(),
-            key_log_head: Some(prepared.version_id.clone()),
+            key_log_head: Some(event_digest.clone()),
             seq: 1,
             method_evidence: serde_json::json!({
                 "mode": "embedded_webvh_provider",
                 "provider_id": "soland.embedded",
                 "local_id": "service",
+                "version_id": prepared.version_id,
                 "self_bootstrapped": true,
             }),
             // put_document overwrites freshness evidence with the ingestion
@@ -206,7 +209,7 @@ async fn mint_local_service_identity(
     persistence
         .webvh()
         .append_log_event(WebvhLogRecord {
-            event_digest: prepared.version_id.clone(),
+            event_digest: event_digest.clone(),
             did: prepared.did.clone(),
             seq: 1,
             operation: prepared.log_entry.clone(),

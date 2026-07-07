@@ -321,6 +321,7 @@ fn local_semantic_claims(state: &AppState) -> SemanticClaims {
     crate::routing::system::describe::apply_claim_level_partition(
         &mut description,
         state.verified_profiles.as_ref(),
+        state.settings().candidate_join_policy_enabled,
     );
     let mut profiles = profile_ids_from_description(&description);
     profiles.insert(PROFILE_FEDERATION_MINIMAL.to_owned());

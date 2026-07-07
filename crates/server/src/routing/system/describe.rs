@@ -294,7 +294,11 @@ fn build_server_description(state: &AppState) -> ServerDescription {
     // wire-callable only; this helper separates implementation state,
     // self-claims, cotest-verified claims, and compat surfaces while the
     // response is still the SDK's typed `ServerDescription`.
-    apply_claim_level_partition(&mut description, state.verified_profiles.as_ref());
+    apply_claim_level_partition(
+        &mut description,
+        state.verified_profiles.as_ref(),
+        state.settings().candidate_join_policy_enabled,
+    );
 
     // Round 4 (B1) — validate the v2 invariants. development_mode=true MUST
     // forbid non-empty verified_profiles; protocol_version MUST equal the
@@ -328,6 +332,7 @@ fn build_server_description(state: &AppState) -> ServerDescription {
 pub(crate) fn apply_claim_level_partition(
     description: &mut cokret_sdk::ServerDescription,
     loaded_verified: &[crate::verified_profiles::VerifiedProfileDescriptor],
+    candidate_join_policy_enabled: bool,
 ) {
     // implemented_features: mirror of supported_features. Every entry
     // there corresponds to in-tree implementation code, but soland does
@@ -405,6 +410,17 @@ pub(crate) fn apply_claim_level_partition(
             ..cokret_sdk::ClaimedProfileEntry::self_claimed(
                 crate::routing::extensions::sovereign::SOVEREIGN_ENCLAVE_PROFILE_ID,
             )
+        });
+    }
+    if candidate_join_policy_enabled {
+        claimed_profiles.push(cokret_sdk::ClaimedProfileEntry {
+            notes: Some(
+                "Candidate join-policy profile: product-local member application \
+                 workflow surface is enabled; application/review concepts remain \
+                 profile-private and off the /_cokret protocol root."
+                    .to_owned(),
+            ),
+            ..cokret_sdk::ClaimedProfileEntry::self_claimed("ck.profile.candidate.join_policy.v1")
         });
     }
     // Snapshot the claimed-profile id set BEFORE serialising (which moves

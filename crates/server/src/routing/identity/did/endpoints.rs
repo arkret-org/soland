@@ -421,6 +421,7 @@ pub(crate) async fn embedded_webvh_register(
         map.insert("versionId".to_owned(), Value::String(version_id.clone()));
         map.insert("proof".to_owned(), Value::Array(vec![proof]));
     }
+    let event_digest = did_log_event_digest(&log_entry)?;
     let did_document = log_entry
         .get("state")
         .cloned()
@@ -435,7 +436,7 @@ pub(crate) async fn embedded_webvh_register(
         .put_document(WebvhDocumentRecord {
             did: location.did.clone(),
             did_document: did_document.clone(),
-            key_log_head: Some(version_id.clone()),
+            key_log_head: Some(event_digest.clone()),
             seq: 1,
             method_evidence: json!({
                 "mode": "embedded_webvh_provider",
@@ -444,6 +445,7 @@ pub(crate) async fn embedded_webvh_register(
                 "document_url": location.document_url,
                 "log_url": location.log_url,
                 "scid": location.scid,
+                "version_id": version_id,
                 "updateKeys": [body.update_public_key_multibase.clone()],
             }),
             // put_document authoritatively overwrites freshness evidence with
@@ -463,7 +465,7 @@ pub(crate) async fn embedded_webvh_register(
         .persistence
         .webvh()
         .append_log_event(WebvhLogRecord {
-            event_digest: version_id.clone(),
+            event_digest: event_digest.clone(),
             did: location.did.clone(),
             seq: 1,
             operation: log_entry.clone(),
@@ -485,6 +487,7 @@ pub(crate) async fn embedded_webvh_register(
             "local_id": local_id,
             "provider_id": "soland.embedded",
             "version_id": version_id,
+            "head_event_digest": event_digest,
         }),
         "accepted",
     )
@@ -499,7 +502,7 @@ pub(crate) async fn embedded_webvh_register(
         did_public_key_multibase: body.did_public_key_multibase,
         update_public_key_multibase: body.update_public_key_multibase,
         seq: 1,
-        key_log_head: version_id,
+        key_log_head: event_digest,
         document_url: location.document_url,
         log_url: location.log_url,
         did_document,
@@ -585,6 +588,7 @@ pub(crate) async fn embedded_webvh_rotate(
             AppError::invalid_param("log_entry.state (the new DID document) is required")
         })?;
     ensure_webvh_document_id(&did, &new_document)?;
+    let event_digest = did_log_event_digest(&entry)?;
 
     // Load the existing log; the rotation MUST extend a known history.
     let mut events = state
@@ -619,7 +623,7 @@ pub(crate) async fn embedded_webvh_rotate(
         .put_document(WebvhDocumentRecord {
             did: did.clone(),
             did_document: new_document.clone(),
-            key_log_head: Some(version_id.clone()),
+            key_log_head: Some(event_digest.clone()),
             seq: next_seq,
             method_evidence: json!({
                 "mode": "embedded_webvh_provider",
@@ -637,7 +641,7 @@ pub(crate) async fn embedded_webvh_rotate(
         .persistence
         .webvh()
         .append_log_event(WebvhLogRecord {
-            event_digest: version_id.clone(),
+            event_digest: event_digest.clone(),
             did: did.clone(),
             seq: next_seq,
             operation: entry,
@@ -646,7 +650,7 @@ pub(crate) async fn embedded_webvh_rotate(
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
     events.push(WebvhLogRecord {
-        event_digest: version_id.clone(),
+        event_digest: event_digest.clone(),
         did: did.clone(),
         seq: next_seq,
         operation: json!({}),
@@ -660,6 +664,7 @@ pub(crate) async fn embedded_webvh_rotate(
             "did": did.clone(),
             "seq": next_seq,
             "version_id": version_id.clone(),
+            "head_event_digest": event_digest.clone(),
         }),
         "accepted",
     )
@@ -668,7 +673,7 @@ pub(crate) async fn embedded_webvh_rotate(
         status: "accepted".to_owned(),
         did,
         seq: next_seq,
-        key_log_head: version_id,
+        key_log_head: event_digest,
         did_document: new_document,
         entry_count: events.len(),
     })
@@ -827,6 +832,11 @@ fn key_log_head_hash(value: Option<String>) -> Result<Option<Hash>, AppError> {
         .map(Hash::new)
         .transpose()
         .map_err(|error| AppError::internal(format!("invalid key_log_head digest: {error}")))
+}
+
+fn did_log_event_digest(operation: &Value) -> Result<String, AppError> {
+    cokret_sdk::canonical::canonical_sha256(operation)
+        .map_err(|error| AppError::internal(format!("DID log entry digest failed: {error}")))
 }
 
 fn identity_resolve_outcome(
@@ -1018,28 +1028,56 @@ pub(crate) async fn identity_submit_did_operation(
         "did": did.clone(),
         "seq": next_seq,
         "previous": existing.as_ref().and_then(|record| record.key_log_head.clone()),
-        "operation": operation,
+        "operation": operation.clone(),
         "submitted_at": submitted_at,
     });
-    let event_digest = format!(
+    let submit_event_digest = format!(
         "sha256:{}",
         sha256_hex(&serde_json::to_vec(&event_payload).unwrap_or_default())
     );
-    let method_evidence = json!({
-        "mode": "submitted_operation",
-        "source": "ck.root.identity.command.submit_did_operation",
-        "previous": existing
-            .as_ref()
-            .map(|record| record.method_evidence.clone())
-            .unwrap_or_else(|| json!({"mode": "development_local"})),
-    });
+    let operation_version_id = operation
+        .get("versionId")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    let is_webvh_did = did.starts_with("did:webvh:");
+    let is_webvh_log_operation = is_webvh_did && operation_version_id.is_some();
+    let append_log_event = !is_webvh_did || is_webvh_log_operation;
+    let (event_digest, log_operation) = if is_webvh_log_operation {
+        (did_log_event_digest(&operation)?, operation.clone())
+    } else {
+        (submit_event_digest, event_payload.clone())
+    };
+    let previous_method_evidence = existing
+        .as_ref()
+        .map(|record| record.method_evidence.clone())
+        .unwrap_or_else(|| json!({"mode": "development_local"}));
+    let method_evidence = if let Some(version_id) = operation_version_id {
+        json!({
+            "mode": "submitted_operation",
+            "source": "ck.root.identity.command.submit_did_operation",
+            "version_id": version_id,
+            "previous": previous_method_evidence,
+        })
+    } else if is_webvh_did {
+        json!({
+            "mode": "submitted_document",
+            "source": "ck.root.identity.command.submit_did_operation",
+            "previous": previous_method_evidence,
+        })
+    } else {
+        json!({
+            "mode": "submitted_operation",
+            "source": "ck.root.identity.command.submit_did_operation",
+            "previous": previous_method_evidence,
+        })
+    };
     state
         .persistence
         .webvh()
         .put_document(WebvhDocumentRecord {
             did: did.clone(),
             did_document: document.clone(),
-            key_log_head: Some(event_digest.clone()),
+            key_log_head: append_log_event.then(|| event_digest.clone()),
             seq: next_seq,
             method_evidence,
             // put_document authoritatively overwrites freshness evidence with
@@ -1050,18 +1088,20 @@ pub(crate) async fn identity_submit_did_operation(
         })
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
-    state
-        .persistence
-        .webvh()
-        .append_log_event(WebvhLogRecord {
-            event_digest: event_digest.clone(),
-            did: did.clone(),
-            seq: next_seq,
-            operation: event_payload,
-            created_at: submitted_at,
-        })
-        .await
-        .map_err(|error| AppError::internal(error.to_string()))?;
+    if append_log_event {
+        state
+            .persistence
+            .webvh()
+            .append_log_event(WebvhLogRecord {
+                event_digest: event_digest.clone(),
+                did: did.clone(),
+                seq: next_seq,
+                operation: log_operation,
+                created_at: submitted_at,
+            })
+            .await
+            .map_err(|error| AppError::internal(error.to_string()))?;
+    }
     append_audit_log(
         state,
         Some(&did),
@@ -1069,28 +1109,37 @@ pub(crate) async fn identity_submit_did_operation(
         json!({
             "did": did.clone(),
             "seq": next_seq,
-            "head_event_digest": event_digest.clone(),
+            "head_event_digest": append_log_event.then(|| event_digest.clone()),
         }),
         "accepted",
     )
     .await;
-    let head_event_digest = Hash::new(event_digest.clone()).map_err(|error| {
-        AppError::internal(format!(
-            "DID operation digest failed SDK type validation: {error}"
-        ))
-    })?;
-    json_ok(DidOperationSubmitOutcome {
-        status: "accepted".to_owned(),
-        did: typed_did,
-        seq: Some(next_seq),
-        head_event_digest: Some(head_event_digest),
-        operation_ref: None,
-        receipts: vec![json!({
+    let head_event_digest = if append_log_event {
+        Some(Hash::new(event_digest.clone()).map_err(|error| {
+            AppError::internal(format!(
+                "DID operation digest failed SDK type validation: {error}"
+            ))
+        })?)
+    } else {
+        None
+    };
+    let receipts = if append_log_event {
+        vec![json!({
             "service_did": state.config.service_did.clone(),
             "did": did,
             "head_event_digest": event_digest,
             "seq": next_seq,
             "issued_at": submitted_at,
-        })],
+        })]
+    } else {
+        Vec::new()
+    };
+    json_ok(DidOperationSubmitOutcome {
+        status: "accepted".to_owned(),
+        did: typed_did,
+        seq: Some(next_seq),
+        head_event_digest,
+        operation_ref: None,
+        receipts,
     })
 }

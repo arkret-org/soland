@@ -221,7 +221,7 @@ impl ProjectionState {
         {
             return Ok(());
         }
-        let refs = join_authorised_by_refs(&operation.payload);
+        let refs = join_authorised_by_refs(operation);
         if refs.is_empty() {
             return Ok(());
         }
@@ -448,7 +448,7 @@ impl ProjectionState {
             return;
         }
         let realm_id = operation.realm_id.as_str().to_owned();
-        for review_ref in join_authorised_by_refs(&operation.payload) {
+        for review_ref in join_authorised_by_refs(operation) {
             if let Some(key) = self
                 .member_applications
                 .iter()
@@ -503,7 +503,25 @@ impl ProjectionState {
     }
 }
 
-fn join_authorised_by_refs(payload: &Value) -> Vec<String> {
+fn join_authorised_by_refs(operation: &Operation) -> Vec<String> {
+    let refs = join_authorised_by_refs_from_event_refs(&operation.refs);
+    if !refs.is_empty() {
+        return refs;
+    }
+    join_authorised_by_refs_from_payload(&operation.payload)
+}
+
+fn join_authorised_by_refs_from_event_refs(refs: &[cokret_sdk::EventRef]) -> Vec<String> {
+    refs.iter()
+        .filter(|reference| reference.role == "join_authorised_by")
+        .filter_map(|reference| {
+            let value = reference.id.trim();
+            (!value.is_empty()).then(|| value.to_owned())
+        })
+        .collect()
+}
+
+fn join_authorised_by_refs_from_payload(payload: &Value) -> Vec<String> {
     payload
         .get("refs")
         .and_then(Value::as_array)

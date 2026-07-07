@@ -587,9 +587,9 @@ fn count_distinct_valid_entry_proofs(
 }
 
 /// Verify a single `proof[]` object signs the proof-stripped canonical entry
-/// under `eddsa-jcs-2022`. Mirrors [`verify_one_witness_proof`] but strips
-/// `proof` (not `witness`), matching the controller-proof construction in the
-/// embedded provider and coauth's `soland_webvh::build_proof`.
+/// under `eddsa-jcs-2022`. Controller proofs intentionally keep `witness`
+/// and `versionId`, matching the embedded provider and coauth's
+/// `soland_webvh::build_proof`.
 fn verify_entry_proof(
     entry: &WebvhLogEntry,
     proof: &serde_json::Map<String, Value>,
@@ -812,6 +812,7 @@ fn verify_one_witness_proof(
     if let Value::Object(map) = &mut canonical_entry {
         map.remove("witness");
         map.remove("proof");
+        map.remove("versionId");
     }
     let payload =
         cokret_sdk::canonical::canonical_json_bytes(&canonical_entry).map_err(|error| {
@@ -1086,8 +1087,14 @@ mod tests {
         format!("z{}", bs58::encode(sig.to_bytes()).into_string())
     }
 
-    fn witness_proof(entry_without_witness: &Value, signer: &SigningKey) -> Value {
-        let canonical = cokret_sdk::canonical::canonical_json_bytes(entry_without_witness).unwrap();
+    fn witness_proof(entry: &Value, signer: &SigningKey) -> Value {
+        let mut signed_entry = entry.clone();
+        if let Value::Object(map) = &mut signed_entry {
+            map.remove("witness");
+            map.remove("proof");
+            map.remove("versionId");
+        }
+        let canonical = cokret_sdk::canonical::canonical_json_bytes(&signed_entry).unwrap();
         let signature = signer.sign(&canonical);
         let public_key = encode_pubkey_multibase(&signer.verifying_key());
         json!({
@@ -1219,9 +1226,15 @@ mod tests {
             "versionTime": "2026-05-21T00:00:00Z",
             "parameters": {"method": "did:webvh:1.0"},
         });
-        // Sign canonical bytes of entry_body (without `witness`) with
-        // the forger key; attach as if it were the witness's signature.
-        let canonical = cokret_sdk::canonical::canonical_json_bytes(&entry_body).unwrap();
+        // Sign the witness transcript with the forger key; attach it as if it
+        // came from the configured witness.
+        let mut forged_payload = entry_body.clone();
+        if let Value::Object(map) = &mut forged_payload {
+            map.remove("witness");
+            map.remove("proof");
+            map.remove("versionId");
+        }
+        let canonical = cokret_sdk::canonical::canonical_json_bytes(&forged_payload).unwrap();
         let forged_sig = forger.sign(&canonical);
         let mut payload = entry_body;
         if let Value::Object(map) = &mut payload {

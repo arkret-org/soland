@@ -33,6 +33,7 @@ async fn events_describe(depot: &mut Depot) -> JsonResult<cokret_sdk::ServerDesc
     crate::routing::system::describe::apply_claim_level_partition(
         &mut description,
         state.verified_profiles.as_ref(),
+        state.settings().candidate_join_policy_enabled,
     );
     // Advertise the live rate-limit ceilings (see the canonical describe
     // handler) so wire and enforcement stay in lock-step after a hot-swap.
