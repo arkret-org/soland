@@ -22,7 +22,7 @@ pub enum SolandEventsSubmitRequestBody {
     /// Batch form — multiple envelopes, optional `idempotency_key`.
     Batch(cokret_sdk::EventsSubmitBatchRequestBody),
     /// Single Event Envelope (dominant shape).
-    Single(Value),
+    Single(cokret_sdk::Event),
 }
 
 impl SolandEventsSubmitRequestBody {

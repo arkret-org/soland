@@ -75,14 +75,6 @@ pub(in crate::routing) struct RealmBootstrapBatchContext {
     pub(in crate::routing) actor_id: String,
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-struct RawFederationEventsSubmitBody {
-    service_binding_ref: FederationServiceBindingRef,
-    events: Vec<Value>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    idempotency_key: Option<String>,
-}
-
 const DELIVERY_BINDING_HANDOVER_GRACE_SECONDS: i64 = 86_400;
 
 #[derive(Debug, Clone)]
@@ -258,13 +250,13 @@ pub(super) async fn submit_event_batch_outcome(
     let mut realm_bootstrap_contexts: Vec<RealmBootstrapBatchContext> = Vec::new();
 
     for envelope in envelopes {
-        let envelope = match serde_json::to_value(envelope) {
-            Ok(value) => value,
+        let envelope = match event_to_legacy_value(envelope) {
+            Ok(envelope) => envelope,
             Err(error) => {
                 rejected.push(EventsSubmitRejectedItem {
                     id: "unknown".to_owned(),
-                    reason_code: "bad_json".to_owned(),
-                    detail: Some(format!("event envelope re-encode failed: {error}")),
+                    reason_code: error.code,
+                    detail: Some(error.message),
                 });
                 continue;
             }
@@ -327,18 +319,24 @@ pub(crate) async fn submit_federation_events(
     body_value: Value,
     res: &mut Response,
 ) {
-    let submit = match serde_json::from_value::<RawFederationEventsSubmitBody>(body_value.clone()) {
-        Ok(value) => value,
-        Err(error) => {
-            render_error(
-                res,
-                StatusCode::BAD_REQUEST,
-                "bad_json",
-                &format!("invalid ck.peer.events.command.submit request body: {error}"),
-            );
-            return;
-        }
-    };
+    let submit =
+        match serde_json::from_value::<EventsSubmitFederationRequestBody>(body_value.clone()) {
+            Ok(value) => value,
+            Err(error) => {
+                render_error(
+                    res,
+                    StatusCode::BAD_REQUEST,
+                    "bad_json",
+                    &format!("invalid ck.peer.events.command.submit request body: {error}"),
+                );
+                return;
+            }
+        };
+    let EventsSubmitFederationRequestBody {
+        service_binding_ref,
+        events,
+        idempotency_key: _,
+    } = submit;
 
     let trust_headers =
         match crate::routing::federation::federation::FederationTrustHeaders::from_salvo_request(
@@ -403,13 +401,13 @@ pub(crate) async fn submit_federation_events(
         return;
     }
 
-    if let Err((code, message)) = SolandEventsSubmitRequestBody::validate_federation_service_binding(
-        &submit.service_binding_ref,
-    ) {
+    if let Err((code, message)) =
+        SolandEventsSubmitRequestBody::validate_federation_service_binding(&service_binding_ref)
+    {
         render_error(res, StatusCode::BAD_REQUEST, code, &message);
         return;
     }
-    if submit.events.is_empty() {
+    if events.is_empty() {
         render_error(
             res,
             StatusCode::BAD_REQUEST,
@@ -418,7 +416,7 @@ pub(crate) async fn submit_federation_events(
         );
         return;
     }
-    if cokret_sdk::validate_event_submit_batch_count(submit.events.len()).is_err() {
+    if cokret_sdk::validate_event_submit_batch_count(events.len()).is_err() {
         render_error(
             res,
             StatusCode::PAYLOAD_TOO_LARGE,
@@ -427,8 +425,19 @@ pub(crate) async fn submit_federation_events(
         );
         return;
     }
+    let events = match events
+        .into_iter()
+        .map(event_to_legacy_value)
+        .collect::<Result<Vec<_>, _>>()
+    {
+        Ok(events) => events,
+        Err(error) => {
+            render_submit_one_error(res, error);
+            return;
+        }
+    };
 
-    let binding_realm = submit.service_binding_ref.realm_id.as_str().to_owned();
+    let binding_realm = service_binding_ref.realm_id.as_str().to_owned();
     let source_service_did = req
         .headers()
         .get("source-service-did")
@@ -445,8 +454,7 @@ pub(crate) async fn submit_federation_events(
     .await
     {
         Ok(true) => {
-            let quarantine = submit
-                .events
+            let quarantine = events
                 .iter()
                 .filter_map(|envelope| event_string_field_from_value(envelope, "event_id"))
                 .collect::<Vec<_>>();
@@ -497,9 +505,7 @@ pub(crate) async fn submit_federation_events(
             return;
         }
     }
-    match federation_service_binding_current_for_destination(state, &submit.service_binding_ref)
-        .await
-    {
+    match federation_service_binding_current_for_destination(state, &service_binding_ref).await {
         FederationServiceBindingCheck::Current => {}
         FederationServiceBindingCheck::Reject(reason) => {
             render_error(res, StatusCode::CONFLICT, reason, reason);
@@ -543,8 +549,7 @@ pub(crate) async fn submit_federation_events(
         {
             Ok(gate) => gate,
             Err(rejection) => {
-                let rejected = submit
-                    .events
+                let rejected = events
                     .iter()
                     .map(|envelope| EventsSubmitRejectedItem {
                         id: event_string_field_from_value(envelope, "event_id")
@@ -583,7 +588,7 @@ pub(crate) async fn submit_federation_events(
             }
         };
 
-    for envelope in submit.events {
+    for envelope in events {
         let id = event_string_field_from_value(&envelope, "event_id")
             .unwrap_or_else(|| "unknown".to_owned());
         let event_realm = event_string_field_from_value(&envelope, "realm_id");
@@ -1135,6 +1140,25 @@ fn prev_frontier_digest(prev_refs: &[String]) -> Result<String, SubmitOneError> 
             format!("prev_refs cannot be canonicalized: {error}"),
         )
     })
+}
+
+pub(in crate::routing) fn event_to_legacy_value(envelope: Event) -> Result<Value, SubmitOneError> {
+    serde_json::to_value(envelope).map_err(|error| {
+        SubmitOneError::new(
+            StatusCode::BAD_REQUEST,
+            "bad_json",
+            format!("event envelope re-encode failed: {error}"),
+        )
+    })
+}
+
+pub(in crate::routing) async fn submit_event_envelope(
+    state: &AppState,
+    session: &SessionRecord,
+    envelope: Event,
+) -> Result<SubmittedEventOutcome, SubmitOneError> {
+    let envelope = event_to_legacy_value(envelope)?;
+    submit_event_value(state, session, envelope).await
 }
 
 pub(in crate::routing) async fn submit_event_value(
