@@ -60,6 +60,17 @@ fn explicit_watch_level(state: &AppState, strand_id: &str, actor_id: &str) -> Op
         .and_then(|watch| watch.level.clone())
 }
 
+fn all_watch_recipients(state: &AppState, strand_id: &str) -> BTreeSet<String> {
+    state
+        .projection
+        .lock()
+        .strand_watches
+        .values()
+        .filter(|watch| watch.strand_id == strand_id && watch.level.as_deref() == Some("all"))
+        .map(|watch| watch.actor_id.clone())
+        .collect()
+}
+
 fn actor_has_realm_access(state: &AppState, realm_id: &str, actor_id: &str) -> bool {
     realm_joined_members(state, realm_id).contains(actor_id)
 }
@@ -276,6 +287,26 @@ pub(crate) async fn dispatch_message_notifications(
         .chain(mention_sidecar_subjects(state, &realm_id, payload).into_iter())
         .filter(|subject| !subject.trim().is_empty())
         .collect::<BTreeSet<_>>();
+    if let Some(strand_id) = strand_id.as_deref() {
+        for recipient in all_watch_recipients(state, strand_id) {
+            if recipient == sender || mentioned_subjects.contains(&recipient) {
+                continue;
+            }
+            if !actor_can_see_strand(state, &realm_id, strand_id, &recipient) {
+                continue;
+            }
+            put_message_notification(
+                state,
+                &recipient,
+                &realm_id,
+                &source_event_id,
+                "message",
+                Some(strand_id),
+                Some(&sender),
+            )
+            .await;
+        }
+    }
     for subject in mentioned_subjects {
         if subject == sender {
             continue;
@@ -626,19 +657,48 @@ mod tests {
     }
 
     fn plain_message(realm_id: &str, seed: &str, sender: &str) -> cokret_sdk::Operation {
+        plain_message_with_strand(realm_id, seed, sender, None)
+    }
+
+    fn plain_message_with_strand(
+        realm_id: &str,
+        seed: &str,
+        sender: &str,
+        strand_id: Option<&str>,
+    ) -> cokret_sdk::Operation {
+        let mut payload = json!({
+            "sender": sender,
+            "event_id": format!("ck:event:01904100-0000-7000-8000-{seed}"),
+            "content": {
+                "body": "hello"
+            }
+        });
+        if let Some(strand_id) = strand_id {
+            payload
+                .as_object_mut()
+                .expect("message payload object")
+                .insert("strand_id".to_owned(), json!(strand_id));
+        }
         cokret_sdk::Operation::create(
             cokret_sdk::OperationId::new(format!("ck:operation:01904100-0000-7000-8000-{seed}"))
                 .unwrap(),
             cokret_sdk::RealmId::new(realm_id.to_owned()).unwrap(),
             cokret_sdk::events::kinds::MESSAGE_CREATE,
-            json!({
-                "sender": sender,
-                "event_id": format!("ck:event:01904100-0000-7000-8000-{seed}"),
-                "content": {
-                    "body": "hello"
-                }
-            }),
+            payload,
         )
+    }
+
+    fn seed_strand_watch(state: &AppState, strand_id: &str, actor_id: &str, level: &str) {
+        state.projection.lock().strand_watches.insert(
+            (strand_id.to_owned(), actor_id.to_owned()),
+            crate::reducer::StrandWatchProjection {
+                strand_id: strand_id.to_owned(),
+                actor_id: actor_id.to_owned(),
+                level: Some(level.to_owned()),
+                level_public: false,
+                updated_at: chrono::Utc::now(),
+            },
+        );
     }
 
     fn seed_strand_scope(state: &AppState, realm_id: &str, strand_id: &str, circle_id: &str) {
@@ -834,6 +894,61 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn plain_message_notifies_all_watchers_only() {
+        let state = test_state();
+        let realm_id = "ck:realm:01904100-0000-7000-8000-000000009951";
+        let strand_id = "ck:strand:01904100-0000-7000-8000-000000009952";
+        let alice = "did:web:alice.example";
+        let bob = "did:web:bob.example";
+        let carol = "did:web:carol.example";
+        seed_realm_members(&state, realm_id, &[alice, bob, carol]);
+        seed_strand(&state, realm_id, strand_id);
+        seed_strand_watch(&state, strand_id, bob, "all");
+        seed_strand_watch(&state, strand_id, carol, "participating");
+
+        let delivered = plain_message_with_strand(realm_id, "000000009953", alice, Some(strand_id));
+        dispatch_message_notifications(&state, &delivered).await;
+
+        let bob_notifications = state
+            .persistence
+            .notifications()
+            .list_for_recipient(bob)
+            .await
+            .unwrap();
+        assert_eq!(bob_notifications.len(), 1);
+        assert_eq!(
+            bob_notifications[0]
+                .get("notification_type")
+                .and_then(Value::as_str),
+            Some("message")
+        );
+        assert_eq!(
+            bob_notifications[0]
+                .get("strand_id")
+                .and_then(Value::as_str),
+            Some(strand_id)
+        );
+        assert!(
+            state
+                .persistence
+                .notifications()
+                .list_for_recipient(carol)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            state
+                .persistence
+                .notifications()
+                .list_for_recipient(alice)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
     async fn member_mention_is_single_mention_notification() {
         let state = test_state();
         let realm_id = "ck:realm:01904100-0000-7000-8000-000000009972";
@@ -910,16 +1025,7 @@ mod tests {
             .projection
             .lock()
             .apply_relation_create(&assignment, chrono::Utc::now());
-        state.projection.lock().strand_watches.insert(
-            (strand_id.to_owned(), carol.to_owned()),
-            crate::reducer::StrandWatchProjection {
-                strand_id: strand_id.to_owned(),
-                actor_id: carol.to_owned(),
-                level: Some("all".to_owned()),
-                level_public: false,
-                updated_at: chrono::Utc::now(),
-            },
-        );
+        seed_strand_watch(&state, strand_id, carol, "all");
 
         let operation = schedule_update(realm_id, "000000009998", alice, strand_id);
         dispatch_schedule_notifications(&state, &operation).await;
