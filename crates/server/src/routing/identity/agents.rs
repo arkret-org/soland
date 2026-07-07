@@ -109,7 +109,7 @@ pub(crate) fn agent_key_pair_router() -> Router {
 pub(crate) fn open_router() -> Router {
     Router::with_path("agent-pairing")
         .push(Router::with_path("resolve").post(resolve_agent_pairing))
-        .push(Router::with_path("runtime-key-requests").post(request_agent_runtime_key_approval))
+        .push(Router::with_path("runtime-key-requests").post(submit_agent_runtime_key_request))
 }
 
 #[endpoint(
@@ -180,6 +180,100 @@ async fn resolve_agent_pairing(
         pairing_expires_at,
     };
     json_ok(bootstrap)
+}
+
+#[endpoint(
+    operation_id = "ck.open.agent_pairing.command.submit_runtime_key_request",
+    tags("open"),
+    summary = "Submit an agent runtime key request for controller approval"
+)]
+#[tracing::instrument(
+    skip_all,
+    fields(op = "ck.open.agent_pairing.command.submit_runtime_key_request")
+)]
+async fn submit_agent_runtime_key_request(
+    body: JsonBody<AgentRuntimeApprovalRequestBody>,
+    depot: &mut Depot,
+) -> JsonResult<AgentRuntimeApprovalOutcome> {
+    let state = depot.get_typed::<AppState>().expect("state injected");
+    let body = body.into_inner();
+    let pairing_code = body.pairing_code.trim();
+    if pairing_code.is_empty() {
+        return Err(AppError::invalid_param("pairing_code is required"));
+    }
+    let agent_principal_id = body.agent_principal_id.as_str();
+    validate_agent_principal_id(agent_principal_id)?;
+    if body.verification_method.trim().is_empty() {
+        return Err(AppError::invalid_param("verification_method is required"));
+    }
+    if verification_method_principal(&body.verification_method) != agent_principal_id {
+        return Err(AppError::invalid_param(
+            "verification_method DID must match agent_principal_id",
+        ));
+    }
+    let mut agent_record = state
+        .persistence
+        .agents()
+        .get_by_pairing_request_id(&body.pairing_request_id)
+        .await
+        .map_err(|err| AppError::internal(format!("agent pairing lookup failed: {err}")))?
+        .ok_or_else(agent_pairing_not_found)?;
+    if agent_record.get("pairing_code").and_then(Value::as_str) != Some(pairing_code) {
+        return Err(agent_pairing_not_found());
+    }
+    ensure_pairing_request_open(&agent_record)?;
+    ensure_pairing_request_id_matches(&agent_record, &body.pairing_request_id)?;
+    if agent_record
+        .get("agent_principal_id")
+        .and_then(Value::as_str)
+        != Some(agent_principal_id)
+    {
+        return Err(pairing_failed_precondition(
+            "agent_principal_id does not match the open pairing request",
+        ));
+    }
+    let key_pair_body = agent_key_pair_body_from_runtime_approval(&body);
+    verify_runtime_key_pair_proof_of_possession(
+        &key_pair_body,
+        agent_principal_id,
+        &state.config.service_did,
+    )?;
+    if let Some(attestation) = body.runtime_attestation.as_ref() {
+        let kind = attestation
+            .get("kind")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        return Err(AppError::unsupported_feature(format!(
+            "runtime_attestation verifier is not wired; refusing kind `{kind}` fail-closed"
+        )));
+    }
+
+    let approval_request_id = format!("agent_runtime_approval:{}", uuid::Uuid::now_v7());
+    let requested_at = chrono::Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
+    if let Some(object) = agent_record.as_object_mut() {
+        object.insert(
+            "approval_request_id".to_owned(),
+            json!(approval_request_id.clone()),
+        );
+        object.insert(
+            "runtime_key_request".to_owned(),
+            runtime_key_request_for_controller(&body),
+        );
+        object.insert("approval_requested_at".to_owned(), json!(requested_at));
+    }
+    state
+        .persistence
+        .agents()
+        .put(agent_record)
+        .await
+        .map_err(|err| {
+            AppError::internal(format!("runtime approval request save failed: {err}"))
+        })?;
+    json_ok(AgentRuntimeApprovalOutcome {
+        ok: true,
+        approval_request_id,
+        status: AgentStatus::PendingRuntimeKey,
+    })
 }
 
 /// CKP-0008 (dev option B) — synthesize a controller-authored
@@ -385,6 +479,26 @@ fn agent_key_state_from_record(record: &Value) -> Value {
         .filter(|value| !value.is_empty())
     {
         state.insert("pairing_expires_at".to_owned(), json!(value));
+    }
+    if let Some(value) = record
+        .get("approval_request_id")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+    {
+        state.insert("approval_request_id".to_owned(), json!(value));
+    }
+    if let Some(value) = record
+        .get("runtime_key_request")
+        .filter(|value| !value.is_null())
+    {
+        state.insert("pending_runtime_key_request".to_owned(), value.clone());
+    }
+    if let Some(value) = record
+        .get("approval_requested_at")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+    {
+        state.insert("approval_requested_at".to_owned(), json!(value));
     }
     if let Some(value) = record
         .get("authorized_event_ref")
@@ -783,6 +897,9 @@ async fn agent_key_pair(
             "authorized_event_ref".to_owned(),
             json!(authorized_event_ref.as_str()),
         );
+        object.remove("approval_request_id");
+        object.remove("runtime_key_request");
+        object.remove("approval_requested_at");
     }
     state
         .persistence
@@ -976,6 +1093,31 @@ fn ensure_pairing_request_id_matches(
         ));
     }
     Ok(())
+}
+
+fn agent_key_pair_body_from_runtime_approval(
+    body: &AgentRuntimeApprovalRequestBody,
+) -> AgentKeyPairRequestBody {
+    AgentKeyPairRequestBody {
+        pairing_request_id: body.pairing_request_id.clone(),
+        agent_principal_id: body.agent_principal_id.clone(),
+        verification_method: body.verification_method.clone(),
+        public_key: body.public_key.clone(),
+        proof_of_possession: body.proof_of_possession.clone(),
+        runtime_attestation: body.runtime_attestation.clone(),
+        authorize_event: Value::Null,
+    }
+}
+
+fn runtime_key_request_for_controller(body: &AgentRuntimeApprovalRequestBody) -> Value {
+    json!({
+        "pairing_request_id": body.pairing_request_id.clone(),
+        "agent_principal_id": body.agent_principal_id.clone(),
+        "verification_method": body.verification_method.clone(),
+        "public_key": body.public_key.clone(),
+        "proof_of_possession": body.proof_of_possession.clone(),
+        "runtime_attestation": body.runtime_attestation.clone(),
+    })
 }
 
 #[derive(serde::Deserialize)]
@@ -2994,6 +3136,75 @@ mod tests {
 
         verify_runtime_key_pair_proof_of_possession(&body, agent, service_did)
             .expect("runtime PoP must verify");
+    }
+
+    #[test]
+    fn runtime_approval_request_for_controller_omits_pairing_code() {
+        let agent = "did:web:agent.example";
+        let verification_method = "did:web:agent.example#runtime-key-1";
+        let service_did = "did:web:soland.local";
+        let key_pair = key_pair_request_body(agent, verification_method, service_did);
+        let request = AgentRuntimeApprovalRequestBody {
+            pairing_code: "12345678".to_owned(),
+            pairing_request_id: key_pair.pairing_request_id.clone(),
+            agent_principal_id: key_pair.agent_principal_id.clone(),
+            verification_method: key_pair.verification_method.clone(),
+            public_key: key_pair.public_key.clone(),
+            proof_of_possession: key_pair.proof_of_possession.clone(),
+            runtime_attestation: None,
+        };
+
+        let controller_request = runtime_key_request_for_controller(&request);
+
+        assert!(controller_request.get("pairing_code").is_none());
+        assert_eq!(
+            controller_request["pairing_request_id"],
+            key_pair.pairing_request_id
+        );
+        assert_eq!(
+            controller_request["verification_method"],
+            verification_method
+        );
+    }
+
+    #[test]
+    fn agent_key_state_projects_pending_runtime_approval() {
+        let mut record = pending_pairing_record(
+            "did:web:agent.example",
+            "did:web:controller.example",
+            requested_agent_scope(),
+            "12345678",
+            "2999-01-01T00:00:00Z",
+        );
+        record["approval_request_id"] = json!("agent_runtime_approval:01999999");
+        record["approval_requested_at"] = json!("2026-07-08T00:00:00.000Z");
+        record["runtime_key_request"] = json!({
+            "pairing_request_id": "agent_pairing_request:01999999-0000-7000-8000-00000000feed",
+            "agent_principal_id": "did:web:agent.example",
+            "verification_method": "did:web:agent.example#runtime-key-1",
+            "public_key": {
+                "kty": "OKP",
+                "kid": "did:web:agent.example#runtime-key-1",
+                "alg": "Ed25519",
+                "key": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+            },
+            "proof_of_possession": { "challenge": "agent_pairing_request:01999999-0000-7000-8000-00000000feed" }
+        });
+
+        let key_state = agent_key_state_from_record(&record);
+
+        assert_eq!(
+            key_state["approval_request_id"],
+            "agent_runtime_approval:01999999"
+        );
+        assert_eq!(
+            key_state["pending_runtime_key_request"]["verification_method"],
+            "did:web:agent.example#runtime-key-1"
+        );
+        assert_eq!(
+            key_state["approval_requested_at"],
+            "2026-07-08T00:00:00.000Z"
+        );
     }
 
     #[test]

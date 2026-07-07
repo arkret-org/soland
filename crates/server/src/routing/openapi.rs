@@ -159,6 +159,13 @@ const SOLAND_EXTENSION_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &
         "ck.open.agent_pairing.query.resolve",
         "resolve agent pairing token",
     ),
+    (
+        "/_cokret/open/agent-pairing/runtime-key-requests",
+        PathItemType::Post,
+        "open",
+        "ck.open.agent_pairing.command.submit_runtime_key_request",
+        "submit agent runtime key request for controller approval",
+    ),
     // Circle admin surface (`ck.self.circle.*`) was promoted to the protocol
     // surface at `/_cokret/self/circles*`; its operation ids are now emitted by
     // the typed `#[endpoint]` handlers in `circles.rs`, so they no longer appear
