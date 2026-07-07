@@ -157,8 +157,12 @@ fn api_v1_router(conformance_harness_enabled: bool) -> Router {
                 .push(invites::peer_router())
                 .push(identity::contact_federation::peer_router()),
         )
-        // `open` - unauthenticated, body-only locator handoff surface.
-        .push(Router::with_path("open").push(invites::open_router()))
+        // `open` - unauthenticated, body-only handoff resolver surface.
+        .push(
+            Router::with_path("open")
+                .push(invites::open_router())
+                .push(identity::agents::open_router()),
+        )
         // `find` — directory discovery surface.
         .push(Router::with_path("find").push(spaces::find_router()))
         // edge/push/*, edge/applet, self/rtc/*, self/webrtc/*, self/blob/*,

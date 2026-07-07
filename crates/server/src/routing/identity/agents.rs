@@ -30,11 +30,13 @@
 use std::collections::BTreeSet;
 
 use base64::Engine as _;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::SecondsFormat;
 use cokret_sdk::models::{
     AgentDeactivateRequestBody, AgentGrantAttachOutcome, AgentGrantAttachRequestBody,
     AgentGrantDetachOutcome, AgentKeyPairOutcome, AgentKeyPairRequestBody, AgentLifecycleOutcome,
-    AgentLifecycleState, AgentList, AgentParticipation, AgentParticipationEntry,
+    AgentLifecycleState, AgentList, AgentPairingBootstrap, AgentPairingResolveRequestBody,
+    AgentParticipation, AgentParticipationEntry,
     AgentParticipationOutcome as AgentParticipationResBody, AgentParticipationScope,
     AgentParticipationSetRequestBody as AgentParticipationSetReqBody, AgentPauseRequestBody,
     AgentProtocolDiscoverOutcome, AgentProtocolDiscoverRequestBody, AgentProvisionOutcome,
@@ -100,6 +102,82 @@ pub(super) fn protocol_router() -> Router {
 /// `/_cokret/self/agents`. Registered separately in `routing::identity::auth`.
 pub(crate) fn agent_key_pair_router() -> Router {
     Router::with_path("agent-key-pair").post(agent_key_pair)
+}
+
+/// Mounted under `/_cokret/open`.
+pub(crate) fn open_router() -> Router {
+    Router::with_path("agent-pairing")
+        .push(Router::with_path("resolve").post(resolve_agent_pairing))
+}
+
+#[endpoint(
+    operation_id = "ck.open.agent_pairing.query.resolve",
+    tags("open"),
+    summary = "Resolve a short-lived agent pairing token"
+)]
+#[tracing::instrument(skip_all, fields(op = "ck.open.agent_pairing.query.resolve"))]
+async fn resolve_agent_pairing(
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<AgentPairingBootstrap> {
+    if agent_pairing_token_appears_in_url(req) {
+        return Err(AppError::invalid_param(
+            "pairing_token must be sent in the JSON body, never in URL path or query",
+        )
+        .with_status(StatusCode::BAD_REQUEST)
+        .with_wire_code("schema_violation"));
+    }
+    let state = depot.get_typed::<AppState>().expect("state injected");
+    let body = req
+        .parse_json::<AgentPairingResolveRequestBody>()
+        .await
+        .map_err(|_| AppError::bad_json("invalid agent pairing resolve request body"))?;
+    let pairing_token = body.pairing_token.trim();
+    if !is_agent_pairing_token_shape(pairing_token) {
+        return Err(agent_pairing_not_found());
+    }
+    let token = decode_agent_pairing_token(pairing_token).ok_or_else(agent_pairing_not_found)?;
+    let pairing_request_id = token
+        .get("r")
+        .or_else(|| token.get("pairing_request_id"))
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(agent_pairing_not_found)?;
+    let pairing_code = token
+        .get("c")
+        .or_else(|| token.get("pairing_code"))
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(agent_pairing_not_found)?;
+    let record = state
+        .persistence
+        .agents()
+        .get_by_pairing_request_id(pairing_request_id)
+        .await
+        .map_err(|err| AppError::internal(format!("agent pairing lookup failed: {err}")))?
+        .ok_or_else(agent_pairing_not_found)?;
+    if record.get("pairing_code").and_then(Value::as_str) != Some(pairing_code) {
+        return Err(agent_pairing_not_found());
+    }
+    ensure_pairing_request_open(&record).map_err(|_| agent_pairing_not_found())?;
+    let agent_principal_id = pairing_record_string(&record, "agent_principal_id")?;
+    let pairing_expires_at = pairing_record_timestamp(&record, "pairing_expires_at")?;
+    let bootstrap = AgentPairingBootstrap {
+        cokret_base_url: state
+            .config
+            .public_base_url
+            .trim_end_matches('/')
+            .to_owned(),
+        service_did: Did::new(state.config.service_did.clone()).map_err(|error| {
+            AppError::internal(format!("configured service_did invalid: {error}"))
+        })?,
+        agent_principal_id: Did::new(agent_principal_id)
+            .map_err(|error| AppError::internal(format!("agent principal DID invalid: {error}")))?,
+        pairing_request_id: pairing_request_id.to_owned(),
+        pairing_code: pairing_code.to_owned(),
+        pairing_expires_at,
+    };
+    json_ok(bootstrap)
 }
 
 /// CKP-0008 (dev option B) — synthesize a controller-authored
@@ -868,6 +946,23 @@ fn ensure_pairing_request_open(agent_record: &Value) -> Result<(), AppError> {
     Ok(())
 }
 
+fn agent_record_reserves_selector_slug(
+    agent_record: &Value,
+    now: &chrono::DateTime<chrono::Utc>,
+) -> bool {
+    match agent_record.get("state").and_then(Value::as_str) {
+        Some("active" | "paused") => true,
+        Some("pending_runtime_key") => agent_record
+            .get("pairing_expires_at")
+            .and_then(Value::as_str)
+            .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+            .map(|expires_at| expires_at.with_timezone(&chrono::Utc) > now.clone())
+            .unwrap_or(true),
+        Some("pairing_expired" | "deactivated") => false,
+        _ => true,
+    }
+}
+
 fn ensure_pairing_request_id_matches(
     agent_record: &Value,
     supplied_pairing_request_id: &str,
@@ -1098,6 +1193,30 @@ fn generate_pairing_code() -> String {
     format!("{:08}", u32::from_be_bytes(buf) % 100_000_000)
 }
 
+fn agent_pairing_token_appears_in_url(req: &Request) -> bool {
+    req.uri().query().is_some_and(|query| {
+        query.contains("pairing_token=")
+            || query.contains("pairing_request_id=")
+            || query.contains("token=")
+    })
+}
+
+fn is_agent_pairing_token_shape(value: &str) -> bool {
+    (22..=512).contains(&value.len())
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+}
+
+fn decode_agent_pairing_token(pairing_token: &str) -> Option<Value> {
+    let bytes = URL_SAFE_NO_PAD.decode(pairing_token.as_bytes()).ok()?;
+    serde_json::from_slice::<Value>(&bytes).ok()
+}
+
+fn agent_pairing_not_found() -> AppError {
+    AppError::not_found("agent pairing token not found")
+}
+
 #[endpoint(
     operation_id = "ck.self.agent.command.provision",
     tags("agents"),
@@ -1130,6 +1249,7 @@ async fn provision_agent(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned);
+    let now_utc = chrono::Utc::now();
     if let Some(slug) = agent_slug.as_deref() {
         validate_agent_slug(slug)
             .map_err(|err| AppError::invalid_param(format!("agent_slug is invalid: {err}")))?;
@@ -1141,12 +1261,16 @@ async fn provision_agent(
             .map_err(|err| {
                 AppError::internal(format!("agent slug conflict check failed: {err}"))
             })?;
+        let mut existing = existing;
+        for record in existing.iter_mut() {
+            *record = lazily_expire_pairing(state, &session, record.clone()).await;
+        }
         if existing.iter().any(|record| {
             record.get("agent_slug").and_then(Value::as_str) == Some(slug)
-                && record.get("state").and_then(Value::as_str) != Some("deactivated")
+                && agent_record_reserves_selector_slug(record, &now_utc)
         }) {
             return Err(AppError::invalid_param(
-                "agent_slug is already bound to an active agent for this controller",
+                "agent_slug is already bound to an active or open agent for this controller",
             ));
         }
     }
@@ -1168,7 +1292,6 @@ async fn provision_agent(
         format!("did:webvh:{scid}:{host}:webvh:agent-actor:{controller_slug}")
     };
     let agent_principal_id = generate_agent_principal_did(&state.config.service_did);
-    let now_utc = chrono::Utc::now();
     let timestamp = now_utc.to_rfc3339_opts(SecondsFormat::Millis, true);
     let pairing_request_id = format!("agent_pairing_request:{}", uuid::Uuid::now_v7());
     let pairing_code = generate_pairing_code();
@@ -2713,6 +2836,57 @@ mod tests {
         // soland-internal columns MUST NOT leak into the protocol projection.
         assert!(agent["agent"].get("controller_did").is_none());
         assert!(agent["agent"].get("agent_id").is_none());
+    }
+
+    #[test]
+    fn selector_slug_reservation_ignores_expired_and_terminal_agents() {
+        let now = chrono::DateTime::parse_from_rfc3339("2026-07-07T00:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let mut active = agent_record("did:web:agent.example", "did:web:controller.example");
+        active["state"] = json!("active");
+        assert!(agent_record_reserves_selector_slug(&active, &now));
+
+        let mut paused = active.clone();
+        paused["state"] = json!("paused");
+        assert!(agent_record_reserves_selector_slug(&paused, &now));
+
+        let pending_future = pending_pairing_record(
+            "did:web:agent.example",
+            "did:web:controller.example",
+            requested_agent_scope(),
+            "12345678",
+            "2026-07-08T00:00:00Z",
+        );
+        assert!(agent_record_reserves_selector_slug(&pending_future, &now));
+
+        let pending_expired = pending_pairing_record(
+            "did:web:agent.example",
+            "did:web:controller.example",
+            requested_agent_scope(),
+            "12345678",
+            "2026-07-06T00:00:00Z",
+        );
+        assert!(!agent_record_reserves_selector_slug(&pending_expired, &now));
+
+        let mut pairing_expired = active.clone();
+        pairing_expired["state"] = json!("pairing_expired");
+        assert!(!agent_record_reserves_selector_slug(&pairing_expired, &now));
+
+        let mut deactivated = active;
+        deactivated["state"] = json!("deactivated");
+        assert!(!agent_record_reserves_selector_slug(&deactivated, &now));
+    }
+
+    #[test]
+    fn agent_pairing_token_decodes_compact_request_and_code() {
+        let token = URL_SAFE_NO_PAD.encode(br#"{"r":"agent_pairing_request:0193","c":"12345678"}"#);
+
+        assert!(is_agent_pairing_token_shape(&token));
+        let decoded = decode_agent_pairing_token(&token).expect("decode token");
+
+        assert_eq!(decoded["r"], json!("agent_pairing_request:0193"));
+        assert_eq!(decoded["c"], json!("12345678"));
     }
 
     #[test]
