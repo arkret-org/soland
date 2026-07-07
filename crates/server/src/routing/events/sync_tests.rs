@@ -447,6 +447,94 @@ fn insert_projected_membership(state: &AppState, actor: &str, membership: &str) 
     );
 }
 
+#[tokio::test]
+async fn projection_visibility_uses_received_at_for_joined_history_cutoff() {
+    let mut config = test_config();
+    config.seed_demo_data = false;
+    let state = AppState::new(config, soland_data::Db { pool: None });
+    state.realms.lock().upsert(roster_realm(false, true));
+    let session = roster_session(&state, ROSTER_CALLER);
+    let created_at = DateTime::parse_from_rfc3339("2026-06-24T10:00:00Z")
+        .unwrap()
+        .with_timezone(&Utc);
+    let pre_join_received_at = created_at + ChronoDuration::milliseconds(100);
+    let joined_at = created_at + ChronoDuration::milliseconds(200);
+    let post_join_received_at = created_at + ChronoDuration::milliseconds(300);
+
+    state
+        .persistence
+        .realm_meta()
+        .put(
+            ROSTER_REALM,
+            &crate::state::RealmMetaRecord {
+                owner: ROSTER_ACTOR.to_owned(),
+                deleted: false,
+                discoverability: "invite_only".to_owned(),
+                history_visibility: "joined".to_owned(),
+                history_sharing_policy: None,
+                history_sharing_policy_digest: None,
+                preview_policy: None,
+                preview_policy_digest: None,
+                asset_privacy_policy: None,
+                asset_privacy_policy_digest: None,
+                encryption_profile: Some("mls_rfc9420".to_owned()),
+                plaintext_visible_services: BTreeSet::new(),
+                plaintext_visible_service_classes: BTreeMap::new(),
+                minimal_metadata_realm: false,
+                created_at,
+                updated_at: created_at,
+            },
+        )
+        .await
+        .expect("realm meta stored");
+    let mut member_join = sync_test_operation_at(
+        "ck:operation:01904100-0000-7000-8000-0000000000ef",
+        cokret_sdk::events::kinds::MEMBER_STATE,
+        json!({
+            "realm_id": ROSTER_REALM,
+            "actor_id": ROSTER_CALLER,
+            "membership": "join",
+            "delivery_status": "unroutable",
+            "event_received_at": joined_at.to_rfc3339()
+        }),
+        created_at,
+    );
+    member_join.created_at = created_at;
+    state.projection.lock().apply(&member_join, &state.hlc);
+
+    let event_at = |event_id: &str, received_at| ProjectionEventRecord {
+        event_id: event_id.to_owned(),
+        realm_id: ROSTER_REALM.to_owned(),
+        event_kind: cokret_sdk::events::kinds::MLS_COMMIT.to_owned(),
+        operation_type: "event".to_owned(),
+        operation_id: Some(event_id.replace("ck:event:", "ck:operation:")),
+        sender: Some(ROSTER_ACTOR.to_owned()),
+        payload: json!({
+            "realm_id": ROSTER_REALM,
+            "mls_group_id": "ck:mls_group:01904100-0000-7000-8000-0000000000e1"
+        }),
+        created_at,
+        received_at,
+    };
+    let pre_join_event = event_at(
+        "ck:event:01904100-0000-7000-8000-0000000000e1",
+        pre_join_received_at,
+    );
+    let post_join_event = event_at(
+        "ck:event:01904100-0000-7000-8000-0000000000e2",
+        post_join_received_at,
+    );
+
+    assert!(
+        !projection_record_visible_to_session(&state, &pre_join_event, Some(&session)).await,
+        "joined history must crop events received before the member joined even when created_at is the same second"
+    );
+    assert!(
+        projection_record_visible_to_session(&state, &post_join_event, Some(&session)).await,
+        "joined history should include events received after the member joined"
+    );
+}
+
 fn insert_member_identity_subject(state: &AppState) {
     use crate::state::{MemberIdentityEventRecord, MemberIdentitySubjectKey};
     let identity_payload = json!({
@@ -1213,6 +1301,135 @@ async fn sync_snapshot_includes_shared_pin_events_for_joined_member() {
         ),
         "joined members must receive shared pin state events through account sync"
     );
+}
+
+#[tokio::test]
+async fn sync_timeline_dedupes_redacted_revision_by_message_id() {
+    let mut config = test_config();
+    config.seed_demo_data = false;
+    let state = AppState::new(config, soland_data::Db { pool: None });
+    let session = roster_session(&state, ROSTER_CALLER);
+    let strand_id = strand_id_from_realm_id(ROSTER_REALM);
+    let message_event_id = "ck:event:01904100-0000-7000-8000-0000000001d1";
+    let revision_event_id = "ck:event:01904100-0000-7000-8000-0000000001d2";
+    let redaction_event_id = "ck:event:01904100-0000-7000-8000-0000000001d3";
+    let message_id = "ck:message:01904100-0000-7000-8000-0000000001d1";
+    let base = DateTime::parse_from_rfc3339("2026-06-24T11:00:00Z")
+        .unwrap()
+        .with_timezone(&Utc);
+    let realm_create = sync_test_operation_at(
+        "ck:operation:01904100-0000-7000-8000-0000000001c1",
+        cokret_sdk::events::kinds::REALM_CREATE,
+        json!({
+            "object": {
+                "id": ROSTER_REALM,
+                "title": "Redacted revision space",
+                "created_by": ROSTER_ACTOR,
+                "join_rule": "invite",
+                "history_visibility": "joined",
+                "encryption_profile": "none"
+            }
+        }),
+        base,
+    );
+    let member_join = sync_test_operation_at(
+        "ck:operation:01904100-0000-7000-8000-0000000001c2",
+        cokret_sdk::events::kinds::MEMBER_STATE,
+        json!({
+            "realm_id": ROSTER_REALM,
+            "actor_id": ROSTER_CALLER,
+            "membership": "join",
+            "delivery_status": "unroutable",
+            "sender": ROSTER_CALLER
+        }),
+        base + ChronoDuration::seconds(1),
+    );
+    let strand_create = sync_test_operation_at(
+        "ck:operation:01904100-0000-7000-8000-0000000001c3",
+        cokret_sdk::events::kinds::STRAND_CREATE,
+        json!({
+            "object": {
+                "id": strand_id,
+                "realm_id": ROSTER_REALM,
+                "created_by": ROSTER_ACTOR,
+                "metadata": {"title": "Discussion"}
+            }
+        }),
+        base + ChronoDuration::seconds(2),
+    );
+    let message_create = sync_test_operation_at(
+        "ck:operation:01904100-0000-7000-8000-0000000001c4",
+        cokret_sdk::events::kinds::MESSAGE_CREATE,
+        json!({
+            "event_id": message_event_id,
+            "message_id": message_id,
+            "realm_id": ROSTER_REALM,
+            "strand_id": strand_id,
+            "thread_id": strand_id,
+            "sender": ROSTER_ACTOR,
+            "content": {"kind": "ck.content.text", "body": "original"}
+        }),
+        base + ChronoDuration::seconds(3),
+    );
+    let message_revise = sync_test_operation_at(
+        "ck:operation:01904100-0000-7000-8000-0000000001c5",
+        cokret_sdk::events::kinds::MESSAGE_REVISE,
+        json!({
+            "event_id": revision_event_id,
+            "target_ref": message_id,
+            "realm_id": ROSTER_REALM,
+            "strand_id": strand_id,
+            "thread_id": strand_id,
+            "sender": ROSTER_ACTOR,
+            "content": {"kind": "ck.content.text", "body": "edited"}
+        }),
+        base + ChronoDuration::seconds(4),
+    );
+    let message_redact = sync_test_operation_at(
+        "ck:operation:01904100-0000-7000-8000-0000000001c6",
+        cokret_sdk::events::kinds::MESSAGE_REDACT,
+        json!({
+            "event_id": redaction_event_id,
+            "message_id": message_id,
+            "realm_id": ROSTER_REALM,
+            "sender": ROSTER_ACTOR,
+            "reason": "user requested tombstone"
+        }),
+        base + ChronoDuration::seconds(5),
+    );
+    crate::routing::events::projection::project_accepted_operations(
+        &state,
+        ROSTER_ACTOR,
+        &[
+            realm_create,
+            member_join,
+            strand_create,
+            message_create,
+            message_revise,
+            message_redact,
+        ],
+    )
+    .await;
+
+    let body = roster_body(&state.config.service_did);
+    let snapshot =
+        build_sync_snapshot(&state, Some(&session), &body, &SyncCursor::default(), false).await;
+    let timeline_events = snapshot.realms[ROSTER_REALM]["timeline"]["events"]
+        .as_array()
+        .expect("timeline events array");
+    let matching = timeline_events
+        .iter()
+        .filter(|event| event["message_id"] == message_id)
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        matching.len(),
+        1,
+        "timeline must surface one logical tombstone per message_id"
+    );
+    assert_eq!(matching[0]["event_id"], revision_event_id);
+    assert_eq!(matching[0]["redacted"], true);
+    assert_eq!(matching[0]["state"], "redacted");
 }
 
 #[test]

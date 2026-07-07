@@ -45,8 +45,8 @@ pub async fn projected_event_page(
         return Ok(None);
     }
     events.sort_by(|left, right| {
-        left.created_at
-            .cmp(&right.created_at)
+        left.received_at
+            .cmp(&right.received_at)
             .then_with(|| left.event_id.cmp(&right.event_id))
     });
     let redacted = {
@@ -107,12 +107,12 @@ pub async fn load_projected_events_from_pg(
     let mut conn = pool.get().await?;
     let realm_id_uuid = ids::typed_uuid_part_expect_internal(realm_id);
     let rows = sql_query(
-        "SELECT id AS event_id, realm_id, event_type AS event_kind, 'event' AS operation_type, operation_id, sender_id AS sender, payload, created_at, created_at AS received_at \
-         FROM events WHERE realm_id = $1 \
+        "SELECT e.id AS event_id, e.realm_id, e.event_type AS event_kind, 'event' AS operation_type, e.operation_id, e.sender_id AS sender, e.payload, e.created_at, COALESCE(ce.received_at, e.created_at) AS received_at \
+         FROM events e LEFT JOIN canonical_events ce ON ce.id = e.id WHERE e.realm_id = $1 \
          UNION ALL \
-         SELECT id AS event_id, realm_id, event_type AS event_kind, 'state' AS operation_type, operation_id, sender_id AS sender, payload, created_at, created_at AS received_at \
-         FROM space_state_events WHERE realm_id = $1 \
-         ORDER BY created_at ASC, event_id ASC",
+         SELECT s.id AS event_id, s.realm_id, s.event_type AS event_kind, 'state' AS operation_type, s.operation_id, s.sender_id AS sender, s.payload, s.created_at, COALESCE(ce.received_at, s.created_at) AS received_at \
+         FROM space_state_events s LEFT JOIN canonical_events ce ON ce.id = s.id OR ce.id = s.operation_id WHERE s.realm_id = $1 \
+         ORDER BY received_at ASC, event_id ASC",
     )
     .bind::<SqlUuid, _>(realm_id_uuid)
     .load::<ProjectionEventRow>(&mut *conn).await?;

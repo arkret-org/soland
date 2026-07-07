@@ -1186,13 +1186,17 @@ async fn timeline_events_for_realm(
     session: Option<&SessionRecord>,
 ) -> (Vec<serde_json::Value>, i64) {
     let mut seen = BTreeSet::new();
+    let mut seen_message_ids = BTreeSet::new();
     let mut newest_position = after_position;
     let mut timeline_entries = Vec::new();
 
     for message in projection.messages_for_realm_including_redacted(realm_id) {
         let position = timeline_event_position(state, &message.event_id, message.created_at).await;
         newest_position = newest_position.max(position);
-        if position <= after_position || !seen.insert(message.event_id.clone()) {
+        if position <= after_position
+            || !seen.insert(message.event_id.clone())
+            || !seen_message_ids.insert(message.message_id.clone())
+        {
             continue;
         }
         if !realm_event_visible_to_session_with_projection(
@@ -1232,7 +1236,10 @@ async fn timeline_events_for_realm(
     {
         let position = timeline_event_position(state, &message.event_id, message.created_at).await;
         newest_position = newest_position.max(position);
-        if position <= after_position || !seen.insert(message.event_id.clone()) {
+        if position <= after_position
+            || !seen.insert(message.event_id.clone())
+            || !seen_message_ids.insert(message.message_id.clone())
+        {
             continue;
         }
         if !realm_event_visible_to_session_with_projection(
@@ -1580,7 +1587,7 @@ pub(crate) async fn projection_record_visible_to_session(
     if !realm_event_visible_to_session(
         state,
         &event.realm_id,
-        event.created_at,
+        event.received_at,
         event.sender.as_deref(),
         session,
     )
@@ -1596,7 +1603,7 @@ pub(crate) async fn projection_record_visible_to_session(
     circle_scope_visible_to_session(
         &projection,
         scope_circle_id.as_deref(),
-        event.created_at,
+        event.received_at,
         session,
         event.sender.as_deref(),
     )

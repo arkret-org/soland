@@ -65,6 +65,15 @@ pub(crate) fn extract_event_ref_id(payload: &Value, field: &str) -> Option<Strin
 // the "unknown kind → ProjectionEffect::Ignored" tolerance preserved
 // in the fallthrough.
 
+fn projection_received_at(op: &Operation) -> chrono::DateTime<chrono::Utc> {
+    op.payload
+        .get("event_received_at")
+        .and_then(Value::as_str)
+        .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+        .map(|value| value.with_timezone(&chrono::Utc))
+        .unwrap_or(op.created_at)
+}
+
 /// Adapter signature for entries in [`default_apply_registry`].
 pub type ApplyFn = fn(&mut ProjectionState, &Operation, &ServerHlc) -> ProjectionEffect;
 
@@ -157,7 +166,7 @@ fn apply_membership_dispatch(
     op: &Operation,
     _hlc: &ServerHlc,
 ) -> ProjectionEffect {
-    s.apply_membership(op, op.created_at)
+    s.apply_membership(op, projection_received_at(op))
 }
 fn apply_invite_third_party_dispatch(
     s: &mut ProjectionState,
@@ -440,7 +449,7 @@ fn apply_circle_member_state_dispatch(
     op: &Operation,
     _hlc: &ServerHlc,
 ) -> ProjectionEffect {
-    s.apply_circle_member_state(op, op.created_at)
+    s.apply_circle_member_state(op, projection_received_at(op))
 }
 
 fn apply_applet_registration_dispatch(

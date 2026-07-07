@@ -32,6 +32,19 @@ fn actor_submit_lock(actor_id: &str) -> Arc<tokio::sync::Mutex<()>> {
     locks[shard].clone()
 }
 
+fn stamp_projection_operation_received_at(
+    operation: &mut cokret_sdk::Operation,
+    received_at: chrono::DateTime<chrono::Utc>,
+) {
+    let Some(payload) = operation.payload.as_object_mut() else {
+        return;
+    };
+    payload.insert(
+        "event_received_at".to_owned(),
+        Value::String(received_at.to_rfc3339()),
+    );
+}
+
 #[derive(Debug)]
 pub(in crate::routing) struct ValidatedEventEnvelope {
     pub(in crate::routing) event_id: String,
@@ -1278,7 +1291,7 @@ async fn submit_event_value_with_context(
     }
     enforce_sibling_fork_limit(state, session, &parsed, &existing_records).await?;
 
-    let projection_operation = projection_operation_from_event(&parsed, &envelope);
+    let mut projection_operation = projection_operation_from_event(&parsed, &envelope);
     tracing::debug!(
         event_id = %parsed.event_id,
         kind = %parsed.kind,
@@ -1757,6 +1770,10 @@ async fn submit_event_value_with_context(
         {
             object.insert("effective_scope".to_owned(), Value::String(scope));
         }
+    }
+
+    if let Some(operation) = projection_operation.as_mut() {
+        stamp_projection_operation_received_at(operation, received_at);
     }
 
     let envelope_for_bootstrap = envelope.clone();
