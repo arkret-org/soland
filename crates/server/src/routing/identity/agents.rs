@@ -41,8 +41,9 @@ use cokret_sdk::models::{
     AgentParticipationSetRequestBody as AgentParticipationSetReqBody, AgentPauseRequestBody,
     AgentProtocolDiscoverOutcome, AgentProtocolDiscoverRequestBody, AgentProvisionOutcome,
     AgentProvisionRequestBody, AgentResumeRequestBody, AgentRotateKeyOutcome,
-    AgentRotateKeyRequestBody, AgentSidecarContextRef, AgentSidecarExposureAck,
-    AgentSidecarThreadEnsureOutcome, AgentSidecarThreadEnsureRequestBody, AgentView, PublicKey,
+    AgentRotateKeyRequestBody, AgentRuntimeApprovalOutcome, AgentRuntimeApprovalRequestBody,
+    AgentSidecarContextRef, AgentSidecarExposureAck, AgentSidecarThreadEnsureOutcome,
+    AgentSidecarThreadEnsureRequestBody, AgentStatus, AgentView, PublicKey,
     effective_participation, validate_agent_slug, validate_selection_within_ceiling,
 };
 use cokret_sdk::{
@@ -108,6 +109,7 @@ pub(crate) fn agent_key_pair_router() -> Router {
 pub(crate) fn open_router() -> Router {
     Router::with_path("agent-pairing")
         .push(Router::with_path("resolve").post(resolve_agent_pairing))
+        .push(Router::with_path("runtime-key-requests").post(request_agent_runtime_key_approval))
 }
 
 #[endpoint(

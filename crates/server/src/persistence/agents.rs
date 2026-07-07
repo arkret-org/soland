@@ -419,6 +419,12 @@ struct AgentPrincipalRow {
     #[diesel(sql_type = Nullable<Timestamptz>)]
     pairing_expires_at: Option<chrono::DateTime<chrono::Utc>>,
     #[diesel(sql_type = Nullable<Text>)]
+    approval_request_id: Option<String>,
+    #[diesel(sql_type = Nullable<Jsonb>)]
+    runtime_key_request: Option<Value>,
+    #[diesel(sql_type = Nullable<Timestamptz>)]
+    approval_requested_at: Option<chrono::DateTime<chrono::Utc>>,
+    #[diesel(sql_type = Nullable<Text>)]
     authorized_event_ref: Option<String>,
     #[diesel(sql_type = Timestamptz)]
     created_at: chrono::DateTime<chrono::Utc>,
@@ -442,6 +448,10 @@ impl From<AgentPrincipalRow> for Value {
             "pairing_request_id": row.pairing_request_id,
             "pairing_code": row.pairing_code,
             "pairing_expires_at": row.pairing_expires_at
+                .map(|value| value.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)),
+            "approval_request_id": row.approval_request_id,
+            "runtime_key_request": row.runtime_key_request,
+            "approval_requested_at": row.approval_requested_at
                 .map(|value| value.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)),
             "authorized_event_ref": row.authorized_event_ref,
             "created_at": row.created_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
@@ -515,6 +525,27 @@ impl AgentStore for PgAgentStore {
                     })
             })
             .transpose()?;
+        let approval_request_id = record
+            .get("approval_request_id")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned);
+        let runtime_key_request = record
+            .get("runtime_key_request")
+            .cloned()
+            .filter(|value| !value.is_null());
+        let approval_requested_at = record
+            .get("approval_requested_at")
+            .and_then(Value::as_str)
+            .map(|value| {
+                chrono::DateTime::parse_from_rfc3339(value)
+                    .map(|timestamp| timestamp.with_timezone(&chrono::Utc))
+                    .map_err(|err| {
+                        PersistenceError::Internal(format!(
+                            "agent record approval_requested_at invalid: {err}"
+                        ))
+                    })
+            })
+            .transpose()?;
         let authorized_event_ref = record
             .get("authorized_event_ref")
             .and_then(Value::as_str)
@@ -523,8 +554,9 @@ impl AgentStore for PgAgentStore {
             "INSERT INTO agent_principals \
              (id, controller_id, agent_id, display_name, agent_slug, state, requested_scope, \
               accountability, self_realm_id, provision_event_refs, pairing_request_id, \
-              pairing_code, pairing_expires_at, authorized_event_ref, created_at, updated_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, NOW(), NOW()) \
+              pairing_code, pairing_expires_at, approval_request_id, runtime_key_request, \
+              approval_requested_at, authorized_event_ref, created_at, updated_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, NOW(), NOW()) \
              ON CONFLICT (id) DO UPDATE SET \
              controller_id = EXCLUDED.controller_id, agent_id = EXCLUDED.agent_id, \
              display_name = EXCLUDED.display_name, agent_slug = EXCLUDED.agent_slug, \
@@ -533,6 +565,9 @@ impl AgentStore for PgAgentStore {
              provision_event_refs = EXCLUDED.provision_event_refs, \
              pairing_request_id = EXCLUDED.pairing_request_id, pairing_code = EXCLUDED.pairing_code, \
              pairing_expires_at = EXCLUDED.pairing_expires_at, \
+             approval_request_id = EXCLUDED.approval_request_id, \
+             runtime_key_request = EXCLUDED.runtime_key_request, \
+             approval_requested_at = EXCLUDED.approval_requested_at, \
              authorized_event_ref = EXCLUDED.authorized_event_ref, updated_at = NOW()",
         )
         .bind::<Text, _>(&agent_principal_id)
@@ -548,6 +583,9 @@ impl AgentStore for PgAgentStore {
         .bind::<Nullable<Text>, _>(&pairing_request_id)
         .bind::<Nullable<Text>, _>(&pairing_code)
         .bind::<Nullable<Timestamptz>, _>(&pairing_expires_at)
+        .bind::<Nullable<Text>, _>(&approval_request_id)
+        .bind::<Nullable<Jsonb>, _>(&runtime_key_request)
+        .bind::<Nullable<Timestamptz>, _>(&approval_requested_at)
         .bind::<Nullable<Text>, _>(&authorized_event_ref)
         .execute(&mut *conn)
         .await
@@ -560,7 +598,8 @@ impl AgentStore for PgAgentStore {
         sql_query(
             "SELECT id AS agent_principal_id, controller_id AS controller_did, agent_id, display_name, agent_slug, state, \
              requested_scope, accountability, self_realm_id, provision_event_refs, \
-             pairing_request_id, pairing_code, pairing_expires_at, authorized_event_ref, \
+             pairing_request_id, pairing_code, pairing_expires_at, approval_request_id, \
+             runtime_key_request, approval_requested_at, authorized_event_ref, \
              created_at, updated_at FROM agent_principals WHERE id = $1",
         )
         .bind::<Text, _>(agent_principal_id)
@@ -579,7 +618,8 @@ impl AgentStore for PgAgentStore {
         sql_query(
             "SELECT id AS agent_principal_id, controller_id AS controller_did, agent_id, display_name, agent_slug, state, \
              requested_scope, accountability, self_realm_id, provision_event_refs, \
-             pairing_request_id, pairing_code, pairing_expires_at, authorized_event_ref, \
+             pairing_request_id, pairing_code, pairing_expires_at, approval_request_id, \
+             runtime_key_request, approval_requested_at, authorized_event_ref, \
              created_at, updated_at FROM agent_principals WHERE pairing_request_id = $1",
         )
         .bind::<Text, _>(pairing_request_id)
@@ -595,7 +635,8 @@ impl AgentStore for PgAgentStore {
         sql_query(
             "SELECT id AS agent_principal_id, controller_id AS controller_did, agent_id, display_name, agent_slug, state, \
              requested_scope, accountability, self_realm_id, provision_event_refs, \
-             pairing_request_id, pairing_code, pairing_expires_at, authorized_event_ref, \
+             pairing_request_id, pairing_code, pairing_expires_at, approval_request_id, \
+             runtime_key_request, approval_requested_at, authorized_event_ref, \
              created_at, updated_at FROM agent_principals WHERE controller_id = $1 \
              ORDER BY created_at",
         )

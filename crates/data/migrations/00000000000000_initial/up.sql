@@ -106,6 +106,9 @@ CREATE TABLE public.agent_principals (
     pairing_request_id text,
     pairing_code text,
     pairing_expires_at timestamp with time zone,
+    approval_request_id text,
+    runtime_key_request jsonb,
+    approval_requested_at timestamp with time zone,
     authorized_event_ref text,
     state_changed_at timestamp with time zone,
     created_at timestamp with time zone NOT NULL,
@@ -1474,6 +1477,7 @@ CREATE INDEX agent_principals_controller_idx ON public.agent_principals USING bt
 CREATE INDEX agent_principals_controller_agent_slug_idx ON public.agent_principals USING btree (controller_id, agent_slug) WHERE (agent_slug IS NOT NULL);
 
 CREATE UNIQUE INDEX agent_principals_pairing_request_idx ON public.agent_principals USING btree (pairing_request_id) WHERE (pairing_request_id IS NOT NULL);
+CREATE UNIQUE INDEX agent_principals_approval_request_idx ON public.agent_principals USING btree (approval_request_id) WHERE (approval_request_id IS NOT NULL);
 
 CREATE INDEX agent_principals_state_idx ON public.agent_principals USING btree (state);
 
