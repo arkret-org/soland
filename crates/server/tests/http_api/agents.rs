@@ -99,3 +99,99 @@ async fn production_agent_provision_fails_closed_without_durable_fanout() {
         "production fail-closed must not persist a pairing-only agent row"
     );
 }
+
+#[tokio::test]
+async fn provisioned_agent_is_listed_and_slug_conflict_is_rejected() {
+    let mut config = test_config();
+    config.development_mode = true;
+    let state = AppState::new(config, Db { pool: None });
+    let controller = "did:web:alice.example";
+    let token = "agent-list-session";
+    seed_controller_session(&state, token, controller).await;
+
+    let requested_scope = serde_json::json!({
+        "actions": [
+            "ck.self.events.stream.subscribe",
+            "ck.self.events.query.scan",
+            "ck.self.events.command.submit"
+        ],
+        "resources": [
+            {
+                "kind": "operation",
+                "operation": "ck.self.events.stream.subscribe"
+            },
+            {
+                "kind": "operation",
+                "operation": "ck.self.events.query.scan"
+            },
+            {
+                "kind": "operation",
+                "operation": "ck.self.events.command.submit"
+            }
+        ],
+        "constraints": []
+    });
+
+    let app = app_from_state(state.clone());
+    let mut created = TestClient::post("http://server/_cokret/self/agents")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&serde_json::json!({
+            "display_name": "Summary Assistant",
+            "agent_slug": "summary",
+            "requested_scope": requested_scope,
+            "accountability": null
+        }))
+        .send(&app)
+        .await;
+
+    assert_eq!(created.status_code.unwrap(), StatusCode::CREATED);
+    let created_body: Value = created.take_json().await.unwrap();
+    let agent_principal_id = created_body["agent_principal_id"]
+        .as_str()
+        .expect("created agent principal id")
+        .to_owned();
+
+    let mut listed = TestClient::get("http://server/_cokret/self/agents")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .send(&app)
+        .await;
+
+    assert_eq!(listed.status_code.unwrap(), StatusCode::OK);
+    let list_body: Value = listed.take_json().await.unwrap();
+    assert_eq!(list_body["has_more"], false, "{list_body}");
+    let agents = list_body["agents"].as_array().expect("agents list shape");
+    assert_eq!(agents.len(), 1, "{list_body}");
+    assert_eq!(agents[0]["agent_principal_id"], agent_principal_id);
+    assert_eq!(agents[0]["display_name"], "Summary Assistant");
+    assert_eq!(agents[0]["agent_slug"], "summary");
+    assert_eq!(agents[0]["status"], "pending_runtime_key");
+
+    let mut duplicate = TestClient::post("http://server/_cokret/self/agents")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&serde_json::json!({
+            "display_name": "Duplicate Summary",
+            "agent_slug": "summary",
+            "requested_scope": {
+                "actions": ["ck.self.events.stream.subscribe"],
+                "resources": [{
+                    "kind": "operation",
+                    "operation": "ck.self.events.stream.subscribe"
+                }],
+                "constraints": []
+            },
+            "accountability": null
+        }))
+        .send(&app)
+        .await;
+
+    assert_eq!(duplicate.status_code.unwrap(), StatusCode::BAD_REQUEST);
+    let duplicate_body: Value = duplicate.take_json().await.unwrap();
+    assert_eq!(duplicate_body["error"]["reason"], "invalid_param");
+    assert!(
+        duplicate_body["error"]["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("agent_slug is already bound"),
+        "{duplicate_body}"
+    );
+}
