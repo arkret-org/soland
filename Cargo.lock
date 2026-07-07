@@ -3965,7 +3965,7 @@ checksum = "9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f"
 [[package]]
 name = "salvo"
 version = "0.93.0"
-source = "git+https://github.com/salvo-rs/salvo.git?branch=main#d1365f0d0e8e0f35ed3a04fb2faec861881c9863"
+source = "git+https://github.com/salvo-rs/salvo.git?rev=d1365f0d0e8e0f35ed3a04fb2faec861881c9863#d1365f0d0e8e0f35ed3a04fb2faec861881c9863"
 dependencies = [
  "salvo-cors",
  "salvo-oapi",
@@ -3977,7 +3977,7 @@ dependencies = [
 [[package]]
 name = "salvo-cors"
 version = "0.93.0"
-source = "git+https://github.com/salvo-rs/salvo.git?branch=main#d1365f0d0e8e0f35ed3a04fb2faec861881c9863"
+source = "git+https://github.com/salvo-rs/salvo.git?rev=d1365f0d0e8e0f35ed3a04fb2faec861881c9863#d1365f0d0e8e0f35ed3a04fb2faec861881c9863"
 dependencies = [
  "bytes",
  "salvo_core",
@@ -3987,7 +3987,7 @@ dependencies = [
 [[package]]
 name = "salvo-oapi"
 version = "0.93.0"
-source = "git+https://github.com/salvo-rs/salvo.git?branch=main#d1365f0d0e8e0f35ed3a04fb2faec861881c9863"
+source = "git+https://github.com/salvo-rs/salvo.git?rev=d1365f0d0e8e0f35ed3a04fb2faec861881c9863#d1365f0d0e8e0f35ed3a04fb2faec861881c9863"
 dependencies = [
  "anyhow",
  "base64",
@@ -4021,7 +4021,7 @@ dependencies = [
 [[package]]
 name = "salvo-oapi-macros"
 version = "0.93.0"
-source = "git+https://github.com/salvo-rs/salvo.git?branch=main#d1365f0d0e8e0f35ed3a04fb2faec861881c9863"
+source = "git+https://github.com/salvo-rs/salvo.git?rev=d1365f0d0e8e0f35ed3a04fb2faec861881c9863#d1365f0d0e8e0f35ed3a04fb2faec861881c9863"
 dependencies = [
  "proc-macro-crate",
  "proc-macro2",
@@ -4035,7 +4035,7 @@ dependencies = [
 [[package]]
 name = "salvo-proxy"
 version = "0.93.0"
-source = "git+https://github.com/salvo-rs/salvo.git?branch=main#d1365f0d0e8e0f35ed3a04fb2faec861881c9863"
+source = "git+https://github.com/salvo-rs/salvo.git?rev=d1365f0d0e8e0f35ed3a04fb2faec861881c9863#d1365f0d0e8e0f35ed3a04fb2faec861881c9863"
 dependencies = [
  "fastrand",
  "futures-util",
@@ -4053,7 +4053,7 @@ dependencies = [
 [[package]]
 name = "salvo-serde-util"
 version = "0.93.0"
-source = "git+https://github.com/salvo-rs/salvo.git?branch=main#d1365f0d0e8e0f35ed3a04fb2faec861881c9863"
+source = "git+https://github.com/salvo-rs/salvo.git?rev=d1365f0d0e8e0f35ed3a04fb2faec861881c9863#d1365f0d0e8e0f35ed3a04fb2faec861881c9863"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -4063,7 +4063,7 @@ dependencies = [
 [[package]]
 name = "salvo_core"
 version = "0.93.0"
-source = "git+https://github.com/salvo-rs/salvo.git?branch=main#d1365f0d0e8e0f35ed3a04fb2faec861881c9863"
+source = "git+https://github.com/salvo-rs/salvo.git?rev=d1365f0d0e8e0f35ed3a04fb2faec861881c9863#d1365f0d0e8e0f35ed3a04fb2faec861881c9863"
 dependencies = [
  "arc-swap",
  "async-trait",
@@ -4114,7 +4114,7 @@ dependencies = [
 [[package]]
 name = "salvo_extra"
 version = "0.93.0"
-source = "git+https://github.com/salvo-rs/salvo.git?branch=main#d1365f0d0e8e0f35ed3a04fb2faec861881c9863"
+source = "git+https://github.com/salvo-rs/salvo.git?rev=d1365f0d0e8e0f35ed3a04fb2faec861881c9863#d1365f0d0e8e0f35ed3a04fb2faec861881c9863"
 dependencies = [
  "base64",
  "etag",
@@ -4135,7 +4135,7 @@ dependencies = [
 [[package]]
 name = "salvo_macros"
 version = "0.93.0"
-source = "git+https://github.com/salvo-rs/salvo.git?branch=main#d1365f0d0e8e0f35ed3a04fb2faec861881c9863"
+source = "git+https://github.com/salvo-rs/salvo.git?rev=d1365f0d0e8e0f35ed3a04fb2faec861881c9863#d1365f0d0e8e0f35ed3a04fb2faec861881c9863"
 dependencies = [
  "proc-macro-crate",
  "proc-macro2",

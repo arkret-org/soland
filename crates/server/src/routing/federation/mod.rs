@@ -16,7 +16,7 @@ pub use stubs::well_known_cokret_router;
 
 use super::{
     AuthArgs, ingest_federation_operations, now, operation_is_visible,
-    redaction_targets_from_operations, sha256_hex, sync_token, validate_did,
+    redaction_targets_from_operations, sha256_hex, sync_token,
 };
 
 /// RFC 9530 `Content-Digest` structured-field value over `bytes`:
