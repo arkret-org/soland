@@ -36,6 +36,12 @@ fn stamp_projection_operation_received_at(
     operation: &mut cokret_sdk::Operation,
     received_at: chrono::DateTime<chrono::Utc>,
 ) {
+    if !matches!(
+        operation.object_type.as_str(),
+        cokret_sdk::events::kinds::MEMBER_STATE | cokret_sdk::events::kinds::CIRCLE_MEMBER_STATE
+    ) {
+        return;
+    }
     let Some(payload) = operation.payload.as_object_mut() else {
         return;
     };
@@ -2194,6 +2200,54 @@ fn typed_frontier_or_fallback(
         typed.push(EventId::new(fallback_event_id.to_owned()).ok()?);
     }
     Some(typed)
+}
+
+#[cfg(test)]
+mod received_at_stamp_tests {
+    use super::*;
+
+    fn operation_for_kind(kind: &str, suffix: u32) -> Operation {
+        Operation::create(
+            OperationId::new(format!(
+                "ck:operation:01904100-0000-7000-8000-{suffix:012x}"
+            ))
+            .unwrap(),
+            RealmId::new("ck:realm:01904100-0000-7000-8000-000000000001".to_owned()).unwrap(),
+            kind,
+            json!({ "actor_id": "did:web:alice.example" }),
+        )
+    }
+
+    #[test]
+    fn received_at_stamp_only_mutates_membership_projection_payloads() {
+        let received_at = DateTime::parse_from_rfc3339("2026-07-07T05:20:58.398662Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let mut device_authorize = operation_for_kind("ck.device.authorize", 1);
+        let mut member_state = operation_for_kind(cokret_sdk::events::kinds::MEMBER_STATE, 2);
+        let mut circle_member_state =
+            operation_for_kind(cokret_sdk::events::kinds::CIRCLE_MEMBER_STATE, 3);
+
+        stamp_projection_operation_received_at(&mut device_authorize, received_at);
+        stamp_projection_operation_received_at(&mut member_state, received_at);
+        stamp_projection_operation_received_at(&mut circle_member_state, received_at);
+
+        assert!(device_authorize.payload.get("event_received_at").is_none());
+        assert_eq!(
+            member_state
+                .payload
+                .get("event_received_at")
+                .and_then(Value::as_str),
+            Some("2026-07-07T05:20:58.398662+00:00")
+        );
+        assert_eq!(
+            circle_member_state
+                .payload
+                .get("event_received_at")
+                .and_then(Value::as_str),
+            Some("2026-07-07T05:20:58.398662+00:00")
+        );
+    }
 }
 
 #[cfg(test)]
