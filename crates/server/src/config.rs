@@ -692,7 +692,7 @@ impl AppConfig {
         //     explicitly for browser access)
         //   - env unset, development mode → defaults to `Some("*")`, the spec-recommended
         //     permissive default for local / loopback work so plain `cargo run` of soland is
-        //     reachable from a yougen dev server without extra env wiring
+        //     reachable from a inkson dev server without extra env wiring
         //   - env set → use as-is. `"*"` installs the permissive (mirror origin, no credentials)
         //     handler; any other value is treated as an explicit origin allow-list and installs the
         //     credentialed handler. See `routing::cors_handler_for_config`.

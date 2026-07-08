@@ -584,7 +584,7 @@ async fn memory_push_device_store_register_unregister_and_snapshot() {
         "device_id": "dev-1",
         "push_gateway": "https://floria.example",
         "push_key": "k1",
-        "app_id": "yougen"
+        "app_id": "inkson"
     });
     let dev2 = serde_json::json!({
         "registration_id": "ck:push:dev-2",
@@ -592,7 +592,7 @@ async fn memory_push_device_store_register_unregister_and_snapshot() {
         "device_id": "dev-2",
         "push_gateway": "https://floria.example",
         "push_key": "k2",
-        "app_id": "yougen"
+        "app_id": "inkson"
     });
     store.register(dev1.clone()).await.unwrap();
     store.register(dev2.clone()).await.unwrap();
@@ -600,7 +600,7 @@ async fn memory_push_device_store_register_unregister_and_snapshot() {
     assert_eq!(snap.len(), 2);
 
     let removed = store
-        .unregister("did:web:alice.example", "dev-1", Some("k1"), Some("yougen"))
+        .unregister("did:web:alice.example", "dev-1", Some("k1"), Some("inkson"))
         .await
         .unwrap();
     assert_eq!(removed, 1);
@@ -609,7 +609,7 @@ async fn memory_push_device_store_register_unregister_and_snapshot() {
     assert_eq!(after[0]["actor"], "did:web:bob.example");
 
     let no_match = store
-        .unregister("did:web:alice.example", "dev-1", Some("k1"), Some("yougen"))
+        .unregister("did:web:alice.example", "dev-1", Some("k1"), Some("inkson"))
         .await
         .unwrap();
     assert_eq!(no_match, 0);

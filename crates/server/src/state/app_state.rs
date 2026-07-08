@@ -457,7 +457,7 @@ impl AppState {
                 // every previously-issued sync cursor with
                 // `cursor_integrity_invalid` because the freshly-minted
                 // key couldn't reproduce yesterday's signature. Stable in
-                // dev = `cargo run` doesn't break a connected yougen.
+                // dev = `cargo run` doesn't break a connected inkson.
                 let mut hasher = Sha256::new();
                 hasher.update(b"soland:notary-ephemeral:");
                 hasher.update(service_did.as_bytes());

@@ -547,7 +547,7 @@ async fn auth_keys_device_messages_and_blobs_work() {
                 "push_gateway": "https://push.example",
                 "push_key": "opaque",
                 "platform": "desktop",
-                "app_id": "yougen"
+                "app_id": "inkson"
             }))
             .send(&app_from_state(state.clone()))
             .await

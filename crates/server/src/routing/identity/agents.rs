@@ -2,7 +2,7 @@
 //!
 //! Implements the 11 personal-agent HTTP operations gap-reported as missing
 //! in soland. The handlers below stand up the cross-project HTTP contract
-//! (sodmin admin UI, yougen client, cotest journey vectors) ahead of the
+//! (sodmin admin UI, inkson client, cotest journey vectors) ahead of the
 //! deep reducer logic.
 //!
 //! Surfaces:
@@ -631,7 +631,7 @@ async fn set_agent_participation(
     // ⇒ `ck.capability.grant` (ck.message.create + ck.reaction.add over the
     // scope resource); otherwise `ck.capability.revoke` (idempotent). The
     // grant id is deterministic per (agent, scope_key) so set/unset/set
-    // converge on a single cell. Production submits these from yougen.
+    // converge on a single cell. Production submits these from inkson.
     if state.config.development_mode {
         let realm = ensure_self_realm(state, &session).await?;
         let grant_id = participation_grant_id(&agent_id, &body.scope.scope_key());

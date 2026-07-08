@@ -330,7 +330,7 @@ async fn push_profile_and_moderation_contracts_work() {
             "push_gateway": "https://push.example",
             "push_key": "opaque",
             "platform": "desktop",
-            "app_id": "yougen"
+            "app_id": "inkson"
         }))
         .send(&app_from_state(state.clone()))
         .await
@@ -1205,7 +1205,7 @@ async fn push_unregister_mutates_registration_and_gateway_snapshot_gates_notify(
             "push_gateway": push_gateway,
             "push_key": "opaque-token",
             "platform": "desktop",
-            "app_id": "yougen"
+            "app_id": "inkson"
         }))
         .send(&service)
         .await
@@ -1281,7 +1281,7 @@ async fn push_unregister_mutates_registration_and_gateway_snapshot_gates_notify(
         .json(&serde_json::json!({
             "device_id": device_id,
             "push_key": "opaque-token",
-            "app_id": "yougen"
+            "app_id": "inkson"
         }))
         .send(&service)
         .await

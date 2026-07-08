@@ -301,7 +301,7 @@ Focus-binding troubleshooting matrix:
 | `participant_binding_invalid` | Canonical bytes / signature mismatch. Capture the raw `participant_binding` and re-verify locally; suspect a serializer bug on the issuer. |
 | `participant_identity_unrecognised` | Identity string failed to parse — usually a client passing through a backend-native identity instead of the canonical `ck:participant:<realm>:<actor>:<device>:<call>`. |
 | `session_focus_already_committed` | Call is bound to a different focus already; the client must resume against that focus or end and re-initiate. |
-| `e2ee_key_source_unauthorised` | Backend tried to source SFrame keys outside MLS-Exporter — this is a hard reject. Escalate to yougen if it persists. |
+| `e2ee_key_source_unauthorised` | Backend tried to source SFrame keys outside MLS-Exporter — this is a hard reject. Escalate to inkson if it persists. |
 | `recording_artifact_pipeline_bypassed` | Recording landed outside the canonical pipeline. Check `floria` recording-export hooks. |
 | `focus_unavailable_for_client` | Client profile set doesn't include the focus's backend profile. Negotiate down or update the client. |
 

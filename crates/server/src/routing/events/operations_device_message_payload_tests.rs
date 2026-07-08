@@ -31,7 +31,7 @@ fn accepts_secret_share_content() {
         "ck.secret.request",
         json!({
             "request_id": "r1",
-            "secret_id": "yougen_mls_account_secret",
+            "secret_id": "inkson_mls_account_secret",
             "from_device": "ck:device:new",
             "recipient_hpke_public_key": "cHVi"
         }),
@@ -42,7 +42,7 @@ fn accepts_secret_share_content() {
         "ck.secret.send",
         json!({
             "request_id": "r1",
-            "secret_id": "yougen_mls_account_secret",
+            "secret_id": "inkson_mls_account_secret",
             "from_device": "ck:device:old",
             "scheme": "ck.hpke_x25519_aead_chacha20poly1305.v1",
             "enc": "ZW5j",

@@ -623,14 +623,14 @@ async fn rtc_media_token_uses_projected_media_service_epoch() {
     );
 }
 
-/// Keystone acceptance for T4': the yougen flow obtains a media token WITHOUT
+/// Keystone acceptance for T4': the inkson flow obtains a media token WITHOUT
 /// ever touching any ephemeral signaling session. There is no `ck.call.state`
 /// cell yet (the initiator redeems the token before writing its first
 /// `ck.call.state` event); authorization is purely realm membership +
 /// `ck.call.join`. This is the case the old `participants.contains` /
-/// session-not-found gate broke (it 404'd every real yougen call).
+/// session-not-found gate broke (it 404'd every real inkson call).
 #[tokio::test]
-async fn rtc_media_token_yougen_flow_no_session_issues_token() {
+async fn rtc_media_token_inkson_flow_no_session_issues_token() {
     let state = AppState::new(livekit_test_config(), Db { pool: None });
     install_media_service_epoch(&state, good_media_service_epoch());
     let token = dev_token(state.clone()).await;

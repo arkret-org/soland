@@ -2469,7 +2469,7 @@ mod control_move_seal_basis_tests {
 
     #[test]
     fn realm_history_sharing_policy_is_a_bootstrap_followup() {
-        // Regression: yougen's restricted-history bootstrap emits a
+        // Regression: inkson's restricted-history bootstrap emits a
         // ck.realm.history_sharing_policy Control Move in the same ordered
         // batch (no Seal exists yet, so it carries no seal_basis). soland
         // MUST accept it as a genesis followup alongside the other realm.*

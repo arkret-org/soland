@@ -975,7 +975,7 @@ mod tests {
             "did:web:soland.example",
             "did:web:alice.example",
             "ck:device:01904100-0000-7000-8000-000000000001",
-            "yougen.web",
+            "inkson.web",
             epoch,
         )
         .unwrap();
@@ -984,7 +984,7 @@ mod tests {
             "did:web:soland.example",
             "did:web:alice.example",
             "ck:device:01904100-0000-7000-8000-000000000001",
-            "yougen.web",
+            "inkson.web",
             epoch,
         )
         .unwrap();
@@ -993,7 +993,7 @@ mod tests {
             "did:web:soland.example",
             "did:web:alice.example",
             "ck:device:01904100-0000-7000-8000-000000000001",
-            "yougen.voip",
+            "inkson.voip",
             epoch,
         )
         .unwrap();
@@ -1002,7 +1002,7 @@ mod tests {
             "did:web:org.example",
             "did:web:alice.example",
             "ck:device:01904100-0000-7000-8000-000000000001",
-            "yougen.web",
+            "inkson.web",
             epoch,
         )
         .unwrap();

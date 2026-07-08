@@ -232,7 +232,7 @@ async fn wildcard_cors_mirrors_origin_without_credentials() {
     config.cors_allow_origin = Some("*".to_owned());
     let service = app_from_state(AppState::new(config, Db { pool: None }));
 
-    let from_yougen =
+    let from_inkson =
         TestClient::options("http://server/_cokret/self/account/subscribe?catchup=true")
             .add_header("Origin", "http://127.0.0.1:8080", true)
             .add_header("Access-Control-Request-Method", "POST", true)
@@ -244,7 +244,7 @@ async fn wildcard_cors_mirrors_origin_without_credentials() {
             .send(&service)
             .await;
     assert_eq!(
-        from_yougen
+        from_inkson
             .headers()
             .get("access-control-allow-origin")
             .and_then(|value| value.to_str().ok()),
@@ -252,7 +252,7 @@ async fn wildcard_cors_mirrors_origin_without_credentials() {
         "wildcard posture must mirror the request origin"
     );
     assert!(
-        from_yougen
+        from_inkson
             .headers()
             .get("access-control-allow-credentials")
             .is_none(),

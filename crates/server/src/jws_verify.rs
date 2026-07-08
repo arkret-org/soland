@@ -3,7 +3,7 @@
 //!
 //! All JWS verification semantics (RFC 7515 detached shape, Ed25519
 //! signature check, DID resolution, replay-window timing) live in the
-//! SDK so yougen, floria, cotest, teabay and soland share one
+//! SDK so inkson, floria, cotest, teabay and soland share one
 //! wire-compatible implementation. This module exists only to bridge
 //! soland's [`AppState`]-rooted resolver into the SDK's
 //! `&dyn DidResolver` API and to re-export the pure helpers (replay

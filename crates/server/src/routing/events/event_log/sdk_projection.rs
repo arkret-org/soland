@@ -323,7 +323,7 @@ fn normalize_relation_create_payload(
 fn event_operation_id(envelope: &Value, event_id: &str) -> Option<OperationId> {
     // Prefer the client-supplied alias when it's a valid OperationId
     // (`ck:operation:<uuid v7>` per `cokret-rust-sdk/identifiers`).
-    // Older yougen builds shipped the event_id (ck:event:) verbatim in
+    // Older inkson builds shipped the event_id (ck:event:) verbatim in
     // this slot; soland MUST NOT silently drop projection for such
     // events ── fall through to the event_id-derived form so the
     // projection chain (`project_accepted_operations` →

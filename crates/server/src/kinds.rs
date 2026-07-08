@@ -47,7 +47,7 @@ pub const CONFLICT_REPAIR: &str = "ck.conflict.repair";
 // Round 14e+ (2026-05-16) — Applet protocol family. Spec
 // `extensions/applet-integration.md`. soland's role at this layer is to
 // validate wire shape + persist + dispatch; applet bridge state machine
-// lives client-side (yougen) and at the applet service itself.
+// lives client-side (inkson) and at the applet service itself.
 // R3 spec-sync — new actor_private_event kinds (reducer_input=false; do
 // NOT advance the seal frontier / actor_seq). Wire-accepted only.
 // R3 spec-sync (2026-05-27, cokret-spec b47ff6ec) — agent lifecycle FSM
