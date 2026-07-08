@@ -30,9 +30,7 @@ use salvo::http::StatusCode;
 use salvo::test::{ResponseExt, TestClient};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use soland::config::{
-    AppConfig, FederationPolicy, IceServersConfig, LiveKitConfig, ObjectStorageConfig,
-};
+use soland::config::{AppConfig, IceServersConfig, LiveKitConfig, ObjectStorageConfig};
 use soland::service;
 use soland::state::AppState;
 use soland_data::Db;

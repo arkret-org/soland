@@ -36,7 +36,7 @@ pub(super) async fn account_describe(
         }),
         // SDK `SyncDescription.frontier` is an opaque cursor string; hand out
         // the current sync token so callers can seed `after` from describe.
-        frontier: Some(sync_token_for_state(state).await),
+        frontier: Some(serde_json::Value::String(sync_token_for_state(state).await)),
     })
 }
 

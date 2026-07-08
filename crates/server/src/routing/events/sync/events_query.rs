@@ -1272,13 +1272,13 @@ mod tests {
             .iter()
             .find(|event| event.event_id.as_str() == TEST_MESSAGE_EVENT)
             .expect("message event returned");
-        assert_eq!(message_event.content["redacted"], json!(true));
+        assert_eq!(message_event.payload["redacted"], json!(true));
         assert_eq!(
-            message_event.content["content"]["body"],
+            message_event.payload["content"]["body"],
             json!("[redacted]")
         );
         assert!(
-            !serde_json::to_string(&message_event.content)
+            !serde_json::to_string(&message_event.payload)
                 .unwrap()
                 .contains("secret that must not leak")
         );
@@ -1286,10 +1286,10 @@ mod tests {
             .iter()
             .find(|event| event.event_id.as_str() == TEST_REVISE_EVENT)
             .expect("revision event returned");
-        assert_eq!(revise_event.content["redacted"], json!(true));
-        assert_eq!(revise_event.content["content"]["body"], json!("[redacted]"));
+        assert_eq!(revise_event.payload["redacted"], json!(true));
+        assert_eq!(revise_event.payload["content"]["body"], json!("[redacted]"));
         assert!(
-            !serde_json::to_string(&revise_event.content)
+            !serde_json::to_string(&revise_event.payload)
                 .unwrap()
                 .contains("revised secret that must not leak")
         );
