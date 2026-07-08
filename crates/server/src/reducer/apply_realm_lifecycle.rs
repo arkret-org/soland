@@ -526,10 +526,10 @@ impl ProjectionState {
                             "value": incoming,
                         }),
                     ],
-                    details: Some(serde_json::json!({
-                        "reason": "concurrent_realm_update",
-                        "basis": basis,
-                    })),
+                    details: Some(cokret_sdk::bottom_details([
+                        ("basis", serde_json::json!(basis.as_str())),
+                        ("reason", serde_json::json!("concurrent_realm_update")),
+                    ])),
                     escalated_at: None,
                 };
                 self.cells.insert(cell_id, CellState::Bottom(bottom));

@@ -30,7 +30,10 @@ fn cell_value_returns_none_for_bottom_state() {
         move_ids: vec![],
         seal_view: None,
         heads: vec![],
-        details: Some(serde_json::json!({"reason": "concurrent set"})),
+        details: Some(cokret_sdk::bottom_details([(
+            "reason",
+            serde_json::json!("concurrent set"),
+        )])),
         escalated_at: None,
     };
     state

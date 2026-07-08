@@ -492,7 +492,8 @@ async fn projection_document_endpoint_reports_body_versions_relations_and_range_
     let token = dev_token(state.clone()).await;
     let realm_id = DEMO_REALM_ID;
     let morph_id = "ck:morph:01904100-0000-7000-8000-d21dc0000001";
-    let relation_id = "ck:relation:01904100-0000-7000-8000-d21dc0000001";
+    let relation_event_id = "ck:event:01904100-0000-7000-8000-d21ec0000002";
+    let relation_id = relation_event_id.replacen("ck:event:", "ck:relation:", 1);
     let incident_ref = "ck:strand:01904100-0000-7000-8000-d21dc0000100";
 
     let initial_body = serde_json::json!({
@@ -565,22 +566,12 @@ async fn projection_document_endpoint_reports_body_versions_relations_and_range_
     );
 
     let relation_event = signed_relation_event(
-        "ck:event:01904100-0000-7000-8000-d21ec0000002",
+        relation_event_id,
         3,
         serde_json::json!({
-            "relation": {
-                "id": relation_id,
-                "schema": "ck.schema.relation.v1",
-                "realm_id": realm_id,
-                "relation_kind": "references",
-                "from_ref": morph_id,
-                "to_ref": incident_ref,
-                "fields": {
-                    "role": "postmortem_for"
-                },
-                "created_by": "did:web:alice.example",
-                "created_at": "2026-05-17T00:00:00Z"
-            }
+            "kind": "references",
+            "from_ref": morph_id,
+            "to_ref": incident_ref,
         }),
         vec![
             "ck:event:01904100-0000-7000-8000-d21ec0000001",
@@ -693,7 +684,6 @@ async fn projection_document_endpoint_reports_body_versions_relations_and_range_
     assert_eq!(relation["relation_kind"], "references");
     assert_eq!(relation["from"], morph_id);
     assert_eq!(relation["to"], incident_ref);
-    assert_eq!(relation["fields"]["role"], "postmortem_for");
     assert_eq!(relation["reference_projection"]["status"], "accessible");
 
     let comment = body["comments"]

@@ -1011,6 +1011,7 @@ pub(crate) fn signed_space_event(
     prev_refs: Vec<&str>,
 ) -> Value {
     normalize_space_container_payload(kind, &mut payload);
+    payload = typed_space_container_payload(kind, payload);
     let mut event = serde_json::json!({
         "event_id": event_id,
         "kind": kind,
@@ -1055,6 +1056,58 @@ pub(crate) fn normalize_space_container_payload(kind: &str, payload: &mut Value)
                 .or_insert_with(|| Value::String("2026-05-17T00:00:00Z".to_owned()));
         }
     }
+}
+
+fn typed_space_container_payload(kind: &str, payload: Value) -> Value {
+    match kind {
+        cokret_sdk::events::kinds::SPACE_ARCHIVE | cokret_sdk::events::kinds::SPACE_RESTORE => {
+            serde_json::to_value(cokret_sdk::SpaceStateTransitionPayload {
+                space_id: required_space_id(&payload, "space_id"),
+                reason: optional_string(&payload, "reason"),
+                effective_at: None,
+            })
+            .expect("space lifecycle payload serialization")
+        }
+        cokret_sdk::events::kinds::SPACE_TOMBSTONE => {
+            serde_json::to_value(cokret_sdk::SpaceObjectTombstonePayload {
+                space_id: required_space_id(&payload, "space_id"),
+                reason: optional_string(&payload, "reason"),
+                replacement_space: optional_space_id(&payload, "replacement_space"),
+                replacement_event: optional_event_ref(&payload, "replacement_event"),
+                effective_at: None,
+            })
+            .expect("space tombstone payload serialization")
+        }
+        _ => payload,
+    }
+}
+
+fn required_space_id(payload: &Value, field: &str) -> cokret_sdk::SpaceId {
+    let value = payload
+        .get(field)
+        .and_then(Value::as_str)
+        .expect("space lifecycle payload requires space_id");
+    cokret_sdk::SpaceId::new(value.to_owned()).expect("valid space id")
+}
+
+fn optional_space_id(payload: &Value, field: &str) -> Option<cokret_sdk::SpaceId> {
+    payload
+        .get(field)
+        .and_then(Value::as_str)
+        .map(|value| cokret_sdk::SpaceId::new(value.to_owned()).expect("valid optional space id"))
+}
+
+fn optional_event_ref(payload: &Value, field: &str) -> Option<cokret_sdk::EventRef> {
+    payload
+        .get(field)
+        .map(|value| serde_json::from_value(value.clone()).expect("valid optional event ref"))
+}
+
+fn optional_string(payload: &Value, field: &str) -> Option<String> {
+    payload
+        .get(field)
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned)
 }
 
 // End-to-end check that the server-side Space-container state-machine guard
@@ -1159,6 +1212,7 @@ pub(crate) fn signed_morph_event(
     prev_refs: Vec<&str>,
 ) -> Value {
     normalize_morph_payload(kind, &mut payload);
+    payload = typed_morph_payload(kind, payload);
     let mut event = serde_json::json!({
         "event_id": event_id,
         "kind": kind,
@@ -1211,6 +1265,51 @@ pub(crate) fn normalize_morph_payload(kind: &str, payload: &mut Value) {
     }
 }
 
+fn typed_morph_payload(kind: &str, payload: Value) -> Value {
+    match kind {
+        cokret_sdk::events::kinds::MORPH_ARCHIVE => cokret_sdk::ObjectLifecyclePayload::new(
+            required_string(&payload, "target_ref", "morph lifecycle target_ref"),
+        )
+        .with_target_state("archived")
+        .to_value()
+        .expect("morph archive payload serialization"),
+        cokret_sdk::events::kinds::MORPH_RESTORE => cokret_sdk::ObjectLifecyclePayload::new(
+            required_string(&payload, "target_ref", "morph lifecycle target_ref"),
+        )
+        .with_target_state("active")
+        .to_value()
+        .expect("morph restore payload serialization"),
+        cokret_sdk::events::kinds::MORPH_UPDATE => {
+            let morph_id = cokret_sdk::MorphId::new(required_string(
+                &payload,
+                "target_ref",
+                "morph update target_ref",
+            ))
+            .expect("valid morph id");
+            let patch: cokret_sdk::Patch = serde_json::from_value(
+                payload
+                    .get("patch")
+                    .cloned()
+                    .expect("morph update payload requires patch"),
+            )
+            .expect("valid morph update patch");
+            cokret_sdk::MorphUpdatePayload::for_morph(morph_id, patch)
+                .expect("valid morph update payload")
+                .to_value()
+                .expect("morph update payload serialization")
+        }
+        _ => payload,
+    }
+}
+
+fn required_string(payload: &Value, field: &str, context: &str) -> String {
+    payload
+        .get(field)
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| panic!("{context} is required"))
+}
+
 /// Build a signed relation event envelope for read-model projection tests.
 pub(crate) fn signed_relation_event(
     event_id: &str,
@@ -1218,52 +1317,7 @@ pub(crate) fn signed_relation_event(
     mut payload: Value,
     prev_refs: Vec<&str>,
 ) -> Value {
-    let mut normalized_payload = None;
-    if let Some(object) = payload.as_object_mut() {
-        let relation_id = object.remove("relation_id").or_else(|| object.remove("id"));
-        let relation_kind = object
-            .remove("relation_kind")
-            .or_else(|| object.remove("kind"));
-        let from_ref = object.remove("from_ref").or_else(|| object.remove("from"));
-        let to_ref = object.remove("to_ref").or_else(|| object.remove("to"));
-        if let (Some(relation_id), Some(relation_kind), Some(from_ref), Some(to_ref)) =
-            (relation_id, relation_kind, from_ref, to_ref)
-        {
-            let mut relation = serde_json::Map::new();
-            relation.insert("id".to_owned(), relation_id);
-            relation.insert(
-                "schema".to_owned(),
-                Value::String("ck.schema.relation.v1".to_owned()),
-            );
-            relation.insert(
-                "realm_id".to_owned(),
-                Value::String(DEMO_REALM_ID.to_owned()),
-            );
-            relation.insert("relation_kind".to_owned(), relation_kind);
-            relation.insert("from_ref".to_owned(), from_ref);
-            relation.insert("to_ref".to_owned(), to_ref);
-            relation.insert(
-                "created_by".to_owned(),
-                Value::String("did:web:alice.example".to_owned()),
-            );
-            relation.insert(
-                "created_at".to_owned(),
-                Value::String("2026-05-17T00:00:00Z".to_owned()),
-            );
-            if let Some(fields) = object.remove("fields") {
-                relation.insert("fields".to_owned(), fields);
-            }
-            if let Some(rank) = object.remove("rank") {
-                relation.insert("rank".to_owned(), rank);
-            }
-            normalized_payload = Some(serde_json::json!({ "relation": Value::Object(relation) }));
-        } else {
-            object.remove("fields");
-        }
-    }
-    if let Some(next_payload) = normalized_payload {
-        payload = next_payload;
-    }
+    payload = typed_relation_create_payload(payload);
     let mut event = serde_json::json!({
         "event_id": event_id,
         "kind": "ck.relation.create",
@@ -1289,6 +1343,40 @@ pub(crate) fn signed_relation_event(
     });
     event["canonical_digest"] = Value::String(event_canonical_digest(&event));
     event
+}
+
+fn typed_relation_create_payload(payload: Value) -> Value {
+    let kind = relation_payload_str(&payload, &["relation_kind", "kind"])
+        .expect("relation create payload requires kind");
+    let from_ref = relation_payload_str(&payload, &["from_ref", "from"])
+        .expect("relation create payload requires from_ref");
+    let to_ref = relation_payload_str(&payload, &["to_ref", "to"])
+        .expect("relation create payload requires to_ref");
+    let rank = relation_payload_str(&payload, &["rank"]);
+    let mut typed = cokret_sdk::RelationCreatePayload::new(kind, from_ref, to_ref);
+    if let Some(rank) = rank {
+        typed = typed.with_rank(rank);
+    }
+    typed
+        .to_value()
+        .expect("relation create payload serialization")
+}
+
+fn relation_payload_str(payload: &Value, fields: &[&str]) -> Option<String> {
+    fields
+        .iter()
+        .find_map(|field| payload.get(*field).and_then(Value::as_str))
+        .or_else(|| {
+            payload
+                .get("relation")
+                .and_then(Value::as_object)
+                .and_then(|relation| {
+                    fields
+                        .iter()
+                        .find_map(|field| relation.get(*field).and_then(Value::as_str))
+                })
+        })
+        .map(ToOwned::to_owned)
 }
 
 // Round 13 — end-to-end check that Strand / Morph lifecycle state-machine

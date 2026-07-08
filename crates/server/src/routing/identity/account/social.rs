@@ -2226,37 +2226,41 @@ mod tests {
             assert_eq!(member.state, "join");
         }
 
-        let event_id = crate::ids::generate_event_id();
+        let message_id = crate::ids::generate("message");
+        let encrypted_content = json!({
+            "scheme": "mls-rfc9420",
+            "version": "1.0",
+            "group_id": "mls_test",
+            "epoch": 1,
+            "content_type": "application/vnd.cokret.message+json",
+            "aad_visibility_event_id": "hidden",
+            "aad": {
+                "realm_id": realm_id,
+                "event_kind": "ck.message.create"
+            },
+            "key_ref": {
+                "algorithm": "MLS",
+                "group_state_ref": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+            },
+            "ciphertext": "b3BhcXVl",
+            "aad_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+            "payload_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+        });
+        let message_payload = cokret_sdk::models::MessageCreatePayload::with_encrypted_content(
+            cokret_sdk::StrandId::new(main_strand_id.clone()).unwrap(),
+            "discussion",
+            encrypted_content,
+        )
+        .with_message_id(message_id.clone())
+        .to_value()
+        .unwrap();
         let mut message_op = cokret_sdk::Operation::create(
             direct_operation_id().unwrap(),
             cokret_sdk::RealmId::new(realm_id.clone()).unwrap(),
             cokret_sdk::events::kinds::MESSAGE_CREATE,
-            json!({
-                "event_id": event_id,
-                "sender": alice,
-                "strand_id": main_strand_id,
-                "track_name": "discussion",
-                "encrypted_content": {
-                    "scheme": "mls-rfc9420",
-                    "version": "1.0",
-                    "group_id": "mls_test",
-                    "epoch": 1,
-                    "content_type": "application/vnd.cokret.message+json",
-                    "aad_visibility_event_id": "hidden",
-                    "aad": {
-                        "realm_id": realm_id,
-                        "event_kind": "ck.message.create"
-                    },
-                    "key_ref": {
-                        "algorithm": "MLS",
-                        "group_state_ref": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
-                    },
-                    "ciphertext": "b3BhcXVl",
-                    "aad_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
-                    "payload_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
-                }
-            }),
+            message_payload,
         );
+        let event_id = message_op.operation_id.to_string();
         message_op.created_at = joined_at
             .with_nanosecond(0)
             .expect("joined_at can be rounded to canonical seconds");

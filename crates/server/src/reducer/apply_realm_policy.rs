@@ -517,11 +517,11 @@ impl ProjectionState {
                         "value": candidate_value,
                     }),
                 ],
-                details: Some(serde_json::json!({
-                    "reason": "call_state_sibling_conflict",
-                    "field": *field,
-                    "basis": basis.as_str(),
-                })),
+                details: Some(cokret_sdk::bottom_details([
+                    ("basis", serde_json::json!(basis.as_str())),
+                    ("field", serde_json::json!(*field)),
+                    ("reason", serde_json::json!("call_state_sibling_conflict")),
+                ])),
                 escalated_at: None,
             };
             self.cells
