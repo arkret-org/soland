@@ -231,7 +231,7 @@ async fn peer_events_resolve(
         found_digests.insert(record.canonical_digest.clone());
         let mut event = super::event_log::sdk_event_for_state(state, &record)?;
         if !include_payload {
-            event.content = Value::Null;
+            event.payload = Value::Null;
         }
         events.push(event);
     }

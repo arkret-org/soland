@@ -10,10 +10,10 @@
 //! core operation surface). It is therefore served off the protocol root and
 //! uses reverse-domain `org.cokret.soland.policy_document.*` operation ids
 //! rather than the `ck.*` protocol namespace:
-//! - `GET    /_soland/self/policies`            â€” list owner-scoped policies
-//! - `POST   /_soland/self/policies`            â€” upsert one policy document
-//! - `GET    /_soland/self/policies/{id}`       â€” read one policy document
-//! - `DELETE /_soland/self/policies/{id}`       â€” remove one policy document
+//! - `GET    /_soland/self/policies`            list owner-scoped policies
+//! - `POST   /_soland/self/policies`            upsert one policy document
+//! - `GET    /_soland/self/policies/{id}`       read one policy document
+//! - `DELETE /_soland/self/policies/{id}`       remove one policy document
 //!
 //! `policy_document_to_response`, `is_valid_generated_or_custom_id`, and the
 //! supported-effect/scope/type validators are `pub` so admin / authz handlers

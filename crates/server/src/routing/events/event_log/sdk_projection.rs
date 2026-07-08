@@ -517,7 +517,7 @@ fn sdk_event_from_record(
             .get("redacts")
             .and_then(Value::as_str)
             .and_then(|value| EventId::new(value.to_owned()).ok()),
-        content: payload,
+        payload,
         executed_by: object
             .get("executed_by")
             .and_then(Value::as_str)

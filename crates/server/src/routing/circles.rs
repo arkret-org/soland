@@ -328,7 +328,7 @@ fn validate_scope_rotate_events(
                 ));
             }
         }
-        let event_group_ref = mls_event_group_ref(&event.content).ok_or_else(|| {
+        let event_group_ref = mls_event_group_ref(&event.payload).ok_or_else(|| {
             scope_rotate_failed(
                 "mls_rotate_group_missing",
                 "MLS rotate event payload requires mls_group_id or group_id",

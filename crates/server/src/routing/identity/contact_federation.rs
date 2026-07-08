@@ -256,7 +256,7 @@ async fn peer_contacts_submit(
             "contact_address.recipient_service_did does not match this service",
         ));
     }
-    let payload = delivery.contact_event.content.clone();
+    let payload = delivery.contact_event.payload.clone();
 
     // Originating Principal Server of this delivery: the peer end of the
     // projected contact row (the issuer) is hosted there. `validate_peer_request`
