@@ -1,7 +1,7 @@
 //! Read-side HTTP handlers for the server-side Space-container / Strand / Morph
 //! lifecycle projection state maintained by `reducer::ProjectionState`.
 //!
-//! These endpoints let yougen (and other clients) re-hydrate the
+//! These endpoints let inkson (and other clients) re-hydrate the
 //! optimistic Archive / Restore state after a page refresh, so a
 //! `ck.space.archive` accepted by the server doesn't appear "unarchived"
 //! again when the kanban view re-mounts.

@@ -362,7 +362,7 @@ async fn hard_logout_removes_push_registration_and_to_device_queue_for_device() 
             "device_id": device_b,
             "push_gateway": "https://floria.example",
             "push_key": "push-key-b-main",
-            "app_id": "yougen-main",
+            "app_id": "inkson-main",
         }))
         .await
         .unwrap();

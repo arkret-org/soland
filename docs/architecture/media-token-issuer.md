@@ -177,6 +177,6 @@ tokens validate correctly across the kid boundary.
 | `participant_binding_invalid` | Issuer or transport | round-trip canonical bytes against issuer log |
 | `participant_identity_unrecognised` | Client | canonical identity-string composition |
 | `session_focus_already_committed` | Client | call already bound to another focus |
-| `e2ee_key_source_unauthorised` | Backend | escalate to yougen; SFrame key derivation |
+| `e2ee_key_source_unauthorised` | Backend | escalate to inkson; SFrame key derivation |
 | `recording_artifact_pipeline_bypassed` | floria recording hook | canonical pipeline |
 | `focus_unavailable_for_client` | Client profile | declared profile set vs realm focus backend |

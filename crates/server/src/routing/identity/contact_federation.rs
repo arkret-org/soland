@@ -262,7 +262,7 @@ async fn peer_contacts_submit(
     // projected contact row (the issuer) is hosted there. `validate_peer_request`
     // above already verified this header is a present, well-formed DID, so we
     // record it on the projection as the contact's `peer_service_did` — that is
-    // the requester's/accepter's home server, NOT this service. yougen reads it
+    // the requester's/accepter's home server, NOT this service. inkson reads it
     // off a pending_incoming row as the `requester_service_did` to address the
     // reverse `respond` delivery back to the originator.
     let source_service_did = req
@@ -561,7 +561,7 @@ async fn project_delivered_contact_fact(
                 // Peer end of this pending_incoming row is the remote requester
                 // (`issuer`), hosted on the delivering source server. The local
                 // holder later uses this as the reverse-delivery target when it
-                // responds (yougen's `requester_service_did`).
+                // responds (inkson's `requester_service_did`).
                 peer_service_did: source_service_did.map(ToOwned::to_owned),
                 created_at: now(),
                 updated_at: now(),
@@ -877,7 +877,7 @@ mod tests {
     /// row on the recipient (target holder) MUST record the *originating*
     /// requester's home Principal Server as `peer_service_did` — the
     /// `source-service-did` of the delivery, NOT the recipient's own service
-    /// DID. This is exactly the address yougen reads back as
+    /// DID. This is exactly the address inkson reads back as
     /// `requester_service_did` to federate the reverse `respond` delivery.
     #[tokio::test]
     async fn delivered_request_records_originating_peer_service_did() {

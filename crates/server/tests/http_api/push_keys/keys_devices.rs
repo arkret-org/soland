@@ -882,7 +882,7 @@ fn tier2_publish_and_authorize(
 
 /// Tier-2 (device-lifecycle.md §8.2 / §8.3) — `keys/query` echoes the per-device
 /// `cross_signing_binding` and the per-principal `cross_signing` publish payload,
-/// and the SDK chain verifier accepts the returned material (simulating a yougen
+/// and the SDK chain verifier accepts the returned material (simulating a inkson
 /// client that DID-anchored the PSK), while a tampered device binding fails.
 #[tokio::test]
 async fn keys_query_exposes_tier2_cross_signing_chain_and_verifies() {
@@ -958,7 +958,7 @@ async fn keys_query_exposes_tier2_cross_signing_chain_and_verifies() {
     );
 
     // Reconstruct the SDK inputs from the response and run the chain verifier,
-    // anchoring the PSK to the published key (a yougen client would instead
+    // anchoring the PSK to the published key (a inkson client would instead
     // resolve A's DID and confirm this PSK is in A's control set).
     let publish: CrossSigningPublishContent =
         serde_json::from_value(query["cross_signing"][alice].clone()).unwrap();

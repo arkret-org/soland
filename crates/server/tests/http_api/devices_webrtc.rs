@@ -1104,7 +1104,7 @@ fn grant_call_capability(state: &AppState, realm_id: &str, subject: &str, action
 /// the identity counts as a roster member or media is exposed): a
 /// brand-new call has no
 /// `ck.call.state` cell yet, and the issuer authorizes on realm membership +
-/// `ck.call.join` + the durable ban set. This mirrors the yougen flow, which
+/// `ck.call.join` + the durable ban set. This mirrors the inkson flow, which
 /// redeems a media token before writing its first `ck.call.state` event.
 fn add_member_and_fresh_call(state: &AppState, member: &str) -> String {
     add_test_realm_member(state, DEMO_REALM_ID, member);

@@ -404,7 +404,7 @@ mod cross_impl_tests {
     //! this lock there was no test asserting the two produce **identical bytes**
     //! for the same logical seven-tuple — so a drift on either side could go
     //! unnoticed (unlike the `ck.call.signal` envelope proof, which has a real
-    //! yougen round-trip). This test fails the moment either construction drifts.
+    //! inkson round-trip). This test fails the moment either construction drifts.
 
     use chrono::{DateTime, Utc};
     use cokret_sdk::{

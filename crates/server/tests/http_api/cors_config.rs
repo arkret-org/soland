@@ -117,15 +117,15 @@ async fn configured_cors_allows_blob_upload_headers() {
 
 #[tokio::test]
 async fn seed_member_invite_event_surfaces_via_authz_invites() {
-    // The Realm bootstrap strand in yougen emits a
+    // The Realm bootstrap strand in inkson emits a
     // `ck.member.state{membership="invite"}` event for each seed member
-    // (see cokret-rust-sdk + yougen/src/api.rs `build_realm_bootstrap_events`).
+    // (see cokret-rust-sdk + inkson/src/api.rs `build_realm_bootstrap_events`).
     // `models/realm-and-space.md` §3 + `governance/join-policy.md` §6 then
     // expect the invitee to see that invite via `GET /authz/invites`.
     // This test pins that contract on the event path.
     let state = AppState::new(test_config(), Db { pool: None });
     // dev-login auto-registers the actor; we don't need /account/register's
-    // strict schema here. Use yougen-style unique DIDs (with hyphens and
+    // strict schema here. Use inkson-style unique DIDs (with hyphens and
     // uuid suffixes) so the test exercises the same DID validator path the
     // e2e suite hits.
     let alice_did = "did:web:s23-alice-c58c7ec9-39a4-40ce-acfd-e7318c944230.example";

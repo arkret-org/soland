@@ -23,7 +23,7 @@ use std::sync::Arc;
 
 // Delegation primitives — `Grant`, `Constraint` (alias of `GrantConstraint`),
 // `DelegationError`, and the chain-integrity / cascade / expiry helpers —
-// live in the SDK so yougen and sodmin admin can call them client-side. See
+// live in the SDK so inkson and sodmin admin can call them client-side. See
 // `cokret_sdk::authz::delegation` (crates/sdk/src/authz/delegation.rs).
 pub use cokret_sdk::authz::delegation::{
     AppletDelegationBindingError, DelegationError, Grant, GrantConstraint as Constraint,
@@ -192,7 +192,7 @@ impl SolandAuthzEngine {
     /// Thin wrapper around [`cokret_sdk::authz::delegation::create_delegated_grant`]:
     /// the SDK helper does the pure validation work; this method snapshots the
     /// engine's grant table, runs the check, assigns a server-issued grant id,
-    /// and persists. yougen / sodmin call the SDK helper directly for client-side
+    /// and persists. inkson / sodmin call the SDK helper directly for client-side
     /// pre-validation (skipping the persist step).
     #[allow(clippy::too_many_arguments)]
     pub fn create_delegated_grant(

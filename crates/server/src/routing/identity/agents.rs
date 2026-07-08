@@ -856,7 +856,7 @@ async fn agent_key_pair(
     // CKP-0008 §4.5 / D3: the runtime key may become active only after a
     // reducer-visible `ck.agent.key.authorize` event exists. Development mode
     // still materializes the event with the local dev-proof path; production
-    // requires yougen/coauth to provide a controller-signed durable event and
+    // requires inkson/coauth to provide a controller-signed durable event and
     // soland submits + rechecks it here.
     let event_id = if state.config.development_mode {
         let controller_session = controller_dev_session(&session.actor, state);
@@ -1726,7 +1726,7 @@ async fn lifecycle_transition(
     // `ck.self.agent.{pause,resume,deactivate}` event authored by the
     // controller, and on deactivate fan-out the revocation chain
     // (`ck.agent.key.revoke` + `ck.capability.revoke` for every grant the
-    // agent holds). Production submits the lifecycle event from yougen.
+    // agent holds). Production submits the lifecycle event from inkson.
     if state.config.development_mode {
         let realm = ensure_self_realm(state, &session).await?;
         submit_durable_agent_lifecycle(
@@ -1979,7 +1979,7 @@ async fn attach_agent_grant(
     let grant_id = GrantId::new(grant_id_str.clone())
         .map_err(|err| AppError::internal(format!("generated grant id invalid: {err}")))?;
     // CKP-0008 §4.11 (dev option B): write the real `ck.capability.grant`
-    // authored by the controller. Production submits this from yougen.
+    // authored by the controller. Production submits this from inkson.
     if state.config.development_mode {
         let realm = ensure_self_realm(state, &session).await?;
         attach_agent_grant_event(
