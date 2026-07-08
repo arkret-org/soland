@@ -92,6 +92,28 @@ fn actor_can_see_strand(state: &AppState, realm_id: &str, strand_id: &str, actor
     true
 }
 
+fn actor_can_receive_watched_message(
+    state: &AppState,
+    realm_id: &str,
+    strand_id: &str,
+    actor_id: &str,
+) -> bool {
+    if !actor_has_realm_access(state, realm_id, actor_id) {
+        return false;
+    }
+    let projection = state.projection.lock();
+    let Some(strand) = projection.strands.get(strand_id) else {
+        return true;
+    };
+    if strand.realm_id != realm_id {
+        return false;
+    }
+    if let Some(circle_id) = strand.scope_circle_id.as_deref() {
+        return projection.circle_scope_visible_to_actor(circle_id, actor_id);
+    }
+    true
+}
+
 /// Mention subject DIDs from a message payload's `content.mentions[]`
 /// (string DID, `{subject_id}`, or `{did}` forms).
 fn mention_subjects(payload: &Value) -> Vec<String> {
@@ -292,7 +314,7 @@ pub(crate) async fn dispatch_message_notifications(
             if recipient == sender || mentioned_subjects.contains(&recipient) {
                 continue;
             }
-            if !actor_can_see_strand(state, &realm_id, strand_id, &recipient) {
+            if !actor_can_receive_watched_message(state, &realm_id, strand_id, &recipient) {
                 continue;
             }
             put_message_notification(
@@ -942,6 +964,42 @@ mod tests {
                 .persistence
                 .notifications()
                 .list_for_recipient(alice)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn plain_message_all_watcher_falls_back_to_realm_access_when_strand_missing() {
+        let state = test_state();
+        let realm_id = "ck:realm:01904100-0000-7000-8000-000000009954";
+        let strand_id = "ck:strand:01904100-0000-7000-8000-000000009955";
+        let alice = "did:web:alice.example";
+        let bob = "did:web:bob.example";
+        let mallory = "did:web:mallory.example";
+        seed_realm_members(&state, realm_id, &[alice, bob]);
+        seed_strand_watch(&state, strand_id, bob, "all");
+        seed_strand_watch(&state, strand_id, mallory, "all");
+
+        let delivered = plain_message_with_strand(realm_id, "000000009956", alice, Some(strand_id));
+        dispatch_message_notifications(&state, &delivered).await;
+
+        assert_eq!(
+            state
+                .persistence
+                .notifications()
+                .list_for_recipient(bob)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(
+            state
+                .persistence
+                .notifications()
+                .list_for_recipient(mallory)
                 .await
                 .unwrap()
                 .is_empty()
