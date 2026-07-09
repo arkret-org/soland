@@ -39,12 +39,12 @@ use cokret_sdk::models::{
     AgentParticipation, AgentParticipationEntry,
     AgentParticipationOutcome as AgentParticipationResBody, AgentParticipationScope,
     AgentParticipationSetRequestBody as AgentParticipationSetReqBody, AgentPauseRequestBody,
-    AgentProtocolDiscoverOutcome, AgentProtocolDiscoverRequestBody, AgentProvisionOutcome,
-    AgentProvisionRequestBody, AgentResumeRequestBody, AgentRotateKeyOutcome,
-    AgentRotateKeyRequestBody, AgentRuntimeApprovalOutcome, AgentRuntimeApprovalRequestBody,
-    AgentSidecarContextRef, AgentSidecarExposureAck, AgentSidecarThreadEnsureOutcome,
-    AgentProjection, AgentSidecarThreadEnsureRequestBody, AgentStatus, AgentView, PublicKey,
-    effective_participation, validate_agent_slug, validate_selection_within_ceiling,
+    AgentProjection, AgentProtocolDiscoverOutcome, AgentProtocolDiscoverRequestBody,
+    AgentProvisionOutcome, AgentProvisionRequestBody, AgentResumeRequestBody,
+    AgentRotateKeyOutcome, AgentRotateKeyRequestBody, AgentRuntimeApprovalOutcome,
+    AgentRuntimeApprovalRequestBody, AgentSidecarContextRef, AgentSidecarExposureAck,
+    AgentSidecarThreadEnsureOutcome, AgentSidecarThreadEnsureRequestBody, AgentStatus, AgentView,
+    PublicKey, effective_participation, validate_agent_slug, validate_selection_within_ceiling,
 };
 use cokret_sdk::{
     CircleId, Did, EventId, GrantId, Hash, Operation, OperationId, RealmId, RelationId, StrandId,
