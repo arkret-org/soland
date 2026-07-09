@@ -52,18 +52,18 @@ pub fn protocol_router() -> Router {
 
 pub fn local_router() -> Router {
     Router::new()
-        // `edge` — push / bridge gateway (`/_soland/edge/push/*`).
-        .push(
-            Router::with_path("edge").push(
-                Router::new()
-                    .push(Router::with_path("push/register-device").post(push::push_register))
-                    .push(Router::with_path("push/unregister-device").post(push::push_unregister))
-                    .push(push_outbound::router())
-                    .push(Router::with_path("push/notify").post(push::push_notify)),
-            ),
-        )
-        // `open` — non-Cokret external vendor interop (MIMI).
-        .push(Router::with_path("open").push(mimi::router()))
+        // `edge` — outbound push bridge gateway
+        // (`/_soland/edge/push/outbound/bridge/*`). The device
+        // register/unregister/notify verbs are NOT mirrored here: those are the
+        // canonical `/_cokret/edge/push/*` operations (see `protocol_router`),
+        // and the `/_soland/*` duplicate mounts had no caller. Only the
+        // deployment-local outbound bridge cache surface stays product-local.
+        .push(Router::with_path("edge").push(push_outbound::router()))
+    // NOTE: the MIMI provider facade is served only from its canonical
+    // `/_cokret/open/mimi/*` surface (see `protocol_router` / `mimi.rs`).
+    // The historical `/_soland/open/mimi/*` duplicate mount had no caller and
+    // was removed; MIMI providers discover the surface via the well-known
+    // `mimi-protocol-directory`, not this vendor namespace.
 }
 
 pub fn well_known_router() -> Router {
