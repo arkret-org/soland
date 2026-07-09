@@ -951,7 +951,10 @@ fn contact_request_outcome(
         request_event_ref,
         requester_consent_refs,
         state: directional_contact_state(actor, contact).ok_or_else(|| {
-            AppError::internal(format!("unrecognized stored contact state: {}", contact.status))
+            AppError::internal(format!(
+                "unrecognized stored contact state: {}",
+                contact.status
+            ))
         })?,
     })
 }
@@ -965,7 +968,10 @@ fn contact_respond_outcome(
         response_event_ref,
         consent_grant_refs,
         state: directional_contact_state(&contact.target, contact).ok_or_else(|| {
-            AppError::internal(format!("unrecognized stored contact state: {}", contact.status))
+            AppError::internal(format!(
+                "unrecognized stored contact state: {}",
+                contact.status
+            ))
         })?,
     })
 }
