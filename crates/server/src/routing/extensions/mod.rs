@@ -50,8 +50,13 @@ pub fn local_router() -> Router {
                 .push(applet_manifest::router()),
         )
         // `self` — applet install companion + sovereign enclave surfaces.
+        // Carries the shared session-PoP hoop (matching the main
+        // `soland_local_router` `self` segment); each sovereign handler
+        // additionally enforces `authenticated_session` (and, for the
+        // deployment-management face, an admin-principal gate).
         .push(
             Router::with_path("self")
+                .hoop(crate::routing::identity::session_pop::verify_session_pop)
                 .push(sovereign::router()),
         )
 }

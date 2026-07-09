@@ -950,7 +950,9 @@ fn contact_request_outcome(
     Ok(ContactRequestOutcome {
         request_event_ref,
         requester_consent_refs,
-        state: directional_contact_state(actor, contact),
+        state: directional_contact_state(actor, contact).ok_or_else(|| {
+            AppError::internal(format!("unrecognized stored contact state: {}", contact.status))
+        })?,
     })
 }
 
@@ -962,7 +964,9 @@ fn contact_respond_outcome(
     Ok(ContactRespondOutcome {
         response_event_ref,
         consent_grant_refs,
-        state: directional_contact_state(&contact.target, contact),
+        state: directional_contact_state(&contact.target, contact).ok_or_else(|| {
+            AppError::internal(format!("unrecognized stored contact state: {}", contact.status))
+        })?,
     })
 }
 
@@ -1005,7 +1009,10 @@ fn contact_list_rows(
         } else {
             record.requester.clone()
         };
-        let row_state = directional_contact_state(actor, &record);
+        let row_state = match directional_contact_state(actor, &record) {
+            Some(state) => state,
+            None => continue,
+        };
         let entry = rows.entry(peer.clone()).or_insert_with(|| ContactListRow {
             peer: Did::new(peer.clone()).expect("contact peer DID is validated"),
             state: row_state,
@@ -1072,15 +1079,28 @@ fn contact_list_rows(
     out
 }
 
-fn directional_contact_state(actor: &str, record: &ContactRecord) -> ContactState {
-    match record.status.as_str() {
+/// Map a stored contact FSM status to its actor-relative [`ContactState`].
+///
+/// Returns `None` for an unrecognized stored status. `status` is written
+/// by the server-side contact FSM (never request-controlled), so an
+/// unknown value implies a migration / partial-write / writer bug; read
+/// paths fail soft (skip the row) and write outcomes surface an internal
+/// error rather than panicking and taking down the whole endpoint.
+fn directional_contact_state(actor: &str, record: &ContactRecord) -> Option<ContactState> {
+    Some(match record.status.as_str() {
         "pending" if record.requester == actor => ContactState::PendingOutgoing,
         "pending" => ContactState::PendingIncoming,
         "accepted" => ContactState::Accepted,
         "rejected" => ContactState::Rejected,
         "tombstoned" => ContactState::Tombstoned,
-        other => panic!("invalid stored contact state: {other}"),
-    }
+        other => {
+            tracing::warn!(
+                stored_status = %other,
+                "skipping contact row with unrecognized stored state"
+            );
+            return None;
+        }
+    })
 }
 
 fn contact_state_rank(state: &ContactState) -> u8 {

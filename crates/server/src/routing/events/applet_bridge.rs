@@ -23,11 +23,32 @@
 //! event when the upstream responds (or fails). This matches the
 //! agent bridge's pattern (see `agent_bridge.rs`).
 
-use serde_json::{Value, json};
+use std::sync::{Arc, OnceLock};
 
+use serde_json::{Value, json};
+use tokio::sync::Semaphore;
+
+use super::agent_bridge::read_json_body_limited;
 use super::projection::append_projection_event;
 use crate::state::{AppState, EventNotification, ProjectionEventRecord};
 use crate::{ids, kinds};
+
+/// Upper bound on in-flight outbound applet-bridge HTTP tasks. Bridge URLs
+/// come from applet-registration data (lower trust); without a cap a high
+/// rate of `ck.applet.interop_session.start` operations could spawn
+/// unbounded background tasks and outbound connections. When saturated the
+/// bridge fails closed with a `capacity_exhausted` bridge-error event.
+const MAX_CONCURRENT_APPLET_BRIDGE_TASKS: usize = 64;
+
+/// Maximum bytes read from an upstream applet-bridge response body, to bound
+/// memory against a malicious endpoint returning an unbounded body.
+const MAX_APPLET_BRIDGE_RESPONSE_BYTES: usize = 1024 * 1024;
+
+/// Process-level concurrency gate for outbound applet-bridge tasks.
+fn applet_bridge_semaphore() -> &'static Arc<Semaphore> {
+    static SEM: OnceLock<Arc<Semaphore>> = OnceLock::new();
+    SEM.get_or_init(|| Arc::new(Semaphore::new(MAX_CONCURRENT_APPLET_BRIDGE_TASKS)))
+}
 
 /// Look up the applet's registered bridge URL from its
 /// `AppletProjection.manifest`. Returns the first non-empty value
@@ -85,6 +106,28 @@ pub async fn maybe_emit_echo_status_for_session_start(
     let origin_owned = origin.to_owned();
 
     if let Some(bridge_url) = lookup_bridge_url(state, &applet_id) {
+        // Bound in-flight outbound bridge tasks; fail closed with a
+        // bridge-error event when the gate is saturated rather than
+        // spawning an unbounded background task.
+        let permit = match applet_bridge_semaphore().clone().try_acquire_owned() {
+            Ok(permit) => permit,
+            Err(_) => {
+                emit_applet_outcome_event(
+                    state,
+                    &realm_id_str,
+                    &session_id,
+                    &applet_id,
+                    &bridge_url,
+                    origin,
+                    AppletBridgeOutcome::UpstreamFailure {
+                        code: "capacity_exhausted".to_owned(),
+                        message: "applet bridge outbound concurrency limit reached".to_owned(),
+                    },
+                )
+                .await;
+                return;
+            }
+        };
         // Outbound HTTP path. Same async-spawn pattern as
         // agent_bridge.rs — `project_accepted_operations` returns
         // immediately while the spawned task awaits the upstream.
@@ -95,6 +138,8 @@ pub async fn maybe_emit_echo_status_for_session_start(
         let bridge_url_clone = bridge_url.clone();
         let development_mode = state.config.development_mode;
         tokio::spawn(async move {
+            // Held for the task's lifetime; released on completion.
+            let _permit = permit;
             let outcome = forward_to_applet_bridge(
                 &bridge_url_clone,
                 &session_clone,
@@ -212,13 +257,13 @@ async fn forward_to_applet_bridge(
             message: format!("POST {bridge_url} returned {status}"),
         };
     }
-    match response.json::<Value>().await {
+    match read_json_body_limited(response, MAX_APPLET_BRIDGE_RESPONSE_BYTES).await {
         Ok(body) => AppletBridgeOutcome::UpstreamSuccess {
             response_body: body,
         },
-        Err(err) => AppletBridgeOutcome::UpstreamFailure {
+        Err(message) => AppletBridgeOutcome::UpstreamFailure {
             code: "upstream_body_parse_failed".to_owned(),
-            message: format!("response body JSON parse: {err}"),
+            message,
         },
     }
 }

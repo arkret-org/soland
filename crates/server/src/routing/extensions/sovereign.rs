@@ -34,6 +34,8 @@ use serde_json::{Value, json};
 
 use crate::config::AppConfig;
 use crate::error::AppError;
+use crate::routing::admin::require_admin_principal;
+use crate::routing::system::extract::AuthArgs;
 use crate::state::{
     AppState, SovereignAuditRecord, SovereignEnclaveRecord, SovereignExternalAccountRecord,
     SovereignExternalInviteRecord, SovereignRealmRecord, SovereignStoreForwardRecord,
@@ -444,8 +446,13 @@ pub(super) fn router() -> Router {
 
 #[endpoint]
 #[tracing::instrument(skip_all, fields(op = "deployment.info"))]
-async fn deployment_info(depot: &mut Depot) -> JsonResult<DeploymentInfoResponseBody> {
+async fn deployment_info(
+    aa: AuthArgs,
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<DeploymentInfoResponseBody> {
     let state = depot.get_typed::<AppState>().expect("state injected");
+    aa.authenticated_session(state, req).await?;
     let guard = state.sovereign_deployment.lock();
     let trusted_enclaves = guard
         .trusted_enclaves
@@ -480,10 +487,14 @@ async fn deployment_info(depot: &mut Depot) -> JsonResult<DeploymentInfoResponse
 #[endpoint]
 #[tracing::instrument(skip_all, fields(op = "deployment.configure"))]
 async fn configure_deployment(
+    aa: AuthArgs,
     depot: &mut Depot,
+    req: &mut Request,
     body: JsonBody<ConfigureDeploymentRequestBody>,
 ) -> JsonResult<ConfigureDeploymentResponseBody> {
     let state = depot.get_typed::<AppState>().expect("state injected");
+    let session = aa.authenticated_session(state, req).await?;
+    require_admin_principal(state, session)?;
     let body = body.into_inner();
     let mut guard = state.sovereign_deployment.lock();
     if let Some(profile) = body.profile {
@@ -519,10 +530,14 @@ async fn configure_deployment(
 #[endpoint]
 #[tracing::instrument(skip_all, fields(op = "deployment.register_enclave"))]
 async fn register_enclave(
+    aa: AuthArgs,
     depot: &mut Depot,
+    req: &mut Request,
     body: JsonBody<RegisterEnclaveRequestBody>,
 ) -> JsonResult<RegisterEnclaveResponseBody> {
     let state = depot.get_typed::<AppState>().expect("state injected");
+    let session = aa.authenticated_session(state, req).await?;
+    require_admin_principal(state, session)?;
     let body = body.into_inner();
     if body.server_id.trim().is_empty() || body.base_url.trim().is_empty() {
         return Err(AppError::missing_param(
@@ -558,10 +573,14 @@ async fn register_enclave(
 #[endpoint]
 #[tracing::instrument(skip_all, fields(op = "deployment.realm_create"))]
 async fn realm_create(
+    aa: AuthArgs,
     depot: &mut Depot,
+    req: &mut Request,
     body: JsonBody<RealmCreateRequestBody>,
 ) -> JsonResult<RealmCreateResponseBody> {
     let state = depot.get_typed::<AppState>().expect("state injected");
+    let session = aa.authenticated_session(state, req).await?;
+    require_admin_principal(state, session)?;
     let body = body.into_inner();
     let realm_id = body.realm_id.unwrap_or_else(ids::generate_realm_id);
     let now = chrono::Utc::now();
@@ -607,10 +626,13 @@ async fn realm_create(
 #[endpoint]
 #[tracing::instrument(skip_all, fields(op = "deployment.realm_info"))]
 async fn realm_info(
+    aa: AuthArgs,
     depot: &mut Depot,
+    req: &mut Request,
     realm_id: PathParam<String>,
 ) -> JsonResult<RealmInfoResponseBody> {
     let state = depot.get_typed::<AppState>().expect("state injected");
+    aa.authenticated_session(state, req).await?;
     let realm_id = realm_id.into_inner();
     let guard = state.sovereign_deployment.lock();
     let Some(record) = guard.enclave_realms.get(&realm_id) else {
@@ -634,10 +656,14 @@ async fn realm_info(
 #[endpoint]
 #[tracing::instrument(skip_all, fields(op = "deployment.external_invite"))]
 async fn external_invite(
+    aa: AuthArgs,
     depot: &mut Depot,
+    req: &mut Request,
     body: JsonBody<ExternalInviteRequestBody>,
 ) -> JsonResult<ExternalInviteResponseBody> {
     let state = depot.get_typed::<AppState>().expect("state injected");
+    let session = aa.authenticated_session(state, req).await?;
+    require_admin_principal(state, session)?;
     let body = body.into_inner();
     validate_did_against_roots(state, &body.invitee, Some("enclave"))?;
     let mut guard = state.sovereign_deployment.lock();
@@ -691,10 +717,13 @@ async fn external_invite(
 #[endpoint]
 #[tracing::instrument(skip_all, fields(op = "account.accept_external_invite"))]
 async fn accept_external_invite(
+    aa: AuthArgs,
     depot: &mut Depot,
+    req: &mut Request,
     body: JsonBody<AcceptExternalInviteRequestBody>,
 ) -> JsonResult<AcceptExternalInviteResponseBody> {
     let state = depot.get_typed::<AppState>().expect("state injected");
+    aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
     validate_did_against_roots(state, &body.actor_id, Some("enclave"))?;
     let now = chrono::Utc::now();
@@ -753,10 +782,13 @@ async fn accept_external_invite(
 #[endpoint]
 #[tracing::instrument(skip_all, fields(op = "deployment.external_account_status"))]
 async fn external_account_status(
+    aa: AuthArgs,
     depot: &mut Depot,
+    req: &mut Request,
     did: PathParam<String>,
 ) -> JsonResult<ExternalAccountStatusResponseBody> {
     let state = depot.get_typed::<AppState>().expect("state injected");
+    aa.authenticated_session(state, req).await?;
     let did = did.into_inner();
     let guard = state.sovereign_deployment.lock();
     let Some(record) = guard.external_accounts.get(&did) else {
@@ -775,11 +807,14 @@ async fn external_account_status(
 #[endpoint]
 #[tracing::instrument(skip_all, fields(op = "deployment.guard_realm_access"))]
 async fn guard_realm_access(
+    aa: AuthArgs,
     depot: &mut Depot,
+    req: &mut Request,
     realm_id: PathParam<String>,
     actor: QueryParam<String, false>,
 ) -> JsonResult<GuardRealmAccessResponseBody> {
     let state = depot.get_typed::<AppState>().expect("state injected");
+    aa.authenticated_session(state, req).await?;
     let actor = actor.into_inner().unwrap_or_default();
     let realm_id = realm_id.into_inner();
     let mut guard = state.sovereign_deployment.lock();
@@ -805,11 +840,14 @@ async fn guard_realm_access(
 #[endpoint]
 #[tracing::instrument(skip_all, fields(op = "deployment.directory_realms"))]
 async fn directory_realms(
+    aa: AuthArgs,
     depot: &mut Depot,
+    req: &mut Request,
     actor: QueryParam<String, false>,
     q: QueryParam<String, false>,
 ) -> JsonResult<DirectoryRealmsResponseBody> {
     let state = depot.get_typed::<AppState>().expect("state injected");
+    aa.authenticated_session(state, req).await?;
     let actor = actor.into_inner().unwrap_or_default();
     let q = q.into_inner().unwrap_or_default();
     let guard = state.sovereign_deployment.lock();
@@ -839,10 +877,14 @@ async fn directory_realms(
 #[endpoint]
 #[tracing::instrument(skip_all, fields(op = "deployment.enclave_proxy"))]
 async fn enclave_proxy(
+    aa: AuthArgs,
     depot: &mut Depot,
+    req: &mut Request,
     body: JsonBody<EnclaveProxyRequestBody>,
 ) -> JsonResult<EnclaveProxyResponseBody> {
     let state = depot.get_typed::<AppState>().expect("state injected");
+    let session = aa.authenticated_session(state, req).await?;
+    require_admin_principal(state, session)?;
     let body = body.into_inner();
     let mut guard = state.sovereign_deployment.lock();
     if deployment_profile(state, &guard) == "enclave" {
@@ -869,10 +911,14 @@ async fn enclave_proxy(
 #[endpoint]
 #[tracing::instrument(skip_all, fields(op = "deployment.network_link"))]
 async fn set_network_link(
+    aa: AuthArgs,
     depot: &mut Depot,
+    req: &mut Request,
     body: JsonBody<NetworkLinkRequestBody>,
 ) -> JsonResult<NetworkLinkResponseBody> {
     let state = depot.get_typed::<AppState>().expect("state injected");
+    let session = aa.authenticated_session(state, req).await?;
+    require_admin_principal(state, session)?;
     let body = body.into_inner();
     let mut guard = state.sovereign_deployment.lock();
     guard.upstream_available = body.upstream_available;
@@ -886,10 +932,14 @@ async fn set_network_link(
 #[endpoint]
 #[tracing::instrument(skip_all, fields(op = "deployment.store_forward_message"))]
 async fn store_forward_message(
+    aa: AuthArgs,
     depot: &mut Depot,
+    req: &mut Request,
     body: JsonBody<StoreForwardMessageRequestBody>,
 ) -> JsonResult<StoreForwardMessageResponseBody> {
     let state = depot.get_typed::<AppState>().expect("state injected");
+    let session = aa.authenticated_session(state, req).await?;
+    require_admin_principal(state, session)?;
     let body = body.into_inner();
     validate_did_against_roots(state, &body.actor, Some("enclave"))?;
     let mut guard = state.sovereign_deployment.lock();
@@ -941,8 +991,14 @@ async fn store_forward_message(
 
 #[endpoint]
 #[tracing::instrument(skip_all, fields(op = "deployment.store_forward_drain"))]
-async fn drain_store_forward(depot: &mut Depot) -> JsonResult<DrainStoreForwardResponseBody> {
+async fn drain_store_forward(
+    aa: AuthArgs,
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<DrainStoreForwardResponseBody> {
     let state = depot.get_typed::<AppState>().expect("state injected");
+    let session = aa.authenticated_session(state, req).await?;
+    require_admin_principal(state, session)?;
     let mut guard = state.sovereign_deployment.lock();
     if !guard.upstream_available {
         return Err(AppError::capability_denied("upstream_unavailable")
@@ -971,10 +1027,14 @@ async fn drain_store_forward(depot: &mut Depot) -> JsonResult<DrainStoreForwardR
 #[endpoint]
 #[tracing::instrument(skip_all, fields(op = "deployment.store_forward_ingest"))]
 async fn ingest_store_forward(
+    aa: AuthArgs,
     depot: &mut Depot,
+    req: &mut Request,
     body: JsonBody<IngestStoreForwardRequestBody>,
 ) -> JsonResult<IngestStoreForwardResponseBody> {
     let state = depot.get_typed::<AppState>().expect("state injected");
+    let session = aa.authenticated_session(state, req).await?;
+    require_admin_principal(state, session)?;
     let body = body.into_inner();
     let mut guard = state.sovereign_deployment.lock();
     let mut ingested = 0_i64;
@@ -1022,10 +1082,13 @@ async fn ingest_store_forward(
 #[endpoint]
 #[tracing::instrument(skip_all, fields(op = "deployment.enclave_frontier"))]
 async fn enclave_frontier(
+    aa: AuthArgs,
     depot: &mut Depot,
+    req: &mut Request,
     realm_id: QueryParam<String, true>,
 ) -> JsonResult<EnclaveFrontierResponseBody> {
     let state = depot.get_typed::<AppState>().expect("state injected");
+    aa.authenticated_session(state, req).await?;
     let realm_id = realm_id.into_inner();
     let guard = state.sovereign_deployment.lock();
     let (main_frontier, enclave_pos) = guard
@@ -1056,10 +1119,14 @@ async fn enclave_frontier(
 #[endpoint]
 #[tracing::instrument(skip_all, fields(op = "deployment.audit"))]
 async fn deployment_audit(
+    aa: AuthArgs,
     depot: &mut Depot,
+    req: &mut Request,
     subject: QueryParam<String, false>,
 ) -> JsonResult<DeploymentAuditResponseBody> {
     let state = depot.get_typed::<AppState>().expect("state injected");
+    let session = aa.authenticated_session(state, req).await?;
+    require_admin_principal(state, session)?;
     let subject = subject.into_inner();
     let guard = state.sovereign_deployment.lock();
     let entries = guard

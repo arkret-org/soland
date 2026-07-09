@@ -2026,10 +2026,9 @@ fn event_record_realm_id(record: &CanonicalEventRecord) -> Option<String> {
         .map(normalize_persisted_realm_id)
 }
 
-fn canonical_value_digest(value: &Value) -> Option<String> {
-    let bytes = cokret_sdk::canonical::canonical_json_bytes(value).ok()?;
-    Some(cokret_sdk::canonical::sha256_digest(bytes))
-}
+// Converged to the single crate-root canonical-digest helper (delegates
+// to SDK `canonical_sha256`) so the two-step composition cannot drift.
+use crate::canonical_value_digest;
 
 fn normalize_persisted_realm_id(id: &str) -> String {
     id.to_owned()

@@ -237,6 +237,7 @@ pub(super) fn policy_array_contains(policy: &Value, field: &str, expected: &str)
         .is_some_and(|values| values.iter().any(|value| value.as_str() == Some(expected)))
 }
 
-pub(super) fn canonical_value_digest(value: &Value) -> Option<String> {
-    canonical::canonical_sha256(value).ok()
-}
+// Converged to the single crate-root canonical-digest helper (delegates
+// to SDK `canonical_sha256`); re-exported so directory call sites keep
+// referencing `canonical_value_digest`.
+pub(super) use crate::canonical_value_digest;

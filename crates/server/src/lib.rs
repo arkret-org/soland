@@ -51,6 +51,16 @@ pub const REFERENCE_AGENT_AUDIT_ED25519_SEED: [u8; 32] =
 pub const REFERENCE_AGENT_AUDIT_ED25519_KEY_ID: &str =
     routing::events::agent_bridge::REFERENCE_AGENT_AUDIT_ED25519_KEY_ID;
 
+/// Canonical-JSON digest of a value: SHA-256 over the SDK canonical byte
+/// encoding. Single soland-side entry point, delegating to the SDK's
+/// `canonical_sha256`, so the `canonical_json_bytes` + `sha256_digest`
+/// composition lives only in the SDK (the protocol truth source) and
+/// cannot drift across call sites. Returns `None` when canonicalization
+/// fails (e.g. non-finite floats).
+pub(crate) fn canonical_value_digest(value: &serde_json::Value) -> Option<String> {
+    cokret_sdk::canonical::canonical_sha256(value).ok()
+}
+
 /// Test-support re-exports for the integration test crate. These projection /
 /// identity helpers live in `pub(crate)` modules; surface them here (hidden
 /// from the rendered API) so the device-identity directory tests can drive the

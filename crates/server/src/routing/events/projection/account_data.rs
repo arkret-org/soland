@@ -37,6 +37,11 @@ pub fn project_read_receipt_policy(state: &AppState, operation: &Operation) {
         .and_then(|v| v.as_str())
         .unwrap_or("members")
         .to_owned();
+    // Default `true` is spec-mandated (discovery/read-receipts.md §2.5, default
+    // column). Unlike the adjacent `allow_*` escape switches (which can breach
+    // the compliance floor and so fail closed at `false`), this flag only lets a
+    // Circle declare an independently *stricter* policy — loosening is rejected
+    // by the reducer regardless of its value, so `true` is directionally safe.
     let scope_overrides_allowed = payload
         .get("scope_overrides_allowed")
         .and_then(|v| v.as_bool())

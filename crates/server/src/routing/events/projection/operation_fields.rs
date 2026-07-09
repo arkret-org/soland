@@ -107,10 +107,10 @@ pub(super) fn operation_realm_asset_privacy_policy(operation: &Operation) -> Opt
     }
 }
 
-pub(super) fn canonical_value_digest(value: &Value) -> Option<String> {
-    let bytes = cokret_sdk::canonical::canonical_json_bytes(value).ok()?;
-    Some(cokret_sdk::canonical::sha256_digest(bytes))
-}
+// Converged to the single crate-root canonical-digest helper (delegates
+// to SDK `canonical_sha256`); re-exported so projection call sites keep
+// referencing `canonical_value_digest`.
+pub(super) use crate::canonical_value_digest;
 
 pub(super) fn is_valid_history_visibility(value: &str) -> bool {
     matches!(

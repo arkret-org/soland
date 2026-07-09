@@ -1,9 +1,9 @@
 use super::*;
 
-pub(super) fn canonical_value_digest(value: &Value) -> Option<String> {
-    let bytes = canonical::canonical_json_bytes(value).ok()?;
-    Some(canonical::sha256_digest(bytes))
-}
+// Canonical-JSON digest converged to the single crate-root helper
+// (delegates to SDK `canonical_sha256`); re-exported here so existing
+// `event_log` call sites keep referencing `canonical_value_digest`.
+pub(super) use crate::canonical_value_digest;
 
 pub(super) fn require_object_field(
     object: &serde_json::Map<String, Value>,

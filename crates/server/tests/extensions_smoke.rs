@@ -945,3 +945,44 @@ fn safe_did_token(value: &str) -> String {
         })
         .collect()
 }
+
+// S-00 regression: the sovereign deployment surface
+// (`/_soland/self/deployment/*`, `/_soland/self/account/*`, etc.) MUST
+// reject unauthenticated callers. Before the fix the whole `self` segment
+// mounted `sovereign::router()` with no auth hoop and no per-handler
+// `authenticated_session`, exposing every read/write handler to anonymous
+// access. These negatives assert the fail-closed 401 on both a management
+// write and an operator read.
+
+#[tokio::test]
+async fn sovereign_deployment_configure_rejects_unauthenticated() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    state.hydrate().await.unwrap();
+    let app = service(state);
+
+    let response = TestClient::post("http://server/_soland/self/deployment/configure")
+        .json(&json!({ "upstream_available": true }))
+        .send(&app)
+        .await;
+    assert_eq!(
+        response.status_code.unwrap(),
+        StatusCode::UNAUTHORIZED,
+        "deployment.configure must reject an unauthenticated caller"
+    );
+}
+
+#[tokio::test]
+async fn sovereign_deployment_audit_rejects_unauthenticated() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    state.hydrate().await.unwrap();
+    let app = service(state);
+
+    let response = TestClient::get("http://server/_soland/self/deployment/audit")
+        .send(&app)
+        .await;
+    assert_eq!(
+        response.status_code.unwrap(),
+        StatusCode::UNAUTHORIZED,
+        "deployment.audit must reject an unauthenticated caller"
+    );
+}

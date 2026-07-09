@@ -29,12 +29,62 @@
 //! event is `.result`, not `.status`, so the family classifier
 //! `is_agent_kind` can distinguish "still running" from "done".
 
+use std::sync::{Arc, OnceLock};
+
 use cokret_sdk::AgentLifecycleState;
 use serde_json::{Value, json};
+use tokio::sync::Semaphore;
 
 use super::projection::append_projection_event;
 use crate::state::{AppState, EventNotification, ProjectionEventRecord};
 use crate::{ids, kinds};
+
+/// Upper bound on in-flight outbound agent-bridge HTTP tasks. Agent
+/// endpoint URLs come from agent-registration data (lower trust); without
+/// a cap, a high rate of `ck.agent.interop_session.start` operations could
+/// spawn unbounded background tasks and outbound connections (task / FD /
+/// memory exhaustion). When saturated, the bridge fails closed with a
+/// `capacity_exhausted` result envelope instead of piling up work.
+const MAX_CONCURRENT_AGENT_BRIDGE_TASKS: usize = 64;
+
+/// Maximum bytes read from an upstream agent-endpoint response body. A
+/// compromised or malicious endpoint could otherwise return an unbounded
+/// body and trigger OOM (`response.json()` reads the whole body).
+const MAX_AGENT_BRIDGE_RESPONSE_BYTES: usize = 1024 * 1024;
+
+/// Process-level concurrency gate for outbound agent-bridge tasks.
+fn agent_bridge_semaphore() -> &'static Arc<Semaphore> {
+    static SEM: OnceLock<Arc<Semaphore>> = OnceLock::new();
+    SEM.get_or_init(|| Arc::new(Semaphore::new(MAX_CONCURRENT_AGENT_BRIDGE_TASKS)))
+}
+
+/// Read an upstream JSON response body with a hard byte ceiling. Rejects
+/// early on a `Content-Length` over the limit, then streams chunks and
+/// aborts if the accumulated size would exceed `max_bytes`.
+pub(super) async fn read_json_body_limited(
+    mut response: reqwest::Response,
+    max_bytes: usize,
+) -> Result<Value, String> {
+    if let Some(len) = response.content_length()
+        && len as usize > max_bytes
+    {
+        return Err(format!(
+            "response body Content-Length {len} exceeds {max_bytes} byte limit"
+        ));
+    }
+    let mut buf: Vec<u8> = Vec::new();
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|error| format!("response body read: {error}"))?
+    {
+        if buf.len() + chunk.len() > max_bytes {
+            return Err(format!("response body exceeds {max_bytes} byte limit"));
+        }
+        buf.extend_from_slice(&chunk);
+    }
+    serde_json::from_slice(&buf).map_err(|error| format!("response body parse: {error}"))
+}
 
 /// Reference Ed25519 signing seed used by the in-process echo
 /// runtime to sign `audit_binding` blocks. The 32-byte seed produces
@@ -225,6 +275,29 @@ pub async fn maybe_emit_echo_result_for_session_start(
     let realm_id_string = operation.realm_id.to_string();
     let echo_value = params.clone();
     if let Some(endpoint_url) = agent_endpoint_url.clone() {
+        // Bound the number of in-flight outbound bridge tasks. When the
+        // gate is saturated, fail closed with a terminal result envelope
+        // instead of spawning an unbounded background task.
+        let permit = match agent_bridge_semaphore().clone().try_acquire_owned() {
+            Ok(permit) => permit,
+            Err(_) => {
+                emit_agent_result_envelope(
+                    state,
+                    &realm_id_string,
+                    &session_id,
+                    &agent_principal_id,
+                    &agent_protocol,
+                    Some(&endpoint_url),
+                    origin,
+                    AgentInvocationOutcome::UpstreamFailure {
+                        code: "capacity_exhausted".to_owned(),
+                        message: "agent bridge outbound concurrency limit reached".to_owned(),
+                    },
+                )
+                .await;
+                return;
+            }
+        };
         // Outbound HTTP path. Clone what the spawned task needs and
         // let `project_accepted_operations` return immediately.
         let state_clone = state.clone();
@@ -236,6 +309,9 @@ pub async fn maybe_emit_echo_result_for_session_start(
         let endpoint_url_for_detail = endpoint_url.clone();
         let development_mode = state.config.development_mode;
         tokio::spawn(async move {
+            // Held for the task's lifetime; released on completion so the
+            // gate reflects only in-flight outbound calls.
+            let _permit = permit;
             let outcome = forward_to_agent_endpoint(
                 &endpoint_url,
                 &session_id_clone,
@@ -349,13 +425,13 @@ async fn forward_to_agent_endpoint(
             message: format!("POST {endpoint_url} returned {status}"),
         };
     }
-    match response.json::<Value>().await {
+    match read_json_body_limited(response, MAX_AGENT_BRIDGE_RESPONSE_BYTES).await {
         Ok(parsed) => AgentInvocationOutcome::UpstreamSuccess {
             response_body: parsed,
         },
-        Err(err) => AgentInvocationOutcome::UpstreamFailure {
+        Err(message) => AgentInvocationOutcome::UpstreamFailure {
             code: "upstream_invalid_json".to_owned(),
-            message: format!("response body parse: {err}"),
+            message,
         },
     }
 }
