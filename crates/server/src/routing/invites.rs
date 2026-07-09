@@ -414,7 +414,7 @@ async fn persist_invite_quarantine_entry(
     let idempotency_key_digest =
         format!("sha256:{}", sha256_hex(delivery.idempotency_key.as_bytes()));
     let quarantine_id = format!(
-        "ck:invite_quarantine:{}",
+        "ak:invite_quarantine:{}",
         sha256_hex(
             format!(
                 "{subject}|{source_service_did}|{}|{invite_event_digest}",

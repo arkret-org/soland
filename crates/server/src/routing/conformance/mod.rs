@@ -43,7 +43,7 @@
 //! **Dependency posture.** This module does NOT depend on the `cotest`
 //! crate — see [`util`] for the rationale. The primitives are forked from
 //! `cotest/src/conformance/mod.rs`, with the spec
-//! (`cokret-spec/spec/v1/zh/conformance/conformance-vectors.md`) as the
+//! (`arkret-spec/spec/v1/zh/conformance/conformance-vectors.md`) as the
 //! shared source of truth.
 
 use std::sync::OnceLock;

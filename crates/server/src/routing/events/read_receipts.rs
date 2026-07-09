@@ -332,7 +332,7 @@ async fn target_event_visible_to_session(
         return false;
     };
     if effective_scope_for_envelope(&target.envelope)
-        .is_some_and(|scope| scope.starts_with("ck:circle:"))
+        .is_some_and(|scope| scope.starts_with("ak:circle:"))
     {
         return false;
     }

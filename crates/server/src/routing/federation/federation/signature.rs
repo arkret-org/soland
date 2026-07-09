@@ -776,7 +776,7 @@ pub(crate) fn trust_domain_from_service_did(service_did: &str) -> String {
             .to_ascii_lowercase()
             .replace(':', ".")
     });
-    format!("ck:trust_domain:{scope}")
+    format!("ak:trust_domain:{scope}")
 }
 
 fn signature_error(message: impl Into<String>) -> AppError {
@@ -807,7 +807,7 @@ mod tests {
             trust_domain_from_service_did(
                 "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:local.host:webvh:service"
             ),
-            "ck:trust_domain:local.host"
+            "ak:trust_domain:local.host"
         );
     }
 

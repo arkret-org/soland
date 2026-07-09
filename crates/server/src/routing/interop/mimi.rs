@@ -2,10 +2,10 @@
 //!
 //! Surfaces under `/_cokret/open/mimi/*` plus the well-known
 //! `mimi-protocol-directory`. Writes from the MIMI side map into the
-//! canonical Cokret reducer chain:
+//! canonical Arkret reducer chain:
 //!
 //!   * `POST /mimi/strands/{strand_id}/messages` -> emits a `MessageRecord` + a `ck.message.create`
-//!     projection event so the MIMI ingress shows up on the canonical Cokret timeline.
+//!     projection event so the MIMI ingress shows up on the canonical Arkret timeline.
 //!   * `POST /mimi/strands/{strand_id}/update` -> emits a `ck.mimi.room_binding` projection event
 //!     whenever the update body carries a `room_binding` block.
 //!   * `POST /mimi/strands/{strand_id}/notify` -> broadcasts a synthetic
@@ -15,7 +15,7 @@
 //!
 //! Each canonical event carries `payload.mimi_provenance` metadata
 //! (provider id, original MIMI envelope hash, MIMI message id) so
-//! the receiving Cokret consumer can prove the message arrived
+//! the receiving Arkret consumer can prove the message arrived
 //! through the MIMI facade rather than as a native signed Move.
 
 use std::collections::BTreeMap;

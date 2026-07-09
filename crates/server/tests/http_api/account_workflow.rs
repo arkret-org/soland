@@ -24,7 +24,7 @@ async fn account_viewer_returns_device_summaries() {
     assert_eq!(devices.len(), 1);
     assert_eq!(
         devices[0]["device_id"],
-        "ck:device:01904100-0000-7000-8000-a11ce0000001"
+        "ak:device:01904100-0000-7000-8000-a11ce0000001"
     );
     assert_eq!(devices[0]["display_name"], "Alice Desktop");
     assert_eq!(devices[0]["status"], "active");
@@ -66,7 +66,7 @@ async fn local_account_register_duplicate_conflict_and_me_reads_state() {
         state.clone(),
         "did:web:bob.example",
         "@bob",
-        "ck:device:01904100-0000-7000-8000-b0b0b0000002",
+        "ak:device:01904100-0000-7000-8000-b0b0b0000002",
     )
     .await;
 
@@ -74,7 +74,7 @@ async fn local_account_register_duplicate_conflict_and_me_reads_state() {
         .json(&serde_json::json!({
             "did": "did:web:bob.example",
             "handle": "@bob",
-            "device_id": "ck:device:01904100-0000-7000-8000-b0b0b0000022"
+            "device_id": "ak:device:01904100-0000-7000-8000-b0b0b0000022"
         }))
         .send(&app_from_state(state.clone()))
         .await;
@@ -99,7 +99,7 @@ async fn account_lifecycle_errors_surface_specific_codes() {
         state.clone(),
         "did:web:bob.example",
         "@bob",
-        "ck:device:01904100-0000-7000-8000-b0b0b0000002",
+        "ak:device:01904100-0000-7000-8000-b0b0b0000002",
     )
     .await;
 
@@ -125,7 +125,7 @@ async fn account_lifecycle_errors_surface_specific_codes() {
     let mut login = TestClient::post("http://server/_soland/gate/auth/dev-login")
         .json(&serde_json::json!({
             "actor": "did:web:bob.example",
-            "device_id": "ck:device:01904100-0000-7000-8000-b0b0b0000002",
+            "device_id": "ak:device:01904100-0000-7000-8000-b0b0b0000002",
             "display_name": "bob"
         }))
         .send(&app_from_state(state.clone()))
@@ -138,7 +138,7 @@ async fn account_lifecycle_errors_surface_specific_codes() {
         state.clone(),
         "did:web:carol.example",
         "@carol",
-        "ck:device:01904100-0000-7000-8000-ca2010000003",
+        "ak:device:01904100-0000-7000-8000-ca2010000003",
     )
     .await;
     let suspend: Value =
@@ -164,7 +164,7 @@ async fn account_lifecycle_errors_surface_specific_codes() {
     let mut suspended_login = TestClient::post("http://server/_soland/gate/auth/dev-login")
         .json(&serde_json::json!({
             "actor": "did:web:carol.example",
-            "device_id": "ck:device:01904100-0000-7000-8000-ca2010000003",
+            "device_id": "ak:device:01904100-0000-7000-8000-ca2010000003",
             "display_name": "carol"
         }))
         .send(&app_from_state(state.clone()))
@@ -177,7 +177,7 @@ async fn account_lifecycle_errors_surface_specific_codes() {
         state.clone(),
         "did:web:dave.example",
         "@dave",
-        "ck:device:01904100-0000-7000-8000-da4e00000004",
+        "ak:device:01904100-0000-7000-8000-da4e00000004",
     )
     .await;
     let deactivate: Value = TestClient::post("http://server/_soland/self/account/deactivate")
@@ -200,7 +200,7 @@ async fn account_lifecycle_errors_surface_specific_codes() {
     let mut deactivated_login = TestClient::post("http://server/_soland/gate/auth/dev-login")
         .json(&serde_json::json!({
             "actor": "did:web:dave.example",
-            "device_id": "ck:device:01904100-0000-7000-8000-da4e00000004",
+            "device_id": "ak:device:01904100-0000-7000-8000-da4e00000004",
             "display_name": "dave"
         }))
         .send(&app_from_state(state.clone()))
@@ -216,8 +216,8 @@ async fn account_lifecycle_errors_surface_specific_codes() {
 #[tokio::test]
 async fn account_viewer_does_not_authorize_unverified_session_device() {
     let state = AppState::new(test_config(), Db { pool: None });
-    let first_device = "ck:device:01904100-0000-7000-8000-a11ce0000001";
-    let second_device = "ck:device:01904100-0000-7000-8000-a11ce0000002";
+    let first_device = "ak:device:01904100-0000-7000-8000-a11ce0000001";
+    let second_device = "ak:device:01904100-0000-7000-8000-a11ce0000002";
     let _first = dev_token_for_device(
         state.clone(),
         "did:web:alice.example",
@@ -264,7 +264,7 @@ async fn account_viewer_authorizes_founding_device_registered_with_account() {
     // authorized rather than stranding the founding device behind a never-
     // satisfiable "approve from an existing device" prompt.
     let state = AppState::new(test_config(), Db { pool: None });
-    let founding_device = "ck:device:01904100-0000-7000-8000-b0b0b0000001";
+    let founding_device = "ak:device:01904100-0000-7000-8000-b0b0b0000001";
     let did = "did:web:bob.example";
     let registered: Value = TestClient::post("http://server/_cokret/gate/account/register")
         .json(&serde_json::json!({
@@ -308,7 +308,7 @@ async fn account_contacts_and_realm_lifecycle_workflow() {
         state.clone(),
         "did:web:bob.example",
         "@bob",
-        "ck:device:01904100-0000-7000-8000-b0b0b0000002",
+        "ak:device:01904100-0000-7000-8000-b0b0b0000002",
     )
     .await;
 
@@ -316,7 +316,7 @@ async fn account_contacts_and_realm_lifecycle_workflow() {
         .json(&serde_json::json!({
             "did": "did:web:bob.example",
             "handle": "@bob",
-            "device_id": "ck:device:01904100-0000-7000-8000-b0b0b0000022"
+            "device_id": "ak:device:01904100-0000-7000-8000-b0b0b0000022"
         }))
         .send(&app_from_state(state.clone()))
         .await;
@@ -434,7 +434,7 @@ async fn account_contacts_and_realm_lifecycle_workflow() {
     )
     .await;
     let realm_id = created_realm["realm_id"].as_str().unwrap().to_owned();
-    assert!(realm_id.starts_with("ck:realm:"));
+    assert!(realm_id.starts_with("ak:realm:"));
     assert_eq!(created_realm["owner"], "did:web:alice.example");
 
     let hidden_realm: Value =
@@ -481,7 +481,7 @@ async fn account_contacts_and_realm_lifecycle_workflow() {
         .to_owned();
     let invalid_invite_resolve =
         TestClient::post("http://server/_cokret/find/directory/resolve-realm")
-            .json(&serde_json::json!({"invite_token": "ck:invite-token:invalid"}))
+            .json(&serde_json::json!({"invite_token": "ak:invite-token:invalid"}))
             .send(&app_from_state(state.clone()))
             .await;
     assert_eq!(invalid_invite_resolve.status_code.unwrap().as_u16(), 404);
@@ -626,7 +626,7 @@ async fn account_contacts_and_realm_lifecycle_workflow() {
         encrypted_message["event_id"]
             .as_str()
             .unwrap()
-            .starts_with("ck:event:")
+            .starts_with("ak:event:")
     );
 
     let bob_private_sync = account_subscribe_frame(state.clone(), Some(&bob), "catchup=true").await;
@@ -651,7 +651,7 @@ async fn account_contacts_and_realm_lifecycle_workflow() {
         &alice,
         "did:web:alice.example",
         &realm_id,
-        "ck:strand:workflow",
+        "ak:strand:workflow",
         serde_json::json!({"body": "hello workflow"}),
         false,
     )
@@ -660,7 +660,7 @@ async fn account_contacts_and_realm_lifecycle_workflow() {
         sent_message["operation_id"]
             .as_str()
             .unwrap()
-            .starts_with("ck:operation:")
+            .starts_with("ak:operation:")
     );
     assert_eq!(sent_message["realm_id"], realm_id);
     assert_eq!(sent_message["source_realm_id"], realm_id);
@@ -674,7 +674,7 @@ async fn account_contacts_and_realm_lifecycle_workflow() {
         &alice,
         "did:web:alice.example",
         &realm_id,
-        "ck:strand:workflow",
+        "ak:strand:workflow",
         serde_json::json!({"kind": "ck.content.composite", "body": "invalid", "parts": [{"kind": "ck.content.image", "body": "image"}]}),
         false,
     )
@@ -686,7 +686,7 @@ async fn account_contacts_and_realm_lifecycle_workflow() {
         &alice,
         "did:web:alice.example",
         &realm_id,
-        "ck:strand:workflow",
+        "ak:strand:workflow",
         serde_json::json!({"kind": "ck.content.location", "body": "location", "latitude": 31.2304, "longitude": 121.4737}),
         false,
     )
@@ -698,7 +698,7 @@ async fn account_contacts_and_realm_lifecycle_workflow() {
         &alice,
         "did:web:alice.example",
         &realm_id,
-        "ck:strand:workflow",
+        "ak:strand:workflow",
         serde_json::json!({"body": "bad mention", "mentions": [{"type": "actor", "did": "alice"}]}),
         false,
     )
@@ -710,13 +710,13 @@ async fn account_contacts_and_realm_lifecycle_workflow() {
         &alice,
         "did:web:alice.example",
         &realm_id,
-        "ck:strand:workflow",
+        "ak:strand:workflow",
         serde_json::json!({
             "kind": "ck.content.composite",
             "body": "structured hello",
             "mentions": [
                 "did:web:bob.example",
-                {"type": "strand", "strand_id": "ck:strand:01904100-0000-7000-8000-170d4f3bfc7b"}
+                {"type": "strand", "strand_id": "ak:strand:01904100-0000-7000-8000-170d4f3bfc7b"}
             ],
             "parts": [
                 {"kind": "ck.content.text", "body": "structured hello"},
@@ -741,7 +741,7 @@ async fn account_contacts_and_realm_lifecycle_workflow() {
     assert!(
         block_message["event_id"]
             .as_str()
-            .is_some_and(|event_id| event_id.starts_with("ck:event:")),
+            .is_some_and(|event_id| event_id.starts_with("ak:event:")),
         "block message response: {block_message}"
     );
 
@@ -867,7 +867,7 @@ async fn account_contacts_and_realm_lifecycle_workflow() {
         &alice,
         "did:web:alice.example",
         &realm_id,
-        "ck:strand:workflow",
+        "ak:strand:workflow",
         serde_json::json!({"body": "second workflow"}),
         false,
     )
@@ -948,7 +948,7 @@ async fn account_contacts_and_realm_lifecycle_workflow() {
 
     let invalid_wait = TestClient::get("http://server/_cokret/self/account/subscribe?catchup=true")
         .add_header("authorization", format!("Bearer {alice}"), true)
-        .add_header("x-cokret-wait-for", "not-a-sync-token", true)
+        .add_header("x-arkret-wait-for", "not-a-sync-token", true)
         .send(&app_from_state(state.clone()))
         .await;
     assert_eq!(invalid_wait.status_code.unwrap().as_u16(), 400);
@@ -975,7 +975,7 @@ async fn account_contacts_and_realm_lifecycle_workflow() {
     .await
     .unwrap();
     assert_eq!(snapshot["frontier"]["message_count"], 3);
-    assert!(snapshot["id"].as_str().unwrap().starts_with("ck:snapshot:"));
+    assert!(snapshot["id"].as_str().unwrap().starts_with("ak:snapshot:"));
     assert!(
         !snapshot["dev_digest"]["digest"]
             .as_str()

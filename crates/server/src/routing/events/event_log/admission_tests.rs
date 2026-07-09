@@ -55,13 +55,13 @@ fn frozen_realm_blocks_ordinary_write_but_allows_lifecycle_escape() {
 #[test]
 fn cross_signing_reset_replay_rejects_wrong_trust_domain() {
     let payload = json!({
-        "trust_domain": "ck:trust_domain:other.example",
-        "reset_event_id": "ck:event:01904100-0000-7000-8000-000000000001",
+        "trust_domain": "ak:trust_domain:other.example",
+        "reset_event_id": "ak:event:01904100-0000-7000-8000-000000000001",
     });
     let err = cross_signing_reset_replay_check(
         &payload,
-        "ck:event:01904100-0000-7000-8000-000000000001",
-        "ck:trust_domain:soland.local",
+        "ak:event:01904100-0000-7000-8000-000000000001",
+        "ak:trust_domain:soland.local",
     )
     .unwrap_err();
     assert_eq!(err.0, ErrorCode::Unauthenticated);
@@ -70,13 +70,13 @@ fn cross_signing_reset_replay_rejects_wrong_trust_domain() {
 #[test]
 fn cross_signing_reset_replay_rejects_wrong_event_id() {
     let payload = json!({
-        "trust_domain": "ck:trust_domain:soland.local",
-        "reset_event_id": "ck:event:01904100-0000-7000-8000-000000000002",
+        "trust_domain": "ak:trust_domain:soland.local",
+        "reset_event_id": "ak:event:01904100-0000-7000-8000-000000000002",
     });
     let err = cross_signing_reset_replay_check(
         &payload,
-        "ck:event:01904100-0000-7000-8000-000000000001",
-        "ck:trust_domain:soland.local",
+        "ak:event:01904100-0000-7000-8000-000000000001",
+        "ak:trust_domain:soland.local",
     )
     .unwrap_err();
     assert_eq!(err.0, ErrorCode::FailedPrecondition);
@@ -85,13 +85,13 @@ fn cross_signing_reset_replay_rejects_wrong_event_id() {
 #[test]
 fn cross_signing_reset_replay_passes_when_matched() {
     let payload = json!({
-        "trust_domain": "ck:trust_domain:soland.local",
-        "reset_event_id": "ck:event:01904100-0000-7000-8000-000000000001",
+        "trust_domain": "ak:trust_domain:soland.local",
+        "reset_event_id": "ak:event:01904100-0000-7000-8000-000000000001",
     });
     cross_signing_reset_replay_check(
         &payload,
-        "ck:event:01904100-0000-7000-8000-000000000001",
-        "ck:trust_domain:soland.local",
+        "ak:event:01904100-0000-7000-8000-000000000001",
+        "ak:trust_domain:soland.local",
     )
     .unwrap();
 }
@@ -174,12 +174,12 @@ fn realm_policy_components_media_decrypt_digest_recompute_gate() {
 fn federation_binding_rejects_duplicate_frontier_entries() {
     let req = EventsSubmitFederationRequestBody {
         service_binding_ref: cokret_sdk::FederationServiceBindingRef {
-            realm_id: RealmId::new("ck:realm:01904100-0000-7000-8000-000000000001").unwrap(),
+            realm_id: RealmId::new("ak:realm:01904100-0000-7000-8000-000000000001").unwrap(),
             realm_policy_digest: cokret_sdk::Hash::new(format!("sha256:{}", "1".repeat(64)))
                 .unwrap(),
             membership_frontier: vec![
-                cokret_sdk::EventId::new("ck:event:01904100-0000-7000-8000-000000000001").unwrap(),
-                cokret_sdk::EventId::new("ck:event:01904100-0000-7000-8000-000000000001").unwrap(),
+                cokret_sdk::EventId::new("ak:event:01904100-0000-7000-8000-000000000001").unwrap(),
+                cokret_sdk::EventId::new("ak:event:01904100-0000-7000-8000-000000000001").unwrap(),
             ],
             delivery_binding_frontier: Vec::new(),
             destination_service_type: "principal_server".to_owned(),
@@ -199,10 +199,10 @@ fn federation_binding_rejects_duplicate_frontier_entries() {
 #[test]
 fn federation_binding_rejects_reducer_profile_digest_mismatch() {
     let event_id =
-        cokret_sdk::EventId::new("ck:event:01904100-0000-7000-8000-000000000001").unwrap();
+        cokret_sdk::EventId::new("ak:event:01904100-0000-7000-8000-000000000001").unwrap();
     let req = EventsSubmitFederationRequestBody {
         service_binding_ref: cokret_sdk::FederationServiceBindingRef {
-            realm_id: RealmId::new("ck:realm:01904100-0000-7000-8000-000000000001").unwrap(),
+            realm_id: RealmId::new("ak:realm:01904100-0000-7000-8000-000000000001").unwrap(),
             realm_policy_digest: cokret_sdk::Hash::new(format!("sha256:{}", "1".repeat(64)))
                 .unwrap(),
             membership_frontier: vec![event_id.clone()],
@@ -225,10 +225,10 @@ fn federation_binding_rejects_reducer_profile_digest_mismatch() {
 #[test]
 fn federation_binding_accepts_registry_reducer_profile_digest() {
     let event_id =
-        cokret_sdk::EventId::new("ck:event:01904100-0000-7000-8000-000000000001").unwrap();
+        cokret_sdk::EventId::new("ak:event:01904100-0000-7000-8000-000000000001").unwrap();
     let req = EventsSubmitFederationRequestBody {
         service_binding_ref: cokret_sdk::FederationServiceBindingRef {
-            realm_id: RealmId::new("ck:realm:01904100-0000-7000-8000-000000000001").unwrap(),
+            realm_id: RealmId::new("ak:realm:01904100-0000-7000-8000-000000000001").unwrap(),
             realm_policy_digest: cokret_sdk::Hash::new(format!("sha256:{}", "1".repeat(64)))
                 .unwrap(),
             membership_frontier: vec![event_id.clone()],
@@ -250,23 +250,23 @@ fn federation_binding_accepts_registry_reducer_profile_digest() {
 #[test]
 fn federation_delivery_binding_frontier_rejects_empty_or_stale_basis() {
     let event_id =
-        cokret_sdk::EventId::new("ck:event:01904100-0000-7000-8000-000000000001").unwrap();
-    let current = vec!["ck:event:01904100-0000-7000-8000-000000000001".to_owned()];
+        cokret_sdk::EventId::new("ak:event:01904100-0000-7000-8000-000000000001").unwrap();
+    let current = vec!["ak:event:01904100-0000-7000-8000-000000000001".to_owned()];
 
     federation_delivery_binding_frontier_is_current(std::slice::from_ref(&event_id), current)
         .unwrap();
 
-    let stale = cokret_sdk::EventId::new("ck:event:01904100-0000-7000-8000-000000000002").unwrap();
+    let stale = cokret_sdk::EventId::new("ak:event:01904100-0000-7000-8000-000000000002").unwrap();
     let err = federation_delivery_binding_frontier_is_current(
         &[stale],
-        vec!["ck:event:01904100-0000-7000-8000-000000000001".to_owned()],
+        vec!["ak:event:01904100-0000-7000-8000-000000000001".to_owned()],
     )
     .unwrap_err();
     assert_eq!(err, "delivery_binding_stale");
 
     let err = federation_delivery_binding_frontier_is_current(
         &[],
-        vec!["ck:event:01904100-0000-7000-8000-000000000001".to_owned()],
+        vec!["ak:event:01904100-0000-7000-8000-000000000001".to_owned()],
     )
     .unwrap_err();
     assert_eq!(err, "schema_violation");

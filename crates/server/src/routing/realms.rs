@@ -67,7 +67,7 @@ pub(crate) fn router() -> Router {
 /// `conformance/schema-registry.md:178`) that MUST NOT use the `ck.*` prefix or
 /// occupy the `/_cokret/...` protocol root before formal registration. It is
 /// gated behind the `ck.profile.candidate.join_policy.v1` profile and uses the
-/// reverse-domain `org.cokret.soland.*` operation namespace.
+/// reverse-domain `org.arkret.soland.*` operation namespace.
 pub(crate) fn local_router() -> Router {
     Router::with_path("realms")
         .push(Router::with_path("{realm_id}/applications").get(list_member_applications))
@@ -186,7 +186,7 @@ pub struct MemberApplicationEntry {
 }
 
 /// Outcome of the product-local member-application listing
-/// (`org.cokret.soland.member_application.query.list`).
+/// (`org.arkret.soland.member_application.query.list`).
 #[derive(Debug, Clone, serde::Serialize, salvo::oapi::ToSchema)]
 pub struct MemberApplicationListOutcome {
     /// The Realm the applications are scoped to.
@@ -202,17 +202,17 @@ pub struct MemberApplicationListOutcome {
 /// schema-registry.md:178): it MUST stay off the `/_cokret/...` protocol root and
 /// the `ck.*` namespace until formally registered, so this read surface lives on
 /// the product-local `/_soland/self/realms/{realm_id}/applications` URL under the
-/// reverse-domain `org.cokret.soland.*` namespace and is fail-closed (404) unless
+/// reverse-domain `org.arkret.soland.*` namespace and is fail-closed (404) unless
 /// the deployment declares `ck.profile.candidate.join_policy.v1`. Each reviewer
 /// read of an application body is logged as `ck.audit.accessed` (§8.1).
 #[endpoint(
-    operation_id = "org.cokret.soland.member_application.query.list",
+    operation_id = "org.arkret.soland.member_application.query.list",
     tags("soland-local"),
     summary = "List join-policy member applications scoped by viewer (candidate profile)"
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "org.cokret.soland.member_application.query.list")
+    fields(op = "org.arkret.soland.member_application.query.list")
 )]
 async fn list_member_applications(
     aa: AuthArgs,
@@ -436,13 +436,13 @@ async fn delete_realm_link(
 /// Body shape:
 /// ```json
 /// {
-///   "realm_id": "ck:realm:...",
+///   "realm_id": "ak:realm:...",
 ///   "effective_policy": {
 ///     "allowed_policies": [...],
 ///     "allowed_capability_bundles": [...],
 ///     "organization_policy_layers": [...]
 ///   },
-///   "inheritance_chain": ["ck:space:...parent...", "ck:space:...grandparent..."],
+///   "inheritance_chain": ["ak:space:...parent...", "ak:space:...grandparent..."],
 ///   "inheritance_mode": "explicit" | "none"
 /// }
 /// ```

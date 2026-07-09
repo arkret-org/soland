@@ -59,18 +59,18 @@ fn bottom_entry_from_camel_case_kind_normalises_to_snake_case() {
     // shaping helper bridges the two.
     let bottom = json!({
         "kind": "Conflict",
-        "event_ids": ["ck:event:a", "ck:event:b"],
+        "event_ids": ["ak:event:a", "ak:event:b"],
         "details": "two heads"
     });
     let entry = bottom_entry_from(
-        "ck:space:01904100-0000-7000-8000-2dd3431bd65a",
-        "ck:cell:ck.component.space.title.v1:ck:space:01904100-0000-7000-8000-2dd3431bd65a",
+        "ak:space:01904100-0000-7000-8000-2dd3431bd65a",
+        "ak:cell:ck.component.space.title.v1:ck:space:01904100-0000-7000-8000-2dd3431bd65a",
         &bottom,
     );
     assert_eq!(entry.kind, "conflict");
     assert_eq!(entry.event_ids.len(), 2);
     assert_eq!(entry.candidate_heads.len(), 2);
-    assert_eq!(entry.candidate_heads[0].event_id, "ck:event:a");
+    assert_eq!(entry.candidate_heads[0].event_id, "ak:event:a");
     assert_eq!(entry.details.as_deref(), Some("two heads"));
 }
 
@@ -78,12 +78,12 @@ fn bottom_entry_from_camel_case_kind_normalises_to_snake_case() {
 fn bottom_entry_from_non_conflict_kind_has_no_candidate_heads() {
     let bottom = json!({
         "kind": "InvalidTransition",
-        "event_ids": ["ck:event:x"],
+        "event_ids": ["ak:event:x"],
         "details": "fsm rejected from invited→ban"
     });
     let entry = bottom_entry_from(
-        "ck:space:01904100-0000-7000-8000-2dd3431bd65a",
-        "ck:cell:ck.component.member.state.v1:did.web.alice",
+        "ak:space:01904100-0000-7000-8000-2dd3431bd65a",
+        "ak:cell:ck.component.member.state.v1:did.web.alice",
         &bottom,
     );
     assert_eq!(entry.kind, "invalid_transition");
@@ -95,14 +95,14 @@ fn bottom_repair_request_body_round_trips_through_serde() {
     let head_in = BottomRepairRequestBody {
         strategy: BottomRepairStrategy::HeadInWinner {
             head: BottomCandidateHead {
-                event_id: "ck:event:abc".to_owned(),
+                event_id: "ak:event:abc".to_owned(),
                 issuer: Some("did:ck:alice".to_owned()),
                 hlc: None,
                 summary: None,
             },
-            recovery_capability_ref: "ck:grant:recovery".to_owned(),
-            state_witness_ref: format!("ck:seal:sha256:{}", "11".repeat(32)),
-            state_witness_inclusion_proof_ref: Some("ck:proof:state-witness".to_owned()),
+            recovery_capability_ref: "ak:grant:recovery".to_owned(),
+            state_witness_ref: format!("ak:seal:sha256:{}", "11".repeat(32)),
+            state_witness_inclusion_proof_ref: Some("ak:proof:state-witness".to_owned()),
         },
     };
     let j = serde_json::to_value(&head_in).unwrap();
@@ -118,12 +118,12 @@ fn bottom_repair_request_body_round_trips_through_serde() {
             state_witness_ref,
             state_witness_inclusion_proof_ref,
         } => {
-            assert_eq!(head.event_id, "ck:event:abc");
-            assert_eq!(recovery_capability_ref, "ck:grant:recovery");
-            assert!(state_witness_ref.starts_with("ck:seal:sha256:"));
+            assert_eq!(head.event_id, "ak:event:abc");
+            assert_eq!(recovery_capability_ref, "ak:grant:recovery");
+            assert!(state_witness_ref.starts_with("ak:seal:sha256:"));
             assert_eq!(
                 state_witness_inclusion_proof_ref.as_deref(),
-                Some("ck:proof:state-witness")
+                Some("ak:proof:state-witness")
             );
         }
         other => panic!("expected HeadInWinner, got {other:?}"),
@@ -178,10 +178,10 @@ fn notary_reconfig_body_converts_to_sdk_authoritative_cell_value() {
 
 #[test]
 fn notary_cell_for_builds_canonical_cell_ref() {
-    let cell = notary_cell_for("ck:space:01904100-0000-7000-8000-2dd3431bd65a").unwrap();
+    let cell = notary_cell_for("ak:space:01904100-0000-7000-8000-2dd3431bd65a").unwrap();
     assert_eq!(
         cell.as_str(),
-        "ck:cell:ck.component.notary.v1:ck:space:01904100-0000-7000-8000-2dd3431bd65a"
+        "ak:cell:ck.component.notary.v1:ck:space:01904100-0000-7000-8000-2dd3431bd65a"
     );
 }
 

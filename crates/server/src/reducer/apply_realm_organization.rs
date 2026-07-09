@@ -181,7 +181,7 @@ impl ProjectionState {
         relationship: &str,
     ) -> Option<cokret_sdk::CellRef> {
         cokret_sdk::CellRef::new(format!(
-            "ck:cell:ck.component.realm.organization.v1:{organization_id}::{relationship}"
+            "ak:cell:ck.component.realm.organization.v1:{organization_id}::{relationship}"
         ))
         .ok()
     }
@@ -338,8 +338,8 @@ mod tests {
 
     use super::*;
 
-    const REALM: &str = "ck:realm:0196419b-0000-7000-8000-000000000010";
-    const REALM_OTHER: &str = "ck:realm:0196419b-0000-7000-8000-000000000099";
+    const REALM: &str = "ak:realm:0196419b-0000-7000-8000-000000000010";
+    const REALM_OTHER: &str = "ak:realm:0196419b-0000-7000-8000-000000000099";
     const ORG: &str = "did:webvh:example.test:orgs:01J0000000000000000000000A";
     const ORG2: &str = "did:webvh:example.test:orgs:01J0000000000000000000000B";
 
@@ -351,7 +351,7 @@ mod tests {
 
     fn op(realm_id: &str, payload: Value) -> Operation {
         Operation::create(
-            OperationId::new(format!("ck:operation:{}", uuid::Uuid::now_v7())).unwrap(),
+            OperationId::new(format!("ak:operation:{}", uuid::Uuid::now_v7())).unwrap(),
             RealmId::new(realm_id).unwrap(),
             cokret_sdk::events::kinds::REALM_ORGANIZATION,
             payload,
@@ -558,7 +558,7 @@ mod tests {
         let mut payload = active_payload(REALM, ORG, "governance", &["moderation_policy"]);
         payload["authorization"]["issuer_role"] = json!("account_authority");
         payload["authorization"]["delegation_ref"] =
-            json!("ck:grant:01904100-0000-7000-8000-000000000001");
+            json!("ak:grant:01904100-0000-7000-8000-000000000001");
         let effect = apply(&mut state, payload);
         assert!(matches!(effect, ProjectionEffect::Rejected { .. }));
     }

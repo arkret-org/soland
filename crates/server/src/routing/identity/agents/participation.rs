@@ -137,7 +137,7 @@ pub(super) async fn set_agent_participation(
 pub(super) fn participation_grant_id(agent_principal_id: &str, scope_key: &str) -> String {
     use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
-    hasher.update(b"ck:grant:agent_participation:v1:");
+    hasher.update(b"ak:grant:agent_participation:v1:");
     hasher.update(agent_principal_id.as_bytes());
     hasher.update(b"\0");
     hasher.update(scope_key.as_bytes());
@@ -150,7 +150,7 @@ pub(super) fn participation_grant_id(agent_principal_id: &str, scope_key: &str) 
     bytes[8] = (bytes[8] & 0x3F) | 0x80;
     let g = |slice: &[u8]| slice.iter().map(|b| format!("{b:02x}")).collect::<String>();
     format!(
-        "ck:grant:{}-{}-{}-{}-{}",
+        "ak:grant:{}-{}-{}-{}-{}",
         g(&bytes[0..4]),
         g(&bytes[4..6]),
         g(&bytes[6..8]),
@@ -183,7 +183,7 @@ pub(super) fn participation_scope_resource(scope: &AgentParticipationScope) -> V
 }
 
 pub(super) fn is_capability_grant_id(grant_id: &str) -> bool {
-    grant_id.starts_with("ck:grant:")
+    grant_id.starts_with("ak:grant:")
 }
 
 pub(super) fn normalize_sidecar_exposure_ack(

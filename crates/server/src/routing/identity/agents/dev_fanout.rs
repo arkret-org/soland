@@ -59,8 +59,8 @@ pub(super) async fn submit_agent_fanout_event(
         .unwrap_or(0)
         + 1;
     let event_uuid = uuid::Uuid::now_v7();
-    let event_id = format!("ck:event:{event_uuid}");
-    let operation_alias = format!("ck:operation:{}", uuid::Uuid::now_v7());
+    let event_id = format!("ak:event:{event_uuid}");
+    let operation_alias = format!("ak:operation:{}", uuid::Uuid::now_v7());
     let payload_bytes = canonical::canonical_json_bytes(&payload).unwrap_or_default();
     let payload_digest = canonical::sha256_digest(&payload_bytes);
     // Envelope created_at MUST be canonical RFC3339 UTC with no fractional
@@ -124,7 +124,7 @@ fn self_realm_create_payload(controller_did: &str, service_did: &str, realm_id: 
             "title": "Personal Agent Control",
             "summary": "Controller self realm hosting personal agent identity events.",
             "created_by": controller_did,
-            "trust_domain": "ck:trust_domain:soland.local",
+            "trust_domain": "ak:trust_domain:soland.local",
             "schema_refs": ["ck.schema.realm.v1"],
             "default_discoverability": "listed",
             "default_join_rule": "invite",
@@ -169,7 +169,7 @@ pub(super) async fn fanout_provision_subevents(
     //    is not wired; list/get read the agent_principals table).
     let profile_payload = json!({
         "value": {
-            "id": format!("ck:actor_profile:{agent_principal_id}"),
+            "id": format!("ak:actor_profile:{agent_principal_id}"),
             "schema": "ck.schema.actor_profile.v1",
             "actor_id": agent_principal_id,
             "actor_kind": "agent",
@@ -409,7 +409,7 @@ pub(super) async fn submit_durable_key_authorize(
             .to_rfc3339_opts(SecondsFormat::Secs, true),
         "approval_evidence": {
             "kind": "approval_event",
-            "ref": format!("ck:event:{}", uuid::Uuid::now_v7()),
+            "ref": format!("ak:event:{}", uuid::Uuid::now_v7()),
         },
     });
     submit_agent_fanout_event(state, session, realm_id, "ck.agent.key.authorize", payload).await
@@ -567,10 +567,10 @@ pub(super) async fn submit_revoke_agent_grants(
 pub(super) fn default_agent_key_id(agent_principal_id: &str) -> String {
     use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
-    hasher.update(b"ck:agent_key:dev:v1:");
+    hasher.update(b"ak:agent_key:dev:v1:");
     hasher.update(agent_principal_id.as_bytes());
     let digest = hasher.finalize();
-    format!("ck:agent_key:{}", hex::encode(&digest[..16]))
+    format!("ak:agent_key:{}", hex::encode(&digest[..16]))
 }
 
 #[cfg(test)]
@@ -621,7 +621,7 @@ mod tests {
     fn requested_scope_actions_filter_service_surface_from_content_grant() {
         let requested = json!({
             "actions": [SCOPE_EVENTS_STREAM_SUBSCRIBE, SCOPE_EVENTS_QUERY_SCAN, ACTION_MESSAGE_CREATE],
-            "resources": [{ "kind": "realm", "realm_id": "ck:realm:test" }]
+            "resources": [{ "kind": "realm", "realm_id": "ak:realm:test" }]
         });
 
         assert_eq!(
@@ -634,7 +634,7 @@ mod tests {
     fn requested_scope_service_only_creates_no_content_grant() {
         let requested = json!({
             "actions": [SCOPE_EVENTS_STREAM_SUBSCRIBE, SCOPE_EVENTS_QUERY_SCAN],
-            "resources": [{ "kind": "realm", "realm_id": "ck:realm:test" }]
+            "resources": [{ "kind": "realm", "realm_id": "ak:realm:test" }]
         });
 
         assert!(initial_grant_actions(&requested).is_empty());

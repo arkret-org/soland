@@ -894,7 +894,7 @@ async fn complete_resumable_upload(
     // the same bytes would produce (spec §2.1 content-addressing
     // invariant).
     let media_type = "application/octet-stream".to_owned();
-    let blob_ref = format!("ck:blob:sha256:{sha256}");
+    let blob_ref = format!("ak:blob:sha256:{sha256}");
     let storage_key = state.object_storage.object_key_for_sha256(&sha256);
     if let Err(error) = state
         .object_storage

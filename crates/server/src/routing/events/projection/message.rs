@@ -11,7 +11,7 @@ pub async fn project_federated_message(state: &AppState, origin: &str, operation
         .map(ToOwned::to_owned)
         .unwrap_or_else(|| {
             format!(
-                "ck:event:{}",
+                "ak:event:{}",
                 operation.operation_id.as_str().replace(':', "")
             )
         });

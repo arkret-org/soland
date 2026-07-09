@@ -290,8 +290,8 @@ impl ProjectionState {
         };
         match type_constraint {
             "did" => object_ref.starts_with("did:"),
-            "realm" => object_ref.starts_with("ck:realm:"),
-            "space" => object_ref.starts_with("ck:space:"),
+            "realm" => object_ref.starts_with("ak:realm:"),
+            "space" => object_ref.starts_with("ak:space:"),
             "space:board" => self
                 .space_containers
                 .get(object_ref)
@@ -300,18 +300,18 @@ impl ProjectionState {
                 .space_containers
                 .get(object_ref)
                 .is_some_and(|space| space.kind == "list"),
-            "strand" => object_ref.starts_with("ck:strand:"),
+            "strand" => object_ref.starts_with("ak:strand:"),
             "message" => {
-                object_ref.starts_with("ck:message:") || object_ref.starts_with("ck:event:")
+                object_ref.starts_with("ak:message:") || object_ref.starts_with("ak:event:")
             }
-            "morph" => object_ref.starts_with("ck:morph:"),
+            "morph" => object_ref.starts_with("ak:morph:"),
             type_constraint if type_constraint.starts_with("morph:") => {
-                object_ref.starts_with("ck:morph:")
+                object_ref.starts_with("ak:morph:")
             }
-            "relation" => object_ref.starts_with("ck:relation:"),
-            "event" => object_ref.starts_with("ck:event:"),
-            "view" => object_ref.starts_with("ck:view:"),
-            "blob" => object_ref.starts_with("ck:blob:"),
+            "relation" => object_ref.starts_with("ak:relation:"),
+            "event" => object_ref.starts_with("ak:event:"),
+            "view" => object_ref.starts_with("ak:view:"),
+            "blob" => object_ref.starts_with("ak:blob:"),
             _ => false,
         }
     }
@@ -983,17 +983,17 @@ fn relation_scope_circle_id_from_payload(payload: &Value) -> Option<String> {
                 .and_then(|object| object.get("scope_circle_id"))
         })
         .and_then(Value::as_str)
-        .filter(|value| value.starts_with("ck:circle:"))
+        .filter(|value| value.starts_with("ak:circle:"))
         .map(ToOwned::to_owned)
 }
 
 fn relation_endpoint_needs_projection(endpoint: &str) -> bool {
-    endpoint.starts_with("ck:space:")
-        || endpoint.starts_with("ck:strand:")
-        || endpoint.starts_with("ck:morph:")
-        || endpoint.starts_with("ck:relation:")
-        || endpoint.starts_with("ck:event:")
-        || endpoint.starts_with("ck:message:")
+    endpoint.starts_with("ak:space:")
+        || endpoint.starts_with("ak:strand:")
+        || endpoint.starts_with("ak:morph:")
+        || endpoint.starts_with("ak:relation:")
+        || endpoint.starts_with("ak:event:")
+        || endpoint.starts_with("ak:message:")
 }
 
 fn relation_event_digest(operation: &Operation) -> String {
@@ -1017,13 +1017,13 @@ mod cross_realm_relation_tests {
 
     use super::*;
 
-    const REALM_A: &str = "ck:realm:01904100-0000-7000-8000-000000000a01";
-    const REALM_B: &str = "ck:realm:01904100-0000-7000-8000-000000000a02";
-    const CIRCLE_A: &str = "ck:circle:01904100-0000-7000-8000-000000000c01";
-    const STRAND_A: &str = "ck:strand:01904100-0000-7000-8000-000000000b01";
-    const STRAND_A2: &str = "ck:strand:01904100-0000-7000-8000-000000000b02";
-    const STRAND_A3: &str = "ck:strand:01904100-0000-7000-8000-000000000b04";
-    const STRAND_B: &str = "ck:strand:01904100-0000-7000-8000-000000000b03";
+    const REALM_A: &str = "ak:realm:01904100-0000-7000-8000-000000000a01";
+    const REALM_B: &str = "ak:realm:01904100-0000-7000-8000-000000000a02";
+    const CIRCLE_A: &str = "ak:circle:01904100-0000-7000-8000-000000000c01";
+    const STRAND_A: &str = "ak:strand:01904100-0000-7000-8000-000000000b01";
+    const STRAND_A2: &str = "ak:strand:01904100-0000-7000-8000-000000000b02";
+    const STRAND_A3: &str = "ak:strand:01904100-0000-7000-8000-000000000b04";
+    const STRAND_B: &str = "ak:strand:01904100-0000-7000-8000-000000000b03";
 
     fn strand_in_scope(realm: &str, scope_circle_id: Option<&str>) -> StrandProjection {
         StrandProjection {
@@ -1050,7 +1050,7 @@ mod cross_realm_relation_tests {
 
     fn relation_op(relation_kind: &str, from: &str, to: &str) -> Operation {
         Operation::create(
-            cokret_sdk::OperationId::new("ck:operation:01904100-0000-7000-8000-57d7d85564c5")
+            cokret_sdk::OperationId::new("ak:operation:01904100-0000-7000-8000-57d7d85564c5")
                 .unwrap(),
             cokret_sdk::RealmId::new(REALM_A.to_owned()).unwrap(),
             cokret_sdk::events::kinds::RELATION_CREATE,
@@ -1067,7 +1067,7 @@ mod cross_realm_relation_tests {
         digest: &str,
     ) -> Operation {
         let mut operation = Operation::create(
-            cokret_sdk::OperationId::new(format!("ck:operation:01904100-0000-7000-8000-{seed}"))
+            cokret_sdk::OperationId::new(format!("ak:operation:01904100-0000-7000-8000-{seed}"))
                 .unwrap(),
             cokret_sdk::RealmId::new(REALM_A.to_owned()).unwrap(),
             cokret_sdk::events::kinds::RELATION_CREATE,
@@ -1076,7 +1076,7 @@ mod cross_realm_relation_tests {
                 "relation_kind": relation_kind,
                 "from_ref": from,
                 "to_ref": to,
-                "event_id": format!("ck:event:01904100-0000-7000-8000-{seed}")
+                "event_id": format!("ak:event:01904100-0000-7000-8000-{seed}")
             }),
         );
         operation.canonical_event_digest = Some(digest.to_owned());
@@ -1154,7 +1154,7 @@ mod cross_realm_relation_tests {
                 .check_relation_cross_realm(&relation_op(
                     "contains",
                     STRAND_A,
-                    "ck:strand:01904100-0000-7000-8000-0000000000ff"
+                    "ak:strand:01904100-0000-7000-8000-0000000000ff"
                 ))
                 .is_ok()
         );
@@ -1166,7 +1166,7 @@ mod cross_realm_relation_tests {
         let now = chrono::Utc::now();
         let high = relation_op_with_id_digest(
             "000000000d01",
-            "ck:relation:01904100-0000-7000-8000-000000000d01",
+            "ak:relation:01904100-0000-7000-8000-000000000d01",
             "references",
             STRAND_A,
             STRAND_A2,
@@ -1174,7 +1174,7 @@ mod cross_realm_relation_tests {
         );
         let low = relation_op_with_id_digest(
             "000000000d02",
-            "ck:relation:01904100-0000-7000-8000-000000000d02",
+            "ak:relation:01904100-0000-7000-8000-000000000d02",
             "references",
             STRAND_A,
             STRAND_A2,
@@ -1199,7 +1199,7 @@ mod cross_realm_relation_tests {
         let now = chrono::Utc::now();
         for index in 1..=RELATION_CONFLICT_FANOUT_LIMIT {
             let seed = format!("{index:012x}");
-            let relation_id = format!("ck:relation:01904100-0000-7000-8000-{seed}");
+            let relation_id = format!("ak:relation:01904100-0000-7000-8000-{seed}");
             let digest = format!("sha256:{index:064x}");
             let effect = proj.apply_relation_create(
                 &relation_op_with_id_digest(
@@ -1220,7 +1220,7 @@ mod cross_realm_relation_tests {
 
         let overflow_index = RELATION_CONFLICT_FANOUT_LIMIT + 1;
         let overflow_seed = format!("{overflow_index:012x}");
-        let overflow_id = format!("ck:relation:01904100-0000-7000-8000-{overflow_seed}");
+        let overflow_id = format!("ak:relation:01904100-0000-7000-8000-{overflow_seed}");
         let overflow_digest = format!("sha256:{overflow_index:064x}");
         let overflow = relation_op_with_id_digest(
             &overflow_seed,
@@ -1257,7 +1257,7 @@ mod cross_realm_relation_tests {
             ProjectionEffect::Rejected { reason } if reason == REASON_RELATION_KIND_WATCHES_DERIVED
         ));
 
-        let relation_id = "ck:relation:01904100-0000-7000-8000-0000000000aa".to_owned();
+        let relation_id = "ak:relation:01904100-0000-7000-8000-0000000000aa".to_owned();
         proj.relations.insert(
             relation_id.clone(),
             SolandRelationState {
@@ -1277,7 +1277,7 @@ mod cross_realm_relation_tests {
             },
         );
         let update = Operation::create(
-            cokret_sdk::OperationId::new("ck:operation:01904100-0000-7000-8000-0000000000ab")
+            cokret_sdk::OperationId::new("ak:operation:01904100-0000-7000-8000-0000000000ab")
                 .unwrap(),
             cokret_sdk::RealmId::new(REALM_A.to_owned()).unwrap(),
             cokret_sdk::events::kinds::RELATION_UPDATE,
@@ -1289,11 +1289,11 @@ mod cross_realm_relation_tests {
         ));
 
         let delete = Operation::create(
-            cokret_sdk::OperationId::new("ck:operation:01904100-0000-7000-8000-0000000000ac")
+            cokret_sdk::OperationId::new("ak:operation:01904100-0000-7000-8000-0000000000ac")
                 .unwrap(),
             cokret_sdk::RealmId::new(REALM_A.to_owned()).unwrap(),
             cokret_sdk::events::kinds::RELATION_TOMBSTONE,
-            json!({"relation_id": "ck:relation:01904100-0000-7000-8000-0000000000aa"}),
+            json!({"relation_id": "ak:relation:01904100-0000-7000-8000-0000000000aa"}),
         );
         assert!(matches!(
             proj.apply_relation_delete(&delete),
@@ -1307,7 +1307,7 @@ mod cross_realm_relation_tests {
         let now = chrono::Utc::now();
         let losing_parent = relation_op_with_id_digest(
             "000000000e01",
-            "ck:relation:01904100-0000-7000-8000-000000000e01",
+            "ak:relation:01904100-0000-7000-8000-000000000e01",
             "belongs_to",
             STRAND_A,
             STRAND_A2,
@@ -1315,7 +1315,7 @@ mod cross_realm_relation_tests {
         );
         let winning_parent = relation_op_with_id_digest(
             "000000000e02",
-            "ck:relation:01904100-0000-7000-8000-000000000e02",
+            "ak:relation:01904100-0000-7000-8000-000000000e02",
             "belongs_to",
             STRAND_A,
             STRAND_A3,
@@ -1340,7 +1340,7 @@ mod cross_realm_relation_tests {
         let now = chrono::Utc::now();
         let alice_old = relation_op_with_id_digest(
             "000000000f01",
-            "ck:relation:01904100-0000-7000-8000-000000000f01",
+            "ak:relation:01904100-0000-7000-8000-000000000f01",
             "assigned_to",
             STRAND_A,
             "did:web:alice.example",
@@ -1348,7 +1348,7 @@ mod cross_realm_relation_tests {
         );
         let bob = relation_op_with_id_digest(
             "000000000f02",
-            "ck:relation:01904100-0000-7000-8000-000000000f02",
+            "ak:relation:01904100-0000-7000-8000-000000000f02",
             "assigned_to",
             STRAND_A,
             "did:web:bob.example",
@@ -1356,7 +1356,7 @@ mod cross_realm_relation_tests {
         );
         let alice_new = relation_op_with_id_digest(
             "000000000f03",
-            "ck:relation:01904100-0000-7000-8000-000000000f03",
+            "ak:relation:01904100-0000-7000-8000-000000000f03",
             "assigned_to",
             STRAND_A,
             "did:web:alice.example",
@@ -1391,7 +1391,7 @@ mod cross_realm_relation_tests {
         );
 
         let scoped = Operation::create(
-            cokret_sdk::OperationId::new("ck:operation:01904100-0000-7000-8000-000000001001")
+            cokret_sdk::OperationId::new("ak:operation:01904100-0000-7000-8000-000000001001")
                 .unwrap(),
             cokret_sdk::RealmId::new(REALM_A.to_owned()).unwrap(),
             cokret_sdk::events::kinds::RELATION_CREATE,

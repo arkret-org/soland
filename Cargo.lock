@@ -509,7 +509,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3f88a43d011fc4a6876cb7344703e297c71dda42494fee094d5f7c76bf13f746"
 
 [[package]]
-name = "cokret"
+name = "arkret"
 version = "0.3.0"
 dependencies = [
  "argon2",
@@ -517,13 +517,13 @@ dependencies = [
  "chacha20poly1305",
  "chrono",
  "chrono-tz",
- "cokret-core",
- "cokret-crypto",
- "cokret-ffi",
- "cokret-html",
- "cokret-keystore",
- "cokret-server",
- "cokret-signatures",
+ "arkret-core",
+ "arkret-crypto",
+ "arkret-ffi",
+ "arkret-html",
+ "arkret-keystore",
+ "arkret-server",
+ "arkret-signatures",
  "ed25519-dalek",
  "getrandom 0.4.2",
  "hex",
@@ -549,7 +549,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "cokret-core"
+name = "arkret-core"
 version = "0.3.0"
 dependencies = [
  "base64",
@@ -557,7 +557,7 @@ dependencies = [
  "bs58",
  "chrono",
  "chrono-tz",
- "cokret-identifiers",
+ "arkret-identifiers",
  "getrandom 0.4.2",
  "hex",
  "hmac 0.13.0",
@@ -574,12 +574,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "cokret-crypto"
+name = "arkret-crypto"
 version = "0.3.0"
 dependencies = [
  "chrono",
- "cokret-core",
- "cokret-signatures",
+ "arkret-core",
+ "arkret-signatures",
  "serde",
  "serde_json",
  "sha2 0.11.0",
@@ -587,25 +587,25 @@ dependencies = [
 ]
 
 [[package]]
-name = "cokret-ffi"
+name = "arkret-ffi"
 version = "0.3.0"
 dependencies = [
- "cokret-core",
+ "arkret-core",
  "serde",
  "serde_json",
 ]
 
 [[package]]
-name = "cokret-html"
+name = "arkret-html"
 version = "0.3.0"
 dependencies = [
- "cokret-core",
+ "arkret-core",
  "serde",
  "serde_json",
 ]
 
 [[package]]
-name = "cokret-identifiers"
+name = "arkret-identifiers"
 version = "0.3.0"
 dependencies = [
  "getrandom 0.2.17",
@@ -620,30 +620,30 @@ dependencies = [
 ]
 
 [[package]]
-name = "cokret-keystore"
+name = "arkret-keystore"
 version = "0.3.0"
 dependencies = [
- "cokret-core",
+ "arkret-core",
  "tracing",
 ]
 
 [[package]]
-name = "cokret-server"
+name = "arkret-server"
 version = "0.3.0"
 dependencies = [
- "cokret-core",
- "cokret-signatures",
+ "arkret-core",
+ "arkret-signatures",
  "serde",
  "serde_json",
 ]
 
 [[package]]
-name = "cokret-signatures"
+name = "arkret-signatures"
 version = "0.3.0"
 dependencies = [
  "base64",
  "chrono",
- "cokret-core",
+ "arkret-core",
  "ed25519-dalek",
  "rand_core 0.6.4",
  "serde",
@@ -4409,7 +4409,7 @@ dependencies = [
  "bs58",
  "bytes",
  "chrono",
- "cokret",
+ "arkret",
  "deadpool",
  "diesel",
  "diesel-async",
@@ -4453,7 +4453,7 @@ dependencies = [
 name = "soland-core"
 version = "0.3.0"
 dependencies = [
- "cokret-core",
+ "arkret-core",
  "salvo",
  "serde",
  "serde_json",

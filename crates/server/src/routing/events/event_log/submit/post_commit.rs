@@ -168,7 +168,7 @@ pub(super) async fn enqueue_peer_event_fanout(
             hasher_input.extend_from_slice(b"|");
             hasher_input.extend_from_slice(frontier.as_bytes());
         }
-        let idempotency_key = format!("ck:outbox:event:{}", sha256_hex(&hasher_input));
+        let idempotency_key = format!("ak:outbox:event:{}", sha256_hex(&hasher_input));
         let body = EventsSubmitFederationRequestBody {
             service_binding_ref,
             events: vec![event.clone()],

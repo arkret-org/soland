@@ -42,7 +42,7 @@ use crate::wire::{
 };
 use crate::{JsonResult, ids, json_ok};
 
-pub(crate) const PRINCIPAL_SESSION_BIND_SCOPE: &str = "urn:cokret:principal-server:session.bind";
+pub(crate) const PRINCIPAL_SESSION_BIND_SCOPE: &str = "urn:arkret:principal-server:session.bind";
 mod device_pair;
 mod grant;
 mod login;

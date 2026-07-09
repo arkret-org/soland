@@ -2,7 +2,7 @@
 
 This document covers what an operator needs to wire two soland (or
 soland-compatible) deployments together. The wire contract is the
-canonical Cokret v1 federation surface; this file restates the
+canonical Arkret v1 federation surface; this file restates the
 operator-visible pieces — header semantics, trust-domain binding, and
 peer onboarding.
 

@@ -318,11 +318,11 @@ mod tests {
     #[tokio::test]
     async fn realm_key_request_is_relayed_to_target_device_queue() {
         let state = AppState::new(test_config(), Db { pool: None });
-        let realm_id = "ck:realm:01904100-0000-7000-8000-00000000ab01";
+        let realm_id = "ak:realm:01904100-0000-7000-8000-00000000ab01";
         let sender_actor = "did:web:bob.example";
-        let sender_device = "ck:device:01904100-0000-7000-8000-b0b000000001";
+        let sender_device = "ak:device:01904100-0000-7000-8000-b0b000000001";
         let provider_principal = "did:web:alice.example";
-        let provider_device = "ck:device:01904100-0000-7000-8000-a11ce0000001";
+        let provider_device = "ak:device:01904100-0000-7000-8000-a11ce0000001";
         let request_id = "req-0001";
         let created_at = chrono::Utc::now();
         let expires_at = created_at + chrono::Duration::minutes(5);

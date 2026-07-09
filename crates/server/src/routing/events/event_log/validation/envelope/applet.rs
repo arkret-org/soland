@@ -25,7 +25,7 @@ pub(super) async fn validate_applet_delegated_authorization_chain(
                 "applet-originated Event requires authorization_ref",
             )
         })?;
-    if !authorization_ref.starts_with("ck:grant:") {
+    if !authorization_ref.starts_with("ak:grant:") {
         return Err(event_validation_error(
             StatusCode::FORBIDDEN,
             "authorization_ref_invalid",

@@ -216,7 +216,7 @@ pub(super) async fn build_ghost_profile_create_event(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .unwrap_or(provision.external_user_id.as_str());
-    let profile_id = ActorProfileId::new(cokret_sdk::new_prefixed_uuid7("ck:actor_profile:"))
+    let profile_id = ActorProfileId::new(cokret_sdk::new_prefixed_uuid7("ak:actor_profile:"))
         .map_err(|error| AppError::internal(format!("profile id generation failed: {error}")))?;
     let external_ref = json!({
         "schema": "ck.applet.ghost_actor.external_ref.v1",

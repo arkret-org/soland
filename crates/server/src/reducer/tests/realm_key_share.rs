@@ -2,11 +2,11 @@ use serde_json::{Value, json};
 
 use super::*;
 
-const REALM: &str = "ck:realm:0196419b-1000-7000-8000-000000000001";
-const OTHER_REALM: &str = "ck:realm:0196419b-2000-7000-8000-000000000001";
+const REALM: &str = "ak:realm:0196419b-1000-7000-8000-000000000001";
+const OTHER_REALM: &str = "ak:realm:0196419b-2000-7000-8000-000000000001";
 const RECIPIENT: &str = "did:web:bob.example";
-const RECIPIENT_DEVICE: &str = "ck:device:bob-history";
-const SENDER_DEVICE: &str = "ck:device:alice-history";
+const RECIPIENT_DEVICE: &str = "ak:device:bob-history";
+const SENDER_DEVICE: &str = "ak:device:alice-history";
 
 fn realm_key_share_payload(effective_scope: Value) -> Value {
     json!({
@@ -71,7 +71,7 @@ fn realm_key_share_dispatch_accepts_projection_metadata() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("realm-key-share-projected-context");
     let mut payload = realm_key_share_payload(realm_scope(REALM));
-    payload["event_id"] = json!("ck:event:01904100-0000-7000-8000-000000000701");
+    payload["event_id"] = json!("ak:event:01904100-0000-7000-8000-000000000701");
     payload["sender"] = json!("did:web:alice.example");
     payload["hlc"] = json!("2026-07-05T00:00:00Z/node/1");
 

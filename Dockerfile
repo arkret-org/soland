@@ -4,8 +4,8 @@ FROM --platform=$BUILDPLATFORM rust:1-bookworm AS builder
 
 WORKDIR /workspace
 
-COPY --from=cokret-rust-sdk . ./cokret-rust-sdk
-COPY --from=cokret-spec . ./cokret-spec
+COPY --from=arkret-rust-sdk . ./arkret-rust-sdk
+COPY --from=arkret-spec . ./arkret-spec
 COPY . ./soland
 
 WORKDIR /workspace/soland

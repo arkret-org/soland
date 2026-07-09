@@ -163,7 +163,7 @@ pub(super) fn validate_audit_accessed_payload(
         ));
     }
     let target_ref = required_payload_string(payload, "target_ref")?;
-    if !target_ref.starts_with("ck:") {
+    if !target_ref.starts_with("ak:") {
         return Err(event_validation_error(
             StatusCode::BAD_REQUEST,
             "schema_violation",
@@ -235,7 +235,7 @@ fn validate_watch_audit_payload_fields(
         )
     })?;
     let target_cell_id = required_payload_string(payload, "target_cell_id")?;
-    if !target_cell_id.starts_with("ck:cell:") {
+    if !target_cell_id.starts_with("ak:cell:") {
         return Err(event_validation_error(
             StatusCode::BAD_REQUEST,
             "schema_violation",

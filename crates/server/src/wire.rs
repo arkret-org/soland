@@ -542,7 +542,7 @@ pub struct SendMessageRequestBody {
 // `{ok: true, status}`) has no struct mirror in the SDK and is emitted as a
 // spec-exact JSON object by the agents handler. `AgentProvisionRequestBody` /
 // `AgentProvisionOutcome` were already SDK-backed.
-// ── CKP-0010 (R3 spec-sync 2026-05-27, cokret-spec b47ff6ec) — media
+// ── CKP-0010 (R3 spec-sync 2026-05-27, arkret-spec b47ff6ec) — media
 // token exchange wire shapes. Both the request body and the response types
 // come straight from the SDK (`CallMediaTokenExchangeRequestBody` carries
 // typed ids `realm_id`/`call_id`/`actor_id`/`device_id` plus the optional
@@ -877,7 +877,7 @@ pub fn describe(
     // before the response is serialized so the JSON wire shape and the
     // typed surface can never drift.
     //
-    // Profile catalogue per `cokret-spec/spec/v1/zh/conformance/conformance-profiles.md`
+    // Profile catalogue per `arkret-spec/spec/v1/zh/conformance/conformance-profiles.md`
     // §1 / §7 / §8: a principal server self-claims the Event Store
     // interop floor AND the Principal Server + Principal Server Events
     // API stable-catalog profiles in addition to whatever interop
@@ -959,7 +959,7 @@ pub fn describe(
                 "ck.profile.file_transfer.v1".to_owned(),
                 "ck.profile.webrtc_media.v1".to_owned(),
             ];
-            // PROF-1 (R3 spec-sync 2026-05-27, cokret-spec b47ff6ec) —
+            // PROF-1 (R3 spec-sync 2026-05-27, arkret-spec b47ff6ec) —
             // advertise `ck.profile.media_service_binding.v1` whenever the
             // server exposes the `ck.self.call.media.exchange.issue_token`
             // handler. soland mounts the handler unconditionally, and also
@@ -1007,34 +1007,34 @@ pub fn describe(
         takedown_contact: None,
         rate_limits: None,
         supported_features: vec![
-            "org.cokret.soland.feature.auth.logout".to_owned(),
-            "org.cokret.soland.feature.contacts.request".to_owned(),
-            "org.cokret.soland.feature.contacts.respond".to_owned(),
-            "org.cokret.soland.feature.space.lifecycle".to_owned(),
-            "org.cokret.soland.feature.schema.registry".to_owned(),
-            "org.cokret.soland.feature.events.describe".to_owned(),
-            "org.cokret.soland.feature.events.submit".to_owned(),
-            "org.cokret.soland.feature.events.read".to_owned(),
-            "org.cokret.soland.feature.federation.transaction".to_owned(),
-            "org.cokret.soland.feature.federation.operations".to_owned(),
-            "org.cokret.soland.feature.sync.client_sync".to_owned(),
-            "org.cokret.soland.feature.sync.bound_cursor".to_owned(),
-            "org.cokret.soland.feature.sync.incremental_since".to_owned(),
-            "org.cokret.soland.feature.sync.typing".to_owned(),
-            "org.cokret.soland.feature.personal_productivity.scheduled_send_wake_only".to_owned(),
-            "org.cokret.soland.feature.personal_productivity.reminder_snooze_private_wake"
+            "org.arkret.soland.feature.auth.logout".to_owned(),
+            "org.arkret.soland.feature.contacts.request".to_owned(),
+            "org.arkret.soland.feature.contacts.respond".to_owned(),
+            "org.arkret.soland.feature.space.lifecycle".to_owned(),
+            "org.arkret.soland.feature.schema.registry".to_owned(),
+            "org.arkret.soland.feature.events.describe".to_owned(),
+            "org.arkret.soland.feature.events.submit".to_owned(),
+            "org.arkret.soland.feature.events.read".to_owned(),
+            "org.arkret.soland.feature.federation.transaction".to_owned(),
+            "org.arkret.soland.feature.federation.operations".to_owned(),
+            "org.arkret.soland.feature.sync.client_sync".to_owned(),
+            "org.arkret.soland.feature.sync.bound_cursor".to_owned(),
+            "org.arkret.soland.feature.sync.incremental_since".to_owned(),
+            "org.arkret.soland.feature.sync.typing".to_owned(),
+            "org.arkret.soland.feature.personal_productivity.scheduled_send_wake_only".to_owned(),
+            "org.arkret.soland.feature.personal_productivity.reminder_snooze_private_wake"
                 .to_owned(),
-            "org.cokret.soland.feature.directory.search_realms".to_owned(),
-            "org.cokret.soland.feature.directory.resolve_realm".to_owned(),
-            "org.cokret.soland.feature.authz.check".to_owned(),
-            "org.cokret.soland.feature.authz.effective_grants".to_owned(),
-            "org.cokret.soland.feature.authz.invites".to_owned(),
-            "org.cokret.soland.feature.policy.check_signed_decision".to_owned(),
-            "org.cokret.soland.feature.profile.presence".to_owned(),
-            "org.cokret.soland.feature.push.register_device".to_owned(),
-            "org.cokret.soland.feature.push.target_id_hmac_rotation".to_owned(),
-            "org.cokret.soland.feature.push.rules".to_owned(),
-            "org.cokret.soland.feature.blob.upload".to_owned(),
+            "org.arkret.soland.feature.directory.search_realms".to_owned(),
+            "org.arkret.soland.feature.directory.resolve_realm".to_owned(),
+            "org.arkret.soland.feature.authz.check".to_owned(),
+            "org.arkret.soland.feature.authz.effective_grants".to_owned(),
+            "org.arkret.soland.feature.authz.invites".to_owned(),
+            "org.arkret.soland.feature.policy.check_signed_decision".to_owned(),
+            "org.arkret.soland.feature.profile.presence".to_owned(),
+            "org.arkret.soland.feature.push.register_device".to_owned(),
+            "org.arkret.soland.feature.push.target_id_hmac_rotation".to_owned(),
+            "org.arkret.soland.feature.push.rules".to_owned(),
+            "org.arkret.soland.feature.blob.upload".to_owned(),
             // Spec crypto-media/media-and-blob.md §2.1 — protocol-level
             // feature id for the resumable (tus) upload companion binding
             // of ck.self.blob.upload. Pairs with the `kind="tus"` entry in
@@ -1045,21 +1045,21 @@ pub fn describe(
             // history-shareable `mls-exporter-aead-v1` content scheme so clients
             // know late-joiner pre-join history decryption is reachable here.
             "ck.feature.mls_exporter_aead.v1".to_owned(),
-            "org.cokret.soland.feature.blob.authenticated_download".to_owned(),
-            "org.cokret.soland.feature.file_transfer".to_owned(),
-            "org.cokret.soland.feature.blob.presigned_download.local_direct_serve".to_owned(),
-            "org.cokret.soland.feature.blob.upload_policy".to_owned(),
-            "org.cokret.soland.feature.federation.transaction_idempotency".to_owned(),
-            "org.cokret.soland.feature.policy.documents".to_owned(),
-            "org.cokret.soland.feature.moderation.report".to_owned(),
-            "org.cokret.soland.feature.mimi.provider_facade".to_owned(),
-            "org.cokret.soland.feature.mimi.discovery".to_owned(),
-            "org.cokret.soland.feature.mimi.key_material_receipt".to_owned(),
-            "org.cokret.soland.feature.mimi.room_projection".to_owned(),
-            "org.cokret.soland.feature.mimi.identifier_privacy".to_owned(),
-            "org.cokret.soland.feature.mimi.proxy_download_policy".to_owned(),
-            "org.cokret.soland.feature.registry.artifacts".to_owned(),
-            "org.cokret.soland.feature.plaintext_visible_services".to_owned(),
+            "org.arkret.soland.feature.blob.authenticated_download".to_owned(),
+            "org.arkret.soland.feature.file_transfer".to_owned(),
+            "org.arkret.soland.feature.blob.presigned_download.local_direct_serve".to_owned(),
+            "org.arkret.soland.feature.blob.upload_policy".to_owned(),
+            "org.arkret.soland.feature.federation.transaction_idempotency".to_owned(),
+            "org.arkret.soland.feature.policy.documents".to_owned(),
+            "org.arkret.soland.feature.moderation.report".to_owned(),
+            "org.arkret.soland.feature.mimi.provider_facade".to_owned(),
+            "org.arkret.soland.feature.mimi.discovery".to_owned(),
+            "org.arkret.soland.feature.mimi.key_material_receipt".to_owned(),
+            "org.arkret.soland.feature.mimi.room_projection".to_owned(),
+            "org.arkret.soland.feature.mimi.identifier_privacy".to_owned(),
+            "org.arkret.soland.feature.mimi.proxy_download_policy".to_owned(),
+            "org.arkret.soland.feature.registry.artifacts".to_owned(),
+            "org.arkret.soland.feature.plaintext_visible_services".to_owned(),
             // realm-and-space.md history-sharing — advertise the three
             // `ck.realm_key.request` / `ck.realm_key.share` retrieval modes the
             // server relays history keys through: backup-derived retrieval,
@@ -1135,8 +1135,8 @@ pub fn describe(
                 "surface": "authz_policy",
                 "tier": "extension",
                 "self_surface_status": "standard_self_supported",
-                "operation_registry_source": "cokret-spec/spec/v1/artifacts/registry/operation-registry.json",
-                "error_mapping_source": "cokret-spec/spec/v1/artifacts/registry/operations-error-mapping.json",
+                "operation_registry_source": "arkret-spec/spec/v1/artifacts/registry/operation-registry.json",
+                "error_mapping_source": "arkret-spec/spec/v1/artifacts/registry/operations-error-mapping.json",
                 "universal_error_codes_inherited": true,
                 "supported_operations": [
                     "ck.self.authz.query.check",
@@ -1258,7 +1258,7 @@ pub fn describe(
                 }
             },
             "scalability_constraints": {
-                "source": "cokret-spec/spec/v1/zh/conformance/scalability-constraints.md",
+                "source": "arkret-spec/spec/v1/zh/conformance/scalability-constraints.md",
                 "max_event_bytes": MAX_EVENT_ENVELOPE_BYTES,
                 "max_events_batch_submit": MAX_EVENT_SUBMIT_BATCH,
                 "max_federation_transaction_events": 500,
@@ -1292,7 +1292,7 @@ pub fn describe(
                 ],
                 "principal_server_full_profile_gaps": full_principal_server_gap_summary(),
                 "supported_operation_catalog": {
-                    "source": "cokret-spec/spec/v1/artifacts/registry/operation-registry.json",
+                    "source": "arkret-spec/spec/v1/artifacts/registry/operation-registry.json",
                     "derived_surface_groups": SUPPORTED_OPERATION_SURFACES,
                     "standalone_operations": SUPPORTED_STANDALONE_OPERATION_IDS
                 },
@@ -1392,7 +1392,7 @@ mod tests {
             true,
             None,
             None,
-            "ck:trust_domain:soland.example",
+            "ak:trust_domain:soland.example",
             86_400,
             10_000,
         );
@@ -1421,7 +1421,7 @@ mod tests {
             true,
             None,
             None,
-            "ck:trust_domain:soland.example",
+            "ak:trust_domain:soland.example",
             86_400,
             10_000,
         );
@@ -1458,7 +1458,7 @@ mod tests {
                 .as_array()
                 .expect("features array")
                 .contains(&json!(
-                    "org.cokret.soland.feature.personal_productivity.scheduled_send_wake_only"
+                    "org.arkret.soland.feature.personal_productivity.scheduled_send_wake_only"
                 ))
         );
         assert!(
@@ -1466,7 +1466,7 @@ mod tests {
                 .as_array()
                 .expect("features array")
                 .contains(&json!(
-                    "org.cokret.soland.feature.personal_productivity.reminder_snooze_private_wake"
+                    "org.arkret.soland.feature.personal_productivity.reminder_snooze_private_wake"
                 ))
         );
         assert!(
@@ -1474,7 +1474,7 @@ mod tests {
                 .as_array()
                 .expect("features array")
                 .contains(&json!(
-                    "org.cokret.soland.feature.policy.check_signed_decision"
+                    "org.arkret.soland.feature.policy.check_signed_decision"
                 ))
         );
         assert!(
@@ -1482,7 +1482,7 @@ mod tests {
                 .as_array()
                 .expect("features array")
                 .contains(&json!(
-                    "org.cokret.soland.feature.push.target_id_hmac_rotation"
+                    "org.arkret.soland.feature.push.target_id_hmac_rotation"
                 ))
         );
         assert_eq!(

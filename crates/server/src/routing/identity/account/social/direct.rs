@@ -647,7 +647,7 @@ pub(super) async fn submit_direct_mls_welcome(
         "claim_id": claim.claim_id.as_str(),
         "claim_ref": claim_ref,
         "claim_envelope": claim_envelope,
-        "welcome_ref": format!("ck:blob:{}", cokret_sdk::canonical::sha256_digest(&welcome_bytes)),
+        "welcome_ref": format!("ak:blob:{}", cokret_sdk::canonical::sha256_digest(&welcome_bytes)),
         "welcome_bytes_b64": URL_SAFE_NO_PAD.encode(&welcome_bytes),
         "expires_at": (created_at + chrono::Duration::days(1)).to_rfc3339_opts(SecondsFormat::Secs, true),
         "governance_binding": governance_binding,

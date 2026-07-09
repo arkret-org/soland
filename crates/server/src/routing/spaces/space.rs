@@ -55,7 +55,7 @@ pub(super) fn protocol_router() -> Router {
 }
 
 /// Soland-local Space-container child-order cell read surface
-/// (`org.cokret.soland.spaces.cells.get`); no canonical operation, stays on the
+/// (`org.arkret.soland.spaces.cells.get`); no canonical operation, stays on the
 /// `/_soland` product surface.
 pub(super) fn local_router() -> Router {
     Router::new()
@@ -350,11 +350,11 @@ async fn upsert_realm_moderation_policy(
 }
 
 #[endpoint(
-    operation_id = "org.cokret.soland.spaces.cells.get",
+    operation_id = "org.arkret.soland.spaces.cells.get",
     tags("spaces", "cells"),
     summary = "Get a projected Space-container child-order cell"
 )]
-#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.spaces.cells.get"))]
+#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.spaces.cells.get"))]
 async fn get_space_cell(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -393,7 +393,7 @@ async fn get_space_cell(
         .unwrap_or_default();
 
     json_ok(SpaceCellOutcome {
-        cell_id: format!("ck:cell:{CHILD_ORDER_CELL_FAMILY}:{space_id}"),
+        cell_id: format!("ak:cell:{CHILD_ORDER_CELL_FAMILY}:{space_id}"),
         cell_family: CHILD_ORDER_CELL_FAMILY.to_owned(),
         space_id,
         state: "value".to_owned(),
@@ -1316,12 +1316,12 @@ pub async fn typing_scope_allows_actor(
     let Some(strand_id) = strand_id.map(str::trim).filter(|value| !value.is_empty()) else {
         return Ok(());
     };
-    if strand_id.starts_with("ck:realm:") || strand_id == realm_id {
+    if strand_id.starts_with("ak:realm:") || strand_id == realm_id {
         return Err(AppError::capability_denied(
             "ck.typing strand_id must name a visible ck:strand",
         ));
     }
-    if !strand_id.starts_with("ck:strand:") {
+    if !strand_id.starts_with("ak:strand:") {
         return Err(AppError::invalid_param(
             "ck.typing strand_id must name a visible ck:strand",
         ));

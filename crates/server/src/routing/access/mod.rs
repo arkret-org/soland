@@ -23,7 +23,7 @@ pub fn product_router() -> Router {
 /// Deployment-local root surface mounted under `/_soland/root/...`.
 ///
 /// Carries the coauth→soland collaboration capability fanout
-/// (`org.cokret.soland.root.authz.capability_fanout.submit`). This is a
+/// (`org.arkret.soland.root.authz.capability_fanout.submit`). This is a
 /// product / deployment-internal S2S contract — the Auth Server (coauth) has
 /// no principal session, so it cannot use the principal-authenticated protocol
 /// `POST /_cokret/self/events` path. Per `service-http-binding.md` §2.1.3(b)

@@ -41,7 +41,7 @@ async fn dev_token(svc: &salvo::Service) -> String {
     let login: Value = TestClient::post("http://server/_soland/gate/auth/dev-login")
         .json(&serde_json::json!({
             "actor": "did:web:alice.example",
-            "device_id": "ck:device:01904100-0000-7000-8000-a11ce0000001",
+            "device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001",
             "display_name": "Alice Desktop"
         }))
         .send(svc)
@@ -60,7 +60,7 @@ async fn dev_token(svc: &salvo::Service) -> String {
 async fn realms_delivery_binding_policy_endpoint_responds() {
     let svc = app();
     let token = dev_token(&svc).await;
-    let realm_id = "ck:realm:01904100-0000-7000-8000-d00ddeadbeef";
+    let realm_id = "ak:realm:01904100-0000-7000-8000-d00ddeadbeef";
     let body: Value = TestClient::get(format!(
         "http://server/_soland/admin/realms/{realm_id}/delivery-binding-policy"
     ))

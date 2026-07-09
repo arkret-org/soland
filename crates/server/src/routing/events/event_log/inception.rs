@@ -256,7 +256,7 @@ mod prev_refs_limit_tests {
     #[test]
     fn prev_refs_over_max_rejected() {
         let refs: Vec<Value> = (0..(MAX_EVENT_PREV_REFS + 1))
-            .map(|i| json!(format!("ck:event:e{i}")))
+            .map(|i| json!(format!("ak:event:e{i}")))
             .collect();
         let err =
             event_ref_list(&object(json!(refs)), "prev_refs", MAX_EVENT_PREV_REFS).unwrap_err();
@@ -266,18 +266,18 @@ mod prev_refs_limit_tests {
     // §2 — entries MUST be deduplicated (`prev_refs_too_large` covers dedup).
     #[test]
     fn duplicate_prev_refs_rejected() {
-        let refs = json!(["ck:event:e1", "ck:event:e1"]);
+        let refs = json!(["ak:event:e1", "ak:event:e1"]);
         let err = event_ref_list(&object(refs), "prev_refs", MAX_EVENT_PREV_REFS).unwrap_err();
         assert_eq!(err.code, "prev_refs_too_large");
     }
 
     #[test]
     fn distinct_prev_refs_within_limit_ok() {
-        let refs = json!(["ck:event:e1", "ck:event:e2"]);
+        let refs = json!(["ak:event:e1", "ak:event:e2"]);
         let out = event_ref_list(&object(refs), "prev_refs", MAX_EVENT_PREV_REFS).unwrap();
         assert_eq!(
             out,
-            vec!["ck:event:e1".to_owned(), "ck:event:e2".to_owned()]
+            vec!["ak:event:e1".to_owned(), "ak:event:e2".to_owned()]
         );
     }
 }

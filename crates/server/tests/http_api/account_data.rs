@@ -8,8 +8,8 @@ use super::common::*;
 #[tokio::test]
 async fn account_data_accepts_fresh_principal_control_realm() {
     const FRESH_DID: &str = "did:web:fresh-avatar.example";
-    const FRESH_DEVICE: &str = "ck:device:01904100-0000-7000-8000-a11ce0000010";
-    const BOB_DEVICE: &str = "ck:device:01904100-0000-7000-8000-b0b000000010";
+    const FRESH_DEVICE: &str = "ak:device:01904100-0000-7000-8000-a11ce0000010";
+    const BOB_DEVICE: &str = "ak:device:01904100-0000-7000-8000-b0b000000010";
 
     let state = AppState::new(test_config(), Db { pool: None });
     let fresh = dev_token_for_device(state.clone(), FRESH_DID, FRESH_DEVICE, "Fresh").await;
@@ -17,13 +17,13 @@ async fn account_data_accepts_fresh_principal_control_realm() {
 
     let principal_realm = soland::test_support::principal_control_realm_for_did(FRESH_DID);
     assert!(
-        principal_realm.starts_with("ck:realm:"),
+        principal_realm.starts_with("ak:realm:"),
         "principal realm response: {principal_realm}"
     );
 
     let body = serde_json::json!({
         "theme": "night",
-        "avatar_blob_ref": "ck:blob:sha256:1111111111111111111111111111111111111111111111111111111111111111"
+        "avatar_blob_ref": "ak:blob:sha256:1111111111111111111111111111111111111111111111111111111111111111"
     });
     let put = submit_actor_private_event(
         state.clone(),
@@ -74,8 +74,8 @@ async fn account_data_accepts_fresh_principal_control_realm() {
 
 #[tokio::test]
 async fn encrypted_account_data_realm_remark_round_trip() {
-    const ALICE_DEVICE: &str = "ck:device:01904100-0000-7000-8000-a11ce0000001";
-    const BOB_DEVICE: &str = "ck:device:01904100-0000-7000-8000-b0b000000001";
+    const ALICE_DEVICE: &str = "ak:device:01904100-0000-7000-8000-a11ce0000001";
+    const BOB_DEVICE: &str = "ak:device:01904100-0000-7000-8000-b0b000000001";
 
     let state = AppState::new(test_config(), Db { pool: None });
     let alice = dev_token_for_device(
@@ -87,7 +87,7 @@ async fn encrypted_account_data_realm_remark_round_trip() {
     .await;
     let bob = dev_token_for_device(state.clone(), "did:web:bob.example", BOB_DEVICE, "Bob").await;
 
-    let realm_id = "ck:realm:0196419b-0000-7000-8000-000000000000";
+    let realm_id = "ak:realm:0196419b-0000-7000-8000-000000000000";
     let key = format!("ck.contacts.realm.{realm_id}");
     let remark = account_data_client_side_marker("44", "opaque-realm-remark-v1");
 
@@ -204,7 +204,7 @@ async fn encrypted_account_data_realm_remark_round_trip() {
 
 #[tokio::test]
 async fn encrypted_account_data_requires_envelope_metadata_or_marker() {
-    const ALICE_DEVICE: &str = "ck:device:01904100-0000-7000-8000-a11ce0000001";
+    const ALICE_DEVICE: &str = "ak:device:01904100-0000-7000-8000-a11ce0000001";
 
     let state = AppState::new(test_config(), Db { pool: None });
     let alice = dev_token_for_device(
@@ -274,7 +274,7 @@ async fn encrypted_account_data_requires_envelope_metadata_or_marker() {
             "plaintext_schema_id": "ck.schema.file_transfer.v1",
             "payload_digest": "sha256:4444444444444444444444444444444444444444444444444444444444444444"
         },
-        "content_type": "application/vnd.cokret.account-data+json",
+        "content_type": "application/vnd.arkret.account-data+json",
         "ciphertext": "opaque-client-envelope"
     });
     let put: Value = TestClient::put(format!(
@@ -296,7 +296,7 @@ async fn encrypted_account_data_requires_envelope_metadata_or_marker() {
 
 #[tokio::test]
 async fn encrypted_realm_remark_rejects_plaintext_carrier() {
-    const ALICE_DEVICE: &str = "ck:device:01904100-0000-7000-8000-a11ce0000001";
+    const ALICE_DEVICE: &str = "ak:device:01904100-0000-7000-8000-a11ce0000001";
 
     let state = AppState::new(test_config(), Db { pool: None });
     let alice = dev_token_for_device(
@@ -337,7 +337,7 @@ async fn encrypted_realm_remark_rejects_plaintext_carrier() {
 async fn account_data_requires_auth() {
     let event = signed_actor_private_event_envelope(
         "did:web:alice.example",
-        "ck:device:01904100-0000-7000-8000-a11ce0000001",
+        "ak:device:01904100-0000-7000-8000-a11ce0000001",
         DEMO_REALM_ID,
         "ck.account_data.set",
         serde_json::json!({
@@ -369,7 +369,7 @@ fn account_data_encrypted_envelope() -> Value {
         "version": "1.0",
         "group_id": "testGroup",
         "epoch": 1,
-        "content_type": "application/vnd.cokret.account-data+json",
+        "content_type": "application/vnd.arkret.account-data+json",
         "ciphertext": "b3BhcXVl",
         "aad_visibility_event_id": "hidden",
         "aad": {
@@ -394,7 +394,7 @@ fn account_data_client_side_marker(hex_pair: &str, ciphertext: &str) -> Value {
             "plaintext_schema_id": "ck.schema.realm_remark.v1",
             "payload_digest": format!("sha256:{digest}")
         },
-        "content_type": "application/vnd.cokret.account-data+json",
+        "content_type": "application/vnd.arkret.account-data+json",
         "ciphertext": ciphertext
     })
 }

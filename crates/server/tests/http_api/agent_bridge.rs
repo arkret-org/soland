@@ -17,7 +17,7 @@ async fn admin_applets_agents_endpoints_reflect_submitted_registry_events() {
     // schema in the spec registry (applet payload is free-form per
     // spec extensions/applet-integration.md).
     let registration_payload = serde_json::json!({
-        "applet_id": "ck:applet:01904100-0000-7000-8000-ab10de000000",
+        "applet_id": "ak:applet:01904100-0000-7000-8000-ab10de000000",
         "service_did": service_did,
         "controller_did": "did:web:alice.example",
         "base_url": "https://applet.example",
@@ -42,7 +42,7 @@ async fn admin_applets_agents_endpoints_reflect_submitted_registry_events() {
         "created_at": "2026-06-22T00:00:00Z",
     });
     let mut registration_event = signed_event_envelope(
-        "ck:event:01904100-0000-7000-8000-ab10de000001",
+        "ak:event:01904100-0000-7000-8000-ab10de000001",
         1,
         Vec::new(),
     );
@@ -69,9 +69,9 @@ async fn admin_applets_agents_endpoints_reflect_submitted_registry_events() {
         "manifest": {"protocol": "http", "endpoint": "https://applet.example"},
     });
     let mut discovery_event = signed_event_envelope(
-        "ck:event:01904100-0000-7000-8000-ab10de000002",
+        "ak:event:01904100-0000-7000-8000-ab10de000002",
         2,
-        vec!["ck:event:01904100-0000-7000-8000-ab10de000001"],
+        vec!["ak:event:01904100-0000-7000-8000-ab10de000001"],
     );
     discovery_event["kind"] = Value::String("ck.applet.discovery".to_owned());
     discovery_event["schema_id"] = Value::String("ck.schema.event_payload.v1".to_owned());
@@ -96,9 +96,9 @@ async fn admin_applets_agents_endpoints_reflect_submitted_registry_events() {
         }],
     });
     let mut agent_event = signed_event_envelope(
-        "ck:event:01904100-0000-7000-8000-ab10de000003",
+        "ak:event:01904100-0000-7000-8000-ab10de000003",
         3,
-        vec!["ck:event:01904100-0000-7000-8000-ab10de000002"],
+        vec!["ak:event:01904100-0000-7000-8000-ab10de000002"],
     );
     agent_event["kind"] = Value::String("ck.agent.endpoint".to_owned());
     agent_event["schema_id"] = Value::String("ck.schema.event_payload.v1".to_owned());
@@ -157,8 +157,8 @@ async fn admin_applets_agents_endpoints_reflect_submitted_registry_events() {
 async fn applet_bridge_emits_synthetic_status_for_session_start() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
-    let session_id = "ck:session:01904100-0000-7000-8000-b3b3b3b3b3b3";
-    let applet_id = "ck:applet:01904100-0000-7000-8000-c3c3c3c3c3c3";
+    let session_id = "ak:session:01904100-0000-7000-8000-b3b3b3b3b3b3";
+    let applet_id = "ak:applet:01904100-0000-7000-8000-c3c3c3c3c3c3";
 
     // Submit the start event via the canonical events surface.
     let mut payload = serde_json::json!({
@@ -167,13 +167,13 @@ async fn applet_bridge_emits_synthetic_status_for_session_start() {
         "params": {"op": "ping", "tag": "b3-e2e"},
     });
     let mut start_event = serde_json::json!({
-        "event_id": "ck:event:01904100-0000-7000-8000-d3d3d3d3d3d3",
+        "event_id": "ak:event:01904100-0000-7000-8000-d3d3d3d3d3d3",
         "kind": "ck.applet.interop_session.start",
         "schema_id": "ck.schema.applet.v1",
         "actor_id": "did:web:alice.example",
         "actor_seq": 1u64,
         "realm_id": DEMO_REALM_ID,
-        "device_id": "ck:device:01904100-0000-7000-8000-a11ce0000001",
+        "device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001",
         "audience": "did:web:soland.local",
         "domain": "did:web:soland.local",
         "prev_refs": Vec::<String>::new(),
@@ -182,7 +182,7 @@ async fn applet_bridge_emits_synthetic_status_for_session_start() {
         "proofs": [{
             "type": "dev-proof",
             "verification_method": "did:web:alice.example#01904100-0000-7000-8000-a11ce0000001",
-            "device_id": "ck:device:01904100-0000-7000-8000-a11ce0000001",
+            "device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001",
             "audience": "did:web:soland.local",
             "domain": "did:web:soland.local",
             "payload_digest": sha256_json(&payload),
@@ -237,7 +237,7 @@ async fn agent_bridge_emits_status_and_result_for_session_start() {
     // Use the seeded demo Realm — dev_token's actor is a member of
     // `ck:realm:0196419b-0000-7000-8000-000000000000` so the events
     // surface accepts writes against it (mirror of the B3 test).
-    let session_id = "ck:agent_interop_session:01904100-0000-7000-8000-b4b4b4b4b4b4";
+    let session_id = "ak:agent_interop_session:01904100-0000-7000-8000-b4b4b4b4b4b4";
     let agent_id = "did:web:agent.example";
 
     // Register the agent first so B4c's dispatch lookup succeeds.
@@ -248,13 +248,13 @@ async fn agent_bridge_emits_status_and_result_for_session_start() {
         }],
     });
     let mut endpoint_event = serde_json::json!({
-        "event_id": "ck:event:01904100-0000-7000-8000-e4e4e4e4e4e4",
+        "event_id": "ak:event:01904100-0000-7000-8000-e4e4e4e4e4e4",
         "kind": "ck.agent.endpoint",
         "schema_id": "ck.schema.agent.v1",
         "actor_id": "did:web:alice.example",
         "actor_seq": 1u64,
         "realm_id": DEMO_REALM_ID,
-        "device_id": "ck:device:01904100-0000-7000-8000-a11ce0000001",
+        "device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001",
         "audience": "did:web:soland.local",
         "domain": "did:web:soland.local",
         "prev_refs": Vec::<String>::new(),
@@ -263,7 +263,7 @@ async fn agent_bridge_emits_status_and_result_for_session_start() {
         "proofs": [{
             "type": "dev-proof",
             "verification_method": "did:web:alice.example#01904100-0000-7000-8000-a11ce0000001",
-            "device_id": "ck:device:01904100-0000-7000-8000-a11ce0000001",
+            "device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001",
             "audience": "did:web:soland.local",
             "domain": "did:web:soland.local",
             "payload_digest": sha256_json(&endpoint_payload),
@@ -287,16 +287,16 @@ async fn agent_bridge_emits_status_and_result_for_session_start() {
         "counterparty_agent": agent_id,
         "session_id": session_id,
         "protocol": "http_custom",
-        "capability_grant": "ck:grant:01904100-0000-7000-8000-000000000099",
+        "capability_grant": "ak:grant:01904100-0000-7000-8000-000000000099",
     });
     let mut start_event = serde_json::json!({
-        "event_id": "ck:event:01904100-0000-7000-8000-d4d4d4d4d4d4",
+        "event_id": "ak:event:01904100-0000-7000-8000-d4d4d4d4d4d4",
         "kind": "ck.agent.interop_session.start",
         "schema_id": "ck.schema.agent.v1",
         "actor_id": "did:web:alice.example",
         "actor_seq": 2u64,
         "realm_id": DEMO_REALM_ID,
-        "device_id": "ck:device:01904100-0000-7000-8000-a11ce0000001",
+        "device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001",
         "audience": "did:web:soland.local",
         "domain": "did:web:soland.local",
         "prev_refs": Vec::<String>::new(),
@@ -305,7 +305,7 @@ async fn agent_bridge_emits_status_and_result_for_session_start() {
         "proofs": [{
             "type": "dev-proof",
             "verification_method": "did:web:alice.example#01904100-0000-7000-8000-a11ce0000001",
-            "device_id": "ck:device:01904100-0000-7000-8000-a11ce0000001",
+            "device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001",
             "audience": "did:web:soland.local",
             "domain": "did:web:soland.local",
             "payload_digest": sha256_json(&payload),
@@ -398,7 +398,7 @@ async fn agent_bridge_emits_status_and_result_for_session_start() {
 async fn agent_bridge_fails_closed_on_unknown_agent() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
-    let session_id = "ck:agent_interop_session:01904100-0000-7000-8000-deaddeaddead";
+    let session_id = "ak:agent_interop_session:01904100-0000-7000-8000-deaddeaddead";
     let agent_id = "did:web:unregistered-agent.example";
 
     // Intentionally skip the ck.agent.endpoint step — this is the
@@ -407,16 +407,16 @@ async fn agent_bridge_fails_closed_on_unknown_agent() {
         "counterparty_agent": agent_id,
         "session_id": session_id,
         "protocol": "http_custom",
-        "capability_grant": "ck:grant:01904100-0000-7000-8000-000000000099",
+        "capability_grant": "ak:grant:01904100-0000-7000-8000-000000000099",
     });
     let mut start_event = serde_json::json!({
-        "event_id": "ck:event:01904100-0000-7000-8000-deadbeefdead",
+        "event_id": "ak:event:01904100-0000-7000-8000-deadbeefdead",
         "kind": "ck.agent.interop_session.start",
         "schema_id": "ck.schema.agent.v1",
         "actor_id": "did:web:alice.example",
         "actor_seq": 1u64,
         "realm_id": DEMO_REALM_ID,
-        "device_id": "ck:device:01904100-0000-7000-8000-a11ce0000001",
+        "device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001",
         "audience": "did:web:soland.local",
         "domain": "did:web:soland.local",
         "prev_refs": Vec::<String>::new(),
@@ -425,7 +425,7 @@ async fn agent_bridge_fails_closed_on_unknown_agent() {
         "proofs": [{
             "type": "dev-proof",
             "verification_method": "did:web:alice.example#01904100-0000-7000-8000-a11ce0000001",
-            "device_id": "ck:device:01904100-0000-7000-8000-a11ce0000001",
+            "device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001",
             "audience": "did:web:soland.local",
             "domain": "did:web:soland.local",
             "payload_digest": sha256_json(&payload),
@@ -490,7 +490,7 @@ async fn agent_bridge_fails_closed_on_unknown_agent() {
 async fn agent_bridge_plumbs_endpoint_url_through_session_envelopes() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
-    let session_id = "ck:agent_interop_session:01904100-0000-7000-8000-c0c0c0c0c0c0";
+    let session_id = "ak:agent_interop_session:01904100-0000-7000-8000-c0c0c0c0c0c0";
     let agent_id = "did:web:b4d-agent.example";
     let endpoint_url = "https://b4d-agent.example/_cokret/self/agent";
 
@@ -502,13 +502,13 @@ async fn agent_bridge_plumbs_endpoint_url_through_session_envelopes() {
         }],
     });
     let mut endpoint_event = serde_json::json!({
-        "event_id": "ck:event:01904100-0000-7000-8000-c1c1c1c1c1c1",
+        "event_id": "ak:event:01904100-0000-7000-8000-c1c1c1c1c1c1",
         "kind": "ck.agent.endpoint",
         "schema_id": "ck.schema.agent.v1",
         "actor_id": "did:web:alice.example",
         "actor_seq": 1u64,
         "realm_id": DEMO_REALM_ID,
-        "device_id": "ck:device:01904100-0000-7000-8000-a11ce0000001",
+        "device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001",
         "audience": "did:web:soland.local",
         "domain": "did:web:soland.local",
         "prev_refs": Vec::<String>::new(),
@@ -517,7 +517,7 @@ async fn agent_bridge_plumbs_endpoint_url_through_session_envelopes() {
         "proofs": [{
             "type": "dev-proof",
             "verification_method": "did:web:alice.example#01904100-0000-7000-8000-a11ce0000001",
-            "device_id": "ck:device:01904100-0000-7000-8000-a11ce0000001",
+            "device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001",
             "audience": "did:web:soland.local",
             "domain": "did:web:soland.local",
             "payload_digest": sha256_json(&endpoint_payload),
@@ -541,16 +541,16 @@ async fn agent_bridge_plumbs_endpoint_url_through_session_envelopes() {
         "counterparty_agent": agent_id,
         "session_id": session_id,
         "protocol": "http_custom",
-        "capability_grant": "ck:grant:01904100-0000-7000-8000-000000000099",
+        "capability_grant": "ak:grant:01904100-0000-7000-8000-000000000099",
     });
     let mut start_event = serde_json::json!({
-        "event_id": "ck:event:01904100-0000-7000-8000-c2c2c2c2c2c2",
+        "event_id": "ak:event:01904100-0000-7000-8000-c2c2c2c2c2c2",
         "kind": "ck.agent.interop_session.start",
         "schema_id": "ck.schema.agent.v1",
         "actor_id": "did:web:alice.example",
         "actor_seq": 2u64,
         "realm_id": DEMO_REALM_ID,
-        "device_id": "ck:device:01904100-0000-7000-8000-a11ce0000001",
+        "device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001",
         "audience": "did:web:soland.local",
         "domain": "did:web:soland.local",
         "prev_refs": Vec::<String>::new(),
@@ -559,7 +559,7 @@ async fn agent_bridge_plumbs_endpoint_url_through_session_envelopes() {
         "proofs": [{
             "type": "dev-proof",
             "verification_method": "did:web:alice.example#01904100-0000-7000-8000-a11ce0000001",
-            "device_id": "ck:device:01904100-0000-7000-8000-a11ce0000001",
+            "device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001",
             "audience": "did:web:soland.local",
             "domain": "did:web:soland.local",
             "payload_digest": sha256_json(&payload),
@@ -703,13 +703,13 @@ async fn agent_discover_reflects_endpoint_projection_and_fails_closed() {
         ],
     });
     let mut endpoint_event = serde_json::json!({
-        "event_id": "ck:event:01904100-0000-7000-8000-d15c0ffee001",
+        "event_id": "ak:event:01904100-0000-7000-8000-d15c0ffee001",
         "kind": "ck.agent.endpoint",
         "schema_id": "ck.schema.agent.v1",
         "actor_id": "did:web:alice.example",
         "actor_seq": 1u64,
         "realm_id": DEMO_REALM_ID,
-        "device_id": "ck:device:01904100-0000-7000-8000-a11ce0000001",
+        "device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001",
         "audience": "did:web:soland.local",
         "domain": "did:web:soland.local",
         "prev_refs": Vec::<String>::new(),
@@ -718,7 +718,7 @@ async fn agent_discover_reflects_endpoint_projection_and_fails_closed() {
         "proofs": [{
             "type": "dev-proof",
             "verification_method": "did:web:alice.example#01904100-0000-7000-8000-a11ce0000001",
-            "device_id": "ck:device:01904100-0000-7000-8000-a11ce0000001",
+            "device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001",
             "audience": "did:web:soland.local",
             "domain": "did:web:soland.local",
             "payload_digest": sha256_json(&endpoint_payload),

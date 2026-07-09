@@ -1,6 +1,6 @@
 //! Operator handle-management admin surface (Wave 3 / T6.2 §2).
 //!
-//! Endpoints (product-local operator surface, `org.cokret.soland.*` op IDs):
+//! Endpoints (product-local operator surface, `org.arkret.soland.*` op IDs):
 //!
 //! - `GET  /_soland/admin/handles` — paginated list of handle rows.
 //! - `GET  /_soland/admin/handles/{id}` — single handle row.
@@ -134,7 +134,7 @@ pub(super) async fn admin_handle_items(state: &AppState) -> Vec<AdminHandleRecor
             let handle = format!("@{}", localpart.localpart);
             rows.push(AdminHandleRecord {
                 id: localpart.localpart.clone(),
-                canonical_uri: format!("ck:handle:{handle}"),
+                canonical_uri: format!("ak:handle:{handle}"),
                 aliases: vec![handle],
                 issuer_did: primary_claim
                     .and_then(|record| record.issuer_service_did.clone())
@@ -164,12 +164,12 @@ async fn handle_record_by_id(
 }
 
 #[endpoint(
-    operation_id = "org.cokret.soland.admin.handles.list",
+    operation_id = "org.arkret.soland.admin.handles.list",
     tags("soland-admin", "handles"),
     summary = "List operator handle rows",
     status_codes(200, 401, 403, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.admin.handles.list"))]
+#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.admin.handles.list"))]
 async fn list_handles(
     aa: AuthArgs,
     page: QueryParam<u64, false>,
@@ -222,12 +222,12 @@ async fn list_handles(
 }
 
 #[endpoint(
-    operation_id = "org.cokret.soland.admin.handles.get",
+    operation_id = "org.arkret.soland.admin.handles.get",
     tags("soland-admin", "handles"),
     summary = "Read a single operator handle row",
     status_codes(200, 401, 403, 404, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.admin.handles.get"))]
+#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.admin.handles.get"))]
 async fn get_handle(
     aa: AuthArgs,
     handle_id: PathParam<String>,
@@ -241,12 +241,12 @@ async fn get_handle(
 }
 
 #[endpoint(
-    operation_id = "org.cokret.soland.admin.handles.audit",
+    operation_id = "org.arkret.soland.admin.handles.audit",
     tags("soland-admin", "handles"),
     summary = "Read the audit trail for a handle",
     status_codes(200, 401, 403, 404, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.admin.handles.audit"))]
+#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.admin.handles.audit"))]
 async fn get_handle_audit(
     aa: AuthArgs,
     handle_id: PathParam<String>,
@@ -334,12 +334,12 @@ fn audit_entry_to_handle_event(entry: Value) -> AdminHandleAuditEvent {
 }
 
 #[endpoint(
-    operation_id = "org.cokret.soland.admin.handles.revoke",
+    operation_id = "org.arkret.soland.admin.handles.revoke",
     tags("soland-admin", "handles"),
     summary = "Operator-level handle revocation",
     status_codes(200, 401, 403, 404, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.admin.handles.revoke"))]
+#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.admin.handles.revoke"))]
 async fn revoke_handle(
     aa: AuthArgs,
     handle_id: PathParam<String>,
@@ -392,12 +392,12 @@ async fn revoke_handle(
 }
 
 #[endpoint(
-    operation_id = "org.cokret.soland.admin.handles.reassign",
+    operation_id = "org.arkret.soland.admin.handles.reassign",
     tags("soland-admin", "handles"),
     summary = "Operator-level handle re-bind to a new subject DID",
     status_codes(200, 400, 401, 403, 404, 409, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.admin.handles.reassign"))]
+#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.admin.handles.reassign"))]
 async fn reassign_handle(
     aa: AuthArgs,
     handle_id: PathParam<String>,

@@ -8,7 +8,7 @@ use crate::reducer::*;
 fn media_service_projects_cell_and_rejects_empty_foci() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
-    let realm = "ck:realm:01904100-0000-7000-8000-cfc039892063";
+    let realm = "ak:realm:01904100-0000-7000-8000-cfc039892063";
 
     assert!(matches!(
         state.apply(
@@ -25,7 +25,7 @@ fn media_service_projects_cell_and_rejects_empty_foci() {
     let payload = serde_json::json!({
         "service_id": "did:web:media.example",
         "foci": [{
-            "focus_id": "ck:focus:livekit:green",
+            "focus_id": "ak:focus:livekit:green",
             "backend": "livekit",
             "connect_url": "wss://media.example/livekit",
             "issuer_kid": "did:web:media.example#livekit-2026-05",
@@ -44,21 +44,21 @@ fn media_service_projects_cell_and_rejects_empty_foci() {
         ProjectionEffect::RealmMediaServiceProjected { .. }
     ));
     let cell_id = cokret_sdk::CellRef::new(format!(
-        "ck:cell:ck.component.realm.media_service.v1:{realm}"
+        "ak:cell:ck.component.realm.media_service.v1:{realm}"
     ))
     .unwrap();
     let value = state
         .cell_value(&cell_id)
         .expect("media_service cell projected");
-    assert_eq!(value["foci"][0]["focus_id"], "ck:focus:livekit:green");
+    assert_eq!(value["foci"][0]["focus_id"], "ak:focus:livekit:green");
 }
 
 #[test]
 fn call_state_projects_cell_and_commits_session_focus_write_once() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
-    let realm = "ck:realm:01904100-0000-7000-8000-cfc039892063";
-    let call_id = "ck:call:01904100-0000-7000-8000-c0000000000a";
+    let realm = "ak:realm:01904100-0000-7000-8000-cfc039892063";
+    let call_id = "ak:call:01904100-0000-7000-8000-c0000000000a";
 
     // §4.2 — the first `ck.call.state` MUST open in `{scheduled, ringing,
     // connecting}`; `ringing` is the immediate-call entry state.
@@ -87,10 +87,10 @@ fn call_state_projects_cell_and_commits_session_focus_write_once() {
                     "call_id": call_id,
                     "state": "active",
                     "mode": "sfu",
-                    "session_focus": "ck:focus:livekit:green",
+                    "session_focus": "ak:focus:livekit:green",
                     "recording_state": "recording",
                     "recording_result": {
-                        "recording_start_event_id": "ck:event:01904100-0000-7000-8000-e0000000000a",
+                        "recording_start_event_id": "ak:event:01904100-0000-7000-8000-e0000000000a",
                         "retention": { "consent_confirmed": true }
                     }
                 }),
@@ -100,7 +100,7 @@ fn call_state_projects_cell_and_commits_session_focus_write_once() {
         ProjectionEffect::CallStateProjected { .. }
     ));
     let cell_id =
-        cokret_sdk::CellRef::new(format!("ck:cell:ck.component.call.state.v1:{call_id}")).unwrap();
+        cokret_sdk::CellRef::new(format!("ak:cell:ck.component.call.state.v1:{call_id}")).unwrap();
     let value = state
         .cell_value(&cell_id)
         .expect("call.state cell projected");
@@ -115,7 +115,7 @@ fn call_state_projects_cell_and_commits_session_focus_write_once() {
                 serde_json::json!({
                     "call_id": call_id,
                     "state": "ended",
-                    "session_focus": "ck:focus:livekit:green"
+                    "session_focus": "ak:focus:livekit:green"
                 }),
             ),
             &hlc,
@@ -131,7 +131,7 @@ fn call_state_projects_cell_and_commits_session_focus_write_once() {
                 realm,
                 serde_json::json!({
                     "call_id": call_id,
-                    "session_focus": "ck:focus:mediasoup:blue"
+                    "session_focus": "ak:focus:mediasoup:blue"
                 }),
             ),
             &hlc,
@@ -148,10 +148,10 @@ fn call_state_projects_cell_and_commits_session_focus_write_once() {
 fn call_state_removed_participants_ban_set_is_monotonic() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
-    let realm = "ck:realm:01904100-0000-7000-8000-cfc039892063";
-    let call_id = "ck:call:01904100-0000-7000-8000-c0000000000b";
+    let realm = "ak:realm:01904100-0000-7000-8000-cfc039892063";
+    let call_id = "ak:call:01904100-0000-7000-8000-c0000000000b";
     let cell_id =
-        cokret_sdk::CellRef::new(format!("ck:cell:ck.component.call.state.v1:{call_id}")).unwrap();
+        cokret_sdk::CellRef::new(format!("ak:cell:ck.component.call.state.v1:{call_id}")).unwrap();
 
     assert!(matches!(
         state.apply(
@@ -216,10 +216,10 @@ fn call_state_removed_participants_ban_set_is_monotonic() {
 fn call_state_participant_mute_overrides_are_current_set() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
-    let realm = "ck:realm:01904100-0000-7000-8000-cfc039892063";
-    let call_id = "ck:call:01904100-0000-7000-8000-c0000000000c";
+    let realm = "ak:realm:01904100-0000-7000-8000-cfc039892063";
+    let call_id = "ak:call:01904100-0000-7000-8000-c0000000000c";
     let cell_id =
-        cokret_sdk::CellRef::new(format!("ck:cell:ck.component.call.state.v1:{call_id}")).unwrap();
+        cokret_sdk::CellRef::new(format!("ak:cell:ck.component.call.state.v1:{call_id}")).unwrap();
 
     assert!(matches!(
         state.apply(
@@ -243,7 +243,7 @@ fn call_state_participant_mute_overrides_are_current_set() {
                     "state": "active",
                     "participant_mute_overrides": [{
                         "actor_id": "did:web:bob.example",
-                        "device_id": "ck:device:01904100-0000-7000-8000-000000000002",
+                        "device_id": "ak:device:01904100-0000-7000-8000-000000000002",
                         "audio_muted": true,
                         "video_muted": false,
                         "muted_by": "did:web:mod.example",
@@ -285,7 +285,7 @@ fn call_state_participant_mute_overrides_are_current_set() {
 /// legal-successor table, terminal absorption, and idempotent replay.
 #[test]
 fn call_state_lifecycle_fsm_enforces_transition_table() {
-    let realm = "ck:realm:01904100-0000-7000-8000-cfc039892063";
+    let realm = "ak:realm:01904100-0000-7000-8000-cfc039892063";
 
     let apply_state = |state: &mut ProjectionState, hlc: &ServerHlc, call_id: &str, value: &str| {
         state.apply(
@@ -303,7 +303,7 @@ fn call_state_lifecycle_fsm_enforces_transition_table() {
     for bad_first in ["active", "ended", "missed", "failed", "cancelled"] {
         let mut state = ProjectionState::new();
         let hlc = ServerHlc::new("test");
-        let call_id = "ck:call:01904100-0000-7000-8000-c00000000f01";
+        let call_id = "ak:call:01904100-0000-7000-8000-c00000000f01";
         assert!(
             matches!(
                 apply_state(&mut state, &hlc, call_id, bad_first),
@@ -317,7 +317,7 @@ fn call_state_lifecycle_fsm_enforces_transition_table() {
     for good_first in ["scheduled", "ringing", "connecting"] {
         let mut state = ProjectionState::new();
         let hlc = ServerHlc::new("test");
-        let call_id = "ck:call:01904100-0000-7000-8000-c00000000f02";
+        let call_id = "ak:call:01904100-0000-7000-8000-c00000000f02";
         assert!(
             matches!(
                 apply_state(&mut state, &hlc, call_id, good_first),
@@ -331,7 +331,7 @@ fn call_state_lifecycle_fsm_enforces_transition_table() {
     // active -> ended` is accepted.
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
-    let call_id = "ck:call:01904100-0000-7000-8000-c00000000f03";
+    let call_id = "ak:call:01904100-0000-7000-8000-c00000000f03";
     for next in ["scheduled", "ringing", "connecting", "active", "ended"] {
         assert!(
             matches!(
@@ -357,7 +357,7 @@ fn call_state_lifecycle_fsm_enforces_transition_table() {
     // successor table) rejects with `call_state_transition_invalid`.
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
-    let call_id = "ck:call:01904100-0000-7000-8000-c00000000f04";
+    let call_id = "ak:call:01904100-0000-7000-8000-c00000000f04";
     assert!(matches!(
         apply_state(&mut state, &hlc, call_id, "ringing"),
         ProjectionEffect::CallStateProjected { .. }
@@ -377,12 +377,12 @@ fn call_state_lifecycle_fsm_enforces_transition_table() {
 fn call_state_same_basis_sibling_state_conflict_projects_bottom() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
-    let realm = "ck:realm:01904100-0000-7000-8000-cfc039892063";
-    let call_id = "ck:call:01904100-0000-7000-8000-c00000000f05";
+    let realm = "ak:realm:01904100-0000-7000-8000-cfc039892063";
+    let call_id = "ak:call:01904100-0000-7000-8000-c00000000f05";
     let initial_basis =
-        "ck:seal:sha256:0000000000000000000000000000000000000000000000000000000000000001";
+        "ak:seal:sha256:0000000000000000000000000000000000000000000000000000000000000001";
     let sibling_basis =
-        "ck:seal:sha256:0000000000000000000000000000000000000000000000000000000000000002";
+        "ak:seal:sha256:0000000000000000000000000000000000000000000000000000000000000002";
 
     assert!(matches!(
         state.apply(
@@ -431,7 +431,7 @@ fn call_state_same_basis_sibling_state_conflict_projects_bottom() {
     ));
 
     let cell_id =
-        cokret_sdk::CellRef::new(format!("ck:cell:ck.component.call.state.v1:{call_id}")).unwrap();
+        cokret_sdk::CellRef::new(format!("ak:cell:ck.component.call.state.v1:{call_id}")).unwrap();
     let bottom = match state.cell(&cell_id) {
         Some(CellState::Bottom(bottom)) => bottom,
         other => panic!("expected call state bottom, got {other:?}"),
@@ -475,10 +475,10 @@ fn call_state_same_basis_sibling_state_conflict_projects_bottom() {
 fn call_state_rejects_recording_artifact_pipeline_bypass() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
-    let realm = "ck:realm:01904100-0000-7000-8000-cfc039892063";
-    let call_id = "ck:call:01904100-0000-7000-8000-c0000000000b";
+    let realm = "ak:realm:01904100-0000-7000-8000-cfc039892063";
+    let call_id = "ak:call:01904100-0000-7000-8000-c0000000000b";
 
-    // A recording_result pointing at a raw backend URL bypasses the Cokret
+    // A recording_result pointing at a raw backend URL bypasses the Arkret
     // blob pipeline (`call-state.md` §5) and MUST be rejected.
     assert!(matches!(
         state.apply(
@@ -489,7 +489,7 @@ fn call_state_rejects_recording_artifact_pipeline_bypass() {
                     "call_id": call_id,
                     "recording_state": "ready",
                     "recording_result": {
-                        "recording_start_event_id": "ck:event:01904100-0000-7000-8000-e00000000001",
+                        "recording_start_event_id": "ak:event:01904100-0000-7000-8000-e00000000001",
                         "recording_artifact_url": "https://backend.example/egress/out.mp4"
                     }
                 }),
@@ -499,7 +499,7 @@ fn call_state_rejects_recording_artifact_pipeline_bypass() {
         ProjectionEffect::Rejected { reason } if reason == "recording_artifact_pipeline_bypassed"
     ));
 
-    // A Cokret-blob-backed artifact ref is accepted.
+    // A Arkret-blob-backed artifact ref is accepted.
     assert!(matches!(
         state.apply(
             &make_operation(
@@ -509,8 +509,8 @@ fn call_state_rejects_recording_artifact_pipeline_bypass() {
                     "call_id": call_id,
                     "recording_state": "ready",
                     "recording_result": {
-                        "recording_start_event_id": "ck:event:01904100-0000-7000-8000-e00000000001",
-                        "recording_artifact_ref": "ck:blob:sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                        "recording_start_event_id": "ak:event:01904100-0000-7000-8000-e00000000001",
+                        "recording_artifact_ref": "ak:blob:sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
                     }
                 }),
             ),
@@ -524,8 +524,8 @@ fn call_state_rejects_recording_artifact_pipeline_bypass() {
 fn call_state_recording_capture_requires_second_consent() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
-    let realm = "ck:realm:01904100-0000-7000-8000-cfc039892063";
-    let call_id = "ck:call:01904100-0000-7000-8000-c0000000000c";
+    let realm = "ak:realm:01904100-0000-7000-8000-cfc039892063";
+    let call_id = "ak:call:01904100-0000-7000-8000-c0000000000c";
 
     // §4.2 — drive a legal lifecycle to `active` so the capture-state gate is
     // exercised on an in-range FSM head (first state MUST be in
@@ -585,8 +585,8 @@ fn call_state_recording_capture_requires_second_consent() {
 fn call_state_transcript_capture_requires_consent_and_rejects_unknown_state() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
-    let realm = "ck:realm:01904100-0000-7000-8000-cfc039892063";
-    let call_id = "ck:call:01904100-0000-7000-8000-c0000000000d";
+    let realm = "ak:realm:01904100-0000-7000-8000-cfc039892063";
+    let call_id = "ak:call:01904100-0000-7000-8000-c0000000000d";
 
     // §5.1 — an unknown `transcript_state` value MUST reject.
     assert!(matches!(
@@ -664,8 +664,8 @@ fn call_state_transcript_capture_requires_consent_and_rejects_unknown_state() {
 fn call_summary_requires_terminal_state_and_is_write_once() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
-    let realm = "ck:realm:01904100-0000-7000-8000-cfc039892063";
-    let call_id = "ck:call:01904100-0000-7000-8000-c0000000000e";
+    let realm = "ak:realm:01904100-0000-7000-8000-cfc039892063";
+    let call_id = "ak:call:01904100-0000-7000-8000-c0000000000e";
 
     // §7 — a summary for a call with no terminal `ck.call.state` head rejects.
     assert!(matches!(

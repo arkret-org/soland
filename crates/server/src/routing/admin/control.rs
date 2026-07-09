@@ -77,13 +77,13 @@ pub struct AdminControlFrameOutcome {
 /// re-subscribe with `from=null` (or whatever the subscribe path
 /// considers a fresh-from-frontier start).
 #[endpoint(
-    operation_id = "org.cokret.soland.admin.events.resync_required",
+    operation_id = "org.arkret.soland.admin.events.resync_required",
     tags("soland-admin", "events"),
     summary = "Broadcast a resync_required control frame to subscribers"
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "org.cokret.soland.admin.events.resync_required")
+    fields(op = "org.arkret.soland.admin.events.resync_required")
 )]
 async fn admin_emit_resync_required(
     aa: AuthArgs,
@@ -131,11 +131,11 @@ async fn admin_emit_resync_required(
 /// Clients receiving this frame MUST close the stream and re-authenticate
 /// before reconnecting; the existing session token is no longer accepted.
 #[endpoint(
-    operation_id = "org.cokret.soland.admin.events.unauthorized",
+    operation_id = "org.arkret.soland.admin.events.unauthorized",
     tags("soland-admin", "events"),
     summary = "Broadcast an unauthorized control frame to subscribers"
 )]
-#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.admin.events.unauthorized"))]
+#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.admin.events.unauthorized"))]
 async fn admin_emit_unauthorized(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -179,7 +179,7 @@ mod tests {
     async fn resync_required_notification_round_trips_through_channel() {
         let (tx, mut rx) = broadcast::channel::<EventNotification>(8);
         let n = EventNotification {
-            realm_id: "ck:realm:01904100-0000-7000-8000-000000000001".to_owned(),
+            realm_id: "ak:realm:01904100-0000-7000-8000-000000000001".to_owned(),
             kind: EventNotificationKind::ResyncRequired {
                 reason: "compaction".to_owned(),
                 reconnect_after_ms: Some(7_500),
@@ -189,7 +189,7 @@ mod tests {
         let received = rx.recv().await.expect("receive");
         assert_eq!(
             received.realm_id,
-            "ck:realm:01904100-0000-7000-8000-000000000001"
+            "ak:realm:01904100-0000-7000-8000-000000000001"
         );
         match received.kind {
             EventNotificationKind::ResyncRequired {
@@ -207,7 +207,7 @@ mod tests {
     async fn unauthorized_notification_round_trips_through_channel() {
         let (tx, mut rx) = broadcast::channel::<EventNotification>(8);
         let n = EventNotification {
-            realm_id: "ck:realm:01904100-0000-7000-8000-000000000002".to_owned(),
+            realm_id: "ak:realm:01904100-0000-7000-8000-000000000002".to_owned(),
             kind: EventNotificationKind::Unauthorized {
                 reason: "session_revoked".to_owned(),
             },
@@ -216,7 +216,7 @@ mod tests {
         let received = rx.recv().await.expect("receive");
         assert_eq!(
             received.realm_id,
-            "ck:realm:01904100-0000-7000-8000-000000000002"
+            "ak:realm:01904100-0000-7000-8000-000000000002"
         );
         match received.kind {
             EventNotificationKind::Unauthorized { reason } => {

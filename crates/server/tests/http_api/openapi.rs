@@ -2,7 +2,7 @@ use super::common::*;
 
 #[tokio::test]
 async fn soland_admin_openapi_uses_product_namespace() {
-    let spec: Value = TestClient::get("http://server/.well-known/cokret/openapi.json")
+    let spec: Value = TestClient::get("http://server/.well-known/arkret/openapi.json")
         .send(&app())
         .await
         .take_json()
@@ -15,7 +15,7 @@ async fn soland_admin_openapi_uses_product_namespace() {
     let server_status = &spec["paths"]["/_soland/admin/server/status"]["get"];
     assert_eq!(
         server_status["operationId"],
-        "org.cokret.soland.admin.get_server_status"
+        "org.arkret.soland.admin.get_server_status"
     );
     assert_product_admin_tags(server_status);
 
@@ -41,7 +41,7 @@ async fn soland_admin_openapi_uses_product_namespace() {
             checked_admin_operations += 1;
             assert!(!operation_id.starts_with(&removed_admin_operation_prefix));
             assert_no_plain_admin_tag(operation);
-            if operation_id.starts_with("org.cokret.soland.admin.") {
+            if operation_id.starts_with("org.arkret.soland.admin.") {
                 assert_product_admin_tags(operation);
             }
         }

@@ -2,7 +2,7 @@
 
 > 勘察快照,截至 d28714b。本文「现状基线」描述以该 commit 为准,后续实现演进可能使其失真。
 
-支撑 CKP-0016(agent 参与策略)落地所需、当前缺失或 stub 的四个 soland 子系统的完整设计。真源协议见 `cokret-spec/spec/v1/proposals/0016-agent-participation-policy.md` 与 CKP-0008/0009。
+支撑 CKP-0016(agent 参与策略)落地所需、当前缺失或 stub 的四个 soland 子系统的完整设计。真源协议见 `arkret-spec/spec/v1/proposals/0016-agent-participation-policy.md` 与 CKP-0008/0009。
 
 设计原则:复用现有事件管线与 reducer/cell 投影模型,不另起并行栈;字段顺序与 spec 一致;直接改现有 SQL;无兼容层。
 
@@ -55,7 +55,7 @@ pub(crate) async fn emit_server_event(
 fn apply_capability_grant(&mut self, op: &Operation) -> ProjectionEffect {
     // payload: { capability_id, issuer, subject, actions[], resources[], constraints[], expires_at }
     let cap_id = op.payload.get("capability_id").and_then(Value::as_str)...; // reject if missing
-    let cell = CellRef::new(format!("ck:cell:ck.component.capability.grant.v1:{cap_id}"))?;
+    let cell = CellRef::new(format!("ak:cell:ck.component.capability.grant.v1:{cap_id}"))?;
     // 校验:issuer 有 ck.capability.grant 授权(已有 authz 引擎);subject/resources 格式;
     //       resources 的 realm_id == op.realm_id。
     self.cells.insert(cell, CellState::Value(grant_value));      // 与现有 grant 读侧同 schema

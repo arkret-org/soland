@@ -239,8 +239,8 @@ fn moderation_target_message<'a>(
 ) -> Option<&'a crate::reducer::MessageState> {
     projection.messages.get(target_ref).or_else(|| {
         target_ref
-            .strip_prefix("ck:message:")
-            .and_then(|suffix| projection.messages.get(&format!("ck:event:{suffix}")))
+            .strip_prefix("ak:message:")
+            .and_then(|suffix| projection.messages.get(&format!("ak:event:{suffix}")))
     })
 }
 
@@ -354,13 +354,13 @@ async fn validate_moderation_franking_proof(
         ));
     }
     if !required_string_field(object, "franking_proof_id", "franking_proof")?
-        .starts_with("ck:franking_proof:")
+        .starts_with("ak:franking_proof:")
     {
         return Err(AppError::invalid_param(
             "franking_proof.franking_proof_id must be a franking proof id",
         ));
     }
-    if !required_string_field(object, "event_id", "franking_proof")?.starts_with("ck:event:") {
+    if !required_string_field(object, "event_id", "franking_proof")?.starts_with("ak:event:") {
         return Err(AppError::invalid_param(
             "franking_proof.event_id must be an event id",
         ));
@@ -498,7 +498,7 @@ fn validate_franking_sender_claim(object: &serde_json::Map<String, Value>) -> Re
     })?;
     let device_id =
         required_string_field(sender_claim, "device_id", "franking_proof.sender_claim")?;
-    if !device_id.starts_with("ck:device:") {
+    if !device_id.starts_with("ak:device:") {
         return Err(AppError::invalid_param(
             "franking_proof.sender_claim.device_id must be a device id",
         ));
@@ -741,11 +741,11 @@ async fn moderation_report(
 }
 
 #[endpoint(
-    operation_id = "org.cokret.soland.moderation.reports",
+    operation_id = "org.arkret.soland.moderation.reports",
     tags("moderation"),
     summary = "List moderation reports visible to the authenticated actor"
 )]
-#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.moderation.reports"))]
+#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.moderation.reports"))]
 async fn moderation_reports(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -947,7 +947,7 @@ async fn notify_audit_agent_for_report(
     .await;
 
     let event_body = json!({
-        "kind": "org.cokret.soland.audit.report",
+        "kind": "org.arkret.soland.audit.report",
         "event": report_payload,
         "disclosure": {
             "plaintext_release": false,
@@ -961,7 +961,7 @@ async fn notify_audit_agent_for_report(
                 append_audit_log(
                     state,
                     None,
-                    "org.cokret.soland.audit.report",
+                    "org.arkret.soland.audit.report",
                     json!({
                         "realm_id": realm_id,
                         "report_id": report_id,
@@ -983,7 +983,7 @@ async fn notify_audit_agent_for_report(
             append_audit_log(
                 state,
                 None,
-                "org.cokret.soland.audit.report",
+                "org.arkret.soland.audit.report",
                 json!({
                     "realm_id": realm_id,
                     "report_id": report_id,
@@ -998,7 +998,7 @@ async fn notify_audit_agent_for_report(
             append_audit_log(
                 state,
                 None,
-                "org.cokret.soland.audit.report",
+                "org.arkret.soland.audit.report",
                 json!({
                     "realm_id": realm_id,
                     "report_id": report_id,
@@ -1037,9 +1037,9 @@ async fn audit_plaintext_release_withheld_for_report(
     append_audit_log(
         state,
         None,
-        "org.cokret.soland.audit.plaintext_release",
+        "org.arkret.soland.audit.plaintext_release",
         json!({
-            "kind": "org.cokret.soland.audit.plaintext_release",
+            "kind": "org.arkret.soland.audit.plaintext_release",
             "realm_id": report_payload.get("realm_id").cloned().unwrap_or(Value::Null),
             "report_id": report_payload.get("report_id").cloned().unwrap_or(Value::Null),
             "target_ref": report_payload.get("target_ref").cloned().unwrap_or(Value::Null),
@@ -1067,9 +1067,9 @@ async fn append_agent_accessed_if_present(
         append_audit_log(
             state,
             None,
-            "org.cokret.soland.audit.plaintext_release",
+            "org.arkret.soland.audit.plaintext_release",
             json!({
-                "kind": "org.cokret.soland.audit.plaintext_release",
+                "kind": "org.arkret.soland.audit.plaintext_release",
                 "realm_id": report_payload.get("realm_id").cloned().unwrap_or(Value::Null),
                 "report_id": report_payload.get("report_id").cloned().unwrap_or(Value::Null),
                 "target_ref": report_payload.get("target_ref").cloned().unwrap_or(Value::Null),
@@ -1143,7 +1143,7 @@ fn sealed_plaintext_release_authorized(emitted: &Value) -> bool {
                 .and_then(|decision| decision.get("decision_ref"))
                 .and_then(Value::as_str)
         })
-        .filter(|value| value.starts_with("ck:event:") || value.starts_with("ck:decision:"));
+        .filter(|value| value.starts_with("ak:event:") || value.starts_with("ak:decision:"));
     let proof = object
         .get("binding_proof")
         .and_then(Value::as_str)
@@ -1253,11 +1253,11 @@ pub struct ModerationAppealSubmitOutcome {
 }
 
 #[endpoint(
-    operation_id = "org.cokret.soland.moderation.appeal.submit",
+    operation_id = "org.arkret.soland.moderation.appeal.submit",
     tags("moderation"),
     summary = "Submit a moderation appeal against a prior decision"
 )]
-#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.moderation.appeal.submit"))]
+#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.moderation.appeal.submit"))]
 async fn moderation_appeal_submit(
     aa: AuthArgs,
     body: JsonBody<ModerationAppealSubmitRequestBody>,
@@ -1349,9 +1349,9 @@ mod report_safety_tests {
     use super::*;
     use crate::config::{AppConfig, IceServersConfig, LiveKitConfig, ObjectStorageConfig};
 
-    const REALM: &str = "ck:realm:01904100-0000-7000-8000-d0d0d0d0d0d0";
-    const TARGET: &str = "ck:message:01904100-0000-7000-8000-000000000777";
-    const FRANKING_EVENT: &str = "ck:event:01904100-0000-7000-8000-000000000222";
+    const REALM: &str = "ak:realm:01904100-0000-7000-8000-d0d0d0d0d0d0";
+    const TARGET: &str = "ak:message:01904100-0000-7000-8000-000000000777";
+    const FRANKING_EVENT: &str = "ak:event:01904100-0000-7000-8000-000000000222";
     const FRANKING_RECEIVED_AT: &str = "2026-04-30T00:00:00Z";
     const REPORTER: &str = "did:web:alice.example";
 
@@ -1369,9 +1369,9 @@ mod report_safety_tests {
             Db { pool: None },
         );
         state.projection.lock().messages.insert(
-            TARGET.replacen("ck:message:", "ck:event:", 1),
+            TARGET.replacen("ak:message:", "ak:event:", 1),
             crate::reducer::MessageState {
-                event_id: TARGET.replacen("ck:message:", "ck:event:", 1),
+                event_id: TARGET.replacen("ak:message:", "ak:event:", 1),
                 message_id: TARGET.to_owned(),
                 realm_id: REALM.to_owned(),
                 sender: REPORTER.to_owned(),
@@ -1379,7 +1379,7 @@ mod report_safety_tests {
                 content: json!({ "kind": "ck.content.text", "body": "reported" }),
                 expiry: None,
                 encrypted: false,
-                operation_id: "ck:operation:01904100-0000-7000-8000-000000000777".to_owned(),
+                operation_id: "ak:operation:01904100-0000-7000-8000-000000000777".to_owned(),
                 created_at: chrono::Utc::now(),
                 history_basis_seals: Vec::new(),
                 revision_of: None,
@@ -1439,7 +1439,7 @@ mod report_safety_tests {
     fn valid_franking() -> Value {
         json!({
             "kind": "ck.moderation.franking_proof",
-            "franking_proof_id": "ck:franking_proof:01904100-0000-7000-8000-000000000111",
+            "franking_proof_id": "ak:franking_proof:01904100-0000-7000-8000-000000000111",
             "realm_id": REALM,
             "event_id": FRANKING_EVENT,
             "routing_metadata_digest": hash('c'),
@@ -1447,7 +1447,7 @@ mod report_safety_tests {
             "aad_digest": hash('e'),
             "sender_claim": {
                 "actor_id": REPORTER,
-                "device_id": "ck:device:01904100-0000-7000-8000-000000000333",
+                "device_id": "ak:device:01904100-0000-7000-8000-000000000333",
                 "mls_group_id_digest": hash('f'),
             },
             "received_by": "did:web:soland.local",
@@ -1465,7 +1465,7 @@ mod report_safety_tests {
 
         let bad_scope = json!({
             "kind": "realm",
-            "realm_id": "ck:realm:01904100-0000-7000-8000-badbadbadbad",
+            "realm_id": "ak:realm:01904100-0000-7000-8000-badbadbadbad",
         });
         let bad = valid_evidence(bad_scope);
         let error = validate_moderation_evidence_package(&bad, &scope).unwrap_err();
@@ -1561,7 +1561,7 @@ mod report_safety_tests {
         })));
         assert!(!sealed_plaintext_release_authorized(&json!({
             "access_kind": "e2ee_plaintext_release",
-            "decision_ref": "ck:event:01904100-0000-7000-8000-000000000999",
+            "decision_ref": "ak:event:01904100-0000-7000-8000-000000000999",
             "binding_proof": "proof",
         })));
         assert!(!sealed_plaintext_release_authorized(&json!({
@@ -1572,7 +1572,7 @@ mod report_safety_tests {
         assert!(sealed_plaintext_release_authorized(&json!({
             "access_kind": "e2ee_plaintext_release",
             "sealed": true,
-            "sealed_decision_ref": "ck:event:01904100-0000-7000-8000-000000000999",
+            "sealed_decision_ref": "ak:event:01904100-0000-7000-8000-000000000999",
             "binding_proof": "proof",
         })));
     }

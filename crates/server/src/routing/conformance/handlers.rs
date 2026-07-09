@@ -302,11 +302,11 @@ fn encode_reject_for_vector(vector: &str) -> Option<(ErrorCode, &'static str)> {
 }
 
 #[endpoint(
-    operation_id = "org.cokret.soland.conformance.encode",
+    operation_id = "org.arkret.soland.conformance.encode",
     tags("conformance"),
     summary = "Run a canonical-JSON / digest conformance vector"
 )]
-#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.conformance.encode"))]
+#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.conformance.encode"))]
 pub async fn encode(body: JsonBody<EncodeVectorRequest>) -> JsonResult<CanonicalJsonDigestOutcome> {
     super::ensure_enabled()?;
     let body = body.into_inner();
@@ -324,11 +324,11 @@ pub async fn encode(body: JsonBody<EncodeVectorRequest>) -> JsonResult<Canonical
 }
 
 #[endpoint(
-    operation_id = "org.cokret.soland.conformance.sign",
+    operation_id = "org.arkret.soland.conformance.sign",
     tags("conformance"),
     summary = "Run a signature-binding conformance vector"
 )]
-#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.conformance.sign"))]
+#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.conformance.sign"))]
 pub async fn sign(body: JsonBody<SignVectorRequest>) -> JsonResult<SignVectorOutcome> {
     super::ensure_enabled()?;
     let body = body.into_inner();
@@ -376,11 +376,11 @@ pub async fn sign(body: JsonBody<SignVectorRequest>) -> JsonResult<SignVectorOut
 }
 
 #[endpoint(
-    operation_id = "org.cokret.soland.conformance.hlc_merge",
+    operation_id = "org.arkret.soland.conformance.hlc_merge",
     tags("conformance"),
     summary = "Run an HLC ordering conformance vector"
 )]
-#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.conformance.hlc_merge"))]
+#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.conformance.hlc_merge"))]
 pub async fn hlc_merge(body: JsonBody<HlcMergeVectorRequest>) -> JsonResult<HlcMergeVectorOutcome> {
     super::ensure_enabled()?;
     let body = body.into_inner();
@@ -416,11 +416,11 @@ pub async fn hlc_merge(body: JsonBody<HlcMergeVectorRequest>) -> JsonResult<HlcM
 }
 
 #[endpoint(
-    operation_id = "org.cokret.soland.conformance.cursor",
+    operation_id = "org.arkret.soland.conformance.cursor",
     tags("conformance"),
     summary = "Run an opaque-cursor conformance vector"
 )]
-#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.conformance.cursor"))]
+#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.conformance.cursor"))]
 pub async fn cursor(body: JsonBody<CursorVectorRequest>) -> JsonResult<CursorVectorOutcome> {
     super::ensure_enabled()?;
     let body = body.into_inner();
@@ -469,11 +469,11 @@ pub async fn cursor(body: JsonBody<CursorVectorRequest>) -> JsonResult<CursorVec
 }
 
 #[endpoint(
-    operation_id = "org.cokret.soland.conformance.envelope",
+    operation_id = "org.arkret.soland.conformance.envelope",
     tags("conformance"),
     summary = "Run an encrypted-envelope canonical-digest conformance vector"
 )]
-#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.conformance.envelope"))]
+#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.conformance.envelope"))]
 pub async fn envelope(
     body: JsonBody<EnvelopeVectorRequest>,
 ) -> JsonResult<CanonicalBytesDigestOutcome> {
@@ -500,11 +500,11 @@ pub async fn envelope(
 }
 
 #[endpoint(
-    operation_id = "org.cokret.soland.conformance.redact",
+    operation_id = "org.arkret.soland.conformance.redact",
     tags("conformance"),
     summary = "Run a redaction visibility / projection conformance vector"
 )]
-#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.conformance.redact"))]
+#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.conformance.redact"))]
 pub async fn redact(body: JsonBody<RedactVectorRequest>) -> JsonResult<RedactVectorOutcome> {
     super::ensure_enabled()?;
     let body = body.into_inner();
@@ -557,11 +557,11 @@ pub async fn redact(body: JsonBody<RedactVectorRequest>) -> JsonResult<RedactVec
 }
 
 #[endpoint(
-    operation_id = "org.cokret.soland.conformance.erase_receipt",
+    operation_id = "org.arkret.soland.conformance.erase_receipt",
     tags("conformance"),
     summary = "Run a hard-erasure receipt / snapshot-pruning verification-stub conformance vector"
 )]
-#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.conformance.erase_receipt"))]
+#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.conformance.erase_receipt"))]
 pub async fn erase_receipt(
     body: JsonBody<EraseReceiptVectorRequest>,
 ) -> JsonResult<EraseReceiptVectorOutcome> {
@@ -670,11 +670,11 @@ fn projected_event_carries_plaintext(projected: &Value, original: &Value) -> boo
 }
 
 #[endpoint(
-    operation_id = "org.cokret.soland.conformance.snapshot",
+    operation_id = "org.arkret.soland.conformance.snapshot",
     tags("conformance"),
     summary = "Run a snapshot manifest / chunk integrity conformance vector"
 )]
-#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.conformance.snapshot"))]
+#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.conformance.snapshot"))]
 pub async fn snapshot(body: JsonBody<SnapshotVectorRequest>) -> JsonResult<SnapshotVectorOutcome> {
     super::ensure_enabled()?;
     let body = body.into_inner();
@@ -767,11 +767,11 @@ pub async fn snapshot(body: JsonBody<SnapshotVectorRequest>) -> JsonResult<Snaps
 }
 
 #[endpoint(
-    operation_id = "org.cokret.soland.conformance.query",
+    operation_id = "org.arkret.soland.conformance.query",
     tags("conformance"),
     summary = "Run a query filter / sort / pagination conformance vector"
 )]
-#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.conformance.query"))]
+#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.conformance.query"))]
 pub async fn query(body: JsonBody<QueryVectorRequest>) -> JsonResult<QueryVectorOutcome> {
     super::ensure_enabled()?;
     let body = body.into_inner();
@@ -835,11 +835,11 @@ pub async fn query(body: JsonBody<QueryVectorRequest>) -> JsonResult<QueryVector
 }
 
 #[endpoint(
-    operation_id = "org.cokret.soland.conformance.chaos_operation",
+    operation_id = "org.arkret.soland.conformance.chaos_operation",
     tags("conformance"),
     summary = "Inspect a committed operation during local chaos testing"
 )]
-#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.conformance.chaos_operation"))]
+#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.conformance.chaos_operation"))]
 pub async fn chaos_operation(
     depot: &mut Depot,
     req: &Request,
@@ -853,7 +853,7 @@ pub async fn chaos_operation(
     }
     let operation_id = query_param(req, "operation_id")
         .ok_or_else(|| AppError::missing_param("missing operation_id"))?;
-    if !operation_id.starts_with("ck:operation:") {
+    if !operation_id.starts_with("ak:operation:") {
         return Err(AppError::invalid_param(
             "operation_id must use ck:operation:",
         ));
@@ -1195,7 +1195,7 @@ fn encode_query_cursor(offset: usize, query_digest: &str) -> Result<String, AppE
     });
     let canonical = canonical_json(&shape).map_err(schema_error)?;
     Ok(format!(
-        "ck:cursor:{}",
+        "ak:cursor:{}",
         URL_SAFE_NO_PAD.encode(canonical.as_bytes())
     ))
 }
@@ -1210,7 +1210,7 @@ fn query_digest_value(query_value: &Value) -> Value {
 
 fn decode_query_cursor(cursor_token: &str, query_digest: &str) -> Result<usize, AppError> {
     let payload = cursor_token
-        .strip_prefix("ck:cursor:")
+        .strip_prefix("ak:cursor:")
         .ok_or_else(|| AppError::invalid_param("query cursor must start with ck:cursor:"))?;
     let bytes = URL_SAFE_NO_PAD
         .decode(payload)
@@ -1272,13 +1272,13 @@ fn canonical_event_operation_id(record: &CanonicalEventRecord) -> Option<String>
         .and_then(Value::as_object)
         .and_then(|unsigned| unsigned.get("local_operation_idempotency_alias"))
         .and_then(Value::as_str)
-        .filter(|value| value.starts_with("ck:operation:"))
+        .filter(|value| value.starts_with("ak:operation:"))
         .map(ToOwned::to_owned)
         .or_else(|| {
             record
                 .event_id
-                .strip_prefix("ck:event:")
-                .map(|suffix| format!("ck:operation:{suffix}"))
+                .strip_prefix("ak:event:")
+                .map(|suffix| format!("ak:operation:{suffix}"))
         })
 }
 
@@ -1323,7 +1323,7 @@ mod tests {
     #[test]
     fn strip_path_removes_nested_field() {
         let mut event = json!({
-            "event_id": "ck:event:1",
+            "event_id": "ak:event:1",
             "payload": { "content": "secret", "kind": "msg" },
             "sender": "did:alice",
         });
@@ -1333,7 +1333,7 @@ mod tests {
         assert_eq!(
             event,
             json!({
-                "event_id": "ck:event:1",
+                "event_id": "ak:event:1",
                 "payload": { "kind": "msg" },
                 "sender": "did:alice",
             })

@@ -47,9 +47,9 @@ use crate::wire::{
 };
 
 /// Device-scope prefix carried in a `ck.session.grant`'s scope set
-/// (`urn:cokret:client:device:<device_id>`). A grant that drives
+/// (`urn:arkret:client:device:<device_id>`). A grant that drives
 /// `/_cokret/self/*` MUST carry one so the request is device-bound.
-const DEVICE_SCOPE_PREFIX: &str = "urn:cokret:client:device:";
+const DEVICE_SCOPE_PREFIX: &str = "urn:arkret:client:device:";
 
 /// TTL for the session-grant introspection cache (api-conventions.md §3.3 D2:
 /// SHOULD ≤ 120s). The revocation-visibility upper bound equals this TTL;
@@ -897,12 +897,12 @@ mod tests {
 
     fn test_introspection_grant() -> SessionGrantIntrospectGrant {
         SessionGrantIntrospectGrant {
-            id: GrantId::new("ck:grant:0196419b-0000-7000-8000-000000000001").unwrap(),
+            id: GrantId::new("ak:grant:0196419b-0000-7000-8000-000000000001").unwrap(),
             issuer: "did:web:coauth.local".to_owned(),
             subject: "did:web:alice.example".to_owned(),
             service_account_id: "alice".to_owned(),
             device_id: Some(
-                DeviceId::new("ck:device:0196419b-0000-7000-8000-000000000001").unwrap(),
+                DeviceId::new("ak:device:0196419b-0000-7000-8000-000000000001").unwrap(),
             ),
             audience: "did:web:soland.local".to_owned(),
             scopes: vec![
@@ -911,7 +911,7 @@ mod tests {
             ],
             expires_at: crate::wire::now() + Duration::minutes(5),
             revoked_at: None,
-            revocation_ref: "ck:session:grant-1".to_owned(),
+            revocation_ref: "ak:session:grant-1".to_owned(),
             session_public_key: "{}".to_owned(),
             cnf_jkt: Some("holder-thumbprint".to_owned()),
             proof_kind: None,
@@ -935,7 +935,7 @@ mod tests {
     #[test]
     fn agent_session_binding_materializes_scope_details() {
         let mut grant = test_introspection_grant();
-        grant.id = GrantId::new("ck:grant:0196419b-0000-7000-8000-000000000002").unwrap();
+        grant.id = GrantId::new("ak:grant:0196419b-0000-7000-8000-000000000002").unwrap();
         grant.subject = "did:web:agent.example".to_owned();
         grant.device_id = None;
         grant.scopes = vec!["ck.agent.action:message.send".to_owned()];
@@ -943,7 +943,7 @@ mod tests {
         grant.scope_details = serde_json::json!({
             "controller_did": "did:web:alice.example",
             "resources": {
-                "realm_refs": ["ck:realm:team"],
+                "realm_refs": ["ak:realm:team"],
                 "strand_refs": [],
             },
             "constraints": {

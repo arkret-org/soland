@@ -70,7 +70,7 @@ async fn account_subscribe_frame(state: AppState, token: &str, query: &str) -> V
 }
 
 async fn create_plaintext_realm(state: AppState, _token: &str, title: &str) -> String {
-    let realm_id = cokret_sdk::new_prefixed_uuid7("ck:realm:");
+    let realm_id = cokret_sdk::new_prefixed_uuid7("ak:realm:");
     let typed_realm_id = RealmId::new(realm_id.clone()).unwrap();
     let owner = Did::new("did:web:alice.example".to_owned()).unwrap();
     let now = chrono::Utc::now();
@@ -142,13 +142,13 @@ async fn send_plaintext_message(
         "content": {"kind": "ck.content.text", "body": body}
     });
     let mut event = json!({
-        "event_id": cokret_sdk::new_prefixed_uuid7("ck:event:"),
+        "event_id": cokret_sdk::new_prefixed_uuid7("ak:event:"),
         "kind": "ck.message.create",
         "schema_id": "ck.schema.message.v1",
         "actor_id": actor,
         "actor_seq": TEST_EVENT_SEQ.fetch_add(1, Ordering::Relaxed),
         "realm_id": realm_id,
-        "device_id": "ck:device:01904100-0000-7000-8000-b0b000000001",
+        "device_id": "ak:device:01904100-0000-7000-8000-b0b000000001",
         "audience": "did:web:soland.local",
         "domain": "did:web:soland.local",
         "prev_refs": [],
@@ -157,7 +157,7 @@ async fn send_plaintext_message(
         "proofs": [{
             "type": "dev-proof",
             "verification_method": format!("{actor}#01904100-0000-7000-8000-b0b000000001"),
-            "device_id": "ck:device:01904100-0000-7000-8000-b0b000000001",
+            "device_id": "ak:device:01904100-0000-7000-8000-b0b000000001",
             "audience": "did:web:soland.local",
             "domain": "did:web:soland.local",
             "payload_digest": sha256_json(&payload)
@@ -194,7 +194,7 @@ fn signed_actor_private_event_envelope(
     payload: Value,
 ) -> Value {
     let mut event = json!({
-        "event_id": cokret_sdk::new_prefixed_uuid7("ck:event:"),
+        "event_id": cokret_sdk::new_prefixed_uuid7("ak:event:"),
         "kind": kind,
         "schema_id": "ck.schema.event.v1",
         "actor_id": actor,
@@ -255,7 +255,7 @@ fn read_cursor_payload(
     hlc: &str,
 ) -> Value {
     json!({
-        "id": cokret_sdk::new_prefixed_uuid7("ck:read_cursor:"),
+        "id": cokret_sdk::new_prefixed_uuid7("ak:read_cursor:"),
         "schema": "ck.schema.read_cursor.v1",
         "actor_id": actor,
         "device_id": device_id,
@@ -319,16 +319,16 @@ fn encrypted_account_data_marker(hex_pair: &str, ciphertext: &str) -> Value {
             "profile_id": "ck.profile.e2ee_client.v1",
             "payload_digest": format!("sha256:{}", hex_pair.repeat(32))
         },
-        "content_type": "application/vnd.cokret.account-data+json",
+        "content_type": "application/vnd.arkret.account-data+json",
         "ciphertext": ciphertext,
     })
 }
 
 fn strand_id_for_realm(realm_id: &str) -> String {
     realm_id
-        .strip_prefix("ck:realm:")
-        .map(|suffix| format!("ck:strand:{suffix}"))
-        .unwrap_or_else(|| "ck:strand:01904100-0000-7000-8000-f10dc0000001".to_owned())
+        .strip_prefix("ak:realm:")
+        .map(|suffix| format!("ak:strand:{suffix}"))
+        .unwrap_or_else(|| "ak:strand:01904100-0000-7000-8000-f10dc0000001".to_owned())
 }
 
 #[tokio::test]
@@ -337,21 +337,21 @@ async fn blocklist_account_data_requires_encrypted_carrier_and_fans_out_opaque()
     let alice_desktop = dev_token(
         state.clone(),
         "did:web:alice.example",
-        "ck:device:01904100-0000-7000-8000-a11ce0000001",
+        "ak:device:01904100-0000-7000-8000-a11ce0000001",
         "Alice Desktop",
     )
     .await;
     let alice_phone = dev_token(
         state.clone(),
         "did:web:alice.example",
-        "ck:device:01904100-0000-7000-8000-a11ce0000002",
+        "ak:device:01904100-0000-7000-8000-a11ce0000002",
         "Alice Phone",
     )
     .await;
     let bob = dev_token(
         state.clone(),
         "did:web:bob.example",
-        "ck:device:01904100-0000-7000-8000-b0b000000001",
+        "ak:device:01904100-0000-7000-8000-b0b000000001",
         "Bob",
     )
     .await;
@@ -380,7 +380,7 @@ async fn blocklist_account_data_requires_encrypted_carrier_and_fans_out_opaque()
         state.clone(),
         &alice_desktop,
         "did:web:alice.example",
-        "ck:device:01904100-0000-7000-8000-a11ce0000001",
+        "ak:device:01904100-0000-7000-8000-a11ce0000001",
         &realm_id,
         "ck.account_data.set",
         json!({
@@ -401,7 +401,7 @@ async fn blocklist_account_data_requires_encrypted_carrier_and_fans_out_opaque()
         state.clone(),
         &alice_desktop,
         "did:web:alice.example",
-        "ck:device:01904100-0000-7000-8000-a11ce0000001",
+        "ak:device:01904100-0000-7000-8000-a11ce0000001",
         &realm_id,
         "ck.account_data.set",
         json!({
@@ -473,39 +473,39 @@ async fn read_cursor_fans_out_per_realm_without_cross_actor_leakage() {
     let alice_desktop = dev_token(
         state.clone(),
         "did:web:alice.example",
-        "ck:device:01904100-0000-7000-8000-a11ce0000001",
+        "ak:device:01904100-0000-7000-8000-a11ce0000001",
         "Alice Desktop",
     )
     .await;
     let alice_phone = dev_token(
         state.clone(),
         "did:web:alice.example",
-        "ck:device:01904100-0000-7000-8000-a11ce0000002",
+        "ak:device:01904100-0000-7000-8000-a11ce0000002",
         "Alice Phone",
     )
     .await;
     let bob = dev_token(
         state.clone(),
         "did:web:bob.example",
-        "ck:device:01904100-0000-7000-8000-b0b000000001",
+        "ak:device:01904100-0000-7000-8000-b0b000000001",
         "Bob",
     )
     .await;
     let realm_a = create_plaintext_realm(state.clone(), &alice_desktop, "Parent Realm").await;
     let realm_b = create_plaintext_realm(state.clone(), &alice_desktop, "Discussion Realm").await;
-    let event_a = "ck:event:01904100-0000-7000-8000-0000000000aa";
-    let event_b = "ck:event:01904100-0000-7000-8000-0000000000bb";
+    let event_a = "ak:event:01904100-0000-7000-8000-0000000000aa";
+    let event_b = "ak:event:01904100-0000-7000-8000-0000000000bb";
 
     let marker_a = submit_actor_private_event(
         state.clone(),
         &alice_desktop,
         "did:web:alice.example",
-        "ck:device:01904100-0000-7000-8000-a11ce0000001",
+        "ak:device:01904100-0000-7000-8000-a11ce0000001",
         &realm_a,
         "ck.read_cursor.advance",
         read_cursor_payload(
             "did:web:alice.example",
-            "ck:device:01904100-0000-7000-8000-a11ce0000001",
+            "ak:device:01904100-0000-7000-8000-a11ce0000001",
             &realm_a,
             event_a,
             "019041000000-0001-a11ce001",
@@ -521,12 +521,12 @@ async fn read_cursor_fans_out_per_realm_without_cross_actor_leakage() {
         state.clone(),
         &alice_desktop,
         "did:web:alice.example",
-        "ck:device:01904100-0000-7000-8000-a11ce0000001",
+        "ak:device:01904100-0000-7000-8000-a11ce0000001",
         &realm_b,
         "ck.read_cursor.advance",
         read_cursor_payload(
             "did:web:alice.example",
-            "ck:device:01904100-0000-7000-8000-a11ce0000001",
+            "ak:device:01904100-0000-7000-8000-a11ce0000001",
             &realm_b,
             event_b,
             "019041000000-0001-a11ce002",
@@ -590,14 +590,14 @@ async fn push_blind_wakeup_rejects_e2ee_stable_identifiers() {
     let token = dev_token(
         state.clone(),
         "did:web:alice.example",
-        "ck:device:01904100-0000-7000-8000-a11ce0000001",
+        "ak:device:01904100-0000-7000-8000-a11ce0000001",
         "Alice Desktop",
     )
     .await;
     let registered: Value = TestClient::post("http://server/_cokret/edge/push/register-device")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&json!({
-            "device_id": "ck:device:01904100-0000-7000-8000-a11ce0000001",
+            "device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001",
             "push_gateway": "https://push.example",
             "push_key": "opaque",
             "platform": "desktop",
@@ -618,10 +618,10 @@ async fn push_blind_wakeup_rejects_e2ee_stable_identifiers() {
             "notification": {
                 "push_target_id": push_target_id,
                 "wakeup_kind": "message",
-                "event_id": "ck:event:01904100-0000-7000-8000-0000000000ee",
-                "realm_id": "ck:realm:0190419b-0000-7000-8000-0000000000ee",
+                "event_id": "ak:event:01904100-0000-7000-8000-0000000000ee",
+                "realm_id": "ak:realm:0190419b-0000-7000-8000-0000000000ee",
                 "sender_actor_id": "did:web:bob.example",
-                "devices": [{"device_id": "ck:device:01904100-0000-7000-8000-a11ce0000001"}]
+                "devices": [{"device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001"}]
             }
         }))
         .send(&app_from_state(state.clone()))
@@ -633,7 +633,7 @@ async fn push_blind_wakeup_rejects_e2ee_stable_identifiers() {
             "notification": {
                 "push_target_id": push_target_id,
                 "wakeup_kind": "message",
-                "devices": [{"device_id": "ck:device:01904100-0000-7000-8000-a11ce0000001"}]
+                "devices": [{"device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001"}]
             }
         }))
         .send(&app_from_state(state))

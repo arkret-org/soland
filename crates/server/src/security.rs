@@ -588,7 +588,7 @@ fn trust_domain_from_service_did(service_did: &str) -> String {
             .unwrap_or(service_did)
             .replace(':', ".")
     });
-    format!("ck:trust_domain:{scope}")
+    format!("ak:trust_domain:{scope}")
 }
 
 fn env_bool(name: &str) -> Option<bool> {

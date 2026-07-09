@@ -33,7 +33,7 @@ async fn dev_token(svc: &salvo::Service) -> String {
     let login: Value = TestClient::post("http://server/_soland/gate/auth/dev-login")
         .json(&json!({
             "actor": "did:web:alice.example",
-            "device_id": "ck:device:01904100-0000-7000-8000-a11ce0000001",
+            "device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001",
             "display_name": "Alice Desktop"
         }))
         .send(svc)
@@ -44,10 +44,10 @@ async fn dev_token(svc: &salvo::Service) -> String {
     login["session_credential"].as_str().unwrap().to_owned()
 }
 
-const REALM_A: &str = "ck:realm:01904100-0000-7000-8000-aaaaaaaaaaa1";
-const REALM_B: &str = "ck:realm:01904100-0000-7000-8000-bbbbbbbbbbb2";
-const REALM_C: &str = "ck:realm:01904100-0000-7000-8000-ccccccccccc3";
-const REALM_D: &str = "ck:realm:01904100-0000-7000-8000-ddddddddddd4";
+const REALM_A: &str = "ak:realm:01904100-0000-7000-8000-aaaaaaaaaaa1";
+const REALM_B: &str = "ak:realm:01904100-0000-7000-8000-bbbbbbbbbbb2";
+const REALM_C: &str = "ak:realm:01904100-0000-7000-8000-ccccccccccc3";
+const REALM_D: &str = "ak:realm:01904100-0000-7000-8000-ddddddddddd4";
 
 /// Submit a `ck.realm.inheritance_policy` event directly through the
 /// reducer (the dedicated HTTP route is the standard `/_cokret/self/events`
@@ -61,7 +61,7 @@ fn project_inheritance_policy(
 ) {
     use cokret_sdk::{Operation, OperationId, RealmId};
     let op = Operation::create(
-        OperationId::new(format!("ck:operation:{}", uuid::Uuid::now_v7())).unwrap(),
+        OperationId::new(format!("ak:operation:{}", uuid::Uuid::now_v7())).unwrap(),
         RealmId::new(realm_id).unwrap(),
         cokret_sdk::events::kinds::REALM_INHERITANCE_POLICY,
         json!({

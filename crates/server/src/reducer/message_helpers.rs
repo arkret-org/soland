@@ -11,8 +11,8 @@ use crate::wire::ReadScopeWire;
 
 pub(crate) fn message_event_id_from_ref(value: &str) -> String {
     value
-        .strip_prefix("ck:message:")
-        .map(|suffix| format!("ck:event:{suffix}"))
+        .strip_prefix("ak:message:")
+        .map(|suffix| format!("ak:event:{suffix}"))
         .unwrap_or_else(|| value.to_owned())
 }
 
@@ -33,7 +33,7 @@ pub(crate) fn message_redaction_target_ref(payload: &Value) -> Option<String> {
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .and_then(|value| {
-                if value.starts_with("ck:event:") || value.starts_with("ck:message:") {
+                if value.starts_with("ak:event:") || value.starts_with("ak:message:") {
                     Some(value.to_owned())
                 } else {
                     None
@@ -44,9 +44,9 @@ pub(crate) fn message_redaction_target_ref(payload: &Value) -> Option<String> {
 
 pub(crate) fn message_id_from_event_id(value: &str) -> String {
     value
-        .strip_prefix("ck:event:")
-        .map(|suffix| format!("ck:message:{suffix}"))
-        .unwrap_or_else(|| format!("ck:message:{value}"))
+        .strip_prefix("ak:event:")
+        .map(|suffix| format!("ak:message:{suffix}"))
+        .unwrap_or_else(|| format!("ak:message:{value}"))
 }
 
 pub(crate) fn message_id_from_payload_or_event_id(payload: &Value, event_id: &str) -> String {

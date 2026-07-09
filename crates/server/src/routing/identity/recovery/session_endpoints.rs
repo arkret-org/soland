@@ -206,13 +206,13 @@ pub(super) async fn recovery_session_create(
         .with_wire_code("recovery_principal_isolation"));
     }
     let requesting_device_id = payload.requesting_device_id.as_str().to_owned();
-    if !requesting_device_id.starts_with("ck:device:") {
+    if !requesting_device_id.starts_with("ak:device:") {
         return Err(AppError::invalid_param(format!(
             "requesting_device_id `{requesting_device_id}` must start with ck:device:",
         )));
     }
     let trust_domain = payload.trust_domain.as_str().to_owned();
-    if !trust_domain.starts_with("ck:trust_domain:") {
+    if !trust_domain.starts_with("ak:trust_domain:") {
         return Err(AppError::invalid_param(format!(
             "trust_domain `{trust_domain}` must start with ck:trust_domain:",
         )));

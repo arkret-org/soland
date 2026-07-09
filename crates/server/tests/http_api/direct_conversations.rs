@@ -12,13 +12,13 @@ use super::common::*;
 
 const BOB_DID: &str = "did:web:bob.example";
 const BOB_PAIRWISE_DID: &str = "did:peer:2.ezbobpairwise";
-const BOB_DEVICE: &str = "ck:device:01904100-0000-7000-8000-b0b0b0000002";
+const BOB_DEVICE: &str = "ak:device:01904100-0000-7000-8000-b0b0b0000002";
 
 fn cross_signing_publish(principal: &str, generation: u64) -> CrossSigningPublishContent {
     let principal_id = Did::new(principal.to_owned()).unwrap();
     CrossSigningPublishContent {
         principal_id: principal_id.clone(),
-        trust_domain: TypedTrustDomainId::new("ck:trust_domain:soland.local".to_owned()).unwrap(),
+        trust_domain: TypedTrustDomainId::new("ak:trust_domain:soland.local".to_owned()).unwrap(),
         principal_signing_key: CrossSigningKeyRecord {
             kid: format!("{principal}#principal-signing"),
             alg: "EdDSA".to_owned(),
@@ -68,8 +68,8 @@ fn seed_cross_signing_generation(state: &AppState, principal: &str, generation: 
 
 async fn upload_bob_direct_keypackage(state: AppState, bob_token: &str, suffix: &str) {
     seed_cross_signing_generation(&state, BOB_DID, 1);
-    let keypackage_id = format!("ck:mls_keypackage:direct-{suffix}");
-    let keypackage_ref = format!("ck:mls:keypackage:direct-{suffix}");
+    let keypackage_id = format!("ak:mls_keypackage:direct-{suffix}");
+    let keypackage_ref = format!("ak:mls:keypackage:direct-{suffix}");
     let keypackage_bytes = format!("opaque-direct-keypackage-{suffix}");
     let capabilities = serde_json::json!(["ck.mls.rfc9420", "ck.mls.profile.full"]);
     let response = TestClient::post("http://server/_cokret/self/keys/keypackages/upload")
@@ -129,8 +129,8 @@ async fn direct_resolve_fails_closed_when_consent_missing() {
             target: BOB_DID.to_owned(),
             scope: "direct_message".to_owned(),
             status: "accepted".to_owned(),
-            request_event_ref: Some("ck:event:0196419b-0000-7000-8000-000000000211".to_owned()),
-            response_event_ref: Some("ck:event:0196419b-0000-7000-8000-000000000212".to_owned()),
+            request_event_ref: Some("ak:event:0196419b-0000-7000-8000-000000000211".to_owned()),
+            response_event_ref: Some("ak:event:0196419b-0000-7000-8000-000000000212".to_owned()),
             tombstone_event_ref: None,
             message: None,
             peer_service_did: None,
@@ -164,8 +164,8 @@ async fn direct_resolve_rejects_pairwise_did_without_stable_identity_link() {
             target: BOB_PAIRWISE_DID.to_owned(),
             scope: "direct_message".to_owned(),
             status: "accepted".to_owned(),
-            request_event_ref: Some("ck:event:0196419b-0000-7000-8000-000000000231".to_owned()),
-            response_event_ref: Some("ck:event:0196419b-0000-7000-8000-000000000232".to_owned()),
+            request_event_ref: Some("ak:event:0196419b-0000-7000-8000-000000000231".to_owned()),
+            response_event_ref: Some("ak:event:0196419b-0000-7000-8000-000000000232".to_owned()),
             tombstone_event_ref: None,
             message: None,
             peer_service_did: None,
@@ -174,7 +174,7 @@ async fn direct_resolve_rejects_pairwise_did_without_stable_identity_link() {
         })
         .await
         .unwrap();
-    let grant_dot = "ck:event:0196419b-0000-7000-8000-000000000233".to_owned();
+    let grant_dot = "ak:event:0196419b-0000-7000-8000-000000000233".to_owned();
     state.consent_cells.lock().insert(
         soland::state::ConsentCellKey {
             holder: BOB_PAIRWISE_DID.to_owned(),
@@ -185,7 +185,7 @@ async fn direct_resolve_rejects_pairwise_did_without_stable_identity_link() {
             holder: BOB_PAIRWISE_DID.to_owned(),
             peer: "did:web:alice.example".to_owned(),
             scope: "direct_message".to_owned(),
-            cell_id: "ck:consent:pairwise-direct".to_owned(),
+            cell_id: "ak:consent:pairwise-direct".to_owned(),
             requested_at: None,
             grant_dots: BTreeMap::from([(
                 grant_dot.clone(),
@@ -371,13 +371,13 @@ async fn contacts_spec_path_projects_directional_scopes_and_resolve_is_idempoten
         created["realm_id"]
             .as_str()
             .unwrap()
-            .starts_with("ck:realm:")
+            .starts_with("ak:realm:")
     );
     assert!(
         created["main_strand_id"]
             .as_str()
             .unwrap()
-            .starts_with("ck:strand:")
+            .starts_with("ak:strand:")
     );
     let keypackages = state
         .persistence
@@ -390,7 +390,7 @@ async fn contacts_spec_path_projects_directional_scopes_and_resolve_is_idempoten
         .find(|row| row.actor_id == BOB_DID && row.claimed_by_mls_group_id.is_some())
         .expect("Bob KeyPackage should be claimed for the direct MLS group");
     let mls_group_id = claimed.claimed_by_mls_group_id.clone().unwrap();
-    assert!(mls_group_id.starts_with("ck:mls_group:"));
+    assert!(mls_group_id.starts_with("ak:mls_group:"));
     let welcomes = state
         .persistence
         .mls_welcomes()

@@ -287,7 +287,7 @@ pub(super) fn validate_key_backup_domain_separation_typed(
         ));
     }
     let expected_hkdf_info = format!(
-        "cokret-key-backup/{}/{}/v1",
+        "arkret-key-backup/{}/{}/v1",
         backup_class_wire(backup.backup_class),
         domain.subdomain
     );
@@ -520,7 +520,7 @@ pub(super) fn validate_recovery_policy_ref_shape_typed(backup: &KeyBackup) -> Re
 
     let (policy_id, version) = typed_recovery_policy_ref(backup)
         .ok_or_else(|| schema_error("recovery_policy_ref must be an object"))?;
-    if !policy_id.starts_with("ck:policy:") {
+    if !policy_id.starts_with("ak:policy:") {
         return Err(schema_error(format!(
             "recovery_policy_ref.policy_id `{policy_id}` must start with ck:policy:"
         )));

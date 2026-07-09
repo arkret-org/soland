@@ -360,7 +360,7 @@ mod tests {
     #[test]
     fn frontier_response_validation_requires_bound_peer_and_realm() {
         let body = serde_json::json!({
-            "realm_id": "ck:realm:01904100-0000-7000-8000-000000000001",
+            "realm_id": "ak:realm:01904100-0000-7000-8000-000000000001",
             "heads": [],
             "issuer": "did:web:peer.example",
             "frontier_root": format!("sha256:{}", "a".repeat(64)),
@@ -373,7 +373,7 @@ mod tests {
             validate_frontier_response(
                 &state,
                 "did:web:peer.example",
-                "ck:realm:01904100-0000-7000-8000-000000000001"
+                "ak:realm:01904100-0000-7000-8000-000000000001"
             )
             .is_ok()
         );
@@ -381,7 +381,7 @@ mod tests {
             validate_frontier_response(
                 &state,
                 "did:web:other.example",
-                "ck:realm:01904100-0000-7000-8000-000000000001"
+                "ak:realm:01904100-0000-7000-8000-000000000001"
             )
             .unwrap_err(),
             "issuer_mismatch"

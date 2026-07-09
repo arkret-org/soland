@@ -29,7 +29,7 @@ async fn recovery_receipt_rejects_policy_binding_mismatch() {
         &signing,
         &principal_id,
         &verification_method,
-        &new_prefixed_uuid7("ck:policy:"),
+        &new_prefixed_uuid7("ak:policy:"),
         1,
         None,
         RECEIPT_FIELDS,
@@ -83,7 +83,7 @@ async fn recovery_receipt_rejects_unauthorized_device() {
         &principal_id,
         &policy_id,
         1,
-        "ck:device:01904100-0000-7000-8000-00000000aaaa",
+        "ak:device:01904100-0000-7000-8000-00000000aaaa",
         RECEIPT_FIELDS,
     );
     let body = post_recovery_receipt(state, &token, &receipt, StatusCode::CONFLICT).await;

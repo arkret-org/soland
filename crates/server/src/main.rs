@@ -43,7 +43,7 @@ async fn main() -> anyhow::Result<()> {
     let log_format = soland::config::LogFormat::from_env(dev_mode_for_logging);
     let _tracing_guards = init_tracing(log_format)?;
 
-    // Fail fast at startup if a bundled Cokret artifact is malformed instead
+    // Fail fast at startup if a bundled Arkret artifact is malformed instead
     // of crashing the first request that touches the offending OnceLock.
     artifacts::validate_embedded_artifacts()?;
 

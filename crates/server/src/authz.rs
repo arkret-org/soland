@@ -595,7 +595,7 @@ fn circle_local_management_action_requires_explicit_grant(action: &str) -> bool 
 
 /// Check if a grant resource pattern matches the requested resource.
 ///
-/// CKP-0007 / SEL-1 (R3 spec-sync 2026-05-27, cokret-spec b47ff6ec) —
+/// CKP-0007 / SEL-1 (R3 spec-sync 2026-05-27, arkret-spec b47ff6ec) —
 /// the spec resource-selector enum admits `realm`, `space`, `strand`,
 /// `morph`, `circle`, `actor`. soland's resource matcher accepts the
 /// `ck:circle:<uuid>` typed-id form alongside the existing space /
@@ -634,27 +634,27 @@ fn resource_term_matches(pattern: &str, resource: &str) -> bool {
         return true;
     }
     match pattern {
-        "realm" => return resource.starts_with("ck:realm:"),
-        "space" => return resource.starts_with("ck:space:"),
-        "circle" => return resource.starts_with("ck:circle:"),
-        "strand" => return resource.starts_with("ck:strand:"),
+        "realm" => return resource.starts_with("ak:realm:"),
+        "space" => return resource.starts_with("ak:space:"),
+        "circle" => return resource.starts_with("ak:circle:"),
+        "strand" => return resource.starts_with("ak:strand:"),
         "message" => {
-            return resource.starts_with("ck:message:") || resource.starts_with("ck:event:");
+            return resource.starts_with("ak:message:") || resource.starts_with("ak:event:");
         }
-        "morph" => return resource.starts_with("ck:morph:"),
+        "morph" => return resource.starts_with("ak:morph:"),
         "object" => return is_canonical_object_ref(resource),
-        "relation" => return resource.starts_with("ck:relation:"),
-        "view" => return resource.starts_with("ck:view:"),
-        "event" => return resource.starts_with("ck:event:"),
-        "actor" => return resource.starts_with("did:") || resource.starts_with("ck:actor:"),
+        "relation" => return resource.starts_with("ak:relation:"),
+        "view" => return resource.starts_with("ak:view:"),
+        "event" => return resource.starts_with("ak:event:"),
+        "actor" => return resource.starts_with("did:") || resource.starts_with("ak:actor:"),
         "schema" => {
-            return resource.starts_with("ck:schema:") || resource.starts_with("ck.schema.");
+            return resource.starts_with("ak:schema:") || resource.starts_with("ck.schema.");
         }
-        "policy" => return resource.starts_with("ck:policy:"),
-        "invite" => return resource.starts_with("ck:invite:"),
-        "notification" => return resource.starts_with("ck:notification:"),
-        "read_cursor" => return resource.starts_with("ck:read_cursor:"),
-        "blob" => return resource.starts_with("ck:blob:"),
+        "policy" => return resource.starts_with("ak:policy:"),
+        "invite" => return resource.starts_with("ak:invite:"),
+        "notification" => return resource.starts_with("ak:notification:"),
+        "read_cursor" => return resource.starts_with("ak:read_cursor:"),
+        "blob" => return resource.starts_with("ak:blob:"),
         _ => {}
     }
     if let Some(prefix) = pattern.strip_suffix('*') {
@@ -665,18 +665,18 @@ fn resource_term_matches(pattern: &str, resource: &str) -> bool {
 
 fn is_canonical_object_ref(value: &str) -> bool {
     [
-        "ck:realm:",
-        "ck:space:",
-        "ck:circle:",
-        "ck:strand:",
-        "ck:message:",
-        "ck:morph:",
-        "ck:relation:",
-        "ck:view:",
-        "ck:event:",
-        "ck:policy:",
-        "ck:invite:",
-        "ck:blob:",
+        "ak:realm:",
+        "ak:space:",
+        "ak:circle:",
+        "ak:strand:",
+        "ak:message:",
+        "ak:morph:",
+        "ak:relation:",
+        "ak:view:",
+        "ak:event:",
+        "ak:policy:",
+        "ak:invite:",
+        "ak:blob:",
     ]
     .iter()
     .any(|prefix| value.starts_with(prefix))
@@ -943,7 +943,7 @@ fn selector_uses_governance_wildcard(map: &Map<String, Value>) -> bool {
             let object_ref = map.get("object_ref").and_then(Value::as_str);
             let governance_type = matches!(object_type, Some("policy" | "schema"));
             let governance_ref = object_ref.is_some_and(|value| {
-                value.starts_with("ck:policy:") || value.starts_with("ck:schema:")
+                value.starts_with("ak:policy:") || value.starts_with("ak:schema:")
             });
             (governance_type
                 && (selector_field_missing_or_wildcard(map, "object_ref")
@@ -962,7 +962,7 @@ fn selector_field_missing_or_wildcard(map: &Map<String, Value>, field: &str) -> 
 
 /// Pick the resulting decision over a set of satisfied grants.
 ///
-/// Per Cokret v1 (spec optimization round, _todos B3/B5): the three non-allow
+/// Per Arkret v1 (spec optimization round, _todos B3/B5): the three non-allow
 /// decisions — `deny`, `quarantine`, `require_review` — are each *any-hit-wins*
 /// in that priority order. `allow` is only the diagnostic fallback when no
 /// non-allow decision was raised, so it ranks lowest. This avoids the previous
@@ -1063,7 +1063,7 @@ fn evaluate_constraint(
                     "allowed_circle_ids constraint requires a non-empty allow list".to_owned(),
                 );
             }
-            if !resource.starts_with("ck:circle:") {
+            if !resource.starts_with("ak:circle:") {
                 // Constraint is Circle-scoped — non-Circle resources are
                 // out of scope; pass through.
                 return None;
@@ -1085,7 +1085,7 @@ fn evaluate_constraint(
                     "allowed_session_ids constraint requires a non-empty allow list".to_owned(),
                 );
             }
-            if !resource.starts_with("ck:agent_interop_session:") {
+            if !resource.starts_with("ak:agent_interop_session:") {
                 return None;
             }
             if allowed_session_ids
@@ -1319,8 +1319,8 @@ mod tests {
         let result = engine.check(
             "did:web:alice",
             "ck.message.create",
-            "ck:space:1",
-            "ck:space:1",
+            "ak:space:1",
+            "ak:space:1",
             Some("did:web:alice"),
             &[],
             &[],
@@ -1335,8 +1335,8 @@ mod tests {
         let result = engine.check(
             "did:web:alice",
             "ck.future.action",
-            "ck:space:1",
-            "ck:space:1",
+            "ak:space:1",
+            "ak:space:1",
             Some("did:web:alice"),
             &[],
             &[],
@@ -1349,10 +1349,10 @@ mod tests {
     fn unknown_action_grant_is_fail_closed() {
         let engine = SolandAuthzEngine::new();
         let grant = engine.create_grant(
-            "ck:space:1".to_owned(),
+            "ak:space:1".to_owned(),
             "did:web:alice".to_owned(),
             "did:web:bob".to_owned(),
-            "ck:space:1".to_owned(),
+            "ak:space:1".to_owned(),
             vec!["ck.future.action".to_owned()],
             vec![],
         );
@@ -1365,8 +1365,8 @@ mod tests {
         let result = engine.check(
             "did:web:bob",
             "ck.future.action",
-            "ck:space:1",
-            "ck:space:1",
+            "ak:space:1",
+            "ak:space:1",
             None,
             &[],
             &[],
@@ -1387,8 +1387,8 @@ mod tests {
             let result = engine.check(
                 "did:web:alice",
                 action,
-                "ck:circle:01904100-0000-7000-8000-000000000001",
-                "ck:realm:01904100-0000-7000-8000-000000000001",
+                "ak:circle:01904100-0000-7000-8000-000000000001",
+                "ak:realm:01904100-0000-7000-8000-000000000001",
                 Some("did:web:alice"),
                 &[],
                 &[],
@@ -1405,8 +1405,8 @@ mod tests {
         let read = engine.check(
             "did:web:bob",
             "ck.strand.read",
-            "ck:space:1",
-            "ck:space:1",
+            "ak:space:1",
+            "ak:space:1",
             Some("did:web:alice"),
             &members,
             &[],
@@ -1417,8 +1417,8 @@ mod tests {
         let write = engine.check(
             "did:web:bob",
             "ck.message.create",
-            "ck:space:1",
-            "ck:space:1",
+            "ak:space:1",
+            "ak:space:1",
             Some("did:web:alice"),
             &members,
             &[],
@@ -1432,18 +1432,18 @@ mod tests {
         let engine = SolandAuthzEngine::new();
         let members = vec!["did:web:bob".to_owned()];
         engine.create_grant(
-            "ck:space:1".to_owned(),
+            "ak:space:1".to_owned(),
             "did:web:alice".to_owned(),
             "did:web:bob".to_owned(),
-            "ck:space:1".to_owned(),
+            "ak:space:1".to_owned(),
             vec!["ck.strand.read".to_owned()],
             vec![],
         );
         let result = engine.check(
             "did:web:bob",
             "ck.strand.read",
-            "ck:space:1",
-            "ck:space:1",
+            "ak:space:1",
+            "ak:space:1",
             Some("did:web:alice"),
             &members,
             &[],
@@ -1456,18 +1456,18 @@ mod tests {
     fn explicit_grant_overrides_default() {
         let engine = SolandAuthzEngine::new();
         engine.create_grant(
-            "ck:space:1".to_owned(),
+            "ak:space:1".to_owned(),
             "did:web:alice".to_owned(),
             "did:web:bob".to_owned(),
-            "ck:space:1".to_owned(),
+            "ak:space:1".to_owned(),
             vec!["ck.message.create".to_owned()],
             vec![],
         );
         let result = engine.check(
             "did:web:bob",
             "ck.message.create",
-            "ck:space:1",
-            "ck:space:1",
+            "ak:space:1",
+            "ak:space:1",
             Some("did:web:alice"),
             &[],
             &[],
@@ -1480,20 +1480,20 @@ mod tests {
     fn explicit_deny_overrides_allow() {
         let engine = SolandAuthzEngine::new();
         engine.create_grant(
-            "ck:space:1".to_owned(),
+            "ak:space:1".to_owned(),
             "did:web:alice".to_owned(),
             "did:web:bob".to_owned(),
-            "ck:space:1".to_owned(),
+            "ak:space:1".to_owned(),
             vec!["ck.message.create".to_owned()],
             vec![Constraint::Decision {
                 decision: GrantDecisionVerdict::Allow,
             }],
         );
         engine.create_grant(
-            "ck:space:1".to_owned(),
+            "ak:space:1".to_owned(),
             "did:web:alice".to_owned(),
             "did:web:bob".to_owned(),
-            "ck:space:1".to_owned(),
+            "ak:space:1".to_owned(),
             vec!["ck.message.create".to_owned()],
             vec![Constraint::Decision {
                 decision: GrantDecisionVerdict::Deny,
@@ -1502,8 +1502,8 @@ mod tests {
         let result = engine.check(
             "did:web:bob",
             "ck.message.create",
-            "ck:space:1",
-            "ck:space:1",
+            "ak:space:1",
+            "ak:space:1",
             Some("did:web:alice"),
             &[],
             &[],
@@ -1518,20 +1518,20 @@ mod tests {
         // any-hit-wins; allow is the diagnostic fallback only.
         let engine = SolandAuthzEngine::new();
         engine.create_grant(
-            "ck:space:1".to_owned(),
+            "ak:space:1".to_owned(),
             "did:web:alice".to_owned(),
             "did:web:bob".to_owned(),
-            "ck:space:1".to_owned(),
+            "ak:space:1".to_owned(),
             vec!["ck.message.create".to_owned()],
             vec![Constraint::Decision {
                 decision: GrantDecisionVerdict::RequireReview,
             }],
         );
         engine.create_grant(
-            "ck:space:1".to_owned(),
+            "ak:space:1".to_owned(),
             "did:web:alice".to_owned(),
             "did:web:bob".to_owned(),
-            "ck:space:1".to_owned(),
+            "ak:space:1".to_owned(),
             vec!["ck.message.create".to_owned()],
             vec![Constraint::Decision {
                 decision: GrantDecisionVerdict::Allow,
@@ -1540,8 +1540,8 @@ mod tests {
         let reviewed = engine.check(
             "did:web:bob",
             "ck.message.create",
-            "ck:space:1",
-            "ck:space:1",
+            "ak:space:1",
+            "ak:space:1",
             Some("did:web:alice"),
             &[],
             &[],
@@ -1550,10 +1550,10 @@ mod tests {
         assert_eq!(reviewed.reason, "require_review");
 
         engine.create_grant(
-            "ck:space:1".to_owned(),
+            "ak:space:1".to_owned(),
             "did:web:alice".to_owned(),
             "did:web:bob".to_owned(),
-            "ck:space:1".to_owned(),
+            "ak:space:1".to_owned(),
             vec!["ck.message.create".to_owned()],
             vec![Constraint::Decision {
                 decision: GrantDecisionVerdict::Quarantine,
@@ -1562,8 +1562,8 @@ mod tests {
         let quarantined = engine.check(
             "did:web:bob",
             "ck.message.create",
-            "ck:space:1",
-            "ck:space:1",
+            "ak:space:1",
+            "ak:space:1",
             Some("did:web:alice"),
             &[],
             &[],
@@ -1576,10 +1576,10 @@ mod tests {
     fn revoked_grant_denied() {
         let engine = SolandAuthzEngine::new();
         let grant = engine.create_grant(
-            "ck:space:1".to_owned(),
+            "ak:space:1".to_owned(),
             "did:web:alice".to_owned(),
             "did:web:bob".to_owned(),
-            "ck:space:1".to_owned(),
+            "ak:space:1".to_owned(),
             vec!["ck.message.create".to_owned()],
             vec![],
         );
@@ -1587,8 +1587,8 @@ mod tests {
         let result = engine.check(
             "did:web:bob",
             "ck.message.create",
-            "ck:space:1",
-            "ck:space:1",
+            "ak:space:1",
+            "ak:space:1",
             Some("did:web:alice"),
             &[],
             &[],
@@ -1600,10 +1600,10 @@ mod tests {
     fn delegated_child_denied_with_upstream_revocation_reason() {
         let engine = SolandAuthzEngine::new();
         let parent = engine.create_grant(
-            "ck:space:1".to_owned(),
+            "ak:space:1".to_owned(),
             "did:web:alice".to_owned(),
             "did:web:bob".to_owned(),
-            "ck:space:1".to_owned(),
+            "ak:space:1".to_owned(),
             vec!["ck.message.create".to_owned()],
             vec![],
         );
@@ -1612,7 +1612,7 @@ mod tests {
                 &parent.grant_id,
                 "did:web:bob".to_owned(),
                 "did:web:carol".to_owned(),
-                "ck:space:1".to_owned(),
+                "ak:space:1".to_owned(),
                 vec!["ck.message.create".to_owned()],
                 vec![],
                 None,
@@ -1622,8 +1622,8 @@ mod tests {
         let result = engine.check(
             "did:web:carol",
             "ck.message.create",
-            "ck:space:1",
-            "ck:space:1",
+            "ak:space:1",
+            "ak:space:1",
             Some("did:web:alice"),
             &[],
             &[],
@@ -1644,8 +1644,8 @@ mod tests {
         let result = engine.check(
             "did:web:eve",
             "ck.strand.read",
-            "ck:space:1",
-            "ck:space:1",
+            "ak:space:1",
+            "ak:space:1",
             Some("did:web:alice"),
             &[],
             &[],
@@ -1657,18 +1657,18 @@ mod tests {
     fn wildcard_action_grant_is_fail_closed() {
         let engine = SolandAuthzEngine::new();
         engine.create_grant(
-            "ck:realm:1".to_owned(),
+            "ak:realm:1".to_owned(),
             "did:web:alice".to_owned(),
             "did:web:bob".to_owned(),
-            "ck:realm:1".to_owned(),
+            "ak:realm:1".to_owned(),
             vec!["ck.pin.*".to_owned()],
             vec![],
         );
         let result = engine.check(
             "did:web:bob",
             "ck.pin.add",
-            "ck:realm:1",
-            "ck:realm:1",
+            "ak:realm:1",
+            "ak:realm:1",
             None,
             &[],
             &[],
@@ -1681,7 +1681,7 @@ mod tests {
     fn bare_wildcard_resource_grant_is_fail_closed() {
         let engine = SolandAuthzEngine::new();
         engine.create_grant(
-            "ck:realm:1".to_owned(),
+            "ak:realm:1".to_owned(),
             "did:web:alice".to_owned(),
             "did:web:bob".to_owned(),
             "*".to_owned(),
@@ -1691,8 +1691,8 @@ mod tests {
         let result = engine.check(
             "did:web:bob",
             "ck.pin.add",
-            "ck:realm:1",
-            "ck:realm:1",
+            "ak:realm:1",
+            "ak:realm:1",
             None,
             &[],
             &[],

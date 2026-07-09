@@ -370,7 +370,7 @@ async fn peer_events_frontier(
 /// §5.2). The operation is therefore undeclared and the endpoint fails
 /// closed with `not_implemented` until a real signing path lands. The
 /// dev snapshot bundle remains reachable on the `/_soland/` product face
-/// (`org.cokret.soland.sync.snapshot_chunk`).
+/// (`org.arkret.soland.sync.snapshot_chunk`).
 #[endpoint(
     operation_id = "ck.peer.snapshot.query.manifest_head",
     tags("peer"),
@@ -1063,12 +1063,12 @@ fn record_scope_circle_id(record: &CanonicalEventRecord) -> Option<String> {
     let object = record.envelope.as_object()?;
     if let Some(scope) = object.get("effective_scope") {
         if let Some(scope) = scope.as_str()
-            && scope.starts_with("ck:circle:")
+            && scope.starts_with("ak:circle:")
         {
             return Some(scope.to_owned());
         }
         if let Some(circle_id) = scope.get("circle_id").and_then(Value::as_str)
-            && circle_id.starts_with("ck:circle:")
+            && circle_id.starts_with("ak:circle:")
         {
             return Some(circle_id.to_owned());
         }
@@ -1084,7 +1084,7 @@ fn record_scope_circle_id(record: &CanonicalEventRecord) -> Option<String> {
                 .and_then(|object| object.get("scope_circle_id"))
                 .and_then(Value::as_str)
         })
-        .filter(|scope| scope.starts_with("ck:circle:"))
+        .filter(|scope| scope.starts_with("ak:circle:"))
         .map(ToOwned::to_owned)
 }
 

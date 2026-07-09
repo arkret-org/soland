@@ -25,7 +25,7 @@ async fn admin_actor_detail_includes_account_lifecycle_linkage() {
     assert!(
         actor["account_row_id"]
             .as_str()
-            .is_some_and(|value| value.starts_with("ck:account:")),
+            .is_some_and(|value| value.starts_with("ak:account:")),
         "actor row must include the durable account row id: {actor}"
     );
 }
@@ -38,7 +38,7 @@ async fn admin_account_status_aliases_keep_protocol_state_closed() {
         state.clone(),
         "did:web:bob.example",
         "@bob",
-        "ck:device:01904100-0000-7000-8000-b0b0b0000002",
+        "ak:device:01904100-0000-7000-8000-b0b0b0000002",
     )
     .await;
 
@@ -66,7 +66,7 @@ async fn admin_account_status_aliases_keep_protocol_state_closed() {
         state.clone(),
         "did:web:carol.example",
         "@carol",
-        "ck:device:01904100-0000-7000-8000-ca2010000003",
+        "ak:device:01904100-0000-7000-8000-ca2010000003",
     )
     .await;
     let disabled: Value =
@@ -116,14 +116,14 @@ async fn admin_invite_token_create_and_revoke_round_trip() {
         .await
         .unwrap();
     let invite_id = created["id"].as_str().expect("invite id").to_owned();
-    assert!(invite_id.starts_with("ck:invite:"));
+    assert!(invite_id.starts_with("ak:invite:"));
     assert_eq!(created["invite_id"], invite_id);
     assert_eq!(created["realm_id"], DEMO_REALM_ID);
     assert_eq!(created["status"], "pending");
     assert!(
         created["token"]
             .as_str()
-            .is_some_and(|value| value.starts_with("ck:invite-token:")),
+            .is_some_and(|value| value.starts_with("ak:invite-token:")),
         "create response must include the plaintext token once: {created}"
     );
 
@@ -164,7 +164,7 @@ async fn admin_media_statistics_and_by_actor_are_derived_from_blobs() {
         .persistence
         .blobs()
         .put(
-            "ck:blob:test-1",
+            "ak:blob:test-1",
             &BlobRecord {
                 sha256: "sha256-1".to_owned(),
                 size_bytes: 128,
@@ -187,7 +187,7 @@ async fn admin_media_statistics_and_by_actor_are_derived_from_blobs() {
         .persistence
         .blobs()
         .put(
-            "ck:blob:test-2",
+            "ak:blob:test-2",
             &BlobRecord {
                 sha256: "sha256-2".to_owned(),
                 size_bytes: 64,

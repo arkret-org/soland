@@ -1,17 +1,17 @@
-//! Soland error integration for canonical Cokret SDK error codes.
+//! Soland error integration for canonical Arkret SDK error codes.
 //!
 //! Wire-form error codes are owned by `cokret_sdk::ErrorCode`; this module
 //! only adds soland-specific Salvo rendering and typed endpoint plumbing.
 
 /// Round C44 (2026-05-18; spec dc01ad7 Tier-0) — registered
 /// `failed_precondition` reason codes new in this round. These are
-/// re-exported from cokret-sdk so soland call sites can use
+/// re-exported from arkret-sdk so soland call sites can use
 /// `crate::error::reasons::INCEPTION_UPGRADE_FINGERPRINT_MISMATCH` directly.
 pub mod reasons {
     use cokret_sdk::error as core_error;
 
     // SEC-04 — receiver-side independent 24h inception-key online-window cap
-    // (`identity/key-management.md` §5.0.1 step 5). Re-exported from cokret-sdk
+    // (`identity/key-management.md` §5.0.1 step 5). Re-exported from arkret-sdk
     // so soland never inlines the wire literal.
     pub const INCEPTION_KEY_WINDOW_EXCEEDED: &str =
         core_error::REASON_INCEPTION_KEY_WINDOW_EXCEEDED;

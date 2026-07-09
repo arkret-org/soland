@@ -209,7 +209,7 @@ async fn dev_login_is_unavailable_in_production_mode() {
     let response = TestClient::post("http://server/_soland/gate/auth/dev-login")
         .json(&serde_json::json!({
             "actor": "did:web:alice.example",
-            "device_id": "ck:device:01904100-0000-7000-8000-0a4a40000006"
+            "device_id": "ak:device:01904100-0000-7000-8000-0a4a40000006"
         }))
         .send(&app_from_state(state))
         .await;
@@ -273,7 +273,7 @@ async fn rate_limit_errors_use_standard_envelope_with_retry_after() {
         limited["request_id"]
             .as_str()
             .unwrap()
-            .starts_with("ck:request:")
+            .starts_with("ak:request:")
     );
 }
 
@@ -322,8 +322,8 @@ async fn protected_endpoints_reject_query_auth_material() {
 async fn hard_logout_removes_push_registration_and_to_device_queue_for_device() {
     let state = AppState::new(test_config(), Db { pool: None });
     let actor = "did:web:alice.example";
-    let device_a = "ck:device:01904100-0000-7000-8000-a11ce00000aa";
-    let device_b = "ck:device:01904100-0000-7000-8000-a11ce00000bb";
+    let device_a = "ak:device:01904100-0000-7000-8000-a11ce00000aa";
+    let device_b = "ak:device:01904100-0000-7000-8000-a11ce00000bb";
     let token_a = dev_token_for_device(state.clone(), actor, device_a, "Alice Phone").await;
     let _token_b = dev_token_for_device(state.clone(), actor, device_b, "Alice Tablet").await;
 
@@ -331,7 +331,7 @@ async fn hard_logout_removes_push_registration_and_to_device_queue_for_device() 
         .persistence
         .push_devices()
         .register(serde_json::json!({
-            "registration_id": "ck:push:device-a-main",
+            "registration_id": "ak:push:device-a-main",
             "actor": actor,
             "device_id": device_a,
             "push_gateway": "https://floria.example",
@@ -344,7 +344,7 @@ async fn hard_logout_removes_push_registration_and_to_device_queue_for_device() 
         .persistence
         .push_devices()
         .register(serde_json::json!({
-            "registration_id": "ck:push:device-a-voip",
+            "registration_id": "ak:push:device-a-voip",
             "actor": actor,
             "device_id": device_a,
             "push_gateway": "https://floria.example",
@@ -357,7 +357,7 @@ async fn hard_logout_removes_push_registration_and_to_device_queue_for_device() 
         .persistence
         .push_devices()
         .register(serde_json::json!({
-            "registration_id": "ck:push:device-b-main",
+            "registration_id": "ak:push:device-b-main",
             "actor": actor,
             "device_id": device_b,
             "push_gateway": "https://floria.example",

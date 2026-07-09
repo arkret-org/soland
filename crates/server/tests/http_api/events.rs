@@ -160,7 +160,7 @@ async fn agent_session_without_submit_scope_cannot_submit_events() {
     let token = "agent-local-session-submit";
     seed_agent_session_with_scopes(&state, token, &["ck.self.events.query.scan"]).await;
     let event = signed_event_envelope(
-        "ck:event:01904100-0000-7000-8000-5c0fedead001",
+        "ak:event:01904100-0000-7000-8000-5c0fedead001",
         1,
         Vec::new(),
     );
@@ -183,7 +183,7 @@ async fn pg_account_subscribe_cursor_handle_survives_app_state_rebuild() {
     };
     let suffix = uuid::Uuid::now_v7().simple().to_string();
     let actor = format!("did:web:pg-cursor-{suffix}.example");
-    let device = new_prefixed_uuid7("ck:device:");
+    let device = new_prefixed_uuid7("ak:device:");
     let token =
         dev_token_for_device(first_state.clone(), &actor, &device, "Pg Cursor Restart").await;
 
@@ -192,7 +192,7 @@ async fn pg_account_subscribe_cursor_handle_survives_app_state_rebuild() {
         .as_str()
         .expect("baseline cursor")
         .to_owned();
-    assert!(cursor.starts_with("ck:cursor:"));
+    assert!(cursor.starts_with("ak:cursor:"));
 
     let Some(restarted_state) = optional_pg_app_state().await else {
         return;
@@ -216,7 +216,7 @@ async fn pg_account_subscribe_cursor_handle_survives_app_state_rebuild() {
 async fn memory_account_subscribe_cursor_handle_does_not_survive_app_state_rebuild() {
     let first_state = AppState::new(test_config(), Db { pool: None });
     let actor = "did:web:memory-cursor-restart.example";
-    let device = "ck:device:01904100-0000-7000-8000-0badc0ffee01";
+    let device = "ak:device:01904100-0000-7000-8000-0badc0ffee01";
     let first_token =
         dev_token_for_device(first_state.clone(), actor, device, "Memory Cursor Restart").await;
     let baseline = account_subscribe_frame(first_state, Some(&first_token), "catchup=true").await;
@@ -224,7 +224,7 @@ async fn memory_account_subscribe_cursor_handle_does_not_survive_app_state_rebui
         .as_str()
         .expect("baseline cursor")
         .to_owned();
-    assert!(cursor.starts_with("ck:cursor:"));
+    assert!(cursor.starts_with("ak:cursor:"));
 
     let restarted_state = AppState::new(test_config(), Db { pool: None });
     let restarted_token = dev_token_for_device(
@@ -308,7 +308,7 @@ async fn events_describe_and_single_event_submit_work() {
     assert_eq!(describe["limits"]["max_resolve"], 100);
 
     let first = signed_event_envelope(
-        "ck:event:01904100-0000-7000-8000-f15c8ea06c11",
+        "ak:event:01904100-0000-7000-8000-f15c8ea06c11",
         1,
         Vec::new(),
     );
@@ -323,7 +323,7 @@ async fn events_describe_and_single_event_submit_work() {
     assert_eq!(submitted["status"], "accepted");
     assert_eq!(
         submitted["accepted"][0],
-        "ck:event:01904100-0000-7000-8000-f15c8ea06c11"
+        "ak:event:01904100-0000-7000-8000-f15c8ea06c11"
     );
 
     let duplicate: Value = TestClient::post("http://server/_cokret/self/events")
@@ -348,7 +348,7 @@ async fn events_describe_and_single_event_submit_work() {
     .unwrap();
     assert_eq!(
         fetched["event"]["event_id"],
-        "ck:event:01904100-0000-7000-8000-f15c8ea06c11"
+        "ak:event:01904100-0000-7000-8000-f15c8ea06c11"
     );
     assert_eq!(
         fetched["event"]["proofs"][0]["event_digest"],
@@ -356,13 +356,13 @@ async fn events_describe_and_single_event_submit_work() {
     );
     assert_eq!(
         fetched["visibility"]["realm_id"],
-        "ck:realm:0196419b-0000-7000-8000-000000000000"
+        "ak:realm:0196419b-0000-7000-8000-000000000000"
     );
 
     let second = signed_event_envelope(
-        "ck:event:01904100-0000-7000-8000-63f16896f0b0",
+        "ak:event:01904100-0000-7000-8000-63f16896f0b0",
         2,
-        vec!["ck:event:01904100-0000-7000-8000-f15c8ea06c11"],
+        vec!["ak:event:01904100-0000-7000-8000-f15c8ea06c11"],
     );
     let second_submitted: Value = TestClient::post("http://server/_cokret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -381,7 +381,7 @@ async fn events_describe_and_single_event_submit_work() {
     // accept path (kind/schema combo distinct from `ck.message.create`).
     let artifact_kind_payload = serde_json::json!({
         "object": {
-            "id": "ck:strand:01904100-0000-7000-8000-aa11ccff0001",
+            "id": "ak:strand:01904100-0000-7000-8000-aa11ccff0001",
             "schema": "ck.schema.strand.v1",
             "realm_id": DEMO_REALM_ID,
             "metadata": { "title": "Onboarding strand" },
@@ -397,7 +397,7 @@ async fn events_describe_and_single_event_submit_work() {
         }
     });
     let mut artifact_kind_event = signed_event_envelope(
-        "ck:event:01904100-0000-7000-8000-df827a7269a3",
+        "ak:event:01904100-0000-7000-8000-df827a7269a3",
         3,
         Vec::new(),
     );
@@ -419,7 +419,7 @@ async fn events_describe_and_single_event_submit_work() {
     assert_eq!(artifact_kind_submitted["status"], "accepted");
 
     let mut unknown_schema = signed_event_envelope(
-        "ck:event:01904100-0000-7000-8000-80be9d943c27",
+        "ak:event:01904100-0000-7000-8000-80be9d943c27",
         4,
         Vec::new(),
     );
@@ -440,7 +440,7 @@ async fn events_describe_and_single_event_submit_work() {
     let batch: Value = TestClient::post("http://server/_cokret/self/events/resolve")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
-            "event_ids": ["ck:event:01904100-0000-7000-8000-f15c8ea06c11", "ck:event:01904100-0000-7000-8000-30f4e405b35e"]
+            "event_ids": ["ak:event:01904100-0000-7000-8000-f15c8ea06c11", "ak:event:01904100-0000-7000-8000-30f4e405b35e"]
         }))
         .send(&app_from_state(state.clone()))
         .await
@@ -450,7 +450,7 @@ async fn events_describe_and_single_event_submit_work() {
     assert_eq!(batch["events"].as_array().unwrap().len(), 1);
     assert_eq!(
         batch["missing"],
-        serde_json::json!(["ck:event:01904100-0000-7000-8000-30f4e405b35e"])
+        serde_json::json!(["ak:event:01904100-0000-7000-8000-30f4e405b35e"])
     );
 
     let listed: Value =
@@ -465,7 +465,7 @@ async fn events_describe_and_single_event_submit_work() {
     assert!(!listed["has_more"].as_bool().unwrap_or(false));
     assert_eq!(
         listed["events"][2]["event_id"],
-        "ck:event:01904100-0000-7000-8000-df827a7269a3"
+        "ak:event:01904100-0000-7000-8000-df827a7269a3"
     );
 
     // Actor selector → spec actor frontier `{actor_id, actor_seq, event_id}`.
@@ -482,7 +482,7 @@ async fn events_describe_and_single_event_submit_work() {
     assert_eq!(frontier["frontier"]["actor_seq"], 3);
     assert_eq!(
         frontier["frontier"]["event_id"],
-        "ck:event:01904100-0000-7000-8000-df827a7269a3"
+        "ak:event:01904100-0000-7000-8000-df827a7269a3"
     );
 
     // Realm selector → spec Realm Seal view: the registered sourcing for
@@ -510,7 +510,7 @@ async fn events_describe_and_single_event_submit_work() {
     .unwrap();
     assert_eq!(seal_view["frontier"]["realm_id"], seeded_realm_id);
     let seal_id = seal_view["frontier"]["seal_id"].as_str().unwrap();
-    assert!(seal_id.starts_with("ck:seal:sha256:"), "seal_id: {seal_id}");
+    assert!(seal_id.starts_with("ak:seal:sha256:"), "seal_id: {seal_id}");
     assert!(
         seal_view["frontier"]["control_event_set_root"]
             .as_str()
@@ -536,7 +536,7 @@ async fn events_describe_and_single_event_submit_work() {
     assert_eq!(hidden_body["error"]["code"], "not_found");
 
     let mut conflicting = signed_event_envelope(
-        "ck:event:01904100-0000-7000-8000-f15c8ea06c11",
+        "ak:event:01904100-0000-7000-8000-f15c8ea06c11",
         4,
         Vec::new(),
     );
@@ -559,7 +559,7 @@ async fn events_describe_and_single_event_submit_work() {
 async fn realm_create_with_bootstrap_effects_does_not_require_seal_basis() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
-    let realm_id = new_prefixed_uuid7("ck:realm:");
+    let realm_id = new_prefixed_uuid7("ak:realm:");
     let created_at = "2026-05-17T00:00:00Z";
     let payload = serde_json::json!({
         "object": {
@@ -568,7 +568,7 @@ async fn realm_create_with_bootstrap_effects_does_not_require_seal_basis() {
             "title": "Bootstrap effects realm",
             "summary": "Realm create carries its genesis cell write",
             "created_by": "did:web:alice.example",
-            "trust_domain": "ck:trust_domain:soland.local",
+            "trust_domain": "ak:trust_domain:soland.local",
             "schema_refs": ["ck.schema.realm.v1"],
             "default_discoverability": "listed",
             "default_join_rule": "invite",
@@ -589,9 +589,9 @@ async fn realm_create_with_bootstrap_effects_does_not_require_seal_basis() {
             "created_at": created_at
         }
     });
-    let cell = format!("ck:cell:ck.component.realm.create.v1:{realm_id}");
+    let cell = format!("ak:cell:ck.component.realm.create.v1:{realm_id}");
     let mut event = signed_event_envelope(
-        "ck:event:01904100-0000-7000-8000-c7ea7e000001",
+        "ak:event:01904100-0000-7000-8000-c7ea7e000001",
         1,
         Vec::new(),
     );
@@ -645,7 +645,7 @@ async fn invite_create_accepts_locator_evidence_digest_without_local_consent() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
     let realm_id = DEMO_REALM_ID;
-    let invite_id = new_prefixed_uuid7("ck:invite:");
+    let invite_id = new_prefixed_uuid7("ak:invite:");
     let payload = serde_json::json!({
         "invite_id": invite_id,
         "invitee": "did:web:carol.example",
@@ -657,7 +657,7 @@ async fn invite_create_accepts_locator_evidence_digest_without_local_consent() {
         "expires_at": "2026-06-14T10:00:00Z"
     });
     let mut event = signed_event_envelope(
-        "ck:event:01904100-0000-7000-8000-1e0c1a7e0001",
+        "ak:event:01904100-0000-7000-8000-1e0c1a7e0001",
         TEST_EVENT_SEQ.fetch_add(1, Ordering::Relaxed),
         Vec::new(),
     );
@@ -762,7 +762,7 @@ async fn scaffold_describe_surfaces_are_marked_limited_not_profile_claims() {
 async fn index_query_supports_facet_projection_binding() {
     let query: Value = TestClient::post("http://server/_soland/self/index/query")
         .json(&serde_json::json!({
-            "realm_ids": ["ck:realm:0196419b-0000-7000-8000-000000000000"],
+            "realm_ids": ["ak:realm:0196419b-0000-7000-8000-000000000000"],
             "facets": ["container", "replyable"],
             "renderer": "collection",
             "limit": 20
@@ -774,7 +774,7 @@ async fn index_query_supports_facet_projection_binding() {
         .unwrap();
     let unsupported: Value = TestClient::post("http://server/_soland/self/index/query")
         .json(&serde_json::json!({
-            "realm_ids": ["ck:realm:0196419b-0000-7000-8000-000000000000"],
+            "realm_ids": ["ak:realm:0196419b-0000-7000-8000-000000000000"],
             "facets": ["not_supported"],
             "limit": 20
         }))
@@ -806,7 +806,7 @@ async fn index_reducer_debug_reports_projection_frontier() {
         &token,
         "did:web:alice.example",
         realm_id,
-        "ck:strand:debug-reducer",
+        "ak:strand:debug-reducer",
         serde_json::json!({"body": "debug reducer"}),
         false,
     )
@@ -933,7 +933,7 @@ async fn events_query_exposes_prev_cursor_and_limited_timeline_pages() {
             &token,
             "did:web:alice.example",
             realm_id,
-            "ck:strand:backfill-pages",
+            "ak:strand:backfill-pages",
             serde_json::json!({"body": body}),
             false,
         )
@@ -954,7 +954,7 @@ async fn events_query_exposes_prev_cursor_and_limited_timeline_pages() {
     assert_eq!(first_page["has_more"], true);
     assert!(first_page["prev_cursor"].is_null());
     let next_cursor = first_page["next_cursor"].as_str().unwrap();
-    assert!(next_cursor.starts_with("ck:cursor:"));
+    assert!(next_cursor.starts_with("ak:cursor:"));
 
     let second_page: Value = TestClient::get(format!(
         "http://server/_cokret/self/events?realms={realm_id}&limit=1&after={next_cursor}"
@@ -1212,7 +1212,7 @@ async fn account_subscribe_long_poll_wakes_on_broadcast() {
 #[tokio::test]
 async fn account_subscribe_long_poll_wakes_on_new_invite_for_inaccessible_realm() {
     let state = AppState::new(test_config(), Db { pool: None });
-    let bob_device = new_prefixed_uuid7("ck:device:");
+    let bob_device = new_prefixed_uuid7("ak:device:");
     let bob = dev_token_for_device(
         state.clone(),
         "did:web:bob.example",
@@ -1239,7 +1239,7 @@ async fn account_subscribe_long_poll_wakes_on_new_invite_for_inaccessible_realm(
     let waker_realm_id = realm_id.clone();
     let waker = tokio::spawn(async move {
         tokio::time::sleep(Duration::from_millis(150)).await;
-        let invite_id = new_prefixed_uuid7("ck:invite:");
+        let invite_id = new_prefixed_uuid7("ak:invite:");
         let now = chrono::Utc::now();
         waker_state
             .persistence
@@ -1256,7 +1256,7 @@ async fn account_subscribe_long_poll_wakes_on_new_invite_for_inaccessible_realm(
                 introduction_evidence_digest: Some(format!("sha256:{}", "2".repeat(64))),
                 third_party_id: None,
                 join_rule_snapshot: None,
-                invite_token: new_prefixed_uuid7("ck:invite-token:"),
+                invite_token: new_prefixed_uuid7("ak:invite-token:"),
                 status: "pending".to_owned(),
                 claim_nonces: std::collections::BTreeMap::new(),
                 expires_at: None,
@@ -1267,7 +1267,7 @@ async fn account_subscribe_long_poll_wakes_on_new_invite_for_inaccessible_realm(
             .unwrap();
         let _ = waker_state.event_broadcast.send(EventNotification::event(
             waker_realm_id.clone(),
-            new_prefixed_uuid7("ck:event:"),
+            new_prefixed_uuid7("ak:event:"),
             serde_json::json!({
                 "kind": "ck.invite.create",
                 "realm_id": waker_realm_id,

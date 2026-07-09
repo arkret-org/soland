@@ -6,9 +6,9 @@ mod invite_create_schema_tests {
 
     fn op(payload: serde_json::Value) -> Operation {
         Operation::create(
-            cokret_sdk::OperationId::new("ck:operation:01904100-0000-7000-8000-000000000701")
+            cokret_sdk::OperationId::new("ak:operation:01904100-0000-7000-8000-000000000701")
                 .unwrap(),
-            cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-000000000701".to_owned())
+            cokret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-000000000701".to_owned())
                 .unwrap(),
             cokret_sdk::events::kinds::INVITE_CREATE,
             payload,
@@ -17,7 +17,7 @@ mod invite_create_schema_tests {
 
     fn invite_payload() -> serde_json::Value {
         json!({
-            "invite_id": "ck:invite:01904100-0000-7000-8000-000000000701",
+            "invite_id": "ak:invite:01904100-0000-7000-8000-000000000701",
             "invitee": "did:web:bob.example",
             "invite_delivery_target": {
                 "recipient_service_did": "did:web:local.host",
@@ -40,11 +40,11 @@ mod invite_create_schema_tests {
     fn invite_create_accepts_projection_internal_fields() {
         let schema = operation_schema_for_kind(cokret_sdk::events::kinds::INVITE_CREATE).unwrap();
         let mut payload = invite_payload();
-        payload["event_id"] = json!("ck:event:01904100-0000-7000-8000-000000000701");
+        payload["event_id"] = json!("ak:event:01904100-0000-7000-8000-000000000701");
         payload["sender"] = json!("did:web:alice.example");
         payload["hlc"] = json!("2026-06-14T10:00:00Z/node/1");
         payload["seal_ref"] = json!(
-            "ck:seal:sha256:1111111111111111111111111111111111111111111111111111111111111111"
+            "ak:seal:sha256:1111111111111111111111111111111111111111111111111111111111111111"
         );
         let operation = op(payload);
 
@@ -104,7 +104,7 @@ mod invite_create_schema_tests {
     fn invite_create_rejects_invalid_invite_id() {
         let schema = operation_schema_for_kind(cokret_sdk::events::kinds::INVITE_CREATE).unwrap();
         let mut payload = invite_payload();
-        payload["invite_id"] = json!("ck:invite:01");
+        payload["invite_id"] = json!("ak:invite:01");
         let operation = op(payload);
 
         assert_eq!(
@@ -135,9 +135,9 @@ mod realm_key_share_schema_tests {
 
     fn op(payload: serde_json::Value) -> Operation {
         Operation::create(
-            cokret_sdk::OperationId::new("ck:operation:01904100-0000-7000-8000-0000000007aa")
+            cokret_sdk::OperationId::new("ak:operation:01904100-0000-7000-8000-0000000007aa")
                 .unwrap(),
-            cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-0000000007aa".to_owned())
+            cokret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-0000000007aa".to_owned())
                 .unwrap(),
             cokret_sdk::events::kinds::REALM_KEY_SHARE,
             payload,
@@ -148,8 +148,8 @@ mod realm_key_share_schema_tests {
         json!({
             "share_class": "member_device",
             "recipient_principal_id": "did:web:bob.example",
-            "recipient_device_id": "ck:device:01904100-0000-7000-8000-0000000000b1",
-            "sender_device_id": "ck:device:01904100-0000-7000-8000-0000000000a1",
+            "recipient_device_id": "ak:device:01904100-0000-7000-8000-0000000000b1",
+            "sender_device_id": "ak:device:01904100-0000-7000-8000-0000000000a1",
             "sender_device_signature": {
                 "alg": "Ed25519",
                 "signature": "c2lnbmF0dXJl",
@@ -158,7 +158,7 @@ mod realm_key_share_schema_tests {
             "key_scope": {
                 "effective_scope": {
                     "kind": "realm",
-                    "realm_id": "ck:realm:01904100-0000-7000-8000-0000000007aa"
+                    "realm_id": "ak:realm:01904100-0000-7000-8000-0000000007aa"
                 },
                 "policy_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
                 "from_epoch": 0,
@@ -212,9 +212,9 @@ mod read_receipt_policy_schema_tests {
 
     fn op(payload: serde_json::Value) -> Operation {
         Operation::create(
-            cokret_sdk::OperationId::new("ck:operation:01904100-0000-7000-8000-000000000702")
+            cokret_sdk::OperationId::new("ak:operation:01904100-0000-7000-8000-000000000702")
                 .unwrap(),
-            cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-000000000702".to_owned())
+            cokret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-000000000702".to_owned())
                 .unwrap(),
             cokret_sdk::events::kinds::REALM_READ_RECEIPT_POLICY,
             payload,
@@ -228,10 +228,10 @@ mod read_receipt_policy_schema_tests {
                 .unwrap();
         let operation = op(json!({
             "disclosure": "required",
-            "event_id": "ck:event:01904100-0000-7000-8000-000000000702",
+            "event_id": "ak:event:01904100-0000-7000-8000-000000000702",
             "sender": "did:web:alice.example",
             "hlc": "2026-06-14T10:00:00Z/node/1",
-            "seal_ref": "ck:seal:sha256:1111111111111111111111111111111111111111111111111111111111111111"
+            "seal_ref": "ak:seal:sha256:1111111111111111111111111111111111111111111111111111111111111111"
         }));
 
         assert!(validate_operation_schema(&operation, schema).is_ok());
@@ -247,16 +247,16 @@ mod realm_media_service_schema_tests {
     #[test]
     fn realm_media_service_is_registered_for_projection() {
         let operation = Operation::create(
-            cokret_sdk::OperationId::new("ck:operation:01904100-0000-7000-8000-000000000901")
+            cokret_sdk::OperationId::new("ak:operation:01904100-0000-7000-8000-000000000901")
                 .unwrap(),
-            cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-000000000901".to_owned())
+            cokret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-000000000901".to_owned())
                 .unwrap(),
             cokret_sdk::events::kinds::REALM_MEDIA_SERVICE,
             json!({
                 "media_service": {
                     "service_id": "did:web:media.example",
                     "foci": [{
-                        "focus_id": "ck:focus:livekit-lhr",
+                        "focus_id": "ak:focus:livekit-lhr",
                         "type": "livekit",
                         "issuer_kid": "did:web:media.example#media-token",
                         "connect_url": "wss://livekit.media.example"
@@ -280,9 +280,9 @@ mod realm_plaintext_visible_services_schema_tests {
     #[test]
     fn realm_plaintext_visible_services_is_registered_for_projection() {
         let operation = Operation::create(
-            cokret_sdk::OperationId::new("ck:operation:01904100-0000-7000-8000-000000000902")
+            cokret_sdk::OperationId::new("ak:operation:01904100-0000-7000-8000-000000000902")
                 .unwrap(),
-            cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-000000000902".to_owned())
+            cokret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-000000000902".to_owned())
                 .unwrap(),
             cokret_sdk::events::kinds::REALM_PLAINTEXT_VISIBLE_SERVICES,
             json!({
@@ -305,19 +305,19 @@ mod realm_plaintext_visible_services_schema_tests {
     #[test]
     fn realm_inheritance_policy_is_registered_for_projection() {
         let operation = Operation::create(
-            cokret_sdk::OperationId::new("ck:operation:01904100-0000-7000-8000-000000000904")
+            cokret_sdk::OperationId::new("ak:operation:01904100-0000-7000-8000-000000000904")
                 .unwrap(),
-            cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-000000000904".to_owned())
+            cokret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-000000000904".to_owned())
                 .unwrap(),
             cokret_sdk::events::kinds::REALM_INHERITANCE_POLICY,
             json!({
-                "source_realm_id": "ck:realm:01904100-0000-7000-8000-000000000905",
+                "source_realm_id": "ak:realm:01904100-0000-7000-8000-000000000905",
                 "inherits": {
                     "policy_rules": ["moderation.banned_keywords"]
                 },
                 "mode": "narrow_only",
                 "max_depth": 1,
-                "event_id": "ck:event:01904100-0000-7000-8000-000000000904",
+                "event_id": "ak:event:01904100-0000-7000-8000-000000000904",
                 "sender": "did:web:alice.example",
                 "hlc": "2026-07-06T00:00:00Z/node/1"
             }),
@@ -336,13 +336,13 @@ mod realm_plaintext_visible_services_schema_tests {
     #[test]
     fn realm_inheritance_policy_rejects_legacy_allowed_policies_wire_shape() {
         let operation = Operation::create(
-            cokret_sdk::OperationId::new("ck:operation:01904100-0000-7000-8000-000000000906")
+            cokret_sdk::OperationId::new("ak:operation:01904100-0000-7000-8000-000000000906")
                 .unwrap(),
-            cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-000000000906".to_owned())
+            cokret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-000000000906".to_owned())
                 .unwrap(),
             cokret_sdk::events::kinds::REALM_INHERITANCE_POLICY,
             json!({
-                "source_realm_id": "ck:realm:01904100-0000-7000-8000-000000000905",
+                "source_realm_id": "ak:realm:01904100-0000-7000-8000-000000000905",
                 "allowed_policies": ["moderation.banned_keywords"],
                 "max_depth": 1
             }),
@@ -360,13 +360,13 @@ mod realm_plaintext_visible_services_schema_tests {
     #[test]
     fn moderation_control_kinds_are_registered_for_projection() {
         let realm_id =
-            cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-000000000903".to_owned())
+            cokret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-000000000903".to_owned())
                 .unwrap();
         let cases = [
             (
                 cokret_sdk::events::kinds::MODERATION_DECISION,
                 json!({
-                    "target_ref": "ck:message:01904100-0000-7000-8000-000000000903",
+                    "target_ref": "ak:message:01904100-0000-7000-8000-000000000903",
                     "decision": "quarantine",
                     "issuer": "did:web:moderator.example",
                     "request_canonical_digest": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
@@ -375,17 +375,17 @@ mod realm_plaintext_visible_services_schema_tests {
             (
                 cokret_sdk::events::kinds::MODERATION_DECISION_LIFT,
                 json!({
-                    "target_ref": "ck:message:01904100-0000-7000-8000-000000000903",
-                    "decision_ref": "ck:event:01904100-0000-7000-8000-000000000903"
+                    "target_ref": "ak:message:01904100-0000-7000-8000-000000000903",
+                    "decision_ref": "ak:event:01904100-0000-7000-8000-000000000903"
                 }),
             ),
             (
                 cokret_sdk::events::kinds::MODERATION_APPEAL_SUBMIT,
                 json!({
-                    "appeal_id": "ck:appeal:01904100-0000-7000-8000-000000000903",
+                    "appeal_id": "ak:appeal:01904100-0000-7000-8000-000000000903",
                     "realm_id": realm_id.as_str(),
-                    "decision_ref": "ck:event:01904100-0000-7000-8000-000000000903",
-                    "target_ref": "ck:message:01904100-0000-7000-8000-000000000903",
+                    "decision_ref": "ak:event:01904100-0000-7000-8000-000000000903",
+                    "target_ref": "ak:message:01904100-0000-7000-8000-000000000903",
                     "appellant": "did:web:appellant.example",
                     "reason_text_ref": "appeal",
                     "created_at": "2026-06-23T00:00:00Z"
@@ -394,7 +394,7 @@ mod realm_plaintext_visible_services_schema_tests {
             (
                 cokret_sdk::events::kinds::MODERATION_APPEAL_REVIEW,
                 json!({
-                    "appeal_id": "ck:appeal:01904100-0000-7000-8000-000000000903",
+                    "appeal_id": "ak:appeal:01904100-0000-7000-8000-000000000903",
                     "realm_id": realm_id.as_str(),
                     "reviewer": "did:web:reviewer.example",
                     "reviewed_at": "2026-06-23T00:00:00Z"
@@ -403,7 +403,7 @@ mod realm_plaintext_visible_services_schema_tests {
             (
                 cokret_sdk::events::kinds::MODERATION_APPEAL_DECISION,
                 json!({
-                    "appeal_id": "ck:appeal:01904100-0000-7000-8000-000000000903",
+                    "appeal_id": "ak:appeal:01904100-0000-7000-8000-000000000903",
                     "realm_id": realm_id.as_str(),
                     "reviewer": "did:web:reviewer.example",
                     "verdict": "uphold",
@@ -414,7 +414,7 @@ mod realm_plaintext_visible_services_schema_tests {
             (
                 cokret_sdk::events::kinds::MODERATION_APPEAL_CLOSE,
                 json!({
-                    "appeal_id": "ck:appeal:01904100-0000-7000-8000-000000000903",
+                    "appeal_id": "ak:appeal:01904100-0000-7000-8000-000000000903",
                     "realm_id": realm_id.as_str(),
                     "closer": "did:web:reviewer.example",
                     "closed_at": "2026-06-23T00:00:00Z"
@@ -424,7 +424,7 @@ mod realm_plaintext_visible_services_schema_tests {
 
         for (kind, payload) in cases {
             let operation = Operation::create(
-                cokret_sdk::OperationId::new("ck:operation:01904100-0000-7000-8000-000000000903")
+                cokret_sdk::OperationId::new("ak:operation:01904100-0000-7000-8000-000000000903")
                     .unwrap(),
                 realm_id.clone(),
                 kind,
@@ -445,9 +445,9 @@ mod message_projection_schema_tests {
 
     fn op(kind: &str, payload: serde_json::Value) -> Operation {
         Operation::create(
-            cokret_sdk::OperationId::new("ck:operation:01904100-0000-7000-8000-57d7d85564c5")
+            cokret_sdk::OperationId::new("ak:operation:01904100-0000-7000-8000-57d7d85564c5")
                 .unwrap(),
-            cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-668e2181b41d").unwrap(),
+            cokret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-668e2181b41d").unwrap(),
             kind,
             payload,
         )
@@ -458,7 +458,7 @@ mod message_projection_schema_tests {
         let operation = op(
             cokret_sdk::events::kinds::MESSAGE_REVISE,
             json!({
-                "target_ref": "ck:event:01904100-0000-7000-8000-000000000001",
+                "target_ref": "ak:event:01904100-0000-7000-8000-000000000001",
                 "content": {"kind": "ck.content.text", "body": "edited"}
             }),
         );
@@ -472,7 +472,7 @@ mod message_projection_schema_tests {
         let operation = op(
             cokret_sdk::events::kinds::REACTION_ADD,
             json!({
-                "target_ref": "ck:event:01904100-0000-7000-8000-000000000001",
+                "target_ref": "ak:event:01904100-0000-7000-8000-000000000001",
                 "sender": "did:web:alice.example",
                 "key": "+1"
             }),
@@ -493,9 +493,9 @@ mod agent_action_schema_tests {
 
     fn op(kind: &str, payload: serde_json::Value) -> Operation {
         Operation::create(
-            cokret_sdk::OperationId::new("ck:operation:01904100-0000-7000-8000-57d7d85564c5")
+            cokret_sdk::OperationId::new("ak:operation:01904100-0000-7000-8000-57d7d85564c5")
                 .unwrap(),
-            cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-668e2181b41d").unwrap(),
+            cokret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-668e2181b41d").unwrap(),
             kind,
             payload,
         )
@@ -508,14 +508,14 @@ mod agent_action_schema_tests {
         let operation = op(
             cokret_sdk::events::kinds::AGENT_ACTION_APPROVE,
             json!({
-                "approval_id": "ck:agent_approval:01904100-0000-7000-8000-000000000001",
-                "draft_id": "ck:agent_draft:01904100-0000-7000-8000-000000000001",
+                "approval_id": "ak:agent_approval:01904100-0000-7000-8000-000000000001",
+                "draft_id": "ak:agent_draft:01904100-0000-7000-8000-000000000001",
                 "agent_principal_id": "did:web:agent.example",
                 "controller_principal_id": "did:web:alice.example",
                 "proposed_action": "ck.message.create",
                 "target": {
                     "kind": "realm",
-                    "realm_id": "ck:realm:01904100-0000-7000-8000-668e2181b41d"
+                    "realm_id": "ak:realm:01904100-0000-7000-8000-668e2181b41d"
                 },
                 "approved_payload_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                 "draft_content_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
@@ -534,7 +534,7 @@ mod agent_action_schema_tests {
             operation_schema_for_kind(cokret_sdk::events::kinds::AGENT_ACTION_APPROVE).unwrap();
         let operation = op(
             cokret_sdk::events::kinds::AGENT_ACTION_APPROVE,
-            json!({ "request_id": "ck:agent-action-request:01904100-0000-7000-8000-000000000001" }),
+            json!({ "request_id": "ak:agent-action-request:01904100-0000-7000-8000-000000000001" }),
         );
 
         assert_eq!(
@@ -550,8 +550,8 @@ mod agent_action_schema_tests {
         let operation = op(
             cokret_sdk::events::kinds::AGENT_ACTION_REJECT,
             json!({
-                "rejection_id": "ck:agent_rejection:01904100-0000-7000-8000-000000000001",
-                "draft_id": "ck:agent_draft:01904100-0000-7000-8000-000000000001",
+                "rejection_id": "ak:agent_rejection:01904100-0000-7000-8000-000000000001",
+                "draft_id": "ak:agent_draft:01904100-0000-7000-8000-000000000001",
                 "agent_principal_id": "did:web:agent.example",
                 "controller_principal_id": "did:web:alice.example",
                 "reason": "needs review",
@@ -571,9 +571,9 @@ mod spec_sync_validator_tests {
 
     fn op(kind: &'static str, payload: serde_json::Value) -> Operation {
         Operation::create(
-            cokret_sdk::OperationId::new("ck:operation:01904100-0000-7000-8000-57d7d85564c5")
+            cokret_sdk::OperationId::new("ak:operation:01904100-0000-7000-8000-57d7d85564c5")
                 .unwrap(),
-            cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-668e2181b41d").unwrap(),
+            cokret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-668e2181b41d").unwrap(),
             kind,
             payload,
         )
@@ -586,7 +586,7 @@ mod spec_sync_validator_tests {
             cokret_sdk::events::kinds::MORPH_CREATE,
             json!({
                 "object": {
-                    "id": "ck:morph:01904100-0000-7000-8000-000000000001",
+                    "id": "ak:morph:01904100-0000-7000-8000-000000000001",
                     "morph_type": "document",
                     "schema_refs": ["ck.schema.morph.v1"],
                     "metadata": {"title": "Spec"},
@@ -600,7 +600,7 @@ mod spec_sync_validator_tests {
             cokret_sdk::events::kinds::MORPH_CREATE,
             json!({
                 "object": {
-                    "id": "ck:morph:01904100-0000-7000-8000-000000000001",
+                    "id": "ak:morph:01904100-0000-7000-8000-000000000001",
                     "morph_type": "document",
                     "schema_refs": ["ck.schema.morph.v1"],
                     "content": {},
@@ -621,7 +621,7 @@ mod spec_sync_validator_tests {
         let update = op(
             cokret_sdk::events::kinds::MORPH_UPDATE,
             json!({
-                "target_ref": "ck:morph:01904100-0000-7000-8000-000000000001",
+                "target_ref": "ak:morph:01904100-0000-7000-8000-000000000001",
                 "patch": {"schema_refs": ["ck.schema.new"]}
             }),
         );
@@ -633,11 +633,11 @@ mod spec_sync_validator_tests {
         let migrate = op(
             cokret_sdk::events::kinds::MORPH_SCHEMA_MIGRATE,
             json!({
-                "morph_id": "ck:morph:01904100-0000-7000-8000-000000000001",
+                "morph_id": "ak:morph:01904100-0000-7000-8000-000000000001",
                 "from_schema_refs": ["ck.schema.old"],
                 "to_schema_refs": ["ck.schema.old", "ck.schema.new"],
                 "compatibility_class": "additive",
-                "authorization_ref": "ck:event:01904100-0000-7000-8000-aaaaaaaaaaaa",
+                "authorization_ref": "ak:event:01904100-0000-7000-8000-aaaaaaaaaaaa",
                 "capability_action": "ck.morph.schema.migrate"
             }),
         );
@@ -649,11 +649,11 @@ mod spec_sync_validator_tests {
         let non_additive = op(
             cokret_sdk::events::kinds::MORPH_SCHEMA_MIGRATE,
             json!({
-                "morph_id": "ck:morph:01904100-0000-7000-8000-000000000001",
+                "morph_id": "ak:morph:01904100-0000-7000-8000-000000000001",
                 "from_schema_refs": ["ck.schema.old"],
                 "to_schema_refs": ["ck.schema.new"],
                 "compatibility_class": "additive",
-                "authorization_ref": "ck:event:01904100-0000-7000-8000-aaaaaaaaaaaa",
+                "authorization_ref": "ak:event:01904100-0000-7000-8000-aaaaaaaaaaaa",
                 "capability_action": "ck.morph.schema.migrate"
             }),
         );
@@ -665,7 +665,7 @@ mod spec_sync_validator_tests {
         let missing_gate = op(
             cokret_sdk::events::kinds::MORPH_SCHEMA_MIGRATE,
             json!({
-                "morph_id": "ck:morph:01904100-0000-7000-8000-000000000001",
+                "morph_id": "ak:morph:01904100-0000-7000-8000-000000000001",
                 "from_schema_refs": ["ck.schema.old"],
                 "to_schema_refs": ["ck.schema.new"],
                 "compatibility_class": "additive"
@@ -684,11 +684,11 @@ mod spec_sync_validator_tests {
         let breaking = op(
             cokret_sdk::events::kinds::MORPH_SCHEMA_MIGRATE,
             json!({
-                "morph_id": "ck:morph:01904100-0000-7000-8000-000000000001",
+                "morph_id": "ak:morph:01904100-0000-7000-8000-000000000001",
                 "from_schema_refs": ["ck.schema.old"],
                 "to_schema_refs": ["ck.schema.new"],
                 "compatibility_class": "breaking",
-                "authorization_ref": "ck:event:01904100-0000-7000-8000-aaaaaaaaaaaa",
+                "authorization_ref": "ak:event:01904100-0000-7000-8000-aaaaaaaaaaaa",
                 "capability_action": "ck.morph.schema_migrate"
             }),
         );
@@ -699,11 +699,11 @@ mod spec_sync_validator_tests {
         let transformation_without_rules = op(
             cokret_sdk::events::kinds::MORPH_SCHEMA_MIGRATE,
             json!({
-                "morph_id": "ck:morph:01904100-0000-7000-8000-000000000001",
+                "morph_id": "ak:morph:01904100-0000-7000-8000-000000000001",
                 "from_schema_refs": ["ck.schema.old"],
                 "to_schema_refs": ["ck.schema.new"],
                 "compatibility_class": "transformation",
-                "authorization_ref": "ck:event:01904100-0000-7000-8000-aaaaaaaaaaaa",
+                "authorization_ref": "ak:event:01904100-0000-7000-8000-aaaaaaaaaaaa",
                 "capability_action": "ck.morph.schema_migrate"
             }),
         );
@@ -722,9 +722,9 @@ mod sdk_artifact_schema_tests {
 
     fn cross_signing_reset(payload: serde_json::Value) -> Operation {
         Operation::create(
-            cokret_sdk::OperationId::new("ck:operation:01904100-0000-7000-8000-57d7d85564c5")
+            cokret_sdk::OperationId::new("ak:operation:01904100-0000-7000-8000-57d7d85564c5")
                 .unwrap(),
-            cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-668e2181b41d").unwrap(),
+            cokret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-668e2181b41d").unwrap(),
             "ck.cross_signing.reset",
             payload,
         )
@@ -732,9 +732,9 @@ mod sdk_artifact_schema_tests {
 
     fn cross_signing_publish(payload: serde_json::Value) -> Operation {
         Operation::create(
-            cokret_sdk::OperationId::new("ck:operation:01904100-0000-7000-8000-57d7d85564c6")
+            cokret_sdk::OperationId::new("ak:operation:01904100-0000-7000-8000-57d7d85564c6")
                 .unwrap(),
-            cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-668e2181b41d").unwrap(),
+            cokret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-668e2181b41d").unwrap(),
             "ck.cross_signing.publish",
             payload,
         )
@@ -745,7 +745,7 @@ mod sdk_artifact_schema_tests {
         let issued_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
         let operation = cross_signing_publish(json!({
             "principal_id": "did:web:alice.example",
-            "trust_domain": "ck:trust_domain:soland.local",
+            "trust_domain": "ak:trust_domain:soland.local",
             "principal_signing_key": {
                 "kid": "did:web:alice.example#ck_principal_signing_v1",
                 "alg": "EdDSA",
@@ -808,8 +808,8 @@ mod sdk_artifact_schema_tests {
                 "alg": "EdDSA",
                 "signature": "abc"
             },
-            "trust_domain": "ck:trust_domain:soland.local",
-            "reset_event_id": "ck:event:01904100-0000-7000-8000-000000000001",
+            "trust_domain": "ak:trust_domain:soland.local",
+            "reset_event_id": "ak:event:01904100-0000-7000-8000-000000000001",
             "issued_at": issued_at
         }));
         assert_eq!(
@@ -829,8 +829,8 @@ mod sdk_artifact_schema_tests {
             "previous_generation": 1,
             "new_generation": 2,
             "reset_reason_code": "rotation",
-            "trust_domain": "ck:trust_domain:soland.local",
-            "reset_event_id": "ck:event:01904100-0000-7000-8000-000000000001",
+            "trust_domain": "ak:trust_domain:soland.local",
+            "reset_event_id": "ak:event:01904100-0000-7000-8000-000000000001",
             "issued_at": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
         }));
         assert_eq!(
@@ -850,7 +850,7 @@ mod sdk_artifact_schema_tests {
                 "alg": "EdDSA",
                 "signature": "abc"
             },
-            "reset_event_id": "ck:event:01904100-0000-7000-8000-000000000001",
+            "reset_event_id": "ak:event:01904100-0000-7000-8000-000000000001",
             "issued_at": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
         }));
         assert!(
@@ -875,8 +875,8 @@ mod sdk_artifact_schema_tests {
                 "alg": "EdDSA",
                 "signature": "abc"
             },
-            "trust_domain": "ck:trust_domain:soland.local",
-            "reset_event_id": "ck:event:01904100-0000-7000-8000-000000000001",
+            "trust_domain": "ak:trust_domain:soland.local",
+            "reset_event_id": "ak:event:01904100-0000-7000-8000-000000000001",
             "issued_at": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
         }));
         assert_eq!(
@@ -895,8 +895,8 @@ mod sdk_artifact_schema_tests {
                 "alg": "EdDSA",
                 "signature": "abc"
             },
-            "trust_domain": "ck:trust_domain:soland.local",
-            "reset_event_id": "ck:event:01904100-0000-7000-8000-000000000002",
+            "trust_domain": "ak:trust_domain:soland.local",
+            "reset_event_id": "ak:event:01904100-0000-7000-8000-000000000002",
             "issued_at": (chrono::Utc::now() - chrono::Duration::seconds(CROSS_SIGNING_RESET_MAX_CLOCK_SKEW_SECONDS + 1))
                 .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
         }));
@@ -915,9 +915,9 @@ mod derived_relation_and_morph_immutability_tests {
 
     fn op(kind: &'static str, payload: serde_json::Value) -> Operation {
         Operation::create(
-            cokret_sdk::OperationId::new("ck:operation:01904100-0000-7000-8000-57d7d85564c5")
+            cokret_sdk::OperationId::new("ak:operation:01904100-0000-7000-8000-57d7d85564c5")
                 .unwrap(),
-            cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-668e2181b41d").unwrap(),
+            cokret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-668e2181b41d").unwrap(),
             kind,
             payload,
         )
@@ -929,7 +929,7 @@ mod derived_relation_and_morph_immutability_tests {
             cokret_sdk::events::kinds::DEVICE_AUTHORIZE,
             json!({
                 "principal_id": "did:webvh:zQmZcDaFwUR8yQCZRkXoYEBi9hdzMSCCLASUVdwT1J4Qyc6:local.host:webvh:01kvqwpxssfq3bqm15rcd0g99x",
-                "device_id": "ck:device:019eefcb-5882-7861-bc30-3033fa32dcf6",
+                "device_id": "ak:device:019eefcb-5882-7861-bc30-3033fa32dcf6",
                 "device_public_key": "z6MkjHNtpwuhc2QSXzkf4DWoWp7eSMKB9PzfdnvaLB7kb3dG",
                 "hpke_key": "z6LSgy7T8CEsMDMzk1e4EBFVX8CDXWWzvkFZWSXhsC97zjcM",
                 "algorithms": ["ck.hpke_x25519_aead_chacha20poly1305.v1", "ck.mls.v1"],
@@ -940,7 +940,7 @@ mod derived_relation_and_morph_immutability_tests {
                     "authority_did": "did:key:z6MknBuwKMPAzbhp6EwCnaxsEDk4G2KFeWRu273gYVuTY5jw",
                     "authorization_ref": "did:webvh:zQmZcDaFwUR8yQCZRkXoYEBi9hdzMSCCLASUVdwT1J4Qyc6:local.host:webvh:01kvqwpxssfq3bqm15rcd0g99x#enrollment-authority"
                 },
-                "event_id": "ck:event:019eefcb-7fb2-7890-bffd-1f2035356fbf",
+                "event_id": "ak:event:019eefcb-7fb2-7890-bffd-1f2035356fbf",
                 "sender": "did:webvh:zQmZcDaFwUR8yQCZRkXoYEBi9hdzMSCCLASUVdwT1J4Qyc6:local.host:webvh:01kvqwpxssfq3bqm15rcd0g99x",
                 "hlc": "019eefcb7d18-0000-8adcfdb5",
                 "executed_by": "did:key:z6MknBuwKMPAzbhp6EwCnaxsEDk4G2KFeWRu273gYVuTY5jw",
@@ -956,7 +956,7 @@ mod derived_relation_and_morph_immutability_tests {
             cokret_sdk::events::kinds::DEVICE_AUTHORIZE,
             json!({
                 "principal_id": "did:web:alice.example",
-                "device_id": "ck:device:01904100-0000-7000-8000-000000000001",
+                "device_id": "ak:device:01904100-0000-7000-8000-000000000001",
                 "device_public_key": "z6MkDeviceKey",
                 "hpke_key": "z6LSDeviceHpkeKey",
                 "algorithms": ["ck.hpke_x25519_aead_chacha20poly1305.v1", "ck.mls.v1"],
@@ -988,10 +988,10 @@ mod derived_relation_and_morph_immutability_tests {
         let operation = op(
             cokret_sdk::events::kinds::RELATION_CREATE,
             json!({
-                "relation_id": "ck:relation:01904100-0000-7000-8000-000000000001",
+                "relation_id": "ak:relation:01904100-0000-7000-8000-000000000001",
                 "relation_kind": "watches",
                 "from_ref": "did:web:alice.example",
-                "to_ref": "ck:strand:01904100-0000-7000-8000-000000000002"
+                "to_ref": "ak:strand:01904100-0000-7000-8000-000000000002"
             }),
         );
         assert_eq!(
@@ -1007,10 +1007,10 @@ mod derived_relation_and_morph_immutability_tests {
         let operation = op(
             cokret_sdk::events::kinds::RELATION_CREATE,
             json!({
-                "relation_id": "ck:relation:01904100-0000-7000-8000-000000000003",
+                "relation_id": "ak:relation:01904100-0000-7000-8000-000000000003",
                 "relation_kind": "contains",
-                "from_ref": "ck:space:01904100-0000-7000-8000-000000000004",
-                "to_ref": "ck:strand:01904100-0000-7000-8000-000000000005"
+                "from_ref": "ak:space:01904100-0000-7000-8000-000000000004",
+                "to_ref": "ak:strand:01904100-0000-7000-8000-000000000005"
             }),
         );
         assert_eq!(
@@ -1026,10 +1026,10 @@ mod derived_relation_and_morph_immutability_tests {
         let operation = op(
             cokret_sdk::events::kinds::RELATION_CREATE,
             json!({
-                "relation_id": "ck:relation:01904100-0000-7000-8000-000000000006",
+                "relation_id": "ak:relation:01904100-0000-7000-8000-000000000006",
                 "relation_kind": "contains",
-                "from_ref": "ck:strand:01904100-0000-7000-8000-000000000007",
-                "to_ref": "ck:strand:01904100-0000-7000-8000-000000000008"
+                "from_ref": "ak:strand:01904100-0000-7000-8000-000000000007",
+                "to_ref": "ak:strand:01904100-0000-7000-8000-000000000008"
             }),
         );
         assert!(validate_relation_operation_payload(&operation).is_ok());
@@ -1040,10 +1040,10 @@ mod derived_relation_and_morph_immutability_tests {
         let operation = op(
             cokret_sdk::events::kinds::RELATION_CREATE,
             json!({
-                "relation_id": "ck:relation:01904100-0000-7000-8000-000000000009",
+                "relation_id": "ak:relation:01904100-0000-7000-8000-000000000009",
                 "relation_kind": "references",
-                "from_ref": "ck:strand:01904100-0000-7000-8000-00000000000a",
-                "to_ref": "ck:strand:01904100-0000-7000-8000-00000000000b"
+                "from_ref": "ak:strand:01904100-0000-7000-8000-00000000000a",
+                "to_ref": "ak:strand:01904100-0000-7000-8000-00000000000b"
             }),
         );
         assert!(validate_relation_operation_payload(&operation).is_ok());
@@ -1056,10 +1056,10 @@ mod derived_relation_and_morph_immutability_tests {
         let operation = op(
             cokret_sdk::events::kinds::RELATION_CREATE,
             json!({
-                "relation_id": "ck:relation:01904100-0000-7000-8000-00000000000f",
+                "relation_id": "ak:relation:01904100-0000-7000-8000-00000000000f",
                 "relation_kind": "references",
-                "from_ref": "ck:strand:01904100-0000-7000-8000-000000000010",
-                "to_ref": "ck:strand:01904100-0000-7000-8000-000000000011",
+                "from_ref": "ak:strand:01904100-0000-7000-8000-000000000010",
+                "to_ref": "ak:strand:01904100-0000-7000-8000-000000000011",
                 "effective_scope": {"kind": "realm"}
             }),
         );
@@ -1075,10 +1075,10 @@ mod derived_relation_and_morph_immutability_tests {
             cokret_sdk::events::kinds::RELATION_CREATE,
             json!({
                 "relation": {
-                    "id": "ck:relation:01904100-0000-7000-8000-00000000001f",
+                    "id": "ak:relation:01904100-0000-7000-8000-00000000001f",
                     "relation_kind": "references",
-                    "from_ref": "ck:strand:01904100-0000-7000-8000-000000000020",
-                    "to_ref": "ck:strand:01904100-0000-7000-8000-000000000021",
+                    "from_ref": "ak:strand:01904100-0000-7000-8000-000000000020",
+                    "to_ref": "ak:strand:01904100-0000-7000-8000-000000000021",
                     "effective_scope": {"kind": "realm"}
                 }
             }),
@@ -1095,7 +1095,7 @@ mod derived_relation_and_morph_immutability_tests {
         let bare = op(
             cokret_sdk::events::kinds::MORPH_UPDATE,
             json!({
-                "target_ref": "ck:morph:01904100-0000-7000-8000-00000000000c",
+                "target_ref": "ak:morph:01904100-0000-7000-8000-00000000000c",
                 "patch": {"morph_type": "task"}
             }),
         );
@@ -1106,7 +1106,7 @@ mod derived_relation_and_morph_immutability_tests {
         let enveloped = op(
             cokret_sdk::events::kinds::MORPH_UPDATE,
             json!({
-                "target_ref": "ck:morph:01904100-0000-7000-8000-00000000000c",
+                "target_ref": "ak:morph:01904100-0000-7000-8000-00000000000c",
                 "patch": {"morph_type": {"$op": "set", "value": "task"}}
             }),
         );
@@ -1124,7 +1124,7 @@ mod derived_relation_and_morph_immutability_tests {
         let top_stage = op(
             cokret_sdk::events::kinds::MORPH_UPDATE,
             json!({
-                "target_ref": "ck:morph:01904100-0000-7000-8000-00000000000d",
+                "target_ref": "ak:morph:01904100-0000-7000-8000-00000000000d",
                 "patch": {"stage": "done"}
             }),
         );
@@ -1135,7 +1135,7 @@ mod derived_relation_and_morph_immutability_tests {
         let dotted = op(
             cokret_sdk::events::kinds::MORPH_UPDATE,
             json!({
-                "target_ref": "ck:morph:01904100-0000-7000-8000-00000000000d",
+                "target_ref": "ak:morph:01904100-0000-7000-8000-00000000000d",
                 "patch": {"fields.lifecycle": "archived"}
             }),
         );
@@ -1146,7 +1146,7 @@ mod derived_relation_and_morph_immutability_tests {
         let object_replace = op(
             cokret_sdk::events::kinds::MORPH_UPDATE,
             json!({
-                "target_ref": "ck:morph:01904100-0000-7000-8000-00000000000d",
+                "target_ref": "ak:morph:01904100-0000-7000-8000-00000000000d",
                 "patch": {"fields": {"$op": "set", "value": {"stage_reason": "x"}}}
             }),
         );
@@ -1161,7 +1161,7 @@ mod derived_relation_and_morph_immutability_tests {
         let operation = op(
             cokret_sdk::events::kinds::MORPH_UPDATE,
             json!({
-                "target_ref": "ck:morph:01904100-0000-7000-8000-00000000000e",
+                "target_ref": "ak:morph:01904100-0000-7000-8000-00000000000e",
                 "patch": {"fields.severity": "high", "fields": {"$op": "set", "value": {"status": "open"}}}
             }),
         );
@@ -1173,7 +1173,7 @@ mod derived_relation_and_morph_immutability_tests {
         let operation = op(
             cokret_sdk::events::kinds::STRAND_UPDATE,
             json!({
-                "target_ref": "ck:strand:01904100-0000-7000-8000-00000000000e",
+                "target_ref": "ak:strand:01904100-0000-7000-8000-00000000000e",
                 "patch": {"state": {"$op": "set", "value": "archived"}}
             }),
         );
@@ -1188,7 +1188,7 @@ mod derived_relation_and_morph_immutability_tests {
         let operation = op(
             cokret_sdk::events::kinds::STRAND_UPDATE,
             json!({
-                "target_ref": "ck:strand:01904100-0000-7000-8000-00000000000e",
+                "target_ref": "ak:strand:01904100-0000-7000-8000-00000000000e",
                 "patch": {"metadata.summary": {"$op": "unset"}}
             }),
         );
@@ -1203,7 +1203,7 @@ mod derived_relation_and_morph_immutability_tests {
         let operation = op(
             cokret_sdk::events::kinds::STRAND_UPDATE,
             json!({
-                "target_ref": "ck:strand:01904100-0000-7000-8000-00000000000e",
+                "target_ref": "ak:strand:01904100-0000-7000-8000-00000000000e",
                 "patch": {"metadata.title": {"$op": "unset"}}
             }),
         );

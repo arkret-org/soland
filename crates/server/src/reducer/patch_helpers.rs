@@ -157,8 +157,8 @@ pub(crate) fn utc_timestamp_z(now: chrono::DateTime<chrono::Utc>) -> String {
 /// `(organization_id, relationship)` and is owned by `ck.realm.organization`).
 pub(crate) fn realm_metadata_realm_id_from_cell(cell_id: &str) -> Option<String> {
     cell_id
-        .strip_prefix("ck:cell:ck.component.realm.metadata.v1:")
-        .filter(|realm_id| realm_id.starts_with("ck:realm:"))
+        .strip_prefix("ak:cell:ck.component.realm.metadata.v1:")
+        .filter(|realm_id| realm_id.starts_with("ak:realm:"))
         .map(ToOwned::to_owned)
 }
 
@@ -182,7 +182,7 @@ pub(crate) fn push_route_cell_ref(subject: &PushRouteSubject) -> Option<CellRef>
     ])
     .ok()?;
     CellRef::new(format!(
-        "ck:cell:ck.component.device.push_route.v1:{cell_subject}"
+        "ak:cell:ck.component.device.push_route.v1:{cell_subject}"
     ))
     .ok()
 }
@@ -470,7 +470,7 @@ pub(crate) fn strand_id_from_payload(payload: &Value) -> Option<&str> {
     payload
         .get("target_ref")
         .and_then(Value::as_str)
-        .filter(|value| value.starts_with("ck:strand:"))
+        .filter(|value| value.starts_with("ak:strand:"))
 }
 
 pub(crate) fn check_strand_status_patch(

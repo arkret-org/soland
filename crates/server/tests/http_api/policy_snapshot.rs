@@ -14,7 +14,7 @@ async fn policy_check_and_validation_work() {
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
             "request_id": "req1",
-            "realm_id": "ck:realm:0196419b-0000-7000-8000-000000000000",
+            "realm_id": "ak:realm:0196419b-0000-7000-8000-000000000000",
             "request_canonical_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
             "action": "message.send",
             "actor_id": "did:web:alice.example",
@@ -37,7 +37,7 @@ async fn policy_check_and_validation_work() {
 
     let unauthenticated_policy = TestClient::post("http://server/_soland/self/policies")
         .json(&serde_json::json!({
-            "scope": "ck:realm:0196419b-0000-7000-8000-000000000000",
+            "scope": "ak:realm:0196419b-0000-7000-8000-000000000000",
             "subject_ref": "did:web:alice.example",
             "policy_type": "message.send",
             "effect": "hard_deny"
@@ -52,12 +52,12 @@ async fn policy_check_and_validation_work() {
     let policy_document: Value = TestClient::post("http://server/_soland/self/policies")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
-            "scope": "ck:realm:0196419b-0000-7000-8000-000000000000",
+            "scope": "ak:realm:0196419b-0000-7000-8000-000000000000",
             "subject_ref": "did:web:alice.example",
             "policy_type": "message.send",
             "effect": "hard_deny",
             "actions": ["message.send"],
-            "resource": {"kind": "realm", "realm_id": "ck:realm:0196419b-0000-7000-8000-000000000000"},
+            "resource": {"kind": "realm", "realm_id": "ak:realm:0196419b-0000-7000-8000-000000000000"},
             "obligations": [{"type": "audit", "level": "high"}]
         }))
         .send(&app_from_state(state.clone()))
@@ -81,7 +81,7 @@ async fn policy_check_and_validation_work() {
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
             "request_id": "req2",
-            "realm_id": "ck:realm:0196419b-0000-7000-8000-000000000000",
+            "realm_id": "ak:realm:0196419b-0000-7000-8000-000000000000",
             "request_canonical_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
             "action": "message.send",
             "actor_id": "did:web:alice.example",
@@ -115,7 +115,7 @@ async fn policy_check_and_validation_work() {
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
             "request_id": "req3",
-            "realm_id": "ck:realm:0196419b-0000-7000-8000-000000000000",
+            "realm_id": "ak:realm:0196419b-0000-7000-8000-000000000000",
             "request_canonical_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
             "action": "message.send",
             "actor_id": "did:web:alice.example",
@@ -274,7 +274,7 @@ async fn snapshot_v1_multi_chunk_fixture_verifies_non_empty_audit_path() {
             &token,
             "did:web:alice.example",
             &realm_id,
-            &format!("ck:strand:multi-chunk-{:02}", seq % 4),
+            &format!("ak:strand:multi-chunk-{:02}", seq % 4),
             serde_json::json!({"body": body_text, "msgtype": "m.text", "seq": seq}),
             false,
         )

@@ -79,7 +79,7 @@ pub(super) fn router() -> Router {
 async fn outbound_push_bridge_describe(depot: &mut Depot, res: &mut Response) {
     let state = depot.get_typed::<AppState>().expect("state injected");
     res.render(Json(OutboundPushBridgeDescribeOutcome {
-        contract: "cokret.rest.outbound_push_bridge.v1".to_owned(),
+        contract: "arkret.rest.outbound_push_bridge.v1".to_owned(),
         version: "2026-05-04-scaffold".to_owned(),
         api_base_path: "/_soland/edge/push".to_owned(),
         gateway_contract: OutboundPushGatewayContractDescriptor {
@@ -104,9 +104,9 @@ async fn outbound_push_bridge_describe(depot: &mut Depot, res: &mut Response) {
         },
         delivery: OutboundPushDeliveryDescriptor {
             operation_id: "ck.edge.push.command.notify".to_owned(),
-            origin_service_did_header: "X-Cokret-Origin-Service-Did".to_owned(),
-            destination_service_did_header: "X-Cokret-Destination-Service-Did".to_owned(),
-            request_id_header: "X-Cokret-Request-Id".to_owned(),
+            origin_service_did_header: "X-Arkret-Origin-Service-Did".to_owned(),
+            destination_service_did_header: "X-Arkret-Destination-Service-Did".to_owned(),
+            request_id_header: "X-Arkret-Request-Id".to_owned(),
             idempotency_key_header: "Idempotency-Key".to_owned(),
             payload_mode: format!(
                 "blind_wakeup_from_principal_service_did={}",
@@ -123,9 +123,9 @@ async fn outbound_push_bridge_describe(depot: &mut Depot, res: &mut Response) {
                 "force_refresh": true
             }),
             notify_headers: json!({
-                "X-Cokret-Origin-Service-Did": state.config.service_did,
-                "X-Cokret-Destination-Service-Did": "did:web:floria.example",
-                "X-Cokret-Request-Id": "req_01js0000000000000000000000",
+                "X-Arkret-Origin-Service-Did": state.config.service_did,
+                "X-Arkret-Destination-Service-Did": "did:web:floria.example",
+                "X-Arkret-Request-Id": "req_01js0000000000000000000000",
                 "Idempotency-Key": "notify-01js0000000000000000000000"
             }),
             cache_import_request: json!({
@@ -167,13 +167,13 @@ async fn outbound_push_bridge_describe(depot: &mut Depot, res: &mut Response) {
 }
 
 #[endpoint(
-    operation_id = "org.cokret.soland.push.outbound_bridge_resolve",
+    operation_id = "org.arkret.soland.push.outbound_bridge_resolve",
     tags("push"),
     summary = "Resolve a push gateway URL to a cached contract snapshot"
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "org.cokret.soland.push.outbound_bridge_resolve")
+    fields(op = "org.arkret.soland.push.outbound_bridge_resolve")
 )]
 async fn outbound_push_bridge_resolve(
     body: JsonBody<OutboundPushBridgeResolveRequestBody>,
@@ -237,11 +237,11 @@ async fn outbound_push_bridge_resolve(
 }
 
 #[endpoint(
-    operation_id = "org.cokret.soland.push.outbound_bridge_fetch",
+    operation_id = "org.arkret.soland.push.outbound_bridge_fetch",
     tags("push"),
     summary = "Live-fetch the upstream push bridge contract + populate the durable cache"
 )]
-#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.push.outbound_bridge_fetch"))]
+#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.push.outbound_bridge_fetch"))]
 async fn outbound_push_bridge_fetch(
     body: JsonBody<OutboundPushBridgeFetchRequestBody>,
     depot: &mut Depot,
@@ -422,13 +422,13 @@ async fn outbound_push_bridge_cache_export(depot: &mut Depot, res: &mut Response
 }
 
 #[endpoint(
-    operation_id = "org.cokret.soland.push.outbound_bridge_cache_import",
+    operation_id = "org.arkret.soland.push.outbound_bridge_cache_import",
     tags("push"),
     summary = "Import push bridge cache snapshots (replace_existing toggle)"
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "org.cokret.soland.push.outbound_bridge_cache_import")
+    fields(op = "org.arkret.soland.push.outbound_bridge_cache_import")
 )]
 async fn outbound_push_bridge_cache_import(
     body: JsonBody<OutboundPushBridgeCacheImportRequestBody>,
@@ -489,13 +489,13 @@ async fn outbound_push_bridge_cache_import(
 }
 
 #[endpoint(
-    operation_id = "org.cokret.soland.push.outbound_bridge_cache_invalidate",
+    operation_id = "org.arkret.soland.push.outbound_bridge_cache_invalidate",
     tags("push"),
     summary = "Invalidate one or all push bridge cache entries"
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "org.cokret.soland.push.outbound_bridge_cache_invalidate")
+    fields(op = "org.arkret.soland.push.outbound_bridge_cache_invalidate")
 )]
 async fn outbound_push_bridge_cache_invalidate(
     body: JsonBody<OutboundPushBridgeCacheInvalidateRequestBody>,
@@ -540,11 +540,11 @@ pub(super) fn derive_push_gateway_service_base_url(push_gateway_url: &str) -> Op
 
     for suffix in [
         "/_floria/push/bridge/describe",
-        "/cokret/push/v1/bridge/describe",
+        "/arkret/push/v1/bridge/describe",
         "/_cokret/edge/push/notify",
-        "/cokret/push/v1/notify",
+        "/arkret/push/v1/notify",
         "/_cokret/edge/push",
-        "/cokret/push/v1",
+        "/arkret/push/v1",
     ] {
         if let Some(prefix) = value.strip_suffix(suffix) {
             value = prefix.trim_end_matches('/').to_owned();
@@ -581,9 +581,9 @@ fn default_outbound_push_resolved_contract() -> OutboundPushResolvedContract {
         contract: "ck.push.bridge.describe".to_owned(),
         expected_notify_path: "/_cokret/edge/push/notify".to_owned(),
         expected_operation_id: "ck.edge.push.command.notify".to_owned(),
-        expected_origin_service_did_header: "X-Cokret-Origin-Service-Did".to_owned(),
-        expected_destination_service_did_header: "X-Cokret-Destination-Service-Did".to_owned(),
-        expected_request_id_header: "X-Cokret-Request-Id".to_owned(),
+        expected_origin_service_did_header: "X-Arkret-Origin-Service-Did".to_owned(),
+        expected_destination_service_did_header: "X-Arkret-Destination-Service-Did".to_owned(),
+        expected_request_id_header: "X-Arkret-Request-Id".to_owned(),
         expected_idempotency_key_header: "Idempotency-Key".to_owned(),
         auth_modes: vec!["bearer".to_owned()],
         privacy_mode: "blind_wakeup".to_owned(),

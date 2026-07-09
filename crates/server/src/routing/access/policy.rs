@@ -8,7 +8,7 @@
 //! CRUD is deployment-local management, NOT a v1 protocol operation
 //! (`service-http-binding.md` §1007 keeps policy_document storage out of the
 //! core operation surface). It is therefore served off the protocol root and
-//! uses reverse-domain `org.cokret.soland.policy_document.*` operation ids
+//! uses reverse-domain `org.arkret.soland.policy_document.*` operation ids
 //! rather than the `ck.*` protocol namespace:
 //! - `GET    /_soland/self/policies`            list owner-scoped policies
 //! - `POST   /_soland/self/policies`            upsert one policy document
@@ -78,11 +78,11 @@ pub(super) fn product_router() -> Router {
 }
 
 #[endpoint(
-    operation_id = "org.cokret.soland.policy_document.query.list",
+    operation_id = "org.arkret.soland.policy_document.query.list",
     tags("policy"),
     summary = "List policy documents owned by the authenticated actor"
 )]
-#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.policy_document.query.list"))]
+#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.policy_document.query.list"))]
 async fn list_policy_documents(
     aa: AuthArgs,
     scope: QueryParam<String, false>,
@@ -119,13 +119,13 @@ async fn list_policy_documents(
 }
 
 #[endpoint(
-    operation_id = "org.cokret.soland.policy_document.resource.get",
+    operation_id = "org.arkret.soland.policy_document.resource.get",
     tags("policy"),
     summary = "Read a single policy document by id"
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "org.cokret.soland.policy_document.resource.get")
+    fields(op = "org.arkret.soland.policy_document.resource.get")
 )]
 async fn get_policy_document(
     aa: AuthArgs,
@@ -149,13 +149,13 @@ async fn get_policy_document(
 }
 
 #[endpoint(
-    operation_id = "org.cokret.soland.policy_document.command.upsert",
+    operation_id = "org.arkret.soland.policy_document.command.upsert",
     tags("policy"),
     summary = "Idempotently create or replace a policy document"
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "org.cokret.soland.policy_document.command.upsert")
+    fields(op = "org.arkret.soland.policy_document.command.upsert")
 )]
 async fn upsert_policy_document(
     aa: AuthArgs,
@@ -229,13 +229,13 @@ async fn upsert_policy_document(
 }
 
 #[endpoint(
-    operation_id = "org.cokret.soland.policy_document.resource.delete",
+    operation_id = "org.arkret.soland.policy_document.resource.delete",
     tags("policy"),
     summary = "Delete a policy document by id"
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "org.cokret.soland.policy_document.resource.delete")
+    fields(op = "org.arkret.soland.policy_document.resource.delete")
 )]
 async fn delete_policy_document(
     aa: AuthArgs,
@@ -768,7 +768,7 @@ pub fn is_supported_policy_effect(value: &str) -> bool {
 }
 
 pub fn is_valid_generated_or_custom_id(value: &str, kind: &str) -> bool {
-    let prefix = format!("ck:{kind}:");
+    let prefix = format!("ak:{kind}:");
     value.starts_with(&prefix)
         && value[prefix.len()..]
             .chars()
@@ -789,8 +789,8 @@ mod tests {
         auth_context: Value,
     ) -> PolicyCheckRequestBody {
         PolicyCheckRequestBody {
-            request_id: "ck:policy_request:test".to_owned(),
-            realm_id: RealmId::new("ck:realm:01904100-0000-7000-8000-000000000001").unwrap(),
+            request_id: "ak:policy_request:test".to_owned(),
+            realm_id: RealmId::new("ak:realm:01904100-0000-7000-8000-000000000001").unwrap(),
             actor_id: Did::new(actor.to_owned()).unwrap(),
             device_id: None,
             action: "ck.message.create".to_owned(),
@@ -829,7 +829,7 @@ mod tests {
                     "kind": "service_delegation",
                     "subject_actor_id": "did:web:alice.example",
                     "executed_by": "did:web:service.example",
-                    "authorization_ref": "ck:grant:01904100-0000-7000-8000-000000000abc"
+                    "authorization_ref": "ak:grant:01904100-0000-7000-8000-000000000abc"
                 }
             }),
         );
@@ -849,7 +849,7 @@ mod tests {
                     "kind": "service_delegation",
                     "subject_actor_id": "did:web:alice.example",
                     "executed_by": "did:web:service.example",
-                    "authorization_ref": "ck:grant:01904100-0000-7000-8000-000000000abc"
+                    "authorization_ref": "ak:grant:01904100-0000-7000-8000-000000000abc"
                 }
             }),
         );

@@ -10,7 +10,7 @@ use soland::state::{DeviceInventoryRecord, DeviceMessageRecord, RecoveryPolicyRe
 use super::helpers::*;
 use crate::common::*;
 
-const RESET_SOURCE_DEVICE: &str = "ck:device:01904100-0000-7000-8000-c51000000001";
+const RESET_SOURCE_DEVICE: &str = "ak:device:01904100-0000-7000-8000-c51000000001";
 
 fn cross_signing_reset_event(
     actor: &str,
@@ -48,7 +48,7 @@ fn cross_signing_reset_event(
 fn base_reset_payload(principal_id: &str, event_id: &str, proof: Value) -> Value {
     serde_json::json!({
         "principal_id": principal_id,
-        "trust_domain": "ck:trust_domain:soland.local",
+        "trust_domain": "ak:trust_domain:soland.local",
         "reset_event_id": event_id,
         "previous_generation": 1,
         "new_generation": 2,
@@ -112,7 +112,7 @@ async fn seed_reset_recovery_policy(
     allowed_kind: &str,
     extra: Value,
 ) -> String {
-    let policy_id = new_prefixed_uuid7("ck:policy:");
+    let policy_id = new_prefixed_uuid7("ak:policy:");
     let issued_at = chrono::Utc::now();
     let expires_at = issued_at + chrono::Duration::days(1);
     let mut raw_payload = serde_json::json!({
@@ -120,7 +120,7 @@ async fn seed_reset_recovery_policy(
         "policy_id": policy_id.clone(),
         "principal_id": principal_id,
         "version": 1,
-        "trust_domain": "ck:trust_domain:soland.local",
+        "trust_domain": "ak:trust_domain:soland.local",
         "allowed_proof_kinds": [allowed_kind],
         "issued_at": issued_at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
         "expires_at": expires_at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
@@ -137,7 +137,7 @@ async fn seed_reset_recovery_policy(
             policy_id: policy_id.clone(),
             principal_id: principal_id.to_owned(),
             version: 1,
-            trust_domain: "ck:trust_domain:soland.local".to_owned(),
+            trust_domain: "ak:trust_domain:soland.local".to_owned(),
             allowed_proof_kinds: vec![allowed_kind.to_owned()],
             supersedes: None,
             expires_at: Some(expires_at),
@@ -213,7 +213,7 @@ async fn recovery_session_create_and_get_roundtrip() {
     let challenge = session["challenge"].as_str().unwrap();
     assert!(!challenge.is_empty(), "challenge must be issued");
     let session_id = session["recovery_session_id"].as_str().unwrap();
-    assert!(session_id.starts_with("ck:recovery_session:"));
+    assert!(session_id.starts_with("ak:recovery_session:"));
 
     let fetched = get_recovery(
         state,
@@ -242,8 +242,8 @@ async fn recovery_session_create_requires_active_policy() {
 
     let create_body = serde_json::json!({
         "principal_id": principal_id,
-        "trust_domain": "ck:trust_domain:soland.local",
-        "requesting_device_id": "ck:device:01904100-0000-7000-8000-000000000099",
+        "trust_domain": "ak:trust_domain:soland.local",
+        "requesting_device_id": "ak:device:01904100-0000-7000-8000-000000000099",
         "ssk_generation": 1,
     });
     let body = post_recovery(
@@ -429,8 +429,8 @@ async fn recovery_session_trusted_recovery_service_proof_verifies_and_audits() {
     .await;
     let create_body = serde_json::json!({
         "principal_id": principal_id.clone(),
-        "trust_domain": "ck:trust_domain:soland.local",
-        "requesting_device_id": "ck:device:01904100-0000-7000-8000-000000000139",
+        "trust_domain": "ak:trust_domain:soland.local",
+        "requesting_device_id": "ak:device:01904100-0000-7000-8000-000000000139",
         "ssk_generation": 1,
     });
     let session = post_recovery(
@@ -542,8 +542,8 @@ async fn recovery_session_trusted_recovery_service_rejects_unlisted_service_and_
     .await;
     let create_body = serde_json::json!({
         "principal_id": principal_id.clone(),
-        "trust_domain": "ck:trust_domain:soland.local",
-        "requesting_device_id": "ck:device:01904100-0000-7000-8000-000000000140",
+        "trust_domain": "ak:trust_domain:soland.local",
+        "requesting_device_id": "ak:device:01904100-0000-7000-8000-000000000140",
         "ssk_generation": 1,
     });
     let session = post_recovery(
@@ -867,13 +867,13 @@ async fn cross_signing_reset_accepts_recovery_unlock_quorum_and_trusted_service_
         "Reset Source",
     )
     .await;
-    let event_id = new_prefixed_uuid7("ck:event:");
+    let event_id = new_prefixed_uuid7("ak:event:");
     let mut payload = base_reset_payload(
         &principal_id,
         &event_id,
         serde_json::json!({
             "kind": "recovery_unlock",
-            "recovery_session_id": new_prefixed_uuid7("ck:recovery_session:"),
+            "recovery_session_id": new_prefixed_uuid7("ak:recovery_session:"),
             "recovery_secret_ref": recovery_ref,
             "unlock_commitment": "sha256:placeholder",
             "alg": "EdDSA",
@@ -916,7 +916,7 @@ async fn cross_signing_reset_accepts_recovery_unlock_quorum_and_trusted_service_
         "Reset Source",
     )
     .await;
-    let event_id = new_prefixed_uuid7("ck:event:");
+    let event_id = new_prefixed_uuid7("ak:event:");
     let mut payload = base_reset_payload(
         &principal_id,
         &event_id,
@@ -952,8 +952,8 @@ async fn cross_signing_reset_accepts_recovery_unlock_quorum_and_trusted_service_
         serde_json::json!({ "device_quorum": { "k": 2 } }),
     )
     .await;
-    let device_a = "ck:device:01904100-0000-7000-8000-c5100000000a";
-    let device_b = "ck:device:01904100-0000-7000-8000-c5100000000b";
+    let device_a = "ak:device:01904100-0000-7000-8000-c5100000000a";
+    let device_b = "ak:device:01904100-0000-7000-8000-c5100000000b";
     let device_a_key = SigningKey::from_bytes(&[132u8; 32]);
     let device_b_key = SigningKey::from_bytes(&[133u8; 32]);
     for (device_id, key) in [(device_a, &device_a_key), (device_b, &device_b_key)] {
@@ -983,7 +983,7 @@ async fn cross_signing_reset_accepts_recovery_unlock_quorum_and_trusted_service_
         "Reset Source",
     )
     .await;
-    let event_id = new_prefixed_uuid7("ck:event:");
+    let event_id = new_prefixed_uuid7("ak:event:");
     let mut payload = base_reset_payload(
         &principal_id,
         &event_id,
@@ -1033,7 +1033,7 @@ async fn cross_signing_reset_replay_cache_and_queue_purge_cover_publish_window()
     )
     .await;
 
-    let target_device = "ck:device:01904100-0000-7000-8000-c5100000000c";
+    let target_device = "ak:device:01904100-0000-7000-8000-c5100000000c";
     let now = chrono::Utc::now();
     for (position, kind, content) in [
         (
@@ -1073,7 +1073,7 @@ async fn cross_signing_reset_replay_cache_and_queue_purge_cover_publish_window()
             .unwrap();
     }
 
-    let event_id = new_prefixed_uuid7("ck:event:");
+    let event_id = new_prefixed_uuid7("ak:event:");
     let mut payload = base_reset_payload(
         &principal_id,
         &event_id,
@@ -1125,7 +1125,7 @@ async fn cross_signing_reset_replay_cache_and_queue_purge_cover_publish_window()
         Some(1)
     );
 
-    let replay_event_id = new_prefixed_uuid7("ck:event:");
+    let replay_event_id = new_prefixed_uuid7("ak:event:");
     let mut replay_payload = base_reset_payload(
         &principal_id,
         &replay_event_id,
@@ -1178,8 +1178,8 @@ async fn recovery_complete_rejected_after_cross_signing_reset() {
     // Record a cross-signing reset (gen 1 -> 2): drops the accepted publish.
     let reset = serde_json::json!({
         "principal_id": principal_id,
-        "trust_domain": "ck:trust_domain:soland.local",
-        "reset_event_id": "ck:event:01964137-0000-7000-8000-0000000000aa",
+        "trust_domain": "ak:trust_domain:soland.local",
+        "reset_event_id": "ak:event:01964137-0000-7000-8000-0000000000aa",
         "previous_generation": 1,
         "new_generation": 2,
         "reset_reason_code": "rotation",

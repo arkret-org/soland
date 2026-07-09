@@ -17,7 +17,7 @@ fn device_message_target(kind: &str, content: Value) -> DeviceMessageTarget {
 fn accepts_cleartext_verification_content() {
     let payload = device_message_target(
         "ck.key.verification.key",
-        json!({"transaction_id": "ver_1", "from_device": "ck:device:x", "key": "base64"}),
+        json!({"transaction_id": "ver_1", "from_device": "ak:device:x", "key": "base64"}),
     );
     assert!(validate_device_message_target(&payload).is_ok());
 }
@@ -32,7 +32,7 @@ fn accepts_secret_share_content() {
         json!({
             "request_id": "r1",
             "secret_id": "inkson_mls_account_secret",
-            "from_device": "ck:device:new",
+            "from_device": "ak:device:new",
             "recipient_hpke_public_key": "cHVi"
         }),
     );
@@ -43,7 +43,7 @@ fn accepts_secret_share_content() {
         json!({
             "request_id": "r1",
             "secret_id": "inkson_mls_account_secret",
-            "from_device": "ck:device:old",
+            "from_device": "ak:device:old",
             "scheme": "ck.hpke_x25519_aead_chacha20poly1305.v1",
             "enc": "ZW5j",
             "ciphertext": "Y2lwaGVy"

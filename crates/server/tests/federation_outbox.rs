@@ -30,7 +30,7 @@ use soland_data::Db;
 
 const PEER_DID: &str = "did:web:peer.example";
 const FEDERATION_ENDPOINT: &str = "/_cokret/peer/events";
-const IDEMPOTENCY_KEY: &str = "ck:outbox:test-idem-key-0001";
+const IDEMPOTENCY_KEY: &str = "ak:outbox:test-idem-key-0001";
 const PAYLOAD_JSON: &str = r#"{"resource":"sha256:01"}"#;
 
 struct CapturedSignedRequestBody {
@@ -85,7 +85,7 @@ fn outbox_test_config() -> AppConfig {
         did_resolver_allow_methods: vec!["web".to_owned(), "key".to_owned()],
         jws_replay_window_seconds: 0,
         jws_replay_window_per_family: BTreeMap::new(),
-        trust_domain: "ck:trust_domain:soland-outbox.local".to_owned(),
+        trust_domain: "ak:trust_domain:soland-outbox.local".to_owned(),
         ..AppConfig::test_default()
     }
 }
@@ -276,7 +276,7 @@ async fn outbound_signature_rejects_trust_domain_mismatch() {
     let mut headers = parse_headers(&captured.captured);
     headers.insert(
         "destination-trust-domain".to_owned(),
-        "ck:trust_domain:evil.example".to_owned(),
+        "ak:trust_domain:evil.example".to_owned(),
     );
 
     let verifying_key = captured.state.notary_signing_key().verifying_key();

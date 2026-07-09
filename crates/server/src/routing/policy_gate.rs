@@ -209,7 +209,7 @@ async fn policy_request_for_operation(
     policy_doc_ids.sort();
 
     let mut request = PolicyCheckRequestInput {
-        request_id: format!("ck:policy_request:{}", ids::generate_event_id()),
+        request_id: format!("ak:policy_request:{}", ids::generate_event_id()),
         realm_id,
         actor_id,
         action: action.to_owned(),

@@ -473,14 +473,14 @@ mod tests {
     use super::*;
     use crate::hlc::ServerHlc;
 
-    const REALM_A: &str = "ck:realm:01904100-0000-7000-8000-aaaaaaaaaaa1";
-    const REALM_B: &str = "ck:realm:01904100-0000-7000-8000-bbbbbbbbbbb2";
-    const REALM_C: &str = "ck:realm:01904100-0000-7000-8000-ccccccccccc3";
-    const REALM_D: &str = "ck:realm:01904100-0000-7000-8000-ddddddddddd4";
+    const REALM_A: &str = "ak:realm:01904100-0000-7000-8000-aaaaaaaaaaa1";
+    const REALM_B: &str = "ak:realm:01904100-0000-7000-8000-bbbbbbbbbbb2";
+    const REALM_C: &str = "ak:realm:01904100-0000-7000-8000-ccccccccccc3";
+    const REALM_D: &str = "ak:realm:01904100-0000-7000-8000-ddddddddddd4";
 
     fn op(kind: &str, realm_id: &str, payload: Value) -> Operation {
         Operation::create(
-            OperationId::new(format!("ck:operation:{}", uuid::Uuid::now_v7())).unwrap(),
+            OperationId::new(format!("ak:operation:{}", uuid::Uuid::now_v7())).unwrap(),
             RealmId::new(realm_id).unwrap(),
             kind,
             payload,

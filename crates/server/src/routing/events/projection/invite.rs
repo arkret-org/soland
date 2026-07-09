@@ -171,7 +171,7 @@ fn project_invite_accept_membership(
             updated_at: operation.created_at,
         },
     );
-    if let Ok(cell_id) = CellRef::new(format!("ck:cell:ck.component.member.state.v1:{member}")) {
+    if let Ok(cell_id) = CellRef::new(format!("ak:cell:ck.component.member.state.v1:{member}")) {
         projection
             .cells
             .insert(cell_id, CellState::Value(Value::String("join".to_owned())));
@@ -693,7 +693,7 @@ fn claim_binding_matches(
     if binding.get("realm_id").and_then(Value::as_str) != Some(record.realm_id.as_str()) {
         return false;
     }
-    if binding.get("audience").and_then(Value::as_str) != Some("cokret.invite.claim") {
+    if binding.get("audience").and_then(Value::as_str) != Some("arkret.invite.claim") {
         return false;
     }
     if binding.get("claim_nonce").and_then(Value::as_str) != Some(claim_nonce) {

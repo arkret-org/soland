@@ -466,7 +466,7 @@ impl ProjectionState {
                 relation
                     .to_ref
                     .as_deref()
-                    .filter(|strand_id| strand_id.starts_with("ck:strand:"))
+                    .filter(|strand_id| strand_id.starts_with("ak:strand:"))
                     .map(|strand_id| (relation_id.clone(), strand_id.to_owned()))
             })
             .collect::<Vec<_>>();

@@ -971,7 +971,7 @@ pub(crate) fn validate_morph_schema_migrate_capability(
         .payload
         .get("authorization_ref")
         .and_then(serde_json::Value::as_str)
-        .filter(|value| value.starts_with("ck:event:"))
+        .filter(|value| value.starts_with("ak:event:"))
         .is_none()
     {
         return Err("ck.morph.schema_migrate requires authorization_ref");
@@ -1004,10 +1004,10 @@ mod tests {
     fn read_receipt_policy_projection_ignores_projection_context() {
         let policy = read_receipt_policy_projection_from_payload(&json!({
             "disclosure": "required",
-            "event_id": "ck:event:01904100-0000-7000-8000-000000000702",
+            "event_id": "ak:event:01904100-0000-7000-8000-000000000702",
             "sender": "did:web:alice.example",
             "hlc": "2026-06-14T10:00:00Z/node/1",
-            "seal_ref": "ck:seal:sha256:1111111111111111111111111111111111111111111111111111111111111111"
+            "seal_ref": "ak:seal:sha256:1111111111111111111111111111111111111111111111111111111111111111"
         }))
         .unwrap();
 

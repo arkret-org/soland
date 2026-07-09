@@ -185,10 +185,10 @@ fn validate_read_scope(scope: &ReadScope) -> Result<(), AppError> {
 
 fn validate_scope_ref(kind: &ReadScopeKind, object_ref: &str) -> Result<(), AppError> {
     let expected_prefix = match kind {
-        ReadScopeKind::Circle => "ck:circle:",
-        ReadScopeKind::Space => "ck:space:",
-        ReadScopeKind::Strand => "ck:strand:",
-        ReadScopeKind::Thread => "ck:message:",
+        ReadScopeKind::Circle => "ak:circle:",
+        ReadScopeKind::Space => "ak:space:",
+        ReadScopeKind::Strand => "ak:strand:",
+        ReadScopeKind::Thread => "ak:message:",
         ReadScopeKind::Realm => return Ok(()),
         _ => {
             return Err(AppError::invalid_param(
@@ -221,7 +221,7 @@ fn validate_track(track: &str) -> Result<(), AppError> {
 }
 
 fn validate_position(position: &ReadCursorPosition) -> Result<(), AppError> {
-    if !position.event_id.as_str().starts_with("ck:event:") {
+    if !position.event_id.as_str().starts_with("ak:event:") {
         return Err(AppError::invalid_param("invalid position.event_id"));
     }
     let parts = position.hlc.as_str().split('-').collect::<Vec<_>>();

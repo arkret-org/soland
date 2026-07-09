@@ -244,7 +244,7 @@ pub(super) fn validate_key_backup_unlock_proof_shape(
         ));
     }
     let recovery_session_id = required_proof_string(proof, "recovery_session_id")?;
-    if !recovery_session_id.starts_with("ck:recovery_session:") {
+    if !recovery_session_id.starts_with("ak:recovery_session:") {
         return Err(schema_error(
             "key backup unlock proof recovery_session_id must start with ck:recovery_session:",
         ));

@@ -53,7 +53,7 @@ pub(super) async fn directory_announce(
         ));
     }
     let announcement_id = format!(
-        "ck:announcement:{}",
+        "ak:announcement:{}",
         super::sha256_hex(
             format!("{}:{}:{}", session.actor, resource_kind, resource_id).as_bytes()
         )
@@ -92,7 +92,7 @@ pub(super) async fn directory_withdraw(
         })?;
     let body = body.into_inner();
     let withdrawal_ref = format!(
-        "ck:withdrawal:{}",
+        "ak:withdrawal:{}",
         super::sha256_hex(format!("{}:realm:{}", session.actor, body.resource_id).as_bytes())
     );
     json_ok(DirectoryWithdrawOutcome {

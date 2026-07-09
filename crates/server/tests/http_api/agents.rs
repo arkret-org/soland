@@ -12,7 +12,7 @@ fn test_session_credential_hash(token: &str, audience: &str) -> String {
 
 async fn seed_controller_session(state: &AppState, token: &str, actor: &str) {
     let now = chrono::Utc::now();
-    let device_id = "ck:device:01904100-0000-7000-8000-a11ce0000001";
+    let device_id = "ak:device:01904100-0000-7000-8000-a11ce0000001";
     state
         .persistence
         .sessions()

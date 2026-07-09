@@ -63,7 +63,7 @@ pub fn project_read_receipt_policy(state: &AppState, operation: &Operation) {
     // the cells-map fast-path serve reads without scanning the durable
     // Event store on every fanout.
     let cell_id = match cokret_sdk::CellRef::new(format!(
-        "ck:cell:ck.component.realm.read_receipt_policy.v1:{}",
+        "ak:cell:ck.component.realm.read_receipt_policy.v1:{}",
         realm_id.as_str()
     )) {
         Ok(c) => c,

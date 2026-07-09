@@ -10,7 +10,7 @@ pub(crate) async fn build_sync_snapshot(
     include_presence_delta: bool,
 ) -> cokret_sdk::models::SyncOutcome {
     let filter_value = sync_filter_value(body.filter.as_ref());
-    // SYNC-MEM-1 + ROST-SOL-1..3 (cokret-spec @ b56cab1) — `members[]` is
+    // SYNC-MEM-1 + ROST-SOL-1..3 (arkret-spec @ b56cab1) — `members[]` is
     // the per-Realm roster v2 projection from
     // `account-subscribe-frame.schema.json#/$defs/member_roster_entry`. Each
     // row carries `{actor_id, membership, subject_id?, identity_event_ids?,
@@ -243,7 +243,7 @@ pub(crate) async fn build_sync_snapshot(
                 "encryption_profile": encryption_profile,
                 "content_scheme": content_scheme,
                 "members": members,
-                // SYNC-MEM-2 (cokret-spec @ 7157ee8) — `members_limited`
+                // SYNC-MEM-2 (arkret-spec @ 7157ee8) — `members_limited`
                 // is always `false` until lazy-load truncation lands; the
                 // spec requires the flag to be present so clients can tell
                 // a small roster from a truncated one.
@@ -811,20 +811,20 @@ mod notification_projection_tests {
     #[test]
     fn assignment_notification_projects_without_message_source() {
         let row = json!({
-            "notification_id": "ck:notification:01904100-0000-7000-8000-000000000001",
+            "notification_id": "ak:notification:01904100-0000-7000-8000-000000000001",
             "recipient_id": "did:web:bob.example",
-            "realm_id": "ck:realm:01904100-0000-7000-8000-000000000002",
-            "source_event_id": "ck:event:01904100-0000-7000-8000-000000000003",
-            "source_ref": "ck:relation:01904100-0000-7000-8000-000000000004",
-            "strand_id": "ck:strand:01904100-0000-7000-8000-000000000005",
+            "realm_id": "ak:realm:01904100-0000-7000-8000-000000000002",
+            "source_event_id": "ak:event:01904100-0000-7000-8000-000000000003",
+            "source_ref": "ak:relation:01904100-0000-7000-8000-000000000004",
+            "strand_id": "ak:strand:01904100-0000-7000-8000-000000000005",
             "notification_type": "assignment",
             "event_kind": "ck.relation.create",
             "source_actor_id": "did:web:alice.example",
             "created_at": "2026-07-05T00:00:00Z"
         });
         let source = json!({
-            "event_id": "ck:event:01904100-0000-7000-8000-000000000003",
-            "realm_id": "ck:realm:01904100-0000-7000-8000-000000000002",
+            "event_id": "ak:event:01904100-0000-7000-8000-000000000003",
+            "realm_id": "ak:realm:01904100-0000-7000-8000-000000000002",
             "event_kind": "ck.relation.create"
         });
 
@@ -839,19 +839,19 @@ mod notification_projection_tests {
     #[test]
     fn schedule_notification_projects_without_message_source() {
         let row = json!({
-            "notification_id": "ck:notification:01904100-0000-7000-8000-000000000006",
+            "notification_id": "ak:notification:01904100-0000-7000-8000-000000000006",
             "recipient_id": "did:web:bob.example",
-            "realm_id": "ck:realm:01904100-0000-7000-8000-000000000002",
-            "source_event_id": "ck:event:01904100-0000-7000-8000-000000000007",
-            "strand_id": "ck:strand:01904100-0000-7000-8000-000000000005",
+            "realm_id": "ak:realm:01904100-0000-7000-8000-000000000002",
+            "source_event_id": "ak:event:01904100-0000-7000-8000-000000000007",
+            "strand_id": "ak:strand:01904100-0000-7000-8000-000000000005",
             "notification_type": "schedule",
             "event_kind": "ck.strand.update",
             "source_actor_id": "did:web:alice.example",
             "created_at": "2026-07-05T00:00:00Z"
         });
         let source = json!({
-            "event_id": "ck:event:01904100-0000-7000-8000-000000000007",
-            "realm_id": "ck:realm:01904100-0000-7000-8000-000000000002",
+            "event_id": "ak:event:01904100-0000-7000-8000-000000000007",
+            "realm_id": "ak:realm:01904100-0000-7000-8000-000000000002",
             "event_kind": "ck.strand.update"
         });
 
@@ -895,7 +895,7 @@ fn invite_notification_value(invite: &crate::state::RealmInviteRecord) -> Value 
     })
 }
 
-/// SYNC-MEM-1..4 + ROST-SOL-1..3 (cokret-spec @ b56cab1) — build the
+/// SYNC-MEM-1..4 + ROST-SOL-1..3 (arkret-spec @ b56cab1) — build the
 /// per-Realm `members[]` roster v2 projection from the structured membership
 /// FSM, the legacy in-memory `RealmDirectoryEntry`, and the MemberIdentity
 /// registry.
@@ -1740,7 +1740,7 @@ fn message_scope_circle_id(content: &Value) -> Option<&str> {
     content
         .get("scope_circle_id")
         .and_then(Value::as_str)
-        .filter(|value| value.starts_with("ck:circle:"))
+        .filter(|value| value.starts_with("ak:circle:"))
 }
 
 fn projection_event_scope_circle_id(
@@ -1757,7 +1757,7 @@ fn projection_event_scope_circle_id(
                     .payload
                     .get("thread_id")
                     .and_then(Value::as_str)
-                    .filter(|value| value.starts_with("ck:strand:"))
+                    .filter(|value| value.starts_with("ak:strand:"))
             })
             .and_then(|strand_id| projection.strand_scope_circle_id(strand_id));
     }
@@ -1781,7 +1781,7 @@ fn projection_event_scope_circle_id(
                 .and_then(|relation| relation.get("scope_circle_id"))
                 .and_then(Value::as_str)
         })
-        .filter(|value| value.starts_with("ck:circle:"))
+        .filter(|value| value.starts_with("ak:circle:"))
         .map(ToOwned::to_owned)
 }
 

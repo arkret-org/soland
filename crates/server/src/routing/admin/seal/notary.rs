@@ -217,11 +217,11 @@ fn admin_notary_value_from_sdk(
 /// `GET /_soland/admin/realms/{realm_id}/notary` — read current
 /// notary cell value.
 #[endpoint(
-    operation_id = "org.cokret.soland.admin.realms.notary.get",
+    operation_id = "org.arkret.soland.admin.realms.notary.get",
     tags("soland-admin", "notary"),
     summary = "Get current notary cell value"
 )]
-#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.admin.realms.notary.get"))]
+#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.admin.realms.notary.get"))]
 pub(crate) async fn admin_get_notary(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -260,13 +260,13 @@ pub(crate) async fn admin_get_notary(
 /// the signing identity is still the service signer so Moves chain off the
 /// NotaryWorker key.
 #[endpoint(
-    operation_id = "org.cokret.soland.admin.realms.notary.reconfigure",
+    operation_id = "org.arkret.soland.admin.realms.notary.reconfigure",
     tags("soland-admin", "notary"),
     summary = "Submit notary reconfiguration Move"
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "org.cokret.soland.admin.realms.notary.reconfigure")
+    fields(op = "org.arkret.soland.admin.realms.notary.reconfigure")
 )]
 pub(crate) async fn admin_reconfigure_notary(
     aa: AuthArgs,

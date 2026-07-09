@@ -1,14 +1,14 @@
 use super::*;
 
 #[endpoint(
-    operation_id = "org.cokret.soland.identity.recovery_receipts.get",
+    operation_id = "org.arkret.soland.identity.recovery_receipts.get",
     tags("identity", "recovery"),
     summary = "List recovery receipt history newest-first (REC-1)",
     status_codes(200, 401, 403, 500)
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "org.cokret.soland.identity.recovery_receipts.get")
+    fields(op = "org.arkret.soland.identity.recovery_receipts.get")
 )]
 pub(super) async fn recovery_receipts_get(
     aa: AuthArgs,
@@ -52,14 +52,14 @@ pub(super) fn recovery_receipt_item(
 }
 
 #[endpoint(
-    operation_id = "org.cokret.soland.identity.recovery_receipt.put",
+    operation_id = "org.arkret.soland.identity.recovery_receipt.put",
     tags("identity", "recovery"),
     summary = "Record a ck.schema.recovery_receipt.v1 receipt (REC-1)",
     status_codes(200, 201, 400, 401, 403, 409, 500)
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "org.cokret.soland.identity.recovery_receipt.put")
+    fields(op = "org.arkret.soland.identity.recovery_receipt.put")
 )]
 pub(super) async fn recovery_receipt_put(
     aa: AuthArgs,
@@ -156,7 +156,7 @@ pub(super) async fn recovery_receipt_put(
     append_audit_log(
         state,
         Some(&session.actor),
-        "org.cokret.soland.identity.recovery_receipt.put",
+        "org.arkret.soland.identity.recovery_receipt.put",
         json!({
             "receipt_id": record.receipt_id.clone(),
             "principal_id": record.principal_id.clone(),

@@ -14,7 +14,7 @@ default = []
 salvo = ["dep:salvo"]
 
 [dependencies]
-cokret-core = {workspace = true,default-features = false}
+arkret-core = {workspace = true,default-features = false}
 salvo = {workspace = true,optional = true,features = ["oapi"]}
 serde = {workspace = true,features = ["derive"]}
 serde_json = {workspace = true}

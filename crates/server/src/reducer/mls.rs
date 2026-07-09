@@ -85,9 +85,9 @@ pub const REASON_REMOVE_PROPOSAL_MISSING: &str = "mls_remove_proposal_missing";
 /// Payload shape (validated below):
 /// ```json
 /// {
-///   "keypackage_id": "ck:mls_keypackage:<uuid>",
+///   "keypackage_id": "ak:mls_keypackage:<uuid>",
 ///   "actor_id": "did:web:alice.example",
-///   "device_id": "ck:device:<uuid>",
+///   "device_id": "ak:device:<uuid>",
 ///   "lifetime": { "not_before": <unix_secs>, "not_after": <unix_secs> },
 ///   "key_package_bytes_b64": "<base64url(opaque MLS KeyPackage)>"
 /// }
@@ -214,8 +214,8 @@ pub fn apply_keypackage_publish(
 /// Payload shape:
 /// ```json
 /// {
-///   "keypackage_id": "ck:mls_keypackage:<uuid>",
-///   "group_id":      "ck:mls_group:<uuid>"
+///   "keypackage_id": "ak:mls_keypackage:<uuid>",
+///   "group_id":      "ak:mls_group:<uuid>"
 /// }
 /// ```
 ///
@@ -294,12 +294,12 @@ pub fn apply_keypackage_claim(state: &mut ProjectionState, op: &Operation) -> Pr
 /// Payload shape:
 /// ```json
 /// {
-///   "welcome_id":             "ck:mls_welcome:<uuid>",
-///   "group_id":               "ck:mls_group:<uuid>",
+///   "welcome_id":             "ak:mls_welcome:<uuid>",
+///   "group_id":               "ak:mls_group:<uuid>",
 ///   "recipient_actor_id":     "did:web:bob.example",
-///   "recipient_device_id":    "ck:device:<uuid>",
+///   "recipient_device_id":    "ak:device:<uuid>",
 ///   "ciphertext":             "<base64url(opaque MLS Welcome)>",
-///   "key_package_id":         "ck:mls_keypackage:<uuid>"
+///   "key_package_id":         "ak:mls_keypackage:<uuid>"
 /// }
 /// ```
 ///
@@ -542,7 +542,7 @@ pub fn apply_group_genesis(state: &mut ProjectionState, op: &Operation) -> Proje
 /// Payload shape:
 /// ```json
 /// {
-///   "group_id":            "ck:mls_group:<uuid>",
+///   "group_id":            "ak:mls_group:<uuid>",
 ///   "expected_prev_epoch": <u64>,
 ///   "leader_actor_id":     "did:web:alice.example",
 ///   "commit_bytes_b64":    "<base64url(opaque MLS Commit)>"

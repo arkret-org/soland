@@ -14,7 +14,7 @@ pub struct CokretOpenApiDoc(pub OpenApi);
 /// Catch-all handler under `/_cokret/*` (and the `/_soland/*` compat mirror,
 /// which mounts the same protocol handlers and must answer errors identically).
 ///
-/// Per `cokret-spec/spec/v1/zh/sync/api-conventions.md` §10:
+/// Per `arkret-spec/spec/v1/zh/sync/api-conventions.md` §10:
 /// * Unknown path -> `404 Not Found` + JSON envelope `{"error":{"code": "unrecognized_endpoint",
 ///   ...}}`.
 /// * Known path, wrong method -> `405 Method Not Allowed` + JSON envelope `{"error":{"code":
@@ -103,7 +103,7 @@ fn path_item_type_to_method(ty: &PathItemType) -> Option<Method> {
         PathItemType::Patch => Method::PATCH,
         PathItemType::Head => Method::HEAD,
         PathItemType::Options => Method::OPTIONS,
-        // TRACE is not part of the Cokret HTTP binding; exclude it so it
+        // TRACE is not part of the Arkret HTTP binding; exclude it so it
         // doesn't pollute the `Allow` header.
         PathItemType::Trace => return None,
     })
@@ -256,7 +256,7 @@ pub(crate) async fn wait_for_sync_token(
     res: &mut Response,
     ctrl: &mut FlowCtrl,
 ) {
-    let header_name = salvo::http::header::HeaderName::from_static("x-cokret-wait-for");
+    let header_name = salvo::http::header::HeaderName::from_static("x-arkret-wait-for");
     let Some(header_value) = req.headers().get(&header_name) else {
         ctrl.call_next(req, depot, res).await;
         return;
@@ -266,7 +266,7 @@ pub(crate) async fn wait_for_sync_token(
             res,
             StatusCode::BAD_REQUEST,
             "invalid_param",
-            "X-Cokret-Wait-For must be ASCII",
+            "X-Arkret-Wait-For must be ASCII",
         );
         return;
     };
@@ -281,7 +281,7 @@ pub(crate) async fn wait_for_sync_token(
                 res,
                 StatusCode::BAD_REQUEST,
                 "invalid_param",
-                "X-Cokret-Wait-For must contain ck:cursor sync tokens",
+                "X-Arkret-Wait-For must contain ck:cursor sync tokens",
             );
             return;
         }
@@ -291,12 +291,12 @@ pub(crate) async fn wait_for_sync_token(
             res,
             StatusCode::BAD_REQUEST,
             "invalid_param",
-            "X-Cokret-Wait-For must contain at least one sync token",
+            "X-Arkret-Wait-For must contain at least one sync token",
         );
         return;
     }
     res.headers_mut().insert(
-        salvo::http::header::HeaderName::from_static("x-cokret-wait-for-satisfied"),
+        salvo::http::header::HeaderName::from_static("x-arkret-wait-for-satisfied"),
         "true".parse().unwrap(),
     );
     ctrl.call_next(req, depot, res).await;

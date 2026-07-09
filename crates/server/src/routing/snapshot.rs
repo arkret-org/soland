@@ -308,7 +308,7 @@ pub(crate) fn device_inventory_to_json(device: &DeviceInventoryRecord) -> serde_
 
 pub(crate) fn generate_invite_token(invite_id: &str, realm_id: &str, invitee: &str) -> String {
     format!(
-        "ck:invite-token:{}",
+        "ak:invite-token:{}",
         sha256_hex(format!("{invite_id}:{realm_id}:{invitee}").as_bytes())
     )
 }

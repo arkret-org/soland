@@ -60,11 +60,11 @@ jobs:
         with:
           path: soland
 
-      - name: Checkout Cokret Rust SDK
+      - name: Checkout Arkret Rust SDK
         uses: actions/checkout@v6
         with:
-          repository: ${{ github.repository_owner }}/cokret-rust-sdk
-          path: cokret-rust-sdk
+          repository: ${{ github.repository_owner }}/arkret-rust-sdk
+          path: arkret-rust-sdk
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -206,7 +206,7 @@ jobs:
           set -euxo pipefail
           export XDG_DATA_HOME="$GITHUB_WORKSPACE/_drill/keystore-xdg"
           mkdir -p "$XDG_DATA_HOME"
-          KEY_ID="cokret:signer:soland-notary:${SOLAND_SERVICE_DID}"
+          KEY_ID="arkret:signer:soland-notary:${SOLAND_SERVICE_DID}"
           SEED_B64="AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA="
           mkdir -p _drill
           cat > _drill/seed-in.json <<EOF

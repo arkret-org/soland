@@ -1,7 +1,7 @@
 //! G3.S1 — MLS / E2EE lifecycle HTTP surface.
 //!
 //! Spec-canonical binding under `/_cokret/self/keys/keypackages/*` (see
-//! `cokret-service-api.openapi.yaml §/keys/keypackages/*`):
+//! `arkret-service-api.openapi.yaml §/keys/keypackages/*`):
 //!
 //! - `POST /_cokret/self/keys/keypackages/upload` — op `ck.self.keys.keypackages.upload.create`
 //!   (publishes a fresh KeyPackage).
@@ -9,7 +9,7 @@
 //!   (atomically claim a published KeyPackage; second claim of the same id returns `409
 //!   cas_conflict`).
 //! - `GET  /_soland/self/keys/keypackages/welcomes/pending` — extension op
-//!   `org.cokret.soland.mls.welcomes.pending` (drain the calling device's Welcome queue; caps at 50
+//!   `org.arkret.soland.mls.welcomes.pending` (drain the calling device's Welcome queue; caps at 50
 //!   per call; marks delivered rows with `delivered_at = now()` so subsequent polls don't
 //!   redeliver). This is a soland-specific extension (not in the canonical spec registry), so it is
 //!   served from the `/_soland/` product surface only.
@@ -158,7 +158,7 @@ impl KeyPackageTrustSelector {
 /// `/_cokret/self` from `routing::mod::api_v1_router`.
 ///
 /// Spec-canonical paths (see
-/// `cokret-service-api.openapi.yaml §/keys/keypackages/*`):
+/// `arkret-service-api.openapi.yaml §/keys/keypackages/*`):
 ///   - `POST /_cokret/self/keys/keypackages/upload`
 ///   - `POST /_cokret/self/keys/keypackages/claim`
 pub fn router() -> Router {
@@ -972,11 +972,11 @@ pub(crate) async fn retire_device_keypackages(
 // ── welcomes/pending ──────────────────────────────────────────────────
 
 #[endpoint(
-    operation_id = "org.cokret.soland.mls.welcomes.pending",
+    operation_id = "org.arkret.soland.mls.welcomes.pending",
     tags("keys"),
     summary = "Drain the calling device's MLS Welcome queue (G3.S1; soland extension)"
 )]
-#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.mls.welcomes.pending"))]
+#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.mls.welcomes.pending"))]
 async fn pending_welcomes(
     aa: AuthArgs,
     limit: QueryParam<usize, false>,
@@ -1358,8 +1358,8 @@ fn unix_timestamp_datetime(timestamp: i64) -> Result<DateTime<Utc>, AppError> {
 /// MLS kinds.
 fn build_op(object_type: &str, payload: Value) -> Operation {
     let op_id =
-        OperationId::new("ck:operation:01904100-0000-7000-8000-000000000001").expect("op id");
-    let realm_id = RealmId::new("ck:realm:01904100-0000-7000-8000-000000000000").expect("realm id");
+        OperationId::new("ak:operation:01904100-0000-7000-8000-000000000001").expect("op id");
+    let realm_id = RealmId::new("ak:realm:01904100-0000-7000-8000-000000000000").expect("realm id");
     Operation::create(op_id, realm_id, object_type, payload)
 }
 

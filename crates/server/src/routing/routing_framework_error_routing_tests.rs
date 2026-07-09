@@ -104,7 +104,7 @@ async fn cokret_v1_unknown_path_returns_unrecognized_endpoint() {
 /// End-to-end check that hitting a known `/_cokret/*` path with the
 /// wrong method returns 405 + the `method_not_allowed` JSON envelope
 /// AND populates the `Allow` response header per
-/// `cokret-spec/spec/v1/zh/sync/api-conventions.md` §10.
+/// `arkret-spec/spec/v1/zh/sync/api-conventions.md` §10.
 #[tokio::test]
 async fn known_path_wrong_method_returns_method_not_allowed_with_allow_header() {
     use salvo::test::{ResponseExt, TestClient};

@@ -1,6 +1,6 @@
 //! Shared wire contract for the coauth → soland capability fanout S2S call
 //! (`POST /_soland/root/authz/capability-fanout`,
-//! `org.cokret.soland.root.authz.capability_fanout.submit`).
+//! `org.arkret.soland.root.authz.capability_fanout.submit`).
 //!
 //! This is a deployment-internal product contract (service-http-binding.md
 //! §2.1.3(b)), not a spec operation, so the types live in `soland-core`

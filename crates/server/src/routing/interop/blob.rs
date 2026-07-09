@@ -114,7 +114,7 @@ async fn blob_upload(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     };
     let realm_id = match req
         .headers()
-        .get("x-cokret-realm-id")
+        .get("x-arkret-realm-id")
         .and_then(|value| value.to_str().ok())
         .map(str::to_owned)
     {
@@ -204,7 +204,7 @@ async fn blob_upload(depot: &mut Depot, req: &mut Request, res: &mut Response) {
             res,
             StatusCode::BAD_REQUEST,
             "invalid_param",
-            "encrypted blob uploads require x-cokret-attachment-envelope or a supported encrypted x-cokret-blob-purpose",
+            "encrypted blob uploads require x-arkret-attachment-envelope or a supported encrypted x-arkret-blob-purpose",
         );
         return;
     }
@@ -213,7 +213,7 @@ async fn blob_upload(depot: &mut Depot, req: &mut Request, res: &mut Response) {
             res,
             StatusCode::BAD_REQUEST,
             "invalid_param",
-            "x-cokret-blob-encrypted=false conflicts with encrypted attachment metadata",
+            "x-arkret-blob-encrypted=false conflicts with encrypted attachment metadata",
         );
         return;
     }
@@ -287,7 +287,7 @@ async fn blob_upload(depot: &mut Depot, req: &mut Request, res: &mut Response) {
         );
         return;
     }
-    let blob_ref = format!("ck:blob:sha256:{sha256}");
+    let blob_ref = format!("ak:blob:sha256:{sha256}");
     let storage_key = state.object_storage.object_key_for_sha256(&sha256);
     if let Err(error) = state.object_storage.put(&storage_key, bytes).await {
         render_error(
@@ -549,7 +549,7 @@ async fn blob_get(depot: &mut Depot, req: &mut Request, res: &mut Response) {
             );
             res.headers_mut().insert(
                 salvo::http::header::HeaderName::from_static("digest"),
-                format!("sha-256={}", blob_ref.trim_start_matches("ck:blob:sha256:"))
+                format!("sha-256={}", blob_ref.trim_start_matches("ak:blob:sha256:"))
                     .parse()
                     .unwrap(),
             );
@@ -618,7 +618,7 @@ async fn try_recover_profile_avatar_blob(
     blob_ref: &str,
     uploaded_by: &str,
 ) -> Option<BlobRecord> {
-    let sha256 = blob_ref.strip_prefix("ck:blob:sha256:")?;
+    let sha256 = blob_ref.strip_prefix("ak:blob:sha256:")?;
     if !is_valid_sha256_hex(sha256) {
         return None;
     }
@@ -943,12 +943,12 @@ fn blob_content_disposition(blob: &BlobRecord, purpose: &str) -> Option<String> 
 fn expected_blob_content_digest(req: &Request) -> Result<Option<String>, &'static str> {
     if let Some(value) = req
         .headers()
-        .get("x-cokret-content-digest")
+        .get("x-arkret-content-digest")
         .and_then(|value| value.to_str().ok())
     {
         let digest = value.trim();
         if !is_valid_sha256_digest(digest) {
-            return Err("x-cokret-content-digest must be sha256:<64 lowercase hex>");
+            return Err("x-arkret-content-digest must be sha256:<64 lowercase hex>");
         }
         return Ok(Some(digest.trim_start_matches("sha256:").to_owned()));
     }
@@ -1110,7 +1110,7 @@ fn encrypted_attachment_metadata(req: &Request) -> Result<Option<serde_json::Val
     let Some(value) = req
         .headers()
         .get(salvo::http::header::HeaderName::from_static(
-            "x-cokret-attachment-envelope",
+            "x-arkret-attachment-envelope",
         ))
         .and_then(|value| value.to_str().ok())
     else {
@@ -1123,7 +1123,7 @@ fn encrypted_attachment_metadata(req: &Request) -> Result<Option<serde_json::Val
 }
 
 fn blob_upload_purpose(req: &Request) -> Result<Option<String>, &'static str> {
-    for header in ["x-cokret-blob-purpose", "x-cokret-purpose"] {
+    for header in ["x-arkret-blob-purpose", "x-arkret-purpose"] {
         let Some(value) = req
             .headers()
             .get(header)
@@ -1344,7 +1344,7 @@ fn is_valid_mime_token(value: &str) -> bool {
 fn sanitized_blob_filename(req: &Request) -> Result<Option<String>, &'static str> {
     let raw = req
         .headers()
-        .get("x-cokret-filename")
+        .get("x-arkret-filename")
         .and_then(|value| value.to_str().ok())
         .map(str::to_owned)
         .or_else(|| {
@@ -1395,7 +1395,7 @@ fn sanitize_blob_filename_value(value: &str) -> Result<String, &'static str> {
 fn blob_encrypted_flag(req: &Request) -> Result<Option<bool>, &'static str> {
     let Some(raw) = req
         .headers()
-        .get("x-cokret-blob-encrypted")
+        .get("x-arkret-blob-encrypted")
         .and_then(|value| value.to_str().ok())
     else {
         return Ok(None);
@@ -1403,7 +1403,7 @@ fn blob_encrypted_flag(req: &Request) -> Result<Option<bool>, &'static str> {
     match raw.trim().to_ascii_lowercase().as_str() {
         "true" | "1" | "yes" => Ok(Some(true)),
         "false" | "0" | "no" => Ok(Some(false)),
-        _ => Err("x-cokret-blob-encrypted must be true or false"),
+        _ => Err("x-arkret-blob-encrypted must be true or false"),
     }
 }
 
@@ -1670,7 +1670,7 @@ mod tests {
             storage_key: "sha256/test".to_owned(),
             media_type: media_type.to_owned(),
             filename: filename.map(ToOwned::to_owned),
-            realm_id: Some("ck:realm:0196419b-0000-7000-8000-000000000000".to_owned()),
+            realm_id: Some("ak:realm:0196419b-0000-7000-8000-000000000000".to_owned()),
             encryption: None,
             legal_hold: false,
             redacted: false,
@@ -1714,7 +1714,7 @@ mod tests {
         assert!(
             validate_encrypted_attachment_metadata(&json!({
                 "alg": "mls_exporter_aead_xchacha20poly1305",
-                "key_ref": "ck:mls:exporter",
+                "key_ref": "ak:mls:exporter",
                 "nonce": "AAAAAAAAAAAAAAAA",
                 "ciphertext_digest": digest,
             }))
@@ -1724,7 +1724,7 @@ mod tests {
         assert!(
             validate_encrypted_attachment_metadata(&json!({
                 "alg": "mls_exporter_aead_xchacha20poly1305",
-                "key_ref": "ck:mls:exporter",
+                "key_ref": "ak:mls:exporter",
                 "ciphertext_digest": digest,
             }))
             .is_err()
@@ -1739,7 +1739,7 @@ mod tests {
             validate_encrypted_attachment_metadata(&json!({
                 "scheme": "ck.blob.stream_aead.v1",
                 "alg": "mls_exporter_aead_xchacha20poly1305_stream",
-                "key_ref": "ck:mls:exporter",
+                "key_ref": "ak:mls:exporter",
                 "nonce_prefix": "AAAAAAAA",
                 "segment_size": 65536,
                 "segment_count": 4,
@@ -1752,7 +1752,7 @@ mod tests {
             validate_encrypted_attachment_metadata(&json!({
                 "scheme": "ck.blob.stream_aead.v1",
                 "alg": "mls_exporter_aead_xchacha20poly1305_stream",
-                "key_ref": "ck:mls:exporter",
+                "key_ref": "ak:mls:exporter",
                 "segment_size": 65536,
                 "segment_count": 4,
                 "ciphertext_digest": digest,
@@ -1764,7 +1764,7 @@ mod tests {
             validate_encrypted_attachment_metadata(&json!({
                 "scheme": "ck.blob.stream_aead.v1",
                 "alg": "mls_exporter_aead_xchacha20poly1305_stream",
-                "key_ref": "ck:mls:exporter",
+                "key_ref": "ak:mls:exporter",
                 "nonce_prefix": "AAAAAAAA",
                 "segment_size": "65536",
                 "segment_count": 4,
@@ -1783,7 +1783,7 @@ mod tests {
             validate_encrypted_attachment_metadata(&json!({
                 "scheme": "ck.blob.future_scheme.v9",
                 "alg": "something-new",
-                "key_ref": "ck:mls:exporter",
+                "key_ref": "ak:mls:exporter",
                 "ciphertext_digest": digest,
             }))
             .is_ok()

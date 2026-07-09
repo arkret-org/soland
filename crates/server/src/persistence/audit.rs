@@ -153,7 +153,7 @@ mod tests {
         let uuid = Uuid::parse_str("01904100-0000-7000-8000-000000000001").unwrap();
 
         assert_eq!(
-            operation_uuid_index(Some("ck:operation:01904100-0000-7000-8000-000000000001")),
+            operation_uuid_index(Some("ak:operation:01904100-0000-7000-8000-000000000001")),
             Some(uuid)
         );
     }

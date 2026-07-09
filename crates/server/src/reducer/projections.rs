@@ -67,7 +67,7 @@ pub struct FanoutPeerStatus {
 /// Stream-F (Wave 1B) — `ck.audit.erasure_receipt` projection record.
 /// Mirrors a subset of the canonical `ck.schema.erasure_receipt.v1`
 /// payload (see
-/// `cokret-spec/spec/v1/artifacts/schemas/erasure-receipt.schema.json`).
+/// `arkret-spec/spec/v1/artifacts/schemas/erasure-receipt.schema.json`).
 /// We only keep the fields the local audit / federation fanout layer
 /// actually consults — the rest of the payload (`proofs`,
 /// `erased_classes`, `retained_stub_digest`, …) round-trips through the
@@ -426,7 +426,7 @@ impl MlsCommitEpochKey {
 pub struct MlsCommitEpoch {
     /// MLS group id (`ck:mls_group:<...>`).
     pub group_id: String,
-    /// Tagged Cokret application scope that this MLS group is bound to.
+    /// Tagged Arkret application scope that this MLS group is bound to.
     pub effective_scope: Value,
     /// Monotonic epoch counter. Starts at 0 before the first commit;
     /// each commit bumps by +1.

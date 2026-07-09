@@ -436,7 +436,7 @@ fn ice_config_signature<T: Serialize>(state: &AppState, payload: &T) -> (String,
     (URL_SAFE_NO_PAD.encode(signature.to_bytes()), payload_digest)
 }
 
-// ── CKP-0010 (R3 spec-sync 2026-05-27, cokret-spec b47ff6ec) — media
+// ── CKP-0010 (R3 spec-sync 2026-05-27, arkret-spec b47ff6ec) — media
 // token exchange. Issues a backend_token + ParticipantBinding for a
 // caller that already has a committed `ck.call.state.session_focus`.
 //
@@ -462,7 +462,7 @@ enum MediaProviderKind {
 impl MediaProviderKind {
     fn parse(value: &str) -> Result<Self, AppError> {
         match value.trim().to_ascii_lowercase().as_str() {
-            "cokret-native" | "cokret_native" => Ok(Self::CokretNative),
+            "arkret-native" | "cokret_native" => Ok(Self::CokretNative),
             "livekit" => Ok(Self::LiveKit),
             "mediasoup" => Ok(Self::Mediasoup),
             _ => Err(AppError::new(
@@ -475,7 +475,7 @@ impl MediaProviderKind {
 
     fn as_wire(self) -> &'static str {
         match self {
-            Self::CokretNative => "cokret-native",
+            Self::CokretNative => "arkret-native",
             Self::LiveKit => "livekit",
             Self::Mediasoup => "mediasoup",
         }
@@ -483,7 +483,7 @@ impl MediaProviderKind {
 
     fn token_prefix(self) -> &'static str {
         match self {
-            Self::CokretNative => "cokret-native",
+            Self::CokretNative => "arkret-native",
             Self::LiveKit => "livekit",
             Self::Mediasoup => "mediasoup",
         }
@@ -545,7 +545,7 @@ struct IssuedMediaToken {
 }
 
 /// Per-provider signing material handed to a [`MediaTokenIssuer`]. The
-/// ed25519 notary key signs the `cokret-native` / `mediasoup` envelopes;
+/// ed25519 notary key signs the `arkret-native` / `mediasoup` envelopes;
 /// LiveKit needs the deployment's API Key/Secret to emit a real LiveKit
 /// JWT (`bindings/livekit.md` §2).
 struct MediaTokenSigningContext<'a> {
@@ -741,7 +741,7 @@ async fn handle_rtc_token(
     // exchange so the SFU cannot be linked back to (realm, call, actor, device)
     // by recomputing the id, and the wire form matches the schema pattern
     // `^ck:rtc_participant:<uuidv7>$`.
-    let participant_identity = cokret_sdk::new_prefixed_uuid7("ck:rtc_participant:");
+    let participant_identity = cokret_sdk::new_prefixed_uuid7("ak:rtc_participant:");
     let signing_key = state.notary_signing_key();
     // `bindings/livekit.md` §2/§5 — publish grants are derived from the
     // caller's `desired_media`. Absent the field we default to audio+video
@@ -1006,7 +1006,7 @@ impl CallStateCell {
 }
 
 fn call_state_cell_ref(call_id: &str) -> Result<CellRef, AppError> {
-    CellRef::new(format!("ck:cell:ck.component.call.state.v1:{call_id}"))
+    CellRef::new(format!("ak:cell:ck.component.call.state.v1:{call_id}"))
         .map_err(|error| AppError::internal(format!("invalid call.state cell id: {error}")))
 }
 
@@ -1074,10 +1074,10 @@ fn call_state_operation_from_record(
         return Ok(None);
     };
     let realm_id = RealmId::new(realm_id).map_err(|error| AppError::internal(error.to_string()))?;
-    let Some(suffix) = record.event_id.strip_prefix("ck:event:") else {
+    let Some(suffix) = record.event_id.strip_prefix("ak:event:") else {
         return Ok(None);
     };
-    let operation_id = OperationId::new(format!("ck:operation:{suffix}"))
+    let operation_id = OperationId::new(format!("ak:operation:{suffix}"))
         .map_err(|error| AppError::internal(error.to_string()))?;
     let payload = record
         .envelope
@@ -1106,7 +1106,7 @@ fn media_service_epoch_for_realm(
     realm_id: &str,
 ) -> Result<MediaServiceEpoch, AppError> {
     let cell_id = cokret_sdk::CellRef::new(format!(
-        "ck:cell:{REALM_MEDIA_SERVICE_CELL_FAMILY}:{realm_id}"
+        "ak:cell:{REALM_MEDIA_SERVICE_CELL_FAMILY}:{realm_id}"
     ))
     .map_err(|error| AppError::internal(format!("invalid media_service cell id: {error}")))?;
     let value = {
@@ -1134,7 +1134,7 @@ fn parse_media_service_epoch(realm_id: &str, value: &Value) -> Result<MediaServi
     let mut foci = Vec::new();
     for focus_value in foci_value {
         let focus_id = required_json_string(&focus_value, "focus_id")?;
-        if !focus_id.starts_with("ck:focus:") {
+        if !focus_id.starts_with("ak:focus:") {
             return Err(AppError::invalid_param(
                 "media focus_id must start with ck:focus:",
             ));
@@ -1162,7 +1162,7 @@ fn parse_media_service_epoch(realm_id: &str, value: &Value) -> Result<MediaServi
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .map(ToOwned::to_owned)
-            .unwrap_or_else(|| format!("cokret:media:{realm_id}:{focus_id}"));
+            .unwrap_or_else(|| format!("arkret:media:{realm_id}:{focus_id}"));
         let ttl_seconds = focus_value
             .get("ttl_seconds")
             .or_else(|| focus_value.get("token_ttl_seconds"))
@@ -1467,7 +1467,7 @@ mod tests {
                 "participant_mute_overrides": [
                     {
                         "actor_id": "did:web:alice.example",
-                        "device_id": "ck:device:01904100-0000-7000-8000-000000000001",
+                        "device_id": "ak:device:01904100-0000-7000-8000-000000000001",
                         "audio_muted": false,
                         "video_muted": false,
                         "muted_by": "did:web:mod.example",
@@ -1475,7 +1475,7 @@ mod tests {
                     },
                     {
                         "actor_id": "did:web:alice.example",
-                        "device_id": "ck:device:01904100-0000-7000-8000-000000000001",
+                        "device_id": "ak:device:01904100-0000-7000-8000-000000000001",
                         "audio_muted": true,
                         "video_muted": false,
                         "muted_by": "did:web:mod.example",
@@ -1483,7 +1483,7 @@ mod tests {
                     },
                     {
                         "actor_id": "did:web:alice.example",
-                        "device_id": "ck:device:01904100-0000-7000-8000-000000000002",
+                        "device_id": "ak:device:01904100-0000-7000-8000-000000000002",
                         "audio_muted": false,
                         "video_muted": true,
                         "muted_by": "did:web:mod.example",
@@ -1496,7 +1496,7 @@ mod tests {
         assert_eq!(
             cell.participant_mute_override(
                 "did:web:alice.example",
-                "ck:device:01904100-0000-7000-8000-000000000001",
+                "ak:device:01904100-0000-7000-8000-000000000001",
             ),
             (true, false)
         );
@@ -1506,7 +1506,7 @@ mod tests {
     fn token_media_permissions_gate_screen_after_mute_adjustment() {
         let focus = MediaProviderConfig {
             provider: MediaProviderKind::CokretNative,
-            focus_id: "ck:focus:cokret-native:test".to_owned(),
+            focus_id: "ak:focus:arkret-native:test".to_owned(),
             issuer_kid: "did:web:media.example#key-1".to_owned(),
             audience: "media".to_owned(),
             ttl_seconds: 300,
@@ -1516,11 +1516,11 @@ mod tests {
         let issued_at = Utc::now();
         let request = MediaTokenIssueRequestBody {
             focus: &focus,
-            realm_id: "ck:realm:01904100-0000-7000-8000-cfc039892063",
-            call_id: "ck:call:01904100-0000-7000-8000-c0000000000c",
+            realm_id: "ak:realm:01904100-0000-7000-8000-cfc039892063",
+            call_id: "ak:call:01904100-0000-7000-8000-c0000000000c",
             actor_id: "did:web:alice.example",
-            device_id: "ck:device:01904100-0000-7000-8000-000000000001",
-            participant_identity: "ck:rtc_participant:01904100-0000-7000-8000-000000000009",
+            device_id: "ak:device:01904100-0000-7000-8000-000000000001",
+            participant_identity: "ak:rtc_participant:01904100-0000-7000-8000-000000000009",
             desired_media: (false, true, true),
             allow_screen_share: false,
             issued_at,
@@ -1592,9 +1592,9 @@ pub(crate) async fn actor_has_call_capability(
 fn is_valid_webrtc_session_id(value: &str) -> bool {
     // v1 wire ID: `ck:call:<uuidv7-36-char-lowercase-hex>` (RFC 9562 v7,
     // version=7, variant ∈ {8,9,a,b}) — per
-    // `cokret-spec/v1/artifacts/registry/id-kind-registry.json` the WebRTC
+    // `arkret-spec/v1/artifacts/registry/id-kind-registry.json` the WebRTC
     // call surface uses `ck:call:`.
-    let Some(rest) = value.strip_prefix("ck:call:") else {
+    let Some(rest) = value.strip_prefix("ak:call:") else {
         return false;
     };
     let Ok(parsed) = uuid::Uuid::parse_str(rest) else {

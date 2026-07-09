@@ -4,13 +4,13 @@
 use super::common::*;
 
 const ALICE: &str = "did:web:alice.example";
-const ALICE_DEVICE: &str = "ck:device:01904100-0000-7000-8000-a11ce0000001";
+const ALICE_DEVICE: &str = "ak:device:01904100-0000-7000-8000-a11ce0000001";
 const BOB: &str = "did:web:bob.example";
-const BOB_DEVICE: &str = "ck:device:01904100-0000-7000-8000-b0b000000001";
+const BOB_DEVICE: &str = "ak:device:01904100-0000-7000-8000-b0b000000001";
 const CAROL: &str = "did:web:carol.example";
-const CAROL_DEVICE: &str = "ck:device:01904100-0000-7000-8000-ca0010000001";
+const CAROL_DEVICE: &str = "ak:device:01904100-0000-7000-8000-ca0010000001";
 const DAVE: &str = "did:web:dave.example";
-const DAVE_DEVICE: &str = "ck:device:01904100-0000-7000-8000-da0010000001";
+const DAVE_DEVICE: &str = "ak:device:01904100-0000-7000-8000-da0010000001";
 
 async fn set_demo_realm_visibility(
     state: &AppState,
@@ -237,7 +237,7 @@ async fn submit_alice_target_message(state: AppState, token: &str, body: &str) -
         token,
         ALICE,
         DEMO_REALM_ID,
-        "ck:strand:0196419b-0000-7000-8000-000000000000",
+        "ak:strand:0196419b-0000-7000-8000-000000000000",
         serde_json::json!({"body": body}),
         false,
     )

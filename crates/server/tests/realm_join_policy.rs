@@ -10,14 +10,14 @@ use serde_json::{Value, json};
 use soland::hlc::ServerHlc;
 use soland::reducer::{ProjectionEffect, ProjectionState};
 
-const REALM_A: &str = "ck:realm:01904100-0000-7000-8000-cfc039892036";
-const REALM_PARENT: &str = "ck:realm:01904100-0000-7000-8000-cfc039892037";
+const REALM_A: &str = "ak:realm:01904100-0000-7000-8000-cfc039892036";
+const REALM_PARENT: &str = "ak:realm:01904100-0000-7000-8000-cfc039892037";
 const BOB: &str = "did:web:bob.example";
 const MALLORY: &str = "did:web:mallory.example";
 
 fn op(kind: &str, realm_id: &str, payload: Value) -> Operation {
     Operation::create(
-        cokret_sdk::OperationId::new(format!("ck:operation:{}", uuid::Uuid::now_v7())).unwrap(),
+        cokret_sdk::OperationId::new(format!("ak:operation:{}", uuid::Uuid::now_v7())).unwrap(),
         cokret_sdk::RealmId::new(realm_id).unwrap(),
         kind,
         payload,

@@ -29,7 +29,7 @@
 //! prefixed with `did:web:soland.local#proxy-` so it's never confused
 //! with a genuine signature.
 //!
-//! Spec: `cokret-spec/spec/v1/zh/authz/policy-server.md` §5–§6.
+//! Spec: `arkret-spec/spec/v1/zh/authz/policy-server.md` §5–§6.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -790,7 +790,7 @@ mod tests {
 
     fn realm_config(url: &str) -> RealmPolicyServerConfig {
         RealmPolicyServerConfig {
-            realm_id: "ck:realm:01904100-0000-7000-8000-000000000001".to_owned(),
+            realm_id: "ak:realm:01904100-0000-7000-8000-000000000001".to_owned(),
             policy_server_did: "did:web:policy.example.com".to_owned(),
             policy_server_url: url.to_owned(),
             cache_ttl_seconds: 60,
@@ -811,7 +811,7 @@ mod tests {
     fn sample_input(bypass_cache: bool) -> PolicyCheckRequestInput {
         PolicyCheckRequestInput {
             request_id: "req-1".to_owned(),
-            realm_id: RealmId::new("ck:realm:01904100-0000-7000-8000-000000000001").unwrap(),
+            realm_id: RealmId::new("ak:realm:01904100-0000-7000-8000-000000000001").unwrap(),
             actor_id: Did::new("did:web:alice.example").unwrap(),
             action: "ck.message.create".to_owned(),
             source_service_did: Did::new("did:web:soland.local").unwrap(),
@@ -831,7 +831,7 @@ mod tests {
             request_id: "req-1".to_owned(),
             decision: AuthzDecision::Allow,
             bound_to: PolicyCheckBoundTo {
-                realm_id: RealmId::new("ck:realm:01904100-0000-7000-8000-000000000001").unwrap(),
+                realm_id: RealmId::new("ak:realm:01904100-0000-7000-8000-000000000001").unwrap(),
                 actor_id: Did::new("did:web:alice.example").unwrap(),
                 action: "ck.message.create".to_owned(),
                 request_canonical_digest: zero.clone(),

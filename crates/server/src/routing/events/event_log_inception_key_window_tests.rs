@@ -10,11 +10,11 @@ const PRINCIPAL_DID: &str = "did:webvh:zScidExample0000000000000000000000:test.e
 
 fn parsed(kind: &str) -> ValidatedEventEnvelope {
     ValidatedEventEnvelope {
-        event_id: "ck:event:01904100-0000-7000-8000-a11ce0000001".to_owned(),
+        event_id: "ak:event:01904100-0000-7000-8000-a11ce0000001".to_owned(),
         actor_id: PRINCIPAL_DID.to_owned(),
         actor_seq: 1,
-        realm_id: "ck:realm:01904100-0000-7000-8000-a11ce0000001".to_owned(),
-        device_id: "ck:device:x".to_owned(),
+        realm_id: "ak:realm:01904100-0000-7000-8000-a11ce0000001".to_owned(),
+        device_id: "ak:device:x".to_owned(),
         kind: kind.to_owned(),
         schema_id: "ck.schema.event.v1".to_owned(),
         prev_refs: Vec::new(),
@@ -28,13 +28,13 @@ fn parsed(kind: &str) -> ValidatedEventEnvelope {
 /// envelope `refs[]` carries the `role="did_inception"` evidence ref.
 fn inception_bootstrap_envelope() -> Value {
     json!({
-        "event_id": "ck:event:01904100-0000-7000-8000-a11ce0000001",
+        "event_id": "ak:event:01904100-0000-7000-8000-a11ce0000001",
         "kind": "ck.device.authorize",
         "actor_id": PRINCIPAL_DID,
         "refs": [
             {"id": "1-zEntryZeroVersionId", "role": "did_inception", "critical": true}
         ],
-        "payload": {"principal_id": PRINCIPAL_DID, "device_id": "ck:device:x"}
+        "payload": {"principal_id": PRINCIPAL_DID, "device_id": "ak:device:x"}
     })
 }
 
@@ -42,13 +42,13 @@ fn inception_bootstrap_envelope() -> Value {
 /// device, with NO `did_inception` ref.
 fn sealed_device_envelope() -> Value {
     json!({
-        "event_id": "ck:event:01904100-0000-7000-8000-a11ce0000002",
+        "event_id": "ak:event:01904100-0000-7000-8000-a11ce0000002",
         "kind": "ck.device.authorize",
         "actor_id": PRINCIPAL_DID,
         "refs": [
-            {"id": "ck:event:01904100-0000-7000-8000-a11ce0000001", "role": "authorized_by"}
+            {"id": "ak:event:01904100-0000-7000-8000-a11ce0000001", "role": "authorized_by"}
         ],
-        "payload": {"principal_id": PRINCIPAL_DID, "device_id": "ck:device:y"}
+        "payload": {"principal_id": PRINCIPAL_DID, "device_id": "ak:device:y"}
     })
 }
 
@@ -166,7 +166,7 @@ async fn session_grant_signed_by_inception_key_is_gated() {
     let bootstrap = now() - chrono::Duration::hours(48);
     seed_entry_zero(&state, &bootstrap.to_rfc3339()).await;
     let envelope = json!({
-        "event_id": "ck:event:01904100-0000-7000-8000-a11ce0000003",
+        "event_id": "ak:event:01904100-0000-7000-8000-a11ce0000003",
         "kind": "ck.session.grant",
         "actor_id": PRINCIPAL_DID,
         "refs": [

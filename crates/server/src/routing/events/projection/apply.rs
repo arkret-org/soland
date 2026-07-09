@@ -613,7 +613,7 @@ async fn project_accepted_operations_inner(
         {
             project_membership_operation(state, origin, operation).await;
         }
-        // MID-3 (R3.1, cokret-spec @ 7157ee8) — persist accepted
+        // MID-3 (R3.1, arkret-spec @ 7157ee8) — persist accepted
         // `ck.member.identity.update` events into the in-memory registry.
         // Reducer-shape validation (segment whitelist, cross-cell guard,
         // digest binding) runs inside `project_member_identity_update`;
@@ -1289,15 +1289,15 @@ mod tests {
             soland_data::Db { pool: None },
         );
         let realm_id =
-            cokret_sdk::RealmId::new("ck:realm:0196419b-1000-7000-8000-000000000101".to_owned())
+            cokret_sdk::RealmId::new("ak:realm:0196419b-1000-7000-8000-000000000101".to_owned())
                 .unwrap();
         let operation_id =
-            cokret_sdk::OperationId::new("ck:operation:0196419b-1000-7000-8000-000000000102")
+            cokret_sdk::OperationId::new("ak:operation:0196419b-1000-7000-8000-000000000102")
                 .unwrap();
         let sender = "did:web:alice.example";
-        let sender_device = "ck:device:01904100-0000-7000-8000-a11ce0000101";
+        let sender_device = "ak:device:01904100-0000-7000-8000-a11ce0000101";
         let recipient = "did:web:bob.example";
-        let recipient_device = "ck:device:01904100-0000-7000-8000-b0b000000101";
+        let recipient_device = "ak:device:01904100-0000-7000-8000-b0b000000101";
         let payload = json!({
             "share_class": "member_device",
             "recipient_principal_id": recipient,
@@ -1312,7 +1312,7 @@ mod tests {
             },
             "ciphertext": "sealed",
             "created_at": "2026-07-05T00:00:00Z",
-            "event_id": "ck:event:01904100-0000-7000-8000-000000000101",
+            "event_id": "ak:event:01904100-0000-7000-8000-000000000101",
             "sender": sender,
             "hlc": "2026-07-05T00:00:00Z/node/1"
         });
@@ -1355,12 +1355,12 @@ mod tests {
 
     #[test]
     fn realm_key_share_device_projection_preserves_payload_in_envelope_content() {
-        let realm_id = "ck:realm:0196419b-1000-7000-8000-000000000001";
-        let operation_id = "ck:operation:0196419b-1000-7000-8000-000000000002";
+        let realm_id = "ak:realm:0196419b-1000-7000-8000-000000000001";
+        let operation_id = "ak:operation:0196419b-1000-7000-8000-000000000002";
         let sender = "did:web:alice.example";
-        let sender_device = "ck:device:01904100-0000-7000-8000-a11ce0000001";
+        let sender_device = "ak:device:01904100-0000-7000-8000-a11ce0000001";
         let recipient = "did:web:bob.example";
-        let recipient_device = "ck:device:01904100-0000-7000-8000-b0b000000001";
+        let recipient_device = "ak:device:01904100-0000-7000-8000-b0b000000001";
         let payload = json!({
             "share_class": "member_device",
             "recipient_principal_id": recipient,
@@ -1409,12 +1409,12 @@ mod tests {
 
     #[test]
     fn realm_key_request_device_projection_preserves_payload_in_envelope_content() {
-        let realm_id = "ck:realm:0196419b-1000-7000-8000-000000000001";
+        let realm_id = "ak:realm:0196419b-1000-7000-8000-000000000001";
         let request_id = "sha256:request";
         let sender = "did:web:bob.example";
-        let sender_device = "ck:device:01904100-0000-7000-8000-b0b000000001";
+        let sender_device = "ak:device:01904100-0000-7000-8000-b0b000000001";
         let recipient = "did:web:alice.example";
-        let recipient_device = "ck:device:01904100-0000-7000-8000-a11ce0000001";
+        let recipient_device = "ak:device:01904100-0000-7000-8000-a11ce0000001";
         let payload = json!({
             "key_scope": {
                 "effective_scope": {"realm_id": realm_id},

@@ -24,20 +24,20 @@ const SERVICE_DID_OTHER: &str = "did:web:principal.rogue.example";
 // For control-stream actor-private use the convention is the actor's
 // principal control Realm, but a placeholder is fine for reducer-level
 // tests because the dispatcher reads everything it needs from payload.
-const PLACEHOLDER_REALM: &str = "ck:realm:01904100-0000-7000-8000-aaaaaaaaaaaa";
+const PLACEHOLDER_REALM: &str = "ak:realm:01904100-0000-7000-8000-aaaaaaaaaaaa";
 const PRINCIPAL_A: &str = "did:web:alice.example";
 const PRINCIPAL_B: &str = "did:web:bob.example";
 const DEVICE_A: &str = "device-a";
 const ROUTE_APNS: &str = "apns_main";
 const ROUTE_FCM: &str = "fcm_voip";
-const PSEUDONYM_1: &str = "ck:pseudonym:push:01HYZ8Z000000000000000";
-const PSEUDONYM_2: &str = "ck:pseudonym:push:01HYZ8Z000000000000001";
-const PSEUDONYM_3: &str = "ck:pseudonym:push:01HYZ8Z000000000000002";
+const PSEUDONYM_1: &str = "ak:pseudonym:push:01HYZ8Z000000000000000";
+const PSEUDONYM_2: &str = "ak:pseudonym:push:01HYZ8Z000000000000001";
+const PSEUDONYM_3: &str = "ak:pseudonym:push:01HYZ8Z000000000000002";
 const GATEWAY_DID: &str = "did:web:gateway.example";
 
 fn op(payload: Value) -> Operation {
     Operation::create(
-        cokret_sdk::OperationId::new(format!("ck:operation:{}", uuid::Uuid::now_v7())).unwrap(),
+        cokret_sdk::OperationId::new(format!("ak:operation:{}", uuid::Uuid::now_v7())).unwrap(),
         cokret_sdk::RealmId::new(PLACEHOLDER_REALM).unwrap(),
         cokret_sdk::events::kinds::DEVICE_PUSH_ROUTE,
         payload,

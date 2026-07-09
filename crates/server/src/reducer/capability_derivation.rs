@@ -13,7 +13,7 @@ use serde_json::Value;
 
 use super::{ProjectionState, RealmInheritancePolicyState};
 
-pub(crate) const CAPABILITY_GRANT_CELL_PREFIX: &str = "ck:cell:ck.component.capability.grant.v1:";
+pub(crate) const CAPABILITY_GRANT_CELL_PREFIX: &str = "ak:cell:ck.component.capability.grant.v1:";
 
 #[derive(Clone, Debug)]
 pub(crate) struct CapabilityGrantSnapshot {
@@ -81,7 +81,7 @@ pub(crate) fn has_active_realm_link_to_source(
 
 pub(crate) fn inheritance_policy_cell_ref(realm_id: &str) -> Option<CellRef> {
     CellRef::new(format!(
-        "ck:cell:ck.component.realm.inheritance_policy.v1:{realm_id}"
+        "ak:cell:ck.component.realm.inheritance_policy.v1:{realm_id}"
     ))
     .ok()
 }
@@ -91,7 +91,7 @@ pub(crate) fn inheritance_policy_ref_matches(
     realm_id: &str,
     policy_ref: &str,
 ) -> bool {
-    let cell_ref_string = format!("ck:cell:ck.component.realm.inheritance_policy.v1:{realm_id}");
+    let cell_ref_string = format!("ak:cell:ck.component.realm.inheritance_policy.v1:{realm_id}");
     if policy_ref == cell_ref_string {
         return true;
     }
@@ -344,14 +344,14 @@ pub(crate) fn find_capability_grant(
 ///
 /// The Circle HTTP surface (`/_cokret/self/circles/{id}/members`) runs the
 /// real `SolandAuthzEngine::check(sender, "ck.circle.member.manage",
-/// "ck:circle:<id>", …)` — which evaluates the grant's `allowed_circle_ids`
+/// "ak:circle:<id>", …)` — which evaluates the grant's `allowed_circle_ids`
 /// selector — and stamps the result into the operation payload before handing
 /// it to the reducer. The reducer treats this as a fail-closed assertion:
 /// absent / false / mismatched-circle ⇒ not authorised.
 ///
 /// Accepted shapes (any one suffices):
 ///   - `manage_capability_verified: true`
-///   - `actor_capability: { action: "ck.circle.member.manage", circle_id: "ck:circle:…", allowed:
+///   - `actor_capability: { action: "ck.circle.member.manage", circle_id: "ak:circle:…", allowed:
 ///     true }`
 pub(crate) fn payload_asserts_circle_manage(payload: &Value, circle_id: &str) -> bool {
     if payload

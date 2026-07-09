@@ -31,13 +31,13 @@ pub(super) fn require_demo_directory_provider(state: &AppState) -> Result<(), Ap
 
 pub fn demo_organization(realms: &[&RealmDirectoryEntry], service_did: &str) -> Value {
     json!({
-        "organization_id": "ck:org:demo",
+        "organization_id": "ak:org:demo",
         "organization_did": service_did,
-        "handle": "@cokret-demo",
-        "title": "Cokret Demo Organization",
-        "display_name": "Cokret Demo Organization",
+        "handle": "@arkret-demo",
+        "title": "Arkret Demo Organization",
+        "display_name": "Arkret Demo Organization",
         "description": "Demo organization projected by soland",
-        "source_refs": ["ck:event:0196419b-0000-7000-8000-0000000000d0"],
+        "source_refs": ["ak:event:0196419b-0000-7000-8000-0000000000d0"],
         "policy_revision": "local",
         "service_did": service_did,
         "realm_count": realms.len(),
@@ -70,7 +70,7 @@ pub async fn demo_actors(state: &AppState) -> Vec<Value> {
         "did": "did:web:alice.example",
         "handle": "@alice",
         "display_name": "Alice Example",
-        "organization_id": "ck:org:demo",
+        "organization_id": "ak:org:demo",
         "avatar_url": null,
         "presence": {"status": "online", "updated_at": now()},
     })];
@@ -102,7 +102,7 @@ pub async fn demo_actors(state: &AppState) -> Vec<Value> {
             "state": account_state.clone(),
             "account_state": account_state,
             "bio": account.bio,
-            "organization_id": "ck:org:demo",
+            "organization_id": "ak:org:demo",
             "avatar_url": account.avatar_url,
             "presence": presence,
         }));
@@ -146,7 +146,7 @@ pub async fn demo_actors(state: &AppState) -> Vec<Value> {
             "display_name": display_name,
             "state": account_state.clone(),
             "account_state": account_state,
-            "organization_id": "ck:org:demo",
+            "organization_id": "ak:org:demo",
             "avatar_url": null,
             "presence": presence,
         }));

@@ -752,7 +752,7 @@ pub(crate) async fn contact_tombstone(
 
     let consent_revoke_refs = revoked_dots
         .iter()
-        .filter_map(|dot| EventId::new(format!("ck:event:{}", sha256_hex(dot.as_bytes()))).ok())
+        .filter_map(|dot| EventId::new(format!("ak:event:{}", sha256_hex(dot.as_bytes()))).ok())
         .collect::<Vec<_>>();
     json_ok(ContactTombstone {
         tombstone_event_ref,

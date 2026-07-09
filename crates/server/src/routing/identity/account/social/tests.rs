@@ -14,7 +14,7 @@ fn direct_realm_create_payload_is_sdk_schema_valid() {
     let created_at = chrono::Utc.with_ymd_and_hms(2026, 7, 6, 0, 0, 0).unwrap();
     let payload = direct_realm_create_payload(
         &state,
-        cokret_sdk::RealmId::new("ck:realm:01964137-0000-7000-8000-000000000101").unwrap(),
+        cokret_sdk::RealmId::new("ak:realm:01964137-0000-7000-8000-000000000101").unwrap(),
         "did:web:alice.example",
         created_at,
     )
@@ -52,7 +52,7 @@ fn direct_realm_create_payload_is_sdk_schema_valid() {
 #[test]
 fn direct_member_join_payload_is_sdk_schema_valid() {
     let payload = direct_member_join_payload(
-        cokret_sdk::RealmId::new("ck:realm:01964137-0000-7000-8000-000000000101").unwrap(),
+        cokret_sdk::RealmId::new("ak:realm:01964137-0000-7000-8000-000000000101").unwrap(),
         "did:web:bob.example",
     )
     .unwrap();
@@ -67,7 +67,7 @@ fn direct_member_join_payload_is_sdk_schema_valid() {
     );
     assert_eq!(
         payload.get("realm_id").and_then(Value::as_str),
-        Some("ck:realm:01964137-0000-7000-8000-000000000101")
+        Some("ak:realm:01964137-0000-7000-8000-000000000101")
     );
     assert_eq!(
         payload.get("actor_id").and_then(Value::as_str),
@@ -84,8 +84,8 @@ fn direct_member_join_payload_is_sdk_schema_valid() {
 fn direct_strand_create_payload_is_sdk_schema_valid() {
     let created_at = chrono::Utc.with_ymd_and_hms(2026, 7, 6, 0, 0, 0).unwrap();
     let payload = direct_strand_create_payload(
-        cokret_sdk::RealmId::new("ck:realm:01964137-0000-7000-8000-000000000101").unwrap(),
-        "ck:strand:01964137-0000-7000-8000-000000000102",
+        cokret_sdk::RealmId::new("ak:realm:01964137-0000-7000-8000-000000000101").unwrap(),
+        "ak:strand:01964137-0000-7000-8000-000000000102",
         "did:web:alice.example",
         created_at,
     )
@@ -152,7 +152,7 @@ async fn direct_realm_genesis_projects_peer_as_timeline_reader() {
         "version": "1.0",
         "group_id": "mls_test",
         "epoch": 1,
-        "content_type": "application/vnd.cokret.message+json",
+        "content_type": "application/vnd.arkret.message+json",
         "aad_visibility_event_id": "hidden",
         "aad": {
             "realm_id": realm_id,
@@ -201,7 +201,7 @@ async fn direct_realm_genesis_projects_peer_as_timeline_reader() {
     let bob_session = crate::state::SessionRecord {
         token_hash: "test".to_owned(),
         actor: bob.to_owned(),
-        device_id: "ck:device:01904100-0000-7000-8000-000000000001".to_owned(),
+        device_id: "ak:device:01904100-0000-7000-8000-000000000001".to_owned(),
         audience: "test".to_owned(),
         session_public_key: None,
         agent_session: None,

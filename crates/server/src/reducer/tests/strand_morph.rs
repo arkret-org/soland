@@ -10,8 +10,8 @@ use crate::reducer::*;
 fn strand_lifecycle_round_trip() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
-    let realm_id = "ck:realm:01904100-0000-7000-8000-cfc039892036";
-    let strand_id = "ck:strand:01904100-0000-7000-8000-1fb50799ad50";
+    let realm_id = "ak:realm:01904100-0000-7000-8000-cfc039892036";
+    let strand_id = "ak:strand:01904100-0000-7000-8000-1fb50799ad50";
 
     let create_effect = state.apply(
         &make_operation(
@@ -82,8 +82,8 @@ fn strand_lifecycle_round_trip() {
 fn strand_lifecycle_preflight_rejects_illegal_transitions() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
-    let realm_id = "ck:realm:01904100-0000-7000-8000-cfc039892036";
-    let strand_id = "ck:strand:01904100-0000-7000-8000-1fb50799ad51";
+    let realm_id = "ak:realm:01904100-0000-7000-8000-cfc039892036";
+    let strand_id = "ak:strand:01904100-0000-7000-8000-1fb50799ad51";
 
     state.apply(
         &make_operation(
@@ -151,8 +151,8 @@ fn strand_lifecycle_preflight_tolerates_unknown_strand() {
     let state = ProjectionState::new();
     let archive_unknown = make_operation(
         cokret_sdk::events::kinds::STRAND_ARCHIVE,
-        "ck:realm:01904100-0000-7000-8000-cfc039892036",
-        serde_json::json!({ "target_ref": "ck:strand:nope-not-here" }),
+        "ak:realm:01904100-0000-7000-8000-cfc039892036",
+        serde_json::json!({ "target_ref": "ak:strand:nope-not-here" }),
     );
     assert_eq!(
         state.check_strand_lifecycle_transition(&archive_unknown),
@@ -166,8 +166,8 @@ fn strand_lifecycle_preflight_tolerates_unknown_strand() {
 fn morph_lifecycle_round_trip() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
-    let realm_id = "ck:realm:01904100-0000-7000-8000-cfc039892036";
-    let morph_id = "ck:morph:01904100-0000-7000-8000-1fb50799ad60";
+    let realm_id = "ak:realm:01904100-0000-7000-8000-cfc039892036";
+    let morph_id = "ak:morph:01904100-0000-7000-8000-1fb50799ad60";
 
     let create_effect = state.apply(
         &make_operation(
@@ -219,8 +219,8 @@ fn morph_lifecycle_round_trip() {
 fn morph_lifecycle_preflight_rejects_illegal_transitions() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
-    let realm_id = "ck:realm:01904100-0000-7000-8000-cfc039892036";
-    let morph_id = "ck:morph:01904100-0000-7000-8000-1fb50799ad61";
+    let realm_id = "ak:realm:01904100-0000-7000-8000-cfc039892036";
+    let morph_id = "ak:morph:01904100-0000-7000-8000-1fb50799ad61";
 
     state.apply(
         &make_operation(
@@ -288,8 +288,8 @@ fn morph_lifecycle_preflight_tolerates_unknown_morph() {
     let state = ProjectionState::new();
     let archive_unknown = make_operation(
         cokret_sdk::events::kinds::MORPH_ARCHIVE,
-        "ck:realm:01904100-0000-7000-8000-cfc039892036",
-        serde_json::json!({ "target_ref": "ck:morph:nope-not-here" }),
+        "ak:realm:01904100-0000-7000-8000-cfc039892036",
+        serde_json::json!({ "target_ref": "ak:morph:nope-not-here" }),
     );
     assert_eq!(
         state.check_morph_lifecycle_transition(&archive_unknown),
@@ -306,9 +306,9 @@ fn morph_lifecycle_preflight_tolerates_unknown_morph() {
 fn strand_position_events_touch_projection_without_changing_state() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
-    let realm_id = "ck:realm:01904100-0000-7000-8000-cfc039892036";
-    let strand_id = "ck:strand:01904100-0000-7000-8000-2fb50799ad50";
-    let board_space_id = "ck:space:01904100-0000-7000-8000-c10dc0000001";
+    let realm_id = "ak:realm:01904100-0000-7000-8000-cfc039892036";
+    let strand_id = "ak:strand:01904100-0000-7000-8000-2fb50799ad50";
+    let board_space_id = "ak:space:01904100-0000-7000-8000-c10dc0000001";
 
     state.apply(
         &make_operation(
@@ -341,7 +341,7 @@ fn strand_position_events_touch_projection_without_changing_state() {
             serde_json::json!({
                 "strand_id": strand_id,
                 "board_space_id": board_space_id,
-                "target_space_id": "ck:space:01904100-0000-7000-8000-c10dc0000002",
+                "target_space_id": "ak:space:01904100-0000-7000-8000-c10dc0000002",
                 "rank": "a1",
                 "sender": "did:web:alice.example",
             }),
@@ -373,7 +373,7 @@ fn strand_position_events_touch_projection_without_changing_state() {
             serde_json::json!({
                 "strand_id": strand_id,
                 "board_space_id": board_space_id,
-                "space_id": "ck:space:01904100-0000-7000-8000-c10dc0000002",
+                "space_id": "ak:space:01904100-0000-7000-8000-c10dc0000002",
                 "rank": "a2",
                 "sender": "did:web:alice.example",
             }),
@@ -395,16 +395,16 @@ fn strand_position_events_touch_projection_without_changing_state() {
 fn strand_position_events_queue_unknown_strand() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
-    let realm_id = "ck:realm:01904100-0000-7000-8000-cfc039892036";
-    let strand_id = "ck:strand:01904100-0000-7000-8000-2fb50799ad51";
+    let realm_id = "ak:realm:01904100-0000-7000-8000-cfc039892036";
+    let strand_id = "ak:strand:01904100-0000-7000-8000-2fb50799ad51";
     let effect = state.apply(
         &make_operation(
             cokret_sdk::events::kinds::STRAND_MOVE,
             realm_id,
             serde_json::json!({
                 "strand_id": strand_id,
-                "board_space_id": "ck:space:01904100-0000-7000-8000-c10dc0000001",
-                "target_space_id": "ck:space:01904100-0000-7000-8000-c10dc0000002",
+                "board_space_id": "ak:space:01904100-0000-7000-8000-c10dc0000001",
+                "target_space_id": "ak:space:01904100-0000-7000-8000-c10dc0000002",
                 "rank": "a1",
             }),
         ),
@@ -442,8 +442,8 @@ fn strand_position_events_queue_unknown_strand() {
 fn redaction_with_strand_object_ref_flips_to_redacted() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
-    let realm_id = "ck:realm:01904100-0000-7000-8000-cfc039892036";
-    let strand_id = "ck:strand:01904100-0000-7000-8000-3fb50799ad50";
+    let realm_id = "ak:realm:01904100-0000-7000-8000-cfc039892036";
+    let strand_id = "ak:strand:01904100-0000-7000-8000-3fb50799ad50";
 
     state.apply(
         &make_operation(
@@ -467,7 +467,7 @@ fn redaction_with_strand_object_ref_flips_to_redacted() {
             cokret_sdk::events::kinds::REDACTION,
             realm_id,
             serde_json::json!({
-                "target_event_id": "ck:event:01904100-0000-7000-8000-1d10dc000001",
+                "target_event_id": "ak:event:01904100-0000-7000-8000-1d10dc000001",
                 "object_ref": strand_id,
                 "by": "did:web:alice.example",
                 "reason": "policy violation",
@@ -494,8 +494,8 @@ fn redaction_with_strand_object_ref_flips_to_redacted() {
 fn redaction_with_morph_object_ref_flips_to_redacted() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
-    let realm_id = "ck:realm:01904100-0000-7000-8000-cfc039892036";
-    let morph_id = "ck:morph:01904100-0000-7000-8000-3fb50799ad60";
+    let realm_id = "ak:realm:01904100-0000-7000-8000-cfc039892036";
+    let morph_id = "ak:morph:01904100-0000-7000-8000-3fb50799ad60";
 
     state.apply(
         &make_operation(
@@ -518,7 +518,7 @@ fn redaction_with_morph_object_ref_flips_to_redacted() {
             cokret_sdk::events::kinds::REDACTION,
             realm_id,
             serde_json::json!({
-                "target_event_id": "ck:event:01904100-0000-7000-8000-1d10dc000002",
+                "target_event_id": "ak:event:01904100-0000-7000-8000-1d10dc000002",
                 "object_ref": morph_id,
                 "sender": "did:web:alice.example",
             }),
@@ -541,9 +541,9 @@ fn redaction_with_morph_object_ref_flips_to_redacted() {
 fn redaction_preflight_rejects_against_already_terminal() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
-    let realm_id = "ck:realm:01904100-0000-7000-8000-cfc039892036";
-    let strand_id = "ck:strand:01904100-0000-7000-8000-3fb50799ad51";
-    let morph_id = "ck:morph:01904100-0000-7000-8000-3fb50799ad61";
+    let realm_id = "ak:realm:01904100-0000-7000-8000-cfc039892036";
+    let strand_id = "ak:strand:01904100-0000-7000-8000-3fb50799ad51";
+    let morph_id = "ak:morph:01904100-0000-7000-8000-3fb50799ad61";
 
     // Materialise + redact a Strand once (legal first redaction).
     state.apply(
@@ -566,7 +566,7 @@ fn redaction_preflight_rejects_against_already_terminal() {
             cokret_sdk::events::kinds::REDACTION,
             realm_id,
             serde_json::json!({
-                "target_event_id": "ck:event:01904100-0000-7000-8000-1d10dc000003",
+                "target_event_id": "ak:event:01904100-0000-7000-8000-1d10dc000003",
                 "object_ref": strand_id,
             }),
         ),
@@ -582,7 +582,7 @@ fn redaction_preflight_rejects_against_already_terminal() {
         cokret_sdk::events::kinds::REDACTION,
         realm_id,
         serde_json::json!({
-            "target_event_id": "ck:event:01904100-0000-7000-8000-1d10dc000004",
+            "target_event_id": "ak:event:01904100-0000-7000-8000-1d10dc000004",
             "object_ref": strand_id,
         }),
     );
@@ -613,7 +613,7 @@ fn redaction_preflight_rejects_against_already_terminal() {
             cokret_sdk::events::kinds::REDACTION,
             realm_id,
             serde_json::json!({
-                "target_event_id": "ck:event:01904100-0000-7000-8000-1d10dc000005",
+                "target_event_id": "ak:event:01904100-0000-7000-8000-1d10dc000005",
                 "object_ref": morph_id,
             }),
         ),
@@ -623,7 +623,7 @@ fn redaction_preflight_rejects_against_already_terminal() {
         cokret_sdk::events::kinds::REDACTION,
         realm_id,
         serde_json::json!({
-            "target_event_id": "ck:event:01904100-0000-7000-8000-1d10dc000006",
+            "target_event_id": "ak:event:01904100-0000-7000-8000-1d10dc000006",
             "object_ref": morph_id,
         }),
     );
@@ -643,8 +643,8 @@ fn redaction_preflight_rejects_against_already_terminal() {
 fn strand_tracks_update_touches_active_strand_only() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
-    let realm_id = "ck:realm:01904100-0000-7000-8000-cfc039892036";
-    let strand_id = "ck:strand:01904100-0000-7000-8000-4fb50799ad50";
+    let realm_id = "ak:realm:01904100-0000-7000-8000-cfc039892036";
+    let strand_id = "ak:strand:01904100-0000-7000-8000-4fb50799ad50";
 
     state.apply(
         &make_operation(
@@ -693,8 +693,8 @@ fn strand_tracks_update_touches_active_strand_only() {
 fn strand_tracks_update_projects_discussion_enabled_state() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
-    let realm_id = "ck:realm:01904100-0000-7000-8000-cfc039892036";
-    let strand_id = "ck:strand:01904100-0000-7000-8000-4fb50799ad52";
+    let realm_id = "ak:realm:01904100-0000-7000-8000-cfc039892036";
+    let strand_id = "ak:strand:01904100-0000-7000-8000-4fb50799ad52";
 
     state.apply(
         &make_operation(
@@ -754,8 +754,8 @@ fn strand_tracks_update_projects_discussion_enabled_state() {
 fn strand_tracks_preflight_rejects_when_strand_archived() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
-    let realm_id = "ck:realm:01904100-0000-7000-8000-cfc039892036";
-    let strand_id = "ck:strand:01904100-0000-7000-8000-4fb50799ad51";
+    let realm_id = "ak:realm:01904100-0000-7000-8000-cfc039892036";
+    let strand_id = "ak:strand:01904100-0000-7000-8000-4fb50799ad51";
 
     state.apply(
         &make_operation(
@@ -812,9 +812,9 @@ fn strand_tracks_preflight_tolerates_unknown_strand() {
     let state = ProjectionState::new();
     let tracks_op = make_operation(
         cokret_sdk::events::kinds::STRAND_TRACKS_UPDATE,
-        "ck:realm:01904100-0000-7000-8000-cfc039892036",
+        "ak:realm:01904100-0000-7000-8000-cfc039892036",
         serde_json::json!({
-            "strand_id": "ck:strand:nope-not-here",
+            "strand_id": "ak:strand:nope-not-here",
             "patch": {"tracks": {"synthesis": {"profile": "synthesis"}}}
         }),
     );
@@ -827,14 +827,14 @@ fn strand_tracks_preflight_tolerates_unknown_strand() {
 #[test]
 fn redaction_preflight_tolerates_unknown_object_or_message_path() {
     let state = ProjectionState::new();
-    let realm_id = "ck:realm:01904100-0000-7000-8000-cfc039892036";
+    let realm_id = "ak:realm:01904100-0000-7000-8000-cfc039892036";
     // Unknown object_ref.
     let unknown = make_operation(
         cokret_sdk::events::kinds::REDACTION,
         realm_id,
         serde_json::json!({
-            "target_event_id": "ck:event:01904100-0000-7000-8000-1d10dc000007",
-            "object_ref": "ck:strand:nope-not-here",
+            "target_event_id": "ak:event:01904100-0000-7000-8000-1d10dc000007",
+            "object_ref": "ak:strand:nope-not-here",
         }),
     );
     assert_eq!(state.check_redaction_target_transition(&unknown), Ok(()));
@@ -843,7 +843,7 @@ fn redaction_preflight_tolerates_unknown_object_or_message_path() {
         cokret_sdk::events::kinds::REDACTION,
         realm_id,
         serde_json::json!({
-            "target_event_id": "ck:event:01904100-0000-7000-8000-1d10dc000008",
+            "target_event_id": "ak:event:01904100-0000-7000-8000-1d10dc000008",
         }),
     );
     assert_eq!(

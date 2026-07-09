@@ -293,7 +293,7 @@ pub(super) fn validate_agent_act_on_behalf_authorization_ref(
         .and_then(Value::as_str)
         .filter(|value| !value.trim().is_empty())
         .ok_or("agent_act_on_behalf_authorization_ref_missing")?;
-    if !authorization_ref.starts_with("ck:grant:") {
+    if !authorization_ref.starts_with("ak:grant:") {
         return Err("agent_act_on_behalf_authorization_ref_invalid");
     }
     let Some(action) = agent_participation_action(operation) else {
@@ -568,7 +568,7 @@ pub(super) fn validate_agent_context_authorization_ref(
     agent_principal_id: &str,
     authorization_ref: &str,
 ) -> Result<(), &'static str> {
-    if !authorization_ref.starts_with("ck:grant:") {
+    if !authorization_ref.starts_with("ak:grant:") {
         return Err("agent_context_authorization_ref_invalid");
     }
     let Some(action) = agent_participation_action(operation) else {

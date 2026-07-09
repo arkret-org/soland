@@ -1,7 +1,7 @@
 use super::*;
-const REALM: &str = "ck:realm:01904100-0000-7000-8000-cfc039892036";
+const REALM: &str = "ak:realm:01904100-0000-7000-8000-cfc039892036";
 const AGENT: &str = "did:web:agent.example";
-const REQUEST: &str = "ck:agent-action-request:01904100-0000-7000-8000-cfc039892037";
+const REQUEST: &str = "ak:agent-action-request:01904100-0000-7000-8000-cfc039892037";
 
 fn agent_endpoint() -> Operation {
     make_operation(
@@ -34,7 +34,7 @@ fn action_approve(request_id: &str) -> Operation {
         cokret_sdk::events::kinds::AGENT_ACTION_APPROVE,
         REALM,
         serde_json::json!({
-            "approval_id": "ck:agent-approval:01904100-0000-7000-8000-cfc039892038",
+            "approval_id": "ak:agent-approval:01904100-0000-7000-8000-cfc039892038",
             "request_id": request_id,
             "agent_principal_id": AGENT,
             "controller_principal_id": "did:web:controller.example",

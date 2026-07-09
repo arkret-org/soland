@@ -25,7 +25,7 @@ fn test_config() -> crate::config::AppConfig {
 fn state_with_direct_binding() -> (AppState, cokret_sdk::RealmId) {
     let state = AppState::new(test_config(), Db { pool: None });
     let realm_id =
-        cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-000000000601".to_owned())
+        cokret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-000000000601".to_owned())
             .unwrap();
     let now = chrono::Utc::now();
     state.direct_conversation_bindings.lock().insert(
@@ -36,8 +36,8 @@ fn state_with_direct_binding() -> (AppState, cokret_sdk::RealmId) {
                 "did:web:bob.example".to_owned(),
             ],
             realm_id: realm_id.to_string(),
-            main_strand_id: "ck:strand:01904100-0000-7000-8000-000000000601".to_owned(),
-            binding_event_ref: "ck:event:01904100-0000-7000-8000-000000000601".to_owned(),
+            main_strand_id: "ak:strand:01904100-0000-7000-8000-000000000601".to_owned(),
+            binding_event_ref: "ak:event:01904100-0000-7000-8000-000000000601".to_owned(),
             state: "active".to_owned(),
             created_at: now,
             updated_at: now,
@@ -53,7 +53,7 @@ fn op(
     payload: serde_json::Value,
 ) -> Operation {
     Operation::create(
-        cokret_sdk::OperationId::new(format!("ck:operation:01904100-0000-7000-8000-{seed}"))
+        cokret_sdk::OperationId::new(format!("ak:operation:01904100-0000-7000-8000-{seed}"))
             .unwrap(),
         realm_id,
         kind,
@@ -70,7 +70,7 @@ fn service_attested_device_authorize_binding_accepts_projection_metadata() {
     let state = test_state();
     let payload = json!({
         "principal_id": "did:webvh:zQmZcDaFwUR8yQCZRkXoYEBi9hdzMSCCLASUVdwT1J4Qyc6:local.host:webvh:01kvqwpxssfq3bqm15rcd0g99x",
-        "device_id": "ck:device:019eefcb-5882-7861-bc30-3033fa32dcf6",
+        "device_id": "ak:device:019eefcb-5882-7861-bc30-3033fa32dcf6",
         "device_public_key": "z6MkjHNtpwuhc2QSXzkf4DWoWp7eSMKB9PzfdnvaLB7kb3dG",
         "hpke_key": "z6LSgy7T8CEsMDMzk1e4EBFVX8CDXWWzvkFZWSXhsC97zjcM",
         "algorithms": ["ck.hpke_x25519_aead_chacha20poly1305.v1", "ck.mls.v1"],
@@ -81,7 +81,7 @@ fn service_attested_device_authorize_binding_accepts_projection_metadata() {
             "authority_did": "did:key:z6MknBuwKMPAzbhp6EwCnaxsEDk4G2KFeWRu273gYVuTY5jw",
             "authorization_ref": "did:webvh:zQmZcDaFwUR8yQCZRkXoYEBi9hdzMSCCLASUVdwT1J4Qyc6:local.host:webvh:01kvqwpxssfq3bqm15rcd0g99x#enrollment-authority"
         },
-        "event_id": "ck:event:019eefcb-7fb2-7890-bffd-1f2035356fbf",
+        "event_id": "ak:event:019eefcb-7fb2-7890-bffd-1f2035356fbf",
         "sender": "did:webvh:zQmZcDaFwUR8yQCZRkXoYEBi9hdzMSCCLASUVdwT1J4Qyc6:local.host:webvh:01kvqwpxssfq3bqm15rcd0g99x",
         "hlc": "019eefcb7d18-0000-8adcfdb5",
         "executed_by": "did:key:z6MknBuwKMPAzbhp6EwCnaxsEDk4G2KFeWRu273gYVuTY5jw",
@@ -100,7 +100,7 @@ fn signed_service_attested_device_authorize_payload(
         cokret_sdk::ed25519_pubkey_to_did_key_multibase(device_signer.verifying_key().as_bytes());
     let mut payload = json!({
         "principal_id": "did:webvh:zQmZcDaFwUR8yQCZRkXoYEBi9hdzMSCCLASUVdwT1J4Qyc6:local.host:webvh:01kvqwpxssfq3bqm15rcd0g99x",
-        "device_id": "ck:device:019eefcb-5882-7861-bc30-3033fa32dcf6",
+        "device_id": "ak:device:019eefcb-5882-7861-bc30-3033fa32dcf6",
         "device_public_key": device_public_key,
         "hpke_key": "z6LSgy7T8CEsMDMzk1e4EBFVX8CDXWWzvkFZWSXhsC97zjcM",
         "algorithms": ["ck.hpke_x25519_aead_chacha20poly1305.v1", "ck.mls.v1"],
@@ -203,7 +203,7 @@ fn seed_read_receipt_inheritance(
     let now = chrono::Utc::now();
     let mut projection = state.projection.lock();
     let cell_id = cokret_sdk::CellRef::new(format!(
-        "ck:cell:ck.component.realm.read_receipt_policy.v1:{parent_realm_id}"
+        "ak:cell:ck.component.realm.read_receipt_policy.v1:{parent_realm_id}"
     ))
     .expect("valid read receipt policy cell ref");
     projection
@@ -227,7 +227,7 @@ fn seed_read_receipt_inheritance(
         child_realm_id.to_owned(),
         crate::reducer::RealmInheritancePolicyState {
             realm_id: child_realm_id.to_owned(),
-            operation_id: "ck:operation:01904100-0000-7000-8000-000000009901".to_owned(),
+            operation_id: "ak:operation:01904100-0000-7000-8000-000000009901".to_owned(),
             source_realm_id: parent_realm_id.to_owned(),
             allowed_policies: vec!["ck.realm.read_receipt_policy".to_owned()],
             allowed_capability_bundles: Vec::new(),
@@ -240,9 +240,9 @@ fn seed_read_receipt_inheritance(
 #[tokio::test]
 async fn read_receipt_child_policy_rejects_visibility_loosening() {
     let state = test_state();
-    let parent_realm = "ck:realm:01904100-0000-7000-8000-000000009911";
+    let parent_realm = "ak:realm:01904100-0000-7000-8000-000000009911";
     let child_realm =
-        cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-000000009912".to_owned())
+        cokret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-000000009912".to_owned())
             .unwrap();
     seed_read_receipt_inheritance(
         &state,
@@ -275,9 +275,9 @@ async fn read_receipt_child_policy_rejects_visibility_loosening() {
 #[tokio::test]
 async fn read_receipt_child_policy_rejects_required_floor_without_escape() {
     let state = test_state();
-    let parent_realm = "ck:realm:01904100-0000-7000-8000-000000009921";
+    let parent_realm = "ak:realm:01904100-0000-7000-8000-000000009921";
     let child_realm =
-        cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-000000009922".to_owned())
+        cokret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-000000009922".to_owned())
             .unwrap();
     seed_read_receipt_inheritance(
         &state,
@@ -310,9 +310,9 @@ async fn read_receipt_child_policy_rejects_required_floor_without_escape() {
 #[tokio::test]
 async fn read_receipt_child_policy_allows_required_floor_escape() {
     let state = test_state();
-    let parent_realm = "ck:realm:01904100-0000-7000-8000-000000009931";
+    let parent_realm = "ak:realm:01904100-0000-7000-8000-000000009931";
     let child_realm =
-        cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-000000009932".to_owned())
+        cokret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-000000009932".to_owned())
             .unwrap();
     seed_read_receipt_inheritance(
         &state,
@@ -343,9 +343,9 @@ async fn read_receipt_child_policy_allows_required_floor_escape() {
 #[tokio::test]
 async fn read_receipt_child_policy_rejects_any_change_when_overrides_disabled() {
     let state = test_state();
-    let parent_realm = "ck:realm:01904100-0000-7000-8000-000000009941";
+    let parent_realm = "ak:realm:01904100-0000-7000-8000-000000009941";
     let child_realm =
-        cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-000000009942".to_owned())
+        cokret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-000000009942".to_owned())
             .unwrap();
     seed_read_receipt_inheritance(
         &state,
@@ -403,10 +403,10 @@ async fn put_agent_participation_ceiling(
 async fn strand_agent_participation_ceiling_cannot_widen_circle_parent() {
     let state = test_state();
     let realm_id =
-        cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-000000009951".to_owned())
+        cokret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-000000009951".to_owned())
             .unwrap();
-    let circle_id = "ck:circle:01904100-0000-7000-8000-000000009952";
-    let strand_id = "ck:strand:01904100-0000-7000-8000-000000009953";
+    let circle_id = "ak:circle:01904100-0000-7000-8000-000000009952";
+    let strand_id = "ak:strand:01904100-0000-7000-8000-000000009953";
     put_agent_participation_ceiling(
         &state,
         "circle",
@@ -426,7 +426,7 @@ async fn strand_agent_participation_ceiling_cannot_widen_circle_parent() {
             "sender": "did:web:alice.example",
             "object": {
                 "id": strand_id,
-                "realm_id": "ck:realm:01904100-0000-7000-8000-000000009951",
+                "realm_id": "ak:realm:01904100-0000-7000-8000-000000009951",
                 "scope_circle_id": circle_id,
                 "metadata": {"title": "Scoped"},
                 "agent_participation": {
@@ -450,11 +450,11 @@ async fn strand_agent_participation_ceiling_cannot_widen_circle_parent() {
 async fn strand_selection_is_capped_by_enclosing_circle_ceiling() {
     let state = test_state();
     let realm_id =
-        cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-000000009961".to_owned())
+        cokret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-000000009961".to_owned())
             .unwrap();
-    let circle_id = "ck:circle:01904100-0000-7000-8000-000000009962";
+    let circle_id = "ak:circle:01904100-0000-7000-8000-000000009962";
     let strand_id =
-        cokret_sdk::StrandId::new("ck:strand:01904100-0000-7000-8000-000000009963".to_owned())
+        cokret_sdk::StrandId::new("ak:strand:01904100-0000-7000-8000-000000009963".to_owned())
             .unwrap();
     {
         let mut projection = state.projection.lock();
@@ -532,7 +532,7 @@ async fn register_agent_selection(
         .expect("agent record");
     let realm_uuid = realm_id
         .as_str()
-        .strip_prefix("ck:realm:")
+        .strip_prefix("ak:realm:")
         .expect("realm id prefix");
     state
         .persistence
@@ -627,10 +627,10 @@ fn insert_approved_agent_action(
             status: crate::reducer::AgentActionRequestStatus::Approved,
             requested_at: message.created_at - chrono::Duration::minutes(1),
             resolved_at: Some(message.created_at),
-            resolution_event_id: Some("ck:event:01904100-0000-7000-8000-0000000007aa".to_owned()),
+            resolution_event_id: Some("ak:event:01904100-0000-7000-8000-0000000007aa".to_owned()),
             cancel_reason: None,
             approval: Some(crate::reducer::AgentActionApprovalProjection {
-                approval_id: "ck:agent_approval:01904100-0000-7000-8000-0000000007aa".to_owned(),
+                approval_id: "ak:agent_approval:01904100-0000-7000-8000-0000000007aa".to_owned(),
                 proposed_action: kinds::canonical_kind_string(message),
                 target: json!({
                     "kind": "realm",
@@ -655,7 +655,7 @@ async fn insert_agent_interop_session_start(
         .persistence
         .events()
         .put(CanonicalEventRecord {
-            event_id: format!("ck:event:01904100-0000-7000-8000-{seed}"),
+            event_id: format!("ak:event:01904100-0000-7000-8000-{seed}"),
             actor_id: actor.to_owned(),
             actor_seq: 1,
             realm_id: Some(realm_id.to_string()),
@@ -672,7 +672,7 @@ async fn insert_agent_interop_session_start(
                     "session_id": session_id,
                     "counterparty_agent": "did:web:remote-agent.example",
                     "protocol": "mcp",
-                    "capability_grant": "ck:grant:01904100-0000-7000-8000-0000000000ff"
+                    "capability_grant": "ak:grant:01904100-0000-7000-8000-0000000000ff"
                 }
             }),
             received_at: chrono::Utc::now(),
@@ -690,7 +690,7 @@ async fn active_direct_conversation_rejects_invite_space_and_third_party_member(
         "000000000601",
         cokret_sdk::events::kinds::INVITE_CREATE,
         json!({
-            "invite_id": "ck:invite:01904100-0000-7000-8000-000000000601",
+            "invite_id": "ak:invite:01904100-0000-7000-8000-000000000601",
             "inviter": "did:web:alice.example",
             "invitee": "did:web:charlie.example",
             "invite_delivery_target": {
@@ -712,7 +712,7 @@ async fn active_direct_conversation_rejects_invite_space_and_third_party_member(
         "000000000602",
         cokret_sdk::events::kinds::SPACE_CREATE,
         json!({
-            "space_id": "ck:space:01904100-0000-7000-8000-000000000602",
+            "space_id": "ak:space:01904100-0000-7000-8000-000000000602",
             "title": "Third participant space"
         }),
     );
@@ -745,7 +745,7 @@ async fn active_direct_conversation_rejects_invite_space_and_third_party_member(
 async fn act_on_behalf_agent_requires_participation_bit() {
     let state = test_state();
     let realm_id =
-        cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-000000000701".to_owned())
+        cokret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-000000000701".to_owned())
             .unwrap();
     let agent = "did:web:agent.example";
     register_agent_selection(&state, &realm_id, agent, true, false).await;
@@ -777,7 +777,7 @@ async fn act_on_behalf_agent_requires_participation_bit() {
 async fn act_on_behalf_agent_requires_authorization_ref_covering_action() {
     let state = test_state();
     let realm_id =
-        cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-000000000702".to_owned())
+        cokret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-000000000702".to_owned())
             .unwrap();
     let agent = "did:web:agent.example";
     register_agent_selection(&state, &realm_id, agent, true, true).await;
@@ -809,7 +809,7 @@ async fn act_on_behalf_agent_requires_authorization_ref_covering_action() {
 async fn act_on_behalf_agent_non_message_write_requires_authorization_ref() {
     let state = test_state();
     let realm_id =
-        cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-0000000007a2".to_owned())
+        cokret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-0000000007a2".to_owned())
             .unwrap();
     let agent = "did:web:agent.example";
     register_agent_selection(&state, &realm_id, agent, true, true).await;
@@ -821,7 +821,7 @@ async fn act_on_behalf_agent_non_message_write_requires_authorization_ref() {
             "sender": "did:web:alice.example",
             "executed_by": agent,
             "object": {
-                "id": "ck:strand:01904100-0000-7000-8000-0000000007a2",
+                "id": "ak:strand:01904100-0000-7000-8000-0000000007a2",
                 "metadata": {"title": "Work"}
             }
         }),
@@ -839,7 +839,7 @@ async fn act_on_behalf_agent_non_message_write_requires_authorization_ref() {
 async fn act_on_behalf_agent_strand_write_requires_agent_context() {
     let state = test_state();
     let realm_id =
-        cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-0000000007c1".to_owned())
+        cokret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-0000000007c1".to_owned())
             .unwrap();
     let agent = "did:web:agent.example";
     register_agent_selection(&state, &realm_id, agent, true, true).await;
@@ -860,7 +860,7 @@ async fn act_on_behalf_agent_strand_write_requires_agent_context() {
             "executed_by": agent,
             "authorization_ref": grant.grant_id,
             "object": {
-                "id": "ck:strand:01904100-0000-7000-8000-0000000007c1",
+                "id": "ak:strand:01904100-0000-7000-8000-0000000007c1",
                 "metadata": {"title": "Work"}
             }
         }),
@@ -878,7 +878,7 @@ async fn act_on_behalf_agent_strand_write_requires_agent_context() {
 async fn native_agent_member_target_uses_sender_for_agent_write_detection() {
     let state = test_state();
     let realm_id =
-        cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-0000000007b1".to_owned())
+        cokret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-0000000007b1".to_owned())
             .unwrap();
     let agent = "did:web:agent.example";
     register_agent_selection(&state, &realm_id, agent, true, true).await;
@@ -890,7 +890,7 @@ async fn native_agent_member_target_uses_sender_for_agent_write_detection() {
             "sender": "did:web:alice.example",
             "actor_id": agent,
             "membership": "join",
-            "realm_id": "ck:realm:01904100-0000-7000-8000-0000000007b1",
+            "realm_id": "ak:realm:01904100-0000-7000-8000-0000000007b1",
             "delivery_status": "unroutable"
         }),
     );
@@ -904,7 +904,7 @@ async fn native_agent_member_target_uses_sender_for_agent_write_detection() {
 async fn act_on_behalf_agent_relation_write_rejects_context_authorization_mismatch() {
     let state = test_state();
     let realm_id =
-        cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-0000000007c2".to_owned())
+        cokret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-0000000007c2".to_owned())
             .unwrap();
     let agent = "did:web:agent.example";
     register_agent_selection(&state, &realm_id, agent, true, true).await;
@@ -933,10 +933,10 @@ async fn act_on_behalf_agent_relation_write_rejects_context_authorization_mismat
             "executed_by": agent,
             "authorization_ref": envelope_grant.grant_id,
             "agent_context": agent_context(agent, context_grant.grant_id.as_str()),
-            "relation_id": "ck:relation:01904100-0000-7000-8000-0000000007c2",
+            "relation_id": "ak:relation:01904100-0000-7000-8000-0000000007c2",
             "relation_kind": "references",
-            "from_ref": "ck:strand:01904100-0000-7000-8000-0000000007c2",
-            "to_ref": "ck:strand:01904100-0000-7000-8000-0000000007c3"
+            "from_ref": "ak:strand:01904100-0000-7000-8000-0000000007c2",
+            "to_ref": "ak:strand:01904100-0000-7000-8000-0000000007c3"
         }),
     );
 
@@ -952,7 +952,7 @@ async fn act_on_behalf_agent_relation_write_rejects_context_authorization_mismat
 async fn provenance_actor_kind_agent_requires_agent_context_for_non_message_write() {
     let state = test_state();
     let realm_id =
-        cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-0000000007c3".to_owned())
+        cokret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-0000000007c3".to_owned())
             .unwrap();
     let operation = op(
         realm_id,
@@ -963,10 +963,10 @@ async fn provenance_actor_kind_agent_requires_agent_context_for_non_message_writ
             "provenance": {
                 "actor_kind": "agent"
             },
-            "relation_id": "ck:relation:01904100-0000-7000-8000-0000000007c3",
+            "relation_id": "ak:relation:01904100-0000-7000-8000-0000000007c3",
             "relation_kind": "references",
-            "from_ref": "ck:strand:01904100-0000-7000-8000-0000000007c4",
-            "to_ref": "ck:strand:01904100-0000-7000-8000-0000000007c5"
+            "from_ref": "ak:strand:01904100-0000-7000-8000-0000000007c4",
+            "to_ref": "ak:strand:01904100-0000-7000-8000-0000000007c5"
         }),
     );
 
@@ -982,7 +982,7 @@ async fn provenance_actor_kind_agent_requires_agent_context_for_non_message_writ
 async fn act_on_behalf_agent_view_write_allows_valid_agent_context_and_approval() {
     let state = test_state();
     let realm_id =
-        cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-0000000007c4".to_owned())
+        cokret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-0000000007c4".to_owned())
             .unwrap();
     let agent = "did:web:agent.example";
     register_agent_selection(&state, &realm_id, agent, true, true).await;
@@ -1004,7 +1004,7 @@ async fn act_on_behalf_agent_view_write_allows_valid_agent_context_and_approval(
             "executed_by": agent,
             "authorization_ref": grant_id.as_str(),
             "agent_context": agent_context(agent, grant_id.as_str()),
-            "view_id": "ck:view:01904100-0000-7000-8000-0000000007c4",
+            "view_id": "ak:view:01904100-0000-7000-8000-0000000007c4",
             "approval_request_id": "request-7c4",
             "approval_nonce": "nonce-7c4"
         }),
@@ -1020,7 +1020,7 @@ async fn act_on_behalf_agent_view_write_allows_valid_agent_context_and_approval(
 async fn act_on_behalf_agent_unknown_kind_rejects_authorization_action() {
     let state = test_state();
     let realm_id =
-        cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-0000000007c5".to_owned())
+        cokret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-0000000007c5".to_owned())
             .unwrap();
     let agent = "did:web:agent.example";
     register_agent_selection(&state, &realm_id, agent, true, true).await;
@@ -1057,7 +1057,7 @@ async fn act_on_behalf_agent_unknown_kind_rejects_authorization_action() {
 async fn reply_agent_unknown_kind_rejects_context_authorization_action() {
     let state = test_state();
     let realm_id =
-        cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-0000000007c6".to_owned())
+        cokret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-0000000007c6".to_owned())
             .unwrap();
     let agent = "did:web:agent.example";
     register_agent_selection(&state, &realm_id, agent, true, true).await;
@@ -1092,7 +1092,7 @@ async fn reply_agent_unknown_kind_rejects_context_authorization_action() {
 async fn reply_agent_lifecycle_state_blocks_writes_even_with_participation() {
     let state = test_state();
     let realm_id =
-        cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-0000000007c7".to_owned())
+        cokret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-0000000007c7".to_owned())
             .unwrap();
     let agent = "did:web:agent.example";
     register_agent_selection(&state, &realm_id, agent, true, false).await;
@@ -1132,7 +1132,7 @@ async fn reply_agent_lifecycle_state_blocks_writes_even_with_participation() {
 async fn reply_agent_projected_deactivation_blocks_writes_even_with_active_record() {
     let state = test_state();
     let realm_id =
-        cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-0000000007c8".to_owned())
+        cokret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-0000000007c8".to_owned())
             .unwrap();
     let agent = "did:web:agent.example";
     register_agent_selection(&state, &realm_id, agent, true, false).await;
@@ -1162,7 +1162,7 @@ async fn reply_agent_projected_deactivation_blocks_writes_even_with_active_recor
 async fn profile_accountable_principal_requires_active_grant() {
     let state = test_state();
     let realm_id =
-        cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-0000000007a3".to_owned())
+        cokret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-0000000007a3".to_owned())
             .unwrap();
     let profile = op(
         realm_id,
@@ -1187,7 +1187,7 @@ async fn profile_accountable_principal_requires_active_grant() {
 async fn profile_accountable_principal_rejects_batch_grant_signed_by_other_actor() {
     let state = test_state();
     let realm_id =
-        cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-0000000007a4".to_owned())
+        cokret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-0000000007a4".to_owned())
             .unwrap();
     let profile = op(
         realm_id.clone(),
@@ -1226,13 +1226,13 @@ async fn profile_accountable_principal_rejects_batch_grant_signed_by_other_actor
 async fn profile_accountable_principal_rejects_stored_grant_signed_by_other_actor() {
     let state = test_state();
     let realm_id =
-        cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-0000000007a6".to_owned())
+        cokret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-0000000007a6".to_owned())
             .unwrap();
     state
         .persistence
         .events()
         .put(CanonicalEventRecord {
-            event_id: "ck:event:01904100-0000-7000-8000-0000000007a6".to_owned(),
+            event_id: "ak:event:01904100-0000-7000-8000-0000000007a6".to_owned(),
             actor_id: "did:web:mallory.example".to_owned(),
             actor_seq: 1,
             realm_id: Some(realm_id.to_string()),
@@ -1280,7 +1280,7 @@ async fn profile_accountable_principal_rejects_stored_grant_signed_by_other_acto
 async fn circle_member_manage_rejects_forged_verdict_without_grant() {
     let state = test_state();
     let realm_id =
-        cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-000000000881".to_owned())
+        cokret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-000000000881".to_owned())
             .unwrap();
     let member_add = op(
         realm_id,
@@ -1288,13 +1288,13 @@ async fn circle_member_manage_rejects_forged_verdict_without_grant() {
         cokret_sdk::events::kinds::CIRCLE_MEMBER_STATE,
         json!({
             "sender": "did:web:alice.example",
-            "circle_id": "ck:circle:01904100-0000-7000-8000-000000000881",
+            "circle_id": "ak:circle:01904100-0000-7000-8000-000000000881",
             "actor_id": "did:web:bob.example",
             "membership": "join",
             "manage_capability_verified": true,
             "actor_capability": {
                 "action": "ck.circle.member.manage",
-                "circle_id": "ck:circle:01904100-0000-7000-8000-000000000881",
+                "circle_id": "ak:circle:01904100-0000-7000-8000-000000000881",
                 "allowed": true
             }
         }),
@@ -1312,9 +1312,9 @@ async fn circle_member_manage_rejects_forged_verdict_without_grant() {
 async fn circle_member_manage_allows_explicit_circle_scoped_grant() {
     let state = test_state();
     let realm_id =
-        cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-000000000882".to_owned())
+        cokret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-000000000882".to_owned())
             .unwrap();
-    let circle_id = "ck:circle:01904100-0000-7000-8000-000000000882";
+    let circle_id = "ak:circle:01904100-0000-7000-8000-000000000882";
     grant_circle_action(
         &state,
         &realm_id,
@@ -1349,9 +1349,9 @@ async fn circle_member_manage_allows_explicit_circle_scoped_grant() {
 async fn circle_lifecycle_requires_circle_manage_grant() {
     let state = test_state();
     let realm_id =
-        cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-000000000883".to_owned())
+        cokret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-000000000883".to_owned())
             .unwrap();
-    let circle_id = "ck:circle:01904100-0000-7000-8000-000000000883";
+    let circle_id = "ak:circle:01904100-0000-7000-8000-000000000883";
     let tombstone = op(
         realm_id.clone(),
         "000000000883",
@@ -1385,9 +1385,9 @@ async fn circle_lifecycle_requires_circle_manage_grant() {
 async fn agent_interop_session_status_allows_start_actor_in_batch() {
     let state = test_state();
     let realm_id =
-        cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-0000000007b1".to_owned())
+        cokret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-0000000007b1".to_owned())
             .unwrap();
-    let session_id = "ck:agent_interop_session:01904100-0000-7000-8000-0000000007b1";
+    let session_id = "ak:agent_interop_session:01904100-0000-7000-8000-0000000007b1";
     let start = op(
         realm_id.clone(),
         "0000000007b1",
@@ -1397,7 +1397,7 @@ async fn agent_interop_session_status_allows_start_actor_in_batch() {
             "session_id": session_id,
             "counterparty_agent": "did:web:remote-agent.example",
             "protocol": "mcp",
-            "capability_grant": "ck:grant:01904100-0000-7000-8000-0000000007b1"
+            "capability_grant": "ak:grant:01904100-0000-7000-8000-0000000007b1"
         }),
     );
     let status = op(
@@ -1420,9 +1420,9 @@ async fn agent_interop_session_status_allows_start_actor_in_batch() {
 async fn agent_interop_session_status_rejects_other_actor() {
     let state = test_state();
     let realm_id =
-        cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-0000000007b3".to_owned())
+        cokret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-0000000007b3".to_owned())
             .unwrap();
-    let session_id = "ck:agent_interop_session:01904100-0000-7000-8000-0000000007b3";
+    let session_id = "ak:agent_interop_session:01904100-0000-7000-8000-0000000007b3";
     insert_agent_interop_session_start(
         &state,
         &realm_id,
@@ -1461,9 +1461,9 @@ async fn agent_interop_session_status_rejects_other_actor() {
 async fn agent_interop_session_status_rejects_realm_grant_without_session_scope() {
     let state = test_state();
     let realm_id =
-        cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-0000000007b5".to_owned())
+        cokret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-0000000007b5".to_owned())
             .unwrap();
-    let session_id = "ck:agent_interop_session:01904100-0000-7000-8000-0000000007b5";
+    let session_id = "ak:agent_interop_session:01904100-0000-7000-8000-0000000007b5";
     insert_agent_interop_session_start(
         &state,
         &realm_id,
@@ -1503,9 +1503,9 @@ async fn agent_interop_session_status_rejects_realm_grant_without_session_scope(
 async fn agent_interop_session_status_allows_session_scoped_delegate() {
     let state = test_state();
     let realm_id =
-        cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-0000000007b7".to_owned())
+        cokret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-0000000007b7".to_owned())
             .unwrap();
-    let session_id = "ck:agent_interop_session:01904100-0000-7000-8000-0000000007b7";
+    let session_id = "ak:agent_interop_session:01904100-0000-7000-8000-0000000007b7";
     insert_agent_interop_session_start(
         &state,
         &realm_id,
@@ -1546,7 +1546,7 @@ async fn agent_interop_session_status_allows_session_scoped_delegate() {
 async fn act_on_behalf_agent_allows_effective_selection_and_active_grant() {
     let state = test_state();
     let realm_id =
-        cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-000000000703".to_owned())
+        cokret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-000000000703".to_owned())
             .unwrap();
     let agent = "did:web:agent.example";
     register_agent_selection(&state, &realm_id, agent, true, true).await;
@@ -1576,7 +1576,7 @@ async fn act_on_behalf_agent_allows_effective_selection_and_active_grant() {
 async fn act_on_behalf_agent_requires_fresh_approval_request() {
     let state = test_state();
     let realm_id =
-        cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-000000000704".to_owned())
+        cokret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-000000000704".to_owned())
             .unwrap();
     let agent = "did:web:agent.example";
     register_agent_selection(&state, &realm_id, agent, true, true).await;
@@ -1608,7 +1608,7 @@ async fn act_on_behalf_agent_requires_fresh_approval_request() {
 async fn act_on_behalf_agent_consumes_approval_nonce_once() {
     let state = test_state();
     let realm_id =
-        cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-000000000705".to_owned())
+        cokret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-000000000705".to_owned())
             .unwrap();
     let agent = "did:web:agent.example";
     register_agent_selection(&state, &realm_id, agent, true, true).await;
@@ -1644,10 +1644,10 @@ async fn act_on_behalf_agent_consumes_approval_nonce_once() {
 async fn circle_scoped_relation_update_and_delete_require_circle_membership() {
     let state = test_state();
     let realm_id =
-        cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-000000000801".to_owned())
+        cokret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-000000000801".to_owned())
             .unwrap();
-    let circle_id = "ck:circle:01904100-0000-7000-8000-000000000801";
-    let relation_id = "ck:relation:01904100-0000-7000-8000-000000000801";
+    let circle_id = "ak:circle:01904100-0000-7000-8000-000000000801";
+    let relation_id = "ak:relation:01904100-0000-7000-8000-000000000801";
     let now = chrono::Utc::now();
     {
         let mut projection = state.projection.lock();
@@ -1683,11 +1683,11 @@ async fn circle_scoped_relation_update_and_delete_require_circle_membership() {
                 realm_id: realm_id.to_string(),
                 relation_kind: "confidential_discussion_of".to_owned(),
                 scope_circle_id: Some(circle_id.to_owned()),
-                from_ref: Some("ck:strand:01904100-0000-7000-8000-000000000811".to_owned()),
-                to_ref: Some("ck:strand:01904100-0000-7000-8000-000000000812".to_owned()),
+                from_ref: Some("ak:strand:01904100-0000-7000-8000-000000000811".to_owned()),
+                to_ref: Some("ak:strand:01904100-0000-7000-8000-000000000812".to_owned()),
                 fields: Default::default(),
                 state: "active".to_owned(),
-                source_event_id: Some("ck:event:01904100-0000-7000-8000-000000000801".to_owned()),
+                source_event_id: Some("ak:event:01904100-0000-7000-8000-000000000801".to_owned()),
                 source_event_digest: Some(
                     "sha256:1111111111111111111111111111111111111111111111111111111111111111"
                         .to_owned(),
@@ -1751,7 +1751,7 @@ async fn circle_scoped_relation_update_and_delete_require_circle_membership() {
 async fn moderation_decision_checks_issuer_capability_not_sender_spoof() {
     let state = test_state();
     let realm_id =
-        cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-000000000901".to_owned())
+        cokret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-000000000901".to_owned())
             .unwrap();
     grant_moderation_decision(&state, &realm_id, "did:web:moderator.example");
     let decision = op(
@@ -1761,7 +1761,7 @@ async fn moderation_decision_checks_issuer_capability_not_sender_spoof() {
         json!({
             "sender": "did:web:moderator.example",
             "issuer": "did:web:impostor.example",
-            "target_ref": "ck:message:01904100-0000-7000-8000-000000000901",
+            "target_ref": "ak:message:01904100-0000-7000-8000-000000000901",
             "decision": "quarantine",
             "request_canonical_digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
         }),
@@ -1779,7 +1779,7 @@ async fn moderation_decision_checks_issuer_capability_not_sender_spoof() {
 async fn moderation_decision_allows_authorized_issuer() {
     let state = test_state();
     let realm_id =
-        cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-000000000902".to_owned())
+        cokret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-000000000902".to_owned())
             .unwrap();
     grant_moderation_decision(&state, &realm_id, "did:web:moderator.example");
     let decision = op(
@@ -1789,7 +1789,7 @@ async fn moderation_decision_allows_authorized_issuer() {
         json!({
             "sender": "did:web:moderator.example",
             "issuer": "did:web:moderator.example",
-            "target_ref": "ck:message:01904100-0000-7000-8000-000000000902",
+            "target_ref": "ak:message:01904100-0000-7000-8000-000000000902",
             "decision": "quarantine",
             "request_canonical_digest": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
         }),
@@ -1804,7 +1804,7 @@ async fn moderation_decision_allows_authorized_issuer() {
 async fn moderation_decision_rejects_missing_issuer_even_with_sender_grant() {
     let state = test_state();
     let realm_id =
-        cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-000000000903".to_owned())
+        cokret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-000000000903".to_owned())
             .unwrap();
     grant_moderation_decision(&state, &realm_id, "did:web:moderator.example");
     let decision = op(
@@ -1813,7 +1813,7 @@ async fn moderation_decision_rejects_missing_issuer_even_with_sender_grant() {
         cokret_sdk::events::kinds::MODERATION_DECISION,
         json!({
             "sender": "did:web:moderator.example",
-            "target_ref": "ck:message:01904100-0000-7000-8000-000000000903",
+            "target_ref": "ak:message:01904100-0000-7000-8000-000000000903",
             "decision": "quarantine",
             "request_canonical_digest": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
         }),
@@ -1831,7 +1831,7 @@ async fn moderation_decision_rejects_missing_issuer_even_with_sender_grant() {
 async fn call_recording_start_defaults_to_record_capability() {
     let state = test_state();
     let realm_id =
-        cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-000000000904".to_owned())
+        cokret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-000000000904".to_owned())
             .unwrap();
     grant_call_action(
         &state,
@@ -1845,7 +1845,7 @@ async fn call_recording_start_defaults_to_record_capability() {
         cokret_sdk::events::kinds::CALL_RECORDING_START,
         json!({
             "sender": "did:web:recorder.example",
-            "call_id": "ck:call:01904100-0000-7000-8000-000000000904",
+            "call_id": "ak:call:01904100-0000-7000-8000-000000000904",
             "recording_id": "recording-904"
         }),
     );
@@ -1859,7 +1859,7 @@ async fn call_recording_start_defaults_to_record_capability() {
 async fn call_recording_start_transcript_requires_transcribe_capability() {
     let state = test_state();
     let realm_id =
-        cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-000000000905".to_owned())
+        cokret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-000000000905".to_owned())
             .unwrap();
     grant_call_action(
         &state,
@@ -1873,7 +1873,7 @@ async fn call_recording_start_transcript_requires_transcribe_capability() {
         cokret_sdk::events::kinds::CALL_RECORDING_START,
         json!({
             "sender": "did:web:recorder.example",
-            "call_id": "ck:call:01904100-0000-7000-8000-000000000905",
+            "call_id": "ak:call:01904100-0000-7000-8000-000000000905",
             "recording_id": "transcript-905",
             "capture_kind": "transcript"
         }),
@@ -1898,7 +1898,7 @@ async fn call_recording_start_transcript_requires_transcribe_capability() {
 async fn call_recording_start_transcript_allows_transcribe_capability() {
     let state = test_state();
     let realm_id =
-        cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-000000000906".to_owned())
+        cokret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-000000000906".to_owned())
             .unwrap();
     grant_call_action(
         &state,
@@ -1912,7 +1912,7 @@ async fn call_recording_start_transcript_allows_transcribe_capability() {
         cokret_sdk::events::kinds::CALL_RECORDING_START,
         json!({
             "sender": "did:web:recorder.example",
-            "call_id": "ck:call:01904100-0000-7000-8000-000000000906",
+            "call_id": "ak:call:01904100-0000-7000-8000-000000000906",
             "recording_id": "transcript-906",
             "capture_kind": "transcript"
         }),
@@ -1927,7 +1927,7 @@ async fn call_recording_start_transcript_allows_transcribe_capability() {
 async fn mls_prejoin_history_rejects_non_history_capable_content_scheme() {
     let state = test_state();
     let realm_id =
-        cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-00000000c100".to_owned())
+        cokret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-00000000c100".to_owned())
             .unwrap();
     let create = op(
         realm_id.clone(),
@@ -1973,7 +1973,7 @@ async fn mls_prejoin_history_rejects_non_history_capable_content_scheme() {
 async fn mls_prejoin_history_accepts_exporter_aead_content_scheme() {
     let state = test_state();
     let realm_id =
-        cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-00000000c200".to_owned())
+        cokret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-00000000c200".to_owned())
             .unwrap();
     let create = op(
         realm_id.clone(),
@@ -2008,7 +2008,7 @@ async fn mls_prejoin_history_accepts_exporter_aead_content_scheme() {
 async fn mls_prejoin_history_accepts_create_object_exporter_aead_content_scheme() {
     let state = test_state();
     let realm_id =
-        cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-00000000c210".to_owned())
+        cokret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-00000000c210".to_owned())
             .unwrap();
     let create = op(
         realm_id.clone(),
@@ -2034,7 +2034,7 @@ async fn mls_prejoin_history_accepts_create_object_exporter_aead_content_scheme(
 async fn mls_prejoin_history_rejects_create_object_strict_content_scheme() {
     let state = test_state();
     let realm_id =
-        cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-00000000c220".to_owned())
+        cokret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-00000000c220".to_owned())
             .unwrap();
     let create = op(
         realm_id.clone(),
@@ -2066,7 +2066,7 @@ async fn mls_strict_existing_realm_rejects_prejoin_history_update() {
 
     let state = test_state();
     let realm_id =
-        cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-00000000c300".to_owned())
+        cokret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-00000000c300".to_owned())
             .unwrap();
     let now = chrono::Utc::now();
     state
@@ -2098,7 +2098,7 @@ async fn mls_strict_existing_realm_rejects_prejoin_history_update() {
     {
         let mut projection = state.projection.lock();
         let cell_id = cokret_sdk::CellRef::new(format!(
-            "ck:cell:ck.component.realm.policy_components.v1:{}",
+            "ak:cell:ck.component.realm.policy_components.v1:{}",
             realm_id.as_str()
         ))
         .expect("valid policy_components cell ref");
@@ -2137,7 +2137,7 @@ async fn realm_key_share_rrk_targeted_is_accepted_for_recovery_recipient() {
 
     let state = test_state();
     let realm_id =
-        cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-00000000d100".to_owned())
+        cokret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-00000000d100".to_owned())
             .unwrap();
     let recovery_principal = "did:web:hr.example";
 
@@ -2146,7 +2146,7 @@ async fn realm_key_share_rrk_targeted_is_accepted_for_recovery_recipient() {
     {
         let mut projection = state.projection.lock();
         let cell_id = cokret_sdk::CellRef::new(format!(
-            "ck:cell:ck.component.realm.policy_components.v1:{}",
+            "ak:cell:ck.component.realm.policy_components.v1:{}",
             realm_id.as_str()
         ))
         .expect("valid policy_components cell ref");
@@ -2175,7 +2175,7 @@ async fn realm_key_share_rrk_targeted_is_accepted_for_recovery_recipient() {
             "recipient_principal_id": recovery_principal,
             "recipient_verification_method": format!("{recovery_principal}#rrk-1"),
             "recovery_recipient_id": "rrk-1",
-            "sender_device_id": "ck:device:01904100-0000-7000-8000-00000000d1d2",
+            "sender_device_id": "ak:device:01904100-0000-7000-8000-00000000d1d2",
             "sender_device_signature": {"alg": "EdDSA", "kid": "k", "sig": "s"},
             "key_scope": {
                 "effective_scope": {"kind": "realm", "realm_id": realm_id.as_str()},
@@ -2197,13 +2197,13 @@ async fn realm_key_share_rrk_targeted_is_accepted_for_recovery_recipient() {
 async fn realm_key_share_member_device_accepts_projection_metadata() {
     let state = test_state();
     let realm_id =
-        cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-00000000d300".to_owned())
+        cokret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-00000000d300".to_owned())
             .unwrap();
     let now = chrono::DateTime::parse_from_rfc3339("2026-07-05T00:00:00Z")
         .unwrap()
         .with_timezone(&chrono::Utc);
     let bob = "did:web:bob.example";
-    let bob_device = "ck:device:01904100-0000-7000-8000-00000000d3d1";
+    let bob_device = "ak:device:01904100-0000-7000-8000-00000000d3d1";
 
     state
         .persistence
@@ -2271,7 +2271,7 @@ async fn realm_key_share_member_device_accepts_projection_metadata() {
                 delivery_status: Some("routable".to_owned()),
                 recipient_service_did: Some("did:web:local.host".to_owned()),
                 membership_event_ref: Some(
-                    "ck:event:01904100-0000-7000-8000-00000000d3aa".to_owned(),
+                    "ak:event:01904100-0000-7000-8000-00000000d3aa".to_owned(),
                 ),
                 delivery_binding_frontier: None,
                 invited_at: Some(now),
@@ -2289,7 +2289,7 @@ async fn realm_key_share_member_device_accepts_projection_metadata() {
             "share_class": "member_device",
             "recipient_principal_id": bob,
             "recipient_device_id": bob_device,
-            "sender_device_id": "ck:device:01904100-0000-7000-8000-00000000d3d2",
+            "sender_device_id": "ak:device:01904100-0000-7000-8000-00000000d3d2",
             "sender_device_signature": {"alg": "EdDSA", "kid": "k", "sig": "s"},
             "key_scope": {
                 "effective_scope": {"kind": "realm", "realm_id": realm_id.as_str()},
@@ -2299,7 +2299,7 @@ async fn realm_key_share_member_device_accepts_projection_metadata() {
             },
             "ciphertext": "sealed-history-secret",
             "created_at": "2026-07-05T00:00:00Z",
-            "event_id": "ck:event:01904100-0000-7000-8000-00000000d300",
+            "event_id": "ak:event:01904100-0000-7000-8000-00000000d300",
             "sender": "did:web:alice.example",
             "hlc": "2026-07-05T00:00:00Z/node/1"
         }),
@@ -2318,12 +2318,12 @@ async fn realm_key_share_non_recovery_recipient_without_policy_is_rejected() {
 
     let state = test_state();
     let realm_id =
-        cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-00000000d200".to_owned())
+        cokret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-00000000d200".to_owned())
             .unwrap();
     {
         let mut projection = state.projection.lock();
         let cell_id = cokret_sdk::CellRef::new(format!(
-            "ck:cell:ck.component.realm.policy_components.v1:{}",
+            "ak:cell:ck.component.realm.policy_components.v1:{}",
             realm_id.as_str()
         ))
         .expect("valid policy_components cell ref");
@@ -2350,8 +2350,8 @@ async fn realm_key_share_non_recovery_recipient_without_policy_is_rejected() {
         json!({
             "share_class": "member_device",
             "recipient_principal_id": "did:web:stranger.example",
-            "recipient_device_id": "ck:device:01904100-0000-7000-8000-00000000d2d1",
-            "sender_device_id": "ck:device:01904100-0000-7000-8000-00000000d2d2",
+            "recipient_device_id": "ak:device:01904100-0000-7000-8000-00000000d2d1",
+            "sender_device_id": "ak:device:01904100-0000-7000-8000-00000000d2d2",
             "sender_device_signature": {"alg": "EdDSA", "kid": "k", "sig": "s"},
             "key_scope": {
                 "effective_scope": {"kind": "realm", "realm_id": realm_id.as_str()},

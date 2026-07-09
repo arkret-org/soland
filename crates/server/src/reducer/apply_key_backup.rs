@@ -75,7 +75,7 @@ impl ProjectionState {
         };
         let subject = active_series_subject(&actor_id, &backup_class);
         if let Ok(cell_id) = cokret_sdk::CellRef::new(format!(
-            "ck:cell:{KEY_BACKUP_ACTIVE_SERIES_CELL_FAMILY}:{subject}"
+            "ak:cell:{KEY_BACKUP_ACTIVE_SERIES_CELL_FAMILY}:{subject}"
         )) {
             self.cells
                 .insert(cell_id, CellState::Value(operation.payload.clone()));
@@ -196,7 +196,7 @@ fn is_active_series_hash(value: &str) -> bool {
 
 fn is_seal_ref(value: &str) -> bool {
     value
-        .strip_prefix("ck:seal:sha256:")
+        .strip_prefix("ak:seal:sha256:")
         .is_some_and(|hex| hex.len() == 64 && hex.chars().all(|ch| ch.is_ascii_hexdigit()))
 }
 

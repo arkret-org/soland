@@ -285,7 +285,7 @@ fn string_array_contains(value: Option<&Value>, needle: &str) -> bool {
 }
 
 fn valid_trust_domain(value: &str) -> bool {
-    let Some(scope) = value.strip_prefix("ck:trust_domain:") else {
+    let Some(scope) = value.strip_prefix("ak:trust_domain:") else {
         return false;
     };
     if scope.is_empty() || scope.len() > 128 {
@@ -496,14 +496,14 @@ mod tests {
         let describe = json!({
             "service_type": "identity_registry",
             "service_did": "did:web:starid.example",
-            "trust_domain": "ck:trust_domain:example.net",
+            "trust_domain": "ak:trust_domain:example.net",
             "development_mode": false,
             "supported_operations": ["ck.server.query.describe"]
         });
         validate_webvh_provider_describe(
             &describe,
             Some("did:web:starid.example"),
-            Some("ck:trust_domain:example.net"),
+            Some("ak:trust_domain:example.net"),
         )
         .expect("valid canonical identity_registry describe should pass");
     }
@@ -513,14 +513,14 @@ mod tests {
         let mut describe = json!({
             "service_type": "identity_registry",
             "service_did": "did:web:starid.example",
-            "trust_domain": "ck:trust_domain:example.net",
+            "trust_domain": "ak:trust_domain:example.net",
             "development_mode": false,
             "supported_operations": ["ck.server.query.describe"]
         });
         let err = validate_webvh_provider_describe(
             &describe,
             Some("did:web:starid.example"),
-            Some("ck:trust_domain:other.example"),
+            Some("ak:trust_domain:other.example"),
         )
         .expect_err("trust-domain mismatch must fail closed");
         assert!(err.contains("trust_domain mismatch"), "{err}");
@@ -529,7 +529,7 @@ mod tests {
         let err = validate_webvh_provider_describe(
             &describe,
             Some("did:web:starid.example"),
-            Some("ck:trust_domain:example.net"),
+            Some("ak:trust_domain:example.net"),
         )
         .expect_err("development-mode provider must fail closed");
         assert!(err.contains("development_mode"), "{err}");

@@ -232,7 +232,7 @@ pub(super) fn mimi_provider_directory_value(state: &AppState) -> Value {
                 "application/mimi-content",
                 "text/plain;charset=utf-8",
                 "text/markdown;variant=GFM-MIMI",
-                "application/vnd.cokret.content+json"
+                "application/vnd.arkret.content+json"
             ],
             "room_policy_components": [
                 "roles",

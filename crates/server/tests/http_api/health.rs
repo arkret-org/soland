@@ -91,7 +91,7 @@ async fn health_and_describe_work() {
     );
     assert_eq!(
         describe["limits"]["registries"]["source"],
-        "cokret-spec/spec/v1/artifacts"
+        "arkret-spec/spec/v1/artifacts"
     );
     assert_eq!(
         describe["limits"]["registries"]["versions"]["event_kind"],
@@ -219,7 +219,7 @@ async fn health_and_describe_work() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|operation| operation == "org.cokret.soland.admin.actors")
+            .any(|operation| operation == "org.arkret.soland.admin.actors")
     );
     assert!(
         describe["limits"]["profile_status"]["supported_operation_catalog"]["derived_surface_groups"]

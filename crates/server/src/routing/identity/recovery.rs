@@ -1,6 +1,6 @@
 //! CKP-0010 / R3 (REC-1) — recovery policy + recovery receipt endpoints.
 //!
-//! Mounts recovery policy / receipt endpoints introduced in cokret-spec b47ff6ec:
+//! Mounts recovery policy / receipt endpoints introduced in arkret-spec b47ff6ec:
 //!
 //! - `GET /_cokret/root/identity/recovery-policy` — read the active recovery policy.
 //! - `POST /_cokret/root/identity/recovery-policy` — persist + advance a recovery policy.
@@ -117,7 +117,7 @@ pub(super) fn router() -> Router {
 /// realm is auto-materialized by the projector on the first accepted op.
 pub fn principal_control_realm_for_did(principal_did: &str) -> String {
     let mut hasher = Sha256::new();
-    hasher.update(b"ck:realm:principal-control:v1:");
+    hasher.update(b"ak:realm:principal-control:v1:");
     hasher.update(principal_did.as_bytes());
     let digest = hasher.finalize();
     let mut bytes = [0u8; 16];
@@ -128,7 +128,7 @@ pub fn principal_control_realm_for_did(principal_did: &str) -> String {
     let group =
         |slice: &[u8]| -> String { slice.iter().map(|b| format!("{b:02x}")).collect::<String>() };
     format!(
-        "ck:realm:{}-{}-{}-{}-{}",
+        "ak:realm:{}-{}-{}-{}-{}",
         group(&bytes[0..4]),
         group(&bytes[4..6]),
         group(&bytes[6..8]),

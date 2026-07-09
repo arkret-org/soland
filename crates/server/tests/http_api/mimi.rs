@@ -8,8 +8,8 @@ use super::common::*;
 const MIMI_SOURCE_SERVICE_DID: &str = "did:web:remote-mimi.example";
 const MIMI_DESTINATION_SERVICE_DID: &str = "did:web:soland.local";
 const MIMI_PROVIDER_ID: &str = "mimi://remote-mimi.example/provider";
-const MIMI_TEST_DEVICE_ID: &str = "ck:device:01904100-0000-7000-8000-a11ce0000001";
-const MIMI_TEST_STRAND_ID: &str = "ck:strand:01964180-0000-7000-8000-000000000000";
+const MIMI_TEST_DEVICE_ID: &str = "ak:device:01904100-0000-7000-8000-a11ce0000001";
+const MIMI_TEST_STRAND_ID: &str = "ak:strand:01964180-0000-7000-8000-000000000000";
 const MIMI_TEST_POLICY_ROOT: &str =
     "sha256:1111111111111111111111111111111111111111111111111111111111111111";
 
@@ -152,8 +152,8 @@ fn mimi_submit_body(
 ) -> Value {
     let governance_binding = mimi_governance_binding(realm_id, group_id, epoch);
     let covered_seals_cell = json!({
-        "cell_id": "ck:cell:mimi-submit-test",
-        "seal_refs": ["ck:seal:0196419b-0000-7000-8000-000000000001"],
+        "cell_id": "ak:cell:mimi-submit-test",
+        "seal_refs": ["ak:seal:0196419b-0000-7000-8000-000000000001"],
     });
     if let Value::Object(object) = &mut message {
         object.insert("mls_group_id".to_owned(), json!(group_id));
@@ -188,7 +188,7 @@ fn mimi_governance_binding(realm_id: &str, group_id: &str, epoch: u64) -> Value 
             "kind": "realm",
             "realm_id": realm_id,
         },
-        "membership_frontier": ["ck:event:0196419b-0000-7000-8000-000000000001"],
+        "membership_frontier": ["ak:event:0196419b-0000-7000-8000-000000000001"],
         "policy_root": MIMI_TEST_POLICY_ROOT,
         "capability_root": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
     })
@@ -364,7 +364,7 @@ async fn mimi_provider_facade_contracts_work() {
     assert_eq!(mapped["rejected"], json!([]));
 
     let proxy_body = json!({
-        "asset_ref": "ck:blob:sha256:e2e",
+        "asset_ref": "ak:blob:sha256:e2e",
         "requester": "did:web:alice.example",
         "strand_id": MIMI_TEST_STRAND_ID,
     });
@@ -414,7 +414,7 @@ async fn mimi_facade_writes_strand_into_canonical_reducer_chain() {
     let token = dev_token(state.clone()).await;
     let service = app_from_state(state.clone());
     let demo_realm = DEMO_REALM_ID;
-    let custom_realm = "ck:realm:0196419b-0000-7000-8000-aaaaaaaaaaaa";
+    let custom_realm = "ak:realm:0196419b-0000-7000-8000-aaaaaaaaaaaa";
     let room_id = "01JSMIMI-P4-E2E";
     let group_id = "mimi-group-p4-001";
     let room_uri = mimi_room_uri(room_id);
@@ -434,7 +434,7 @@ async fn mimi_facade_writes_strand_into_canonical_reducer_chain() {
     let binding_event_id = update_resp["room_state_ref"]
         .as_str()
         .expect("room_state_ref missing");
-    assert!(binding_event_id.starts_with("ck:event:"));
+    assert!(binding_event_id.starts_with("ak:event:"));
 
     let msg_resp: Value = signed_mimi_post!(
         format!("http://server/_cokret/open/mimi/strands/{room_id}/messages"),

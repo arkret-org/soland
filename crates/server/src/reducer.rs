@@ -1,4 +1,4 @@
-//! Deterministic state reducer for cokret operations.
+//! Deterministic state reducer for arkret operations.
 //!
 //! Applies operations to produce projection state using well-known
 //! conflict resolution rules:

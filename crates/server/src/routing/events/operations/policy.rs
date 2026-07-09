@@ -212,9 +212,9 @@ mod tests {
 
     fn circle_create_with_payload(payload: Value) -> Operation {
         Operation::create(
-            cokret_sdk::OperationId::new("ck:operation:01964137-0000-7000-8000-000000000040")
+            cokret_sdk::OperationId::new("ak:operation:01964137-0000-7000-8000-000000000040")
                 .unwrap(),
-            cokret_sdk::RealmId::new("ck:realm:01964137-0000-7000-8000-000000000030").unwrap(),
+            cokret_sdk::RealmId::new("ak:realm:01964137-0000-7000-8000-000000000030").unwrap(),
             cokret_sdk::events::kinds::CIRCLE_CREATE,
             payload,
         )
@@ -235,14 +235,14 @@ mod tests {
     #[test]
     fn sidecar_circle_create_shape_requires_derived_short_name() {
         let actor = "did:web:example.com:users:alice";
-        let realm_id = "ck:realm:01964137-0000-7000-8000-000000000030";
+        let realm_id = "ak:realm:01964137-0000-7000-8000-000000000030";
         let key = cokret_sdk::agent_sidecar_circle_key(realm_id, actor);
         let short_name = cokret_sdk::agent_sidecar_short_name(&key);
         let valid_payload = serde_json::json!({
             "profile": cokret_sdk::PROFILE_AGENT_SIDECAR_THREAD,
             "sidecar_ensure_capability_verified": true,
             "object": {
-                "id": "ck:circle:01964137-0000-7000-8000-000000000041",
+                "id": "ak:circle:01964137-0000-7000-8000-000000000041",
                 "realm_id": realm_id,
                 "title": short_name,
                 "display": { "short_name": short_name },

@@ -1,12 +1,12 @@
 # Media Token Issuer
 
-> Spec: `cokret-spec @ b47ff6ec`, `ck.self.call.media.exchange.issue_token` operation.
+> Spec: `arkret-spec @ b47ff6ec`, `ck.self.call.media.exchange.issue_token` operation.
 > Companion runbook: [`../runbook.md` → Media token issuer](../runbook.md#media-token-issuer-rotating-service_signaturekid-focus-binding-troubleshooting).
 > SDK type reference:
-> [`cokret-rust-sdk docs/architecture.md`](../../../cokret-rust-sdk/docs/architecture.md#call-media-cxcallmediatoken_exchange).
+> [`arkret-rust-sdk docs/architecture.md`](../../../arkret-rust-sdk/docs/architecture.md#call-media-cxcallmediatoken_exchange).
 
 This document is the architectural reference for soland's role as the
-**canonical media-token issuer** in the Cokret v1 protocol family. It is
+**canonical media-token issuer** in the Arkret v1 protocol family. It is
 the source of truth for: who issues, when floria proxies, focus_id derivation
 rules, participant_binding canonical bytes, TTL policy, and kid rotation.
 
@@ -21,7 +21,7 @@ rules, participant_binding canonical bytes, TTL policy, and kid rotation.
 | Rotates `issuer_kid` | **Yes** | No |
 | Exposes `POST /rtc/token` to clients | **Yes (direct)** | Yes (proxy in v1) |
 
-In Cokret v1, soland is always the canonical signing authority. floria may
+In Arkret v1, soland is always the canonical signing authority. floria may
 proxy the request from the client to soland (e.g. when push-side network
 constraints make a direct client→soland call awkward), but floria never
 forges, re-signs, or augments the token. Specifically:
@@ -77,12 +77,12 @@ the realm's `ck.realm.media_service.foci[]` set, returning `focus_mismatch`.
 {
   "scheme": "ck.media.participant_binding.v1",
   "issuer_kid": "ck-media-issuer/example/2026-05",
-  "realm_id": "ck:realm:...",
-  "call_id": "ck:call:...",
-  "focus_id": "ck:focus:livekit:eu-west-1",
+  "realm_id": "ak:realm:...",
+  "call_id": "ak:call:...",
+  "focus_id": "ak:focus:livekit:eu-west-1",
   "actor_id": "did:ck:...",
-  "device_id": "ck:device:...",
-  "participant_identity": "ck:participant:<realm>:<actor>:<device>:<call>",
+  "device_id": "ak:device:...",
+  "participant_identity": "ak:participant:<realm>:<actor>:<device>:<call>",
   "expires_at": "2026-05-27T12:34:56.789Z",
   "sig": "<base64url>"
 }

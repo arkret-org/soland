@@ -97,7 +97,7 @@ pub struct AppConfig {
     /// `now - replay_window_seconds` OR newer than `now +
     /// replay_window_seconds` are rejected.
     ///
-    /// Default 300s = 5 min — matches the Cokret spec recommendation in
+    /// Default 300s = 5 min — matches the Arkret spec recommendation in
     /// `signatures-and-replay.md`. Set to `0` to disable (dev / tests
     /// using fixed-time fixtures rely on this; production deployments
     /// MUST keep this > 0).
@@ -146,7 +146,7 @@ pub struct AppConfig {
     /// from the SDK platform `KeyStore` (`platform_default_keystore("soland.<service_did>")`)
     /// at boot and stores rotated keys back into the same KeyStore. When
     /// false (default), only `notary_signing_key_seed` (env-loaded) is
-    /// honored. The KeyStore key id is `cokret:signer:soland-notary:<service_did>`.
+    /// honored. The KeyStore key id is `arkret:signer:soland-notary:<service_did>`.
     ///
     /// Behavior when `use_keystore=true`:
     /// - First boot: try `KeyStore::load(...)`; on `not_found` fall back to
@@ -302,7 +302,7 @@ pub struct AppConfig {
     /// candidate profile and exposes the product-local join-policy
     /// member-application read surface
     /// (`GET /_soland/self/realms/{realm_id}/applications`,
-    /// `org.cokret.soland.member_application.query.list`). `member.application`
+    /// `org.arkret.soland.member_application.query.list`). `member.application`
     /// is a spec candidate concept (`governance/join-policy.md` §7.2) that MUST
     /// stay off the `/_cokret/...` protocol root and out of the `ck.*` namespace
     /// until formally registered; the read surface is fail-closed (404) unless
@@ -623,7 +623,7 @@ impl AppConfig {
             compaction_prune_walk_interval_seconds: 0,
             compaction_prune_walk_per_realm_limit: 50,
             seed_demo_data: false,
-            trust_domain: "ck:trust_domain:soland.local".to_owned(),
+            trust_domain: "ak:trust_domain:soland.local".to_owned(),
             receive_policy_constraints: None,
             sovereign_enclave_enabled: false,
             sovereign_enclave_allowed_outbound_hosts: Vec::new(),
@@ -1333,7 +1333,7 @@ pub(crate) fn derive_trust_domain(service_did: &str) -> anyhow::Result<String> {
     } else {
         scope
     };
-    let candidate = format!("ck:trust_domain:{scope}");
+    let candidate = format!("ak:trust_domain:{scope}");
     // Final safety check.
     cokret_sdk::TypedTrustDomainId::new(candidate.clone()).map_err(|e| {
         anyhow::anyhow!(
@@ -1606,7 +1606,7 @@ mod tests {
             "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:local.host:webvh:service",
         )
         .unwrap();
-        assert_eq!(trust_domain, "ck:trust_domain:local.host");
+        assert_eq!(trust_domain, "ak:trust_domain:local.host");
     }
 
     #[test]

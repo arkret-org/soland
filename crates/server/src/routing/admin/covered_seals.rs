@@ -62,14 +62,14 @@ fn covered_state_for_realm(state: &AppState, realm_id: &str) -> Option<(u64, Vec
 }
 
 #[endpoint(
-    operation_id = "org.cokret.soland.admin.realms.covered_seals.get",
+    operation_id = "org.arkret.soland.admin.realms.covered_seals.get",
     tags("soland-admin", "realm", "mls"),
     summary = "Get covered-seals lag snapshot for a Realm",
     status_codes(200, 400, 401, 403, 500)
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "org.cokret.soland.admin.realms.covered_seals.get")
+    fields(op = "org.arkret.soland.admin.realms.covered_seals.get")
 )]
 async fn get_covered_seals(
     aa: AuthArgs,
@@ -112,14 +112,14 @@ async fn get_covered_seals(
 }
 
 #[endpoint(
-    operation_id = "org.cokret.soland.admin.realms.covered_seals.advance",
+    operation_id = "org.arkret.soland.admin.realms.covered_seals.advance",
     tags("soland-admin", "realm", "mls"),
     summary = "Operator override: fold governance Seals into covered_seals",
     status_codes(200, 400, 401, 403, 404, 500)
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "org.cokret.soland.admin.realms.covered_seals.advance")
+    fields(op = "org.arkret.soland.admin.realms.covered_seals.advance")
 )]
 async fn advance_covered_seals(
     aa: AuthArgs,

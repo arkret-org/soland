@@ -43,7 +43,7 @@ fn test_config() -> AppConfig {
         did_resolver_allow_methods: vec!["web".to_owned(), "key".to_owned()],
         jws_replay_window_seconds: 0,
         jws_replay_window_per_family: BTreeMap::new(),
-        trust_domain: "ck:trust_domain:soland-mls-test.local".to_owned(),
+        trust_domain: "ak:trust_domain:soland-mls-test.local".to_owned(),
         ..AppConfig::test_default()
     }
 }
@@ -143,7 +143,7 @@ fn cross_signing_publish(principal: &str, generation: u64) -> CrossSigningPublis
     let self_signing_public_key = ed25519_public_multibase(&test_ssk_signing_key());
     CrossSigningPublishContent {
         principal_id: principal_id.clone(),
-        trust_domain: TypedTrustDomainId::new("ck:trust_domain:soland-mls-test.local").unwrap(),
+        trust_domain: TypedTrustDomainId::new("ak:trust_domain:soland-mls-test.local").unwrap(),
         principal_signing_key: CrossSigningKeyRecord {
             kid: format!("{principal}#principal-signing"),
             alg: "EdDSA".to_owned(),
@@ -196,16 +196,16 @@ async fn mls_lifecycle_end_to_end() {
     let state = AppState::new(test_config(), Db { pool: None });
 
     let alice_did = "did:web:alice.example";
-    let alice_device = "ck:device:01904100-0000-7000-8000-a11ce0000001";
+    let alice_device = "ak:device:01904100-0000-7000-8000-a11ce0000001";
     let alice_token = dev_token(state.clone(), alice_did, alice_device, "Alice").await;
     seed_cross_signing_generation(&state, alice_did, 3);
-    let realm_id = "ck:realm:01904100-0000-7000-8000-00000000e2ee";
+    let realm_id = "ak:realm:01904100-0000-7000-8000-00000000e2ee";
 
     // ── 1. upload a KeyPackage (W1C: ck.self.keys.keypackages.upload.create) ──
-    let keypackage_id = "ck:mls_keypackage:t-01";
-    let keypackage_id_mismatch = "ck:mls_keypackage:t-02";
-    let uploaded_keypackage_ref = "ck:mls:keypackage:test-01";
-    let mismatch_keypackage_ref = "ck:mls:keypackage:test-02";
+    let keypackage_id = "ak:mls_keypackage:t-01";
+    let keypackage_id_mismatch = "ak:mls_keypackage:t-02";
+    let uploaded_keypackage_ref = "ak:mls:keypackage:test-01";
+    let mismatch_keypackage_ref = "ak:mls:keypackage:test-02";
     let keypackage_bytes = b"opaque-mls-keypackage";
     let mismatch_keypackage_bytes = b"opaque-mls-keypackage-mismatch";
     let keypackage_digest = cokret_sdk::canonical::sha256_digest(keypackage_bytes);
@@ -297,7 +297,7 @@ async fn mls_lifecycle_end_to_end() {
             "required_capabilities": ["ck.mls.profile.full"],
             "claim_nonce": b64(b"claim-nonce-01"),
             "expires_at": "2100-01-01T00:00:00Z",
-            "mls_group_id": "ck:mls_group:abc"
+            "mls_group_id": "ak:mls_group:abc"
         }))
         .send(&app_from_state(state.clone()))
         .await;
@@ -330,7 +330,7 @@ async fn mls_lifecycle_end_to_end() {
             "required_capabilities": ["ck.mls.profile.full"],
             "claim_nonce": b64(b"claim-nonce-02"),
             "expires_at": "2100-01-01T00:00:00Z",
-            "mls_group_id": "ck:mls_group:second"
+            "mls_group_id": "ak:mls_group:second"
         }))
         .send(&app_from_state(state.clone()))
         .await;
@@ -344,13 +344,13 @@ async fn mls_lifecycle_end_to_end() {
     );
 
     let bob_did = "did:web:bob.example";
-    let bob_device = "ck:device:01904100-0000-7000-8000-b0b0e0000001";
-    let group_id = "ck:mls_group:abc";
+    let bob_device = "ak:device:01904100-0000-7000-8000-b0b0e0000001";
+    let group_id = "ak:mls_group:abc";
     let effective_scope = json!({"kind": "realm", "realm_id": realm_id});
-    let frontier_ref = "ck:event:01904100-0000-7000-8000-00000000f00d";
+    let frontier_ref = "ak:event:01904100-0000-7000-8000-00000000f00d";
     let keypackage_ref = claimed_keypackage_ref;
     let welcome_ref =
-        "ck:blob:sha256:8888888888888888888888888888888888888888888888888888888888888888";
+        "ak:blob:sha256:8888888888888888888888888888888888888888888888888888888888888888";
     let governance_binding = json!({
         "binding_version": 1,
         "encoding_profile": "cbor-deterministic-rfc8949-v1",
@@ -367,7 +367,7 @@ async fn mls_lifecycle_end_to_end() {
 
     // ── 3a. Realm + MLS group genesis enter through canonical events ─
     let realm_create = signed_event(
-        "ck:event:01904100-0000-7000-8000-00000000e2e0",
+        "ak:event:01904100-0000-7000-8000-00000000e2e0",
         1,
         alice_did,
         alice_device,
@@ -379,7 +379,7 @@ async fn mls_lifecycle_end_to_end() {
                 "schema": "ck.schema.realm.v1",
                 "title": "MLS lifecycle",
                 "created_by": alice_did,
-                "trust_domain": "ck:trust_domain:soland-mls-test.local",
+                "trust_domain": "ak:trust_domain:soland-mls-test.local",
                 "schema_refs": ["ck.schema.realm.v1"],
                 "default_discoverability": "listed",
                 "default_join_rule": "invite",
@@ -408,7 +408,7 @@ async fn mls_lifecycle_end_to_end() {
     assert_eq!(create_resp.status_code, Some(StatusCode::OK));
 
     let genesis = signed_event(
-        "ck:event:01904100-0000-7000-8000-00000000e2e1",
+        "ak:event:01904100-0000-7000-8000-00000000e2e1",
         2,
         alice_did,
         alice_device,
@@ -471,7 +471,7 @@ async fn mls_lifecycle_end_to_end() {
     claim_envelope["signature"]["sig"] = json!(claim_envelope_signature);
 
     let welcome = signed_event(
-        "ck:event:01904100-0000-7000-8000-00000000e2e2",
+        "ak:event:01904100-0000-7000-8000-00000000e2e2",
         3,
         alice_did,
         alice_device,
@@ -496,7 +496,7 @@ async fn mls_lifecycle_end_to_end() {
             "welcome_ref": welcome_ref,
             "ciphertext": b64(b"opaque-mls-welcome"),
             "expires_at": "2100-01-01T00:00:00Z",
-            "commit_ref": "ck:event:01904100-0000-7000-8000-00000000e2e3",
+            "commit_ref": "ak:event:01904100-0000-7000-8000-00000000e2e3",
             "governance_binding": governance_binding
         }),
     );
@@ -536,7 +536,7 @@ async fn mls_lifecycle_end_to_end() {
         "reducer_profile": soland::kinds::MLS_REDUCER_PROFILE_V1
     });
     let commit = signed_event(
-        "ck:event:01904100-0000-7000-8000-00000000e2e3",
+        "ak:event:01904100-0000-7000-8000-00000000e2e3",
         4,
         alice_did,
         alice_device,
@@ -545,7 +545,7 @@ async fn mls_lifecycle_end_to_end() {
         json!({
             "mls_group_id": group_id,
             "base_epoch": 0,
-            "base_epoch_ref": "ck:event:01904100-0000-7000-8000-00000000e2e1",
+            "base_epoch_ref": "ak:event:01904100-0000-7000-8000-00000000e2e1",
             "proposal_refs": [],
             "next_epoch": 1,
             "commit_digest": "sha256:7777777777777777777777777777777777777777777777777777777777777777",
@@ -624,7 +624,7 @@ async fn mls_lifecycle_end_to_end() {
     let welcomes = drain_json["welcomes"].as_array().expect("welcomes array");
     assert_eq!(welcomes.len(), 1);
     assert_eq!(welcomes[0]["welcome_id"], json!(welcome_ref));
-    assert_eq!(welcomes[0]["mls_group_ref"], json!("ck:mls_group:abc"));
+    assert_eq!(welcomes[0]["mls_group_ref"], json!("ak:mls_group:abc"));
     assert!(welcomes[0].get("group_id").is_none());
     assert_eq!(welcomes[0]["key_package_id"], json!(keypackage_ref));
     assert!(

@@ -8,11 +8,11 @@ use super::common::*;
 /// registration. Other tests in this file use a different realm id
 /// (Move/Seal tests don't go through realm_id_accessible).
 fn demo_realm_id() -> &'static str {
-    "ck:realm:0196419b-0000-7000-8000-000000000000"
+    "ak:realm:0196419b-0000-7000-8000-000000000000"
 }
 
 fn event_envelope(event_id: &str, actor: &str, realm_id: &str, payload: Value) -> Value {
-    let suffix = event_id.trim_start_matches("ck:event:");
+    let suffix = event_id.trim_start_matches("ak:event:");
     let mut event = json!({
         "event_id": event_id,
         "kind": "ck.message.create",
@@ -25,7 +25,7 @@ fn event_envelope(event_id: &str, actor: &str, realm_id: &str, payload: Value) -
         "prev_refs": [],
         "refs": [],
         "unsigned": {
-            "local_operation_idempotency_alias": format!("ck:operation:{suffix}"),
+            "local_operation_idempotency_alias": format!("ak:operation:{suffix}"),
         },
         "proofs": [{
             "kind": "detached_jws",
@@ -91,7 +91,7 @@ async fn events_subscribe_streams_live_event_then_closes_at_deadline() {
         let app_writer = service(writer_state);
         // Wait for the subscribe request to land + register its receiver.
         sleep(StdDuration::from_millis(150)).await;
-        let event_id = "ck:event:01984101-0000-7000-8000-000000000abc";
+        let event_id = "ak:event:01984101-0000-7000-8000-000000000abc";
         let _: Value = TestClient::post("http://server/_cokret/self/events")
             .add_header("Authorization", format!("Bearer {token_writer}"), true)
             .json(&event_envelope(
@@ -235,7 +235,7 @@ async fn events_subscribe_frames_are_sdk_typed_and_cursor_advances() {
     // projection store (rather than `/events` submit) keeps the test
     // deterministic and isolates the subscribe/cursor surface under test; the
     // sender matches the dev session actor so it passes visibility.
-    let event_id = "ck:event:01984101-0000-7000-8000-00000000d0c5";
+    let event_id = "ak:event:01984101-0000-7000-8000-00000000d0c5";
     state
         .persistence
         .projection_events()
@@ -244,7 +244,7 @@ async fn events_subscribe_frames_are_sdk_typed_and_cursor_advances() {
             realm_id: demo_realm_id().to_owned(),
             event_kind: "ck.message.create".to_owned(),
             operation_type: "create".to_owned(),
-            operation_id: Some("ck:operation:01984101-0000-7000-8000-00000000d0c5".to_owned()),
+            operation_id: Some("ak:operation:01984101-0000-7000-8000-00000000d0c5".to_owned()),
             sender: Some("did:web:admin.example".to_owned()),
             payload: json!({"content": {"body": "durable history"}}),
             created_at: chrono::Utc::now(),
@@ -298,7 +298,7 @@ async fn events_subscribe_frames_are_sdk_typed_and_cursor_advances() {
         .as_str()
         .to_owned();
     assert!(
-        resume_cursor.starts_with("ck:cursor:"),
+        resume_cursor.starts_with("ak:cursor:"),
         "resume cursor must be a ck:cursor token, got {resume_cursor}"
     );
 

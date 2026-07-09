@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::Value;
 
-/// R3.1/R3.2 (cokret-spec @ b56cab1) — Realm-scoped MemberIdentity event
+/// R3.1/R3.2 (arkret-spec @ b56cab1) — Realm-scoped MemberIdentity event
 /// registry. Stores every accepted `ck.member.identity.update` event by
 /// `(realm_id, actor_id, segment)`, computes the current effective set
 /// per the SDK helper `effective_identity_events`, and materializes both

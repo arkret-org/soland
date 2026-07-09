@@ -7,7 +7,7 @@ pub(super) fn validate_recovery_policy(payload: &Value) -> Result<RecoveryPolicy
     let principal_id = require_did(payload, "principal_id")?;
     let version = require_u32_min(payload, "version", 1)?;
     let trust_domain = require_string(payload, "trust_domain")?;
-    if !trust_domain.starts_with("ck:trust_domain:") {
+    if !trust_domain.starts_with("ak:trust_domain:") {
         return Err(AppError::invalid_param(format!(
             "trust_domain `{trust_domain}` must start with ck:trust_domain:",
         )));
@@ -115,21 +115,21 @@ pub(super) fn validate_recovery_receipt(
 ) -> Result<RecoveryReceiptRecord, AppError> {
     require_const_string(payload, "schema", "ck.schema.recovery_receipt.v1")?;
     let receipt_id = require_string(payload, "receipt_id")?;
-    if !receipt_id.starts_with("ck:receipt:") {
+    if !receipt_id.starts_with("ak:receipt:") {
         return Err(AppError::invalid_param(format!(
             "receipt_id `{receipt_id}` must start with ck:receipt:",
         )));
     }
     let principal_id = require_did(payload, "principal_id")?;
     let recovery_session_id = require_string(payload, "recovery_session_id")?;
-    if !recovery_session_id.starts_with("ck:recovery_session:") {
+    if !recovery_session_id.starts_with("ak:recovery_session:") {
         return Err(AppError::invalid_param(format!(
             "recovery_session_id `{recovery_session_id}` must start with ck:recovery_session:",
         )));
     }
     // UUIDv7 pattern (final 36 chars after the prefix).
     let session_uuid = recovery_session_id
-        .strip_prefix("ck:recovery_session:")
+        .strip_prefix("ak:recovery_session:")
         .unwrap_or("");
     let parsed = uuid::Uuid::parse_str(session_uuid).map_err(|_| {
         AppError::invalid_param("recovery_session_id MUST be ck:recovery_session:<uuidv7> per spec")
@@ -145,7 +145,7 @@ pub(super) fn validate_recovery_receipt(
     let policy_version = require_u32_min(payload, "policy_version", 1)?;
     let trust_domain = require_string(payload, "trust_domain")?;
     let new_device_id = require_string(payload, "new_device_id")?;
-    if !new_device_id.starts_with("ck:device:") {
+    if !new_device_id.starts_with("ak:device:") {
         return Err(AppError::invalid_param(format!(
             "new_device_id `{new_device_id}` must start with ck:device:",
         )));
@@ -466,12 +466,12 @@ pub(super) fn require_rfc3339(
 }
 
 pub(super) fn require_policy_id_pattern(value: &str) -> Result<(), AppError> {
-    if !value.starts_with("ck:policy:") {
+    if !value.starts_with("ak:policy:") {
         return Err(AppError::invalid_param(format!(
             "policy_id `{value}` must start with ck:policy:",
         )));
     }
-    let uuid_part = value.trim_start_matches("ck:policy:");
+    let uuid_part = value.trim_start_matches("ak:policy:");
     let parsed = uuid::Uuid::parse_str(uuid_part)
         .map_err(|_| AppError::invalid_param("policy_id MUST be ck:policy:<uuidv7>"))?;
     if parsed.get_version_num() != 7 {

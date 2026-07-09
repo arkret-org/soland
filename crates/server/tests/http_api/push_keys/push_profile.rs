@@ -15,7 +15,7 @@ use crate::common::*;
 /// only — signature bytes stay dummy.
 fn broadcast_ephemeral_envelope(kind: &str, payload: Value) -> Value {
     let actor_id = "did:web:alice.example";
-    let device_id = "ck:device:01904100-0000-7000-8000-a11ce0000001";
+    let device_id = "ak:device:01904100-0000-7000-8000-a11ce0000001";
     let sent_at = chrono::Utc::now();
     let expires_at = sent_at + chrono::Duration::seconds(30);
     let mut env = serde_json::json!({
@@ -63,11 +63,11 @@ async fn file_transfer_blob_upload_uses_encrypted_metadata_and_blocks_presign() 
     let file_transfer_blob: Value = TestClient::post("http://server/_cokret/self/blob/upload")
         .add_header("authorization", format!("Bearer {token}"), true)
         .add_header("content-type", file_transfer_content_type, true)
-        .add_header("x-cokret-filename", "private.txt", true)
-        .add_header("x-cokret-blob-encrypted", "true", true)
-        .add_header("x-cokret-blob-purpose", "file_transfer", true)
+        .add_header("x-arkret-filename", "private.txt", true)
+        .add_header("x-arkret-blob-encrypted", "true", true)
+        .add_header("x-arkret-blob-purpose", "file_transfer", true)
         .add_header(
-            "x-cokret-content-digest",
+            "x-arkret-content-digest",
             file_transfer_digest.clone(),
             true,
         )
@@ -132,7 +132,7 @@ async fn profile_avatar_get_recovers_existing_local_object_without_metadata() {
     let token = dev_token(state.clone()).await;
     let avatar_bytes = b"\x89PNG\r\n\x1a\navatar-bytes".to_vec();
     let avatar_sha256 = hex::encode(Sha256::digest(&avatar_bytes));
-    let blob_ref = format!("ck:blob:sha256:{avatar_sha256}");
+    let blob_ref = format!("ak:blob:sha256:{avatar_sha256}");
     let storage_key = state.object_storage.object_key_for_sha256(&avatar_sha256);
     state
         .object_storage
@@ -240,7 +240,7 @@ async fn push_profile_and_moderation_contracts_work() {
         .presence()
         .put(PresenceRecord {
             actor: "did:web:alice.example".to_owned(),
-            device_id: "ck:device:01904100-0000-7000-8000-a11ce0000001".to_owned(),
+            device_id: "ak:device:01904100-0000-7000-8000-a11ce0000001".to_owned(),
             status: "online".to_owned(),
             status_message: None,
             last_active_at: None,
@@ -258,7 +258,7 @@ async fn push_profile_and_moderation_contracts_work() {
     assert!(last_active_at.ends_with("/PT1H"));
     assert!(stale_profile.get("last_active").is_none());
 
-    let typing_strand_id = "ck:strand:01904100-0000-7000-8000-7a1c00000003";
+    let typing_strand_id = "ak:strand:01904100-0000-7000-8000-7a1c00000003";
     insert_typing_scope_strand(state.clone(), typing_strand_id, Some(true));
 
     let unauth_typing = TestClient::post("http://server/_cokret/self/ephemeral")
@@ -326,7 +326,7 @@ async fn push_profile_and_moderation_contracts_work() {
     let push: Value = TestClient::post("http://server/_cokret/edge/push/register-device")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
-            "device_id": "ck:device:01904100-0000-7000-8000-a11ce0000001",
+            "device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001",
             "push_gateway": "https://push.example",
             "push_key": "opaque",
             "platform": "desktop",
@@ -349,7 +349,7 @@ async fn push_profile_and_moderation_contracts_work() {
         state.clone(),
         &token,
         "did:web:alice.example",
-        "ck:device:01904100-0000-7000-8000-a11ce0000001",
+        "ak:device:01904100-0000-7000-8000-a11ce0000001",
         DEMO_REALM_ID,
         "ck.account_data.set",
         serde_json::json!({
@@ -361,7 +361,7 @@ async fn push_profile_and_moderation_contracts_work() {
                     "enabled": true,
                     "actions": ["dont_notify"],
                     "conditions": {
-                        "device_id": "ck:device:01904100-0000-7000-8000-a11ce0000001",
+                        "device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001",
                         "wakeup_kind": "message"
                     }
                 }]
@@ -384,9 +384,9 @@ async fn push_profile_and_moderation_contracts_work() {
     let notify_after_rejected_rule: Value = TestClient::post("http://server/_cokret/edge/push/notify")
         .json(&serde_json::json!({
             "notification": {
-                "push_target_id": "ck:push_target:01904100-0000-7000-8000-000000000001",
+                "push_target_id": "ak:push_target:01904100-0000-7000-8000-000000000001",
                 "wakeup_kind": "message",
-                "devices": [{"device_id": "ck:device:01904100-0000-7000-8000-a11ce0000001"}, {"device_id": "ck:device:01904100-0000-7000-8000-71551c000004"}]
+                "devices": [{"device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001"}, {"device_id": "ak:device:01904100-0000-7000-8000-71551c000004"}]
             }
         }))
         .send(&app_from_state(state.clone()))
@@ -397,7 +397,7 @@ async fn push_profile_and_moderation_contracts_work() {
     let rejected = notify_after_rejected_rule["rejected"].as_array().unwrap();
     assert_eq!(rejected.len(), 1);
     assert!(rejected.iter().any(|device| {
-        device["device_id"] == "ck:device:01904100-0000-7000-8000-71551c000004"
+        device["device_id"] == "ak:device:01904100-0000-7000-8000-71551c000004"
             && device["reason"] == "unknown_device"
     }));
 
@@ -405,7 +405,7 @@ async fn push_profile_and_moderation_contracts_work() {
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
             "realm_id": DEMO_REALM_ID,
-            "target_ref": "ck:event:01904100-0000-7000-8000-4a4116cba4e8",
+            "target_ref": "ak:event:01904100-0000-7000-8000-4a4116cba4e8",
             "report_reason_code": "spam",
             "reporter": "did:web:alice.example"
         }))
@@ -441,7 +441,7 @@ async fn push_profile_and_moderation_contracts_work() {
     let unauthenticated_report = TestClient::post("http://server/_cokret/self/moderation/report")
         .json(&serde_json::json!({
             "realm_id": DEMO_REALM_ID,
-            "target_ref": "ck:event:01904100-0000-7000-8000-4a4116cba4e8",
+            "target_ref": "ak:event:01904100-0000-7000-8000-4a4116cba4e8",
             "report_reason_code": "spam",
             "reporter": "did:web:alice.example"
         }))
@@ -472,7 +472,7 @@ async fn presence_visibility_account_data_requires_encrypted_content() {
         .presence()
         .put(PresenceRecord {
             actor: "did:web:alice.example".to_owned(),
-            device_id: "ck:device:01904100-0000-7000-8000-a11ce0000001".to_owned(),
+            device_id: "ak:device:01904100-0000-7000-8000-a11ce0000001".to_owned(),
             status: "online".to_owned(),
             status_message: None,
             last_active_at: None,
@@ -515,7 +515,7 @@ async fn presence_visibility_account_data_requires_encrypted_content() {
         "encrypted presence preferences must not clear server-visible presence"
     );
 
-    let typing_strand_id = "ck:strand:01904100-0000-7000-8000-7a1c00000004";
+    let typing_strand_id = "ak:strand:01904100-0000-7000-8000-7a1c00000004";
     insert_typing_scope_strand(state.clone(), typing_strand_id, Some(true));
     let typing: Value = TestClient::post("http://server/_cokret/self/ephemeral")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -629,7 +629,7 @@ async fn typing_submit_rejects_unknown_strand_scope() {
         .json(&broadcast_ephemeral_envelope(
             "ck.typing",
             serde_json::json!({
-                "strand_id": new_prefixed_uuid7("ck:strand:"),
+                "strand_id": new_prefixed_uuid7("ak:strand:"),
                 "typing": true
             }),
         ))
@@ -649,7 +649,7 @@ async fn typing_submit_rejects_unknown_strand_scope() {
 async fn typing_submit_accepts_default_realm_strand_scope() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
-    let default_strand_id = DEMO_REALM_ID.replacen("ck:realm:", "ck:strand:", 1);
+    let default_strand_id = DEMO_REALM_ID.replacen("ak:realm:", "ak:strand:", 1);
     let sent_at = chrono::Utc::now();
     let expires_at = sent_at + chrono::Duration::seconds(30);
 
@@ -690,7 +690,7 @@ async fn typing_submit_accepts_default_realm_strand_scope() {
 async fn typing_submit_wakes_account_subscribe_stream() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
-    let strand_id = "ck:strand:01904100-0000-7000-8000-7a1c00000004";
+    let strand_id = "ak:strand:01904100-0000-7000-8000-7a1c00000004";
     insert_typing_scope_strand(state.clone(), strand_id, Some(true));
     let mut wakeups = state.event_broadcast.subscribe();
     let sent_at = chrono::Utc::now();
@@ -735,11 +735,11 @@ async fn typing_submit_is_visible_in_incremental_account_subscribe_delta() {
     let bob_token = dev_token_for_device(
         state.clone(),
         "did:web:bob.example",
-        "ck:device:01904100-0000-7000-8000-b0b000000004",
+        "ak:device:01904100-0000-7000-8000-b0b000000004",
         "Bob Desktop",
     )
     .await;
-    let strand_id = "ck:strand:01904100-0000-7000-8000-7a1c00000005";
+    let strand_id = "ak:strand:01904100-0000-7000-8000-7a1c00000005";
     insert_typing_scope_strand(state.clone(), strand_id, Some(true));
 
     let baseline = account_subscribe_frame(state.clone(), Some(&bob_token), "catchup=true").await;
@@ -798,7 +798,7 @@ async fn typing_submit_is_visible_in_incremental_account_subscribe_delta() {
 async fn typing_submit_rejects_disabled_discussion_strand_scope() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
-    let strand_id = "ck:strand:01904100-0000-7000-8000-7a1c00000001";
+    let strand_id = "ak:strand:01904100-0000-7000-8000-7a1c00000001";
     insert_typing_scope_strand(state.clone(), strand_id, Some(false));
     let sent_at = chrono::Utc::now();
     let expires_at = sent_at + chrono::Duration::seconds(30);
@@ -864,7 +864,7 @@ async fn public_read_receipt_rejected_for_world_readable_realm_without_opt_in() 
         state.clone(),
         &token,
         "did:web:alice.example",
-        "ck:device:01904100-0000-7000-8000-a11ce0000001",
+        "ak:device:01904100-0000-7000-8000-a11ce0000001",
         DEMO_REALM_ID,
         "ck.realm.read_receipt_policy",
         serde_json::json!({
@@ -893,7 +893,7 @@ async fn public_read_receipt_rejected_for_world_readable_realm_without_opt_in() 
             "sent_at": sent_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
             "expires_at": expires_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
             "payload": {
-                "event_id": new_prefixed_uuid7("ck:event:")
+                "event_id": new_prefixed_uuid7("ak:event:")
             }
         }))
         .send(&app_from_state(state.clone()))
@@ -909,7 +909,7 @@ async fn typing_fanout_respects_receiver_blocklist() {
     let bob_token = dev_token_for_device(
         state.clone(),
         "did:web:bob.example",
-        "ck:device:01904100-0000-7000-8000-b0b000000001",
+        "ak:device:01904100-0000-7000-8000-b0b000000001",
         "Bob Desktop",
     )
     .await;
@@ -917,7 +917,7 @@ async fn typing_fanout_respects_receiver_blocklist() {
         state.clone(),
         &bob_token,
         "did:web:bob.example",
-        "ck:device:01904100-0000-7000-8000-b0b000000001",
+        "ak:device:01904100-0000-7000-8000-b0b000000001",
         DEMO_REALM_ID,
         "ck.account_data.set",
         serde_json::json!({
@@ -929,7 +929,7 @@ async fn typing_fanout_respects_receiver_blocklist() {
                     "profile_id": "ck.profile.e2ee_client.v1",
                     "payload_digest": "sha256:abababababababababababababababababababababababababababababababab"
                 },
-                "content_type": "application/vnd.cokret.account-data+json",
+                "content_type": "application/vnd.arkret.account-data+json",
                 "ciphertext": "opaque-bob-blocklist"
             },
             "updated_at": "2026-05-21T00:00:00Z",
@@ -986,11 +986,11 @@ async fn typing_fanout_hides_cached_record_when_discussion_track_disabled() {
     let bob_token = dev_token_for_device(
         state.clone(),
         "did:web:bob.example",
-        "ck:device:01904100-0000-7000-8000-b0b000000002",
+        "ak:device:01904100-0000-7000-8000-b0b000000002",
         "Bob Desktop",
     )
     .await;
-    let strand_id = "ck:strand:01904100-0000-7000-8000-7a1c00000002";
+    let strand_id = "ak:strand:01904100-0000-7000-8000-7a1c00000002";
     insert_typing_scope_strand(state.clone(), strand_id, Some(false));
     let now = chrono::Utc::now();
     state
@@ -1072,8 +1072,8 @@ async fn ephemeral_call_signal_enforces_structural_contract() {
         vec![cokret_sdk::CAP_CALL_SIGNAL_SEND.to_owned()],
         vec![],
     );
-    let call_id = "ck:call:01904100-0000-7000-8000-ca110000001a";
-    let device_id = "ck:device:01904100-0000-7000-8000-a11ce0000001";
+    let call_id = "ak:call:01904100-0000-7000-8000-ca110000001a";
+    let device_id = "ak:device:01904100-0000-7000-8000-a11ce0000001";
 
     let post_signal = |state: AppState, bearer: String, body: Value| async move {
         TestClient::post("http://server/_cokret/self/ephemeral")
@@ -1163,7 +1163,7 @@ async fn push_unregister_mutates_registration_and_gateway_snapshot_gates_notify(
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
     let service = app_from_state(state.clone());
-    let device_id = "ck:device:01904100-0000-7000-8000-a11ce0000001";
+    let device_id = "ak:device:01904100-0000-7000-8000-a11ce0000001";
     let push_gateway = "https://push.example/_cokret/edge/push/notify";
     let bridge_describe = "https://push.example/_floria/push/bridge/describe";
     let stale_at = chrono::Utc::now() - chrono::Duration::hours(25);
@@ -1217,7 +1217,7 @@ async fn push_unregister_mutates_registration_and_gateway_snapshot_gates_notify(
     let stale_notify: Value = TestClient::post("http://server/_cokret/edge/push/notify")
         .json(&serde_json::json!({
             "notification": {
-                "push_target_id": "ck:push_target:01904100-0000-7000-8000-000000000003",
+                "push_target_id": "ak:push_target:01904100-0000-7000-8000-000000000003",
                 "wakeup_kind": "message",
                 "devices": [{"device_id": device_id}]
             }
@@ -1264,7 +1264,7 @@ async fn push_unregister_mutates_registration_and_gateway_snapshot_gates_notify(
     let fresh_notify: Value = TestClient::post("http://server/_cokret/edge/push/notify")
         .json(&serde_json::json!({
             "notification": {
-                "push_target_id": "ck:push_target:01904100-0000-7000-8000-000000000004",
+                "push_target_id": "ak:push_target:01904100-0000-7000-8000-000000000004",
                 "wakeup_kind": "message",
                 "devices": [{"device_id": device_id}]
             }
@@ -1293,7 +1293,7 @@ async fn push_unregister_mutates_registration_and_gateway_snapshot_gates_notify(
     let after_unregister: Value = TestClient::post("http://server/_cokret/edge/push/notify")
         .json(&serde_json::json!({
             "notification": {
-                "push_target_id": "ck:push_target:01904100-0000-7000-8000-000000000005",
+                "push_target_id": "ak:push_target:01904100-0000-7000-8000-000000000005",
                 "wakeup_kind": "message",
                 "devices": [{"device_id": device_id}]
             }

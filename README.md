@@ -1,9 +1,9 @@
 # soland
 
-> **Spec target**: [cokret-spec @ 8a9c32a](../cokret-spec) (v1 sync 2026-06-11)
+> **Spec target**: [arkret-spec @ 8a9c32a](../arkret-spec) (v1 sync 2026-06-11)
 
-Reference Cokret v1 principal server, built with Salvo, Diesel, and
-PostgreSQL. The HTTP surface mirrors `cokret-spec/spec/v1/artifacts/openapi/cokret-service-api.openapi.yaml`;
+Reference Arkret v1 principal server, built with Salvo, Diesel, and
+PostgreSQL. The HTTP surface mirrors `arkret-spec/spec/v1/artifacts/openapi/arkret-service-api.openapi.yaml`;
 in-memory mode keeps the same API for fast local iteration.
 
 > See [DEPLOYMENT.md](DEPLOYMENT.md) for production guidance, [SECURITY.md](SECURITY.md)
@@ -35,7 +35,7 @@ security-boundary lifecycle and policy events use `ck.realm.*`.
 
 ## Round R4 (protocol review closures)
 
-Spec round 4 (`cokret-spec` range `2a4d39b..a77b995`, 8 commits) lands
+Spec round 4 (`arkret-spec` range `2a4d39b..a77b995`, 8 commits) lands
 on top of R2/R3. See [`CHANGELOG.md`](CHANGELOG.md) `[Unreleased]` and
 [`../_todos.md`](../_todos.md) for the canonical wire-breaking list.
 Operator-visible highlights:
@@ -73,7 +73,7 @@ Operator-visible highlights:
 Spec rounds 2+3 (2026-05-20) introduced wire-breaking changes that the
 operator must address at boot — see
 [`CHANGELOG.md`](CHANGELOG.md) `[Unreleased]` and
-[`../cokret-spec/CHANGELOG.md`](../cokret-spec/CHANGELOG.md) for the
+[`../arkret-spec/CHANGELOG.md`](../arkret-spec/CHANGELOG.md) for the
 normative source. The key operational hooks:
 
 - **`SOLAND_TRUST_DOMAIN`** — required `ck:trust_domain:<scope>` value
@@ -91,12 +91,12 @@ normative source. The key operational hooks:
 
 ## Quick start
 
-soland depends on the `cokret` crate at `../cokret-rust-sdk/crates/sdk`.
+soland depends on the `arkret` crate at `../arkret-rust-sdk/crates/sdk`.
 Clone both repos side by side:
 
 ```bash
-git clone https://github.com/cokret/cokret-rust-sdk.git
-git clone https://github.com/cokret/soland.git
+git clone https://github.com/arkret/arkret-rust-sdk.git
+git clone https://github.com/arkret/soland.git
 cd soland
 ```
 
@@ -173,7 +173,7 @@ docker run --rm -p 8698:8698 \
   -e SOLAND_OBJECT_STORAGE_BACKEND=filesystem \
   -e SOLAND_OBJECT_STORAGE_LOCAL_ROOT=/var/lib/soland/objects \
   -v soland-objects:/var/lib/soland \
-  ghcr.io/cokret/soland:latest
+  ghcr.io/arkret/soland:latest
 ```
 
 See [DEPLOYMENT.md](DEPLOYMENT.md) for a full Docker / PostgreSQL / TLS guide.
@@ -298,9 +298,9 @@ SOLAND_EMBEDDED_WEBVH_REGISTRATION_BEARER=local-soland-webvh-registration
 ```
 
 Those bearer values must match coauth's
-`cokret.principal_servers[]` entry for `https://local.host/`. If coauth
+`arkret.principal_servers[]` entry for `https://local.host/`. If coauth
 is still using an old local file with a `contrix:` section, rename that
-section to `cokret:` before restarting it; otherwise coauth will reject
+section to `arkret:` before restarting it; otherwise coauth will reject
 soland's introspection call and browser sign-in will end with
 `unauthenticated: invalid bearer token`.
 
@@ -332,7 +332,7 @@ rather than the internal registration API path.
 Production authentication presents the coauth-issued `ck.session.grant`
 directly to soland as `Authorization: Bearer <ck.session.grant>` plus a DPoP
 proof. soland validates the grant through session-grant introspection, requires
-`urn:cokret:principal-server:session.bind`, and maps the introspection subject
+`urn:arkret:principal-server:session.bind`, and maps the introspection subject
 and device binding into the local request-scoped account/device view. soland no
 longer exposes a Principal-local credential issuance endpoint for production
 grants.
@@ -364,12 +364,12 @@ and reject plaintext blobs in private Spaces unless this service is listed in
 
 ## API surface
 
-soland exposes the canonical Cokret v1 routes from the operation registry; local
+soland exposes the canonical Arkret v1 routes from the operation registry; local
 operator/product surfaces live under `/_soland/...`. Highlights:
 
 - `GET  /health` — liveness + DB / persistence probe (used as the Docker healthcheck)
 - `GET  /readyz` — readiness probe for DB, boot migrations, introspection bearer config, and external webvh boot probe state
-- `GET  /.well-known/cokret/openapi.json` and `.../openapi.yaml` — the
+- `GET  /.well-known/arkret/openapi.json` and `.../openapi.yaml` — the
   generated OpenAPI 3.1 document from soland's Salvo route wiring
 - `GET  /.well-known/mimi-protocol-directory`
 - `POST /_cokret/self/events`, `GET /_cokret/self/events/describe`, …
@@ -384,8 +384,8 @@ and `/_soland/gate/auth/dev-login` are gated behind `SOLAND_DEVELOPMENT_MODE=tru
 Workspace layout (the CI checkout assumes the same):
 
 ```
-cokret/
-├── cokret-rust-sdk/       # https://github.com/cokret/cokret-rust-sdk
+arkret/
+├── arkret-rust-sdk/       # https://github.com/arkret/arkret-rust-sdk
 │   └── crates/sdk
 └── soland/                 # this repo
     ├── src/
@@ -441,5 +441,5 @@ Apache-2.0 — see [LICENSE](LICENSE).
 
 <!-- circle-rollout milestone pointer -->
 > **Active milestone tracking** (local-only, gitignored): see
-> `_soland_todos.md` in the parent `cokret/` directory for the
+> `_soland_todos.md` in the parent `arkret/` directory for the
 > circle-rollout (CKP-0007) work item list and per-stage checkpoints.

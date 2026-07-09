@@ -1,6 +1,6 @@
 # Deploying soland
 
-Production guidance for running soland as a single-process Cokret v1 reference
+Production guidance for running soland as a single-process Arkret v1 reference
 server. soland is pre-1.0 — review [_todos.md](_todos.md) for the open scaffold
 endpoints (push outbound, MIMI provider directory and directory discovery)
 before serving real users.
@@ -123,7 +123,7 @@ soland --bind "${SOLAND_BIND}" --help    # cheap startup sanity check
 
 ```ini
 [Unit]
-Description=soland — Cokret v1 principal server
+Description=soland — Arkret v1 principal server
 After=network-online.target postgresql.service
 Wants=network-online.target
 
@@ -167,7 +167,7 @@ docker run --name soland --restart=always -d \
   -e SOLAND_OBJECT_STORAGE_LOCAL_ROOT=/var/lib/soland/objects \
   -e RUST_LOG=soland=info \
   -v soland-objects:/var/lib/soland \
-  ghcr.io/cokret/soland:<tag>
+  ghcr.io/arkret/soland:<tag>
 ```
 
 The image runs as UID `10001`. Mounted volumes for
@@ -182,7 +182,7 @@ so secrets and network ranges are explicit in the release artifact:
 
 ```bash
 helm template soland ./deploy/helm/soland \
-  --namespace cokret \
+  --namespace arkret \
   --set image.tag=<tag> \
   --set env.SOLAND_PUBLIC_BASE_URL=https://soland.example \
   --set env.SOLAND_SERVICE_DID=did:webvh:<scid>:soland.example:webvh:service \
@@ -196,7 +196,7 @@ Install the same values with:
 
 ```bash
 helm upgrade --install soland ./deploy/helm/soland \
-  --namespace cokret --create-namespace \
+  --namespace arkret --create-namespace \
   -f production-values.yaml
 ```
 
@@ -209,7 +209,7 @@ does not set it by default.
 ## 4. Front with TLS
 
 soland speaks plaintext HTTP — terminate TLS in the reverse proxy.
-The Cokret v1 transport baseline requires TLS 1.3 connections to negotiate
+The Arkret v1 transport baseline requires TLS 1.3 connections to negotiate
 `X25519MLKEM768` and fail closed when the peer cannot offer it. Run that
 handshake probe against the externally reachable client-service and
 service-to-service listener, then set `SOLAND_PQ_TLS_DEPLOYMENT_PROBE=verified`
@@ -234,9 +234,9 @@ soland.example {
 }
 ```
 
-Make sure the proxy passes the `Authorization`, `X-Cokret-Wait-For`,
-`X-Cokret-SHA256`, and `Range` request headers; soland sends back
-`Retry-After`, `X-Cokret-Wait-For-Satisfied`, `Content-Range`, and
+Make sure the proxy passes the `Authorization`, `X-Arkret-Wait-For`,
+`X-Arkret-SHA256`, and `Range` request headers; soland sends back
+`Retry-After`, `X-Arkret-Wait-For-Satisfied`, `Content-Range`, and
 `Accept-Ranges`.
 
 ## 5. Health checks
@@ -553,7 +553,7 @@ geo-distributed pools):
   "media_service": {
     "foci": [
       {
-        "focus_id": "ck:focus:livekit:eu-west-1",
+        "focus_id": "ak:focus:livekit:eu-west-1",
         "backend": "livekit",
         "connect_url": "https://sfu.eu-west-1.example.org",
         "issuer_kid": "ck-media-issuer/example/2026-05"

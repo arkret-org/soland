@@ -11,7 +11,7 @@
 //! read path referenced by `realm-and-space.md` §2.3.0 — soland never invents a
 //! private endpoint for it.
 //!
-//! Spec: `cokret-spec/spec/v1/zh/models/realm-and-space.md` §2.3.0; response
+//! Spec: `arkret-spec/spec/v1/zh/models/realm-and-space.md` §2.3.0; response
 //! schema `realm-organization-operations.schema.json`.
 
 use std::collections::BTreeSet;

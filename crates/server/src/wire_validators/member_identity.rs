@@ -1,4 +1,4 @@
-//! MIU-SOL-1 (R3.2, cokret-spec @ b56cab1) — `ck.member.identity.update`
+//! MIU-SOL-1 (R3.2, arkret-spec @ b56cab1) — `ck.member.identity.update`
 //! payload deny check for the removed handle fields.
 //!
 //! `MemberIdentity` no longer carries handle lifecycle: `primary_handle`
@@ -60,7 +60,7 @@ mod tests {
     #[test]
     fn accepts_clean_payload() {
         let payload = json!({
-            "realm_id": "ck:realm:01904100-0000-7000-8000-000000000001",
+            "realm_id": "ak:realm:01904100-0000-7000-8000-000000000001",
             "actor_id": "did:web:alice.example",
             "segment": "member_identity",
             "identity_payload": {

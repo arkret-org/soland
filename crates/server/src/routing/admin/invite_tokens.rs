@@ -38,11 +38,11 @@ pub struct CreateInviteTokenRequest {
 }
 
 #[endpoint(
-    operation_id = "org.cokret.soland.admin.invite_tokens.create",
+    operation_id = "org.arkret.soland.admin.invite_tokens.create",
     tags("soland-admin", "invite_tokens"),
     summary = "Create a single-use Realm invite token"
 )]
-#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.admin.invite_tokens.create"))]
+#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.admin.invite_tokens.create"))]
 async fn create_invite_token(
     aa: AuthArgs,
     body: JsonBody<CreateInviteTokenRequest>,
@@ -114,11 +114,11 @@ async fn create_invite_token(
 }
 
 #[endpoint(
-    operation_id = "org.cokret.soland.admin.invite_tokens.revoke",
+    operation_id = "org.arkret.soland.admin.invite_tokens.revoke",
     tags("soland-admin", "invite_tokens"),
     summary = "Revoke a Realm invite token"
 )]
-#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.admin.invite_tokens.revoke"))]
+#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.admin.invite_tokens.revoke"))]
 async fn revoke_invite_token(
     aa: AuthArgs,
     invite_id: PathParam<String>,

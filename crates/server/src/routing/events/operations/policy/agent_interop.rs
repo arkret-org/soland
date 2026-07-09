@@ -39,7 +39,7 @@ pub(super) fn agent_interop_session_id_from_payload(payload: &Value) -> Option<&
     payload
         .get("session_id")
         .and_then(Value::as_str)
-        .filter(|value| value.starts_with("ck:agent_interop_session:"))
+        .filter(|value| value.starts_with("ak:agent_interop_session:"))
 }
 
 pub(super) async fn agent_interop_session_start_actor(

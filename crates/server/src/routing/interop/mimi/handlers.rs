@@ -83,7 +83,7 @@ pub(super) async fn mimi_room_update(
         return Err(AppError::invalid_param("invalid MIMI room id"));
     }
     // If the update carries a `room_binding` block, persist it as a
-    // `ck.mimi.room_binding` projection event so the Cokret
+    // `ck.mimi.room_binding` projection event so the Arkret
     // timeline observes the binding. Updates without a binding block
     // fall through to the receipt-only response. A binding block that
     // omits both `binding_scope.realm_id` and a top-level `realm_id`
@@ -160,7 +160,7 @@ pub(super) async fn mimi_notify(
     // spec's wire_scope taxonomy - we broadcast but don't persist
     // into projection_events so it doesn't pollute durable history.
     let realm_id = mimi_bound_realm_id(state, &room_id).await.ok_or_else(|| {
-        AppError::not_found("MIMI room is not bound to any Cokret Realm")
+        AppError::not_found("MIMI room is not bound to any Arkret Realm")
             .with_wire_code(MIMI_REASON_GOVERNANCE_BINDING_MISSING)
     })?;
     let event_id = ids::generate_event_id();
@@ -248,7 +248,7 @@ pub(super) async fn mimi_room_message(
         .unwrap_or_else(|| {
             format!(
                 "mimi-msg-{}",
-                operation_id.trim_start_matches("ck:operation:")
+                operation_id.trim_start_matches("ak:operation:")
             )
         });
     let original_hash = body
@@ -257,7 +257,7 @@ pub(super) async fn mimi_room_message(
         .map(str::to_owned)
         .unwrap_or_else(|| cokret_sdk::canonical::sha256_digest(body.to_string().as_bytes()));
 
-    // Map the MIMI message into the canonical Cokret timeline.
+    // Map the MIMI message into the canonical Arkret timeline.
     // Append a MessageRecord + a `ck.message.create` projection event so
     // the message shows up in `GET /_cokret/self/events?realm_id=...`. The
     // MIMI provenance metadata is preserved verbatim under
@@ -266,7 +266,7 @@ pub(super) async fn mimi_room_message(
     let room_binding = latest_mimi_room_binding(state, &room_id)
         .await
         .ok_or_else(|| {
-            AppError::not_found("MIMI room is not bound to any Cokret Realm")
+            AppError::not_found("MIMI room is not bound to any Arkret Realm")
                 .with_wire_code(MIMI_REASON_GOVERNANCE_BINDING_MISSING)
         })?;
     enforce_mimi_submit_binding(&room_binding, &body, &message)?;
@@ -413,7 +413,7 @@ pub(super) async fn mimi_group_info(
         return Err(AppError::invalid_param("invalid MIMI room id"));
     }
     let realm_id = mimi_bound_realm_id(state, &room_id).await.ok_or_else(|| {
-        AppError::not_found("MIMI room is not bound to any Cokret Realm")
+        AppError::not_found("MIMI room is not bound to any Arkret Realm")
             .with_wire_code(MIMI_REASON_GOVERNANCE_BINDING_MISSING)
     })?;
     let projection = mimi_room_projection(state, &room_id, &realm_id);
@@ -687,7 +687,7 @@ pub(super) async fn mimi_report_abuse(
         bound
     } else {
         return Err(AppError::invalid_param(
-            "mimi report requires `realm_id` or a `mimi_room_uri` that resolves to a bound Cokret Realm",
+            "mimi report requires `realm_id` or a `mimi_room_uri` that resolves to a bound Arkret Realm",
         )
         .with_wire_code(MIMI_REASON_GOVERNANCE_BINDING_MISSING));
     };
@@ -755,7 +755,7 @@ pub(super) async fn mimi_report_abuse(
 
     // Also emit a `ck.self.moderation.report` projection event so the
     // audit timeline observes the report in the same shape native
-    // Cokret reports use. The MIMI provenance is preserved under
+    // Arkret reports use. The MIMI provenance is preserved under
     // `payload.mimi_provenance`.
     let mut projection_payload = serde_json::Map::new();
     projection_payload.insert("report_id".to_owned(), json!(report_id));
@@ -955,7 +955,7 @@ pub(super) fn enforce_mimi_proxy_download_egress_policy(
         ));
     }
     let asset_ref = asset_ref.trim();
-    if asset_ref.starts_with("ck:blob:") {
+    if asset_ref.starts_with("ak:blob:") {
         return Ok(());
     }
     if asset_ref.starts_with("//") || asset_ref.contains('\\') {

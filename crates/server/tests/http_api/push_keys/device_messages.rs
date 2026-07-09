@@ -17,7 +17,7 @@ async fn server_preserves_e2ee_payloads_as_opaque_data() {
         .json(&serde_json::json!({
             "messages": {
                 "did:web:alice.example": {
-                    "ck:device:01904100-0000-7000-8000-a11ce0000001":
+                    "ak:device:01904100-0000-7000-8000-a11ce0000001":
                         device_message_target("ck.mls.application", encrypted_envelope("ck.mls.application", ciphertext))
                 }
             }
@@ -54,7 +54,7 @@ async fn to_device_messages_survive_duplicate_sync_until_ack_token_consumed() {
         .json(&serde_json::json!({
             "messages": {
                 "did:web:alice.example": {
-                    "ck:device:01904100-0000-7000-8000-a11ce0000001":
+                    "ak:device:01904100-0000-7000-8000-a11ce0000001":
                         device_message_target("ck.mls.application", encrypted_envelope("ck.mls.application", "ack-ciphertext"))
                 }
             }
@@ -151,7 +151,7 @@ async fn expired_to_device_messages_signal_lost_and_advance_cursor() {
         .json(&serde_json::json!({
             "messages": {
                 "did:web:alice.example": {
-                    "ck:device:01904100-0000-7000-8000-a11ce0000001": expired_target
+                    "ak:device:01904100-0000-7000-8000-a11ce0000001": expired_target
                 }
             }
         }))
@@ -199,7 +199,7 @@ async fn expired_to_device_messages_signal_lost_and_advance_cursor() {
         .json(&serde_json::json!({
             "messages": {
                 "did:web:alice.example": {
-                    "ck:device:01904100-0000-7000-8000-a11ce0000001": expired_for_subscribe
+                    "ak:device:01904100-0000-7000-8000-a11ce0000001": expired_for_subscribe
                 }
             }
         }))
@@ -233,7 +233,7 @@ async fn device_messages_evicted_after_session_logout() {
         .json(&serde_json::json!({
             "messages": {
                 "did:web:alice.example": {
-                    "ck:device:01904100-0000-7000-8000-a11ce0000001":
+                    "ak:device:01904100-0000-7000-8000-a11ce0000001":
                         device_message_target("ck.mls.welcome", encrypted_envelope("ck.mls.welcome", "logout-ciphertext"))
                 }
             }

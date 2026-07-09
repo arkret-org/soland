@@ -24,18 +24,18 @@ jobs:
         with:
           path: soland
 
-      - name: Checkout Cokret Rust SDK
+      - name: Checkout Arkret Rust SDK
         uses: actions/checkout@v6
         with:
-          repository: ${{ github.repository_owner }}/cokret-rust-sdk
-          path: cokret-rust-sdk
+          repository: ${{ github.repository_owner }}/arkret-rust-sdk
+          path: arkret-rust-sdk
           token: ${{ secrets.CI_REPO_TOKEN || github.token }}
 
-      - name: Checkout Cokret Spec
+      - name: Checkout Arkret Spec
         uses: actions/checkout@v6
         with:
-          repository: ${{ github.repository_owner }}/cokret-spec
-          path: cokret-spec
+          repository: ${{ github.repository_owner }}/arkret-spec
+          path: arkret-spec
           token: ${{ secrets.CI_REPO_TOKEN || github.token }}
 
       - name: Set up QEMU
@@ -62,8 +62,8 @@ jobs:
           context: soland
           file: soland/Dockerfile
           build-contexts: |
-            cokret-rust-sdk=cokret-rust-sdk
-            cokret-spec=cokret-spec
+            arkret-rust-sdk=arkret-rust-sdk
+            arkret-spec=arkret-spec
           load: true
           tags: ${{ env.IMAGE_NAME }}
           labels: ${{ steps.meta.outputs.labels }}

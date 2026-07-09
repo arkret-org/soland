@@ -48,7 +48,7 @@ async fn admin_get_cell_on_unknown_cell_returns_404_envelope() {
     // Cell family is registered (member.state.v1 lives in the SDK default
     // registry) but no Move ever wrote to this subject — so the cell is
     // "absent" and the endpoint returns 404 with the canonical envelope.
-    let unknown = "ck:cell:ck.component.member.state.v1:did.web.nobody.example";
+    let unknown = "ak:cell:ck.component.member.state.v1:did.web.nobody.example";
     let mut resp = TestClient::get(format!(
         "http://server/_soland/admin/cells/{unknown}?realm_id={}",
         realm_id().as_str()

@@ -220,7 +220,7 @@ pub enum ProjectionEffect {
     AgentProjectionUpdated {
         agent_id: String,
     },
-    /// REDU-1 (R3 spec-sync 2026-05-27, cokret-spec b47ff6ec) — agent
+    /// REDU-1 (R3 spec-sync 2026-05-27, arkret-spec b47ff6ec) — agent
     /// lifecycle FSM transition projected. `agent_principal_id` is the DID
     /// from the payload; `new_state` is the post-transition
     /// AgentLifecycleState. Bottom = `Reject`;
@@ -252,7 +252,7 @@ pub enum ProjectionEffect {
         kind: &'static str,
         event_id: String,
     },
-    /// MID-1..6 (R3.1/R3.2, cokret-spec @ b56cab1) —
+    /// MID-1..6 (R3.1/R3.2, arkret-spec @ b56cab1) —
     /// `ck.member.identity.update` accepted into the ordered-log
     /// `ck.component.member.identity.v1` cell. The actual replacement-edge
     /// filter + per-actor effective-set / `member_display_state_digest`

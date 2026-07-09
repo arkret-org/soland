@@ -44,7 +44,7 @@ async fn sync_directory_and_index_share_demo_realm() {
         sync["realms"]
             .as_object()
             .unwrap()
-            .contains_key("ck:realm:0196419b-0000-7000-8000-000000000000")
+            .contains_key("ak:realm:0196419b-0000-7000-8000-000000000000")
     );
 
     let directory: Value = TestClient::post("http://server/_cokret/find/directory/search-realms")
@@ -57,7 +57,7 @@ async fn sync_directory_and_index_share_demo_realm() {
     assert_eq!(directory["realms"].as_array().unwrap().len(), 1);
 
     let index: Value = TestClient::post("http://server/_soland/self/index/query")
-        .json(&serde_json::json!({"realm_ids": ["ck:realm:0196419b-0000-7000-8000-000000000000"]}))
+        .json(&serde_json::json!({"realm_ids": ["ak:realm:0196419b-0000-7000-8000-000000000000"]}))
         .send(&app())
         .await
         .take_json()
@@ -70,7 +70,7 @@ async fn sync_directory_and_index_share_demo_realm() {
 async fn directory_product_endpoints_return_demo_projection_shapes() {
     let organizations: Value =
         TestClient::post("http://server/_cokret/find/directory/search-organizations")
-            .json(&serde_json::json!({"query": "cokret", "limit": 10}))
+            .json(&serde_json::json!({"query": "arkret", "limit": 10}))
             .send(&app())
             .await
             .take_json()
@@ -82,11 +82,11 @@ async fn directory_product_endpoints_return_demo_projection_shapes() {
     );
     assert_eq!(
         organizations["organizations"][0]["display_name"],
-        "Cokret Demo Organization"
+        "Arkret Demo Organization"
     );
     assert_eq!(
         organizations["organizations"][0]["source_refs"][0],
-        "ck:event:0196419b-0000-7000-8000-0000000000d0"
+        "ak:event:0196419b-0000-7000-8000-0000000000d0"
     );
     assert_eq!(
         organizations["organizations"][0]["policy_revision"],
@@ -95,7 +95,7 @@ async fn directory_product_endpoints_return_demo_projection_shapes() {
 
     let organization: Value =
         TestClient::post("http://server/_cokret/find/directory/resolve-organization")
-            .json(&serde_json::json!({"handle": "@cokret-demo"}))
+            .json(&serde_json::json!({"handle": "@arkret-demo"}))
             .send(&app())
             .await
             .take_json()
@@ -103,11 +103,11 @@ async fn directory_product_endpoints_return_demo_projection_shapes() {
             .unwrap();
     assert_eq!(
         organization["organization_preview"]["handle"],
-        "@cokret-demo"
+        "@arkret-demo"
     );
     assert_eq!(
         organization["organization_preview"]["display_name"],
-        "Cokret Demo Organization"
+        "Arkret Demo Organization"
     );
     assert_eq!(
         organization["organization_preview"]["policy_revision"],
@@ -134,7 +134,7 @@ async fn directory_product_endpoints_return_demo_projection_shapes() {
         .take_json()
         .await
         .unwrap();
-    // DIR-1 (R3.1, cokret-spec @ 7157ee8) — search_users rows surface the
+    // DIR-1 (R3.1, arkret-spec @ 7157ee8) — search_users rows surface the
     // canonical `<localpart>:<domain>` form (handle-claim.schema.json) and
     // no longer carry `handle_uri` / `presence` / `organization_id`.
     assert_eq!(users["users"][0]["did"], "did:web:alice.example");
@@ -155,7 +155,7 @@ async fn directory_product_endpoints_return_demo_projection_shapes() {
         handle["handle_claim"]["schema"],
         "ck.schema.handle_claim.v1"
     );
-    // HDLREN-2 (cokret-spec @ 7157ee8) — canonical handle wire form is
+    // HDLREN-2 (arkret-spec @ 7157ee8) — canonical handle wire form is
     // `<localpart>:<domain>`. `handle_uri` is gone from the claim shape.
     assert_eq!(handle["handle_claim"]["handle"], "alice:soland.local");
     assert!(handle["handle_claim"].get("handle_uri").is_none());
@@ -226,7 +226,7 @@ async fn account_primary_handle_claim_is_listed_for_webvh_service_did() {
     config.trust_domain = trust_domain_from_service_did(&config.service_did);
     let state = AppState::new(config, Db { pool: None });
     let did = "did:web:registered-handle.example";
-    let device = "ck:device:01904100-0000-7000-8000-00000000a11c";
+    let device = "ak:device:01904100-0000-7000-8000-00000000a11c";
     seed_did_document_also_known_as(&state, did, &["acct:alice@local.host"]).await;
 
     let registered: Value = TestClient::post("http://server/_cokret/gate/account/register")
@@ -289,7 +289,7 @@ async fn directory_resolve_handle_invite_accepts_canonical_handles_without_conta
         state.clone(),
         "did:web:bob.example",
         "@bob",
-        "ck:device:01904100-0000-7000-8000-b0b0b0000002",
+        "ak:device:01904100-0000-7000-8000-b0b0b0000002",
     )
     .await;
     seed_did_document_also_known_as(
@@ -412,7 +412,7 @@ async fn directory_demo_projection_rejects_outside_development_mode() {
     let not_found_cases = [
         (
             "resolve-organization",
-            serde_json::json!({"handle": "@cokret-demo"}),
+            serde_json::json!({"handle": "@arkret-demo"}),
         ),
         ("search-actors", serde_json::json!({"query": "alice"})),
         ("search-users", serde_json::json!({"query": "alice"})),
@@ -444,7 +444,7 @@ async fn directory_demo_projection_rejects_outside_development_mode() {
 
     let empty_search_cases = [(
         "search-organizations",
-        serde_json::json!({"query": "cokret", "limit": 10}),
+        serde_json::json!({"query": "arkret", "limit": 10}),
     )];
 
     for (path, body) in empty_search_cases {
@@ -503,11 +503,11 @@ async fn directory_resolve_target_preview_requires_effective_preview_policy() {
     )
     .await;
     let realm_id = realm["realm_id"].as_str().unwrap();
-    let realm_uuid = realm_id.strip_prefix("ck:realm:").unwrap();
-    let strand_id = new_prefixed_uuid7("ck:strand:");
-    let strand_uuid = strand_id.strip_prefix("ck:strand:").unwrap();
+    let realm_uuid = realm_id.strip_prefix("ak:realm:").unwrap();
+    let strand_id = new_prefixed_uuid7("ak:strand:");
+    let strand_uuid = strand_id.strip_prefix("ak:strand:").unwrap();
     let address = format!(
-        "web+cokret:realm/{realm_uuid}/strand/{strand_uuid}?via=did:web:soland.local&lt=preview"
+        "web+arkret:realm/{realm_uuid}/strand/{strand_uuid}?via=did:web:soland.local&lt=preview"
     );
     let token = preview_token_for_address(
         &state,
@@ -561,11 +561,11 @@ async fn directory_resolve_target_preview_returns_policy_limited_projection() {
         .await
         .unwrap();
 
-    let realm_uuid = realm_id.strip_prefix("ck:realm:").unwrap();
-    let strand_id = new_prefixed_uuid7("ck:strand:");
-    let strand_uuid = strand_id.strip_prefix("ck:strand:").unwrap();
+    let realm_uuid = realm_id.strip_prefix("ak:realm:").unwrap();
+    let strand_id = new_prefixed_uuid7("ak:strand:");
+    let strand_uuid = strand_id.strip_prefix("ak:strand:").unwrap();
     let address = format!(
-        "web+cokret:realm/{realm_uuid}/strand/{strand_uuid}?via=did:web:soland.local&lt=preview"
+        "web+arkret:realm/{realm_uuid}/strand/{strand_uuid}?via=did:web:soland.local&lt=preview"
     );
     let token = preview_token_for_address(&state, &address, realm_id, &policy_digest);
     let resolved: Value = TestClient::post("http://server/_cokret/find/directory/resolve-target")
@@ -642,7 +642,7 @@ fn preview_token_for_address(
         "iss": state.config.service_did.clone(),
         "aud": "anonymous",
         "exp": (chrono::Utc::now() + chrono::Duration::minutes(10)).to_rfc3339(),
-        "nonce": new_prefixed_uuid7("ck:nonce:"),
+        "nonce": new_prefixed_uuid7("ak:nonce:"),
         "target_digest": target_digest,
         "link_type": "preview",
         "preview_policy_digest": preview_policy_digest,
@@ -659,7 +659,7 @@ fn preview_token_for_address(
         "jws": jws,
     });
     format!(
-        "ck:preview-token:{}",
+        "ak:preview-token:{}",
         URL_SAFE_NO_PAD.encode(claim.to_string())
     )
 }
@@ -686,7 +686,7 @@ async fn index_product_endpoints_return_demo_projection_shapes() {
             .take_json()
             .await
             .unwrap();
-    assert_eq!(thread["thread"]["thread_id"], "ck:strand:demo");
+    assert_eq!(thread["thread"]["thread_id"], "ak:strand:demo");
     assert!(thread["events"].as_array().unwrap().is_empty());
 
     let notifications: Value = TestClient::get(
@@ -730,7 +730,7 @@ async fn index_product_endpoints_return_demo_projection_shapes() {
     .unwrap();
     assert_eq!(
         hierarchy["root_space_id"],
-        "ck:space:0196419b-0000-7000-8000-000000000000"
+        "ak:space:0196419b-0000-7000-8000-000000000000"
     );
 
     let invalid = TestClient::post("http://server/_soland/self/index/search")
@@ -797,9 +797,9 @@ async fn broader_protocol_surface_returns_contract_shapes() {
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
             "realm_id": DEMO_REALM_ID,
-            "call_id": "ck:call:01964137-0000-7000-8000-000000000001",
+            "call_id": "ak:call:01964137-0000-7000-8000-000000000001",
             "actor_id": "did:web:alice.example",
-            "device_id": "ck:device:01904100-0000-7000-8000-a11ce0000001"
+            "device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001"
         }))
         .send(&app_from_state(state))
         .await
@@ -882,7 +882,7 @@ async fn admin_collection_surfaces_return_sodmin_shapes() {
         .unwrap();
     assert!(devices["devices"].as_array().unwrap().iter().any(|device| {
         device["actor"] == "did:web:alice.example"
-            && device["device_id"] == "ck:device:01904100-0000-7000-8000-a11ce0000001"
+            && device["device_id"] == "ak:device:01904100-0000-7000-8000-a11ce0000001"
     }));
 
     let unknown = TestClient::get("http://server/_soland/admin/not-real")

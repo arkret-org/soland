@@ -25,7 +25,7 @@ use soland::service;
 use soland::state::AppState;
 use soland_data::Db;
 
-const DEMO_REALM_ID: &str = "ck:realm:0196419b-0000-7000-8000-000000000000";
+const DEMO_REALM_ID: &str = "ak:realm:0196419b-0000-7000-8000-000000000000";
 
 fn test_config() -> AppConfig {
     AppConfig {
@@ -45,7 +45,7 @@ async fn dev_token(state: AppState) -> String {
     let login: Value = TestClient::post("http://server/_soland/gate/auth/dev-login")
         .json(&json!({
             "actor": "did:web:alice.example",
-            "device_id": "ck:device:01904100-0000-7000-8000-a11ce0000001",
+            "device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001",
             "display_name": "Alice"
         }))
         .send(&service(state))
@@ -97,7 +97,7 @@ async fn applet_install_package_registers_bot_projection_smoke() {
     let app = service(state.clone());
     let suffix = uuid::Uuid::now_v7().simple().to_string();
     let realm_id = DEMO_REALM_ID;
-    let applet_id = cokret_sdk::new_prefixed_uuid7("ck:applet:");
+    let applet_id = cokret_sdk::new_prefixed_uuid7("ak:applet:");
     let namespace = format!("bridge.install.{suffix}");
     let package = signed_applet_package(&applet_id, &namespace);
     ingest_applet_service_did_document(&state, &package).await;
@@ -172,7 +172,7 @@ async fn applet_ghost_actor_provision_writes_durable_profile_and_grant_events() 
     let token = dev_token(state.clone()).await;
     let app = service(state.clone());
     let suffix = uuid::Uuid::now_v7().simple().to_string();
-    let applet_id = cokret_sdk::new_prefixed_uuid7("ck:applet:");
+    let applet_id = cokret_sdk::new_prefixed_uuid7("ak:applet:");
     let namespace = format!("bridge.provision.{suffix}");
     let package = signed_applet_package(&applet_id, &namespace);
     ingest_applet_service_did_document(&state, &package).await;
@@ -219,8 +219,8 @@ async fn applet_ghost_actor_provision_writes_durable_profile_and_grant_events() 
     let profile_event_ref = provision["profile_event_ref"].as_str().unwrap();
     let accountability_grant_ref = provision["accountability_grant_ref"].as_str().unwrap();
     let authorization_ref = provision["authorization_ref"].as_str().unwrap();
-    assert!(profile_event_ref.starts_with("ck:event:"));
-    assert!(accountability_grant_ref.starts_with("ck:event:"));
+    assert!(profile_event_ref.starts_with("ak:event:"));
+    assert!(accountability_grant_ref.starts_with("ak:event:"));
     assert_eq!(authorization_ref, accountability_grant_ref);
 
     let profile_event = state
@@ -308,7 +308,7 @@ async fn applet_ghost_actor_provision_requires_approved_ghost_scope() {
     let token = dev_token(state.clone()).await;
     let app = service(state.clone());
     let suffix = uuid::Uuid::now_v7().simple().to_string();
-    let applet_id = cokret_sdk::new_prefixed_uuid7("ck:applet:");
+    let applet_id = cokret_sdk::new_prefixed_uuid7("ak:applet:");
     let namespace = format!("bridge.no-ghost-scope.{suffix}");
     let package = signed_applet_package(&applet_id, &namespace);
     ingest_applet_service_did_document(&state, &package).await;
@@ -357,7 +357,7 @@ async fn applet_ghost_actor_provision_rejects_actor_namespace_mismatch() {
     let token = dev_token(state.clone()).await;
     let app = service(state.clone());
     let suffix = uuid::Uuid::now_v7().simple().to_string();
-    let applet_id = cokret_sdk::new_prefixed_uuid7("ck:applet:");
+    let applet_id = cokret_sdk::new_prefixed_uuid7("ak:applet:");
     let namespace = format!("bridge.namespace.{suffix}");
     let package = signed_applet_package(&applet_id, &namespace);
     ingest_applet_service_did_document(&state, &package).await;
@@ -494,7 +494,7 @@ fn applet_message_event(
         },
     });
     let mut event = json!({
-        "event_id": cokret_sdk::new_prefixed_uuid7("ck:event:"),
+        "event_id": cokret_sdk::new_prefixed_uuid7("ak:event:"),
         "kind": "ck.message.create",
         "realm_id": realm_id,
         "actor_id": actor_id,
@@ -574,9 +574,9 @@ fn applet_service_signing_key(verification_method: &str) -> SigningKey {
 
 fn strand_id_for_realm(realm_id: &str) -> String {
     realm_id
-        .strip_prefix("ck:realm:")
-        .map(|suffix| format!("ck:strand:{suffix}"))
-        .unwrap_or_else(|| "ck:strand:01904100-0000-7000-8000-f10dc0000001".to_owned())
+        .strip_prefix("ak:realm:")
+        .map(|suffix| format!("ak:strand:{suffix}"))
+        .unwrap_or_else(|| "ak:strand:01904100-0000-7000-8000-f10dc0000001".to_owned())
 }
 
 #[tokio::test]
@@ -585,7 +585,7 @@ async fn applet_bridge_register_ghost_route_revoke_smoke() {
     let token = dev_token(state.clone()).await;
     let app = service(state.clone());
     let suffix = uuid::Uuid::now_v7().simple().to_string();
-    let applet_id = cokret_sdk::new_prefixed_uuid7("ck:applet:");
+    let applet_id = cokret_sdk::new_prefixed_uuid7("ak:applet:");
     let namespace = format!("bridge.smoke.{suffix}");
     let package = signed_applet_package(&applet_id, &namespace);
     ingest_applet_service_did_document(&state, &package).await;
@@ -737,7 +737,7 @@ async fn tsp_local_stub_routes_are_not_mounted() {
             "transport_id": "tspt:alice-smoke",
             "transport_type": "tsp-pairwise",
             "endpoint_url": "https://alice.example/tsp",
-            "supported_protocols": ["cokret"]
+            "supported_protocols": ["arkret"]
         }))
         .send(&app)
         .await
@@ -767,7 +767,7 @@ fn signed_applet_package(applet_id: &str, namespace: &str) -> AppletPackage {
         controller_did.clone(),
         format!("https://{}.applet.example", safe_did_token(namespace)),
         bot_actor_id,
-        vec!["cokret.portal".to_owned()],
+        vec!["arkret.portal".to_owned()],
         AppletWireNamespaces {
             actors: vec![AppletNamespaceEntry::exclusive(format!(
                 "did:web:{}.applet.example:ghost:*",

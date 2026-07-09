@@ -163,7 +163,7 @@ fn issuer_kid_belongs_to_service(issuer_kid: &str, service_id: &str) -> bool {
 /// call site with `token_issuer_unauthorised`).
 fn media_service_anchors(state: &AppState, realm_id: &str) -> Option<MediaServiceAnchors> {
     let cell_id = CellRef::new(format!(
-        "ck:cell:{REALM_MEDIA_SERVICE_CELL_FAMILY}:{realm_id}"
+        "ak:cell:{REALM_MEDIA_SERVICE_CELL_FAMILY}:{realm_id}"
     ))
     .ok()?;
     let value = {
@@ -334,7 +334,7 @@ pub(crate) fn verify_call_state_participant_bindings(
 
         // (d) signature — reconstruct the canonical signing input verbatim from
         // the wire fields and verify the detached Ed25519 signature. The
-        // cokret-native self-signed binding is minted with the notary key
+        // arkret-native self-signed binding is minted with the notary key
         // (`routing::interop::webrtc`), so verify against the notary verifying
         // key; a federated issuer with a resolvable DID is accepted when its
         // resolved key validates the same bytes.
@@ -416,12 +416,12 @@ mod cross_impl_tests {
     use super::{binding_canonical_bytes, binding_canonical_value, binding_signing_input};
 
     /// Fixed, realistic seven-tuple shared by both constructions.
-    const REALM_ID: &str = "ck:realm:01904100-0000-7000-8000-9b64700c6ee8";
-    const CALL_ID: &str = "ck:call:0196441c-0000-7000-8000-000000000000";
+    const REALM_ID: &str = "ak:realm:01904100-0000-7000-8000-9b64700c6ee8";
+    const CALL_ID: &str = "ak:call:0196441c-0000-7000-8000-000000000000";
     const FOCUS_ID: &str = "fra-1";
     const ACTOR_ID: &str = "did:web:alice.example";
-    const DEVICE_ID: &str = "ck:device:01904100-0000-7000-8000-000000000005";
-    const PARTICIPANT_IDENTITY: &str = "ck:rtc_participant:0198c2f4-0000-7000-8000-000000000000";
+    const DEVICE_ID: &str = "ak:device:01904100-0000-7000-8000-000000000005";
+    const PARTICIPANT_IDENTITY: &str = "ak:rtc_participant:0198c2f4-0000-7000-8000-000000000000";
     const EXPIRES_AT: &str = "2026-05-27T12:34:56Z";
 
     /// SDK-side signing input for the fixed tuple (`expires_at` overridable so

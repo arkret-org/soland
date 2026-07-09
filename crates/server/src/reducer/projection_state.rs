@@ -120,7 +120,7 @@ pub struct ProjectionState {
     /// Server-side Space-container projection —
     /// `container_space_id -> SpaceContainerProjection`.
     /// Maintains the canonical state-machine described in
-    /// `cokret-spec/v1/zh/models/common-fields.md §5.1` for `ck.space.*`
+    /// `arkret-spec/v1/zh/models/common-fields.md §5.1` for `ck.space.*`
     /// lifecycle events. Used by `event_log::submit_event` to reject
     /// invalid transitions with HTTP 412 before persisting. Reducer applies
     /// `ck.space.create` / update / parent / archive / restore / tombstone;
@@ -162,7 +162,7 @@ pub struct ProjectionState {
     /// (`ck.agent.interop_session.{start,status,result}`) are also not
     /// mirrored — see `applets` rationale.
     pub agents: BTreeMap<String, SolandAgentProjection>,
-    /// R3 spec-sync (2026-05-27, cokret-spec b47ff6ec) — FSM lifecycle
+    /// R3 spec-sync (2026-05-27, arkret-spec b47ff6ec) — FSM lifecycle
     /// state for each agent_principal_id. Driven by
     /// `ck.agent.{pause,resume,deactivate}` (REDU-1). Default `Active`
     /// for any agent_principal_id we've seen; `Deactivated` is terminal
@@ -341,19 +341,19 @@ impl ProjectionState {
     }
 
     pub(crate) fn projected_ref_exists(&self, target_ref: &str) -> bool {
-        if target_ref.starts_with("ck:space:") {
+        if target_ref.starts_with("ak:space:") {
             return self.space_containers.contains_key(target_ref);
         }
-        if target_ref.starts_with("ck:strand:") {
+        if target_ref.starts_with("ak:strand:") {
             return self.strands.contains_key(target_ref);
         }
-        if target_ref.starts_with("ck:morph:") {
+        if target_ref.starts_with("ak:morph:") {
             return self.morphs.contains_key(target_ref);
         }
-        if target_ref.starts_with("ck:relation:") {
+        if target_ref.starts_with("ak:relation:") {
             return self.relations.contains_key(target_ref);
         }
-        if target_ref.starts_with("ck:event:") || target_ref.starts_with("ck:message:") {
+        if target_ref.starts_with("ak:event:") || target_ref.starts_with("ak:message:") {
             return self.message_by_target_ref(target_ref).is_some();
         }
         false
@@ -377,7 +377,7 @@ impl ProjectionState {
         resource: &str,
         resources: &mut BTreeSet<String>,
     ) {
-        if !resource.starts_with("ck:space:") {
+        if !resource.starts_with("ak:space:") {
             return;
         }
         let Some(space) = self.space_containers.get(resource) else {
@@ -668,7 +668,7 @@ impl ProjectionState {
     fn head_eq_holds(&self, cell_ref: &str, expected: &Value) -> bool {
         const STRAND_FIELDS_FAMILY: &str = "ck.component.strand.fields.v1";
         if let Some(strand_id) = cell_ref
-            .strip_prefix("ck:cell:")
+            .strip_prefix("ak:cell:")
             .and_then(|rest| rest.strip_prefix(STRAND_FIELDS_FAMILY))
             .and_then(|rest| rest.strip_prefix(':'))
         {
@@ -770,7 +770,7 @@ impl ProjectionState {
         rank: Option<&str>,
         now: chrono::DateTime<chrono::Utc>,
     ) {
-        let relation_id = format!("ck:relation:kanban.position:{board_space_id}:{strand_id}");
+        let relation_id = format!("ak:relation:kanban.position:{board_space_id}:{strand_id}");
         let scope_circle_id = self
             .strand_scope_circle_id(strand_id)
             .or_else(|| self.space_container_scope_circle_id(list_space_id));
@@ -978,7 +978,7 @@ impl ProjectionState {
                 .payload
                 .get("target_ref")
                 .and_then(Value::as_str)
-                .filter(|value| value.starts_with("ck:strand:")),
+                .filter(|value| value.starts_with("ak:strand:")),
             _ => None,
         };
         let Some(strand_id) = strand_id else {

@@ -99,14 +99,14 @@ pub(super) async fn recovery_policy_get(
 }
 
 #[endpoint(
-    operation_id = "org.cokret.soland.identity.recovery_policies.get",
+    operation_id = "org.arkret.soland.identity.recovery_policies.get",
     tags("identity", "recovery"),
     summary = "List recovery policy history newest-first (REC-1)",
     status_codes(200, 401, 403, 500)
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "org.cokret.soland.identity.recovery_policies.get")
+    fields(op = "org.arkret.soland.identity.recovery_policies.get")
 )]
 pub(super) async fn recovery_policies_get(
     aa: AuthArgs,

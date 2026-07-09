@@ -21,13 +21,13 @@ pub const RELATION_KIND_CONFIDENTIAL_DISCUSSION_OF: &str = "confidential_discuss
 
 // Morph lifecycle (round 13). Same shape as Strand — no dedicated tombstone.
 // `ck.field.position.move` and `ck.field.position.reorder` were removed in
-// revision 0a5ab85 (see cokret-spec
+// revision 0a5ab85 (see arkret-spec
 // `artifacts/registry/removed-event-kinds.json`). Field-level position move
 // was subsumed by track-relative ordering and the per-cell ordered-log
 // lattice. No replacement; reducer/wire MUST hard_reject these kinds. The
 // generic unknown-event-kind path in `event_log::submit_event` already
 // rejects them because they no longer appear in `active_durable_event_kinds`.
-// R3.1 spec-sync (2026-05-27, cokret-spec @ 7157ee8) — Realm-scoped
+// R3.1 spec-sync (2026-05-27, arkret-spec @ 7157ee8) — Realm-scoped
 // MemberIdentity append-only replacement event. Cell family
 // `ck.component.member.identity.v1`; lattice `ordered_log`; bottom
 // `expose`. Composite cell subject is
@@ -35,7 +35,7 @@ pub const RELATION_KIND_CONFIDENTIAL_DISCUSSION_OF: &str = "confidential_discuss
 // dispatch lives in `reducer::apply_member_identity_update`; persistence
 // is in `state::MemberIdentityRegistry`.
 // Realm security-boundary lifecycle (`ck.realm.*`). Spec
-// `cokret-spec/spec/v1/zh/models/realm-and-space.md` §2.6.
+// `arkret-spec/spec/v1/zh/models/realm-and-space.md` §2.6.
 //
 // `ck.realm.freeze` is reversible read-only hold. `ck.realm.tombstone` is a
 // terminal migration to a successor Realm. `ck.realm.destroy` is terminal
@@ -50,7 +50,7 @@ pub const CONFLICT_REPAIR: &str = "ck.conflict.repair";
 // lives client-side (inkson) and at the applet service itself.
 // R3 spec-sync — new actor_private_event kinds (reducer_input=false; do
 // NOT advance the seal frontier / actor_seq). Wire-accepted only.
-// R3 spec-sync (2026-05-27, cokret-spec b47ff6ec) — agent lifecycle FSM
+// R3 spec-sync (2026-05-27, arkret-spec b47ff6ec) — agent lifecycle FSM
 // event kinds. `lattice` is `fsm` with `bottom=reject`; deactivate is
 // terminal. Reducer enforcement of the (active → paused → active →
 // deactivated) transitions lives in `reducer::apply_agent_lifecycle`
@@ -67,7 +67,7 @@ pub const CONFLICT_REPAIR: &str = "ck.conflict.repair";
 // G3.S1 — MLS / E2EE lifecycle event kinds.
 //
 // Canonical kinds per
-// `cokret-spec/spec/v1/artifacts/schemas/event-envelope.schema.json` (kind enum):
+// `arkret-spec/spec/v1/artifacts/schemas/event-envelope.schema.json` (kind enum):
 //   - `ck.mls.keypackage`    — KeyPackage publication. The publish/claim distinction lives at the
 //     HTTP operation_id layer (`ck.self.keys.keypackages.upload.create` /
 //     `ck.self.keys.keypackages.command.claim`); the event log stores only the canonical kind. The
@@ -94,7 +94,7 @@ pub const CONFLICT_REPAIR: &str = "ck.conflict.repair";
 // Audit model migration (spec @ 2026-06-04): the standing-audit-member
 // events `ck.audit.epoch_key_destruction` and `ck.realm.audit_policy_downgrade`
 // (and the `ck.audit.epoch_destruction_failsafe` remediation) were removed
-// from the registry. Cokret v1 audit now uses the Audit Applet Binding +
+// from the registry. Arkret v1 audit now uses the Audit Applet Binding +
 // sealed historical release session model (`ck.audit.applet_binding`,
 // `ck.audit.session.*`, `ck.audit.release`); audit applets are not MLS members
 // and no epoch-key-destruction / downgrade event is accepted.
@@ -152,7 +152,7 @@ pub const CONFLICT_REPAIR: &str = "ck.conflict.repair";
 // G3.S2 — `ck.realm.policy_server` (realm / reducer_input): declares the
 // pluggable policy-decision service for a Realm. cell_family
 // `ck.component.realm.policy_server.v1` (cas-register per SDK lattice
-// registry). Spec `cokret-spec/spec/v1/zh/authz/policy-server.md` §2.
+// registry). Spec `arkret-spec/spec/v1/zh/authz/policy-server.md` §2.
 
 pub fn validate_mls_governance_binding(payload: &Value) -> Result<(), &'static str> {
     let binding = payload
@@ -407,15 +407,15 @@ mod tests {
             "governance_binding": {
                 "binding_version": 1,
                 "encoding_profile": "cbor-deterministic-rfc8949-v1",
-                "realm_id": "ck:realm:0196419b-0000-7000-8000-000000000000",
+                "realm_id": "ak:realm:0196419b-0000-7000-8000-000000000000",
                 "effective_scope": {
                     "kind": "realm",
-                    "realm_id": "ck:realm:0196419b-0000-7000-8000-000000000000"
+                    "realm_id": "ak:realm:0196419b-0000-7000-8000-000000000000"
                 },
                 "mls_group_id": "mls-group-a",
                 "previous_epoch": 7,
                 "next_epoch": 8,
-                "membership_frontier": ["ck:event:0196419b-0000-7000-8000-000000000001"],
+                "membership_frontier": ["ak:event:0196419b-0000-7000-8000-000000000001"],
                 "policy_root": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
                 "binding_profile": MLS_GOVERNANCE_BINDING_FULL_PROFILE,
                 "reducer_profile": MLS_REDUCER_PROFILE_V1
@@ -434,15 +434,15 @@ mod tests {
             "governance_binding": {
                 "binding_version": 1,
                 "encoding_profile": "cbor-deterministic-rfc8949-v1",
-                "realm_id": "ck:realm:0196419b-0000-7000-8000-000000000000",
+                "realm_id": "ak:realm:0196419b-0000-7000-8000-000000000000",
                 "effective_scope": {
                     "kind": "realm",
-                    "realm_id": "ck:realm:0196419b-0000-7000-8000-000000000000"
+                    "realm_id": "ak:realm:0196419b-0000-7000-8000-000000000000"
                 },
                 "mls_group_id": "mls-group-a",
                 "previous_epoch": 6,
                 "next_epoch": 8,
-                "membership_frontier": ["ck:event:0196419b-0000-7000-8000-000000000001"],
+                "membership_frontier": ["ak:event:0196419b-0000-7000-8000-000000000001"],
                 "policy_root": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
                 "binding_profile": MLS_GOVERNANCE_BINDING_FULL_PROFILE,
                 "reducer_profile": MLS_REDUCER_PROFILE_V1
@@ -460,15 +460,15 @@ mod tests {
             "governance_binding": {
                 "binding_version": 1,
                 "encoding_profile": "cbor-deterministic-rfc8949-v1",
-                "realm_id": "ck:realm:0196419b-0000-7000-8000-000000000000",
+                "realm_id": "ak:realm:0196419b-0000-7000-8000-000000000000",
                 "effective_scope": {
                     "kind": "realm",
-                    "realm_id": "ck:realm:0196419b-0000-7000-8000-000000000999"
+                    "realm_id": "ak:realm:0196419b-0000-7000-8000-000000000999"
                 },
                 "mls_group_id": "mls-group-a",
                 "previous_epoch": 7,
                 "next_epoch": 8,
-                "membership_frontier": ["ck:event:0196419b-0000-7000-8000-000000000001"],
+                "membership_frontier": ["ak:event:0196419b-0000-7000-8000-000000000001"],
                 "policy_root": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
                 "binding_profile": MLS_GOVERNANCE_BINDING_FULL_PROFILE,
                 "reducer_profile": MLS_REDUCER_PROFILE_V1

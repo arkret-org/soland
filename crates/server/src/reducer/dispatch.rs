@@ -41,7 +41,7 @@ pub(crate) fn upsert_realm_link(vec: &mut Vec<RealmLinkState>, row: &RealmLinkSt
 
 /// R3.2 — extract a string EventRef id from an `EventRef`-shaped
 /// payload field. Accepts both the canonical object shape
-/// `{"id": "ck:event:...", "role": "..."}` and a bare string form
+/// `{"id": "ak:event:...", "role": "..."}` and a bare string form
 /// (older client tolerance).
 pub(crate) fn extract_event_ref_id(payload: &Value, field: &str) -> Option<String> {
     let v = payload.get(field)?;
@@ -474,7 +474,7 @@ fn apply_agent_endpoint_dispatch(
     s.apply_agent_endpoint(op, op.created_at)
 }
 
-// REDU-1 (R3 spec-sync 2026-05-27, cokret-spec b47ff6ec) — FSM-lattice
+// REDU-1 (R3 spec-sync 2026-05-27, arkret-spec b47ff6ec) — FSM-lattice
 // dispatch for `ck.agent.{pause,resume,deactivate}`. Bottom = `Reject`;
 // `Deactivated` is terminal (no transition out, no resume after).
 fn apply_agent_pause_dispatch(
@@ -555,7 +555,7 @@ fn apply_agent_action_reject_dispatch(
 ) -> ProjectionEffect {
     s.apply_agent_action_resolution(op, AgentActionRequestStatus::Rejected)
 }
-/// MID-1..6 (R3.1/R3.2, cokret-spec @ b56cab1) — reducer-side dispatch for
+/// MID-1..6 (R3.1/R3.2, arkret-spec @ b56cab1) — reducer-side dispatch for
 /// `ck.member.identity.update`. The full ordered-log projection +
 /// per-actor effective-set / `member_display_state_digest` materialization
 /// happens on `AppState::member_identity` (see
@@ -793,7 +793,7 @@ fn apply_moderation_appeal_dispatch(
 // module can grow independently (see top-level `pub mod mls;`).
 //
 // Canonical event kinds per
-// `cokret-spec/spec/v1/artifacts/schemas/event-envelope.schema.json`: a single
+// `arkret-spec/spec/v1/artifacts/schemas/event-envelope.schema.json`: a single
 // `ck.mls.keypackage` kind covers both publish and claim. The reducer
 // dispatches on `payload.action == "publish" | "claim"` (the publish-
 // vs-claim split lives at the HTTP operation_id layer:
@@ -955,7 +955,7 @@ pub fn default_apply_registry() -> std::collections::HashMap<&'static str, Apply
         cokret_sdk::events::kinds::KEY_BACKUP_ACTIVE_SERIES,
         apply_key_backup_active_series_dispatch,
     );
-    // MID-1..6 (R3.1/R3.2 spec-sync, cokret-spec @ b56cab1) —
+    // MID-1..6 (R3.1/R3.2 spec-sync, arkret-spec @ b56cab1) —
     // `ck.member.identity.update`. Cell family
     // `ck.component.member.identity.v1`, lattice `ordered_log`, bottom
     // `expose`. The ordered-log projection (effective-set filter,

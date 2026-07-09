@@ -55,7 +55,7 @@ async fn post_account_device_pair(
 async fn account_device_pair_registers_sibling_via_canonical_gate_route() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
-    let sibling = "ck:device:01904100-0000-7000-8000-9b04e0000008";
+    let sibling = "ak:device:01904100-0000-7000-8000-9b04e0000008";
     let sibling_pubkey = pair_device_pubkey(sibling);
     let sibling_device_public_key = sibling_pubkey["public_key"].as_str().unwrap();
 
@@ -90,7 +90,7 @@ async fn account_device_pair_registers_sibling_via_canonical_gate_route() {
         paired["authorized_event_ref"]
             .as_str()
             .unwrap()
-            .starts_with("ck:event:")
+            .starts_with("ak:event:")
     );
     assert_eq!(paired["device_grant"]["status"], "active");
 
@@ -141,11 +141,11 @@ async fn account_device_pair_registers_sibling_via_canonical_gate_route() {
 async fn account_device_pair_rejects_untrusted_authorizers_and_bad_proofs() {
     let state = AppState::new(test_config(), Db { pool: None });
     let actor = "did:web:alice.example";
-    let trusted_device = "ck:device:01904100-0000-7000-8000-a11ce0000001";
-    let unverified_device = "ck:device:01904100-0000-7000-8000-9b04e0000008";
-    let first_new_device = "ck:device:01904100-0000-7000-8000-9b04e0000009";
-    let second_new_device = "ck:device:01904100-0000-7000-8000-9b04e000000a";
-    let third_new_device = "ck:device:01904100-0000-7000-8000-9b04e000000b";
+    let trusted_device = "ak:device:01904100-0000-7000-8000-a11ce0000001";
+    let unverified_device = "ak:device:01904100-0000-7000-8000-9b04e0000008";
+    let first_new_device = "ak:device:01904100-0000-7000-8000-9b04e0000009";
+    let second_new_device = "ak:device:01904100-0000-7000-8000-9b04e000000a";
+    let third_new_device = "ak:device:01904100-0000-7000-8000-9b04e000000b";
 
     let trusted_token =
         dev_token_for_device(state.clone(), actor, trusted_device, "Alice Desktop").await;
@@ -230,8 +230,8 @@ async fn account_device_pair_rejects_untrusted_authorizers_and_bad_proofs() {
 async fn to_device_pairing_request_reaches_existing_device_and_gate_pair_authorizes_new_device() {
     let state = AppState::new(test_config(), Db { pool: None });
     let actor = "did:web:alice.example";
-    let existing_device = "ck:device:01904100-0000-7000-8000-a11ce0000001";
-    let new_device = "ck:device:01904100-0000-7000-8000-9b04e0000008";
+    let existing_device = "ak:device:01904100-0000-7000-8000-a11ce0000001";
+    let new_device = "ak:device:01904100-0000-7000-8000-9b04e0000008";
     let existing_token =
         dev_token_for_device(state.clone(), actor, existing_device, "Alice Desktop").await;
     let new_token = dev_token_for_device(state.clone(), actor, new_device, "Alice Browser").await;
@@ -352,7 +352,7 @@ async fn to_device_capacity_eviction_sets_lost_watermark() {
     let state = AppState::new(config, Db { pool: None });
     let alice_token = dev_token(state.clone()).await;
     let bob = "did:web:bob.example";
-    let bob_device = "ck:device:01904100-0000-7000-8000-b0b000000001";
+    let bob_device = "ak:device:01904100-0000-7000-8000-b0b000000001";
     let bob_token = dev_token_for_device(state.clone(), bob, bob_device, "Bob Phone").await;
 
     for seq in 1..=3 {
@@ -420,7 +420,7 @@ async fn protocol_device_surface_excludes_pairing_request_scaffold() {
         .json(&serde_json::json!({
             "pairing_code": "pairing-code",
             "new_device_pubkey": {
-                "kid": "ck:device:01904100-0000-7000-8000-9b04e0000007",
+                "kid": "ak:device:01904100-0000-7000-8000-9b04e0000007",
                 "alg": "EdDSA",
                 "public_key": "emtleQ"
             },
@@ -445,7 +445,7 @@ async fn protocol_device_surface_excludes_pairing_request_scaffold() {
     let soland_challenge = TestClient::post("http://server/_soland/self/devices/pairing-challenge")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
-            "device_id": "ck:device:01904100-0000-7000-8000-9b04e0000007"
+            "device_id": "ak:device:01904100-0000-7000-8000-9b04e0000007"
         }))
         .send(&app_from_state(state.clone()))
         .await;
@@ -454,7 +454,7 @@ async fn protocol_device_surface_excludes_pairing_request_scaffold() {
     let soland_authorize = TestClient::post("http://server/_soland/self/devices/authorize-pairing")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
-            "device_id": "ck:device:01904100-0000-7000-8000-9b04e0000007"
+            "device_id": "ak:device:01904100-0000-7000-8000-9b04e0000007"
         }))
         .send(&app_from_state(state))
         .await;
@@ -470,7 +470,7 @@ async fn rtc_media_token_uses_projected_media_service_epoch() {
     // media token before writing its first `ck.call.state` event). With no
     // committed `session_focus`, the issuer admits the requested focus as long
     // as it is a legal focus within the realm media_service epoch.
-    let session_id = new_prefixed_uuid7("ck:call:");
+    let session_id = new_prefixed_uuid7("ak:call:");
 
     // `media-service-binding.md` §6 — token exchange requires `ck.call.join`;
     // realm membership alone is insufficient.
@@ -488,8 +488,8 @@ async fn rtc_media_token_uses_projected_media_service_epoch() {
             "realm_id": DEMO_REALM_ID,
             "call_id": session_id,
             "actor_id": "did:web:alice.example",
-            "device_id": "ck:device:01904100-0000-7000-8000-a11ce0000001",
-            "focus_id": "ck:focus:mediasoup:blue"
+            "device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001",
+            "focus_id": "ak:focus:mediasoup:blue"
         }))
         .send(&app_from_state(state.clone()))
         .await
@@ -504,7 +504,7 @@ async fn rtc_media_token_uses_projected_media_service_epoch() {
     // Spec `CallMediaTokenExchangeOutcome` required fields: focus_id + type
     // identify the chosen focus and its backend protocol; `todos` is not a
     // schema field and must not appear.
-    assert_eq!(token_response["focus_id"], "ck:focus:mediasoup:blue");
+    assert_eq!(token_response["focus_id"], "ak:focus:mediasoup:blue");
     assert_eq!(token_response["type"], "mediasoup");
     assert!(token_response.get("todos").is_none());
     assert_eq!(
@@ -518,11 +518,11 @@ async fn rtc_media_token_uses_projected_media_service_epoch() {
     assert_eq!(token_response["participant_binding"]["call_id"], session_id);
     assert_eq!(
         token_response["participant_binding"]["device_id"],
-        "ck:device:01904100-0000-7000-8000-a11ce0000001"
+        "ak:device:01904100-0000-7000-8000-a11ce0000001"
     );
     assert_eq!(
         token_response["participant_binding"]["focus_id"],
-        "ck:focus:mediasoup:blue"
+        "ak:focus:mediasoup:blue"
     );
     // `media-service-binding.md` §3 — service_signature is a typed {kid, sig}
     // object, not a packed `<kid>:<alg>:<sig>` string.
@@ -545,13 +545,13 @@ async fn rtc_media_token_uses_projected_media_service_epoch() {
     // handle, NOT a deterministic hash of the principal tuple.
     let participant_identity = token_response["participant_identity"].as_str().unwrap();
     assert!(
-        participant_identity.starts_with("ck:rtc_participant:"),
+        participant_identity.starts_with("ak:rtc_participant:"),
         "participant_identity must be a typed ck:rtc_participant id"
     );
     assert!(
         cokret_sdk::identifiers::is_lowercase_uuidv7(
             participant_identity
-                .strip_prefix("ck:rtc_participant:")
+                .strip_prefix("ak:rtc_participant:")
                 .unwrap()
         ),
         "participant_identity payload must be a canonical lowercase uuidv7"
@@ -600,7 +600,7 @@ async fn rtc_media_token_uses_projected_media_service_epoch() {
     assert_eq!(backend_payload["actor_id"], "did:web:alice.example");
     assert_eq!(
         backend_payload["device_id"],
-        "ck:device:01904100-0000-7000-8000-a11ce0000001"
+        "ak:device:01904100-0000-7000-8000-a11ce0000001"
     );
 
     let second_token_response: Value = TestClient::post("http://server/_cokret/self/rtc/token")
@@ -609,8 +609,8 @@ async fn rtc_media_token_uses_projected_media_service_epoch() {
             "realm_id": DEMO_REALM_ID,
             "call_id": session_id,
             "actor_id": "did:web:alice.example",
-            "device_id": "ck:device:01904100-0000-7000-8000-a11ce0000001",
-            "focus_id": "ck:focus:mediasoup:blue"
+            "device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001",
+            "focus_id": "ak:focus:mediasoup:blue"
         }))
         .send(&app_from_state(state))
         .await
@@ -635,7 +635,7 @@ async fn rtc_media_token_inkson_flow_no_session_issues_token() {
     install_media_service_epoch(&state, good_media_service_epoch());
     let token = dev_token(state.clone()).await;
     // A fresh call id with NO `ck.call.state` cell and NO ephemeral session.
-    let call_id = new_prefixed_uuid7("ck:call:");
+    let call_id = new_prefixed_uuid7("ak:call:");
 
     // Without ck.call.join, even a realm member is denied (§6).
     let mut denied = TestClient::post("http://server/_cokret/self/rtc/token")
@@ -644,8 +644,8 @@ async fn rtc_media_token_inkson_flow_no_session_issues_token() {
             "realm_id": DEMO_REALM_ID,
             "call_id": call_id,
             "actor_id": "did:web:alice.example",
-            "device_id": "ck:device:01904100-0000-7000-8000-a11ce0000001",
-            "focus_id": "ck:focus:livekit:green"
+            "device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001",
+            "focus_id": "ak:focus:livekit:green"
         }))
         .send(&app_from_state(state.clone()))
         .await;
@@ -669,21 +669,21 @@ async fn rtc_media_token_inkson_flow_no_session_issues_token() {
             "realm_id": DEMO_REALM_ID,
             "call_id": call_id,
             "actor_id": "did:web:alice.example",
-            "device_id": "ck:device:01904100-0000-7000-8000-a11ce0000001",
-            "focus_id": "ck:focus:livekit:green"
+            "device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001",
+            "focus_id": "ak:focus:livekit:green"
         }))
         .send(&app_from_state(state))
         .await
         .take_json()
         .await
         .unwrap();
-    assert_eq!(issued["focus_id"], "ck:focus:livekit:green");
+    assert_eq!(issued["focus_id"], "ak:focus:livekit:green");
     assert_eq!(issued["connect_url"], "wss://media.example/livekit");
     assert!(
         issued["participant_identity"]
             .as_str()
             .unwrap()
-            .starts_with("ck:rtc_participant:"),
+            .starts_with("ak:rtc_participant:"),
         "a token MUST be minted with a fresh participant_identity"
     );
     assert_eq!(issued["participant_binding"]["call_id"], call_id);
@@ -700,7 +700,7 @@ async fn rtc_media_token_rejects_epoch_and_focus_mismatches() {
     let state = AppState::new(test_config(), Db { pool: None });
     install_media_service_epoch(&state, good_media_service_epoch());
     let token = dev_token(state.clone()).await;
-    let session_id = new_prefixed_uuid7("ck:call:");
+    let session_id = new_prefixed_uuid7("ak:call:");
     // §6 — grant ck.call.join so the join gate passes and the focus/issuer
     // mismatch errors (not capability_denied) are what surfaces.
     grant_call_capability(
@@ -713,7 +713,7 @@ async fn rtc_media_token_rejects_epoch_and_focus_mismatches() {
     // Commit `session_focus = mediasoup:blue` into the durable `ck.call.state`
     // cell (§4.1 write-once). A token request naming a different focus MUST be
     // rejected with `focus_mismatch`.
-    seed_call_state(&state, &session_id, Some("ck:focus:mediasoup:blue"), vec![]);
+    seed_call_state(&state, &session_id, Some("ak:focus:mediasoup:blue"), vec![]);
 
     let mut focus_mismatch = TestClient::post("http://server/_cokret/self/rtc/token")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -721,8 +721,8 @@ async fn rtc_media_token_rejects_epoch_and_focus_mismatches() {
             "realm_id": DEMO_REALM_ID,
             "call_id": session_id,
             "actor_id": "did:web:alice.example",
-            "device_id": "ck:device:01904100-0000-7000-8000-a11ce0000001",
-            "focus_id": "ck:focus:livekit:green"
+            "device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001",
+            "focus_id": "ak:focus:livekit:green"
         }))
         .send(&app_from_state(state.clone()))
         .await;
@@ -734,7 +734,7 @@ async fn rtc_media_token_rejects_epoch_and_focus_mismatches() {
         serde_json::json!({
             "service_id": "did:web:media.example",
             "foci": [{
-                "focus_id": "ck:focus:mediasoup:blue",
+                "focus_id": "ak:focus:mediasoup:blue",
                 "backend": "mediasoup",
                 "connect_url": "wss://media.example/mediasoup",
                 "issuer_kid": "did:web:rogue.example#kid-1",
@@ -748,8 +748,8 @@ async fn rtc_media_token_rejects_epoch_and_focus_mismatches() {
             "realm_id": DEMO_REALM_ID,
             "call_id": session_id,
             "actor_id": "did:web:alice.example",
-            "device_id": "ck:device:01904100-0000-7000-8000-a11ce0000001",
-            "focus_id": "ck:focus:mediasoup:blue"
+            "device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001",
+            "focus_id": "ak:focus:mediasoup:blue"
         }))
         .send(&app_from_state(state))
         .await;
@@ -765,11 +765,11 @@ async fn rtc_media_token_rejects_non_member_actor() {
     let state = AppState::new(test_config(), Db { pool: None });
     install_media_service_epoch(&state, good_media_service_epoch());
     let _token = dev_token(state.clone()).await;
-    let session_id = new_prefixed_uuid7("ck:call:");
+    let session_id = new_prefixed_uuid7("ak:call:");
     let bob_token = dev_token_for_device(
         state.clone(),
         "did:web:bob.example",
-        "ck:device:01904100-0000-7000-8000-b0b000000001",
+        "ak:device:01904100-0000-7000-8000-b0b000000001",
         "Bob Phone",
     )
     .await;
@@ -780,8 +780,8 @@ async fn rtc_media_token_rejects_non_member_actor() {
             "realm_id": DEMO_REALM_ID,
             "call_id": session_id,
             "actor_id": "did:web:bob.example",
-            "device_id": "ck:device:01904100-0000-7000-8000-b0b000000001",
-            "focus_id": "ck:focus:livekit:green"
+            "device_id": "ak:device:01904100-0000-7000-8000-b0b000000001",
+            "focus_id": "ak:focus:livekit:green"
         }))
         .send(&app_from_state(state))
         .await;
@@ -803,7 +803,7 @@ async fn rtc_media_token_requires_call_join_capability() {
     // member.
     let _alice_token = dev_token(state.clone()).await;
     let bob = "did:web:bob.example";
-    let bob_device = "ck:device:01904100-0000-7000-8000-b0b000000001";
+    let bob_device = "ak:device:01904100-0000-7000-8000-b0b000000001";
     let bob_token = dev_token_for_device(state.clone(), bob, bob_device, "Bob Phone").await;
     // bob is a realm member; no `ck.call.state` cell exists yet (the new model
     // does not require an ephemeral session to exist before token exchange).
@@ -813,7 +813,7 @@ async fn rtc_media_token_requires_call_join_capability() {
         "call_id": session_id,
         "actor_id": bob,
         "device_id": bob_device,
-        "focus_id": "ck:focus:livekit:green"
+        "focus_id": "ak:focus:livekit:green"
     });
 
     // No ck.call.join → capability_denied even though bob is a member+participant.
@@ -837,12 +837,12 @@ async fn rtc_media_token_requires_call_join_capability() {
         .take_json()
         .await
         .unwrap();
-    assert_eq!(granted["focus_id"], "ck:focus:livekit:green");
+    assert_eq!(granted["focus_id"], "ak:focus:livekit:green");
     assert!(
         granted["participant_identity"]
             .as_str()
             .unwrap()
-            .starts_with("ck:rtc_participant:")
+            .starts_with("ak:rtc_participant:")
     );
 }
 
@@ -898,7 +898,7 @@ async fn rtc_media_token_livekit_backend_token_carries_livekit_claims() {
     let state = AppState::new(livekit_test_config(), Db { pool: None });
     install_media_service_epoch(&state, good_media_service_epoch());
     let token = dev_token(state.clone()).await;
-    let session_id = new_prefixed_uuid7("ck:call:");
+    let session_id = new_prefixed_uuid7("ak:call:");
     // §6 — token exchange requires ck.call.join.
     grant_call_capability(
         &state,
@@ -916,8 +916,8 @@ async fn rtc_media_token_livekit_backend_token_carries_livekit_claims() {
             "realm_id": DEMO_REALM_ID,
             "call_id": session_id,
             "actor_id": "did:web:alice.example",
-            "device_id": "ck:device:01904100-0000-7000-8000-a11ce0000001",
-            "focus_id": "ck:focus:livekit:green",
+            "device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001",
+            "focus_id": "ak:focus:livekit:green",
             "desired_media": {"audio": true, "video": true, "screen": false}
         }))
         .send(&app_from_state(state.clone()))
@@ -1000,11 +1000,11 @@ async fn admin_realm_media_service_renders_projected_cell() {
     assert_eq!(foci.len(), 2);
     assert!(
         foci.iter()
-            .any(|focus| focus["focus_id"] == "ck:focus:livekit:green")
+            .any(|focus| focus["focus_id"] == "ak:focus:livekit:green")
     );
 
     // A Realm with no committed epoch renders an empty (but well-typed) view.
-    let other_realm = "ck:realm:0196419b-0000-7000-8000-0000000000ff";
+    let other_realm = "ak:realm:0196419b-0000-7000-8000-0000000000ff";
     let empty: Value = TestClient::get(format!(
         "http://server/_soland/admin/realms/{other_realm}/media-service"
     ))
@@ -1024,11 +1024,11 @@ async fn webrtc_ban_blocks_removed_participant_token_reissue() {
     install_media_service_epoch(&state, good_media_service_epoch());
     let _alice_token = dev_token(state.clone()).await;
     let bob = "did:web:bob.example";
-    let bob_device = "ck:device:01904100-0000-7000-8000-b0b000000001";
+    let bob_device = "ak:device:01904100-0000-7000-8000-b0b000000001";
     let bob_token = dev_token_for_device(state.clone(), bob, bob_device, "Bob Phone").await;
     add_test_realm_member(&state, DEMO_REALM_ID, bob);
 
-    let session_id = new_prefixed_uuid7("ck:call:");
+    let session_id = new_prefixed_uuid7("ak:call:");
     // §6 — bob needs ck.call.join to exchange a token before the ban.
     grant_call_capability(&state, DEMO_REALM_ID, bob, "ck.call.join");
 
@@ -1041,14 +1041,14 @@ async fn webrtc_ban_blocks_removed_participant_token_reissue() {
             "call_id": session_id,
             "actor_id": bob,
             "device_id": bob_device,
-            "focus_id": "ck:focus:livekit:green"
+            "focus_id": "ak:focus:livekit:green"
         }))
         .send(&app_from_state(state.clone()))
         .await
         .take_json()
         .await
         .unwrap();
-    assert_eq!(pre_ban["focus_id"], "ck:focus:livekit:green");
+    assert_eq!(pre_ban["focus_id"], "ak:focus:livekit:green");
 
     // A moderator actor-wide-bans bob: the durable `ck.call.state.removed_participants[]`
     // projection (`webrtc-signaling.md` §3a) carries a `ban` row with no
@@ -1074,7 +1074,7 @@ async fn webrtc_ban_blocks_removed_participant_token_reissue() {
             "call_id": session_id,
             "actor_id": bob,
             "device_id": bob_device,
-            "focus_id": "ck:focus:livekit:green"
+            "focus_id": "ak:focus:livekit:green"
         }))
         .send(&app_from_state(state))
         .await;
@@ -1108,7 +1108,7 @@ fn grant_call_capability(state: &AppState, realm_id: &str, subject: &str, action
 /// redeems a media token before writing its first `ck.call.state` event.
 fn add_member_and_fresh_call(state: &AppState, member: &str) -> String {
     add_test_realm_member(state, DEMO_REALM_ID, member);
-    new_prefixed_uuid7("ck:call:")
+    new_prefixed_uuid7("ak:call:")
 }
 
 /// Seed the durable `ck.call.state` cell (`ck.component.call.state.v1:{call_id}`)
@@ -1130,7 +1130,7 @@ fn seed_call_state(
     if let Some(focus) = session_focus {
         value["session_focus"] = Value::String(focus.to_owned());
     }
-    let cell_id = CellRef::new(format!("ck:cell:ck.component.call.state.v1:{call_id}")).unwrap();
+    let cell_id = CellRef::new(format!("ak:cell:ck.component.call.state.v1:{call_id}")).unwrap();
     state
         .projection
         .lock()
@@ -1140,7 +1140,7 @@ fn seed_call_state(
 
 fn install_media_service_epoch(state: &AppState, media_service: Value) {
     let cell_id = CellRef::new(format!(
-        "ck:cell:ck.component.realm.media_service.v1:{DEMO_REALM_ID}"
+        "ak:cell:ck.component.realm.media_service.v1:{DEMO_REALM_ID}"
     ))
     .unwrap();
     state.projection.lock().cells.insert(
@@ -1155,7 +1155,7 @@ fn good_media_service_epoch() -> Value {
         "e2ee_key_sources_allowed": ["mls_epoch"],
         "foci": [
             {
-                "focus_id": "ck:focus:livekit:green",
+                "focus_id": "ak:focus:livekit:green",
                 "backend": "livekit",
                 "connect_url": "wss://media.example/livekit",
                 "issuer_kid": "did:web:media.example#livekit-2026-05",
@@ -1164,7 +1164,7 @@ fn good_media_service_epoch() -> Value {
                 "e2ee_key_source": "mls_epoch"
             },
             {
-                "focus_id": "ck:focus:mediasoup:blue",
+                "focus_id": "ak:focus:mediasoup:blue",
                 "backend": "mediasoup",
                 "connect_url": "wss://media.example/mediasoup",
                 "issuer_kid": "did:web:media.example#mediasoup-2026-05",
@@ -1244,10 +1244,10 @@ fn call_signals_in_subscribe(frame: &Value, realm_id: &str) -> Vec<Value> {
 async fn ephemeral_call_signal_relays_to_other_realm_member_and_filters_self_device() {
     let state = AppState::new(test_config(), Db { pool: None });
     let alice = "did:web:alice.example";
-    let alice_device = "ck:device:01904100-0000-7000-8000-a11ce0000001";
+    let alice_device = "ak:device:01904100-0000-7000-8000-a11ce0000001";
     let alice_token = dev_token(state.clone()).await;
     let bob = "did:web:bob.example";
-    let bob_device = "ck:device:01904100-0000-7000-8000-b0b000000001";
+    let bob_device = "ak:device:01904100-0000-7000-8000-b0b000000001";
     let bob_token = dev_token_for_device(state.clone(), bob, bob_device, "Bob Phone").await;
     add_test_realm_member(&state, DEMO_REALM_ID, bob);
     // §162 — the sender MUST hold `ck.call.signal.send` for the Realm.
@@ -1258,7 +1258,7 @@ async fn ephemeral_call_signal_relays_to_other_realm_member_and_filters_self_dev
         cokret_sdk::CAP_CALL_SIGNAL_SEND,
     );
 
-    let call_id = "ck:call:0196419b-0000-7000-8000-00000000ca11";
+    let call_id = "ak:call:0196419b-0000-7000-8000-00000000ca11";
     let envelope = call_signal_envelope(alice, alice_device, call_id, "invite", 1);
     let mut submit = post_ephemeral(state.clone(), &alice_token, &envelope).await;
     assert_eq!(submit.status_code, Some(StatusCode::OK));
@@ -1304,8 +1304,8 @@ async fn ephemeral_call_signal_reaches_same_actor_other_device() {
     // fan-out); only the originating device self-echo is suppressed.
     let state = AppState::new(test_config(), Db { pool: None });
     let alice = "did:web:alice.example";
-    let alice_device_a = "ck:device:01904100-0000-7000-8000-a11ce0000001";
-    let alice_device_b = "ck:device:01904100-0000-7000-8000-a11ce0000002";
+    let alice_device_a = "ak:device:01904100-0000-7000-8000-a11ce0000001";
+    let alice_device_b = "ak:device:01904100-0000-7000-8000-a11ce0000002";
     let token_a = dev_token(state.clone()).await;
     let token_b = dev_token_for_device(state.clone(), alice, alice_device_b, "Alice Laptop").await;
     grant_call_capability(
@@ -1315,7 +1315,7 @@ async fn ephemeral_call_signal_reaches_same_actor_other_device() {
         cokret_sdk::CAP_CALL_SIGNAL_SEND,
     );
 
-    let call_id = "ck:call:0196419b-0000-7000-8000-00000000ca12";
+    let call_id = "ak:call:0196419b-0000-7000-8000-00000000ca12";
     let envelope = call_signal_envelope(alice, alice_device_a, call_id, "invite", 1);
     let submit = post_ephemeral(state.clone(), &token_a, &envelope).await;
     assert_eq!(submit.status_code, Some(StatusCode::OK));
@@ -1339,10 +1339,10 @@ async fn ephemeral_call_signal_reaches_same_actor_other_device() {
 async fn ephemeral_call_signal_not_delivered_after_ttl_expiry() {
     let state = AppState::new(test_config(), Db { pool: None });
     let alice = "did:web:alice.example";
-    let alice_device = "ck:device:01904100-0000-7000-8000-a11ce0000001";
+    let alice_device = "ak:device:01904100-0000-7000-8000-a11ce0000001";
     let alice_token = dev_token(state.clone()).await;
     let bob = "did:web:bob.example";
-    let bob_device = "ck:device:01904100-0000-7000-8000-b0b000000001";
+    let bob_device = "ak:device:01904100-0000-7000-8000-b0b000000001";
     let bob_token = dev_token_for_device(state.clone(), bob, bob_device, "Bob Phone").await;
     add_test_realm_member(&state, DEMO_REALM_ID, bob);
     grant_call_capability(
@@ -1352,7 +1352,7 @@ async fn ephemeral_call_signal_not_delivered_after_ttl_expiry() {
         cokret_sdk::CAP_CALL_SIGNAL_SEND,
     );
 
-    let call_id = "ck:call:0196419b-0000-7000-8000-00000000ca13";
+    let call_id = "ak:call:0196419b-0000-7000-8000-00000000ca13";
     let envelope = call_signal_envelope(alice, alice_device, call_id, "invite", 1);
     let submit = post_ephemeral(state.clone(), &alice_token, &envelope).await;
     assert_eq!(submit.status_code, Some(StatusCode::OK));
@@ -1400,10 +1400,10 @@ async fn ephemeral_call_signal_not_delivered_after_ttl_expiry() {
 async fn ephemeral_call_signal_without_send_capability_is_denied() {
     let state = AppState::new(test_config(), Db { pool: None });
     let alice = "did:web:alice.example";
-    let alice_device = "ck:device:01904100-0000-7000-8000-a11ce0000001";
+    let alice_device = "ak:device:01904100-0000-7000-8000-a11ce0000001";
     let alice_token = dev_token(state.clone()).await;
     // No `ck.call.signal.send` grant.
-    let call_id = "ck:call:0196419b-0000-7000-8000-00000000ca14";
+    let call_id = "ak:call:0196419b-0000-7000-8000-00000000ca14";
     let envelope = call_signal_envelope(alice, alice_device, call_id, "invite", 1);
     let denied = post_ephemeral(state.clone(), &alice_token, &envelope).await;
     assert_eq!(denied.status_code, Some(StatusCode::FORBIDDEN));
@@ -1442,10 +1442,10 @@ async fn ephemeral_call_signal_incremental_resubscribe_does_not_redeliver() {
     // and a full sync (catchup, no `after`) still re-delivers pending signals.
     let state = AppState::new(test_config(), Db { pool: None });
     let alice = "did:web:alice.example";
-    let alice_device = "ck:device:01904100-0000-7000-8000-a11ce0000001";
+    let alice_device = "ak:device:01904100-0000-7000-8000-a11ce0000001";
     let alice_token = dev_token(state.clone()).await;
     let bob = "did:web:bob.example";
-    let bob_device = "ck:device:01904100-0000-7000-8000-b0b000000001";
+    let bob_device = "ak:device:01904100-0000-7000-8000-b0b000000001";
     let bob_token = dev_token_for_device(state.clone(), bob, bob_device, "Bob Phone").await;
     add_test_realm_member(&state, DEMO_REALM_ID, bob);
     grant_call_capability(
@@ -1455,7 +1455,7 @@ async fn ephemeral_call_signal_incremental_resubscribe_does_not_redeliver() {
         cokret_sdk::CAP_CALL_SIGNAL_SEND,
     );
 
-    let call_id = "ck:call:0196419b-0000-7000-8000-00000000ca20";
+    let call_id = "ak:call:0196419b-0000-7000-8000-00000000ca20";
     let first = call_signal_envelope(alice, alice_device, call_id, "invite", 1);
     assert_eq!(
         post_ephemeral(state.clone(), &alice_token, &first)

@@ -514,13 +514,13 @@ fn require_device_directory_bearer(state: &AppState, req: &Request) -> Result<()
 }
 
 #[endpoint(
-    operation_id = "org.cokret.soland.gate.account.device_signing_keys.query",
+    operation_id = "org.arkret.soland.gate.account.device_signing_keys.query",
     tags("keys"),
     summary = "Look up authorized, non-revoked device signing keys for a principal (server-to-server)"
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "org.cokret.soland.gate.account.device_signing_keys.query")
+    fields(op = "org.arkret.soland.gate.account.device_signing_keys.query")
 )]
 async fn device_signing_keys_query(
     body: JsonBody<DeviceSigningKeyDirectoryQueryRequestBody>,

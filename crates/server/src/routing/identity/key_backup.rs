@@ -90,8 +90,8 @@ mod tests {
     use super::*;
 
     const ACTOR: &str = "did:web:alice.example";
-    const BACKUP_ID: &str = "ck:backup:01964137-0000-7000-8000-000000000001";
-    const DEVICE_ID: &str = "ck:device:01964137-0000-7000-8000-000000000001";
+    const BACKUP_ID: &str = "ak:backup:01964137-0000-7000-8000-000000000001";
+    const DEVICE_ID: &str = "ak:device:01964137-0000-7000-8000-000000000001";
 
     fn validate_key_backup_body(
         backup_id: &str,
@@ -123,7 +123,7 @@ mod tests {
             "backup_class": backup_class,
             "backup_version": "kb_1",
             "created_at": "2026-05-30T00:00:00Z",
-            "series_id": "ck:backup_series:01964137-0000-7000-8000-000000000001",
+            "series_id": "ak:backup_series:01964137-0000-7000-8000-000000000001",
             "series_seq": 0,
             "encryption": encryption,
             "contents": [{
@@ -133,7 +133,7 @@ mod tests {
             "ciphertext": "AAAA",
             "ciphertext_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
             "domain_separation": {
-                "hkdf_info": format!("cokret-key-backup/{backup_class}/test/v1"),
+                "hkdf_info": format!("arkret-key-backup/{backup_class}/test/v1"),
                 "subdomain": "test",
                 "aead_aad": {
                     "schema": "ck.schema.key_backup.v1",
@@ -285,7 +285,7 @@ mod tests {
 
     // ── C-P5: recovery_policy_ref binding (structural) ──────────────────────
 
-    const POLICY_REF: &str = "ck:policy:01964137-0000-7000-8000-0000000000aa";
+    const POLICY_REF: &str = "ak:policy:01964137-0000-7000-8000-0000000000aa";
 
     fn did_recovery_signed_fields() -> Value {
         json!([
@@ -374,7 +374,7 @@ mod tests {
             .unwrap()
             .remove("ssk_generation");
         body["auth_data"]["device_authorize_event_id"] =
-            json!("ck:event:01964137-0000-7000-8000-000000000123");
+            json!("ak:event:01964137-0000-7000-8000-000000000123");
 
         validate_key_backup_body(BACKUP_ID, ACTOR, &body)
             .expect("service-attested device_authorize_event_id anchor should validate");
@@ -385,7 +385,7 @@ mod tests {
         let mut body =
             key_backup_body("secret_storage", "recovery_secret", passphrase_encryption());
         body["auth_data"]["device_authorize_event_id"] =
-            json!("ck:event:01964137-0000-7000-8000-000000000123");
+            json!("ak:event:01964137-0000-7000-8000-000000000123");
 
         let err = validate_key_backup_body(BACKUP_ID, ACTOR, &body)
             .expect_err("ssk_generation and device_authorize_event_id are exclusive");
@@ -520,7 +520,7 @@ mod tests {
         ));
         assert!(!is_development_delete_proof(
             &proof,
-            "ck:backup:01964137-0000-7000-8000-000000000099",
+            "ak:backup:01964137-0000-7000-8000-000000000099",
             ACTOR
         ));
     }
@@ -565,7 +565,7 @@ mod tests {
     fn delete_rejects_non_tail_even_when_policy_stale() {
         let older = did_recovery_delete_candidate(POLICY_REF, 1);
         let mut newer = older.clone();
-        newer["backup_id"] = json!("ck:backup:01964137-0000-7000-8000-000000000099");
+        newer["backup_id"] = json!("ak:backup:01964137-0000-7000-8000-000000000099");
         newer["series_seq"] = json!(1);
         newer["supersedes"] = older["backup_id"].clone();
         newer["supersedes_digest"] =
@@ -588,7 +588,7 @@ mod tests {
     fn genesis_envelope_rejects_supersedes() {
         let mut body =
             key_backup_body("secret_storage", "recovery_secret", passphrase_encryption());
-        body["supersedes"] = json!("ck:backup:01964137-0000-7000-8000-0000000000ff");
+        body["supersedes"] = json!("ak:backup:01964137-0000-7000-8000-0000000000ff");
 
         let backup = typed_key_backup_body(&body).expect("typed key backup");
         let err = validate_series_genesis_shape_typed(&backup)

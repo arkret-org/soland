@@ -58,8 +58,8 @@ mod tests {
     use super::*;
     use crate::kinds;
 
-    const REALM_ID: &str = "ck:realm:01904100-0000-7000-8000-000000000001";
-    const OPERATION_ID: &str = "ck:operation:01904100-0000-7000-8000-000000000002";
+    const REALM_ID: &str = "ak:realm:01904100-0000-7000-8000-000000000001";
+    const OPERATION_ID: &str = "ak:operation:01904100-0000-7000-8000-000000000002";
 
     fn op(kind: &str, payload: Value) -> Operation {
         Operation::create(
@@ -105,14 +105,14 @@ mod tests {
             .unwrap()
             .with_timezone(&chrono::Utc);
         let event = crate::state::ProjectionEventRecord {
-            event_id: "ck:event:01904100-0000-7000-8000-0000000000f1".to_owned(),
+            event_id: "ak:event:01904100-0000-7000-8000-0000000000f1".to_owned(),
             realm_id: REALM_ID.to_owned(),
             event_kind: cokret_sdk::events::kinds::STRAND_UPDATE.to_owned(),
             operation_type: "state".to_owned(),
             operation_id: Some(OPERATION_ID.to_owned()),
             sender: Some("did:web:bob.example".to_owned()),
             payload: json!({
-                "strand_id": "ck:strand:01904100-0000-7000-8000-0000000000f2",
+                "strand_id": "ak:strand:01904100-0000-7000-8000-0000000000f2",
                 "patch": {"synthesis": {"$op": "set", "value": "bob update"}}
             }),
             created_at,
@@ -187,7 +187,7 @@ mod tests {
 
     #[test]
     fn invite_acceptance_ref_reads_canonical_invite_ref() {
-        let invite_id = "ck:invite:01904100-0000-7000-8000-000000000003";
+        let invite_id = "ak:invite:01904100-0000-7000-8000-000000000003";
         let operation = op(
             cokret_sdk::events::kinds::MEMBER_STATE,
             json!({

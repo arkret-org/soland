@@ -1,4 +1,4 @@
-//! Cokret v1 protocol-compliant ID generation.
+//! Arkret v1 protocol-compliant ID generation.
 //!
 //! All typed object IDs follow the format `ck:<kind>:<uuid>` where `<uuid>`
 //! is RFC 9562 UUID version 7 (48-bit Unix-millisecond timestamp + 4-bit
@@ -6,9 +6,9 @@
 //! as the canonical 36-character lowercase hex form
 //! `xxxxxxxx-xxxx-7xxx-Nxxx-xxxxxxxxxxxx` where N ∈ {8,9,a,b}.
 //!
-//! See `cokret-spec/spec/v1/zh/conformance/encoding.md` §4.
+//! See `arkret-spec/spec/v1/zh/conformance/encoding.md` §4.
 
-/// Typed wire identifiers are owned by the SDK `cokret` (identifiers) crate.
+/// Typed wire identifiers are owned by the SDK `arkret` (identifiers) crate.
 /// soland re-exports them so the whole server shares one validated newtype per
 /// id-kind instead of maintaining parallel local copies.
 ///
@@ -23,7 +23,7 @@ use uuid::Uuid;
 /// [`cokret_sdk::new_prefixed_uuid7`] so the canonical lowercase UUIDv7 wire
 /// form is produced by the single shared primitive.
 pub fn generate(kind: &str) -> String {
-    cokret_sdk::new_prefixed_uuid7(&format!("ck:{kind}:"))
+    cokret_sdk::new_prefixed_uuid7(&format!("ak:{kind}:"))
 }
 
 pub fn generate_space_id() -> String {
@@ -107,7 +107,7 @@ pub fn generate_request_id() -> String {
 /// not validated here; callers that care MUST check it separately (the kind
 /// is canonical bytes of the wire value, see encoding.md §4).
 pub fn parse_typed_uuid(typed: &str, expected_kind: &str) -> Option<Uuid> {
-    let prefix = format!("ck:{}:", expected_kind);
+    let prefix = format!("ak:{}:", expected_kind);
     let rest = typed.strip_prefix(&prefix)?;
     Uuid::parse_str(rest).ok()
 }
@@ -165,12 +165,12 @@ pub fn typed_uuid_part_or_schema_violation(
 
 /// Format a raw `Uuid` back to a typed wire ID `ck:<kind>:<uuid>`.
 pub fn format_typed_uuid(kind: &str, uuid: &Uuid) -> String {
-    format!("ck:{}:{}", kind, uuid)
+    format!("ak:{}:{}", kind, uuid)
 }
 
 /// Percent-encode reserved characters in a **cell subject** segment.
 ///
-/// Per Cokret v1 (spec encoding §9.5), composite cell subjects are joined
+/// Per Arkret v1 (spec encoding §9.5), composite cell subjects are joined
 /// with `|`. Raw DIDs and identifiers may contain `|` themselves, which
 /// would collide with the separator. We encode `%`, `|`, and ASCII control
 /// characters using percent-escape (`%XX`) so that segments roundtrip
@@ -219,8 +219,8 @@ mod tests {
     #[test]
     fn id_format_is_ck_kind_uuid() {
         let id = generate_space_id();
-        assert!(id.starts_with("ck:space:"));
-        let uuid_part = &id["ck:space:".len()..];
+        assert!(id.starts_with("ak:space:"));
+        let uuid_part = &id["ak:space:".len()..];
         // 36-char canonical UUID form: 8-4-4-4-12 hex with dashes
         assert_eq!(uuid_part.len(), 36);
         let parsed = Uuid::parse_str(uuid_part).expect("uuid parse");
@@ -230,18 +230,18 @@ mod tests {
 
     #[test]
     fn all_generators_produce_valid_prefixes() {
-        assert!(generate_realm_id().starts_with("ck:realm:"));
-        assert!(generate_space_id().starts_with("ck:space:"));
-        assert!(generate_event_id().starts_with("ck:event:"));
-        assert!(generate_operation_id().starts_with("ck:operation:"));
-        assert!(generate_relation_id().starts_with("ck:relation:"));
-        assert!(generate_grant_id().starts_with("ck:grant:"));
-        assert!(generate_invite_id().starts_with("ck:invite:"));
-        assert!(generate_snapshot_id().starts_with("ck:snapshot:"));
-        assert!(generate_report_id().starts_with("ck:report:"));
-        assert!(generate_notification_id().starts_with("ck:notification:"));
-        assert!(generate_view_id().starts_with("ck:view:"));
-        assert!(generate_request_id().starts_with("ck:request:"));
+        assert!(generate_realm_id().starts_with("ak:realm:"));
+        assert!(generate_space_id().starts_with("ak:space:"));
+        assert!(generate_event_id().starts_with("ak:event:"));
+        assert!(generate_operation_id().starts_with("ak:operation:"));
+        assert!(generate_relation_id().starts_with("ak:relation:"));
+        assert!(generate_grant_id().starts_with("ak:grant:"));
+        assert!(generate_invite_id().starts_with("ak:invite:"));
+        assert!(generate_snapshot_id().starts_with("ak:snapshot:"));
+        assert!(generate_report_id().starts_with("ak:report:"));
+        assert!(generate_notification_id().starts_with("ak:notification:"));
+        assert!(generate_view_id().starts_with("ak:view:"));
+        assert!(generate_request_id().starts_with("ak:request:"));
     }
 
     #[test]
@@ -312,9 +312,9 @@ mod tests {
         let space = generate_space_id();
         assert!(RealmId::new(space).is_err());
         // Non-Realm kinds and malformed UUIDs are rejected.
-        assert!(RealmId::new("ck:strand:00000000-0000-7000-8000-000000000000").is_err());
-        assert!(RealmId::new("ck:realm:not-a-uuid").is_err());
-        assert!(RealmId::new("ck:realm:00000000-0000-0000-0000-000000000000").is_err());
+        assert!(RealmId::new("ak:strand:00000000-0000-7000-8000-000000000000").is_err());
+        assert!(RealmId::new("ak:realm:not-a-uuid").is_err());
+        assert!(RealmId::new("ak:realm:00000000-0000-0000-0000-000000000000").is_err());
         assert!(RealmId::new("").is_err());
     }
 
@@ -344,7 +344,7 @@ mod tests {
     #[test]
     fn space_container_id_rejects_bad_kind() {
         assert!(SpaceContainerId::new(generate_realm_id()).is_err());
-        assert!(SpaceContainerId::new("ck:space:not-a-uuid").is_err());
+        assert!(SpaceContainerId::new("ak:space:not-a-uuid").is_err());
         assert!(SpaceContainerId::new("").is_err());
     }
 

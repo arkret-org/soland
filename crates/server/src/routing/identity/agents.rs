@@ -208,7 +208,7 @@ mod tests {
             "actor_id": controller,
             "payload": {
                 "agent_principal_id": agent_principal_id,
-                "key_id": "ck:agent_key:01999999000070008000000000000001",
+                "key_id": "ak:agent_key:01999999000070008000000000000001",
                 "verification_method": verification_method,
                 "public_key_digest": public_key_digest,
                 "accountable_principal_id": controller,
@@ -218,7 +218,7 @@ mod tests {
                 "expires_at": "2999-01-01T00:00:00Z",
                 "approval_evidence": {
                     "kind": "approval_event",
-                    "ref": "ck:event:01999999-0000-7000-8000-000000000001",
+                    "ref": "ak:event:01999999-0000-7000-8000-000000000001",
                     "request_canonical_digest": request_canonical_digest,
                     "approved_by": controller,
                 },
@@ -289,7 +289,7 @@ mod tests {
     fn agent_principal_id_is_did_not_typed_id() {
         validate_agent_principal_id("did:web:agent.example").expect("DID-as-id must be accepted");
         assert!(
-            validate_agent_principal_id("ck:agent_principal:01999999-0000-7000-8000-00000000a001")
+            validate_agent_principal_id("ak:agent_principal:01999999-0000-7000-8000-00000000a001")
                 .is_err()
         );
     }
@@ -305,10 +305,10 @@ mod tests {
     #[test]
     fn detach_revoke_only_targets_capability_grants() {
         assert!(is_capability_grant_id(
-            "ck:grant:01999999-0000-7000-8000-000000000001"
+            "ak:grant:01999999-0000-7000-8000-000000000001"
         ));
         assert!(!is_capability_grant_id(
-            "ck:accountability_grant:01999999-0000-7000-8000-000000000001"
+            "ak:accountability_grant:01999999-0000-7000-8000-000000000001"
         ));
     }
 
@@ -396,8 +396,8 @@ mod tests {
                 "acknowledged_at": "2026-06-18T12:00:00Z",
                 "acknowledged_by": "did:web:controller.example",
                 "sidecar_refs": [
-                    "ck:circle:01964137-0000-7000-8000-000000000020",
-                    "ck:strand:01964137-0000-7000-8000-000000000021"
+                    "ak:circle:01964137-0000-7000-8000-000000000020",
+                    "ak:strand:01964137-0000-7000-8000-000000000021"
                 ]
             })),
             "did:web:controller.example",
@@ -415,7 +415,7 @@ mod tests {
             Some(json!({
                 "acknowledged_at": "2026-06-18T12:00:00Z",
                 "acknowledged_by": "did:web:other.example",
-                "sidecar_refs": ["ck:circle:01964137-0000-7000-8000-000000000020"]
+                "sidecar_refs": ["ak:circle:01964137-0000-7000-8000-000000000020"]
             })),
             "did:web:controller.example",
         )
@@ -779,8 +779,8 @@ mod tests {
             controller_principal_id: Did::new("did:web:mallory.example").expect("controller did"),
             addressed_agent_principal_ids: Vec::new(),
             context_ref: AgentSidecarContextRef::strand(
-                RealmId::new("ck:realm:0196419b-0000-7000-8000-000000000001").expect("realm id"),
-                StrandId::new("ck:strand:0196419b-0000-7000-8000-000000000002").expect("strand id"),
+                RealmId::new("ak:realm:0196419b-0000-7000-8000-000000000001").expect("realm id"),
+                StrandId::new("ak:strand:0196419b-0000-7000-8000-000000000002").expect("strand id"),
             ),
         };
 
@@ -793,7 +793,7 @@ mod tests {
     #[test]
     fn sidecar_context_ref_requires_strand_or_relation() {
         let context_ref = AgentSidecarContextRef {
-            realm_id: RealmId::new("ck:realm:01964137-0000-7000-8000-000000000030").unwrap(),
+            realm_id: RealmId::new("ak:realm:01964137-0000-7000-8000-000000000030").unwrap(),
             strand_id: None,
             track_name: None,
             message_id: None,
@@ -811,8 +811,8 @@ mod tests {
             controller_principal_id: controller.clone(),
             addressed_agent_principal_ids: vec![controller.clone()],
             context_ref: AgentSidecarContextRef::strand(
-                RealmId::new("ck:realm:01964137-0000-7000-8000-000000000030").unwrap(),
-                StrandId::new("ck:strand:01964137-0000-7000-8000-000000000031").unwrap(),
+                RealmId::new("ak:realm:01964137-0000-7000-8000-000000000030").unwrap(),
+                StrandId::new("ak:strand:01964137-0000-7000-8000-000000000031").unwrap(),
             ),
         };
         let err = normalize_addressed_agents(controller.as_str(), &body)

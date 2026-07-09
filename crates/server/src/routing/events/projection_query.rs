@@ -262,7 +262,7 @@ fn member_state_at_history_basis(
     if seals.is_empty() {
         return None;
     }
-    let cell = CellRef::new(format!("ck:cell:ck.component.member.state.v1:{actor}")).ok()?;
+    let cell = CellRef::new(format!("ak:cell:ck.component.member.state.v1:{actor}")).ok()?;
     let state_at_basis = cokret_sdk::state_res::effective_state_at(
         &seals,
         &realm,
@@ -466,19 +466,19 @@ struct TargetRowVisibilitySnapshot {
 }
 
 fn projection_ref_requires_lookup(ref_id: &str) -> bool {
-    ref_id.starts_with("ck:realm:")
-        || ref_id.starts_with("ck:space:")
-        || ref_id.starts_with("ck:strand:")
-        || ref_id.starts_with("ck:morph:")
-        || ref_id.starts_with("ck:relation:")
-        || ref_id.starts_with("ck:event:")
-        || ref_id.starts_with("ck:message:")
+    ref_id.starts_with("ak:realm:")
+        || ref_id.starts_with("ak:space:")
+        || ref_id.starts_with("ak:strand:")
+        || ref_id.starts_with("ak:morph:")
+        || ref_id.starts_with("ak:relation:")
+        || ref_id.starts_with("ak:event:")
+        || ref_id.starts_with("ak:message:")
 }
 
 fn message_event_id_from_projection_ref(ref_id: &str) -> String {
     ref_id
-        .strip_prefix("ck:message:")
-        .map(|suffix| format!("ck:event:{suffix}"))
+        .strip_prefix("ak:message:")
+        .map(|suffix| format!("ak:event:{suffix}"))
         .unwrap_or_else(|| ref_id.to_owned())
 }
 
@@ -495,7 +495,7 @@ fn target_info_for_relation_ref(
     let Some(target_ref) = target_ref else {
         return (None, true, false, None);
     };
-    if target_ref.starts_with("ck:realm:") {
+    if target_ref.starts_with("ak:realm:") {
         return (Some(target_ref.to_owned()), true, true, None);
     }
     if let Some(space) = projection.space_containers.get(target_ref) {
@@ -567,7 +567,7 @@ fn target_info_for_relation_ref(
             None,
         );
     }
-    if target_ref.starts_with("ck:event:") || target_ref.starts_with("ck:message:") {
+    if target_ref.starts_with("ak:event:") || target_ref.starts_with("ak:message:") {
         let event_id = message_event_id_from_projection_ref(target_ref);
         if let Some(message) = projection
             .messages
@@ -1121,7 +1121,7 @@ async fn list_strand_projections(
     })
 }
 
-/// Strongly-typed response body for `org.cokret.soland.strands.get`
+/// Strongly-typed response body for `org.arkret.soland.strands.get`
 /// (`GET /_soland/self/strands/{strand_id}`). This is a soland product-private
 /// projection read (`/_soland/self/*` negative-space root); the SDK does not —
 /// and per `service-http-binding.md` §2.1.3 should not — define a response type
@@ -1148,7 +1148,7 @@ struct StrandProjectionView {
     updated_at: Option<DateTime<Utc>>,
 }
 
-/// One relation edge in the `org.cokret.soland.relations.list` response.
+/// One relation edge in the `org.arkret.soland.relations.list` response.
 /// Mirrors the projected [`SolandRelationState`] fields surfaced by the
 /// product-private `/_soland/self/relations` read. `fields` stays a free-form
 /// `serde_json` map (arbitrary relation payload values).
@@ -1166,7 +1166,7 @@ struct RelationEdgeView {
     updated_at: DateTime<Utc>,
 }
 
-/// Strongly-typed response body for `org.cokret.soland.relations.list`
+/// Strongly-typed response body for `org.arkret.soland.relations.list`
 /// (`GET /_soland/self/relations`). soland product-private projection read;
 /// the DTO lives here for the same reason as [`StrandProjectionView`].
 #[derive(Debug, serde::Serialize, salvo::oapi::ToSchema)]
@@ -1183,11 +1183,11 @@ struct RelationEdgeList {
 /// patch-merge effects) that need the materialized field values. Visibility
 /// reuses the same Realm history / Circle scope gate as the list endpoint.
 #[endpoint(
-    operation_id = "org.cokret.soland.strands.get",
+    operation_id = "org.arkret.soland.strands.get",
     tags("soland-local"),
     summary = "Read a single Strand projection with materialized fields"
 )]
-#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.strands.get"))]
+#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.strands.get"))]
 async fn get_strand_projection(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -1264,11 +1264,11 @@ async fn get_strand_projection(
 /// defaults to `active`. Only edges whose `realm_id` is accessible to the
 /// caller are returned, so non-members can't enumerate another Realm's graph.
 #[endpoint(
-    operation_id = "org.cokret.soland.relations.list",
+    operation_id = "org.arkret.soland.relations.list",
     tags("soland-local"),
     summary = "List relation edge projections with from/to/kind/state filters"
 )]
-#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.relations.list"))]
+#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.relations.list"))]
 async fn list_relation_projections(
     aa: AuthArgs,
     depot: &mut Depot,

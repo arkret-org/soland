@@ -2,8 +2,8 @@ use serde_json::{Value, json};
 
 use super::*;
 
-const REALM: &str = "ck:realm:0196419b-0000-7000-8000-000000000001";
-const INVITE: &str = "ck:invite:0196419b-0000-7000-8000-000000000101";
+const REALM: &str = "ak:realm:0196419b-0000-7000-8000-000000000001";
+const INVITE: &str = "ak:invite:0196419b-0000-7000-8000-000000000101";
 const INVITER: &str = "did:web:alice.example";
 const SUBJECT: &str = "did:web:bob.example";
 const SUBJECT_METHOD: &str = "did:web:bob.example#device-1";
@@ -45,7 +45,7 @@ fn claim_payload(nonce: &str, token_commitment: &str, service_did: &str) -> Valu
         "verification_method": VERIFICATION_METHOD,
         "subject_id": SUBJECT,
         "realm_id": REALM,
-        "audience": "cokret.invite.claim",
+        "audience": "arkret.invite.claim",
         "claim_nonce": nonce,
         "expires_at": "2099-01-01T00:00:00Z",
         "signature": "test-signature"
@@ -140,7 +140,7 @@ fn invite_claim_converts_third_party_invite_to_claimed_invite() {
         invite
             .claim_nonces
             .get("nonce-0000000001")
-            .is_some_and(|operation_id| operation_id.starts_with("ck:operation:"))
+            .is_some_and(|operation_id| operation_id.starts_with("ak:operation:"))
     );
     let third_party_id = invite.third_party_id.as_ref().expect("third_party_id");
     assert_eq!(

@@ -46,7 +46,7 @@ pub struct PartialSubmitOutcome {
 /// Seal; the watchdog itself is a follow-up (in the meantime an admin can
 /// trigger aggregation via a separate ops command — not exposed yet).
 #[salvo::oapi::endpoint(
-    operation_id = "org.cokret.soland.admin.multisig.partial",
+    operation_id = "org.arkret.soland.admin.multisig.partial",
     tags("soland-admin", "multisig")
 )]
 pub(crate) async fn admin_submit_multisig_partial(
@@ -166,7 +166,7 @@ pub(crate) async fn admin_submit_multisig_partial(
 
 /// `GET /_soland/admin/realms/{realm_id}/multisig/pending`.
 #[salvo::oapi::endpoint(
-    operation_id = "org.cokret.soland.admin.multisig.pending",
+    operation_id = "org.arkret.soland.admin.multisig.pending",
     tags("soland-admin", "multisig")
 )]
 pub(crate) async fn admin_list_multisig_pending(
@@ -233,7 +233,7 @@ pub(crate) async fn admin_list_multisig_pending(
 /// ```
 ///
 /// When `use_keystore=true`, the new seed is also stored under
-/// `cokret:signer:soland-notary:<service_did>` so it survives
+/// `arkret:signer:soland-notary:<service_did>` so it survives
 /// process restart. When `use_keystore=false`, the rotation lives only
 /// in the running process's `ArcSwap` (suitable for dev/test, not
 /// production — the next restart re-loads the env-supplied seed). The
@@ -259,7 +259,7 @@ pub struct RotateSigningKeyOutcome {
 }
 
 #[salvo::oapi::endpoint(
-    operation_id = "org.cokret.soland.admin.realms.notary.rotate_signing_key",
+    operation_id = "org.arkret.soland.admin.realms.notary.rotate_signing_key",
     tags("soland-admin", "notary"),
     summary = "Rotate the NotaryWorker signing key"
 )]
@@ -297,7 +297,7 @@ pub(crate) async fn admin_rotate_signing_key(
     let mut keystore_warning: Option<String> = None;
     if state.config.use_keystore {
         let app_id = format!("soland.{}", state.config.service_did);
-        let key_id = format!("cokret:signer:soland-notary:{}", state.config.service_did);
+        let key_id = format!("arkret:signer:soland-notary:{}", state.config.service_did);
         let store = cokret_sdk::platform_default_keystore(&app_id);
         match store.store(&key_id, &seed) {
             Ok(()) => {

@@ -44,7 +44,7 @@ impl ProjectionState {
         let scope_circle_id = object
             .get("scope_circle_id")
             .and_then(Value::as_str)
-            .filter(|value| value.starts_with("ck:circle:"))
+            .filter(|value| value.starts_with("ak:circle:"))
             .map(ToOwned::to_owned);
         let title = object
             .get("metadata")

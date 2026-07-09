@@ -211,7 +211,7 @@ async fn sync_token_for_state_positions(
 pub(crate) fn encode_sync_cursor_value(cursor: Value) -> String {
     let bytes = cokret_sdk::canonical::canonical_json_bytes(&cursor)
         .unwrap_or_else(|_| cursor.to_string().into_bytes());
-    format!("ck:cursor:{}", URL_SAFE_NO_PAD.encode(bytes))
+    format!("ak:cursor:{}", URL_SAFE_NO_PAD.encode(bytes))
 }
 
 /// Deterministic, unguessable stateful cursor handle.
@@ -619,7 +619,7 @@ pub(crate) async fn parse_and_validate_events_query_cursor(
     filter_digest: &str,
     now_ms: i64,
 ) -> Result<EventsQueryCursor, SyncCursorError> {
-    if !token.starts_with("ck:cursor:") {
+    if !token.starts_with("ak:cursor:") {
         return Err(SyncCursorError::Invalid(
             "events query cursor must be a ck:cursor token",
         ));
@@ -709,7 +709,7 @@ pub(crate) async fn parse_and_validate_events_query_cursor(
         .ok_or(SyncCursorError::Integrity(
             "events query cursor handle is missing target.event_id",
         ))?;
-    if !target.starts_with("ck:event:") {
+    if !target.starts_with("ak:event:") {
         return Err(SyncCursorError::Integrity(
             "events query cursor target must be an event id",
         ));
@@ -720,7 +720,7 @@ pub(crate) async fn parse_and_validate_events_query_cursor(
 }
 
 pub fn decode_sync_cursor_value(token: &str) -> Result<serde_json::Value, SyncCursorError> {
-    let Some(encoded) = token.strip_prefix("ck:cursor:") else {
+    let Some(encoded) = token.strip_prefix("ak:cursor:") else {
         return Err(SyncCursorError::Invalid(
             "after must use a ck:cursor account token",
         ));
@@ -838,7 +838,7 @@ pub(super) async fn account_cursor_revoke(
     let body = body.into_inner();
 
     let cursor = body.cursor.trim();
-    if !cursor.starts_with("ck:cursor:") || cursor.len() <= "ck:cursor:".len() {
+    if !cursor.starts_with("ak:cursor:") || cursor.len() <= "ak:cursor:".len() {
         return Err(AppError::invalid_param("cursor must be a ck:cursor token"));
     }
     let reason_code = body.reason_code.trim();
@@ -991,7 +991,7 @@ mod cursor_frame_tests {
             body.kind,
             cokret_sdk::EventsSubscribeFrameKind::ResyncRequired
         );
-        let cursor = cokret_sdk::identifiers::Cursor::new("ck:cursor:resume").unwrap();
+        let cursor = cokret_sdk::identifiers::Cursor::new("ak:cursor:resume").unwrap();
         let body = dropped_or_resync(Some(cursor), "broadcast_lag", Some(10_000));
         assert_eq!(body.kind, cokret_sdk::EventsSubscribeFrameKind::Dropped);
         assert_eq!(body.reconnect_after_ms, Some(10_000));

@@ -17,7 +17,7 @@
 //!    Exit 0 on full PASS, 1 on any assertion fail, 2 on prerequisite/IO.
 //!
 //! 2. `--export-only` — used by `scripts/backup-drill.sh`. Loads the KeyStore-persisted notary seed
-//!    (`cokret:signer:soland-notary:<service_did>`) and writes a single-key JSON snapshot to
+//!    (`arkret:signer:soland-notary:<service_did>`) and writes a single-key JSON snapshot to
 //!    `--output`.
 //!
 //! 3. `--import-only` — used by `scripts/restore-drill.sh`. Reads the JSON snapshot from `--input`
@@ -63,7 +63,7 @@ fn parse_args() -> anyhow::Result<Args> {
     // Canonical env is `SOLAND_SERVICE_DID` (see `config.rs`); default mirrors
     // the server's own did:webvh default. `did:web` is never the default — a
     // drill that silently signs against a forbidden DID would also derive the
-    // wrong notary KeyStore id (`cokret:signer:soland-notary:<service_did>`).
+    // wrong notary KeyStore id (`arkret:signer:soland-notary:<service_did>`).
     let mut service_did = std::env::var("SOLAND_SERVICE_DID").unwrap_or_else(|_| {
         "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service"
             .to_owned()
@@ -218,7 +218,7 @@ enum DrillError {
 
 fn keystore_id(service_did: &str) -> (String, String) {
     let app_id = format!("soland.{service_did}");
-    let key_id = format!("cokret:signer:soland-notary:{service_did}");
+    let key_id = format!("arkret:signer:soland-notary:{service_did}");
     (app_id, key_id)
 }
 

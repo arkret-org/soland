@@ -61,7 +61,7 @@ pub(super) fn operation_target_scope_circle_id(
             .payload
             .get("scope_circle_id")
             .and_then(Value::as_str)
-            .filter(|value| value.starts_with("ck:circle:"))
+            .filter(|value| value.starts_with("ak:circle:"))
             .map(ToOwned::to_owned)
     };
     let inline_scope = |field: &str| -> Option<String> {
@@ -71,7 +71,7 @@ pub(super) fn operation_target_scope_circle_id(
             .and_then(Value::as_object)
             .and_then(|object| object.get("scope_circle_id"))
             .and_then(Value::as_str)
-            .filter(|value| value.starts_with("ck:circle:"))
+            .filter(|value| value.starts_with("ak:circle:"))
             .map(ToOwned::to_owned)
     };
     let relation_scope = |field: &str| -> Option<String> {

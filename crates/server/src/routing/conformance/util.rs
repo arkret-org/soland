@@ -96,7 +96,7 @@ mod tests {
             h: "abcdefghijklmnopqrstuv".to_owned(),
         };
         let encoded = cursor.encode().unwrap();
-        assert!(encoded.starts_with("ck:cursor:"));
+        assert!(encoded.starts_with("ak:cursor:"));
         let decoded = cokret_sdk::Cursor::decode(&encoded).unwrap();
         assert_eq!(decoded.v, cursor.v);
         assert_eq!(decoded.purpose, cursor.purpose);

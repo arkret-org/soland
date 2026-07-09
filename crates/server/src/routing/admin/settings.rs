@@ -94,7 +94,7 @@ async fn put_settings(depot: &mut Depot, req: &mut Request) -> JsonResult<Runtim
     super::audit::append_audit_log(
         state,
         Some(&session.actor),
-        "org.cokret.soland.admin.settings.update",
+        "org.arkret.soland.admin.settings.update",
         serde_json::json!({ "changed_keys": changed_keys }),
         "ok",
     )

@@ -88,7 +88,7 @@ pub(crate) async fn validate_event_envelope_with_context(
     }
 
     // REDU-7 / CKP-0008 / CKP-0009 (R3 spec-sync 2026-05-27,
-    // cokret-spec b47ff6ec) — Envelope `actor_kind` is reducer-managed:
+    // arkret-spec b47ff6ec) — Envelope `actor_kind` is reducer-managed:
     // reject any client-supplied value with the spec-canonical
     // `actor_kind_reducer_managed` reason code. The reducer derives the
     // canonical `EnvelopeActorKind` (Native/Ghost/Service/Agent) from

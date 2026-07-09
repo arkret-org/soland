@@ -42,7 +42,7 @@ pub(super) fn validate_conflict_repair_event_payload(
                 "conflict repair payload requires cell_id",
             )
         })?;
-    if !cell_id.starts_with("ck:cell:") {
+    if !cell_id.starts_with("ak:cell:") {
         return Err(event_validation_error(
             StatusCode::BAD_REQUEST,
             "schema_violation",

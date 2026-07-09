@@ -19,18 +19,18 @@ use soland::authz::SolandAuthzEngine;
 use soland::hlc::ServerHlc;
 use soland::reducer::{ProjectionEffect, ProjectionState, SolandRealmState};
 
-const REALM: &str = "ck:realm:01904100-0000-7000-8000-cccccccccccc";
-const GRANT_ID: &str = "ck:grant:01904100-0000-7000-8000-dddddddddddd";
+const REALM: &str = "ak:realm:01904100-0000-7000-8000-cccccccccccc";
+const GRANT_ID: &str = "ak:grant:01904100-0000-7000-8000-dddddddddddd";
 const ISSUER: &str = "did:web:owner.example";
 const SUBJECT: &str = "did:web:bob.example";
 const ACTION: &str = "ck.realm.admin";
-const STRAND_ID: &str = "ck:strand:01904100-0000-7000-8000-eeeeeeeeeeee";
-const CIRCLE_A: &str = "ck:circle:01904100-0000-7000-8000-c1c1c1c1c1c1";
-const CIRCLE_B: &str = "ck:circle:01904100-0000-7000-8000-c2c2c2c2c2c2";
+const STRAND_ID: &str = "ak:strand:01904100-0000-7000-8000-eeeeeeeeeeee";
+const CIRCLE_A: &str = "ak:circle:01904100-0000-7000-8000-c1c1c1c1c1c1";
+const CIRCLE_B: &str = "ak:circle:01904100-0000-7000-8000-c2c2c2c2c2c2";
 
 fn op(kind: &str, realm_id: &str, payload: Value) -> Operation {
     Operation::create(
-        OperationId::new(format!("ck:operation:{}", uuid::Uuid::now_v7())).unwrap(),
+        OperationId::new(format!("ak:operation:{}", uuid::Uuid::now_v7())).unwrap(),
         RealmId::new(realm_id).unwrap(),
         kind,
         payload,
@@ -113,7 +113,7 @@ fn check_allows_for(state: &ProjectionState, grant_id: &str, action: &str, resou
 
 fn grant_cell_items(state: &ProjectionState, grant_id: &str) -> Vec<Value> {
     let cell_ref = cokret_sdk::CellRef::new(format!(
-        "ck:cell:ck.component.capability.grant.v1:{grant_id}"
+        "ak:cell:ck.component.capability.grant.v1:{grant_id}"
     ))
     .unwrap();
     match state.cell_value(&cell_ref) {
@@ -368,7 +368,7 @@ fn canonical_strand_selector_projects_to_exact_resource() {
         &state,
         GRANT_ID,
         "ck.strand.read",
-        "ck:strand:01904100-0000-7000-8000-ffffffffffff"
+        "ak:strand:01904100-0000-7000-8000-ffffffffffff"
     ));
 }
 
@@ -377,7 +377,7 @@ fn multiple_resource_selectors_are_disjoined_in_engine_projection() {
     let mut state = ProjectionState::new();
     seed_realm_owner(&mut state);
     let hlc = ServerHlc::new("test");
-    let other_strand = "ck:strand:01904100-0000-7000-8000-ffffffffffff";
+    let other_strand = "ak:strand:01904100-0000-7000-8000-ffffffffffff";
     let effect = state.apply(
         &grant_op_with(
             GRANT_ID,

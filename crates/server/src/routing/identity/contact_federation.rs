@@ -218,7 +218,7 @@ fn contact_delivery_idempotency_key(
         hasher.update(part.as_bytes());
         hasher.update(b"|");
     }
-    format!("ck:contact-outbox:{}", hex::encode(hasher.finalize()))
+    format!("ak:contact-outbox:{}", hex::encode(hasher.finalize()))
 }
 
 #[endpoint(
@@ -868,7 +868,7 @@ mod tests {
             compaction_min_witnesses: 0,
             compaction_preserve_genesis: false,
             compaction_prune_only_singleton_successors: false,
-            trust_domain: "ck:trust_domain:recipient.local".to_owned(),
+            trust_domain: "ak:trust_domain:recipient.local".to_owned(),
             ..AppConfig::test_default()
         }
     }
@@ -897,7 +897,7 @@ mod tests {
             requester,
             target,
             &payload,
-            "ck:event:0196419b-0000-7000-8000-000000000001",
+            "ak:event:0196419b-0000-7000-8000-000000000001",
             Some(source_service_did),
         )
         .await
@@ -921,7 +921,7 @@ mod tests {
         );
         assert_eq!(
             record.request_event_ref.as_deref(),
-            Some("ck:event:0196419b-0000-7000-8000-000000000001"),
+            Some("ak:event:0196419b-0000-7000-8000-000000000001"),
         );
         assert_ne!(
             record.peer_service_did.as_deref(),

@@ -17,7 +17,7 @@ use crate::state::AppState;
 
 const FANOUT_KIND: &str = "ck.coauth.collaboration_capability.fanout.v1";
 const SOURCE_DEVICE_ID: &str = "coauth-capability-fanout";
-const DIGEST_HEADER: &str = "x-cokret-capability-fanout-digest";
+const DIGEST_HEADER: &str = "x-arkret-capability-fanout-digest";
 
 #[derive(Clone, Debug)]
 struct CapabilityFanoutDraft {
@@ -43,19 +43,19 @@ pub(super) fn router() -> Router {
 // role — it holds no principal session, so the protocol `POST /_cokret/self/events`
 // path (which requires `user_session` / `device_proof` / a principal-authorised
 // delegated service signature, service-http-binding.md §2.1 row `self/events`
-// + §189) is not an available caller surface. The reverse-DNS `org.cokret.soland.*`
+// + §189) is not an available caller surface. The reverse-DNS `org.arkret.soland.*`
 // operation_id mirrors the device-signing-key directory read
-// (`org.cokret.soland.gate.account.device_signing_keys.query`): both are
+// (`org.arkret.soland.gate.account.device_signing_keys.query`): both are
 // deployment-internal S2S contracts, not spec operations. Trust boundary is
 // registered in coauth `docs/{zh,en}/setup/principal-server.md`.
 #[endpoint(
-    operation_id = "org.cokret.soland.root.authz.capability_fanout.submit",
+    operation_id = "org.arkret.soland.root.authz.capability_fanout.submit",
     tags("soland-local"),
     summary = "Materialize coauth-issued collaboration capability fanout (deployment-internal S2S)"
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "org.cokret.soland.root.authz.capability_fanout.submit")
+    fields(op = "org.arkret.soland.root.authz.capability_fanout.submit")
 )]
 async fn submit_fanout(
     body: JsonBody<Value>,
@@ -148,7 +148,7 @@ fn validate_header_digest(req: &Request, body: &Value) -> Result<(), AppError> {
         .map_err(|error| AppError::invalid_param(format!("fanout body digest failed: {error}")))?;
     if expected != actual {
         return Err(AppError::invalid_param(
-            "x-cokret-capability-fanout-digest does not match body",
+            "x-arkret-capability-fanout-digest does not match body",
         ));
     }
     Ok(())
@@ -352,10 +352,10 @@ fn require_non_empty_proofs(
 }
 
 fn operation_id_for_event_id(event_id: &str) -> Result<OperationId, AppError> {
-    let Some(suffix) = event_id.strip_prefix("ck:event:") else {
+    let Some(suffix) = event_id.strip_prefix("ak:event:") else {
         return Err(AppError::invalid_param("event_id must use ck:event prefix"));
     };
-    OperationId::new(format!("ck:operation:{suffix}"))
+    OperationId::new(format!("ak:operation:{suffix}"))
         .map_err(|_| AppError::invalid_param("event_id does not map to a valid operation id"))
 }
 
@@ -407,7 +407,7 @@ fn authz_state_for_draft(
 
 fn projected_capability_cell_revoked(state: &AppState, grant_id: &str) -> bool {
     let Ok(cell_ref) = CellRef::new(format!(
-        "ck:cell:ck.component.capability.grant.v1:{grant_id}"
+        "ak:cell:ck.component.capability.grant.v1:{grant_id}"
     )) else {
         return false;
     };
@@ -456,9 +456,9 @@ mod tests {
 
     use super::*;
 
-    const EVENT: &str = "ck:event:01970000-0000-7000-8000-000000000001";
-    const GRANT: &str = "ck:grant:01970000-0000-7000-8000-000000000002";
-    const REALM: &str = "ck:realm:01970000-0000-7000-8000-000000000003";
+    const EVENT: &str = "ak:event:01970000-0000-7000-8000-000000000001";
+    const GRANT: &str = "ak:grant:01970000-0000-7000-8000-000000000002";
+    const REALM: &str = "ak:realm:01970000-0000-7000-8000-000000000003";
     const ISSUER: &str = "did:web:coauth.example";
     const SUBJECT: &str = "did:web:alice.example";
 
@@ -501,7 +501,7 @@ mod tests {
         assert_eq!(draft.subject.as_deref(), Some(SUBJECT));
         assert_eq!(
             draft.operation.operation_id.to_string(),
-            "ck:operation:01970000-0000-7000-8000-000000000001"
+            "ak:operation:01970000-0000-7000-8000-000000000001"
         );
         assert_eq!(draft.operation.payload["event_id"], EVENT);
     }
@@ -509,7 +509,7 @@ mod tests {
     #[test]
     fn grant_fanout_rejects_mismatched_grant_id() {
         let mut body = grant_body();
-        body.payload["grant"]["id"] = json!("ck:grant:01970000-0000-7000-8000-0000000000aa");
+        body.payload["grant"]["id"] = json!("ak:grant:01970000-0000-7000-8000-0000000000aa");
 
         assert!(build_projectable_operation(None, body).is_err());
     }

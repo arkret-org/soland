@@ -7,16 +7,16 @@ use crate::reducer::*;
 // fsm submitted -> under_review -> decided; separation-of-duties +
 // overturn-missing-lift rejections.
 
-const MOD_REALM: &str = "ck:realm:01904100-0000-7000-8000-d0d0d0d0d0d0";
-const MOD_DECISION_ID: &str = "ck:event:01904100-0000-7000-8000-0d0d0d0d0d01";
-const MOD_APPEAL_ID: &str = "ck:appeal:01904100-0000-7000-8000-0a0a0a0a0a01";
-const MOD_TARGET_REF: &str = "ck:message:01904100-0000-7000-8000-000000000777";
+const MOD_REALM: &str = "ak:realm:01904100-0000-7000-8000-d0d0d0d0d0d0";
+const MOD_DECISION_ID: &str = "ak:event:01904100-0000-7000-8000-0d0d0d0d0d01";
+const MOD_APPEAL_ID: &str = "ak:appeal:01904100-0000-7000-8000-0a0a0a0a0a01";
+const MOD_TARGET_REF: &str = "ak:message:01904100-0000-7000-8000-000000000777";
 const MOD_REQUEST_DIGEST: &str =
     "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
 fn mod_decision_cell_ref() -> CellRef {
     CellRef::new(format!(
-        "ck:cell:ck.component.moderation_state.v1:{MOD_TARGET_REF}"
+        "ak:cell:ck.component.moderation_state.v1:{MOD_TARGET_REF}"
     ))
     .unwrap()
 }
@@ -339,7 +339,7 @@ fn moderation_appeal_duplicate_active_rejected() {
         cokret_sdk::events::kinds::MODERATION_APPEAL_SUBMIT,
         MOD_REALM,
         serde_json::json!({
-            "appeal_id": "ck:appeal:01904100-0000-7000-8000-0a0a0a0a0a02",
+            "appeal_id": "ak:appeal:01904100-0000-7000-8000-0a0a0a0a0a02",
             "realm_id": MOD_REALM,
             "decision_ref": MOD_DECISION_ID,
             "target_ref": MOD_TARGET_REF,

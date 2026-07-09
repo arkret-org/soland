@@ -408,11 +408,11 @@ mod tests {
             "version": "1.0",
             "group_id": "testGroup",
             "epoch": 1,
-            "content_type": "application/vnd.cokret.account-data+json",
+            "content_type": "application/vnd.arkret.account-data+json",
             "ciphertext": "b3BhcXVl",
             "aad_visibility_event_id": "hidden",
             "aad": {
-                "realm_id": "ck:realm:0196419b-0000-7000-8000-000000000000",
+                "realm_id": "ak:realm:0196419b-0000-7000-8000-000000000000",
                 "event_kind": "ck.account_data.set"
             },
             "key_ref": {
@@ -432,7 +432,7 @@ mod tests {
                 "plaintext_schema_id": "ck.schema.personal_productivity.v1",
                 "payload_digest": "sha256:4444444444444444444444444444444444444444444444444444444444444444"
             },
-            "content_type": "application/vnd.cokret.account-data+json",
+            "content_type": "application/vnd.arkret.account-data+json",
             "ciphertext": "opaque-client-envelope"
         })
     }
@@ -501,7 +501,7 @@ mod tests {
 
         let err = validate_encrypted_account_data_value(
             ACCOUNT_DATA_TYPE_INVITE_QUARANTINE,
-            &json!({"invite_event_id": "ck:event:0196419b-0000-7000-8000-000000000000"}),
+            &json!({"invite_event_id": "ak:event:0196419b-0000-7000-8000-000000000000"}),
         )
         .unwrap_err();
         assert_eq!(err, AccountDataEncryptionError::MissingEncryptedCarrier);
@@ -583,7 +583,7 @@ mod tests {
             key,
             &json!({
                 "kind": "reminder",
-                "target_ref": "ck:message:01904100-0000-7000-8000-000000000001",
+                "target_ref": "ak:message:01904100-0000-7000-8000-000000000001",
                 "remind_at": "2026-06-19T08:00:00Z",
                 "note": "private reminder note",
                 "updated_hlc": "01904100-0000-7000-8000-000000000001",
@@ -605,7 +605,7 @@ mod tests {
             key,
             &json!({
                 "kind": "snooze",
-                "target_ref": "ck:strand:01904100-0000-7000-8000-000000000001",
+                "target_ref": "ak:strand:01904100-0000-7000-8000-000000000001",
                 "snooze_expires_at": "2026-06-19T09:00:00Z",
                 "updated_hlc": "01904100-0000-7000-8000-000000000001",
                 "encrypted_payload": conformance_marker()
@@ -626,10 +626,10 @@ mod tests {
             key,
             &json!({
                 "kind": "scheduled_send",
-                "planned_message_id": "ck:message:01904100-0000-7000-8000-000000000001",
+                "planned_message_id": "ak:message:01904100-0000-7000-8000-000000000001",
                 "send_at": "2026-06-19T08:00:00Z",
                 "message_payload": {
-                    "message_id": "ck:message:01904100-0000-7000-8000-000000000001",
+                    "message_id": "ak:message:01904100-0000-7000-8000-000000000001",
                     "content": {"kind": "ck.content.text", "body": "secret"}
                 },
                 "message_payload_digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
@@ -651,10 +651,10 @@ mod tests {
         let err = validate_encrypted_account_data_value(
             key,
             &json!({
-                "realm_id": "ck:realm:0196419b-0000-7000-8000-000000000000",
+                "realm_id": "ak:realm:0196419b-0000-7000-8000-000000000000",
                 "shards": [{
                     "shard_key": "term-derived-key",
-                    "blob_ref": "ck:blob:sha256:1111111111111111111111111111111111111111111111111111111111111111",
+                    "blob_ref": "ak:blob:sha256:1111111111111111111111111111111111111111111111111111111111111111",
                     "ciphertext_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
                 }],
                 "encrypted_payload": conformance_marker()

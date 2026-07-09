@@ -212,7 +212,7 @@ pub(super) async fn delivery_binding_handover_witness(
     if let (Ok(realm_id), Ok(cell_ref)) = (
         RealmId::new(evidence.realm_id.clone()),
         cokret_sdk::CellRef::new(format!(
-            "ck:cell:ck.component.member.state.v1:{}",
+            "ak:cell:ck.component.member.state.v1:{}",
             evidence.actor_id.as_str()
         )),
     ) {

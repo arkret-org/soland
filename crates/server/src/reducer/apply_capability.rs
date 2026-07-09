@@ -54,7 +54,7 @@ fn selector_string_field<'a>(selector: &'a Value, field: &str) -> Option<&'a str
 
 fn selector_realm_id<'a>(selector: &'a Value, fallback: &'a str) -> &'a str {
     selector_string_field(selector, "realm_id")
-        .or_else(|| selector_string_field(selector, "id").filter(|id| id.starts_with("ck:realm:")))
+        .or_else(|| selector_string_field(selector, "id").filter(|id| id.starts_with("ak:realm:")))
         .unwrap_or(fallback)
 }
 
@@ -444,14 +444,14 @@ fn grant_item_value(
 impl ProjectionState {
     fn capability_grant_cell_ref(grant_id: &str) -> Option<CellRef> {
         CellRef::new(format!(
-            "ck:cell:ck.component.capability.grant.v1:{grant_id}"
+            "ak:cell:ck.component.capability.grant.v1:{grant_id}"
         ))
         .ok()
     }
 
     fn capability_delegate_cell_ref(grant_id: &str) -> Option<CellRef> {
         CellRef::new(format!(
-            "ck:cell:ck.component.capability.delegate.v1:{grant_id}"
+            "ak:cell:ck.component.capability.delegate.v1:{grant_id}"
         ))
         .ok()
     }
@@ -480,7 +480,7 @@ impl ProjectionState {
         {
             return true;
         }
-        const CELL_PREFIX: &str = "ck:cell:ck.component.capability.grant.v1:";
+        const CELL_PREFIX: &str = "ak:cell:ck.component.capability.grant.v1:";
         let resource_expr = self.authz_resource_expr(realm_id, resource);
         self.cells.iter().any(|(cell_ref, cell_state)| {
             let Some(grant_id) = cell_ref.as_str().strip_prefix(CELL_PREFIX) else {
@@ -957,7 +957,7 @@ impl ProjectionState {
     /// deactivate fan-out can idempotently re-revoke). Used by the lifecycle
     /// deactivate path to fan-out `ck.capability.revoke`.
     pub fn grant_ids_for_subject(&self, subject_did: &str) -> Vec<String> {
-        let cell_prefix = "ck:cell:ck.component.capability.grant.v1:";
+        let cell_prefix = "ak:cell:ck.component.capability.grant.v1:";
         let mut ids = Vec::new();
         for (cell_ref, cell_state) in &self.cells {
             if !cell_ref.as_str().starts_with(cell_prefix) {
@@ -999,7 +999,7 @@ impl ProjectionState {
         &self,
         realm_id: &str,
     ) -> std::collections::BTreeSet<String> {
-        let cell_prefix = "ck:cell:ck.component.capability.grant.v1:";
+        let cell_prefix = "ak:cell:ck.component.capability.grant.v1:";
         let mut revoked: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
         for (cell_ref, cell_state) in &self.cells {
             if !cell_ref.as_str().starts_with(cell_prefix) {
@@ -1064,7 +1064,7 @@ impl ProjectionState {
     /// were flipped from inactive to active.
     fn clear_pending_grant_flags_for(&mut self, agent_principal_id: &str) -> Vec<String> {
         let mut cleared = Vec::new();
-        let cell_prefix = "ck:cell:ck.component.capability.grant.v1:";
+        let cell_prefix = "ak:cell:ck.component.capability.grant.v1:";
         let target_refs: Vec<CellRef> = self
             .cells
             .keys()
@@ -1135,15 +1135,15 @@ mod agent_key_flag_tests {
     use crate::reducer::{ProjectionState, SolandRealmState};
 
     const AGENT: &str = "did:web:agent.example";
-    const REALM: &str = "ck:realm:01970000-0000-7000-8000-000000000000";
-    const GRANT: &str = "ck:grant:01970000-0000-7000-8000-0000000000a1";
-    const GRANT_2: &str = "ck:grant:01970000-0000-7000-8000-0000000000a2";
-    const GRANT_3: &str = "ck:grant:01970000-0000-7000-8000-0000000000a3";
+    const REALM: &str = "ak:realm:01970000-0000-7000-8000-000000000000";
+    const GRANT: &str = "ak:grant:01970000-0000-7000-8000-0000000000a1";
+    const GRANT_2: &str = "ak:grant:01970000-0000-7000-8000-0000000000a2";
+    const GRANT_3: &str = "ak:grant:01970000-0000-7000-8000-0000000000a3";
 
     fn op(kind_object_type: &str, payload: serde_json::Value) -> Operation {
         Operation {
             schema: "ck.schema.operation.v1".to_owned(),
-            operation_id: OperationId::new("ck:operation:01970000-0000-7000-8000-0000000000ff")
+            operation_id: OperationId::new("ak:operation:01970000-0000-7000-8000-0000000000ff")
                 .unwrap(),
             record_type: "operation".to_owned(),
             operation_type: OperationType::Create,
@@ -1235,7 +1235,7 @@ mod agent_key_flag_tests {
         // Pairing: ck.agent.key.authorize clears the flag for the agent.
         let effect = state.apply_agent_key_authorize(&op(
             "agent_key_authorize",
-            json!({ "agent_principal_id": AGENT, "key_id": "ck:agent_key:dev1" }),
+            json!({ "agent_principal_id": AGENT, "key_id": "ak:agent_key:dev1" }),
         ));
         match effect {
             crate::reducer::ProjectionEffect::AgentKeyAuthorizeProjected {
@@ -1254,7 +1254,7 @@ mod agent_key_flag_tests {
         // Revoking the key removes the authorized-key marker.
         state.apply_agent_key_revoke(&op(
             "agent_key_revoke",
-            json!({ "agent_principal_id": AGENT, "key_id": "ck:agent_key:dev1" }),
+            json!({ "agent_principal_id": AGENT, "key_id": "ak:agent_key:dev1" }),
         ));
         assert!(!state.agent_has_authorized_key(AGENT));
     }
@@ -1429,10 +1429,10 @@ mod delegation_cycle_tests {
 
     use crate::reducer::{ProjectionState, SolandRealmState};
 
-    const REALM: &str = "ck:realm:01970000-0000-7000-8000-000000000000";
-    const G_A: &str = "ck:grant:01970000-0000-7000-8000-00000000a001";
-    const G_B: &str = "ck:grant:01970000-0000-7000-8000-00000000b002";
-    const G_C: &str = "ck:grant:01970000-0000-7000-8000-00000000c003";
+    const REALM: &str = "ak:realm:01970000-0000-7000-8000-000000000000";
+    const G_A: &str = "ak:grant:01970000-0000-7000-8000-00000000a001";
+    const G_B: &str = "ak:grant:01970000-0000-7000-8000-00000000b002";
+    const G_C: &str = "ak:grant:01970000-0000-7000-8000-00000000c003";
 
     fn delegate_op(grant_id: &str, parent_grant_id: &str) -> Operation {
         delegate_op_with_constraints(grant_id, parent_grant_id, json!([]))
@@ -1444,7 +1444,7 @@ mod delegation_cycle_tests {
         constraints: serde_json::Value,
     ) -> Operation {
         Operation::create(
-            OperationId::new("ck:operation:01970000-0000-7000-8000-0000000000fe").unwrap(),
+            OperationId::new("ak:operation:01970000-0000-7000-8000-0000000000fe").unwrap(),
             RealmId::new(REALM.to_owned()).unwrap(),
             cokret_sdk::events::kinds::CAPABILITY_DELEGATE,
             json!({
@@ -1471,7 +1471,7 @@ mod delegation_cycle_tests {
         constraints: serde_json::Value,
     ) -> Operation {
         Operation::create(
-            OperationId::new("ck:operation:01970000-0000-7000-8000-0000000000fd").unwrap(),
+            OperationId::new("ak:operation:01970000-0000-7000-8000-0000000000fd").unwrap(),
             RealmId::new(REALM.to_owned()).unwrap(),
             cokret_sdk::events::kinds::CAPABILITY_GRANT,
             json!({
@@ -1618,11 +1618,11 @@ mod federation_revoke_fanout_tests {
 
     use crate::reducer::{ProjectionState, SolandRealmState};
 
-    const REALM: &str = "ck:realm:01970000-0000-7000-8000-000000000000";
-    const OTHER_REALM: &str = "ck:realm:01970000-0000-7000-8000-000000000001";
+    const REALM: &str = "ak:realm:01970000-0000-7000-8000-000000000000";
+    const OTHER_REALM: &str = "ak:realm:01970000-0000-7000-8000-000000000001";
     const OWNER: &str = "did:web:alice.example";
     const PEER_SERVICE_DID: &str = "did:web:beta.example";
-    const GRANT: &str = "ck:grant:01970000-0000-7000-8000-0000000000d1";
+    const GRANT: &str = "ak:grant:01970000-0000-7000-8000-0000000000d1";
 
     fn capability_op(operation_id: &str, kind: &str, payload: serde_json::Value) -> Operation {
         Operation::create(
@@ -1688,7 +1688,7 @@ mod federation_revoke_fanout_tests {
         // grant MUST NOT appear in the revoked set.
         state.apply_capability_grant(
             &capability_op(
-                "ck:operation:01970000-0000-7000-8000-0000000000a1",
+                "ak:operation:01970000-0000-7000-8000-0000000000a1",
                 cokret_sdk::events::kinds::CAPABILITY_GRANT,
                 delivery_binding_grant_payload(),
             ),
@@ -1702,7 +1702,7 @@ mod federation_revoke_fanout_tests {
         // Revoke it: the peer service DID is now delivery-revoked for this Realm.
         state.apply_capability_revoke(
             &capability_op(
-                "ck:operation:01970000-0000-7000-8000-0000000000a2",
+                "ak:operation:01970000-0000-7000-8000-0000000000a2",
                 cokret_sdk::events::kinds::CAPABILITY_REVOKE,
                 json!({ "grant_id": GRANT, "realm_id": REALM }),
             ),

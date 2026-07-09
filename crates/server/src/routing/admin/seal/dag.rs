@@ -17,11 +17,11 @@ use crate::{JsonResult, json_ok};
 /// `GET /_soland/admin/realms/{realm_id}/seal-dag` — leaves + covered events
 /// + state_root snapshot built from the live `SealStore`.
 #[endpoint(
-    operation_id = "org.cokret.soland.admin.spaces.seal_dag.get",
+    operation_id = "org.arkret.soland.admin.spaces.seal_dag.get",
     tags("soland-admin", "seal-dag"),
     summary = "Get Seal DAG snapshot for a Space"
 )]
-#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.admin.spaces.seal_dag.get"))]
+#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.admin.spaces.seal_dag.get"))]
 pub(crate) async fn admin_get_seal_dag(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -102,13 +102,13 @@ pub(crate) async fn admin_get_seal_dag(
 /// structurally-correct response so sodmin's UI strand is unblocked.
 /// `max_control_moves` is honoured via `run_one_signing_pass`.
 #[endpoint(
-    operation_id = "org.cokret.soland.admin.spaces.seal_dag.compact",
+    operation_id = "org.arkret.soland.admin.spaces.seal_dag.compact",
     tags("soland-admin", "seal-dag"),
     summary = "Trigger signed compaction Seal"
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "org.cokret.soland.admin.spaces.seal_dag.compact")
+    fields(op = "org.arkret.soland.admin.spaces.seal_dag.compact")
 )]
 pub(crate) async fn admin_compact_seal_dag(
     aa: AuthArgs,
@@ -239,11 +239,11 @@ pub(crate) async fn admin_compact_seal_dag(
 /// `predecessor_refs` rewired to the pruned candidate's parents; the
 /// store guarantees no leaf prune (returns 4xx instead).
 #[endpoint(
-    operation_id = "org.cokret.soland.admin.spaces.seal_dag.prune",
+    operation_id = "org.arkret.soland.admin.spaces.seal_dag.prune",
     tags("soland-admin", "seal-dag"),
     summary = "Evaluate + prune a historical Seal"
 )]
-#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.admin.spaces.seal_dag.prune"))]
+#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.admin.spaces.seal_dag.prune"))]
 pub(crate) async fn admin_prune_seal_dag(
     aa: AuthArgs,
     depot: &mut Depot,

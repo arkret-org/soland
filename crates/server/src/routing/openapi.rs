@@ -6,10 +6,10 @@ use serde_json::json;
 
 use super::*;
 
-static COKRET_OPENAPI_DOC: OnceLock<OpenApi> = OnceLock::new();
+static ARKRET_OPENAPI_DOC: OnceLock<OpenApi> = OnceLock::new();
 
 pub(crate) fn cached_cokret_openapi_doc(router: &Router) -> OpenApi {
-    let doc = COKRET_OPENAPI_DOC
+    let doc = ARKRET_OPENAPI_DOC
         .get_or_init(|| cokret_openapi_doc(router))
         .clone();
     // The same cached doc is also the source of truth for the
@@ -30,10 +30,10 @@ fn cokret_openapi_doc(router: &Router) -> OpenApi {
             }),
         )
         .add_extension(
-            "x-cokret-artifacts",
+            "x-arkret-artifacts",
             json!({
                 "registries": crate::artifacts::registry_summary(),
-                "openapi_source": "cokret-spec/spec/v1/artifacts/openapi/cokret-service-api.openapi.yaml",
+                "openapi_source": "arkret-spec/spec/v1/artifacts/openapi/arkret-service-api.openapi.yaml",
                 // Round-6: the round-4 entity/view scaffold (FacetName /
                 // ViewRenderer / AllowedEntityFacetsConstraint /
                 // allowed_entity_facets) was removed alongside the entity
@@ -63,7 +63,7 @@ pub(crate) fn soland_extension_operation_ids() -> Vec<String> {
     SOLAND_EXTENSION_OPERATIONS
         .iter()
         .map(|(_, _, _, operation_id, _)| *operation_id)
-        .filter(|operation_id| operation_id.starts_with("org.cokret.soland."))
+        .filter(|operation_id| operation_id.starts_with("org.arkret.soland."))
         .filter(|operation_id| seen.insert((*operation_id).to_owned()))
         .map(ToOwned::to_owned)
         .collect()
@@ -117,7 +117,7 @@ const SOLAND_EXTENSION_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &
         "/health",
         PathItemType::Get,
         "system",
-        "org.cokret.soland.system.health",
+        "org.arkret.soland.system.health",
         "health and liveness",
     ),
     // ② (api-conventions.md §3.3): the local credential issuance endpoint
@@ -363,91 +363,91 @@ const SOLAND_EXTENSION_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &
         "/_soland/admin/actors",
         PathItemType::Get,
         "soland-admin",
-        "org.cokret.soland.admin.actors",
+        "org.arkret.soland.admin.actors",
         "admin actor snapshot",
     ),
     (
         "/_soland/admin/realms",
         PathItemType::Get,
         "soland-admin",
-        "org.cokret.soland.admin.realms",
+        "org.arkret.soland.admin.realms",
         "admin realm snapshot",
     ),
     (
         "/_soland/admin/spaces",
         PathItemType::Get,
         "soland-admin",
-        "org.cokret.soland.admin.space_containers",
+        "org.arkret.soland.admin.space_containers",
         "admin space container snapshot",
     ),
     (
         "/_soland/admin/devices",
         PathItemType::Get,
         "soland-admin",
-        "org.cokret.soland.admin.devices",
+        "org.arkret.soland.admin.devices",
         "admin device snapshot",
     ),
     (
         "/_soland/admin/capabilities",
         PathItemType::Get,
         "soland-admin",
-        "org.cokret.soland.admin.capabilities",
+        "org.arkret.soland.admin.capabilities",
         "admin capability snapshot",
     ),
     (
         "/_soland/admin/federation",
         PathItemType::Get,
         "soland-admin",
-        "org.cokret.soland.admin.federation",
+        "org.arkret.soland.admin.federation",
         "admin federation snapshot",
     ),
     (
         "/_soland/admin/applets",
         PathItemType::Get,
         "soland-admin",
-        "org.cokret.soland.admin.applets",
+        "org.arkret.soland.admin.applets",
         "admin applet snapshot",
     ),
     (
         "/_soland/admin/agents",
         PathItemType::Get,
         "soland-admin",
-        "org.cokret.soland.admin.agents",
+        "org.arkret.soland.admin.agents",
         "admin agent snapshot",
     ),
     (
         "/_soland/admin/reports",
         PathItemType::Get,
         "soland-admin",
-        "org.cokret.soland.admin.reports",
+        "org.arkret.soland.admin.reports",
         "admin report snapshot",
     ),
     (
         "/_soland/admin/invite-tokens",
         PathItemType::Get,
         "soland-admin",
-        "org.cokret.soland.admin.invite_tokens",
+        "org.arkret.soland.admin.invite_tokens",
         "admin invite token snapshot",
     ),
     (
         "/_soland/admin/audit",
         PathItemType::Get,
         "soland-admin",
-        "org.cokret.soland.admin.audit",
+        "org.arkret.soland.admin.audit",
         "admin audit snapshot",
     ),
     (
         "/_soland/admin/policy",
         PathItemType::Get,
         "soland-admin",
-        "org.cokret.soland.admin.policy",
+        "org.arkret.soland.admin.policy",
         "admin policy snapshot",
     ),
     (
         "/_soland/admin/media",
         PathItemType::Get,
         "soland-admin",
-        "org.cokret.soland.admin.media",
+        "org.arkret.soland.admin.media",
         "admin media snapshot",
     ),
     (
@@ -473,14 +473,14 @@ const SOLAND_EXTENSION_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &
         "/_soland/edge/push/outbound/bridge/cache/export",
         PathItemType::Get,
         "push",
-        "org.cokret.soland.push.outbound_bridge_cache_export",
+        "org.arkret.soland.push.outbound_bridge_cache_export",
         "export outbound push bridge cache snapshots",
     ),
     (
         "/_soland/edge/push/outbound/bridge/cache/import",
         PathItemType::Post,
         "push",
-        "org.cokret.soland.push.outbound_bridge_cache_import",
+        "org.arkret.soland.push.outbound_bridge_cache_import",
         "import outbound push bridge cache snapshots",
     ),
     (
@@ -704,10 +704,10 @@ const SOLAND_EXTENSION_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &
         "ck.self.agent.grant.resource.delete",
         "detach a capability grant from a personal agent",
     ),
-    // CKP-0010 (R3 spec-sync 2026-05-27, cokret-spec b47ff6ec) — media
+    // CKP-0010 (R3 spec-sync 2026-05-27, arkret-spec b47ff6ec) — media
     // token exchange + signed ICE config. Canonical wire paths now live on
     // the `self` trust segment (`/_cokret/self/rtc/...`); the historical
-    // `/cokret/v1/...` and `/api/v1/...` aliases are gone.
+    // `/arkret/v1/...` and `/api/v1/...` aliases are gone.
     (
         "/_cokret/self/rtc/token",
         PathItemType::Post,
@@ -742,7 +742,7 @@ const SOLAND_EXTENSION_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &
         "/_soland/root/identity/recovery-receipt",
         PathItemType::Post,
         "identity",
-        "org.cokret.soland.identity.recovery_receipt.put",
+        "org.arkret.soland.identity.recovery_receipt.put",
         "submit a ck.schema.recovery_receipt.v1 receipt",
     ),
 ];

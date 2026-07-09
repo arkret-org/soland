@@ -54,7 +54,7 @@ async fn notary_worker_signs_pending_move_and_publishes_seal() {
         .as_str()
         .expect("seal_id should be present when published=true");
     assert!(
-        seal_id.starts_with("ck:seal:sha256:"),
+        seal_id.starts_with("ak:seal:sha256:"),
         "seal_id should be a content-addressed sha256 ref, got {seal_id}"
     );
     let accepted = sign_resp["accepted_move_ids"]
@@ -159,7 +159,7 @@ async fn notary_pass_broadcasts_frontier_frame_to_subscribers() {
                         seal_id,
                     } => {
                         assert!(
-                            seal_id.starts_with("ck:seal:sha256:"),
+                            seal_id.starts_with("ak:seal:sha256:"),
                             "frontier seal_id should be content-addressed (got `{seal_id}`)"
                         );
                         assert!(
@@ -280,7 +280,7 @@ async fn admin_reconfigure_notary_builds_real_move_and_seals_it() {
         .as_str()
         .expect("seal_id should be set when this node is the round leader");
     assert!(
-        seal_id.starts_with("ck:seal:sha256:"),
+        seal_id.starts_with("ak:seal:sha256:"),
         "seal_id should be content-addressed sha256, got {seal_id}"
     );
 }

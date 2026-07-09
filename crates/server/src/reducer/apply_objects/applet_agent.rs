@@ -235,7 +235,7 @@ impl ProjectionState {
         ProjectionEffect::AgentProjectionUpdated { agent_id }
     }
 
-    /// REDU-1 (R3 spec-sync 2026-05-27, cokret-spec b47ff6ec) — apply
+    /// REDU-1 (R3 spec-sync 2026-05-27, arkret-spec b47ff6ec) — apply
     /// an `ck.agent.{pause,resume,deactivate}` FSM transition. The
     /// lattice is `fsm` with `bottom=reject`; allowed transitions are:
     ///   - Active → Paused                 via `ck.self.agent.pause`

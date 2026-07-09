@@ -81,7 +81,7 @@ pub(crate) fn validate_reaction_target_kind(
         // unsupported so the canonical reason still surfaces.
         return Err(cokret_sdk::error::REASON_REACTION_TARGET_UNSUPPORTED);
     };
-    if target.starts_with("ck:message:") || target.starts_with("ck:event:") {
+    if target.starts_with("ak:message:") || target.starts_with("ak:event:") {
         Ok(())
     } else {
         Err(cokret_sdk::error::REASON_REACTION_TARGET_UNSUPPORTED)
@@ -749,7 +749,7 @@ pub fn operation_schema_for_kind(kind: &str) -> Option<OperationPayloadSchema> {
                 validate: Some(validate_morph_schema_migrate_payload),
             },
             // `ck.field.position.move` / `ck.field.position.reorder` were removed
-            // in revision 0a5ab85 (see cokret-spec
+            // in revision 0a5ab85 (see arkret-spec
             // `artifacts/registry/removed-event-kinds.json`). The generic
             // unknown-event-kind path in `event_log::submit_event` already
             // hard-rejects these kinds; no operation schema branch is needed.

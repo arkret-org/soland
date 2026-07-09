@@ -94,10 +94,10 @@ mod tests {
     #[test]
     fn lag_zero_when_covered_matches_governance() {
         let snap = CoveredSealsSnapshot {
-            realm_id: "ck:realm:demo".into(),
+            realm_id: "ak:realm:demo".into(),
             mls_epoch: 4,
-            governance_seals: vec!["ck:seal:1".into(), "ck:seal:2".into(), "ck:seal:3".into()],
-            covered_seals: vec!["ck:seal:3".into(), "ck:seal:1".into(), "ck:seal:2".into()],
+            governance_seals: vec!["ak:seal:1".into(), "ak:seal:2".into(), "ak:seal:3".into()],
+            covered_seals: vec!["ak:seal:3".into(), "ak:seal:1".into(), "ak:seal:2".into()],
             ..Default::default()
         };
         assert_eq!(snap.lag_count(), 0);
@@ -107,19 +107,19 @@ mod tests {
     #[test]
     fn lag_counts_only_unacknowledged_moves() {
         let snap = CoveredSealsSnapshot {
-            realm_id: "ck:realm:demo".into(),
+            realm_id: "ak:realm:demo".into(),
             mls_epoch: 7,
             governance_seals: vec![
-                "ck:seal:1".into(),
-                "ck:seal:2".into(),
-                "ck:seal:3".into(),
-                "ck:seal:4".into(),
-                "ck:seal:5".into(),
-                "ck:seal:6".into(),
-                "ck:seal:7".into(),
-                "ck:seal:8".into(),
+                "ak:seal:1".into(),
+                "ak:seal:2".into(),
+                "ak:seal:3".into(),
+                "ak:seal:4".into(),
+                "ak:seal:5".into(),
+                "ak:seal:6".into(),
+                "ak:seal:7".into(),
+                "ak:seal:8".into(),
             ],
-            covered_seals: vec!["ck:seal:1".into(), "ck:seal:2".into()],
+            covered_seals: vec!["ak:seal:1".into(), "ak:seal:2".into()],
             ..Default::default()
         };
         // 8 governance Seals - 2 covered Seals = 6 lag, above default threshold 5.
@@ -133,7 +133,7 @@ mod tests {
         // soland normally canonicalizes the frontier, but if duplicates
         // ever leak through we must not double-count them.
         let snap = CoveredSealsSnapshot {
-            governance_seals: vec!["ck:seal:1".into(), "ck:seal:1".into(), "ck:seal:2".into()],
+            governance_seals: vec!["ak:seal:1".into(), "ak:seal:1".into(), "ak:seal:2".into()],
             covered_seals: vec![],
             ..Default::default()
         };
@@ -143,7 +143,7 @@ mod tests {
     #[test]
     fn lag_threshold_boundary_is_strict_greater_than() {
         let snap = CoveredSealsSnapshot {
-            governance_seals: vec!["ck:seal:1".into(), "ck:seal:2".into(), "ck:seal:3".into()],
+            governance_seals: vec!["ak:seal:1".into(), "ak:seal:2".into(), "ak:seal:3".into()],
             covered_seals: vec![],
             ..Default::default()
         };

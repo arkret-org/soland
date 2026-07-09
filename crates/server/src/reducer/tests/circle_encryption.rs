@@ -8,8 +8,8 @@ use crate::reducer::*;
 // fail-closed second-line check directly.
 
 fn seed_circle_authz_state() -> (ProjectionState, ServerHlc, String, String) {
-    let realm = "ck:realm:01904100-0000-7000-8000-c1c1c1c1c1c1".to_owned();
-    let circle = "ck:circle:01904100-0000-7000-8000-aaaaaaaaaaaa".to_owned();
+    let realm = "ak:realm:01904100-0000-7000-8000-c1c1c1c1c1c1".to_owned();
+    let circle = "ak:circle:01904100-0000-7000-8000-aaaaaaaaaaaa".to_owned();
     let mut state = ProjectionState::new();
     let now = chrono::Utc::now();
     let join_member = |state: &mut ProjectionState, did: &str| {
@@ -205,7 +205,7 @@ fn circle_self_join_requires_open_rule() {
 fn content_floor_ratchet_allows_upgrade_then_rejects_downgrade() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
-    let realm = "ck:realm:01904100-0000-7000-8000-cfc039892061";
+    let realm = "ak:realm:01904100-0000-7000-8000-cfc039892061";
     let apply_floor = |state: &mut ProjectionState, floor: Option<&str>| {
         let payload = match floor {
             Some(f) => serde_json::json!({ "content_encryption_floor": f }),
@@ -246,7 +246,7 @@ fn content_floor_ratchet_allows_upgrade_then_rejects_downgrade() {
 fn metadata_floor_ratchet_rejects_downgrade() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
-    let realm = "ck:realm:01904100-0000-7000-8000-cfc039892062";
+    let realm = "ak:realm:01904100-0000-7000-8000-cfc039892062";
     let apply_meta = |state: &mut ProjectionState, level: &str| {
         state.apply(
             &make_operation(
@@ -275,7 +275,7 @@ fn metadata_floor_ratchet_rejects_downgrade() {
 fn content_scheme_ratchet_allows_upgrade_then_rejects_downgrade() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
-    let realm = "ck:realm:01904100-0000-7000-8000-cfc039892063";
+    let realm = "ak:realm:01904100-0000-7000-8000-cfc039892063";
     let apply_scheme = |state: &mut ProjectionState, scheme: Option<&str>| {
         let payload = match scheme {
             Some(s) => serde_json::json!({ "content_scheme": s }),
@@ -323,7 +323,7 @@ fn content_scheme_ratchet_allows_upgrade_then_rejects_downgrade() {
 fn content_scheme_rejects_unknown_value() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
-    let realm = "ck:realm:01904100-0000-7000-8000-cfc039892064";
+    let realm = "ak:realm:01904100-0000-7000-8000-cfc039892064";
     let effect = state.apply(
         &make_operation(
             cokret_sdk::events::kinds::REALM_POLICY_COMPONENTS,
@@ -344,9 +344,9 @@ fn prejoin_history_rejects_strict_content_scheme_on_mls_realm() {
 
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("history-scheme");
-    let realm = "ck:realm:01904100-0000-7000-8000-d0d0d0d0c001";
+    let realm = "ak:realm:01904100-0000-7000-8000-d0d0d0d0c001";
     let create_cell =
-        cokret_sdk::CellRef::new(format!("ck:cell:ck.component.realm.create.v1:{realm}"))
+        cokret_sdk::CellRef::new(format!("ak:cell:ck.component.realm.create.v1:{realm}"))
             .expect("valid create cell ref");
     state.cells.insert(
         create_cell,
@@ -389,9 +389,9 @@ fn prejoin_history_accepts_exporter_aead_scheme_on_mls_realm() {
 
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("history-scheme-ok");
-    let realm = "ck:realm:01904100-0000-7000-8000-d0d0d0d0c002";
+    let realm = "ak:realm:01904100-0000-7000-8000-d0d0d0d0c002";
     let create_cell =
-        cokret_sdk::CellRef::new(format!("ck:cell:ck.component.realm.create.v1:{realm}"))
+        cokret_sdk::CellRef::new(format!("ak:cell:ck.component.realm.create.v1:{realm}"))
             .expect("valid create cell ref");
     state.cells.insert(
         create_cell,
@@ -421,9 +421,9 @@ fn content_scheme_falls_back_to_realm_create_log() {
 
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("history-scheme-create");
-    let realm = "ck:realm:01904100-0000-7000-8000-d0d0d0d0c012";
+    let realm = "ak:realm:01904100-0000-7000-8000-d0d0d0d0c012";
     let create_cell =
-        cokret_sdk::CellRef::new(format!("ck:cell:ck.component.realm.create.v1:{realm}"))
+        cokret_sdk::CellRef::new(format!("ak:cell:ck.component.realm.create.v1:{realm}"))
             .expect("valid create cell ref");
     state.cells.insert(
         create_cell,
@@ -460,7 +460,7 @@ fn content_scheme_falls_back_to_realm_create_log() {
 fn durability_policy_requires_exporter_aead_scheme() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("durability-scheme");
-    let realm = "ck:realm:01904100-0000-7000-8000-d0d0d0d0d001";
+    let realm = "ak:realm:01904100-0000-7000-8000-d0d0d0d0d001";
     let recipient = serde_json::json!({
         "recipient_id": "rrk-1",
         "principal_id": "did:web:hr.example",
@@ -492,7 +492,7 @@ fn durability_policy_requires_exporter_aead_scheme() {
 fn durability_policy_accepted_on_exporter_aead_scheme() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("durability-ok");
-    let realm = "ck:realm:01904100-0000-7000-8000-d0d0d0d0d002";
+    let realm = "ak:realm:01904100-0000-7000-8000-d0d0d0d0d002";
     let recipient = serde_json::json!({
         "recipient_id": "rrk-1",
         "principal_id": "did:web:hr.example",
@@ -533,7 +533,7 @@ fn durability_policy_accepted_on_exporter_aead_scheme() {
 fn durability_policy_rejects_empty_recipients() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("durability-empty");
-    let realm = "ck:realm:01904100-0000-7000-8000-d0d0d0d0d003";
+    let realm = "ak:realm:01904100-0000-7000-8000-d0d0d0d0d003";
     let effect = state.apply(
         &make_operation(
             cokret_sdk::events::kinds::REALM_POLICY_COMPONENTS,
@@ -559,7 +559,7 @@ fn durability_policy_rejects_empty_recipients() {
 fn durability_policy_threshold_validates_k_of_n() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("durability-threshold");
-    let realm = "ck:realm:01904100-0000-7000-8000-d0d0d0d0d004";
+    let realm = "ak:realm:01904100-0000-7000-8000-d0d0d0d0d004";
     let recipients = serde_json::json!([
         {"recipient_id": "rrk-1", "principal_id": "did:web:a.example", "verification_method": "did:web:a.example#rrk"},
         {"recipient_id": "rrk-2", "principal_id": "did:web:b.example", "verification_method": "did:web:b.example#rrk"}

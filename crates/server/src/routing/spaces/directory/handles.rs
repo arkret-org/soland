@@ -563,7 +563,7 @@ pub(super) async fn resolve_handle(
             }
             // HDLREN-2 — surface the canonical `<localpart>:<domain>` handle
             // from the freshly signed claim so the top-level response field
-            // matches handle-claim.schema.json (cokret-spec @ 7157ee8). The
+            // matches handle-claim.schema.json (arkret-spec @ 7157ee8). The
             // request's `@alice` UI form is normalized away here.
             let canonical_handle = handle_claim
                 .handle

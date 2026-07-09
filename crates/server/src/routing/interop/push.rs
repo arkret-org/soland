@@ -11,7 +11,7 @@
 //! encrypted account data and are never parsed by this module.
 //!
 //! `push_register_session_grant_bridge` is the local stand-in that accepts an
-//! `X-Cokret-Session-Grant` header for clients that haven't yet picked up a
+//! `X-Arkret-Session-Grant` header for clients that haven't yet picked up a
 //! bearer session. When coauth introspection is configured, the bridge uses
 //! the same audience/scope/proof validation as `/_cokret/gate/account/session-grants`.
 //! Spec rule: no DID in push payload / TURN username.
@@ -101,7 +101,7 @@ fn derive_push_target_id(
         .map_err(|error| AppError::internal(format!("push target canonicalize: {error}")))?;
     let epoch_key = hmac_sha256(root_key, salt_epoch_id.as_bytes());
     let tag = hmac_sha256(&epoch_key, &canonical);
-    Ok(format!("ck:pseudonym:push:{}", URL_SAFE_NO_PAD.encode(tag)))
+    Ok(format!("ak:pseudonym:push:{}", URL_SAFE_NO_PAD.encode(tag)))
 }
 #[endpoint(
     operation_id = "ck.edge.push.command.register_device",
@@ -381,11 +381,11 @@ pub(super) async fn push_unregister(
 }
 
 #[endpoint(
-    operation_id = "org.cokret.soland.push.rules",
+    operation_id = "org.arkret.soland.push.rules",
     tags("push"),
     summary = "List push notification rules for the authenticated actor"
 )]
-#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.push.rules"))]
+#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.push.rules"))]
 pub(super) async fn push_rules(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -405,11 +405,11 @@ pub(super) async fn push_rules(
 }
 
 #[endpoint(
-    operation_id = "org.cokret.soland.push.upsert_rule",
+    operation_id = "org.arkret.soland.push.upsert_rule",
     tags("push"),
     summary = "Idempotently create or update a push notification rule"
 )]
-#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.push.upsert_rule"))]
+#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.push.upsert_rule"))]
 pub(super) async fn upsert_push_rule(
     aa: AuthArgs,
     body: JsonBody<UpsertPushRuleRequestBody>,
@@ -459,11 +459,11 @@ pub(super) async fn upsert_push_rule(
 }
 
 #[endpoint(
-    operation_id = "org.cokret.soland.push.delete_rule",
+    operation_id = "org.arkret.soland.push.delete_rule",
     tags("push"),
     summary = "Delete a push notification rule"
 )]
-#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.push.delete_rule"))]
+#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.push.delete_rule"))]
 pub(super) async fn delete_push_rule(
     aa: AuthArgs,
     rule_id: PathParam<String>,
@@ -641,50 +641,50 @@ async fn push_register_session_grant_bridge(
     req: &Request,
     body: &PushRegisterDeviceRequestBody,
 ) -> Result<Option<SessionRecord>, (StatusCode, &'static str, &'static str)> {
-    let Some(grant) = req.headers().get("x-cokret-session-grant") else {
+    let Some(grant) = req.headers().get("x-arkret-session-grant") else {
         return Ok(None);
     };
     let grant = grant.to_str().map_err(|_| {
         (
             StatusCode::BAD_REQUEST,
             "invalid_param",
-            "X-Cokret-Session-Grant must be ASCII",
+            "X-Arkret-Session-Grant must be ASCII",
         )
     })?;
     if grant.trim().is_empty() {
         return Err((
             StatusCode::BAD_REQUEST,
             "invalid_param",
-            "X-Cokret-Session-Grant must not be empty",
+            "X-Arkret-Session-Grant must not be empty",
         ));
     }
     let Some(principal_id) =
-        optional_ascii_header(req, "x-cokret-principal-id", "X-Cokret-Principal-Id")?
+        optional_ascii_header(req, "x-arkret-principal-id", "X-Arkret-Principal-Id")?
             .map(str::trim)
             .filter(|value| !value.is_empty())
     else {
         return Err((
             StatusCode::BAD_REQUEST,
             "invalid_param",
-            "X-Cokret-Principal-Id is required when using X-Cokret-Session-Grant",
+            "X-Arkret-Principal-Id is required when using X-Arkret-Session-Grant",
         ));
     };
     if !principal_id.starts_with("did:") {
         return Err((
             StatusCode::BAD_REQUEST,
             "invalid_param",
-            "principal_id must use the did: prefix when using X-Cokret-Session-Grant",
+            "principal_id must use the did: prefix when using X-Arkret-Session-Grant",
         ));
     }
     let challenge = optional_ascii_header(
         req,
-        "x-cokret-session-grant-challenge",
-        "X-Cokret-Session-Grant-Challenge",
+        "x-arkret-session-grant-challenge",
+        "X-Arkret-Session-Grant-Challenge",
     )?;
     let proof_jwt = optional_ascii_header(
         req,
-        "x-cokret-session-grant-proof",
-        "X-Cokret-Session-Grant-Proof",
+        "x-arkret-session-grant-proof",
+        "X-Arkret-Session-Grant-Proof",
     )?;
     let proof = match (challenge, proof_jwt) {
         (Some(challenge), Some(proof_jwt)) => Some(SessionGrantIntrospectionProof {
@@ -974,7 +974,7 @@ mod tests {
             &root_key,
             "did:web:soland.example",
             "did:web:alice.example",
-            "ck:device:01904100-0000-7000-8000-000000000001",
+            "ak:device:01904100-0000-7000-8000-000000000001",
             "inkson.web",
             epoch,
         )
@@ -983,7 +983,7 @@ mod tests {
             &root_key,
             "did:web:soland.example",
             "did:web:alice.example",
-            "ck:device:01904100-0000-7000-8000-000000000001",
+            "ak:device:01904100-0000-7000-8000-000000000001",
             "inkson.web",
             epoch,
         )
@@ -992,7 +992,7 @@ mod tests {
             &root_key,
             "did:web:soland.example",
             "did:web:alice.example",
-            "ck:device:01904100-0000-7000-8000-000000000001",
+            "ak:device:01904100-0000-7000-8000-000000000001",
             "inkson.voip",
             epoch,
         )
@@ -1001,7 +1001,7 @@ mod tests {
             &root_key,
             "did:web:org.example",
             "did:web:alice.example",
-            "ck:device:01904100-0000-7000-8000-000000000001",
+            "ak:device:01904100-0000-7000-8000-000000000001",
             "inkson.web",
             epoch,
         )
@@ -1017,8 +1017,8 @@ mod tests {
 
     #[test]
     fn retained_push_target_acceptance_is_time_bounded() {
-        let current = "ck:pseudonym:push:aaaaaaaaaaaaaaaaaaaaaa";
-        let retained = "ck:pseudonym:push:bbbbbbbbbbbbbbbbbbbbbb";
+        let current = "ak:pseudonym:push:aaaaaaaaaaaaaaaaaaaaaa";
+        let retained = "ak:pseudonym:push:bbbbbbbbbbbbbbbbbbbbbb";
         let now = chrono::DateTime::parse_from_rfc3339("2026-06-19T00:00:00Z")
             .unwrap()
             .with_timezone(&chrono::Utc);
@@ -1048,7 +1048,7 @@ mod tests {
         ));
         assert!(!push_registration_accepts_target(
             &registration,
-            "ck:pseudonym:push:cccccccccccccccccccccc",
+            "ak:pseudonym:push:cccccccccccccccccccccc",
             now
         ));
     }

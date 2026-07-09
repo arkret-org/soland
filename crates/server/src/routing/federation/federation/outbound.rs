@@ -114,7 +114,7 @@ pub(super) async fn enqueue_outbound_for(
     hasher.update(resource_kind.as_bytes());
     hasher.update(b"|");
     hasher.update(resource_id.as_bytes());
-    let idempotency_key = format!("ck:outbox:{}", hex::encode(hasher.finalize()));
+    let idempotency_key = format!("ak:outbox:{}", hex::encode(hasher.finalize()));
     if let Err(error) = crate::routing::federation::outbox::enqueue_outbound(
         state,
         peer.url.as_str(),
@@ -322,11 +322,11 @@ fn http_message_signature_evidence(
     let content_digest = content_digest_header(body_bytes);
     let keyid = format!("{}#federation-fanout-key", state.config.service_did);
     let signature_params = format!(
-        "(\"@method\" \"@path\" \"content-digest\" \"x-cokret-fanout-digest\");created={created};keyid=\"{keyid}\";alg=\"ed25519\""
+        "(\"@method\" \"@path\" \"content-digest\" \"x-arkret-fanout-digest\");created={created};keyid=\"{keyid}\";alg=\"ed25519\""
     );
     let signature_input_header = format!("sig1={signature_params}");
     let signature_base = format!(
-        "\"@method\": POST\n\"@path\": {target_path}\n\"content-digest\": {content_digest}\n\"x-cokret-fanout-digest\": {payload_digest}\n\"@signature-params\": {signature_params}"
+        "\"@method\": POST\n\"@path\": {target_path}\n\"content-digest\": {content_digest}\n\"x-arkret-fanout-digest\": {payload_digest}\n\"@signature-params\": {signature_params}"
     );
     let signature = state.notary_signing_key().sign(signature_base.as_bytes());
     let signature_header = format!("sig1=:{}:", STANDARD.encode(signature.to_bytes()));
@@ -342,13 +342,13 @@ fn http_message_signature_evidence(
             "@method",
             "@path",
             "content-digest",
-            "x-cokret-fanout-digest"
+            "x-arkret-fanout-digest"
         ],
         "headers": {
             "content-digest": content_digest,
             "signature-input": signature_input_header,
             "signature": signature_header,
-            "x-cokret-fanout-digest": payload_digest
+            "x-arkret-fanout-digest": payload_digest
         },
         "signature_base": signature_base,
         "verification_material": {

@@ -49,12 +49,12 @@ pub(crate) const RECEIPT_FIELDS: &[&str] = &[
     "completed_at",
 ];
 
-pub(crate) const RECOVERY_TEST_DEVICE: &str = "ck:device:01904100-0000-7000-8000-a11ce0000001";
+pub(crate) const RECOVERY_TEST_DEVICE: &str = "ak:device:01904100-0000-7000-8000-a11ce0000001";
 
-pub(crate) const RECOVERY_TEST_DEVICE_B: &str = "ck:device:01904100-0000-7000-8000-a11ce0000002";
+pub(crate) const RECOVERY_TEST_DEVICE_B: &str = "ak:device:01904100-0000-7000-8000-a11ce0000002";
 
-pub(crate) const AUTH_EVENT_ID: &str = "ck:event:01964137-0000-7000-8000-00000000a111";
-pub(crate) const LIST_EVENT_ID: &str = "ck:event:01964137-0000-7000-8000-00000000a222";
+pub(crate) const AUTH_EVENT_ID: &str = "ak:event:01964137-0000-7000-8000-00000000a111";
+pub(crate) const LIST_EVENT_ID: &str = "ak:event:01964137-0000-7000-8000-00000000a222";
 
 /// Helper: seed an accepted v1 policy for `principal_id` and open a recovery
 /// session against it. Returns the session JSON body.
@@ -69,8 +69,8 @@ pub(crate) async fn open_recovery_session(
     seed_recovery_policy(&state, principal_id, vm, 1, None).await;
     let create_body = serde_json::json!({
         "principal_id": principal_id,
-        "trust_domain": "ck:trust_domain:soland.local",
-        "requesting_device_id": "ck:device:01904100-0000-7000-8000-000000000099",
+        "trust_domain": "ak:trust_domain:soland.local",
+        "requesting_device_id": "ak:device:01904100-0000-7000-8000-000000000099",
         "ssk_generation": 1,
     });
     post_recovery(
@@ -196,12 +196,12 @@ pub(crate) fn signed_device_recovery_receipt(
 ) -> Value {
     let mut receipt = serde_json::json!({
         "schema": "ck.schema.recovery_receipt.v1",
-        "receipt_id": new_prefixed_uuid7("ck:receipt:"),
+        "receipt_id": new_prefixed_uuid7("ak:receipt:"),
         "principal_id": principal_id,
-        "recovery_session_id": new_prefixed_uuid7("ck:recovery_session:"),
+        "recovery_session_id": new_prefixed_uuid7("ak:recovery_session:"),
         "policy_id": policy_id,
         "policy_version": policy_version,
-        "trust_domain": "ck:trust_domain:soland.local",
+        "trust_domain": "ak:trust_domain:soland.local",
         "new_device_id": new_device_id,
         "proof_summary": {
             "kind": "principal_signing",
@@ -287,7 +287,7 @@ pub(crate) fn seed_cross_signing(
 ) {
     let publish = serde_json::json!({
         "principal_id": principal_id,
-        "trust_domain": "ck:trust_domain:soland.local",
+        "trust_domain": "ak:trust_domain:soland.local",
         "principal_signing_key": {
             "kid": vm, "alg": "EdDSA",
             "public_key": test_ed25519_multibase_public(psk), "key_format": "multibase",
@@ -420,7 +420,7 @@ pub(crate) fn did_recovery_backup_body(
         "backup_class": "did_recovery",
         "backup_version": "kb_1",
         "created_at": "2026-05-30T00:00:00Z",
-        "series_id": "ck:backup_series:01964137-0000-7000-8000-0000000000c5",
+        "series_id": "ak:backup_series:01964137-0000-7000-8000-0000000000c5",
         "series_seq": 0,
         "recovery_policy_ref": { "policy_id": policy_id, "policy_version": 1 },
         "encryption": {
@@ -433,7 +433,7 @@ pub(crate) fn did_recovery_backup_body(
             }
         },
         "domain_separation": {
-            "hkdf_info": "cokret-key-backup/did_recovery/recovery_policy/v1",
+            "hkdf_info": "arkret-key-backup/did_recovery/recovery_policy/v1",
             "subdomain": "recovery_policy",
             "aead_aad": {
                 "schema": "ck.schema.key_backup.v1",
@@ -570,7 +570,7 @@ pub(crate) async fn seed_recovery_policy(
     version: u32,
     supersedes: Option<&str>,
 ) -> String {
-    let policy_id = new_prefixed_uuid7("ck:policy:");
+    let policy_id = new_prefixed_uuid7("ak:policy:");
     let issued_at = chrono::DateTime::parse_from_rfc3339("2026-05-30T00:00:00Z")
         .unwrap()
         .with_timezone(&chrono::Utc);
@@ -582,7 +582,7 @@ pub(crate) async fn seed_recovery_policy(
         "policy_id": policy_id,
         "principal_id": principal_id,
         "version": version,
-        "trust_domain": "ck:trust_domain:soland.local",
+        "trust_domain": "ak:trust_domain:soland.local",
         "allowed_proof_kinds": ["principal_signing"],
         "supersedes": supersedes,
         "issued_at": "2026-05-30T00:00:00Z",
@@ -601,7 +601,7 @@ pub(crate) async fn seed_recovery_policy(
             policy_id: policy_id.clone(),
             principal_id: principal_id.to_owned(),
             version,
-            trust_domain: "ck:trust_domain:soland.local".to_owned(),
+            trust_domain: "ak:trust_domain:soland.local".to_owned(),
             allowed_proof_kinds: vec!["principal_signing".to_owned()],
             supersedes: supersedes.map(ToOwned::to_owned),
             expires_at: Some(expires_at),
@@ -735,10 +735,10 @@ pub(crate) fn signed_recovery_policy(
 ) -> Value {
     let mut policy = serde_json::json!({
         "schema": "ck.schema.recovery_policy.v1",
-        "policy_id": new_prefixed_uuid7("ck:policy:"),
+        "policy_id": new_prefixed_uuid7("ak:policy:"),
         "principal_id": principal_id,
         "version": version,
-        "trust_domain": "ck:trust_domain:soland.local",
+        "trust_domain": "ak:trust_domain:soland.local",
         "allowed_proof_kinds": ["principal_signing"],
         "supersedes": supersedes,
         "issued_at": "2026-05-30T00:00:00Z",
@@ -770,15 +770,15 @@ pub(crate) fn signed_recovery_receipt(
 ) -> Value {
     let mut receipt = serde_json::json!({
         "schema": "ck.schema.recovery_receipt.v1",
-        "receipt_id": new_prefixed_uuid7("ck:receipt:"),
+        "receipt_id": new_prefixed_uuid7("ak:receipt:"),
         "principal_id": principal_id,
         "recovery_session_id": recovery_session_id
             .map(ToOwned::to_owned)
-            .unwrap_or_else(|| new_prefixed_uuid7("ck:recovery_session:")),
+            .unwrap_or_else(|| new_prefixed_uuid7("ak:recovery_session:")),
         "policy_id": policy_id,
         "policy_version": policy_version,
-        "trust_domain": "ck:trust_domain:soland.local",
-        "new_device_id": "ck:device:01904100-0000-7000-8000-000000000042",
+        "trust_domain": "ak:trust_domain:soland.local",
+        "new_device_id": "ak:device:01904100-0000-7000-8000-000000000042",
         "proof_summary": {
             "kind": "principal_signing",
             "proof_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"

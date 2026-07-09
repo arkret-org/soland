@@ -57,7 +57,7 @@ async fn recovery_policy_rejects_tampered_signature_body() {
         None,
         POLICY_FIELDS,
     );
-    policy["trust_domain"] = serde_json::json!("ck:trust_domain:tampered.example");
+    policy["trust_domain"] = serde_json::json!("ak:trust_domain:tampered.example");
 
     let body = post_recovery_policy(state, &token, &policy, StatusCode::UNAUTHORIZED).await;
     assert_eq!(body["error"]["code"], "proof_invalid");
@@ -163,7 +163,7 @@ async fn recovery_policy_rejects_non_monotonic_supersedes_after_restart() {
         &principal_id,
         &verification_method,
         2,
-        Some(&new_prefixed_uuid7("ck:policy:")),
+        Some(&new_prefixed_uuid7("ak:policy:")),
         POLICY_FIELDS,
     );
     let body = post_recovery_policy(

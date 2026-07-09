@@ -1,6 +1,6 @@
 //! Realm alias normalization for soland (deployment-authority domain model).
 //!
-//! Realm alias canonical form is `<localpart>:<domain>` (cokret-spec
+//! Realm alias canonical form is `<localpart>:<domain>` (arkret-spec
 //! `discovery/object-addressing.md` §3.3), sharing the handle grammar. soland
 //! operates the deployment-authority domain, so a realm alias localpart entered
 //! at create time is bound to THIS deployment's domain. The `#` share sigil (and

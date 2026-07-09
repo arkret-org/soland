@@ -171,13 +171,13 @@ pub struct AssignReviewerReq {
 }
 
 #[endpoint(
-    operation_id = "org.cokret.soland.admin.moderation.queue.assign",
+    operation_id = "org.arkret.soland.admin.moderation.queue.assign",
     tags("soland-admin", "moderation"),
     summary = "Assign reviewer DIDs to a queue item"
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "org.cokret.soland.admin.moderation.queue.assign")
+    fields(op = "org.arkret.soland.admin.moderation.queue.assign")
 )]
 async fn assign_queue_item(
     aa: AuthArgs,
@@ -228,13 +228,13 @@ pub struct PrioritiseReq {
 }
 
 #[endpoint(
-    operation_id = "org.cokret.soland.admin.moderation.queue.priority",
+    operation_id = "org.arkret.soland.admin.moderation.queue.priority",
     tags("soland-admin", "moderation"),
     summary = "Set priority on a queue item"
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "org.cokret.soland.admin.moderation.queue.priority")
+    fields(op = "org.arkret.soland.admin.moderation.queue.priority")
 )]
 async fn prioritise_queue_item(
     aa: AuthArgs,
@@ -286,13 +286,13 @@ async fn prioritise_queue_item(
 // ── Appeals ──────────────────────────────────────────────────────────
 
 #[endpoint(
-    operation_id = "org.cokret.soland.admin.moderation.appeals.list",
+    operation_id = "org.arkret.soland.admin.moderation.appeals.list",
     tags("soland-admin", "moderation"),
     summary = "List moderation appeals (latest event per appeal)"
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "org.cokret.soland.admin.moderation.appeals.list")
+    fields(op = "org.arkret.soland.admin.moderation.appeals.list")
 )]
 async fn list_appeals(
     aa: AuthArgs,
@@ -315,13 +315,13 @@ async fn list_appeals(
 }
 
 #[endpoint(
-    operation_id = "org.cokret.soland.admin.moderation.appeals.get",
+    operation_id = "org.arkret.soland.admin.moderation.appeals.get",
     tags("soland-admin", "moderation"),
     summary = "Full history of one moderation appeal"
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "org.cokret.soland.admin.moderation.appeals.get")
+    fields(op = "org.arkret.soland.admin.moderation.appeals.get")
 )]
 async fn get_appeal(
     aa: AuthArgs,

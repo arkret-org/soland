@@ -3,7 +3,7 @@
   "schemaVersion": 39,
   "version": 1,
   "refresh": "30s",
-  "tags": ["soland", "cokret", "operations"],
+  "tags": ["soland", "arkret", "operations"],
   "timezone": "browser",
   "panels": [
     {

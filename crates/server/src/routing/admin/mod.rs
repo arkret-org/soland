@@ -104,7 +104,7 @@ pub fn audit_ingest_router() -> Router {
 
 /// Deployment-local admin branch served at the bare `/admin/*`
 /// namespace (collection snapshot, cell inspection, control-frame
-/// triggers, retention), per cokret-spec `service-http-binding.md`
+/// triggers, retention), per arkret-spec `service-http-binding.md`
 /// §2.1: `/admin/*` is deployment-local and MUST NOT carry the
 /// `/_cokret/...` protocol prefix. Gated by the shared `RequireAdmin` hoop.
 pub fn router() -> Router {
@@ -126,7 +126,7 @@ pub fn admin_router() -> Router {
     // namespace (notary / seal-DAG / bottom repair / multisig /
     // gc-candidates / delivery-binding / moderation). Realm-scoped
     // operations use `/admin/realms/{realm_id}`; Space containers are
-    // reserved for `/admin/spaces/*`. Per cokret-spec
+    // reserved for `/admin/spaces/*`. Per arkret-spec
     // `service-http-binding.md` §2.1 the `/admin/*` namespace is
     // deployment-local and MUST NOT carry the `/_cokret/...` protocol prefix.
     // Registered ahead of `router()` (the `{resource}` collection

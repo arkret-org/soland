@@ -9,7 +9,7 @@ pub(super) mod frontier;
 pub(super) mod peer;
 // Strand + projection helpers are `pub(crate)` so the MIMI interop
 // facade can reuse the canonical space→strand mapping + projection-event
-// JSON shape when ingesting MIMI traffic into the Cokret timeline.
+// JSON shape when ingesting MIMI traffic into the Arkret timeline.
 pub(super) mod notify;
 pub(super) mod operations;
 pub(crate) mod projection;
@@ -126,7 +126,7 @@ mod tests {
         SessionRecord {
             token_hash: "human".to_owned(),
             actor: "did:web:alice.example".to_owned(),
-            device_id: "ck:device:0196419b-0000-7000-8000-000000000001".to_owned(),
+            device_id: "ak:device:0196419b-0000-7000-8000-000000000001".to_owned(),
             audience: "did:web:soland.local".to_owned(),
             session_public_key: None,
             agent_session: None,

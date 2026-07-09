@@ -101,7 +101,7 @@ pub(super) fn token_target_matches_claim(
 pub(super) fn decode_preview_token(token: &str) -> Option<Value> {
     let encoded = token
         .trim()
-        .strip_prefix("ck:preview-token:")
+        .strip_prefix("ak:preview-token:")
         .unwrap_or_else(|| token.trim());
     if encoded.starts_with('{') {
         return serde_json::from_str(encoded).ok();

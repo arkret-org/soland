@@ -186,7 +186,7 @@ fn poll_projection_json(
         .get("poll_id")
         .and_then(serde_json::Value::as_str)
         .map(ToOwned::to_owned)
-        .unwrap_or_else(|| event_id.replacen("ck:event:", "ck:message:", 1));
+        .unwrap_or_else(|| event_id.replacen("ak:event:", "ak:message:", 1));
     let Some(poll) = projection.poll(&poll_id) else {
         return Some(json!({
             "poll_id": poll_id,
@@ -258,12 +258,12 @@ mod tests {
 
     #[test]
     fn timeline_projection_preserves_payload_message_id() {
-        let realm_id = "ck:realm:019e4fd4-4e26-7cc9-af7e-d7102d6f4a22";
-        let event_id = "ck:event:019e4fd4-4e26-7cc9-af7e-d7102d6f4a23";
-        let message_id = "ck:message:019e4fd4-4e26-7cc9-af7e-d7102d6f4a24";
+        let realm_id = "ak:realm:019e4fd4-4e26-7cc9-af7e-d7102d6f4a22";
+        let event_id = "ak:event:019e4fd4-4e26-7cc9-af7e-d7102d6f4a23";
+        let message_id = "ak:message:019e4fd4-4e26-7cc9-af7e-d7102d6f4a24";
         let operation = Operation::create(
             cokret_sdk::OperationId::new(
-                "ck:operation:019e4fd4-4e26-7cc9-af7e-d7102d6f4a25".to_owned(),
+                "ak:operation:019e4fd4-4e26-7cc9-af7e-d7102d6f4a25".to_owned(),
             )
             .unwrap(),
             cokret_sdk::RealmId::new(realm_id.to_owned()).unwrap(),
@@ -272,7 +272,7 @@ mod tests {
                 "event_id": event_id,
                 "message_id": message_id,
                 "sender": "did:web:alice.example",
-                "strand_id": "ck:strand:019e4fd4-4e26-7cc9-af7e-d7102d6f4a22",
+                "strand_id": "ak:strand:019e4fd4-4e26-7cc9-af7e-d7102d6f4a22",
                 "track_name": "discussion",
                 "content": {"kind": "ck.content.text", "body": "hello"}
             }),

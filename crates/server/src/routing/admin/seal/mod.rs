@@ -141,7 +141,7 @@ pub(super) fn pick_admin_seal_basis(
             .map_err(|e| app_error!(InternalError, "empty control_event_set_root failed: {e}"))?;
         return Ok(cokret_sdk::SealBasis {
             leaves: vec![
-                SealId::new(format!("ck:seal:sha256:{}", "00".repeat(32)))
+                SealId::new(format!("ak:seal:sha256:{}", "00".repeat(32)))
                     .expect("valid genesis seal id"),
             ],
             control_event_set_root,
@@ -173,7 +173,7 @@ pub(super) fn fresh_hlc(state: &AppState) -> Result<Hlc, AppError> {
 
 /// Build the canonical notary cell ref for a Space.
 pub(super) fn notary_cell_for(realm_id: &str) -> Result<cokret_sdk::CellRef, AppError> {
-    cokret_sdk::CellRef::new(format!("ck:cell:ck.component.notary.v1:{realm_id}")).map_err(|e| {
+    cokret_sdk::CellRef::new(format!("ak:cell:ck.component.notary.v1:{realm_id}")).map_err(|e| {
         app_error!(InvalidParam, "invalid realm_id `{realm_id}`: {e}")
             .with_status(StatusCode::BAD_REQUEST)
     })

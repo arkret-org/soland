@@ -352,7 +352,7 @@ fn normalize_path_for_metrics(path: &str) -> String {
 }
 
 fn looks_like_path_id(segment: &str) -> bool {
-    segment.starts_with("ck:")
+    segment.starts_with("ak:")
         || segment.starts_with("did:")
         || (segment.len() >= 16
             && segment

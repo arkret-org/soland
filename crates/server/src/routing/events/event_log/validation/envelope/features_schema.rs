@@ -433,7 +433,7 @@ pub(crate) fn event_requirements_schema_id(
         return Err(event_validation_error(
             StatusCode::BAD_REQUEST,
             "unknown_schema",
-            "event schema_id is not in the cokret-spec schema registry",
+            "event schema_id is not in the arkret-spec schema registry",
         ));
     }
     Ok(schema_id)

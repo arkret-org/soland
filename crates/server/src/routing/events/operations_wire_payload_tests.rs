@@ -30,7 +30,7 @@ fn consent_revoke_accepts_non_empty_observed_dots() {
 #[test]
 fn applet_id_accepts_did_or_ck_form() {
     assert!(validate_applet_id("did:web:applet.example").is_ok());
-    assert!(validate_applet_id("ck:applet:01904100-0000-7000-8000-000000000001").is_ok());
+    assert!(validate_applet_id("ak:applet:01904100-0000-7000-8000-000000000001").is_ok());
     assert!(validate_applet_id("not-a-valid-id").is_err());
 }
 
@@ -40,7 +40,7 @@ fn principal_control_realm_binding_enforced() {
     let correct = crate::routing::identity::recovery::principal_control_realm_for_did(principal);
     let payload = serde_json::json!({
         "principal_id": principal,
-        "device_id": "ck:device:01904100-0000-7000-8000-000000000001",
+        "device_id": "ak:device:01904100-0000-7000-8000-000000000001",
     });
     let mk = |realm: &str, kind: &str, payload: serde_json::Value| {
         cokret_sdk::Operation::create(
@@ -58,7 +58,7 @@ fn principal_control_realm_binding_enforced() {
         ))
         .is_ok()
     );
-    let wrong = "ck:realm:01904100-0000-7000-8000-0000000000ff";
+    let wrong = "ak:realm:01904100-0000-7000-8000-0000000000ff";
     assert_eq!(
         validate_principal_control_realm_binding(&mk(wrong, "ck.device.authorize", payload))
             .unwrap_err(),

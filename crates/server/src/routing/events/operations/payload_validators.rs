@@ -210,8 +210,8 @@ pub(crate) fn validate_invite_claim_payload(operation: &Operation) -> Result<(),
     if binding.get("realm_id").and_then(Value::as_str) != Some(operation.realm_id.as_str()) {
         return Err("binding_proof.realm_id must match envelope realm_id");
     }
-    if binding.get("audience").and_then(Value::as_str) != Some("cokret.invite.claim") {
-        return Err("binding_proof.audience must be cokret.invite.claim");
+    if binding.get("audience").and_then(Value::as_str) != Some("arkret.invite.claim") {
+        return Err("binding_proof.audience must be arkret.invite.claim");
     }
     if binding.get("claim_nonce").and_then(Value::as_str) != Some(claim_nonce.as_str()) {
         return Err("binding_proof.claim_nonce must match claim_nonce");
@@ -529,10 +529,10 @@ pub(crate) fn validate_read_marker_payload(operation: &Operation) -> Result<(), 
                 .filter(|value| !value.trim().is_empty())
                 .ok_or("read marker read_scope.ref is required")?;
             let expected_prefix = match kind {
-                "circle" => "ck:circle:",
-                "space" => "ck:space:",
-                "strand" => "ck:strand:",
-                "thread" => "ck:message:",
+                "circle" => "ak:circle:",
+                "space" => "ak:space:",
+                "strand" => "ak:strand:",
+                "thread" => "ak:message:",
                 _ => unreachable!(),
             };
             if !reference.starts_with(expected_prefix) {
@@ -571,7 +571,7 @@ pub(crate) fn validate_read_marker_payload(operation: &Operation) -> Result<(), 
     if position
         .get("event_id")
         .and_then(|value| value.as_str())
-        .is_none_or(|value| !value.starts_with("ck:event:"))
+        .is_none_or(|value| !value.starts_with("ak:event:"))
     {
         return Err("read marker position.event_id is invalid");
     }
@@ -628,7 +628,7 @@ pub(crate) fn validate_conflict_repair_payload(operation: &Operation) -> Result<
         .get("cell_id")
         .and_then(serde_json::Value::as_str)
         .ok_or("conflict repair requires cell_id")?;
-    if !cell_id.starts_with("ck:cell:") {
+    if !cell_id.starts_with("ak:cell:") {
         return Err("conflict repair cell_id must use ck:cell:");
     }
     let heads = operation
@@ -1013,10 +1013,10 @@ mod tests {
     fn message_operation(expiry: serde_json::Value) -> Operation {
         Operation::create(
             cokret_sdk::OperationId::new(
-                "ck:operation:01904100-0000-7000-8000-0000000000e1".to_owned(),
+                "ak:operation:01904100-0000-7000-8000-0000000000e1".to_owned(),
             )
             .unwrap(),
-            cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-cfc039892036").unwrap(),
+            cokret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-cfc039892036").unwrap(),
             cokret_sdk::events::kinds::MESSAGE_CREATE,
             json!({
                 "content": {"kind": "ck.content.text", "body": "secret"},
@@ -1062,12 +1062,12 @@ mod tests {
             "ciphertext": "Y2lwaGVydGV4dA",
             "aad_visibility_event_id": "hidden",
             "aad": {
-                "realm_id": "ck:realm:01904100-0000-7000-8000-000000000001",
+                "realm_id": "ak:realm:01904100-0000-7000-8000-000000000001",
                 "event_kind": "ck.message.create"
             },
             "key_ref": {
                 "algorithm": "MLS-EXPORTER-AEAD",
-                "group_state_ref": "ck:event:01904100-0000-7000-8000-000000000001"
+                "group_state_ref": "ak:event:01904100-0000-7000-8000-000000000001"
             },
             "aad_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
             "payload_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222"

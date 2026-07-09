@@ -260,7 +260,7 @@ pub struct AppState {
     /// is unset / file missing / file malformed — that's the dev-mode
     /// invariant in service-surface.md §3.0.
     pub verified_profiles: Arc<Vec<VerifiedProfileDescriptor>>,
-    /// MID-1..6 (R3.1 spec-sync 2026-05-27, cokret-spec @ 7157ee8) — in-
+    /// MID-1..6 (R3.1 spec-sync 2026-05-27, arkret-spec @ 7157ee8) — in-
     /// memory registry of `ck.member.identity.update` events. Reducer
     /// dispatch (`apply_member_identity_update`) and the sync roster
     /// projection (`SYNC-MEM-1..3`) both go through this. See
@@ -310,7 +310,7 @@ impl AppState {
     /// Public Ed25519 verifying key for the current notary signing key.
     ///
     /// Used by the `ck.call.state` participant_binding verifier: in the
-    /// cokret-native self-signed deployment the binding `sig` is minted with
+    /// arkret-native self-signed deployment the binding `sig` is minted with
     /// the notary signing key (`routing::interop::webrtc`), so the receiver
     /// verifies against this key after anchoring `issuer_kid` to the current
     /// media_service epoch.
@@ -368,7 +368,7 @@ impl AppState {
         // Seed the deterministic demo Realm into the in-memory directory index
         // when explicitly opted in (tests via `test_config()`, dev harnesses via
         // `SOLAND_SEED_DEMO_DATA=true`). In production this stays off so soland
-        // deployments don't all advertise the same hard-coded "Cokret Demo
+        // deployments don't all advertise the same hard-coded "Arkret Demo
         // Space" id across federation peers.
         //
         // The DB-touching half of the demo seed (writing the demo account +
@@ -377,10 +377,10 @@ impl AppState {
         // async boot step driven from `main`, so the synchronous constructor
         // never touches the database.
         if config.seed_demo_data {
-            let demo_realm_id = "ck:realm:0196419b-0000-7000-8000-000000000000";
+            let demo_realm_id = "ak:realm:0196419b-0000-7000-8000-000000000000";
             let mut demo = RealmDirectoryEntry::new(
                 RealmId::new(demo_realm_id.to_owned()).expect("valid demo Realm id"),
-                "Cokret Demo Realm",
+                "Arkret Demo Realm",
             );
             demo.description = Some("Shared demo Realm served by soland".to_owned());
             demo.public = true;
@@ -412,7 +412,7 @@ impl AppState {
             (|| -> ([u8; 32], NotarySigningKeyOrigin) {
                 if config.use_keystore {
                     let app_id = format!("soland.{service_did}");
-                    let key_id = format!("cokret:signer:soland-notary:{service_did}");
+                    let key_id = format!("arkret:signer:soland-notary:{service_did}");
                     let store = cokret_sdk::platform_default_keystore(&app_id);
                     if let Ok(bytes) = store.load(&key_id) {
                         if bytes.len() == 32 {
@@ -689,9 +689,9 @@ impl AppState {
             }
         }
         if self.config.seed_demo_data {
-            let demo_realm_id = "ck:realm:0196419b-0000-7000-8000-000000000000";
+            let demo_realm_id = "ak:realm:0196419b-0000-7000-8000-000000000000";
             let demo_account = AccountRecord {
-                id: "ck:account:0196419b-0000-7000-8000-000000000001".to_owned(),
+                id: "ak:account:0196419b-0000-7000-8000-000000000001".to_owned(),
                 did: "did:web:alice.example".to_owned(),
                 localpart: "alice".to_owned(),
                 display_name: Some("Alice Example".to_owned()),
@@ -1378,7 +1378,7 @@ mod membership_hydration_tests {
 
     fn member_state_event(realm_id: &str, member: &str, membership: &str) -> CanonicalEventRecord {
         CanonicalEventRecord {
-            event_id: format!("ck:event:{member}-{membership}"),
+            event_id: format!("ak:event:{member}-{membership}"),
             actor_id: member.to_owned(),
             actor_seq: 1,
             realm_id: Some(realm_id.to_owned()),
@@ -1408,7 +1408,7 @@ mod membership_hydration_tests {
     // invitee is stuck "waiting for a Welcome" after every restart.
     #[test]
     fn joined_member_survives_directory_hydration() {
-        let realm_id = RealmId::new("ck:realm:019f0dd3-081c-7f03-b388-e0399e7759fc".to_owned())
+        let realm_id = RealmId::new("ak:realm:019f0dd3-081c-7f03-b388-e0399e7759fc".to_owned())
             .expect("realm id");
         let creator = Did::new("did:web:alice.example".to_owned()).expect("creator did");
         let invitee = Did::new("did:web:bob.example".to_owned()).expect("invitee did");
@@ -1433,7 +1433,7 @@ mod membership_hydration_tests {
 
     #[test]
     fn left_member_is_dropped_on_directory_hydration() {
-        let realm_id = RealmId::new("ck:realm:019f0dd3-081c-7f03-b388-e0399e7759fc".to_owned())
+        let realm_id = RealmId::new("ak:realm:019f0dd3-081c-7f03-b388-e0399e7759fc".to_owned())
             .expect("realm id");
         let creator = Did::new("did:web:alice.example".to_owned()).expect("creator did");
         let invitee = Did::new("did:web:bob.example".to_owned()).expect("invitee did");
@@ -1458,7 +1458,7 @@ mod membership_hydration_tests {
     // member during hydration.
     #[test]
     fn invite_state_does_not_add_directory_member() {
-        let realm_id = RealmId::new("ck:realm:019f0dd3-081c-7f03-b388-e0399e7759fc".to_owned())
+        let realm_id = RealmId::new("ak:realm:019f0dd3-081c-7f03-b388-e0399e7759fc".to_owned())
             .expect("realm id");
         let creator = Did::new("did:web:alice.example".to_owned()).expect("creator did");
         let invitee = Did::new("did:web:bob.example".to_owned()).expect("invitee did");
@@ -1485,18 +1485,18 @@ mod membership_hydration_tests {
             MlsKeyPackageRow, PersistenceStore, SolandMemoryPersistenceStore,
         };
 
-        let realm_id = "ck:realm:019f0dd3-081c-7f03-b388-e0399e7759fc";
-        let group_id = "ck:mls_group:019f0dd3-aaaa";
+        let realm_id = "ak:realm:019f0dd3-081c-7f03-b388-e0399e7759fc";
+        let group_id = "ak:mls_group:019f0dd3-aaaa";
         let store = SolandMemoryPersistenceStore::new();
 
         store
             .mls_key_packages()
             .put(&MlsKeyPackageRow {
-                id: "ck:mls_keypackage:01".to_owned(),
+                id: "ak:mls_keypackage:01".to_owned(),
                 keypackage_ref: "sha256:ref".to_owned(),
                 keypackage_digest: "sha256:digest".to_owned(),
                 actor_id: "did:web:bob.example".to_owned(),
-                device_id: "ck:device:bob-1".to_owned(),
+                device_id: "ak:device:bob-1".to_owned(),
                 key_package_bytes: vec![1, 2, 3],
                 capabilities: vec!["ck.content.v1".to_owned()],
                 capabilities_digest: "sha256:caps".to_owned(),
@@ -1507,7 +1507,7 @@ mod membership_hydration_tests {
                 lifetime_not_after: i64::MAX,
                 claimed_by_mls_group_id: None,
                 ssk_generation: None,
-                device_authorize_event_id: Some("ck:event:auth".to_owned()),
+                device_authorize_event_id: Some("ak:event:auth".to_owned()),
                 consumed_at: None,
                 created_at: 1,
             })
@@ -1536,7 +1536,7 @@ mod membership_hydration_tests {
         // KeyPackage projection is rebuilt → the claim selector can find it.
         let kp = proj
             .mls_key_packages
-            .get("ck:mls_keypackage:01")
+            .get("ak:mls_keypackage:01")
             .expect("keypackage rehydrated");
         assert_eq!(kp.actor_id, "did:web:bob.example");
         assert!(kp.last_resort);

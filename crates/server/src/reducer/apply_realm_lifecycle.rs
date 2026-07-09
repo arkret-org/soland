@@ -207,7 +207,7 @@ impl ProjectionState {
         // cell_subject is `actor_id` (per-actor), not (realm_id, actor)
         // composite. The Realm scoping is implicit in the CellStore key.
         if let Ok(cell_id) =
-            cokret_sdk::CellRef::new(format!("ck:cell:ck.component.member.state.v1:{member}"))
+            cokret_sdk::CellRef::new(format!("ak:cell:ck.component.member.state.v1:{member}"))
         {
             self.cells.insert(
                 cell_id,
@@ -251,7 +251,7 @@ impl ProjectionState {
             },
         );
         if let Ok(cell_id) =
-            cokret_sdk::CellRef::new(format!("ck:cell:ck.component.member.state.v1:{creator}"))
+            cokret_sdk::CellRef::new(format!("ak:cell:ck.component.member.state.v1:{creator}"))
         {
             self.cells
                 .insert(cell_id, CellState::Value(Value::String("join".to_owned())));
@@ -423,7 +423,7 @@ impl ProjectionState {
     /// Realm metadata is the `realm_states` object projection, and this cell
     /// only exists to drive the concurrent-update conflict resolution.
     pub(crate) fn realm_metadata_cell_id(realm_id: &str) -> Option<CellRef> {
-        CellRef::new(format!("ck:cell:ck.component.realm.metadata.v1:{realm_id}")).ok()
+        CellRef::new(format!("ak:cell:ck.component.realm.metadata.v1:{realm_id}")).ok()
     }
 
     pub(crate) fn realm_update_conflict_basis(operation: &Operation) -> Option<String> {
@@ -597,7 +597,7 @@ impl ProjectionState {
             .or_else(|| operation.payload.get("state_witness_ref"))
             .and_then(Value::as_str)
             .ok_or("recovery_witness_missing")?;
-        if !witness.starts_with("ck:seal:sha256:") {
+        if !witness.starts_with("ak:seal:sha256:") {
             return Err("repair_state_witness_invalid");
         }
         if declared.iter().any(|head| head == witness) {
@@ -1043,7 +1043,7 @@ impl ProjectionState {
         match kind {
             k if k == cokret_sdk::events::kinds::REALM_CREATE => {
                 if let Ok(cell_id) = cokret_sdk::CellRef::new(format!(
-                    "ck:cell:ck.component.realm.create.v1:{realm_id}"
+                    "ak:cell:ck.component.realm.create.v1:{realm_id}"
                 )) {
                     let entry = serde_json::json!({
                         "owner": owner,
@@ -1099,7 +1099,7 @@ impl ProjectionState {
             }
             k if k == cokret_sdk::events::kinds::REALM_ARCHIVE => {
                 if let Ok(cell_id) = cokret_sdk::CellRef::new(format!(
-                    "ck:cell:ck.component.realm.archive.v1:{realm_id}"
+                    "ak:cell:ck.component.realm.archive.v1:{realm_id}"
                 )) {
                     let mut value = serde_json::Map::new();
                     value.insert(
@@ -1124,7 +1124,7 @@ impl ProjectionState {
             }
             k if k == cokret_sdk::events::kinds::REALM_FREEZE => {
                 if let Ok(cell_id) = cokret_sdk::CellRef::new(format!(
-                    "ck:cell:ck.component.realm.freeze.v1:{realm_id}"
+                    "ak:cell:ck.component.realm.freeze.v1:{realm_id}"
                 )) {
                     let mut value = serde_json::Map::new();
                     value.insert(
@@ -1157,7 +1157,7 @@ impl ProjectionState {
                 // cell with `successor_realm_id` so peers hydrating from
                 // cells alone can distinguish migration from destroy.
                 if let Ok(cell_id) = cokret_sdk::CellRef::new(format!(
-                    "ck:cell:ck.component.realm.tombstone.v1:{realm_id}"
+                    "ak:cell:ck.component.realm.tombstone.v1:{realm_id}"
                 )) {
                     let value = serde_json::json!({
                         "terminal_kind": "tombstoned",
@@ -1176,7 +1176,7 @@ impl ProjectionState {
             k if k == cokret_sdk::events::kinds::REALM_DESTROY => {
                 // cas-register: terminal {destroyed: true, at: ts}.
                 if let Ok(cell_id) = cokret_sdk::CellRef::new(format!(
-                    "ck:cell:ck.component.realm.destroy.v1:{realm_id}"
+                    "ak:cell:ck.component.realm.destroy.v1:{realm_id}"
                 )) {
                     let value = serde_json::json!({
                         "terminal_kind": "destroyed",

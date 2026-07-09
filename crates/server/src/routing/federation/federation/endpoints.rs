@@ -85,11 +85,11 @@ pub(in crate::routing::federation::federation) struct FederationBackfillOperatio
 }
 
 #[endpoint(
-    operation_id = "org.cokret.soland.federation.transaction",
+    operation_id = "org.arkret.soland.federation.transaction",
     tags("federation"),
     summary = "Idempotent inbound server-to-server federation transaction"
 )]
-#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.federation.transaction"))]
+#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.federation.transaction"))]
 pub(crate) async fn federation_transaction(
     txn_id: PathParam<String>,
     body: JsonBody<cokret_sdk::FederationTransactionRequestBody>,
@@ -388,11 +388,11 @@ fn local_peer_policy_digest_for_transaction(
 }
 
 #[endpoint(
-    operation_id = "org.cokret.soland.federation.push_operations",
+    operation_id = "org.arkret.soland.federation.push_operations",
     tags("federation"),
     summary = "Accept a batch of operations pushed from a peer service"
 )]
-#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.federation.push_operations"))]
+#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.federation.push_operations"))]
 pub(crate) async fn federation_push_operations(
     body: JsonBody<cokret_sdk::FederationPushOperationsRequestBody>,
     depot: &mut Depot,
@@ -429,11 +429,11 @@ pub(crate) async fn federation_push_operations(
 }
 
 #[endpoint(
-    operation_id = "org.cokret.soland.federation.actor_events",
+    operation_id = "org.arkret.soland.federation.actor_events",
     tags("federation"),
     summary = "Debug/read model: list projection events for a federated actor"
 )]
-#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.federation.actor_events"))]
+#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.federation.actor_events"))]
 pub(crate) async fn federation_actor_events(
     actor_id: PathParam<String>,
     depot: &mut Depot,
@@ -503,11 +503,11 @@ fn projection_event_matches_actor(
 }
 
 #[endpoint(
-    operation_id = "org.cokret.soland.federation.pull_operations",
+    operation_id = "org.arkret.soland.federation.pull_operations",
     tags("federation"),
     summary = "Pull a page of operations for a federated Realm, with optional snapshot bootstrap"
 )]
-#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.federation.pull_operations"))]
+#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.federation.pull_operations"))]
 pub(crate) async fn federation_pull_operations(
     realm_id: QueryParam<String, true>,
     after_cursor: QueryParam<String, false>,
@@ -610,13 +610,13 @@ pub(crate) async fn federation_pull_operations(
 }
 
 #[endpoint(
-    operation_id = "org.cokret.soland.federation.backfill_operations",
+    operation_id = "org.arkret.soland.federation.backfill_operations",
     tags("federation"),
     summary = "Pull missing operations from a configured federation peer and ingest them locally"
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "org.cokret.soland.federation.backfill_operations")
+    fields(op = "org.arkret.soland.federation.backfill_operations")
 )]
 pub(crate) async fn federation_backfill_operations(
     body: JsonBody<FederationBackfillOperationsRequestBody>,
@@ -715,13 +715,13 @@ async fn operation_history_visible_for_federation_pull(
 }
 
 #[endpoint(
-    operation_id = "org.cokret.soland.federation.operation_frontier",
+    operation_id = "org.arkret.soland.federation.operation_frontier",
     tags("federation"),
     summary = "Return the operation frontier used by federation pull/backfill convergence checks"
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "org.cokret.soland.federation.operation_frontier")
+    fields(op = "org.arkret.soland.federation.operation_frontier")
 )]
 pub(crate) async fn federation_operation_frontier(
     realm_id: QueryParam<String, true>,
@@ -737,11 +737,11 @@ pub(crate) async fn federation_operation_frontier(
 }
 
 #[endpoint(
-    operation_id = "org.cokret.soland.federation.realm_members",
+    operation_id = "org.arkret.soland.federation.realm_members",
     tags("federation"),
     summary = "List Realm memberships for a federated Realm"
 )]
-#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.federation.realm_members"))]
+#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.federation.realm_members"))]
 pub(crate) async fn federation_realm_members(
     realm_id: QueryParam<String, true>,
     depot: &mut Depot,
@@ -773,11 +773,11 @@ pub(crate) async fn federation_realm_members(
 }
 
 #[endpoint(
-    operation_id = "org.cokret.soland.federation.verify_actor",
+    operation_id = "org.arkret.soland.federation.verify_actor",
     tags("federation"),
     summary = "Verify a federated actor's signature against the local DID resolver"
 )]
-#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.federation.verify_actor"))]
+#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.federation.verify_actor"))]
 pub(crate) async fn federation_verify_actor(
     body: JsonBody<cokret_sdk::FederationVerifyActorRequestBody>,
     depot: &mut Depot,
@@ -857,11 +857,11 @@ pub struct FederationSealsPushOutcome {
 }
 
 #[endpoint(
-    operation_id = "org.cokret.soland.federation.seals.pull",
+    operation_id = "org.arkret.soland.federation.seals.pull",
     tags("federation"),
     summary = "Pull locally-held Seals for a Realm (federation peer-pull)"
 )]
-#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.federation.seals.pull"))]
+#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.federation.seals.pull"))]
 pub(crate) async fn federation_seals_pull(
     depot: &mut Depot,
     realm_id: QueryParam<String, true>,
@@ -892,11 +892,11 @@ pub(crate) async fn federation_seals_pull(
 }
 
 #[endpoint(
-    operation_id = "org.cokret.soland.federation.seals.push",
+    operation_id = "org.arkret.soland.federation.seals.push",
     tags("federation"),
     summary = "Accept Seal envelopes from a federation peer (peer-push)"
 )]
-#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.federation.seals.push"))]
+#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.federation.seals.push"))]
 pub(crate) async fn federation_seals_push(
     req: &mut Request,
     depot: &mut Depot,

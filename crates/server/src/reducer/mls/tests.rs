@@ -9,9 +9,9 @@ use crate::reducer::{MlsEffect, ProjectionEffect, ProjectionState};
 
 fn op_at(secs: i64, object_type: &str, payload: serde_json::Value) -> Operation {
     let mut op = Operation::create(
-        OperationId::new("ck:operation:0196419b-0000-7000-8000-000000000001")
+        OperationId::new("ak:operation:0196419b-0000-7000-8000-000000000001")
             .expect("op id parses"),
-        RealmId::new("ck:realm:0196419b-0000-7000-8000-000000000000").expect("realm id parses"),
+        RealmId::new("ak:realm:0196419b-0000-7000-8000-000000000000").expect("realm id parses"),
         object_type,
         payload,
     );
@@ -26,14 +26,14 @@ fn b64(bytes: &[u8]) -> String {
 fn realm_scope() -> Value {
     json!({
         "kind": "realm",
-        "realm_id": "ck:realm:0196419b-0000-7000-8000-000000000000"
+        "realm_id": "ak:realm:0196419b-0000-7000-8000-000000000000"
     })
 }
 
 fn circle_scope(circle_id: &str) -> Value {
     json!({
         "kind": "circle",
-        "realm_id": "ck:realm:0196419b-0000-7000-8000-000000000000",
+        "realm_id": "ak:realm:0196419b-0000-7000-8000-000000000000",
         "circle_id": circle_id
     })
 }
@@ -43,8 +43,8 @@ fn governance_binding_for_scope(
     group_id: &str,
     effective_scope: Value,
 ) -> Value {
-    let realm_id = "ck:realm:0196419b-0000-7000-8000-000000000000";
-    let frontier = format!("ck:event:0196419b-0000-7000-8000-{previous_epoch:012x}");
+    let realm_id = "ak:realm:0196419b-0000-7000-8000-000000000000";
+    let frontier = format!("ak:event:0196419b-0000-7000-8000-{previous_epoch:012x}");
     let mut binding = json!({
         "binding_version": 1,
         "encoding_profile": "cbor-deterministic-rfc8949-v1",
@@ -71,18 +71,18 @@ fn governance_binding_for_scope(
 }
 
 fn governance_binding(previous_epoch: u64) -> Value {
-    governance_binding_for_scope(previous_epoch, "ck:mls_group:abc", realm_scope())
+    governance_binding_for_scope(previous_epoch, "ak:mls_group:abc", realm_scope())
 }
 
 fn welcome_payload(welcome_id: &str) -> Value {
-    let keypackage_ref = "ck:mls_keypackage:01";
+    let keypackage_ref = "ak:mls_keypackage:01";
     let keypackage_digest =
         "sha256:5555555555555555555555555555555555555555555555555555555555555555";
     json!({
         "welcome_id": welcome_id,
-        "group_id": "ck:mls_group:abc",
+        "group_id": "ak:mls_group:abc",
         "recipient_actor_id": "did:web:bob.example",
-        "recipient_device_id": "ck:device:bob-phone",
+        "recipient_device_id": "ak:device:bob-phone",
         "welcome_bytes_b64": b64(b"opaque-welcome-bytes"),
         "key_package_id": keypackage_ref,
         "keypackage_ref": keypackage_ref,
@@ -98,7 +98,7 @@ fn welcome_payload(welcome_id: &str) -> Value {
         "claim_envelope": {
             "keypackage_ref": keypackage_ref,
             "keypackage_digest": keypackage_digest,
-            "intended_realm_id": "ck:realm:0196419b-0000-7000-8000-000000000000",
+            "intended_realm_id": "ak:realm:0196419b-0000-7000-8000-000000000000",
             "claim_id": "claim-01",
             "requester_did": "did:web:alice.example",
             "ssk_generation": 7,
@@ -116,7 +116,7 @@ fn welcome_payload(welcome_id: &str) -> Value {
 }
 
 fn genesis_binding(group_id: &str, effective_scope: Value) -> Value {
-    let realm_id = "ck:realm:0196419b-0000-7000-8000-000000000000";
+    let realm_id = "ak:realm:0196419b-0000-7000-8000-000000000000";
     let mut binding = json!({
         "binding_version": 1,
         "encoding_profile": "cbor-deterministic-rfc8949-v1",
@@ -126,7 +126,7 @@ fn genesis_binding(group_id: &str, effective_scope: Value) -> Value {
         "previous_epoch": 0,
         "next_epoch": 0,
         "membership_frontier": [
-            "ck:event:0196419b-0000-7000-8000-000000000000"
+            "ak:event:0196419b-0000-7000-8000-000000000000"
         ],
         "policy_root": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
         "binding_profile": crate::kinds::MLS_GOVERNANCE_BINDING_FULL_PROFILE,
@@ -148,7 +148,7 @@ fn genesis_payload(group_id: &str, effective_scope: Value) -> Value {
         "effective_scope": effective_scope.clone(),
         "epoch": 0,
         "creator_principal_id": "did:web:alice.example",
-        "creator_device_id": "ck:device:alice-desktop",
+        "creator_device_id": "ak:device:alice-desktop",
         "cipher_suite": "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
         "group_info_digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
         "ratchet_tree_digest": "sha256:4444444444444444444444444444444444444444444444444444444444444444",
@@ -161,7 +161,7 @@ fn initialize_genesis(state: &mut ProjectionState) {
     let genesis = op_at(
         499,
         "ck.mls.genesis",
-        genesis_payload("ck:mls_group:abc", realm_scope()),
+        genesis_payload("ak:mls_group:abc", realm_scope()),
     );
     let effect = apply_group_genesis(state, &genesis);
     assert!(matches!(
@@ -189,9 +189,9 @@ fn keypackage_publish_then_claim_succeeds() {
         100,
         "ck.mls.keypackage",
         publish_payload(
-            "ck:mls_keypackage:01",
+            "ak:mls_keypackage:01",
             "did:web:alice.example",
-            "ck:device:alice-desktop",
+            "ak:device:alice-desktop",
             1_000_000,
         ),
     );
@@ -199,12 +199,12 @@ fn keypackage_publish_then_claim_succeeds() {
     assert!(matches!(
         effect,
         ProjectionEffect::Mls(MlsEffect::KeyPackagePublished { ref keypackage_id, .. })
-            if keypackage_id == "ck:mls_keypackage:01"
+            if keypackage_id == "ak:mls_keypackage:01"
     ));
     assert!(
         state
             .mls_key_packages
-            .get("ck:mls_keypackage:01")
+            .get("ak:mls_keypackage:01")
             .unwrap()
             .claimed_by
             .is_none()
@@ -215,8 +215,8 @@ fn keypackage_publish_then_claim_succeeds() {
         "ck.mls.keypackage",
         json!({
             "action": "claim",
-            "keypackage_id": "ck:mls_keypackage:01",
-            "group_id": "ck:mls_group:abc",
+            "keypackage_id": "ak:mls_keypackage:01",
+            "group_id": "ak:mls_group:abc",
             "ssk_generation": 7
         }),
     );
@@ -228,14 +228,14 @@ fn keypackage_publish_then_claim_succeeds() {
             consumed_at,
             ..
         }) => {
-            assert_eq!(keypackage_id, "ck:mls_keypackage:01");
-            assert_eq!(group_id, "ck:mls_group:abc");
+            assert_eq!(keypackage_id, "ak:mls_keypackage:01");
+            assert_eq!(group_id, "ak:mls_group:abc");
             assert_eq!(consumed_at, 200);
         }
         other => panic!("expected KeyPackageClaimed, got {other:?}"),
     }
-    let row = state.mls_key_packages.get("ck:mls_keypackage:01").unwrap();
-    assert_eq!(row.claimed_by.as_deref(), Some("ck:mls_group:abc"));
+    let row = state.mls_key_packages.get("ak:mls_keypackage:01").unwrap();
+    assert_eq!(row.claimed_by.as_deref(), Some("ak:mls_group:abc"));
     assert_eq!(row.consumed_at, Some(200));
 }
 
@@ -246,9 +246,9 @@ fn keypackage_claim_twice_second_fails() {
         100,
         "ck.mls.keypackage",
         publish_payload(
-            "ck:mls_keypackage:02",
+            "ak:mls_keypackage:02",
             "did:web:alice.example",
-            "ck:device:alice-desktop",
+            "ak:device:alice-desktop",
             1_000_000,
         ),
     );
@@ -260,8 +260,8 @@ fn keypackage_claim_twice_second_fails() {
         "ck.mls.keypackage",
         json!({
             "action": "claim",
-            "keypackage_id": "ck:mls_keypackage:02",
-            "group_id": "ck:mls_group:first",
+            "keypackage_id": "ak:mls_keypackage:02",
+            "group_id": "ak:mls_group:first",
             "ssk_generation": 7
         }),
     );
@@ -277,8 +277,8 @@ fn keypackage_claim_twice_second_fails() {
         "ck.mls.keypackage",
         json!({
             "action": "claim",
-            "keypackage_id": "ck:mls_keypackage:02",
-            "group_id": "ck:mls_group:second",
+            "keypackage_id": "ak:mls_keypackage:02",
+            "group_id": "ak:mls_group:second",
             "ssk_generation": 7
         }),
     );
@@ -290,8 +290,8 @@ fn keypackage_claim_twice_second_fails() {
         other => panic!("expected Rejected, got {other:?}"),
     }
     // First claim's group must still own the row — losers don't overwrite.
-    let row = state.mls_key_packages.get("ck:mls_keypackage:02").unwrap();
-    assert_eq!(row.claimed_by.as_deref(), Some("ck:mls_group:first"));
+    let row = state.mls_key_packages.get("ak:mls_keypackage:02").unwrap();
+    assert_eq!(row.claimed_by.as_deref(), Some("ak:mls_group:first"));
     assert_eq!(row.consumed_at, Some(200));
 }
 
@@ -299,24 +299,24 @@ fn keypackage_claim_twice_second_fails() {
 fn last_resort_keypackage_reuses_within_realm_only() {
     let mut state = ProjectionState::default();
     let mut payload = publish_payload(
-        "ck:mls_keypackage:last-resort",
+        "ak:mls_keypackage:last-resort",
         "did:web:alice.example",
-        "ck:device:alice-desktop",
+        "ak:device:alice-desktop",
         1_000_000,
     );
     payload["last_resort"] = json!(true);
     let publish = op_at(100, "ck.mls.keypackage", payload);
     let _ = apply_keypackage_publish(&mut state, &publish);
 
-    for group_id in ["ck:mls_group:first", "ck:mls_group:second"] {
+    for group_id in ["ak:mls_group:first", "ak:mls_group:second"] {
         let claim = op_at(
             200,
             "ck.mls.keypackage",
             json!({
                 "action": "claim",
-                "keypackage_id": "ck:mls_keypackage:last-resort",
+                "keypackage_id": "ak:mls_keypackage:last-resort",
                 "group_id": group_id,
-                "intended_realm_id": "ck:realm:alpha",
+                "intended_realm_id": "ak:realm:alpha",
                 "ssk_generation": 7
             }),
         );
@@ -331,20 +331,20 @@ fn last_resort_keypackage_reuses_within_realm_only() {
 
     let row = state
         .mls_key_packages
-        .get("ck:mls_keypackage:last-resort")
+        .get("ak:mls_keypackage:last-resort")
         .unwrap();
     assert!(row.claimed_by.is_none());
     assert!(row.consumed_at.is_none());
-    assert_eq!(row.last_resort_realm_id.as_deref(), Some("ck:realm:alpha"));
+    assert_eq!(row.last_resort_realm_id.as_deref(), Some("ak:realm:alpha"));
 
     let cross_realm = op_at(
         201,
         "ck.mls.keypackage",
         json!({
             "action": "claim",
-            "keypackage_id": "ck:mls_keypackage:last-resort",
-            "group_id": "ck:mls_group:other",
-            "intended_realm_id": "ck:realm:beta",
+            "keypackage_id": "ak:mls_keypackage:last-resort",
+            "group_id": "ak:mls_group:other",
+            "intended_realm_id": "ak:realm:beta",
             "ssk_generation": 7
         }),
     );
@@ -360,9 +360,9 @@ fn last_resort_keypackage_reuses_within_realm_only() {
 fn revoked_last_resort_keypackage_cannot_be_reused() {
     let mut state = ProjectionState::default();
     let mut payload = publish_payload(
-        "ck:mls_keypackage:revoked-last-resort",
+        "ak:mls_keypackage:revoked-last-resort",
         "did:web:alice.example",
-        "ck:device:alice-desktop",
+        "ak:device:alice-desktop",
         1_000_000,
     );
     payload["last_resort"] = json!(true);
@@ -370,7 +370,7 @@ fn revoked_last_resort_keypackage_cannot_be_reused() {
     let _ = apply_keypackage_publish(&mut state, &publish);
     state
         .mls_key_packages
-        .get_mut("ck:mls_keypackage:revoked-last-resort")
+        .get_mut("ak:mls_keypackage:revoked-last-resort")
         .unwrap()
         .claimed_by = Some("revoked".to_owned());
 
@@ -379,9 +379,9 @@ fn revoked_last_resort_keypackage_cannot_be_reused() {
         "ck.mls.keypackage",
         json!({
             "action": "claim",
-            "keypackage_id": "ck:mls_keypackage:revoked-last-resort",
-            "group_id": "ck:mls_group:first",
-            "intended_realm_id": "ck:realm:alpha",
+            "keypackage_id": "ak:mls_keypackage:revoked-last-resort",
+            "group_id": "ak:mls_group:first",
+            "intended_realm_id": "ak:realm:alpha",
             "ssk_generation": 7
         }),
     );
@@ -400,9 +400,9 @@ fn keypackage_claim_rejects_stale_cross_signing_generation() {
         100,
         "ck.mls.keypackage",
         publish_payload(
-            "ck:mls_keypackage:03",
+            "ak:mls_keypackage:03",
             "did:web:alice.example",
-            "ck:device:alice-desktop",
+            "ak:device:alice-desktop",
             1_000_000,
         ),
     );
@@ -413,8 +413,8 @@ fn keypackage_claim_rejects_stale_cross_signing_generation() {
         "ck.mls.keypackage",
         json!({
             "action": "claim",
-            "keypackage_id": "ck:mls_keypackage:03",
-            "group_id": "ck:mls_group:abc",
+            "keypackage_id": "ak:mls_keypackage:03",
+            "group_id": "ak:mls_group:abc",
             "ssk_generation": 8
         }),
     );
@@ -425,7 +425,7 @@ fn keypackage_claim_rejects_stale_cross_signing_generation() {
         }
         other => panic!("expected Rejected, got {other:?}"),
     }
-    let row = state.mls_key_packages.get("ck:mls_keypackage:03").unwrap();
+    let row = state.mls_key_packages.get("ak:mls_keypackage:03").unwrap();
     assert!(row.claimed_by.is_none());
     assert_eq!(row.ssk_generation, Some(7));
 }
@@ -433,14 +433,14 @@ fn keypackage_claim_rejects_stale_cross_signing_generation() {
 #[test]
 fn welcome_enqueue_then_fetch_marks_delivered() {
     let mut state = ProjectionState::default();
-    let enqueue = op_at(300, "ck.mls.welcome", welcome_payload("ck:mls_welcome:w1"));
+    let enqueue = op_at(300, "ck.mls.welcome", welcome_payload("ak:mls_welcome:w1"));
     let effect = apply_welcome_enqueue(&mut state, &enqueue);
     assert!(matches!(
         effect,
         ProjectionEffect::Mls(MlsEffect::WelcomeEnqueued { .. })
     ));
 
-    let key = MlsWelcomeQueueKey::new("did:web:bob.example", "ck:device:bob-phone");
+    let key = MlsWelcomeQueueKey::new("did:web:bob.example", "ak:device:bob-phone");
     let queue = state.mls_welcomes.get(&key).unwrap();
     assert_eq!(queue.len(), 1);
     assert!(queue[0].delivered_at.is_none());
@@ -476,7 +476,7 @@ fn welcome_enqueue_then_fetch_marks_delivered() {
 #[test]
 fn welcome_enqueue_accepts_requester_device_envelope_without_sender_device_id() {
     let mut state = ProjectionState::default();
-    let mut payload = welcome_payload("ck:mls_welcome:w-device");
+    let mut payload = welcome_payload("ak:mls_welcome:w-device");
     let claim_ref = payload
         .get_mut("claim_ref")
         .and_then(Value::as_object_mut)
@@ -484,7 +484,7 @@ fn welcome_enqueue_accepts_requester_device_envelope_without_sender_device_id() 
     claim_ref.remove("ssk_generation");
     claim_ref.insert(
         "device_authorize_event_id".to_owned(),
-        json!("ck:event:01904100-0000-7000-8000-00000000d001"),
+        json!("ak:event:01904100-0000-7000-8000-00000000d001"),
     );
     let claim_envelope = payload
         .get_mut("claim_envelope")
@@ -493,7 +493,7 @@ fn welcome_enqueue_accepts_requester_device_envelope_without_sender_device_id() 
     claim_envelope.remove("ssk_generation");
     claim_envelope.insert(
         "requester_device_id".to_owned(),
-        json!("ck:device:alice-desktop"),
+        json!("ak:device:alice-desktop"),
     );
     claim_envelope["signature"]["kid"] = json!("did:key:z6MkRequesterDevice#device");
     assert!(payload.get("sender_device_id").is_none());
@@ -510,7 +510,7 @@ fn welcome_enqueue_accepts_requester_device_envelope_without_sender_device_id() 
 #[test]
 fn welcome_enqueue_rejects_mismatched_sender_device_id_when_present() {
     let mut state = ProjectionState::default();
-    let mut payload = welcome_payload("ck:mls_welcome:w-device-mismatch");
+    let mut payload = welcome_payload("ak:mls_welcome:w-device-mismatch");
     let claim_ref = payload
         .get_mut("claim_ref")
         .and_then(Value::as_object_mut)
@@ -518,7 +518,7 @@ fn welcome_enqueue_rejects_mismatched_sender_device_id_when_present() {
     claim_ref.remove("ssk_generation");
     claim_ref.insert(
         "device_authorize_event_id".to_owned(),
-        json!("ck:event:01904100-0000-7000-8000-00000000d001"),
+        json!("ak:event:01904100-0000-7000-8000-00000000d001"),
     );
     let claim_envelope = payload
         .get_mut("claim_envelope")
@@ -527,10 +527,10 @@ fn welcome_enqueue_rejects_mismatched_sender_device_id_when_present() {
     claim_envelope.remove("ssk_generation");
     claim_envelope.insert(
         "requester_device_id".to_owned(),
-        json!("ck:device:alice-desktop"),
+        json!("ak:device:alice-desktop"),
     );
     claim_envelope["signature"]["kid"] = json!("did:key:z6MkRequesterDevice#device");
-    payload["sender_device_id"] = json!("ck:device:other");
+    payload["sender_device_id"] = json!("ak:device:other");
 
     let enqueue = op_at(300, "ck.mls.welcome", payload);
     let effect = apply_welcome_enqueue(&mut state, &enqueue);
@@ -546,7 +546,7 @@ fn welcome_enqueue_rejects_mismatched_sender_device_id_when_present() {
 fn welcome_enqueue_decodes_schema_ciphertext_base64_to_raw_welcome_bytes() {
     let mut state = ProjectionState::default();
     let raw_welcome = b"real-openmls-welcome-bytes";
-    let mut payload = welcome_payload("ck:mls_welcome:w-ciphertext");
+    let mut payload = welcome_payload("ak:mls_welcome:w-ciphertext");
     let object = payload.as_object_mut().unwrap();
     object.remove("welcome_bytes_b64");
     object.remove("key_package_id");
@@ -561,16 +561,16 @@ fn welcome_enqueue_decodes_schema_ciphertext_base64_to_raw_welcome_bytes() {
         effect,
         ProjectionEffect::Mls(MlsEffect::WelcomeEnqueued { .. })
     ));
-    let key = MlsWelcomeQueueKey::new("did:web:bob.example", "ck:device:bob-phone");
+    let key = MlsWelcomeQueueKey::new("did:web:bob.example", "ak:device:bob-phone");
     let queue = state.mls_welcomes.get(&key).unwrap();
     assert_eq!(queue[0].welcome_bytes, raw_welcome);
-    assert_eq!(queue[0].key_package_id, "ck:mls_keypackage:01");
+    assert_eq!(queue[0].key_package_id, "ak:mls_keypackage:01");
 }
 
 #[test]
 fn welcome_enqueue_rejects_plaintext_identity_metadata() {
     let mut state = ProjectionState::default();
-    let mut payload = welcome_payload("ck:mls_welcome:w-leaky");
+    let mut payload = welcome_payload("ak:mls_welcome:w-leaky");
     payload["metadata"] = json!({
         "sender_handle": "@alice",
         "routing_hint": "ok"
@@ -587,7 +587,7 @@ fn welcome_enqueue_rejects_plaintext_identity_metadata() {
 #[test]
 fn welcome_enqueue_rejects_missing_claim_envelope() {
     let mut state = ProjectionState::default();
-    let mut payload = welcome_payload("ck:mls_welcome:w-unbound");
+    let mut payload = welcome_payload("ak:mls_welcome:w-unbound");
     payload.as_object_mut().unwrap().remove("claim_envelope");
     let enqueue = op_at(300, "ck.mls.welcome", payload);
     let effect = apply_welcome_enqueue(&mut state, &enqueue);
@@ -609,7 +609,7 @@ fn commit_epoch_in_order_succeeds() {
         500,
         "ck.mls.commit",
         json!({
-            "group_id": "ck:mls_group:abc",
+            "group_id": "ak:mls_group:abc",
             "expected_prev_epoch": 0,
             "next_epoch": 1,
             "leader_actor_id": "did:web:alice.example",
@@ -629,7 +629,7 @@ fn commit_epoch_in_order_succeeds() {
             assert_eq!(new_epoch, 1);
             assert_eq!(
                 covered_seals,
-                &vec!["ck:event:0196419b-0000-7000-8000-000000000000".to_owned()]
+                &vec!["ak:event:0196419b-0000-7000-8000-000000000000".to_owned()]
             );
         }
         other => panic!("expected CommitEpochAdvanced, got {other:?}"),
@@ -640,7 +640,7 @@ fn commit_epoch_in_order_succeeds() {
         501,
         "ck.mls.commit",
         json!({
-            "group_id": "ck:mls_group:abc",
+            "group_id": "ak:mls_group:abc",
             "expected_prev_epoch": 1,
             "next_epoch": 2,
             "leader_actor_id": "did:web:alice.example",
@@ -656,16 +656,16 @@ fn commit_epoch_in_order_succeeds() {
     assert_eq!(
         state
             .mls_commit_epochs
-            .get(&mls_epoch_key(&realm_scope(), "ck:mls_group:abc").unwrap())
+            .get(&mls_epoch_key(&realm_scope(), "ak:mls_group:abc").unwrap())
             .unwrap(),
         &MlsCommitEpoch {
-            group_id: "ck:mls_group:abc".to_owned(),
+            group_id: "ak:mls_group:abc".to_owned(),
             effective_scope: realm_scope(),
             epoch: 2,
             leader_actor_id: "did:web:alice.example".to_owned(),
             covered_seals: vec![
-                "ck:event:0196419b-0000-7000-8000-000000000000".to_owned(),
-                "ck:event:0196419b-0000-7000-8000-000000000001".to_owned()
+                "ak:event:0196419b-0000-7000-8000-000000000000".to_owned(),
+                "ak:event:0196419b-0000-7000-8000-000000000001".to_owned()
             ],
             committed_at: 501,
             policy_root: "sha256:2222222222222222222222222222222222222222222222222222222222222222"
@@ -681,14 +681,14 @@ fn commit_epoch_in_order_succeeds() {
 fn pending_device_revoke_requires_remove_commit_frontier() {
     let mut state = ProjectionState::default();
     initialize_genesis(&mut state);
-    let revoke_event = "ck:event:0196419b-0000-7000-8000-00000000d002";
-    let proposal_ref = "ck:event:0196419b-0000-7000-8000-00000000d003";
+    let revoke_event = "ak:event:0196419b-0000-7000-8000-00000000d002";
+    let proposal_ref = "ak:event:0196419b-0000-7000-8000-00000000d003";
     state.pending_mls_removals.push(MlsRemoveObligation {
-        realm_id: "ck:realm:0196419b-0000-7000-8000-000000000000".to_owned(),
+        realm_id: "ak:realm:0196419b-0000-7000-8000-000000000000".to_owned(),
         circle_id: None,
-        mls_group_ref: Some("ck:mls_group:abc".to_owned()),
+        mls_group_ref: Some("ak:mls_group:abc".to_owned()),
         actor_id: "did:web:alice.example".to_owned(),
-        device_id: Some("ck:device:lost".to_owned()),
+        device_id: Some("ak:device:lost".to_owned()),
         membership_frontier: vec![revoke_event.to_owned()],
         trigger_membership: "device_revoke".to_owned(),
         triggered_at: Utc.timestamp_opt(500, 0).single().unwrap(),
@@ -701,12 +701,12 @@ fn pending_device_revoke_requires_remove_commit_frontier() {
                 "ck.mls.proposal",
                 json!({
                     "event_id": proposal_ref,
-                    "mls_group_id": "ck:mls_group:abc",
+                    "mls_group_id": "ak:mls_group:abc",
                     "base_epoch": 0,
                     "proposal_type": "remove",
                     "proposal_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                     "target_principal_id": "did:web:alice.example",
-                    "target_device_id": "ck:device:lost",
+                    "target_device_id": "ak:device:lost",
                 }),
             )
         ),
@@ -719,7 +719,7 @@ fn pending_device_revoke_requires_remove_commit_frontier() {
             501,
             "ck.mls.commit",
             json!({
-                "group_id": "ck:mls_group:abc",
+                "group_id": "ak:mls_group:abc",
                 "expected_prev_epoch": 0,
                 "next_epoch": 1,
                 "leader_actor_id": "did:web:alice.example",
@@ -741,14 +741,14 @@ fn pending_device_revoke_requires_remove_commit_frontier() {
 fn remove_commit_covering_device_revoke_advances_and_clears_obligation() {
     let mut state = ProjectionState::default();
     initialize_genesis(&mut state);
-    let revoke_event = "ck:event:0196419b-0000-7000-8000-00000000d102";
-    let proposal_ref = "ck:event:0196419b-0000-7000-8000-00000000d103";
+    let revoke_event = "ak:event:0196419b-0000-7000-8000-00000000d102";
+    let proposal_ref = "ak:event:0196419b-0000-7000-8000-00000000d103";
     state.pending_mls_removals.push(MlsRemoveObligation {
-        realm_id: "ck:realm:0196419b-0000-7000-8000-000000000000".to_owned(),
+        realm_id: "ak:realm:0196419b-0000-7000-8000-000000000000".to_owned(),
         circle_id: None,
-        mls_group_ref: Some("ck:mls_group:abc".to_owned()),
+        mls_group_ref: Some("ak:mls_group:abc".to_owned()),
         actor_id: "did:web:alice.example".to_owned(),
-        device_id: Some("ck:device:lost".to_owned()),
+        device_id: Some("ak:device:lost".to_owned()),
         membership_frontier: vec![revoke_event.to_owned()],
         trigger_membership: "device_revoke".to_owned(),
         triggered_at: Utc.timestamp_opt(500, 0).single().unwrap(),
@@ -761,12 +761,12 @@ fn remove_commit_covering_device_revoke_advances_and_clears_obligation() {
                 "ck.mls.proposal",
                 json!({
                     "event_id": proposal_ref,
-                    "mls_group_id": "ck:mls_group:abc",
+                    "mls_group_id": "ak:mls_group:abc",
                     "base_epoch": 0,
                     "proposal_type": "remove",
                     "proposal_digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
                     "target_principal_id": "did:web:alice.example",
-                    "target_device_id": "ck:device:lost",
+                    "target_device_id": "ak:device:lost",
                 }),
             )
         ),
@@ -781,7 +781,7 @@ fn remove_commit_covering_device_revoke_advances_and_clears_obligation() {
             501,
             "ck.mls.commit",
             json!({
-                "group_id": "ck:mls_group:abc",
+                "group_id": "ak:mls_group:abc",
                 "expected_prev_epoch": 0,
                 "next_epoch": 1,
                 "leader_actor_id": "did:web:alice.example",
@@ -798,7 +798,7 @@ fn remove_commit_covering_device_revoke_advances_and_clears_obligation() {
     assert!(state.pending_mls_removals.is_empty());
     let row = state
         .mls_commit_epochs
-        .get(&mls_epoch_key(&realm_scope(), "ck:mls_group:abc").unwrap())
+        .get(&mls_epoch_key(&realm_scope(), "ak:mls_group:abc").unwrap())
         .unwrap();
     assert_eq!(row.epoch, 1);
     assert!(row.covered_seals.iter().any(|seal| seal == revoke_event));
@@ -813,7 +813,7 @@ fn commit_epoch_requires_covered_seals() {
             500,
             "ck.mls.commit",
             json!({
-                "group_id": "ck:mls_group:abc",
+                "group_id": "ak:mls_group:abc",
                 "expected_prev_epoch": 0,
                 "next_epoch": 1,
                 "leader_actor_id": "did:web:alice.example",
@@ -821,12 +821,12 @@ fn commit_epoch_requires_covered_seals() {
                 "governance_binding": {
                     "binding_version": 1,
                     "encoding_profile": "cbor-deterministic-rfc8949-v1",
-                    "realm_id": "ck:realm:0196419b-0000-7000-8000-000000000000",
+                    "realm_id": "ak:realm:0196419b-0000-7000-8000-000000000000",
                     "effective_scope": {
                         "kind": "realm",
-                        "realm_id": "ck:realm:0196419b-0000-7000-8000-000000000000"
+                        "realm_id": "ak:realm:0196419b-0000-7000-8000-000000000000"
                     },
-                    "mls_group_id": "ck:mls_group:abc",
+                    "mls_group_id": "ak:mls_group:abc",
                     "previous_epoch": 0,
                     "next_epoch": 1,
                     "policy_root": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
@@ -852,7 +852,7 @@ fn commit_epoch_requires_effective_genesis() {
             500,
             "ck.mls.commit",
             json!({
-                "group_id": "ck:mls_group:abc",
+                "group_id": "ak:mls_group:abc",
                 "expected_prev_epoch": 0,
                 "next_epoch": 1,
                 "leader_actor_id": "did:web:alice.example",
@@ -871,16 +871,16 @@ fn commit_epoch_requires_effective_genesis() {
 fn same_group_id_is_independent_across_effective_scopes() {
     let mut state = ProjectionState::default();
     let realm_scope = realm_scope();
-    let circle_scope = circle_scope("ck:circle:0196419b-0000-7000-8000-000000000123");
+    let circle_scope = circle_scope("ak:circle:0196419b-0000-7000-8000-000000000123");
     let realm_genesis = op_at(
         500,
         "ck.mls.genesis",
-        genesis_payload("ck:mls_group:abc", realm_scope.clone()),
+        genesis_payload("ak:mls_group:abc", realm_scope.clone()),
     );
     let circle_genesis = op_at(
         501,
         "ck.mls.genesis",
-        genesis_payload("ck:mls_group:abc", circle_scope.clone()),
+        genesis_payload("ak:mls_group:abc", circle_scope.clone()),
     );
     assert!(matches!(
         apply_group_genesis(&mut state, &realm_genesis),
@@ -895,14 +895,14 @@ fn same_group_id_is_independent_across_effective_scopes() {
         502,
         "ck.mls.commit",
         json!({
-            "group_id": "ck:mls_group:abc",
+            "group_id": "ak:mls_group:abc",
             "expected_prev_epoch": 0,
             "next_epoch": 1,
             "leader_actor_id": "did:web:alice.example",
             "commit_bytes_b64": b64(b"realm-commit"),
             "governance_binding": governance_binding_for_scope(
                 0,
-                "ck:mls_group:abc",
+                "ak:mls_group:abc",
                 realm_scope.clone()
             ),
         }),
@@ -915,7 +915,7 @@ fn same_group_id_is_independent_across_effective_scopes() {
     assert_eq!(
         state
             .mls_commit_epochs
-            .get(&mls_epoch_key(&realm_scope, "ck:mls_group:abc").unwrap())
+            .get(&mls_epoch_key(&realm_scope, "ak:mls_group:abc").unwrap())
             .unwrap()
             .epoch,
         1
@@ -923,7 +923,7 @@ fn same_group_id_is_independent_across_effective_scopes() {
     assert_eq!(
         state
             .mls_commit_epochs
-            .get(&mls_epoch_key(&circle_scope, "ck:mls_group:abc").unwrap())
+            .get(&mls_epoch_key(&circle_scope, "ak:mls_group:abc").unwrap())
             .unwrap()
             .epoch,
         0
@@ -942,7 +942,7 @@ fn commit_epoch_stale_rejected() {
             600,
             "ck.mls.commit",
             json!({
-                "group_id": "ck:mls_group:abc",
+                "group_id": "ak:mls_group:abc",
                 "expected_prev_epoch": 0,
                 "next_epoch": 1,
                 "leader_actor_id": "did:web:alice.example",
@@ -959,7 +959,7 @@ fn commit_epoch_stale_rejected() {
             601,
             "ck.mls.commit",
             json!({
-                "group_id": "ck:mls_group:abc",
+                "group_id": "ak:mls_group:abc",
                 "expected_prev_epoch": 0,
                 "next_epoch": 1,
                 "leader_actor_id": "did:web:alice.example",
@@ -978,7 +978,7 @@ fn commit_epoch_stale_rejected() {
     assert_eq!(
         state
             .mls_commit_epochs
-            .get(&mls_epoch_key(&realm_scope(), "ck:mls_group:abc").unwrap())
+            .get(&mls_epoch_key(&realm_scope(), "ak:mls_group:abc").unwrap())
             .unwrap()
             .epoch,
         1
@@ -991,7 +991,7 @@ fn commit_epoch_stale_rejected() {
             602,
             "ck.mls.commit",
             json!({
-                "group_id": "ck:mls_group:abc",
+                "group_id": "ak:mls_group:abc",
                 "expected_prev_epoch": 5,
                 "next_epoch": 6,
                 "leader_actor_id": "did:web:alice.example",
@@ -1006,7 +1006,7 @@ fn commit_epoch_stale_rejected() {
     assert_eq!(
         state
             .mls_commit_epochs
-            .get(&mls_epoch_key(&realm_scope(), "ck:mls_group:abc").unwrap())
+            .get(&mls_epoch_key(&realm_scope(), "ak:mls_group:abc").unwrap())
             .unwrap()
             .epoch,
         1
@@ -1015,7 +1015,7 @@ fn commit_epoch_stale_rejected() {
 
 fn commit_op(secs: i64, label: &[u8], extra: Value) -> Operation {
     let mut payload = json!({
-        "group_id": "ck:mls_group:abc",
+        "group_id": "ak:mls_group:abc",
         "expected_prev_epoch": 0,
         "next_epoch": 1,
         "leader_actor_id": "did:web:alice.example",
@@ -1057,7 +1057,7 @@ fn commit_rejects_policy_root_mismatch() {
     assert_eq!(
         state
             .mls_commit_epochs
-            .get(&mls_epoch_key(&realm_scope(), "ck:mls_group:abc").unwrap())
+            .get(&mls_epoch_key(&realm_scope(), "ak:mls_group:abc").unwrap())
             .unwrap()
             .epoch,
         0
@@ -1068,7 +1068,7 @@ fn commit_rejects_policy_root_mismatch() {
 fn concurrent_commits_contend_then_resolve() {
     let mut state = ProjectionState::default();
     initialize_genesis(&mut state);
-    let epoch_key = mls_epoch_key(&realm_scope(), "ck:mls_group:abc").unwrap();
+    let epoch_key = mls_epoch_key(&realm_scope(), "ak:mls_group:abc").unwrap();
 
     // First commit at base epoch 0 lands → epoch 1.
     assert!(matches!(

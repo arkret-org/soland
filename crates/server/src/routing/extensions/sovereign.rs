@@ -15,7 +15,7 @@
 //! `security` egress layer and logged with
 //! `target = "sovereign_boundary_audit"` before an HTTP client is built.
 //!
-//! Spec seal: `cokret-spec/spec/v1/zh/sync/sovereign-deployment.md`
+//! Spec seal: `arkret-spec/spec/v1/zh/sync/sovereign-deployment.md`
 //! §2 (sovereign client + trust roots), §4 (controlled collaboration
 //! Realm / enclave deployment), §5 (enclave boundary — no escape to
 //! main), §6 (network outage + audit).
@@ -144,7 +144,7 @@ fn url_host(url: &str) -> Option<String> {
 
 /// The conformance profile id soland claims on `/server/describe` when
 /// `sovereign_enclave_enabled=true`. Registered in
-/// `cokret-spec/spec/v1/artifacts/profiles/conformance-profiles.json`.
+/// `arkret-spec/spec/v1/artifacts/profiles/conformance-profiles.json`.
 pub const SOVEREIGN_ENCLAVE_PROFILE_ID: &str = "ck.profile.sovereign_enclave.v1";
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -1047,7 +1047,7 @@ async fn ingest_store_forward(
             id: operation
                 .id
                 .or(operation.operation_id)
-                .unwrap_or_else(|| "ck:operation:unknown".to_owned()),
+                .unwrap_or_else(|| "ak:operation:unknown".to_owned()),
             realm_id: realm_id.clone(),
             actor: operation.actor,
             content: operation.content,

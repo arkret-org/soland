@@ -1,6 +1,6 @@
 # Security policy
 
-soland is a reference Cokret v1 server. Several scaffold endpoints (push
+soland is a reference Arkret v1 server. Several scaffold endpoints (push
 outbound bridge, MIMI provider directory, parts of directory discovery, ...)
 return placeholder shapes today; production deployments must keep `_todos.md`
 in mind when assessing security posture.
@@ -16,7 +16,7 @@ Please **do not** open a public GitHub issue for security reports.
 
 - Preferred: open a private vulnerability report via GitHub Security Advisories
   (`Security` tab → `Report a vulnerability`).
-- Alternate: email **security@cokret.dev** with the details. PGP fingerprint
+- Alternate: email **security@arkret.dev** with the details. PGP fingerprint
   and a backup contact will be added here once available.
 
 Please include:

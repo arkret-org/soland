@@ -94,10 +94,10 @@ pub struct AccountLifecycleRecord {
     pub changed_at: chrono::DateTime<chrono::Utc>,
 }
 
-/// REC-1 (R3 spec-sync 2026-05-27, cokret-spec b47ff6ec) — accepted
+/// REC-1 (R3 spec-sync 2026-05-27, arkret-spec b47ff6ec) — accepted
 /// recovery policy snapshot persisted by `RecoveryPolicyStore`.
 ///
-/// Spec: `cokret-spec/spec/v1/artifacts/schemas/recovery-policy.schema.json`.
+/// Spec: `arkret-spec/spec/v1/artifacts/schemas/recovery-policy.schema.json`.
 #[derive(Clone, Debug)]
 pub struct RecoveryPolicyRecord {
     pub policy_id: String,
@@ -119,7 +119,7 @@ pub struct RecoveryPolicyRecord {
 
 /// REC-1 — accepted recovery receipt snapshot.
 ///
-/// Spec: `cokret-spec/spec/v1/artifacts/schemas/recovery-receipt.schema.json`.
+/// Spec: `arkret-spec/spec/v1/artifacts/schemas/recovery-receipt.schema.json`.
 #[derive(Clone, Debug)]
 pub struct RecoveryReceiptRecord {
     pub receipt_id: String,
@@ -610,7 +610,7 @@ pub struct CanonicalEventRecord {
 pub struct ProjectionEventRecord {
     pub event_id: String,
     pub realm_id: String,
-    /// Canonical Cokret event kind (e.g. `ck.message.create`).
+    /// Canonical Arkret event kind (e.g. `ck.message.create`).
     pub event_kind: String,
     pub operation_type: String,
     pub operation_id: Option<String>,

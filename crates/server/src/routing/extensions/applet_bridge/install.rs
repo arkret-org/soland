@@ -1176,7 +1176,7 @@ pub(super) fn widget_effect_for_package(package: &AppletPackage) -> InstallWidge
 
 pub(super) fn deterministic_plan_id(plan_seed: &Value) -> Result<String, AppError> {
     let digest = canonical_digest(plan_seed)?;
-    Ok(format!("ck:plan:{}", digest.trim_start_matches("sha256:")))
+    Ok(format!("ak:plan:{}", digest.trim_start_matches("sha256:")))
 }
 
 pub(super) fn canonical_digest(value: &Value) -> Result<String, AppError> {
@@ -1408,12 +1408,12 @@ mod tests {
         let registration_epoch = Hash::new(format!("sha256:{}", "11".repeat(32))).unwrap();
         let mut package = AppletPackage::new(
             "package:ck:applet:test".to_owned(),
-            "ck:applet:01974100-0000-7000-8000-000000000001".to_owned(),
+            "ak:applet:01974100-0000-7000-8000-000000000001".to_owned(),
             Did::new("did:web:test-applet.example".to_owned()).unwrap(),
             controller_did.clone(),
             "https://test-applet.example".to_owned(),
             Did::new("did:web:bot-test-applet.soland.local".to_owned()).unwrap(),
-            vec!["cokret.portal".to_owned()],
+            vec!["arkret.portal".to_owned()],
             AppletWireNamespaces {
                 handles: vec![AppletNamespaceEntry::exclusive("bridge.test".to_owned())],
                 ..Default::default()
@@ -1500,12 +1500,12 @@ mod tests {
         let registration_epoch = Hash::new(format!("sha256:{}", "11".repeat(32))).unwrap();
         AppletPackage::new(
             "package:ck:applet:test".to_owned(),
-            "ck:applet:01974100-0000-7000-8000-000000000001".to_owned(),
+            "ak:applet:01974100-0000-7000-8000-000000000001".to_owned(),
             Did::new("did:web:test-applet.example".to_owned()).unwrap(),
             Did::new("did:web:test-registry.example".to_owned()).unwrap(),
             "https://test-applet.example".to_owned(),
             Did::new("did:web:bot-test-applet.soland.local".to_owned()).unwrap(),
-            vec!["cokret.portal".to_owned()],
+            vec!["arkret.portal".to_owned()],
             AppletWireNamespaces {
                 handles: vec![AppletNamespaceEntry::exclusive("bridge.test".to_owned())],
                 ..Default::default()
@@ -1517,14 +1517,14 @@ mod tests {
     fn sample_response(package: &AppletPackage) -> InstallCommitOutcome {
         InstallCommitOutcome {
             ok: true,
-            install_id: "ck:install:01974100-0000-7000-8000-000000000001".to_owned(),
+            install_id: "ak:install:01974100-0000-7000-8000-000000000001".to_owned(),
             applet_id: package.applet_id.clone(),
-            registration_event_ref: "ck:event:01974100-0000-7000-8000-000000000010".to_owned(),
+            registration_event_ref: "ak:event:01974100-0000-7000-8000-000000000010".to_owned(),
             registration_epoch: package.registration_epoch.clone(),
             bot_actor_id: package.bot_actor_id.clone(),
             capability_grant_refs: vec![
-                "ck:grant:01974100-0000-7000-8000-000000000020".to_owned(),
-                "ck:grant:01974100-0000-7000-8000-000000000021".to_owned(),
+                "ak:grant:01974100-0000-7000-8000-000000000020".to_owned(),
+                "ak:grant:01974100-0000-7000-8000-000000000021".to_owned(),
             ],
             membership_event_refs: Vec::new(),
             e2ee_authorization_refs: Vec::new(),
@@ -1571,7 +1571,7 @@ mod tests {
             owner_actor_id: "did:web:alice.example".to_owned(),
             registry_did: package.controller_did.to_string(),
             bot_actor_id: package.bot_actor_id.to_string(),
-            portal_realm_id: "ck:realm:01974100-0000-7000-8000-000000000001".to_owned(),
+            portal_realm_id: "ak:realm:01974100-0000-7000-8000-000000000001".to_owned(),
             capabilities: vec![
                 "ck.message.create".to_owned(),
                 GHOST_PROVISION_ACTION.to_owned(),

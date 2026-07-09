@@ -174,7 +174,7 @@ pub(super) fn ghost_actor_id_for(namespace: &str, applet_id: &str, external_id: 
 pub(super) fn portal_realm_id_for(namespace: &str, applet_id: &str) -> String {
     let digest = sha256_hex(applet_id.as_bytes());
     format!(
-        "ck:realm:portal:{}:{}",
+        "ak:realm:portal:{}:{}",
         safe_token(namespace),
         &digest[..12]
     )

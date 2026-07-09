@@ -22,7 +22,7 @@ fn federation_idempotency_strict_key_changes_with_key_state_digest() {
 fn historical_only_marker_set() {
     let response = mark_response_historical_only(json!({
         "ok": true,
-        "accepted": ["ck:operation:01904100-0000-7000-8000-000000000001"]
+        "accepted": ["ak:operation:01904100-0000-7000-8000-000000000001"]
     }));
     assert_eq!(
         response.get("reason_code").and_then(Value::as_str),
@@ -44,7 +44,7 @@ fn historical_only_marker_set() {
         response
             .pointer("/original_outcome/accepted/0")
             .and_then(Value::as_str),
-        Some("ck:operation:01904100-0000-7000-8000-000000000001")
+        Some("ak:operation:01904100-0000-7000-8000-000000000001")
     );
 }
 
@@ -53,7 +53,7 @@ fn delivery_binding_stale_response_carries_new_service_and_frontier() {
     let response = delivery_binding_stale_response(
         &Did::new("did:web:bob.example").unwrap(),
         &Did::new("did:web:alice.example").unwrap(),
-        &[cokret_sdk::EventId::new("ck:event:01904100-0000-7000-8000-000000000001").unwrap()],
+        &[cokret_sdk::EventId::new("ak:event:01904100-0000-7000-8000-000000000001").unwrap()],
         json!({
             "kind": "member_delivery_binding_projection",
             "event_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -73,13 +73,13 @@ fn delivery_binding_stale_response_carries_new_service_and_frontier() {
         response
             .pointer("/error/details/handover_frontier/0")
             .and_then(Value::as_str),
-        Some("ck:event:01904100-0000-7000-8000-000000000001")
+        Some("ak:event:01904100-0000-7000-8000-000000000001")
     );
     assert_eq!(
         response
             .pointer("/error/details/handover_proof/frontier/0")
             .and_then(Value::as_str),
-        Some("ck:event:01904100-0000-7000-8000-000000000001")
+        Some("ak:event:01904100-0000-7000-8000-000000000001")
     );
     assert_eq!(
         response

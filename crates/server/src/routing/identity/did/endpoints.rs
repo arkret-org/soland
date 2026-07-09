@@ -273,12 +273,12 @@ pub struct EmbeddedWebvhRegisterOutcome {
 }
 
 #[endpoint(
-    operation_id = "org.cokret.soland.identity.webvh.register",
+    operation_id = "org.arkret.soland.identity.webvh.register",
     tags("identity"),
     summary = "Register through the embedded did:webvh provider",
     status_codes(201, 400, 401, 404, 409, 500, 503)
 )]
-#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.identity.webvh.register"))]
+#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.identity.webvh.register"))]
 pub(crate) async fn embedded_webvh_register(
     depot: &mut Depot,
     req: &mut Request,
@@ -552,12 +552,12 @@ pub struct EmbeddedWebvhRotateOutcome {
 /// (governance N-of-M) and E9.5 (recovery key) are all enforced at write time.
 /// Spec: identity-did.md §3.4 / §4.2.1 / §7 / §8 + key-management.md §3.3.
 #[endpoint(
-    operation_id = "org.cokret.soland.identity.webvh.rotate",
+    operation_id = "org.arkret.soland.identity.webvh.rotate",
     tags("identity"),
     summary = "Append a rotation entry to an embedded did:webvh history",
     status_codes(200, 400, 401, 404, 409, 422, 500, 503)
 )]
-#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.identity.webvh.rotate"))]
+#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.identity.webvh.rotate"))]
 pub(crate) async fn embedded_webvh_rotate(
     depot: &mut Depot,
     req: &mut Request,
@@ -864,13 +864,13 @@ fn identity_resolve_outcome(
 }
 
 #[endpoint(
-    operation_id = "org.cokret.soland.identity.get_path_did_document",
+    operation_id = "org.arkret.soland.identity.get_path_did_document",
     tags("identity"),
     summary = "Fetch a DID document by DID path segment"
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "org.cokret.soland.identity.get_path_did_document")
+    fields(op = "org.arkret.soland.identity.get_path_did_document")
 )]
 pub(crate) async fn identity_did_document(
     req: &mut Request,

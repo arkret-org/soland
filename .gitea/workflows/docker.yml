@@ -141,19 +141,19 @@ jobs:
         with:
           path: soland
 
-      - name: Check out Cokret Rust SDK
+      - name: Check out Arkret Rust SDK
         uses: actions/checkout@v4
         with:
-          repository: ${{ gitea.repository_owner }}/cokret-rust-sdk
-          path: cokret-rust-sdk
+          repository: ${{ gitea.repository_owner }}/arkret-rust-sdk
+          path: arkret-rust-sdk
           ref: main
           token: ${{ secrets.CI_REPO_TOKEN }}
 
-      - name: Check out Cokret Spec
+      - name: Check out Arkret Spec
         uses: actions/checkout@v4
         with:
-          repository: ${{ gitea.repository_owner }}/cokret-spec
-          path: cokret-spec
+          repository: ${{ gitea.repository_owner }}/arkret-spec
+          path: arkret-spec
           ref: main
           token: ${{ secrets.CI_REPO_TOKEN }}
 
@@ -216,8 +216,8 @@ jobs:
             --load \
             --platform linux/arm64 \
             --pull \
-            --build-context cokret-rust-sdk=cokret-rust-sdk \
-            --build-context cokret-spec=cokret-spec \
+            --build-context arkret-rust-sdk=arkret-rust-sdk \
+            --build-context arkret-spec=arkret-spec \
             "${tag_args[@]}" \
             -f soland/Dockerfile \
             soland

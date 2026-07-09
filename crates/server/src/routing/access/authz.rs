@@ -258,15 +258,15 @@ mod tests {
     fn realm_selector_uses_realm_id_as_resource() {
         let parsed = parse_authz_resource(&json!({
             "kind": "realm",
-            "realm_id": "ck:realm:01970000-0000-7000-8000-000000000001"
+            "realm_id": "ak:realm:01970000-0000-7000-8000-000000000001"
         }));
         assert_eq!(
             parsed.realm_id,
-            "ck:realm:01970000-0000-7000-8000-000000000001"
+            "ak:realm:01970000-0000-7000-8000-000000000001"
         );
         assert_eq!(
             parsed.resource,
-            "ck:realm:01970000-0000-7000-8000-000000000001"
+            "ak:realm:01970000-0000-7000-8000-000000000001"
         );
     }
 
@@ -274,16 +274,16 @@ mod tests {
     fn object_selector_uses_kind_specific_typed_id() {
         let parsed = parse_authz_resource(&json!({
             "kind": "strand",
-            "realm_id": "ck:realm:01970000-0000-7000-8000-000000000001",
-            "strand_id": "ck:strand:01970000-0000-7000-8000-000000000002"
+            "realm_id": "ak:realm:01970000-0000-7000-8000-000000000001",
+            "strand_id": "ak:strand:01970000-0000-7000-8000-000000000002"
         }));
         assert_eq!(
             parsed.realm_id,
-            "ck:realm:01970000-0000-7000-8000-000000000001"
+            "ak:realm:01970000-0000-7000-8000-000000000001"
         );
         assert_eq!(
             parsed.resource,
-            "ck:strand:01970000-0000-7000-8000-000000000002"
+            "ak:strand:01970000-0000-7000-8000-000000000002"
         );
     }
 }
@@ -559,19 +559,19 @@ fn capability_resource_selector(realm_id: &str, resource: &str) -> Value {
             "kind": "realm",
             "realm_id": realm_id,
         })
-    } else if resource == realm_id || resource.starts_with("ck:realm:") {
+    } else if resource == realm_id || resource.starts_with("ak:realm:") {
         json!({
             "kind": "realm",
             "realm_id": realm_id,
             "id": resource,
         })
-    } else if resource.starts_with("ck:circle:") {
+    } else if resource.starts_with("ak:circle:") {
         json!({
             "kind": "circle",
             "realm_id": realm_id,
             "id": resource,
         })
-    } else if resource.starts_with("ck:strand:") {
+    } else if resource.starts_with("ak:strand:") {
         json!({
             "kind": "strand",
             "realm_id": realm_id,

@@ -2,7 +2,7 @@
 //! block on `ProjectionState`; methods resolve by type, so cross-family
 //! `self.apply_*` / `self.check_*` calls are unaffected.
 //!
-//! Spec source: `cokret-spec/spec/v1/zh/models/circle.md` +
+//! Spec source: `arkret-spec/spec/v1/zh/models/circle.md` +
 //! `spec/v1/artifacts/schemas/circle.schema.json`. The six on-wire
 //! reducer-input kinds are dispatched here (the seventh,
 //! `ck.circle.seal_commit`, is reducer-derived and emitted by the
@@ -27,7 +27,7 @@ impl ProjectionState {
                 reason: "circle_create_missing_id".to_owned(),
             };
         };
-        if !circle_id.starts_with("ck:circle:") {
+        if !circle_id.starts_with("ak:circle:") {
             return ProjectionEffect::Rejected {
                 reason: "circle_create_invalid_id_prefix".to_owned(),
             };
@@ -672,14 +672,14 @@ impl ProjectionState {
         self.strands
             .get(strand_id)
             .and_then(|strand| strand.scope_circle_id.clone())
-            .filter(|scope| scope.starts_with("ck:circle:"))
+            .filter(|scope| scope.starts_with("ak:circle:"))
     }
 
     pub fn space_container_scope_circle_id(&self, space_id: &str) -> Option<String> {
         self.space_containers
             .get(space_id)
             .and_then(|space| space.scope_circle_id.clone())
-            .filter(|scope| scope.starts_with("ck:circle:"))
+            .filter(|scope| scope.starts_with("ak:circle:"))
     }
 
     /// CKP-0007 - resolve the Circle (`ck:circle:...`) a Morph is scoped to, if
@@ -688,14 +688,14 @@ impl ProjectionState {
         self.morphs
             .get(morph_id)
             .and_then(|morph| morph.scope_circle_id.clone())
-            .filter(|scope| scope.starts_with("ck:circle:"))
+            .filter(|scope| scope.starts_with("ak:circle:"))
     }
 
     pub fn relation_scope_circle_id(&self, relation_id: &str) -> Option<String> {
         self.relations
             .get(relation_id)
             .and_then(|relation| relation.scope_circle_id.clone())
-            .filter(|scope| scope.starts_with("ck:circle:"))
+            .filter(|scope| scope.starts_with("ak:circle:"))
     }
 }
 

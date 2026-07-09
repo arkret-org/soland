@@ -1090,14 +1090,14 @@ fn consent_key(holder: &str, peer: &str, scope: &str) -> ConsentCellKey {
 
 fn consent_cell_id(holder: &str, peer: &str, scope: &str) -> String {
     let digest = sha256_hex(format!("{holder}\0{peer}\0{scope}").as_bytes());
-    format!("ck:cell:ck.component.consent.grant.v1:{}", &digest[..32])
+    format!("ak:cell:ck.component.consent.grant.v1:{}", &digest[..32])
 }
 
 fn consent_cell_id_for_consent_id(consent_id: &str) -> String {
-    if consent_id.starts_with("ck:cell:") {
+    if consent_id.starts_with("ak:cell:") {
         consent_id.to_owned()
     } else {
-        format!("ck:cell:ck.component.consent.grant.v1:{consent_id}")
+        format!("ak:cell:ck.component.consent.grant.v1:{consent_id}")
     }
 }
 
@@ -1689,7 +1689,7 @@ mod tests {
         // bob grants alice an `invite`-scope contact-managed consent.
         let (grant_ref, _cell) = grant_contact_managed_consent(&state, bob, alice, "invite", now);
         assert!(
-            grant_ref.starts_with("ck:event:"),
+            grant_ref.starts_with("ak:event:"),
             "grant ref is a canonical event id: {grant_ref}"
         );
 
@@ -1714,7 +1714,7 @@ mod tests {
             &state,
             bob,
             alice,
-            "ck:event:00000000-0000-7000-8000-000000000000",
+            "ak:event:00000000-0000-7000-8000-000000000000",
             None,
             now
         ));

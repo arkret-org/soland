@@ -51,7 +51,7 @@ const AUTH_REGISTER_PATH: &str = "/_cokret/gate/account/register";
 const AUTH_SESSION_GRANTS_PATH: &str = "/_cokret/gate/account/session-grants";
 const AUTH_AGENT_KEY_PAIR_PATH: &str = "/_cokret/gate/account/agent-key-pair";
 const SOLAND_AUTH_PREFIX: &str = "/_soland/gate/auth/";
-const COKRET_PREFIX: &str = "/_cokret/";
+const ARKRET_PREFIX: &str = "/_cokret/";
 
 /// Rate limiter configuration.
 #[derive(Clone, Debug)]
@@ -181,7 +181,7 @@ impl RateLimiterConfig {
                 entry(AUTH_SESSION_GRANTS_PATH.to_owned(), self.auth_max_requests),
                 entry(AUTH_AGENT_KEY_PAIR_PATH.to_owned(), self.auth_max_requests),
                 entry(format!("{SOLAND_AUTH_PREFIX}*"), self.auth_max_requests),
-                entry(format!("{COKRET_PREFIX}*"), self.api_max_requests),
+                entry(format!("{ARKRET_PREFIX}*"), self.api_max_requests),
                 entry("*".to_owned(), self.max_requests),
             ],
             ..cokret_sdk::RateLimitPolicy::default()
@@ -225,7 +225,7 @@ impl EndpointClass {
             || path.starts_with(SOLAND_AUTH_PREFIX)
         {
             Self::Auth
-        } else if path.starts_with(COKRET_PREFIX) {
+        } else if path.starts_with(ARKRET_PREFIX) {
             Self::Api
         } else {
             Self::Other
@@ -467,7 +467,7 @@ mod tests {
             // Resolve a representative concrete path for the glob/catch-all
             // entries so we can run them through the real classifier.
             let concrete = match endpoint {
-                "*" => "/some/non-cokret/path",
+                "*" => "/some/non-arkret/path",
                 "/_cokret/*" => "/_cokret/self/account/subscribe",
                 "/_soland/gate/auth/*" => "/_soland/gate/auth/dev-login",
                 literal => literal,

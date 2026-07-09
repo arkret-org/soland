@@ -216,8 +216,8 @@ async fn resumable_chunked_upload_matches_canonical_blob_ref() {
     let canonical: Value = TestClient::post("http://server/_cokret/self/blob/upload")
         .add_header("authorization", format!("Bearer {token}"), true)
         .add_header("content-type", canonical_content_type, true)
-        .add_header("x-cokret-blob-encrypted", "true", true)
-        .add_header("x-cokret-blob-purpose", "file_transfer", true)
+        .add_header("x-arkret-blob-encrypted", "true", true)
+        .add_header("x-arkret-blob-purpose", "file_transfer", true)
         .body(canonical_body)
         .send(&app_from_state(state.clone()))
         .await
@@ -243,7 +243,7 @@ async fn resumable_upload_is_actor_scoped_and_terminable() {
     let bob = dev_token_for_device(
         state.clone(),
         "did:web:bob.example",
-        "ck:device:01904100-0000-7000-8000-b0b000000001",
+        "ak:device:01904100-0000-7000-8000-b0b000000001",
         "Bob Laptop",
     )
     .await;

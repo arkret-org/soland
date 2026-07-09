@@ -18,7 +18,7 @@ mod strand_morph;
 
 pub(super) fn make_operation(object_type: &str, realm_id: &str, payload: Value) -> Operation {
     Operation::create(
-        cokret_sdk::OperationId::new(format!("ck:operation:{}", uuid::Uuid::now_v7())).unwrap(),
+        cokret_sdk::OperationId::new(format!("ak:operation:{}", uuid::Uuid::now_v7())).unwrap(),
         cokret_sdk::RealmId::new(realm_id).unwrap(),
         object_type,
         payload,

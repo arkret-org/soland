@@ -124,11 +124,11 @@ fn required_realm_scope(req: &mut Request) -> Result<RealmId, AppError> {
 /// passing them to `req.param`; receivers MUST canonicalise via
 /// `CellRef::new` to round-trip into the projection map.
 #[endpoint(
-    operation_id = "org.cokret.soland.admin.cells.get",
+    operation_id = "org.arkret.soland.admin.cells.get",
     tags("soland-admin", "cells"),
     summary = "Get one cell's resolved state"
 )]
-#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.admin.cells.get"))]
+#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.admin.cells.get"))]
 async fn admin_get_cell(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -221,11 +221,11 @@ async fn admin_get_cell(
 ///   `admin_max_page_limit` (env `SOLAND_ADMIN_MAX_PAGE_LIMIT`, default `1000`). `offset` defaults
 ///   to `0`.
 #[endpoint(
-    operation_id = "org.cokret.soland.admin.cells.list",
+    operation_id = "org.arkret.soland.admin.cells.list",
     tags("soland-admin", "cells"),
     summary = "List cells matching a Realm + family prefix filter"
 )]
-#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.admin.cells.list"))]
+#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.admin.cells.list"))]
 async fn admin_list_cells(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -322,7 +322,7 @@ mod tests {
     #[test]
     fn state_response_value_serializes_with_value_field() {
         let cell =
-            CellRef::new("ck:cell:ck.component.member.state.v1:did.web.alice.example".to_owned())
+            CellRef::new("ak:cell:ck.component.member.state.v1:did.web.alice.example".to_owned())
                 .unwrap();
         let st = CellState::Value(json!("join"));
         let resp = state_response_from(&cell, Some(&st), "fsm", "reject");
@@ -337,7 +337,7 @@ mod tests {
     #[test]
     fn state_response_absent_state_omits_value_and_bottom() {
         let cell =
-            CellRef::new("ck:cell:ck.component.consent.grant.v1:cnt.01abc".to_owned()).unwrap();
+            CellRef::new("ak:cell:ck.component.consent.grant.v1:cnt.01abc".to_owned()).unwrap();
         let resp = state_response_from(&cell, None, "or_set", "expose");
         let v = serde_json::to_value(&resp).unwrap();
         assert_eq!(v["state"], "absent");
@@ -348,10 +348,10 @@ mod tests {
 
     #[test]
     fn parse_realm_scope_accepts_realm_id() {
-        let realm = parse_realm_scope("ck:realm:0196419b-0000-7000-8000-00000000014a").unwrap();
+        let realm = parse_realm_scope("ak:realm:0196419b-0000-7000-8000-00000000014a").unwrap();
         assert_eq!(
             realm.as_str(),
-            "ck:realm:0196419b-0000-7000-8000-00000000014a"
+            "ak:realm:0196419b-0000-7000-8000-00000000014a"
         );
     }
 }

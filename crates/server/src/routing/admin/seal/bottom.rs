@@ -124,11 +124,11 @@ fn collect_bottom_entries_for_realm(state: &AppState, realm_id: &str) -> Vec<Bot
 /// `GET /_soland/admin/realms/{realm_id}/bottom` — list bottom cells in
 /// this Realm.
 #[endpoint(
-    operation_id = "org.cokret.soland.admin.realms.bottom.list",
+    operation_id = "org.arkret.soland.admin.realms.bottom.list",
     tags("soland-admin", "bottom"),
     summary = "List Bottom cells in a Realm"
 )]
-#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.admin.realms.bottom.list"))]
+#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.admin.realms.bottom.list"))]
 pub(crate) async fn admin_list_realm_bottom(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -146,11 +146,11 @@ pub(crate) async fn admin_list_realm_bottom(
 
 /// `GET /_soland/admin/bottom` — global cross-Realm bottom entries.
 #[endpoint(
-    operation_id = "org.cokret.soland.admin.bottom.list_global",
+    operation_id = "org.arkret.soland.admin.bottom.list_global",
     tags("soland-admin", "bottom"),
     summary = "List Bottom cells across every Realm"
 )]
-#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.admin.bottom.list_global"))]
+#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.admin.bottom.list_global"))]
 pub(crate) async fn admin_list_bottom_global(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -185,11 +185,11 @@ pub(crate) async fn admin_list_bottom_global(
 /// - `Manual` is **still placeholder** — free-form effects validation + admin-scope enforcement is
 ///   non-trivial and lives behind a separate admin signer strand.
 #[endpoint(
-    operation_id = "org.cokret.soland.admin.realms.bottom.repair",
+    operation_id = "org.arkret.soland.admin.realms.bottom.repair",
     tags("soland-admin", "bottom"),
     summary = "Submit repair Move for a Bottom cell"
 )]
-#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.admin.realms.bottom.repair"))]
+#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.admin.realms.bottom.repair"))]
 pub(crate) async fn admin_repair_bottom(
     aa: AuthArgs,
     depot: &mut Depot,

@@ -3,12 +3,12 @@ use super::*;
 #[test]
 fn derive_cursor_handle_is_deterministic_and_spec_shaped() {
     let key = b"test-cursor-key-0123456789abcdef";
-    let realms = BTreeMap::from([("ck:realm:a".to_owned(), 7i64)]);
-    let account_realms = BTreeMap::from([("ck:realm:a".to_owned(), 11i64)]);
+    let realms = BTreeMap::from([("ak:realm:a".to_owned(), 7i64)]);
+    let account_realms = BTreeMap::from([("ak:realm:a".to_owned(), 11i64)]);
     let device_lists = BTreeMap::from([("did:web:alice.example".to_owned(), 13i64)]);
     let binding = stream_cursor_handle_binding(
         "did:web:alice",
-        "ck:device:1",
+        "ak:device:1",
         "did:web:host",
         "fd0",
         &realms,
@@ -40,8 +40,8 @@ fn derive_cursor_handle_excludes_devices_timestamp() {
     // mints at different wall-clock times but identical realm/to_device
     // positions yield the SAME handle (determinism / dedup).
     let key = b"test-cursor-key-0123456789abcdef";
-    let realms = BTreeMap::from([("ck:realm:a".to_owned(), 7i64)]);
-    let account_realms = BTreeMap::from([("ck:realm:a".to_owned(), 11i64)]);
+    let realms = BTreeMap::from([("ak:realm:a".to_owned(), 7i64)]);
+    let account_realms = BTreeMap::from([("ak:realm:a".to_owned(), 11i64)]);
     let device_lists = BTreeMap::from([("did:web:alice.example".to_owned(), 13i64)]);
     let a = stream_cursor_handle_binding(
         "p",
@@ -68,9 +68,9 @@ fn derive_cursor_handle_excludes_devices_timestamp() {
 
 #[test]
 fn derive_cursor_handle_separates_bindings_and_keys() {
-    let realms = BTreeMap::from([("ck:realm:a".to_owned(), 7i64)]);
-    let account_realms = BTreeMap::from([("ck:realm:a".to_owned(), 11i64)]);
-    let advanced_account_realms = BTreeMap::from([("ck:realm:a".to_owned(), 12i64)]);
+    let realms = BTreeMap::from([("ak:realm:a".to_owned(), 7i64)]);
+    let account_realms = BTreeMap::from([("ak:realm:a".to_owned(), 11i64)]);
+    let advanced_account_realms = BTreeMap::from([("ak:realm:a".to_owned(), 12i64)]);
     let device_lists = BTreeMap::from([("did:web:alice.example".to_owned(), 13i64)]);
     let advanced_device_lists = BTreeMap::from([("did:web:alice.example".to_owned(), 14i64)]);
     let base = stream_cursor_handle_binding(
@@ -159,11 +159,11 @@ fn timeline_position_disambiguates_same_second_events() {
         .with_timezone(&Utc);
     let realm_create = timestamp_position_with_tie_breaker(
         created_at,
-        "ck:event:019e507b-16b2-719a-84fd-a9319ab43a36",
+        "ak:event:019e507b-16b2-719a-84fd-a9319ab43a36",
     );
     let welcome_message = timestamp_position_with_tie_breaker(
         created_at,
-        "ck:event:019e507b-1857-73b7-9579-a00706bf0af4",
+        "ak:event:019e507b-1857-73b7-9579-a00706bf0af4",
     );
 
     assert_ne!(realm_create, welcome_message);
@@ -185,7 +185,7 @@ fn presence_record(device: &str, status: &str, updated_at: DateTime<Utc>) -> Pre
 #[test]
 fn presence_sync_event_marks_stale_online_offline() {
     let record = presence_record(
-        "ck:device:a",
+        "ak:device:a",
         "online",
         now() - ChronoDuration::seconds(PRESENCE_ONLINE_TTL_SECONDS + 1),
     );
@@ -205,7 +205,7 @@ fn presence_sync_event_marks_stale_online_offline() {
 
 #[test]
 fn presence_sync_event_hides_activity_detail_without_contact_visibility() {
-    let mut record = presence_record("ck:device:a", "dnd", now());
+    let mut record = presence_record("ak:device:a", "dnd", now());
     record.status_message = Some("in a meeting".to_owned());
     record.last_active_at = Some("2026-07-03T10:00:00Z/PT1H".to_owned());
 
@@ -224,15 +224,15 @@ fn presence_sync_event_hides_activity_detail_without_contact_visibility() {
 fn presence_aggregation_prefers_dnd_then_online_then_idle() {
     let now = now();
     let records = vec![
-        presence_record("ck:device:a", "idle", now - ChronoDuration::seconds(1)),
-        presence_record("ck:device:b", "online", now),
+        presence_record("ak:device:a", "idle", now - ChronoDuration::seconds(1)),
+        presence_record("ak:device:b", "online", now),
     ];
     let aggregated = aggregate_presence_records(&records, now).expect("aggregate");
     assert_eq!(aggregated.status, "online");
 
     let records = vec![
-        presence_record("ck:device:a", "online", now),
-        presence_record("ck:device:b", "dnd", now - ChronoDuration::seconds(1)),
+        presence_record("ak:device:a", "online", now),
+        presence_record("ak:device:b", "dnd", now - ChronoDuration::seconds(1)),
     ];
     let aggregated = aggregate_presence_records(&records, now).expect("aggregate");
     assert_eq!(aggregated.status, "dnd");
@@ -241,7 +241,7 @@ fn presence_aggregation_prefers_dnd_then_online_then_idle() {
 #[test]
 fn presence_aggregation_all_expired_projects_offline() {
     let now = now();
-    let mut record = presence_record("ck:device:a", "idle", now - ChronoDuration::seconds(120));
+    let mut record = presence_record("ak:device:a", "idle", now - ChronoDuration::seconds(120));
     record.expires_at = Some(now - ChronoDuration::seconds(30));
     let aggregated = aggregate_presence_records(&[record], now).expect("aggregate");
     assert_eq!(aggregated.status, "offline");
@@ -251,7 +251,7 @@ fn presence_aggregation_all_expired_projects_offline() {
 
 #[test]
 fn presence_sync_event_carries_status_message_for_authorized_observer() {
-    let mut record = presence_record("ck:device:a", "online", now());
+    let mut record = presence_record("ak:device:a", "online", now());
     record.status_message = Some("On vacation until May 5".to_owned());
     record.last_active_at = Some("2026-07-03T10:00:00Z/PT1H".to_owned());
 
@@ -273,7 +273,7 @@ async fn incremental_sync_includes_presence_only_for_presence_delta() {
         .presence()
         .put(PresenceRecord {
             actor: ROSTER_ACTOR.to_owned(),
-            device_id: "ck:device:01904100-0000-7000-8000-a11ce0000001".to_owned(),
+            device_id: "ak:device:01904100-0000-7000-8000-a11ce0000001".to_owned(),
             status: "dnd".to_owned(),
             status_message: Some("In a meeting".to_owned()),
             last_active_at: None,
@@ -355,7 +355,7 @@ fn test_state() -> AppState {
     AppState::new(test_config(), soland_data::Db { pool: None })
 }
 
-const ROSTER_REALM: &str = "ck:realm:01904100-0000-7000-8000-00000000a001";
+const ROSTER_REALM: &str = "ak:realm:01904100-0000-7000-8000-00000000a001";
 const ROSTER_ACTOR: &str = "did:web:alice.example";
 const ROSTER_SUBJECT: &str = "did:web:alice-principal.example";
 const ROSTER_CALLER: &str = "did:web:bob.example";
@@ -488,7 +488,7 @@ async fn projection_visibility_uses_received_at_for_joined_history_cutoff() {
         .await
         .expect("realm meta stored");
     let mut member_join = sync_test_operation_at(
-        "ck:operation:01904100-0000-7000-8000-0000000000ef",
+        "ak:operation:01904100-0000-7000-8000-0000000000ef",
         cokret_sdk::events::kinds::MEMBER_STATE,
         json!({
             "realm_id": ROSTER_REALM,
@@ -507,21 +507,21 @@ async fn projection_visibility_uses_received_at_for_joined_history_cutoff() {
         realm_id: ROSTER_REALM.to_owned(),
         event_kind: cokret_sdk::events::kinds::MLS_COMMIT.to_owned(),
         operation_type: "event".to_owned(),
-        operation_id: Some(event_id.replace("ck:event:", "ck:operation:")),
+        operation_id: Some(event_id.replace("ak:event:", "ak:operation:")),
         sender: Some(ROSTER_ACTOR.to_owned()),
         payload: json!({
             "realm_id": ROSTER_REALM,
-            "mls_group_id": "ck:mls_group:01904100-0000-7000-8000-0000000000e1"
+            "mls_group_id": "ak:mls_group:01904100-0000-7000-8000-0000000000e1"
         }),
         created_at,
         received_at,
     };
     let pre_join_event = event_at(
-        "ck:event:01904100-0000-7000-8000-0000000000e1",
+        "ak:event:01904100-0000-7000-8000-0000000000e1",
         pre_join_received_at,
     );
     let post_join_event = event_at(
-        "ck:event:01904100-0000-7000-8000-0000000000e2",
+        "ak:event:01904100-0000-7000-8000-0000000000e2",
         post_join_received_at,
     );
 
@@ -616,7 +616,7 @@ async fn sync_timeline_visibility_uses_received_at_for_joined_history_cutoff() {
         .expect("realm meta stored");
 
     let mut member_join = sync_test_operation_at(
-        "ck:operation:01904100-0000-7000-8000-0000000002ef",
+        "ak:operation:01904100-0000-7000-8000-0000000002ef",
         cokret_sdk::events::kinds::MEMBER_STATE,
         json!({
             "realm_id": ROSTER_REALM,
@@ -630,11 +630,11 @@ async fn sync_timeline_visibility_uses_received_at_for_joined_history_cutoff() {
     member_join.created_at = created_at;
     state.projection.lock().apply(&member_join, &state.hlc);
 
-    let pre_join_event_id = "ck:event:01904100-0000-7000-8000-0000000002e1";
-    let post_join_event_id = "ck:event:01904100-0000-7000-8000-0000000002e2";
+    let pre_join_event_id = "ak:event:01904100-0000-7000-8000-0000000002e1";
+    let post_join_event_id = "ak:event:01904100-0000-7000-8000-0000000002e2";
     let pre_join_payload = json!({
         "event_id": pre_join_event_id,
-        "message_id": "ck:message:01904100-0000-7000-8000-0000000002e1",
+        "message_id": "ak:message:01904100-0000-7000-8000-0000000002e1",
         "realm_id": ROSTER_REALM,
         "strand_id": strand_id,
         "thread_id": strand_id,
@@ -643,7 +643,7 @@ async fn sync_timeline_visibility_uses_received_at_for_joined_history_cutoff() {
     });
     let post_join_payload = json!({
         "event_id": post_join_event_id,
-        "message_id": "ck:message:01904100-0000-7000-8000-0000000002e2",
+        "message_id": "ak:message:01904100-0000-7000-8000-0000000002e2",
         "realm_id": ROSTER_REALM,
         "strand_id": strand_id,
         "thread_id": strand_id,
@@ -651,13 +651,13 @@ async fn sync_timeline_visibility_uses_received_at_for_joined_history_cutoff() {
         "content": {"kind": "ck.content.text", "body": "after join"}
     });
     let pre_join_message = sync_test_operation_at(
-        "ck:operation:01904100-0000-7000-8000-0000000002e1",
+        "ak:operation:01904100-0000-7000-8000-0000000002e1",
         cokret_sdk::events::kinds::MESSAGE_CREATE,
         pre_join_payload.clone(),
         created_at,
     );
     let post_join_message = sync_test_operation_at(
-        "ck:operation:01904100-0000-7000-8000-0000000002e2",
+        "ak:operation:01904100-0000-7000-8000-0000000002e2",
         cokret_sdk::events::kinds::MESSAGE_CREATE,
         post_join_payload.clone(),
         created_at,
@@ -723,7 +723,7 @@ fn insert_member_identity_subject(state: &AppState) {
         .member_identity
         .lock()
         .insert(MemberIdentityEventRecord {
-            event_id: "ck:operation:roster-identity-1".to_owned(),
+            event_id: "ak:operation:roster-identity-1".to_owned(),
             subject: MemberIdentitySubjectKey {
                 realm_id: ROSTER_REALM.to_owned(),
                 actor_id: ROSTER_ACTOR.to_owned(),
@@ -732,7 +732,7 @@ fn insert_member_identity_subject(state: &AppState) {
             payload_digest,
             replaces: Vec::new(),
             raw_event: json!({
-                "operation_id": "ck:operation:roster-identity-1",
+                "operation_id": "ak:operation:roster-identity-1",
                 "event_kind": cokret_sdk::events::kinds::MEMBER_IDENTITY_UPDATE,
                 "realm_id": ROSTER_REALM,
                 "created_at": now(),
@@ -832,8 +832,8 @@ fn member_identity_projection_stores_typed_event_id_and_matches_event_replaces()
     let state = test_state();
     let realm = ROSTER_REALM;
     let actor = ROSTER_ACTOR;
-    let first_event_id = "ck:event:01904100-0000-7000-8000-0000000000e1";
-    let second_event_id = "ck:event:01904100-0000-7000-8000-0000000000e2";
+    let first_event_id = "ak:event:01904100-0000-7000-8000-0000000000e1";
+    let second_event_id = "ak:event:01904100-0000-7000-8000-0000000000e2";
 
     let first_identity = json!({
         "member_identity": {
@@ -848,7 +848,7 @@ fn member_identity_projection_stores_typed_event_id_and_matches_event_replaces()
     // First update. Operation carries the canonical `ck:event:` id in
     // `payload.event_id`, exactly as `projection_operation_from_event` threads it.
     let first_op = Operation::create(
-        OperationId::new("ck:operation:01904100-0000-7000-8000-0000000000e1".to_owned()).unwrap(),
+        OperationId::new("ak:operation:01904100-0000-7000-8000-0000000000e1".to_owned()).unwrap(),
         RealmId::new(realm.to_owned()).unwrap(),
         cokret_sdk::events::kinds::MEMBER_IDENTITY_UPDATE,
         json!({
@@ -876,7 +876,7 @@ fn member_identity_projection_stores_typed_event_id_and_matches_event_replaces()
         }
     });
     let second_op = Operation::create(
-        OperationId::new("ck:operation:01904100-0000-7000-8000-0000000000e2".to_owned()).unwrap(),
+        OperationId::new("ak:operation:01904100-0000-7000-8000-0000000000e2".to_owned()).unwrap(),
         RealmId::new(realm.to_owned()).unwrap(),
         cokret_sdk::events::kinds::MEMBER_IDENTITY_UPDATE,
         json!({
@@ -903,7 +903,7 @@ fn member_identity_projection_stores_typed_event_id_and_matches_event_replaces()
         snapshot
             .effective_entries
             .iter()
-            .all(|entry| entry.event_id.starts_with("ck:event:")),
+            .all(|entry| entry.event_id.starts_with("ak:event:")),
         "effective entries must live in the ck:event: id space"
     );
 }
@@ -1119,11 +1119,11 @@ async fn sync_snapshot_emits_device_list_baseline_changes_and_left_principals() 
     for (actor, device_id) in [
         (
             ROSTER_ACTOR,
-            "ck:device:01904100-0000-7000-8000-0000000000a1",
+            "ak:device:01904100-0000-7000-8000-0000000000a1",
         ),
         (
             ROSTER_CALLER,
-            "ck:device:01904100-0000-7000-8000-0000000000b1",
+            "ak:device:01904100-0000-7000-8000-0000000000b1",
         ),
     ] {
         state
@@ -1264,14 +1264,14 @@ async fn sync_snapshot_emits_state_events_without_timeline_messages() {
         .persistence
         .projection_events()
         .append(crate::state::ProjectionEventRecord {
-            event_id: "ck:event:01904100-0000-7000-8000-0000000000a1".to_owned(),
+            event_id: "ak:event:01904100-0000-7000-8000-0000000000a1".to_owned(),
             realm_id: ROSTER_REALM.to_owned(),
             event_kind: cokret_sdk::events::kinds::STRAND_UPDATE.to_owned(),
             operation_type: "state".to_owned(),
-            operation_id: Some("ck:operation:01904100-0000-7000-8000-0000000000a1".to_owned()),
+            operation_id: Some("ak:operation:01904100-0000-7000-8000-0000000000a1".to_owned()),
             sender: Some(ROSTER_ACTOR.to_owned()),
             payload: json!({
-                "strand_id": "ck:strand:01904100-0000-7000-8000-0000000000a2",
+                "strand_id": "ak:strand:01904100-0000-7000-8000-0000000000a2",
                 "patch": {"synthesis": {"$op": "set", "value": "first"}}
             }),
             created_at: first_created_at,
@@ -1304,14 +1304,14 @@ async fn sync_snapshot_emits_state_events_without_timeline_messages() {
         .persistence
         .projection_events()
         .append(crate::state::ProjectionEventRecord {
-            event_id: "ck:event:01904100-0000-7000-8000-0000000000b1".to_owned(),
+            event_id: "ak:event:01904100-0000-7000-8000-0000000000b1".to_owned(),
             realm_id: ROSTER_REALM.to_owned(),
             event_kind: cokret_sdk::events::kinds::STRAND_UPDATE.to_owned(),
             operation_type: "state".to_owned(),
-            operation_id: Some("ck:operation:01904100-0000-7000-8000-0000000000b1".to_owned()),
+            operation_id: Some("ak:operation:01904100-0000-7000-8000-0000000000b1".to_owned()),
             sender: Some(ROSTER_CALLER.to_owned()),
             payload: json!({
-                "strand_id": "ck:strand:01904100-0000-7000-8000-0000000000a2",
+                "strand_id": "ak:strand:01904100-0000-7000-8000-0000000000a2",
                 "patch": {"synthesis": {"$op": "set", "value": "first\n\n---\n\nsecond"}}
             }),
             created_at: second_created_at,
@@ -1355,13 +1355,13 @@ async fn sync_snapshot_includes_shared_pin_events_for_joined_member() {
     let state = AppState::new(config, soland_data::Db { pool: None });
     let session = roster_session(&state, ROSTER_CALLER);
     let strand_id = strand_id_from_realm_id(ROSTER_REALM);
-    let message_event_id = "ck:event:01904100-0000-7000-8000-0000000000d1";
-    let message_id = "ck:message:01904100-0000-7000-8000-0000000000d1";
+    let message_event_id = "ak:event:01904100-0000-7000-8000-0000000000d1";
+    let message_id = "ak:message:01904100-0000-7000-8000-0000000000d1";
     let base = DateTime::parse_from_rfc3339("2026-06-24T10:00:00Z")
         .unwrap()
         .with_timezone(&Utc);
     let realm_create = sync_test_operation_at(
-        "ck:operation:01904100-0000-7000-8000-0000000000c1",
+        "ak:operation:01904100-0000-7000-8000-0000000000c1",
         cokret_sdk::events::kinds::REALM_CREATE,
         json!({
             "object": {
@@ -1376,7 +1376,7 @@ async fn sync_snapshot_includes_shared_pin_events_for_joined_member() {
         base,
     );
     let member_join = sync_test_operation_at(
-        "ck:operation:01904100-0000-7000-8000-0000000000c2",
+        "ak:operation:01904100-0000-7000-8000-0000000000c2",
         cokret_sdk::events::kinds::MEMBER_STATE,
         json!({
             "realm_id": ROSTER_REALM,
@@ -1388,7 +1388,7 @@ async fn sync_snapshot_includes_shared_pin_events_for_joined_member() {
         base + ChronoDuration::seconds(1),
     );
     let strand_create = sync_test_operation_at(
-        "ck:operation:01904100-0000-7000-8000-0000000000c3",
+        "ak:operation:01904100-0000-7000-8000-0000000000c3",
         cokret_sdk::events::kinds::STRAND_CREATE,
         json!({
             "object": {
@@ -1401,7 +1401,7 @@ async fn sync_snapshot_includes_shared_pin_events_for_joined_member() {
         base + ChronoDuration::seconds(2),
     );
     let message_create = sync_test_operation_at(
-        "ck:operation:01904100-0000-7000-8000-0000000000c4",
+        "ak:operation:01904100-0000-7000-8000-0000000000c4",
         cokret_sdk::events::kinds::MESSAGE_CREATE,
         json!({
             "event_id": message_event_id,
@@ -1436,10 +1436,10 @@ async fn sync_snapshot_includes_shared_pin_events_for_joined_member() {
     .expect("initial cursor parses");
 
     let pin_add = sync_test_operation_at(
-        "ck:operation:01904100-0000-7000-8000-0000000000c5",
+        "ak:operation:01904100-0000-7000-8000-0000000000c5",
         cokret_sdk::events::kinds::PIN_ADD,
         json!({
-            "event_id": "ck:event:01904100-0000-7000-8000-0000000000d5",
+            "event_id": "ak:event:01904100-0000-7000-8000-0000000000d5",
             "pin_scope": {"kind": "strand", "id": strand_id},
             "target_ref": message_id,
             "rank": "r1",
@@ -1483,15 +1483,15 @@ async fn sync_timeline_dedupes_redacted_revision_by_message_id() {
     let state = AppState::new(config, soland_data::Db { pool: None });
     let session = roster_session(&state, ROSTER_CALLER);
     let strand_id = strand_id_from_realm_id(ROSTER_REALM);
-    let message_event_id = "ck:event:01904100-0000-7000-8000-0000000001d1";
-    let revision_event_id = "ck:event:01904100-0000-7000-8000-0000000001d2";
-    let redaction_event_id = "ck:event:01904100-0000-7000-8000-0000000001d3";
-    let message_id = "ck:message:01904100-0000-7000-8000-0000000001d1";
+    let message_event_id = "ak:event:01904100-0000-7000-8000-0000000001d1";
+    let revision_event_id = "ak:event:01904100-0000-7000-8000-0000000001d2";
+    let redaction_event_id = "ak:event:01904100-0000-7000-8000-0000000001d3";
+    let message_id = "ak:message:01904100-0000-7000-8000-0000000001d1";
     let base = DateTime::parse_from_rfc3339("2026-06-24T11:00:00Z")
         .unwrap()
         .with_timezone(&Utc);
     let realm_create = sync_test_operation_at(
-        "ck:operation:01904100-0000-7000-8000-0000000001c1",
+        "ak:operation:01904100-0000-7000-8000-0000000001c1",
         cokret_sdk::events::kinds::REALM_CREATE,
         json!({
             "object": {
@@ -1506,7 +1506,7 @@ async fn sync_timeline_dedupes_redacted_revision_by_message_id() {
         base,
     );
     let member_join = sync_test_operation_at(
-        "ck:operation:01904100-0000-7000-8000-0000000001c2",
+        "ak:operation:01904100-0000-7000-8000-0000000001c2",
         cokret_sdk::events::kinds::MEMBER_STATE,
         json!({
             "realm_id": ROSTER_REALM,
@@ -1518,7 +1518,7 @@ async fn sync_timeline_dedupes_redacted_revision_by_message_id() {
         base + ChronoDuration::seconds(1),
     );
     let strand_create = sync_test_operation_at(
-        "ck:operation:01904100-0000-7000-8000-0000000001c3",
+        "ak:operation:01904100-0000-7000-8000-0000000001c3",
         cokret_sdk::events::kinds::STRAND_CREATE,
         json!({
             "object": {
@@ -1531,7 +1531,7 @@ async fn sync_timeline_dedupes_redacted_revision_by_message_id() {
         base + ChronoDuration::seconds(2),
     );
     let message_create = sync_test_operation_at(
-        "ck:operation:01904100-0000-7000-8000-0000000001c4",
+        "ak:operation:01904100-0000-7000-8000-0000000001c4",
         cokret_sdk::events::kinds::MESSAGE_CREATE,
         json!({
             "event_id": message_event_id,
@@ -1545,7 +1545,7 @@ async fn sync_timeline_dedupes_redacted_revision_by_message_id() {
         base + ChronoDuration::seconds(3),
     );
     let message_revise = sync_test_operation_at(
-        "ck:operation:01904100-0000-7000-8000-0000000001c5",
+        "ak:operation:01904100-0000-7000-8000-0000000001c5",
         cokret_sdk::events::kinds::MESSAGE_REVISE,
         json!({
             "event_id": revision_event_id,
@@ -1559,7 +1559,7 @@ async fn sync_timeline_dedupes_redacted_revision_by_message_id() {
         base + ChronoDuration::seconds(4),
     );
     let message_redact = sync_test_operation_at(
-        "ck:operation:01904100-0000-7000-8000-0000000001c6",
+        "ak:operation:01904100-0000-7000-8000-0000000001c6",
         cokret_sdk::events::kinds::MESSAGE_REDACT,
         json!({
             "event_id": redaction_event_id,
@@ -1719,7 +1719,7 @@ async fn events_query_cursor_rejects_bare_event_id_cursor() {
     let state = test_state();
     let now_ms = chrono::Utc::now().timestamp_millis();
     let error = parse_and_validate_events_query_cursor(
-        "ck:event:01904100-0000-7000-8000-0000000000e1",
+        "ak:event:01904100-0000-7000-8000-0000000000e1",
         &state,
         None,
         "digest-a",
@@ -1730,7 +1730,7 @@ async fn events_query_cursor_rejects_bare_event_id_cursor() {
 
     match error {
         SyncCursorError::Invalid(message) => {
-            assert!(message.contains("ck:cursor"));
+            assert!(message.contains("ak:cursor"));
         }
         other => panic!("expected invalid cursor shape, got {other:?}"),
     }
@@ -1754,7 +1754,7 @@ async fn events_query_cursor_uses_stream_purpose_and_binds_filter_digest() {
         "filters": {"kind": "ck.message.create"},
         "order": "default",
     })));
-    let event_id = "ck:event:01904100-0000-7000-8000-0000000000e1";
+    let event_id = "ak:event:01904100-0000-7000-8000-0000000000e1";
     let token = sync_token_for_events_query(&state, Some(&session), &filter_a, event_id).await;
     let now_ms = chrono::Utc::now().timestamp_millis();
     let token_value = decode_sync_cursor_value(&token).expect("events query cursor decodes");
@@ -1799,14 +1799,14 @@ async fn events_query_cursor_uses_stream_purpose_and_binds_filter_digest() {
 #[test]
 fn sync_filter_digest_normalizes_account_filter_collections() {
     let filter_a = json!({
-        "realms": ["ck:realm:b", "ck:realm:a", "ck:realm:a"],
+        "realms": ["ak:realm:b", "ak:realm:a", "ak:realm:a"],
         "event_types": ["ck.reaction.add", "ck.message.create", "ck.message.create"],
         "not_event_types": ["ck.redaction", "ck.audit.accessed"],
         "lazy_load_members": false,
         "include_redundant_members": false
     });
     let filter_b = json!({
-        "realms": ["ck:realm:a", "ck:realm:b"],
+        "realms": ["ak:realm:a", "ak:realm:b"],
         "event_types": ["ck.message.create", "ck.reaction.add"],
         "not_event_types": ["ck.audit.accessed", "ck.redaction"]
     });
@@ -1816,7 +1816,7 @@ fn sync_filter_digest_normalizes_account_filter_collections() {
     );
 
     let narrowed = json!({
-        "realms": ["ck:realm:a", "ck:realm:b"],
+        "realms": ["ak:realm:a", "ak:realm:b"],
         "event_types": ["ck.message.create"],
         "not_event_types": ["ck.audit.accessed", "ck.redaction"]
     });
@@ -1830,7 +1830,7 @@ fn sync_filter_digest_normalizes_account_filter_collections() {
 fn sync_filter_digest_normalizes_events_query_scope_collections() {
     let scope_a = json!({
         "operation_id": "ck.self.events.query.scan",
-        "realms": ["ck:realm:b", "ck:realm:a", "ck:realm:a"],
+        "realms": ["ak:realm:b", "ak:realm:a", "ak:realm:a"],
         "actors": ["did:web:bob.example", "did:web:alice.example"],
         "filters": {
             "kind": ["ck.reaction.add", "ck.message.create", "ck.message.create"],
@@ -1840,7 +1840,7 @@ fn sync_filter_digest_normalizes_events_query_scope_collections() {
     });
     let scope_b = json!({
         "operation_id": "ck.self.events.query.scan",
-        "realms": ["ck:realm:a", "ck:realm:b"],
+        "realms": ["ak:realm:a", "ak:realm:b"],
         "actors": ["did:web:alice.example", "did:web:bob.example"],
         "filters": {
             "kind": ["ck.message.create", "ck.reaction.add"],
@@ -1855,7 +1855,7 @@ fn sync_filter_digest_normalizes_events_query_scope_collections() {
 
     let different_order = json!({
         "operation_id": "ck.self.events.query.scan",
-        "realms": ["ck:realm:a", "ck:realm:b"],
+        "realms": ["ak:realm:a", "ak:realm:b"],
         "actors": ["did:web:alice.example", "did:web:bob.example"],
         "filters": {
             "kind": ["ck.message.create", "ck.reaction.add"],
@@ -1873,7 +1873,7 @@ fn sync_filter_digest_normalizes_events_query_scope_collections() {
 async fn unchanged_frontier_remints_same_handle_and_advance_keeps_old_token_valid() {
     let state = test_state();
     let session = roster_session(&state, "did:web:alice.example");
-    let positions = BTreeMap::from([("ck:realm:dedup-test".to_owned(), 7i64)]);
+    let positions = BTreeMap::from([("ak:realm:dedup-test".to_owned(), 7i64)]);
     let now_ms = chrono::Utc::now().timestamp_millis();
 
     let first = sync_token_for_client_sync(
@@ -1936,7 +1936,7 @@ async fn unchanged_frontier_remints_same_handle_and_advance_keeps_old_token_vali
 async fn presenting_a_cursor_prunes_strictly_older_stream_handles() {
     let state = test_state();
     let session = roster_session(&state, "did:web:alice.example");
-    let positions = BTreeMap::from([("ck:realm:prune-test".to_owned(), 1i64)]);
+    let positions = BTreeMap::from([("ak:realm:prune-test".to_owned(), 1i64)]);
     let now_ms = chrono::Utc::now().timestamp_millis();
 
     let old_token = sync_token_for_client_sync(
@@ -1998,7 +1998,7 @@ async fn revoked_cursor_returns_revoked_error() {
         &state,
         None,
         None,
-        BTreeMap::from([("ck:realm:revoke-test".to_owned(), 3)]),
+        BTreeMap::from([("ak:realm:revoke-test".to_owned(), 3)]),
         BTreeMap::new(),
         BTreeMap::new(),
         5,
@@ -2038,7 +2038,7 @@ async fn expired_revocation_entry_is_pruned_and_does_not_block() {
         &state,
         None,
         None,
-        BTreeMap::from([("ck:realm:revoke-gc".to_owned(), 1)]),
+        BTreeMap::from([("ak:realm:revoke-gc".to_owned(), 1)]),
         BTreeMap::new(),
         BTreeMap::new(),
         0,

@@ -113,7 +113,7 @@ pub(super) fn cba_effect_cell_family(effect: &Value) -> Result<&str, EventValida
             "effects[] entries require cell",
         )
     })?;
-    let Some(rest) = cell.strip_prefix("ck:cell:") else {
+    let Some(rest) = cell.strip_prefix("ak:cell:") else {
         return Err(event_validation_error(
             StatusCode::BAD_REQUEST,
             "schema_violation",
@@ -228,10 +228,10 @@ pub(super) fn actor_device_id_from_verification_method(
         .map(str::trim)
         .filter(|fragment| !fragment.is_empty())
         .map(|fragment| {
-            if fragment.starts_with("ck:device:") {
+            if fragment.starts_with("ak:device:") {
                 fragment.to_owned()
             } else {
-                format!("ck:device:{fragment}")
+                format!("ak:device:{fragment}")
             }
         })
 }

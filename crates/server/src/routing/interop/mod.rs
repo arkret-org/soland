@@ -46,7 +46,7 @@ pub fn protocol_router() -> Router {
                 .push(blob_resumable::router())
                 .push(moderation::protocol_router()),
         )
-        // `open` — non-Cokret external vendor interop (MIMI).
+        // `open` — non-Arkret external vendor interop (MIMI).
         .push(Router::with_path("open").push(mimi::router()))
 }
 

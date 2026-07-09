@@ -751,10 +751,10 @@ mod received_at_stamp_tests {
     fn operation_for_kind(kind: &str, suffix: u32) -> Operation {
         Operation::create(
             OperationId::new(format!(
-                "ck:operation:01904100-0000-7000-8000-{suffix:012x}"
+                "ak:operation:01904100-0000-7000-8000-{suffix:012x}"
             ))
             .unwrap(),
-            RealmId::new("ck:realm:01904100-0000-7000-8000-000000000001".to_owned()).unwrap(),
+            RealmId::new("ak:realm:01904100-0000-7000-8000-000000000001".to_owned()).unwrap(),
             kind,
             json!({ "actor_id": "did:web:alice.example" }),
         )
@@ -797,7 +797,7 @@ mod federation_delivery_binding_tests {
     use super::*;
 
     fn event_id(suffix: u32) -> EventId {
-        EventId::new(format!("ck:event:01904100-0000-7000-8000-{suffix:012x}")).unwrap()
+        EventId::new(format!("ak:event:01904100-0000-7000-8000-{suffix:012x}")).unwrap()
     }
 
     fn member_view(
@@ -808,7 +808,7 @@ mod federation_delivery_binding_tests {
     ) -> DeliveryBindingMemberView {
         DeliveryBindingMemberView {
             member: actor.to_owned(),
-            realm_id: "ck:realm:01904100-0000-7000-8000-000000000001".to_owned(),
+            realm_id: "ak:realm:01904100-0000-7000-8000-000000000001".to_owned(),
             recipient_service_did: recipient_service_did.to_owned(),
             membership_event_ref: Some(frontier.as_str().to_owned()),
             delivery_binding_frontier_ref: frontier.as_str().to_owned(),

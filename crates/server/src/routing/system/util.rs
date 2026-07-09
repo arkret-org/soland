@@ -19,7 +19,7 @@ use salvo::prelude::*;
 use crate::ids;
 // ── HTTP helpers ────────────────────────────────────────────────────────────
 
-/// Render a Cokret-shaped error envelope and stamp the response status.
+/// Render a Arkret-shaped error envelope and stamp the response status.
 ///
 /// Produces the spec-canonical SDK envelope:
 /// `{"ok": false, "error": {"code": <code>, "message": <message>},
@@ -206,7 +206,7 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
 /// `{v,purpose,t,x,h}`. Core cursors do not carry inline positions or
 /// stateless integrity material.
 pub fn is_valid_sync_token(token: &str) -> bool {
-    let Some(encoded) = token.strip_prefix("ck:cursor:") else {
+    let Some(encoded) = token.strip_prefix("ak:cursor:") else {
         return false;
     };
     let Ok(bytes) = URL_SAFE_NO_PAD.decode(encoded) else {
@@ -303,7 +303,7 @@ pub fn handle_for_did(did: &str) -> String {
 
 // ── Discoverability validator ───────────────────────────────────────────────
 //
-// (The `entity` abstraction never landed in `cokret-spec/v1`; typed
+// (The `entity` abstraction never landed in `arkret-spec/v1`; typed
 // objects in the protocol are `ck:space:` / `ck:strand:` / `ck:morph:` /
 // `ck:relation:` / `ck:view:`, each driven by its own dedicated event
 // kind.)

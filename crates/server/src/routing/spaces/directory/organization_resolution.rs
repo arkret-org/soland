@@ -105,7 +105,7 @@ pub(super) async fn resolve_organization(
     let matches_handle = body
         .handle
         .as_deref()
-        .is_some_and(|handle| handle.eq_ignore_ascii_case("@cokret-demo"));
+        .is_some_and(|handle| handle.eq_ignore_ascii_case("@arkret-demo"));
     if !matches_id && !matches_handle {
         return Err(AppError::not_found("not found"));
     }

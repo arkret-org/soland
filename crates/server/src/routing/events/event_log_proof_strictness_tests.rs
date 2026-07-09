@@ -34,7 +34,7 @@ fn session() -> SessionRecord {
     SessionRecord {
         token_hash: "hash".to_owned(),
         actor: "did:web:alice.example".to_owned(),
-        device_id: "ck:device:01904100-0000-7000-8000-a11ce0000001".to_owned(),
+        device_id: "ak:device:01904100-0000-7000-8000-a11ce0000001".to_owned(),
         audience: "did:web:soland.local".to_owned(),
         session_public_key: None,
         agent_session: None,
@@ -82,7 +82,7 @@ fn signed_member_identity_payload(signing_key: &ed25519_dalek::SigningKey) -> (S
     let did_key_fragment = did.strip_prefix("did:key:").expect("did:key prefix");
     let verification_method = format!("{did}#{did_key_fragment}");
     let realm_id =
-        cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-a11ce0000001".to_owned())
+        cokret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-a11ce0000001".to_owned())
             .unwrap();
     let actor_id = cokret_sdk::Did::new(did.clone()).unwrap();
     let subject_id = actor_id.clone();
@@ -163,7 +163,7 @@ async fn member_identity_unsupported_signature_algorithm_is_422() {
 async fn member_identity_encrypted_payload_is_unsupported_fail_closed() {
     let state = make_state(false);
     let payload = json!({
-        "realm_id": "ck:realm:01904100-0000-7000-8000-a11ce0000001",
+        "realm_id": "ak:realm:01904100-0000-7000-8000-a11ce0000001",
         "actor_id": "did:key:z6MkeTG3bFFSLYVU7VqhgZxqr6YzpaGrQtFMh1uvqGy1vDnP",
         "segment": "member_identity",
         "identity_payload": {
@@ -250,7 +250,7 @@ fn declared_required_feature_is_accepted() {
 #[tokio::test]
 async fn policy_components_media_plaintext_reads_realm_meta() {
     let state = make_state(true);
-    let realm_id = "ck:realm:01904100-0000-7000-8000-a11ce0000001";
+    let realm_id = "ak:realm:01904100-0000-7000-8000-a11ce0000001";
     let now = chrono::Utc::now();
     state
         .persistence
@@ -297,7 +297,7 @@ async fn minimal_metadata_realm_rejects_non_hidden_aad() {
     // SEC-08 — a minimal-metadata Realm rejects an encrypted message whose
     // aad_visibility_event_id is not `hidden`, and accepts `hidden`.
     let state = make_state(true);
-    let realm_id = "ck:realm:01904100-0000-7000-8000-a11ce0000002";
+    let realm_id = "ak:realm:01904100-0000-7000-8000-a11ce0000002";
     let now = chrono::Utc::now();
     state
         .persistence
@@ -328,7 +328,7 @@ async fn minimal_metadata_realm_rejects_non_hidden_aad() {
 
     let encrypted_envelope = |visibility: &str| {
         json!({
-            "strand_id": "ck:strand:01904100-0000-7000-8000-000000000001",
+            "strand_id": "ak:strand:01904100-0000-7000-8000-000000000001",
             "track_name": "main",
             "encrypted_content": {
                 "scheme": "mls-rfc9420",
@@ -353,7 +353,7 @@ async fn minimal_metadata_realm_rejects_non_hidden_aad() {
     };
     let message_op = |payload: serde_json::Value| {
         cokret_sdk::Operation::create(
-            cokret_sdk::OperationId::new("ck:operation:01904100-0000-7000-8000-57d7d85564c5")
+            cokret_sdk::OperationId::new("ak:operation:01904100-0000-7000-8000-57d7d85564c5")
                 .unwrap(),
             cokret_sdk::RealmId::new(realm_id.to_owned()).unwrap(),
             cokret_sdk::events::kinds::MESSAGE_CREATE,
@@ -396,8 +396,8 @@ async fn circle_scoped_write_requires_circle_membership() {
     // Regression guard for the gap where a Realm-wide grant (notably an Applet
     // bot / Ghost Actor) could inject content into a Circle it never joined.
     let state = make_state(true);
-    let realm_id = "ck:realm:01904100-0000-7000-8000-c1c1e0000001";
-    let circle_id = "ck:circle:01904100-0000-7000-8000-c1c1e0000002";
+    let realm_id = "ak:realm:01904100-0000-7000-8000-c1c1e0000001";
+    let circle_id = "ak:circle:01904100-0000-7000-8000-c1c1e0000002";
     let member = "did:web:alice.example";
     // An Applet bot that holds a Realm-wide grant but never joined the Circle.
     let non_member = "did:web:slack-bridge.example:bot";
@@ -433,14 +433,14 @@ async fn circle_scoped_write_requires_circle_membership() {
 
     let strand_create = |sender: &str, scope: Option<&str>| {
         let mut object = json!({
-            "id": "ck:strand:01904100-0000-7000-8000-000000000abc",
+            "id": "ak:strand:01904100-0000-7000-8000-000000000abc",
             "metadata": {"title": "t"}
         });
         if let Some(scope) = scope {
             object["scope_circle_id"] = json!(scope);
         }
         cokret_sdk::Operation::create(
-            cokret_sdk::OperationId::new("ck:operation:01904100-0000-7000-8000-57d7d8550abc")
+            cokret_sdk::OperationId::new("ak:operation:01904100-0000-7000-8000-57d7d8550abc")
                 .unwrap(),
             cokret_sdk::RealmId::new(realm_id.to_owned()).unwrap(),
             cokret_sdk::events::kinds::STRAND_CREATE,
@@ -479,10 +479,10 @@ async fn circle_scoped_reaction_requires_circle_membership() {
     // circle.md §8 — a reaction is a write into the target Message's Strand
     // scope, so reacting to a Circle message requires Circle membership too.
     let state = make_state(true);
-    let realm_id = "ck:realm:01904100-0000-7000-8000-c2c2e0000001";
-    let circle_id = "ck:circle:01904100-0000-7000-8000-c2c2e0000002";
-    let strand_id = "ck:strand:01904100-0000-7000-8000-c2c2e0000003";
-    let event_id = "ck:event:01904100-0000-7000-8000-c2c2e0000004";
+    let realm_id = "ak:realm:01904100-0000-7000-8000-c2c2e0000001";
+    let circle_id = "ak:circle:01904100-0000-7000-8000-c2c2e0000002";
+    let strand_id = "ak:strand:01904100-0000-7000-8000-c2c2e0000003";
+    let event_id = "ak:event:01904100-0000-7000-8000-c2c2e0000004";
     let member = "did:web:alice.example";
     let non_member = "did:web:slack-bridge.example:bot";
     let now = chrono::Utc::now();
@@ -546,7 +546,7 @@ async fn circle_scoped_reaction_requires_circle_membership() {
                 content: json!({}),
                 expiry: None,
                 encrypted: false,
-                operation_id: "ck:operation:01904100-0000-7000-8000-c2c2e0000005".to_owned(),
+                operation_id: "ak:operation:01904100-0000-7000-8000-c2c2e0000005".to_owned(),
                 created_at: now,
                 history_basis_seals: Vec::new(),
                 revision_of: None,
@@ -557,7 +557,7 @@ async fn circle_scoped_reaction_requires_circle_membership() {
 
     let reaction = |sender: &str| {
         cokret_sdk::Operation::create(
-            cokret_sdk::OperationId::new("ck:operation:01904100-0000-7000-8000-c2c2e000000a")
+            cokret_sdk::OperationId::new("ak:operation:01904100-0000-7000-8000-c2c2e000000a")
                 .unwrap(),
             cokret_sdk::RealmId::new(realm_id.to_owned()).unwrap(),
             cokret_sdk::events::kinds::REACTION_ADD,
@@ -583,10 +583,10 @@ async fn circle_scoped_morph_update_requires_circle_membership() {
     // scope. A Realm-wide grant is insufficient when the Morph was created
     // under a Circle scope.
     let state = make_state(true);
-    let realm_id = "ck:realm:01904100-0000-7000-8000-c3c3e0000001";
-    let circle_id = "ck:circle:01904100-0000-7000-8000-c3c3e0000002";
-    let scoped_morph_id = "ck:morph:01904100-0000-7000-8000-c3c3e0000003";
-    let realm_morph_id = "ck:morph:01904100-0000-7000-8000-c3c3e0000004";
+    let realm_id = "ak:realm:01904100-0000-7000-8000-c3c3e0000001";
+    let circle_id = "ak:circle:01904100-0000-7000-8000-c3c3e0000002";
+    let scoped_morph_id = "ak:morph:01904100-0000-7000-8000-c3c3e0000003";
+    let realm_morph_id = "ak:morph:01904100-0000-7000-8000-c3c3e0000004";
     let member = "did:web:alice.example";
     let non_member = "did:web:slack-bridge.example:bot";
     let now = chrono::Utc::now();
@@ -646,7 +646,7 @@ async fn circle_scoped_morph_update_requires_circle_membership() {
 
     let morph_update = |sender: &str, morph_id: &str| {
         cokret_sdk::Operation::create(
-            cokret_sdk::OperationId::new("ck:operation:01904100-0000-7000-8000-c3c3e000000a")
+            cokret_sdk::OperationId::new("ak:operation:01904100-0000-7000-8000-c3c3e000000a")
                 .unwrap(),
             cokret_sdk::RealmId::new(realm_id.to_owned()).unwrap(),
             cokret_sdk::events::kinds::MORPH_UPDATE,
@@ -690,7 +690,7 @@ async fn applet_registration_requires_realm_admin() {
     // its own — this gate closes that bypass. The Realm owner may register; an
     // outsider without `ck.realm.admin` may not.
     let state = make_state(true);
-    let realm_id = "ck:realm:01904100-0000-7000-8000-a99e70000001";
+    let realm_id = "ak:realm:01904100-0000-7000-8000-a99e70000001";
     let owner = "did:web:alice.example";
     let outsider = "did:web:mallory.example";
     let now = chrono::Utc::now();
@@ -723,13 +723,13 @@ async fn applet_registration_requires_realm_admin() {
 
     let registration = |sender: &str| {
         cokret_sdk::Operation::create(
-            cokret_sdk::OperationId::new("ck:operation:01904100-0000-7000-8000-57d7d855a99e")
+            cokret_sdk::OperationId::new("ak:operation:01904100-0000-7000-8000-57d7d855a99e")
                 .unwrap(),
             cokret_sdk::RealmId::new(realm_id.to_owned()).unwrap(),
             cokret_sdk::events::kinds::APPLET_REGISTRATION,
             json!({
                 "sender": sender,
-                "applet_id": "ck:applet:01904100-0000-7000-8000-000000000a01",
+                "applet_id": "ak:applet:01904100-0000-7000-8000-000000000a01",
                 "service_did": "did:web:slack-bridge.example",
                 "namespace": "slack",
             }),
@@ -754,7 +754,7 @@ async fn non_minimal_metadata_realm_allows_any_aad() {
     // SEC-08 — a Realm that did not declare the profile is unaffected: a
     // non-hidden aad encrypted message passes this gate.
     let state = make_state(true);
-    let realm_id = "ck:realm:01904100-0000-7000-8000-a11ce0000003";
+    let realm_id = "ak:realm:01904100-0000-7000-8000-a11ce0000003";
     let now = chrono::Utc::now();
     state
         .persistence
@@ -784,11 +784,11 @@ async fn non_minimal_metadata_realm_allows_any_aad() {
         .unwrap();
 
     let op = cokret_sdk::Operation::create(
-        cokret_sdk::OperationId::new("ck:operation:01904100-0000-7000-8000-57d7d85564c6").unwrap(),
+        cokret_sdk::OperationId::new("ak:operation:01904100-0000-7000-8000-57d7d85564c6").unwrap(),
         cokret_sdk::RealmId::new(realm_id.to_owned()).unwrap(),
         cokret_sdk::events::kinds::MESSAGE_CREATE,
         json!({
-            "strand_id": "ck:strand:01904100-0000-7000-8000-000000000001",
+            "strand_id": "ak:strand:01904100-0000-7000-8000-000000000001",
             "track_name": "main",
             "encrypted_content": {
                 "scheme": "mls-rfc9420",
@@ -820,13 +820,13 @@ async fn non_minimal_metadata_realm_allows_any_aad() {
 #[test]
 fn policy_components_mls_governance_reads_projection_cell() {
     let state = make_state(true);
-    let realm_id = "ck:realm:01904100-0000-7000-8000-a11ce0000001";
+    let realm_id = "ak:realm:01904100-0000-7000-8000-a11ce0000001";
     let policy_root = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     {
         let mut projection = state.projection.lock();
         projection.cells.insert(
             cokret_sdk::CellRef::new(
-                "ck:cell:ck.component.mls.epoch.v1:ck:mls_group:unit-test".to_owned(),
+                "ak:cell:ck.component.mls.epoch.v1:ck:mls_group:unit-test".to_owned(),
             )
             .unwrap(),
             cokret_sdk::lattice::CellState::Value(json!({
@@ -914,11 +914,11 @@ async fn top_level_effective_scope_is_reducer_managed() {
     let state = make_state(false);
     let session = session();
     let envelope = json!({
-        "event_id": "ck:event:01904100-0000-7000-8000-00000000eff0",
+        "event_id": "ak:event:01904100-0000-7000-8000-00000000eff0",
         "kind": cokret_sdk::events::kinds::REALM_CREATE,
         "requirements": { "schema": ["ck.schema.event.v1"] },
         "actor_id": session.actor.clone(),
-        "effective_scope": "ck:realm:01904100-0000-7000-8000-a11ce0000001"
+        "effective_scope": "ak:realm:01904100-0000-7000-8000-a11ce0000001"
     });
 
     let err = validate_event_envelope(&state, &session, &envelope)
@@ -940,7 +940,7 @@ fn event_canonical_bytes_use_sdk_canonical_json() {
         "proofs": [{"type": "dev-proof"}],
         "effective_scope": {
             "kind": "realm",
-            "realm_id": "ck:realm:01904100-0000-7000-8000-a11ce0000001"
+            "realm_id": "ak:realm:01904100-0000-7000-8000-a11ce0000001"
         },
         "actor_kind": "native",
         "canonical_digest": "sha256:old"
@@ -965,7 +965,7 @@ fn event_payload_validator_rejects_registered_payload_shape_errors() {
     let state = make_state(true);
     let envelope = json!({
         "payload": {
-            "strand_id": "ck:strand:01904100-0000-7000-8000-f10dc0000001"
+            "strand_id": "ak:strand:01904100-0000-7000-8000-f10dc0000001"
         }
     });
     let object = envelope.as_object().unwrap();
@@ -986,10 +986,10 @@ fn member_state_invite_accept_uses_canonical_invite_ref() {
     let valid = json!({
         "payload": {
             "actor_id": "did:web:bob.example",
-            "realm_id": "ck:realm:01904100-0000-7000-8000-000000000001",
+            "realm_id": "ak:realm:01904100-0000-7000-8000-000000000001",
             "membership": "join",
             "reason": "invite_accept",
-            "invite_ref": "ck:invite:01904100-0000-7000-8000-000000000001",
+            "invite_ref": "ak:invite:01904100-0000-7000-8000-000000000001",
             "delivery_status": "unroutable"
         }
     });
@@ -1006,7 +1006,7 @@ fn member_state_invite_accept_uses_canonical_invite_ref() {
 #[test]
 fn event_payload_validator_enforces_strand_update_patch_schema() {
     let state = make_state(true);
-    let strand_id = "ck:strand:01904100-0000-7000-8000-f10dc0000001";
+    let strand_id = "ak:strand:01904100-0000-7000-8000-f10dc0000001";
     let valid = json!({
         "payload": {
             "target_ref": strand_id,
@@ -1088,55 +1088,55 @@ fn event_payload_validator_enforces_patch_family_schema() {
         (
             "ck.realm.update",
             json!({
-                "target_ref": "ck:realm:01904100-0000-7000-8000-f10dc0000001",
+                "target_ref": "ak:realm:01904100-0000-7000-8000-f10dc0000001",
                 "patch": { "title": { "$op": "set", "value": "Roadmap" } }
             }),
             json!({
-                "target_ref": "ck:realm:01904100-0000-7000-8000-f10dc0000001",
+                "target_ref": "ak:realm:01904100-0000-7000-8000-f10dc0000001",
                 "patch": { "title": { "$op": "replace", "value": "Roadmap" } }
             }),
         ),
         (
             "ck.strand.update",
             json!({
-                "target_ref": "ck:strand:01904100-0000-7000-8000-f10dc0000001",
+                "target_ref": "ak:strand:01904100-0000-7000-8000-f10dc0000001",
                 "patch": { "metadata.title": { "$op": "set", "value": "Roadmap" } }
             }),
             json!({
-                "target_ref": "ck:strand:01904100-0000-7000-8000-f10dc0000001",
+                "target_ref": "ak:strand:01904100-0000-7000-8000-f10dc0000001",
                 "patch": { "metadata.title": { "$op": "replace", "value": "Roadmap" } }
             }),
         ),
         (
             "ck.morph.update",
             json!({
-                "target_ref": "ck:morph:01904100-0000-7000-8000-f10dc0000001",
+                "target_ref": "ak:morph:01904100-0000-7000-8000-f10dc0000001",
                 "patch": { "metadata.title": { "$op": "set", "value": "Roadmap" } }
             }),
             json!({
-                "target_ref": "ck:morph:01904100-0000-7000-8000-f10dc0000001",
+                "target_ref": "ak:morph:01904100-0000-7000-8000-f10dc0000001",
                 "patch": { "metadata.title": { "$op": "replace", "value": "Roadmap" } }
             }),
         ),
         (
             "ck.space.update",
             json!({
-                "space_id": "ck:space:01904100-0000-7000-8000-f10dc0000001",
+                "space_id": "ak:space:01904100-0000-7000-8000-f10dc0000001",
                 "patch": { "title": { "$op": "set", "value": "Roadmap" } }
             }),
             json!({
-                "space_id": "ck:space:01904100-0000-7000-8000-f10dc0000001",
+                "space_id": "ak:space:01904100-0000-7000-8000-f10dc0000001",
                 "patch": { "title": { "$op": "replace", "value": "Roadmap" } }
             }),
         ),
         (
             "ck.profile.update",
             json!({
-                "target_ref": "ck:actor_profile:01904100-0000-7000-8000-f10dc0000001",
+                "target_ref": "ak:actor_profile:01904100-0000-7000-8000-f10dc0000001",
                 "patch": { "title": { "$op": "set", "value": "Roadmap" } }
             }),
             json!({
-                "target_ref": "ck:actor_profile:01904100-0000-7000-8000-f10dc0000001",
+                "target_ref": "ak:actor_profile:01904100-0000-7000-8000-f10dc0000001",
                 "patch": { "title": { "$op": "replace", "value": "Roadmap" } }
             }),
         ),
@@ -1162,8 +1162,8 @@ fn event_payload_validator_enforces_patch_family_schema() {
         .validate_payload(
             "ck.profile.realm_override",
             &json!({
-                "target_ref": "ck:actor_profile:01904100-0000-7000-8000-f10dc0000001",
-                "target_realm_id": "ck:realm:01904100-0000-7000-8000-f10dc0000002",
+                "target_ref": "ak:actor_profile:01904100-0000-7000-8000-f10dc0000001",
+                "target_realm_id": "ak:realm:01904100-0000-7000-8000-f10dc0000002",
                 "patch": { "title": { "$op": "set", "value": "Roadmap" } }
             }),
         )
@@ -1175,7 +1175,7 @@ fn event_payload_validator_enforces_patch_family_schema() {
         .validate_payload(
             "ck.strand.tracks.update",
             &json!({
-                "strand_id": "ck:strand:01904100-0000-7000-8000-f10dc0000001",
+                "strand_id": "ak:strand:01904100-0000-7000-8000-f10dc0000001",
                 "tracks": {
                     "discussion": {
                         "enabled": true,
@@ -1193,7 +1193,7 @@ fn event_payload_validator_enforces_patch_family_schema() {
                 "ck.strand.tracks.update",
                 &json!({
                     "type": "removed_track_update",
-                    "strand_id": "ck:strand:01904100-0000-7000-8000-f10dc0000001",
+                    "strand_id": "ak:strand:01904100-0000-7000-8000-f10dc0000001",
                 }),
             )
             .is_err(),
@@ -1204,7 +1204,7 @@ fn event_payload_validator_enforces_patch_family_schema() {
 #[test]
 fn realm_create_shape_allows_world_readable_encrypted_history() {
     let state = make_state(true);
-    let realm_id = "ck:realm:01904100-0000-7000-8000-a11ce0000001";
+    let realm_id = "ak:realm:01904100-0000-7000-8000-a11ce0000001";
     let envelope = json!({
         "payload": {
             "object": {
@@ -1212,7 +1212,7 @@ fn realm_create_shape_allows_world_readable_encrypted_history() {
                 "schema": "ck.schema.realm.v1",
                 "title": "encrypted public history",
                 "created_by": "did:web:alice.example",
-                "trust_domain": "ck:trust_domain:soland.local",
+                "trust_domain": "ak:trust_domain:soland.local",
                 "schema_refs": ["ck.schema.realm.v1"],
                 "default_discoverability": "listed",
                 "default_join_rule": "invite",
@@ -1299,7 +1299,7 @@ async fn production_rejects_full_proof_without_valid_jws_signature() {
     // First ingest a fresh webvh document so the high-risk freshness gate
     // passes and this test focuses on JWS signature verification failure.
     ingest_fresh_webvh_document(&state, "did:web:alice.example").await;
-    let canonical_bytes = br#"{"actor_id":"did:web:alice.example","event_id":"ck:event:test"}"#;
+    let canonical_bytes = br#"{"actor_id":"did:web:alice.example","event_id":"ak:event:test"}"#;
     let event_digest = cokret_sdk::canonical::sha256_digest(canonical_bytes);
     let mut object = serde_json::Map::new();
     object.insert(
@@ -1341,7 +1341,7 @@ async fn production_event_proof_fails_closed_when_did_document_stale() {
     let session = session();
     // Deliberately ingest no webvh document: the actor has no freshness
     // evidence in persistence.
-    let canonical_bytes = br#"{"actor_id":"did:web:alice.example","event_id":"ck:event:test"}"#;
+    let canonical_bytes = br#"{"actor_id":"did:web:alice.example","event_id":"ak:event:test"}"#;
     let event_digest = cokret_sdk::canonical::sha256_digest(canonical_bytes);
     let mut object = serde_json::Map::new();
     object.insert(
@@ -1438,12 +1438,12 @@ fn soland_dev_proof_gate_matches_sdk_production_verifier() {
         .expect("SDK ProductionVerifier must accept detached_jws kind");
 }
 
-const DATA_EVENT_REALM: &str = "ck:realm:01904100-0000-7000-8000-000000000001";
+const DATA_EVENT_REALM: &str = "ak:realm:01904100-0000-7000-8000-000000000001";
 const DATA_EVENT_ACTOR: &str = "did:web:alice.example";
-const DATA_EVENT_STRAND: &str = "ck:strand:01904100-0000-7000-8000-000000000001";
+const DATA_EVENT_STRAND: &str = "ak:strand:01904100-0000-7000-8000-000000000001";
 
 fn data_event_seal_id() -> cokret_sdk::SealId {
-    cokret_sdk::SealId::new(format!("ck:seal:sha256:{}", "a".repeat(64))).unwrap()
+    cokret_sdk::SealId::new(format!("ak:seal:sha256:{}", "a".repeat(64))).unwrap()
 }
 
 fn data_event_move_id(byte: u8) -> cokret_sdk::MoveId {
@@ -1550,7 +1550,7 @@ fn insert_historical_data_event_grant(
     let seal_id = data_event_seal_id();
     let move_id = data_event_move_id(0xab);
     let cell = cokret_sdk::CellRef::new(format!(
-        "ck:cell:ck.component.capability.grant.v1:{grant_id}"
+        "ak:cell:ck.component.capability.grant.v1:{grant_id}"
     ))
     .unwrap();
     let value = historical_data_event_grant_value(
@@ -1563,7 +1563,7 @@ fn insert_historical_data_event_grant(
     );
     let op = cokret_sdk::LatticeOp {
         op_type: cokret_sdk::LatticeOpType::Add,
-        tag: Some("ck:operation:01904100-0000-7000-8000-000000000999".to_owned()),
+        tag: Some("ak:operation:01904100-0000-7000-8000-000000000999".to_owned()),
         value: Some(value),
         from: None,
         to: None,
@@ -1594,11 +1594,11 @@ fn insert_historical_data_event_delegated_grant_with_revoked_parent(
     let parent_move_id = data_event_move_id(0xac);
     let child_move_id = data_event_move_id(0xad);
     let parent_cell = cokret_sdk::CellRef::new(format!(
-        "ck:cell:ck.component.capability.grant.v1:{parent_grant_id}"
+        "ak:cell:ck.component.capability.grant.v1:{parent_grant_id}"
     ))
     .unwrap();
     let child_cell = cokret_sdk::CellRef::new(format!(
-        "ck:cell:ck.component.capability.grant.v1:{child_grant_id}"
+        "ak:cell:ck.component.capability.grant.v1:{child_grant_id}"
     ))
     .unwrap();
     let parent_value = historical_data_event_grant_value(
@@ -1619,7 +1619,7 @@ fn insert_historical_data_event_delegated_grant_with_revoked_parent(
     );
     let parent_op = cokret_sdk::LatticeOp {
         op_type: cokret_sdk::LatticeOpType::Add,
-        tag: Some("ck:operation:01904100-0000-7000-8000-000000000991".to_owned()),
+        tag: Some("ak:operation:01904100-0000-7000-8000-000000000991".to_owned()),
         value: Some(parent_value),
         from: None,
         to: None,
@@ -1628,7 +1628,7 @@ fn insert_historical_data_event_delegated_grant_with_revoked_parent(
     };
     let child_op = cokret_sdk::LatticeOp {
         op_type: cokret_sdk::LatticeOpType::Add,
-        tag: Some("ck:operation:01904100-0000-7000-8000-000000000992".to_owned()),
+        tag: Some("ak:operation:01904100-0000-7000-8000-000000000992".to_owned()),
         value: Some(child_value),
         from: None,
         to: None,
@@ -1667,12 +1667,12 @@ fn insert_historical_data_event_grant_with_e2ee_state(
 
     let grant_move_id = data_event_move_id(0xb0);
     let grant_cell = cokret_sdk::CellRef::new(format!(
-        "ck:cell:ck.component.capability.grant.v1:{grant_id}"
+        "ak:cell:ck.component.capability.grant.v1:{grant_id}"
     ))
     .unwrap();
     let grant_op = cokret_sdk::LatticeOp {
         op_type: cokret_sdk::LatticeOpType::Add,
-        tag: Some("ck:operation:01904100-0000-7000-8000-0000000009b0".to_owned()),
+        tag: Some("ak:operation:01904100-0000-7000-8000-0000000009b0".to_owned()),
         value: Some(historical_data_event_grant_value(
             grant_id,
             "ck.message.create",
@@ -1714,7 +1714,7 @@ fn insert_historical_data_event_grant_with_e2ee_state(
     if include_relaxed_policy {
         let policy_move_id = data_event_move_id(0xb2);
         let policy_cell = cokret_sdk::CellRef::new(format!(
-            "ck:cell:ck.component.realm.policy_components.v1:{DATA_EVENT_REALM}"
+            "ak:cell:ck.component.realm.policy_components.v1:{DATA_EVENT_REALM}"
         ))
         .unwrap();
         let policy_op = cokret_sdk::LatticeOp {
@@ -1758,12 +1758,12 @@ fn data_event_object_with_refs(
         "created_at": "2026-05-08T00:02:00Z",
         "auth_context": {
             "did": DATA_EVENT_ACTOR,
-            "key_id": "ck:device:01904100-0000-7000-8000-a11ce0000001",
+            "key_id": "ak:device:01904100-0000-7000-8000-a11ce0000001",
             "key_epoch": 1,
             "capability_refs": refs
         },
         "effects": [{
-            "cell": format!("ck:cell:ck.component.strand.discussion.timeline.v1:{DATA_EVENT_STRAND}"),
+            "cell": format!("ak:cell:ck.component.strand.discussion.timeline.v1:{DATA_EVENT_STRAND}"),
             "op": {"kind": "append"}
         }]
     })
@@ -1804,7 +1804,7 @@ fn data_event_capability_ref_must_resolve() {
     let seal_ref = insert_data_event_seal(&state, Vec::new());
     let object = data_event_object_with_refs(
         &seal_ref,
-        vec!["ck:grant:01904100-0000-7000-8000-000000000111".to_owned()],
+        vec!["ak:grant:01904100-0000-7000-8000-000000000111".to_owned()],
     );
 
     let err = validate_data_event_capability_refs(
@@ -1823,7 +1823,7 @@ fn data_event_capability_ref_must_resolve() {
 #[test]
 fn data_event_capability_ref_must_cover_effect_cell() {
     let state = make_state(true);
-    let grant_id = "ck:grant:01904100-0000-7000-8000-000000000112";
+    let grant_id = "ak:grant:01904100-0000-7000-8000-000000000112";
     let seal_ref = insert_historical_data_event_grant(&state, grant_id, "ck.message.create", false);
     let object = data_event_object_with_refs(&seal_ref, vec![grant_id.to_owned()]);
 
@@ -1837,7 +1837,7 @@ fn data_event_capability_ref_must_cover_effect_cell() {
     .expect("matching grant must cover the DataEvent effect cell");
 
     let wrong_state = make_state(true);
-    let wrong_grant_id = "ck:grant:01904100-0000-7000-8000-000000000113";
+    let wrong_grant_id = "ak:grant:01904100-0000-7000-8000-000000000113";
     let wrong_seal_ref =
         insert_historical_data_event_grant(&wrong_state, wrong_grant_id, "ck.reaction.add", false);
     let wrong_action_object =
@@ -1857,7 +1857,7 @@ fn data_event_capability_ref_must_cover_effect_cell() {
 #[test]
 fn data_event_capability_ref_must_not_be_revoked() {
     let state = make_state(true);
-    let grant_id = "ck:grant:01904100-0000-7000-8000-000000000114";
+    let grant_id = "ak:grant:01904100-0000-7000-8000-000000000114";
     let seal_ref = insert_historical_data_event_grant(&state, grant_id, "ck.message.create", true);
     let object = data_event_object_with_refs(&seal_ref, vec![grant_id.to_owned()]);
 
@@ -1877,8 +1877,8 @@ fn data_event_capability_ref_must_not_be_revoked() {
 #[test]
 fn data_event_capability_ref_reports_upstream_revoked_parent() {
     let state = make_state(true);
-    let parent_grant_id = "ck:grant:01904100-0000-7000-8000-000000000116";
-    let child_grant_id = "ck:grant:01904100-0000-7000-8000-000000000117";
+    let parent_grant_id = "ak:grant:01904100-0000-7000-8000-000000000116";
+    let child_grant_id = "ak:grant:01904100-0000-7000-8000-000000000117";
     let seal_ref = insert_historical_data_event_delegated_grant_with_revoked_parent(
         &state,
         parent_grant_id,
@@ -1903,7 +1903,7 @@ fn data_event_capability_ref_reports_upstream_revoked_parent() {
 #[test]
 fn data_event_uses_seal_ref_pre_state_not_live_authz_index() {
     let state = make_state(true);
-    let grant_id = "ck:grant:01904100-0000-7000-8000-000000000115";
+    let grant_id = "ak:grant:01904100-0000-7000-8000-000000000115";
     let seal_ref = insert_historical_data_event_grant(&state, grant_id, "ck.message.create", false);
     state
         .authz
@@ -1923,7 +1923,7 @@ fn data_event_uses_seal_ref_pre_state_not_live_authz_index() {
 #[test]
 fn e2ee_data_event_requires_covered_seals_cell_contains_seal_ref() {
     let state = make_state(true);
-    let grant_id = "ck:grant:01904100-0000-7000-8000-000000000118";
+    let grant_id = "ak:grant:01904100-0000-7000-8000-000000000118";
     let seal_ref =
         insert_historical_data_event_grant_with_e2ee_state(&state, grant_id, false, false);
     let object = data_event_e2ee_object_with_refs(&seal_ref, vec![grant_id.to_owned()]);
@@ -1945,7 +1945,7 @@ fn e2ee_data_event_requires_covered_seals_cell_contains_seal_ref() {
 #[test]
 fn e2ee_data_event_accepts_when_covered_seals_contains_seal_ref() {
     let state = make_state(true);
-    let grant_id = "ck:grant:01904100-0000-7000-8000-000000000119";
+    let grant_id = "ak:grant:01904100-0000-7000-8000-000000000119";
     let seal_ref =
         insert_historical_data_event_grant_with_e2ee_state(&state, grant_id, true, false);
     let object = data_event_e2ee_object_with_refs(&seal_ref, vec![grant_id.to_owned()]);
@@ -1963,7 +1963,7 @@ fn e2ee_data_event_accepts_when_covered_seals_contains_seal_ref() {
 #[test]
 fn relaxed_e2ee_data_event_keeps_capability_gate_without_covered_seals_gate() {
     let state = make_state(true);
-    let grant_id = "ck:grant:01904100-0000-7000-8000-00000000011a";
+    let grant_id = "ak:grant:01904100-0000-7000-8000-00000000011a";
     let seal_ref =
         insert_historical_data_event_grant_with_e2ee_state(&state, grant_id, false, true);
     let object = data_event_e2ee_object_with_refs(&seal_ref, vec![grant_id.to_owned()]);
@@ -2028,7 +2028,7 @@ fn service_attested_device_authorize_object(
     device_pubkey: &[u8; 32],
 ) -> serde_json::Map<String, Value> {
     let device_pubkey_mb = cokret_sdk::ed25519_pubkey_to_did_key_multibase(device_pubkey);
-    let device_id = cokret_sdk::DeviceId::new("ck:device:01904100-0000-7000-8000-0000000000d0")
+    let device_id = cokret_sdk::DeviceId::new("ak:device:01904100-0000-7000-8000-0000000000d0")
         .expect("valid device id");
     let envelope = json!({
         "kind": "ck.device.authorize",
@@ -2154,7 +2154,7 @@ async fn non_enrollment_device_authorize_passes_through_gate() {
         "actor_id": principal_did,
         "payload": {
             "principal_id": principal_did,
-            "device_id": "ck:device:01904100-0000-8000-8000-000000000001",
+            "device_id": "ak:device:01904100-0000-8000-8000-000000000001",
             "device_public_key": "z6Mk...",
             "bootstrap_binding": {
                 "kind": "inception_self_authorized",

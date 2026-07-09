@@ -46,7 +46,7 @@ fn projected_strand_circle_id(state: &AppState, strand_id: &str) -> Option<Optio
                 strand
                     .scope_circle_id
                     .clone()
-                    .filter(|scope| scope.starts_with("ck:circle:"))
+                    .filter(|scope| scope.starts_with("ak:circle:"))
             })
         }
     }
@@ -61,7 +61,7 @@ pub(crate) fn scope_keys_for_message(
     let Some(strand_id) = strand_id.map(str::trim).filter(|value| !value.is_empty()) else {
         return Some(keys);
     };
-    if !strand_id.starts_with("ck:strand:") {
+    if !strand_id.starts_with("ak:strand:") {
         return Some(keys);
     }
     if let Some(circle_id) = projected_strand_circle_id(state, strand_id)? {

@@ -566,9 +566,9 @@ diesel::table! {
 }
 
 // Strand / Morph projection state for ck.strand.* / ck.morph.* lifecycle
-// events. Spec: cokret-spec/v1/zh/models/common-fields.md §5.1
+// events. Spec: arkret-spec/v1/zh/models/common-fields.md §5.1
 // (canonical state-transition table). State enum mirrors ObjectState
-// from cokret-sdk: active / archived / deleted / redacted (no
+// from arkret-sdk: active / archived / deleted / redacted (no
 // "tombstoned" — Strand / Morph have no dedicated tombstone event).
 diesel::table! {
     projection_strands (id) {

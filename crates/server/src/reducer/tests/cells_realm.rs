@@ -7,7 +7,7 @@ use crate::reducer::*;
 fn cell_value_returns_none_for_unwritten_cell() {
     let state = ProjectionState::new();
     let cell_id = cokret_sdk::CellRef::new(
-        "ck:cell:ck.component.realm.read_receipt_policy.v1:ck:realm:01904100-0000-7000-8000-cfc039892036".to_owned(),
+        "ak:cell:ck.component.realm.read_receipt_policy.v1:ck:realm:01904100-0000-7000-8000-cfc039892036".to_owned(),
     )
     .unwrap();
     assert!(state.cell(&cell_id).is_none());
@@ -19,7 +19,7 @@ fn cell_value_returns_none_for_bottom_state() {
     use cokret_sdk::lattice::CellState;
     let mut state = ProjectionState::new();
     let cell_id = cokret_sdk::CellRef::new(
-        "ck:cell:ck.component.realm.policy.v1:ck:realm:01904100-0000-7000-8000-cfc039892036"
+        "ak:cell:ck.component.realm.policy.v1:ck:realm:01904100-0000-7000-8000-cfc039892036"
             .to_owned(),
     )
     .unwrap();
@@ -54,14 +54,14 @@ fn membership_join_writes_both_structured_cache_and_fsm_cell() {
     let hlc = ServerHlc::new("test");
 
     // `membership=join` MUST carry `delivery_status` per
-    // cokret-spec/spec/v1/zh/governance/join-policy.md §5.1.1.
+    // arkret-spec/spec/v1/zh/governance/join-policy.md §5.1.1.
     // `unroutable` keeps the projection focused on the FSM cell +
     // structured cache write paths without requiring a projected
     // realm delivery-binding policy.
     state.apply(
         &make_operation(
             cokret_sdk::events::kinds::MEMBER_STATE,
-            "ck:realm:01904100-0000-7000-8000-cfc039892036",
+            "ak:realm:01904100-0000-7000-8000-cfc039892036",
             serde_json::json!({
                 "actor_id": "did:web:alice",
                 "membership": "join",
@@ -75,7 +75,7 @@ fn membership_join_writes_both_structured_cache_and_fsm_cell() {
     // Structured cache populated with state="join" + role="admin".
     let m = state
         .member(
-            "ck:realm:01904100-0000-7000-8000-cfc039892036",
+            "ak:realm:01904100-0000-7000-8000-cfc039892036",
             "did:web:alice",
         )
         .expect("member entry should exist after join");
@@ -91,7 +91,7 @@ fn membership_join_writes_both_structured_cache_and_fsm_cell() {
     // members_of_realm only returns entries in `state="join"`.
     assert_eq!(
         state
-            .members_of_realm("ck:realm:01904100-0000-7000-8000-cfc039892036")
+            .members_of_realm("ak:realm:01904100-0000-7000-8000-cfc039892036")
             .len(),
         1
     );
@@ -107,7 +107,7 @@ fn ban_then_invite_round_trips_through_fsm_states() {
         state.apply(
             &make_operation(
                 cokret_sdk::events::kinds::MEMBER_STATE,
-                "ck:realm:01904100-0000-7000-8000-cfc039892036",
+                "ak:realm:01904100-0000-7000-8000-cfc039892036",
                 serde_json::json!({
                     "actor_id": "did:web:bob",
                     "membership": membership,
@@ -122,13 +122,13 @@ fn ban_then_invite_round_trips_through_fsm_states() {
     // `members_of_realm()` (which filters by `state="join"`).
     assert_eq!(
         state
-            .members_in_state("ck:realm:01904100-0000-7000-8000-cfc039892036", "ban")
+            .members_in_state("ak:realm:01904100-0000-7000-8000-cfc039892036", "ban")
             .len(),
         1
     );
     assert_eq!(
         state
-            .members_of_realm("ck:realm:01904100-0000-7000-8000-cfc039892036")
+            .members_of_realm("ak:realm:01904100-0000-7000-8000-cfc039892036")
             .len(),
         0
     );
@@ -141,7 +141,7 @@ fn ban_then_invite_round_trips_through_fsm_states() {
     state.apply(
         &make_operation(
             cokret_sdk::events::kinds::MEMBER_STATE,
-            "ck:realm:01904100-0000-7000-8000-cfc039892036",
+            "ak:realm:01904100-0000-7000-8000-cfc039892036",
             serde_json::json!({"actor_id": "did:web:bob", "membership": "invite"}),
         ),
         &hlc,
@@ -152,13 +152,13 @@ fn ban_then_invite_round_trips_through_fsm_states() {
     );
     assert_eq!(
         state
-            .members_in_state("ck:realm:01904100-0000-7000-8000-cfc039892036", "ban")
+            .members_in_state("ak:realm:01904100-0000-7000-8000-cfc039892036", "ban")
             .len(),
         0
     );
     assert_eq!(
         state
-            .members_in_state("ck:realm:01904100-0000-7000-8000-cfc039892036", "invite")
+            .members_in_state("ak:realm:01904100-0000-7000-8000-cfc039892036", "invite")
             .len(),
         1
     );
@@ -173,7 +173,7 @@ fn realm_create_writes_both_structured_cache_and_ordered_log_cell() {
     state.apply(
         &make_operation(
             cokret_sdk::events::kinds::REALM_CREATE,
-            "ck:realm:01904100-0000-7000-8000-cfc039892036",
+            "ak:realm:01904100-0000-7000-8000-cfc039892036",
             serde_json::json!({
                 "action": "create",
                 "object": {
@@ -188,7 +188,7 @@ fn realm_create_writes_both_structured_cache_and_ordered_log_cell() {
     // Structured cache populated.
     let realm = state
         .realm_states
-        .get("ck:realm:01904100-0000-7000-8000-cfc039892036")
+        .get("ak:realm:01904100-0000-7000-8000-cfc039892036")
         .expect("realm_states entry should exist after create");
     assert_eq!(realm.owner.as_deref(), Some("did:web:alice"));
     assert_eq!(realm.title.as_deref(), Some("Test Realm"));
@@ -196,7 +196,7 @@ fn realm_create_writes_both_structured_cache_and_ordered_log_cell() {
 
     // Ordered-log cell has one entry.
     let log = state
-        .realm_create_log("ck:realm:01904100-0000-7000-8000-cfc039892036")
+        .realm_create_log("ak:realm:01904100-0000-7000-8000-cfc039892036")
         .expect("create cell should be a Value(Array)");
     assert_eq!(log.len(), 1);
     assert_eq!(
@@ -212,7 +212,7 @@ fn realm_update_writes_metadata_cell_with_cas_register_semantics() {
     state.apply(
         &make_operation(
             cokret_sdk::events::kinds::REALM_UPDATE,
-            "ck:realm:01904100-0000-7000-8000-cfc039892036",
+            "ak:realm:01904100-0000-7000-8000-cfc039892036",
             serde_json::json!({
                 "action": "update",
                 "owner": "did:web:alice",
@@ -223,7 +223,7 @@ fn realm_update_writes_metadata_cell_with_cas_register_semantics() {
     );
 
     let value = state
-        .realm_metadata_cell_value("ck:realm:01904100-0000-7000-8000-cfc039892036")
+        .realm_metadata_cell_value("ak:realm:01904100-0000-7000-8000-cfc039892036")
         .expect("metadata cell should resolve to Value");
     // SOL-ORG-01 regression: ck.realm.update must NOT touch the
     // organization relationship cell family.
@@ -231,7 +231,7 @@ fn realm_update_writes_metadata_cell_with_cas_register_semantics() {
         state
             .cell_value(
                 &cokret_sdk::CellRef::new(
-                    "ck:cell:ck.component.realm.organization.v1:ck:realm:01904100-0000-7000-8000-cfc039892036".to_owned(),
+                    "ak:cell:ck.component.realm.organization.v1:ck:realm:01904100-0000-7000-8000-cfc039892036".to_owned(),
                 )
                 .unwrap(),
             )
@@ -253,8 +253,8 @@ fn realm_update_writes_metadata_cell_with_cas_register_semantics() {
 fn concurrent_realm_updates_with_same_basis_expose_bottom_and_repair_clears() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
-    let realm = "ck:realm:01904100-0000-7000-8000-cfc039892036";
-    let basis = "ck:seal:sha256:0000000000000000000000000000000000000000000000000000000000000000";
+    let realm = "ak:realm:01904100-0000-7000-8000-cfc039892036";
+    let basis = "ak:seal:sha256:0000000000000000000000000000000000000000000000000000000000000000";
     let first = make_operation(
         cokret_sdk::events::kinds::REALM_UPDATE,
         realm,
@@ -337,29 +337,29 @@ fn realm_destroy_writes_destroy_cell_and_marks_cache_deleted() {
     state.apply(
         &make_operation(
             cokret_sdk::events::kinds::REALM_CREATE,
-            "ck:realm:01904100-0000-7000-8000-cfc039892036",
+            "ak:realm:01904100-0000-7000-8000-cfc039892036",
             serde_json::json!({"action": "create", "owner": "did:web:alice"}),
         ),
         &hlc,
     );
-    assert!(!state.realm_is_destroyed("ck:realm:01904100-0000-7000-8000-cfc039892036"));
+    assert!(!state.realm_is_destroyed("ak:realm:01904100-0000-7000-8000-cfc039892036"));
 
     // ...then destroy.
     state.apply(
         &make_operation(
             cokret_sdk::events::kinds::REALM_DESTROY,
-            "ck:realm:01904100-0000-7000-8000-cfc039892036",
+            "ak:realm:01904100-0000-7000-8000-cfc039892036",
             serde_json::json!({"action": "destroy"}),
         ),
         &hlc,
     );
 
     // Cell-keyed query returns true.
-    assert!(state.realm_is_destroyed("ck:realm:01904100-0000-7000-8000-cfc039892036"));
+    assert!(state.realm_is_destroyed("ak:realm:01904100-0000-7000-8000-cfc039892036"));
     // Structured cache mirror agrees.
     let realm = state
         .realm_states
-        .get("ck:realm:01904100-0000-7000-8000-cfc039892036")
+        .get("ak:realm:01904100-0000-7000-8000-cfc039892036")
         .unwrap();
     assert!(realm.deleted);
 }
@@ -371,8 +371,8 @@ fn realm_tombstone_writes_tombstone_cell_and_successor() {
 
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
-    let realm_id = "ck:realm:01904100-0000-7000-8000-cfc039892036";
-    let successor = "ck:realm:01904100-0000-7000-8000-cfc039892037";
+    let realm_id = "ak:realm:01904100-0000-7000-8000-cfc039892036";
+    let successor = "ak:realm:01904100-0000-7000-8000-cfc039892037";
     state.apply(
         &make_operation(
             cokret_sdk::events::kinds::REALM_CREATE,
@@ -394,7 +394,7 @@ fn realm_tombstone_writes_tombstone_cell_and_successor() {
     );
 
     let tombstone_cell = cokret_sdk::CellRef::new(format!(
-        "ck:cell:ck.component.realm.tombstone.v1:{realm_id}"
+        "ak:cell:ck.component.realm.tombstone.v1:{realm_id}"
     ))
     .unwrap();
     assert!(matches!(
@@ -414,7 +414,7 @@ fn realm_freeze_writes_freeze_cell_and_blocks_until_expiry() {
 
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
-    let realm_id = "ck:realm:01904100-0000-7000-8000-cfc039892036";
+    let realm_id = "ak:realm:01904100-0000-7000-8000-cfc039892036";
     state.apply(
         &make_operation(
             cokret_sdk::events::kinds::REALM_CREATE,
@@ -437,7 +437,7 @@ fn realm_freeze_writes_freeze_cell_and_blocks_until_expiry() {
     );
 
     let cell_id =
-        cokret_sdk::CellRef::new(format!("ck:cell:ck.component.realm.freeze.v1:{realm_id}"))
+        cokret_sdk::CellRef::new(format!("ak:cell:ck.component.realm.freeze.v1:{realm_id}"))
             .unwrap();
     assert!(matches!(
         state.cells.get(&cell_id),
@@ -473,15 +473,15 @@ fn audit_erasure_receipt_records_scope_realm_id_and_pending_fanout() {
     state.apply(
         &make_operation(
             cokret_sdk::events::kinds::AUDIT_ERASURE_RECEIPT,
-            "ck:realm:01904100-0000-7000-8000-cfc039892036",
+            "ak:realm:01904100-0000-7000-8000-cfc039892036",
             serde_json::json!({
-                "receipt_id": "ck:receipt:01",
+                "receipt_id": "ak:receipt:01",
                 "schema": "ck.schema.erasure_receipt.v1",
                 "issuer": "did:web:soland.local",
-                "subject": {"kind": "realm", "ref": "ck:realm:01904100-0000-7000-8000-cfc039892036"},
+                "subject": {"kind": "realm", "ref": "ak:realm:01904100-0000-7000-8000-cfc039892036"},
                 "scope": {
                     "storage_boundary": "projection_store",
-                    "realm_id": "ck:realm:01904100-0000-7000-8000-cfc039892036",
+                    "realm_id": "ak:realm:01904100-0000-7000-8000-cfc039892036",
                 },
                 "outcome": "completed",
             }),
@@ -490,11 +490,11 @@ fn audit_erasure_receipt_records_scope_realm_id_and_pending_fanout() {
     );
     assert_eq!(state.erasure_receipts.len(), 1);
     let record = &state.erasure_receipts[0];
-    assert_eq!(record.receipt_id.as_deref(), Some("ck:receipt:01"));
+    assert_eq!(record.receipt_id.as_deref(), Some("ak:receipt:01"));
     assert_eq!(record.outcome, "completed");
     assert_eq!(
         record.scope_realm_id.as_deref(),
-        Some("ck:realm:01904100-0000-7000-8000-cfc039892036"),
+        Some("ak:realm:01904100-0000-7000-8000-cfc039892036"),
         "scope.realm_id MUST be extracted for the federation fanout pass"
     );
     assert_eq!(record.fanout_status, "pending");
@@ -508,7 +508,7 @@ fn audit_erasure_receipt_records_scope_realm_id_and_pending_fanout() {
 fn realm_create_bootstraps_creator_member_and_rejects_duplicate_create() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
-    let realm_id = "ck:realm:01904100-0000-7000-8000-cfc039892036";
+    let realm_id = "ak:realm:01904100-0000-7000-8000-cfc039892036";
     let first = state.apply(
         &make_operation(
             cokret_sdk::events::kinds::REALM_CREATE,
@@ -517,7 +517,7 @@ fn realm_create_bootstraps_creator_member_and_rejects_duplicate_create() {
                 "object": {
                     "created_by": "did:web:alice",
                     "title": "Spec Realm",
-                    "trust_domain": "ck:trust_domain:example.net",
+                    "trust_domain": "ak:trust_domain:example.net",
                     "encryption_profile": "none",
                     "notary_profile": "single_did",
                     "notary": {"type": "single_did", "did": "did:web:notary.example"}
@@ -549,7 +549,7 @@ fn realm_create_bootstraps_creator_member_and_rejects_duplicate_create() {
                 "object": {
                     "created_by": "did:web:bob",
                     "title": "Duplicate Realm",
-                    "trust_domain": "ck:trust_domain:example.net",
+                    "trust_domain": "ak:trust_domain:example.net",
                     "encryption_profile": "none",
                     "notary_profile": "single_did",
                     "notary": {"type": "single_did", "did": "did:web:notary.example"}
@@ -567,7 +567,7 @@ fn realm_create_bootstraps_creator_member_and_rejects_duplicate_create() {
 
 #[test]
 fn realm_metadata_cell_returns_none_for_uncreated_realm() {
-    let realm_id = "ck:realm:01904100-0000-7000-8000-0f863ed7d6d2";
+    let realm_id = "ak:realm:01904100-0000-7000-8000-0f863ed7d6d2";
     let state = ProjectionState::new();
     assert!(state.realm_metadata_cell_value(realm_id).is_none());
     assert!(state.realm_create_log(realm_id).is_none());
@@ -581,12 +581,12 @@ fn knock_state_visible_in_members_in_state_query() {
     state.apply(
         &make_operation(
             cokret_sdk::events::kinds::MEMBER_STATE,
-            "ck:realm:01904100-0000-7000-8000-cfc039892036",
+            "ak:realm:01904100-0000-7000-8000-cfc039892036",
             serde_json::json!({"actor_id": "did:web:carol", "membership": "knock"}),
         ),
         &hlc,
     );
-    let knockers = state.members_in_state("ck:realm:01904100-0000-7000-8000-cfc039892036", "knock");
+    let knockers = state.members_in_state("ak:realm:01904100-0000-7000-8000-cfc039892036", "knock");
     assert_eq!(knockers.len(), 1);
     assert_eq!(knockers[0].member, "did:web:carol");
     assert_eq!(
@@ -600,7 +600,7 @@ fn read_receipt_policy_cell_value_helper_extracts_canonical_value() {
     use cokret_sdk::lattice::CellState;
     let mut state = ProjectionState::new();
     let cell_id = cokret_sdk::CellRef::new(
-        "ck:cell:ck.component.realm.read_receipt_policy.v1:ck:realm:01904100-0000-7000-8000-cfc039892036".to_owned(),
+        "ak:cell:ck.component.realm.read_receipt_policy.v1:ck:realm:01904100-0000-7000-8000-cfc039892036".to_owned(),
     )
     .unwrap();
     state.cells.insert(
@@ -612,7 +612,7 @@ fn read_receipt_policy_cell_value_helper_extracts_canonical_value() {
         })),
     );
     let value = state
-        .read_receipt_policy_cell_value("ck:realm:01904100-0000-7000-8000-cfc039892036")
+        .read_receipt_policy_cell_value("ak:realm:01904100-0000-7000-8000-cfc039892036")
         .expect("policy cell should resolve");
     assert_eq!(
         value.get("disclosure").and_then(Value::as_str),
@@ -647,7 +647,7 @@ fn apply_search_policy_payload(payload: Value) -> ProjectionEffect {
     state.apply(
         &make_operation(
             cokret_sdk::events::kinds::REALM_SEARCH_POLICY,
-            "ck:realm:01904100-0000-7000-8000-cfc039892036",
+            "ak:realm:01904100-0000-7000-8000-cfc039892036",
             payload,
         ),
         &hlc,
@@ -669,7 +669,7 @@ fn realm_search_policy_accepts_wrapped_valid_policy_and_projects_inner_value() {
     let effect = state.apply(
         &make_operation(
             cokret_sdk::events::kinds::REALM_SEARCH_POLICY,
-            "ck:realm:01904100-0000-7000-8000-cfc039892036",
+            "ak:realm:01904100-0000-7000-8000-cfc039892036",
             serde_json::json!({ "value": policy.clone() }),
         ),
         &hlc,
@@ -679,7 +679,7 @@ fn realm_search_policy_accepts_wrapped_valid_policy_and_projects_inner_value() {
         ProjectionEffect::RealmSearchPolicyProjected { .. }
     ));
     let cell = state
-        .realm_search_policy_cell_value("ck:realm:01904100-0000-7000-8000-cfc039892036")
+        .realm_search_policy_cell_value("ak:realm:01904100-0000-7000-8000-cfc039892036")
         .expect("search policy cell should resolve");
     assert_eq!(cell, &policy);
 }

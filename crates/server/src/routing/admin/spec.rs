@@ -1,8 +1,8 @@
 //! Product-local soland operator endpoints.
 //!
-//! The public Cokret protocol namespace does not define admin operations.
+//! The public Arkret protocol namespace does not define admin operations.
 //! soland serves operator-only controls under `/_soland/admin/*`
-//! with local `org.cokret.soland.*` operation IDs and the `soland-admin`
+//! with local `org.arkret.soland.*` operation IDs and the `soland-admin`
 //! OpenAPI tag. These endpoints share that
 //! namespace with the soland operator infrastructure (seal DAG, bottom-cell
 //! repair, multisig -- see [`super::seal`]) and the admin collection snapshot
@@ -154,12 +154,12 @@ pub(super) fn router() -> Router {
 }
 
 #[endpoint(
-    operation_id = "org.cokret.soland.admin.get_server_status",
+    operation_id = "org.arkret.soland.admin.get_server_status",
     tags("soland-admin"),
     summary = "Read operator admin status",
     status_codes(200, 401, 403, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.admin.get_server_status"))]
+#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.admin.get_server_status"))]
 async fn get_server_status(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -199,12 +199,12 @@ async fn get_server_status(
 }
 
 #[endpoint(
-    operation_id = "org.cokret.soland.admin.get_server_info",
+    operation_id = "org.arkret.soland.admin.get_server_info",
     tags("soland-admin"),
     summary = "Read operator node info (version / build / key config)",
     status_codes(200, 401, 403, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.admin.get_server_info"))]
+#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.admin.get_server_info"))]
 async fn get_server_info(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -226,12 +226,12 @@ async fn get_server_info(
 }
 
 #[endpoint(
-    operation_id = "org.cokret.soland.admin.get_server_stats",
+    operation_id = "org.arkret.soland.admin.get_server_stats",
     tags("soland-admin"),
     summary = "Read operator node counters (accounts / realms / devices / storage)",
     status_codes(200, 401, 403, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.admin.get_server_stats"))]
+#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.admin.get_server_stats"))]
 async fn get_server_stats(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -297,12 +297,12 @@ async fn get_server_stats(
 }
 
 #[endpoint(
-    operation_id = "org.cokret.soland.admin.update_account_status",
+    operation_id = "org.arkret.soland.admin.update_account_status",
     tags("soland-admin"),
     summary = "Set an account moderation status",
     status_codes(200, 400, 401, 403, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.admin.update_account_status"))]
+#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.admin.update_account_status"))]
 async fn update_account_status(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -324,12 +324,12 @@ async fn update_account_status(
 }
 
 #[endpoint(
-    operation_id = "org.cokret.soland.admin.lock_account",
+    operation_id = "org.arkret.soland.admin.lock_account",
     tags("soland-admin"),
     summary = "Lock an account and revoke active access",
     status_codes(200, 400, 401, 403, 404, 409, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.admin.lock_account"))]
+#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.admin.lock_account"))]
 async fn lock_account(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -341,12 +341,12 @@ async fn lock_account(
 }
 
 #[endpoint(
-    operation_id = "org.cokret.soland.admin.unlock_account",
+    operation_id = "org.arkret.soland.admin.unlock_account",
     tags("soland-admin"),
     summary = "Return a locked account to active state",
     status_codes(200, 400, 401, 403, 404, 409, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.admin.unlock_account"))]
+#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.admin.unlock_account"))]
 async fn unlock_account(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -358,12 +358,12 @@ async fn unlock_account(
 }
 
 #[endpoint(
-    operation_id = "org.cokret.soland.admin.suspend_account",
+    operation_id = "org.arkret.soland.admin.suspend_account",
     tags("soland-admin"),
     summary = "Suspend an account while leaving existing sessions to expire naturally",
     status_codes(200, 400, 401, 403, 404, 409, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.admin.suspend_account"))]
+#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.admin.suspend_account"))]
 async fn suspend_account(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -375,12 +375,12 @@ async fn suspend_account(
 }
 
 #[endpoint(
-    operation_id = "org.cokret.soland.admin.unsuspend_account",
+    operation_id = "org.arkret.soland.admin.unsuspend_account",
     tags("soland-admin"),
     summary = "Return a suspended account to active state",
     status_codes(200, 400, 401, 403, 404, 409, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.admin.unsuspend_account"))]
+#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.admin.unsuspend_account"))]
 async fn unsuspend_account(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -392,12 +392,12 @@ async fn unsuspend_account(
 }
 
 #[endpoint(
-    operation_id = "org.cokret.soland.admin.deactivate_account",
+    operation_id = "org.arkret.soland.admin.deactivate_account",
     tags("soland-admin"),
     summary = "Deactivate an account and revoke active access",
     status_codes(200, 400, 401, 403, 404, 409, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.admin.deactivate_account"))]
+#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.admin.deactivate_account"))]
 async fn deactivate_account(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -537,12 +537,12 @@ fn account_lifecycle_change_response(
 }
 
 #[endpoint(
-    operation_id = "org.cokret.soland.admin.revoke_device",
+    operation_id = "org.arkret.soland.admin.revoke_device",
     tags("soland-admin"),
     summary = "Revoke a device as an administrator",
     status_codes(200, 400, 401, 403, 404, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.admin.revoke_device"))]
+#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.admin.revoke_device"))]
 async fn revoke_device(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -595,12 +595,12 @@ async fn revoke_device(
 }
 
 #[endpoint(
-    operation_id = "org.cokret.soland.admin.get_moderation_queue",
+    operation_id = "org.arkret.soland.admin.get_moderation_queue",
     tags("soland-admin", "moderation"),
     summary = "List canonical moderation queue items",
     status_codes(200, 401, 403, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.admin.get_moderation_queue"))]
+#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.admin.get_moderation_queue"))]
 async fn get_moderation_queue(
     aa: AuthArgs,
     depot: &mut Depot,

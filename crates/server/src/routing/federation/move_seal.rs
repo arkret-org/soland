@@ -33,7 +33,7 @@ use crate::{JsonResult, json_ok};
 
 /// Map an SDK [`SealReject`] onto an [`AppError`].
 ///
-/// Every reject reason routes through the canonical Cokret error
+/// Every reject reason routes through the canonical Arkret error
 /// registry:
 ///
 /// - `UnknownPredecessor`, coverage mismatches, `Structural`, `MissingMove`, `MoveRejected`,
@@ -111,11 +111,11 @@ pub struct SubmitMoveOutcome {
 }
 
 #[endpoint(
-    operation_id = "org.cokret.soland.moves.submit",
+    operation_id = "org.arkret.soland.moves.submit",
     tags("moves"),
     summary = "Submit a Move for the next Seal batch"
 )]
-#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.moves.submit"))]
+#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.moves.submit"))]
 async fn submit_move(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -190,11 +190,11 @@ pub struct RejectedMoveEntry {
 }
 
 #[endpoint(
-    operation_id = "org.cokret.soland.seals.submit",
+    operation_id = "org.arkret.soland.seals.submit",
     tags("seals"),
     summary = "Submit a Seal; runs apply_seal end-to-end"
 )]
-#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.seals.submit"))]
+#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.seals.submit"))]
 async fn submit_seal(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -256,7 +256,7 @@ async fn submit_seal(
     // Capture mls.epoch before the reload so we can detect a
     // shift after the reload writes the new value.
     let mls_epoch_cell = cokret_sdk::CellRef::new(format!(
-        "ck:cell:ck.component.mls.epoch.v1:{}",
+        "ak:cell:ck.component.mls.epoch.v1:{}",
         seal.realm_id.as_str()
     ))
     .ok();
@@ -347,11 +347,11 @@ pub struct SignSealOutcome {
 /// background ticker. Production deploys will eventually wire a
 /// periodic ticker to call the same worker function.
 #[endpoint(
-    operation_id = "org.cokret.soland.admin.seals.sign",
+    operation_id = "org.arkret.soland.admin.seals.sign",
     tags("soland-admin", "seals"),
     summary = "Trigger one notary signing pass for a Realm"
 )]
-#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.admin.seals.sign"))]
+#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.admin.seals.sign"))]
 async fn admin_sign_seal(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -445,7 +445,7 @@ mod seal_delta_tests {
 
     #[test]
     fn seal_delta_rejects_event_id_form() {
-        let entries = vec!["ck:event:01904100-0000-7000-8000-000000000001".to_owned()];
+        let entries = vec!["ak:event:01904100-0000-7000-8000-000000000001".to_owned()];
         let err = validate_seal_delta_entries(&entries).unwrap_err();
         assert_eq!(err.0, ErrorCode::SchemaViolation);
     }

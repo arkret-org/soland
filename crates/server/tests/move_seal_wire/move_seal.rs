@@ -117,7 +117,7 @@ async fn seal_with_unknown_predecessor_is_rejected_with_conflict() {
     expected.insert(member_cell(), CellState::Value(json!("join")));
     let expected_root = compute_state_root(&expected).unwrap();
 
-    let bad_pred = SealId::new(format!("ck:seal:sha256:{}", "ee".repeat(32))).unwrap();
+    let bad_pred = SealId::new(format!("ak:seal:sha256:{}", "ee".repeat(32))).unwrap();
     let seal = build_seal(vec![bad_pred], vec![move_obj.id.clone()], expected_root);
 
     let mut resp = TestClient::post("http://server/_soland/peer/seals")

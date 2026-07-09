@@ -206,7 +206,7 @@ mod tests {
                 ],
                 scope_details: serde_json::json!({
                     "agent_principal_id": "did:web:agent.example",
-                    "applet_id": "ck:applet:01904100-0000-7000-8000-000000000001"
+                    "applet_id": "ak:applet:01904100-0000-7000-8000-000000000001"
                 }),
                 freshness_state: FreshnessState::Fresh,
             }),
@@ -228,7 +228,7 @@ mod tests {
         );
         assert_eq!(
             restored.scope_details["applet_id"],
-            "ck:applet:01904100-0000-7000-8000-000000000001"
+            "ak:applet:01904100-0000-7000-8000-000000000001"
         );
     }
 }

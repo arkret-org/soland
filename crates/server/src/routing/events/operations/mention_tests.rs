@@ -60,9 +60,9 @@ mod reaction_and_window_policy_tests {
 
     fn reaction_op(kind: &str, payload: serde_json::Value) -> Operation {
         Operation::create(
-            cokret_sdk::OperationId::new("ck:operation:01904100-0000-7000-8000-57d7d85564c5")
+            cokret_sdk::OperationId::new("ak:operation:01904100-0000-7000-8000-57d7d85564c5")
                 .unwrap(),
-            cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-668e2181b41d").unwrap(),
+            cokret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-668e2181b41d").unwrap(),
             kind,
             payload,
         )
@@ -73,7 +73,7 @@ mod reaction_and_window_policy_tests {
         let op = reaction_op(
             cokret_sdk::events::kinds::REACTION_ADD,
             json!({
-                "target_ref": "ck:message:01904100-0000-7000-8000-000000000001",
+                "target_ref": "ak:message:01904100-0000-7000-8000-000000000001",
                 "actor": "did:web:alice",
                 "key": "👍",
             }),
@@ -87,7 +87,7 @@ mod reaction_and_window_policy_tests {
     fn reaction_on_event_storage_id_is_accepted() {
         let op = reaction_op(
             cokret_sdk::events::kinds::REACTION_ADD,
-            json!({ "target_ref": "ck:event:01904100-0000-7000-8000-000000000001" }),
+            json!({ "target_ref": "ak:event:01904100-0000-7000-8000-000000000001" }),
         );
         assert!(
             validate_reaction_target_kind(cokret_sdk::events::kinds::REACTION_ADD, &op).is_ok()
@@ -97,9 +97,9 @@ mod reaction_and_window_policy_tests {
     #[test]
     fn reaction_on_non_message_target_is_rejected() {
         for target in [
-            "ck:strand:01904100-0000-7000-8000-000000000001",
-            "ck:morph:01904100-0000-7000-8000-000000000001",
-            "ck:circle:01904100-0000-7000-8000-000000000001",
+            "ak:strand:01904100-0000-7000-8000-000000000001",
+            "ak:morph:01904100-0000-7000-8000-000000000001",
+            "ak:circle:01904100-0000-7000-8000-000000000001",
         ] {
             let op = reaction_op(
                 cokret_sdk::events::kinds::REACTION_ADD,
@@ -117,7 +117,7 @@ mod reaction_and_window_policy_tests {
     fn non_reaction_kinds_skip_target_check() {
         let op = reaction_op(
             cokret_sdk::events::kinds::MESSAGE_CREATE,
-            json!({ "target_ref": "ck:strand:01904100-0000-7000-8000-000000000001" }),
+            json!({ "target_ref": "ak:strand:01904100-0000-7000-8000-000000000001" }),
         );
         assert!(
             validate_reaction_target_kind(cokret_sdk::events::kinds::MESSAGE_CREATE, &op).is_ok()
@@ -127,11 +127,11 @@ mod reaction_and_window_policy_tests {
     #[test]
     fn realm_id_alias_forms_match() {
         assert!(!realm_ids_match(
-            "ck:realm:01904100-0000-7000-8000-668e2181b41d",
-            "ck:space:01904100-0000-7000-8000-668e2181b41d",
+            "ak:realm:01904100-0000-7000-8000-668e2181b41d",
+            "ak:space:01904100-0000-7000-8000-668e2181b41d",
         ));
-        assert!(realm_ids_match("ck:realm:abc", "ck:realm:abc"));
-        assert!(!realm_ids_match("ck:realm:abc", "ck:realm:def"));
+        assert!(realm_ids_match("ak:realm:abc", "ak:realm:abc"));
+        assert!(!realm_ids_match("ak:realm:abc", "ak:realm:def"));
     }
 
     fn dur(value: u64, unit: &str) -> cokret_sdk::authz::ConstraintDuration {

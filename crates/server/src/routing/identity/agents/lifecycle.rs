@@ -673,7 +673,7 @@ pub(super) async fn detach_agent_grant(
     let agent_id = agent_principal_id.into_inner();
     let grant_id = grant_id.into_inner();
     require_agent_controller(state, &session, &agent_id).await?;
-    if !grant_id.starts_with("ck:accountability_grant:") && !grant_id.starts_with("ck:grant:") {
+    if !grant_id.starts_with("ak:accountability_grant:") && !grant_id.starts_with("ak:grant:") {
         return Err(AppError::invalid_param(
             "grant_id must be a ck:accountability_grant:<uuidv7> or ck:grant:<uuidv7> typed id",
         ));

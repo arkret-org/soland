@@ -337,7 +337,7 @@ pub async fn project_membership_operation(state: &AppState, origin: &str, operat
                 entry.members.remove(&member);
             } else if membership == Some("join") {
                 entry.members.insert(member);
-                // HDLREN-3/4 (cokret-spec @ 7157ee8) — `handle` is no longer
+                // HDLREN-3/4 (arkret-spec @ 7157ee8) — `handle` is no longer
                 // a roster field. The spec §8.1 MUST NOT put it on the per-Realm
                 // roster; clients resolve identity by following the
                 // `ck.member.identity.update` events surfaced via
@@ -373,7 +373,7 @@ async fn project_invite_acceptance(state: &AppState, member: &str, operation: &O
     }
 }
 
-/// MID-2..6 (R3.1, cokret-spec @ 7157ee8) — projection write for
+/// MID-2..6 (R3.1, arkret-spec @ 7157ee8) — projection write for
 /// `ck.member.identity.update`. Validates payload shape (segment
 /// whitelist, cell-subject coherence), computes the canonical
 /// payload digest, and inserts a [`crate::state::MemberIdentityEventRecord`]
@@ -433,14 +433,14 @@ pub fn project_member_identity_update(state: &AppState, operation: &Operation) {
     let canonical_event_id = payload
         .get("event_id")
         .and_then(Value::as_str)
-        .filter(|value| value.starts_with("ck:event:"))
+        .filter(|value| value.starts_with("ak:event:"))
         .map(str::to_owned)
         .or_else(|| {
             operation
                 .operation_id
                 .as_str()
-                .strip_prefix("ck:operation:")
-                .map(|suffix| format!("ck:event:{suffix}"))
+                .strip_prefix("ak:operation:")
+                .map(|suffix| format!("ak:event:{suffix}"))
         })
         .unwrap_or_else(|| operation.operation_id.to_string());
 

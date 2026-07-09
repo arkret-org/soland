@@ -6,10 +6,10 @@
 //! production route tree.
 //!
 //! Spec seals:
-//!   - `cokret-spec/spec/v1/zh/extensions/applet-integration.md` §3–§5 (manifest signing, bot /
+//!   - `arkret-spec/spec/v1/zh/extensions/applet-integration.md` §3–§5 (manifest signing, bot /
 //!     ghost actor accountability)
-//!   - `cokret-spec/spec/v1/zh/extensions/applet-schema.md` (manifest schema)
-//!   - `cokret-spec/spec/v1/zh/sync/sovereign-deployment.md` §2–§6 (sovereign enclave profile,
+//!   - `arkret-spec/spec/v1/zh/extensions/applet-schema.md` (manifest schema)
+//!   - `arkret-spec/spec/v1/zh/sync/sovereign-deployment.md` §2–§6 (sovereign enclave profile,
 //!     outbound federation guard)
 //!
 //! TODO(G3.S9-followup): capability inheritance from primary actor to

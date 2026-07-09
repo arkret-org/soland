@@ -199,14 +199,14 @@ impl NotaryWorker {
             .map_err(|e| NotaryError::Construction(format!("invalid HLC: {e}")))?;
 
         // canonical_bytes_for_id excludes `id` + `notary_signature` (see
-        // `Seal::canonical_bytes_for_id` in cokret-core/src/seal.rs).
+        // `Seal::canonical_bytes_for_id` in arkret-core/src/seal.rs).
         // We therefore compute canonical bytes from a Seal whose `id`
         // is the well-known zero sentinel and whose `notary_signature` is a
         // zero-byte-signature placeholder — both fields are EXCLUDED from
         // the canonical body so the sentinels never influence the signing
         // target. Then we derive the real id and sign over those same
         // canonical bytes, keeping the signature byte-stable.
-        let zero_seal_id = SealId::new(format!("ck:seal:sha256:{}", "00".repeat(32)))
+        let zero_seal_id = SealId::new(format!("ak:seal:sha256:{}", "00".repeat(32)))
             .expect("zero SealId is well-formed");
         let zero_sig = zero_notary_sig_placeholder()?;
         let mut seal = Seal {
@@ -260,7 +260,7 @@ impl NotaryWorker {
         //
         // Capture mls.epoch before reload so we can detect rotation.
         let mls_epoch_cell = CellRef::new(format!(
-            "ck:cell:ck.component.mls.epoch.v1:{}",
+            "ak:cell:ck.component.mls.epoch.v1:{}",
             realm_id.as_str()
         ))
         .ok();
@@ -334,7 +334,7 @@ impl NotaryWorker {
     ///   60_000ms), the recovery set takes over with the same lex-smallest leader election.
     fn is_authorized_for(&self, state: &AppState, realm_id: &RealmId) -> Result<bool, NotaryError> {
         let notary_cell = match CellRef::new(format!(
-            "ck:cell:ck.component.notary.v1:{}",
+            "ak:cell:ck.component.notary.v1:{}",
             realm_id.as_str()
         )) {
             Ok(c) => c,
@@ -586,7 +586,7 @@ impl NotaryWorker {
         state: &AppState,
         realm_id: &RealmId,
     ) -> Result<Seal, NotaryError> {
-        let zero_seal_id = SealId::new(format!("ck:seal:sha256:{}", "00".repeat(32)))
+        let zero_seal_id = SealId::new(format!("ak:seal:sha256:{}", "00".repeat(32)))
             .expect("zero SealId is well-formed");
         let zero_sig = zero_notary_sig_placeholder()?;
         let empty_covered = BTreeSet::new();
@@ -746,7 +746,7 @@ fn materialize_genesis_if_empty(
 /// Current accepted Seal head for a Realm — the server side of the
 /// registered account-client seal-view sourcing (`ck.self.events.query.frontier`
 /// realm shape `{realm_id, seal_id, control_event_set_root, state_root,
-/// hlc?}`, see cokret-spec service-http-binding). Clients mint single-leaf
+/// hlc?}`, see arkret-spec service-http-binding). Clients mint single-leaf
 /// Control Move `seal_basis` (`leaves=[seal_id]`) and DataEvent `seal_ref`
 /// from this view.
 ///
@@ -905,7 +905,7 @@ mod tests {
         );
 
         // 2) Single cell -> single-leaf root == leaf hash (no node prefix).
-        let cell_a = CellRef::new("ck:cell:ck.x:1".to_owned()).unwrap();
+        let cell_a = CellRef::new("ak:cell:ck.x:1".to_owned()).unwrap();
         let val_a = json!("alpha");
         let mut one = BTreeMap::new();
         one.insert(cell_a.clone(), CellState::Value(val_a.clone()));
@@ -916,8 +916,8 @@ mod tests {
         );
 
         // 3) Two cells -> H(0x01 || leaf(lo) || leaf(hi)), leaves ordered by ascending cell wire
-        //    string ("ck:cell:ck.x:1" < "ck:cell:ck.y:2").
-        let cell_b = CellRef::new("ck:cell:ck.y:2".to_owned()).unwrap();
+        //    string ("ak:cell:ck.x:1" < "ak:cell:ck.y:2").
+        let cell_b = CellRef::new("ak:cell:ck.y:2".to_owned()).unwrap();
         let val_b = json!("beta");
         let cell_a_wire = cell_a.as_str().to_owned();
         let cell_b_wire = cell_b.as_str().to_owned();

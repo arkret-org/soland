@@ -485,8 +485,8 @@ mod tests {
 
     use super::*;
 
-    const REALM: &str = "ck:realm:0196419b-0000-7000-8000-000000000001";
-    const INVITE: &str = "ck:invite:0196419b-0000-7000-8000-000000000101";
+    const REALM: &str = "ak:realm:0196419b-0000-7000-8000-000000000001";
+    const INVITE: &str = "ak:invite:0196419b-0000-7000-8000-000000000101";
     const SUBJECT: &str = "did:web:bob.example";
     const SUBJECT_CURRENT_METHOD: &str = "did:web:bob.example#device-current";
     const SUBJECT_OLD_METHOD: &str = "did:web:bob.example#device-old";

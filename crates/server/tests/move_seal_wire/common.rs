@@ -7,7 +7,7 @@
 //! `tests/move_seal_wire.rs`).
 //!
 //! The Move/Seal builders mirror those in
-//! `cokret-rust-sdk/crates/state-res/src/seal.rs#tests` and
+//! `arkret-rust-sdk/crates/state-res/src/seal.rs#tests` and
 //! `crates/testing/src/lib.rs#build_membership_move`. They're inlined
 //! here because those helpers are private to the SDK test modules.
 //!
@@ -58,15 +58,15 @@ pub(crate) fn test_config() -> AppConfig {
 }
 
 pub(crate) fn realm_id() -> RealmId {
-    RealmId::new("ck:realm:0196419b-0000-7000-8000-00000000014a".to_owned()).unwrap()
+    RealmId::new("ak:realm:0196419b-0000-7000-8000-00000000014a".to_owned()).unwrap()
 }
 
 pub(crate) fn member_cell() -> CellRef {
-    CellRef::new("ck:cell:ck.component.member.state.v1:did.web.alice.example".to_owned()).unwrap()
+    CellRef::new("ak:cell:ck.component.member.state.v1:did.web.alice.example".to_owned()).unwrap()
 }
 
 pub(crate) fn zero_seal_id_value() -> String {
-    format!("ck:seal:sha256:{}", "00".repeat(32))
+    format!("ak:seal:sha256:{}", "00".repeat(32))
 }
 
 pub(crate) fn empty_seal_basis_value() -> Value {
@@ -160,7 +160,7 @@ pub(crate) fn build_seal(
     let covered: BTreeSet<MoveId> = delta.iter().cloned().collect();
     let control_event_set_root = control_event_set_root(&covered).unwrap();
     let mut a = Seal {
-        id: SealId::new(format!("ck:seal:sha256:{}", "00".repeat(32))).unwrap(),
+        id: SealId::new(format!("ak:seal:sha256:{}", "00".repeat(32))).unwrap(),
         realm_id: realm_id(),
         predecessor_refs,
         delta,
@@ -195,7 +195,7 @@ pub(crate) async fn dev_token(state: AppState) -> String {
             "did": "did:web:admin.example",
             "handle": "@admin",
             "display_name": "Admin",
-            "device_id": "ck:device:01904100-0000-7000-8000-ad11d0000008"
+            "device_id": "ak:device:01904100-0000-7000-8000-ad11d0000008"
         }))
         .send(&app)
         .await
@@ -205,7 +205,7 @@ pub(crate) async fn dev_token(state: AppState) -> String {
     let login: Value = TestClient::post("http://server/_soland/gate/auth/dev-login")
         .json(&json!({
             "actor": "did:web:admin.example",
-            "device_id": "ck:device:01904100-0000-7000-8000-ad11d0000008",
+            "device_id": "ak:device:01904100-0000-7000-8000-ad11d0000008",
             "display_name": "Admin"
         }))
         .send(&app)
@@ -229,7 +229,7 @@ pub(crate) async fn dev_token(state: AppState) -> String {
 /// with `unknown cell family` if soland hadn't replaced the SDK default
 /// with `build_sdk_cell_registry()`.
 pub(crate) fn build_consent_grant_add_move() -> Move {
-    let consent_cell = "ck:cell:ck.component.consent.grant.v1:cnt.01js0c000000000000000000aa";
+    let consent_cell = "ak:cell:ck.component.consent.grant.v1:cnt.01js0c000000000000000000aa";
     let body = json!({
         "issuer": "did:web:admin.example",
         "realm_id": realm_id().as_str(),

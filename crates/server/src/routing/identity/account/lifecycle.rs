@@ -11,12 +11,12 @@ use cokret_sdk::{
 use super::*;
 
 #[endpoint(
-    operation_id = "org.cokret.soland.account.export",
+    operation_id = "org.arkret.soland.account.export",
     tags("account"),
     summary = "GDPR export: assemble the authenticated principal's data bundle",
     status_codes(200, 401, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.account.export"))]
+#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.account.export"))]
 pub(super) async fn export_account(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -25,7 +25,7 @@ pub(super) async fn export_account(
     // Spec: identity/account-lifecycle.md §8 — the export bundle MUST
     // include account / profile / realms / messages / devices / audit_log
     // facets. We assemble each from the existing persistence stores; the
-    // bundle is shipped as a single JSON blob, and a `org.cokret.soland.audit.exported`
+    // bundle is shipped as a single JSON blob, and a `org.arkret.soland.audit.exported`
     // audit entry records the operation so subsequent governance reviews
     // can see who requested an export.
     let state = depot.get_typed::<AppState>().expect("state injected");
@@ -79,13 +79,13 @@ pub(super) async fn export_account(
         .collect();
 
     // Append the audit entry FIRST so the export bundle (assembled
-    // immediately after) carries the org.cokret.soland.audit.exported row inline.
+    // immediately after) carries the org.arkret.soland.audit.exported row inline.
     // After erasure the actor's session token is invalidated, so the
     // export-bundle slot is the only path back to the audit trail.
     append_audit_log(
         state,
         Some(&actor),
-        "org.cokret.soland.audit.exported",
+        "org.arkret.soland.audit.exported",
         json!({"actor": actor.clone()}),
         "accepted",
     )
@@ -436,7 +436,7 @@ async fn append_account_state_change_audit(
 ) {
     // Product-private audit actions must not occupy the protocol `ck.` prefix.
     let payload = json!({
-        "schema": "org.cokret.soland.account.state_change.v1",
+        "schema": "org.arkret.soland.account.state_change.v1",
         "actor": changed_by,
         "subject": did,
         "from": previous_state,
@@ -466,7 +466,7 @@ async fn append_account_state_change_audit(
     append_audit_log(
         state,
         Some(did),
-        "org.cokret.soland.account.state_change",
+        "org.arkret.soland.account.state_change",
         payload.clone(),
         "accepted",
     )
@@ -475,7 +475,7 @@ async fn append_account_state_change_audit(
         append_audit_log(
             state,
             Some(changed_by),
-            "org.cokret.soland.account.state_change",
+            "org.arkret.soland.account.state_change",
             payload,
             "accepted",
         )
@@ -562,7 +562,7 @@ async fn append_account_deactivation_propagation_state(
     append_audit_log(
         state,
         Some(did),
-        "org.cokret.soland.account.deactivation_propagation",
+        "org.arkret.soland.account.deactivation_propagation",
         payload.clone(),
         if federation_incomplete {
             "pending_peer_ack"
@@ -575,7 +575,7 @@ async fn append_account_deactivation_propagation_state(
         append_audit_log(
             state,
             Some(changed_by),
-            "org.cokret.soland.account.deactivation_propagation",
+            "org.arkret.soland.account.deactivation_propagation",
             payload,
             if federation_incomplete {
                 "pending_peer_ack"
@@ -642,12 +642,12 @@ fn deactivation_peer_service_targets_for_actor(state: &AppState, actor: &str) ->
 }
 
 #[endpoint(
-    operation_id = "org.cokret.soland.account.deactivate",
+    operation_id = "org.arkret.soland.account.deactivate",
     tags("account"),
     summary = "Deactivate the authenticated principal and revoke active access",
     status_codes(200, 401, 409, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.account.deactivate"))]
+#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.account.deactivate"))]
 pub(super) async fn deactivate_account(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -699,12 +699,12 @@ struct AccountDeactivateOutcome {
 }
 
 #[endpoint(
-    operation_id = "org.cokret.soland.account.erase",
+    operation_id = "org.arkret.soland.account.erase",
     tags("account"),
     summary = "GDPR erasure: pseudonymize the authenticated principal and revoke access",
     status_codes(200, 401, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.account.erase"))]
+#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.account.erase"))]
 pub(super) async fn erase_account(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -724,7 +724,7 @@ pub(super) async fn erase_account(
     append_audit_log(
         state,
         Some(&actor),
-        "org.cokret.soland.audit.erasure_initiated",
+        "org.arkret.soland.audit.erasure_initiated",
         json!({"actor": actor.clone()}),
         "accepted",
     )
@@ -842,7 +842,7 @@ pub(super) async fn erase_account(
         append_audit_log(
             state,
             Some(&actor),
-            "org.cokret.soland.audit.erasure_receipt.fanout_failed",
+            "org.arkret.soland.audit.erasure_receipt.fanout_failed",
             json!({
                 "actor": actor.clone(),
                 "affected_realms": affected_realms,
@@ -944,7 +944,7 @@ async fn append_audit_redaction_marker(state: &AppState, actor: &str) {
     append_audit_log(
         state,
         Some(actor),
-        "org.cokret.soland.audit.actor_audit_redacted",
+        "org.arkret.soland.audit.actor_audit_redacted",
         json!({
             "actor": actor,
             "redacted_entry_count": entries.len(),

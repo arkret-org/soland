@@ -105,7 +105,7 @@ mod tests {
     fn rejects_actor_id_subject() {
         let claim = json!({
             "claim_kind": "handle_binding",
-            "subject": "ck:actor:01904100-0000-7000-8000-000000000001"
+            "subject": "ak:actor:01904100-0000-7000-8000-000000000001"
         });
         let err = validate_handle_claim_ingest(&claim).unwrap_err();
         assert_eq!(err.reason, reasons::HANDLE_CLAIM_SUBJECT_NOT_PRINCIPAL_DID);
@@ -113,7 +113,7 @@ mod tests {
 
     #[test]
     fn rejects_account_id_subject() {
-        let claim = json!({"subject": "ck:account:01904100-0000-7000-8000-000000000001"});
+        let claim = json!({"subject": "ak:account:01904100-0000-7000-8000-000000000001"});
         let err = validate_handle_claim_ingest(&claim).unwrap_err();
         assert_eq!(err.reason, reasons::HANDLE_CLAIM_SUBJECT_NOT_PRINCIPAL_DID);
     }

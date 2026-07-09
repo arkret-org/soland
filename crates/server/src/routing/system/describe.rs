@@ -1,6 +1,6 @@
 //! Describe handlers (the `*_describe` family).
 //!
-//! These are the introspection / capability-probe surfaces every Cokret
+//! These are the introspection / capability-probe surfaces every Arkret
 //! client uses to discover what the server actually implements. None of them
 //! mutate state; most are static JSON literals + a small amount of state
 //! injection (config, registry version metadata).
@@ -101,11 +101,11 @@ pub(super) fn local_router() -> Router {
 }
 
 #[endpoint(
-    operation_id = "org.cokret.soland.system.health",
+    operation_id = "org.arkret.soland.system.health",
     tags("system"),
     summary = "Liveness probe + database / events health snapshot"
 )]
-#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.system.health"))]
+#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.system.health"))]
 async fn health(depot: &mut Depot, res: &mut Response) -> JsonResult<HealthOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let database_ok = database_ready(state).await;
@@ -134,11 +134,11 @@ async fn health(depot: &mut Depot, res: &mut Response) -> JsonResult<HealthOutco
 }
 
 #[endpoint(
-    operation_id = "org.cokret.soland.system.readyz",
+    operation_id = "org.arkret.soland.system.readyz",
     tags("system"),
     summary = "Readiness probe for deploy orchestrators"
 )]
-#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.system.readyz"))]
+#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.system.readyz"))]
 async fn readyz(depot: &mut Depot, res: &mut Response) -> JsonResult<ReadyzOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let database_ok = database_ready(state).await;
@@ -230,11 +230,11 @@ async fn server_describe(depot: &mut Depot) -> JsonResult<ServerDescribeOutcome>
 }
 
 #[endpoint(
-    operation_id = "org.cokret.soland.system.describe",
+    operation_id = "org.arkret.soland.system.describe",
     tags("soland-local"),
     summary = "Soland operator capability description"
 )]
-#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.system.describe"))]
+#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.system.describe"))]
 async fn soland_describe(depot: &mut Depot) -> JsonResult<SolandServerDescribeOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let service = build_server_description(state);
@@ -289,7 +289,7 @@ fn build_server_description(state: &AppState) -> ServerDescription {
             .advertised_policy(),
     );
     // T6.1 — claim-level partition of the describe response.
-    // See cokret-spec/spec/v1/zh/sync/service-surface.md §3.0 and
+    // See arkret-spec/spec/v1/zh/sync/service-surface.md §3.0 and
     // `ck.schema.service_describe.v1`. `supported_operations` is
     // wire-callable only; this helper separates implementation state,
     // self-claims, cotest-verified claims, and compat surfaces while the
@@ -497,14 +497,14 @@ fn soland_compat_surfaces() -> Vec<cokret_sdk::CompatSurfaceEntry> {
 }
 
 #[endpoint(
-    operation_id = "org.cokret.soland.auth.bridge.describe",
+    operation_id = "org.arkret.soland.auth.bridge.describe",
     tags("auth"),
     summary = "Auth bridge contract description (session grant presentation + push)"
 )]
-#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.auth.bridge.describe"))]
+#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.auth.bridge.describe"))]
 pub(in crate::routing) async fn auth_bridge_describe() -> JsonResult<AuthBridgeDescribeOutcome> {
     json_ok(AuthBridgeDescribeOutcome {
-        contract: "cokret.rest.principal_bridge.v1".to_owned(),
+        contract: "arkret.rest.principal_bridge.v1".to_owned(),
         version: "2026-06-21-session-grant-direct".to_owned(),
         api_base_path: "/_soland".to_owned(),
         auth: AuthBridgeAuthDescriptor {
@@ -518,14 +518,14 @@ pub(in crate::routing) async fn auth_bridge_describe() -> JsonResult<AuthBridgeD
         push: AuthBridgePushDescriptor {
             register_device_path: "/_cokret/edge/push/register-device".to_owned(),
             unregister_device_path: "/_cokret/edge/push/unregister-device".to_owned(),
-            session_grant_header: "X-Cokret-Session-Grant".to_owned(),
+            session_grant_header: "X-Arkret-Session-Grant".to_owned(),
             principal_id_body_field: "principal_id".to_owned(),
             register_device_mode: "session_grant_presentation_or_dev_session".to_owned(),
         },
         examples: AuthBridgeExamples {
             session_grant_issue_request: json!({
                 "principal_id": "did:web:alice.example",
-                "device_id": "ck:device:01904100-0000-7000-8000-000000000001",
+                "device_id": "ak:device:01904100-0000-7000-8000-000000000001",
                 "proof": {
                     "proof_kind": "did_bound_signature",
                     "challenge": "challenge-01js0000000000000000000000",
@@ -536,15 +536,15 @@ pub(in crate::routing) async fn auth_bridge_describe() -> JsonResult<AuthBridgeD
             }),
             register_device_request: json!({
                 "principal_id": "did:web:alice.example",
-                "device_id": "ck:device:01904100-0000-7000-8000-000000000001",
+                "device_id": "ak:device:01904100-0000-7000-8000-000000000001",
                 "push_gateway": "https://floria.example/_cokret/edge/push/notify",
                 "push_key": "webpush:https://fcm.googleapis.com/wp/01js0000000000000000000000",
                 "platform": "web"
             }),
             unregister_device_request: json!({
                 "principal_id": "did:web:alice.example",
-                "device_id": "ck:device:01904100-0000-7000-8000-000000000001",
-                "registration_id": "ck:device:01904100-0000-7000-8000-000000000001#webpush"
+                "device_id": "ak:device:01904100-0000-7000-8000-000000000001",
+                "registration_id": "ak:device:01904100-0000-7000-8000-000000000001#webpush"
             }),
         },
         todos: vec![
@@ -554,14 +554,14 @@ pub(in crate::routing) async fn auth_bridge_describe() -> JsonResult<AuthBridgeD
 }
 
 #[endpoint(
-    operation_id = "org.cokret.soland.integration.describe",
+    operation_id = "org.arkret.soland.integration.describe",
     tags("system"),
     summary = "Integration manifest (dependencies + service surface inventory)"
 )]
-#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.integration.describe"))]
+#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.integration.describe"))]
 async fn integration_describe() -> JsonResult<IntegrationDescribeOutcome> {
     json_ok(IntegrationDescribeOutcome {
-        contract: "cokret.rest.integration_manifest.v1".to_owned(),
+        contract: "arkret.rest.integration_manifest.v1".to_owned(),
         version: "2026-05-04-scaffold".to_owned(),
         service: "soland".to_owned(),
         service_kind: "principal_server".to_owned(),
@@ -588,7 +588,7 @@ async fn integration_describe() -> JsonResult<IntegrationDescribeOutcome> {
                 name: "auth_bridge".to_owned(),
                 method: "GET".to_owned(),
                 path: "/_soland/gate/auth/bridge/describe".to_owned(),
-                contract: "cokret.rest.principal_bridge.v1".to_owned(),
+                contract: "arkret.rest.principal_bridge.v1".to_owned(),
                 stability: "scaffold".to_owned(),
                 todo: "publish the same session-grant presentation requirements in the registry artifact.".to_owned(),
             },
@@ -604,7 +604,7 @@ async fn integration_describe() -> JsonResult<IntegrationDescribeOutcome> {
                 name: "outbound_push_bridge".to_owned(),
                 method: "GET".to_owned(),
                 path: "/_soland/edge/push/outbound/bridge/describe".to_owned(),
-                contract: "cokret.rest.outbound_push_bridge.v1".to_owned(),
+                contract: "arkret.rest.outbound_push_bridge.v1".to_owned(),
                 stability: "limited".to_owned(),
                 todo: "snapshots are durable and participate in notify drift checks; signed delivery binding to the gateway contract is still not claimed.".to_owned(),
             },
@@ -612,7 +612,7 @@ async fn integration_describe() -> JsonResult<IntegrationDescribeOutcome> {
                 name: "push_register_device".to_owned(),
                 method: "POST".to_owned(),
                 path: "/_cokret/edge/push/register-device".to_owned(),
-                contract: "cokret.rest.principal_push_register.v1".to_owned(),
+                contract: "arkret.rest.principal_push_register.v1".to_owned(),
                 stability: "limited".to_owned(),
                 todo: "unify push registration behind the same session-grant presentation used by ordinary requests.".to_owned(),
             },
@@ -620,7 +620,7 @@ async fn integration_describe() -> JsonResult<IntegrationDescribeOutcome> {
                 name: "admin_bottom_manual_repair".to_owned(),
                 method: "POST".to_owned(),
                 path: "/_soland/admin/realms/{realm_id}/bottom/{cell_id}/repair".to_owned(),
-                contract: "cokret.rest.admin.bottom_repair.v1".to_owned(),
+                contract: "arkret.rest.admin.bottom_repair.v1".to_owned(),
                 stability: "unsupported_signing_path".to_owned(),
                 todo: "manual effects are scope-validated only and are not submitted as signed Moves.".to_owned(),
             },

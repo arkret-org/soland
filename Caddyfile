@@ -4,8 +4,8 @@
 		Access-Control-Allow-Origin "{http.request.header.Origin}"
 		Access-Control-Allow-Credentials "true"
 		Access-Control-Allow-Methods "GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS"
-		Access-Control-Allow-Headers "authorization, content-type, dpop, idempotency-key, x-cokret-request-id, x-cokret-wait-for, x-cokret-content-digest, x-cokret-realm-id, x-cokret-filename, x-cokret-blob-encrypted, x-cokret-blob-purpose, x-cokret-purpose, x-cokret-attachment-envelope, x-cokret-key-backup-unlock-proof, x-cokret-session-grant-challenge, x-cokret-session-grant-proof, range"
-		Access-Control-Expose-Headers "retry-after, x-cokret-wait-for-satisfied, content-range, accept-ranges"
+		Access-Control-Allow-Headers "authorization, content-type, dpop, idempotency-key, x-arkret-request-id, x-arkret-wait-for, x-arkret-content-digest, x-arkret-realm-id, x-arkret-filename, x-arkret-blob-encrypted, x-arkret-blob-purpose, x-arkret-purpose, x-arkret-attachment-envelope, x-arkret-key-backup-unlock-proof, x-arkret-session-grant-challenge, x-arkret-session-grant-proof, range"
+		Access-Control-Expose-Headers "retry-after, x-arkret-wait-for-satisfied, content-range, accept-ranges"
 		Vary "Origin"
 		defer
 	}
@@ -18,8 +18,8 @@
 			Access-Control-Allow-Origin "{http.request.header.Origin}"
 			Access-Control-Allow-Credentials "true"
 			Access-Control-Allow-Methods "GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS"
-			Access-Control-Allow-Headers "authorization, content-type, dpop, idempotency-key, x-cokret-request-id, x-cokret-wait-for, x-cokret-content-digest, x-cokret-realm-id, x-cokret-filename, x-cokret-blob-encrypted, x-cokret-blob-purpose, x-cokret-purpose, x-cokret-attachment-envelope, x-cokret-key-backup-unlock-proof, x-cokret-session-grant-challenge, x-cokret-session-grant-proof, range"
-			Access-Control-Expose-Headers "retry-after, x-cokret-wait-for-satisfied, content-range, accept-ranges"
+			Access-Control-Allow-Headers "authorization, content-type, dpop, idempotency-key, x-arkret-request-id, x-arkret-wait-for, x-arkret-content-digest, x-arkret-realm-id, x-arkret-filename, x-arkret-blob-encrypted, x-arkret-blob-purpose, x-arkret-purpose, x-arkret-attachment-envelope, x-arkret-key-backup-unlock-proof, x-arkret-session-grant-challenge, x-arkret-session-grant-proof, range"
+			Access-Control-Expose-Headers "retry-after, x-arkret-wait-for-satisfied, content-range, accept-ranges"
 			Vary "Origin"
 		}
 		respond "{err.status_code} {err.status_text}" {err.status_code}

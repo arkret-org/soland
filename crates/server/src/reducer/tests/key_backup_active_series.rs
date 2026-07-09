@@ -2,10 +2,10 @@ use serde_json::{Value, json};
 
 use super::*;
 
-const REALM: &str = "ck:realm:0196419b-0000-7000-8000-000000000001";
+const REALM: &str = "ak:realm:0196419b-0000-7000-8000-000000000001";
 const ACTOR: &str = "did:web:alice.example";
-const ACTIVE_SERIES: &str = "ck:backup_series:01964137-1000-7000-8000-000000000000";
-const PREVIOUS_SERIES: &str = "ck:backup_series:01964137-1000-7000-8000-000000000001";
+const ACTIVE_SERIES: &str = "ak:backup_series:01964137-1000-7000-8000-000000000000";
+const PREVIOUS_SERIES: &str = "ak:backup_series:01964137-1000-7000-8000-000000000001";
 
 fn active_series_payload() -> Value {
     json!({
@@ -16,7 +16,7 @@ fn active_series_payload() -> Value {
         "previous_series_ids": [PREVIOUS_SERIES],
         "frontier_ref": {
             "frontier_digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
-            "seal_ref": "ck:seal:sha256:4444444444444444444444444444444444444444444444444444444444444444",
+            "seal_ref": "ak:seal:sha256:4444444444444444444444444444444444444444444444444444444444444444",
             "ssk_generation": 2
         },
         "issued_at": "2026-04-27T00:00:00Z",
@@ -70,7 +70,7 @@ fn key_backup_active_series_projects_pointer_and_cell() {
     assert_eq!(projected.ssk_generation, 2);
 
     let cell = cokret_sdk::CellRef::new(format!(
-        "ck:cell:ck.component.key_backup.active_series.v1:{ACTOR}::secret_storage"
+        "ak:cell:ck.component.key_backup.active_series.v1:{ACTOR}::secret_storage"
     ))
     .expect("active series cell ref");
     assert!(state.cell_value(&cell).is_some());

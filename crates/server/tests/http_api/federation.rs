@@ -11,8 +11,8 @@ use super::common::*;
 
 const PEER_SOURCE_DID: &str = "did:web:remote.example";
 const SERVICE_DID: &str = "did:web:soland.local";
-const TEST_REALM_ID: &str = "ck:realm:0196419b-0000-7000-8000-000000000000";
-const TEST_CIRCLE_ID: &str = "ck:circle:0196419b-0000-7000-8000-0000000000c1";
+const TEST_REALM_ID: &str = "ak:realm:0196419b-0000-7000-8000-000000000000";
+const TEST_CIRCLE_ID: &str = "ak:circle:0196419b-0000-7000-8000-0000000000c1";
 
 #[tokio::test]
 async fn peer_events_describe_advertises_formal_surface() {
@@ -56,7 +56,7 @@ async fn peer_events_query_and_frontier_use_peer_surface() {
     let state = AppState::new(test_config(), Db { pool: None });
     seed_peer_read_authorization(&state, PEER_SOURCE_DID, "did:web:alice.example").await;
     let mut event = signed_event_envelope(
-        "ck:event:01904100-0000-7000-8000-fede00000001",
+        "ak:event:01904100-0000-7000-8000-fede00000001",
         1,
         Vec::new(),
     );
@@ -83,7 +83,7 @@ async fn peer_events_query_and_frontier_use_peer_surface() {
         .or_else(|| page["events"][0]["event"]["event_id"].as_str());
     assert_eq!(
         returned_event_id,
-        Some("ck:event:01904100-0000-7000-8000-fede00000001"),
+        Some("ak:event:01904100-0000-7000-8000-fede00000001"),
         "{page:?}"
     );
     assert!(!page["has_more"].as_bool().unwrap_or(false), "{page:?}");
@@ -106,7 +106,7 @@ async fn peer_events_query_and_frontier_use_peer_surface() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|head| head == "ck:event:01904100-0000-7000-8000-fede00000001")
+            .any(|head| head == "ak:event:01904100-0000-7000-8000-fede00000001")
     );
     assert!(
         frontier["frontier_root"]
@@ -127,14 +127,14 @@ async fn peer_events_submit_quarantines_actor_seq_sibling_overflow() {
     let state = AppState::new(test_config(), Db { pool: None });
     let now = Utc::now();
     for idx in 0..16 {
-        let event_id = format!("ck:event:01904100-0000-7000-8000-fede000001{idx:02x}");
+        let event_id = format!("ak:event:01904100-0000-7000-8000-fede000001{idx:02x}");
         let mut event = signed_event_envelope(&event_id, 41, Vec::new());
         event["canonical_digest"] = serde_json::json!(event_canonical_digest(&event));
         put_event_record(&state, event, now + ChronoDuration::seconds(idx)).await;
     }
 
     let mut overflow = signed_event_envelope(
-        "ck:event:01904100-0000-7000-8000-fede000001ff",
+        "ak:event:01904100-0000-7000-8000-fede000001ff",
         41,
         Vec::new(),
     );
@@ -155,7 +155,7 @@ async fn peer_events_submit_quarantines_actor_seq_sibling_overflow() {
     assert_eq!(outcome["status"], "partial", "{outcome:?}");
     assert_eq!(
         outcome["quarantine"],
-        serde_json::json!(["ck:event:01904100-0000-7000-8000-fede000001ff"]),
+        serde_json::json!(["ak:event:01904100-0000-7000-8000-fede000001ff"]),
         "{outcome:?}"
     );
     assert!(outcome["rejected"].as_array().is_none_or(Vec::is_empty));
@@ -163,7 +163,7 @@ async fn peer_events_submit_quarantines_actor_seq_sibling_overflow() {
         state
             .persistence
             .events()
-            .get("ck:event:01904100-0000-7000-8000-fede000001ff")
+            .get("ak:event:01904100-0000-7000-8000-fede000001ff")
             .await
             .unwrap()
             .is_none(),
@@ -177,8 +177,8 @@ async fn peer_events_frontier_exposes_current_sibling_heads() {
     seed_peer_read_authorization(&state, PEER_SOURCE_DID, "did:web:alice.example").await;
     let now = Utc::now();
     for (idx, event_id) in [
-        "ck:event:01904100-0000-7000-8000-fede000002a1",
-        "ck:event:01904100-0000-7000-8000-fede000002a2",
+        "ak:event:01904100-0000-7000-8000-fede000002a1",
+        "ak:event:01904100-0000-7000-8000-fede000002a2",
     ]
     .iter()
     .enumerate()
@@ -204,13 +204,13 @@ async fn peer_events_frontier_exposes_current_sibling_heads() {
     assert!(
         heads
             .iter()
-            .any(|head| head == "ck:event:01904100-0000-7000-8000-fede000002a1"),
+            .any(|head| head == "ak:event:01904100-0000-7000-8000-fede000002a1"),
         "{frontier:?}"
     );
     assert!(
         heads
             .iter()
-            .any(|head| head == "ck:event:01904100-0000-7000-8000-fede000002a2"),
+            .any(|head| head == "ak:event:01904100-0000-7000-8000-fede000002a2"),
         "{frontier:?}"
     );
     assert_eq!(
@@ -227,7 +227,7 @@ async fn peer_events_frontier_exposes_current_sibling_heads() {
 async fn peer_events_submit_rejects_actor_outside_source_trust_domain() {
     let state = AppState::new(test_config(), Db { pool: None });
     let mut event = signed_event_envelope(
-        "ck:event:01904100-0000-7000-8000-fede00000099",
+        "ak:event:01904100-0000-7000-8000-fede00000099",
         1,
         Vec::new(),
     );
@@ -272,7 +272,7 @@ async fn peer_events_submit_accepts_known_member_relayed_by_foreign_domain() {
     // index; the source domain is `remote.example` (mismatched home), so
     // acceptance exercises the membership-index path.
     let event = signed_event_envelope(
-        "ck:event:01904100-0000-7000-8000-fede00000098",
+        "ak:event:01904100-0000-7000-8000-fede00000098",
         1,
         Vec::new(),
     );
@@ -295,7 +295,7 @@ async fn peer_events_submit_accepts_known_member_relayed_by_foreign_domain() {
 #[tokio::test]
 async fn peer_events_submit_accepts_bound_mls_welcome_and_rejects_missing_claim_envelope() {
     let state = AppState::new(test_config(), Db { pool: None });
-    let welcome_event_id = "ck:event:01904100-0000-7000-8000-fede00000b01";
+    let welcome_event_id = "ak:event:01904100-0000-7000-8000-fede00000b01";
     let welcome_event = event_envelope(
         welcome_event_id,
         "ck.mls.welcome",
@@ -318,7 +318,7 @@ async fn peer_events_submit_accepts_bound_mls_welcome_and_rejects_missing_claim_
         1
     );
 
-    let missing_claim_event_id = "ck:event:01904100-0000-7000-8000-fede00000b02";
+    let missing_claim_event_id = "ak:event:01904100-0000-7000-8000-fede00000b02";
     let mut missing_claim_payload =
         mls_welcome_payload("claim-peer-02", "opaque-peer-welcome-missing");
     missing_claim_payload
@@ -368,7 +368,7 @@ async fn peer_events_query_clips_circle_event_outside_source_did_member_scope() 
     put_event_record(
         &state,
         circle_member_event(
-            "ck:event:01904100-0000-7000-8000-c1ac1e000001",
+            "ak:event:01904100-0000-7000-8000-c1ac1e000001",
             "did:web:alice.example",
             "did:web:admin.example",
             31,
@@ -376,7 +376,7 @@ async fn peer_events_query_clips_circle_event_outside_source_did_member_scope() 
         now - ChronoDuration::seconds(20),
     )
     .await;
-    let hidden_event_id = "ck:event:01904100-0000-7000-8000-c1ac1e000002";
+    let hidden_event_id = "ak:event:01904100-0000-7000-8000-c1ac1e000002";
     let mut event = signed_event_envelope(hidden_event_id, 32, Vec::new());
     event["actor_id"] = serde_json::json!("did:web:alice.example");
     event["effective_scope"] = serde_json::json!(TEST_CIRCLE_ID);
@@ -436,7 +436,7 @@ async fn self_events_reject_federation_wire() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
     let event = signed_event_envelope(
-        "ck:event:01904100-0000-7000-8000-fede00000002",
+        "ak:event:01904100-0000-7000-8000-fede00000002",
         1,
         Vec::new(),
     );
@@ -476,7 +476,7 @@ fn peer_submit_body(event: &Value) -> Value {
             "reducer_profile_digest": cokret_sdk::FEDERATION_MINIMAL_REDUCER_PROFILE_DIGEST,
         },
         "events": [event],
-        "idempotency_key": format!("ck:outbox:event:{event_id}"),
+        "idempotency_key": format!("ak:outbox:event:{event_id}"),
     })
 }
 
@@ -546,7 +546,7 @@ async fn seed_peer_read_authorization(
     put_event_record(
         state,
         realm_sync_endpoint_event(
-            "ck:event:01904100-0000-7000-8000-fede0000a001",
+            "ak:event:01904100-0000-7000-8000-fede0000a001",
             source_service_did,
             21,
         ),
@@ -556,7 +556,7 @@ async fn seed_peer_read_authorization(
     put_event_record(
         state,
         member_binding_event(
-            "ck:event:01904100-0000-7000-8000-fede0000a002",
+            "ak:event:01904100-0000-7000-8000-fede0000a002",
             member_did,
             source_service_did,
             22,
@@ -603,7 +603,7 @@ fn member_binding_event(
         "delivery_binding": {
             "recipient_service_did": source_service_did,
             "binding_source": "explicit",
-            "delivery_binding_frontier": "ck:frontier:peer-read-test"
+            "delivery_binding_frontier": "ak:frontier:peer-read-test"
         }
     });
     event_envelope(
@@ -635,7 +635,7 @@ fn circle_member_event(event_id: &str, member_did: &str, sender: &str, seq: u64)
 }
 
 fn mls_welcome_payload(claim_id: &str, ciphertext: &str) -> Value {
-    let group_id = "ck:mls_group:peer-dm";
+    let group_id = "ak:mls_group:peer-dm";
     let keypackage_ref = "sha256:5555555555555555555555555555555555555555555555555555555555555555";
     let keypackage_digest =
         "sha256:5555555555555555555555555555555555555555555555555555555555555555";
@@ -643,7 +643,7 @@ fn mls_welcome_payload(claim_id: &str, ciphertext: &str) -> Value {
         "mls_group_id": group_id,
         "epoch": 1,
         "recipient_principal_id": "did:web:bob.example",
-        "recipient_device_id": "ck:device:01904100-0000-7000-8000-b0b0e0000001",
+        "recipient_device_id": "ak:device:01904100-0000-7000-8000-b0b0e0000001",
         "keypackage_ref": keypackage_ref,
         "keypackage_digest": keypackage_digest,
         "claim_id": claim_id,
@@ -670,10 +670,10 @@ fn mls_welcome_payload(claim_id: &str, ciphertext: &str) -> Value {
                 "sig": b64(format!("{claim_id}-signature").as_bytes())
             }
         },
-        "welcome_ref": "ck:blob:sha256:8888888888888888888888888888888888888888888888888888888888888888",
+        "welcome_ref": "ak:blob:sha256:8888888888888888888888888888888888888888888888888888888888888888",
         "ciphertext": ciphertext,
         "expires_at": "2026-05-25T01:00:00Z",
-        "commit_ref": "ck:event:01904100-0000-7000-8000-fede00000c01",
+        "commit_ref": "ak:event:01904100-0000-7000-8000-fede00000c01",
         "governance_binding": mls_governance_binding(group_id)
     })
 }
@@ -691,7 +691,7 @@ fn mls_governance_binding(group_id: &str) -> Value {
         "previous_epoch": 0,
         "next_epoch": 0,
         "membership_frontier": [
-            "ck:event:01904100-0000-7000-8000-fede00000a01"
+            "ak:event:01904100-0000-7000-8000-fede00000a01"
         ],
         "policy_root": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
         "binding_profile": soland::kinds::MLS_GOVERNANCE_BINDING_FULL_PROFILE,
@@ -718,7 +718,7 @@ fn event_envelope(
         "actor_id": actor_id,
         "actor_seq": actor_seq,
         "realm_id": TEST_REALM_ID,
-        "device_id": "ck:device:01904100-0000-7000-8000-a11ce0000001",
+        "device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001",
         "audience": SERVICE_DID,
         "domain": SERVICE_DID,
         "prev_refs": [],
@@ -727,7 +727,7 @@ fn event_envelope(
         "proofs": [{
             "type": "dev-proof",
             "verification_method": format!("{actor_id}#01904100-0000-7000-8000-a11ce0000001"),
-            "device_id": "ck:device:01904100-0000-7000-8000-a11ce0000001",
+            "device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001",
             "audience": SERVICE_DID,
             "domain": SERVICE_DID,
             "payload_digest": sha256_json(&payload)

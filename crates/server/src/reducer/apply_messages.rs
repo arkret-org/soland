@@ -75,7 +75,7 @@ impl ProjectionState {
 
     pub(crate) fn apply_poll_create(&mut self, message: &MessageState) {
         let poll_id = poll_id_from_content(&message.content)
-            .unwrap_or_else(|| message.event_id.replacen("ck:event:", "ck:message:", 1));
+            .unwrap_or_else(|| message.event_id.replacen("ak:event:", "ak:message:", 1));
         let Some(question) = poll_question_from_content(&message.content) else {
             return;
         };
@@ -332,7 +332,7 @@ impl ProjectionState {
                     new_state: ObjectLifecycleState::Redacted,
                 };
             }
-            if object_ref.starts_with("ck:strand:") || object_ref.starts_with("ck:morph:") {
+            if object_ref.starts_with("ak:strand:") || object_ref.starts_with("ak:morph:") {
                 return self.queue_pending_replay(
                     object_ref,
                     operation,
@@ -731,7 +731,7 @@ impl ProjectionState {
             .filter(|(cell_ref, _)| {
                 cell_ref
                     .as_str()
-                    .starts_with("ck:cell:ck.component.moderation_state.v1:")
+                    .starts_with("ak:cell:ck.component.moderation_state.v1:")
             })
             .any(|(_, state)| {
                 let CellState::Value(Value::Array(items)) = state else {

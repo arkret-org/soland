@@ -7,7 +7,7 @@ use super::*;
 
 impl ProjectionState {
     pub(crate) fn message_by_target_ref(&self, target_ref: &str) -> Option<&MessageState> {
-        if target_ref.starts_with("ck:message:") {
+        if target_ref.starts_with("ak:message:") {
             return self
                 .messages
                 .values()
@@ -18,7 +18,7 @@ impl ProjectionState {
                     self.messages.get(&event_id)
                 });
         }
-        if target_ref.starts_with("ck:event:") {
+        if target_ref.starts_with("ak:event:") {
             return self.messages.get(target_ref);
         }
         self.messages.get(target_ref).or_else(|| {
@@ -254,7 +254,7 @@ impl ProjectionState {
     /// `ck.component.member.state.v1` cell_family declaration.
     pub fn member_fsm_state(&self, actor_id: &str) -> Option<String> {
         let cell_id =
-            cokret_sdk::CellRef::new(format!("ck:cell:ck.component.member.state.v1:{actor_id}"))
+            cokret_sdk::CellRef::new(format!("ak:cell:ck.component.member.state.v1:{actor_id}"))
                 .ok()?;
         self.cell_value(&cell_id)
             .and_then(Value::as_str)
@@ -269,7 +269,7 @@ impl ProjectionState {
     ///   - the cell is in `Bottom` state (concurrent conflict needs recovery)
     pub fn read_receipt_policy_cell_value(&self, realm_id: &str) -> Option<&Value> {
         let cell_id = cokret_sdk::CellRef::new(format!(
-            "ck:cell:ck.component.realm.read_receipt_policy.v1:{realm_id}"
+            "ak:cell:ck.component.realm.read_receipt_policy.v1:{realm_id}"
         ))
         .ok()?;
         self.cell_value(&cell_id)
@@ -298,7 +298,7 @@ impl ProjectionState {
     /// events (e.g. before first projection) or `Bottom` state.
     pub fn realm_create_log(&self, realm_id: &str) -> Option<&[Value]> {
         let cell_id =
-            cokret_sdk::CellRef::new(format!("ck:cell:ck.component.realm.create.v1:{realm_id}"))
+            cokret_sdk::CellRef::new(format!("ak:cell:ck.component.realm.create.v1:{realm_id}"))
                 .ok()?;
         match self.cells.get(&cell_id)? {
             CellState::Value(Value::Array(entries)) => Some(entries.as_slice()),
@@ -309,7 +309,7 @@ impl ProjectionState {
     /// True when the `ck.component.realm.destroy.v1` cell has a Value.
     pub fn realm_is_destroyed(&self, realm_id: &str) -> bool {
         let Ok(cell_id) =
-            cokret_sdk::CellRef::new(format!("ck:cell:ck.component.realm.destroy.v1:{realm_id}"))
+            cokret_sdk::CellRef::new(format!("ak:cell:ck.component.realm.destroy.v1:{realm_id}"))
         else {
             return false;
         };
@@ -319,7 +319,7 @@ impl ProjectionState {
     /// True when the `ck.component.realm.tombstone.v1` cell has a Value.
     pub fn realm_is_tombstoned(&self, realm_id: &str) -> bool {
         let Ok(cell_id) = cokret_sdk::CellRef::new(format!(
-            "ck:cell:ck.component.realm.tombstone.v1:{realm_id}"
+            "ak:cell:ck.component.realm.tombstone.v1:{realm_id}"
         )) else {
             return false;
         };
@@ -365,7 +365,7 @@ impl ProjectionState {
     /// cells map to the structured cache.
     pub fn realm_delivery_binding_policy_cell_value(&self, realm_id: &str) -> Option<&Value> {
         let cell_id = cokret_sdk::CellRef::new(format!(
-            "ck:cell:ck.component.realm.delivery_binding_policy.v1:{realm_id}"
+            "ak:cell:ck.component.realm.delivery_binding_policy.v1:{realm_id}"
         ))
         .ok()?;
         self.cell_value(&cell_id)
@@ -373,7 +373,7 @@ impl ProjectionState {
 
     pub fn realm_policy_components_cell_value(&self, realm_id: &str) -> Option<&Value> {
         let cell_id = cokret_sdk::CellRef::new(format!(
-            "ck:cell:ck.component.realm.policy_components.v1:{realm_id}"
+            "ak:cell:ck.component.realm.policy_components.v1:{realm_id}"
         ))
         .ok()?;
         self.cell_value(&cell_id)
@@ -558,7 +558,7 @@ impl ProjectionState {
 
     pub fn realm_disappearing_policy_cell_value(&self, realm_id: &str) -> Option<&Value> {
         let cell_id = cokret_sdk::CellRef::new(format!(
-            "ck:cell:ck.component.realm.disappearing_policy.v1:{realm_id}"
+            "ak:cell:ck.component.realm.disappearing_policy.v1:{realm_id}"
         ))
         .ok()?;
         self.cell_value(&cell_id)
@@ -566,7 +566,7 @@ impl ProjectionState {
 
     pub fn realm_search_policy_cell_value(&self, realm_id: &str) -> Option<&Value> {
         let cell_id = cokret_sdk::CellRef::new(format!(
-            "ck:cell:ck.component.realm.search_policy.v1:{realm_id}"
+            "ak:cell:ck.component.realm.search_policy.v1:{realm_id}"
         ))
         .ok()?;
         self.cell_value(&cell_id)
@@ -792,7 +792,7 @@ impl ProjectionState {
         }
         // Fallback: check the create-log cell's last entry.
         if let Ok(create_cell) =
-            cokret_sdk::CellRef::new(format!("ck:cell:ck.component.realm.create.v1:{realm_id}"))
+            cokret_sdk::CellRef::new(format!("ak:cell:ck.component.realm.create.v1:{realm_id}"))
             && let Some(arr) = self.cell_value(&create_cell).and_then(Value::as_array)
             && let Some(last) = arr.last()
             && let Some(s) = last.get("security_class").and_then(Value::as_str)

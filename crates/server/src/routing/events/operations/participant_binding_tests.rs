@@ -6,13 +6,13 @@ use soland_data::Db;
 use super::*;
 use crate::routing::interop::participant_binding;
 
-const REALM_ID: &str = "ck:realm:01904100-0000-7000-8000-c0ffeec0ffec";
-const CALL_ID: &str = "ck:call:01904100-0000-7000-8000-ca11ca11ca11";
-const FOCUS_ID: &str = "ck:focus:cokret-native:green";
+const REALM_ID: &str = "ak:realm:01904100-0000-7000-8000-c0ffeec0ffec";
+const CALL_ID: &str = "ak:call:01904100-0000-7000-8000-ca11ca11ca11";
+const FOCUS_ID: &str = "ak:focus:arkret-native:green";
 const ACTOR_ID: &str = "did:web:alice.example";
-const DEVICE_ID: &str = "ck:device:01904100-0000-7000-8000-a11ce0000001";
+const DEVICE_ID: &str = "ak:device:01904100-0000-7000-8000-a11ce0000001";
 const ISSUER_KID: &str = "did:web:soland.local#media-2026-06";
-const PARTICIPANT_IDENTITY: &str = "ck:rtc_participant:01904100-0000-7000-8000-aaaaaaaaaaaa";
+const PARTICIPANT_IDENTITY: &str = "ak:rtc_participant:01904100-0000-7000-8000-aaaaaaaaaaaa";
 
 fn test_config() -> crate::config::AppConfig {
     crate::config::AppConfig {
@@ -32,7 +32,7 @@ fn test_config() -> crate::config::AppConfig {
 /// `service_id`.
 fn install_media_service_with_service_id(state: &AppState, service_id: &str, issuer_kid: &str) {
     let cell_id = CellRef::new(format!(
-        "ck:cell:ck.component.realm.media_service.v1:{REALM_ID}"
+        "ak:cell:ck.component.realm.media_service.v1:{REALM_ID}"
     ))
     .unwrap();
     state.projection.lock().cells.insert(
@@ -42,7 +42,7 @@ fn install_media_service_with_service_id(state: &AppState, service_id: &str, iss
                 "service_id": service_id,
                 "foci": [{
                     "focus_id": FOCUS_ID,
-                    "backend": "cokret-native",
+                    "backend": "arkret-native",
                     "issuer_kid": issuer_kid,
                     "connect_url": "wss://media.soland.local/native"
                 }]
@@ -52,7 +52,7 @@ fn install_media_service_with_service_id(state: &AppState, service_id: &str, iss
 }
 
 /// Install a current-epoch media_service cell anchoring `issuer_kid` under
-/// the soland self service_id (the cokret-native self-signed deployment).
+/// the soland self service_id (the arkret-native self-signed deployment).
 fn install_media_service(state: &AppState, issuer_kid: &str) {
     install_media_service_with_service_id(state, "did:web:soland.local", issuer_kid);
 }
@@ -93,7 +93,7 @@ fn signed_binding(state: &AppState, expires_at: &str) -> Value {
 
 fn call_state_op(binding: Value) -> Operation {
     let mut op = Operation::create(
-        cokret_sdk::OperationId::new(format!("ck:operation:{}", uuid::Uuid::now_v7())).unwrap(),
+        cokret_sdk::OperationId::new(format!("ak:operation:{}", uuid::Uuid::now_v7())).unwrap(),
         cokret_sdk::RealmId::new(REALM_ID.to_owned()).unwrap(),
         cokret_sdk::events::kinds::CALL_STATE,
         json!({
@@ -147,7 +147,7 @@ fn binding_field_mismatch_with_participant_entry_is_rejected() {
     let mut op = call_state_op(signed_binding(&state, "2026-06-15T00:05:00Z"));
     // The participant entry's device_id diverges from the signed binding.
     op.payload["participants"][0]["device_id"] =
-        json!("ck:device:01904100-0000-7000-8000-d1ffffffffff");
+        json!("ak:device:01904100-0000-7000-8000-d1ffffffffff");
     let err = validate_operation_semantics(&state, std::slice::from_ref(&op)).unwrap_err();
     assert!(
         err.starts_with("participant_binding_invalid"),

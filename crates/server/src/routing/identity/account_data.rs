@@ -397,11 +397,11 @@ mod tests {
             "version": "1.0",
             "group_id": "testGroup",
             "epoch": 1,
-            "content_type": "application/vnd.cokret.account-data+json",
+            "content_type": "application/vnd.arkret.account-data+json",
             "ciphertext": "b3BhcXVl",
             "aad_visibility_event_id": "hidden",
             "aad": {
-                "realm_id": "ck:realm:0196419b-0000-7000-8000-000000000000",
+                "realm_id": "ak:realm:0196419b-0000-7000-8000-000000000000",
                 "event_kind": "ck.account_data.set"
             },
             "key_ref": {
@@ -514,7 +514,7 @@ mod tests {
             .put(json!({
                 "agent_principal_id": agent_principal_id,
                 "controller_did": "did:web:alice.example",
-                "agent_id": "ck:agent:0196419b-0000-7000-8000-000000000001",
+                "agent_id": "ak:agent:0196419b-0000-7000-8000-000000000001",
                 "display_name": "Alice Assistant",
                 "state": "active"
             }))

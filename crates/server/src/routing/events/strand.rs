@@ -26,17 +26,17 @@ pub fn retag_typed_id(value: &str, from_prefix: &str, to_prefix: &str) -> Option
 
 pub fn derived_strand_id(seed: &str) -> String {
     let digest = sha256_hex(seed.as_bytes());
-    format!("ck:strand:{}", &digest[..26])
+    format!("ak:strand:{}", &digest[..26])
 }
 
 pub fn strand_id_from_realm_id(realm_id: &str) -> String {
-    retag_typed_id(realm_id, "ck:realm:", "ck:strand:")
+    retag_typed_id(realm_id, "ak:realm:", "ak:strand:")
         .unwrap_or_else(|| derived_strand_id(realm_id))
 }
 
 pub fn message_id_from_event_id(event_id: &str) -> String {
-    retag_typed_id(event_id, "ck:event:", "ck:message:")
-        .unwrap_or_else(|| format!("ck:message:{event_id}"))
+    retag_typed_id(event_id, "ak:event:", "ak:message:")
+        .unwrap_or_else(|| format!("ak:message:{event_id}"))
 }
 
 pub fn default_discussion_track(_strand_id: &str, _track_id: &str) -> serde_json::Value {

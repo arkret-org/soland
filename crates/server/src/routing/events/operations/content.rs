@@ -311,7 +311,7 @@ pub fn validate_mentions(content: &serde_json::Value) -> Result<(), &'static str
                 if !mention
                     .get("strand_id")
                     .and_then(|value| value.as_str())
-                    .is_some_and(|value| value.starts_with("ck:strand:"))
+                    .is_some_and(|value| value.starts_with("ak:strand:"))
                 {
                     return Err("strand mention requires strand_id");
                 }

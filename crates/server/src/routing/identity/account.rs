@@ -738,12 +738,12 @@ async fn enforce_account_registration_policy(
 }
 
 #[endpoint(
-    operation_id = "org.cokret.soland.account.register",
+    operation_id = "org.arkret.soland.account.register",
     tags("account"),
     summary = "Register a local account projection",
     status_codes(200, 400, 409, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.account.register"))]
+#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.account.register"))]
 async fn local_account_register(
     depot: &mut Depot,
     body: JsonBody<LocalAccountRegisterRequestBody>,
@@ -831,12 +831,12 @@ async fn local_account_register(
 }
 
 #[endpoint(
-    operation_id = "org.cokret.soland.account.me",
+    operation_id = "org.arkret.soland.account.me",
     tags("account"),
     summary = "Get the authenticated local account projection",
     status_codes(200, 401, 404, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.account.me"))]
+#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.account.me"))]
 async fn local_account_me(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -856,12 +856,12 @@ async fn local_account_me(
 }
 
 #[endpoint(
-    operation_id = "org.cokret.soland.accounts.localparts.list",
+    operation_id = "org.arkret.soland.accounts.localparts.list",
     tags("account"),
     summary = "List account localparts",
     status_codes(200, 401, 404, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.accounts.localparts.list"))]
+#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.accounts.localparts.list"))]
 async fn list_account_localparts(
     account_did: PathParam<String>,
     depot: &mut Depot,
@@ -890,12 +890,12 @@ async fn list_account_localparts(
 }
 
 #[endpoint(
-    operation_id = "org.cokret.soland.accounts.localparts.add",
+    operation_id = "org.arkret.soland.accounts.localparts.add",
     tags("account"),
     summary = "Bind a localpart to an account",
     status_codes(200, 400, 401, 404, 409, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.accounts.localparts.add"))]
+#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.accounts.localparts.add"))]
 async fn add_account_localpart(
     account_did: PathParam<String>,
     depot: &mut Depot,
@@ -940,12 +940,12 @@ async fn add_account_localpart(
 }
 
 #[endpoint(
-    operation_id = "org.cokret.soland.accounts.localparts.update",
+    operation_id = "org.arkret.soland.accounts.localparts.update",
     tags("account"),
     summary = "Update an account localpart binding",
     status_codes(200, 400, 401, 404, 409, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.accounts.localparts.update"))]
+#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.accounts.localparts.update"))]
 async fn update_account_localpart(
     account_did: PathParam<String>,
     localpart: PathParam<String>,
@@ -988,12 +988,12 @@ async fn update_account_localpart(
 }
 
 #[endpoint(
-    operation_id = "org.cokret.soland.accounts.localparts.delete",
+    operation_id = "org.arkret.soland.accounts.localparts.delete",
     tags("account"),
     summary = "Remove an account localpart binding",
     status_codes(200, 400, 401, 404, 409, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.accounts.localparts.delete"))]
+#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.accounts.localparts.delete"))]
 async fn delete_account_localpart(
     account_did: PathParam<String>,
     localpart: PathParam<String>,
@@ -1387,7 +1387,7 @@ fn actor_profile_from_account(
     if let Some(bio) = account.bio.clone() {
         profile_fields.insert("bio".to_owned(), Value::String(bio));
     }
-    let id = ActorProfileId::new(cokret_sdk::new_prefixed_uuid7("ck:actor_profile:")).map_err(
+    let id = ActorProfileId::new(cokret_sdk::new_prefixed_uuid7("ak:actor_profile:")).map_err(
         |error| AppError::internal(format!("actor profile id construction failed: {error}")),
     )?;
     Ok(ActorProfile {
@@ -1646,8 +1646,8 @@ mod tests {
         let s = crate::routing::identity::recovery::principal_control_realm_for_did(
             "did:web:alice.example",
         );
-        assert!(s.starts_with("ck:realm:"), "got {s}");
-        let uuid_segment = s.strip_prefix("ck:realm:").unwrap();
+        assert!(s.starts_with("ak:realm:"), "got {s}");
+        let uuid_segment = s.strip_prefix("ak:realm:").unwrap();
         // Sections separated by '-'.
         let parts: Vec<&str> = uuid_segment.split('-').collect();
         assert_eq!(parts.len(), 5, "uuid has 5 dash-separated groups");

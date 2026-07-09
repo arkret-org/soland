@@ -16,7 +16,7 @@ async fn configured_cors_allows_only_explicit_origin() {
         .add_header("Access-Control-Request-Method", "POST", true)
         .add_header(
             "Access-Control-Request-Headers",
-            "authorization, content-type, dpop, x-cokret-wait-for",
+            "authorization, content-type, dpop, x-arkret-wait-for",
             true,
         )
         .send(&service)
@@ -45,11 +45,11 @@ async fn configured_cors_allows_only_explicit_origin() {
     // spec (`keys_backups_delete_request_body` / `keys_backups_unlock_request_body`);
     // the former private proof headers must no longer be advertised.
     assert!(
-        !allow_headers.contains("x-cokret-key-backup-unlock-proof"),
+        !allow_headers.contains("x-arkret-key-backup-unlock-proof"),
         "key-backup unlock proof must travel in the request body, not a header: {allow_headers}"
     );
     assert!(
-        !allow_headers.contains("x-cokret-key-backup-delete-proof"),
+        !allow_headers.contains("x-arkret-key-backup-delete-proof"),
         "key-backup delete proof must travel in the request body, not a header: {allow_headers}"
     );
     assert!(
@@ -81,7 +81,7 @@ async fn configured_cors_allows_blob_upload_headers() {
         .add_header("Access-Control-Request-Method", "POST", true)
         .add_header(
             "Access-Control-Request-Headers",
-            "authorization, content-type, x-cokret-blob-encrypted, x-cokret-blob-purpose, x-cokret-content-digest, x-cokret-attachment-envelope, x-cokret-realm-id, x-cokret-filename",
+            "authorization, content-type, x-arkret-blob-encrypted, x-arkret-blob-purpose, x-arkret-content-digest, x-arkret-attachment-envelope, x-arkret-realm-id, x-arkret-filename",
             true,
         )
         .send(&service)
@@ -101,12 +101,12 @@ async fn configured_cors_allows_blob_upload_headers() {
         .unwrap_or_default()
         .to_ascii_lowercase();
     for header in [
-        "x-cokret-blob-encrypted",
-        "x-cokret-blob-purpose",
-        "x-cokret-content-digest",
-        "x-cokret-attachment-envelope",
-        "x-cokret-realm-id",
-        "x-cokret-filename",
+        "x-arkret-blob-encrypted",
+        "x-arkret-blob-purpose",
+        "x-arkret-content-digest",
+        "x-arkret-attachment-envelope",
+        "x-arkret-realm-id",
+        "x-arkret-filename",
     ] {
         assert!(
             allow_headers.contains(header),
@@ -119,7 +119,7 @@ async fn configured_cors_allows_blob_upload_headers() {
 async fn seed_member_invite_event_surfaces_via_authz_invites() {
     // The Realm bootstrap strand in inkson emits a
     // `ck.member.state{membership="invite"}` event for each seed member
-    // (see cokret-rust-sdk + inkson/src/api.rs `build_realm_bootstrap_events`).
+    // (see arkret-rust-sdk + inkson/src/api.rs `build_realm_bootstrap_events`).
     // `models/realm-and-space.md` §3 + `governance/join-policy.md` §6 then
     // expect the invitee to see that invite via `GET /authz/invites`.
     // This test pins that contract on the event path.
@@ -133,14 +133,14 @@ async fn seed_member_invite_event_surfaces_via_authz_invites() {
     let alice = dev_token_for_device(
         state.clone(),
         alice_did,
-        "ck:device:01904100-0000-7000-8000-a11ce0000001",
+        "ak:device:01904100-0000-7000-8000-a11ce0000001",
         "Alice",
     )
     .await;
     let bob = dev_token_for_device(
         state.clone(),
         bob_did,
-        "ck:device:01904100-0000-7000-8000-b0b000000002",
+        "ak:device:01904100-0000-7000-8000-b0b000000002",
         "Bob",
     )
     .await;
@@ -158,7 +158,7 @@ async fn seed_member_invite_event_surfaces_via_authz_invites() {
     let realm_id = created_realm["realm_id"].as_str().unwrap().to_owned();
 
     // Submit alice's ck.member.state{membership=invite} pointing at bob.
-    let event_id = "ck:event:01904100-0000-7000-8000-aa00000000ee";
+    let event_id = "ak:event:01904100-0000-7000-8000-aa00000000ee";
     let payload = serde_json::json!({
         "actor_id": bob_did,
         "membership": "invite",
@@ -171,7 +171,7 @@ async fn seed_member_invite_event_surfaces_via_authz_invites() {
         "actor_id": alice_did,
         "actor_seq": 100_u64,
         "realm_id": realm_id.clone(),
-        "device_id": "ck:device:01904100-0000-7000-8000-a11ce0000001",
+        "device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001",
         "audience": "did:web:soland.local",
         "domain": "did:web:soland.local",
         "created_at": "2026-05-20T16:00:00Z",
@@ -181,7 +181,7 @@ async fn seed_member_invite_event_surfaces_via_authz_invites() {
         "proofs": [{
             "type": "dev-proof",
             "verification_method": format!("{alice_did}#01904100-0000-7000-8000-a11ce0000001"),
-            "device_id": "ck:device:01904100-0000-7000-8000-a11ce0000001",
+            "device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001",
             "audience": "did:web:soland.local",
             "domain": "did:web:soland.local",
             "payload_digest": sha256_json(&payload),
@@ -395,9 +395,9 @@ async fn service_did_is_config_driven_across_public_metadata() {
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
             "realm_id": DEMO_REALM_ID,
-            "call_id": "ck:call:01964137-0000-7000-8000-000000000001",
+            "call_id": "ak:call:01964137-0000-7000-8000-000000000001",
             "actor_id": "did:web:alice.example",
-            "device_id": "ck:device:01904100-0000-7000-8000-a11ce0000001"
+            "device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001"
         }))
         .send(&service)
         .await

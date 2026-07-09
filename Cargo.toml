@@ -12,9 +12,9 @@ version = "0.3.0"
 edition = "2024"
 rust-version = "1.96"
 license = "Apache-2.0"
-repository = "https://github.com/cokret/soland"
-homepage = "https://github.com/cokret/soland"
-authors = ["Cokret contributors"]
+repository = "https://github.com/arkret/soland"
+homepage = "https://github.com/arkret/soland"
+authors = ["Arkret contributors"]
 
 [workspace.dependencies]
 anyhow = "1.0.102"
@@ -27,8 +27,8 @@ bs58 = "0.5.1"
 bytes = "1.11.1"
 chrono = "0.4.45"
 chrono-tz = { version = "0.10.4", default-features = false }
-cokret-core = { version = "0.3.0", path = "../cokret-rust-sdk/crates/core", default-features = false }
-cokret-sdk = { version = "0.3.0", package = "cokret", path = "../cokret-rust-sdk/crates/sdk" }
+arkret-core = { version = "0.3.0", path = "../arkret-rust-sdk/crates/core", default-features = false }
+arkret-sdk = { version = "0.3.0", package = "arkret", path = "../arkret-rust-sdk/crates/sdk" }
 deadpool = "0.13"
 diesel = "2.3.10"
 diesel-async = "0.9"

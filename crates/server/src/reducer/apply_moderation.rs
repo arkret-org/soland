@@ -98,14 +98,14 @@ fn moderation_add_tag(decision_kind: &str, issuer: &str, request_digest: &str) -
 impl ProjectionState {
     fn moderation_state_cell_ref(target_ref: &str) -> Option<CellRef> {
         CellRef::new(format!(
-            "ck:cell:ck.component.moderation_state.v1:{target_ref}"
+            "ak:cell:ck.component.moderation_state.v1:{target_ref}"
         ))
         .ok()
     }
 
     fn moderation_appeal_cell_ref(appeal_id: &str) -> Option<CellRef> {
         CellRef::new(format!(
-            "ck:cell:ck.component.moderation.appeal.v1:{appeal_id}"
+            "ak:cell:ck.component.moderation.appeal.v1:{appeal_id}"
         ))
         .ok()
     }
@@ -125,7 +125,7 @@ impl ProjectionState {
             .filter(|(cell_ref, _)| {
                 cell_ref
                     .as_str()
-                    .starts_with("ck:cell:ck.component.moderation_state.v1:")
+                    .starts_with("ak:cell:ck.component.moderation_state.v1:")
             })
             .flat_map(|(_, state)| match state {
                 CellState::Value(Value::Array(items)) => items.clone(),

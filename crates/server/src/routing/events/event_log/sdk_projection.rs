@@ -70,7 +70,7 @@ pub(crate) fn event_semantic_refs(
 }
 
 fn event_canonical_source(envelope: &Value) -> Value {
-    // Per cokret-spec event-and-patch.md §3: both the event digest and every
+    // Per arkret-spec event-and-patch.md §3: both the event digest and every
     // proof's `event_digest` derive from producer canonical event bytes with
     // `proofs`, `unsigned`, and reducer-stamped top-level fields removed.
     // Stripping derived `canonical_*` slots keeps fixtures that round-trip
@@ -98,7 +98,7 @@ pub(crate) fn event_canonical_bytes(envelope: &Value) -> Result<Vec<u8>, EventVa
 }
 
 pub(crate) fn is_valid_event_id(value: &str) -> bool {
-    let Some(rest) = value.strip_prefix("ck:event:") else {
+    let Some(rest) = value.strip_prefix("ak:event:") else {
         return false;
     };
     !rest.is_empty()
@@ -186,7 +186,7 @@ pub(crate) fn projection_operation_from_event(
         .get("target_ref")
         .and_then(Value::as_str)
         .map(ToOwned::to_owned)
-        && target_ref.starts_with("ck:strand:")
+        && target_ref.starts_with("ak:strand:")
     {
         payload_object
             .entry("strand_id".to_owned())
@@ -311,18 +311,18 @@ fn normalize_relation_create_payload(
 
     if !payload_object.contains_key("relation_id")
         && !payload_object.contains_key("id")
-        && let Some(suffix) = parsed.event_id.strip_prefix("ck:event:")
+        && let Some(suffix) = parsed.event_id.strip_prefix("ak:event:")
     {
         payload_object.insert(
             "relation_id".to_owned(),
-            Value::String(format!("ck:relation:{suffix}")),
+            Value::String(format!("ak:relation:{suffix}")),
         );
     }
 }
 
 fn event_operation_id(envelope: &Value, event_id: &str) -> Option<OperationId> {
     // Prefer the client-supplied alias when it's a valid OperationId
-    // (`ck:operation:<uuid v7>` per `cokret-rust-sdk/identifiers`).
+    // (`ck:operation:<uuid v7>` per `arkret-rust-sdk/identifiers`).
     // Older inkson builds shipped the event_id (ck:event:) verbatim in
     // this slot; soland MUST NOT silently drop projection for such
     // events ── fall through to the event_id-derived form so the
@@ -339,8 +339,8 @@ fn event_operation_id(envelope: &Value, event_id: &str) -> Option<OperationId> {
     {
         return Some(operation_id);
     }
-    let suffix = event_id.strip_prefix("ck:event:")?;
-    OperationId::new(format!("ck:operation:{suffix}")).ok()
+    let suffix = event_id.strip_prefix("ak:event:")?;
+    OperationId::new(format!("ak:operation:{suffix}")).ok()
 }
 
 /// CKP-0007 — resolve the canonical `effective_scope` for an Event
@@ -615,7 +615,7 @@ fn sdk_effective_scope(
         return Some(scope);
     }
     match effective_scope_for_envelope(&record.envelope).as_deref() {
-        Some(scope) if scope.starts_with("ck:circle:") => {
+        Some(scope) if scope.starts_with("ak:circle:") => {
             cokret_sdk::CircleId::new(scope.to_owned())
                 .ok()
                 .map(|circle_id| cokret_sdk::models::EffectiveScope::Circle {
@@ -795,7 +795,7 @@ fn circle_event_visible_to_session(
     session: &SessionRecord,
 ) -> bool {
     let Some(scope_circle_id) = effective_scope_for_envelope(&record.envelope)
-        .filter(|scope| scope.starts_with("ck:circle:"))
+        .filter(|scope| scope.starts_with("ak:circle:"))
     else {
         return true;
     };
@@ -833,7 +833,7 @@ pub async fn effective_read_receipt_policy_for_realm(
     {
         let proj = state.projection.lock();
         let cell_id = cokret_sdk::CellRef::new(format!(
-            "ck:cell:ck.component.realm.read_receipt_policy.v1:{realm_id}"
+            "ak:cell:ck.component.realm.read_receipt_policy.v1:{realm_id}"
         ))
         .ok()?;
         if let Some(value) = proj.cell_value(&cell_id) {
@@ -847,7 +847,7 @@ pub async fn effective_read_receipt_policy_for_realm(
     let mut latest: Option<&CanonicalEventRecord> = None;
     for record in &records {
         // CanonicalEventRecord uses `kind` (not event_kind) for the
-        // canonical Cokret event kind string.
+        // canonical Arkret event kind string.
         if record.kind != "ck.realm.read_receipt_policy" {
             continue;
         }
@@ -884,7 +884,7 @@ mod refs_limit_tests {
     #[test]
     fn total_refs_over_max_rejected_as_refs_too_large() {
         let refs: Vec<Value> = (0..(MAX_EVENT_REFS + 1))
-            .map(|_| json!({"id": "ck:event:e", "role": "after"}))
+            .map(|_| json!({"id": "ak:event:e", "role": "after"}))
             .collect();
         let err = event_semantic_refs(&refs_object(json!(refs)), MAX_EVENT_REFS).unwrap_err();
         assert_eq!(err.code, "refs_too_large");
@@ -894,7 +894,7 @@ mod refs_limit_tests {
     #[test]
     fn authorized_by_over_max_rejected_as_refs_too_large() {
         let refs: Vec<Value> = (0..(cokret_sdk::MAX_AUTHORIZED_BY_REFS + 1))
-            .map(|_| json!({"id": "ck:event:e1", "role": "authorized_by"}))
+            .map(|_| json!({"id": "ak:event:e1", "role": "authorized_by"}))
             .collect();
         let err = event_semantic_refs(&refs_object(json!(refs)), MAX_EVENT_REFS).unwrap_err();
         assert_eq!(err.code, "refs_too_large");
@@ -903,10 +903,10 @@ mod refs_limit_tests {
     #[test]
     fn within_limits_collects_only_authorized_by_refs() {
         let refs = json!([
-            {"id": "ck:event:e1", "role": "authorized_by"},
-            {"id": "ck:event:e2", "role": "after"}
+            {"id": "ak:event:e1", "role": "authorized_by"},
+            {"id": "ak:event:e2", "role": "after"}
         ]);
         let out = event_semantic_refs(&refs_object(refs), MAX_EVENT_REFS).unwrap();
-        assert_eq!(out, vec!["ck:event:e1".to_owned()]);
+        assert_eq!(out, vec!["ak:event:e1".to_owned()]);
     }
 }

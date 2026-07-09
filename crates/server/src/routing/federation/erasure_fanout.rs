@@ -1,7 +1,7 @@
 //! Stream-F (Wave 2C) — `ck.audit.erasure_receipt` cross-Principal-
 //! Server fanout.
 //!
-//! Spec: `cokret-spec/spec/v1/zh/models/realm-and-space.md` §2.5.2.
+//! Spec: `arkret-spec/spec/v1/zh/models/realm-and-space.md` §2.5.2.
 //!
 //! ## Surface
 //!
@@ -170,7 +170,7 @@ pub async fn fanout_erasure_receipt_operation(state: &AppState, operation: &Oper
         hasher.update(b"|");
         hasher.update(operation.operation_id.as_str().as_bytes());
         let idempotency_key = format!(
-            "ck:outbox:erasure_receipt:{}",
+            "ak:outbox:erasure_receipt:{}",
             hex::encode(hasher.finalize())
         );
 
@@ -443,7 +443,7 @@ mod tests {
                 subject_ref: None,
                 outcome: "completed".to_owned(),
                 storage_boundary: Some("projection_store".to_owned()),
-                scope_realm_id: Some("ck:realm:01904100-0000-7000-8000-deadbeefcafe".to_owned()),
+                scope_realm_id: Some("ak:realm:01904100-0000-7000-8000-deadbeefcafe".to_owned()),
                 fanout_status: "pending".to_owned(),
                 peer_status: std::collections::BTreeMap::new(),
                 recorded_at: Utc::now(),
@@ -454,7 +454,7 @@ mod tests {
                     "outcome": "completed",
                     "scope": {
                         "storage_boundary": "projection_store",
-                        "realm_id": "ck:realm:01904100-0000-7000-8000-deadbeefcafe"
+                        "realm_id": "ak:realm:01904100-0000-7000-8000-deadbeefcafe"
                     }
                 }),
             });
@@ -518,7 +518,7 @@ mod tests {
                 subject_ref: None,
                 outcome: "completed".to_owned(),
                 storage_boundary: None,
-                scope_realm_id: Some("ck:realm:r-timeout".to_owned()),
+                scope_realm_id: Some("ak:realm:r-timeout".to_owned()),
                 fanout_status: "pending".to_owned(),
                 peer_status: peers,
                 recorded_at: old,

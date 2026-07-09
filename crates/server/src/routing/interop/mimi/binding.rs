@@ -1,6 +1,6 @@
 use super::*;
 
-/// Look up which Cokret `realm_id` (if any) the MIMI `room_id` is
+/// Look up which Arkret `realm_id` (if any) the MIMI `room_id` is
 /// bound to. Scans the persistence projection event log for the
 /// most recent `ck.mimi.room_binding` event whose
 /// `payload.mimi_room_id` (or trailing segment of `mimi_room_uri`)
@@ -403,7 +403,7 @@ pub(super) fn non_empty_json_value(value: &Value) -> bool {
 /// the top level so [`mimi_bound_realm_id`] can dispatch lookups
 /// efficiently.
 ///
-/// Returns `None` when the binding payload declares no Cokret
+/// Returns `None` when the binding payload declares no Arkret
 /// `realm_id` (neither under `binding_scope.realm_id` nor at the top
 /// level). The caller is expected to surface that to the client as a
 /// 400 rather than implicitly bind the room to some default Realm.
@@ -535,6 +535,6 @@ pub(super) fn valid_mimi_content_type(value: &str) -> bool {
         "application/mimi-content"
             | "text/plain;charset=utf-8"
             | "text/markdown;variant=GFM-MIMI"
-            | "application/vnd.cokret.content+json"
+            | "application/vnd.arkret.content+json"
     )
 }

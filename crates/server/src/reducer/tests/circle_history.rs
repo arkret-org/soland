@@ -3,8 +3,8 @@ use chrono::{Duration, TimeZone, Utc};
 use super::*;
 use crate::reducer::*;
 
-const REALM: &str = "ck:realm:01904100-0000-7000-8000-c1c1c1c1c1c1";
-const CIRCLE: &str = "ck:circle:01904100-0000-7000-8000-aaaaaaaaaaaa";
+const REALM: &str = "ak:realm:01904100-0000-7000-8000-c1c1c1c1c1c1";
+const CIRCLE: &str = "ak:circle:01904100-0000-7000-8000-aaaaaaaaaaaa";
 const ALICE: &str = "did:web:alice";
 const BOB: &str = "did:web:bob";
 
@@ -152,7 +152,7 @@ fn realm_leave_cascades_to_circle_history_membership() {
 #[test]
 fn circle_member_leave_enqueues_mls_remove_obligation() {
     let (mut state, hlc, base) = seed_state("joined");
-    state.circles.get_mut(CIRCLE).unwrap().mls_group_ref = Some("ck:mls:group:circle".to_owned());
+    state.circles.get_mut(CIRCLE).unwrap().mls_group_ref = Some("ak:mls:group:circle".to_owned());
     let join_at = base + Duration::minutes(5);
     let leave_at = base + Duration::minutes(30);
     let mut join = make_operation(
@@ -194,7 +194,7 @@ fn circle_member_leave_enqueues_mls_remove_obligation() {
     assert_eq!(obligation.circle_id.as_deref(), Some(CIRCLE));
     assert_eq!(
         obligation.mls_group_ref.as_deref(),
-        Some("ck:mls:group:circle")
+        Some("ak:mls:group:circle")
     );
     assert_eq!(obligation.actor_id, BOB);
     assert_eq!(obligation.trigger_membership, "leave");
@@ -206,7 +206,7 @@ fn circle_tombstone_enqueues_mls_remove_obligations_for_active_members() {
     let (mut state, hlc, base) = seed_state("joined");
     {
         let circle = state.circles.get_mut(CIRCLE).unwrap();
-        circle.mls_group_ref = Some("ck:mls:group:circle".to_owned());
+        circle.mls_group_ref = Some("ak:mls:group:circle".to_owned());
         circle.members.insert(ALICE.to_owned());
         circle.members.insert(BOB.to_owned());
     }
@@ -238,7 +238,7 @@ fn circle_tombstone_enqueues_mls_remove_obligations_for_active_members() {
     assert!(state.pending_mls_removals.iter().all(|obligation| {
         obligation.realm_id == REALM
             && obligation.circle_id.as_deref() == Some(CIRCLE)
-            && obligation.mls_group_ref.as_deref() == Some("ck:mls:group:circle")
+            && obligation.mls_group_ref.as_deref() == Some("ak:mls:group:circle")
             && obligation.trigger_membership == "tombstone"
             && obligation.triggered_at == tombstone_at
     }));

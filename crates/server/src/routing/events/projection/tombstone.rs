@@ -582,7 +582,7 @@ mod tests {
                 "kind": "ck.content.text",
                 "body": "secret",
                 "mentions": [{"actor_id": "did:web:bob.example"}],
-                "reply_to": "ck:event:01904100-0000-7000-8000-0000000000ff"
+                "reply_to": "ak:event:01904100-0000-7000-8000-0000000000ff"
             }),
             expiry: Some(json!({
                 "ttl_ms": 1,
@@ -590,7 +590,7 @@ mod tests {
                 "grace_ms": 0
             })),
             encrypted: false,
-            operation_id: "ck:operation:01904100-0000-7000-8000-0000000000a2".to_owned(),
+            operation_id: "ak:operation:01904100-0000-7000-8000-0000000000a2".to_owned(),
             created_at: fixed_time("2020-01-01T00:00:00Z"),
             history_basis_seals: Vec::new(),
             revision_of: None,
@@ -634,8 +634,8 @@ mod tests {
 
     #[test]
     fn expired_message_timeline_uses_expiry_stub_without_redaction_or_derived_fields() {
-        let event_id = "ck:event:01904100-0000-7000-8000-0000000000a1";
-        let realm_id = "ck:realm:01904100-0000-7000-8000-cfc039892036";
+        let event_id = "ak:event:01904100-0000-7000-8000-0000000000a1";
+        let realm_id = "ak:realm:01904100-0000-7000-8000-cfc039892036";
         let message = expired_message(event_id, realm_id);
         let projection = ProjectionState::new();
 
@@ -674,8 +674,8 @@ mod tests {
 
     #[test]
     fn read_trigger_message_without_anchor_stays_pending_without_plaintext_downgrade() {
-        let event_id = "ck:event:01904100-0000-7000-8000-0000000000b1";
-        let realm_id = "ck:realm:01904100-0000-7000-8000-cfc039892036";
+        let event_id = "ak:event:01904100-0000-7000-8000-0000000000b1";
+        let realm_id = "ak:realm:01904100-0000-7000-8000-cfc039892036";
         let mut message = expired_message(event_id, realm_id);
         message.expiry = Some(json!({
             "ttl_ms": 86_400_000,
@@ -699,8 +699,8 @@ mod tests {
 
     #[test]
     fn read_trigger_message_expires_after_aggregate_anchor() {
-        let event_id = "ck:event:01904100-0000-7000-8000-0000000000b2";
-        let realm_id = "ck:realm:01904100-0000-7000-8000-cfc039892036";
+        let event_id = "ak:event:01904100-0000-7000-8000-0000000000b2";
+        let realm_id = "ak:realm:01904100-0000-7000-8000-cfc039892036";
         let mut message = expired_message(event_id, realm_id);
         message.expiry = Some(json!({
             "ttl_ms": 1,
@@ -739,8 +739,8 @@ mod tests {
 
     #[test]
     fn on_last_read_waits_for_active_realm_member_aggregate() {
-        let event_id = "ck:event:01904100-0000-7000-8000-0000000000b3";
-        let realm_id = "ck:realm:01904100-0000-7000-8000-cfc039892036";
+        let event_id = "ak:event:01904100-0000-7000-8000-0000000000b3";
+        let realm_id = "ak:realm:01904100-0000-7000-8000-cfc039892036";
         let now = fixed_time("2020-01-01T00:00:00Z");
         let mut message = expired_message(event_id, realm_id);
         message.expiry = Some(json!({
@@ -795,8 +795,8 @@ mod tests {
 
     #[test]
     fn projection_event_for_expired_message_strips_payload_content() {
-        let event_id = "ck:event:01904100-0000-7000-8000-0000000000c1";
-        let realm_id = "ck:realm:01904100-0000-7000-8000-cfc039892036";
+        let event_id = "ak:event:01904100-0000-7000-8000-0000000000c1";
+        let realm_id = "ak:realm:01904100-0000-7000-8000-cfc039892036";
         let projection = ProjectionState::new();
         let mut event = ProjectionEventRecord {
             event_id: event_id.to_owned(),
@@ -808,8 +808,8 @@ mod tests {
             payload: json!({
                 "content": {"kind": "ck.content.text", "body": "secret"},
                 "mentions": [{"actor_id": "did:web:bob.example"}],
-                "reply_to": "ck:event:01904100-0000-7000-8000-0000000000ff",
-                "redaction_ref": "ck:event:should-not-survive",
+                "reply_to": "ak:event:01904100-0000-7000-8000-0000000000ff",
+                "redaction_ref": "ak:event:should-not-survive",
                 "search_index": {"terms": ["secret"]},
                 "search_tokens": ["secret-token"],
                 "push_snippet": "secret push",
@@ -861,8 +861,8 @@ mod tests {
 
     #[test]
     fn retention_tombstone_strips_derived_surfaces_and_marks_risk() {
-        let event_id = "ck:event:01904100-0000-7000-8000-0000000000c2";
-        let realm_id = "ck:realm:01904100-0000-7000-8000-cfc039892036";
+        let event_id = "ak:event:01904100-0000-7000-8000-0000000000c2";
+        let realm_id = "ak:realm:01904100-0000-7000-8000-cfc039892036";
         let tombstone = retention_tombstone(event_id, realm_id, true);
         let payload = json!({
             "content": {"kind": "ck.content.text", "body": "secret"},
@@ -913,8 +913,8 @@ mod tests {
 
     #[test]
     fn retention_timeline_tombstone_marks_no_risk_when_unsealed() {
-        let event_id = "ck:event:01904100-0000-7000-8000-0000000000c3";
-        let realm_id = "ck:realm:01904100-0000-7000-8000-cfc039892036";
+        let event_id = "ak:event:01904100-0000-7000-8000-0000000000c3";
+        let realm_id = "ak:realm:01904100-0000-7000-8000-cfc039892036";
         let tombstone = retention_tombstone(event_id, realm_id, false);
         let mut event = json!({
             "content": {"kind": "ck.content.text", "body": "secret"},
@@ -936,8 +936,8 @@ mod tests {
 
     #[test]
     fn pin_projection_event_for_redacted_target_is_stubbed() {
-        let event_id = "ck:event:01904100-0000-7000-8000-0000000000a1";
-        let realm_id = "ck:realm:01904100-0000-7000-8000-cfc039892036";
+        let event_id = "ak:event:01904100-0000-7000-8000-0000000000a1";
+        let realm_id = "ak:realm:01904100-0000-7000-8000-cfc039892036";
         let now = chrono::Utc::now();
         let mut projection = ProjectionState::new();
         projection.messages.insert(
@@ -951,7 +951,7 @@ mod tests {
                 content: json!({"kind": "ck.content.text", "body": "secret"}),
                 expiry: None,
                 encrypted: false,
-                operation_id: "ck:operation:01904100-0000-7000-8000-0000000000a2".to_owned(),
+                operation_id: "ak:operation:01904100-0000-7000-8000-0000000000a2".to_owned(),
                 created_at: now,
                 history_basis_seals: Vec::new(),
                 revision_of: None,
@@ -968,7 +968,7 @@ mod tests {
             }),
         );
         let mut event = ProjectionEventRecord {
-            event_id: "ck:operation:01904100-0000-7000-8000-0000000000a3".to_owned(),
+            event_id: "ak:operation:01904100-0000-7000-8000-0000000000a3".to_owned(),
             realm_id: realm_id.to_owned(),
             event_kind: cokret_sdk::events::kinds::PIN_ADD.to_owned(),
             operation_type: "create".to_owned(),
@@ -994,15 +994,15 @@ mod tests {
 
     #[test]
     fn pin_projection_event_for_expired_target_is_stubbed() {
-        let event_id = "ck:event:01904100-0000-7000-8000-0000000000d1";
-        let realm_id = "ck:realm:01904100-0000-7000-8000-cfc039892036";
+        let event_id = "ak:event:01904100-0000-7000-8000-0000000000d1";
+        let realm_id = "ak:realm:01904100-0000-7000-8000-cfc039892036";
         let now = fixed_time("2026-06-19T00:00:01Z");
         let mut projection = ProjectionState::new();
         projection
             .messages
             .insert(event_id.to_owned(), expired_message(event_id, realm_id));
         let mut event = ProjectionEventRecord {
-            event_id: "ck:operation:01904100-0000-7000-8000-0000000000d3".to_owned(),
+            event_id: "ak:operation:01904100-0000-7000-8000-0000000000d3".to_owned(),
             realm_id: realm_id.to_owned(),
             event_kind: cokret_sdk::events::kinds::PIN_ADD.to_owned(),
             operation_type: "create".to_owned(),
@@ -1028,9 +1028,9 @@ mod tests {
 
     #[test]
     fn timeline_message_for_redacted_event_surfaces_tombstone() {
-        let event_id = "ck:event:01904100-0000-7000-8000-0000000000e1";
-        let redaction_id = "ck:event:01904100-0000-7000-8000-0000000000e2";
-        let realm_id = "ck:realm:01904100-0000-7000-8000-cfc039892036";
+        let event_id = "ak:event:01904100-0000-7000-8000-0000000000e1";
+        let redaction_id = "ak:event:01904100-0000-7000-8000-0000000000e2";
+        let realm_id = "ak:realm:01904100-0000-7000-8000-cfc039892036";
         let now = chrono::Utc::now();
         let mut projection = ProjectionState::new();
         projection.messages.insert(
@@ -1044,7 +1044,7 @@ mod tests {
                 content: json!({"kind": "ck.content.text", "body": "secret"}),
                 expiry: None,
                 encrypted: false,
-                operation_id: "ck:operation:01904100-0000-7000-8000-0000000000e3".to_owned(),
+                operation_id: "ak:operation:01904100-0000-7000-8000-0000000000e3".to_owned(),
                 created_at: now,
                 history_basis_seals: Vec::new(),
                 revision_of: None,
@@ -1079,11 +1079,11 @@ mod tests {
 
     #[test]
     fn timeline_message_for_redacted_revision_surfaces_tombstone() {
-        let original_id = "ck:event:01904100-0000-7000-8000-0000000000f1";
-        let revision_id = "ck:event:01904100-0001-7000-8000-0000000000f1";
-        let message_id = "ck:message:01904100-0002-7000-8000-0000000000f1";
-        let redaction_id = "ck:event:01904100-0003-7000-8000-0000000000f1";
-        let realm_id = "ck:realm:01904100-0000-7000-8000-cfc039892036";
+        let original_id = "ak:event:01904100-0000-7000-8000-0000000000f1";
+        let revision_id = "ak:event:01904100-0001-7000-8000-0000000000f1";
+        let message_id = "ak:message:01904100-0002-7000-8000-0000000000f1";
+        let redaction_id = "ak:event:01904100-0003-7000-8000-0000000000f1";
+        let realm_id = "ak:realm:01904100-0000-7000-8000-cfc039892036";
         let now = chrono::Utc::now();
         let mut projection = ProjectionState::new();
         projection.messages.insert(
@@ -1097,7 +1097,7 @@ mod tests {
                 content: json!({"kind": "ck.content.text", "body": "edited secret"}),
                 expiry: None,
                 encrypted: false,
-                operation_id: "ck:operation:01904100-0001-7000-8000-0000000000f1".to_owned(),
+                operation_id: "ak:operation:01904100-0001-7000-8000-0000000000f1".to_owned(),
                 created_at: now,
                 history_basis_seals: Vec::new(),
                 revision_of: Some(original_id.to_owned()),

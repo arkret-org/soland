@@ -57,7 +57,7 @@ pub fn router_with_rate_limiter_and_request_size_config(
     let router = router
         .push(system::health_router())
         .push(interop::well_known_router())
-        // Spec: B.3 — `/.well-known/cokret` server-description stub.
+        // Spec: B.3 — `/.well-known/arkret` server-description stub.
         .push(federation::well_known_cokret_router())
         .push(identity::embedded_webvh_public_router())
         // Admin surface lives at the deployment-local `/_soland/admin/*`
@@ -92,18 +92,18 @@ pub fn router_with_rate_limiter_and_request_size_config(
     let doc = cached_cokret_openapi_doc(&router);
     router
         .unshift(
-            Router::with_path(".well-known/cokret/openapi.yaml")
+            Router::with_path(".well-known/arkret/openapi.yaml")
                 .hoop(affix_state::inject(CokretOpenApiDoc(doc.clone())))
                 .get(cokret_openapi_yaml),
         )
-        .unshift(doc.into_router(".well-known/cokret/openapi.json"))
+        .unshift(doc.into_router(".well-known/arkret/openapi.json"))
         .unshift(Router::new().get(home_page))
 }
 
 /// Protocol surface, mounted under the negative-space root `/_cokret/...`.
 ///
 /// API-URL trust-namespace migration: the historical `/api/v1/*` +
-/// `/cokret/v1/*` prefixes are gone. Every protocol path now lives under a
+/// `/arkret/v1/*` prefixes are gone. Every protocol path now lives under a
 /// single `/_cokret/` root with no version segment (version is negotiated
 /// via `*.describe` / `supported_operations`). The first path segment names
 /// the trust concentric circle (self/gate/root/find/peer/open/edge); the
@@ -181,7 +181,7 @@ fn api_v1_router(conformance_harness_enabled: bool) -> Router {
         router = router.push(conformance::router());
     }
     // Catch-all so that anything under `/_cokret/...` that the typed
-    // routers above don't match returns the canonical Cokret JSON
+    // routers above don't match returns the canonical Arkret JSON
     // error envelope. `cors_preflight` is registered as an OPTIONS
     // child so CORS preflight stays 204; every other method falls
     // through to `api_not_found`, which itself decides between 404
@@ -252,7 +252,7 @@ fn soland_local_router() -> Router {
         .push(interop::local_router())
         .push(extensions::local_router())
         // Catch-all for the `/_soland/...` tree, mirroring the `/_cokret/`
-        // one: unmatched paths/methods get the canonical Cokret JSON error
+        // one: unmatched paths/methods get the canonical Arkret JSON error
         // envelope (404 `unrecognized_endpoint` / 405 `method_not_allowed`
         // + `Allow`) instead of salvo's bare defaults, so the compat mirror
         // and the protocol tree answer errors identically. This router is
@@ -315,7 +315,7 @@ async fn cors_preflight(res: &mut Response) {
 
 /// Build a `CorsHandler` from the `SOLAND_CORS_ALLOW_ORIGIN` config string.
 ///
-/// Per `cokret-spec/spec/v1/zh/sync/api-conventions.md` §10 the recommended
+/// Per `arkret-spec/spec/v1/zh/sync/api-conventions.md` §10 the recommended
 /// posture for browser-facing services is `Access-Control-Allow-Origin: *`,
 /// and §10 explicitly says browser-accessible private endpoints must not rely
 /// on cookies as the sole authentication mechanism, meaning credentials need
@@ -352,15 +352,15 @@ pub(crate) fn cors_handler_for_origin_spec(raw: &str) -> CorsHandler {
             "content-type",
             "dpop",
             "idempotency-key",
-            "x-cokret-request-id",
-            "x-cokret-wait-for",
-            "x-cokret-content-digest",
-            "x-cokret-realm-id",
-            "x-cokret-filename",
-            "x-cokret-blob-encrypted",
-            "x-cokret-blob-purpose",
-            "x-cokret-purpose",
-            "x-cokret-attachment-envelope",
+            "x-arkret-request-id",
+            "x-arkret-wait-for",
+            "x-arkret-content-digest",
+            "x-arkret-realm-id",
+            "x-arkret-filename",
+            "x-arkret-blob-encrypted",
+            "x-arkret-blob-purpose",
+            "x-arkret-purpose",
+            "x-arkret-attachment-envelope",
             "range",
         ]);
 
@@ -377,7 +377,7 @@ pub(crate) fn cors_handler_for_origin_spec(raw: &str) -> CorsHandler {
 
     cors.expose_headers(vec![
         "retry-after",
-        "x-cokret-wait-for-satisfied",
+        "x-arkret-wait-for-satisfied",
         "content-range",
         "accept-ranges",
     ])

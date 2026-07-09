@@ -312,7 +312,7 @@ async fn create_realm(app: &salvo::Service, token: &str, actor: &str) -> String 
                 "title": "Consent event projection",
                 "summary": "Consent reducer test realm",
                 "created_by": actor,
-                "trust_domain": "ck:trust_domain:soland.local",
+                "trust_domain": "ak:trust_domain:soland.local",
                 "schema_refs": ["ck.schema.realm.v1"],
                 "default_discoverability": "listed",
                 "default_join_rule": "invite",
@@ -408,7 +408,7 @@ async fn consent_events_project_cells_and_contact_gate() {
     assert_eq!(granted["state"], "active");
     assert_eq!(
         granted["cell_id"],
-        format!("ck:cell:ck.component.consent.grant.v1:{consent_id}")
+        format!("ak:cell:ck.component.consent.grant.v1:{consent_id}")
     );
     assert!(
         granted["grant_dots"]
@@ -565,7 +565,7 @@ async fn contact_row_surfaces_invite_consent_grant_ref() {
         "row carries bob's ck.consent.grant event ref: {bob_row}"
     );
     assert!(
-        grant_event_id.starts_with("ck:event:"),
+        grant_event_id.starts_with("ak:event:"),
         "the surfaced ref is a canonical event id"
     );
 }
@@ -670,7 +670,7 @@ async fn contact_accept_grants_event_backed_invite_consent_ref() {
     let requester_refs = requested["requester_consent_refs"].as_array().unwrap();
     assert_eq!(requester_refs.len(), 1, "requester_consent_refs populated");
     assert!(
-        requester_refs[0].as_str().unwrap().starts_with("ck:event:"),
+        requester_refs[0].as_str().unwrap().starts_with("ak:event:"),
         "requester consent ref is a canonical event id: {requested}"
     );
 
@@ -688,7 +688,7 @@ async fn contact_accept_grants_event_backed_invite_consent_ref() {
     );
     let bob_grant_ref = grant_refs[0].as_str().unwrap().to_owned();
     assert!(
-        bob_grant_ref.starts_with("ck:event:"),
+        bob_grant_ref.starts_with("ak:event:"),
         "accept consent ref is a canonical event id: {responded}"
     );
 
@@ -714,7 +714,7 @@ async fn contact_accept_grants_event_backed_invite_consent_ref() {
         "row carries bob's accept grant event ref: {bob_row}"
     );
     assert!(
-        surfaced_ref.unwrap().starts_with("ck:event:"),
+        surfaced_ref.unwrap().starts_with("ak:event:"),
         "the surfaced ref is a canonical event id"
     );
 }

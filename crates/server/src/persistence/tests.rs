@@ -5,7 +5,7 @@ async fn memory_account_store_crud() {
     let localparts = MemoryAccountLocalpartStore::new();
     let store = MemoryAccountStore::new(localparts.shared_data());
     let record = AccountRecord {
-        id: "ck:account:00000000-0000-7000-8000-000000000001".to_owned(),
+        id: "ak:account:00000000-0000-7000-8000-000000000001".to_owned(),
         did: "did:web:test".to_owned(),
         localpart: "test".to_owned(),
         display_name: Some("Test".to_owned()),
@@ -100,7 +100,7 @@ async fn memory_contact_store_filtering() {
             target: "alice".to_owned(),
             scope: "invite".to_owned(),
             status: "pending".to_owned(),
-            request_event_ref: Some("ck:event:0196419b-0000-7000-8000-000000000101".to_owned()),
+            request_event_ref: Some("ak:event:0196419b-0000-7000-8000-000000000101".to_owned()),
             response_event_ref: None,
             tombstone_event_ref: None,
             message: None,
@@ -160,10 +160,10 @@ async fn memory_federation_transaction_store_is_origin_scoped() {
         origin: "did:web:remote.example".to_owned(),
         txn_id: "txn1".to_owned(),
         destination: "did:web:soland.local".to_owned(),
-        realm_id: Some("ck:realm:01904100-0000-7000-8000-cfc039892036".to_owned()),
+        realm_id: Some("ak:realm:01904100-0000-7000-8000-cfc039892036".to_owned()),
         content_digest: "sha256:first".to_owned(),
         origin_verification_method: Some("did:web:remote.example#federation-fanout-key".to_owned()),
-        service_binding_ref: Some("ck:binding:remote".to_owned()),
+        service_binding_ref: Some("ak:binding:remote".to_owned()),
         origin_key_state_digest: Some("sha256:key-state".to_owned()),
         local_peer_policy_digest: Some("sha256:peer-policy".to_owned()),
         status: "accepted".to_owned(),
@@ -204,7 +204,7 @@ async fn memory_federation_transaction_store_is_origin_scoped() {
 #[tokio::test]
 async fn memory_federation_frontier_exchange_marks_and_clears_stale_peer() {
     let store = MemoryFederationFrontierExchangeStore::new();
-    let realm_id = "ck:realm:01904100-0000-7000-8000-cfc039892036";
+    let realm_id = "ak:realm:01904100-0000-7000-8000-cfc039892036";
     let peer = "did:web:peer.example";
 
     let first = store
@@ -241,12 +241,12 @@ fn sync_cursor_record(handle: &str, issued_at_ms: i64) -> SyncCursorRecord {
     SyncCursorRecord {
         handle: handle.to_owned(),
         principal_id: Some("did:web:alice.example".to_owned()),
-        device_id: Some("ck:device:test-1".to_owned()),
+        device_id: Some("ak:device:test-1".to_owned()),
         service_id: "did:web:soland.local".to_owned(),
         filter_digest: Some("fd-test".to_owned()),
         purpose: "stream".to_owned(),
         positions: Some(serde_json::json!({
-            "realms": {"ck:realm:a": issued_at_ms},
+            "realms": {"ak:realm:a": issued_at_ms},
             "devices": {},
             "to_device": 0
         })),
@@ -293,13 +293,13 @@ async fn memory_sync_cursor_prune_superseded_deletes_strictly_older_same_stream_
         .unwrap();
     // Same age as h-old but a DIFFERENT stream (other device).
     let mut other_stream = sync_cursor_record("h-other-device", 1_000);
-    other_stream.device_id = Some("ck:device:test-2".to_owned());
+    other_stream.device_id = Some("ak:device:test-2".to_owned());
     store.upsert(&other_stream).await.unwrap();
 
     let pruned = store
         .prune_stream_superseded(
             "did:web:alice.example",
-            "ck:device:test-1",
+            "ak:device:test-1",
             "fd-test",
             2_000,
         )
@@ -353,7 +353,7 @@ async fn memory_push_bridge_cache_store_crud() {
         contract_digest: "sha256:abc".to_owned(),
         fetched_at: now,
         remote_contract: serde_json::json!({
-            "contract": "cokret.push.bridge",
+            "contract": "arkret.push.bridge",
             "version": "v1.0",
             "provider_capabilities_version": "2026-05-07",
         }),
@@ -579,7 +579,7 @@ async fn memory_audit_store_actor_scoped_filter_matches_trait() {
 async fn memory_push_device_store_register_unregister_and_snapshot() {
     let store = MemoryPushDeviceStore::new();
     let dev1 = serde_json::json!({
-        "registration_id": "ck:push:dev-1",
+        "registration_id": "ak:push:dev-1",
         "actor": "did:web:alice.example",
         "device_id": "dev-1",
         "push_gateway": "https://floria.example",
@@ -587,7 +587,7 @@ async fn memory_push_device_store_register_unregister_and_snapshot() {
         "app_id": "inkson"
     });
     let dev2 = serde_json::json!({
-        "registration_id": "ck:push:dev-2",
+        "registration_id": "ak:push:dev-2",
         "actor": "did:web:bob.example",
         "device_id": "dev-2",
         "push_gateway": "https://floria.example",
@@ -623,7 +623,7 @@ async fn memory_event_store_round_trip_with_actor_seq() {
         event_id: event_id.to_owned(),
         actor_id: actor.to_owned(),
         actor_seq: seq,
-        realm_id: Some("ck:realm:0196419b-0000-7000-8000-000000000000".to_owned()),
+        realm_id: Some("ak:realm:0196419b-0000-7000-8000-000000000000".to_owned()),
         kind: "ck.message.create".to_owned(),
         schema_id: "ck.schema.event.message.v1".to_owned(),
         canonical_digest: "sha256:abc".to_owned(),
@@ -652,7 +652,7 @@ async fn memory_event_store_rejects_duplicate_realm_create() {
         event_id: event_id.to_owned(),
         actor_id: actor.to_owned(),
         actor_seq: 1,
-        realm_id: Some("ck:realm:0196419b-0000-7000-8000-000000000000".to_owned()),
+        realm_id: Some("ak:realm:0196419b-0000-7000-8000-000000000000".to_owned()),
         kind: "ck.realm.create".to_owned(),
         schema_id: "ck.schema.event.realm.v1".to_owned(),
         canonical_digest: format!("sha256:{event_id}"),
@@ -680,7 +680,7 @@ fn make_test_operation(operation_id: &str, realm_id: &str) -> Operation {
         OperationId::new(operation_id.to_owned()).unwrap(),
         RealmId::new(realm_id.to_owned()).unwrap(),
         "ck.message.create",
-        serde_json::json!({"sender": "did:web:alice", "thread_id": "ck:strand:1"}),
+        serde_json::json!({"sender": "did:web:alice", "thread_id": "ak:strand:1"}),
     );
     op.created_at = Utc::now();
     op
@@ -689,18 +689,18 @@ fn make_test_operation(operation_id: &str, realm_id: &str) -> Operation {
 #[tokio::test]
 async fn memory_federation_operations_store_dedups_and_filters_by_realm() {
     let store = MemoryFederationOperationsStore::new();
-    let realm_a = "ck:realm:0196419b-0000-7000-8000-00000000aaaa";
-    let realm_b = "ck:realm:0196419b-0000-7000-8000-00000000bbbb";
-    let op1 = make_test_operation("ck:operation:0196419b-0000-7000-8000-000000000001", realm_a);
-    let op2 = make_test_operation("ck:operation:0196419b-0000-7000-8000-000000000002", realm_a);
-    let op3 = make_test_operation("ck:operation:0196419b-0000-7000-8000-000000000003", realm_b);
+    let realm_a = "ak:realm:0196419b-0000-7000-8000-00000000aaaa";
+    let realm_b = "ak:realm:0196419b-0000-7000-8000-00000000bbbb";
+    let op1 = make_test_operation("ak:operation:0196419b-0000-7000-8000-000000000001", realm_a);
+    let op2 = make_test_operation("ak:operation:0196419b-0000-7000-8000-000000000002", realm_a);
+    let op3 = make_test_operation("ak:operation:0196419b-0000-7000-8000-000000000003", realm_b);
 
     store.append(op1.clone()).await.unwrap();
     store.append(op2.clone()).await.unwrap();
     store.append(op3.clone()).await.unwrap();
 
     assert!(store.contains(op1.operation_id.as_str()).await.unwrap());
-    assert!(!store.contains("ck:operation:missing").await.unwrap());
+    assert!(!store.contains("ak:operation:missing").await.unwrap());
     assert_eq!(store.list_for_realm(realm_a).await.unwrap().len(), 2);
     assert_eq!(store.list_for_realm(realm_b).await.unwrap().len(), 1);
     assert_eq!(store.snapshot_all().await.unwrap().len(), 3);
@@ -711,8 +711,8 @@ async fn memory_multisig_pending_lease_acquire_release_round_trip() {
     let store = MemoryMultisigPendingStore::new();
     let now = Utc::now();
     let record = MultisigPendingRecord {
-        seal_id: "ck:seal:sha256:lease".to_owned(),
-        realm_id: "ck:realm:0196419b-0000-7000-8000-00000000abcd".to_owned(),
+        seal_id: "ak:seal:sha256:lease".to_owned(),
+        realm_id: "ak:realm:0196419b-0000-7000-8000-00000000abcd".to_owned(),
         threshold_k: 2,
         threshold_n: 3,
         members: vec![
@@ -733,14 +733,14 @@ async fn memory_multisig_pending_lease_acquire_release_round_trip() {
     let lease_until = now + chrono::Duration::seconds(60);
     // First node successfully claims.
     let (won_a, seq_a) = store
-        .try_claim("ck:seal:sha256:lease", "node-A", now, lease_until)
+        .try_claim("ak:seal:sha256:lease", "node-A", now, lease_until)
         .await
         .unwrap();
     assert!(won_a);
     assert_eq!(seq_a, 1);
     // Second node bounces while lease is live.
     let (won_b, seq_b) = store
-        .try_claim("ck:seal:sha256:lease", "node-B", now, lease_until)
+        .try_claim("ak:seal:sha256:lease", "node-B", now, lease_until)
         .await
         .unwrap();
     assert!(!won_b);
@@ -749,7 +749,7 @@ async fn memory_multisig_pending_lease_acquire_release_round_trip() {
     let later = lease_until + chrono::Duration::seconds(1);
     let (won_b2, seq_b2) = store
         .try_claim(
-            "ck:seal:sha256:lease",
+            "ak:seal:sha256:lease",
             "node-B",
             later,
             later + chrono::Duration::seconds(60),
@@ -760,10 +760,10 @@ async fn memory_multisig_pending_lease_acquire_release_round_trip() {
     assert_eq!(seq_b2, 2, "claim_seq must bump on every successful claim");
     // Release by node-B clears the lease so anyone can re-claim.
     store
-        .release_claim("ck:seal:sha256:lease", "node-B")
+        .release_claim("ak:seal:sha256:lease", "node-B")
         .await
         .unwrap();
-    let row = store.get("ck:seal:sha256:lease").await.unwrap().unwrap();
+    let row = store.get("ak:seal:sha256:lease").await.unwrap().unwrap();
     assert!(row.claimed_by_node_id.is_none());
     assert_eq!(
         row.claim_seq, 2,
@@ -783,13 +783,13 @@ async fn memory_multisig_pending_lease_acquire_release_round_trip() {
 async fn memory_moderation_store_append_and_list_matches_trait() {
     let store = MemoryModerationStore::new();
     let report = serde_json::json!({
-        "report_id": "ck:report:01",
+        "report_id": "ak:report:01",
         "reporter": "did:web:alice.example",
         "target_actor": "did:web:bob.example",
         "reason": "spam"
     });
     let action = serde_json::json!({
-        "action_id": "ck:moderation_queue_item:01",
+        "action_id": "ak:moderation_queue_item:01",
         "moderator": "did:web:mod.example",
         "target_actor": "did:web:bob.example",
         "action_kind": "warn"
@@ -800,7 +800,7 @@ async fn memory_moderation_store_append_and_list_matches_trait() {
 
     let reports = store.list_reports().await.unwrap();
     assert_eq!(reports.len(), 1);
-    assert_eq!(reports[0]["report_id"], "ck:report:01");
+    assert_eq!(reports[0]["report_id"], "ak:report:01");
 
     let actions = store.list_actions().await.unwrap();
     assert_eq!(actions.len(), 1);
@@ -813,7 +813,7 @@ async fn memory_presence_store_put_list_matches_trait() {
     let now = Utc::now();
     let record = PresenceRecord {
         actor: "did:web:alice.example".to_owned(),
-        device_id: "ck:device:a".to_owned(),
+        device_id: "ak:device:a".to_owned(),
         status: "online".to_owned(),
         status_message: Some("hi".to_owned()),
         last_active_at: None,
@@ -836,7 +836,7 @@ async fn memory_presence_store_put_list_matches_trait() {
     };
     store.put(update).await.unwrap();
     let other_device = PresenceRecord {
-        device_id: "ck:device:b".to_owned(),
+        device_id: "ak:device:b".to_owned(),
         status: "dnd".to_owned(),
         ..record.clone()
     };
@@ -846,12 +846,12 @@ async fn memory_presence_store_put_list_matches_trait() {
     assert!(
         after
             .iter()
-            .any(|r| r.device_id == "ck:device:a" && r.status == "idle")
+            .any(|r| r.device_id == "ak:device:a" && r.status == "idle")
     );
     assert!(
         after
             .iter()
-            .any(|r| r.device_id == "ck:device:b" && r.status == "dnd")
+            .any(|r| r.device_id == "ak:device:b" && r.status == "dnd")
     );
 
     // Delete clears every device row of the actor.
@@ -1050,8 +1050,8 @@ async fn memory_realm_invite_store_put_get_snapshot_matches_trait() {
     let store = MemoryRealmInviteStore::new();
     let now = Utc::now();
     let record = RealmInviteRecord {
-        invite_id: "ck:invite:01".to_owned(),
-        realm_id: "ck:realm:0196419b-0000-7000-8000-000000000001".to_owned(),
+        invite_id: "ak:invite:01".to_owned(),
+        realm_id: "ak:realm:0196419b-0000-7000-8000-000000000001".to_owned(),
         inviter: "did:web:alice.example".to_owned(),
         invitee: Some("did:web:bob.example".to_owned()),
         invite_delivery_target: Some(serde_json::json!({
@@ -1070,7 +1070,7 @@ async fn memory_realm_invite_store_put_get_snapshot_matches_trait() {
     };
     store.put(record.clone()).await.unwrap();
 
-    let fetched = store.get("ck:invite:01").await.unwrap().unwrap();
+    let fetched = store.get("ak:invite:01").await.unwrap().unwrap();
     assert_eq!(fetched.invite_token, "tok-abc");
     assert_eq!(fetched.status, "pending");
     assert_eq!(fetched.invitee.as_deref(), Some("did:web:bob.example"));
@@ -1093,12 +1093,12 @@ async fn memory_realm_invite_store_put_get_snapshot_matches_trait() {
         ..record
     };
     store.put(updated).await.unwrap();
-    let after = store.get("ck:invite:01").await.unwrap().unwrap();
+    let after = store.get("ak:invite:01").await.unwrap().unwrap();
     assert_eq!(after.status, "accepted");
 
     let snapshot = store.snapshot_all().await.unwrap();
     assert_eq!(snapshot.len(), 1);
-    assert!(store.get("ck:invite:missing").await.unwrap().is_none());
+    assert!(store.get("ak:invite:missing").await.unwrap().is_none());
 }
 
 // ── Memory parity tests for the recovery / realtime sub-stores
@@ -1110,7 +1110,7 @@ async fn memory_realm_invite_store_put_get_snapshot_matches_trait() {
 async fn memory_key_backup_store_put_get_snapshot_matches_trait() {
     let store = MemoryKeyBackupStore::new();
     let envelope = serde_json::json!({
-        "backup_id": "ck:backup:01",
+        "backup_id": "ak:backup:01",
         "account_id": "did:web:alice.example",
         "device_id": "device-1",
         "scheme": "x25519-aead-ratchet",
@@ -1118,20 +1118,20 @@ async fn memory_key_backup_store_put_get_snapshot_matches_trait() {
         "key_material_encrypted_b64": "AAAA"
     });
     store
-        .put("ck:backup:01".to_owned(), envelope.clone())
+        .put("ak:backup:01".to_owned(), envelope.clone())
         .await
         .unwrap();
 
-    let fetched = store.get("ck:backup:01").await.unwrap().unwrap();
-    assert_eq!(fetched["backup_id"], "ck:backup:01");
+    let fetched = store.get("ak:backup:01").await.unwrap().unwrap();
+    assert_eq!(fetched["backup_id"], "ak:backup:01");
     assert_eq!(fetched["scheme"], "x25519-aead-ratchet");
 
     let snapshot = store.snapshot_all().await.unwrap();
     assert_eq!(snapshot.len(), 1);
 
-    assert!(store.delete("ck:backup:01").await.unwrap());
-    assert!(!store.delete("ck:backup:01").await.unwrap());
-    assert!(store.get("ck:backup:01").await.unwrap().is_none());
+    assert!(store.delete("ak:backup:01").await.unwrap());
+    assert!(!store.delete("ak:backup:01").await.unwrap());
+    assert!(store.get("ak:backup:01").await.unwrap().is_none());
 }
 
 #[tokio::test]
@@ -1139,10 +1139,10 @@ async fn memory_policy_document_store_put_list_owner_matches_trait() {
     let store = MemoryPolicyDocumentStore::new();
     let now = Utc::now();
     let alice_doc = PolicyDocumentRecord {
-        policy_id: "ck:policy:01".to_owned(),
+        policy_id: "ak:policy:01".to_owned(),
         owner: "did:web:alice.example".to_owned(),
         scope: "space".to_owned(),
-        subject_ref: "ck:space:0196419b-0000-7000-8000-000000000001".to_owned(),
+        subject_ref: "ak:space:0196419b-0000-7000-8000-000000000001".to_owned(),
         policy_type: "rbac".to_owned(),
         payload: serde_json::json!({
             "version": 5,
@@ -1153,10 +1153,10 @@ async fn memory_policy_document_store_put_list_owner_matches_trait() {
         updated_at: now,
     };
     let bob_doc = PolicyDocumentRecord {
-        policy_id: "ck:policy:02".to_owned(),
+        policy_id: "ak:policy:02".to_owned(),
         owner: "did:web:bob.example".to_owned(),
         scope: "space".to_owned(),
-        subject_ref: "ck:space:0196419b-0000-7000-8000-000000000002".to_owned(),
+        subject_ref: "ak:space:0196419b-0000-7000-8000-000000000002".to_owned(),
         policy_type: "rbac".to_owned(),
         payload: serde_json::json!({"version": 1, "verification_method": "did:web:bob.example"}),
         active: true,
@@ -1165,13 +1165,13 @@ async fn memory_policy_document_store_put_list_owner_matches_trait() {
     store.put(alice_doc.clone()).await.unwrap();
     store.put(bob_doc.clone()).await.unwrap();
 
-    let fetched = store.get("ck:policy:01").await.unwrap().unwrap();
+    let fetched = store.get("ak:policy:01").await.unwrap().unwrap();
     assert_eq!(fetched.owner, "did:web:alice.example");
     assert_eq!(fetched.payload["version"], 5);
 
     let alice_only = store.list_for_owner("did:web:alice.example").await.unwrap();
     assert_eq!(alice_only.len(), 1);
-    assert_eq!(alice_only[0].policy_id, "ck:policy:01");
+    assert_eq!(alice_only[0].policy_id, "ak:policy:01");
 
     let snapshot = store.snapshot_all().await.unwrap();
     assert_eq!(snapshot.len(), 2);
@@ -1185,10 +1185,10 @@ async fn memory_policy_document_store_put_list_owner_matches_trait() {
         .into_iter()
         .find(|record| record.subject_ref.ends_with("000000000002"))
         .unwrap();
-    assert_eq!(found.policy_id, "ck:policy:02");
+    assert_eq!(found.policy_id, "ak:policy:02");
 
-    assert!(store.delete("ck:policy:01").await.unwrap());
-    assert!(store.get("ck:policy:01").await.unwrap().is_none());
+    assert!(store.delete("ak:policy:01").await.unwrap());
+    assert!(store.get("ak:policy:01").await.unwrap().is_none());
 }
 
 #[tokio::test]
@@ -1199,8 +1199,8 @@ async fn memory_contact_store_put_get_roundtrip() {
         target: "did:web:bob.example".to_owned(),
         scope: "message".to_owned(),
         status: "accepted".to_owned(),
-        request_event_ref: Some("ck:event:0196419b-0000-7000-8000-000000000102".to_owned()),
-        response_event_ref: Some("ck:event:0196419b-0000-7000-8000-000000000103".to_owned()),
+        request_event_ref: Some("ak:event:0196419b-0000-7000-8000-000000000102".to_owned()),
+        response_event_ref: Some("ak:event:0196419b-0000-7000-8000-000000000103".to_owned()),
         tombstone_event_ref: None,
         message: Some("hi".to_owned()),
         peer_service_did: Some("did:web:bob-ps.example".to_owned()),
@@ -1217,11 +1217,11 @@ async fn memory_contact_store_put_get_roundtrip() {
     assert_eq!(scoped.status, "accepted");
     assert_eq!(
         scoped.request_event_ref.as_deref(),
-        Some("ck:event:0196419b-0000-7000-8000-000000000102")
+        Some("ak:event:0196419b-0000-7000-8000-000000000102")
     );
     assert_eq!(
         scoped.response_event_ref.as_deref(),
-        Some("ck:event:0196419b-0000-7000-8000-000000000103")
+        Some("ak:event:0196419b-0000-7000-8000-000000000103")
     );
     assert_eq!(
         scoped.peer_service_did.as_deref(),
@@ -1261,20 +1261,20 @@ async fn memory_consent_cell_store_put_get_snapshot_round_trip() {
     let now = Utc::now();
     let mut grant_dots = BTreeMap::new();
     grant_dots.insert(
-        "ck:event:01904100-0000-7000-8000-000000000001:0".to_owned(),
+        "ak:event:01904100-0000-7000-8000-000000000001:0".to_owned(),
         ConsentGrantDot {
-            dot: "ck:event:01904100-0000-7000-8000-000000000001:0".to_owned(),
+            dot: "ak:event:01904100-0000-7000-8000-000000000001:0".to_owned(),
             expires_at: Some(now + chrono::Duration::hours(1)),
             granted_at: now,
         },
     );
     let mut revoked_dots = BTreeSet::new();
-    revoked_dots.insert("ck:event:01904100-0000-7000-8000-0000000000ff:0".to_owned());
+    revoked_dots.insert("ak:event:01904100-0000-7000-8000-0000000000ff:0".to_owned());
     let record = ConsentCellRecord {
         holder: "did:web:alice.example".to_owned(),
         peer: "did:web:bob.example".to_owned(),
         scope: "invite".to_owned(),
-        cell_id: "ck:cell:ck.component.consent.grant.v1:deadbeef".to_owned(),
+        cell_id: "ak:cell:ck.component.consent.grant.v1:deadbeef".to_owned(),
         requested_at: Some(now),
         grant_dots,
         revoked_dots,
@@ -1340,9 +1340,9 @@ async fn memory_direct_conversation_binding_store_put_get_delete() {
             "did:web:alice.example".to_owned(),
             "did:web:bob.example".to_owned(),
         ],
-        realm_id: "ck:realm:01904100-0000-7000-8000-000000000601".to_owned(),
-        main_strand_id: "ck:strand:01904100-0000-7000-8000-000000000601".to_owned(),
-        binding_event_ref: "ck:event:01904100-0000-7000-8000-000000000601".to_owned(),
+        realm_id: "ak:realm:01904100-0000-7000-8000-000000000601".to_owned(),
+        main_strand_id: "ak:strand:01904100-0000-7000-8000-000000000601".to_owned(),
+        binding_event_ref: "ak:event:01904100-0000-7000-8000-000000000601".to_owned(),
         state: "active".to_owned(),
         created_at: now,
         updated_at: now,
@@ -1397,11 +1397,11 @@ async fn pg_contact_consent_policy_and_direct_binding_survive_store_restart() {
         scope: "direct_message".to_owned(),
         status: "accepted".to_owned(),
         request_event_ref: Some(format!(
-            "ck:event:0196419b-0000-7000-8000-{}",
+            "ak:event:0196419b-0000-7000-8000-{}",
             &suffix[..12]
         )),
         response_event_ref: Some(format!(
-            "ck:event:0196419b-0000-7000-8000-{}",
+            "ak:event:0196419b-0000-7000-8000-{}",
             &suffix[12..24]
         )),
         tombstone_event_ref: None,
@@ -1466,8 +1466,8 @@ async fn pg_contact_consent_policy_and_direct_binding_survive_store_restart() {
             .any(|(subject, _)| subject == &alice)
     );
 
-    let grant_dot = format!("ck:event:01904100-0000-7000-8000-{suffix}:0");
-    let revoked_dot = format!("ck:event:01904100-0000-7000-8001-{suffix}:0");
+    let grant_dot = format!("ak:event:01904100-0000-7000-8000-{suffix}:0");
+    let revoked_dot = format!("ak:event:01904100-0000-7000-8001-{suffix}:0");
     let mut grant_dots = BTreeMap::new();
     grant_dots.insert(
         grant_dot.clone(),
@@ -1483,7 +1483,7 @@ async fn pg_contact_consent_policy_and_direct_binding_survive_store_restart() {
         holder: alice.clone(),
         peer: bob.clone(),
         scope: "invite".to_owned(),
-        cell_id: format!("ck:cell:ck.component.consent.grant.v1:{suffix}"),
+        cell_id: format!("ak:cell:ck.component.consent.grant.v1:{suffix}"),
         requested_at: Some(now),
         grant_dots,
         revoked_dots,

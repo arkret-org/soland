@@ -265,7 +265,7 @@ pub(super) async fn resolve_realm_for_address(
             .collect()
     };
     candidates.into_iter().find(|entry| match &parsed.realm {
-        RealmRef::RealmId(uuid) => entry.realm_id.as_str() == format!("ck:realm:{uuid}"),
+        RealmRef::RealmId(uuid) => entry.realm_id.as_str() == format!("ak:realm:{uuid}"),
         RealmRef::Alias(alias) => entry.title.eq_ignore_ascii_case(alias),
     })
 }
@@ -600,11 +600,11 @@ pub(super) fn object_preview_for_address(parsed: &cokret_sdk::ParsedAddress) -> 
     let strand_id = parsed
         .strand
         .as_deref()
-        .map(|strand| format!("ck:strand:{strand}"));
+        .map(|strand| format!("ak:strand:{strand}"));
     let message_id = parsed
         .message
         .as_deref()
-        .map(|message| format!("ck:message:{message}"));
+        .map(|message| format!("ak:message:{message}"));
     strand_id.map(|strand_id| {
         let mut preview = serde_json::Map::new();
         preview.insert("strand_id".to_owned(), json!(strand_id));

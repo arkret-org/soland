@@ -13,7 +13,7 @@ impl ProjectionState {
         let realm_id = operation.realm_id.to_string();
         let value = operation.payload.clone();
         if let Ok(cell_id) = cokret_sdk::CellRef::new(format!(
-            "ck:cell:ck.component.realm.delivery_binding_policy.v1:{realm_id}"
+            "ak:cell:ck.component.realm.delivery_binding_policy.v1:{realm_id}"
         )) {
             self.cells.insert(cell_id, CellState::Value(value));
         }
@@ -107,7 +107,7 @@ impl ProjectionState {
             }
         }
         if let Ok(cell_id) = cokret_sdk::CellRef::new(format!(
-            "ck:cell:ck.component.realm.policy_components.v1:{realm_id}"
+            "ak:cell:ck.component.realm.policy_components.v1:{realm_id}"
         )) {
             self.cells.insert(cell_id, CellState::Value(value));
         }
@@ -134,7 +134,7 @@ impl ProjectionState {
     ) -> ProjectionEffect {
         let realm_id = operation.realm_id.to_string();
         if let Ok(cell_id) = cokret_sdk::CellRef::new(format!(
-            "ck:cell:ck.component.realm.disappearing_policy.v1:{realm_id}"
+            "ak:cell:ck.component.realm.disappearing_policy.v1:{realm_id}"
         )) {
             self.cells
                 .insert(cell_id, CellState::Value(operation.payload.clone()));
@@ -151,7 +151,7 @@ impl ProjectionState {
             };
         }
         if let Ok(cell_id) = cokret_sdk::CellRef::new(format!(
-            "ck:cell:ck.component.realm.search_policy.v1:{realm_id}"
+            "ak:cell:ck.component.realm.search_policy.v1:{realm_id}"
         )) {
             self.cells.insert(cell_id, CellState::Value(value));
         }
@@ -181,7 +181,7 @@ impl ProjectionState {
             };
         }
         if let Ok(cell_id) = cokret_sdk::CellRef::new(format!(
-            "ck:cell:ck.component.realm.media_service.v1:{realm_id}"
+            "ak:cell:ck.component.realm.media_service.v1:{realm_id}"
         )) {
             self.cells.insert(cell_id, CellState::Value(value));
         }
@@ -197,7 +197,7 @@ impl ProjectionState {
     ///   MUST keep the same value or be rejected with `session_focus_already_committed`.
     /// - the orthogonal `recording_state` / transcribe / moderation fields (`§4.2` / `§5`) are
     ///   projected into the cell so admin / sync readers can render them.
-    /// - backend-generated recording artifacts MUST flow through the Cokret blob pipeline (`§5`): a
+    /// - backend-generated recording artifacts MUST flow through the Arkret blob pipeline (`§5`): a
     ///   `recording_result` that points at a raw non-`ck:blob:` artifact reference is rejected with
     ///   `recording_artifact_pipeline_bypassed`.
     pub(crate) fn apply_call_state(&mut self, operation: &Operation) -> ProjectionEffect {
@@ -209,7 +209,7 @@ impl ProjectionState {
         };
         let call_id = call_id.to_owned();
         let call_state_cell_id =
-            cokret_sdk::CellRef::new(format!("ck:cell:ck.component.call.state.v1:{call_id}")).ok();
+            cokret_sdk::CellRef::new(format!("ak:cell:ck.component.call.state.v1:{call_id}")).ok();
         if call_state_cell_id
             .as_ref()
             .is_some_and(|cell_id| matches!(self.cells.get(cell_id), Some(CellState::Bottom(_))))
@@ -231,7 +231,7 @@ impl ProjectionState {
             .filter(|state| !state.is_empty())
         {
             let from_state =
-                cokret_sdk::CellRef::new(format!("ck:cell:ck.component.call.state.v1:{call_id}"))
+                cokret_sdk::CellRef::new(format!("ak:cell:ck.component.call.state.v1:{call_id}"))
                     .ok()
                     .and_then(|cell_id| self.cell_value(&cell_id).cloned())
                     .and_then(|state| {
@@ -289,7 +289,7 @@ impl ProjectionState {
             };
         }
 
-        // §5 — backend recording artifacts MUST land in the Cokret blob
+        // §5 — backend recording artifacts MUST land in the Arkret blob
         // pipeline. A `recording_result` referencing a raw external URL (or a
         // non-`ck:blob:` artifact ref) is bypassing the pipeline.
         if let Some(result) = value.get("recording_result").and_then(Value::as_object) {
@@ -300,7 +300,7 @@ impl ProjectionState {
                 || result
                     .get("recording_artifact_ref")
                     .and_then(Value::as_str)
-                    .is_some_and(|reference| !reference.starts_with("ck:blob:"));
+                    .is_some_and(|reference| !reference.starts_with("ak:blob:"));
             if bypassed {
                 return ProjectionEffect::Rejected {
                     reason: "recording_artifact_pipeline_bypassed".to_owned(),
@@ -308,7 +308,7 @@ impl ProjectionState {
             }
         }
 
-        // §5.1 — transcript artifacts share the same Cokret blob pipeline
+        // §5.1 — transcript artifacts share the same Arkret blob pipeline
         // requirement; a backend-hosted URL / non-`ck:blob:` ref bypasses it.
         if let Some(result) = value.get("transcript_result").and_then(Value::as_object) {
             let bypassed = result
@@ -318,7 +318,7 @@ impl ProjectionState {
                 || result
                     .get("transcript_artifact_ref")
                     .and_then(Value::as_str)
-                    .is_some_and(|reference| !reference.starts_with("ck:blob:"));
+                    .is_some_and(|reference| !reference.starts_with("ak:blob:"));
             if bypassed {
                 return ProjectionEffect::Rejected {
                     reason: crate::error::reasons::TRANSCRIPTION_ARTIFACT_PIPELINE_BYPASSED
@@ -337,7 +337,7 @@ impl ProjectionState {
 
         let incoming_fsm_updates = call_state_fsm_updates(&value);
         if let Ok(cell_id) =
-            cokret_sdk::CellRef::new(format!("ck:cell:ck.component.call.state.v1:{call_id}"))
+            cokret_sdk::CellRef::new(format!("ak:cell:ck.component.call.state.v1:{call_id}"))
         {
             if matches!(self.cells.get(&cell_id), Some(CellState::Bottom(_))) {
                 return ProjectionEffect::Rejected {
@@ -434,7 +434,7 @@ impl ProjectionState {
 
         // §7 — the call MUST already have a terminal `ck.call.state` head.
         let call_state_terminal =
-            cokret_sdk::CellRef::new(format!("ck:cell:ck.component.call.state.v1:{call_id}"))
+            cokret_sdk::CellRef::new(format!("ak:cell:ck.component.call.state.v1:{call_id}"))
                 .ok()
                 .and_then(|cell_id| self.cell_value(&cell_id).cloned())
                 .and_then(|state| {
@@ -453,7 +453,7 @@ impl ProjectionState {
         // §7 — write-once cas_register. A divergent rewrite is rejected; an
         // identical replay is a no-op.
         if let Ok(cell_id) =
-            cokret_sdk::CellRef::new(format!("ck:cell:ck.component.call.summary.v1:{call_id}"))
+            cokret_sdk::CellRef::new(format!("ak:cell:ck.component.call.summary.v1:{call_id}"))
         {
             if let Some(existing) = self.cell_value(&cell_id) {
                 if existing != &value {
@@ -631,7 +631,7 @@ impl ProjectionState {
         // as `(realm, target, link_kind)` joined by `|` (cells store
         // strings; reducer-side decoders re-split).
         if let Ok(cell_id) = cokret_sdk::CellRef::new(format!(
-            "ck:cell:ck.component.realm.link.v1:{realm_id}|{target_realm_id}|{link_kind}"
+            "ak:cell:ck.component.realm.link.v1:{realm_id}|{target_realm_id}|{link_kind}"
         )) {
             let value = serde_json::json!({
                 "realm_id": realm_id,
@@ -748,7 +748,7 @@ impl ProjectionState {
         }
 
         if let Ok(cell_id) = cokret_sdk::CellRef::new(format!(
-            "ck:cell:ck.component.realm.inheritance_policy.v1:{realm_id}"
+            "ak:cell:ck.component.realm.inheritance_policy.v1:{realm_id}"
         )) {
             let value = serde_json::json!({
                 "operation_id": operation.operation_id.as_str(),
@@ -890,7 +890,7 @@ impl ProjectionState {
         };
 
         if let Ok(cell_id) = cokret_sdk::CellRef::new(format!(
-            "ck:cell:ck.component.capability.derived.v1:{capability_id}"
+            "ak:cell:ck.component.capability.derived.v1:{capability_id}"
         )) {
             let mut value = serde_json::Map::new();
             value.insert(

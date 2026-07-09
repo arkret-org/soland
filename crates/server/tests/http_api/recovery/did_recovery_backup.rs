@@ -23,8 +23,8 @@ async fn did_recovery_backup_rejects_missing_active_recovery_policy() {
     )
     .await;
 
-    let backup_id = "ck:backup:01964137-0000-7000-8000-0000000000c4";
-    let policy_id = "ck:policy:01964137-0000-7000-8000-0000000000ee";
+    let backup_id = "ak:backup:01964137-0000-7000-8000-0000000000c4";
+    let policy_id = "ak:policy:01964137-0000-7000-8000-0000000000ee";
     let backup = did_recovery_backup_body(&principal_id, backup_id, policy_id);
     let body = put_key_backup(state, &token, backup_id, &backup, StatusCode::CONFLICT).await;
     assert_eq!(body["error"]["code"], "recovery_policy_mismatch");
@@ -49,8 +49,8 @@ async fn did_recovery_backup_rejects_recovery_policy_mismatch() {
     // backup's fixed wrong policy_id below cannot match it.
     seed_recovery_policy(&state, &principal_id, &vm, 1, None).await;
 
-    let backup_id = "ck:backup:01964137-0000-7000-8000-0000000000c5";
-    let wrong_policy = "ck:policy:01964137-0000-7000-8000-0000000000ff";
+    let backup_id = "ak:backup:01964137-0000-7000-8000-0000000000c5";
+    let wrong_policy = "ak:policy:01964137-0000-7000-8000-0000000000ff";
     let backup = did_recovery_backup_body(&principal_id, backup_id, wrong_policy);
     let body = put_key_backup(state, &token, backup_id, &backup, StatusCode::CONFLICT).await;
     assert_eq!(body["error"]["code"], "recovery_policy_mismatch");
@@ -77,7 +77,7 @@ async fn did_recovery_backup_rejects_unverified_session_device() {
     .await;
 
     let policy_id = seed_recovery_policy(&state, &principal_id, &vm, 1, None).await;
-    let backup_id = "ck:backup:01964137-0000-7000-8000-0000000000c8";
+    let backup_id = "ak:backup:01964137-0000-7000-8000-0000000000c8";
     let mut backup = did_recovery_backup_body(&principal_id, backup_id, &policy_id);
     backup["auth_data"]["device_id"] = serde_json::json!(RECOVERY_TEST_DEVICE_B);
     backup["auth_data"]["verification_method"] =
@@ -101,7 +101,7 @@ async fn key_backup_delete_allows_active_did_recovery_tail_backup() {
     .await;
 
     let policy_id = seed_recovery_policy(&state, &principal_id, &vm, 1, None).await;
-    let backup_id = "ck:backup:01964137-0000-7000-8000-0000000000c6";
+    let backup_id = "ak:backup:01964137-0000-7000-8000-0000000000c6";
     let backup = did_recovery_backup_body(&principal_id, backup_id, &policy_id);
     put_key_backup(state.clone(), &token, backup_id, &backup, StatusCode::OK).await;
 
@@ -123,7 +123,7 @@ async fn key_backup_delete_allows_stale_did_recovery_backup() {
     .await;
 
     let v1_policy_id = seed_recovery_policy(&state, &principal_id, &vm, 1, None).await;
-    let backup_id = "ck:backup:01964137-0000-7000-8000-0000000000c7";
+    let backup_id = "ak:backup:01964137-0000-7000-8000-0000000000c7";
     let backup = did_recovery_backup_body(&principal_id, backup_id, &v1_policy_id);
     put_key_backup(state.clone(), &token, backup_id, &backup, StatusCode::OK).await;
 

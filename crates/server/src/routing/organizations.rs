@@ -244,11 +244,11 @@ pub(crate) async fn refresh_organization_projection(
 }
 
 #[endpoint(
-    operation_id = "org.cokret.soland.organization.query.list",
+    operation_id = "org.arkret.soland.organization.query.list",
     tags("organizations"),
     summary = "List locally known organizations"
 )]
-#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.organization.query.list"))]
+#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.organization.query.list"))]
 async fn list_organizations(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -274,11 +274,11 @@ async fn list_organizations(
 }
 
 #[endpoint(
-    operation_id = "org.cokret.soland.organization.command.upsert",
+    operation_id = "org.arkret.soland.organization.command.upsert",
     tags("organizations"),
     summary = "Create or update a local organization registry row"
 )]
-#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.organization.command.upsert"))]
+#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.organization.command.upsert"))]
 async fn upsert_organization(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -342,11 +342,11 @@ async fn upsert_organization(
 }
 
 #[endpoint(
-    operation_id = "org.cokret.soland.organization.resource.get",
+    operation_id = "org.arkret.soland.organization.resource.get",
     tags("organizations"),
     summary = "Read a local organization registry row"
 )]
-#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.organization.resource.get"))]
+#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.organization.resource.get"))]
 async fn get_organization(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -369,13 +369,13 @@ async fn get_organization(
 }
 
 #[endpoint(
-    operation_id = "org.cokret.soland.organization.policy.resource.get",
+    operation_id = "org.arkret.soland.organization.policy.resource.get",
     tags("organizations", "policy"),
     summary = "Read the current organization moderation policy"
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "org.cokret.soland.organization.policy.resource.get")
+    fields(op = "org.arkret.soland.organization.policy.resource.get")
 )]
 async fn get_organization_policy(
     aa: AuthArgs,
@@ -399,13 +399,13 @@ async fn get_organization_policy(
 }
 
 #[endpoint(
-    operation_id = "org.cokret.soland.organization.policy.resource.replace",
+    operation_id = "org.arkret.soland.organization.policy.resource.replace",
     tags("organizations", "policy"),
     summary = "Publish an organization moderation policy"
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "org.cokret.soland.organization.policy.resource.replace")
+    fields(op = "org.arkret.soland.organization.policy.resource.replace")
 )]
 async fn upsert_organization_policy(
     aa: AuthArgs,
@@ -465,7 +465,7 @@ async fn upsert_organization_policy(
         .map(ToOwned::to_owned)
         .unwrap_or_else(|| {
             format!(
-                "ck:org-policy:{}:{version}",
+                "ak:org-policy:{}:{version}",
                 safe_id_fragment(&organization_id)
             )
         });
@@ -491,13 +491,13 @@ async fn upsert_organization_policy(
 }
 
 #[endpoint(
-    operation_id = "org.cokret.soland.organization.realm.command.link",
+    operation_id = "org.arkret.soland.organization.realm.command.link",
     tags("organizations", "realms"),
     summary = "Link a Realm to an organization policy source"
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "org.cokret.soland.organization.realm.command.link")
+    fields(op = "org.arkret.soland.organization.realm.command.link")
 )]
 async fn link_organization_realm(
     aa: AuthArgs,
@@ -1102,7 +1102,7 @@ fn normalized_organization_id(raw: &str) -> Result<String, AppError> {
     if value.starts_with("did:") {
         validate_did(value)
             .map_err(|_| AppError::invalid_param("organization_id DID is invalid"))?;
-    } else if !value.starts_with("ck:org:") {
+    } else if !value.starts_with("ak:org:") {
         return Err(AppError::invalid_param(
             "organization_id must be a DID or ck:org: identifier",
         ));
@@ -1113,7 +1113,7 @@ fn normalized_organization_id(raw: &str) -> Result<String, AppError> {
 fn display_name_from_organization_id(organization_id: &str) -> String {
     organization_id
         .trim_start_matches("did:web:")
-        .trim_start_matches("ck:org:")
+        .trim_start_matches("ak:org:")
         .replace(['.', '-'], " ")
 }
 

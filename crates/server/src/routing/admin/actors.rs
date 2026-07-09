@@ -16,11 +16,11 @@ pub(super) fn router() -> Router {
 }
 
 #[endpoint(
-    operation_id = "org.cokret.soland.admin.actors.get",
+    operation_id = "org.arkret.soland.admin.actors.get",
     tags("soland-admin", "actors"),
     summary = "Read an admin actor projection row"
 )]
-#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.admin.actors.get"))]
+#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.admin.actors.get"))]
 async fn get_actor(
     aa: AuthArgs,
     actor_id: PathParam<String>,
