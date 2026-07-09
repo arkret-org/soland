@@ -337,9 +337,11 @@ async fn fetch_remote_handle_from_peer(
         serde_json::from_str(&text).map_err(|error| {
             AppError::internal(format!("parse remote resolve-handle response: {error}"))
         })?;
-    validate_remote_handle_resolution(state, peer_did, &remote_body, lookup, &outcome).map_err(
-        |reason| AppError::capability_denied(reason).with_wire_code("handle_unverified"),
-    )?;
+    validate_remote_handle_resolution(state, peer_did, &remote_body, lookup, &outcome)
+        .await
+        .map_err(|reason| {
+            AppError::capability_denied(reason).with_wire_code("handle_unverified")
+        })?;
     if !outcome
         .via_services
         .iter()
@@ -358,7 +360,7 @@ async fn fetch_remote_handle_from_peer(
     Ok(Some(outcome))
 }
 
-fn validate_remote_handle_resolution(
+async fn validate_remote_handle_resolution(
     state: &AppState,
     peer_did: &str,
     body: &DirectoryResolveHandleRequestBody,
@@ -389,7 +391,7 @@ fn validate_remote_handle_resolution(
     claim
         .validate_remote_resolution(Some(audience.as_str()), Some(&expected_peer_did), now())
         .map_err(|error| format!("remote handle claim invalid: {error}"))?;
-    verify_remote_handle_claim_proof(state, peer_did, audience.as_str(), claim)?;
+    verify_remote_handle_claim_proof(state, peer_did, audience.as_str(), claim).await?;
     if claim.handle_canonical() != Some(lookup.canonical.as_str()) {
         return Err("remote handle claim handle mismatch".to_owned());
     }
@@ -427,7 +429,7 @@ fn validate_remote_handle_resolution(
     Ok(())
 }
 
-fn verify_remote_handle_claim_proof(
+async fn verify_remote_handle_claim_proof(
     state: &AppState,
     peer_did: &str,
     expected_audience: &str,
@@ -471,13 +473,14 @@ fn verify_remote_handle_claim_proof(
                 peer_did,
             )
         } else {
-            crate::jws_verify::verify_jws_ed25519(
+            crate::jws_verify::verify_jws_ed25519_async(
                 &canonical_bytes,
                 &proof.jws,
                 &proof.verification_method,
                 peer_did,
                 state,
             )
+            .await
         };
         match result {
             Ok(()) => return Ok(()),

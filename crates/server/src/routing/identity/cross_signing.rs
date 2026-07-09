@@ -53,7 +53,7 @@ pub async fn validate_cross_signing_publish(
     // resolve to a verification method in the principal's DID document, and the
     // published bytes MUST equal the DID-resolved key. (device-lifecycle §5.2.1
     // step 2.)
-    let psk = resolve_psk_in_control_set(state, &content)?;
+    let psk = resolve_psk_in_control_set(state, &content).await?;
 
     // PSK→SSK and PSK→USK binding signatures.
     let ssk_input = content
@@ -158,7 +158,8 @@ pub async fn validate_cross_signing_reset(
                 verification_method,
             )
             .map_err(|_| "cross_signing_reset_proof_authority_invalid")?;
-            let psk = crate::jws_verify::resolve_ed25519_pubkey(state, verification_method)
+            let psk = crate::jws_verify::resolve_ed25519_pubkey_async(state, verification_method)
+                .await
                 .map_err(|_| "cross_signing_reset_proof_authority_invalid")?;
             if !ed25519_verify(&psk, &input, signature) {
                 return Err("cross_signing_reset_signature_invalid");
@@ -194,7 +195,8 @@ pub async fn validate_cross_signing_reset(
                 return Err("cross_signing_reset_unlock_commitment_mismatch");
             }
             let recovery_key =
-                crate::jws_verify::resolve_ed25519_pubkey(state, recovery_secret_ref)
+                crate::jws_verify::resolve_ed25519_pubkey_async(state, recovery_secret_ref)
+                    .await
                     .map_err(|_| "cross_signing_reset_recovery_ref_unknown")?;
             if !ed25519_verify(&recovery_key, &input, signature) {
                 return Err("cross_signing_reset_signature_invalid");
@@ -250,8 +252,10 @@ pub async fn validate_cross_signing_reset(
                 verification_method,
             )
             .map_err(|_| "cross_signing_reset_proof_authority_invalid")?;
-            let service_key = crate::jws_verify::resolve_ed25519_pubkey(state, verification_method)
-                .map_err(|_| "cross_signing_reset_proof_authority_invalid")?;
+            let service_key =
+                crate::jws_verify::resolve_ed25519_pubkey_async(state, verification_method)
+                    .await
+                    .map_err(|_| "cross_signing_reset_proof_authority_invalid")?;
             if !ed25519_verify(&service_key, &input, signature) {
                 return Err("cross_signing_reset_signature_invalid");
             }
@@ -849,14 +853,15 @@ fn device_signature_kid_points_to_device_key(
 
 /// Resolve the published PSK against the principal DID document (control-set
 /// membership) and confirm the published bytes match.
-fn resolve_psk_in_control_set(
+async fn resolve_psk_in_control_set(
     state: &AppState,
     content: &CrossSigningPublishContent,
 ) -> Result<VerifyingKey, &'static str> {
     let kid = content.principal_signing_key.kid.as_str();
     // resolve_ed25519_pubkey enforces that the verification method is present in
     // the principal's DID document — i.e. in its control set.
-    let resolved = crate::jws_verify::resolve_ed25519_pubkey(state, kid)
+    let resolved = crate::jws_verify::resolve_ed25519_pubkey_async(state, kid)
+        .await
         .map_err(|_| "cross_signing_psk_not_in_control_set")?;
     let published = decode_ed25519_key(
         &content.principal_signing_key.public_key,

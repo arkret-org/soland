@@ -67,13 +67,14 @@ pub(super) async fn verify_key_backup_delete_jws_proof(
                 "key backup delete proof DID document stale or unavailable: {error}"
             ))
         })?;
-    crate::jws_verify::verify_jws_ed25519(
+    crate::jws_verify::verify_jws_ed25519_async(
         &canonical,
         &proof.jws,
         &proof.verification_method,
         actor_id.as_str(),
         state,
     )
+    .await
     .map_err(|error| {
         AppError::capability_denied(format!(
             "key backup delete proof signature invalid: {error}"

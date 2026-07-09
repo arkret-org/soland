@@ -22,6 +22,7 @@
 //! existing CSV shape produced by `env_csv` in `config.rs`. The allow
 //! list MUST be non-empty; an empty list resolves nothing.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -30,33 +31,28 @@ use cokret_sdk::identity::{
     DidWebvhResolver,
 };
 use cokret_sdk::{Did, Error};
+use parking_lot::RwLock;
 use serde_json::Value;
 
 use crate::config::AppConfig;
 use crate::persistence::PersistenceStore;
 
-/// Build the production `CompositeDidResolver` chain for `AppState`.
+/// Build the no-IO fallback resolver chain used by tests and sync SDK bridges.
 /// Honors the `did_resolver_allow_methods` filter.
 pub fn build_did_resolver_chain(config: &AppConfig) -> CompositeDidResolver {
-    build_did_resolver_chain_with_identity(config, None)
+    build_fallback_did_resolver_chain(config)
 }
 
-/// Build the resolver chain and optionally place soland's local identity
-/// store first. Tests that only care about static resolver composition can use
-/// [`build_did_resolver_chain`]; `AppState` uses this variant so newly
-/// registered embedded webvh DIDs are immediately resolvable by signature
-/// verification.
-pub fn build_did_resolver_chain_with_identity(
+/// Build the async-native resolver service used by `AppState`.
+pub fn build_soland_did_resolver(
     config: &AppConfig,
     persistence: Option<Arc<dyn PersistenceStore>>,
-) -> CompositeDidResolver {
+) -> SolandDidResolver {
+    SolandDidResolver::new(config, persistence)
+}
+
+fn build_fallback_did_resolver_chain(config: &AppConfig) -> CompositeDidResolver {
     let mut resolver = CompositeDidResolver::new();
-    if let Some(persistence) = persistence {
-        resolver.push(LocalIdentityResolver {
-            persistence,
-            allowed_methods: config.did_resolver_allow_methods.clone(),
-        });
-    }
     if method_allowed(config, "webvh") && config.external_webvh_provider_active {
         resolver.push(DidWebvhResolver::new());
     }
@@ -69,86 +65,100 @@ pub fn build_did_resolver_chain_with_identity(
     resolver
 }
 
-struct LocalIdentityResolver {
+/// Soland DID resolver boundary.
+///
+/// Async callers use [`Self::resolve_did_async`], which awaits the durable
+/// local DID store directly before falling back to the SDK resolver chain. The
+/// sync [`DidResolver`] implementation exists only for SDK APIs that still
+/// require a synchronous resolver; it reads the in-process document snapshot
+/// and the no-IO SDK fallback chain, so it never blocks an async runtime.
+pub struct SolandDidResolver {
     persistence: Arc<dyn PersistenceStore>,
+    fallback: CompositeDidResolver,
     allowed_methods: Vec<String>,
+    local_snapshot: RwLock<BTreeMap<Did, DidDocument>>,
 }
 
-impl LocalIdentityResolver {
+impl SolandDidResolver {
+    fn new(config: &AppConfig, persistence: Option<Arc<dyn PersistenceStore>>) -> Self {
+        let persistence = persistence
+            .unwrap_or_else(|| Arc::new(crate::persistence::SolandMemoryPersistenceStore::new()));
+        Self {
+            persistence,
+            fallback: build_fallback_did_resolver_chain(config),
+            allowed_methods: config.did_resolver_allow_methods.clone(),
+            local_snapshot: RwLock::new(BTreeMap::new()),
+        }
+    }
+
     fn method_allowed(&self, method: &str) -> bool {
         self.allowed_methods
             .iter()
             .any(|allowed| allowed.eq_ignore_ascii_case(method))
     }
 
-    fn document(&self, did: &Did) -> Result<DidDocument, Error> {
+    fn cached_document(&self, did: &Did) -> Option<DidDocument> {
         if !self.method_allowed(did.method()) {
-            return Err(Error::Protocol("DID method not allowed".to_owned()));
+            return None;
         }
-        let persistence = self.persistence.clone();
-        let did_str = did.as_str().to_owned();
-        let lookup = blocking_webvh_document_lookup(persistence, did_str)
-            .map_err(|e| Error::Protocol(format!("local DID store read failed: {e}")))?;
-        let Some(record) =
-            lookup.map_err(|e| Error::Protocol(format!("local DID store read failed: {e}")))?
-        else {
-            return Err(Error::Protocol("local DID document not found".to_owned()));
-        };
+        self.local_snapshot.read().get(did).cloned()
+    }
+
+    fn document_from_record(
+        &self,
+        did: &Did,
+        record: crate::state::WebvhDocumentRecord,
+    ) -> Result<DidDocument, Error> {
         let document: DidDocument = serde_json::from_value(record.did_document)
             .map_err(|e| Error::Protocol(format!("local DID document decode failed: {e}")))?;
         if &document.id != did {
             return Err(Error::Protocol("local DID document id mismatch".to_owned()));
         }
         document.validate()?;
+        self.local_snapshot
+            .write()
+            .insert(document.id.clone(), document.clone());
         Ok(document)
     }
-}
 
-fn blocking_webvh_document_lookup(
-    persistence: Arc<dyn PersistenceStore>,
-    did: String,
-) -> Result<crate::persistence::PersistenceResult<Option<crate::state::WebvhDocumentRecord>>, String>
-{
-    let fut = async move { persistence.webvh().get_document(&did).await };
-    match tokio::runtime::Handle::try_current() {
-        // Inside the production multi-threaded runtime: reuse the shared runtime
-        // handle rather than spawning a fresh OS thread + building a brand-new
-        // current-thread runtime on every DID resolution. `block_in_place` moves
-        // this worker off the async poll loop so blocking on the DB query does not
-        // stall the executor (SOL-02-003).
-        Ok(handle) if handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread => {
-            Ok(tokio::task::block_in_place(|| handle.block_on(fut)))
+    pub fn cache_webvh_record(
+        &self,
+        record: crate::state::WebvhDocumentRecord,
+    ) -> Result<DidDocument, Error> {
+        let did = Did::new(record.did.clone()).map_err(Error::from)?;
+        self.document_from_record(&did, record)
+    }
+
+    pub async fn resolve_did_async(&self, did: &Did) -> Result<DidDocument, Error> {
+        if !self.method_allowed(did.method()) {
+            return Err(Error::Protocol("DID method not allowed".to_owned()));
         }
-        // Inside a current-thread runtime (e.g. `#[tokio::test]`): `block_in_place`
-        // would panic, so run the future on a separate thread with its own
-        // throwaway runtime and join it.
-        Ok(_) => std::thread::spawn(move || {
-            let runtime = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .map_err(|error| error.to_string())?;
-            Ok(runtime.block_on(fut))
-        })
-        .join()
-        .map_err(|_| "local DID lookup worker panicked".to_owned())?,
-        // No runtime in scope (cold path): build a throwaway runtime inline.
-        Err(_) => {
-            let runtime = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .map_err(|error| error.to_string())?;
-            Ok(runtime.block_on(fut))
+        if let Some(document) = self.cached_document(did) {
+            return Ok(document);
         }
+        if let Some(record) = self
+            .persistence
+            .webvh()
+            .get_document(did.as_str())
+            .await
+            .map_err(|e| Error::Protocol(format!("local DID store read failed: {e}")))?
+        {
+            return self.document_from_record(did, record);
+        }
+        self.fallback.resolve_did(did)
     }
 }
 
-impl DidResolver for LocalIdentityResolver {
+impl DidResolver for SolandDidResolver {
     fn supports(&self, did: &Did) -> bool {
-        self.document(did).is_ok()
+        self.cached_document(did).is_some() || self.fallback.supports(did)
     }
 
     fn resolve_did(&self, did: &Did) -> Result<DidDocument, Error> {
-        self.document(did)
+        if let Some(document) = self.cached_document(did) {
+            return Ok(document);
+        }
+        self.fallback.resolve_did(did)
     }
 }
 
@@ -290,7 +300,9 @@ fn valid_trust_domain(value: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
     use std::net::SocketAddr;
+    use std::sync::Arc;
 
     use cokret_sdk::Did;
     use cokret_sdk::identity::DidResolver;
@@ -298,6 +310,8 @@ mod tests {
 
     use super::*;
     use crate::config::{IceServersConfig, LiveKitConfig, ObjectStorageConfig};
+    use crate::persistence::{PersistenceStore, SolandMemoryPersistenceStore};
+    use crate::state::WebvhDocumentRecord;
 
     fn base_config() -> AppConfig {
         AppConfig {
@@ -427,6 +441,52 @@ mod tests {
         let chain = build_did_resolver_chain(&config);
         assert!(!chain.supports(&sample_webvh_did()));
         assert!(!chain.supports(&sample_web_did()));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn soland_resolver_awaits_local_document_and_populates_sync_snapshot() {
+        let config = base_config();
+        let persistence = Arc::new(SolandMemoryPersistenceStore::new());
+        let did = Did::new("did:web:local.example".to_owned()).expect("valid DID");
+        let verification_method = format!("{did}#key-1");
+        let mut verification_methods = BTreeMap::new();
+        verification_methods.insert(
+            verification_method,
+            cokret_sdk::ed25519_pubkey_to_did_key_multibase(&[7u8; 32]),
+        );
+        let document = DidDocument {
+            id: did.clone(),
+            verification_methods,
+            also_known_as: Vec::new(),
+            updated_at: chrono::Utc::now(),
+        };
+        let now = chrono::Utc::now();
+        persistence
+            .webvh()
+            .put_document(WebvhDocumentRecord {
+                did: did.as_str().to_owned(),
+                did_document: serde_json::to_value(&document).expect("document JSON"),
+                key_log_head: None,
+                seq: 1,
+                method_evidence: json!({"mode": "test"}),
+                fetched_at: now,
+                expires_at: now,
+                updated_at: now,
+            })
+            .await
+            .expect("store document");
+
+        let resolver = build_soland_did_resolver(&config, Some(persistence));
+        let resolved = resolver
+            .resolve_did_async(&did)
+            .await
+            .expect("async local resolve");
+
+        assert_eq!(resolved.id, did);
+        assert!(
+            resolver.resolve_did(&did).is_ok(),
+            "async resolve should populate the no-IO sync snapshot"
+        );
     }
 
     #[test]

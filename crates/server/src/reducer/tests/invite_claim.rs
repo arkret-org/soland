@@ -51,14 +51,14 @@ fn claim_payload(nonce: &str, token_commitment: &str, service_did: &str) -> Valu
         "signature": "test-signature"
     });
     let binding_digest = cokret_sdk::canonical::canonical_sha256(&binding_proof).unwrap();
-    let transcript_digest = crate::invite_claim_proofs::subject_proof_transcript_digest(
+    let transcript_digest = cokret_sdk::invite_subject_proof_transcript_digest(
         SUBJECT,
         INVITE,
         REALM,
         token_commitment,
         nonce,
         service_did,
-        &binding_digest,
+        binding_digest.as_str(),
     )
     .unwrap();
     json!({
@@ -119,7 +119,7 @@ fn invite_claim_converts_third_party_invite_to_claimed_invite() {
         &make_operation(
             cokret_sdk::events::kinds::INVITE_CLAIM,
             REALM,
-            claim_payload("nonce-1", TOKEN_COMMITMENT, SERVICE),
+            claim_payload("nonce-0000000001", TOKEN_COMMITMENT, SERVICE),
         ),
         &hlc,
     );
@@ -139,7 +139,7 @@ fn invite_claim_converts_third_party_invite_to_claimed_invite() {
     assert!(
         invite
             .claim_nonces
-            .get("nonce-1")
+            .get("nonce-0000000001")
             .is_some_and(|operation_id| operation_id.starts_with("ck:operation:"))
     );
     let third_party_id = invite.third_party_id.as_ref().expect("third_party_id");
@@ -168,7 +168,7 @@ fn invite_claim_rejects_reused_claim_nonce() {
             &make_operation(
                 cokret_sdk::events::kinds::INVITE_CLAIM,
                 REALM,
-                claim_payload("nonce-1", TOKEN_COMMITMENT, SERVICE),
+                claim_payload("nonce-0000000001", TOKEN_COMMITMENT, SERVICE),
             ),
             &hlc,
         ),
@@ -179,7 +179,7 @@ fn invite_claim_rejects_reused_claim_nonce() {
         &make_operation(
             cokret_sdk::events::kinds::INVITE_CLAIM,
             REALM,
-            claim_payload("nonce-1", TOKEN_COMMITMENT, SERVICE),
+            claim_payload("nonce-0000000001", TOKEN_COMMITMENT, SERVICE),
         ),
         &hlc,
     );
@@ -227,7 +227,11 @@ fn invite_claim_rechecks_verification_service_authorization() {
         &make_operation(
             cokret_sdk::events::kinds::INVITE_CLAIM,
             REALM,
-            claim_payload("nonce-service", TOKEN_COMMITMENT, "did:web:other.example"),
+            claim_payload(
+                "nonce-service-0001",
+                TOKEN_COMMITMENT,
+                "did:web:other.example",
+            ),
         ),
         &hlc,
     );
@@ -247,7 +251,7 @@ fn invite_claim_rejects_invite_bound_service_without_current_policy_allowlist() 
         &make_operation(
             cokret_sdk::events::kinds::INVITE_CLAIM,
             REALM,
-            claim_payload("nonce-no-policy", TOKEN_COMMITMENT, SERVICE),
+            claim_payload("nonce-no-policy-01", TOKEN_COMMITMENT, SERVICE),
         ),
         &hlc,
     );
@@ -307,7 +311,7 @@ fn expired_invite_claim_cleans_active_token_material() {
         &make_operation(
             cokret_sdk::events::kinds::INVITE_CLAIM,
             REALM,
-            claim_payload("nonce-expired", TOKEN_COMMITMENT, SERVICE),
+            claim_payload("nonce-expired-001", TOKEN_COMMITMENT, SERVICE),
         ),
         &hlc,
     );

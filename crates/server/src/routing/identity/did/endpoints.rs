@@ -430,36 +430,40 @@ pub(crate) async fn embedded_webvh_register(
         return Err(AppError::new(ErrorCode::InvalidSignature, message)
             .with_status(StatusCode::UNAUTHORIZED));
     }
+    let document_record = WebvhDocumentRecord {
+        did: location.did.clone(),
+        did_document: did_document.clone(),
+        key_log_head: Some(event_digest.clone()),
+        seq: 1,
+        method_evidence: json!({
+            "mode": "embedded_webvh_provider",
+            "provider_id": "soland.embedded",
+            "local_id": local_id,
+            "document_url": location.document_url,
+            "log_url": location.log_url,
+            "scid": location.scid,
+            "version_id": version_id,
+            "updateKeys": [body.update_public_key_multibase.clone()],
+        }),
+        // put_document authoritatively overwrites freshness evidence with
+        // the ingestion instant, so placeholders are enough here.
+        fetched_at: now,
+        expires_at: now,
+        updated_at: now,
+    };
     if let Err(error) = state
         .persistence
         .webvh()
-        .put_document(WebvhDocumentRecord {
-            did: location.did.clone(),
-            did_document: did_document.clone(),
-            key_log_head: Some(event_digest.clone()),
-            seq: 1,
-            method_evidence: json!({
-                "mode": "embedded_webvh_provider",
-                "provider_id": "soland.embedded",
-                "local_id": local_id,
-                "document_url": location.document_url,
-                "log_url": location.log_url,
-                "scid": location.scid,
-                "version_id": version_id,
-                "updateKeys": [body.update_public_key_multibase.clone()],
-            }),
-            // put_document authoritatively overwrites freshness evidence with
-            // the ingestion instant, so placeholders are enough here.
-            fetched_at: now,
-            expires_at: now,
-            updated_at: now,
-        })
+        .put_document(document_record.clone())
         .await
     {
         tracing::error!(%error, "failed to persist embedded webvh document");
         return Err(AppError::internal(
             "failed to persist embedded webvh document",
         ));
+    }
+    if let Err(error) = state.did_resolver.cache_webvh_record(document_record) {
+        tracing::warn!(%error, "failed to cache embedded webvh DID document");
     }
     if let Err(error) = state
         .persistence
@@ -617,26 +621,30 @@ pub(crate) async fn embedded_webvh_rotate(
     validate_rotation_authorization_for_log(&candidate)?;
 
     let submitted_at = now();
+    let document_record = WebvhDocumentRecord {
+        did: did.clone(),
+        did_document: new_document.clone(),
+        key_log_head: Some(event_digest.clone()),
+        seq: next_seq,
+        method_evidence: json!({
+            "mode": "embedded_webvh_provider",
+            "provider_id": "soland.embedded",
+            "rotation": true,
+            "version_id": version_id,
+        }),
+        fetched_at: submitted_at,
+        expires_at: submitted_at,
+        updated_at: submitted_at,
+    };
     state
         .persistence
         .webvh()
-        .put_document(WebvhDocumentRecord {
-            did: did.clone(),
-            did_document: new_document.clone(),
-            key_log_head: Some(event_digest.clone()),
-            seq: next_seq,
-            method_evidence: json!({
-                "mode": "embedded_webvh_provider",
-                "provider_id": "soland.embedded",
-                "rotation": true,
-                "version_id": version_id,
-            }),
-            fetched_at: submitted_at,
-            expires_at: submitted_at,
-            updated_at: submitted_at,
-        })
+        .put_document(document_record.clone())
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
+    if let Err(error) = state.did_resolver.cache_webvh_record(document_record) {
+        tracing::warn!(%error, "failed to cache rotated webvh DID document");
+    }
     state
         .persistence
         .webvh()
@@ -774,7 +782,7 @@ pub(crate) async fn identity_resolve(
             record.method_evidence,
         ));
     }
-    let sdk_document = state.did_resolver.resolve_did(&body.did).ok();
+    let sdk_document = state.did_resolver.resolve_did_async(&body.did).await.ok();
     if let Some(doc) = sdk_document {
         return json_ok(identity_resolve_outcome(
             body.did,
@@ -1071,23 +1079,27 @@ pub(crate) async fn identity_submit_did_operation(
             "previous": previous_method_evidence,
         })
     };
+    let document_record = WebvhDocumentRecord {
+        did: did.clone(),
+        did_document: document.clone(),
+        key_log_head: append_log_event.then(|| event_digest.clone()),
+        seq: next_seq,
+        method_evidence,
+        // put_document authoritatively overwrites freshness evidence with
+        // the ingestion instant, so placeholders are enough here.
+        fetched_at: submitted_at,
+        expires_at: submitted_at,
+        updated_at: submitted_at,
+    };
     state
         .persistence
         .webvh()
-        .put_document(WebvhDocumentRecord {
-            did: did.clone(),
-            did_document: document.clone(),
-            key_log_head: append_log_event.then(|| event_digest.clone()),
-            seq: next_seq,
-            method_evidence,
-            // put_document authoritatively overwrites freshness evidence with
-            // the ingestion instant, so placeholders are enough here.
-            fetched_at: submitted_at,
-            expires_at: submitted_at,
-            updated_at: submitted_at,
-        })
+        .put_document(document_record.clone())
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
+    if let Err(error) = state.did_resolver.cache_webvh_record(document_record) {
+        tracing::warn!(%error, "failed to cache submitted DID document");
+    }
     if append_log_event {
         state
             .persistence

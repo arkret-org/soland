@@ -608,7 +608,8 @@ pub(super) async fn verify_trusted_recovery_service_proof(
                 "proof.verification_method authority invalid: {error}"
             ))
         })?;
-    let service_key = crate::jws_verify::resolve_ed25519_pubkey(state, verification_method)
+    let service_key = crate::jws_verify::resolve_ed25519_pubkey_async(state, verification_method)
+        .await
         .map_err(|error| {
             recovery_proof_authority_error(format!("trusted recovery service key invalid: {error}"))
         })?;

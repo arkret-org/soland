@@ -126,11 +126,12 @@ async fn member_identity_plaintext_ed25519_proof_verifies() {
     let (_, payload) = signed_member_identity_payload(&signing_key);
 
     validate_member_identity_proof(&state, &payload)
+        .await
         .expect("valid MemberIdentity proof should verify");
 }
 
-#[test]
-fn member_identity_tampered_payload_fails_closed() {
+#[tokio::test(flavor = "multi_thread")]
+async fn member_identity_tampered_payload_fails_closed() {
     let state = make_state(false);
     let signing_key = ed25519_dalek::SigningKey::from_bytes(&[8u8; 32]);
     let (_, mut payload) = signed_member_identity_payload(&signing_key);
@@ -138,26 +139,28 @@ fn member_identity_tampered_payload_fails_closed() {
         json!("Mallory");
 
     let err = validate_member_identity_proof(&state, &payload)
+        .await
         .expect_err("tampered MemberIdentity payload must fail");
     assert_eq!(err.code, "proof_event_digest_mismatch");
 }
 
-#[test]
-fn member_identity_unsupported_signature_algorithm_is_422() {
+#[tokio::test(flavor = "multi_thread")]
+async fn member_identity_unsupported_signature_algorithm_is_422() {
     let state = make_state(false);
     let signing_key = ed25519_dalek::SigningKey::from_bytes(&[9u8; 32]);
     let (_, mut payload) = signed_member_identity_payload(&signing_key);
     payload["identity_payload"]["member_identity"]["proof"]["signature_algorithm"] = json!("ES256");
 
     let err = validate_member_identity_proof(&state, &payload)
+        .await
         .expect_err("unsupported MemberIdentity signature algorithm must fail closed");
     let code = crate::error::ErrorCode::UnsupportedSignatureAlg;
     assert_eq!(err.status, crate::error::error_http_status(code));
     assert_eq!(err.code, code.as_str());
 }
 
-#[test]
-fn member_identity_encrypted_payload_is_unsupported_fail_closed() {
+#[tokio::test(flavor = "multi_thread")]
+async fn member_identity_encrypted_payload_is_unsupported_fail_closed() {
     let state = make_state(false);
     let payload = json!({
         "realm_id": "ck:realm:01904100-0000-7000-8000-a11ce0000001",
@@ -171,6 +174,7 @@ fn member_identity_encrypted_payload_is_unsupported_fail_closed() {
     });
 
     let err = validate_member_identity_proof(&state, &payload)
+        .await
         .expect_err("encrypted MemberIdentity proof verification is not wired");
     assert_eq!(err.code, "unsupported_feature");
 }

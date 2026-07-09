@@ -16,7 +16,6 @@
 //! durable store (see todo F2) — currently in-memory.
 
 use cokret_sdk::http::IdentityDocumentViewOutcome;
-use cokret_sdk::identity::DidResolver;
 use cokret_sdk::{
     Did, DidDocumentRef, DidOperationSubmitOutcome, DidOperationSubmitRequestBody, Hash,
     IdentityDocumentView, IdentityResolveOutcome,

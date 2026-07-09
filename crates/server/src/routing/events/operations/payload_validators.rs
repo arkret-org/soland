@@ -998,7 +998,7 @@ pub(crate) fn validate_cross_signing_reset_replay_batch(
 pub fn validate_encrypted_payload_envelope(
     content: &serde_json::Value,
 ) -> Result<(), &'static str> {
-    cokret_sdk::EncryptedEnvelopeV1::parse_and_validate(content.clone())
+    cokret_sdk::mls::EncryptedEnvelopeV1::parse_and_validate(content.clone())
         .map(|_| ())
         .map_err(|_| "encrypted content envelope violates SDK schema")
 }

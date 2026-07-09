@@ -368,7 +368,7 @@ pub(super) fn validate_key_backup_unlock_proof_shape(
     Ok(())
 }
 
-pub(super) fn verify_key_backup_unlock_proof_signature(
+pub(super) async fn verify_key_backup_unlock_proof_signature(
     state: &AppState,
     proof: &Value,
 ) -> Result<(), AppError> {
@@ -402,7 +402,8 @@ pub(super) fn verify_key_backup_unlock_proof_signature(
             "key backup unlock proof canonicalization failed: {error}"
         ))
     })?;
-    let public_key = crate::jws_verify::resolve_ed25519_pubkey(state, verification_method)
+    let public_key = crate::jws_verify::resolve_ed25519_pubkey_async(state, verification_method)
+        .await
         .map_err(|error| {
             AppError::capability_denied(format!(
                 "key backup unlock proof verification method invalid: {error}"
@@ -494,7 +495,7 @@ pub(super) async fn verify_key_backup_unlock_proof(
     validate_key_backup_unlock_proof_shape(proof, actor_id, session_device_id, backup)?;
     enforce_recovery_session_binding_when_present(state, proof, actor_id, session_device_id)
         .await?;
-    verify_key_backup_unlock_proof_signature(state, proof)
+    verify_key_backup_unlock_proof_signature(state, proof).await
 }
 
 #[cfg(test)]

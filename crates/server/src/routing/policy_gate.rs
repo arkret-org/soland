@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use cokret_sdk::identity::{CompositeDidResolver, DidDocument, DidResolver};
+use cokret_sdk::identity::{DidDocument, DidResolver};
 use cokret_sdk::{Did, Hash, Operation, RealmId};
 use salvo::http::StatusCode;
 use serde_json::{Value, json};
@@ -45,7 +45,7 @@ impl PolicyGateRejection {
 
 #[derive(Clone)]
 struct SharedDidResolver {
-    inner: Arc<CompositeDidResolver>,
+    inner: Arc<crate::state::did_resolver_chain::SolandDidResolver>,
 }
 
 impl DidResolver for SharedDidResolver {

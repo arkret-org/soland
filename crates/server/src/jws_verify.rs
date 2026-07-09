@@ -144,6 +144,33 @@ pub fn verify_jws_ed25519(
     .map_err(|error| error.to_string())
 }
 
+/// Async-native production Ed25519 detached-JWS verifier.
+///
+/// This resolves the DID document through soland's async resolver service
+/// before delegating shape and signature verification to the SDK verifier.
+pub async fn verify_jws_ed25519_async(
+    canonical_bytes: &[u8],
+    jws: &str,
+    verification_method: &str,
+    issuer: &str,
+    state: &AppState,
+) -> Result<(), String> {
+    let did = cokret_sdk::identity::verification_method_did(verification_method)
+        .map_err(|error| error.to_string())?;
+    let document = resolve_did_document_async(state, &did).await?;
+    let resolver = ResolvedDidDocumentResolver {
+        document: &document,
+    };
+    cokret_sdk::jws::verify_jws_ed25519(
+        canonical_bytes,
+        jws,
+        verification_method,
+        issuer,
+        &resolver,
+    )
+    .map_err(|error| error.to_string())
+}
+
 /// Resolve a DID URL to its Ed25519 [`VerifyingKey`] via the AppState
 /// resolver chain. Adapter over
 /// [`cokret_sdk::jws::resolve_ed25519_pubkey`].
@@ -158,6 +185,20 @@ pub fn resolve_ed25519_pubkey(
     .map_err(|error| error.to_string())
 }
 
+pub async fn resolve_ed25519_pubkey_async(
+    state: &AppState,
+    verification_method: &str,
+) -> Result<VerifyingKey, String> {
+    let did = cokret_sdk::identity::verification_method_did(verification_method)
+        .map_err(|error| error.to_string())?;
+    let document = resolve_did_document_async(state, &did).await?;
+    let resolver = ResolvedDidDocumentResolver {
+        document: &document,
+    };
+    cokret_sdk::jws::resolve_ed25519_pubkey(&resolver, verification_method)
+        .map_err(|error| error.to_string())
+}
+
 /// Resolve and validate a DID-scoped Ed25519 verification method.
 ///
 /// This is the shared verifier boundary used by federation, recovery and
@@ -170,9 +211,15 @@ pub async fn resolve_ed25519_verification_key_for_did(
     verification_method: &str,
 ) -> Result<ResolvedVerificationKey, String> {
     validate_verification_method_controller(did.as_str(), verification_method)?;
-    let document = resolve_did_document(state, did)?;
+    let document = resolve_did_document_async(state, did).await?;
     require_verification_method_in_document(&document, verification_method)?;
-    let public_key = resolve_ed25519_pubkey(state, verification_method)?;
+    let public_key = {
+        let resolver = ResolvedDidDocumentResolver {
+            document: &document,
+        };
+        cokret_sdk::jws::resolve_ed25519_pubkey(&resolver, verification_method)
+            .map_err(|error| error.to_string())?
+    };
     let key_log_head = did_document_key_log_head(state, did, &document).await?;
     Ok(ResolvedVerificationKey {
         verification_method: verification_method.to_owned(),
@@ -210,6 +257,40 @@ pub fn resolve_did_document(state: &AppState, did: &Did) -> Result<DidDocument, 
     Ok(document)
 }
 
+pub async fn resolve_did_document_async(
+    state: &AppState,
+    did: &Did,
+) -> Result<DidDocument, String> {
+    let document = state
+        .did_resolver
+        .resolve_did_async(did)
+        .await
+        .map_err(|error| format!("DID resolution failed: {error}"))?;
+    if document.id != *did {
+        return Err("resolved DID document id does not match requested DID".to_owned());
+    }
+    Ok(document)
+}
+
+struct ResolvedDidDocumentResolver<'a> {
+    document: &'a DidDocument,
+}
+
+impl DidResolver for ResolvedDidDocumentResolver<'_> {
+    fn supports(&self, did: &Did) -> bool {
+        &self.document.id == did
+    }
+
+    fn resolve_did(&self, did: &Did) -> cokret_sdk::Result<DidDocument> {
+        if self.supports(did) {
+            return Ok(self.document.clone());
+        }
+        Err(cokret_sdk::Error::Protocol(
+            "resolved DID document does not match requested DID".to_owned(),
+        ))
+    }
+}
+
 /// DID document freshness gate for high-risk paths (fail-closed-on-stale).
 ///
 /// Fetches the DID's persisted [`WebvhDocumentRecord`] (the ingested
@@ -245,7 +326,13 @@ pub async fn enforce_high_risk_did_freshness(state: &AppState, did: &Did) -> Res
         ));
     };
     match verify_did_document_freshness(&record, chrono::Utc::now(), max_age) {
-        WebvhFreshness::Fresh => Ok(()),
+        WebvhFreshness::Fresh => {
+            state
+                .did_resolver
+                .cache_webvh_record(record)
+                .map_err(|error| format!("DID freshness cache failed: {error}"))?;
+            Ok(())
+        }
         WebvhFreshness::Stale => {
             let stale_error = format!(
                 "DID document is stale for high-risk verification (exceeded {HIGH_RISK_DID_FRESHNESS_MAX_SECS}s freshness window): {did}"
@@ -316,7 +403,12 @@ async fn refresh_embedded_webvh_document_for_high_risk(
         .webvh()
         .put_document(record.clone())
         .await
-        .map_err(|error| format!("DID document refresh write failed: {error}"))
+        .map_err(|error| format!("DID document refresh write failed: {error}"))?;
+    state
+        .did_resolver
+        .cache_webvh_record(record.clone())
+        .map_err(|error| format!("DID document refresh cache failed: {error}"))?;
+    Ok(())
 }
 
 /// High-risk variant of [`resolve_ed25519_verification_key_for_did`]: enforce

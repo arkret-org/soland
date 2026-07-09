@@ -2,7 +2,6 @@ use serde_json::{Value, json};
 
 use super::*;
 
-const INVITE_AUDIENCE: &str = "cokret.invite.claim";
 const INVITE_STATE_PENDING: &str = "pending";
 const INVITE_STATE_CLAIMED: &str = "claimed";
 const INVITE_STATE_EXPIRED: &str = "expired";
@@ -437,7 +436,7 @@ fn validate_binding_proof(
     let Some(audience) = proof_string(object, "audience") else {
         return Err("binding_proof_audience_required");
     };
-    if audience != INVITE_AUDIENCE {
+    if audience != cokret_sdk::INVITE_CLAIM_AUDIENCE {
         return Err("binding_proof_audience_mismatch");
     }
     let Some(proof_nonce) = proof_string(object, "claim_nonce") else {
@@ -482,44 +481,27 @@ fn validate_subject_proof(
     claim_nonce: &str,
     third_party_id: &Value,
 ) -> Result<(), &'static str> {
-    let Some(object) = subject_proof.as_object() else {
+    if !subject_proof.is_object() {
         return Err("subject_proof_not_object");
     };
-    if nested_proof_string(object, "verification_method").is_none() {
+    let subject_proof: cokret_sdk::InviteSubjectProof =
+        serde_json::from_value(subject_proof.clone()).map_err(|_| "subject_proof_invalid")?;
+    if subject_proof.verification_method.trim().is_empty() {
         return Err("subject_proof_method_required");
     }
-    if nested_proof_string(object, "alg") != Some("EdDSA".to_owned()) {
+    if subject_proof.alg != cokret_sdk::INVITE_SUBJECT_PROOF_ALG {
         return Err("subject_proof_alg_unsupported");
     }
-    if nested_proof_string(object, "signature").is_none() {
+    if subject_proof.signature.trim().is_empty() {
         return Err("subject_proof_signature_required");
     }
-    if let Some(proof_subject) = nested_proof_string(object, "subject_id")
-        && proof_subject != subject_id
-    {
-        return Err("subject_proof_subject_mismatch");
-    }
-    if let Some(proof_service) = nested_proof_string(object, "verification_service_did") {
-        let expected = third_party_id
-            .get("verification_service_did")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-        if proof_service != expected {
-            return Err("subject_proof_service_mismatch");
-        }
-    }
+    subject_proof
+        .validate()
+        .map_err(|_| "subject_proof_invalid")?;
     let Some(binding_digest) = cokret_sdk::canonical::canonical_sha256(binding_proof).ok() else {
         return Err("binding_proof_digest_invalid");
     };
-    if let Some(proof_binding_digest) = nested_proof_string(object, "binding_proof_digest")
-        && proof_binding_digest != binding_digest
-    {
-        return Err("subject_proof_binding_digest_mismatch");
-    }
-    let Some(transcript_digest) = nested_proof_string(object, "transcript_digest") else {
-        return Err("subject_proof_transcript_required");
-    };
-    let Some(expected_digest) = crate::invite_claim_proofs::subject_proof_transcript_digest(
+    let expected_digest = cokret_sdk::invite_subject_proof_transcript_digest(
         subject_id,
         invite_id,
         realm_id,
@@ -529,12 +511,10 @@ fn validate_subject_proof(
             .get("verification_service_did")
             .and_then(Value::as_str)
             .unwrap_or_default(),
-        &binding_digest,
+        binding_digest.as_str(),
     )
-    .ok() else {
-        return Err("subject_proof_transcript_invalid");
-    };
-    if transcript_digest != expected_digest {
+    .map_err(|_| "subject_proof_transcript_invalid")?;
+    if subject_proof.transcript_digest != expected_digest {
         return Err("subject_proof_transcript_mismatch");
     }
     Ok(())
@@ -543,20 +523,6 @@ fn validate_subject_proof(
 fn proof_string(object: &serde_json::Map<String, Value>, field: &str) -> Option<String> {
     object
         .get(field)
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
-}
-
-fn nested_proof_string(object: &serde_json::Map<String, Value>, field: &str) -> Option<String> {
-    object
-        .get(field)
-        .or_else(|| {
-            object
-                .get("signature_material")
-                .and_then(|value| value.get(field))
-        })
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())
