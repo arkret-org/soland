@@ -19,7 +19,7 @@ async fn soland_admin_openapi_uses_product_namespace() {
     );
     assert_product_admin_tags(server_status);
 
-    let circle_restore = &spec["paths"]["/_cokret/self/circles/{circle_id}/restore"]["post"];
+    let circle_restore = &spec["paths"]["/_arkret/self/circles/{circle_id}/restore"]["post"];
     assert_eq!(
         circle_restore["operationId"],
         "ck.self.circle.command.restore"

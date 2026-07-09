@@ -8,7 +8,7 @@
 //!
 //! Validation / canonicalization (lowercasing, localpart alphabet, confusable /
 //! mixed-script rejection, ≥2-label domain) is delegated to the SDK
-//! [`cokret_sdk::RealmAlias`] so soland and clients agree on the exact bytes.
+//! [`arkret_sdk::RealmAlias`] so soland and clients agree on the exact bytes.
 
 /// Derive this deployment's authority domain from its service DID. Mirrors the
 /// handle `service_handle_domain` derivation (`did:web:<host>` → `<host>`).
@@ -39,7 +39,7 @@ pub fn canonical_realm_alias(service_did: &str, input: &str) -> Option<String> {
     } else {
         format!("{body}:{domain}")
     };
-    let alias = cokret_sdk::RealmAlias::parse(&canonical_input).ok()?;
+    let alias = arkret_sdk::RealmAlias::parse(&canonical_input).ok()?;
     // Deployment-authority model: only aliases under THIS deployment's domain.
     (alias.domain() == domain).then(|| alias.canonical().to_owned())
 }

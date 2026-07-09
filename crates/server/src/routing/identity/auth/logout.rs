@@ -1,13 +1,13 @@
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
-use cokret_sdk::{
+use arkret_sdk::{
     AuthSessionLogoutOutcome, AuthSessionLogoutRequestBody, SESSION_REVOKE_LIFECYCLE_PROOF_KIND,
 };
 use ed25519_dalek::{Signature, Verifier as _};
 
 use super::*;
 
-/// `POST /_cokret/gate/account/logout` — spec `ck.gate.account.command.logout`,
+/// `POST /_arkret/gate/account/logout` — spec `ck.gate.account.command.logout`,
 /// the single client-visible hard logout (account-lifecycle §4.1).
 ///
 /// Request identity differs from every other protected endpoint: per §4.1 the
@@ -74,7 +74,7 @@ pub(super) async fn logout(
     let auth_side_revoked = trigger_auth_side_auth_session_logout(state, &grant_jwt).await?;
 
     // §4.1 step 3 (Principal-side, local): invalidate this grant's cached
-    // introspection so the next `/_cokret/self/*` request re-introspects against
+    // introspection so the next `/_arkret/self/*` request re-introspects against
     // coauth and observes `active=false` once the Auth-side chain is terminated
     // below. There is NO local bearer to revoke (② removed the exchange); the
     // device session-record revoke + to-device drop + this cache invalidation
@@ -345,7 +345,7 @@ async fn revoke_sessions_for_actor_device(
     Ok(count)
 }
 
-/// `POST /_cokret/gate/account/session-grants/revoke` — spec
+/// `POST /_arkret/gate/account/session-grants/revoke` — spec
 /// `ck.gate.account.command.revoke_session` (surface group `account_auth`).
 ///
 /// Spec: sync/service-http-binding.md — the body MAY be omitted (revoke the
@@ -528,16 +528,16 @@ async fn verify_cross_session_revoke_proof(
         ));
     }
 
-    let actor = cokret_sdk::Did::new(session.actor.clone())
+    let actor = arkret_sdk::Did::new(session.actor.clone())
         .map_err(|_| AppError::invalid_param("session actor is not a valid DID"))?;
-    let service_did = cokret_sdk::Did::new(state.config.service_did.clone()).map_err(|error| {
+    let service_did = arkret_sdk::Did::new(state.config.service_did.clone()).map_err(|error| {
         AppError::internal(format!(
             "configured service_did is not a valid DID: {error}"
         ))
     })?;
     let session_device = DeviceId::new(session.device_id.clone())
         .map_err(|_| AppError::invalid_param("session device_id is not a valid DeviceId"))?;
-    let expected_digest = cokret_sdk::AccountLifecycleProof::session_revoke_request_digest(
+    let expected_digest = arkret_sdk::AccountLifecycleProof::session_revoke_request_digest(
         &actor,
         &service_did,
         &session_device,

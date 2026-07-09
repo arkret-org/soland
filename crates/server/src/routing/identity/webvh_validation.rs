@@ -16,7 +16,7 @@
 //!    configured witnesses may only remain in `degraded_no_witness` for 24h. Rotation entries fail
 //!    closed immediately when quorum is missing.
 //!
-//! Canonical JSON uses `cokret_sdk::canonical::canonical_json_bytes`
+//! Canonical JSON uses `arkret_sdk::canonical::canonical_json_bytes`
 //! (`encoding.md` §2 — deterministic, integer-only number profile) — the
 //! same helper the embedded provider uses to derive the SCID and entry
 //! hashes, so validation and production stay in lockstep.
@@ -372,7 +372,7 @@ pub fn derive_scid_from_genesis(genesis: &WebvhLogEntry) -> Result<String, Webvh
             reason,
         }
     })?;
-    let canonical = cokret_sdk::canonical::canonical_json_bytes(&skeleton).map_err(|error| {
+    let canonical = arkret_sdk::canonical::canonical_json_bytes(&skeleton).map_err(|error| {
         WebvhValidationError::MalformedEntry {
             at_index: 0,
             reason: error.to_string(),
@@ -383,7 +383,7 @@ pub fn derive_scid_from_genesis(genesis: &WebvhLogEntry) -> Result<String, Webvh
 
 pub(crate) fn derive_webvh_scid_from_skeleton(skeleton: &Value) -> Result<String, String> {
     let canonical =
-        cokret_sdk::canonical::canonical_json_bytes(skeleton).map_err(|error| error.to_string())?;
+        arkret_sdk::canonical::canonical_json_bytes(skeleton).map_err(|error| error.to_string())?;
     Ok(sha256_multihash_multibase(&canonical))
 }
 
@@ -628,7 +628,7 @@ fn verify_entry_proof(
         map.remove("proof");
     }
     let payload =
-        cokret_sdk::canonical::canonical_json_bytes(&canonical_entry).map_err(|error| {
+        arkret_sdk::canonical::canonical_json_bytes(&canonical_entry).map_err(|error| {
             WebvhValidationError::RotationNotAuthorized {
                 at_index: 0,
                 reason: error.to_string(),
@@ -815,7 +815,7 @@ fn verify_one_witness_proof(
         map.remove("versionId");
     }
     let payload =
-        cokret_sdk::canonical::canonical_json_bytes(&canonical_entry).map_err(|error| {
+        arkret_sdk::canonical::canonical_json_bytes(&canonical_entry).map_err(|error| {
             WebvhValidationError::WitnessSignatureInvalid {
                 reason: error.to_string(),
             }
@@ -875,7 +875,7 @@ pub(crate) fn verify_webvh_log_proof(entry: &Value) -> Result<(), String> {
     if let Value::Object(map) = &mut canonical {
         map.remove("proof");
     }
-    let payload = cokret_sdk::canonical::canonical_json_bytes(&canonical)
+    let payload = arkret_sdk::canonical::canonical_json_bytes(&canonical)
         .map_err(|error| error.to_string())?;
     public_key
         .verify(&payload, &signature)
@@ -986,7 +986,7 @@ fn split_version_id(version_id: &str) -> Option<(u64, &str)> {
 
 pub(crate) fn webvh_entry_hash_multibase(entry: &Value) -> Result<String, String> {
     let stripped = strip_webvh_entry_for_hash(entry);
-    let canonical = cokret_sdk::canonical::canonical_json_bytes(&stripped)
+    let canonical = arkret_sdk::canonical::canonical_json_bytes(&stripped)
         .map_err(|error| error.to_string())?;
     Ok(sha256_multihash_multibase(&canonical))
 }
@@ -1042,7 +1042,7 @@ pub(crate) fn sha256_multihash_multibase(bytes: &[u8]) -> String {
 }
 
 pub(crate) fn decode_ed25519_public_key(value: &str) -> Result<VerifyingKey, String> {
-    let key_bytes = cokret_sdk::decode_ed25519_multibase(value)
+    let key_bytes = arkret_sdk::decode_ed25519_multibase(value)
         .map_err(|error| format!("public key must be base58btc ed25519-pub multibase: {error}"))?;
     VerifyingKey::from_bytes(&key_bytes).map_err(|_| "invalid ed25519 public key".to_owned())
 }
@@ -1094,7 +1094,7 @@ mod tests {
             map.remove("proof");
             map.remove("versionId");
         }
-        let canonical = cokret_sdk::canonical::canonical_json_bytes(&signed_entry).unwrap();
+        let canonical = arkret_sdk::canonical::canonical_json_bytes(&signed_entry).unwrap();
         let signature = signer.sign(&canonical);
         let public_key = encode_pubkey_multibase(&signer.verifying_key());
         json!({
@@ -1120,7 +1120,7 @@ mod tests {
                 "id": format!("did:webvh:{WEBVH_SCID_PLACEHOLDER}:test.example:webvh:alice"),
             },
         });
-        let canonical = cokret_sdk::canonical::canonical_json_bytes(&skeleton).unwrap();
+        let canonical = arkret_sdk::canonical::canonical_json_bytes(&skeleton).unwrap();
         let scid = sha256_multihash_multibase(&canonical);
         // 2) Substitute the real SCID back in everywhere.
         let text = serde_json::to_string(&skeleton).unwrap();
@@ -1234,7 +1234,7 @@ mod tests {
             map.remove("proof");
             map.remove("versionId");
         }
-        let canonical = cokret_sdk::canonical::canonical_json_bytes(&forged_payload).unwrap();
+        let canonical = arkret_sdk::canonical::canonical_json_bytes(&forged_payload).unwrap();
         let forged_sig = forger.sign(&canonical);
         let mut payload = entry_body;
         if let Value::Object(map) = &mut payload {

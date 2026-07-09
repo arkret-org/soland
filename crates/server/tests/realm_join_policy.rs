@@ -5,7 +5,7 @@
 //! must pass before the member FSM is updated.
 
 use chrono::{Duration, Utc};
-use cokret_sdk::Operation;
+use arkret_sdk::Operation;
 use serde_json::{Value, json};
 use soland::hlc::ServerHlc;
 use soland::reducer::{ProjectionEffect, ProjectionState};
@@ -17,8 +17,8 @@ const MALLORY: &str = "did:web:mallory.example";
 
 fn op(kind: &str, realm_id: &str, payload: Value) -> Operation {
     Operation::create(
-        cokret_sdk::OperationId::new(format!("ak:operation:{}", uuid::Uuid::now_v7())).unwrap(),
-        cokret_sdk::RealmId::new(realm_id).unwrap(),
+        arkret_sdk::OperationId::new(format!("ak:operation:{}", uuid::Uuid::now_v7())).unwrap(),
+        arkret_sdk::RealmId::new(realm_id).unwrap(),
         kind,
         payload,
     )
@@ -27,7 +27,7 @@ fn op(kind: &str, realm_id: &str, payload: Value) -> Operation {
 fn apply_policy(state: &mut ProjectionState, hlc: &ServerHlc, join_policy: Value) {
     let effect = state.apply(
         &op(
-            cokret_sdk::events::kinds::REALM_POLICY_COMPONENTS,
+            arkret_sdk::events::kinds::REALM_POLICY_COMPONENTS,
             REALM_A,
             json!({
                 "value": {
@@ -49,7 +49,7 @@ fn apply_policy(state: &mut ProjectionState, hlc: &ServerHlc, join_policy: Value
 
 fn join_op(member: &str) -> Operation {
     op(
-        cokret_sdk::events::kinds::MEMBER_STATE,
+        arkret_sdk::events::kinds::MEMBER_STATE,
         REALM_A,
         json!({
             "actor_id": member,
@@ -62,7 +62,7 @@ fn join_op(member: &str) -> Operation {
 
 fn member_state_op(realm_id: &str, member: &str, membership: &str) -> Operation {
     op(
-        cokret_sdk::events::kinds::MEMBER_STATE,
+        arkret_sdk::events::kinds::MEMBER_STATE,
         realm_id,
         json!({
             "actor_id": member,
@@ -166,7 +166,7 @@ fn principal_admission_requires_selector_on_policy_write() {
 
     let effect = state.apply(
         &op(
-            cokret_sdk::events::kinds::REALM_POLICY_COMPONENTS,
+            arkret_sdk::events::kinds::REALM_POLICY_COMPONENTS,
             REALM_A,
             json!({
                 "value": {
@@ -200,7 +200,7 @@ fn join_policy_requires_explicit_combinator_on_policy_write() {
 
     let effect = state.apply(
         &op(
-            cokret_sdk::events::kinds::REALM_POLICY_COMPONENTS,
+            arkret_sdk::events::kinds::REALM_POLICY_COMPONENTS,
             REALM_A,
             json!({
                 "value": {

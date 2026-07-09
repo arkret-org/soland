@@ -7,8 +7,8 @@
 
 use std::collections::BTreeSet;
 
-use cokret_sdk::CellRef;
-use cokret_sdk::lattice::CellState;
+use arkret_sdk::CellRef;
+use arkret_sdk::lattice::CellState;
 use serde_json::Value;
 
 use super::{ProjectionState, RealmInheritancePolicyState};
@@ -342,7 +342,7 @@ pub(crate) fn find_capability_grant(
 /// CKP-0007 §8 — does the operation payload carry an authoritative
 /// `ck.circle.member.manage` verdict for `circle_id`?
 ///
-/// The Circle HTTP surface (`/_cokret/self/circles/{id}/members`) runs the
+/// The Circle HTTP surface (`/_arkret/self/circles/{id}/members`) runs the
 /// real `SolandAuthzEngine::check(sender, "ck.circle.member.manage",
 /// "ak:circle:<id>", …)` — which evaluates the grant's `allowed_circle_ids`
 /// selector — and stamps the result into the operation payload before handing

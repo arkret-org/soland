@@ -52,11 +52,11 @@ pub(crate) fn canonical_body_digests(
     value: &Value,
     canonical_error: impl FnOnce(String) -> AppError,
 ) -> Result<CanonicalBodyDigests, AppError> {
-    let body_bytes = cokret_sdk::canonical::canonical_json_bytes(value)
+    let body_bytes = arkret_sdk::canonical::canonical_json_bytes(value)
         .map_err(|error| canonical_error(error.to_string()))?;
     Ok(CanonicalBodyDigests {
         content_digest: rfc9530_content_digest(&body_bytes),
-        request_digest: cokret_sdk::canonical::sha256_digest(&body_bytes),
+        request_digest: arkret_sdk::canonical::sha256_digest(&body_bytes),
     })
 }
 

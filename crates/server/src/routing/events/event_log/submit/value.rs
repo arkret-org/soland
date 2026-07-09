@@ -16,7 +16,7 @@ pub(super) fn stored_prev_frontier_digest(
 }
 
 pub(super) fn prev_frontier_digest(prev_refs: &[String]) -> Result<String, SubmitOneError> {
-    cokret_sdk::prev_frontier_digest(prev_refs).map_err(|error| {
+    arkret_sdk::prev_frontier_digest(prev_refs).map_err(|error| {
         SubmitOneError::new(
             StatusCode::BAD_REQUEST,
             "schema_violation",
@@ -56,7 +56,7 @@ pub(super) async fn submit_event_value_with_context(
             "event envelope cannot be encoded",
         )
     })?;
-    if cokret_sdk::validate_event_envelope_byte_len(raw_bytes.len()).is_err() {
+    if arkret_sdk::validate_event_envelope_byte_len(raw_bytes.len()).is_err() {
         return Err(SubmitOneError::new(
             StatusCode::PAYLOAD_TOO_LARGE,
             "payload_too_large",
@@ -105,9 +105,9 @@ pub(super) async fn submit_event_value_with_context(
             format!("events store unavailable: {error}"),
         )
     })?;
-    if parsed.kind == cokret_sdk::events::kinds::REALM_CREATE
+    if parsed.kind == arkret_sdk::events::kinds::REALM_CREATE
         && existing_records.iter().any(|record| {
-            record.kind == cokret_sdk::events::kinds::REALM_CREATE
+            record.kind == arkret_sdk::events::kinds::REALM_CREATE
                 && record.realm_id.as_deref() == Some(parsed.realm_id.as_str())
         })
     {
@@ -522,7 +522,7 @@ pub(super) async fn submit_event_value_with_context(
         // for the revoked device MUST be dropped on revocation: a lost or
         // compromised device that comes back online MUST NOT drain key-exchange
         // or verification bootstrap material queued before the revoke. Runs after
-        // the record flip so `GET /_cokret/self/device_messages` for that device
+        // the record flip so `GET /_arkret/self/device_messages` for that device
         // returns nothing once the revoke is accepted.
         let mls_remove_obligations = crate::routing::mls::enqueue_device_revoke_mls_removals(
             state,
@@ -560,7 +560,7 @@ pub(super) async fn submit_event_value_with_context(
     // MUST emit a `schema_migration_breaking` audit record carrying issuer,
     // from/to schema sets, compatibility class, the capability action used, and
     // the opt-in profile ref. (additive migrations need no audit-grade record.)
-    if parsed.kind == cokret_sdk::events::kinds::MORPH_SCHEMA_MIGRATE {
+    if parsed.kind == arkret_sdk::events::kinds::MORPH_SCHEMA_MIGRATE {
         let migrate_payload = envelope.get("payload");
         let compatibility_class = migrate_payload
             .and_then(|payload| payload.get("compatibility_class"))
@@ -608,14 +608,14 @@ pub(super) async fn submit_event_value_with_context(
     let scope_strand_id: Option<String> = envelope
         .get("payload")
         .and_then(|payload| match parsed.kind.as_str() {
-            cokret_sdk::events::kinds::MESSAGE_CREATE
-            | cokret_sdk::events::kinds::STRAND_MOVE
-            | cokret_sdk::events::kinds::STRAND_REORDER => {
+            arkret_sdk::events::kinds::MESSAGE_CREATE
+            | arkret_sdk::events::kinds::STRAND_MOVE
+            | arkret_sdk::events::kinds::STRAND_REORDER => {
                 payload.get("strand_id").and_then(Value::as_str)
             }
-            cokret_sdk::events::kinds::STRAND_UPDATE
-            | cokret_sdk::events::kinds::STRAND_ARCHIVE
-            | cokret_sdk::events::kinds::STRAND_RESTORE => {
+            arkret_sdk::events::kinds::STRAND_UPDATE
+            | arkret_sdk::events::kinds::STRAND_ARCHIVE
+            | arkret_sdk::events::kinds::STRAND_RESTORE => {
                 payload.get("target_ref").and_then(Value::as_str)
             }
             _ => None,
@@ -653,7 +653,7 @@ pub(super) async fn submit_event_value_with_context(
         })
         .await
     {
-        if parsed.kind == cokret_sdk::events::kinds::REALM_CREATE
+        if parsed.kind == arkret_sdk::events::kinds::REALM_CREATE
             && persistence_error_is_realm_already_exists(&error)
         {
             return Err(realm_already_exists_error());

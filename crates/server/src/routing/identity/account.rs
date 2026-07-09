@@ -1,12 +1,12 @@
 //! Account + contact handlers.
 //!
 //! Surfaces:
-//! - `POST /_cokret/gate/account/register` — create the account record
-//! - `GET  /_cokret/self/account/viewer` — return the authenticated principal's account
-//! - `POST /_cokret/self/contacts/request` — open a pending contact relationship
-//! - `POST /_cokret/self/contacts/respond` — accept or reject a pending request
-//! - `GET  /_cokret/self/contacts` — list contacts visible to the actor
-//! - `POST /_cokret/self/direct-conversations/resolve` — resolve/create the canonical 1:1 DM
+//! - `POST /_arkret/gate/account/register` — create the account record
+//! - `GET  /_arkret/self/account/viewer` — return the authenticated principal's account
+//! - `POST /_arkret/self/contacts/request` — open a pending contact relationship
+//! - `POST /_arkret/self/contacts/respond` — accept or reject a pending request
+//! - `GET  /_arkret/self/contacts` — list contacts visible to the actor
+//! - `POST /_arkret/self/direct-conversations/resolve` — resolve/create the canonical 1:1 DM
 //!   binding
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -14,18 +14,18 @@ use std::collections::{BTreeMap, BTreeSet};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::SecondsFormat;
-use cokret_sdk::http::{
+use arkret_sdk::http::{
     ContactList, ContactListRow, ContactRequestOutcome, ContactRequestRequestBody,
     ContactRespondOutcome, ContactRespondRequestBody, ContactState, ContactTombstone,
     ContactTombstoneRequestBody, DirectConversationBindingState, DirectConversationResolveOutcome,
     DirectConversationResolveRequestBody, DirectConversationResolveState,
     DirectConversationSummary,
 };
-// `cokret_sdk::InviteReceivePolicy` also resolves at the crate root, but the
+// `arkret_sdk::InviteReceivePolicy` also resolves at the crate root, but the
 // invite-addressing strong type lives under `model`; import it via the
 // `model` path to avoid binding the wrong same-named re-export.
-use cokret_sdk::models::{Handle as SdkHandle, InviteReceivePolicy};
-use cokret_sdk::{
+use arkret_sdk::models::{Handle as SdkHandle, InviteReceivePolicy};
+use arkret_sdk::{
     ACTOR_PROFILE_SCHEMA, AccountDeviceSummary, AccountRegisterOutcome, AccountRegisterRequestBody,
     AccountRegistrationAudit, AccountRegistrationAuditOutcome, AccountRegistrationEvidenceSummary,
     AccountRegistrationPolicy, AccountRegistrationPolicyEvidence,
@@ -200,7 +200,7 @@ pub(crate) use lifecycle::{AccountLifecycleChange, set_account_lifecycle_state};
 
 /// `gate` trust-segment account routes — the spec `account_auth` surface
 /// group (tier `deployment_local`) binds account registration to
-/// `POST /_cokret/gate/account/register`.
+/// `POST /_arkret/gate/account/register`.
 pub(super) fn protocol_gate_router() -> Router {
     Router::with_path("account").push(Router::with_path("register").post(gate_account_register))
 }
@@ -211,7 +211,7 @@ pub(super) fn protocol_router() -> Router {
             Router::with_path("account")
                 .push(Router::with_path("viewer").get(account_viewer))
                 // spec `events_sync` surface group (core tier) binds
-                // `ck.self.account.command.update_profile` to POST /_cokret/self/account/profile;
+                // `ck.self.account.command.update_profile` to POST /_arkret/self/account/profile;
                 // describe advertises it, so it MUST resolve on the protocol surface.
                 .push(Router::with_path("profile").post(update_profile)),
         )
@@ -395,7 +395,7 @@ fn account_registration_policy_snapshot(state: &AppState) -> AccountRegistration
 fn account_registration_policy_digest(
     policy: &AccountRegistrationPolicy,
 ) -> Result<Hash, AppError> {
-    let digest = cokret_sdk::canonical::canonical_sha256(policy)
+    let digest = arkret_sdk::canonical::canonical_sha256(policy)
         .map_err(|error| AppError::internal(format!("registration policy digest: {error}")))?;
     Hash::new(digest).map_err(|error| {
         AppError::internal(format!("registration policy digest is invalid: {error}"))
@@ -469,7 +469,7 @@ async fn reject_account_registration(
 }
 
 fn digest_registration_secret(value: &str) -> Result<Hash, AppError> {
-    Hash::new(cokret_sdk::canonical::sha256_digest(
+    Hash::new(arkret_sdk::canonical::sha256_digest(
         value.trim().as_bytes(),
     ))
     .map_err(|error| AppError::internal(format!("registration secret digest: {error}")))
@@ -1096,7 +1096,7 @@ async fn account_viewer(
     })
 }
 
-/// `POST /_cokret/gate/account/register` — spec-canonical registration
+/// `POST /_arkret/gate/account/register` — spec-canonical registration
 /// binding (`ck.gate.account.command.register`, surface group `account_auth`).
 ///
 /// Spec: sync/service-http-binding.md — request is
@@ -1268,7 +1268,7 @@ async fn update_profile(
     // Spec: discovery/profiles-presence.md §2 — actor profile updates
     // fan out through the directory's actor projection. We store the
     // updates on the `AccountRecord` directly; `demo_actors()` reads
-    // them when serving `/_cokret/find/directory/search-actors`.
+    // them when serving `/_arkret/find/directory/search-actors`.
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
@@ -1387,7 +1387,7 @@ fn actor_profile_from_account(
     if let Some(bio) = account.bio.clone() {
         profile_fields.insert("bio".to_owned(), Value::String(bio));
     }
-    let id = ActorProfileId::new(cokret_sdk::new_prefixed_uuid7("ak:actor_profile:")).map_err(
+    let id = ActorProfileId::new(arkret_sdk::new_prefixed_uuid7("ak:actor_profile:")).map_err(
         |error| AppError::internal(format!("actor profile id construction failed: {error}")),
     )?;
     Ok(ActorProfile {

@@ -22,10 +22,10 @@ fn test_config() -> crate::config::AppConfig {
     }
 }
 
-fn state_with_direct_binding() -> (AppState, cokret_sdk::RealmId) {
+fn state_with_direct_binding() -> (AppState, arkret_sdk::RealmId) {
     let state = AppState::new(test_config(), Db { pool: None });
     let realm_id =
-        cokret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-000000000601".to_owned())
+        arkret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-000000000601".to_owned())
             .unwrap();
     let now = chrono::Utc::now();
     state.direct_conversation_bindings.lock().insert(
@@ -47,13 +47,13 @@ fn state_with_direct_binding() -> (AppState, cokret_sdk::RealmId) {
 }
 
 fn op(
-    realm_id: cokret_sdk::RealmId,
+    realm_id: arkret_sdk::RealmId,
     seed: &str,
     kind: &str,
     payload: serde_json::Value,
 ) -> Operation {
     Operation::create(
-        cokret_sdk::OperationId::new(format!("ak:operation:01904100-0000-7000-8000-{seed}"))
+        arkret_sdk::OperationId::new(format!("ak:operation:01904100-0000-7000-8000-{seed}"))
             .unwrap(),
         realm_id,
         kind,
@@ -97,7 +97,7 @@ fn signed_service_attested_device_authorize_payload(
     signing_key: &SigningKey,
 ) -> serde_json::Value {
     let device_public_key =
-        cokret_sdk::ed25519_pubkey_to_did_key_multibase(device_signer.verifying_key().as_bytes());
+        arkret_sdk::ed25519_pubkey_to_did_key_multibase(device_signer.verifying_key().as_bytes());
     let mut payload = json!({
         "principal_id": "did:webvh:zQmZcDaFwUR8yQCZRkXoYEBi9hdzMSCCLASUVdwT1J4Qyc6:local.host:webvh:01kvqwpxssfq3bqm15rcd0g99x",
         "device_id": "ak:device:019eefcb-5882-7861-bc30-3033fa32dcf6",
@@ -113,7 +113,7 @@ fn signed_service_attested_device_authorize_payload(
             "authorization_ref": "did:webvh:zQmZcDaFwUR8yQCZRkXoYEBi9hdzMSCCLASUVdwT1J4Qyc6:local.host:webvh:01kvqwpxssfq3bqm15rcd0g99x#enrollment-authority"
         }
     });
-    let typed: cokret_sdk::DeviceAuthorizePayload =
+    let typed: arkret_sdk::DeviceAuthorizePayload =
         serde_json::from_value(payload.clone()).expect("typed device authorize payload");
     let input = typed
         .device_possession_signature_input()
@@ -150,7 +150,7 @@ fn device_authorize_rejects_signature_from_wrong_device_key() {
 
 fn grant_circle_action(
     state: &AppState,
-    realm_id: &cokret_sdk::RealmId,
+    realm_id: &arkret_sdk::RealmId,
     circle_id: &str,
     actor: &str,
     action: &str,
@@ -162,7 +162,7 @@ fn grant_circle_action(
         circle_id.to_owned(),
         vec![action.to_owned()],
         vec![crate::authz::Constraint::AllowedCircleIds {
-            allowed_circle_ids: std::collections::BTreeSet::from([cokret_sdk::CircleId::new(
+            allowed_circle_ids: std::collections::BTreeSet::from([arkret_sdk::CircleId::new(
                 circle_id.to_owned(),
             )
             .expect("valid circle id")]),
@@ -170,18 +170,18 @@ fn grant_circle_action(
     );
 }
 
-fn grant_moderation_decision(state: &AppState, realm_id: &cokret_sdk::RealmId, actor: &str) {
+fn grant_moderation_decision(state: &AppState, realm_id: &arkret_sdk::RealmId, actor: &str) {
     state.authz.create_grant(
         realm_id.to_string(),
         "did:web:owner.example".to_owned(),
         actor.to_owned(),
         realm_id.to_string(),
-        vec![cokret_sdk::events::kinds::MODERATION_DECISION.to_owned()],
+        vec![arkret_sdk::events::kinds::MODERATION_DECISION.to_owned()],
         Vec::new(),
     );
 }
 
-fn grant_call_action(state: &AppState, realm_id: &cokret_sdk::RealmId, actor: &str, action: &str) {
+fn grant_call_action(state: &AppState, realm_id: &arkret_sdk::RealmId, actor: &str, action: &str) {
     state.authz.create_grant(
         realm_id.to_string(),
         "did:web:owner.example".to_owned(),
@@ -198,11 +198,11 @@ fn seed_read_receipt_inheritance(
     child_realm_id: &str,
     parent_policy: serde_json::Value,
 ) {
-    use cokret_sdk::lattice::CellState;
+    use arkret_sdk::lattice::CellState;
 
     let now = chrono::Utc::now();
     let mut projection = state.projection.lock();
-    let cell_id = cokret_sdk::CellRef::new(format!(
+    let cell_id = arkret_sdk::CellRef::new(format!(
         "ak:cell:ck.component.realm.read_receipt_policy.v1:{parent_realm_id}"
     ))
     .expect("valid read receipt policy cell ref");
@@ -242,7 +242,7 @@ async fn read_receipt_child_policy_rejects_visibility_loosening() {
     let state = test_state();
     let parent_realm = "ak:realm:01904100-0000-7000-8000-000000009911";
     let child_realm =
-        cokret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-000000009912".to_owned())
+        arkret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-000000009912".to_owned())
             .unwrap();
     seed_read_receipt_inheritance(
         &state,
@@ -258,7 +258,7 @@ async fn read_receipt_child_policy_rejects_visibility_loosening() {
     let child_policy = op(
         child_realm,
         "000000009913",
-        cokret_sdk::events::kinds::REALM_READ_RECEIPT_POLICY,
+        arkret_sdk::events::kinds::REALM_READ_RECEIPT_POLICY,
         json!({
             "disclosure": "optional",
             "visibility": "public"
@@ -277,7 +277,7 @@ async fn read_receipt_child_policy_rejects_required_floor_without_escape() {
     let state = test_state();
     let parent_realm = "ak:realm:01904100-0000-7000-8000-000000009921";
     let child_realm =
-        cokret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-000000009922".to_owned())
+        arkret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-000000009922".to_owned())
             .unwrap();
     seed_read_receipt_inheritance(
         &state,
@@ -293,7 +293,7 @@ async fn read_receipt_child_policy_rejects_required_floor_without_escape() {
     let child_policy = op(
         child_realm,
         "000000009923",
-        cokret_sdk::events::kinds::REALM_READ_RECEIPT_POLICY,
+        arkret_sdk::events::kinds::REALM_READ_RECEIPT_POLICY,
         json!({
             "disclosure": "disabled",
             "visibility": "private"
@@ -303,7 +303,7 @@ async fn read_receipt_child_policy_rejects_required_floor_without_escape() {
         validate_operation_policy(&state, &[child_policy])
             .await
             .unwrap_err(),
-        cokret_sdk::ERROR_CODE_READ_RECEIPT_COMPLIANCE_FLOOR_VIOLATED
+        arkret_sdk::ERROR_CODE_READ_RECEIPT_COMPLIANCE_FLOOR_VIOLATED
     );
 }
 
@@ -312,7 +312,7 @@ async fn read_receipt_child_policy_allows_required_floor_escape() {
     let state = test_state();
     let parent_realm = "ak:realm:01904100-0000-7000-8000-000000009931";
     let child_realm =
-        cokret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-000000009932".to_owned())
+        arkret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-000000009932".to_owned())
             .unwrap();
     seed_read_receipt_inheritance(
         &state,
@@ -329,7 +329,7 @@ async fn read_receipt_child_policy_allows_required_floor_escape() {
     let child_policy = op(
         child_realm,
         "000000009933",
-        cokret_sdk::events::kinds::REALM_READ_RECEIPT_POLICY,
+        arkret_sdk::events::kinds::REALM_READ_RECEIPT_POLICY,
         json!({
             "disclosure": "disabled",
             "visibility": "private"
@@ -345,7 +345,7 @@ async fn read_receipt_child_policy_rejects_any_change_when_overrides_disabled() 
     let state = test_state();
     let parent_realm = "ak:realm:01904100-0000-7000-8000-000000009941";
     let child_realm =
-        cokret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-000000009942".to_owned())
+        arkret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-000000009942".to_owned())
             .unwrap();
     seed_read_receipt_inheritance(
         &state,
@@ -361,7 +361,7 @@ async fn read_receipt_child_policy_rejects_any_change_when_overrides_disabled() 
     let child_policy = op(
         child_realm,
         "000000009943",
-        cokret_sdk::events::kinds::REALM_READ_RECEIPT_POLICY,
+        arkret_sdk::events::kinds::REALM_READ_RECEIPT_POLICY,
         json!({
             "disclosure": "disabled",
             "visibility": "private"
@@ -403,7 +403,7 @@ async fn put_agent_participation_ceiling(
 async fn strand_agent_participation_ceiling_cannot_widen_circle_parent() {
     let state = test_state();
     let realm_id =
-        cokret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-000000009951".to_owned())
+        arkret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-000000009951".to_owned())
             .unwrap();
     let circle_id = "ak:circle:01904100-0000-7000-8000-000000009952";
     let strand_id = "ak:strand:01904100-0000-7000-8000-000000009953";
@@ -421,7 +421,7 @@ async fn strand_agent_participation_ceiling_cannot_widen_circle_parent() {
     let strand_create = op(
         realm_id,
         "000000009954",
-        cokret_sdk::events::kinds::STRAND_CREATE,
+        arkret_sdk::events::kinds::STRAND_CREATE,
         json!({
             "sender": "did:web:alice.example",
             "object": {
@@ -450,11 +450,11 @@ async fn strand_agent_participation_ceiling_cannot_widen_circle_parent() {
 async fn strand_selection_is_capped_by_enclosing_circle_ceiling() {
     let state = test_state();
     let realm_id =
-        cokret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-000000009961".to_owned())
+        arkret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-000000009961".to_owned())
             .unwrap();
     let circle_id = "ak:circle:01904100-0000-7000-8000-000000009962";
     let strand_id =
-        cokret_sdk::StrandId::new("ak:strand:01904100-0000-7000-8000-000000009963".to_owned())
+        arkret_sdk::StrandId::new("ak:strand:01904100-0000-7000-8000-000000009963".to_owned())
             .unwrap();
     {
         let mut projection = state.projection.lock();
@@ -489,27 +489,27 @@ async fn strand_selection_is_capped_by_enclosing_circle_ceiling() {
     )
     .await;
 
-    let scope = cokret_sdk::models::AgentParticipationScope::Strand {
+    let scope = arkret_sdk::models::AgentParticipationScope::Strand {
         realm_id,
         strand_id,
     };
     let ceiling =
         crate::routing::agent_participation::resolve_effective_ceiling(&state, &scope).await;
     assert!(!ceiling.accept_third_party_mention);
-    let selection = cokret_sdk::models::AgentParticipation {
+    let selection = arkret_sdk::models::AgentParticipation {
         reply: true,
         accept_third_party_mention: true,
         act_on_behalf: false,
     };
     assert!(matches!(
-        cokret_sdk::models::validate_selection_within_ceiling(ceiling, selection),
-        Err(cokret_sdk::models::AgentParticipationError::ExceedsCeiling { .. })
+        arkret_sdk::models::validate_selection_within_ceiling(ceiling, selection),
+        Err(arkret_sdk::models::AgentParticipationError::ExceedsCeiling { .. })
     ));
 }
 
 async fn register_agent_selection(
     state: &AppState,
-    realm_id: &cokret_sdk::RealmId,
+    realm_id: &arkret_sdk::RealmId,
     agent_principal_id: &str,
     reply: bool,
     act_on_behalf: bool,
@@ -561,7 +561,7 @@ fn agent_context(agent_principal_id: &str, authorization_ref: &str) -> serde_jso
 }
 
 fn reply_message(
-    realm_id: cokret_sdk::RealmId,
+    realm_id: arkret_sdk::RealmId,
     seed: &str,
     agent_principal_id: &str,
     authorization_ref: &str,
@@ -569,7 +569,7 @@ fn reply_message(
     op(
         realm_id,
         seed,
-        cokret_sdk::events::kinds::MESSAGE_CREATE,
+        arkret_sdk::events::kinds::MESSAGE_CREATE,
         json!({
             "sender": agent_principal_id,
             "content": [{"type": "text", "text": "agent reply"}],
@@ -579,7 +579,7 @@ fn reply_message(
 }
 
 fn act_on_behalf_message(
-    realm_id: cokret_sdk::RealmId,
+    realm_id: arkret_sdk::RealmId,
     seed: &str,
     agent_principal_id: &str,
     authorization_ref: Option<&str>,
@@ -606,7 +606,7 @@ fn act_on_behalf_message(
     op(
         realm_id,
         seed,
-        cokret_sdk::events::kinds::MESSAGE_CREATE,
+        arkret_sdk::events::kinds::MESSAGE_CREATE,
         payload,
     )
 }
@@ -618,7 +618,7 @@ fn insert_approved_agent_action(
     agent_principal_id: &str,
     approval_nonce: &str,
 ) {
-    let payload_digest = cokret_sdk::canonical::canonical_sha256(&message.payload).unwrap();
+    let payload_digest = arkret_sdk::canonical::canonical_sha256(&message.payload).unwrap();
     state.projection.lock().agent_action_requests.insert(
         request_id.to_owned(),
         crate::reducer::AgentActionRequestProjection {
@@ -646,7 +646,7 @@ fn insert_approved_agent_action(
 
 async fn insert_agent_interop_session_start(
     state: &AppState,
-    realm_id: &cokret_sdk::RealmId,
+    realm_id: &arkret_sdk::RealmId,
     seed: &str,
     actor: &str,
     session_id: &str,
@@ -659,13 +659,13 @@ async fn insert_agent_interop_session_start(
             actor_id: actor.to_owned(),
             actor_seq: 1,
             realm_id: Some(realm_id.to_string()),
-            kind: cokret_sdk::events::kinds::AGENT_INTEROP_SESSION_START.to_owned(),
+            kind: arkret_sdk::events::kinds::AGENT_INTEROP_SESSION_START.to_owned(),
             schema_id: "ck.schema.event.v1".to_owned(),
             canonical_digest: "sha256:test".to_owned(),
             canonical_bytes: Vec::new(),
             envelope: json!({
                 "actor_id": actor,
-                "kind": cokret_sdk::events::kinds::AGENT_INTEROP_SESSION_START,
+                "kind": arkret_sdk::events::kinds::AGENT_INTEROP_SESSION_START,
                 "realm_id": realm_id.to_string(),
                 "payload": {
                     "sender": actor,
@@ -688,7 +688,7 @@ async fn active_direct_conversation_rejects_invite_space_and_third_party_member(
     let invite = op(
         realm_id.clone(),
         "000000000601",
-        cokret_sdk::events::kinds::INVITE_CREATE,
+        arkret_sdk::events::kinds::INVITE_CREATE,
         json!({
             "invite_id": "ak:invite:01904100-0000-7000-8000-000000000601",
             "inviter": "did:web:alice.example",
@@ -710,7 +710,7 @@ async fn active_direct_conversation_rejects_invite_space_and_third_party_member(
     let space_create = op(
         realm_id.clone(),
         "000000000602",
-        cokret_sdk::events::kinds::SPACE_CREATE,
+        arkret_sdk::events::kinds::SPACE_CREATE,
         json!({
             "space_id": "ak:space:01904100-0000-7000-8000-000000000602",
             "title": "Third participant space"
@@ -726,7 +726,7 @@ async fn active_direct_conversation_rejects_invite_space_and_third_party_member(
     let member_add = op(
         realm_id,
         "000000000603",
-        cokret_sdk::events::kinds::MEMBER_STATE,
+        arkret_sdk::events::kinds::MEMBER_STATE,
         json!({
             "actor_id": "did:web:charlie.example",
             "membership": "invite",
@@ -745,7 +745,7 @@ async fn active_direct_conversation_rejects_invite_space_and_third_party_member(
 async fn act_on_behalf_agent_requires_participation_bit() {
     let state = test_state();
     let realm_id =
-        cokret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-000000000701".to_owned())
+        arkret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-000000000701".to_owned())
             .unwrap();
     let agent = "did:web:agent.example";
     register_agent_selection(&state, &realm_id, agent, true, false).await;
@@ -754,7 +754,7 @@ async fn act_on_behalf_agent_requires_participation_bit() {
         "did:web:alice.example".to_owned(),
         agent.to_owned(),
         realm_id.to_string(),
-        vec![cokret_sdk::events::kinds::MESSAGE_CREATE.to_owned()],
+        vec![arkret_sdk::events::kinds::MESSAGE_CREATE.to_owned()],
         Vec::new(),
     );
     let message = act_on_behalf_message(
@@ -777,7 +777,7 @@ async fn act_on_behalf_agent_requires_participation_bit() {
 async fn act_on_behalf_agent_requires_authorization_ref_covering_action() {
     let state = test_state();
     let realm_id =
-        cokret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-000000000702".to_owned())
+        arkret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-000000000702".to_owned())
             .unwrap();
     let agent = "did:web:agent.example";
     register_agent_selection(&state, &realm_id, agent, true, true).await;
@@ -786,7 +786,7 @@ async fn act_on_behalf_agent_requires_authorization_ref_covering_action() {
         "did:web:alice.example".to_owned(),
         agent.to_owned(),
         realm_id.to_string(),
-        vec![cokret_sdk::events::kinds::REACTION_ADD.to_owned()],
+        vec![arkret_sdk::events::kinds::REACTION_ADD.to_owned()],
         Vec::new(),
     );
     let message = act_on_behalf_message(
@@ -809,14 +809,14 @@ async fn act_on_behalf_agent_requires_authorization_ref_covering_action() {
 async fn act_on_behalf_agent_non_message_write_requires_authorization_ref() {
     let state = test_state();
     let realm_id =
-        cokret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-0000000007a2".to_owned())
+        arkret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-0000000007a2".to_owned())
             .unwrap();
     let agent = "did:web:agent.example";
     register_agent_selection(&state, &realm_id, agent, true, true).await;
     let operation = op(
         realm_id,
         "0000000007a2",
-        cokret_sdk::events::kinds::STRAND_CREATE,
+        arkret_sdk::events::kinds::STRAND_CREATE,
         json!({
             "sender": "did:web:alice.example",
             "executed_by": agent,
@@ -839,7 +839,7 @@ async fn act_on_behalf_agent_non_message_write_requires_authorization_ref() {
 async fn act_on_behalf_agent_strand_write_requires_agent_context() {
     let state = test_state();
     let realm_id =
-        cokret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-0000000007c1".to_owned())
+        arkret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-0000000007c1".to_owned())
             .unwrap();
     let agent = "did:web:agent.example";
     register_agent_selection(&state, &realm_id, agent, true, true).await;
@@ -848,13 +848,13 @@ async fn act_on_behalf_agent_strand_write_requires_agent_context() {
         "did:web:alice.example".to_owned(),
         agent.to_owned(),
         realm_id.to_string(),
-        vec![cokret_sdk::events::kinds::STRAND_CREATE.to_owned()],
+        vec![arkret_sdk::events::kinds::STRAND_CREATE.to_owned()],
         Vec::new(),
     );
     let operation = op(
         realm_id,
         "0000000007c1",
-        cokret_sdk::events::kinds::STRAND_CREATE,
+        arkret_sdk::events::kinds::STRAND_CREATE,
         json!({
             "sender": "did:web:alice.example",
             "executed_by": agent,
@@ -878,14 +878,14 @@ async fn act_on_behalf_agent_strand_write_requires_agent_context() {
 async fn native_agent_member_target_uses_sender_for_agent_write_detection() {
     let state = test_state();
     let realm_id =
-        cokret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-0000000007b1".to_owned())
+        arkret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-0000000007b1".to_owned())
             .unwrap();
     let agent = "did:web:agent.example";
     register_agent_selection(&state, &realm_id, agent, true, true).await;
     let operation = op(
         realm_id,
         "0000000007b1",
-        cokret_sdk::events::kinds::MEMBER_STATE,
+        arkret_sdk::events::kinds::MEMBER_STATE,
         json!({
             "sender": "did:web:alice.example",
             "actor_id": agent,
@@ -904,7 +904,7 @@ async fn native_agent_member_target_uses_sender_for_agent_write_detection() {
 async fn act_on_behalf_agent_relation_write_rejects_context_authorization_mismatch() {
     let state = test_state();
     let realm_id =
-        cokret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-0000000007c2".to_owned())
+        arkret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-0000000007c2".to_owned())
             .unwrap();
     let agent = "did:web:agent.example";
     register_agent_selection(&state, &realm_id, agent, true, true).await;
@@ -913,7 +913,7 @@ async fn act_on_behalf_agent_relation_write_rejects_context_authorization_mismat
         "did:web:alice.example".to_owned(),
         agent.to_owned(),
         realm_id.to_string(),
-        vec![cokret_sdk::events::kinds::RELATION_CREATE.to_owned()],
+        vec![arkret_sdk::events::kinds::RELATION_CREATE.to_owned()],
         Vec::new(),
     );
     let context_grant = state.authz.create_grant(
@@ -921,13 +921,13 @@ async fn act_on_behalf_agent_relation_write_rejects_context_authorization_mismat
         "did:web:alice.example".to_owned(),
         agent.to_owned(),
         realm_id.to_string(),
-        vec![cokret_sdk::events::kinds::RELATION_CREATE.to_owned()],
+        vec![arkret_sdk::events::kinds::RELATION_CREATE.to_owned()],
         Vec::new(),
     );
     let operation = op(
         realm_id,
         "0000000007c2",
-        cokret_sdk::events::kinds::RELATION_CREATE,
+        arkret_sdk::events::kinds::RELATION_CREATE,
         json!({
             "sender": "did:web:alice.example",
             "executed_by": agent,
@@ -952,12 +952,12 @@ async fn act_on_behalf_agent_relation_write_rejects_context_authorization_mismat
 async fn provenance_actor_kind_agent_requires_agent_context_for_non_message_write() {
     let state = test_state();
     let realm_id =
-        cokret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-0000000007c3".to_owned())
+        arkret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-0000000007c3".to_owned())
             .unwrap();
     let operation = op(
         realm_id,
         "0000000007c3",
-        cokret_sdk::events::kinds::RELATION_CREATE,
+        arkret_sdk::events::kinds::RELATION_CREATE,
         json!({
             "sender": "did:web:alice.example",
             "provenance": {
@@ -982,7 +982,7 @@ async fn provenance_actor_kind_agent_requires_agent_context_for_non_message_writ
 async fn act_on_behalf_agent_view_write_allows_valid_agent_context_and_approval() {
     let state = test_state();
     let realm_id =
-        cokret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-0000000007c4".to_owned())
+        arkret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-0000000007c4".to_owned())
             .unwrap();
     let agent = "did:web:agent.example";
     register_agent_selection(&state, &realm_id, agent, true, true).await;
@@ -991,14 +991,14 @@ async fn act_on_behalf_agent_view_write_allows_valid_agent_context_and_approval(
         "did:web:alice.example".to_owned(),
         agent.to_owned(),
         realm_id.to_string(),
-        vec![cokret_sdk::events::kinds::VIEW_CREATE.to_owned()],
+        vec![arkret_sdk::events::kinds::VIEW_CREATE.to_owned()],
         Vec::new(),
     );
     let grant_id = grant.grant_id.clone();
     let operation = op(
         realm_id,
         "0000000007c4",
-        cokret_sdk::events::kinds::VIEW_CREATE,
+        arkret_sdk::events::kinds::VIEW_CREATE,
         json!({
             "sender": "did:web:alice.example",
             "executed_by": agent,
@@ -1020,7 +1020,7 @@ async fn act_on_behalf_agent_view_write_allows_valid_agent_context_and_approval(
 async fn act_on_behalf_agent_unknown_kind_rejects_authorization_action() {
     let state = test_state();
     let realm_id =
-        cokret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-0000000007c5".to_owned())
+        arkret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-0000000007c5".to_owned())
             .unwrap();
     let agent = "did:web:agent.example";
     register_agent_selection(&state, &realm_id, agent, true, true).await;
@@ -1057,7 +1057,7 @@ async fn act_on_behalf_agent_unknown_kind_rejects_authorization_action() {
 async fn reply_agent_unknown_kind_rejects_context_authorization_action() {
     let state = test_state();
     let realm_id =
-        cokret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-0000000007c6".to_owned())
+        arkret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-0000000007c6".to_owned())
             .unwrap();
     let agent = "did:web:agent.example";
     register_agent_selection(&state, &realm_id, agent, true, true).await;
@@ -1092,7 +1092,7 @@ async fn reply_agent_unknown_kind_rejects_context_authorization_action() {
 async fn reply_agent_lifecycle_state_blocks_writes_even_with_participation() {
     let state = test_state();
     let realm_id =
-        cokret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-0000000007c7".to_owned())
+        arkret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-0000000007c7".to_owned())
             .unwrap();
     let agent = "did:web:agent.example";
     register_agent_selection(&state, &realm_id, agent, true, false).await;
@@ -1101,7 +1101,7 @@ async fn reply_agent_lifecycle_state_blocks_writes_even_with_participation() {
         "did:web:alice.example".to_owned(),
         agent.to_owned(),
         realm_id.to_string(),
-        vec![cokret_sdk::events::kinds::MESSAGE_CREATE.to_owned()],
+        vec![arkret_sdk::events::kinds::MESSAGE_CREATE.to_owned()],
         Vec::new(),
     );
     let mut record = state
@@ -1132,7 +1132,7 @@ async fn reply_agent_lifecycle_state_blocks_writes_even_with_participation() {
 async fn reply_agent_projected_deactivation_blocks_writes_even_with_active_record() {
     let state = test_state();
     let realm_id =
-        cokret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-0000000007c8".to_owned())
+        arkret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-0000000007c8".to_owned())
             .unwrap();
     let agent = "did:web:agent.example";
     register_agent_selection(&state, &realm_id, agent, true, false).await;
@@ -1141,12 +1141,12 @@ async fn reply_agent_projected_deactivation_blocks_writes_even_with_active_recor
         "did:web:alice.example".to_owned(),
         agent.to_owned(),
         realm_id.to_string(),
-        vec![cokret_sdk::events::kinds::MESSAGE_CREATE.to_owned()],
+        vec![arkret_sdk::events::kinds::MESSAGE_CREATE.to_owned()],
         Vec::new(),
     );
     state.projection.lock().agent_lifecycles.insert(
         agent.to_owned(),
-        cokret_sdk::AgentLifecycleState::Deactivated,
+        arkret_sdk::AgentLifecycleState::Deactivated,
     );
     let operation = reply_message(realm_id, "0000000007c8", agent, grant.grant_id.as_str());
 
@@ -1162,7 +1162,7 @@ async fn reply_agent_projected_deactivation_blocks_writes_even_with_active_recor
 async fn profile_accountable_principal_requires_active_grant() {
     let state = test_state();
     let realm_id =
-        cokret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-0000000007a3".to_owned())
+        arkret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-0000000007a3".to_owned())
             .unwrap();
     let profile = op(
         realm_id,
@@ -1187,7 +1187,7 @@ async fn profile_accountable_principal_requires_active_grant() {
 async fn profile_accountable_principal_rejects_batch_grant_signed_by_other_actor() {
     let state = test_state();
     let realm_id =
-        cokret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-0000000007a4".to_owned())
+        arkret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-0000000007a4".to_owned())
             .unwrap();
     let profile = op(
         realm_id.clone(),
@@ -1226,7 +1226,7 @@ async fn profile_accountable_principal_rejects_batch_grant_signed_by_other_actor
 async fn profile_accountable_principal_rejects_stored_grant_signed_by_other_actor() {
     let state = test_state();
     let realm_id =
-        cokret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-0000000007a6".to_owned())
+        arkret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-0000000007a6".to_owned())
             .unwrap();
     state
         .persistence
@@ -1280,12 +1280,12 @@ async fn profile_accountable_principal_rejects_stored_grant_signed_by_other_acto
 async fn circle_member_manage_rejects_forged_verdict_without_grant() {
     let state = test_state();
     let realm_id =
-        cokret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-000000000881".to_owned())
+        arkret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-000000000881".to_owned())
             .unwrap();
     let member_add = op(
         realm_id,
         "000000000881",
-        cokret_sdk::events::kinds::CIRCLE_MEMBER_STATE,
+        arkret_sdk::events::kinds::CIRCLE_MEMBER_STATE,
         json!({
             "sender": "did:web:alice.example",
             "circle_id": "ak:circle:01904100-0000-7000-8000-000000000881",
@@ -1312,7 +1312,7 @@ async fn circle_member_manage_rejects_forged_verdict_without_grant() {
 async fn circle_member_manage_allows_explicit_circle_scoped_grant() {
     let state = test_state();
     let realm_id =
-        cokret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-000000000882".to_owned())
+        arkret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-000000000882".to_owned())
             .unwrap();
     let circle_id = "ak:circle:01904100-0000-7000-8000-000000000882";
     grant_circle_action(
@@ -1325,7 +1325,7 @@ async fn circle_member_manage_allows_explicit_circle_scoped_grant() {
     let member_add = op(
         realm_id,
         "000000000882",
-        cokret_sdk::events::kinds::CIRCLE_MEMBER_STATE,
+        arkret_sdk::events::kinds::CIRCLE_MEMBER_STATE,
         json!({
             "sender": "did:web:alice.example",
             "circle_id": circle_id,
@@ -1349,13 +1349,13 @@ async fn circle_member_manage_allows_explicit_circle_scoped_grant() {
 async fn circle_lifecycle_requires_circle_manage_grant() {
     let state = test_state();
     let realm_id =
-        cokret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-000000000883".to_owned())
+        arkret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-000000000883".to_owned())
             .unwrap();
     let circle_id = "ak:circle:01904100-0000-7000-8000-000000000883";
     let tombstone = op(
         realm_id.clone(),
         "000000000883",
-        cokret_sdk::events::kinds::CIRCLE_TOMBSTONE,
+        arkret_sdk::events::kinds::CIRCLE_TOMBSTONE,
         json!({
             "sender": "did:web:alice.example",
             "circle_id": circle_id
@@ -1385,13 +1385,13 @@ async fn circle_lifecycle_requires_circle_manage_grant() {
 async fn agent_interop_session_status_allows_start_actor_in_batch() {
     let state = test_state();
     let realm_id =
-        cokret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-0000000007b1".to_owned())
+        arkret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-0000000007b1".to_owned())
             .unwrap();
     let session_id = "ak:agent_interop_session:01904100-0000-7000-8000-0000000007b1";
     let start = op(
         realm_id.clone(),
         "0000000007b1",
-        cokret_sdk::events::kinds::AGENT_INTEROP_SESSION_START,
+        arkret_sdk::events::kinds::AGENT_INTEROP_SESSION_START,
         json!({
             "sender": "did:web:alice.example",
             "session_id": session_id,
@@ -1403,7 +1403,7 @@ async fn agent_interop_session_status_allows_start_actor_in_batch() {
     let status = op(
         realm_id,
         "0000000007b2",
-        cokret_sdk::events::kinds::AGENT_INTEROP_SESSION_STATUS,
+        arkret_sdk::events::kinds::AGENT_INTEROP_SESSION_STATUS,
         json!({
             "sender": "did:web:alice.example",
             "session_id": session_id,
@@ -1420,7 +1420,7 @@ async fn agent_interop_session_status_allows_start_actor_in_batch() {
 async fn agent_interop_session_status_rejects_other_actor() {
     let state = test_state();
     let realm_id =
-        cokret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-0000000007b3".to_owned())
+        arkret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-0000000007b3".to_owned())
             .unwrap();
     let session_id = "ak:agent_interop_session:01904100-0000-7000-8000-0000000007b3";
     insert_agent_interop_session_start(
@@ -1434,7 +1434,7 @@ async fn agent_interop_session_status_rejects_other_actor() {
     let status = op(
         realm_id,
         "0000000007b4",
-        cokret_sdk::events::kinds::AGENT_INTEROP_SESSION_STATUS,
+        arkret_sdk::events::kinds::AGENT_INTEROP_SESSION_STATUS,
         json!({
             "sender": "did:web:bob.example",
             "session_id": session_id,
@@ -1461,7 +1461,7 @@ async fn agent_interop_session_status_rejects_other_actor() {
 async fn agent_interop_session_status_rejects_realm_grant_without_session_scope() {
     let state = test_state();
     let realm_id =
-        cokret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-0000000007b5".to_owned())
+        arkret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-0000000007b5".to_owned())
             .unwrap();
     let session_id = "ak:agent_interop_session:01904100-0000-7000-8000-0000000007b5";
     insert_agent_interop_session_start(
@@ -1483,7 +1483,7 @@ async fn agent_interop_session_status_rejects_realm_grant_without_session_scope(
     let status = op(
         realm_id,
         "0000000007b6",
-        cokret_sdk::events::kinds::AGENT_INTEROP_SESSION_STATUS,
+        arkret_sdk::events::kinds::AGENT_INTEROP_SESSION_STATUS,
         json!({
             "sender": "did:web:bob.example",
             "session_id": session_id,
@@ -1503,7 +1503,7 @@ async fn agent_interop_session_status_rejects_realm_grant_without_session_scope(
 async fn agent_interop_session_status_allows_session_scoped_delegate() {
     let state = test_state();
     let realm_id =
-        cokret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-0000000007b7".to_owned())
+        arkret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-0000000007b7".to_owned())
             .unwrap();
     let session_id = "ak:agent_interop_session:01904100-0000-7000-8000-0000000007b7";
     insert_agent_interop_session_start(
@@ -1514,7 +1514,7 @@ async fn agent_interop_session_status_allows_session_scoped_delegate() {
         session_id,
     )
     .await;
-    let session = cokret_sdk::AgentInteropSessionId::new(session_id.to_owned())
+    let session = arkret_sdk::AgentInteropSessionId::new(session_id.to_owned())
         .expect("valid agent interop session id");
     state.authz.create_grant(
         realm_id.to_string(),
@@ -1529,7 +1529,7 @@ async fn agent_interop_session_status_allows_session_scoped_delegate() {
     let status = op(
         realm_id,
         "0000000007b8",
-        cokret_sdk::events::kinds::AGENT_INTEROP_SESSION_STATUS,
+        arkret_sdk::events::kinds::AGENT_INTEROP_SESSION_STATUS,
         json!({
             "sender": "did:web:bob.example",
             "session_id": session_id,
@@ -1546,7 +1546,7 @@ async fn agent_interop_session_status_allows_session_scoped_delegate() {
 async fn act_on_behalf_agent_allows_effective_selection_and_active_grant() {
     let state = test_state();
     let realm_id =
-        cokret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-000000000703".to_owned())
+        arkret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-000000000703".to_owned())
             .unwrap();
     let agent = "did:web:agent.example";
     register_agent_selection(&state, &realm_id, agent, true, true).await;
@@ -1555,7 +1555,7 @@ async fn act_on_behalf_agent_allows_effective_selection_and_active_grant() {
         "did:web:alice.example".to_owned(),
         agent.to_owned(),
         realm_id.to_string(),
-        vec![cokret_sdk::events::kinds::MESSAGE_CREATE.to_owned()],
+        vec![arkret_sdk::events::kinds::MESSAGE_CREATE.to_owned()],
         Vec::new(),
     );
     let message = act_on_behalf_message(
@@ -1576,7 +1576,7 @@ async fn act_on_behalf_agent_allows_effective_selection_and_active_grant() {
 async fn act_on_behalf_agent_requires_fresh_approval_request() {
     let state = test_state();
     let realm_id =
-        cokret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-000000000704".to_owned())
+        arkret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-000000000704".to_owned())
             .unwrap();
     let agent = "did:web:agent.example";
     register_agent_selection(&state, &realm_id, agent, true, true).await;
@@ -1585,7 +1585,7 @@ async fn act_on_behalf_agent_requires_fresh_approval_request() {
         "did:web:alice.example".to_owned(),
         agent.to_owned(),
         realm_id.to_string(),
-        vec![cokret_sdk::events::kinds::MESSAGE_CREATE.to_owned()],
+        vec![arkret_sdk::events::kinds::MESSAGE_CREATE.to_owned()],
         Vec::new(),
     );
     let message = act_on_behalf_message(
@@ -1608,7 +1608,7 @@ async fn act_on_behalf_agent_requires_fresh_approval_request() {
 async fn act_on_behalf_agent_consumes_approval_nonce_once() {
     let state = test_state();
     let realm_id =
-        cokret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-000000000705".to_owned())
+        arkret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-000000000705".to_owned())
             .unwrap();
     let agent = "did:web:agent.example";
     register_agent_selection(&state, &realm_id, agent, true, true).await;
@@ -1617,7 +1617,7 @@ async fn act_on_behalf_agent_consumes_approval_nonce_once() {
         "did:web:alice.example".to_owned(),
         agent.to_owned(),
         realm_id.to_string(),
-        vec![cokret_sdk::events::kinds::MESSAGE_CREATE.to_owned()],
+        vec![arkret_sdk::events::kinds::MESSAGE_CREATE.to_owned()],
         Vec::new(),
     );
     let message = act_on_behalf_message(
@@ -1636,7 +1636,7 @@ async fn act_on_behalf_agent_consumes_approval_nonce_once() {
         validate_agent_reply_participation(&state, &[message])
             .await
             .unwrap_err(),
-        cokret_sdk::error::REASON_APPROVAL_NONCE_REUSED
+        arkret_sdk::error::REASON_APPROVAL_NONCE_REUSED
     );
 }
 
@@ -1644,7 +1644,7 @@ async fn act_on_behalf_agent_consumes_approval_nonce_once() {
 async fn circle_scoped_relation_update_and_delete_require_circle_membership() {
     let state = test_state();
     let realm_id =
-        cokret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-000000000801".to_owned())
+        arkret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-000000000801".to_owned())
             .unwrap();
     let circle_id = "ak:circle:01904100-0000-7000-8000-000000000801";
     let relation_id = "ak:relation:01904100-0000-7000-8000-000000000801";
@@ -1702,7 +1702,7 @@ async fn circle_scoped_relation_update_and_delete_require_circle_membership() {
     let bob_update = op(
         realm_id.clone(),
         "000000000802",
-        cokret_sdk::events::kinds::RELATION_UPDATE,
+        arkret_sdk::events::kinds::RELATION_UPDATE,
         json!({
             "relation_id": relation_id,
             "sender": "did:web:bob.example",
@@ -1719,7 +1719,7 @@ async fn circle_scoped_relation_update_and_delete_require_circle_membership() {
     let alice_update = op(
         realm_id.clone(),
         "000000000803",
-        cokret_sdk::events::kinds::RELATION_UPDATE,
+        arkret_sdk::events::kinds::RELATION_UPDATE,
         json!({
             "relation_id": relation_id,
             "sender": "did:web:alice.example",
@@ -1733,7 +1733,7 @@ async fn circle_scoped_relation_update_and_delete_require_circle_membership() {
     let bob_delete = op(
         realm_id,
         "000000000804",
-        cokret_sdk::events::kinds::RELATION_TOMBSTONE,
+        arkret_sdk::events::kinds::RELATION_TOMBSTONE,
         json!({
             "relation_id": relation_id,
             "sender": "did:web:bob.example"
@@ -1751,13 +1751,13 @@ async fn circle_scoped_relation_update_and_delete_require_circle_membership() {
 async fn moderation_decision_checks_issuer_capability_not_sender_spoof() {
     let state = test_state();
     let realm_id =
-        cokret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-000000000901".to_owned())
+        arkret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-000000000901".to_owned())
             .unwrap();
     grant_moderation_decision(&state, &realm_id, "did:web:moderator.example");
     let decision = op(
         realm_id,
         "000000000901",
-        cokret_sdk::events::kinds::MODERATION_DECISION,
+        arkret_sdk::events::kinds::MODERATION_DECISION,
         json!({
             "sender": "did:web:moderator.example",
             "issuer": "did:web:impostor.example",
@@ -1779,13 +1779,13 @@ async fn moderation_decision_checks_issuer_capability_not_sender_spoof() {
 async fn moderation_decision_allows_authorized_issuer() {
     let state = test_state();
     let realm_id =
-        cokret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-000000000902".to_owned())
+        arkret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-000000000902".to_owned())
             .unwrap();
     grant_moderation_decision(&state, &realm_id, "did:web:moderator.example");
     let decision = op(
         realm_id,
         "000000000902",
-        cokret_sdk::events::kinds::MODERATION_DECISION,
+        arkret_sdk::events::kinds::MODERATION_DECISION,
         json!({
             "sender": "did:web:moderator.example",
             "issuer": "did:web:moderator.example",
@@ -1804,13 +1804,13 @@ async fn moderation_decision_allows_authorized_issuer() {
 async fn moderation_decision_rejects_missing_issuer_even_with_sender_grant() {
     let state = test_state();
     let realm_id =
-        cokret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-000000000903".to_owned())
+        arkret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-000000000903".to_owned())
             .unwrap();
     grant_moderation_decision(&state, &realm_id, "did:web:moderator.example");
     let decision = op(
         realm_id,
         "000000000903",
-        cokret_sdk::events::kinds::MODERATION_DECISION,
+        arkret_sdk::events::kinds::MODERATION_DECISION,
         json!({
             "sender": "did:web:moderator.example",
             "target_ref": "ak:message:01904100-0000-7000-8000-000000000903",
@@ -1831,18 +1831,18 @@ async fn moderation_decision_rejects_missing_issuer_even_with_sender_grant() {
 async fn call_recording_start_defaults_to_record_capability() {
     let state = test_state();
     let realm_id =
-        cokret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-000000000904".to_owned())
+        arkret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-000000000904".to_owned())
             .unwrap();
     grant_call_action(
         &state,
         &realm_id,
         "did:web:recorder.example",
-        cokret_sdk::CAP_ACTION_CALL_RECORD,
+        arkret_sdk::CAP_ACTION_CALL_RECORD,
     );
     let start = op(
         realm_id,
         "000000000904",
-        cokret_sdk::events::kinds::CALL_RECORDING_START,
+        arkret_sdk::events::kinds::CALL_RECORDING_START,
         json!({
             "sender": "did:web:recorder.example",
             "call_id": "ak:call:01904100-0000-7000-8000-000000000904",
@@ -1859,18 +1859,18 @@ async fn call_recording_start_defaults_to_record_capability() {
 async fn call_recording_start_transcript_requires_transcribe_capability() {
     let state = test_state();
     let realm_id =
-        cokret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-000000000905".to_owned())
+        arkret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-000000000905".to_owned())
             .unwrap();
     grant_call_action(
         &state,
         &realm_id,
         "did:web:recorder.example",
-        cokret_sdk::CAP_ACTION_CALL_RECORD,
+        arkret_sdk::CAP_ACTION_CALL_RECORD,
     );
     let start = op(
         realm_id,
         "000000000905",
-        cokret_sdk::events::kinds::CALL_RECORDING_START,
+        arkret_sdk::events::kinds::CALL_RECORDING_START,
         json!({
             "sender": "did:web:recorder.example",
             "call_id": "ak:call:01904100-0000-7000-8000-000000000905",
@@ -1898,18 +1898,18 @@ async fn call_recording_start_transcript_requires_transcribe_capability() {
 async fn call_recording_start_transcript_allows_transcribe_capability() {
     let state = test_state();
     let realm_id =
-        cokret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-000000000906".to_owned())
+        arkret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-000000000906".to_owned())
             .unwrap();
     grant_call_action(
         &state,
         &realm_id,
         "did:web:recorder.example",
-        cokret_sdk::CAP_ACTION_CALL_TRANSCRIBE,
+        arkret_sdk::CAP_ACTION_CALL_TRANSCRIBE,
     );
     let start = op(
         realm_id,
         "000000000906",
-        cokret_sdk::events::kinds::CALL_RECORDING_START,
+        arkret_sdk::events::kinds::CALL_RECORDING_START,
         json!({
             "sender": "did:web:recorder.example",
             "call_id": "ak:call:01904100-0000-7000-8000-000000000906",
@@ -1927,12 +1927,12 @@ async fn call_recording_start_transcript_allows_transcribe_capability() {
 async fn mls_prejoin_history_rejects_non_history_capable_content_scheme() {
     let state = test_state();
     let realm_id =
-        cokret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-00000000c100".to_owned())
+        arkret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-00000000c100".to_owned())
             .unwrap();
     let create = op(
         realm_id.clone(),
         "00000000c101",
-        cokret_sdk::events::kinds::REALM_CREATE,
+        arkret_sdk::events::kinds::REALM_CREATE,
         json!({
             "object": {
                 "id": realm_id.as_str(),
@@ -1945,7 +1945,7 @@ async fn mls_prejoin_history_rejects_non_history_capable_content_scheme() {
     let strict_scheme = op(
         realm_id,
         "00000000c102",
-        cokret_sdk::events::kinds::REALM_POLICY_COMPONENTS,
+        arkret_sdk::events::kinds::REALM_POLICY_COMPONENTS,
         json!({
             "value": {
                 "content_scheme": "mls-rfc9420"
@@ -1958,7 +1958,7 @@ async fn mls_prejoin_history_rejects_non_history_capable_content_scheme() {
         .unwrap_err();
     assert_eq!(
         reason,
-        cokret_sdk::error::REASON_HISTORY_VISIBILITY_REQUIRES_HISTORY_CAPABLE_SCHEME
+        arkret_sdk::error::REASON_HISTORY_VISIBILITY_REQUIRES_HISTORY_CAPABLE_SCHEME
     );
     assert_eq!(
         operation_policy_reason_code(reason),
@@ -1973,12 +1973,12 @@ async fn mls_prejoin_history_rejects_non_history_capable_content_scheme() {
 async fn mls_prejoin_history_accepts_exporter_aead_content_scheme() {
     let state = test_state();
     let realm_id =
-        cokret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-00000000c200".to_owned())
+        arkret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-00000000c200".to_owned())
             .unwrap();
     let create = op(
         realm_id.clone(),
         "00000000c201",
-        cokret_sdk::events::kinds::REALM_CREATE,
+        arkret_sdk::events::kinds::REALM_CREATE,
         json!({
             "object": {
                 "id": realm_id.as_str(),
@@ -1991,7 +1991,7 @@ async fn mls_prejoin_history_accepts_exporter_aead_content_scheme() {
     let exporter_scheme = op(
         realm_id,
         "00000000c202",
-        cokret_sdk::events::kinds::REALM_POLICY_COMPONENTS,
+        arkret_sdk::events::kinds::REALM_POLICY_COMPONENTS,
         json!({
             "value": {
                 "content_scheme": "mls-exporter-aead-v1"
@@ -2008,12 +2008,12 @@ async fn mls_prejoin_history_accepts_exporter_aead_content_scheme() {
 async fn mls_prejoin_history_accepts_create_object_exporter_aead_content_scheme() {
     let state = test_state();
     let realm_id =
-        cokret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-00000000c210".to_owned())
+        arkret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-00000000c210".to_owned())
             .unwrap();
     let create = op(
         realm_id.clone(),
         "00000000c211",
-        cokret_sdk::events::kinds::REALM_CREATE,
+        arkret_sdk::events::kinds::REALM_CREATE,
         json!({
             "object": {
                 "id": realm_id.as_str(),
@@ -2034,12 +2034,12 @@ async fn mls_prejoin_history_accepts_create_object_exporter_aead_content_scheme(
 async fn mls_prejoin_history_rejects_create_object_strict_content_scheme() {
     let state = test_state();
     let realm_id =
-        cokret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-00000000c220".to_owned())
+        arkret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-00000000c220".to_owned())
             .unwrap();
     let create = op(
         realm_id.clone(),
         "00000000c221",
-        cokret_sdk::events::kinds::REALM_CREATE,
+        arkret_sdk::events::kinds::REALM_CREATE,
         json!({
             "object": {
                 "id": realm_id.as_str(),
@@ -2056,17 +2056,17 @@ async fn mls_prejoin_history_rejects_create_object_strict_content_scheme() {
         .unwrap_err();
     assert_eq!(
         reason,
-        cokret_sdk::error::REASON_HISTORY_VISIBILITY_REQUIRES_HISTORY_CAPABLE_SCHEME
+        arkret_sdk::error::REASON_HISTORY_VISIBILITY_REQUIRES_HISTORY_CAPABLE_SCHEME
     );
 }
 
 #[tokio::test]
 async fn mls_strict_existing_realm_rejects_prejoin_history_update() {
-    use cokret_sdk::lattice::CellState;
+    use arkret_sdk::lattice::CellState;
 
     let state = test_state();
     let realm_id =
-        cokret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-00000000c300".to_owned())
+        arkret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-00000000c300".to_owned())
             .unwrap();
     let now = chrono::Utc::now();
     state
@@ -2097,7 +2097,7 @@ async fn mls_strict_existing_realm_rejects_prejoin_history_update() {
         .expect("realm meta stored");
     {
         let mut projection = state.projection.lock();
-        let cell_id = cokret_sdk::CellRef::new(format!(
+        let cell_id = arkret_sdk::CellRef::new(format!(
             "ak:cell:ck.component.realm.policy_components.v1:{}",
             realm_id.as_str()
         ))
@@ -2112,7 +2112,7 @@ async fn mls_strict_existing_realm_rejects_prejoin_history_update() {
     let history_visibility = op(
         realm_id,
         "00000000c301",
-        cokret_sdk::events::kinds::REALM_HISTORY_VISIBILITY,
+        arkret_sdk::events::kinds::REALM_HISTORY_VISIBILITY,
         json!({
             "value": "shared"
         }),
@@ -2122,7 +2122,7 @@ async fn mls_strict_existing_realm_rejects_prejoin_history_update() {
         validate_operation_policy(&state, &[history_visibility])
             .await
             .unwrap_err(),
-        cokret_sdk::error::REASON_HISTORY_VISIBILITY_REQUIRES_HISTORY_CAPABLE_SCHEME
+        arkret_sdk::error::REASON_HISTORY_VISIBILITY_REQUIRES_HISTORY_CAPABLE_SCHEME
     );
 }
 
@@ -2133,11 +2133,11 @@ async fn mls_strict_existing_realm_rejects_prejoin_history_update() {
 // `durability_policy.recovery_recipients[].principal_id`.
 #[tokio::test]
 async fn realm_key_share_rrk_targeted_is_accepted_for_recovery_recipient() {
-    use cokret_sdk::lattice::CellState;
+    use arkret_sdk::lattice::CellState;
 
     let state = test_state();
     let realm_id =
-        cokret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-00000000d100".to_owned())
+        arkret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-00000000d100".to_owned())
             .unwrap();
     let recovery_principal = "did:web:hr.example";
 
@@ -2145,7 +2145,7 @@ async fn realm_key_share_rrk_targeted_is_accepted_for_recovery_recipient() {
     // org RRK durability policy naming `recovery_principal` as a recipient.
     {
         let mut projection = state.projection.lock();
-        let cell_id = cokret_sdk::CellRef::new(format!(
+        let cell_id = arkret_sdk::CellRef::new(format!(
             "ak:cell:ck.component.realm.policy_components.v1:{}",
             realm_id.as_str()
         ))
@@ -2169,7 +2169,7 @@ async fn realm_key_share_rrk_targeted_is_accepted_for_recovery_recipient() {
     let share = op(
         realm_id.clone(),
         "00000000d100",
-        cokret_sdk::events::kinds::REALM_KEY_SHARE,
+        arkret_sdk::events::kinds::REALM_KEY_SHARE,
         json!({
             "share_class": "realm_recovery_key",
             "recipient_principal_id": recovery_principal,
@@ -2197,7 +2197,7 @@ async fn realm_key_share_rrk_targeted_is_accepted_for_recovery_recipient() {
 async fn realm_key_share_member_device_accepts_projection_metadata() {
     let state = test_state();
     let realm_id =
-        cokret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-00000000d300".to_owned())
+        arkret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-00000000d300".to_owned())
             .unwrap();
     let now = chrono::DateTime::parse_from_rfc3339("2026-07-05T00:00:00Z")
         .unwrap()
@@ -2284,7 +2284,7 @@ async fn realm_key_share_member_device_accepts_projection_metadata() {
     let share = op(
         realm_id.clone(),
         "00000000d300",
-        cokret_sdk::events::kinds::REALM_KEY_SHARE,
+        arkret_sdk::events::kinds::REALM_KEY_SHARE,
         json!({
             "share_class": "member_device",
             "recipient_principal_id": bob,
@@ -2314,15 +2314,15 @@ async fn realm_key_share_member_device_accepts_projection_metadata() {
 // fails closed — the RRK branch only applies to declared recovery recipients.
 #[tokio::test]
 async fn realm_key_share_non_recovery_recipient_without_policy_is_rejected() {
-    use cokret_sdk::lattice::CellState;
+    use arkret_sdk::lattice::CellState;
 
     let state = test_state();
     let realm_id =
-        cokret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-00000000d200".to_owned())
+        arkret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-00000000d200".to_owned())
             .unwrap();
     {
         let mut projection = state.projection.lock();
-        let cell_id = cokret_sdk::CellRef::new(format!(
+        let cell_id = arkret_sdk::CellRef::new(format!(
             "ak:cell:ck.component.realm.policy_components.v1:{}",
             realm_id.as_str()
         ))
@@ -2346,7 +2346,7 @@ async fn realm_key_share_non_recovery_recipient_without_policy_is_rejected() {
     let share = op(
         realm_id.clone(),
         "00000000d200",
-        cokret_sdk::events::kinds::REALM_KEY_SHARE,
+        arkret_sdk::events::kinds::REALM_KEY_SHARE,
         json!({
             "share_class": "member_device",
             "recipient_principal_id": "did:web:stranger.example",

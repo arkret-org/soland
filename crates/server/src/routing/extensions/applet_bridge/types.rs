@@ -1,6 +1,6 @@
 //! Wire and storage types for the applet bridge surface.
 
-use cokret_sdk::{AppletPackage, AppletWireNamespaces, InstallCommitOutcome};
+use arkret_sdk::{AppletPackage, AppletWireNamespaces, InstallCommitOutcome};
 use salvo::oapi::ToSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;

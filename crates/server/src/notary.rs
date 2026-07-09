@@ -22,7 +22,7 @@
 //!     60_000ms when unset). Among recovery members the lex-smallest reachable DID owns the round
 //!     (same election as threshold).
 //! - **Real Ed25519** signing on both verify *and* sign sides. The signing side delegates the
-//!   detached-JWS construction to `cokret_sdk::jws::sign_jws_ed25519` (symmetric counterpart of
+//!   detached-JWS construction to `arkret_sdk::jws::sign_jws_ed25519` (symmetric counterpart of
 //!   `verify_jws_ed25519` — the SDK's verify path round-trips against the JWS this worker emits).
 //!   The signing key is sourced from `AppState::notary_signing_key()`, which loads from
 //!   `SOLAND_NOTARY_SIGNING_KEY` (configured) or mints an in-process ephemeral seed at boot
@@ -38,12 +38,12 @@ use std::sync::OnceLock;
 use anyhow::Result;
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use cokret_sdk::lattice::{CellState, SealedOp};
-use cokret_sdk::state_res::{
+use arkret_sdk::lattice::{CellState, SealedOp};
+use arkret_sdk::state_res::{
     StoreError, apply_seal, compute_state_root, control_event_set_root, effective_seal_view,
     effective_state_at, verify_move,
 };
-use cokret_sdk::{
+use arkret_sdk::{
     CellRef, Hash, Hlc, Move, MoveId, MoveSignature, NotarySig, RealmId, Seal, SealId,
 };
 use ed25519_dalek::SigningKey;
@@ -154,7 +154,7 @@ impl NotaryWorker {
         let verifier = select_jws_verifier(state);
         let replay_default = state.config.jws_replay_window_seconds;
         let replay_overrides = &state.config.jws_replay_window_per_family;
-        let ordered = cokret_sdk::state_res::deterministic_order(pending);
+        let ordered = arkret_sdk::state_res::deterministic_order(pending);
         let mut accepted: Vec<Move> = Vec::with_capacity(ordered.len());
         let mut rejected: Vec<(MoveId, String)> = Vec::new();
         for m in ordered {
@@ -231,7 +231,7 @@ impl NotaryWorker {
             // Normal delta-accepting Seal. Compaction Seals come
             // through `admin_compact_seal_dag`, not the regular
             // notary pipeline.
-            kind: cokret_sdk::SealKind::Normal,
+            kind: arkret_sdk::SealKind::Normal,
         };
         let canonical_bytes = seal
             .canonical_bytes_for_id()
@@ -373,19 +373,19 @@ impl NotaryWorker {
         // forensic_attribution|recovery_members`). Anything else — including
         // the pre-rename alias spellings (`shape`/`kind_raw`/`k`/`n`/
         // `primary`/`threshold_dids`/...) — is fail-closed: not authorized.
-        let Ok(notary_value) = serde_json::from_value::<cokret_sdk::NotaryValue>(value.clone())
+        let Ok(notary_value) = serde_json::from_value::<arkret_sdk::NotaryValue>(value.clone())
         else {
             return Ok(false);
         };
         match notary_value {
-            cokret_sdk::NotaryValue::SingleDid { did, .. } => Ok(did.as_str() == self.service_did),
-            cokret_sdk::NotaryValue::Threshold { members, .. } => {
+            arkret_sdk::NotaryValue::SingleDid { did, .. } => Ok(did.as_str() == self.service_did),
+            arkret_sdk::NotaryValue::Threshold { members, .. } => {
                 Ok(self.is_round_leader(&members))
             }
-            cokret_sdk::NotaryValue::OpenSet { members } => Ok(members
+            arkret_sdk::NotaryValue::OpenSet { members } => Ok(members
                 .iter()
                 .any(|member| member.as_str() == self.service_did)),
-            cokret_sdk::NotaryValue::Mixed {
+            arkret_sdk::NotaryValue::Mixed {
                 did: primary,
                 recovery_members,
             } => {
@@ -541,7 +541,7 @@ impl NotaryWorker {
     /// deployments fall back to an in-process random ephemeral key with a
     /// sticky-warn log line on every signing pass.
     ///
-    /// The JWS is constructed by `cokret_sdk::jws::sign_jws_ed25519`,
+    /// The JWS is constructed by `arkret_sdk::jws::sign_jws_ed25519`,
     /// the symmetric counterpart of `verify_jws_ed25519`. Both sides of
     /// the wire therefore agree on the protected header (`{"alg":"EdDSA"}`)
     /// and the RFC 7515 §5.2 signing input shape (`BASE64URL(header) ||
@@ -560,7 +560,7 @@ impl NotaryWorker {
     ) -> Result<MoveSignature, NotaryError> {
         // payload_digest = sha256(canonical_bytes), prefix-encoded via the
         // shared SDK digest helper.
-        let payload_digest = Hash::new(cokret_sdk::canonical::sha256_digest(canonical_bytes))
+        let payload_digest = Hash::new(arkret_sdk::canonical::sha256_digest(canonical_bytes))
             .map_err(|e| NotaryError::Construction(format!("payload hash: {e}")))?;
 
         let signing_key = state.notary_signing_key();
@@ -569,7 +569,7 @@ impl NotaryWorker {
             warn_once_about_ephemeral_notary_key();
         }
 
-        let jws = cokret_sdk::jws::sign_jws_ed25519(canonical_bytes, signing_key.as_ref())
+        let jws = arkret_sdk::jws::sign_jws_ed25519(canonical_bytes, signing_key.as_ref())
             .map_err(|e| NotaryError::Construction(format!("sign_jws_ed25519: {e}")))?;
 
         Ok(MoveSignature {
@@ -598,7 +598,7 @@ impl NotaryWorker {
             predecessor_refs: Vec::new(),
             delta: Vec::new(),
             control_event_set_root: control_event_set_root.clone(),
-            state_root: Hash::new(cokret_sdk::EMPTY_STATE_ROOT.to_owned())
+            state_root: Hash::new(arkret_sdk::EMPTY_STATE_ROOT.to_owned())
                 .map_err(|e| NotaryError::Construction(format!("empty state_root: {e}")))?,
             completeness_root: control_event_set_root,
             notary_seq: 0,
@@ -613,7 +613,7 @@ impl NotaryWorker {
             sealed_at: chrono::Utc::now(),
             hlc: Hlc::new(state.hlc.now())
                 .map_err(|e| NotaryError::Construction(format!("invalid HLC: {e}")))?,
-            kind: cokret_sdk::SealKind::Normal,
+            kind: arkret_sdk::SealKind::Normal,
         };
         let canonical_bytes = seal
             .canonical_bytes_for_id()
@@ -814,9 +814,9 @@ mod tests {
             "revocation_freshness_window_ms": 60000,
             "paused": false,
         });
-        let parsed: cokret_sdk::NotaryValue = serde_json::from_value(v).unwrap();
+        let parsed: arkret_sdk::NotaryValue = serde_json::from_value(v).unwrap();
         match parsed {
-            cokret_sdk::NotaryValue::Threshold {
+            arkret_sdk::NotaryValue::Threshold {
                 threshold, members, ..
             } => {
                 assert_eq!(threshold, 2);
@@ -857,7 +857,7 @@ mod tests {
     /// SDK-SEC-02 / decision-3 cross-implementation golden check for the Seal
     /// `state_root` Merkle (spec event-auth-state-resolution.md §6.2.1 / §6.2.2,
     /// RFC 6962 domain separation). soland computes governance roots by reusing
-    /// the SDK's `cokret_sdk::state_res::compute_state_root`, so the only drift
+    /// the SDK's `arkret_sdk::state_res::compute_state_root`, so the only drift
     /// risk is a future SDK change silently altering the byte rule. This test
     /// re-derives the expected root with an INDEPENDENT second implementation
     /// (raw `sha2` + canonical JSON, mirroring the spec text directly) so that
@@ -874,8 +874,8 @@ mod tests {
     fn state_root_matches_independent_rfc6962_recompute() {
         use std::collections::BTreeMap;
 
-        use cokret_sdk::CellRef;
-        use cokret_sdk::lattice::CellState;
+        use arkret_sdk::CellRef;
+        use arkret_sdk::lattice::CellState;
         use sha2::{Digest, Sha256};
 
         // Independent leaf rule (spec §6.2.1):
@@ -886,7 +886,7 @@ mod tests {
                 "cell": cell,
                 "state": { "value": value },
             });
-            let preimage = cokret_sdk::canonical::canonical_json_bytes(&leaf_input).unwrap();
+            let preimage = arkret_sdk::canonical::canonical_json_bytes(&leaf_input).unwrap();
             let mut h = Sha256::new();
             h.update([0x00u8]);
             h.update(&preimage);
@@ -898,7 +898,7 @@ mod tests {
 
         // 1) Empty map -> sha256("").
         let empty = compute_state_root(&BTreeMap::new()).unwrap();
-        assert_eq!(empty.as_str(), cokret_sdk::EMPTY_STATE_ROOT);
+        assert_eq!(empty.as_str(), arkret_sdk::EMPTY_STATE_ROOT);
         assert_eq!(
             empty.as_str(),
             "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"

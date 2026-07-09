@@ -7,7 +7,7 @@
 //! Move/Seal pipeline. The HTTP wire path that feeds these reducer
 //! calls is exercised separately in `tests/http_api.rs`.
 
-use cokret_sdk::Operation;
+use arkret_sdk::Operation;
 use serde_json::{Value, json};
 use soland::hlc::ServerHlc;
 use soland::reducer::{ProjectionEffect, ProjectionState};
@@ -16,8 +16,8 @@ const REALM_A: &str = "ak:realm:01904100-0000-7000-8000-cfc039892036";
 
 fn op(kind: &str, realm_id: &str, payload: Value) -> Operation {
     Operation::create(
-        cokret_sdk::OperationId::new(format!("ak:operation:{}", uuid::Uuid::now_v7())).unwrap(),
-        cokret_sdk::RealmId::new(realm_id).unwrap(),
+        arkret_sdk::OperationId::new(format!("ak:operation:{}", uuid::Uuid::now_v7())).unwrap(),
+        arkret_sdk::RealmId::new(realm_id).unwrap(),
         kind,
         payload,
     )
@@ -26,7 +26,7 @@ fn op(kind: &str, realm_id: &str, payload: Value) -> Operation {
 fn apply_policy(state: &mut ProjectionState, hlc: &ServerHlc, payload: Value) {
     let effect = state.apply(
         &op(
-            cokret_sdk::events::kinds::REALM_DELIVERY_BINDING_POLICY,
+            arkret_sdk::events::kinds::REALM_DELIVERY_BINDING_POLICY,
             REALM_A,
             payload,
         ),
@@ -40,7 +40,7 @@ fn apply_policy(state: &mut ProjectionState, hlc: &ServerHlc, payload: Value) {
 
 fn join_op(member: &str, binding: Value) -> Operation {
     op(
-        cokret_sdk::events::kinds::MEMBER_STATE,
+        arkret_sdk::events::kinds::MEMBER_STATE,
         REALM_A,
         json!({
             "actor_id": member,

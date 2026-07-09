@@ -6,7 +6,7 @@ pub(crate) async fn append_encrypted_message_franking(
     parsed: &ValidatedEventEnvelope,
     envelope: &Value,
 ) {
-    if parsed.kind != cokret_sdk::events::kinds::MESSAGE_CREATE {
+    if parsed.kind != arkret_sdk::events::kinds::MESSAGE_CREATE {
         return;
     }
     let Some(policy) = audit_disclosure_policy_for_realm(state, &parsed.realm_id).await else {
@@ -19,7 +19,7 @@ pub(crate) async fn append_encrypted_message_franking(
         return;
     };
     let mut proof = json!({
-        "kind": cokret_sdk::events::kinds::MODERATION_FRANKING_PROOF,
+        "kind": arkret_sdk::events::kinds::MODERATION_FRANKING_PROOF,
         "realm_id": parsed.realm_id,
         "target_event_id": parsed.event_id,
         "sender_did": parsed.actor_id,
@@ -37,7 +37,7 @@ pub(crate) async fn append_encrypted_message_franking(
     append_audit_log(
         state,
         Some(&parsed.actor_id),
-        cokret_sdk::events::kinds::MODERATION_FRANKING_PROOF,
+        arkret_sdk::events::kinds::MODERATION_FRANKING_PROOF,
         proof,
         "accepted",
     )
@@ -64,7 +64,7 @@ async fn audit_disclosure_policy_for_realm(state: &AppState, realm_id: &str) -> 
         .ok()?
         .into_iter()
         .filter(|record| {
-            record.kind == cokret_sdk::events::kinds::REALM_CREATE
+            record.kind == arkret_sdk::events::kinds::REALM_CREATE
                 && canonical_realm_id_for_record(record).as_deref() == Some(realm_id)
         })
         .rev()
@@ -82,7 +82,7 @@ fn franking_proof_digest(proof: &Value) -> String {
         "kind": proof
             .get("kind")
             .and_then(Value::as_str)
-            .unwrap_or(cokret_sdk::events::kinds::MODERATION_FRANKING_PROOF),
+            .unwrap_or(arkret_sdk::events::kinds::MODERATION_FRANKING_PROOF),
         "target_event_id": proof.get("target_event_id").and_then(Value::as_str).unwrap_or_default(),
         "sender_did": proof.get("sender_did").and_then(Value::as_str).unwrap_or_default(),
         "receiving_service_did": proof.get("receiving_service_did").and_then(Value::as_str).unwrap_or_default(),
@@ -90,14 +90,14 @@ fn franking_proof_digest(proof: &Value) -> String {
         "event_canonical_digest": proof.get("event_canonical_digest").and_then(Value::as_str).unwrap_or_default(),
     });
     let bytes = serde_json::to_vec(&material).unwrap_or_default();
-    cokret_sdk::canonical::sha256_digest(&bytes)
+    arkret_sdk::canonical::sha256_digest(&bytes)
 }
 
 pub(super) fn validate_audit_accessed_payload(
     kind: &str,
     object: &serde_json::Map<String, Value>,
 ) -> Result<(), EventValidationError> {
-    if kind != cokret_sdk::events::kinds::AUDIT_ACCESSED {
+    if kind != arkret_sdk::events::kinds::AUDIT_ACCESSED {
         return Ok(());
     }
     let payload = object
@@ -270,7 +270,7 @@ pub(super) async fn validate_strand_watch_audit_pair(
     actor_id: &str,
     canonical_digest: &str,
 ) -> Result<(), EventValidationError> {
-    if kind != cokret_sdk::events::kinds::STRAND_WATCH_SET {
+    if kind != arkret_sdk::events::kinds::STRAND_WATCH_SET {
         return Ok(());
     }
     let payload = object
@@ -326,7 +326,7 @@ pub(super) async fn validate_strand_watch_audit_pair(
         .await
         .map_err(|_| manage_others_audit_error("audit_pair event lookup failed"))?
         .ok_or_else(|| manage_others_audit_error("audit_pair event is not accepted"))?;
-    if audit_record.kind != cokret_sdk::events::kinds::AUDIT_ACCESSED {
+    if audit_record.kind != arkret_sdk::events::kinds::AUDIT_ACCESSED {
         return Err(manage_others_audit_error(
             "audit_pair ref must point to ck.audit.accessed",
         ));

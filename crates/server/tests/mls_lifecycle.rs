@@ -8,7 +8,7 @@
 //!   4. drain the calling device's queue via `GET /_soland/self/keys/keypackages/welcomes/pending`.
 //!
 //! MLS commits no longer have a dedicated REST surface — clients submit
-//! `ck.mls.commit` events via the canonical `POST /_cokret/self/events` pipeline
+//! `ck.mls.commit` events via the canonical `POST /_arkret/self/events` pipeline
 //! (W1C). The commit-bump path is covered by reducer-level unit tests in
 //! `reducer::mls`; we don't re-test it here.
 //!
@@ -21,7 +21,7 @@ use std::collections::BTreeMap;
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::Utc;
-use cokret_sdk::{
+use arkret_sdk::{
     CrossSigningBinding, CrossSigningKeyRecord, CrossSigningPublishContent, Did,
     MlsWelcomeClaimEnvelope, SignedCrossSigningKey, TypedTrustDomainId,
 };
@@ -72,7 +72,7 @@ fn sign_b64(signing: &SigningKey, bytes: &[u8]) -> String {
 }
 
 fn sha256_json(value: &Value) -> String {
-    let bytes = cokret_sdk::canonical::canonical_json_bytes(value)
+    let bytes = arkret_sdk::canonical::canonical_json_bytes(value)
         .unwrap_or_else(|_| serde_json::to_vec(value).unwrap());
     format!("sha256:{}", hex::encode(Sha256::digest(&bytes)))
 }
@@ -208,9 +208,9 @@ async fn mls_lifecycle_end_to_end() {
     let mismatch_keypackage_ref = "ak:mls:keypackage:test-02";
     let keypackage_bytes = b"opaque-mls-keypackage";
     let mismatch_keypackage_bytes = b"opaque-mls-keypackage-mismatch";
-    let keypackage_digest = cokret_sdk::canonical::sha256_digest(keypackage_bytes);
+    let keypackage_digest = arkret_sdk::canonical::sha256_digest(keypackage_bytes);
     let mismatch_keypackage_digest =
-        cokret_sdk::canonical::sha256_digest(mismatch_keypackage_bytes);
+        arkret_sdk::canonical::sha256_digest(mismatch_keypackage_bytes);
     let capabilities = json!(["ck.mls.rfc9420", "ck.mls.profile.full"]);
     let capabilities_digest = sha256_json(&capabilities);
     let mismatch_capabilities = json!(["ck.mls.rfc9420"]);
@@ -246,7 +246,7 @@ async fn mls_lifecycle_end_to_end() {
             }
         ]
     });
-    let publish_resp = TestClient::post("http://server/_cokret/self/keys/keypackages/upload")
+    let publish_resp = TestClient::post("http://server/_arkret/self/keys/keypackages/upload")
         .add_header("authorization", format!("Bearer {alice_token}"), true)
         .json(&publish_body)
         .send(&app_from_state(state.clone()))
@@ -287,7 +287,7 @@ async fn mls_lifecycle_end_to_end() {
     assert_eq!(published_row.ssk_generation, Some(3));
 
     // ── 2a. atomic claim wins (W1C: ck.self.keys.keypackages.command.claim) ───
-    let claim_url = "http://server/_cokret/self/keys/keypackages/claim".to_owned();
+    let claim_url = "http://server/_arkret/self/keys/keypackages/claim".to_owned();
     let claim_resp = TestClient::post(&claim_url)
         .add_header("authorization", format!("Bearer {alice_token}"), true)
         .json(&json!({
@@ -400,7 +400,7 @@ async fn mls_lifecycle_end_to_end() {
             }
         }),
     );
-    let create_resp = TestClient::post("http://server/_cokret/self/events")
+    let create_resp = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {alice_token}"), true)
         .json(&realm_create)
         .send(&app_from_state(state.clone()))
@@ -427,7 +427,7 @@ async fn mls_lifecycle_end_to_end() {
             "created_at": "2026-05-25T00:00:01Z"
         }),
     );
-    let genesis_resp = TestClient::post("http://server/_cokret/self/events")
+    let genesis_resp = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {alice_token}"), true)
         .json(&genesis)
         .send(&app_from_state(state.clone()))
@@ -454,7 +454,7 @@ async fn mls_lifecycle_end_to_end() {
         "requester_did": alice_did,
         "ssk_generation": 3,
         "nonce": b64(b"welcome-claim-nonce-01-128-bit"),
-        "welcome_digest": cokret_sdk::canonical::sha256_digest(b"opaque-mls-welcome"),
+        "welcome_digest": arkret_sdk::canonical::sha256_digest(b"opaque-mls-welcome"),
         "created_at": "2026-05-25T00:00:02Z",
         "signature": {
             "kid": format!("{alice_did}#self-signing"),
@@ -500,7 +500,7 @@ async fn mls_lifecycle_end_to_end() {
             "governance_binding": governance_binding
         }),
     );
-    let mut welcome_resp = TestClient::post("http://server/_cokret/self/events")
+    let mut welcome_resp = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {alice_token}"), true)
         .json(&welcome)
         .send(&app_from_state(state.clone()))
@@ -552,7 +552,7 @@ async fn mls_lifecycle_end_to_end() {
             "governance_binding": commit_binding
         }),
     );
-    let commit_resp = TestClient::post("http://server/_cokret/self/events")
+    let commit_resp = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {alice_token}"), true)
         .json(&commit)
         .send(&app_from_state(state.clone()))
@@ -572,7 +572,7 @@ async fn mls_lifecycle_end_to_end() {
 
     // ── 4. Bob sees the Welcome on the standard to-device queue ─
     let bob_token = dev_token(state.clone(), bob_did, bob_device, "Bob").await;
-    let device_messages_resp = TestClient::get("http://server/_cokret/self/device_messages")
+    let device_messages_resp = TestClient::get("http://server/_arkret/self/device_messages")
         .add_header("authorization", format!("Bearer {bob_token}"), true)
         .send(&app_from_state(state.clone()))
         .await;
@@ -605,7 +605,7 @@ async fn mls_lifecycle_end_to_end() {
     );
     assert_eq!(
         device_message["content"]["welcome_hash"],
-        json!(cokret_sdk::canonical::sha256_digest(b"opaque-mls-welcome"))
+        json!(arkret_sdk::canonical::sha256_digest(b"opaque-mls-welcome"))
     );
     assert_eq!(
         device_message["unsigned"]["mls_welcome_id"],
@@ -647,9 +647,9 @@ async fn mls_lifecycle_end_to_end() {
     );
 
     // ── 5. MLS commits no longer have a dedicated REST surface ──
-    // The dedicated `POST /_cokret/self/mls/commits` endpoint was removed in
+    // The dedicated `POST /_arkret/self/mls/commits` endpoint was removed in
     // W1C; clients now submit `ck.mls.commit` events via the canonical
-    // `POST /_cokret/self/events` pipeline (ck.self.events.command.submit of the registered
+    // `POST /_arkret/self/events` pipeline (ck.self.events.command.submit of the registered
     // durable `ck.mls.commit` kind). The reducer-level epoch-bump path is
     // covered by unit tests in `reducer::mls`. We deliberately do not
     // re-exercise it here from the HTTP layer.

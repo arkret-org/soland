@@ -218,7 +218,7 @@ pub fn manifest_signing_bytes(manifest: &AppletManifest) -> Vec<u8> {
         "schema_hash": manifest.schema_hash,
         "metadata": manifest.metadata,
     });
-    cokret_sdk::canonical::canonical_json_bytes(&body).expect("manifest signing body canonicalizes")
+    arkret_sdk::canonical::canonical_json_bytes(&body).expect("manifest signing body canonicalizes")
 }
 
 /// sha256 hex of the on-disk `applet.schema.json` referenced in

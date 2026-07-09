@@ -22,7 +22,7 @@ async fn auth_keys_device_messages_and_blobs_work() {
         serde_json::json!({"signed_curve25519:fallback": {"key": "fallback-key"}}),
     );
 
-    let upload: Value = TestClient::post("http://server/_cokret/self/keys/upload")
+    let upload: Value = TestClient::post("http://server/_arkret/self/keys/upload")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&upload_body)
         .send(&app_from_state(state.clone()))
@@ -32,7 +32,7 @@ async fn auth_keys_device_messages_and_blobs_work() {
         .unwrap();
     assert_eq!(upload["one_time_key_counts"]["signed_curve25519"], 1);
 
-    let query: Value = TestClient::post("http://server/_cokret/self/keys/query")
+    let query: Value = TestClient::post("http://server/_arkret/self/keys/query")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
             "device_keys": {"did:web:alice.example": [alice_device]}
@@ -58,7 +58,7 @@ async fn auth_keys_device_messages_and_blobs_work() {
         format!("did:key:{alice_device_public}")
     );
 
-    let claimed_once: Value = TestClient::post("http://server/_cokret/self/keys/claim")
+    let claimed_once: Value = TestClient::post("http://server/_arkret/self/keys/claim")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
             "one_time_keys": {
@@ -77,7 +77,7 @@ async fn auth_keys_device_messages_and_blobs_work() {
             ["key"],
         "one-time"
     );
-    let claimed_replay: Value = TestClient::post("http://server/_cokret/self/keys/claim")
+    let claimed_replay: Value = TestClient::post("http://server/_arkret/self/keys/claim")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
             "one_time_keys": {
@@ -96,7 +96,7 @@ async fn auth_keys_device_messages_and_blobs_work() {
         "one-time key claim must be single-use"
     );
 
-    let invalid_device_message = TestClient::post("http://server/_cokret/self/device_messages")
+    let invalid_device_message = TestClient::post("http://server/_arkret/self/device_messages")
         .add_header("authorization", format!("Bearer {token}"), true)
         .add_header("Idempotency-Key", "bad-txn", true)
         .json(&serde_json::json!({
@@ -115,7 +115,7 @@ async fn auth_keys_device_messages_and_blobs_work() {
         .await;
     assert_eq!(invalid_device_message.status_code.unwrap().as_u16(), 400);
 
-    let send: Value = TestClient::post("http://server/_cokret/self/device_messages")
+    let send: Value = TestClient::post("http://server/_arkret/self/device_messages")
         .add_header("authorization", format!("Bearer {token}"), true)
         .add_header("Idempotency-Key", "txn1", true)
         .json(&serde_json::json!({
@@ -133,7 +133,7 @@ async fn auth_keys_device_messages_and_blobs_work() {
         .unwrap();
     assert_eq!(send["ok"], true);
 
-    let duplicate: Value = TestClient::post("http://server/_cokret/self/device_messages")
+    let duplicate: Value = TestClient::post("http://server/_arkret/self/device_messages")
         .add_header("authorization", format!("Bearer {token}"), true)
         .add_header("Idempotency-Key", "txn1", true)
         .json(&serde_json::json!({
@@ -161,7 +161,7 @@ async fn auth_keys_device_messages_and_blobs_work() {
 
     let (bad_blob_content_type, bad_blob_body) =
         multipart_blob_upload_body("encrypted-bytes", "application/octet-stream");
-    let bad_blob = TestClient::post("http://server/_cokret/self/blob/upload")
+    let bad_blob = TestClient::post("http://server/_arkret/self/blob/upload")
         .add_header("authorization", format!("Bearer {token}"), true)
         .add_header("content-type", bad_blob_content_type, true)
         .add_header(
@@ -176,7 +176,7 @@ async fn auth_keys_device_messages_and_blobs_work() {
 
     let (bad_attachment_content_type, bad_attachment_body) =
         multipart_blob_upload_body("encrypted-bytes", "application/octet-stream");
-    let bad_attachment = TestClient::post("http://server/_cokret/self/blob/upload")
+    let bad_attachment = TestClient::post("http://server/_arkret/self/blob/upload")
         .add_header("authorization", format!("Bearer {token}"), true)
         .add_header("content-type", bad_attachment_content_type, true)
         .add_header(
@@ -197,7 +197,7 @@ async fn auth_keys_device_messages_and_blobs_work() {
 
     let (missing_envelope_content_type, missing_envelope_body) =
         multipart_blob_upload_body("encrypted-bytes", "application/octet-stream");
-    let missing_envelope = TestClient::post("http://server/_cokret/self/blob/upload")
+    let missing_envelope = TestClient::post("http://server/_arkret/self/blob/upload")
         .add_header("authorization", format!("Bearer {token}"), true)
         .add_header("content-type", missing_envelope_content_type, true)
         .add_header("x-arkret-blob-encrypted", "true", true)
@@ -209,7 +209,7 @@ async fn auth_keys_device_messages_and_blobs_work() {
     let large_plaintext = "a".repeat(96 * 1024);
     let (large_content_type, large_body) =
         multipart_blob_upload_body(large_plaintext.as_bytes(), "image/jpeg");
-    let large_blob: Value = TestClient::post("http://server/_cokret/self/blob/upload")
+    let large_blob: Value = TestClient::post("http://server/_arkret/self/blob/upload")
         .add_header("authorization", format!("Bearer {token}"), true)
         .add_header("content-type", large_content_type, true)
         .body(large_body)
@@ -233,7 +233,7 @@ async fn auth_keys_device_messages_and_blobs_work() {
     .await;
     let (private_plaintext_content_type, private_plaintext_body) =
         multipart_blob_upload_body("plaintext-private", "text/plain");
-    let plaintext_private_blob = TestClient::post("http://server/_cokret/self/blob/upload")
+    let plaintext_private_blob = TestClient::post("http://server/_arkret/self/blob/upload")
         .add_header("authorization", format!("Bearer {token}"), true)
         .add_header("content-type", private_plaintext_content_type, true)
         .add_header(
@@ -250,7 +250,7 @@ async fn auth_keys_device_messages_and_blobs_work() {
     let ciphertext_digest = format!("sha256:{}", hex::encode(Sha256::digest(encrypted_bytes)));
     let (encrypted_content_type, encrypted_body) =
         multipart_blob_upload_body(encrypted_bytes, "text/plain");
-    let blob: Value = TestClient::post("http://server/_cokret/self/blob/upload")
+    let blob: Value = TestClient::post("http://server/_arkret/self/blob/upload")
         .add_header("authorization", format!("Bearer {token}"), true)
         .add_header("content-type", encrypted_content_type, true)
         .add_header("x-arkret-filename", "..\\danger<script>.txt", true)
@@ -324,7 +324,7 @@ async fn auth_keys_device_messages_and_blobs_work() {
     assert_eq!(std::fs::read(blob_path).unwrap(), encrypted_bytes);
 
     let anonymous_blob = TestClient::get(format!(
-        "http://server/_cokret/self/blob/get?blob_ref={}&purpose=message_attachment",
+        "http://server/_arkret/self/blob/get?blob_ref={}&purpose=message_attachment",
         blob["blob_ref"].as_str().unwrap()
     ))
     .send(&app_from_state(state.clone()))
@@ -332,7 +332,7 @@ async fn auth_keys_device_messages_and_blobs_work() {
     assert_eq!(anonymous_blob.status_code.unwrap().as_u16(), 401);
 
     let mut alice_blob = TestClient::get(format!(
-        "http://server/_cokret/self/blob/get?blob_ref={}&purpose=message_attachment",
+        "http://server/_arkret/self/blob/get?blob_ref={}&purpose=message_attachment",
         blob["blob_ref"].as_str().unwrap()
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
@@ -384,7 +384,7 @@ async fn auth_keys_device_messages_and_blobs_work() {
     );
     let (plaintext_content_type, plaintext_body) =
         multipart_blob_upload_body("shared plaintext", "text/plain");
-    let plaintext_blob: Value = TestClient::post("http://server/_cokret/self/blob/upload")
+    let plaintext_blob: Value = TestClient::post("http://server/_arkret/self/blob/upload")
         .add_header("authorization", format!("Bearer {token}"), true)
         .add_header("content-type", plaintext_content_type, true)
         .add_header("x-arkret-filename", "report final.txt", true)
@@ -418,7 +418,7 @@ async fn auth_keys_device_messages_and_blobs_work() {
     );
 
     let mut bob_plaintext = TestClient::get(format!(
-        "http://server/_cokret/self/blob/get?blob_ref={}&purpose=message_attachment",
+        "http://server/_arkret/self/blob/get?blob_ref={}&purpose=message_attachment",
         plaintext_blob["blob_ref"].as_str().unwrap()
     ))
     .add_header("authorization", format!("Bearer {bob}"), true)
@@ -439,7 +439,7 @@ async fn auth_keys_device_messages_and_blobs_work() {
         "shared plaintext"
     );
 
-    let mut plaintext_presign = TestClient::post("http://server/_cokret/self/blob/presign")
+    let mut plaintext_presign = TestClient::post("http://server/_arkret/self/blob/presign")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
             "blob_ref": plaintext_blob["blob_ref"].as_str().unwrap(),
@@ -466,7 +466,7 @@ async fn auth_keys_device_messages_and_blobs_work() {
     assert_eq!(forged_plaintext.status_code.unwrap().as_u16(), 404);
 
     let mut bob_blob = TestClient::get(format!(
-        "http://server/_cokret/self/blob/get?blob_ref={}&purpose=message_attachment",
+        "http://server/_arkret/self/blob/get?blob_ref={}&purpose=message_attachment",
         blob["blob_ref"].as_str().unwrap()
     ))
     .add_header("authorization", format!("Bearer {bob}"), true)
@@ -484,7 +484,7 @@ async fn auth_keys_device_messages_and_blobs_work() {
     );
 
     let mut range = TestClient::get(format!(
-        "http://server/_cokret/self/blob/get?blob_ref={}&purpose=message_attachment",
+        "http://server/_arkret/self/blob/get?blob_ref={}&purpose=message_attachment",
         blob["blob_ref"].as_str().unwrap()
     ))
     .add_header("authorization", format!("Bearer {bob}"), true)
@@ -503,7 +503,7 @@ async fn auth_keys_device_messages_and_blobs_work() {
     );
     assert_eq!(range.take_string().await.unwrap(), "encrypted");
 
-    let mut presign = TestClient::post("http://server/_cokret/self/blob/presign")
+    let mut presign = TestClient::post("http://server/_arkret/self/blob/presign")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
             "blob_ref": blob["blob_ref"].as_str().unwrap(),
@@ -523,7 +523,7 @@ async fn auth_keys_device_messages_and_blobs_work() {
     )
     .await;
     let mut invisible_blob = TestClient::get(format!(
-        "http://server/_cokret/self/blob/get?blob_ref={}&purpose=message_attachment",
+        "http://server/_arkret/self/blob/get?blob_ref={}&purpose=message_attachment",
         blob["blob_ref"].as_str().unwrap()
     ))
     .add_header("authorization", format!("Bearer {mallory}"), true)
@@ -540,7 +540,7 @@ async fn auth_keys_device_messages_and_blobs_work() {
     assert!(!invisible_text.contains(blob["blob_ref"].as_str().unwrap()));
 
     let push_registration: Value =
-        TestClient::post("http://server/_cokret/edge/push/register-device")
+        TestClient::post("http://server/_arkret/edge/push/register-device")
             .add_header("authorization", format!("Bearer {token}"), true)
             .json(&serde_json::json!({
                 "device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001",
@@ -559,7 +559,7 @@ async fn auth_keys_device_messages_and_blobs_work() {
         .as_str()
         .expect("push registration returns push_target_id");
 
-    let plaintext_push = TestClient::post("http://server/_cokret/edge/push/notify")
+    let plaintext_push = TestClient::post("http://server/_arkret/edge/push/notify")
         .json(&serde_json::json!({
             "notification": {
                 "push_target_id": push_target_id,
@@ -572,7 +572,7 @@ async fn auth_keys_device_messages_and_blobs_work() {
         .await;
     assert_eq!(plaintext_push.status_code.unwrap().as_u16(), 400);
 
-    let notify: Value = TestClient::post("http://server/_cokret/edge/push/notify")
+    let notify: Value = TestClient::post("http://server/_arkret/edge/push/notify")
         .json(&serde_json::json!({
             "notification": {
                 "push_target_id": push_target_id,
@@ -616,7 +616,7 @@ async fn keys_query_projects_device_signing_key_and_drops_on_revoke() {
     .await;
     add_test_realm_member(&state, DEMO_REALM_ID, "did:web:bob.example");
 
-    let query: Value = TestClient::post("http://server/_cokret/self/keys/query")
+    let query: Value = TestClient::post("http://server/_arkret/self/keys/query")
         .add_header("authorization", format!("Bearer {bob}"), true)
         .json(&serde_json::json!({
             "device_keys": { alice: [alice_device] }
@@ -645,7 +645,7 @@ async fn keys_query_projects_device_signing_key_and_drops_on_revoke() {
     revoked.revoked_at = Some(chrono::Utc::now());
     state.persistence.devices().put(&revoked).await.unwrap();
 
-    let post_revoke: Value = TestClient::post("http://server/_cokret/self/keys/query")
+    let post_revoke: Value = TestClient::post("http://server/_arkret/self/keys/query")
         .add_header("authorization", format!("Bearer {bob}"), true)
         .json(&serde_json::json!({
             "device_keys": { alice: [alice_device] }
@@ -748,7 +748,7 @@ async fn keys_query_exposes_service_attested_device_anchor() {
         "Alice Desktop",
     )
     .await;
-    let query: Value = TestClient::post("http://server/_cokret/self/keys/query")
+    let query: Value = TestClient::post("http://server/_arkret/self/keys/query")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
             "device_keys": { alice: [alice_device] }
@@ -788,7 +788,7 @@ fn tier2_publish_and_authorize(
     ssk: &SigningKey,
     device_signing: &SigningKey,
 ) -> (Value, Value, String, String) {
-    use cokret_sdk::{
+    use arkret_sdk::{
         CrossSigningBinding, CrossSigningKeyRecord, CrossSigningPublishContent, DeviceId,
         DeviceTrustBinding, SignedCrossSigningKey,
     };
@@ -801,7 +801,7 @@ fn tier2_publish_and_authorize(
 
     let mut publish = CrossSigningPublishContent {
         principal_id: principal_did.clone(),
-        trust_domain: cokret_sdk::TypedTrustDomainId::new("ak:trust_domain:example.net").unwrap(),
+        trust_domain: arkret_sdk::TypedTrustDomainId::new("ak:trust_domain:example.net").unwrap(),
         principal_signing_key: CrossSigningKeyRecord {
             kid: format!("{principal}#ck_principal_signing_v1"),
             alg: "EdDSA".to_owned(),
@@ -841,7 +841,7 @@ fn tier2_publish_and_authorize(
     // PSK signs the SSK record over the §5.1 canonical input.
     let ssk_input = publish.self_signing_binding_input().unwrap();
     publish.self_signing_key.binding.signature =
-        cokret_sdk::base64url_encode(psk.sign(&ssk_input).to_bytes());
+        arkret_sdk::base64url_encode(psk.sign(&ssk_input).to_bytes());
 
     // SSK signs the device binding over the §5.2 canonical input.
     let device_input = DeviceTrustBinding::canonical_input(
@@ -856,7 +856,7 @@ fn tier2_publish_and_authorize(
         1,
     )
     .unwrap();
-    let binding_signature = cokret_sdk::base64url_encode(ssk.sign(&device_input).to_bytes());
+    let binding_signature = arkret_sdk::base64url_encode(ssk.sign(&device_input).to_bytes());
 
     let publish_payload = serde_json::to_value(&publish).unwrap();
     let authorize_payload = serde_json::json!({
@@ -886,8 +886,8 @@ fn tier2_publish_and_authorize(
 /// client that DID-anchored the PSK), while a tampered device binding fails.
 #[tokio::test]
 async fn keys_query_exposes_tier2_cross_signing_chain_and_verifies() {
-    use cokret_sdk::signatures::PublicKeyMaterial;
-    use cokret_sdk::{
+    use arkret_sdk::signatures::PublicKeyMaterial;
+    use arkret_sdk::{
         CrossSigningPublishContent, DeviceCrossSigningChainVerification, DeviceId,
         DeviceTrustBinding, DeviceTrustState, QueryDeviceCrossSigningBinding,
         verify_device_cross_signing_chain,
@@ -931,7 +931,7 @@ async fn keys_query_exposes_tier2_cross_signing_chain_and_verifies() {
     )
     .await;
     add_test_realm_member(&state, DEMO_REALM_ID, "did:web:bob.example");
-    let query: Value = TestClient::post("http://server/_cokret/self/keys/query")
+    let query: Value = TestClient::post("http://server/_arkret/self/keys/query")
         .add_header("authorization", format!("Bearer {bob}"), true)
         .json(&serde_json::json!({ "device_keys": { alice: [alice_device] } }))
         .send(&app_from_state(state.clone()))
@@ -993,9 +993,9 @@ async fn keys_query_exposes_tier2_cross_signing_chain_and_verifies() {
 
     // Tampering the device binding signature → not CrossSigned (fail-closed).
     let mut tampered = trust_binding.clone();
-    let mut raw = cokret_sdk::base64url_decode(&tampered.signature).unwrap();
+    let mut raw = arkret_sdk::base64url_decode(&tampered.signature).unwrap();
     raw[0] ^= 0xff;
-    tampered.signature = cokret_sdk::base64url_encode(&raw);
+    tampered.signature = arkret_sdk::base64url_encode(&raw);
     let state_bad = verify_device_cross_signing_chain(DeviceCrossSigningChainVerification {
         publish: &publish,
         binding: &tampered,
@@ -1047,7 +1047,7 @@ async fn keys_query_hides_revoked_device() {
     )
     .await;
 
-    let _desktop_keys: Value = TestClient::post("http://server/_cokret/self/keys/upload")
+    let _desktop_keys: Value = TestClient::post("http://server/_arkret/self/keys/upload")
         .add_header("authorization", format!("Bearer {desktop}"), true)
         .json(&signed_keys_upload_body(
             "did:web:alice.example",
@@ -1062,7 +1062,7 @@ async fn keys_query_hides_revoked_device() {
         .await
         .unwrap();
 
-    let _phone_keys: Value = TestClient::post("http://server/_cokret/self/keys/upload")
+    let _phone_keys: Value = TestClient::post("http://server/_arkret/self/keys/upload")
         .add_header("authorization", format!("Bearer {mobile}"), true)
         .json(&signed_keys_upload_body(
             "did:web:alice.example",
@@ -1077,7 +1077,7 @@ async fn keys_query_hides_revoked_device() {
         .await
         .unwrap();
 
-    let pre_revoke_query: Value = TestClient::post("http://server/_cokret/self/keys/query")
+    let pre_revoke_query: Value = TestClient::post("http://server/_arkret/self/keys/query")
         .add_header("authorization", format!("Bearer {desktop}"), true)
         .json(&serde_json::json!({
             "device_keys": {"did:web:alice.example": ["ak:device:01904100-0000-7000-8000-a11ce0000001", "ak:device:01904100-0000-7000-8000-9b04e0000007"]}
@@ -1098,7 +1098,7 @@ async fn keys_query_hides_revoked_device() {
         "phone-device-key"
     );
 
-    let logout: Value = TestClient::post("http://server/_cokret/gate/account/logout")
+    let logout: Value = TestClient::post("http://server/_arkret/gate/account/logout")
         .add_header("authorization", format!("Bearer {mobile}"), true)
         .send(&app_from_state(state.clone()))
         .await
@@ -1107,7 +1107,7 @@ async fn keys_query_hides_revoked_device() {
         .unwrap();
     assert_eq!(logout["revoked"], true);
 
-    let post_revoke_query: Value = TestClient::post("http://server/_cokret/self/keys/query")
+    let post_revoke_query: Value = TestClient::post("http://server/_arkret/self/keys/query")
         .add_header("authorization", format!("Bearer {desktop}"), true)
         .json(&serde_json::json!({
             "device_keys": {"did:web:alice.example": ["ak:device:01904100-0000-7000-8000-a11ce0000001", "ak:device:01904100-0000-7000-8000-9b04e0000007"]}
@@ -1146,7 +1146,7 @@ async fn revoked_device_blocks_encrypted_writes() {
     )
     .await;
 
-    let logout: Value = TestClient::post("http://server/_cokret/gate/account/logout")
+    let logout: Value = TestClient::post("http://server/_arkret/gate/account/logout")
         .add_header("authorization", format!("Bearer {device_token}"), true)
         .send(&app_from_state(state.clone()))
         .await
@@ -1167,7 +1167,7 @@ async fn revoked_device_blocks_encrypted_writes() {
     .await;
     assert_eq!(blocked_send.as_u16(), 401);
 
-    let blocked_upload = TestClient::post("http://server/_cokret/self/keys/upload")
+    let blocked_upload = TestClient::post("http://server/_arkret/self/keys/upload")
         .add_header("authorization", format!("Bearer {stale_session}"), true)
         .json(&serde_json::json!({
             "device_id": "ak:device:01904100-0000-7000-8000-30b11e000005",

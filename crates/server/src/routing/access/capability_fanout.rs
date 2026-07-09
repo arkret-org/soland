@@ -1,5 +1,5 @@
-use cokret_sdk::lattice::CellState;
-use cokret_sdk::{CellRef, Did, EventId, GrantId, Operation, OperationId, RealmId};
+use arkret_sdk::lattice::CellState;
+use arkret_sdk::{CellRef, Did, EventId, GrantId, Operation, OperationId, RealmId};
 use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 use serde_json::{Value, json};
@@ -35,12 +35,12 @@ pub(super) fn router() -> Router {
 }
 
 // Deployment-local server-to-server product surface, mounted under the
-// `/_soland/root/...` negative-space root (NOT the `/_cokret/*` protocol
+// `/_soland/root/...` negative-space root (NOT the `/_arkret/*` protocol
 // root). Per service-http-binding.md §2.1.3(b), a product / deployment-private
 // capability between the Auth Server (coauth) and this Principal Server MUST
-// live on the implementation's own root and MUST NOT occupy a `/_cokret/*`
+// live on the implementation's own root and MUST NOT occupy a `/_arkret/*`
 // production trust-surface segment. coauth issues this fanout in its Auth-Server
-// role — it holds no principal session, so the protocol `POST /_cokret/self/events`
+// role — it holds no principal session, so the protocol `POST /_arkret/self/events`
 // path (which requires `user_session` / `device_proof` / a principal-authorised
 // delegated service signature, service-http-binding.md §2.1 row `self/events`
 // + §189) is not an available caller surface. The reverse-DNS `org.arkret.soland.*`
@@ -144,7 +144,7 @@ fn validate_header_digest(req: &Request, body: &Value) -> Result<(), AppError> {
     else {
         return Ok(());
     };
-    let actual = cokret_sdk::canonical::canonical_sha256(body)
+    let actual = arkret_sdk::canonical::canonical_sha256(body)
         .map_err(|error| AppError::invalid_param(format!("fanout body digest failed: {error}")))?;
     if expected != actual {
         return Err(AppError::invalid_param(
@@ -180,8 +180,8 @@ fn build_projectable_operation(
     }
 
     let expected_event_kind = match operation_name.as_str() {
-        "grant" => cokret_sdk::events::kinds::CAPABILITY_GRANT,
-        "revoke" => cokret_sdk::events::kinds::CAPABILITY_REVOKE,
+        "grant" => arkret_sdk::events::kinds::CAPABILITY_GRANT,
+        "revoke" => arkret_sdk::events::kinds::CAPABILITY_REVOKE,
         _ => return Err(AppError::invalid_param("operation must be grant or revoke")),
     };
     if event_kind != expected_event_kind {
@@ -467,7 +467,7 @@ mod tests {
             kind: FANOUT_KIND.to_owned(),
             operation: "grant".to_owned(),
             issuer_service_did: ISSUER.to_owned(),
-            event_kind: cokret_sdk::events::kinds::CAPABILITY_GRANT.to_owned(),
+            event_kind: arkret_sdk::events::kinds::CAPABILITY_GRANT.to_owned(),
             event_id: EVENT.to_owned(),
             capability_grant_id: GRANT.to_owned(),
             payload: json!({
@@ -495,7 +495,7 @@ mod tests {
         assert_eq!(draft.event_id, EVENT);
         assert_eq!(
             draft.operation.object_type,
-            cokret_sdk::events::kinds::CAPABILITY_GRANT
+            arkret_sdk::events::kinds::CAPABILITY_GRANT
         );
         assert_eq!(draft.realm_id, REALM);
         assert_eq!(draft.subject.as_deref(), Some(SUBJECT));

@@ -45,7 +45,7 @@ fn key_backup_active_series_projects_pointer_and_cell() {
 
     let effect = state.apply(
         &make_operation(
-            cokret_sdk::events::kinds::KEY_BACKUP_ACTIVE_SERIES,
+            arkret_sdk::events::kinds::KEY_BACKUP_ACTIVE_SERIES,
             REALM,
             active_series_payload(),
         ),
@@ -69,7 +69,7 @@ fn key_backup_active_series_projects_pointer_and_cell() {
     assert_eq!(projected.previous_series_ids, vec![PREVIOUS_SERIES]);
     assert_eq!(projected.ssk_generation, 2);
 
-    let cell = cokret_sdk::CellRef::new(format!(
+    let cell = arkret_sdk::CellRef::new(format!(
         "ak:cell:ck.component.key_backup.active_series.v1:{ACTOR}::secret_storage"
     ))
     .expect("active series cell ref");
@@ -92,7 +92,7 @@ fn key_backup_active_series_requires_complete_signed_fields() {
 
     let effect = state.apply(
         &make_operation(
-            cokret_sdk::events::kinds::KEY_BACKUP_ACTIVE_SERIES,
+            arkret_sdk::events::kinds::KEY_BACKUP_ACTIVE_SERIES,
             REALM,
             payload,
         ),
@@ -115,7 +115,7 @@ fn key_backup_active_series_rejects_active_series_in_previous_set() {
 
     let effect = state.apply(
         &make_operation(
-            cokret_sdk::events::kinds::KEY_BACKUP_ACTIVE_SERIES,
+            arkret_sdk::events::kinds::KEY_BACKUP_ACTIVE_SERIES,
             REALM,
             payload,
         ),
@@ -138,7 +138,7 @@ fn key_backup_active_series_rejects_frontier_ssk_mismatch() {
 
     let effect = state.apply(
         &make_operation(
-            cokret_sdk::events::kinds::KEY_BACKUP_ACTIVE_SERIES,
+            arkret_sdk::events::kinds::KEY_BACKUP_ACTIVE_SERIES,
             REALM,
             payload,
         ),

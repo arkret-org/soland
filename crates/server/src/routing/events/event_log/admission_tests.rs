@@ -46,8 +46,8 @@ fn terminal_realm_blocks_non_audit_kind() {
 #[test]
 fn frozen_realm_blocks_ordinary_write_but_allows_lifecycle_escape() {
     assert!(frozen_realm_check(true, "ck.message.create").is_some());
-    assert!(frozen_realm_check(true, cokret_sdk::events::kinds::REALM_FREEZE).is_none());
-    assert!(frozen_realm_check(true, cokret_sdk::events::kinds::REALM_DESTROY).is_none());
+    assert!(frozen_realm_check(true, arkret_sdk::events::kinds::REALM_FREEZE).is_none());
+    assert!(frozen_realm_check(true, arkret_sdk::events::kinds::REALM_DESTROY).is_none());
     assert!(frozen_realm_check(true, "ck.audit.accessed").is_none());
     assert!(frozen_realm_check(false, "ck.message.create").is_none());
 }
@@ -134,7 +134,7 @@ fn realm_policy_components_media_decrypt_digest_recompute_gate() {
     // service: the digest the governance binding covers MUST equal the
     // digest recomputed from the policy cell value, else fail closed with
     // `mls_governance_binding_stale` (media-service-binding.md §8.2 rule 5).
-    use cokret_sdk::models::{
+    use arkret_sdk::models::{
         MediaDecryptPolicyValue, MediaPlaintextService, derive_media_decrypt_metadata_digest,
     };
 
@@ -150,7 +150,7 @@ fn realm_policy_components_media_decrypt_digest_recompute_gate() {
     let honest = derive_media_decrypt_metadata_digest(&MediaDecryptPolicyValue {
         media_service_decrypts: true,
         plaintext_visible_services: vec![MediaPlaintextService {
-            service_did: cokret_sdk::Did::new(service_did.to_owned()).unwrap(),
+            service_did: arkret_sdk::Did::new(service_did.to_owned()).unwrap(),
         }],
     })
     .unwrap();
@@ -173,17 +173,17 @@ fn realm_policy_components_media_decrypt_digest_recompute_gate() {
 #[test]
 fn federation_binding_rejects_duplicate_frontier_entries() {
     let req = EventsSubmitFederationRequestBody {
-        service_binding_ref: cokret_sdk::FederationServiceBindingRef {
+        service_binding_ref: arkret_sdk::FederationServiceBindingRef {
             realm_id: RealmId::new("ak:realm:01904100-0000-7000-8000-000000000001").unwrap(),
-            realm_policy_digest: cokret_sdk::Hash::new(format!("sha256:{}", "1".repeat(64)))
+            realm_policy_digest: arkret_sdk::Hash::new(format!("sha256:{}", "1".repeat(64)))
                 .unwrap(),
             membership_frontier: vec![
-                cokret_sdk::EventId::new("ak:event:01904100-0000-7000-8000-000000000001").unwrap(),
-                cokret_sdk::EventId::new("ak:event:01904100-0000-7000-8000-000000000001").unwrap(),
+                arkret_sdk::EventId::new("ak:event:01904100-0000-7000-8000-000000000001").unwrap(),
+                arkret_sdk::EventId::new("ak:event:01904100-0000-7000-8000-000000000001").unwrap(),
             ],
             delivery_binding_frontier: Vec::new(),
             destination_service_type: "principal_server".to_owned(),
-            reducer_profile_digest: cokret_sdk::Hash::new(format!("sha256:{}", "2".repeat(64)))
+            reducer_profile_digest: arkret_sdk::Hash::new(format!("sha256:{}", "2".repeat(64)))
                 .unwrap(),
         },
         events: Vec::new(),
@@ -193,22 +193,22 @@ fn federation_binding_rejects_duplicate_frontier_entries() {
         &req.service_binding_ref,
     )
     .unwrap_err();
-    assert_eq!(err.0, cokret_sdk::ERROR_CODE_SCHEMA_VIOLATION);
+    assert_eq!(err.0, arkret_sdk::ERROR_CODE_SCHEMA_VIOLATION);
 }
 
 #[test]
 fn federation_binding_rejects_reducer_profile_digest_mismatch() {
     let event_id =
-        cokret_sdk::EventId::new("ak:event:01904100-0000-7000-8000-000000000001").unwrap();
+        arkret_sdk::EventId::new("ak:event:01904100-0000-7000-8000-000000000001").unwrap();
     let req = EventsSubmitFederationRequestBody {
-        service_binding_ref: cokret_sdk::FederationServiceBindingRef {
+        service_binding_ref: arkret_sdk::FederationServiceBindingRef {
             realm_id: RealmId::new("ak:realm:01904100-0000-7000-8000-000000000001").unwrap(),
-            realm_policy_digest: cokret_sdk::Hash::new(format!("sha256:{}", "1".repeat(64)))
+            realm_policy_digest: arkret_sdk::Hash::new(format!("sha256:{}", "1".repeat(64)))
                 .unwrap(),
             membership_frontier: vec![event_id.clone()],
             delivery_binding_frontier: vec![event_id],
             destination_service_type: "principal_server".to_owned(),
-            reducer_profile_digest: cokret_sdk::Hash::new(format!("sha256:{}", "2".repeat(64)))
+            reducer_profile_digest: arkret_sdk::Hash::new(format!("sha256:{}", "2".repeat(64)))
                 .unwrap(),
         },
         events: Vec::new(),
@@ -219,23 +219,23 @@ fn federation_binding_rejects_reducer_profile_digest_mismatch() {
         &req.service_binding_ref,
     )
     .unwrap_err();
-    assert_eq!(err.0, cokret_sdk::REASON_REDUCER_PROFILE_MISMATCH);
+    assert_eq!(err.0, arkret_sdk::REASON_REDUCER_PROFILE_MISMATCH);
 }
 
 #[test]
 fn federation_binding_accepts_registry_reducer_profile_digest() {
     let event_id =
-        cokret_sdk::EventId::new("ak:event:01904100-0000-7000-8000-000000000001").unwrap();
+        arkret_sdk::EventId::new("ak:event:01904100-0000-7000-8000-000000000001").unwrap();
     let req = EventsSubmitFederationRequestBody {
-        service_binding_ref: cokret_sdk::FederationServiceBindingRef {
+        service_binding_ref: arkret_sdk::FederationServiceBindingRef {
             realm_id: RealmId::new("ak:realm:01904100-0000-7000-8000-000000000001").unwrap(),
-            realm_policy_digest: cokret_sdk::Hash::new(format!("sha256:{}", "1".repeat(64)))
+            realm_policy_digest: arkret_sdk::Hash::new(format!("sha256:{}", "1".repeat(64)))
                 .unwrap(),
             membership_frontier: vec![event_id.clone()],
             delivery_binding_frontier: vec![event_id],
             destination_service_type: "principal_server".to_owned(),
-            reducer_profile_digest: cokret_sdk::Hash::new(
-                cokret_sdk::FEDERATION_MINIMAL_REDUCER_PROFILE_DIGEST,
+            reducer_profile_digest: arkret_sdk::Hash::new(
+                arkret_sdk::FEDERATION_MINIMAL_REDUCER_PROFILE_DIGEST,
             )
             .unwrap(),
         },
@@ -250,13 +250,13 @@ fn federation_binding_accepts_registry_reducer_profile_digest() {
 #[test]
 fn federation_delivery_binding_frontier_rejects_empty_or_stale_basis() {
     let event_id =
-        cokret_sdk::EventId::new("ak:event:01904100-0000-7000-8000-000000000001").unwrap();
+        arkret_sdk::EventId::new("ak:event:01904100-0000-7000-8000-000000000001").unwrap();
     let current = vec!["ak:event:01904100-0000-7000-8000-000000000001".to_owned()];
 
     federation_delivery_binding_frontier_is_current(std::slice::from_ref(&event_id), current)
         .unwrap();
 
-    let stale = cokret_sdk::EventId::new("ak:event:01904100-0000-7000-8000-000000000002").unwrap();
+    let stale = arkret_sdk::EventId::new("ak:event:01904100-0000-7000-8000-000000000002").unwrap();
     let err = federation_delivery_binding_frontier_is_current(
         &[stale],
         vec!["ak:event:01904100-0000-7000-8000-000000000001".to_owned()],

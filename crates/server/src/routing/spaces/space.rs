@@ -1,8 +1,8 @@
 //! Realm lifecycle read surface and Space-container cell read surface.
 //!
 //! Surfaces that remain:
-//! - `GET    /_cokret/self/realms/{realm_id}` — read a Realm lifecycle response.
-//! - `GET    /_cokret/self/realms/{realm_id}/export` — full event log + projection dump.
+//! - `GET    /_arkret/self/realms/{realm_id}` — read a Realm lifecycle response.
+//! - `GET    /_arkret/self/realms/{realm_id}/export` — full event log + projection dump.
 //! - `GET    /_soland/self/spaces/{space_id}/cells/{cell_family}` — projected Space-container
 //!   child-order cell.
 //!
@@ -12,7 +12,7 @@
 //! write in this Realm?".
 
 use chrono::{DateTime, Utc};
-use cokret_sdk::{
+use arkret_sdk::{
     Did, HistoryRangeContext, HistoryReaderContext, HistoryReaderEventState,
     HistorySharingPolicyPayloadValue, HistorySharingRestrictedScopeRef, HistorySharingScopeKind,
     HistoryVisibility, Operation, OperationId, PlaintextDataClassKind, RealmArchivePayload,
@@ -36,7 +36,7 @@ use crate::{JsonResult, ids, json_ok};
 
 /// Spec `realm_read` operation group (`ck.self.realm.*`): Realm lifecycle read,
 /// full export, and Realm moderation-policy effective/set. Canonical path
-/// `/_cokret/self/realms/{realm_id}*`.
+/// `/_arkret/self/realms/{realm_id}*`.
 pub(super) fn protocol_router() -> Router {
     Router::new().push(
         Router::with_path("realms/{realm_id}")
@@ -179,7 +179,7 @@ async fn archive_realm(
         state,
         &session.actor,
         realm_id.into_inner(),
-        cokret_sdk::events::kinds::REALM_ARCHIVE,
+        arkret_sdk::events::kinds::REALM_ARCHIVE,
         payload,
     )
     .await
@@ -209,7 +209,7 @@ async fn freeze_realm(
         state,
         &session.actor,
         realm_id.into_inner(),
-        cokret_sdk::events::kinds::REALM_FREEZE,
+        arkret_sdk::events::kinds::REALM_FREEZE,
         payload,
     )
     .await
@@ -239,7 +239,7 @@ async fn tombstone_realm(
         state,
         &session.actor,
         realm_id.into_inner(),
-        cokret_sdk::events::kinds::REALM_TOMBSTONE,
+        arkret_sdk::events::kinds::REALM_TOMBSTONE,
         payload,
     )
     .await
@@ -269,7 +269,7 @@ async fn destroy_realm(
         state,
         &session.actor,
         realm_id.into_inner(),
-        cokret_sdk::events::kinds::REALM_DESTROY,
+        arkret_sdk::events::kinds::REALM_DESTROY,
         payload,
     )
     .await
@@ -921,7 +921,7 @@ pub async fn realm_recovery_recipient_principal(
     realm_id: &str,
     actor: &str,
 ) -> bool {
-    use cokret_sdk::models::DurabilityMode;
+    use arkret_sdk::models::DurabilityMode;
     let Some(realm_id) = realm_scope_to_realm_id(realm_id) else {
         return false;
     };
@@ -950,7 +950,7 @@ pub fn realm_recovery_event_visible(
     recipient_principal_id: Option<&str>,
     actor: &str,
 ) -> bool {
-    event_kind == cokret_sdk::events::kinds::REALM_KEY_SHARE
+    event_kind == arkret_sdk::events::kinds::REALM_KEY_SHARE
         && recipient_principal_id == Some(actor)
 }
 
@@ -1092,7 +1092,7 @@ async fn realm_restricted_history_policy_allows(
     else {
         return false;
     };
-    if cokret_sdk::validate_history_sharing_policy(&policy).is_err() {
+    if arkret_sdk::validate_history_sharing_policy(&policy).is_err() {
         return false;
     }
     let active_member = realm_active_member_at_read_time(state, &realm_id, actor).await;

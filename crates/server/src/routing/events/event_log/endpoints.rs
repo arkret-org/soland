@@ -17,7 +17,7 @@ pub(in crate::routing::events) fn router() -> Router {
 
 #[endpoint]
 #[tracing::instrument(skip_all, fields(op = "events_describe"))]
-async fn events_describe(depot: &mut Depot) -> JsonResult<cokret_sdk::ServerDescription> {
+async fn events_describe(depot: &mut Depot) -> JsonResult<arkret_sdk::ServerDescription> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let mut description = describe(
         &state.config.service_did,
@@ -89,7 +89,7 @@ async fn submit_event(depot: &mut Depot, req: &mut Request, res: &mut Response) 
             res,
             StatusCode::BAD_REQUEST,
             "schema_violation",
-            "federation peer event submission uses /_cokret/peer/events",
+            "federation peer event submission uses /_arkret/peer/events",
         );
         return;
     }
@@ -110,7 +110,7 @@ async fn submit_event(depot: &mut Depot, req: &mut Request, res: &mut Response) 
     // canonical body is a `duplicate_conflict`. Event-ID idempotency below
     // still applies independently (a write with no header relies on it).
     if let Some(key) = idempotency_key.as_deref() {
-        let request_hash = match cokret_sdk::canonical::canonical_sha256(&submit) {
+        let request_hash = match arkret_sdk::canonical::canonical_sha256(&submit) {
             Ok(hash) => hash,
             Err(error) => {
                 render_error(
@@ -231,7 +231,7 @@ async fn submit_event_dispatch(
     }
 }
 
-fn submit_outcome_value(outcome: &cokret_sdk::EventsSubmitOutcome) -> Value {
+fn submit_outcome_value(outcome: &arkret_sdk::EventsSubmitOutcome) -> Value {
     serde_json::to_value(outcome).unwrap_or_else(|_| json!({"status": "accepted"}))
 }
 
@@ -241,7 +241,7 @@ fn submit_outcome_value(outcome: &cokret_sdk::EventsSubmitOutcome) -> Value {
 fn submit_one_error_value(error: SubmitOneError) -> (StatusCode, Value) {
     if let Some(event_id) = error.quarantine_event_id {
         let outcome = events_submit_outcome(
-            cokret_sdk::EventsSubmitStatus::Partial,
+            arkret_sdk::EventsSubmitStatus::Partial,
             Vec::new(),
             Vec::new(),
             Vec::new(),
@@ -251,7 +251,7 @@ fn submit_one_error_value(error: SubmitOneError) -> (StatusCode, Value) {
         return (StatusCode::OK, submit_outcome_value(&outcome));
     }
     let mut body = json!(
-        cokret_sdk::ErrorEnvelope::new(error.code.clone(), error.message.clone())
+        arkret_sdk::ErrorEnvelope::new(error.code.clone(), error.message.clone())
             .with_request_id(crate::ids::generate_request_id())
     );
     if error.status == StatusCode::PRECONDITION_FAILED
@@ -419,9 +419,9 @@ async fn resolve_events(
 /// Internal durable-Event-store reader, kept for actor-scoped audit reads
 /// that bypass the projection layer. Not wired to a public route in the
 /// current API shape —
-/// the canonical `ck.self.events.query.scan` path at `GET /_cokret/self/events` goes to the
+/// the canonical `ck.self.events.query.scan` path at `GET /_arkret/self/events` goes to the
 /// projection-aware handler in `routing/sync.rs::events_query` so message
-/// timeline reads work through `POST /_cokret/self/events` → `events_query`
+/// timeline reads work through `POST /_arkret/self/events` → `events_query`
 /// round-trips.
 ///
 /// Supports the multi-value selector `realms[]` ∪ `actors[]` (via

@@ -1,10 +1,10 @@
 //! E2EE key surfaces.
 //!
 //! Surfaces:
-//! - `POST /_cokret/self/keys/upload` - upload one-time / fallback prekeys with the current device
+//! - `POST /_arkret/self/keys/upload` - upload one-time / fallback prekeys with the current device
 //!   signature.
-//! - `POST /_cokret/self/keys/query` - fetch device key bundles for a peer set.
-//! - `POST /_cokret/self/keys/claim` - claim one-time keys, draining the per-device pool.
+//! - `POST /_arkret/self/keys/query` - fetch device key bundles for a peer set.
+//! - `POST /_arkret/self/keys/claim` - claim one-time keys, draining the per-device pool.
 
 use std::collections::BTreeMap;
 
@@ -39,7 +39,7 @@ pub(super) fn router() -> Router {
 /// Product-surface (`/_soland/gate/account/...`) router carrying the
 /// server-to-server device signing-key directory read used by the Auth Server
 /// (coauth) to verify device holder proofs. Mounted under `_soland`, not the
-/// `/_cokret` protocol root: it is a deployment-local integration read, not a
+/// `/_arkret` protocol root: it is a deployment-local integration read, not a
 /// spec operation.
 pub(super) fn product_router() -> Router {
     Router::with_path("gate/account/device-signing-keys/query").post(device_signing_keys_query)
@@ -287,10 +287,10 @@ fn keys_query_actor_visible_to_requester(state: &AppState, requester: &str, acto
     if requester == actor {
         return true;
     }
-    let Ok(requester_did) = cokret_sdk::Did::new(requester.to_owned()) else {
+    let Ok(requester_did) = arkret_sdk::Did::new(requester.to_owned()) else {
         return false;
     };
-    let Ok(actor_did) = cokret_sdk::Did::new(actor.to_owned()) else {
+    let Ok(actor_did) = arkret_sdk::Did::new(actor.to_owned()) else {
         return false;
     };
     state.realms.lock().entries_iter().any(|(_, entry)| {
@@ -308,7 +308,7 @@ fn keys_upload_signing_input(
         "one_time_keys": one_time_keys,
         "fallback_keys": fallback_keys,
     });
-    let canonical = cokret_sdk::canonical::canonical_json_bytes(&body)
+    let canonical = arkret_sdk::canonical::canonical_json_bytes(&body)
         .map_err(|error| AppError::invalid_param(format!("keys/upload canonicalize: {error}")))?;
     let mut input = Vec::with_capacity(KEYS_UPLOAD_SIGNATURE_PREFIX.len() + canonical.len());
     input.extend_from_slice(KEYS_UPLOAD_SIGNATURE_PREFIX);
@@ -409,7 +409,7 @@ fn verify_detached_jws_ed25519_with_device_key(
     let header_bytes = URL_SAFE_NO_PAD
         .decode(parts[0].as_bytes())
         .map_err(|_| AppError::invalid_param("keys/upload JWS header is not base64url"))?;
-    let header: Value = cokret_sdk::canonical::from_canonical_json_slice(&header_bytes)
+    let header: Value = arkret_sdk::canonical::from_canonical_json_slice(&header_bytes)
         .map_err(|_| AppError::invalid_param("keys/upload JWS header is not canonical JSON"))?;
     if header.get("alg").and_then(Value::as_str) != Some("EdDSA") {
         return Err(AppError::invalid_param(
@@ -572,7 +572,7 @@ async fn device_signing_keys_query(
         let Some(device_signing_key) = facet.signing_key_did else {
             continue;
         };
-        let Ok(typed_device_id) = cokret_sdk::DeviceId::new(device_id.clone()) else {
+        let Ok(typed_device_id) = arkret_sdk::DeviceId::new(device_id.clone()) else {
             continue;
         };
         devices.push(AuthorizedDeviceSigningKey {

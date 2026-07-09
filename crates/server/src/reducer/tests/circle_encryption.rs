@@ -66,7 +66,7 @@ fn circle_manage_pull_realm_member_succeeds() {
     // Circle; bob performs no action and lands in `members` immediately.
     let (mut state, hlc, realm, circle) = seed_circle_authz_state();
     let op = make_operation(
-        cokret_sdk::events::kinds::CIRCLE_MEMBER_STATE,
+        arkret_sdk::events::kinds::CIRCLE_MEMBER_STATE,
         &realm,
         serde_json::json!({
             "circle_id": circle,
@@ -93,7 +93,7 @@ fn circle_pull_without_manage_rejected() {
     // (e.g. the HTTP gate was bypassed). The reducer fails closed.
     let (mut state, hlc, realm, circle) = seed_circle_authz_state();
     let op = make_operation(
-        cokret_sdk::events::kinds::CIRCLE_MEMBER_STATE,
+        arkret_sdk::events::kinds::CIRCLE_MEMBER_STATE,
         &realm,
         serde_json::json!({
             "circle_id": circle,
@@ -119,7 +119,7 @@ fn circle_pull_non_realm_member_rejected() {
     // violates the strict-subset invariant.
     let (mut state, hlc, realm, circle) = seed_circle_authz_state();
     let op = make_operation(
-        cokret_sdk::events::kinds::CIRCLE_MEMBER_STATE,
+        arkret_sdk::events::kinds::CIRCLE_MEMBER_STATE,
         &realm,
         serde_json::json!({
             "circle_id": circle,
@@ -147,7 +147,7 @@ fn circle_self_join_requires_open_rule() {
     // capability.
     let (mut state, hlc, realm, circle) = seed_circle_authz_state();
     let op_invite = make_operation(
-        cokret_sdk::events::kinds::CIRCLE_MEMBER_STATE,
+        arkret_sdk::events::kinds::CIRCLE_MEMBER_STATE,
         &realm,
         serde_json::json!({
             "circle_id": circle, "actor_id": "did:web:bob",
@@ -162,7 +162,7 @@ fn circle_self_join_requires_open_rule() {
         "self-join on a non-open Circle must be rejected"
     );
     let op_invite_with_manage = make_operation(
-        cokret_sdk::events::kinds::CIRCLE_MEMBER_STATE,
+        arkret_sdk::events::kinds::CIRCLE_MEMBER_STATE,
         &realm,
         serde_json::json!({
             "circle_id": circle, "actor_id": "did:web:alice",
@@ -181,7 +181,7 @@ fn circle_self_join_requires_open_rule() {
     // Flip the Circle to open and retry.
     state.circles.get_mut(&circle).unwrap().join_rule = "open".to_owned();
     let op_open = make_operation(
-        cokret_sdk::events::kinds::CIRCLE_MEMBER_STATE,
+        arkret_sdk::events::kinds::CIRCLE_MEMBER_STATE,
         &realm,
         serde_json::json!({
             "circle_id": circle, "actor_id": "did:web:bob",
@@ -213,7 +213,7 @@ fn content_floor_ratchet_allows_upgrade_then_rejects_downgrade() {
         };
         state.apply(
             &make_operation(
-                cokret_sdk::events::kinds::REALM_POLICY_COMPONENTS,
+                arkret_sdk::events::kinds::REALM_POLICY_COMPONENTS,
                 realm,
                 payload,
             ),
@@ -250,7 +250,7 @@ fn metadata_floor_ratchet_rejects_downgrade() {
     let apply_meta = |state: &mut ProjectionState, level: &str| {
         state.apply(
             &make_operation(
-                cokret_sdk::events::kinds::REALM_POLICY_COMPONENTS,
+                arkret_sdk::events::kinds::REALM_POLICY_COMPONENTS,
                 realm,
                 serde_json::json!({ "metadata_encryption_floor": level }),
             ),
@@ -283,7 +283,7 @@ fn content_scheme_ratchet_allows_upgrade_then_rejects_downgrade() {
         };
         state.apply(
             &make_operation(
-                cokret_sdk::events::kinds::REALM_POLICY_COMPONENTS,
+                arkret_sdk::events::kinds::REALM_POLICY_COMPONENTS,
                 realm,
                 payload,
             ),
@@ -326,7 +326,7 @@ fn content_scheme_rejects_unknown_value() {
     let realm = "ak:realm:01904100-0000-7000-8000-cfc039892064";
     let effect = state.apply(
         &make_operation(
-            cokret_sdk::events::kinds::REALM_POLICY_COMPONENTS,
+            arkret_sdk::events::kinds::REALM_POLICY_COMPONENTS,
             realm,
             serde_json::json!({ "content_scheme": "aes-gcm-siv-handrolled" }),
         ),
@@ -340,13 +340,13 @@ fn content_scheme_rejects_unknown_value() {
 
 #[test]
 fn prejoin_history_rejects_strict_content_scheme_on_mls_realm() {
-    use cokret_sdk::lattice::CellState;
+    use arkret_sdk::lattice::CellState;
 
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("history-scheme");
     let realm = "ak:realm:01904100-0000-7000-8000-d0d0d0d0c001";
     let create_cell =
-        cokret_sdk::CellRef::new(format!("ak:cell:ck.component.realm.create.v1:{realm}"))
+        arkret_sdk::CellRef::new(format!("ak:cell:ck.component.realm.create.v1:{realm}"))
             .expect("valid create cell ref");
     state.cells.insert(
         create_cell,
@@ -366,7 +366,7 @@ fn prejoin_history_rejects_strict_content_scheme_on_mls_realm() {
 
     let effect = state.apply(
         &make_operation(
-            cokret_sdk::events::kinds::REALM_POLICY_COMPONENTS,
+            arkret_sdk::events::kinds::REALM_POLICY_COMPONENTS,
             realm,
             serde_json::json!({ "content_scheme": "mls-rfc9420" }),
         ),
@@ -377,7 +377,7 @@ fn prejoin_history_rejects_strict_content_scheme_on_mls_realm() {
             &effect,
             ProjectionEffect::Rejected { reason }
                 if reason
-                    == cokret_sdk::error::REASON_HISTORY_VISIBILITY_REQUIRES_HISTORY_CAPABLE_SCHEME
+                    == arkret_sdk::error::REASON_HISTORY_VISIBILITY_REQUIRES_HISTORY_CAPABLE_SCHEME
         ),
         "expected history/content-scheme rejection, got {effect:?}"
     );
@@ -385,13 +385,13 @@ fn prejoin_history_rejects_strict_content_scheme_on_mls_realm() {
 
 #[test]
 fn prejoin_history_accepts_exporter_aead_scheme_on_mls_realm() {
-    use cokret_sdk::lattice::CellState;
+    use arkret_sdk::lattice::CellState;
 
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("history-scheme-ok");
     let realm = "ak:realm:01904100-0000-7000-8000-d0d0d0d0c002";
     let create_cell =
-        cokret_sdk::CellRef::new(format!("ak:cell:ck.component.realm.create.v1:{realm}"))
+        arkret_sdk::CellRef::new(format!("ak:cell:ck.component.realm.create.v1:{realm}"))
             .expect("valid create cell ref");
     state.cells.insert(
         create_cell,
@@ -403,7 +403,7 @@ fn prejoin_history_accepts_exporter_aead_scheme_on_mls_realm() {
 
     let effect = state.apply(
         &make_operation(
-            cokret_sdk::events::kinds::REALM_POLICY_COMPONENTS,
+            arkret_sdk::events::kinds::REALM_POLICY_COMPONENTS,
             realm,
             serde_json::json!({ "content_scheme": "mls-exporter-aead-v1" }),
         ),
@@ -417,13 +417,13 @@ fn prejoin_history_accepts_exporter_aead_scheme_on_mls_realm() {
 
 #[test]
 fn content_scheme_falls_back_to_realm_create_log() {
-    use cokret_sdk::lattice::CellState;
+    use arkret_sdk::lattice::CellState;
 
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("history-scheme-create");
     let realm = "ak:realm:01904100-0000-7000-8000-d0d0d0d0c012";
     let create_cell =
-        cokret_sdk::CellRef::new(format!("ak:cell:ck.component.realm.create.v1:{realm}"))
+        arkret_sdk::CellRef::new(format!("ak:cell:ck.component.realm.create.v1:{realm}"))
             .expect("valid create cell ref");
     state.cells.insert(
         create_cell,
@@ -440,7 +440,7 @@ fn content_scheme_falls_back_to_realm_create_log() {
     );
     let effect = state.apply(
         &make_operation(
-            cokret_sdk::events::kinds::REALM_POLICY_COMPONENTS,
+            arkret_sdk::events::kinds::REALM_POLICY_COMPONENTS,
             realm,
             serde_json::json!({ "content_scheme": "mls-rfc9420" }),
         ),
@@ -469,7 +469,7 @@ fn durability_policy_requires_exporter_aead_scheme() {
     // No scheme committed yet (defaults to mls-rfc9420) → incompatible.
     let effect = state.apply(
         &make_operation(
-            cokret_sdk::events::kinds::REALM_POLICY_COMPONENTS,
+            arkret_sdk::events::kinds::REALM_POLICY_COMPONENTS,
             realm,
             serde_json::json!({
                 "durability_policy": {
@@ -501,7 +501,7 @@ fn durability_policy_accepted_on_exporter_aead_scheme() {
     // Same-update set of scheme + durability policy is accepted.
     let effect = state.apply(
         &make_operation(
-            cokret_sdk::events::kinds::REALM_POLICY_COMPONENTS,
+            arkret_sdk::events::kinds::REALM_POLICY_COMPONENTS,
             realm,
             serde_json::json!({
                 "content_scheme": "mls-exporter-aead-v1",
@@ -522,7 +522,7 @@ fn durability_policy_accepted_on_exporter_aead_scheme() {
         .expect("durability policy projected");
     assert!(matches!(
         projected.mode,
-        cokret_sdk::models::DurabilityMode::OrgRecoveryKey
+        arkret_sdk::models::DurabilityMode::OrgRecoveryKey
     ));
     assert_eq!(projected.recovery_recipients.len(), 1);
 }
@@ -536,7 +536,7 @@ fn durability_policy_rejects_empty_recipients() {
     let realm = "ak:realm:01904100-0000-7000-8000-d0d0d0d0d003";
     let effect = state.apply(
         &make_operation(
-            cokret_sdk::events::kinds::REALM_POLICY_COMPONENTS,
+            arkret_sdk::events::kinds::REALM_POLICY_COMPONENTS,
             realm,
             serde_json::json!({
                 "content_scheme": "mls-exporter-aead-v1",
@@ -567,7 +567,7 @@ fn durability_policy_threshold_validates_k_of_n() {
     // n=3 but only 2 recipients → invalid.
     let effect = state.apply(
         &make_operation(
-            cokret_sdk::events::kinds::REALM_POLICY_COMPONENTS,
+            arkret_sdk::events::kinds::REALM_POLICY_COMPONENTS,
             realm,
             serde_json::json!({
                 "content_scheme": "mls-exporter-aead-v1",

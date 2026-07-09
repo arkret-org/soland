@@ -15,8 +15,8 @@
 //!
 //! Spec: `arkret-spec/spec/v1/zh/authz/policy-server.md` §2.
 
-use cokret_sdk::lattice::CellState;
-use cokret_sdk::{CellRef, Operation};
+use arkret_sdk::lattice::CellState;
+use arkret_sdk::{CellRef, Operation};
 use reqwest::Url;
 use serde_json::Value;
 
@@ -39,7 +39,7 @@ const DEFAULT_ON_TIMEOUT: &str = "fail_closed";
 /// ```json
 /// {
 ///   "policy_server_did": "did:web:policy.example.com",
-///   "policy_server_url": "https://policy.example.com/_cokret/self/policy/check",
+///   "policy_server_url": "https://policy.example.com/_arkret/self/policy/check",
 ///   "cache_ttl_seconds": 300,
 ///   "timeout_ms": 2000,
 ///   "on_timeout": "fail_closed"
@@ -167,7 +167,7 @@ fn validate_policy_server_url(raw_url: &str) -> Result<(), &'static str> {
     {
         return Err("policy_server_url_auth_material_forbidden");
     }
-    if url.path() != "/_cokret/self/policy/check" {
+    if url.path() != "/_arkret/self/policy/check" {
         return Err("policy_server_url_invalid_path");
     }
     Ok(())
@@ -175,7 +175,7 @@ fn validate_policy_server_url(raw_url: &str) -> Result<(), &'static str> {
 
 #[cfg(test)]
 mod tests {
-    use cokret_sdk::{Operation, OperationId, RealmId};
+    use arkret_sdk::{Operation, OperationId, RealmId};
     use serde_json::json;
 
     use super::*;
@@ -188,7 +188,7 @@ mod tests {
         Operation::create(
             OperationId::new(format!("ak:operation:{}", uuid::Uuid::now_v7())).unwrap(),
             RealmId::new(realm_id).unwrap(),
-            cokret_sdk::events::kinds::REALM_POLICY_SERVER,
+            arkret_sdk::events::kinds::REALM_POLICY_SERVER,
             payload,
         )
     }
@@ -202,7 +202,7 @@ mod tests {
                 REALM_CHILD,
                 json!({
                     "policy_server_did": "did:web:policy.example.com",
-                    "policy_server_url": "https://policy.example.com/_cokret/self/policy/check",
+                    "policy_server_url": "https://policy.example.com/_arkret/self/policy/check",
                     "cache_ttl_seconds": 60,
                     "timeout_ms": 1500,
                     "on_timeout": "fail_closed",
@@ -250,7 +250,7 @@ mod tests {
                 REALM_ORG,
                 json!({
                     "policy_server_did": "did:web:org.example.com",
-                    "policy_server_url": "https://org.example.com/_cokret/self/policy/check",
+                    "policy_server_url": "https://org.example.com/_arkret/self/policy/check",
                 }),
             ),
         );
@@ -327,7 +327,7 @@ mod tests {
                 REALM_CHILD,
                 json!({
                     "policy_server_did": "did:web:p.example",
-                    "policy_server_url": "https://p.example/_cokret/self/policy/check",
+                    "policy_server_url": "https://p.example/_arkret/self/policy/check",
                     "on_timeout": "soft_pass",
                 }),
             ),
@@ -344,7 +344,7 @@ mod tests {
                 REALM_CHILD,
                 json!({
                     "policy_server_did": "did:web:p.example",
-                    "policy_server_url": "https://p.example/_cokret/self/policy/check",
+                    "policy_server_url": "https://p.example/_arkret/self/policy/check",
                     "timeout_ms": 0,
                 }),
             ),

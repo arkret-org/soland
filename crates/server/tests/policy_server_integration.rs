@@ -22,9 +22,9 @@ use std::time::Duration;
 
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use cokret_sdk::identity::{DidDocument, DidResolver, DidWebResolver};
-use cokret_sdk::models::AuthzDecision;
-use cokret_sdk::{
+use arkret_sdk::identity::{DidDocument, DidResolver, DidWebResolver};
+use arkret_sdk::models::AuthzDecision;
+use arkret_sdk::{
     Did, FreshnessState, Hash, PolicyCheckBoundTo, PolicyCheckOutcome, PolicyCheckRequestBody,
     PolicyCheckSignature, PolicyCheckSource, RealmId,
 };
@@ -184,7 +184,7 @@ fn policy_decision_transcript_bytes(
         expires_at: expires_at.as_str(),
         obligations: &response.obligations,
     };
-    cokret_sdk::canonical::canonical_json_bytes(&transcript).unwrap()
+    arkret_sdk::canonical::canonical_json_bytes(&transcript).unwrap()
 }
 
 /// G3.S2 — soland calls coauth's `/policy/check` end-to-end. Asserts
@@ -213,7 +213,7 @@ async fn policy_server_integration_hits_mock() {
         }
     });
 
-    let url = format!("http://{addr}/_cokret/self/policy/check");
+    let url = format!("http://{addr}/_arkret/self/policy/check");
     let cfg = config_for(&url, 2000);
     let client = PolicyClient::new(reqwest::Client::new(), "did:web:soland.local")
         .with_private_network_egress(true)
@@ -273,7 +273,7 @@ async fn policy_server_integration_timeout_fails_closed() {
         drop(listener);
     });
 
-    let url = format!("http://{addr}/_cokret/self/policy/check");
+    let url = format!("http://{addr}/_arkret/self/policy/check");
     let cfg = config_for(&url, 250);
     let client = PolicyClient::new(reqwest::Client::new(), "did:web:soland.local")
         .with_private_network_egress(true);

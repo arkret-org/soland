@@ -11,7 +11,7 @@ pub(crate) use std::time::Duration;
 
 pub(crate) use base64::Engine;
 pub(crate) use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
-pub(crate) use cokret_sdk::{Did, Operation, OperationId, RealmId, new_prefixed_uuid7};
+pub(crate) use arkret_sdk::{Did, Operation, OperationId, RealmId, new_prefixed_uuid7};
 pub(crate) use ed25519_dalek::{Signature, Signer, SigningKey, Verifier};
 pub(crate) use salvo::http::StatusCode;
 pub(crate) use salvo::test::{ResponseExt, TestClient};
@@ -74,9 +74,9 @@ pub(crate) async fn account_subscribe_frame(
     query: &str,
 ) -> serde_json::Value {
     let url = if query.is_empty() {
-        "http://server/_cokret/self/account/subscribe".to_owned()
+        "http://server/_arkret/self/account/subscribe".to_owned()
     } else {
-        format!("http://server/_cokret/self/account/subscribe?{query}")
+        format!("http://server/_arkret/self/account/subscribe?{query}")
     };
     let mut request = TestClient::get(url);
     if let Some(token) = token {
@@ -166,7 +166,7 @@ fn signed_federation_request_headers(
     target_uri: &str,
     body: &Value,
 ) -> Vec<(&'static str, String)> {
-    let body_bytes = cokret_sdk::canonical::canonical_json_bytes(body).unwrap();
+    let body_bytes = arkret_sdk::canonical::canonical_json_bytes(body).unwrap();
     let content_digest = format!("sha-256=:{}:", STANDARD.encode(Sha256::digest(&body_bytes)));
     let request_digest = format!("sha256:{}", hex::encode(Sha256::digest(&body_bytes)));
     let source_trust_domain = trust_domain_from_service_did(origin);
@@ -287,7 +287,7 @@ pub(crate) async fn seed_did_document_also_known_as(state: &AppState, did: &str,
                 "service": [{
                     "id": format!("{did}#soland"),
                     "type": "CokretPrincipalServer",
-                    "serviceEndpoint": "/_cokret"
+                    "serviceEndpoint": "/_arkret"
                 }]
             }),
             key_log_head: None,
@@ -331,13 +331,13 @@ pub(crate) async fn seed_test_realm(
             (
                 service.clone(),
                 std::collections::BTreeSet::from([
-                    cokret_sdk::PlaintextDataClassKind::MessageContent,
-                    cokret_sdk::PlaintextDataClassKind::AttachmentPlaintext,
-                    cokret_sdk::PlaintextDataClassKind::AttachmentPreview,
-                    cokret_sdk::PlaintextDataClassKind::Thumbnail,
-                    cokret_sdk::PlaintextDataClassKind::FullTextIndex,
-                    cokret_sdk::PlaintextDataClassKind::NotificationSummary,
-                    cokret_sdk::PlaintextDataClassKind::MediaPlaintext,
+                    arkret_sdk::PlaintextDataClassKind::MessageContent,
+                    arkret_sdk::PlaintextDataClassKind::AttachmentPlaintext,
+                    arkret_sdk::PlaintextDataClassKind::AttachmentPreview,
+                    arkret_sdk::PlaintextDataClassKind::Thumbnail,
+                    arkret_sdk::PlaintextDataClassKind::FullTextIndex,
+                    arkret_sdk::PlaintextDataClassKind::NotificationSummary,
+                    arkret_sdk::PlaintextDataClassKind::MediaPlaintext,
                 ]),
             )
         })
@@ -519,7 +519,7 @@ pub(crate) fn encrypted_envelope(content_type: &str, ciphertext: &str) -> Value 
 }
 
 pub(crate) fn sha256_json(value: &Value) -> String {
-    let bytes = cokret_sdk::canonical::canonical_json_bytes(value)
+    let bytes = arkret_sdk::canonical::canonical_json_bytes(value)
         .unwrap_or_else(|_| serde_json::to_vec(value).unwrap());
     let mut hasher = Sha256::new();
     hasher.update(bytes);
@@ -758,7 +758,7 @@ pub(crate) async fn submit_actor_private_event(
     payload: Value,
 ) -> Value {
     let event = signed_actor_private_event_envelope(actor, device_id, realm_id, kind, payload);
-    TestClient::post("http://server/_cokret/self/events")
+    TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&event)
         .send(&app_from_state(state))
@@ -778,7 +778,7 @@ pub(crate) async fn post_message_event(
     encrypted: bool,
 ) -> StatusCode {
     let event = signed_message_event_envelope(actor, realm_id, thread_id, content, encrypted);
-    TestClient::post("http://server/_cokret/self/events")
+    TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&event)
         .send(&app_from_state(state))
@@ -797,7 +797,7 @@ pub(crate) async fn submit_message_event(
     encrypted: bool,
 ) -> Value {
     let event = signed_message_event_envelope(actor, realm_id, thread_id, content, encrypted);
-    let mut response: Value = TestClient::post("http://server/_cokret/self/events")
+    let mut response: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&event)
         .send(&app_from_state(state))
@@ -840,7 +840,7 @@ pub(crate) async fn register_account(
     handle: &str,
     device_id: &str,
 ) -> String {
-    let registered: Value = TestClient::post("http://server/_cokret/gate/account/register")
+    let registered: Value = TestClient::post("http://server/_arkret/gate/account/register")
         .json(&serde_json::json!({
             "principal_id": did,
             "display_name": handle.trim_start_matches('@'),
@@ -934,7 +934,7 @@ pub(crate) fn test_embedded_webvh_proof(
             Value::String(format!("1-{entry_hash}")),
         );
     }
-    let payload = cokret_sdk::canonical::canonical_json_bytes(&entry).unwrap();
+    let payload = arkret_sdk::canonical::canonical_json_bytes(&entry).unwrap();
     let signature = update_signing.sign(&payload);
     serde_json::json!({
         "type": "DataIntegrityProof",
@@ -958,7 +958,7 @@ pub(crate) fn test_webvh_method_authority(url: &str) -> String {
 }
 
 pub(crate) fn test_scid(value: &Value) -> String {
-    let canonical = cokret_sdk::canonical::canonical_json_bytes(value).unwrap();
+    let canonical = arkret_sdk::canonical::canonical_json_bytes(value).unwrap();
     test_sha256_multihash_multibase(&canonical)
 }
 
@@ -968,7 +968,7 @@ pub(crate) fn test_webvh_entry_hash(value: &Value) -> String {
         map.remove("proof");
         map.remove("versionId");
     }
-    let canonical = cokret_sdk::canonical::canonical_json_bytes(&clone).unwrap();
+    let canonical = arkret_sdk::canonical::canonical_json_bytes(&clone).unwrap();
     test_sha256_multihash_multibase(&canonical)
 }
 
@@ -996,8 +996,8 @@ pub(crate) fn test_sha256_multihash_multibase(bytes: &[u8]) -> String {
 // `arkret-spec/v1`. Typed objects in the protocol are `ck:strand:` / `ck:space:`
 // / `ck:morph:` / `ck:relation:` / `ck:view:`, each with its own dedicated
 // event kind; presentation concerns belong on `ck.view.*` events going
-// through the reducer, not on a free-form `/_cokret/self/entities` /
-// `/_cokret/self/views` scaffold.
+// through the reducer, not on a free-form `/_arkret/self/entities` /
+// `/_arkret/self/views` scaffold.
 
 /// Build a signed container `ck.space.*` event envelope for the Space
 /// (container) state-machine integration test. Mirrors [`signed_event_envelope`]
@@ -1060,16 +1060,16 @@ pub(crate) fn normalize_space_container_payload(kind: &str, payload: &mut Value)
 
 fn typed_space_container_payload(kind: &str, payload: Value) -> Value {
     match kind {
-        cokret_sdk::events::kinds::SPACE_ARCHIVE | cokret_sdk::events::kinds::SPACE_RESTORE => {
-            serde_json::to_value(cokret_sdk::SpaceStateTransitionPayload {
+        arkret_sdk::events::kinds::SPACE_ARCHIVE | arkret_sdk::events::kinds::SPACE_RESTORE => {
+            serde_json::to_value(arkret_sdk::SpaceStateTransitionPayload {
                 space_id: required_space_id(&payload, "space_id"),
                 reason: optional_string(&payload, "reason"),
                 effective_at: None,
             })
             .expect("space lifecycle payload serialization")
         }
-        cokret_sdk::events::kinds::SPACE_TOMBSTONE => {
-            serde_json::to_value(cokret_sdk::SpaceObjectTombstonePayload {
+        arkret_sdk::events::kinds::SPACE_TOMBSTONE => {
+            serde_json::to_value(arkret_sdk::SpaceObjectTombstonePayload {
                 space_id: required_space_id(&payload, "space_id"),
                 reason: optional_string(&payload, "reason"),
                 replacement_space: optional_space_id(&payload, "replacement_space"),
@@ -1082,22 +1082,22 @@ fn typed_space_container_payload(kind: &str, payload: Value) -> Value {
     }
 }
 
-fn required_space_id(payload: &Value, field: &str) -> cokret_sdk::SpaceId {
+fn required_space_id(payload: &Value, field: &str) -> arkret_sdk::SpaceId {
     let value = payload
         .get(field)
         .and_then(Value::as_str)
         .expect("space lifecycle payload requires space_id");
-    cokret_sdk::SpaceId::new(value.to_owned()).expect("valid space id")
+    arkret_sdk::SpaceId::new(value.to_owned()).expect("valid space id")
 }
 
-fn optional_space_id(payload: &Value, field: &str) -> Option<cokret_sdk::SpaceId> {
+fn optional_space_id(payload: &Value, field: &str) -> Option<arkret_sdk::SpaceId> {
     payload
         .get(field)
         .and_then(Value::as_str)
-        .map(|value| cokret_sdk::SpaceId::new(value.to_owned()).expect("valid optional space id"))
+        .map(|value| arkret_sdk::SpaceId::new(value.to_owned()).expect("valid optional space id"))
 }
 
-fn optional_event_ref(payload: &Value, field: &str) -> Option<cokret_sdk::EventRef> {
+fn optional_event_ref(payload: &Value, field: &str) -> Option<arkret_sdk::EventRef> {
     payload
         .get(field)
         .map(|value| serde_json::from_value(value.clone()).expect("valid optional event ref"))
@@ -1267,33 +1267,33 @@ pub(crate) fn normalize_morph_payload(kind: &str, payload: &mut Value) {
 
 fn typed_morph_payload(kind: &str, payload: Value) -> Value {
     match kind {
-        cokret_sdk::events::kinds::MORPH_ARCHIVE => cokret_sdk::ObjectLifecyclePayload::new(
+        arkret_sdk::events::kinds::MORPH_ARCHIVE => arkret_sdk::ObjectLifecyclePayload::new(
             required_string(&payload, "target_ref", "morph lifecycle target_ref"),
         )
         .with_target_state("archived")
         .to_value()
         .expect("morph archive payload serialization"),
-        cokret_sdk::events::kinds::MORPH_RESTORE => cokret_sdk::ObjectLifecyclePayload::new(
+        arkret_sdk::events::kinds::MORPH_RESTORE => arkret_sdk::ObjectLifecyclePayload::new(
             required_string(&payload, "target_ref", "morph lifecycle target_ref"),
         )
         .with_target_state("active")
         .to_value()
         .expect("morph restore payload serialization"),
-        cokret_sdk::events::kinds::MORPH_UPDATE => {
-            let morph_id = cokret_sdk::MorphId::new(required_string(
+        arkret_sdk::events::kinds::MORPH_UPDATE => {
+            let morph_id = arkret_sdk::MorphId::new(required_string(
                 &payload,
                 "target_ref",
                 "morph update target_ref",
             ))
             .expect("valid morph id");
-            let patch: cokret_sdk::Patch = serde_json::from_value(
+            let patch: arkret_sdk::Patch = serde_json::from_value(
                 payload
                     .get("patch")
                     .cloned()
                     .expect("morph update payload requires patch"),
             )
             .expect("valid morph update patch");
-            cokret_sdk::MorphUpdatePayload::for_morph(morph_id, patch)
+            arkret_sdk::MorphUpdatePayload::for_morph(morph_id, patch)
                 .expect("valid morph update payload")
                 .to_value()
                 .expect("morph update payload serialization")
@@ -1353,7 +1353,7 @@ fn typed_relation_create_payload(payload: Value) -> Value {
     let to_ref = relation_payload_str(&payload, &["to_ref", "to"])
         .expect("relation create payload requires to_ref");
     let rank = relation_payload_str(&payload, &["rank"]);
-    let mut typed = cokret_sdk::RelationCreatePayload::new(kind, from_ref, to_ref);
+    let mut typed = arkret_sdk::RelationCreatePayload::new(kind, from_ref, to_ref);
     if let Some(rank) = rank {
         typed = typed.with_rank(rank);
     }

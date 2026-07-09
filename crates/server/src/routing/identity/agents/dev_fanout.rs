@@ -12,7 +12,7 @@
 //! the canonical payload bytes.
 
 use chrono::{Duration, SecondsFormat, Utc};
-use cokret_sdk::canonical;
+use arkret_sdk::canonical;
 use serde_json::{Value, json};
 
 use super::SessionRecord;
@@ -326,7 +326,7 @@ async fn materialize_grant(
 }
 
 /// CKP-0008 §4.11 (dev option B) — attach a controller-supplied capability
-/// grant (`POST /_cokret/self/agents/{id}/grants`). The supplied body is
+/// grant (`POST /_arkret/self/agents/{id}/grants`). The supplied body is
 /// normalised into a schema-valid embedded `grant` (filling required id /
 /// schema / issuer / subject / resources / proofs when the caller omitted
 /// them) under the canonical `{grant_id, grant}` wrapper, then submitted as

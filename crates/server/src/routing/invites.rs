@@ -6,12 +6,12 @@
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::Duration;
-// NOTE: `cokret_sdk::DisclosurePolicy` at the crate root resolves to the
+// NOTE: `arkret_sdk::DisclosurePolicy` at the crate root resolves to the
 // auth/DID-proof type (re-exported explicitly), which shadows the
 // invite-addressing one from the `model::*` glob. Import the
 // invite-addressing variant via its `model` module path to disambiguate.
-use cokret_sdk::models::{DisclosurePolicy, HandleClaim};
-use cokret_sdk::{
+use arkret_sdk::models::{DisclosurePolicy, HandleClaim};
+use arkret_sdk::{
     CandidateIntent, CandidateValidationContext, ContactIntroductionEvidence, DetachedPayloadProof,
     Did, DirectoryIntent, DisclosedOutcome, DisclosureLevel, Handle, HandleBindingState, Hash,
     IntroductionEvidence, InviteDeliveryOutcome, InviteDeliveryOutcomeStatus,
@@ -294,7 +294,7 @@ async fn resolve_invite_locator(
         ))
     })?;
     let mut locator = PrincipalLocator {
-        schema: cokret_sdk::PRINCIPAL_LOCATOR_SCHEMA.to_owned(),
+        schema: arkret_sdk::PRINCIPAL_LOCATOR_SCHEMA.to_owned(),
         subject_id,
         recipient_service_did,
         recipient_service_type: None,
@@ -318,7 +318,7 @@ async fn resolve_invite_locator(
             AppError::internal(format!("principal locator digest invalid: {error}"))
         })?;
     let jws =
-        cokret_sdk::jws::sign_jws_ed25519(&canonical_bytes, state.notary_signing_key().as_ref())
+        arkret_sdk::jws::sign_jws_ed25519(&canonical_bytes, state.notary_signing_key().as_ref())
             .map_err(|error| AppError::internal(format!("principal locator sign: {error}")))?;
     locator.proofs = vec![PrincipalLocatorProof {
         proof_purpose: PrincipalLocatorProofPurpose::RecipientServiceAcceptance,
@@ -559,7 +559,7 @@ pub(crate) struct ReceiveDecision {
 /// `high_trust=outcome / low_trust=opaque`.
 pub(crate) fn default_invite_receive_policy(subject: &str) -> InviteReceivePolicy {
     InviteReceivePolicy {
-        schema: cokret_sdk::INVITE_RECEIVE_POLICY_SCHEMA.to_owned(),
+        schema: arkret_sdk::INVITE_RECEIVE_POLICY_SCHEMA.to_owned(),
         subject_id: Did::new(subject.to_owned()).unwrap_or_else(|_| {
             // did:webvh-only red line: placeholder is never a did:web literal.
             Did::new("did:webvh:invalid.invalid".to_owned()).expect("placeholder did")
@@ -1343,7 +1343,7 @@ fn validate_invite_delivery_consistency(
         ));
     }
     if body.pointer("/invite_event/kind").and_then(Value::as_str)
-        != Some(cokret_sdk::events::kinds::INVITE_CREATE)
+        != Some(arkret_sdk::events::kinds::INVITE_CREATE)
     {
         return Err(super::events::peer::schema_violation(
             "invite_event.kind must be ck.invite.create",

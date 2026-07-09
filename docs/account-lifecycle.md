@@ -1,7 +1,7 @@
 # Account lifecycle (soland)
 
 Reference for the soland implementation of the Arkret account lifecycle
-state machine. The wire surface is `/_cokret/self/account/*`; this document
+state machine. The wire surface is `/_arkret/self/account/*`; this document
 covers the soland-side behaviours: the lifecycle states, the audit
 contract, and the GDPR erasure cascade.
 
@@ -21,7 +21,7 @@ with the projection rewrite worker.
 
 ## Failed-login lockout
 
-`POST /_soland/gate/auth/dev-login` and `POST /_cokret/gate/account/session-grants`
+`POST /_soland/gate/auth/dev-login` and `POST /_arkret/gate/account/session-grants`
 participate in the in-memory failed-login counter
 (`AppState::failed_login_attempts`).
 

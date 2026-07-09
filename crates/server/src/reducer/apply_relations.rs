@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-use cokret_sdk::error::{
+use arkret_sdk::error::{
     REASON_RELATION_CONFLICT_FANOUT_EXCEEDED, REASON_RELATION_KIND_WATCHES_DERIVED,
 };
 
@@ -599,7 +599,7 @@ impl ProjectionState {
     /// capability path with projection-time `ReferenceProjectionStatus`).
     pub fn check_relation_cross_realm(&self, operation: &Operation) -> Result<(), &'static str> {
         if crate::kinds::canonical_kind_for_operation(operation)
-            != Some(cokret_sdk::events::kinds::RELATION_CREATE)
+            != Some(arkret_sdk::events::kinds::RELATION_CREATE)
         {
             return Ok(());
         }
@@ -626,7 +626,7 @@ impl ProjectionState {
             .filter_map(Value::as_str)
             .filter_map(|endpoint| self.resolve_object_realm(endpoint))
             .collect::<Vec<_>>();
-        cokret_sdk::validate_structural_relation_same_realm(
+        arkret_sdk::validate_structural_relation_same_realm(
             relation_kind,
             relation_realm,
             endpoint_realms,
@@ -639,14 +639,14 @@ impl ProjectionState {
         };
         if !matches!(
             kind,
-            cokret_sdk::events::kinds::RELATION_CREATE
-                | cokret_sdk::events::kinds::RELATION_UPDATE
-                | cokret_sdk::events::kinds::RELATION_TOMBSTONE
+            arkret_sdk::events::kinds::RELATION_CREATE
+                | arkret_sdk::events::kinds::RELATION_UPDATE
+                | arkret_sdk::events::kinds::RELATION_TOMBSTONE
         ) {
             return Ok(());
         }
 
-        if kind == cokret_sdk::events::kinds::RELATION_CREATE {
+        if kind == arkret_sdk::events::kinds::RELATION_CREATE {
             let relation_kind = operation
                 .payload
                 .get("relation_kind")
@@ -661,7 +661,7 @@ impl ProjectionState {
             return Ok(());
         }
 
-        if kind == cokret_sdk::events::kinds::RELATION_UPDATE {
+        if kind == arkret_sdk::events::kinds::RELATION_UPDATE {
             let relation_id = operation
                 .payload
                 .get("relation_id")
@@ -724,7 +724,7 @@ impl ProjectionState {
             return Ok(());
         }
 
-        if kind == cokret_sdk::events::kinds::RELATION_TOMBSTONE {
+        if kind == arkret_sdk::events::kinds::RELATION_TOMBSTONE {
             if operation
                 .payload
                 .get("relation_kind")
@@ -1050,10 +1050,10 @@ mod cross_realm_relation_tests {
 
     fn relation_op(relation_kind: &str, from: &str, to: &str) -> Operation {
         Operation::create(
-            cokret_sdk::OperationId::new("ak:operation:01904100-0000-7000-8000-57d7d85564c5")
+            arkret_sdk::OperationId::new("ak:operation:01904100-0000-7000-8000-57d7d85564c5")
                 .unwrap(),
-            cokret_sdk::RealmId::new(REALM_A.to_owned()).unwrap(),
-            cokret_sdk::events::kinds::RELATION_CREATE,
+            arkret_sdk::RealmId::new(REALM_A.to_owned()).unwrap(),
+            arkret_sdk::events::kinds::RELATION_CREATE,
             json!({"relation_kind": relation_kind, "from_ref": from, "to_ref": to}),
         )
     }
@@ -1067,10 +1067,10 @@ mod cross_realm_relation_tests {
         digest: &str,
     ) -> Operation {
         let mut operation = Operation::create(
-            cokret_sdk::OperationId::new(format!("ak:operation:01904100-0000-7000-8000-{seed}"))
+            arkret_sdk::OperationId::new(format!("ak:operation:01904100-0000-7000-8000-{seed}"))
                 .unwrap(),
-            cokret_sdk::RealmId::new(REALM_A.to_owned()).unwrap(),
-            cokret_sdk::events::kinds::RELATION_CREATE,
+            arkret_sdk::RealmId::new(REALM_A.to_owned()).unwrap(),
+            arkret_sdk::events::kinds::RELATION_CREATE,
             json!({
                 "relation_id": relation_id,
                 "relation_kind": relation_kind,
@@ -1121,11 +1121,11 @@ mod cross_realm_relation_tests {
     fn structural_contains_across_realms_is_rejected() {
         assert_eq!(
             proj().check_relation_cross_realm(&relation_op("contains", STRAND_A, STRAND_B)),
-            Err(cokret_sdk::error::REASON_CROSS_REALM_STRUCTURAL_RELATION)
+            Err(arkret_sdk::error::REASON_CROSS_REALM_STRUCTURAL_RELATION)
         );
         assert_eq!(
             proj().check_relation_cross_realm(&relation_op("belongs_to", STRAND_A, STRAND_B)),
-            Err(cokret_sdk::error::REASON_CROSS_REALM_STRUCTURAL_RELATION)
+            Err(arkret_sdk::error::REASON_CROSS_REALM_STRUCTURAL_RELATION)
         );
     }
 
@@ -1277,10 +1277,10 @@ mod cross_realm_relation_tests {
             },
         );
         let update = Operation::create(
-            cokret_sdk::OperationId::new("ak:operation:01904100-0000-7000-8000-0000000000ab")
+            arkret_sdk::OperationId::new("ak:operation:01904100-0000-7000-8000-0000000000ab")
                 .unwrap(),
-            cokret_sdk::RealmId::new(REALM_A.to_owned()).unwrap(),
-            cokret_sdk::events::kinds::RELATION_UPDATE,
+            arkret_sdk::RealmId::new(REALM_A.to_owned()).unwrap(),
+            arkret_sdk::events::kinds::RELATION_UPDATE,
             json!({"relation_id": relation_id, "fields": {"level": "muted"}}),
         );
         assert!(matches!(
@@ -1289,10 +1289,10 @@ mod cross_realm_relation_tests {
         ));
 
         let delete = Operation::create(
-            cokret_sdk::OperationId::new("ak:operation:01904100-0000-7000-8000-0000000000ac")
+            arkret_sdk::OperationId::new("ak:operation:01904100-0000-7000-8000-0000000000ac")
                 .unwrap(),
-            cokret_sdk::RealmId::new(REALM_A.to_owned()).unwrap(),
-            cokret_sdk::events::kinds::RELATION_TOMBSTONE,
+            arkret_sdk::RealmId::new(REALM_A.to_owned()).unwrap(),
+            arkret_sdk::events::kinds::RELATION_TOMBSTONE,
             json!({"relation_id": "ak:relation:01904100-0000-7000-8000-0000000000aa"}),
         );
         assert!(matches!(
@@ -1391,10 +1391,10 @@ mod cross_realm_relation_tests {
         );
 
         let scoped = Operation::create(
-            cokret_sdk::OperationId::new("ak:operation:01904100-0000-7000-8000-000000001001")
+            arkret_sdk::OperationId::new("ak:operation:01904100-0000-7000-8000-000000001001")
                 .unwrap(),
-            cokret_sdk::RealmId::new(REALM_A.to_owned()).unwrap(),
-            cokret_sdk::events::kinds::RELATION_CREATE,
+            arkret_sdk::RealmId::new(REALM_A.to_owned()).unwrap(),
+            arkret_sdk::events::kinds::RELATION_CREATE,
             json!({
                 "relation_kind": "contains",
                 "from_ref": STRAND_A,

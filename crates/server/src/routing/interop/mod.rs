@@ -55,12 +55,12 @@ pub fn local_router() -> Router {
         // `edge` — outbound push bridge gateway
         // (`/_soland/edge/push/outbound/bridge/*`). The device
         // register/unregister/notify verbs are NOT mirrored here: those are the
-        // canonical `/_cokret/edge/push/*` operations (see `protocol_router`),
+        // canonical `/_arkret/edge/push/*` operations (see `protocol_router`),
         // and the `/_soland/*` duplicate mounts had no caller. Only the
         // deployment-local outbound bridge cache surface stays product-local.
         .push(Router::with_path("edge").push(push_outbound::router()))
     // NOTE: the MIMI provider facade is served only from its canonical
-    // `/_cokret/open/mimi/*` surface (see `protocol_router` / `mimi.rs`).
+    // `/_arkret/open/mimi/*` surface (see `protocol_router` / `mimi.rs`).
     // The historical `/_soland/open/mimi/*` duplicate mount had no caller and
     // was removed; MIMI providers discover the surface via the well-known
     // `mimi-protocol-directory`, not this vendor namespace.

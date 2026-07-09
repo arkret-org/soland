@@ -1,8 +1,8 @@
-//! `/_cokret/self/*` inbound credential: `ck.session.grant` + DPoP (RFC 9449).
+//! `/_arkret/self/*` inbound credential: `ck.session.grant` + DPoP (RFC 9449).
 //!
 //! Per api-conventions.md §3.3 the Principal Server (soland) no longer mints a
 //! local credential from a session grant. The client
-//! presents the `ck.session.grant` directly on every `/_cokret/self/*` request
+//! presents the `ck.session.grant` directly on every `/_arkret/self/*` request
 //! as `Authorization: Bearer <ck.session.grant>` plus a sender-constrained
 //! `DPoP` proof. soland validates and serves; the resulting `SessionRecord` is
 //! request-scoped and is NEVER persisted as a local bearer.
@@ -30,8 +30,8 @@ use std::time::{Duration as StdDuration, Instant};
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::{DateTime, Duration, Utc};
-use cokret_sdk::http_signature::{Ed25519PublicKey, public_key_from_bytes};
-use cokret_sdk::{DeviceId, Did, FreshnessState, SessionGrantProofKind};
+use arkret_sdk::http_signature::{Ed25519PublicKey, public_key_from_bytes};
+use arkret_sdk::{DeviceId, Did, FreshnessState, SessionGrantProofKind};
 use ed25519_dalek::{Signature, Verifier};
 use parking_lot::Mutex;
 use salvo::http::StatusCode;
@@ -48,7 +48,7 @@ use crate::wire::{
 
 /// Device-scope prefix carried in a `ck.session.grant`'s scope set
 /// (`urn:arkret:client:device:<device_id>`). A grant that drives
-/// `/_cokret/self/*` MUST carry one so the request is device-bound.
+/// `/_arkret/self/*` MUST carry one so the request is device-bound.
 const DEVICE_SCOPE_PREFIX: &str = "urn:arkret:client:device:";
 
 /// TTL for the session-grant introspection cache (api-conventions.md §3.3 D2:
@@ -793,7 +793,7 @@ fn htu_path(htu: &str) -> &str {
 
 #[cfg(test)]
 mod tests {
-    use cokret_sdk::GrantId;
+    use arkret_sdk::GrantId;
 
     use super::*;
 
@@ -808,10 +808,10 @@ mod tests {
     #[test]
     fn htu_path_strips_scheme_authority() {
         assert_eq!(
-            htu_path("https://account.example/_cokret/self/events"),
-            "/_cokret/self/events"
+            htu_path("https://account.example/_arkret/self/events"),
+            "/_arkret/self/events"
         );
-        assert_eq!(htu_path("/_cokret/self/events"), "/_cokret/self/events");
+        assert_eq!(htu_path("/_arkret/self/events"), "/_arkret/self/events");
         assert_eq!(htu_path("https://account.example"), "/");
     }
 

@@ -199,7 +199,7 @@ fn enrollment_authority_designation_from_document(
     let services = did_document.get("service")?.as_array()?;
     for service in services {
         let service_type = service.get("type").and_then(Value::as_str);
-        if service_type != Some(cokret_sdk::service::DID_SERVICE_DEVICE_ENROLLMENT_AUTHORITY) {
+        if service_type != Some(arkret_sdk::service::DID_SERVICE_DEVICE_ENROLLMENT_AUTHORITY) {
             continue;
         }
         let service_id = service.get("id").and_then(Value::as_str)?;

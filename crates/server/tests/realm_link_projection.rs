@@ -6,7 +6,7 @@
 //! - the query API filters by direction + link_kind_allow
 //! - schema validation rejects bad kinds / self-references / bad status
 
-use cokret_sdk::{Operation, RealmLinkDirection};
+use arkret_sdk::{Operation, RealmLinkDirection};
 use serde_json::{Value, json};
 use soland::hlc::ServerHlc;
 use soland::reducer::{ProjectionEffect, ProjectionState};
@@ -17,8 +17,8 @@ const REALM_C: &str = "ak:realm:01904100-0000-7000-8000-cccccccccccc";
 
 fn op(kind: &str, realm_id: &str, payload: Value) -> Operation {
     Operation::create(
-        cokret_sdk::OperationId::new(format!("ak:operation:{}", uuid::Uuid::now_v7())).unwrap(),
-        cokret_sdk::RealmId::new(realm_id).unwrap(),
+        arkret_sdk::OperationId::new(format!("ak:operation:{}", uuid::Uuid::now_v7())).unwrap(),
+        arkret_sdk::RealmId::new(realm_id).unwrap(),
         kind,
         payload,
     )
@@ -32,7 +32,7 @@ fn link_op(source: &str, target: &str, link_kind: &str, status: Option<&str>) ->
     if let Some(s) = status {
         payload["status"] = json!(s);
     }
-    op(cokret_sdk::events::kinds::REALM_LINK, source, payload)
+    op(arkret_sdk::events::kinds::REALM_LINK, source, payload)
 }
 
 #[test]
@@ -164,7 +164,7 @@ fn realm_link_cell_value_persisted() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     state.apply(&link_op(REALM_A, REALM_B, "join_gate_from", None), &hlc);
-    let cell_id = cokret_sdk::CellRef::new(format!(
+    let cell_id = arkret_sdk::CellRef::new(format!(
         "ak:cell:ck.component.realm.link.v1:{REALM_A}|{REALM_B}|join_gate_from"
     ))
     .unwrap();

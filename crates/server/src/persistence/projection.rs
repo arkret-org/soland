@@ -90,7 +90,7 @@ pub struct SpaceContainerProjectionRecord {
 pub struct StrandProjectionRecord {
     pub strand_id: String,
     pub realm_id: String,
-    pub tracks: BTreeMap<String, cokret_sdk::StrandTrackConfig>,
+    pub tracks: BTreeMap<String, arkret_sdk::StrandTrackConfig>,
     pub title: String,
     pub summary: Option<String>,
     /// One of `active` / `archived` / `deleted` / `redacted` per spec.

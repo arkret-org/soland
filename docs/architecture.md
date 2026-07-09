@@ -21,11 +21,11 @@ For a quick map of the codebase, the canonical pointers are:
 
 soland keeps the durable, signed event log as the source of truth; every
 read surface is a projection cached in PostgreSQL (or the in-memory mirror).
-A successful `POST /_cokret/self/events` walks the following stages:
+A successful `POST /_arkret/self/events` walks the following stages:
 
 1. **Wire validation** (`routing::events::event_log`). The Salvo handler
    normalizes the request body into a canonical
-   `cokret_sdk::events::EventEnvelope`, validates the schema-backed payload,
+   `arkret_sdk::events::EventEnvelope`, validates the schema-backed payload,
    and binds the envelope to the authenticated principal.
 
 2. **Replay window + signature verification**
@@ -64,7 +64,7 @@ The end-to-end pipeline is observable on the
 
 ## 2. Federation outbox
 
-soland's outbound federation surface (`/_cokret/peer/events*`) is
+soland's outbound federation surface (`/_arkret/peer/events*`) is
 implemented as an at-least-once outbox table backed by Postgres (or the
 in-memory mirror) and a single in-process dispatcher per replica.
 
@@ -165,7 +165,7 @@ of the following sharing boundaries:
 - **MLS broadcast.** The `AppState::event_broadcast` channel is
   in-process; NDJSON subscribers see notifications only from the replica
   serving their request. Load-balancers should use sticky sessions on
-  `/_cokret/self/events/subscribe` so a single subscriber stays sealed to one
+  `/_arkret/self/events/subscribe` so a single subscriber stays sealed to one
   replica for the lifetime of the stream.
 - **In-process projection mirrors.** Pieces of soland (handle release
   ledger, account lifecycle, erased actors, failed-login counters)

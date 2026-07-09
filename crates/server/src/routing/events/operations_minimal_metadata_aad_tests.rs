@@ -1,4 +1,4 @@
-use cokret_sdk::mls::AadVisibility;
+use arkret_sdk::mls::AadVisibility;
 use serde_json::json;
 
 use super::*;

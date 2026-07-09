@@ -7,7 +7,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use cokret_sdk::{Operation, StrandTrackConfig};
+use arkret_sdk::{Operation, StrandTrackConfig};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -152,7 +152,7 @@ pub struct RealmLinkState {
     pub realm_id: String,
     pub target_realm_id: String,
     /// Canonical link kind string (snake_case, one of the eight values
-    /// in `cokret_sdk::RealmLinkKind`).
+    /// in `arkret_sdk::RealmLinkKind`).
     pub link_kind: String,
     /// `active` / `rejected` / `tombstoned`.
     pub status: String,
@@ -176,7 +176,7 @@ pub struct RealmPolicyServerConfig {
     /// DID of the policy decision service. Used to resolve the
     /// signature verification key and match against `bound_to.policy_server_id`.
     pub policy_server_did: String,
-    /// HTTPS endpoint that accepts `POST /_cokret/self/policy/check`.
+    /// HTTPS endpoint that accepts `POST /_arkret/self/policy/check`.
     pub policy_server_url: String,
     /// Decision cache TTL. Spec §2 default `300`. The outbound client
     /// uses this as the per-realm cap on the in-memory decision cache;
@@ -613,7 +613,7 @@ pub struct StrandProjection {
 
 pub(crate) fn default_strand_tracks() -> BTreeMap<String, StrandTrackConfig> {
     BTreeMap::from([(
-        cokret_sdk::STRAND_TRACK_NAME_SYNTHESIS.to_owned(),
+        arkret_sdk::STRAND_TRACK_NAME_SYNTHESIS.to_owned(),
         StrandTrackConfig::synthesis(),
     )])
 }
@@ -780,7 +780,7 @@ pub struct SolandAgentProjection {
     pub endpoint_url: Option<String>,
     /// Adapter-registry protocol ids declared across the `endpoints[]`
     /// array (spec §5.1 / §11: `a2a` / `acp` / `mcp_bridge` /
-    /// `http_custom`). Surfaced by `POST /_cokret/self/agents/discover`.
+    /// `http_custom`). Surfaced by `POST /_arkret/self/agents/discover`.
     pub supported_protocols: Vec<String>,
     /// A2A AgentCard URL declared in a `ck.agent.endpoint` entry (§5.1).
     pub agent_card_url: Option<String>,
@@ -827,7 +827,7 @@ pub struct AgentActionApprovalProjection {
 }
 
 /// State enum shared by Strand and Morph projections (mirrors SDK
-/// `cokret_sdk::ObjectState`). Unlike `SpaceContainerLifecycleState` which has
+/// `arkret_sdk::ObjectState`). Unlike `SpaceContainerLifecycleState` which has
 /// a single `Tombstoned` terminal, Strand / Morph use `Redacted` as their terminal
 /// state per spec §5.1.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

@@ -1,9 +1,9 @@
-//! Federation frontier root and signature helpers for `/_cokret/peer/events/frontier`.
+//! Federation frontier root and signature helpers for `/_arkret/peer/events/frontier`.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::{DateTime, Utc};
-use cokret_sdk::{Did, EventId, Hash, RealmId, canonical};
+use arkret_sdk::{Did, EventId, Hash, RealmId, canonical};
 use serde_json::{Value, json};
 
 /// Convert a per-realm frontier table to the typed
@@ -129,7 +129,7 @@ pub(crate) fn sign_frontier_root(
     let canonical_bytes =
         canonical::canonical_json_bytes(&signed_payload).map_err(|error| error.to_string())?;
     let payload_digest = canonical::sha256_digest(&canonical_bytes);
-    let jws = cokret_sdk::jws::sign_jws_ed25519(&canonical_bytes, signing_key)
+    let jws = arkret_sdk::jws::sign_jws_ed25519(&canonical_bytes, signing_key)
         .map_err(|error| error.to_string())?;
 
     Ok(json!({

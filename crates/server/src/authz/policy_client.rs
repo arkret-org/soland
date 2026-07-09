@@ -1,6 +1,6 @@
 //! G3.S2 — outbound `/policy/check` client.
 //!
-//! [`PolicyClient`] issues `POST /_cokret/self/policy/check` against the
+//! [`PolicyClient`] issues `POST /_arkret/self/policy/check` against the
 //! `policy_server_url` of the request's Realm
 //! ([`crate::reducer::RealmPolicyServerConfig`]), with per-realm
 //! `cache_ttl_seconds` decision caching and `timeout_ms` fail-closed
@@ -37,9 +37,9 @@ use std::time::{Duration, Instant};
 
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use cokret_sdk::identity::DidResolver;
-use cokret_sdk::models::AuthzDecision;
-use cokret_sdk::{
+use arkret_sdk::identity::DidResolver;
+use arkret_sdk::models::AuthzDecision;
+use arkret_sdk::{
     Did, FreshnessState, Hash, PolicyCheckBoundTo, PolicyCheckOutcome, PolicyCheckRequestBody,
     PolicyCheckSignature, PolicyCheckSource, RealmId,
 };
@@ -119,12 +119,12 @@ impl PolicyCheckRequestInput {
             "auth_context": self.auth_context,
         });
         // SDK is the single source of canonical-JSON + sha256 + `sha256:` prefix
-        // (cokret_sdk::canonical::canonical_sha256), shared with jws_verify /
+        // (arkret_sdk::canonical::canonical_sha256), shared with jws_verify /
         // notary / reducer so the digest is byte-identical across paths. Preserve
         // the prior fail-open all-zeros fallback for the (canonicalization-error)
         // edge case rather than introducing a new failure mode here.
-        let digest = cokret_sdk::canonical::canonical_sha256(&canonical_input)
-            .unwrap_or_else(|_| cokret_sdk::canonical::sha256_digest(b""));
+        let digest = arkret_sdk::canonical::canonical_sha256(&canonical_input)
+            .unwrap_or_else(|_| arkret_sdk::canonical::sha256_digest(b""));
         Hash::new(digest)
             .unwrap_or_else(|_| Hash::new(format!("sha256:{}", "0".repeat(64))).unwrap())
     }
@@ -669,12 +669,12 @@ pub(crate) fn policy_decision_transcript_bytes(
         expires_at: expires_at.as_str(),
         obligations: &response.obligations,
     };
-    cokret_sdk::canonical::canonical_json_bytes(&transcript)
+    arkret_sdk::canonical::canonical_json_bytes(&transcript)
         .map_err(|e| PolicyClientError::BadResponse(format!("policy transcript canonicalize: {e}")))
 }
 
 fn format_canonical_rfc3339(ts: &chrono::DateTime<chrono::Utc>) -> String {
-    cokret_sdk::canonical::format_timestamp_canonical(*ts)
+    arkret_sdk::canonical::format_timestamp_canonical(*ts)
 }
 
 fn decode_policy_signature(sig: &str) -> Result<Signature, PolicyClientError> {
@@ -773,7 +773,7 @@ fn decode_policy_ed25519_public_key(material: &str) -> Result<VerifyingKey, Stri
 }
 
 fn decode_ed25519_multibase(multibase: &str) -> Result<VerifyingKey, String> {
-    let key_bytes = cokret_sdk::decode_ed25519_multibase(multibase).map_err(|e| e.to_string())?;
+    let key_bytes = arkret_sdk::decode_ed25519_multibase(multibase).map_err(|e| e.to_string())?;
     VerifyingKey::from_bytes(&key_bytes).map_err(|e| format!("invalid Ed25519 public key: {e}"))
 }
 
@@ -783,7 +783,7 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use chrono::Utc;
-    use cokret_sdk::identity::{DidDocument, DidWebResolver};
+    use arkret_sdk::identity::{DidDocument, DidWebResolver};
     use ed25519_dalek::{Signer, SigningKey};
 
     use super::*;
@@ -975,7 +975,7 @@ mod tests {
             }
         });
 
-        let url = format!("http://{addr}/_cokret/self/policy/check");
+        let url = format!("http://{addr}/_arkret/self/policy/check");
         let cfg = realm_config(&url);
         let client = client_with_policy_key(&signing);
         client.cache.insert(
@@ -1020,7 +1020,7 @@ mod tests {
             }
         });
 
-        let url = format!("http://{addr}/_cokret/self/policy/check");
+        let url = format!("http://{addr}/_arkret/self/policy/check");
         let cfg = realm_config(&url);
         let client = client_with_policy_key(&signing);
 
@@ -1052,7 +1052,7 @@ mod tests {
             }
         });
 
-        let url = format!("http://{addr}/_cokret/self/policy/check");
+        let url = format!("http://{addr}/_arkret/self/policy/check");
         let cfg = realm_config(&url);
         let client = client_with_policy_key(&signing);
 
@@ -1085,7 +1085,7 @@ mod tests {
             }
         });
 
-        let url = format!("http://{addr}/_cokret/self/policy/check");
+        let url = format!("http://{addr}/_arkret/self/policy/check");
         let cfg = realm_config(&url);
         let client = client_with_policy_key(&signing);
 
@@ -1110,7 +1110,7 @@ mod tests {
             drop(listener);
         });
 
-        let url = format!("http://{addr}/_cokret/self/policy/check");
+        let url = format!("http://{addr}/_arkret/self/policy/check");
         let mut cfg = realm_config(&url);
         cfg.timeout_ms = 150;
         let client = PolicyClient::new(reqwest::Client::new(), "did:web:soland.local")
@@ -1164,7 +1164,7 @@ mod tests {
             }
         });
 
-        let url = format!("http://{addr}/_cokret/self/policy/check");
+        let url = format!("http://{addr}/_arkret/self/policy/check");
         let cfg = realm_config(&url);
         let client = client_with_policy_key(&signing);
         let cfg_clone = cfg.clone();
@@ -1198,7 +1198,7 @@ mod tests {
             }
         });
 
-        let url = format!("http://{addr}/_cokret/self/policy/check");
+        let url = format!("http://{addr}/_arkret/self/policy/check");
         let cfg = realm_config(&url);
         let client = client_with_policy_key(&signing);
         let cfg_clone = cfg.clone();

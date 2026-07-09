@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use cokret_sdk::Operation;
+use arkret_sdk::Operation;
 use serde_json::json;
 
 use super::*;
@@ -262,12 +262,12 @@ mod tests {
         let event_id = "ak:event:019e4fd4-4e26-7cc9-af7e-d7102d6f4a23";
         let message_id = "ak:message:019e4fd4-4e26-7cc9-af7e-d7102d6f4a24";
         let operation = Operation::create(
-            cokret_sdk::OperationId::new(
+            arkret_sdk::OperationId::new(
                 "ak:operation:019e4fd4-4e26-7cc9-af7e-d7102d6f4a25".to_owned(),
             )
             .unwrap(),
-            cokret_sdk::RealmId::new(realm_id.to_owned()).unwrap(),
-            cokret_sdk::events::kinds::MESSAGE_CREATE,
+            arkret_sdk::RealmId::new(realm_id.to_owned()).unwrap(),
+            arkret_sdk::events::kinds::MESSAGE_CREATE,
             json!({
                 "event_id": event_id,
                 "message_id": message_id,

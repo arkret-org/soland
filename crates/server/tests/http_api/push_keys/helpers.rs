@@ -41,7 +41,7 @@ pub(crate) fn keys_upload_signing_input(
         "one_time_keys": one_time_keys,
         "fallback_keys": fallback_keys,
     });
-    let canonical = cokret_sdk::canonical::canonical_json_bytes(&body).unwrap();
+    let canonical = arkret_sdk::canonical::canonical_json_bytes(&body).unwrap();
     let mut input = b"ck-keys-upload-v1\n".to_vec();
     input.extend_from_slice(&canonical);
     input
@@ -55,7 +55,7 @@ pub(crate) fn signed_keys_upload_body(
     fallback_keys: Value,
 ) -> Value {
     let signing_input = keys_upload_signing_input(device_id, &one_time_keys, &fallback_keys);
-    let jws = cokret_sdk::jws::sign_jws_ed25519(&signing_input, signing_key).unwrap();
+    let jws = arkret_sdk::jws::sign_jws_ed25519(&signing_input, signing_key).unwrap();
     serde_json::json!({
         "device_id": device_id,
         "one_time_keys": one_time_keys,

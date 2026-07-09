@@ -8,7 +8,7 @@
 //! Surfaces:
 //! - `GET /health` — liveness + database/events health
 //! - `GET /readyz` — readiness gate for deploy orchestrators
-//! - `GET /_cokret/describe`
+//! - `GET /_arkret/describe`
 //! - `GET /_soland/describe`
 //! - `GET /_soland/gate/auth/bridge/describe`
 //! - `GET /_soland/self/integration/describe`
@@ -16,8 +16,8 @@
 //! `events_describe` lives in `routing/events.rs` (it carries the registry version pull).
 //! `sync_describe` is still in `mod.rs` pending sync-module extraction.
 
-use cokret_sdk::ServerDescription;
-use cokret_sdk::http::ServerDescribeOutcome;
+use arkret_sdk::ServerDescription;
+use arkret_sdk::http::ServerDescribeOutcome;
 use salvo::http::StatusCode;
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -35,7 +35,7 @@ use crate::{JsonResult, json_ok};
 const SOLAND_LOCAL_COMPAT_SURFACE_NAME: &str = "soland_private_local_routes";
 const SOLAND_LOCAL_COMPAT_BASE_PATH: &str = "/_soland";
 const SOLAND_LOCAL_COMPAT_STATUS: &str = "soland_private_local";
-const SOLAND_LOCAL_COMPAT_NOTES: &str = "non-registry REST routes were moved out of /_cokret; clients should prefer operation-registry canonical paths";
+const SOLAND_LOCAL_COMPAT_NOTES: &str = "non-registry REST routes were moved out of /_arkret; clients should prefer operation-registry canonical paths";
 
 #[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 struct ReadyzOutcome {
@@ -89,7 +89,7 @@ pub(super) fn health_router() -> Router {
 
 pub(super) fn protocol_router() -> Router {
     Router::new()
-        // `/_cokret/describe` — root meta position (no trust segment).
+        // `/_arkret/describe` — root meta position (no trust segment).
         .push(Router::with_path("describe").get(server_describe))
 }
 
@@ -330,7 +330,7 @@ fn build_server_description(state: &AppState) -> ServerDescription {
 ///   dropped with a `warn!` line. The wire never advertises a profile we don't also self-claim —
 ///   that would be a silent cross-binding lie.
 pub(crate) fn apply_claim_level_partition(
-    description: &mut cokret_sdk::ServerDescription,
+    description: &mut arkret_sdk::ServerDescription,
     loaded_verified: &[crate::verified_profiles::VerifiedProfileDescriptor],
     candidate_join_policy_enabled: bool,
 ) {
@@ -349,10 +349,10 @@ pub(crate) fn apply_claim_level_partition(
     // floor + Principal Server + Principal Server Events API in
     // addition to the MIMI interop staging extension below.
     let mut claimed_profiles = vec![
-        cokret_sdk::ClaimedProfileEntry::self_claimed("ck.profile.core_event_store.v1"),
-        cokret_sdk::ClaimedProfileEntry::self_claimed("ck.profile.principal_server.v1"),
-        cokret_sdk::ClaimedProfileEntry::self_claimed("ck.profile.principal_server_events_api.v1"),
-        cokret_sdk::ClaimedProfileEntry {
+        arkret_sdk::ClaimedProfileEntry::self_claimed("ck.profile.core_event_store.v1"),
+        arkret_sdk::ClaimedProfileEntry::self_claimed("ck.profile.principal_server.v1"),
+        arkret_sdk::ClaimedProfileEntry::self_claimed("ck.profile.principal_server_events_api.v1"),
+        arkret_sdk::ClaimedProfileEntry {
             notes: Some(
                 "Full MLS Governance Binding: reducer validates governance_binding \
                  policy_root / metadata coverage and the covered_seals_cell coverage \
@@ -363,25 +363,25 @@ pub(crate) fn apply_claim_level_partition(
                  (not claimed)."
                     .to_owned(),
             ),
-            ..cokret_sdk::ClaimedProfileEntry::self_claimed(
+            ..arkret_sdk::ClaimedProfileEntry::self_claimed(
                 "ck.profile.mls_governance_binding.full.v1",
             )
         },
-        cokret_sdk::ClaimedProfileEntry {
+        arkret_sdk::ClaimedProfileEntry {
             notes: Some(
                 "MIMI provider facade first round (not a full v1 core conformance claim)"
                     .to_owned(),
             ),
-            ..cokret_sdk::ClaimedProfileEntry::self_claimed("ck.profile.mimi_interop.v1")
+            ..arkret_sdk::ClaimedProfileEntry::self_claimed("ck.profile.mimi_interop.v1")
         },
-        cokret_sdk::ClaimedProfileEntry {
+        arkret_sdk::ClaimedProfileEntry {
             notes: Some(
                 "Agent protocol interop extension profile: ck.agent.endpoint registry, \
-                 /_cokret/self/agents/discover, ck.agent.interop_session.* lifecycle + \
+                 /_arkret/self/agents/discover, ck.agent.interop_session.* lifecycle + \
                  Ed25519 audit_binding. See zh/extensions/agent-protocol-interop.md."
                     .to_owned(),
             ),
-            ..cokret_sdk::ClaimedProfileEntry::self_claimed("ck.profile.agent_runtime.v1")
+            ..arkret_sdk::ClaimedProfileEntry::self_claimed("ck.profile.agent_runtime.v1")
         },
     ];
     // G3.S9 — when the sovereign enclave profile is enabled, claim it
@@ -400,27 +400,27 @@ pub(crate) fn apply_claim_level_partition(
         std::env::var("SOLAND_SOVEREIGN_ENCLAVE").as_deref(),
         Ok("1") | Ok("true") | Ok("TRUE") | Ok("yes")
     ) {
-        claimed_profiles.push(cokret_sdk::ClaimedProfileEntry {
+        claimed_profiles.push(arkret_sdk::ClaimedProfileEntry {
             notes: Some(
                 "Sovereign enclave profile: outbound federation disabled, \
                  outbound HTTP allow-list enforced. See \
                  zh/sync/sovereign-deployment.md §2–§6."
                     .to_owned(),
             ),
-            ..cokret_sdk::ClaimedProfileEntry::self_claimed(
+            ..arkret_sdk::ClaimedProfileEntry::self_claimed(
                 crate::routing::extensions::sovereign::SOVEREIGN_ENCLAVE_PROFILE_ID,
             )
         });
     }
     if candidate_join_policy_enabled {
-        claimed_profiles.push(cokret_sdk::ClaimedProfileEntry {
+        claimed_profiles.push(arkret_sdk::ClaimedProfileEntry {
             notes: Some(
                 "Candidate join-policy profile: product-local member application \
                  workflow surface is enabled; application/review concepts remain \
-                 profile-private and off the /_cokret protocol root."
+                 profile-private and off the /_arkret protocol root."
                     .to_owned(),
             ),
-            ..cokret_sdk::ClaimedProfileEntry::self_claimed("ck.profile.candidate.join_policy.v1")
+            ..arkret_sdk::ClaimedProfileEntry::self_claimed("ck.profile.candidate.join_policy.v1")
         });
     }
     // Snapshot the claimed-profile id set BEFORE serialising (which moves
@@ -442,7 +442,7 @@ pub(crate) fn apply_claim_level_partition(
     // the `claimed_profiles[]` built above. Entries that fail the
     // cross-check are dropped with a warn — we never advertise a verified
     // profile we don't also self-claim.
-    let verified_profiles: Vec<cokret_sdk::VerifiedProfileEntry> = if description.development_mode {
+    let verified_profiles: Vec<arkret_sdk::VerifiedProfileEntry> = if description.development_mode {
         if !loaded_verified.is_empty() {
             tracing::warn!(
                 target: "verified_profiles",
@@ -464,9 +464,9 @@ pub(crate) fn apply_claim_level_partition(
                     );
                     return None;
                 }
-                Some(cokret_sdk::VerifiedProfileEntry {
+                Some(arkret_sdk::VerifiedProfileEntry {
                     profile_id: entry.profile_id.clone(),
-                    claim_kind: cokret_sdk::ConformanceVerifiedKind::ConformanceVerified,
+                    claim_kind: arkret_sdk::ConformanceVerifiedKind::ConformanceVerified,
                     verification_run_id: entry.cotest_run_id.clone(),
                     artifact_digest: entry.artifact_digest.clone(),
                     artifact_ref: entry.artifact_ref.clone(),
@@ -487,9 +487,9 @@ pub(crate) fn apply_claim_level_partition(
     description.compat_surfaces = soland_compat_surfaces();
 }
 
-fn soland_compat_surfaces() -> Vec<cokret_sdk::CompatSurfaceEntry> {
+fn soland_compat_surfaces() -> Vec<arkret_sdk::CompatSurfaceEntry> {
     vec![
-        cokret_sdk::CompatSurfaceEntry::external_interop(SOLAND_LOCAL_COMPAT_SURFACE_NAME)
+        arkret_sdk::CompatSurfaceEntry::external_interop(SOLAND_LOCAL_COMPAT_SURFACE_NAME)
             .with_extra_string("base_path", SOLAND_LOCAL_COMPAT_BASE_PATH)
             .with_extra_string("status", SOLAND_LOCAL_COMPAT_STATUS)
             .with_notes(SOLAND_LOCAL_COMPAT_NOTES),
@@ -509,15 +509,15 @@ pub(in crate::routing) async fn auth_bridge_describe() -> JsonResult<AuthBridgeD
         api_base_path: "/_soland".to_owned(),
         auth: AuthBridgeAuthDescriptor {
             dev_login_path: "/_soland/gate/auth/dev-login".to_owned(),
-            session_grant_issuance_path: "/_cokret/gate/account/session-grants".to_owned(),
+            session_grant_issuance_path: "/_arkret/gate/account/session-grants".to_owned(),
             session_grant_presentation:
-                "Authorization: Bearer <ck.session.grant> with a DPoP proof on /_cokret/self/*"
+                "Authorization: Bearer <ck.session.grant> with a DPoP proof on /_arkret/self/*"
                     .to_owned(),
             principal_id_body_field: "principal_id".to_owned(),
         },
         push: AuthBridgePushDescriptor {
-            register_device_path: "/_cokret/edge/push/register-device".to_owned(),
-            unregister_device_path: "/_cokret/edge/push/unregister-device".to_owned(),
+            register_device_path: "/_arkret/edge/push/register-device".to_owned(),
+            unregister_device_path: "/_arkret/edge/push/unregister-device".to_owned(),
             session_grant_header: "X-Arkret-Session-Grant".to_owned(),
             principal_id_body_field: "principal_id".to_owned(),
             register_device_mode: "session_grant_presentation_or_dev_session".to_owned(),
@@ -537,7 +537,7 @@ pub(in crate::routing) async fn auth_bridge_describe() -> JsonResult<AuthBridgeD
             register_device_request: json!({
                 "principal_id": "did:web:alice.example",
                 "device_id": "ak:device:01904100-0000-7000-8000-000000000001",
-                "push_gateway": "https://floria.example/_cokret/edge/push/notify",
+                "push_gateway": "https://floria.example/_arkret/edge/push/notify",
                 "push_key": "webpush:https://fcm.googleapis.com/wp/01js0000000000000000000000",
                 "platform": "web"
             }),
@@ -565,14 +565,14 @@ async fn integration_describe() -> JsonResult<IntegrationDescribeOutcome> {
         version: "2026-05-04-scaffold".to_owned(),
         service: "soland".to_owned(),
         service_kind: "principal_server".to_owned(),
-        api_base_path: "/_cokret".to_owned(),
+        api_base_path: "/_arkret".to_owned(),
         describe_path: "/_soland/self/integration/describe".to_owned(),
         dependencies: vec![
             IntegrationDependencyDescriptor {
                 service: "coauth".to_owned(),
                 purpose: "session_grant_introspection".to_owned(),
                 required_contract: "ck.gate.account.session_grant.introspect".to_owned(),
-                discovery_path: "/_cokret/gate/account/session-grants/introspect".to_owned(),
+                discovery_path: "/_arkret/gate/account/session-grants/introspect".to_owned(),
                 mode: "remote_service_contract".to_owned(),
             },
             IntegrationDependencyDescriptor {
@@ -595,7 +595,7 @@ async fn integration_describe() -> JsonResult<IntegrationDescribeOutcome> {
             IntegrationSurfaceDescriptor {
                 name: "session_grant_presentation".to_owned(),
                 method: "Authorization".to_owned(),
-                path: "all protected /_cokret routes".to_owned(),
+                path: "all protected /_arkret routes".to_owned(),
                 contract: "ck.session.grant+dpop".to_owned(),
                 stability: "scaffold".to_owned(),
                 todo: "make the session-grant introspection cache/timeout policy explicit in the published contract.".to_owned(),
@@ -611,7 +611,7 @@ async fn integration_describe() -> JsonResult<IntegrationDescribeOutcome> {
             IntegrationSurfaceDescriptor {
                 name: "push_register_device".to_owned(),
                 method: "POST".to_owned(),
-                path: "/_cokret/edge/push/register-device".to_owned(),
+                path: "/_arkret/edge/push/register-device".to_owned(),
                 contract: "arkret.rest.principal_push_register.v1".to_owned(),
                 stability: "limited".to_owned(),
                 todo: "unify push registration behind the same session-grant presentation used by ordinary requests.".to_owned(),
@@ -627,7 +627,7 @@ async fn integration_describe() -> JsonResult<IntegrationDescribeOutcome> {
             IntegrationSurfaceDescriptor {
                 name: "member_identity_update".to_owned(),
                 method: "POST".to_owned(),
-                path: "/_cokret/self/events".to_owned(),
+                path: "/_arkret/self/events".to_owned(),
                 contract: "ck.member.identity.update".to_owned(),
                 stability: "partial_fail_closed".to_owned(),
                 todo: "plaintext Ed25519 MemberIdentity proofs are verified; encrypted proof verification and ES256/ES384 are unsupported and rejected.".to_owned(),
@@ -635,7 +635,7 @@ async fn integration_describe() -> JsonResult<IntegrationDescribeOutcome> {
             IntegrationSurfaceDescriptor {
                 name: "agent_runtime_attestation".to_owned(),
                 method: "POST".to_owned(),
-                path: "/_cokret/gate/account/agent-key-pair".to_owned(),
+                path: "/_arkret/gate/account/agent-key-pair".to_owned(),
                 contract: "ck.gate.account.command.pair_agent_key".to_owned(),
                 stability: "unsupported_fail_closed".to_owned(),
                 todo: "runtime_attestation verifier and controller approval ledger are not wired; requests carrying runtime_attestation are rejected.".to_owned(),
@@ -651,7 +651,7 @@ async fn integration_describe() -> JsonResult<IntegrationDescribeOutcome> {
             IntegrationSurfaceDescriptor {
                 name: "blob_presign".to_owned(),
                 method: "POST".to_owned(),
-                path: "/_cokret/self/blob/presign".to_owned(),
+                path: "/_arkret/self/blob/presign".to_owned(),
                 contract: "ck.self.blob.command.presign".to_owned(),
                 stability: "local_direct_serve".to_owned(),
                 todo: "issues soland-signed local /blob/get URLs; backend-native object-store presign is not claimed.".to_owned(),
@@ -659,10 +659,10 @@ async fn integration_describe() -> JsonResult<IntegrationDescribeOutcome> {
         ],
         examples: json!({
             "compose_strand": {
-                "step_1": {"service": "coauth", "path": "/_cokret/gate/account/session-grants", "method": "POST"},
+                "step_1": {"service": "coauth", "path": "/_arkret/gate/account/session-grants", "method": "POST"},
                 "step_2": {"service": "soland", "path": "protected route", "method": "Authorization: Bearer <ck.session.grant> + DPoP"},
                 "step_3": {"service": "soland", "path": "/_soland/edge/push/outbound/bridge/fetch", "method": "POST"},
-                "step_4": {"service": "soland", "path": "/_cokret/edge/push/register-device", "method": "POST"}
+                "step_4": {"service": "soland", "path": "/_arkret/edge/push/register-device", "method": "POST"}
             }
         }),
         todos: vec![

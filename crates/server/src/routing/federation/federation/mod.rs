@@ -1,6 +1,6 @@
 //! Internal federation helpers.
 //!
-//! The formal server-to-server HTTP surface is `/_cokret/peer/*`. This module keeps
+//! The formal server-to-server HTTP surface is `/_arkret/peer/*`. This module keeps
 //! trust-header utilities and local migration helpers that are not mounted as peer routes.
 //!
 //! Production gaps: `validation_class` instead of bool, reducer-profile
@@ -73,7 +73,7 @@ pub use backfill::{broadcast_move_to_peers, broadcast_seal_to_peers};
 #[cfg(test)]
 use chrono::{Duration, Utc};
 #[cfg(test)]
-use cokret_sdk::{Operation, RealmId};
+use arkret_sdk::{Operation, RealmId};
 pub(super) use endpoints::{
     federation_actor_events, federation_backfill_operations, federation_operation_frontier,
     federation_pull_operations, federation_push_operations, federation_realm_members,

@@ -1,6 +1,6 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use cokret_sdk::{Did, RealmId};
+use arkret_sdk::{Did, RealmId};
 use salvo::http::StatusCode;
 use salvo::test::{ResponseExt, TestClient};
 use serde_json::{Value, json};
@@ -55,9 +55,9 @@ async fn dev_token(state: AppState, actor: &str, device_id: &str, display_name: 
 
 async fn account_subscribe_frame(state: AppState, token: &str, query: &str) -> Value {
     let url = if query.is_empty() {
-        "http://server/_cokret/self/account/subscribe".to_owned()
+        "http://server/_arkret/self/account/subscribe".to_owned()
     } else {
-        format!("http://server/_cokret/self/account/subscribe?{query}")
+        format!("http://server/_arkret/self/account/subscribe?{query}")
     };
     let body = TestClient::get(url)
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -70,7 +70,7 @@ async fn account_subscribe_frame(state: AppState, token: &str, query: &str) -> V
 }
 
 async fn create_plaintext_realm(state: AppState, _token: &str, title: &str) -> String {
-    let realm_id = cokret_sdk::new_prefixed_uuid7("ak:realm:");
+    let realm_id = arkret_sdk::new_prefixed_uuid7("ak:realm:");
     let typed_realm_id = RealmId::new(realm_id.clone()).unwrap();
     let owner = Did::new("did:web:alice.example".to_owned()).unwrap();
     let now = chrono::Utc::now();
@@ -102,7 +102,7 @@ async fn create_plaintext_realm(state: AppState, _token: &str, title: &str) -> S
                 plaintext_visible_service_classes: std::collections::BTreeMap::from([(
                     "did:web:soland.local".to_owned(),
                     std::collections::BTreeSet::from([
-                        cokret_sdk::PlaintextDataClassKind::MessageContent,
+                        arkret_sdk::PlaintextDataClassKind::MessageContent,
                     ]),
                 )]),
                 minimal_metadata_realm: false,
@@ -142,7 +142,7 @@ async fn send_plaintext_message(
         "content": {"kind": "ck.content.text", "body": body}
     });
     let mut event = json!({
-        "event_id": cokret_sdk::new_prefixed_uuid7("ak:event:"),
+        "event_id": arkret_sdk::new_prefixed_uuid7("ak:event:"),
         "kind": "ck.message.create",
         "schema_id": "ck.schema.message.v1",
         "actor_id": actor,
@@ -164,7 +164,7 @@ async fn send_plaintext_message(
         }]
     });
     event["canonical_digest"] = Value::String(event_canonical_digest(&event));
-    let mut response: Value = TestClient::post("http://server/_cokret/self/events")
+    let mut response: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&event)
         .send(&app_from_state(state))
@@ -194,7 +194,7 @@ fn signed_actor_private_event_envelope(
     payload: Value,
 ) -> Value {
     let mut event = json!({
-        "event_id": cokret_sdk::new_prefixed_uuid7("ak:event:"),
+        "event_id": arkret_sdk::new_prefixed_uuid7("ak:event:"),
         "kind": kind,
         "schema_id": "ck.schema.event.v1",
         "actor_id": actor,
@@ -229,7 +229,7 @@ async fn submit_actor_private_event(
     payload: Value,
 ) -> Value {
     let event = signed_actor_private_event_envelope(actor, device_id, realm_id, kind, payload);
-    TestClient::post("http://server/_cokret/self/events")
+    TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&event)
         .send(&app_from_state(state))
@@ -255,7 +255,7 @@ fn read_cursor_payload(
     hlc: &str,
 ) -> Value {
     json!({
-        "id": cokret_sdk::new_prefixed_uuid7("ak:read_cursor:"),
+        "id": arkret_sdk::new_prefixed_uuid7("ak:read_cursor:"),
         "schema": "ck.schema.read_cursor.v1",
         "actor_id": actor,
         "device_id": device_id,
@@ -295,7 +295,7 @@ fn projected_read_markers(state: &AppState, actor: &str, realm_id: Option<&str>)
 }
 
 fn sha256_json(value: &Value) -> String {
-    let bytes = cokret_sdk::canonical::canonical_json_bytes(value).expect("json canonicalizes");
+    let bytes = arkret_sdk::canonical::canonical_json_bytes(value).expect("json canonicalizes");
     let mut hasher = Sha256::new();
     hasher.update(bytes);
     format!("sha256:{}", hex::encode(hasher.finalize()))
@@ -439,7 +439,7 @@ async fn blocklist_account_data_requires_encrypted_carrier_and_fans_out_opaque()
         .expect("blocklist account_data visible to Alice's sibling device");
     assert_eq!(phone_account_data["content"], encrypted_blocklist);
 
-    let phone_messages: Value = TestClient::get("http://server/_cokret/self/device_messages")
+    let phone_messages: Value = TestClient::get("http://server/_arkret/self/device_messages")
         .add_header("authorization", format!("Bearer {alice_phone}"), true)
         .send(&app_from_state(state.clone()))
         .await
@@ -457,7 +457,7 @@ async fn blocklist_account_data_requires_encrypted_carrier_and_fans_out_opaque()
     );
     assert_eq!(blocklist_event["content"]["content"], encrypted_blocklist);
 
-    let bob_messages: Value = TestClient::get("http://server/_cokret/self/device_messages")
+    let bob_messages: Value = TestClient::get("http://server/_arkret/self/device_messages")
         .add_header("authorization", format!("Bearer {bob}"), true)
         .send(&app_from_state(state.clone()))
         .await
@@ -549,7 +549,7 @@ async fn read_cursor_fans_out_per_realm_without_cross_actor_leakage() {
     assert_eq!(markers_b[0]["position"]["event_id"], event_b);
     assert_eq!(markers_b[0]["realm_id"], realm_b);
 
-    let phone_messages: Value = TestClient::get("http://server/_cokret/self/device_messages")
+    let phone_messages: Value = TestClient::get("http://server/_arkret/self/device_messages")
         .add_header("authorization", format!("Bearer {alice_phone}"), true)
         .send(&app_from_state(state.clone()))
         .await
@@ -574,7 +574,7 @@ async fn read_cursor_fans_out_per_realm_without_cross_actor_leakage() {
 
     let bob_markers = projected_read_markers(&state, "did:web:bob.example", None);
     assert!(bob_markers.is_empty());
-    let bob_messages: Value = TestClient::get("http://server/_cokret/self/device_messages")
+    let bob_messages: Value = TestClient::get("http://server/_arkret/self/device_messages")
         .add_header("authorization", format!("Bearer {bob}"), true)
         .send(&app_from_state(state.clone()))
         .await
@@ -594,7 +594,7 @@ async fn push_blind_wakeup_rejects_e2ee_stable_identifiers() {
         "Alice Desktop",
     )
     .await;
-    let registered: Value = TestClient::post("http://server/_cokret/edge/push/register-device")
+    let registered: Value = TestClient::post("http://server/_arkret/edge/push/register-device")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&json!({
             "device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001",
@@ -613,7 +613,7 @@ async fn push_blind_wakeup_rejects_e2ee_stable_identifiers() {
         .as_str()
         .expect("register-device returns push target registration id");
 
-    let rejected = TestClient::post("http://server/_cokret/edge/push/notify")
+    let rejected = TestClient::post("http://server/_arkret/edge/push/notify")
         .json(&json!({
             "notification": {
                 "push_target_id": push_target_id,
@@ -628,7 +628,7 @@ async fn push_blind_wakeup_rejects_e2ee_stable_identifiers() {
         .await;
     assert_eq!(rejected.status_code, Some(StatusCode::BAD_REQUEST));
 
-    let accepted: Value = TestClient::post("http://server/_cokret/edge/push/notify")
+    let accepted: Value = TestClient::post("http://server/_arkret/edge/push/notify")
         .json(&json!({
             "notification": {
                 "push_target_id": push_target_id,

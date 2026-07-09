@@ -1,14 +1,14 @@
-//! Signed Event Envelope ingestion + read API (`/_cokret/self/events/*`).
+//! Signed Event Envelope ingestion + read API (`/_arkret/self/events/*`).
 //!
 //! Surfaces:
-//! - `GET  /_cokret/self/events/describe`  — declare the active event registry, schema/reducer
+//! - `GET  /_arkret/self/events/describe`  — declare the active event registry, schema/reducer
 //!   profiles, and limits.
-//! - `POST /_cokret/self/events`           — submit one canonical Event Envelope or an `events[]`
+//! - `POST /_arkret/self/events`           — submit one canonical Event Envelope or an `events[]`
 //!   account-client batch.
-//! - `GET  /_cokret/self/events/{event_id}` — fetch one envelope.
-//! - `POST /_cokret/self/events/resolve`    — resolve up to `MAX_EVENT_RESOLVE`.
-//! - `GET  /_cokret/self/events`            — paginated list (filtered by actor / realm).
-//! - `GET  /_cokret/self/events/frontier`   — per-actor / per-realm frontier.
+//! - `GET  /_arkret/self/events/{event_id}` — fetch one envelope.
+//! - `POST /_arkret/self/events/resolve`    — resolve up to `MAX_EVENT_RESOLVE`.
+//! - `GET  /_arkret/self/events`            — paginated list (filtered by actor / realm).
+//! - `GET  /_arkret/self/events/frontier`   — per-actor / per-realm frontier.
 //!
 //! The validator block (`validate_event_envelope` + helpers) lives in the
 //! `validation` submodule.
@@ -18,11 +18,11 @@ use std::collections::BTreeMap;
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::{DateTime, Duration, Utc};
-use cokret_sdk::http::{
+use arkret_sdk::http::{
     EventView, EventsQueryOutcome, EventsResolveOutcome, EventsResolveRequestBody,
     EventsSubmitOutcome, EventsSubmitStatus,
 };
-use cokret_sdk::{
+use arkret_sdk::{
     ActorFrontierView, Audience, Did, Event, EventId, EventRef, EventsFrontierAccountClientState,
     EventsFrontierView, EventsSubmitFederationRequestBody, FederationServiceBindingRef, Hash, Hlc,
     MAX_EVENT_ENVELOPE_BYTES, MAX_EVENT_PREV_REFS, MAX_EVENT_REFS, MAX_EVENT_RESOLVE,

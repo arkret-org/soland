@@ -220,7 +220,7 @@ fn normalize_pair_device_public_key(public_key: &str) -> Result<String, AppError
         .and_then(|body| body.split('#').next())
         .unwrap_or(public_key);
     if multibase.starts_with('z') {
-        cokret_sdk::decode_ed25519_multibase(multibase).map_err(|error| {
+        arkret_sdk::decode_ed25519_multibase(multibase).map_err(|error| {
             AppError::invalid_param(format!(
                 "new_device_pubkey.public_key is not an Ed25519 multibase key: {error}"
             ))
@@ -228,7 +228,7 @@ fn normalize_pair_device_public_key(public_key: &str) -> Result<String, AppError
         return Ok(multibase.to_owned());
     }
 
-    let bytes = cokret_sdk::base64url_decode(public_key).map_err(|error| {
+    let bytes = arkret_sdk::base64url_decode(public_key).map_err(|error| {
         AppError::invalid_param(format!(
             "new_device_pubkey.public_key must be Ed25519 multibase or base64url: {error}"
         ))
@@ -239,7 +239,7 @@ fn normalize_pair_device_public_key(public_key: &str) -> Result<String, AppError
             bytes.len()
         ))
     })?;
-    Ok(cokret_sdk::ed25519_pubkey_to_did_key_multibase(
+    Ok(arkret_sdk::ed25519_pubkey_to_did_key_multibase(
         &public_key_bytes,
     ))
 }

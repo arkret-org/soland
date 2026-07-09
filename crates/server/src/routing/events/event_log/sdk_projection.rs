@@ -15,7 +15,7 @@ pub(crate) fn event_semantic_refs(
         ));
     };
     // scalability-constraints.md §2 — total refs[] across all roles ≤ 128.
-    if values.len() > max_len || cokret_sdk::validate_event_ref_count(values.len()).is_err() {
+    if values.len() > max_len || arkret_sdk::validate_event_ref_count(values.len()).is_err() {
         return Err(event_validation_error(
             StatusCode::BAD_REQUEST,
             "refs_too_large",
@@ -59,7 +59,7 @@ pub(crate) fn event_semantic_refs(
     // scalability-constraints.md §2 — the `authorized_by` role is capped at 64
     // within the 128 total; authorized_by refs MUST be the minimal authorizing
     // state set (event-and-patch.md §2.2).
-    if cokret_sdk::validate_authorized_by_ref_count(authorized_refs.len()).is_err() {
+    if arkret_sdk::validate_authorized_by_ref_count(authorized_refs.len()).is_err() {
         return Err(event_validation_error(
             StatusCode::BAD_REQUEST,
             "refs_too_large",
@@ -172,14 +172,14 @@ pub(crate) fn projection_operation_from_event(
     // lives on the envelope, not the payload, so surface it on the projection
     // operation for this kind (scoped to avoid changing other reducers' payload
     // shape).
-    if parsed.kind == cokret_sdk::events::kinds::MORPH_SCHEMA_MIGRATE
+    if parsed.kind == arkret_sdk::events::kinds::MORPH_SCHEMA_MIGRATE
         && let Some(requirements) = envelope.get("requirements")
     {
         payload_object
             .entry("requirements".to_owned())
             .or_insert_with(|| requirements.clone());
     }
-    if parsed.kind == cokret_sdk::events::kinds::RELATION_CREATE {
+    if parsed.kind == arkret_sdk::events::kinds::RELATION_CREATE {
         normalize_relation_create_payload(payload_object, parsed);
     }
     if let Some(target_ref) = payload_object
@@ -222,7 +222,7 @@ pub(crate) fn projection_operation_from_event(
             .entry("actor_seq".to_owned())
             .or_insert_with(|| Value::from(parsed.actor_seq));
     }
-    if parsed.kind == cokret_sdk::events::kinds::MORPH_SCHEMA_MIGRATE {
+    if parsed.kind == arkret_sdk::events::kinds::MORPH_SCHEMA_MIGRATE {
         if let Some(authorization_ref) = parsed.authorized_refs.first() {
             payload_object
                 .entry("authorization_ref".to_owned())
@@ -372,7 +372,7 @@ pub(crate) fn effective_scope_for_envelope(envelope: &Value) -> Option<String> {
     // server-stamped `effective_scope` above, derived from its Strand at ingest.
     // There is deliberately no client-supplied fallback, so a message cannot
     // spoof its own visibility scope.
-    if object.get("kind").and_then(Value::as_str) == Some(cokret_sdk::events::kinds::MESSAGE_CREATE)
+    if object.get("kind").and_then(Value::as_str) == Some(arkret_sdk::events::kinds::MESSAGE_CREATE)
     {
         return None;
     }
@@ -430,7 +430,7 @@ fn sdk_event_from_record(
     let realm_id = RealmId::new(realm_id).map_err(|error| AppError::internal(error.to_string()))?;
     let event_id = EventId::new(record.event_id.clone())
         .map_err(|error| AppError::internal(error.to_string()))?;
-    let actor_id = cokret_sdk::Did::new(record.actor_id.clone())
+    let actor_id = arkret_sdk::Did::new(record.actor_id.clone())
         .map_err(|error| AppError::internal(error.to_string()))?;
     let created_at = object
         .get("created_at")
@@ -499,7 +499,7 @@ fn sdk_event_from_record(
         seal_ref: object
             .get("seal_ref")
             .and_then(Value::as_str)
-            .and_then(|value| cokret_sdk::SealId::new(value.to_owned()).ok()),
+            .and_then(|value| arkret_sdk::SealId::new(value.to_owned()).ok()),
         auth_context: object
             .get("auth_context")
             .cloned()
@@ -521,7 +521,7 @@ fn sdk_event_from_record(
         executed_by: object
             .get("executed_by")
             .and_then(Value::as_str)
-            .and_then(|value| cokret_sdk::Did::new(value.to_owned()).ok()),
+            .and_then(|value| arkret_sdk::Did::new(value.to_owned()).ok()),
         authorization_ref: object
             .get("authorization_ref")
             .and_then(Value::as_str)
@@ -529,7 +529,7 @@ fn sdk_event_from_record(
         applet_id: object
             .get("applet_id")
             .and_then(Value::as_str)
-            .and_then(|value| cokret_sdk::AppletId::new(value.to_owned()).ok()),
+            .and_then(|value| arkret_sdk::AppletId::new(value.to_owned()).ok()),
         external_ref: object
             .get("external_ref")
             .filter(|value| !value.is_null())
@@ -605,7 +605,7 @@ where
 fn sdk_effective_scope(
     record: &CanonicalEventRecord,
     realm_id: &RealmId,
-) -> Option<cokret_sdk::models::EffectiveScope> {
+) -> Option<arkret_sdk::models::EffectiveScope> {
     if let Some(scope) = record
         .envelope
         .get("effective_scope")
@@ -616,15 +616,15 @@ fn sdk_effective_scope(
     }
     match effective_scope_for_envelope(&record.envelope).as_deref() {
         Some(scope) if scope.starts_with("ak:circle:") => {
-            cokret_sdk::CircleId::new(scope.to_owned())
+            arkret_sdk::CircleId::new(scope.to_owned())
                 .ok()
-                .map(|circle_id| cokret_sdk::models::EffectiveScope::Circle {
+                .map(|circle_id| arkret_sdk::models::EffectiveScope::Circle {
                     realm_id: realm_id.clone(),
                     circle_id,
                 })
         }
         Some(scope) if scope.starts_with("realm:") => {
-            Some(cokret_sdk::models::EffectiveScope::Realm {
+            Some(arkret_sdk::models::EffectiveScope::Realm {
                 realm_id: realm_id.clone(),
             })
         }
@@ -823,7 +823,7 @@ fn circle_event_visible_to_session(
 pub async fn effective_read_receipt_policy_for_realm(
     state: &AppState,
     realm_id: &str,
-) -> Option<cokret_sdk::ReadReceiptPolicy> {
+) -> Option<arkret_sdk::ReadReceiptPolicy> {
     // Cell-keyed fast path. The Move/Seal pipeline writes the
     // `ck.component.realm.read_receipt_policy.v1` resolved CasRegister
     // value into `ProjectionState::cells` after every apply_seal; we
@@ -832,7 +832,7 @@ pub async fn effective_read_receipt_policy_for_realm(
     // kind.)
     {
         let proj = state.projection.lock();
-        let cell_id = cokret_sdk::CellRef::new(format!(
+        let cell_id = arkret_sdk::CellRef::new(format!(
             "ak:cell:ck.component.realm.read_receipt_policy.v1:{realm_id}"
         ))
         .ok()?;
@@ -866,7 +866,7 @@ pub async fn effective_read_receipt_policy_for_realm(
     read_receipt_policy_from_value(payload)
 }
 
-fn read_receipt_policy_from_value(value: &Value) -> Option<cokret_sdk::ReadReceiptPolicy> {
+fn read_receipt_policy_from_value(value: &Value) -> Option<arkret_sdk::ReadReceiptPolicy> {
     serde_json::from_value(value.clone()).ok()
 }
 
@@ -893,7 +893,7 @@ mod refs_limit_tests {
     // §2 — `authorized_by` role ≤ 64 within the 128 total.
     #[test]
     fn authorized_by_over_max_rejected_as_refs_too_large() {
-        let refs: Vec<Value> = (0..(cokret_sdk::MAX_AUTHORIZED_BY_REFS + 1))
+        let refs: Vec<Value> = (0..(arkret_sdk::MAX_AUTHORIZED_BY_REFS + 1))
             .map(|_| json!({"id": "ak:event:e1", "role": "authorized_by"}))
             .collect();
         let err = event_semantic_refs(&refs_object(json!(refs)), MAX_EVENT_REFS).unwrap_err();

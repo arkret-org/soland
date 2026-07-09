@@ -209,7 +209,7 @@ async fn sync_token_for_state_positions(
 }
 
 pub(crate) fn encode_sync_cursor_value(cursor: Value) -> String {
-    let bytes = cokret_sdk::canonical::canonical_json_bytes(&cursor)
+    let bytes = arkret_sdk::canonical::canonical_json_bytes(&cursor)
         .unwrap_or_else(|_| cursor.to_string().into_bytes());
     format!("ak:cursor:{}", URL_SAFE_NO_PAD.encode(bytes))
 }
@@ -262,7 +262,7 @@ pub(crate) fn stream_cursor_handle_binding(
         "device_lists": device_list_positions,
         "to_device": to_device_position,
     });
-    cokret_sdk::canonical::canonical_json_bytes(&binding)
+    arkret_sdk::canonical::canonical_json_bytes(&binding)
         .unwrap_or_else(|_| binding.to_string().into_bytes())
 }
 
@@ -281,7 +281,7 @@ pub(crate) fn events_query_cursor_handle_binding(
         "purpose": STREAM_CURSOR_PURPOSE,
         "target": target,
     });
-    cokret_sdk::canonical::canonical_json_bytes(&binding)
+    arkret_sdk::canonical::canonical_json_bytes(&binding)
         .unwrap_or_else(|_| binding.to_string().into_bytes())
 }
 
@@ -302,7 +302,7 @@ fn service_cursor_handle_binding(
         "device_lists": {},
         "to_device": 0,
     });
-    cokret_sdk::canonical::canonical_json_bytes(&binding)
+    arkret_sdk::canonical::canonical_json_bytes(&binding)
         .unwrap_or_else(|_| binding.to_string().into_bytes())
 }
 
@@ -806,11 +806,11 @@ pub fn sync_filter_digest(filter: Option<&serde_json::Value>) -> String {
     let binding = json!({
         "filter": filter,
     });
-    cokret_sdk::canonical::canonical_sha256(&binding)
-        .unwrap_or_else(|_| cokret_sdk::canonical::sha256_digest(binding.to_string().as_bytes()))
+    arkret_sdk::canonical::canonical_sha256(&binding)
+        .unwrap_or_else(|_| arkret_sdk::canonical::sha256_digest(binding.to_string().as_bytes()))
 }
 
-/// `POST /_cokret/self/account/cursor/revoke` — `ck.self.account.command.revoke_cursor`.
+/// `POST /_arkret/self/account/cursor/revoke` — `ck.self.account.command.revoke_cursor`.
 ///
 /// High-assurance optional endpoint: record a previously issued cursor
 /// authority in the revocation set until its maximum TTL would have elapsed.
@@ -828,10 +828,10 @@ pub fn sync_filter_digest(filter: Option<&serde_json::Value>) -> String {
 #[tracing::instrument(skip_all, fields(op = "ck.self.account.command.revoke_cursor"))]
 pub(super) async fn account_cursor_revoke(
     aa: crate::routing::system::extract::AuthArgs,
-    body: salvo::oapi::extract::JsonBody<cokret_sdk::AccountCursorRevokeRequestBody>,
+    body: salvo::oapi::extract::JsonBody<arkret_sdk::AccountCursorRevokeRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
-) -> crate::result::JsonResult<cokret_sdk::AccountCursorRevokeOutcome> {
+) -> crate::result::JsonResult<arkret_sdk::AccountCursorRevokeOutcome> {
     use crate::error::AppError;
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
@@ -847,14 +847,14 @@ pub(super) async fn account_cursor_revoke(
     }
     let scope = body.revoke_scope;
     let scope_value = match scope {
-        cokret_sdk::CursorRevokeScope::ThisCursor => "this_cursor",
-        cokret_sdk::CursorRevokeScope::SameDevice => "same_device",
-        cokret_sdk::CursorRevokeScope::SameSession => "same_session",
+        arkret_sdk::CursorRevokeScope::ThisCursor => "this_cursor",
+        arkret_sdk::CursorRevokeScope::SameDevice => "same_device",
+        arkret_sdk::CursorRevokeScope::SameSession => "same_session",
     };
 
     let revoked_at = now();
     let expires_at = revoked_at + ChronoDuration::seconds(CURSOR_MAX_TTL_SECONDS);
-    let device_id = if matches!(scope, cokret_sdk::CursorRevokeScope::ThisCursor) {
+    let device_id = if matches!(scope, arkret_sdk::CursorRevokeScope::ThisCursor) {
         None
     } else {
         Some(session.device_id.clone())
@@ -888,7 +888,7 @@ pub(super) async fn account_cursor_revoke(
         revocations.push(record);
     }
 
-    crate::json_ok(cokret_sdk::AccountCursorRevokeOutcome {
+    crate::json_ok(arkret_sdk::AccountCursorRevokeOutcome {
         revoked: true,
         expires_at,
         revoke_scope_effective: Some(scope),
@@ -928,24 +928,24 @@ fn cursor_authority_revoked(
 /// correct flat frame from an optional cursor.
 ///
 /// Note: the cursor type expected by `EventsSubscribeFrame::cursor`
-/// is the typed-id `cokret_identifiers::Cursor` (`ck:cursor:<base64url>`),
-/// NOT the `cokret_sdk::Cursor` struct produced by `cursor::Cursor::new()`.
-/// The typed-id is exposed as `cokret_sdk::identifiers::Cursor`.
+/// is the typed-id `arkret_identifiers::Cursor` (`ck:cursor:<base64url>`),
+/// NOT the `arkret_sdk::Cursor` struct produced by `cursor::Cursor::new()`.
+/// The typed-id is exposed as `arkret_sdk::identifiers::Cursor`.
 pub fn dropped_or_resync(
-    cursor: Option<cokret_sdk::identifiers::Cursor>,
+    cursor: Option<arkret_sdk::identifiers::Cursor>,
     _reason: impl Into<String>,
     reconnect_after_ms: Option<u64>,
-) -> cokret_sdk::EventsSubscribeFrame {
+) -> arkret_sdk::EventsSubscribeFrame {
     match cursor {
-        Some(cursor) => cokret_sdk::EventsSubscribeFrame {
-            kind: cokret_sdk::EventsSubscribeFrameKind::Dropped,
+        Some(cursor) => arkret_sdk::EventsSubscribeFrame {
+            kind: arkret_sdk::EventsSubscribeFrameKind::Dropped,
             realm_id: None,
             cursor: Some(cursor),
             payload: serde_json::Value::Null,
             reconnect_after_ms,
         },
-        None => cokret_sdk::EventsSubscribeFrame {
-            kind: cokret_sdk::EventsSubscribeFrameKind::ResyncRequired,
+        None => arkret_sdk::EventsSubscribeFrame {
+            kind: arkret_sdk::EventsSubscribeFrameKind::ResyncRequired,
             realm_id: None,
             cursor: None,
             payload: serde_json::Value::Null,
@@ -989,11 +989,11 @@ mod cursor_frame_tests {
         let body = dropped_or_resync(None, "broadcast_lag", Some(10_000));
         assert_eq!(
             body.kind,
-            cokret_sdk::EventsSubscribeFrameKind::ResyncRequired
+            arkret_sdk::EventsSubscribeFrameKind::ResyncRequired
         );
-        let cursor = cokret_sdk::identifiers::Cursor::new("ak:cursor:resume").unwrap();
+        let cursor = arkret_sdk::identifiers::Cursor::new("ak:cursor:resume").unwrap();
         let body = dropped_or_resync(Some(cursor), "broadcast_lag", Some(10_000));
-        assert_eq!(body.kind, cokret_sdk::EventsSubscribeFrameKind::Dropped);
+        assert_eq!(body.kind, arkret_sdk::EventsSubscribeFrameKind::Dropped);
         assert_eq!(body.reconnect_after_ms, Some(10_000));
     }
 

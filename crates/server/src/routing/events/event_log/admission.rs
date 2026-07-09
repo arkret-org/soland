@@ -5,7 +5,7 @@ use super::*;
 // (spec B1.6 / T02 / T07 / T08 / T09 / T12 / T23).
 // ════════════════════════════════════════════════════════════════════════
 
-/// Spec B1.6 — discriminated `/_cokret/self/events` POST body. Account-client
+/// Spec B1.6 — discriminated `/_arkret/self/events` POST body. Account-client
 /// event envelopes stay as raw JSON Values until proof validation, because
 /// `proof.event_digest` binds the producer's canonical envelope bytes. Parsing
 /// into SDK `Event` here would reserialize defaults and change the signed
@@ -55,7 +55,7 @@ impl SolandEventsSubmitRequestBody {
             for entry in frontier {
                 if !seen.insert(entry.as_str()) {
                     return Err((
-                        cokret_sdk::ERROR_CODE_SCHEMA_VIOLATION,
+                        arkret_sdk::ERROR_CODE_SCHEMA_VIOLATION,
                         format!("{name} contains duplicate entry {:?}", entry.as_str()),
                     ));
                 }
@@ -63,16 +63,16 @@ impl SolandEventsSubmitRequestBody {
         }
         if binding.destination_service_type.trim().is_empty() {
             return Err((
-                cokret_sdk::ERROR_CODE_SCHEMA_VIOLATION,
+                arkret_sdk::ERROR_CODE_SCHEMA_VIOLATION,
                 "service_binding_ref.destination_service_type MUST be a non-empty string"
                     .to_owned(),
             ));
         }
-        let expected_reducer_digest = cokret_sdk::FEDERATION_MINIMAL_REDUCER_PROFILE_DIGEST;
+        let expected_reducer_digest = arkret_sdk::FEDERATION_MINIMAL_REDUCER_PROFILE_DIGEST;
         let actual_reducer_digest = binding.reducer_profile_digest.to_string();
         if actual_reducer_digest != expected_reducer_digest {
             return Err((
-                cokret_sdk::REASON_REDUCER_PROFILE_MISMATCH,
+                arkret_sdk::REASON_REDUCER_PROFILE_MISMATCH,
                 format!(
                     "service_binding_ref.reducer_profile_digest mismatch: expected {expected_reducer_digest}, got {actual_reducer_digest}"
                 ),
@@ -114,7 +114,7 @@ where
 /// rejected; returns `None` when the kind is fine to forward to the
 /// existing durable-event validator pipeline.
 pub fn events_submit_pre_admit_check(kind: &str) -> Option<(ErrorCode, &'static str)> {
-    if cokret_sdk::events::is_ephemeral_kind(kind) {
+    if arkret_sdk::events::is_ephemeral_kind(kind) {
         return Some((
             ErrorCode::SchemaViolation,
             "ephemeral kind MUST be carried via ck.schema.ephemeral_envelope.v1 \
@@ -122,7 +122,7 @@ pub fn events_submit_pre_admit_check(kind: &str) -> Option<(ErrorCode, &'static 
              (ck.key.verification.* to-device); not durable ck.self.events.command.submit",
         ));
     }
-    if cokret_sdk::events::is_receipt_object_only(kind) {
+    if arkret_sdk::events::is_receipt_object_only(kind) {
         return Some((
             ErrorCode::SchemaViolation,
             "ck.event_batch_receipt is a receipt object only; \
@@ -141,7 +141,7 @@ pub fn terminal_realm_check(
     realm_in_terminal_state: bool,
     kind: &str,
 ) -> Option<(ErrorCode, &'static str)> {
-    if realm_in_terminal_state && !cokret_sdk::events::kinds::is_audit_kind(kind) {
+    if realm_in_terminal_state && !arkret_sdk::events::kinds::is_audit_kind(kind) {
         return Some((
             ErrorCode::FailedPrecondition,
             "Realm has reached ck.realm.tombstone or ck.realm.destroy \
@@ -152,13 +152,13 @@ pub fn terminal_realm_check(
 }
 
 fn frozen_realm_write_exempt(kind: &str) -> bool {
-    cokret_sdk::events::kinds::is_audit_kind(kind)
+    arkret_sdk::events::kinds::is_audit_kind(kind)
         || matches!(
             kind,
-            cokret_sdk::events::kinds::REALM_ARCHIVE
-                | cokret_sdk::events::kinds::REALM_FREEZE
-                | cokret_sdk::events::kinds::REALM_TOMBSTONE
-                | cokret_sdk::events::kinds::REALM_DESTROY
+            arkret_sdk::events::kinds::REALM_ARCHIVE
+                | arkret_sdk::events::kinds::REALM_FREEZE
+                | arkret_sdk::events::kinds::REALM_TOMBSTONE
+                | arkret_sdk::events::kinds::REALM_DESTROY
         )
 }
 
@@ -227,7 +227,7 @@ pub fn cross_signing_reset_replay_check(
                     .to_owned(),
             )
         })?;
-    if cokret_sdk::EventId::new(payload_reset_event_id).is_err() {
+    if arkret_sdk::EventId::new(payload_reset_event_id).is_err() {
         return Err((
             ErrorCode::SchemaViolation,
             "cross_signing.reset.reset_event_id must be a ck:event:<uuidv7>".to_owned(),
@@ -282,13 +282,13 @@ pub fn realm_policy_components_check(
         .and_then(Value::as_u64)
     {
         let window_u32 = u32::try_from(window).unwrap_or(u32::MAX);
-        if cokret_sdk::validate_relaxed_window_ms(window_u32).is_err() {
+        if arkret_sdk::validate_relaxed_window_ms(window_u32).is_err() {
             return Err((
                 ErrorCode::FailedPrecondition,
                 format!(
                     "e2ee_relaxed.relaxed_window_max_ms={window} exceeds absolute \
                      hard ceiling of {}ms",
-                    cokret_sdk::EPHEMERAL_ABSOLUTE_HARD_CEILING_MS
+                    arkret_sdk::EPHEMERAL_ABSOLUTE_HARD_CEILING_MS
                 ),
             ));
         }
@@ -351,7 +351,7 @@ pub fn realm_policy_components_check(
                  for discussion_metadata_digest recomputation"
                     .to_owned(),
             ))?;
-            let covered = cokret_sdk::Hash::new(covered_digest.to_owned()).map_err(|_| {
+            let covered = arkret_sdk::Hash::new(covered_digest.to_owned()).map_err(|_| {
                 (
                     ErrorCode::FailedPrecondition,
                     "governance binding discussion_metadata_digest is not a valid \
@@ -359,7 +359,7 @@ pub fn realm_policy_components_check(
                         .to_owned(),
                 )
             })?;
-            if cokret_sdk::models::verify_media_decrypt_metadata(&covered, &recomputed).is_err() {
+            if arkret_sdk::models::verify_media_decrypt_metadata(&covered, &recomputed).is_err() {
                 return Err((
                     ErrorCode::FailedPrecondition,
                     "media_service_decrypts=true fact recomputed from the policy \
@@ -373,7 +373,7 @@ pub fn realm_policy_components_check(
     Ok(())
 }
 
-/// SEC-03 — build a `cokret_sdk::models::MediaDecryptPolicyValue`
+/// SEC-03 — build a `arkret_sdk::models::MediaDecryptPolicyValue`
 /// from a `ck.realm.policy_components` payload and derive its canonical
 /// `discussion_metadata_digest`. Returns `None` only when the SDK's canonical
 /// digest derivation fails (it never does for well-formed input), so callers
@@ -387,8 +387,8 @@ pub fn realm_policy_components_check(
 /// digest input is consistent with the rule-2 presence gate; non-DID / sentinel
 /// entries that carry no concrete DID are skipped because the SDK digest is
 /// defined over concrete service DIDs.
-fn recompute_media_decrypt_metadata_digest(payload: &Value) -> Option<cokret_sdk::Hash> {
-    use cokret_sdk::models::{
+fn recompute_media_decrypt_metadata_digest(payload: &Value) -> Option<arkret_sdk::Hash> {
+    use arkret_sdk::models::{
         MediaDecryptPolicyValue, MediaPlaintextService, derive_media_decrypt_metadata_digest,
     };
 
@@ -422,7 +422,7 @@ fn recompute_media_decrypt_metadata_digest(payload: &Value) -> Option<cokret_sdk
                 _ => None,
             };
             if let Some(did_str) = did_str
-                && let Ok(service_did) = cokret_sdk::Did::new(did_str.to_owned())
+                && let Ok(service_did) = arkret_sdk::Did::new(did_str.to_owned())
             {
                 plaintext_visible_services.push(MediaPlaintextService { service_did });
             }

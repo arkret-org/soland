@@ -254,7 +254,7 @@ pub(super) async fn resolve_target(
 
 pub(super) async fn resolve_realm_for_address(
     state: &AppState,
-    parsed: &cokret_sdk::ParsedAddress,
+    parsed: &arkret_sdk::ParsedAddress,
 ) -> Option<RealmDirectoryEntry> {
     let candidates: Vec<RealmDirectoryEntry> = {
         let realms = state.realms.lock();
@@ -270,7 +270,7 @@ pub(super) async fn resolve_realm_for_address(
     })
 }
 
-pub(super) fn target_kind_for_address(parsed: &cokret_sdk::ParsedAddress) -> TargetKind {
+pub(super) fn target_kind_for_address(parsed: &arkret_sdk::ParsedAddress) -> TargetKind {
     if parsed.message.is_some() {
         TargetKind::Message
     } else if parsed.strand.is_some() {
@@ -596,7 +596,7 @@ pub(super) fn member_count_bucket_label(count: usize) -> RealmMemberCountBucketL
     }
 }
 
-pub(super) fn object_preview_for_address(parsed: &cokret_sdk::ParsedAddress) -> Option<Value> {
+pub(super) fn object_preview_for_address(parsed: &arkret_sdk::ParsedAddress) -> Option<Value> {
     let strand_id = parsed
         .strand
         .as_deref()
@@ -648,7 +648,7 @@ pub(super) fn join_candidates_for_resolved_realm(
     else {
         return Vec::new();
     };
-    let seal_basis = cokret_sdk::SealBasis {
+    let seal_basis = arkret_sdk::SealBasis {
         leaves: vec![seal.id.clone()],
         control_event_set_root: seal.control_event_set_root.clone(),
         state_root: seal.state_root.clone(),

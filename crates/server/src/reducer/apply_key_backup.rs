@@ -20,12 +20,12 @@ impl ProjectionState {
         operation: &Operation,
     ) -> ProjectionEffect {
         if crate::kinds::canonical_kind_for_operation(operation)
-            != Some(cokret_sdk::events::kinds::KEY_BACKUP_ACTIVE_SERIES)
+            != Some(arkret_sdk::events::kinds::KEY_BACKUP_ACTIVE_SERIES)
         {
             return ProjectionEffect::Ignored;
         }
 
-        let record: cokret_sdk::KeyBackupActiveSeries =
+        let record: arkret_sdk::KeyBackupActiveSeries =
             match serde_json::from_value(operation.payload.clone()) {
                 Ok(record) => record,
                 Err(_) => {
@@ -74,7 +74,7 @@ impl ProjectionState {
             event_id: operation.operation_id.to_string(),
         };
         let subject = active_series_subject(&actor_id, &backup_class);
-        if let Ok(cell_id) = cokret_sdk::CellRef::new(format!(
+        if let Ok(cell_id) = arkret_sdk::CellRef::new(format!(
             "ak:cell:{KEY_BACKUP_ACTIVE_SERIES_CELL_FAMILY}:{subject}"
         )) {
             self.cells
@@ -106,11 +106,11 @@ fn rejected(reason: &str) -> ProjectionEffect {
     }
 }
 
-fn backup_class_wire(backup_class: cokret_sdk::BackupClass) -> &'static str {
+fn backup_class_wire(backup_class: arkret_sdk::BackupClass) -> &'static str {
     match backup_class {
-        cokret_sdk::BackupClass::DidRecovery => "did_recovery",
-        cokret_sdk::BackupClass::SecretStorage => "secret_storage",
-        cokret_sdk::BackupClass::MlsHistory => "mls_history",
+        arkret_sdk::BackupClass::DidRecovery => "did_recovery",
+        arkret_sdk::BackupClass::SecretStorage => "secret_storage",
+        arkret_sdk::BackupClass::MlsHistory => "mls_history",
     }
 }
 
@@ -147,7 +147,7 @@ fn validate_active_series_frontier_ref(
 }
 
 fn validate_active_series_auth_data(
-    auth: &cokret_sdk::KeyBackupActiveSeriesAuthData,
+    auth: &arkret_sdk::KeyBackupActiveSeriesAuthData,
 ) -> Result<(), &'static str> {
     if !is_did_url(&auth.verification_method) {
         return Err("key_backup_active_series_verification_method_invalid");
@@ -204,5 +204,5 @@ fn is_did_url(value: &str) -> bool {
     let Some((did, fragment)) = value.split_once('#') else {
         return false;
     };
-    !fragment.is_empty() && cokret_sdk::Did::new(did.to_owned()).is_ok()
+    !fragment.is_empty() && arkret_sdk::Did::new(did.to_owned()).is_ok()
 }

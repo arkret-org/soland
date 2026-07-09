@@ -2,7 +2,7 @@
 //! governance migration.
 //!
 //! Moderation *truth* (decisions / lifts / appeals) is now carried by
-//! protocol events submitted to `POST /_cokret/self/events` as self-authored
+//! protocol events submitted to `POST /_arkret/self/events` as self-authored
 //! Moves and converged by the data/control-plane reducer
 //! (`reducer/apply_moderation.rs`). The control plane holds no moderation
 //! truth (content-moderation.md §2.6: moderation state MUST NOT be
@@ -152,7 +152,7 @@ pub(super) fn router() -> Router {
         // bound to exactly one handler; only the sub-paths live here.
         //
         // Decision / lift / appeal WRITE endpoints are intentionally absent:
-        // those facts are now protocol events on /_cokret/self/events. Only
+        // those facts are now protocol events on /_arkret/self/events. Only
         // operational queue routing + read-only appeal views remain.
         .push(Router::with_path("queue/{id}/assign").post(assign_queue_item))
         .push(Router::with_path("queue/{id}/priority").post(prioritise_queue_item))

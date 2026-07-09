@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use cokret_sdk::Operation;
+use arkret_sdk::Operation;
 use serde_json::json;
 
 use super::*;

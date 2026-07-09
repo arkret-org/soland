@@ -1,6 +1,6 @@
 use std::sync::OnceLock;
 
-use cokret_sdk::{Did, Hash, ProtocolSchemaRegistry, RealmId};
+use arkret_sdk::{Did, Hash, ProtocolSchemaRegistry, RealmId};
 use serde_json::{Map, Value};
 
 const CLIENT_SIDE_CONFORMANCE: &str = "client_side_conformance";
@@ -25,15 +25,15 @@ const EXACT_ENCRYPTED_ACCOUNT_DATA_KEYS: &[&str] = &[
 ];
 
 const SDK_VALIDATED_ENCRYPTED_ACCOUNT_DATA_PREFIXES: &[&str] = &[
-    cokret_sdk::ACCOUNT_DATA_TYPE_CONTACTS_ACTOR,
-    cokret_sdk::ACCOUNT_DATA_TYPE_CONTACTS_REALM,
-    cokret_sdk::ACCOUNT_DATA_TYPE_REMINDER,
-    cokret_sdk::ACCOUNT_DATA_TYPE_SCHEDULED_SEND,
-    cokret_sdk::ACCOUNT_DATA_TYPE_SNOOZE,
-    cokret_sdk::ACCOUNT_DATA_TYPE_SAVED,
-    cokret_sdk::ACCOUNT_DATA_TYPE_DRAFT,
-    cokret_sdk::ACCOUNT_DATA_TYPE_FILE_TRANSFER,
-    cokret_sdk::ACCOUNT_DATA_TYPE_SEARCH_INDEX_MANIFEST,
+    arkret_sdk::ACCOUNT_DATA_TYPE_CONTACTS_ACTOR,
+    arkret_sdk::ACCOUNT_DATA_TYPE_CONTACTS_REALM,
+    arkret_sdk::ACCOUNT_DATA_TYPE_REMINDER,
+    arkret_sdk::ACCOUNT_DATA_TYPE_SCHEDULED_SEND,
+    arkret_sdk::ACCOUNT_DATA_TYPE_SNOOZE,
+    arkret_sdk::ACCOUNT_DATA_TYPE_SAVED,
+    arkret_sdk::ACCOUNT_DATA_TYPE_DRAFT,
+    arkret_sdk::ACCOUNT_DATA_TYPE_FILE_TRANSFER,
+    arkret_sdk::ACCOUNT_DATA_TYPE_SEARCH_INDEX_MANIFEST,
 ];
 
 const AGENT_ENCRYPTED_ACCOUNT_DATA_PREFIXES: &[&str] = &[
@@ -168,7 +168,7 @@ pub(crate) fn validate_encrypted_account_data_key(
                 .is_some_and(|rest| rest.starts_with('.') || rest.starts_with(':'))
         })
     {
-        return cokret_sdk::validate_private_account_data_key(data_type)
+        return arkret_sdk::validate_private_account_data_key(data_type)
             .map_err(|_| AccountDataEncryptionError::InvalidKeyPattern);
     }
     if let Some(rest) = data_type
@@ -323,14 +323,14 @@ fn validate_encrypted_envelope_metadata(value: &Value) -> Result<(), AccountData
 
     let registry = REGISTRY
         .get_or_init(|| {
-            cokret_sdk::schema::schema_registry_from_default_spec_artifacts()
+            arkret_sdk::schema::schema_registry_from_default_spec_artifacts()
                 .ok()
                 .flatten()
         })
         .as_ref()
         .ok_or(AccountDataEncryptionError::InvalidEnvelopeMetadataOrMarker)?;
     registry
-        .validate_value(cokret_sdk::ENCRYPTED_ENVELOPE_SCHEMA, value)
+        .validate_value(arkret_sdk::ENCRYPTED_ENVELOPE_SCHEMA, value)
         .map_err(|_| AccountDataEncryptionError::InvalidEnvelopeMetadataOrMarker)
 }
 

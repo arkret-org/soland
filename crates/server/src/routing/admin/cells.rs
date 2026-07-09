@@ -16,8 +16,8 @@
 //! list reads require an explicit Realm scope so product Space subjects are
 //! never mistaken for security boundaries.
 
-use cokret_sdk::lattice::CellState;
-use cokret_sdk::{CellRef, RealmId};
+use arkret_sdk::lattice::CellState;
+use arkret_sdk::{CellRef, RealmId};
 use salvo::http::StatusCode;
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -155,7 +155,7 @@ async fn admin_get_cell(
     // Reject syntactically valid CellRef strings that fail the stricter
     // `ck:cell:<family>:<subject>` parse. Without this guard a malformed
     // family slot would leak into the registry resolver.
-    let _ = cokret_sdk::CellId::parse(cell_ref.as_str()).map_err(|e| {
+    let _ = arkret_sdk::CellId::parse(cell_ref.as_str()).map_err(|e| {
         AppError::new(
             ErrorCode::InvalidParam,
             format!("cell_id is not a parseable ck:cell:<family>:<subject>: {e}"),
@@ -177,8 +177,8 @@ async fn admin_get_cell(
         })?;
     let lattice_kind = binding.lattice.kind().as_wire_str();
     let bottom_policy = match binding.bottom_mode {
-        cokret_sdk::state_res::BottomMode::Reject => "reject",
-        cokret_sdk::state_res::BottomMode::Expose => "expose",
+        arkret_sdk::state_res::BottomMode::Reject => "reject",
+        arkret_sdk::state_res::BottomMode::Expose => "expose",
     };
 
     let cell_state_opt = {
@@ -260,7 +260,7 @@ async fn admin_list_cells(
         let Some(prefix_str) = prefix.as_deref() else {
             return true;
         };
-        cokret_sdk::CellId::parse(cell.as_str())
+        arkret_sdk::CellId::parse(cell.as_str())
             .map(|cid| cid.component().starts_with(prefix_str))
             .unwrap_or(false)
     };
@@ -294,8 +294,8 @@ async fn admin_list_cells(
         };
         let lattice_kind = binding.lattice.kind().as_wire_str();
         let bottom_policy = match binding.bottom_mode {
-            cokret_sdk::state_res::BottomMode::Reject => "reject",
-            cokret_sdk::state_res::BottomMode::Expose => "expose",
+            arkret_sdk::state_res::BottomMode::Reject => "reject",
+            arkret_sdk::state_res::BottomMode::Expose => "expose",
         };
         cells_out.push(state_response_from(
             &cell,

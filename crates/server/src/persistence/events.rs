@@ -287,7 +287,7 @@ fn peer_page_record_matches(
 fn record_is_peer_authz_state_record(record: &CanonicalEventRecord) -> bool {
     matches!(
         record.kind.as_str(),
-        cokret_sdk::events::kinds::MEMBER_STATE | cokret_sdk::events::kinds::CIRCLE_MEMBER_STATE
+        arkret_sdk::events::kinds::MEMBER_STATE | arkret_sdk::events::kinds::CIRCLE_MEMBER_STATE
     ) || event_payload_field(&record.envelope, "sync_endpoints").is_some()
 }
 

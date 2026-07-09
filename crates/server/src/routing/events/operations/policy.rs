@@ -30,14 +30,14 @@ pub fn operation_policy_reason_code(message: &str) -> (salvo::http::StatusCode, 
         || message.starts_with("disappearing_")
         || message.starts_with("direct_conversation_")
         || message.starts_with("cross_signing_reset_")
-        || message == cokret_sdk::error::REASON_REACTION_SCOPE_MISMATCH
+        || message == arkret_sdk::error::REASON_REACTION_SCOPE_MISMATCH
     {
         (
             salvo::http::StatusCode::PRECONDITION_FAILED,
             "failed_precondition",
         )
     } else if message
-        == cokret_sdk::error::REASON_HISTORY_VISIBILITY_REQUIRES_HISTORY_CAPABLE_SCHEME
+        == arkret_sdk::error::REASON_HISTORY_VISIBILITY_REQUIRES_HISTORY_CAPABLE_SCHEME
     {
         (
             salvo::http::StatusCode::PRECONDITION_FAILED,
@@ -66,10 +66,10 @@ pub fn operation_policy_reason_code(message: &str) -> (salvo::http::StatusCode, 
             salvo::http::StatusCode::FORBIDDEN,
             "interop_session_writer_unauthorized",
         )
-    } else if message == cokret_sdk::ERROR_CODE_READ_RECEIPT_COMPLIANCE_FLOOR_VIOLATED {
+    } else if message == arkret_sdk::ERROR_CODE_READ_RECEIPT_COMPLIANCE_FLOOR_VIOLATED {
         (
             salvo::http::StatusCode::UNPROCESSABLE_ENTITY,
-            cokret_sdk::ERROR_CODE_READ_RECEIPT_COMPLIANCE_FLOOR_VIOLATED,
+            arkret_sdk::ERROR_CODE_READ_RECEIPT_COMPLIANCE_FLOOR_VIOLATED,
         )
     } else if matches!(
         message,
@@ -102,10 +102,10 @@ pub fn operation_policy_reason_code(message: &str) -> (salvo::http::StatusCode, 
         )
     } else if message == "realm_terminal_state" {
         (salvo::http::StatusCode::FORBIDDEN, "realm_terminal_state")
-    } else if message == cokret_sdk::ERROR_CODE_REALM_FROZEN {
+    } else if message == arkret_sdk::ERROR_CODE_REALM_FROZEN {
         (
             salvo::http::StatusCode::FORBIDDEN,
-            cokret_sdk::ERROR_CODE_REALM_FROZEN,
+            arkret_sdk::ERROR_CODE_REALM_FROZEN,
         )
     } else if matches!(
         message,
@@ -150,7 +150,7 @@ pub async fn validate_operation_policy(
             );
         }
         if kinds::canonical_kind_for_operation(operation)
-            == Some(cokret_sdk::events::kinds::MORPH_SCHEMA_MIGRATE)
+            == Some(arkret_sdk::events::kinds::MORPH_SCHEMA_MIGRATE)
         {
             validate_morph_schema_migrate_capability(operation)?;
             validate_morph_schema_migrate_authz(state, operation).await?;
@@ -212,10 +212,10 @@ mod tests {
 
     fn circle_create_with_payload(payload: Value) -> Operation {
         Operation::create(
-            cokret_sdk::OperationId::new("ak:operation:01964137-0000-7000-8000-000000000040")
+            arkret_sdk::OperationId::new("ak:operation:01964137-0000-7000-8000-000000000040")
                 .unwrap(),
-            cokret_sdk::RealmId::new("ak:realm:01964137-0000-7000-8000-000000000030").unwrap(),
-            cokret_sdk::events::kinds::CIRCLE_CREATE,
+            arkret_sdk::RealmId::new("ak:realm:01964137-0000-7000-8000-000000000030").unwrap(),
+            arkret_sdk::events::kinds::CIRCLE_CREATE,
             payload,
         )
     }
@@ -236,10 +236,10 @@ mod tests {
     fn sidecar_circle_create_shape_requires_derived_short_name() {
         let actor = "did:web:example.com:users:alice";
         let realm_id = "ak:realm:01964137-0000-7000-8000-000000000030";
-        let key = cokret_sdk::agent_sidecar_circle_key(realm_id, actor);
-        let short_name = cokret_sdk::agent_sidecar_short_name(&key);
+        let key = arkret_sdk::agent_sidecar_circle_key(realm_id, actor);
+        let short_name = arkret_sdk::agent_sidecar_short_name(&key);
         let valid_payload = serde_json::json!({
-            "profile": cokret_sdk::PROFILE_AGENT_SIDECAR_THREAD,
+            "profile": arkret_sdk::PROFILE_AGENT_SIDECAR_THREAD,
             "sidecar_ensure_capability_verified": true,
             "object": {
                 "id": "ak:circle:01964137-0000-7000-8000-000000000041",
@@ -249,7 +249,7 @@ mod tests {
                 "directory_visibility": "members",
                 "join_rule": "invite",
                 "history_visibility": "joined",
-                "sidecar_profile": cokret_sdk::PROFILE_AGENT_SIDECAR_THREAD,
+                "sidecar_profile": arkret_sdk::PROFILE_AGENT_SIDECAR_THREAD,
                 "created_by": actor,
                 "controller_principal_id": actor,
                 "controller_agent_circle_key": key,

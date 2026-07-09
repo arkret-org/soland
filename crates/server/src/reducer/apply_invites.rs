@@ -13,7 +13,7 @@ impl ProjectionState {
         now: chrono::DateTime<chrono::Utc>,
     ) -> ProjectionEffect {
         if crate::kinds::canonical_kind_for_operation(operation)
-            != Some(cokret_sdk::events::kinds::INVITE_THIRD_PARTY)
+            != Some(arkret_sdk::events::kinds::INVITE_THIRD_PARTY)
         {
             return ProjectionEffect::Ignored;
         }
@@ -26,7 +26,7 @@ impl ProjectionState {
         let Some(invite_id) = invite_string_field(payload, invite, "invite_id", "id") else {
             return rejected("invite_id_required");
         };
-        if cokret_sdk::InviteId::new(invite_id.clone()).is_err() {
+        if arkret_sdk::InviteId::new(invite_id.clone()).is_err() {
             return rejected("invite_id_invalid");
         }
         let realm_id = invite_string_field(payload, invite, "realm_id", "realm_id")
@@ -37,7 +37,7 @@ impl ProjectionState {
         let Some(inviter) = invite_string_field(payload, invite, "inviter", "inviter") else {
             return rejected("inviter_required");
         };
-        if cokret_sdk::Did::new(inviter.clone()).is_err() {
+        if arkret_sdk::Did::new(inviter.clone()).is_err() {
             return rejected("inviter_invalid");
         }
         let Some(third_party_id) = invite_value_field(payload, invite, "third_party_id") else {
@@ -122,7 +122,7 @@ impl ProjectionState {
         now: chrono::DateTime<chrono::Utc>,
     ) -> ProjectionEffect {
         if crate::kinds::canonical_kind_for_operation(operation)
-            != Some(cokret_sdk::events::kinds::INVITE_CLAIM)
+            != Some(arkret_sdk::events::kinds::INVITE_CLAIM)
         {
             return ProjectionEffect::Ignored;
         }
@@ -134,13 +134,13 @@ impl ProjectionState {
         let Some(invite_id) = string_field(payload, "invite_id") else {
             return rejected("invite_id_required");
         };
-        if cokret_sdk::InviteId::new(invite_id.clone()).is_err() {
+        if arkret_sdk::InviteId::new(invite_id.clone()).is_err() {
             return rejected("invite_id_invalid");
         }
         let Some(subject_id) = string_field(payload, "subject_id") else {
             return rejected("subject_id_required");
         };
-        if cokret_sdk::Did::new(subject_id.clone()).is_err() {
+        if arkret_sdk::Did::new(subject_id.clone()).is_err() {
             return rejected("subject_id_invalid");
         }
         let Some(token_commitment) = string_field(payload, "token_commitment") else {
@@ -322,7 +322,7 @@ fn parse_timestamp(value: &str) -> Option<chrono::DateTime<chrono::Utc>> {
 }
 
 fn valid_hash(value: &str) -> bool {
-    value.starts_with("sha256:") && cokret_sdk::Hash::new(value.to_owned()).is_ok()
+    value.starts_with("sha256:") && arkret_sdk::Hash::new(value.to_owned()).is_ok()
 }
 
 fn validate_third_party_id(third_party_id: &Value) -> Result<(), &'static str> {
@@ -342,7 +342,7 @@ fn validate_third_party_id(third_party_id: &Value) -> Result<(), &'static str> {
     else {
         return Err("verification_service_did_required");
     };
-    if cokret_sdk::Did::new(service_did.to_owned()).is_err() {
+    if arkret_sdk::Did::new(service_did.to_owned()).is_err() {
         return Err("verification_service_did_invalid");
     }
     if object
@@ -408,7 +408,7 @@ fn validate_binding_proof(
     let Some(service_did) = proof_string(object, "verification_service_did") else {
         return Err("binding_proof_service_did_required");
     };
-    if cokret_sdk::Did::new(service_did.clone()).is_err() {
+    if arkret_sdk::Did::new(service_did.clone()).is_err() {
         return Err("binding_proof_service_did_invalid");
     }
     let expected_service_did = third_party_id
@@ -436,7 +436,7 @@ fn validate_binding_proof(
     let Some(audience) = proof_string(object, "audience") else {
         return Err("binding_proof_audience_required");
     };
-    if audience != cokret_sdk::INVITE_CLAIM_AUDIENCE {
+    if audience != arkret_sdk::INVITE_CLAIM_AUDIENCE {
         return Err("binding_proof_audience_mismatch");
     }
     let Some(proof_nonce) = proof_string(object, "claim_nonce") else {
@@ -484,12 +484,12 @@ fn validate_subject_proof(
     if !subject_proof.is_object() {
         return Err("subject_proof_not_object");
     };
-    let subject_proof: cokret_sdk::InviteSubjectProof =
+    let subject_proof: arkret_sdk::InviteSubjectProof =
         serde_json::from_value(subject_proof.clone()).map_err(|_| "subject_proof_invalid")?;
     if subject_proof.verification_method.trim().is_empty() {
         return Err("subject_proof_method_required");
     }
-    if subject_proof.alg != cokret_sdk::INVITE_SUBJECT_PROOF_ALG {
+    if subject_proof.alg != arkret_sdk::INVITE_SUBJECT_PROOF_ALG {
         return Err("subject_proof_alg_unsupported");
     }
     if subject_proof.signature.trim().is_empty() {
@@ -498,10 +498,10 @@ fn validate_subject_proof(
     subject_proof
         .validate()
         .map_err(|_| "subject_proof_invalid")?;
-    let Some(binding_digest) = cokret_sdk::canonical::canonical_sha256(binding_proof).ok() else {
+    let Some(binding_digest) = arkret_sdk::canonical::canonical_sha256(binding_proof).ok() else {
         return Err("binding_proof_digest_invalid");
     };
-    let expected_digest = cokret_sdk::invite_subject_proof_transcript_digest(
+    let expected_digest = arkret_sdk::invite_subject_proof_transcript_digest(
         subject_id,
         invite_id,
         realm_id,

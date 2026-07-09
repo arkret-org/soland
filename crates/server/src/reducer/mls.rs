@@ -24,7 +24,7 @@
 //! Deferred (TODO(G3.S1-followup) markers below + in `routing/mls.rs`):
 //!   - decryption_pending (deferred-decryption queue + retry)
 
-use cokret_sdk::Operation;
+use arkret_sdk::Operation;
 use serde_json::{Map, Value};
 
 use super::{
@@ -55,7 +55,7 @@ pub const REASON_WELCOME_METADATA_LEAK: &str = "mls_welcome_metadata_leak";
 /// Reject code for MLS Welcome payloads whose KeyPackage claim transcript
 /// is missing or does not bind the Welcome bytes to the recipient realm.
 pub const REASON_KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH: &str =
-    cokret_sdk::error::REASON_KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH;
+    arkret_sdk::error::REASON_KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH;
 /// Reject code for commits whose governance binding does not name an
 /// attested governance Seal set to add into the covered_seals accumulator.
 pub const REASON_COMMIT_COVERED_SEALS_MISSING: &str = "mls_covered_seals_missing";
@@ -66,11 +66,11 @@ pub const REASON_GENESIS_ALREADY_EXISTS: &str = "mls_genesis_already_exists";
 /// (encryption-and-audit.md §2.5.1). On a federation push the ingest pipeline
 /// maps it to a 412 whole-batch reject.
 pub const REASON_GOVERNANCE_BINDING_MISMATCH: &str =
-    cokret_sdk::error::REASON_MLS_GOVERNANCE_BINDING_MISMATCH;
+    arkret_sdk::error::REASON_MLS_GOVERNANCE_BINDING_MISMATCH;
 /// Reject code emitted while a group's `covered_frontier_cell` is `⊥`
 /// (concurrent commits, encryption-and-audit.md §2.5.2). Sends / decrypts on
 /// the contested epoch stay fail-closed until a resolving commit advances it.
-pub const REASON_DECRYPTION_PENDING: &str = cokret_sdk::error::REASON_MLS_DECRYPTION_PENDING;
+pub const REASON_DECRYPTION_PENDING: &str = arkret_sdk::error::REASON_MLS_DECRYPTION_PENDING;
 /// Reject code for a Remove commit whose governance binding does not cover the
 /// event frontier that created the pending remove obligation.
 pub const REASON_REMOVE_MISSING_GOVERNANCE_FRONTIER: &str =
@@ -136,7 +136,7 @@ pub fn apply_keypackage_publish(
         .and_then(Value::as_str)
         .unwrap_or(id)
         .to_owned();
-    let computed_keypackage_digest = cokret_sdk::canonical::sha256_digest(&key_package_bytes);
+    let computed_keypackage_digest = arkret_sdk::canonical::sha256_digest(&key_package_bytes);
     let keypackage_digest = payload
         .get("keypackage_digest")
         .and_then(Value::as_str)
@@ -146,8 +146,8 @@ pub fn apply_keypackage_publish(
         return reject("mls_keypackage_digest_mismatch");
     }
     let capabilities = string_array(payload.get("capabilities"));
-    let capabilities_digest = match cokret_sdk::canonical::canonical_json_bytes(&capabilities) {
-        Ok(bytes) => cokret_sdk::canonical::sha256_digest(bytes),
+    let capabilities_digest = match arkret_sdk::canonical::canonical_json_bytes(&capabilities) {
+        Ok(bytes) => arkret_sdk::canonical::sha256_digest(bytes),
         Err(_) => return reject("mls_keypackage_capabilities_digest_failed"),
     };
     if let Some(published_digest) = payload.get("capabilities_digest").and_then(Value::as_str)
@@ -1080,7 +1080,7 @@ fn validate_welcome_trust_binding(
         .get("claim_envelope")
         .and_then(Value::as_object)
         .ok_or(REASON_KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;
-    let expected_welcome_digest = cokret_sdk::canonical::sha256_digest(welcome_bytes);
+    let expected_welcome_digest = arkret_sdk::canonical::sha256_digest(welcome_bytes);
     if envelope.get("claim_id").and_then(Value::as_str) != Some(claim_id)
         || envelope.get("keypackage_ref").and_then(Value::as_str) != Some(keypackage_ref)
         || envelope.get("keypackage_digest").and_then(Value::as_str) != Some(keypackage_digest)
@@ -1194,7 +1194,7 @@ fn validate_welcome_recipient_binding(
 }
 
 fn is_sha256_digest(value: &str) -> bool {
-    value.starts_with("sha256:") && cokret_sdk::Hash::new(value.to_owned()).is_ok()
+    value.starts_with("sha256:") && arkret_sdk::Hash::new(value.to_owned()).is_ok()
 }
 
 fn validate_effective_scope(scope: &Value) -> Result<(), &'static str> {

@@ -5,7 +5,7 @@
 
 use super::*;
 
-/// `ck.self.events.stream.subscribe` at `GET /_cokret/self/events/subscribe`. NDJSON
+/// `ck.self.events.stream.subscribe` at `GET /_arkret/self/events/subscribe`. NDJSON
 /// streaming: each line is one frame, frame `kind` is one of
 /// `event` / `catchup_complete` / `heartbeat` / `dropped`.
 ///
@@ -340,7 +340,7 @@ pub(crate) async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: 
                             // Use the typed-id form (ck:cursor:<base64url>),
                             // not the cursor::Cursor struct.
                             let cursor_typed =
-                                cokret_sdk::identifiers::Cursor::new(cursor_str.clone()).ok();
+                                arkret_sdk::identifiers::Cursor::new(cursor_str.clone()).ok();
                             arm_subscribe_reconnect(
                                 &state,
                                 &subscribe_scope_key_for_stream,
@@ -475,7 +475,7 @@ fn render_subscribe_rate_limited(res: &mut Response, retry_after_ms: u64) {
     res.headers_mut()
         .insert(header::RETRY_AFTER, retry_after_seconds.into());
     res.render(Json(
-        cokret_sdk::ErrorEnvelope::new(
+        arkret_sdk::ErrorEnvelope::new(
             "rate_limited",
             "Subscribe reconnect window is still active.",
         )
@@ -652,9 +652,9 @@ fn truncate_before_stop_cursor(mut events: Vec<Value>, stop_cursor: Option<&str>
     events
 }
 
-/// `ck.self.events.query.scan` at `GET /_cokret/self/events`.
+/// `ck.self.events.query.scan` at `GET /_arkret/self/events`.
 /// Reads from the projection layer so callers writing through
-/// `POST /_cokret/self/events` see their messages here.
+/// `POST /_arkret/self/events` see their messages here.
 ///
 /// Selector: `realms[]` plus optional `actors[]` repeated query args.
 /// Multi-Realm queries call `projected_event_page` per Realm and merge sorted
@@ -1020,7 +1020,7 @@ async fn events_query_event_visible(
 async fn full_events_from_projection_json(
     state: &AppState,
     projection_rows: &[Value],
-) -> Vec<cokret_sdk::Event> {
+) -> Vec<arkret_sdk::Event> {
     let mut events = Vec::with_capacity(projection_rows.len());
     for row in projection_rows {
         let Some(event_id) = row.get("event_id").and_then(Value::as_str) else {
@@ -1048,14 +1048,14 @@ async fn full_events_from_projection_json(
 fn projection_row_is_redacted_message_tombstone(row: &Value) -> bool {
     matches!(
         row.get("event_kind").and_then(Value::as_str),
-        Some(cokret_sdk::events::kinds::MESSAGE_CREATE | cokret_sdk::events::kinds::MESSAGE_REVISE)
+        Some(arkret_sdk::events::kinds::MESSAGE_CREATE | arkret_sdk::events::kinds::MESSAGE_REVISE)
     ) && row.get("payload").is_some_and(|payload| {
         payload.get("redacted").and_then(Value::as_bool) == Some(true)
             || payload.get("state").and_then(Value::as_str) == Some("redacted")
     })
 }
 
-fn projection_only_event_from_row(state: &AppState, row: &Value) -> Option<cokret_sdk::Event> {
+fn projection_only_event_from_row(state: &AppState, row: &Value) -> Option<arkret_sdk::Event> {
     let event_id = row.get("event_id").and_then(Value::as_str)?;
     let realm_id = row.get("realm_id").and_then(Value::as_str)?;
     let kind = row.get("event_kind").and_then(Value::as_str)?;
@@ -1114,9 +1114,9 @@ mod tests {
         kind: &str,
         payload: Value,
         created_at: DateTime<Utc>,
-    ) -> cokret_sdk::Operation {
-        let mut operation = cokret_sdk::Operation::create(
-            cokret_sdk::OperationId::new(operation_id.to_owned()).unwrap(),
+    ) -> arkret_sdk::Operation {
+        let mut operation = arkret_sdk::Operation::create(
+            arkret_sdk::OperationId::new(operation_id.to_owned()).unwrap(),
             RealmId::new(TEST_REALM.to_owned()).unwrap(),
             kind,
             payload,
@@ -1181,19 +1181,19 @@ mod tests {
         });
         let message = operation_at(
             "ak:operation:01904100-0000-7000-8000-00000000aa41",
-            cokret_sdk::events::kinds::MESSAGE_CREATE,
+            arkret_sdk::events::kinds::MESSAGE_CREATE,
             plaintext_payload.clone(),
             created_at,
         );
         let revise = operation_at(
             "ak:operation:01904100-0000-7000-8000-00000000aa43",
-            cokret_sdk::events::kinds::MESSAGE_REVISE,
+            arkret_sdk::events::kinds::MESSAGE_REVISE,
             revised_payload.clone(),
             revised_at,
         );
         let redaction = operation_at(
             "ak:operation:01904100-0000-7000-8000-00000000aa42",
-            cokret_sdk::events::kinds::MESSAGE_REDACT,
+            arkret_sdk::events::kinds::MESSAGE_REDACT,
             json!({
                 "event_id": TEST_REDACTION_EVENT,
                 "message_id": TEST_MESSAGE_ID,
@@ -1211,10 +1211,10 @@ mod tests {
         put_durable_event(
             &state,
             TEST_MESSAGE_EVENT,
-            cokret_sdk::events::kinds::MESSAGE_CREATE,
+            arkret_sdk::events::kinds::MESSAGE_CREATE,
             json!({
                 "event_id": TEST_MESSAGE_EVENT,
-                "kind": cokret_sdk::events::kinds::MESSAGE_CREATE,
+                "kind": arkret_sdk::events::kinds::MESSAGE_CREATE,
                 "realm_id": TEST_REALM,
                 "actor_id": TEST_ACTOR,
                 "actor_seq": 1,
@@ -1230,10 +1230,10 @@ mod tests {
         put_durable_event(
             &state,
             TEST_REVISE_EVENT,
-            cokret_sdk::events::kinds::MESSAGE_REVISE,
+            arkret_sdk::events::kinds::MESSAGE_REVISE,
             json!({
                 "event_id": TEST_REVISE_EVENT,
-                "kind": cokret_sdk::events::kinds::MESSAGE_REVISE,
+                "kind": arkret_sdk::events::kinds::MESSAGE_REVISE,
                 "realm_id": TEST_REALM,
                 "actor_id": TEST_ACTOR,
                 "actor_seq": 2,
@@ -1390,7 +1390,7 @@ async fn durable_events_query_from_parts(
 pub(super) async fn snapshot_head(
     depot: &mut Depot,
     req: &mut Request,
-) -> crate::result::JsonResult<cokret_sdk::SnapshotManifest> {
+) -> crate::result::JsonResult<arkret_sdk::SnapshotManifest> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let realm_id = query_param(req, "realm_id")
         .ok_or_else(|| crate::error::AppError::missing_param("realm_id is required"))?;

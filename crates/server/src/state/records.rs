@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use cokret_sdk::{BlobVisibility, FreshnessState, PlaintextDataClassKind};
+use arkret_sdk::{BlobVisibility, FreshnessState, PlaintextDataClassKind};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -18,7 +18,7 @@ pub struct SessionRecord {
     pub device_id: String,
     pub audience: String,
     /// Session signing key (JWK) bound by `ck.session.grant`, used to verify
-    /// RFC 9421 PoP presentations on `/_cokret/self/*` (api-conventions.md
+    /// RFC 9421 PoP presentations on `/_arkret/self/*` (api-conventions.md
     /// §3.2). `None` for bearer-only / dev-login / OAuth-bridged sessions.
     pub session_public_key: Option<String>,
     pub agent_session: Option<AgentSessionRecord>,
@@ -54,7 +54,7 @@ pub struct AccountRecord {
     pub localpart: String,
     pub display_name: Option<String>,
     /// Free-form short description for directory rendering. Updated via
-    /// `POST /_cokret/self/account/profile` (operationId
+    /// `POST /_arkret/self/account/profile` (operationId
     /// `ck.self.account.command.update_profile`); rendered by `demo_actors` in directory
     /// search results.
     pub bio: Option<String>,
@@ -222,7 +222,7 @@ pub const PSI_PROBE_TRACKER_MAX_ENTRIES: usize = 16_384;
 
 /// Spec `identity/key-management.md` §7.8 — default per-principal ceiling on
 /// full-ciphertext key-backup downloads
-/// (`GET /_cokret/self/keys/backups/{backup_id}`) within a rolling
+/// (`GET /_arkret/self/keys/backups/{backup_id}`) within a rolling
 /// [`KEY_BACKUP_DOWNLOAD_WINDOW`]. Encrypted backup ciphertext is offline
 /// KDF-cracking ammunition; the quota covers a legitimate restore over a long
 /// backup series while blocking bulk dumps. Deployments may adjust via
@@ -316,7 +316,7 @@ pub struct PsiProbeOutcome {
 
 /// Per-principal key-backup ciphertext download counter
 /// (spec `identity/key-management.md` §7.8). Drives the rolling 24h
-/// anti-bulk-dump quota on `GET /_cokret/self/keys/backups/{backup_id}`.
+/// anti-bulk-dump quota on `GET /_arkret/self/keys/backups/{backup_id}`.
 #[derive(Clone, Debug)]
 pub struct KeyBackupDownloadRecord {
     /// Full-envelope downloads observed in the current window.
@@ -685,7 +685,7 @@ pub struct FederationOutboxRecord {
     /// Fully-qualified peer base URL (no trailing slash) the dispatcher
     /// concatenates with `endpoint` to form the POST target.
     pub peer_url: String,
-    /// Endpoint path on the peer, e.g. `/_cokret/peer/events`.
+    /// Endpoint path on the peer, e.g. `/_arkret/peer/events`.
     pub endpoint: String,
     /// `Idempotency-Key` header value the dispatcher sends. Derived
     /// deterministically from `(origin, resource_kind, resource_id)` so

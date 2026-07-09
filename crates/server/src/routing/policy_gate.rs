@@ -1,8 +1,8 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use cokret_sdk::identity::{DidDocument, DidResolver};
-use cokret_sdk::{Did, Hash, Operation, RealmId};
+use arkret_sdk::identity::{DidDocument, DidResolver};
+use arkret_sdk::{Did, Hash, Operation, RealmId};
 use salvo::http::StatusCode;
 use serde_json::{Value, json};
 
@@ -53,7 +53,7 @@ impl DidResolver for SharedDidResolver {
         self.inner.supports(did)
     }
 
-    fn resolve_did(&self, did: &Did) -> cokret_sdk::Result<DidDocument> {
+    fn resolve_did(&self, did: &Did) -> arkret_sdk::Result<DidDocument> {
         self.inner.resolve_did(did)
     }
 }
@@ -233,7 +233,7 @@ async fn policy_request_for_operation(
 }
 
 fn digest_value(value: &str) -> Result<Hash, String> {
-    Hash::new(cokret_sdk::canonical::sha256_digest(value.as_bytes()))
+    Hash::new(arkret_sdk::canonical::sha256_digest(value.as_bytes()))
         .map_err(|error| error.to_string())
 }
 
@@ -274,7 +274,7 @@ fn policy_frontier_snapshot_for_operation(
 }
 
 fn canonical_policy_hash(value: &Value) -> Result<Hash, PolicyGateRejection> {
-    let digest = cokret_sdk::canonical::canonical_sha256(value)
+    let digest = arkret_sdk::canonical::canonical_sha256(value)
         .map_err(|error| PolicyGateRejection::internal(format!("canonical digest: {error}")))?;
     Hash::new(digest).map_err(|error| PolicyGateRejection::internal(format!("hash shape: {error}")))
 }

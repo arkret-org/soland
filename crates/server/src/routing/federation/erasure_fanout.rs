@@ -32,7 +32,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::Utc;
-use cokret_sdk::{Did, Operation, OperationId, RealmId};
+use arkret_sdk::{Did, Operation, OperationId, RealmId};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
@@ -45,7 +45,7 @@ use crate::state::AppState;
 pub const DEFAULT_SWEEP_INTERVAL: Duration = Duration::from_secs(60 * 60); // 1 hour
 
 /// Outbox endpoint for canonical peer Event fanout.
-const ERASURE_RECEIPT_OUTBOX_ENDPOINT: &str = "/_cokret/peer/events";
+const ERASURE_RECEIPT_OUTBOX_ENDPOINT: &str = "/_arkret/peer/events";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct ErasurePeerTarget {
@@ -93,7 +93,7 @@ pub async fn fanout_erasure_receipt(state: &AppState, receipt_id: &str) {
     let operation = Operation::create(
         operation_id,
         realm_id,
-        cokret_sdk::events::kinds::AUDIT_ERASURE_RECEIPT,
+        arkret_sdk::events::kinds::AUDIT_ERASURE_RECEIPT,
         receipt.payload,
     );
     fanout_erasure_receipt_operation(state, &operation).await;
@@ -248,7 +248,7 @@ fn erasure_push_payload(
     let origin = Did::new(state.config.service_did.clone()).ok()?;
     let destination = Did::new(peer.did.clone()).ok()?;
     let realm_id = RealmId::new(operation.realm_id.to_string()).ok()?;
-    let body = cokret_sdk::FederationPushOperationsRequestBody {
+    let body = arkret_sdk::FederationPushOperationsRequestBody {
         origin,
         destination,
         realm_id,
@@ -261,7 +261,7 @@ fn erasure_push_payload(
     };
     serde_json::to_value(&body)
         .ok()
-        .and_then(|value| cokret_sdk::canonical::canonical_json_bytes(&value).ok())
+        .and_then(|value| arkret_sdk::canonical::canonical_json_bytes(&value).ok())
         .and_then(|bytes| String::from_utf8(bytes).ok())
 }
 
@@ -491,7 +491,7 @@ mod tests {
         assert_eq!(body["destination"], "did:web:peer1.example");
         assert_eq!(
             body["operations"][0]["object_type"],
-            cokret_sdk::events::kinds::AUDIT_ERASURE_RECEIPT
+            arkret_sdk::events::kinds::AUDIT_ERASURE_RECEIPT
         );
     }
 

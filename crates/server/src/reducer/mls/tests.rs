@@ -1,7 +1,7 @@
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::{TimeZone, Utc};
-use cokret_sdk::{Operation, OperationId, RealmId};
+use arkret_sdk::{Operation, OperationId, RealmId};
 use serde_json::json;
 
 use super::*;
@@ -103,7 +103,7 @@ fn welcome_payload(welcome_id: &str) -> Value {
             "requester_did": "did:web:alice.example",
             "ssk_generation": 7,
             "nonce": b64(b"welcome-claim-nonce-01-128-bit"),
-            "welcome_digest": cokret_sdk::canonical::sha256_digest(b"opaque-welcome-bytes"),
+            "welcome_digest": arkret_sdk::canonical::sha256_digest(b"opaque-welcome-bytes"),
             "created_at": "2026-05-25T00:00:02Z",
             "signature": {
                 "kid": "did:web:alice.example#self-signing",
@@ -552,7 +552,7 @@ fn welcome_enqueue_decodes_schema_ciphertext_base64_to_raw_welcome_bytes() {
     object.remove("key_package_id");
     object.insert("ciphertext".to_owned(), Value::String(b64(raw_welcome)));
     payload["claim_envelope"]["welcome_digest"] =
-        Value::String(cokret_sdk::canonical::sha256_digest(raw_welcome));
+        Value::String(arkret_sdk::canonical::sha256_digest(raw_welcome));
 
     let enqueue = op_at(300, "ck.mls.welcome", payload);
     let effect = apply_welcome_enqueue(&mut state, &enqueue);

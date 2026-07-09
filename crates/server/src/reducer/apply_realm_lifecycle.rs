@@ -207,7 +207,7 @@ impl ProjectionState {
         // cell_subject is `actor_id` (per-actor), not (realm_id, actor)
         // composite. The Realm scoping is implicit in the CellStore key.
         if let Ok(cell_id) =
-            cokret_sdk::CellRef::new(format!("ak:cell:ck.component.member.state.v1:{member}"))
+            arkret_sdk::CellRef::new(format!("ak:cell:ck.component.member.state.v1:{member}"))
         {
             self.cells.insert(
                 cell_id,
@@ -251,7 +251,7 @@ impl ProjectionState {
             },
         );
         if let Ok(cell_id) =
-            cokret_sdk::CellRef::new(format!("ak:cell:ck.component.member.state.v1:{creator}"))
+            arkret_sdk::CellRef::new(format!("ak:cell:ck.component.member.state.v1:{creator}"))
         {
             self.cells
                 .insert(cell_id, CellState::Value(Value::String("join".to_owned())));
@@ -511,8 +511,8 @@ impl ProjectionState {
                     security_class,
                     federation_policy,
                 );
-                let bottom = cokret_sdk::Bottom {
-                    kind: cokret_sdk::BottomKind::Conflict,
+                let bottom = arkret_sdk::Bottom {
+                    kind: arkret_sdk::BottomKind::Conflict,
                     cells: vec![cell_id.clone()],
                     move_ids: Vec::new(),
                     seal_view: None,
@@ -526,7 +526,7 @@ impl ProjectionState {
                             "value": incoming,
                         }),
                     ],
-                    details: Some(cokret_sdk::bottom_details([
+                    details: Some(arkret_sdk::bottom_details([
                         ("basis", serde_json::json!(basis.as_str())),
                         ("reason", serde_json::json!("concurrent_realm_update")),
                     ])),
@@ -545,7 +545,7 @@ impl ProjectionState {
 
     pub fn check_bottom_cell_transition(&self, operation: &Operation) -> Result<(), &'static str> {
         match crate::kinds::canonical_kind_for_operation(operation) {
-            Some(cokret_sdk::events::kinds::REALM_UPDATE) => {
+            Some(arkret_sdk::events::kinds::REALM_UPDATE) => {
                 let realm_id = operation.realm_id.to_string();
                 if let Some(cell_id) = Self::realm_metadata_cell_id(&realm_id)
                     && matches!(self.cells.get(&cell_id), Some(CellState::Bottom(_)))
@@ -695,12 +695,12 @@ impl ProjectionState {
         debug_assert!(
             matches!(
                 kind,
-                cokret_sdk::events::kinds::REALM_CREATE
-                    | cokret_sdk::events::kinds::REALM_UPDATE
-                    | cokret_sdk::events::kinds::REALM_ARCHIVE
-                    | cokret_sdk::events::kinds::REALM_FREEZE
-                    | cokret_sdk::events::kinds::REALM_TOMBSTONE
-                    | cokret_sdk::events::kinds::REALM_DESTROY
+                arkret_sdk::events::kinds::REALM_CREATE
+                    | arkret_sdk::events::kinds::REALM_UPDATE
+                    | arkret_sdk::events::kinds::REALM_ARCHIVE
+                    | arkret_sdk::events::kinds::REALM_FREEZE
+                    | arkret_sdk::events::kinds::REALM_TOMBSTONE
+                    | arkret_sdk::events::kinds::REALM_DESTROY
             ),
             "apply_realm_lifecycle dispatched with non-realm kind: {kind}",
         );
@@ -721,7 +721,7 @@ impl ProjectionState {
         // terminal-state write rejects with `realm_already_terminal`.
         let payload_object = operation.payload.get("object").and_then(Value::as_object);
         let realm_id = operation.realm_id.to_string();
-        let creator = if kind == cokret_sdk::events::kinds::REALM_CREATE {
+        let creator = if kind == arkret_sdk::events::kinds::REALM_CREATE {
             let Some(creator) = payload_object
                 .and_then(|object| object.get("created_by"))
                 .and_then(Value::as_str)
@@ -729,7 +729,7 @@ impl ProjectionState {
                 .map(ToOwned::to_owned)
             else {
                 return ProjectionEffect::Rejected {
-                    reason: cokret_sdk::ERROR_CODE_SCHEMA_VIOLATION.to_owned(),
+                    reason: arkret_sdk::ERROR_CODE_SCHEMA_VIOLATION.to_owned(),
                 };
             };
             Some(creator)
@@ -822,31 +822,31 @@ impl ProjectionState {
             .and_then(Value::as_str)
             .map(ToOwned::to_owned)
             .unwrap_or_else(|| "sha256".to_owned());
-        if cokret_sdk::canonical::digest_suite(&payload_digest_algorithm).is_err() {
+        if arkret_sdk::canonical::digest_suite(&payload_digest_algorithm).is_err() {
             return ProjectionEffect::Rejected {
-                reason: cokret_sdk::ERROR_CODE_UNSUPPORTED_DIGEST_ALGORITHM.to_owned(),
+                reason: arkret_sdk::ERROR_CODE_UNSUPPORTED_DIGEST_ALGORITHM.to_owned(),
             };
         }
-        if kind == cokret_sdk::events::kinds::REALM_UPDATE
+        if kind == arkret_sdk::events::kinds::REALM_UPDATE
             && operation_touches_encryption_profile(operation)
         {
             return ProjectionEffect::Rejected {
                 reason: REALM_ENCRYPTION_PROFILE_CREATE_LOCKED.to_owned(),
             };
         }
-        if kind == cokret_sdk::events::kinds::REALM_UPDATE
+        if kind == arkret_sdk::events::kinds::REALM_UPDATE
             && operation_touches_digest_algorithm(operation)
         {
             return ProjectionEffect::Rejected {
-                reason: cokret_sdk::ERROR_CODE_SCHEMA_VIOLATION.to_owned(),
+                reason: arkret_sdk::ERROR_CODE_SCHEMA_VIOLATION.to_owned(),
             };
         }
         if let Some(ref new_td) = payload_trust_domain {
             // Shape MUST be `ck:trust_domain:<scope>` — delegate to SDK
             // typed id validator.
-            if cokret_sdk::TypedTrustDomainId::new(new_td.clone()).is_err() {
+            if arkret_sdk::TypedTrustDomainId::new(new_td.clone()).is_err() {
                 return ProjectionEffect::Rejected {
-                    reason: cokret_sdk::ERROR_CODE_SCHEMA_VIOLATION.to_owned(),
+                    reason: arkret_sdk::ERROR_CODE_SCHEMA_VIOLATION.to_owned(),
                 };
             }
             // Compare against any prior locked value. Any mismatch is a
@@ -891,8 +891,8 @@ impl ProjectionState {
             && existing.terminal_state.is_some()
             && matches!(
                 kind,
-                cokret_sdk::events::kinds::REALM_TOMBSTONE
-                    | cokret_sdk::events::kinds::REALM_DESTROY
+                arkret_sdk::events::kinds::REALM_TOMBSTONE
+                    | arkret_sdk::events::kinds::REALM_DESTROY
             )
         {
             return ProjectionEffect::Rejected {
@@ -910,7 +910,7 @@ impl ProjectionState {
             .get("successor_realm_id")
             .and_then(Value::as_str)
             .map(ToOwned::to_owned);
-        if kind == cokret_sdk::events::kinds::REALM_TOMBSTONE {
+        if kind == arkret_sdk::events::kinds::REALM_TOMBSTONE {
             match payload_successor_realm_id.as_deref() {
                 None => {
                     return ProjectionEffect::Rejected {
@@ -918,9 +918,9 @@ impl ProjectionState {
                     };
                 }
                 Some(id) => {
-                    if cokret_sdk::RealmId::new(id).is_err() {
+                    if arkret_sdk::RealmId::new(id).is_err() {
                         return ProjectionEffect::Rejected {
-                            reason: cokret_sdk::ERROR_CODE_SCHEMA_VIOLATION.to_owned(),
+                            reason: arkret_sdk::ERROR_CODE_SCHEMA_VIOLATION.to_owned(),
                         };
                     }
                     if id == realm_id {
@@ -932,14 +932,14 @@ impl ProjectionState {
             }
         }
         // ck.realm.destroy MUST NOT carry successor_realm_id (spec §2.5).
-        if kind == cokret_sdk::events::kinds::REALM_DESTROY && payload_successor_realm_id.is_some()
+        if kind == arkret_sdk::events::kinds::REALM_DESTROY && payload_successor_realm_id.is_some()
         {
             return ProjectionEffect::Rejected {
-                reason: cokret_sdk::ERROR_CODE_SCHEMA_VIOLATION.to_owned(),
+                reason: arkret_sdk::ERROR_CODE_SCHEMA_VIOLATION.to_owned(),
             };
         }
 
-        if kind == cokret_sdk::events::kinds::REALM_UPDATE
+        if kind == arkret_sdk::events::kinds::REALM_UPDATE
             && let Some(effect) = self.maybe_project_realm_update_bottom(
                 operation,
                 now,
@@ -952,7 +952,7 @@ impl ProjectionState {
         {
             return effect;
         }
-        if kind == cokret_sdk::events::kinds::REALM_CREATE
+        if kind == arkret_sdk::events::kinds::REALM_CREATE
             && self.realm_create_log(&realm_id).is_some()
         {
             return ProjectionEffect::Rejected {
@@ -1000,24 +1000,24 @@ impl ProjectionState {
         // Stream-F (Wave 1B): both terminal-state events flip the
         // summary `deleted` flag. The richer `terminal_state` /
         // `successor_realm_id` fields are the source of truth.
-        if kind == cokret_sdk::events::kinds::REALM_DESTROY
-            || kind == cokret_sdk::events::kinds::REALM_TOMBSTONE
+        if kind == arkret_sdk::events::kinds::REALM_DESTROY
+            || kind == arkret_sdk::events::kinds::REALM_TOMBSTONE
         {
             realm.deleted = true;
         }
-        if kind == cokret_sdk::events::kinds::REALM_TOMBSTONE {
+        if kind == arkret_sdk::events::kinds::REALM_TOMBSTONE {
             realm.terminal_state = Some("tombstoned".to_owned());
             realm.successor_realm_id = payload_successor_realm_id.clone();
-        } else if kind == cokret_sdk::events::kinds::REALM_DESTROY {
+        } else if kind == arkret_sdk::events::kinds::REALM_DESTROY {
             realm.terminal_state = Some("destroyed".to_owned());
             realm.successor_realm_id = None;
-        } else if kind == cokret_sdk::events::kinds::REALM_ARCHIVE {
+        } else if kind == arkret_sdk::events::kinds::REALM_ARCHIVE {
             realm.archived = operation
                 .payload
                 .get("archived")
                 .and_then(Value::as_bool)
                 .unwrap_or(true);
-        } else if kind == cokret_sdk::events::kinds::REALM_FREEZE {
+        } else if kind == arkret_sdk::events::kinds::REALM_FREEZE {
             realm.frozen = operation
                 .payload
                 .get("frozen")
@@ -1041,8 +1041,8 @@ impl ProjectionState {
         // Cells map: synth a CellState::Value per the spec cell family
         // for this canonical kind.
         match kind {
-            k if k == cokret_sdk::events::kinds::REALM_CREATE => {
-                if let Ok(cell_id) = cokret_sdk::CellRef::new(format!(
+            k if k == arkret_sdk::events::kinds::REALM_CREATE => {
+                if let Ok(cell_id) = arkret_sdk::CellRef::new(format!(
                     "ak:cell:ck.component.realm.create.v1:{realm_id}"
                 )) {
                     let entry = serde_json::json!({
@@ -1064,7 +1064,7 @@ impl ProjectionState {
                     self.bootstrap_realm_creator_member(&realm_id, creator, operation, now);
                 }
             }
-            k if k == cokret_sdk::events::kinds::REALM_UPDATE => {
+            k if k == arkret_sdk::events::kinds::REALM_UPDATE => {
                 // cas-register: latest value wins. Composite of
                 // owner / title / arbitrary other organization fields
                 // pulled from payload (fields the spec evolves can land
@@ -1097,8 +1097,8 @@ impl ProjectionState {
                         .insert(cell_id, CellState::Value(Value::Object(value)));
                 }
             }
-            k if k == cokret_sdk::events::kinds::REALM_ARCHIVE => {
-                if let Ok(cell_id) = cokret_sdk::CellRef::new(format!(
+            k if k == arkret_sdk::events::kinds::REALM_ARCHIVE => {
+                if let Ok(cell_id) = arkret_sdk::CellRef::new(format!(
                     "ak:cell:ck.component.realm.archive.v1:{realm_id}"
                 )) {
                     let mut value = serde_json::Map::new();
@@ -1122,8 +1122,8 @@ impl ProjectionState {
                         .insert(cell_id, CellState::Value(Value::Object(value)));
                 }
             }
-            k if k == cokret_sdk::events::kinds::REALM_FREEZE => {
-                if let Ok(cell_id) = cokret_sdk::CellRef::new(format!(
+            k if k == arkret_sdk::events::kinds::REALM_FREEZE => {
+                if let Ok(cell_id) = arkret_sdk::CellRef::new(format!(
                     "ak:cell:ck.component.realm.freeze.v1:{realm_id}"
                 )) {
                     let mut value = serde_json::Map::new();
@@ -1152,11 +1152,11 @@ impl ProjectionState {
                         .insert(cell_id, CellState::Value(Value::Object(value)));
                 }
             }
-            k if k == cokret_sdk::events::kinds::REALM_TOMBSTONE => {
+            k if k == arkret_sdk::events::kinds::REALM_TOMBSTONE => {
                 // Stream-F (Wave 1B): tombstone writes its own terminal
                 // cell with `successor_realm_id` so peers hydrating from
                 // cells alone can distinguish migration from destroy.
-                if let Ok(cell_id) = cokret_sdk::CellRef::new(format!(
+                if let Ok(cell_id) = arkret_sdk::CellRef::new(format!(
                     "ak:cell:ck.component.realm.tombstone.v1:{realm_id}"
                 )) {
                     let value = serde_json::json!({
@@ -1173,9 +1173,9 @@ impl ProjectionState {
                 // successor Realm. Spec §2.5 row "tombstone" — no
                 // realm_destroyed_orphan cascade fires here.
             }
-            k if k == cokret_sdk::events::kinds::REALM_DESTROY => {
+            k if k == arkret_sdk::events::kinds::REALM_DESTROY => {
                 // cas-register: terminal {destroyed: true, at: ts}.
-                if let Ok(cell_id) = cokret_sdk::CellRef::new(format!(
+                if let Ok(cell_id) = arkret_sdk::CellRef::new(format!(
                     "ak:cell:ck.component.realm.destroy.v1:{realm_id}"
                 )) {
                     let value = serde_json::json!({
@@ -1322,7 +1322,7 @@ impl ProjectionState {
             Some(s) => s,
             None => {
                 return ProjectionEffect::Rejected {
-                    reason: cokret_sdk::ERROR_CODE_SCHEMA_VIOLATION.to_owned(),
+                    reason: arkret_sdk::ERROR_CODE_SCHEMA_VIOLATION.to_owned(),
                 };
             }
         };
@@ -1339,14 +1339,14 @@ impl ProjectionState {
         ];
         if !valid_outcomes.contains(&outcome.as_str()) {
             return ProjectionEffect::Rejected {
-                reason: cokret_sdk::ERROR_CODE_SCHEMA_VIOLATION.to_owned(),
+                reason: arkret_sdk::ERROR_CODE_SCHEMA_VIOLATION.to_owned(),
             };
         }
         // `scope` MUST be present per schema; we only require it to
         // be an object — the wire validator enforces the inner shape.
         let Some(scope) = payload.get("scope").and_then(Value::as_object) else {
             return ProjectionEffect::Rejected {
-                reason: cokret_sdk::ERROR_CODE_SCHEMA_VIOLATION.to_owned(),
+                reason: arkret_sdk::ERROR_CODE_SCHEMA_VIOLATION.to_owned(),
             };
         };
         let storage_boundary = scope

@@ -1,5 +1,5 @@
 use chrono::{DateTime, SecondsFormat, Utc};
-use cokret_sdk::{ReadReceipt, ReadScopeKind};
+use arkret_sdk::{ReadReceipt, ReadScopeKind};
 use serde_json::{Value, json};
 
 use crate::error::AppError;
@@ -23,7 +23,7 @@ pub(crate) async fn relay_ephemeral_read_receipt(
     session: &SessionRecord,
     realm_id: &str,
     visibility: &str,
-    envelope: &cokret_sdk::EphemeralEnvelope,
+    envelope: &arkret_sdk::EphemeralEnvelope,
 ) -> Result<(), AppError> {
     let normalized = normalize_read_receipt_payload(realm_id, envelope)?;
     let target = state
@@ -84,7 +84,7 @@ pub(crate) async fn relay_ephemeral_read_receipt(
 
 fn normalize_read_receipt_payload(
     realm_id: &str,
-    envelope: &cokret_sdk::EphemeralEnvelope,
+    envelope: &arkret_sdk::EphemeralEnvelope,
 ) -> Result<NormalizedReadReceipt, AppError> {
     let payload = envelope.payload.clone();
     let event_id = {
@@ -92,8 +92,8 @@ fn normalize_read_receipt_payload(
             .as_object()
             .ok_or_else(|| AppError::invalid_param("ck.receipt.read payload must be an object"))?;
 
-        require_string_field(object, "receipt_type", cokret_sdk::READ_RECEIPT_TYPE)?;
-        require_string_field(object, "schema", cokret_sdk::READ_RECEIPT_SCHEMA)?;
+        require_string_field(object, "receipt_type", arkret_sdk::READ_RECEIPT_TYPE)?;
+        require_string_field(object, "schema", arkret_sdk::READ_RECEIPT_SCHEMA)?;
         require_string_field(object, "realm_id", realm_id)?;
         require_string_field(object, "actor_id", envelope.actor_id.as_str())?;
         object

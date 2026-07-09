@@ -56,7 +56,7 @@ Examples:
 Derivation rules:
 
 1. `backend` MUST be one of the registered `MediaBackendType` arms
-   (`livekit`, `mediasoup`, `janus`, `cokret_native`, `moq_relay`). Unknown
+   (`livekit`, `mediasoup`, `janus`, `arkret_native`, `moq_relay`). Unknown
    backends surface `unknown_focus_type` at exchange time.
 2. `region` is a free-form lowercase tag MAX 32 chars matching
    `[a-z0-9-]+`. Region is opaque to soland — its only role is human

@@ -6,7 +6,7 @@
 //! at `cotest/e2e/tests/conformance/encoding-vectors.spec.ts` can drive the
 //! same vectors against a running soland.
 //!
-//! Routes (all `POST /_cokret/_conformance/...`):
+//! Routes (all `POST /_arkret/_conformance/...`):
 //!   - `encode`
 //!   - `sign`
 //!   - `hlc-merge`
@@ -19,7 +19,7 @@
 //!
 //! **Namespace + gating (COT-06-002, `service-http-binding.md` §2.1.2).**
 //! These are *test-only* observation / injection endpoints. Per §2.1.2 they
-//! MUST live under the single reserved `/_cokret/_conformance/*` namespace
+//! MUST live under the single reserved `/_arkret/_conformance/*` namespace
 //! (leading `_` marks it as NOT a production trust-surface classifier) and
 //! MUST be exposed *only* when the implementation declares the
 //! `ck.profile.conformance_harness.v1` build profile. A production profile —
@@ -29,7 +29,7 @@
 //! business logic.
 //!
 //! That gate is realised structurally: [`crate::routing::api_v1_router`] only
-//! mounts [`router`] under `/_cokret/_conformance` when
+//! mounts [`router`] under `/_arkret/_conformance` when
 //! [`harness_profile_enabled`] is true. When the profile is absent the segment
 //! is genuinely unknown and falls through to `api_not_found`
 //! (`404 unrecognized_endpoint`). [`ensure_enabled`] is retained as a
@@ -68,7 +68,7 @@ pub const CONFORMANCE_HARNESS_PROFILE: &str = "ck.profile.conformance_harness.v1
 /// agree with the structural mount decision without re-reading config.
 static HARNESS_ENABLED: OnceLock<bool> = OnceLock::new();
 
-/// Build the `_conformance/*` sub-router. Mounted under `/_cokret` only when
+/// Build the `_conformance/*` sub-router. Mounted under `/_arkret` only when
 /// [`harness_profile_enabled`] is true (see module docs).
 pub fn router() -> Router {
     Router::with_path("_conformance")

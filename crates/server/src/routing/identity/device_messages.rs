@@ -1,12 +1,12 @@
 //! To-device message transport.
 //!
 //! Surfaces:
-//! - `POST /_cokret/self/device_messages` — send to-device messages, idempotent on `(actor,
+//! - `POST /_arkret/self/device_messages` — send to-device messages, idempotent on `(actor,
 //!   idempotency_key)` so duplicate retries return 200 without re-queueing. The idempotency key is
 //!   supplied via the `Idempotency-Key` request header.
-//! - `GET /_cokret/self/device_messages` — pull pending to-device messages for the bound
+//! - `GET /_arkret/self/device_messages` — pull pending to-device messages for the bound
 //!   session/device. A `from` cursor is read-only pagination state; it never prunes the queue.
-//! - `POST /_cokret/self/device_messages/ack` — consume a bearer ack token and prune the messages
+//! - `POST /_arkret/self/device_messages/ack` — consume a bearer ack token and prune the messages
 //!   covered by that delivery batch.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -459,8 +459,8 @@ fn device_message_envelope_from_record(
         .unwrap_or_else(|| message.created_at + chrono::Duration::hours(1));
     Some(DeviceMessageEnvelope {
         kind,
-        sender_principal_id: cokret_sdk::Did::new(message.sender.clone()).ok()?,
-        sender_device_id: cokret_sdk::DeviceId::new(
+        sender_principal_id: arkret_sdk::Did::new(message.sender.clone()).ok()?,
+        sender_device_id: arkret_sdk::DeviceId::new(
             message
                 .content
                 .get("sender_device_id")
@@ -468,8 +468,8 @@ fn device_message_envelope_from_record(
                 .to_owned(),
         )
         .ok()?,
-        recipient_principal_id: cokret_sdk::Did::new(message.recipient.clone()).ok()?,
-        recipient_device_id: cokret_sdk::DeviceId::new(message.device_id.clone()).ok()?,
+        recipient_principal_id: arkret_sdk::Did::new(message.recipient.clone()).ok()?,
+        recipient_device_id: arkret_sdk::DeviceId::new(message.device_id.clone()).ok()?,
         sent_at: message.created_at,
         expires_at,
         content,

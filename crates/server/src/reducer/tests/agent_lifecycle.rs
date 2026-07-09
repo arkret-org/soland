@@ -5,7 +5,7 @@ const REQUEST: &str = "ak:agent-action-request:01904100-0000-7000-8000-cfc039892
 
 fn agent_endpoint() -> Operation {
     make_operation(
-        cokret_sdk::events::kinds::AGENT_ENDPOINT,
+        arkret_sdk::events::kinds::AGENT_ENDPOINT,
         REALM,
         serde_json::json!({
             "agent_id": AGENT,
@@ -20,7 +20,7 @@ fn agent_endpoint() -> Operation {
 
 fn action_request(request_id: &str) -> Operation {
     make_operation(
-        cokret_sdk::events::kinds::AGENT_ACTION_REQUEST,
+        arkret_sdk::events::kinds::AGENT_ACTION_REQUEST,
         REALM,
         serde_json::json!({
             "agent_principal_id": AGENT,
@@ -31,7 +31,7 @@ fn action_request(request_id: &str) -> Operation {
 
 fn action_approve(request_id: &str) -> Operation {
     make_operation(
-        cokret_sdk::events::kinds::AGENT_ACTION_APPROVE,
+        arkret_sdk::events::kinds::AGENT_ACTION_APPROVE,
         REALM,
         serde_json::json!({
             "approval_id": "ak:agent-approval:01904100-0000-7000-8000-cfc039892038",
@@ -50,7 +50,7 @@ fn action_approve(request_id: &str) -> Operation {
 
 fn pause_agent() -> Operation {
     make_operation(
-        cokret_sdk::events::kinds::AGENT_PAUSE,
+        arkret_sdk::events::kinds::AGENT_PAUSE,
         REALM,
         serde_json::json!({
             "agent_principal_id": AGENT,
@@ -61,7 +61,7 @@ fn pause_agent() -> Operation {
 
 fn resume_agent() -> Operation {
     make_operation(
-        cokret_sdk::events::kinds::AGENT_RESUME,
+        arkret_sdk::events::kinds::AGENT_RESUME,
         REALM,
         serde_json::json!({
             "agent_principal_id": AGENT,
@@ -72,7 +72,7 @@ fn resume_agent() -> Operation {
 
 fn deactivate_agent() -> Operation {
     make_operation(
-        cokret_sdk::events::kinds::AGENT_DEACTIVATE,
+        arkret_sdk::events::kinds::AGENT_DEACTIVATE,
         REALM,
         serde_json::json!({
             "agent_principal_id": AGENT,

@@ -138,7 +138,7 @@ pub(super) async fn membership_builder_resolve_allowed(
     };
     if !matches!(
         request.intent,
-        Some(cokret_sdk::DirectoryIntent::Invite | cokret_sdk::DirectoryIntent::MemberAdd)
+        Some(arkret_sdk::DirectoryIntent::Invite | arkret_sdk::DirectoryIntent::MemberAdd)
     ) {
         return false;
     }
@@ -159,7 +159,7 @@ pub(super) async fn contact_request_resolve_allowed(
     let Some(session) = session else {
         return false;
     };
-    if request.intent != Some(cokret_sdk::DirectoryIntent::ContactRequest) {
+    if request.intent != Some(arkret_sdk::DirectoryIntent::ContactRequest) {
         return false;
     }
     matches!(
@@ -304,7 +304,7 @@ async fn fetch_remote_handle_from_peer(
         ));
     }
     let endpoint = format!(
-        "{}/_cokret/find/directory/resolve-handle",
+        "{}/_arkret/find/directory/resolve-handle",
         peer_url.trim_end_matches('/')
     );
     let (url, client) = crate::security::validate_http_url_for_egress_with_pinned_client(
@@ -668,7 +668,7 @@ pub(super) async fn signed_handle_claim(
         policy_event_ref: None,
     };
     let mut claim = SdkHandleClaim {
-        schema: cokret_sdk::HANDLE_CLAIM_SCHEMA.to_owned(),
+        schema: arkret_sdk::HANDLE_CLAIM_SCHEMA.to_owned(),
         handle: Some(handle),
         handle_aliases: vec![format!("acct:{localpart}@{handle_domain}")],
         subject: Some(subject),

@@ -112,7 +112,7 @@ pub(super) fn default_did_document(state: Option<&AppState>, did: &str) -> Value
     if let Some(state) = state
         && did == state.config.service_did
     {
-        let public_key = cokret_sdk::ed25519_pubkey_to_did_key_multibase(
+        let public_key = arkret_sdk::ed25519_pubkey_to_did_key_multibase(
             state.notary_signing_key().verifying_key().as_bytes(),
         );
         for fragment in ["notary-key", "snapshot-key-1"] {
@@ -133,7 +133,7 @@ pub(super) fn default_did_document(state: Option<&AppState>, did: &str) -> Value
         "verificationMethod": verification_methods,
         "authentication": authentication,
         "assertionMethod": assertion_method,
-        "service": [{"id": "soland", "type": "CokretPrincipalServer", "serviceEndpoint": "/_cokret"}]
+        "service": [{"id": "soland", "type": "CokretPrincipalServer", "serviceEndpoint": "/_arkret"}]
     })
 }
 
@@ -163,7 +163,7 @@ fn valid_handle_domain_candidate(value: &str) -> Option<String> {
     if domain.is_empty() {
         return None;
     }
-    cokret_sdk::models::Handle::parse(&format!("alice:{domain}"))
+    arkret_sdk::models::Handle::parse(&format!("alice:{domain}"))
         .ok()
         .map(|handle| handle.domain().to_owned())
 }

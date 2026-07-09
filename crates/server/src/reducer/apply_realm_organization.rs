@@ -32,8 +32,8 @@
 //! admission/HTTP layer (see SOL-ORG-06 notes). `organization_did` /
 //! `threshold_quorum` statements (no `delegation_ref`) project directly.
 
-use cokret_sdk::Operation;
-use cokret_sdk::models::{
+use arkret_sdk::Operation;
+use arkret_sdk::models::{
     NoDelegationResolver, RealmOrganizationControlScope, RealmOrganizationPayload,
     SignatureMaterial, verify_realm_organization_statement,
 };
@@ -62,7 +62,7 @@ impl ProjectionState {
                 Ok(payload) => payload,
                 Err(_) => {
                     return ProjectionEffect::Rejected {
-                        reason: cokret_sdk::ERROR_CODE_SCHEMA_VIOLATION.to_owned(),
+                        reason: arkret_sdk::ERROR_CODE_SCHEMA_VIOLATION.to_owned(),
                     };
                 }
             };
@@ -92,8 +92,8 @@ impl ProjectionState {
             // other failure (bad proof, unresolved delegation, status mismatch)
             // fails closed and is not stored.
             let reason = organization_rejection_reason(&error.to_string());
-            let window_only = (reason == cokret_sdk::REASON_TTL_EXPIRED && payload.is_expired(now))
-                || (reason == cokret_sdk::ERROR_CODE_FAILED_PRECONDITION
+            let window_only = (reason == arkret_sdk::REASON_TTL_EXPIRED && payload.is_expired(now))
+                || (reason == arkret_sdk::ERROR_CODE_FAILED_PRECONDITION
                     && payload.is_not_yet_valid(now));
             if !window_only {
                 tracing::warn!(
@@ -127,12 +127,12 @@ impl ProjectionState {
                 "relationship": relationship,
                 "status": status,
                 "control_scopes": control_scopes_str(&payload),
-                "issued_at": cokret_sdk::canonical::format_timestamp_canonical(payload.issued_at),
-                "updated_at": cokret_sdk::canonical::format_timestamp_canonical(now),
+                "issued_at": arkret_sdk::canonical::format_timestamp_canonical(payload.issued_at),
+                "updated_at": arkret_sdk::canonical::format_timestamp_canonical(now),
                 "operation_id": operation.operation_id.as_str(),
             });
             self.cells
-                .insert(cell_id, cokret_sdk::lattice::CellState::Value(value));
+                .insert(cell_id, arkret_sdk::lattice::CellState::Value(value));
         }
 
         let row = RealmOrganizationStatementState {
@@ -179,8 +179,8 @@ impl ProjectionState {
     pub(crate) fn realm_organization_cell_id(
         organization_id: &str,
         relationship: &str,
-    ) -> Option<cokret_sdk::CellRef> {
-        cokret_sdk::CellRef::new(format!(
+    ) -> Option<arkret_sdk::CellRef> {
+        arkret_sdk::CellRef::new(format!(
             "ak:cell:ck.component.realm.organization.v1:{organization_id}::{relationship}"
         ))
         .ok()
@@ -269,7 +269,7 @@ fn organization_rejection_reason(message: &str) -> String {
             return code.to_owned();
         }
     }
-    cokret_sdk::ERROR_CODE_SCHEMA_VIOLATION.to_owned()
+    arkret_sdk::ERROR_CODE_SCHEMA_VIOLATION.to_owned()
 }
 
 /// Audit-only digest of the proof material — never the raw signature bytes.
@@ -277,17 +277,17 @@ fn proof_digest(proof: &SignatureMaterial) -> Option<String> {
     let bytes = match proof {
         SignatureMaterial::NonEmptyString(s) => s.as_bytes().to_vec(),
         SignatureMaterial::Variant1(map) => {
-            cokret_sdk::canonical::canonical_json_bytes(map).unwrap_or_default()
+            arkret_sdk::canonical::canonical_json_bytes(map).unwrap_or_default()
         }
     };
     if bytes.is_empty() {
         return None;
     }
-    Some(cokret_sdk::canonical::sha256_digest(&bytes))
+    Some(arkret_sdk::canonical::sha256_digest(&bytes))
 }
 
 fn relationship_str(payload: &RealmOrganizationPayload) -> &'static str {
-    use cokret_sdk::models::RealmOrganizationRelationship as R;
+    use arkret_sdk::models::RealmOrganizationRelationship as R;
     match payload.relationship {
         R::Owner => "owner",
         R::Governance => "governance",
@@ -297,7 +297,7 @@ fn relationship_str(payload: &RealmOrganizationPayload) -> &'static str {
 }
 
 fn issuer_role_str(payload: &RealmOrganizationPayload) -> &'static str {
-    use cokret_sdk::models::RealmOrganizationIssuerRole as Role;
+    use arkret_sdk::models::RealmOrganizationIssuerRole as Role;
     match payload.authorization.issuer_role {
         Role::OrganizationDid => "organization_did",
         Role::GovernanceService => "governance_service",
@@ -332,8 +332,8 @@ fn control_scopes_str(payload: &RealmOrganizationPayload) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use cokret_sdk::models::RealmOrganizationControlScope as Scope;
-    use cokret_sdk::{Operation, OperationId, RealmId};
+    use arkret_sdk::models::RealmOrganizationControlScope as Scope;
+    use arkret_sdk::{Operation, OperationId, RealmId};
     use serde_json::{Value, json};
 
     use super::*;
@@ -353,7 +353,7 @@ mod tests {
         Operation::create(
             OperationId::new(format!("ak:operation:{}", uuid::Uuid::now_v7())).unwrap(),
             RealmId::new(realm_id).unwrap(),
-            cokret_sdk::events::kinds::REALM_ORGANIZATION,
+            arkret_sdk::events::kinds::REALM_ORGANIZATION,
             payload,
         )
     }
@@ -591,7 +591,7 @@ mod tests {
         assert!(matches!(
             effect,
             ProjectionEffect::Rejected { ref reason }
-                if reason == cokret_sdk::ERROR_CODE_SCHEMA_VIOLATION
+                if reason == arkret_sdk::ERROR_CODE_SCHEMA_VIOLATION
         ));
     }
 

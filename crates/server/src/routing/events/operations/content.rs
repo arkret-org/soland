@@ -107,7 +107,7 @@ fn patch_operation_value_has_direct_field(value: &Value, field: &str) -> bool {
 
 pub(crate) fn strand_operation_carries_plaintext_private_content(operation: &Operation) -> bool {
     match kinds::canonical_kind_for_operation(operation) {
-        Some(cokret_sdk::events::kinds::STRAND_CREATE) => [
+        Some(arkret_sdk::events::kinds::STRAND_CREATE) => [
             &["synthesis"][..],
             &["object", "synthesis"][..],
             &["content"][..],
@@ -119,7 +119,7 @@ pub(crate) fn strand_operation_carries_plaintext_private_content(operation: &Ope
         .any(|path| {
             value_at_path(&operation.payload, path).is_some_and(value_is_plaintext_content)
         }),
-        Some(cokret_sdk::events::kinds::STRAND_UPDATE) => patch_touches_plaintext_content_path(
+        Some(arkret_sdk::events::kinds::STRAND_UPDATE) => patch_touches_plaintext_content_path(
             &operation.payload,
             &["synthesis", "content", "attachments"],
         ),
@@ -241,7 +241,7 @@ pub async fn known_realm_denies_plaintext_service(state: &AppState, realm_id: &s
         .is_some_and(|record| {
             !(record.allows_plaintext_data_class(
                 &state.config.service_did,
-                cokret_sdk::PlaintextDataClassKind::MessageContent,
+                arkret_sdk::PlaintextDataClassKind::MessageContent,
             ) || record.discoverability == "public"
                 && record.history_visibility == "world_readable")
         })
@@ -662,7 +662,7 @@ pub fn validate_canonical_json_value_inner(
                 if key.ends_with("_at")
                     && let Some(s) = value.as_str()
                 {
-                    cokret_sdk::canonical::validate_timestamp_canonical(s).map_err(
+                    arkret_sdk::canonical::validate_timestamp_canonical(s).map_err(
                         |_| "timestamp must be canonical RFC 3339 UTC (YYYY-MM-DDTHH:MM:SSZ)",
                     )?;
                 }
@@ -671,12 +671,12 @@ pub fn validate_canonical_json_value_inner(
         _ => {}
     }
     // At the top level, attempt a canonical byte roundtrip to ensure full compliance.
-    if root && cokret_sdk::canonical::canonical_json_bytes(value).is_err() {
+    if root && arkret_sdk::canonical::canonical_json_bytes(value).is_err() {
         return Err("value fails canonical JSON byte serialization");
     }
     Ok(())
 }
 
 pub fn validate_content_block(block: &serde_json::Value) -> Result<(), &'static str> {
-    cokret_sdk::validate_content_block(block).map_err(|error| error.message())
+    arkret_sdk::validate_content_block(block).map_err(|error| error.message())
 }

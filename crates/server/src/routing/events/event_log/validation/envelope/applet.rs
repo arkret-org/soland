@@ -154,7 +154,7 @@ pub(super) async fn validate_applet_delegated_authorization_chain(
 pub(super) async fn validate_applet_registration_epoch_binding(
     state: &AppState,
     object: &serde_json::Map<String, Value>,
-    package: &cokret_sdk::AppletPackage,
+    package: &arkret_sdk::AppletPackage,
     grant: &crate::authz::Grant,
     applet_id: &str,
     executed_by: &str,
@@ -267,8 +267,8 @@ pub(super) fn applet_actor_matches_exact_namespace(
     record.namespaces.as_ref().is_some_and(|namespaces| {
         namespaces.actors.iter().any(|entry| {
             !applet_namespace_pattern_is_wildcard(&entry.pattern)
-                && cokret_sdk::namespace_pattern_matches(
-                    cokret_sdk::AppletNamespaceDomain::Actors,
+                && arkret_sdk::namespace_pattern_matches(
+                    arkret_sdk::AppletNamespaceDomain::Actors,
                     &entry.pattern,
                     actor_id,
                 )

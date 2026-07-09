@@ -1,7 +1,7 @@
 //! Ghost / bot actor provisioning, revocation, and the formal applet event
 //! build + persistence path.
 
-use cokret_sdk::{
+use arkret_sdk::{
     AccountabilityGrantPayload, AccountabilityScope, ActorProfileId,
     AppletDelegatedEventAuthorization, AppletId, AppletNamespaceDomain, Did, Event, EventRef,
     GhostActorProfileRequest, GhostActorProvisionRequestBody, Hash, Hlc, Proof, RealmId, canonical,
@@ -216,7 +216,7 @@ pub(super) async fn build_ghost_profile_create_event(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .unwrap_or(provision.external_user_id.as_str());
-    let profile_id = ActorProfileId::new(cokret_sdk::new_prefixed_uuid7("ak:actor_profile:"))
+    let profile_id = ActorProfileId::new(arkret_sdk::new_prefixed_uuid7("ak:actor_profile:"))
         .map_err(|error| AppError::internal(format!("profile id generation failed: {error}")))?;
     let external_ref = json!({
         "schema": "ck.applet.ghost_actor.external_ref.v1",
@@ -395,7 +395,7 @@ pub(super) fn event_proof(
         AppError::internal(format!("proof binding canonicalization failed: {error}"))
     })?;
     let jws =
-        cokret_sdk::jws::sign_jws_ed25519(&binding_bytes, state.notary_signing_key().as_ref())
+        arkret_sdk::jws::sign_jws_ed25519(&binding_bytes, state.notary_signing_key().as_ref())
             .map_err(|error| AppError::internal(format!("event proof signing failed: {error}")))?;
     Ok(Proof {
         kind: "detached_jws".to_owned(),
@@ -429,7 +429,7 @@ pub(super) fn production_payload_proof(
     })?;
     let digest = canonical::sha256_digest(&binding_bytes);
     let jws =
-        cokret_sdk::jws::sign_jws_ed25519(&binding_bytes, state.notary_signing_key().as_ref())
+        arkret_sdk::jws::sign_jws_ed25519(&binding_bytes, state.notary_signing_key().as_ref())
             .map_err(|error| {
                 AppError::internal(format!("accountability proof signing failed: {error}"))
             })?;

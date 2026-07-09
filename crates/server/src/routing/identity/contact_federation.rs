@@ -5,7 +5,7 @@
 //! `tombstoned`) are principal-scoped and cross-Realm. When the issuer and the
 //! target holder live on different Principal Servers, the issuer-side server
 //! federates the signed fact to the target holder's server via
-//! `ck.peer.contacts.command.submit` (`POST /_cokret/peer/contacts`); the recipient
+//! `ck.peer.contacts.command.submit` (`POST /_arkret/peer/contacts`); the recipient
 //! projects the original signed envelope into the target holder's contact
 //! projection without re-signing it.
 //!
@@ -18,7 +18,7 @@
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use chrono::SecondsFormat;
-use cokret_sdk::{
+use arkret_sdk::{
     ContactIntroductionEvidence, Did, DisclosedOutcome, Event, EventId, Hash, Hlc,
     InviteReceiveAction, PeerContactAddress, PeerContactDeliveryRequest, PeerContactFactKind,
     Proof, RealmId, canonical, proof_kind,
@@ -142,7 +142,7 @@ pub(crate) async fn federate_contact_fact(
         state,
         &peer_url,
         recipient_service_did,
-        "/_cokret/peer/contacts",
+        "/_arkret/peer/contacts",
         &idempotency_key,
         &payload_json,
     )
@@ -825,7 +825,7 @@ fn validate_content_digest(req: &Request, body: &Value) -> Result<(), AppError> 
         .ok_or_else(|| {
             super::super::events::peer::schema_violation("required header content-digest missing")
         })?;
-    let canonical_bytes = cokret_sdk::canonical::canonical_json_bytes(body).map_err(|error| {
+    let canonical_bytes = arkret_sdk::canonical::canonical_json_bytes(body).map_err(|error| {
         super::super::events::peer::schema_violation(format!(
             "request body is not canonical-hashable: {error}"
         ))

@@ -1,21 +1,21 @@
 //! Directory + handle / actor / organization resolution handlers.
 //!
 //! Surfaces:
-//! - `GET  /_cokret/find/directory/describe`            — capability + profile probe
-//! - `POST /_cokret/find/directory/search-realms`       — fuzzy text + visibility filter
-//! - `POST /_cokret/find/directory/resolve-realm`       — by id / alias / invite_token /
+//! - `GET  /_arkret/find/directory/describe`            — capability + profile probe
+//! - `POST /_arkret/find/directory/search-realms`       — fuzzy text + visibility filter
+//! - `POST /_arkret/find/directory/resolve-realm`       — by id / alias / invite_token /
 //!   signed_link
-//! - `POST /_cokret/find/directory/resolve-target`      — Realm / Strand / Message address preview
-//! - `POST /_cokret/find/directory/search-organizations`
-//! - `POST /_cokret/find/directory/resolve-organization`
-//! - `POST /_cokret/find/directory/search-actors`
-//! - `POST /_cokret/find/directory/search-users`        — mention/user search via body `query`
-//! - `POST /_cokret/find/directory/resolve-handle`
-//! - `POST /_cokret/find/directory/resolve-agent-selector`
-//! - `POST /_cokret/find/directory/list-handles-for-subject`
-//! - `POST /_cokret/find/directory/announce`
-//! - `POST /_cokret/find/directory/withdraw`
-//! - `POST /_cokret/find/directory/push/register`
+//! - `POST /_arkret/find/directory/resolve-target`      — Realm / Strand / Message address preview
+//! - `POST /_arkret/find/directory/search-organizations`
+//! - `POST /_arkret/find/directory/resolve-organization`
+//! - `POST /_arkret/find/directory/search-actors`
+//! - `POST /_arkret/find/directory/search-users`        — mention/user search via body `query`
+//! - `POST /_arkret/find/directory/resolve-handle`
+//! - `POST /_arkret/find/directory/resolve-agent-selector`
+//! - `POST /_arkret/find/directory/list-handles-for-subject`
+//! - `POST /_arkret/find/directory/announce`
+//! - `POST /_arkret/find/directory/withdraw`
+//! - `POST /_arkret/find/directory/push/register`
 //!
 //! Demo data lives here too — `demo_organization` / `demo_actors` are
 //! placeholders until a real `actors` / `organizations` / `handles`
@@ -27,10 +27,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::{DateTime, TimeZone, Utc};
-use cokret_sdk::models::{
+use arkret_sdk::models::{
     Handle as SdkHandle, HandleBindingState, HandleClaim as SdkHandleClaim, HandleVisibility,
 };
-use cokret_sdk::{
+use arkret_sdk::{
     AGENT_SELECTOR_CLAIM_SCHEMA, ActorPreview, AgentSelectorClaim, Audience, BlobRef,
     DeliveryBindingHint, DeliveryMode, Did, DirectoryActorSearchOutcome,
     DirectoryAgentSelectorResolutionOutcome, DirectoryAnnounceOutcome,
@@ -150,7 +150,7 @@ async fn directory_describe(depot: &mut Depot) -> JsonResult<DirectoryDescriptio
     let state = depot.get_typed::<AppState>().expect("state injected");
     let service_did = Did::new(state.config.service_did.clone())
         .map_err(|error| AppError::internal(format!("invalid configured service_did: {error}")))?;
-    let trust_domain = cokret_sdk::TypedTrustDomainId::new(state.config.trust_domain.clone())
+    let trust_domain = arkret_sdk::TypedTrustDomainId::new(state.config.trust_domain.clone())
         .map_err(|error| AppError::internal(format!("invalid configured trust_domain: {error}")))?;
     let supported_profiles: Vec<String> = DIRECTORY_DISCOVERY_PROFILES
         .iter()
@@ -165,39 +165,39 @@ async fn directory_describe(depot: &mut Depot) -> JsonResult<DirectoryDescriptio
         service_did,
         trust_domain,
         service_type: "directory_service".to_owned(),
-        protocol_version: cokret_sdk::PROTOCOL_VERSION.to_owned(),
+        protocol_version: arkret_sdk::PROTOCOL_VERSION.to_owned(),
         supported_profiles: supported_profiles.clone(),
         supported_operations: DIRECTORY_SUPPORTED_OPERATIONS
             .iter()
             .map(|operation| (*operation).to_owned())
             .collect(),
         supported_bindings: vec![
-            cokret_sdk::SupportedBinding::new("http_json")
+            arkret_sdk::SupportedBinding::new("http_json")
                 .with_base_url(state.config.public_base_url.trim_end_matches('/')),
         ],
         supported_features: supported_features.clone(),
-        auth_metadata: cokret_sdk::AuthMetadata::minimal("public_no_auth"),
+        auth_metadata: arkret_sdk::AuthMetadata::minimal("public_no_auth"),
         limits: json!({}),
-        plaintext_visibility: cokret_sdk::PlaintextVisibility::none(),
+        plaintext_visibility: arkret_sdk::PlaintextVisibility::none(),
         privacy_derivation: None,
         receive_policy_constraints: None,
         implemented_features: supported_features,
         claimed_profiles: supported_profiles
             .iter()
-            .map(cokret_sdk::ClaimedProfileEntry::self_claimed)
+            .map(arkret_sdk::ClaimedProfileEntry::self_claimed)
             .collect(),
         verified_profiles: Vec::new(),
         experimental_features: Vec::new(),
         compat_surfaces: Vec::new(),
         development_mode: state.config.development_mode,
-        rate_limit_policy: Some(cokret_sdk::RateLimitPolicy::unspecified()),
+        rate_limit_policy: Some(arkret_sdk::RateLimitPolicy::unspecified()),
         rate_limit_policy_id: None,
-        egress_network_policy: Some(cokret_sdk::EgressNetworkPolicy::deny_private_defaults()),
+        egress_network_policy: Some(arkret_sdk::EgressNetworkPolicy::deny_private_defaults()),
         resource_types: DIRECTORY_RESOURCE_TYPES.to_vec(),
         discovery_profiles: supported_profiles,
         restricted_query_proof: Some(false),
-        ingest_modes: vec![cokret_sdk::DirectoryIngestMode::Push],
-        accept_policy_kind: Some(cokret_sdk::DirectoryAcceptPolicyKind::Open),
+        ingest_modes: vec![arkret_sdk::DirectoryIngestMode::Push],
+        accept_policy_kind: Some(arkret_sdk::DirectoryAcceptPolicyKind::Open),
         accept_policy_ref: None,
         default_ttl_seconds: Some(86_400),
         max_ttl_seconds: Some(604_800),

@@ -31,13 +31,13 @@ use crate::ratelimit::RateLimiterConfig;
 pub struct RateLimitSettings {
     /// Sliding-window length in seconds.
     pub window_seconds: u32,
-    /// Fallback ceiling for the `other` (non-`/_cokret/*`) class.
+    /// Fallback ceiling for the `other` (non-`/_arkret/*`) class.
     pub default_per_minute: u32,
     /// Strict ceiling for the credential/bearer-issuing `auth` class.
     pub auth_per_minute: u32,
-    /// Moderate ceiling for the rest of `/_cokret/*`.
+    /// Moderate ceiling for the rest of `/_arkret/*`.
     pub api_per_minute: u32,
-    /// Generous ceiling for the public `/_cokret/describe` probe.
+    /// Generous ceiling for the public `/_arkret/describe` probe.
     pub probe_per_minute: u32,
 }
 

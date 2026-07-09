@@ -29,7 +29,7 @@ use soland::state::AppState;
 use soland_data::Db;
 
 const PEER_DID: &str = "did:web:peer.example";
-const FEDERATION_ENDPOINT: &str = "/_cokret/peer/events";
+const FEDERATION_ENDPOINT: &str = "/_arkret/peer/events";
 const IDEMPOTENCY_KEY: &str = "ak:outbox:test-idem-key-0001";
 const PAYLOAD_JSON: &str = r#"{"resource":"sha256:01"}"#;
 
@@ -146,7 +146,7 @@ async fn enqueue_then_dispatch_delivers_payload_with_spec_headers() {
         captured.captured
     );
     assert!(
-        captured.captured.starts_with("POST /_cokret/peer/events"),
+        captured.captured.starts_with("POST /_arkret/peer/events"),
         "request line should target the configured endpoint; got: {}",
         captured.captured
     );

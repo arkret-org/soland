@@ -3,7 +3,7 @@
 //! A tokio background task that wakes every
 //! [`AppConfig::compaction_prune_walk_interval_seconds`] seconds, walks
 //! every live Realm's seal DAG, evaluates each candidate Seal against
-//! [`cokret_sdk::CompactionPolicy::is_eligible`], and prunes the eligible
+//! [`arkret_sdk::CompactionPolicy::is_eligible`], and prunes the eligible
 //! ones via [`SealStore::prune_predecessor`]. Bounded per-Realm by
 //! [`AppConfig::compaction_prune_walk_per_realm_limit`] so a single tick
 //! never tries to prune a huge backlog at once — further candidates land
@@ -36,8 +36,8 @@ use std::collections::{BTreeSet, VecDeque};
 use std::sync::Arc;
 use std::time::Duration;
 
-use cokret_sdk::state_res::SealStore;
-use cokret_sdk::{PruneCandidate, PruneEligibility, RealmId, Seal, SealId};
+use arkret_sdk::state_res::SealStore;
+use arkret_sdk::{PruneCandidate, PruneEligibility, RealmId, Seal, SealId};
 
 use crate::state::AppState;
 

@@ -4,7 +4,7 @@ pub(super) mod account;
 pub(super) mod account_data;
 pub(crate) mod agents;
 pub(crate) mod auth;
-// api-conventions.md §3.3 — `/_cokret/self/*` inbound credential: a
+// api-conventions.md §3.3 — `/_arkret/self/*` inbound credential: a
 // `ck.session.grant` presented directly with a DPoP (RFC 9449) holder proof,
 // validated against a TTL-cached coauth introspection. The default ② session
 // path has no local credential issuance step.
@@ -21,7 +21,7 @@ mod keys;
 // (`principal_control_realm_for_did`) is reachable from the events policy gate.
 pub(crate) mod recovery;
 // SPEC-CR-001 — RFC 9421 sender-constrained (PoP) verification hoop for the
-// `/_cokret/self/*` surface. pub(in crate::routing) so `routing::mod` can mount
+// `/_arkret/self/*` surface. pub(in crate::routing) so `routing::mod` can mount
 // `verify_session_pop` on the self routers.
 pub(in crate::routing) mod session_pop;
 pub(crate) mod webvh_validation;
@@ -63,7 +63,7 @@ pub fn protocol_router() -> Router {
             ),
         )
         // SOL-06-001: recovery_session.* is a core-tier protocol surface; mount
-        // the spec-canonical recovery-sessions routes under /_cokret/root.
+        // the spec-canonical recovery-sessions routes under /_arkret/root.
         .push(Router::with_path("root").push(recovery::protocol_router()))
         .push(
             Router::with_path("self")

@@ -76,8 +76,8 @@ pub(super) fn recovery_proof_summary(record: &RecoverySessionRecord) -> Option<V
     let kind = proof.get("kind").and_then(Value::as_str)?;
     let verification_method = proof.get("verification_method").and_then(Value::as_str);
     let transcript = recovery_proof_summary_transcript(record, proof)?;
-    let transcript_bytes = cokret_sdk::canonical::canonical_json_bytes(&transcript).ok()?;
-    let proof_digest = cokret_sdk::canonical::sha256_digest(&transcript_bytes);
+    let transcript_bytes = arkret_sdk::canonical::canonical_json_bytes(&transcript).ok()?;
+    let proof_digest = arkret_sdk::canonical::sha256_digest(&transcript_bytes);
     let mut summary = json!({ "kind": kind, "proof_digest": proof_digest });
     if let Some(vm) = verification_method {
         summary["verification_method"] = json!(vm);
@@ -531,7 +531,7 @@ pub(super) async fn verify_principal_signing_proof(
 
     let transcript = recovery_proof_transcript(record, "principal_signing");
     let transcript_bytes =
-        cokret_sdk::canonical::canonical_json_bytes(&transcript).map_err(|error| {
+        arkret_sdk::canonical::canonical_json_bytes(&transcript).map_err(|error| {
             AppError::internal(format!("recovery proof transcript failed: {error}"))
         })?;
 
@@ -617,7 +617,7 @@ pub(super) async fn verify_trusted_recovery_service_proof(
     let transcript =
         generic_recovery_proof_transcript(record, "trusted_recovery_service", proof_body);
     let transcript_bytes =
-        cokret_sdk::canonical::canonical_json_bytes(&transcript).map_err(|error| {
+        arkret_sdk::canonical::canonical_json_bytes(&transcript).map_err(|error| {
             AppError::internal(format!("recovery proof transcript failed: {error}"))
         })?;
     let signature_b64 = required_proof_string(proof, "signature")?;
@@ -699,7 +699,7 @@ pub(super) async fn verify_recovery_unlock_proof(
     let transcript =
         generic_recovery_proof_transcript(record, "recovery_unlock", Value::Object(proof_body));
     let transcript_bytes =
-        cokret_sdk::canonical::canonical_json_bytes(&transcript).map_err(|error| {
+        arkret_sdk::canonical::canonical_json_bytes(&transcript).map_err(|error| {
             AppError::internal(format!("recovery_unlock transcript failed: {error}"))
         })?;
 
@@ -1048,7 +1048,7 @@ pub(super) async fn recovery_session_complete(
     // the §5.2 transcript fields (device_public_key / hpke_key / algorithms)
     // are checked access, not stringly lookups. Projection-injected envelope
     // fields are stripped first.
-    let typed_authorize: cokret_sdk::DeviceAuthorizePayload = serde_json::from_value(
+    let typed_authorize: arkret_sdk::DeviceAuthorizePayload = serde_json::from_value(
         crate::routing::identity::cross_signing::device_authorize_wire_payload(&authorize_payload),
     )
     .map_err(|error| {

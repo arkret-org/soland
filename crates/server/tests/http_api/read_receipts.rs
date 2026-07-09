@@ -43,7 +43,7 @@ async fn set_demo_realm_visibility(
             plaintext_visible_service_classes: std::collections::BTreeMap::from([(
                 state.config.service_did.clone(),
                 std::collections::BTreeSet::from([
-                    cokret_sdk::PlaintextDataClassKind::MessageContent,
+                    arkret_sdk::PlaintextDataClassKind::MessageContent,
                 ]),
             )]),
             minimal_metadata_realm: false,
@@ -57,7 +57,7 @@ async fn set_demo_realm_visibility(
         std::collections::BTreeSet::from([state.config.service_did.clone()]);
     meta.plaintext_visible_service_classes.insert(
         state.config.service_did.clone(),
-        std::collections::BTreeSet::from([cokret_sdk::PlaintextDataClassKind::MessageContent]),
+        std::collections::BTreeSet::from([arkret_sdk::PlaintextDataClassKind::MessageContent]),
     );
     meta.updated_at = now;
     state
@@ -199,7 +199,7 @@ async fn post_read_receipt(
     token: &str,
     envelope: &Value,
 ) -> salvo::http::Response {
-    TestClient::post("http://server/_cokret/self/ephemeral")
+    TestClient::post("http://server/_arkret/self/ephemeral")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(envelope)
         .send(&app_from_state(state))
@@ -221,7 +221,7 @@ fn receipts_in_subscribe(frame: &Value, realm_id: &str) -> Vec<Value> {
 }
 
 async fn event_view_receipts(state: AppState, token: &str, event_id: &str) -> Vec<Value> {
-    let view: Value = TestClient::get(format!("http://server/_cokret/self/events/{event_id}"))
+    let view: Value = TestClient::get(format!("http://server/_arkret/self/events/{event_id}"))
         .add_header("authorization", format!("Bearer {token}"), true)
         .send(&app_from_state(state))
         .await

@@ -1,8 +1,8 @@
 //! Policy decision check (protocol surface) + owner-scoped policy document
 //! CRUD (soland product surface).
 //!
-//! Protocol surface (`/_cokret/self/...`):
-//! - `POST   /_cokret/self/policy/check`        - evaluate a `PolicyCheckRequestBody`
+//! Protocol surface (`/_arkret/self/...`):
+//! - `POST   /_arkret/self/policy/check`        - evaluate a `PolicyCheckRequestBody`
 //!
 //! Product surface (`/_soland/self/...`): owner-scoped policy document storage
 //! CRUD is deployment-local management, NOT a v1 protocol operation
@@ -25,8 +25,8 @@
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::{DateTime, Utc};
-use cokret_sdk::schema::{CapabilityRiskTier, embedded_capability_action};
-use cokret_sdk::{
+use arkret_sdk::schema::{CapabilityRiskTier, embedded_capability_action};
+use arkret_sdk::{
     AuthzDecision, Did, FreshnessState, Hash, PolicyCheckBoundTo, PolicyCheckOutcome,
     PolicyCheckRequestBody, PolicyCheckSignature, RealmId,
 };
@@ -53,7 +53,7 @@ const POLICY_FRESHNESS_MIN_HARD_MS: i64 = 300_000;
 const POLICY_FRESHNESS_CLOCK_SKEW_MS: i64 = 60_000;
 const POLICY_FRESHNESS_RETRY_AFTER_SECONDS: i64 = 30;
 
-/// Protocol surface (`/_cokret/self/...`): only the policy decision check is
+/// Protocol surface (`/_arkret/self/...`): only the policy decision check is
 /// a v1 protocol operation (`ck.self.policy.query.check`).
 pub(super) fn protocol_router() -> Router {
     Router::new().push(Router::with_path("policy/check").post(policy_check))
@@ -438,13 +438,13 @@ async fn policy_check(
 
 /// Canonical-JSON sha256 digest helper used to build each of the four
 /// Policy-check frontier hashes. Delegates to the SDK
-/// [`cokret_sdk::canonical::canonical_sha256`] so the digest is computed over
+/// [`arkret_sdk::canonical::canonical_sha256`] so the digest is computed over
 /// canonical JSON bytes and emitted in the wire `sha256:<hex>` form. There is
 /// **no** non-canonical fallback: if canonicalization fails the error is
 /// surfaced to the caller rather than silently hashing a non-canonical
 /// `serde_json::to_vec` byte stream.
 fn canonical_hash(value: &Value) -> Result<Hash, AppError> {
-    let digest = cokret_sdk::canonical::canonical_sha256(value)
+    let digest = arkret_sdk::canonical::canonical_sha256(value)
         .map_err(|e| AppError::internal(format!("canonical digest failed: {e}")))?;
     Hash::new(digest).map_err(|e| AppError::internal(format!("digest shape failed: {e}")))
 }
@@ -795,7 +795,7 @@ mod tests {
             device_id: None,
             action: "ck.message.create".to_owned(),
             request_canonical_digest: test_hash(),
-            source: cokret_sdk::PolicyCheckSource {
+            source: arkret_sdk::PolicyCheckSource {
                 service_did: Did::new(source_service.to_owned()).unwrap(),
                 service_type: "soland".to_owned(),
                 source_ip_digest: Some(test_hash()),

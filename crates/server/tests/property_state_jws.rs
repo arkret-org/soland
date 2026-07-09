@@ -2,9 +2,9 @@ use std::collections::BTreeMap;
 
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use cokret_sdk::CellRef;
-use cokret_sdk::lattice::CellState;
-use cokret_sdk::state_res::compute_state_root;
+use arkret_sdk::CellRef;
+use arkret_sdk::lattice::CellState;
+use arkret_sdk::state_res::compute_state_root;
 use proptest::prelude::*;
 use serde_json::json;
 

@@ -190,7 +190,7 @@ pub(crate) async fn validate_event_envelope_with_context(
     if let Some(reason) = frozen_realm_check(realm_frozen, &kind) {
         return Err(event_validation_error(
             StatusCode::FORBIDDEN,
-            cokret_sdk::ERROR_CODE_REALM_FROZEN,
+            arkret_sdk::ERROR_CODE_REALM_FROZEN,
             reason,
         ));
     }
@@ -204,7 +204,7 @@ pub(crate) async fn validate_event_envelope_with_context(
     // store.put succeeds, so any follow-up facet event in the same
     // session naturally passes the regular realm_has_member check.
     let realm_exists = realm_exists_in_index(state, &realm_id);
-    if kind == cokret_sdk::events::kinds::REALM_CREATE && realm_exists {
+    if kind == arkret_sdk::events::kinds::REALM_CREATE && realm_exists {
         return Err(event_validation_error(
             StatusCode::CONFLICT,
             "realm_already_exists",
@@ -225,7 +225,7 @@ pub(crate) async fn validate_event_envelope_with_context(
         &realm_id,
     )
     .await;
-    // A private cross-PS invite delivery (`POST /_cokret/peer/invites`) submits
+    // A private cross-PS invite delivery (`POST /_arkret/peer/invites`) submits
     // the inviter-signed `ck.invite.create` on the *recipient* PS so the local
     // subject can list + accept it. That realm lives on the inviter's PS, so the
     // recipient PS has no member record for it — yet it MUST still record the
@@ -263,7 +263,7 @@ pub(crate) async fn validate_event_envelope_with_context(
     validate_data_event_capability_refs(state, &actor_id, &realm_id, &kind, object)?;
     validate_cba_effect_planes(object)?;
     validate_control_move_seal_basis(object, is_realm_bootstrap_followup)?;
-    if kind == cokret_sdk::events::kinds::MEMBER_IDENTITY_UPDATE {
+    if kind == arkret_sdk::events::kinds::MEMBER_IDENTITY_UPDATE {
         validate_member_identity_proof(state, object.get("payload").unwrap_or(&Value::Null))
             .await?;
     }

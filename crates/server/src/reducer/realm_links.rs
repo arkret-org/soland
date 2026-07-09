@@ -447,7 +447,7 @@ pub fn check_realm_link_admissible(
     link_kind: &str,
     status: &str,
 ) -> Result<(), &'static str> {
-    if cokret_sdk::RealmLinkKind::parse(link_kind).is_none() {
+    if arkret_sdk::RealmLinkKind::parse(link_kind).is_none() {
         return Err("realm_link_kind_invalid");
     }
     if source_realm_id == target_realm_id {
@@ -467,7 +467,7 @@ pub fn check_realm_link_admissible(
 
 #[cfg(test)]
 mod tests {
-    use cokret_sdk::{Operation, OperationId, RealmId};
+    use arkret_sdk::{Operation, OperationId, RealmId};
     use serde_json::json;
 
     use super::*;
@@ -489,7 +489,7 @@ mod tests {
 
     fn link_op(source: &str, target: &str, link_kind: &str, status: &str) -> Operation {
         op(
-            cokret_sdk::events::kinds::REALM_LINK,
+            arkret_sdk::events::kinds::REALM_LINK,
             source,
             json!({
                 "target_realm_id": target,
@@ -501,7 +501,7 @@ mod tests {
 
     fn inherit_op(child: &str, parent: &str, allowed_policies: &[&str]) -> Operation {
         op(
-            cokret_sdk::events::kinds::REALM_INHERITANCE_POLICY,
+            arkret_sdk::events::kinds::REALM_INHERITANCE_POLICY,
             child,
             json!({
                 "source_realm_id": parent,
@@ -513,7 +513,7 @@ mod tests {
 
     fn inherit_op_spec_payload(child: &str, parent: &str, policy_rules: &[&str]) -> Operation {
         op(
-            cokret_sdk::events::kinds::REALM_INHERITANCE_POLICY,
+            arkret_sdk::events::kinds::REALM_INHERITANCE_POLICY,
             child,
             json!({
                 "source_realm_id": parent,

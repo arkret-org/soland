@@ -16,7 +16,7 @@
 //!   sender / scheme / version / `key_ref`).
 //! - `validate_device_message_target` — to-device transport shape (typed `DeviceMessageTarget`).
 //! - canonical RFC 3339 UTC-Z timestamp shape for `*_at` fields is validated via the SDK
-//!   `cokret_sdk::canonical::validate_timestamp_canonical`.
+//!   `arkret_sdk::canonical::validate_timestamp_canonical`.
 //! - `canonical_json_digest` — sha256 over canonical-JSON bytes.
 //!
 //! Spec items still pending here are tracked in `_todos.md` (notably
@@ -31,7 +31,7 @@
 //! - `content` — canonical-JSON, content-block, mention, and device-message shape checks.
 //! - `payload_schemas` — the static `PayloadRequirement` tables.
 
-use cokret_sdk::{DeviceMessageTarget, Operation};
+use arkret_sdk::{DeviceMessageTarget, Operation};
 use serde_json::Value;
 
 use super::{is_valid_hash_digest, validate_did};
@@ -44,7 +44,7 @@ const CONTENT_ENCRYPTION_FLOOR_VIOLATION: &str = "content_encryption_floor_viola
 const REALM_ENCRYPTION_PROFILE_CREATE_LOCKED: &str = "realm_encryption_profile_create_locked";
 const CIRCLE_ENCRYPTION_PROFILE_CREATE_LOCKED: &str = "circle_encryption_profile_create_locked";
 const CIRCLE_ENCRYPTION_BELOW_REALM_FLOOR: &str =
-    cokret_sdk::error::REASON_CIRCLE_ENCRYPTION_BELOW_REALM_FLOOR;
+    arkret_sdk::error::REASON_CIRCLE_ENCRYPTION_BELOW_REALM_FLOOR;
 const CAP_ACTION_MESSAGE_MENTION_BROADCAST: &str = "ck.message.mention.broadcast";
 const AUDIENCE_MENTION_ALLOWED_AUDIENCES: &[&str] = &[
     "effective_scope_members",

@@ -3,7 +3,7 @@
 //! Each handler is intentionally thin: it pulls the request body, runs the
 //! forked conformance primitive in [`super::util`], and serializes the
 //! result. The handlers are gated behind the `ck.profile.conformance_harness.v1`
-//! build profile: the `/_cokret/_conformance/*` namespace is only mounted when
+//! build profile: the `/_arkret/_conformance/*` namespace is only mounted when
 //! that profile is active (development_mode=true), and [`super::ensure_enabled`]
 //! is the defense-in-depth handler guard. See [`super`] and
 //! `service-http-binding.md` §2.1.2.
@@ -33,7 +33,7 @@ use std::collections::BTreeMap;
 
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use cokret_sdk::{Cursor, CursorPurpose};
+use arkret_sdk::{Cursor, CursorPurpose};
 use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
 use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
@@ -456,7 +456,7 @@ pub async fn cursor(body: JsonBody<CursorVectorRequest>) -> JsonResult<CursorVec
     let shape = Cursor {
         v: "1".to_owned(),
         purpose: CursorPurpose::Stream,
-        t: cokret_sdk::canonical::format_timestamp_canonical(cursor_issued_at),
+        t: arkret_sdk::canonical::format_timestamp_canonical(cursor_issued_at),
         x: cursor_issued_at.timestamp_millis() + Cursor::STREAM_TTL_MAX_MS,
         h: URL_SAFE_NO_PAD.encode(digest),
     };

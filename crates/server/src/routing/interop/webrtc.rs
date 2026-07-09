@@ -1,8 +1,8 @@
 //! RTC media handlers.
 //!
 //! Surfaces:
-//! - `POST /_cokret/self/rtc/ice-config` (TURN / STUN list)
-//! - `POST /_cokret/self/rtc/token` (media token exchange, CKP-0010)
+//! - `POST /_arkret/self/rtc/ice-config` (TURN / STUN list)
+//! - `POST /_arkret/self/rtc/token` (media token exchange, CKP-0010)
 //!
 //! These are the only spec-registered media surfaces. Both are stateless with
 //! respect to any ephemeral signaling session: the media token issuer reads the
@@ -18,7 +18,7 @@ use std::collections::BTreeSet;
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::{DateTime, Duration, Utc};
-use cokret_sdk::{
+use arkret_sdk::{
     CellRef, DeviceId, Did, MediaIceConfigRequestBody, MediaIceMode, Operation, OperationId,
     RealmId,
 };
@@ -43,19 +43,19 @@ use crate::wire::{
 
 /// Spec-canonical RTC media surface. Mounted under the `self` trust segment by
 /// `interop::router()` so the only spec-registered media paths resolve at
-/// `/_cokret/self/rtc/ice-config` and `/_cokret/self/rtc/token` (see
+/// `/_arkret/self/rtc/ice-config` and `/_arkret/self/rtc/token` (see
 /// `contract-catalog.json` / the OpenAPI binding). Ephemeral call signaling is
-/// the spec-registered `/_cokret/self/ephemeral` `ck.call.signal` relay (see
+/// the spec-registered `/_arkret/self/ephemeral` `ck.call.signal` relay (see
 /// `routing::events::sync::ephemeral`); the durable call model is the
 /// `ck.call.state` reducer. The legacy soland-internal `/_soland/self/webrtc/*`
 /// session stack has been removed — token/ICE authz and focus/ban now read the
 /// durable `ck.call.state` cell directly.
 pub(super) fn protocol_router() -> Router {
     Router::new()
-        // Spec-canonical signed ICE config (`/_cokret/self/rtc/ice-config`).
-        .push(Router::with_path("rtc/ice-config").post(cokret_ice_config))
-        // CKP-0010 — media token exchange (`/_cokret/self/rtc/token`).
-        .push(Router::with_path("rtc/token").post(cokret_rtc_token))
+        // Spec-canonical signed ICE config (`/_arkret/self/rtc/ice-config`).
+        .push(Router::with_path("rtc/ice-config").post(arkret_ice_config))
+        // CKP-0010 — media token exchange (`/_arkret/self/rtc/token`).
+        .push(Router::with_path("rtc/token").post(arkret_rtc_token))
 }
 
 #[derive(Clone, Debug)]
@@ -158,7 +158,7 @@ impl SolandIceConfigOutcome {
     summary = "Issue signed ICE config"
 )]
 #[tracing::instrument(skip_all, fields(op = "ck.self.media.query.ice_config"))]
-async fn cokret_ice_config(
+async fn arkret_ice_config(
     aa: AuthArgs,
     body: JsonBody<MediaIceConfigRequestBody>,
     depot: &mut Depot,
@@ -369,7 +369,7 @@ fn pairwise_turn_username(
         "issued_at_bucket": bucket,
         "nonce": URL_SAFE_NO_PAD.encode(nonce),
     });
-    let pseudonym_bytes = cokret_sdk::canonical::canonical_json_bytes(&pseudonym_input)
+    let pseudonym_bytes = arkret_sdk::canonical::canonical_json_bytes(&pseudonym_input)
         .unwrap_or_else(|_| pseudonym_input.to_string().into_bytes());
     let tag = hmac_sha256(&secret, &pseudonym_bytes);
     format!("ck_pseudonym_call_{}", hex::encode(&tag[..8]))
@@ -416,7 +416,7 @@ const ICE_CONFIG_SIGNING_LABEL: &str = "ck.media.ice_config.v1";
 /// `payload` is the unsigned outcome (the response object before the
 /// `signature` field is attached), serialized as RFC 8785 JCS canonical JSON.
 fn ice_config_payload_bytes<T: Serialize>(payload: &T) -> Vec<u8> {
-    cokret_sdk::canonical::canonical_json_bytes(payload)
+    arkret_sdk::canonical::canonical_json_bytes(payload)
         .unwrap_or_else(|_| serde_json::to_vec(payload).unwrap_or_default())
 }
 
@@ -430,7 +430,7 @@ fn ice_config_signing_input(payload: &[u8]) -> Vec<u8> {
 
 fn ice_config_signature<T: Serialize>(state: &AppState, payload: &T) -> (String, String) {
     let payload_bytes = ice_config_payload_bytes(payload);
-    let payload_digest = cokret_sdk::canonical::sha256_digest(&payload_bytes);
+    let payload_digest = arkret_sdk::canonical::sha256_digest(&payload_bytes);
     let signing_input = ice_config_signing_input(&payload_bytes);
     let signature = state.notary_signing_key().sign(&signing_input);
     (URL_SAFE_NO_PAD.encode(signature.to_bytes()), payload_digest)
@@ -462,7 +462,7 @@ enum MediaProviderKind {
 impl MediaProviderKind {
     fn parse(value: &str) -> Result<Self, AppError> {
         match value.trim().to_ascii_lowercase().as_str() {
-            "arkret-native" | "cokret_native" => Ok(Self::CokretNative),
+            "arkret-native" | "arkret_native" => Ok(Self::CokretNative),
             "livekit" => Ok(Self::LiveKit),
             "mediasoup" => Ok(Self::Mediasoup),
             _ => Err(AppError::new(
@@ -613,7 +613,7 @@ async fn handle_rtc_token(
     // The request body is the SDK typed shape: `realm_id`/`call_id`/`actor_id`/
     // `device_id` arrive already validated as the corresponding scalar id types,
     // and the response binding carries the same typed ids — so the wire outcome
-    // reuses `cokret_sdk::CallMediaTokenExchangeOutcome` directly instead of a
+    // reuses `arkret_sdk::CallMediaTokenExchangeOutcome` directly instead of a
     // stringly soland mirror.
     let realm_id = body.realm_id.clone();
     if !is_valid_webrtc_session_id(body.call_id.as_str()) {
@@ -731,7 +731,7 @@ async fn handle_rtc_token(
     // even if the realm focus advertises a larger backend TTL.
     let ttl_secs = focus
         .ttl_seconds
-        .clamp(1, cokret_sdk::MEDIA_TOKEN_TTL_MAX_SECS);
+        .clamp(1, arkret_sdk::MEDIA_TOKEN_TTL_MAX_SECS);
     let issued_at = now();
     let expires_at = issued_at + Duration::seconds(ttl_secs as i64);
 
@@ -741,7 +741,7 @@ async fn handle_rtc_token(
     // exchange so the SFU cannot be linked back to (realm, call, actor, device)
     // by recomputing the id, and the wire form matches the schema pattern
     // `^ck:rtc_participant:<uuidv7>$`.
-    let participant_identity = cokret_sdk::new_prefixed_uuid7("ak:rtc_participant:");
+    let participant_identity = arkret_sdk::new_prefixed_uuid7("ak:rtc_participant:");
     let signing_key = state.notary_signing_key();
     // `bindings/livekit.md` §2/§5 — publish grants are derived from the
     // caller's `desired_media`. Absent the field we default to audio+video
@@ -834,7 +834,7 @@ async fn handle_rtc_token(
     };
 
     let participant_binding = CallMediaParticipantBinding {
-        scheme: cokret_sdk::PARTICIPANT_BINDING_SCHEMA.to_owned(),
+        scheme: arkret_sdk::PARTICIPANT_BINDING_SCHEMA.to_owned(),
         sig,
         issuer_kid,
         realm_id,
@@ -933,7 +933,7 @@ impl CallStateCell {
                 let mut projection = state.projection.lock();
                 projection.cells.insert(
                     cell_id,
-                    cokret_sdk::lattice::CellState::Value(value.clone()),
+                    arkret_sdk::lattice::CellState::Value(value.clone()),
                 );
                 Some(value)
             }
@@ -1023,7 +1023,7 @@ async fn call_state_from_event_log(
         .map_err(|error| AppError::internal(format!("events store unavailable: {error}")))?
         .into_iter()
         .filter(|record| {
-            record.kind == cokret_sdk::events::kinds::CALL_STATE
+            record.kind == arkret_sdk::events::kinds::CALL_STATE
                 && record_call_id(record) == Some(call_id)
         })
         .collect::<Vec<_>>();
@@ -1087,7 +1087,7 @@ fn call_state_operation_from_record(
     let mut operation = Operation::create(
         operation_id,
         realm_id,
-        cokret_sdk::events::kinds::CALL_STATE,
+        arkret_sdk::events::kinds::CALL_STATE,
         payload,
     );
     operation.canonical_event_digest = Some(record.canonical_digest.clone());
@@ -1105,7 +1105,7 @@ fn media_service_epoch_for_realm(
     state: &AppState,
     realm_id: &str,
 ) -> Result<MediaServiceEpoch, AppError> {
-    let cell_id = cokret_sdk::CellRef::new(format!(
+    let cell_id = arkret_sdk::CellRef::new(format!(
         "ak:cell:{REALM_MEDIA_SERVICE_CELL_FAMILY}:{realm_id}"
     ))
     .map_err(|error| AppError::internal(format!("invalid media_service cell id: {error}")))?;
@@ -1168,7 +1168,7 @@ fn parse_media_service_epoch(realm_id: &str, value: &Value) -> Result<MediaServi
             .or_else(|| focus_value.get("token_ttl_seconds"))
             .or_else(|| config.get("ttl_seconds"))
             .and_then(Value::as_u64)
-            .unwrap_or(cokret_sdk::MEDIA_TOKEN_TTL_SHOULD_SECS);
+            .unwrap_or(arkret_sdk::MEDIA_TOKEN_TTL_SHOULD_SECS);
         let connect_url = focus_value
             .get("connect_url")
             .and_then(Value::as_str)
@@ -1272,7 +1272,7 @@ fn issue_signed_backend_token(
         },
         "nonce": nonce,
     });
-    let token_bytes = cokret_sdk::canonical::canonical_json_bytes(&token_payload)
+    let token_bytes = arkret_sdk::canonical::canonical_json_bytes(&token_payload)
         .unwrap_or_else(|_| token_payload.to_string().into_bytes());
     let payload_b64 = URL_SAFE_NO_PAD.encode(&token_bytes);
     let signing_input = format!(
@@ -1445,7 +1445,7 @@ fn focus_unavailable_error(message: impl Into<String>) -> AppError {
     status_codes(200, 400, 401, 403, 404, 500)
 )]
 #[tracing::instrument(skip_all, fields(op = "ck.self.call.media.exchange.issue_token"))]
-async fn cokret_rtc_token(
+async fn arkret_rtc_token(
     aa: AuthArgs,
     body: JsonBody<CallMediaTokenExchangeRequestBody>,
     depot: &mut Depot,
@@ -1553,7 +1553,7 @@ async fn call_authz_principals(state: &AppState, realm_id: &str) -> (Option<Stri
     let members = {
         let realms = state.realms.lock();
         Some({
-            cokret_sdk::RealmId::new(realm_id.to_owned())
+            arkret_sdk::RealmId::new(realm_id.to_owned())
                 .ok()
                 .and_then(|id| realms.get(&id))
                 .map(|realm| realm.members.iter().map(ToString::to_string).collect())

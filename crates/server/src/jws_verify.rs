@@ -1,5 +1,5 @@
 //! Soland thin wrapper over the canonical detached-JWS verifier in
-//! [`cokret_sdk::jws`].
+//! [`arkret_sdk::jws`].
 //!
 //! All JWS verification semantics (RFC 7515 detached shape, Ed25519
 //! signature check, DID resolution, replay-window timing) live in the
@@ -19,11 +19,11 @@
 //!   [`AppState::jws_verifier`]'s closure factory — same shape checks PLUS DID resolution + Ed25519
 //!   public-key extraction + RFC 7515 §5.2 signing-input reconstruction + ed25519-dalek verify.
 
-use cokret_sdk::identity::{DidDocument, DidResolver};
-use cokret_sdk::signatures::{
+use arkret_sdk::identity::{DidDocument, DidResolver};
+use arkret_sdk::signatures::{
     Ed25519DetachedJwsVerifier, PublicKeyMaterial, VerifierError, build_proof_envelope,
 };
-use cokret_sdk::{Did, Hash};
+use arkret_sdk::{Did, Hash};
 use ed25519_dalek::{SigningKey, VerifyingKey};
 
 use crate::persistence::{
@@ -55,7 +55,7 @@ pub struct ResolvedVerificationKey {
 // sites in `notary.rs`, `compactor.rs`, `routing::admin::seal.rs`,
 // `routing::federation::move_seal.rs` and `routing::events::event_log.rs`
 // keep working unchanged.
-pub use cokret_sdk::jws::{
+pub use arkret_sdk::jws::{
     effective_window_for_move, physical_millis_from_hlc, verify_replay_window,
     verify_replay_window_at, verify_replay_window_for_move, verify_replay_window_for_move_at,
 };
@@ -84,7 +84,7 @@ pub fn verify_jws_shape(
         return Err("empty canonical bytes".to_owned());
     }
 
-    let payload_digest = Hash::new(cokret_sdk::canonical::sha256_digest(canonical_bytes))
+    let payload_digest = Hash::new(arkret_sdk::canonical::sha256_digest(canonical_bytes))
         .map_err(|error| error.to_string())?;
     let proof = build_proof_envelope(
         "detached_jws",
@@ -124,7 +124,7 @@ fn dev_shape_only_public_key() -> PublicKeyMaterial {
 /// Production Ed25519 detached-JWS verifier.
 ///
 /// Soland-side adapter: dispatches `state.did_resolver` to
-/// [`cokret_sdk::jws::verify_jws_ed25519`]. See the SDK module docs for
+/// [`arkret_sdk::jws::verify_jws_ed25519`]. See the SDK module docs for
 /// the full spec (RFC 7515 detached shape, alg=EdDSA, did:key /
 /// did:web / did:webvh resolution).
 pub fn verify_jws_ed25519(
@@ -134,7 +134,7 @@ pub fn verify_jws_ed25519(
     issuer: &str,
     state: &AppState,
 ) -> Result<(), String> {
-    cokret_sdk::jws::verify_jws_ed25519(
+    arkret_sdk::jws::verify_jws_ed25519(
         canonical_bytes,
         jws,
         verification_method,
@@ -155,13 +155,13 @@ pub async fn verify_jws_ed25519_async(
     issuer: &str,
     state: &AppState,
 ) -> Result<(), String> {
-    let did = cokret_sdk::identity::verification_method_did(verification_method)
+    let did = arkret_sdk::identity::verification_method_did(verification_method)
         .map_err(|error| error.to_string())?;
     let document = resolve_did_document_async(state, &did).await?;
     let resolver = ResolvedDidDocumentResolver {
         document: &document,
     };
-    cokret_sdk::jws::verify_jws_ed25519(
+    arkret_sdk::jws::verify_jws_ed25519(
         canonical_bytes,
         jws,
         verification_method,
@@ -173,12 +173,12 @@ pub async fn verify_jws_ed25519_async(
 
 /// Resolve a DID URL to its Ed25519 [`VerifyingKey`] via the AppState
 /// resolver chain. Adapter over
-/// [`cokret_sdk::jws::resolve_ed25519_pubkey`].
+/// [`arkret_sdk::jws::resolve_ed25519_pubkey`].
 pub fn resolve_ed25519_pubkey(
     state: &AppState,
     verification_method: &str,
 ) -> Result<VerifyingKey, String> {
-    cokret_sdk::jws::resolve_ed25519_pubkey(
+    arkret_sdk::jws::resolve_ed25519_pubkey(
         &*state.did_resolver as &dyn DidResolver,
         verification_method,
     )
@@ -189,13 +189,13 @@ pub async fn resolve_ed25519_pubkey_async(
     state: &AppState,
     verification_method: &str,
 ) -> Result<VerifyingKey, String> {
-    let did = cokret_sdk::identity::verification_method_did(verification_method)
+    let did = arkret_sdk::identity::verification_method_did(verification_method)
         .map_err(|error| error.to_string())?;
     let document = resolve_did_document_async(state, &did).await?;
     let resolver = ResolvedDidDocumentResolver {
         document: &document,
     };
-    cokret_sdk::jws::resolve_ed25519_pubkey(&resolver, verification_method)
+    arkret_sdk::jws::resolve_ed25519_pubkey(&resolver, verification_method)
         .map_err(|error| error.to_string())
 }
 
@@ -217,7 +217,7 @@ pub async fn resolve_ed25519_verification_key_for_did(
         let resolver = ResolvedDidDocumentResolver {
             document: &document,
         };
-        cokret_sdk::jws::resolve_ed25519_pubkey(&resolver, verification_method)
+        arkret_sdk::jws::resolve_ed25519_pubkey(&resolver, verification_method)
             .map_err(|error| error.to_string())?
     };
     let key_log_head = did_document_key_log_head(state, did, &document).await?;
@@ -281,11 +281,11 @@ impl DidResolver for ResolvedDidDocumentResolver<'_> {
         &self.document.id == did
     }
 
-    fn resolve_did(&self, did: &Did) -> cokret_sdk::Result<DidDocument> {
+    fn resolve_did(&self, did: &Did) -> arkret_sdk::Result<DidDocument> {
         if self.supports(did) {
             return Ok(self.document.clone());
         }
-        Err(cokret_sdk::Error::Protocol(
+        Err(arkret_sdk::Error::Protocol(
             "resolved DID document does not match requested DID".to_owned(),
         ))
     }
@@ -459,7 +459,7 @@ async fn did_document_key_log_head(
     }
     let value = serde_json::to_value(document)
         .map_err(|error| format!("DID document serialization failed: {error}"))?;
-    let digest = cokret_sdk::canonical::canonical_sha256(&value)
+    let digest = arkret_sdk::canonical::canonical_sha256(&value)
         .map_err(|error| format!("DID document canonical digest failed: {error}"))?;
     Hash::new(digest).map_err(|error| format!("DID document digest invalid: {error}"))
 }

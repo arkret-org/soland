@@ -1,4 +1,4 @@
-//! RFC 9421 sender-constrained (PoP) verification for `/_cokret/self/*`.
+//! RFC 9421 sender-constrained (PoP) verification for `/_arkret/self/*`.
 //!
 //! `ck.session.grant` binds a short-lived `session_public_key` to the
 //! principal / device / audience (api-conventions.md §3.2). This hoop turns
@@ -23,7 +23,7 @@
 
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use cokret_sdk::http_signature::{
+use arkret_sdk::http_signature::{
     Component, Ed25519PublicKey, SignatureVerificationPolicy, public_key_from_bytes,
     verify_signed_http_message,
 };
@@ -335,8 +335,8 @@ mod tests {
         assert!(is_write(&salvo::http::Method::POST));
         assert!(is_write(&salvo::http::Method::DELETE));
         assert!(!is_write(&salvo::http::Method::GET));
-        assert!(is_sensitive_read("/_cokret/self/keys/backups"));
-        assert!(is_sensitive_read("/_cokret/self/realms/r1/strands"));
-        assert!(!is_sensitive_read("/_cokret/self/realms/r1/links"));
+        assert!(is_sensitive_read("/_arkret/self/keys/backups"));
+        assert!(is_sensitive_read("/_arkret/self/realms/r1/strands"));
+        assert!(!is_sensitive_read("/_arkret/self/realms/r1/links"));
     }
 }

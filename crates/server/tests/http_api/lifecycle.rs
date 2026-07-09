@@ -27,7 +27,7 @@ async fn space_container_lifecycle_state_machine_returns_412_for_illegal_transit
         }),
         Vec::new(),
     );
-    let create_response: Value = TestClient::post("http://server/_cokret/self/events")
+    let create_response: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&create_event)
         .send(&app_from_state(state.clone()))
@@ -45,7 +45,7 @@ async fn space_container_lifecycle_state_machine_returns_412_for_illegal_transit
         serde_json::json!({ "space_id": container_space_id }),
         vec!["ak:event:01904100-0000-7000-8000-d10dc0000001"],
     );
-    let mut bad_restore_response = TestClient::post("http://server/_cokret/self/events")
+    let mut bad_restore_response = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&bad_restore)
         .send(&app_from_state(state.clone()))
@@ -66,7 +66,7 @@ async fn space_container_lifecycle_state_machine_returns_412_for_illegal_transit
         serde_json::json!({ "space_id": container_space_id }),
         vec!["ak:event:01904100-0000-7000-8000-d10dc0000001"],
     );
-    let archive_response: Value = TestClient::post("http://server/_cokret/self/events")
+    let archive_response: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&archive_event)
         .send(&app_from_state(state.clone()))
@@ -84,7 +84,7 @@ async fn space_container_lifecycle_state_machine_returns_412_for_illegal_transit
         serde_json::json!({ "space_id": container_space_id }),
         vec!["ak:event:01904100-0000-7000-8000-d10dc0000003"],
     );
-    let restore_response: Value = TestClient::post("http://server/_cokret/self/events")
+    let restore_response: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&good_restore)
         .send(&app_from_state(state.clone()))
@@ -102,7 +102,7 @@ async fn space_container_lifecycle_state_machine_returns_412_for_illegal_transit
         serde_json::json!({ "space_id": container_space_id }),
         vec!["ak:event:01904100-0000-7000-8000-d10dc0000004"],
     );
-    let tombstone_response: Value = TestClient::post("http://server/_cokret/self/events")
+    let tombstone_response: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&tombstone_event)
         .send(&app_from_state(state.clone()))
@@ -120,7 +120,7 @@ async fn space_container_lifecycle_state_machine_returns_412_for_illegal_transit
         serde_json::json!({ "space_id": container_space_id }),
         vec!["ak:event:01904100-0000-7000-8000-d10dc0000005"],
     );
-    let mut bad_tombstone_response = TestClient::post("http://server/_cokret/self/events")
+    let mut bad_tombstone_response = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&bad_tombstone)
         .send(&app_from_state(state.clone()))
@@ -143,7 +143,7 @@ async fn space_container_lifecycle_state_machine_returns_412_for_illegal_transit
         serde_json::json!({ "space_id": container_space_id }),
         vec!["ak:event:01904100-0000-7000-8000-d10dc0000005"],
     );
-    let mut bad_restore_terminal_response = TestClient::post("http://server/_cokret/self/events")
+    let mut bad_restore_terminal_response = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&bad_restore_terminal)
         .send(&app_from_state(state.clone()))
@@ -180,7 +180,7 @@ async fn strand_morph_lifecycle_state_machine_returns_412_for_illegal_transition
         }),
         Vec::new(),
     );
-    let response: Value = TestClient::post("http://server/_cokret/self/events")
+    let response: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&create_strand)
         .send(&app_from_state(state.clone()))
@@ -198,7 +198,7 @@ async fn strand_morph_lifecycle_state_machine_returns_412_for_illegal_transition
         serde_json::json!({ "strand_id": strand_id }),
         vec!["ak:event:01904100-0000-7000-8000-e10ec0000001"],
     );
-    let mut resp = TestClient::post("http://server/_cokret/self/events")
+    let mut resp = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&bad_restore)
         .send(&app_from_state(state.clone()))
@@ -215,7 +215,7 @@ async fn strand_morph_lifecycle_state_machine_returns_412_for_illegal_transition
         serde_json::json!({ "strand_id": strand_id }),
         vec!["ak:event:01904100-0000-7000-8000-e10ec0000001"],
     );
-    let resp: Value = TestClient::post("http://server/_cokret/self/events")
+    let resp: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&archive)
         .send(&app_from_state(state.clone()))
@@ -233,7 +233,7 @@ async fn strand_morph_lifecycle_state_machine_returns_412_for_illegal_transition
         serde_json::json!({ "strand_id": strand_id }),
         vec!["ak:event:01904100-0000-7000-8000-e10ec0000003"],
     );
-    let mut resp = TestClient::post("http://server/_cokret/self/events")
+    let mut resp = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&bad_archive)
         .send(&app_from_state(state.clone()))
@@ -253,7 +253,7 @@ async fn strand_morph_lifecycle_state_machine_returns_412_for_illegal_transition
         }),
         vec!["ak:event:01904100-0000-7000-8000-e10ec0000003"],
     );
-    let mut resp = TestClient::post("http://server/_cokret/self/events")
+    let mut resp = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&bad_update)
         .send(&app_from_state(state.clone()))
@@ -270,7 +270,7 @@ async fn strand_morph_lifecycle_state_machine_returns_412_for_illegal_transition
         serde_json::json!({ "strand_id": strand_id }),
         vec!["ak:event:01904100-0000-7000-8000-e10ec0000003"],
     );
-    let resp: Value = TestClient::post("http://server/_cokret/self/events")
+    let resp: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&good_restore)
         .send(&app_from_state(state.clone()))
@@ -297,7 +297,7 @@ async fn strand_morph_lifecycle_state_machine_returns_412_for_illegal_transition
         }),
         Vec::new(),
     );
-    let resp: Value = TestClient::post("http://server/_cokret/self/events")
+    let resp: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&create_morph)
         .send(&app_from_state(state.clone()))
@@ -315,7 +315,7 @@ async fn strand_morph_lifecycle_state_machine_returns_412_for_illegal_transition
         serde_json::json!({ "target_ref": morph_id }),
         vec!["ak:event:01904100-0000-7000-8000-e20ec0000001"],
     );
-    let mut resp = TestClient::post("http://server/_cokret/self/events")
+    let mut resp = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&bad_morph_restore)
         .send(&app_from_state(state.clone()))
@@ -332,7 +332,7 @@ async fn strand_morph_lifecycle_state_machine_returns_412_for_illegal_transition
         serde_json::json!({ "target_ref": morph_id }),
         vec!["ak:event:01904100-0000-7000-8000-e20ec0000001"],
     );
-    let resp: Value = TestClient::post("http://server/_cokret/self/events")
+    let resp: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&morph_archive)
         .send(&app_from_state(state.clone()))
@@ -353,7 +353,7 @@ async fn strand_morph_lifecycle_state_machine_returns_412_for_illegal_transition
         }),
         vec!["ak:event:01904100-0000-7000-8000-e20ec0000003"],
     );
-    let mut resp = TestClient::post("http://server/_cokret/self/events")
+    let mut resp = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&bad_morph_update)
         .send(&app_from_state(state.clone()))
@@ -403,11 +403,11 @@ async fn encrypted_realm_rejects_plaintext_strand_content_before_event_log_persi
         let hlc = soland::hlc::ServerHlc::new("lifecycle-test");
         let mut projection = state.projection.lock();
         projection.apply(
-            &cokret_sdk::Operation::create(
-                cokret_sdk::OperationId::new(format!("ak:operation:{}", uuid::Uuid::now_v7()))
+            &arkret_sdk::Operation::create(
+                arkret_sdk::OperationId::new(format!("ak:operation:{}", uuid::Uuid::now_v7()))
                     .unwrap(),
-                cokret_sdk::RealmId::new(DEMO_REALM_ID).unwrap(),
-                cokret_sdk::events::kinds::REALM_POLICY_COMPONENTS,
+                arkret_sdk::RealmId::new(DEMO_REALM_ID).unwrap(),
+                arkret_sdk::events::kinds::REALM_POLICY_COMPONENTS,
                 serde_json::json!({ "content_encryption_floor": "e2ee_required" }),
             ),
             &hlc,
@@ -429,7 +429,7 @@ async fn encrypted_realm_rejects_plaintext_strand_content_before_event_log_persi
         }),
         Vec::new(),
     );
-    let response: Value = TestClient::post("http://server/_cokret/self/events")
+    let response: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&create_strand)
         .send(&app_from_state(state.clone()))
@@ -454,7 +454,7 @@ async fn encrypted_realm_rejects_plaintext_strand_content_before_event_log_persi
         }),
         vec!["ak:event:01904100-0000-7000-8000-e30ec0000001"],
     );
-    let mut response = TestClient::post("http://server/_cokret/self/events")
+    let mut response = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&plaintext_body_update)
         .send(&app_from_state(state.clone()))
@@ -495,7 +495,7 @@ async fn strand_update_status_fsm_rejects_skipped_terminal_transitions() {
         }),
         Vec::new(),
     );
-    let resp: Value = TestClient::post("http://server/_cokret/self/events")
+    let resp: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&create_task)
         .send(&app_from_state(state.clone()))
@@ -515,7 +515,7 @@ async fn strand_update_status_fsm_rejects_skipped_terminal_transitions() {
         }),
         vec!["ak:event:01904100-0000-7000-8000-f51ec0000001"],
     );
-    let mut resp = TestClient::post("http://server/_cokret/self/events")
+    let mut resp = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&bad_done)
         .send(&app_from_state(state.clone()))
@@ -534,7 +534,7 @@ async fn strand_update_status_fsm_rejects_skipped_terminal_transitions() {
         }),
         vec!["ak:event:01904100-0000-7000-8000-f51ec0000001"],
     );
-    let resp: Value = TestClient::post("http://server/_cokret/self/events")
+    let resp: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&good_in_progress)
         .send(&app_from_state(state.clone()))
@@ -554,7 +554,7 @@ async fn strand_update_status_fsm_rejects_skipped_terminal_transitions() {
         }),
         vec!["ak:event:01904100-0000-7000-8000-f51ec0000003"],
     );
-    let resp: Value = TestClient::post("http://server/_cokret/self/events")
+    let resp: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&good_done)
         .send(&app_from_state(state.clone()))
@@ -578,7 +578,7 @@ async fn strand_update_status_fsm_rejects_skipped_terminal_transitions() {
         }),
         vec!["ak:event:01904100-0000-7000-8000-f51ec0000004"],
     );
-    let resp: Value = TestClient::post("http://server/_cokret/self/events")
+    let resp: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&create_incident)
         .send(&app_from_state(state.clone()))
@@ -598,7 +598,7 @@ async fn strand_update_status_fsm_rejects_skipped_terminal_transitions() {
         }),
         vec!["ak:event:01904100-0000-7000-8000-f51ec0000005"],
     );
-    let mut resp = TestClient::post("http://server/_cokret/self/events")
+    let mut resp = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&bad_resolved)
         .send(&app_from_state(state.clone()))
@@ -672,7 +672,7 @@ async fn redaction_targeting_strand_morph_flips_to_redacted_and_rejects_terminal
         }),
         Vec::new(),
     );
-    let resp: Value = TestClient::post("http://server/_cokret/self/events")
+    let resp: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&create_strand)
         .send(&app_from_state(state.clone()))
@@ -694,7 +694,7 @@ async fn redaction_targeting_strand_morph_flips_to_redacted_and_rejects_terminal
         }),
         vec!["ak:event:01904100-0000-7000-8000-f10ec0000001"],
     );
-    let resp: Value = TestClient::post("http://server/_cokret/self/events")
+    let resp: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&redact1)
         .send(&app_from_state(state.clone()))
@@ -725,7 +725,7 @@ async fn redaction_targeting_strand_morph_flips_to_redacted_and_rejects_terminal
         }),
         vec!["ak:event:01904100-0000-7000-8000-f10ec0000002"],
     );
-    let mut resp = TestClient::post("http://server/_cokret/self/events")
+    let mut resp = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&redact2)
         .send(&app_from_state(state.clone()))
@@ -751,7 +751,7 @@ async fn redaction_targeting_strand_morph_flips_to_redacted_and_rejects_terminal
         }),
         Vec::new(),
     );
-    let resp: Value = TestClient::post("http://server/_cokret/self/events")
+    let resp: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&create_morph)
         .send(&app_from_state(state.clone()))
@@ -770,7 +770,7 @@ async fn redaction_targeting_strand_morph_flips_to_redacted_and_rejects_terminal
         }),
         vec!["ak:event:01904100-0000-7000-8000-f20ec0000001"],
     );
-    let resp: Value = TestClient::post("http://server/_cokret/self/events")
+    let resp: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&morph_redact)
         .send(&app_from_state(state.clone()))
@@ -795,7 +795,7 @@ async fn redaction_targeting_strand_morph_flips_to_redacted_and_rejects_terminal
         }),
         vec!["ak:event:01904100-0000-7000-8000-f20ec0000002"],
     );
-    let mut resp = TestClient::post("http://server/_cokret/self/events")
+    let mut resp = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&bad_morph_redact)
         .send(&app_from_state(state.clone()))
@@ -825,7 +825,7 @@ async fn strand_tracks_update_rejected_when_parent_strand_archived() {
         }),
         Vec::new(),
     );
-    let resp: Value = TestClient::post("http://server/_cokret/self/events")
+    let resp: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&create_strand)
         .send(&app_from_state(state.clone()))
@@ -845,7 +845,7 @@ async fn strand_tracks_update_rejected_when_parent_strand_archived() {
         }),
         vec!["ak:event:01904100-0000-7000-8000-aabbcc000001"],
     );
-    let resp: Value = TestClient::post("http://server/_cokret/self/events")
+    let resp: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&tracks_active)
         .send(&app_from_state(state.clone()))
@@ -862,7 +862,7 @@ async fn strand_tracks_update_rejected_when_parent_strand_archived() {
         serde_json::json!({ "strand_id": strand_id }),
         vec!["ak:event:01904100-0000-7000-8000-aabbcc000002"],
     );
-    let resp: Value = TestClient::post("http://server/_cokret/self/events")
+    let resp: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&archive)
         .send(&app_from_state(state.clone()))
@@ -882,7 +882,7 @@ async fn strand_tracks_update_rejected_when_parent_strand_archived() {
         }),
         vec!["ak:event:01904100-0000-7000-8000-aabbcc000003"],
     );
-    let mut resp = TestClient::post("http://server/_cokret/self/events")
+    let mut resp = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&tracks_archived)
         .send(&app_from_state(state.clone()))

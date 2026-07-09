@@ -46,14 +46,14 @@ pub(super) fn validate_federation_request_binding(
             violation.message()
         ))
     })?;
-    let expected_destination = cokret_sdk::TypedTrustDomainId::new(trust_domain.to_owned())
+    let expected_destination = arkret_sdk::TypedTrustDomainId::new(trust_domain.to_owned())
         .map_err(|error| AppError::internal(format!("configured trust_domain invalid: {error}")))?;
     validate_federation_headers(&headers, &expected_destination, request_hash)
 }
 
 pub(super) fn validate_federation_headers(
     headers: &FederationTrustHeaders,
-    expected_destination: &cokret_sdk::TypedTrustDomainId,
+    expected_destination: &arkret_sdk::TypedTrustDomainId,
     request_hash: &str,
 ) -> Result<(), AppError> {
     headers
@@ -75,7 +75,7 @@ pub(super) fn validate_federation_headers(
 pub(super) async fn verify_inbound_push_http_signature(
     state: &AppState,
     req: &Request,
-    body: &cokret_sdk::FederationPushOperationsRequestBody,
+    body: &arkret_sdk::FederationPushOperationsRequestBody,
 ) -> Result<(), AppError> {
     let body_value = serde_json::to_value(body).map_err(|error| {
         AppError::internal(format!(
@@ -96,7 +96,7 @@ pub(super) async fn verify_inbound_push_http_signature(
 pub(super) async fn verify_inbound_transaction_http_signature(
     state: &AppState,
     req: &Request,
-    body: &cokret_sdk::FederationTransactionRequestBody,
+    body: &arkret_sdk::FederationTransactionRequestBody,
 ) -> Result<(), AppError> {
     let body_value = serde_json::to_value(body).map_err(|error| {
         AppError::internal(format!(
@@ -244,7 +244,7 @@ fn verify_inbound_federation_http_signature_inner(
 }
 
 /// Verify the inbound RFC 9421 HTTP Message Signature for a spec-canonical
-/// `/_cokret/peer/*` request and enforce the local peer deny policy.
+/// `/_arkret/peer/*` request and enforce the local peer deny policy.
 ///
 /// Unlike [`verify_inbound_federation_http_signature`] (the private
 /// `/_soland/peer/federation/*` track, which carries a typed body with an
@@ -510,7 +510,7 @@ fn validate_destination_authority(
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned);
     if let Some(observed_digest) = observed {
-        let expected_digest = cokret_sdk::canonical::sha256_digest(
+        let expected_digest = arkret_sdk::canonical::sha256_digest(
             state
                 .config
                 .public_base_url

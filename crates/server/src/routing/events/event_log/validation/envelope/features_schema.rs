@@ -214,7 +214,7 @@ pub(crate) fn validate_event_schema_and_payload(
     object: &serde_json::Map<String, Value>,
 ) -> Result<(), EventValidationError> {
     if !state.config.development_mode {
-        let registry = cokret_sdk::schema::schema_registry_from_default_spec_artifacts()
+        let registry = arkret_sdk::schema::schema_registry_from_default_spec_artifacts()
             .map_err(|_| {
                 event_validation_error(
                     StatusCode::BAD_REQUEST,
@@ -255,13 +255,13 @@ pub(crate) fn validate_event_schema_and_payload(
     }
     if matches!(
         kind,
-        cokret_sdk::events::kinds::SPACE_ARCHIVE
-            | cokret_sdk::events::kinds::SPACE_RESTORE
-            | cokret_sdk::events::kinds::SPACE_TOMBSTONE
+        arkret_sdk::events::kinds::SPACE_ARCHIVE
+            | arkret_sdk::events::kinds::SPACE_RESTORE
+            | arkret_sdk::events::kinds::SPACE_TOMBSTONE
     ) {
         return validate_space_container_lifecycle_payload(payload);
     }
-    cokret_sdk::schema::event_payload_validator_catalog()
+    arkret_sdk::schema::event_payload_validator_catalog()
         .map_err(|error| {
             event_validation_error(
                 StatusCode::BAD_REQUEST,
@@ -302,7 +302,7 @@ pub(crate) async fn validate_member_identity_proof(
             "identity_payload must carry member_identity or encrypted_payload",
         ));
     };
-    let identity: cokret_sdk::MemberIdentity =
+    let identity: arkret_sdk::MemberIdentity =
         serde_json::from_value(member_identity_value.clone()).map_err(|error| {
             event_validation_error(
                 StatusCode::BAD_REQUEST,
@@ -345,7 +345,7 @@ pub(crate) async fn validate_member_identity_proof(
     }
     if !matches!(
         identity.proof.signature_algorithm,
-        cokret_sdk::MemberIdentitySignatureAlgorithm::Ed25519
+        arkret_sdk::MemberIdentitySignatureAlgorithm::Ed25519
     ) {
         let code = crate::error::ErrorCode::UnsupportedSignatureAlg;
         return Err(event_validation_error(

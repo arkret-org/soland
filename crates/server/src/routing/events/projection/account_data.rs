@@ -1,4 +1,4 @@
-use cokret_sdk::Operation;
+use arkret_sdk::Operation;
 use serde_json::{Value, json};
 
 use crate::kinds;
@@ -62,7 +62,7 @@ pub fn project_read_receipt_policy(state: &AppState, operation: &Operation) {
     // Synthesize a CellState::Value at the canonical cell ref. This lets
     // the cells-map fast-path serve reads without scanning the durable
     // Event store on every fanout.
-    let cell_id = match cokret_sdk::CellRef::new(format!(
+    let cell_id = match arkret_sdk::CellRef::new(format!(
         "ak:cell:ck.component.realm.read_receipt_policy.v1:{}",
         realm_id.as_str()
     )) {
@@ -80,7 +80,7 @@ pub fn project_read_receipt_policy(state: &AppState, operation: &Operation) {
     {
         let mut proj = state.projection.lock();
         proj.cells
-            .insert(cell_id, cokret_sdk::lattice::CellState::Value(value));
+            .insert(cell_id, arkret_sdk::lattice::CellState::Value(value));
     }
 }
 
@@ -97,7 +97,7 @@ pub(super) fn actor_private_read_cursor_matches_origin(
     source_device_id: &str,
     operation: &Operation,
 ) -> bool {
-    if kinds::canonical_kind_string(operation) != cokret_sdk::events::kinds::READ_CURSOR_ADVANCE
+    if kinds::canonical_kind_string(operation) != arkret_sdk::events::kinds::READ_CURSOR_ADVANCE
         || source_device_id.is_empty()
     {
         return true;

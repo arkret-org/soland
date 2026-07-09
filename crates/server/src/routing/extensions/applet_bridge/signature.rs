@@ -1,8 +1,8 @@
 //! Inbound transaction-push per-delivery RFC 9421 source-signature
 //! verification (`applet-integration.md` §7.3.1).
 
-use cokret_sdk::applet::WebhookSignatureAlg;
-use cokret_sdk::{AppletTransactionRequestBody, canonical};
+use arkret_sdk::applet::WebhookSignatureAlg;
+use arkret_sdk::{AppletTransactionRequestBody, canonical};
 use salvo::http::StatusCode;
 use salvo::prelude::*;
 
@@ -238,7 +238,7 @@ pub(super) fn applet_source_signature_anchor(
     let anchor = serde_json::json!({
         "profile": "ck.applet.source_signature_anchor.v1",
         "operation_id": "ck.edge.applet.command.transaction",
-        "direction": "applet_to_cokret_inbound",
+        "direction": "applet_to_arkret_inbound",
         "source_service_did": source_service_did,
         "destination_service_did": destination_service_did,
         "idempotency_key": idempotency_key,

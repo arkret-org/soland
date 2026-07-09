@@ -82,8 +82,8 @@ pub(super) async fn enqueue_outbound_for(
     peer: &FederationPeerTarget,
 ) {
     let endpoint = match resource_kind {
-        "seal" => "/_cokret/peer/events",
-        _ => "/_cokret/peer/events",
+        "seal" => "/_arkret/peer/events",
+        _ => "/_arkret/peer/events",
     };
     let payload = json!({
         "schema": format!("ck.federation.outbound.{resource_kind}.v1"),
@@ -97,7 +97,7 @@ pub(super) async fn enqueue_outbound_for(
     // signing path so the body bytes the dispatcher POSTs are identical
     // to what the signature transcript covers — important once full
     // RFC 9421 signing lands.
-    let payload_bytes = cokret_sdk::canonical::canonical_json_bytes(&payload)
+    let payload_bytes = arkret_sdk::canonical::canonical_json_bytes(&payload)
         .unwrap_or_else(|_| serde_json::to_vec(&payload).unwrap_or_default());
     let payload_json =
         String::from_utf8(payload_bytes.clone()).unwrap_or_else(|_| payload.to_string());
@@ -159,8 +159,8 @@ pub(super) async fn record_outbound_fanout_attempt(
     });
     let next_retry_at = attempted_at + Duration::seconds(30);
     let target_path = match resource_kind {
-        "seal" => "/_cokret/peer/events",
-        _ => "/_cokret/peer/events",
+        "seal" => "/_arkret/peer/events",
+        _ => "/_arkret/peer/events",
     };
     let intent = json!({
         "schema": "ck.federation.outbound_fanout.intent.v1",
@@ -276,9 +276,9 @@ fn signed_fanout_intent_evidence(
     intent: &serde_json::Value,
     attempted_at: DateTime<Utc>,
 ) -> serde_json::Value {
-    let canonical_bytes = cokret_sdk::canonical::canonical_json_bytes(intent)
+    let canonical_bytes = arkret_sdk::canonical::canonical_json_bytes(intent)
         .unwrap_or_else(|_| serde_json::to_vec(intent).unwrap_or_default());
-    let payload_digest = cokret_sdk::canonical::sha256_digest(&canonical_bytes);
+    let payload_digest = arkret_sdk::canonical::sha256_digest(&canonical_bytes);
     let protected_header = br#"{"alg":"EdDSA","typ":"ck.federation.outbound_fanout.intent.v1"}"#;
     let protected_b64u = URL_SAFE_NO_PAD.encode(protected_header);
     let payload_b64u = URL_SAFE_NO_PAD.encode(&canonical_bytes);

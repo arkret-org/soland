@@ -1,13 +1,13 @@
 use super::*;
 
 pub(super) fn realm_frozen_operation_exempt(kind: &str) -> bool {
-    cokret_sdk::events::kinds::is_audit_kind(kind)
+    arkret_sdk::events::kinds::is_audit_kind(kind)
         || matches!(
             kind,
-            cokret_sdk::events::kinds::REALM_ARCHIVE
-                | cokret_sdk::events::kinds::REALM_FREEZE
-                | cokret_sdk::events::kinds::REALM_TOMBSTONE
-                | cokret_sdk::events::kinds::REALM_DESTROY
+            arkret_sdk::events::kinds::REALM_ARCHIVE
+                | arkret_sdk::events::kinds::REALM_FREEZE
+                | arkret_sdk::events::kinds::REALM_TOMBSTONE
+                | arkret_sdk::events::kinds::REALM_DESTROY
         )
 }
 
@@ -19,14 +19,14 @@ pub(super) fn validate_realm_lifecycle_write_gate(
     let realm_id = operation.realm_id.as_str();
     let projection = state.projection.lock();
     if projection.realm_is_in_terminal_state(realm_id)
-        && !cokret_sdk::events::kinds::is_audit_kind(&kind)
+        && !arkret_sdk::events::kinds::is_audit_kind(&kind)
     {
         return Err("realm_terminal_state");
     }
     if projection.realm_is_frozen_at(realm_id, chrono::Utc::now())
         && !realm_frozen_operation_exempt(&kind)
     {
-        return Err(cokret_sdk::ERROR_CODE_REALM_FROZEN);
+        return Err(arkret_sdk::ERROR_CODE_REALM_FROZEN);
     }
     Ok(())
 }
@@ -53,7 +53,7 @@ pub(super) async fn validate_morph_schema_migrate_authz(
         .authz
         .check(
             actor,
-            cokret_sdk::events::kinds::MORPH_SCHEMA_MIGRATE,
+            arkret_sdk::events::kinds::MORPH_SCHEMA_MIGRATE,
             realm_id,
             realm_id,
             owner.as_deref(),
@@ -72,7 +72,7 @@ pub(super) async fn validate_circle_create_policy(
     operation: &Operation,
 ) -> Result<(), &'static str> {
     if kinds::canonical_kind_for_operation(operation)
-        != Some(cokret_sdk::events::kinds::CIRCLE_CREATE)
+        != Some(arkret_sdk::events::kinds::CIRCLE_CREATE)
     {
         return Ok(());
     }
@@ -87,7 +87,7 @@ pub(super) async fn validate_circle_create_policy(
         let (owner, members) = realm_owner_and_members(state, realm_id).await;
         let verdict = state.authz.check(
             actor,
-            cokret_sdk::CAP_ACTION_AGENT_SIDECAR_THREAD_ENSURE,
+            arkret_sdk::CAP_ACTION_AGENT_SIDECAR_THREAD_ENSURE,
             realm_id,
             realm_id,
             owner.as_deref(),
@@ -111,7 +111,7 @@ pub(super) async fn validate_circle_create_policy(
         .authz
         .check(
             actor,
-            cokret_sdk::CAP_ACTION_CIRCLE_CREATE,
+            arkret_sdk::CAP_ACTION_CIRCLE_CREATE,
             realm_id,
             realm_id,
             owner.as_deref(),
@@ -133,13 +133,13 @@ pub(super) async fn validate_circle_management_policy(
         return Ok(());
     };
     let (action, reason) = match kind {
-        cokret_sdk::events::kinds::CIRCLE_UPDATE
-        | cokret_sdk::events::kinds::CIRCLE_ARCHIVE
-        | cokret_sdk::events::kinds::CIRCLE_RESTORE
-        | cokret_sdk::events::kinds::CIRCLE_TOMBSTONE => {
+        arkret_sdk::events::kinds::CIRCLE_UPDATE
+        | arkret_sdk::events::kinds::CIRCLE_ARCHIVE
+        | arkret_sdk::events::kinds::CIRCLE_RESTORE
+        | arkret_sdk::events::kinds::CIRCLE_TOMBSTONE => {
             ("ck.circle.manage", "circle_manage_capability_required")
         }
-        cokret_sdk::events::kinds::CIRCLE_MEMBER_STATE
+        arkret_sdk::events::kinds::CIRCLE_MEMBER_STATE
             if circle_member_manage_required(state, operation) =>
         {
             (
@@ -264,7 +264,7 @@ pub(super) fn payload_asserts_agent_sidecar_ensure(payload: &Value) -> bool {
             .get("object")
             .and_then(|object| object.get("sidecar_profile"))
             .and_then(Value::as_str)
-    }) == Some(cokret_sdk::PROFILE_AGENT_SIDECAR_THREAD);
+    }) == Some(arkret_sdk::PROFILE_AGENT_SIDECAR_THREAD);
     if !profile_matches {
         return false;
     }
@@ -280,7 +280,7 @@ pub(super) fn payload_asserts_agent_sidecar_ensure(payload: &Value) -> bool {
         .and_then(Value::as_object)
         .is_some_and(|cap| {
             cap.get("action").and_then(Value::as_str)
-                == Some(cokret_sdk::CAP_ACTION_AGENT_SIDECAR_THREAD_ENSURE)
+                == Some(arkret_sdk::CAP_ACTION_AGENT_SIDECAR_THREAD_ENSURE)
                 && cap.get("allowed").and_then(Value::as_bool) == Some(true)
         })
 }
@@ -308,7 +308,7 @@ pub(super) fn sidecar_circle_create_shape_is_constrained(
         return false;
     }
     if object.get("sidecar_profile").and_then(Value::as_str)
-        != Some(cokret_sdk::PROFILE_AGENT_SIDECAR_THREAD)
+        != Some(arkret_sdk::PROFILE_AGENT_SIDECAR_THREAD)
     {
         return false;
     }
@@ -321,7 +321,7 @@ pub(super) fn sidecar_circle_create_shape_is_constrained(
     if object.get("history_visibility").and_then(Value::as_str) != Some("joined") {
         return false;
     }
-    let expected_key = cokret_sdk::agent_sidecar_circle_key(realm_id, actor);
+    let expected_key = arkret_sdk::agent_sidecar_circle_key(realm_id, actor);
     if object
         .get("controller_agent_circle_key")
         .and_then(Value::as_str)
@@ -329,7 +329,7 @@ pub(super) fn sidecar_circle_create_shape_is_constrained(
     {
         return false;
     }
-    let expected_short_name = cokret_sdk::agent_sidecar_short_name(&expected_key);
+    let expected_short_name = arkret_sdk::agent_sidecar_short_name(&expected_key);
     object.get("title").and_then(Value::as_str) == Some(expected_short_name.as_str())
         && object
             .get("display")

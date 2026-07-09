@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 
 use chrono::Duration;
-use cokret_sdk::{Did, RealmId};
+use arkret_sdk::{Did, RealmId};
 use salvo::http::StatusCode;
 use salvo::oapi::extract::{JsonBody, PathParam, QueryParam};
 use salvo::prelude::*;
@@ -92,10 +92,10 @@ pub(in crate::routing::federation::federation) struct FederationBackfillOperatio
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.federation.transaction"))]
 pub(crate) async fn federation_transaction(
     txn_id: PathParam<String>,
-    body: JsonBody<cokret_sdk::FederationTransactionRequestBody>,
+    body: JsonBody<arkret_sdk::FederationTransactionRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<cokret_sdk::FederationTransactionOutcome> {
+) -> JsonResult<arkret_sdk::FederationTransactionOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     ensure_private_inbound_write_rail_local(state)?;
     let txn_id = txn_id.into_inner();
@@ -115,7 +115,7 @@ pub(crate) async fn federation_transaction(
         )
         .with_status(StatusCode::BAD_REQUEST)
     })?;
-    let expected_destination = cokret_sdk::TypedTrustDomainId::new(
+    let expected_destination = arkret_sdk::TypedTrustDomainId::new(
         state.config.trust_domain.clone(),
     )
     .map_err(|error| AppError::internal(format!("configured trust_domain invalid: {error}")))?;
@@ -213,7 +213,7 @@ pub(crate) async fn federation_transaction(
             if !strict_cache_hit {
                 response_value = mark_response_historical_only(response_value);
             }
-            let response: cokret_sdk::FederationTransactionOutcome =
+            let response: arkret_sdk::FederationTransactionOutcome =
                 serde_json::from_value(response_value).map_err(|error| {
                     AppError::internal(format!("cached federation response decode: {error}"))
                 })?;
@@ -287,7 +287,7 @@ pub(crate) async fn federation_transaction(
         }
     }
     let ingest = ingest_federation_operations(state, &origin, operations).await;
-    let response = cokret_sdk::FederationTransactionOutcome {
+    let response = arkret_sdk::FederationTransactionOutcome {
         ok: true,
         accepted: ingest.accepted,
         rejected: ingest.rejected,
@@ -326,7 +326,7 @@ pub(crate) async fn federation_transaction(
 fn local_peer_policy_digest_for_transaction(
     state: &AppState,
     origin_service_did: &str,
-    body: &cokret_sdk::FederationTransactionRequestBody,
+    body: &arkret_sdk::FederationTransactionRequestBody,
 ) -> Result<String, AppError> {
     let live_settings = state.settings();
     let mut federation_peers = live_settings.federation_peers.clone();
@@ -379,12 +379,12 @@ fn local_peer_policy_digest_for_transaction(
         "realm_moderation_policies": moderation_policies,
     });
     let canonical =
-        cokret_sdk::canonical::canonical_json_bytes(&policy_state).map_err(|error| {
+        arkret_sdk::canonical::canonical_json_bytes(&policy_state).map_err(|error| {
             AppError::internal(format!(
                 "federation local peer policy digest canonicalization: {error}"
             ))
         })?;
-    Ok(cokret_sdk::canonical::sha256_digest(&canonical))
+    Ok(arkret_sdk::canonical::sha256_digest(&canonical))
 }
 
 #[endpoint(
@@ -394,10 +394,10 @@ fn local_peer_policy_digest_for_transaction(
 )]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.federation.push_operations"))]
 pub(crate) async fn federation_push_operations(
-    body: JsonBody<cokret_sdk::FederationPushOperationsRequestBody>,
+    body: JsonBody<arkret_sdk::FederationPushOperationsRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<cokret_sdk::FederationPushOperationsOutcome> {
+) -> JsonResult<arkret_sdk::FederationPushOperationsOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     ensure_private_inbound_write_rail_local(state)?;
     let body = body.into_inner();
@@ -421,7 +421,7 @@ pub(crate) async fn federation_push_operations(
     let operations = body.operations;
     enforce_inbound_operation_batch_policy(state, &origin, &operations).await?;
     let ingest = ingest_federation_operations(state, &origin, operations).await;
-    json_ok(cokret_sdk::FederationPushOperationsOutcome {
+    json_ok(arkret_sdk::FederationPushOperationsOutcome {
         accepted: ingest.accepted,
         rejected: ingest.rejected,
         quarantine: Vec::new(),
@@ -514,15 +514,15 @@ pub(crate) async fn federation_pull_operations(
     limit: QueryParam<usize, false>,
     snapshot_bootstrap: QueryParam<bool, false>,
     depot: &mut Depot,
-) -> JsonResult<cokret_sdk::FederationPullOperationsOutcome> {
+) -> JsonResult<arkret_sdk::FederationPullOperationsOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     ensure_private_inbound_read_rail_local(state)?;
     let realm_id = realm_id.into_inner();
-    if cokret_sdk::RealmId::new(realm_id.clone()).is_err() {
+    if arkret_sdk::RealmId::new(realm_id.clone()).is_err() {
         return Err(AppError::invalid_param("invalid realm_id"));
     }
     let realm_id_typed =
-        cokret_sdk::RealmId::new(realm_id.clone()).expect("realm_id was validated");
+        arkret_sdk::RealmId::new(realm_id.clone()).expect("realm_id was validated");
     let after_cursor: Option<String> = after_cursor.into_inner();
     let limit = limit.into_inner().unwrap_or(100).min(100);
     let want_snapshot_bootstrap = snapshot_bootstrap.into_inner().unwrap_or(false);
@@ -564,7 +564,7 @@ pub(crate) async fn federation_pull_operations(
             "operation_count": realm_operations.len(),
             "created_at": now(),
         });
-        let state_digest = cokret_sdk::canonical::sha256_digest(manifest.to_string().as_bytes());
+        let state_digest = arkret_sdk::canonical::sha256_digest(manifest.to_string().as_bytes());
         json!({
             "manifest": manifest,
             "state_digest": state_digest,
@@ -601,7 +601,7 @@ pub(crate) async fn federation_pull_operations(
         Some(next_cursor) => Some(next_cursor),
         None => Some(sync_token(state).await),
     };
-    json_ok(cokret_sdk::FederationPullOperationsOutcome {
+    json_ok(arkret_sdk::FederationPullOperationsOutcome {
         operations,
         snapshot_bootstrap,
         next_cursor,
@@ -629,7 +629,7 @@ pub(crate) async fn federation_backfill_operations(
     if realm_id.is_empty() {
         return Err(AppError::missing_param("realm_id is required"));
     }
-    if cokret_sdk::RealmId::new(realm_id.clone()).is_err() {
+    if arkret_sdk::RealmId::new(realm_id.clone()).is_err() {
         return Err(AppError::invalid_param("invalid realm_id"));
     }
     let body_value = serde_json::to_value(&body)
@@ -696,7 +696,7 @@ pub(crate) async fn federation_backfill_operations(
 
 async fn operation_history_visible_for_federation_pull(
     state: &AppState,
-    operation: &cokret_sdk::Operation,
+    operation: &arkret_sdk::Operation,
 ) -> bool {
     state
         .persistence
@@ -730,7 +730,7 @@ pub(crate) async fn federation_operation_frontier(
     let state = depot.get_typed::<AppState>().expect("state injected");
     ensure_private_inbound_read_rail_local(state)?;
     let realm_id = realm_id.into_inner();
-    if cokret_sdk::RealmId::new(realm_id.clone()).is_err() {
+    if arkret_sdk::RealmId::new(realm_id.clone()).is_err() {
         return Err(AppError::invalid_param("invalid realm_id"));
     }
     json_ok(operation_frontier_outcome(state, &realm_id).await)
@@ -745,7 +745,7 @@ pub(crate) async fn federation_operation_frontier(
 pub(crate) async fn federation_realm_members(
     realm_id: QueryParam<String, true>,
     depot: &mut Depot,
-) -> JsonResult<cokret_sdk::FederationRealmMemberList> {
+) -> JsonResult<arkret_sdk::FederationRealmMemberList> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     ensure_private_inbound_read_rail_local(state)?;
     let realm_id_value = RealmId::new(realm_id.into_inner())
@@ -758,14 +758,14 @@ pub(crate) async fn federation_realm_members(
             realm
                 .members
                 .iter()
-                .map(|principal_id| cokret_sdk::MemberRef {
+                .map(|principal_id| arkret_sdk::MemberRef {
                     principal_id: principal_id.clone(),
                     membership: json!({"membership": "join"}),
                 })
                 .collect()
         })
         .unwrap_or_default();
-    json_ok(cokret_sdk::FederationRealmMemberList {
+    json_ok(arkret_sdk::FederationRealmMemberList {
         members,
         membership_frontier: sync_token(state).await,
         next_cursor: None,
@@ -779,10 +779,10 @@ pub(crate) async fn federation_realm_members(
 )]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.federation.verify_actor"))]
 pub(crate) async fn federation_verify_actor(
-    body: JsonBody<cokret_sdk::FederationVerifyActorRequestBody>,
+    body: JsonBody<arkret_sdk::FederationVerifyActorRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<cokret_sdk::FederationVerifyActorOutcome> {
+) -> JsonResult<arkret_sdk::FederationVerifyActorOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let body = body.into_inner();
     let request_hash = federation_verify_actor_digest(&body).map_err(|message| {
@@ -799,7 +799,7 @@ pub(crate) async fn federation_verify_actor(
         // request. Fail closed: report `valid: false` and explain that the
         // signature was skipped, rather than asserting a verification that did
         // not happen.
-        return json_ok(cokret_sdk::FederationVerifyActorOutcome {
+        return json_ok(arkret_sdk::FederationVerifyActorOutcome {
             valid: false,
             actor_id: body.actor_id.clone(),
             verified_key_id: None,
@@ -822,7 +822,7 @@ pub(crate) async fn federation_verify_actor(
     let verification =
         verify_federation_actor_signature(state, &body, &unsigned_request_digest).await?;
 
-    json_ok(cokret_sdk::FederationVerifyActorOutcome {
+    json_ok(arkret_sdk::FederationVerifyActorOutcome {
         valid: true,
         actor_id: body.actor_id.clone(),
         verified_key_id: Some(verification.verified_key_id),
@@ -837,7 +837,7 @@ pub(crate) async fn federation_verify_actor(
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct FederationSealsOutcome {
-    pub seals: Vec<cokret_sdk::Seal>,
+    pub seals: Vec<arkret_sdk::Seal>,
     /// Echo of [`crate::config::FederationFanoutTopology::as_str`] so the calling
     /// peer can reason about whether to fan out to other nodes.
     pub fanout_topology: String,
@@ -847,7 +847,7 @@ pub struct FederationSealsOutcome {
 #[derive(Clone, Debug, Default, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct FederationSealsPushRequestBody {
     pub origin: String,
-    pub seals: Vec<cokret_sdk::Seal>,
+    pub seals: Vec<arkret_sdk::Seal>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, salvo::oapi::ToSchema)]
@@ -869,12 +869,12 @@ pub(crate) async fn federation_seals_pull(
     let state = depot.get_typed::<AppState>().expect("state injected");
     ensure_private_inbound_read_rail_local(state)?;
     let realm_id = realm_id.into_inner();
-    if cokret_sdk::RealmId::new(realm_id.clone()).is_err() {
+    if arkret_sdk::RealmId::new(realm_id.clone()).is_err() {
         return Err(AppError::invalid_param("invalid realm_id"));
     }
     let realm = RealmId::new(realm_id).map_err(|_| AppError::invalid_param("invalid realm_id"))?;
     let leaves = state.seal_store.list_leaves(&realm).unwrap_or_default();
-    let mut seals: Vec<cokret_sdk::Seal> = Vec::with_capacity(leaves.len());
+    let mut seals: Vec<arkret_sdk::Seal> = Vec::with_capacity(leaves.len());
     for leaf in &leaves {
         if let Ok(Some(a)) = state.seal_store.get(leaf) {
             seals.push(a);
@@ -918,7 +918,7 @@ pub(crate) async fn federation_seals_push(
     // this push surface up to the protocol rail's strength:
     //   1. enforce the local origin deny policy, then
     //   2. verify the inbound RFC 9421 HTTP Message Signature (binds origin / destination trust
-    //      headers + the canonical body digest), exactly like `/_cokret/peer/*` and the sibling
+    //      headers + the canonical body digest), exactly like `/_arkret/peer/*` and the sibling
     //      `federation_push_operations`.
     if crate::security::federation_origin_denied(body.origin.as_str()) {
         return Err(AppError::capability_denied(

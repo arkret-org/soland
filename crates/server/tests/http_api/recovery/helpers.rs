@@ -8,7 +8,7 @@
 
 use std::sync::Arc;
 
-use cokret_sdk::{
+use arkret_sdk::{
     KeyBackupDeleteDevelopmentProof, KeyBackupDeleteProof, KeysBackupsDeleteRequestBody,
 };
 use serde_json::{Map, Value};
@@ -76,7 +76,7 @@ pub(crate) async fn open_recovery_session(
     post_recovery(
         state,
         token,
-        "/_cokret/root/identity/recovery-sessions",
+        "/_arkret/root/identity/recovery-sessions",
         &create_body,
         StatusCode::CREATED,
     )
@@ -100,7 +100,7 @@ pub(crate) fn sign_recovery_proof(signing: &SigningKey, session: &Value) -> Stri
         "created_at": session["created_at"],
         "expires_at": session["expires_at"],
     });
-    let bytes = cokret_sdk::canonical::canonical_json_bytes(&transcript).unwrap();
+    let bytes = arkret_sdk::canonical::canonical_json_bytes(&transcript).unwrap();
     URL_SAFE_NO_PAD.encode(signing.sign(&bytes).to_bytes())
 }
 
@@ -138,7 +138,7 @@ pub(crate) fn sign_trusted_recovery_service_proof(
         "expires_at": session["expires_at"],
         "proof_body": proof_body,
     });
-    let bytes = cokret_sdk::canonical::canonical_json_bytes(&transcript).unwrap();
+    let bytes = arkret_sdk::canonical::canonical_json_bytes(&transcript).unwrap();
     URL_SAFE_NO_PAD.encode(signing.sign(&bytes).to_bytes())
 }
 
@@ -177,7 +177,7 @@ pub(crate) async fn authorize_device_via_recovery(
     post_recovery(
         state.clone(),
         &token,
-        &format!("/_cokret/root/identity/recovery-sessions/{session_id}/complete"),
+        &format!("/_arkret/root/identity/recovery-sessions/{session_id}/complete"),
         &complete_body,
         StatusCode::OK,
     )
@@ -235,8 +235,8 @@ pub(crate) fn device_authorize_material(session: &Value, ssk: &SigningKey) -> Va
     let principal = session["principal_id"].as_str().unwrap();
     let device = session["requesting_device_id"].as_str().unwrap();
     let generation = session["ssk_generation"].as_u64().unwrap();
-    let did = cokret_sdk::Did::new(principal.to_owned()).unwrap();
-    let device_id = cokret_sdk::DeviceId::new(device.to_owned()).unwrap();
+    let did = arkret_sdk::Did::new(principal.to_owned()).unwrap();
+    let device_id = arkret_sdk::DeviceId::new(device.to_owned()).unwrap();
     // The new device's real keypair — its multibase public key is what the
     // server records, and what a later recovery_receipt MUST be signed by.
     let device_public_key = test_ed25519_multibase_public(&recovery_device_key());
@@ -245,7 +245,7 @@ pub(crate) fn device_authorize_material(session: &Value, ssk: &SigningKey) -> Va
         "ck.hpke_x25519_aead_chacha20poly1305.v1".to_owned(),
         "ck.mls.v1".to_owned(),
     ];
-    let input = cokret_sdk::DeviceTrustBinding::canonical_input(
+    let input = arkret_sdk::DeviceTrustBinding::canonical_input(
         &did,
         &device_id,
         &device_public_key,
@@ -306,7 +306,7 @@ pub(crate) fn seed_cross_signing(
         "generation": 1,
         "issued_at": "2026-05-30T00:00:00Z",
     });
-    let content: cokret_sdk::CrossSigningPublishContent =
+    let content: arkret_sdk::CrossSigningPublishContent =
         serde_json::from_value(publish).expect("cross-signing publish content");
     state
         .cross_signing
@@ -325,7 +325,7 @@ pub(crate) async fn seed_control_event(
     payload: Value,
 ) {
     let envelope = serde_json::json!({ "payload": payload });
-    let canonical_bytes = cokret_sdk::canonical::canonical_json_bytes(&envelope).unwrap();
+    let canonical_bytes = arkret_sdk::canonical::canonical_json_bytes(&envelope).unwrap();
     state
         .persistence
         .events()
@@ -393,7 +393,7 @@ pub(crate) async fn verified_session_for(
     post_recovery(
         state.clone(),
         token,
-        &format!("/_cokret/root/identity/recovery-sessions/{session_id}/proofs"),
+        &format!("/_arkret/root/identity/recovery-sessions/{session_id}/proofs"),
         &serde_json::json!({
             "proof": {
                 "kind": "principal_signing",
@@ -481,7 +481,7 @@ pub(crate) async fn put_key_backup(
     expected_status: StatusCode,
 ) -> Value {
     let mut response = TestClient::put(format!(
-        "http://server/_cokret/self/keys/backups/{backup_id}"
+        "http://server/_arkret/self/keys/backups/{backup_id}"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .json(body)
@@ -506,7 +506,7 @@ pub(crate) async fn delete_key_backup(
         reason: None,
     };
     let mut response = TestClient::delete(format!(
-        "http://server/_cokret/self/keys/backups/{backup_id}"
+        "http://server/_arkret/self/keys/backups/{backup_id}"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .json(&body)
@@ -822,7 +822,7 @@ pub(crate) fn sign_recovery_payload(
         "signed_fields": signed_fields,
         "payload": Value::Object(signed_payload),
     });
-    let transcript_bytes = cokret_sdk::canonical::canonical_json_bytes(&transcript).unwrap();
+    let transcript_bytes = arkret_sdk::canonical::canonical_json_bytes(&transcript).unwrap();
     let signature = signing.sign(&transcript_bytes);
     payload["auth_data"]["signature"] =
         serde_json::json!(URL_SAFE_NO_PAD.encode(signature.to_bytes()));
@@ -837,7 +837,7 @@ pub(crate) async fn post_recovery_policy(
     if let Some(principal_id) = body.get("principal_id").and_then(Value::as_str) {
         ingest_fresh_recovery_did_document(&state, principal_id).await;
     }
-    let mut response = TestClient::post("http://server/_cokret/root/identity/recovery-policy")
+    let mut response = TestClient::post("http://server/_arkret/root/identity/recovery-policy")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(body)
         .send(&app_from_state(state))

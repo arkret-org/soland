@@ -17,14 +17,14 @@ const TEST_CIRCLE_ID: &str = "ak:circle:0196419b-0000-7000-8000-0000000000c1";
 #[tokio::test]
 async fn peer_events_describe_advertises_formal_surface() {
     let state = AppState::new(test_config(), Db { pool: None });
-    let describe: Value = TestClient::get("http://server/_cokret/peer/events/describe")
+    let describe: Value = TestClient::get("http://server/_arkret/peer/events/describe")
         .send(&app_from_state(state))
         .await
         .take_json()
         .await
         .unwrap();
 
-    assert_eq!(describe["primary_write_path"], "/_cokret/peer/events");
+    assert_eq!(describe["primary_write_path"], "/_arkret/peer/events");
     let operations = describe["supported_operations"].as_array().unwrap();
     assert!(
         operations
@@ -66,7 +66,7 @@ async fn peer_events_query_and_frontier_use_peer_surface() {
     put_event_record(&state, event, created_at).await;
 
     let query_target =
-        format!("http://server/_cokret/peer/events?realms={TEST_REALM_ID}&kind=ck.message.create");
+        format!("http://server/_arkret/peer/events?realms={TEST_REALM_ID}&kind=ck.message.create");
     let mut query = TestClient::get(query_target.clone());
     for (name, value) in peer_get_headers(&query_target) {
         query = query.add_header(name, value, true);
@@ -89,7 +89,7 @@ async fn peer_events_query_and_frontier_use_peer_surface() {
     assert!(!page["has_more"].as_bool().unwrap_or(false), "{page:?}");
 
     let frontier_target =
-        format!("http://server/_cokret/peer/events/frontier?realm_id={TEST_REALM_ID}");
+        format!("http://server/_arkret/peer/events/frontier?realm_id={TEST_REALM_ID}");
     let mut frontier = TestClient::get(frontier_target.clone());
     for (name, value) in peer_get_headers(&frontier_target) {
         frontier = frontier.add_header(name, value, true);
@@ -140,7 +140,7 @@ async fn peer_events_submit_quarantines_actor_seq_sibling_overflow() {
     );
     overflow["canonical_digest"] = serde_json::json!(event_canonical_digest(&overflow));
     let body = peer_submit_body(&overflow);
-    let target = "http://server/_cokret/peer/events";
+    let target = "http://server/_arkret/peer/events";
     let mut submit = TestClient::post(target).json(&body);
     for (name, value) in signed_federation_push_headers(PEER_SOURCE_DID, SERVICE_DID, target, &body)
     {
@@ -189,7 +189,7 @@ async fn peer_events_frontier_exposes_current_sibling_heads() {
     }
 
     let frontier_target =
-        format!("http://server/_cokret/peer/events/frontier?realm_id={TEST_REALM_ID}");
+        format!("http://server/_arkret/peer/events/frontier?realm_id={TEST_REALM_ID}");
     let mut frontier = TestClient::get(frontier_target.clone());
     for (name, value) in peer_get_headers(&frontier_target) {
         frontier = frontier.add_header(name, value, true);
@@ -237,7 +237,7 @@ async fn peer_events_submit_rejects_actor_outside_source_trust_domain() {
     event["actor_id"] = serde_json::json!("did:web:intruder.evil");
     event["canonical_digest"] = serde_json::json!(event_canonical_digest(&event));
     let body = peer_submit_body(&event);
-    let target = "http://server/_cokret/peer/events";
+    let target = "http://server/_arkret/peer/events";
     let mut submit = TestClient::post(target).json(&body);
     for (name, value) in signed_federation_push_headers(PEER_SOURCE_DID, SERVICE_DID, target, &body)
     {
@@ -277,7 +277,7 @@ async fn peer_events_submit_accepts_known_member_relayed_by_foreign_domain() {
         Vec::new(),
     );
     let body = peer_submit_body(&event);
-    let target = "http://server/_cokret/peer/events";
+    let target = "http://server/_arkret/peer/events";
     let mut submit = TestClient::post(target).json(&body);
     for (name, value) in signed_federation_push_headers(PEER_SOURCE_DID, SERVICE_DID, target, &body)
     {
@@ -385,7 +385,7 @@ async fn peer_events_query_clips_circle_event_outside_source_did_member_scope() 
     put_event_record(&state, event, now - ChronoDuration::seconds(10)).await;
 
     let query_target =
-        format!("http://server/_cokret/peer/events?realms={TEST_REALM_ID}&kind=ck.message.create");
+        format!("http://server/_arkret/peer/events?realms={TEST_REALM_ID}&kind=ck.message.create");
     let mut query = TestClient::get(query_target.clone());
     for (name, value) in peer_get_headers(&query_target) {
         query = query.add_header(name, value, true);
@@ -402,7 +402,7 @@ async fn peer_events_query_clips_circle_event_outside_source_did_member_scope() 
         "source service represents Bob only, so Alice's Circle event is outside its read scope: {page:?}"
     );
 
-    let resolve_target = "http://server/_cokret/peer/events/resolve";
+    let resolve_target = "http://server/_arkret/peer/events/resolve";
     let resolve_body = serde_json::json!({
         "event_ids": [hidden_event_id],
         "include_payload": true
@@ -440,7 +440,7 @@ async fn self_events_reject_federation_wire() {
         1,
         Vec::new(),
     );
-    let mut response = TestClient::post("http://server/_cokret/self/events")
+    let mut response = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&peer_submit_body(&event))
         .send(&app_from_state(state))
@@ -473,7 +473,7 @@ fn peer_submit_body(event: &Value) -> Value {
             "membership_frontier": [event_id],
             "delivery_binding_frontier": [event_id],
             "destination_service_type": "principal_server",
-            "reducer_profile_digest": cokret_sdk::FEDERATION_MINIMAL_REDUCER_PROFILE_DIGEST,
+            "reducer_profile_digest": arkret_sdk::FEDERATION_MINIMAL_REDUCER_PROFILE_DIGEST,
         },
         "events": [event],
         "idempotency_key": format!("ak:outbox:event:{event_id}"),
@@ -482,7 +482,7 @@ fn peer_submit_body(event: &Value) -> Value {
 
 async fn submit_peer_event(state: AppState, event: &Value) -> Value {
     let body = peer_submit_body(event);
-    let target = "http://server/_cokret/peer/events";
+    let target = "http://server/_arkret/peer/events";
     let mut submit = TestClient::post(target).json(&body);
     for (name, value) in signed_federation_push_headers(PEER_SOURCE_DID, SERVICE_DID, target, &body)
     {
@@ -535,7 +535,7 @@ async fn seed_peer_read_authorization(
     meta.plaintext_visible_service_classes
         .entry(source_service_did.to_owned())
         .or_default()
-        .insert(cokret_sdk::PlaintextDataClassKind::MessageContent);
+        .insert(arkret_sdk::PlaintextDataClassKind::MessageContent);
     meta.updated_at = now;
     state
         .persistence
@@ -662,7 +662,7 @@ fn mls_welcome_payload(claim_id: &str, ciphertext: &str) -> Value {
             "requester_did": "did:web:alice.example",
             "ssk_generation": 1,
             "nonce": b64(format!("{claim_id}-nonce-128-bit-material").as_bytes()),
-            "welcome_digest": cokret_sdk::canonical::sha256_digest(ciphertext.as_bytes()),
+            "welcome_digest": arkret_sdk::canonical::sha256_digest(ciphertext.as_bytes()),
             "created_at": "2026-05-25T00:00:02Z",
             "signature": {
                 "kid": "did:web:alice.example#self-signing",
@@ -745,7 +745,7 @@ async fn put_event_record(state: &AppState, event: Value, received_at: DateTime<
     let kind = event["kind"].as_str().unwrap().to_owned();
     let schema_id = event["schema_id"].as_str().unwrap().to_owned();
     let canonical_digest = event["canonical_digest"].as_str().unwrap().to_owned();
-    let canonical_bytes = cokret_sdk::canonical::canonical_json_bytes(&event).unwrap();
+    let canonical_bytes = arkret_sdk::canonical::canonical_json_bytes(&event).unwrap();
     state
         .persistence
         .events()

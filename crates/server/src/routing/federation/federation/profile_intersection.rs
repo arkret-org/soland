@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-use cokret_sdk::{
+use arkret_sdk::{
     Operation, ProfileSemanticRequirements, ServerDescription,
     collect_profile_semantic_requirements,
 };
@@ -55,7 +55,7 @@ impl FederationProfileIntersection {
     }
 
     fn enforce_atoms(&self, atoms: &SemanticAtoms) -> Result<(), FederationProfileGateRejection> {
-        // federation.md: inbound `/_cokret/peer/events` acceptance is gated by
+        // federation.md: inbound `/_arkret/peer/events` acceptance is gated by
         // the RFC 9421 service signature + trust-domain/destination binding +
         // byte-exact `reducer_profile_digest` match (admission.rs) + the
         // MLS/E2EE governance binding lower bound. A peer ServiceDescribe's
@@ -362,7 +362,7 @@ async fn fetch_peer_description(
     source_service_did: &str,
 ) -> Option<ServerDescription> {
     let peer_url = super::peer_url_for_service_did(state, source_service_did)?;
-    let url = format!("{}/_cokret/describe", peer_url.trim_end_matches('/'));
+    let url = format!("{}/_arkret/describe", peer_url.trim_end_matches('/'));
     let (url, client) = match crate::security::validate_http_url_for_egress_with_pinned_client(
         &url,
         "peer service describe",

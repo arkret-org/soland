@@ -26,11 +26,11 @@ pub trait InviteReceivePolicyStore: Send + Sync {
     async fn get(
         &self,
         subject_id: &str,
-    ) -> PersistenceResult<Option<cokret_sdk::InviteReceivePolicy>>;
-    async fn put(&self, policy: &cokret_sdk::InviteReceivePolicy) -> PersistenceResult<()>;
+    ) -> PersistenceResult<Option<arkret_sdk::InviteReceivePolicy>>;
+    async fn put(&self, policy: &arkret_sdk::InviteReceivePolicy) -> PersistenceResult<()>;
     async fn snapshot_all(
         &self,
-    ) -> PersistenceResult<Vec<(String, cokret_sdk::InviteReceivePolicy)>>;
+    ) -> PersistenceResult<Vec<(String, arkret_sdk::InviteReceivePolicy)>>;
 }
 
 /// Durable backing for the holder-private consent-cell projection (spec
@@ -151,7 +151,7 @@ impl ContactStore for MemoryContactStore {
 
 // In-memory invite-receive policy store
 pub(crate) struct MemoryInviteReceivePolicyStore {
-    data: Arc<Mutex<BTreeMap<String, cokret_sdk::InviteReceivePolicy>>>,
+    data: Arc<Mutex<BTreeMap<String, arkret_sdk::InviteReceivePolicy>>>,
 }
 
 impl MemoryInviteReceivePolicyStore {
@@ -167,11 +167,11 @@ impl InviteReceivePolicyStore for MemoryInviteReceivePolicyStore {
     async fn get(
         &self,
         subject_id: &str,
-    ) -> PersistenceResult<Option<cokret_sdk::InviteReceivePolicy>> {
+    ) -> PersistenceResult<Option<arkret_sdk::InviteReceivePolicy>> {
         Ok(self.data.lock().get(subject_id).cloned())
     }
 
-    async fn put(&self, policy: &cokret_sdk::InviteReceivePolicy) -> PersistenceResult<()> {
+    async fn put(&self, policy: &arkret_sdk::InviteReceivePolicy) -> PersistenceResult<()> {
         self.data
             .lock()
             .insert(policy.subject_id.as_str().to_owned(), policy.clone());
@@ -180,7 +180,7 @@ impl InviteReceivePolicyStore for MemoryInviteReceivePolicyStore {
 
     async fn snapshot_all(
         &self,
-    ) -> PersistenceResult<Vec<(String, cokret_sdk::InviteReceivePolicy)>> {
+    ) -> PersistenceResult<Vec<(String, arkret_sdk::InviteReceivePolicy)>> {
         Ok(self
             .data
             .lock()
@@ -442,7 +442,7 @@ impl ContactStore for PgContactStore {
 
 // ── Pg-backed invite-receive policy store ────────────────────────────────
 // Durable backing for per-subject `invite_receive_policy` overrides. The full
-// `cokret_sdk::InviteReceivePolicy` is persisted as JSONB; `blocked_subjects`
+// `arkret_sdk::InviteReceivePolicy` is persisted as JSONB; `blocked_subjects`
 // is duplicated into a TEXT[] column for cheap hard-block lookups.
 pub(crate) struct PgInviteReceivePolicyStore {
     pub(crate) pool: PgPool,
@@ -457,8 +457,8 @@ struct InviteReceivePolicyRow {
 }
 
 impl InviteReceivePolicyRow {
-    fn into_pair(self) -> PersistenceResult<(String, cokret_sdk::InviteReceivePolicy)> {
-        let policy: cokret_sdk::InviteReceivePolicy = serde_json::from_value(self.policy_payload)
+    fn into_pair(self) -> PersistenceResult<(String, arkret_sdk::InviteReceivePolicy)> {
+        let policy: arkret_sdk::InviteReceivePolicy = serde_json::from_value(self.policy_payload)
             .map_err(|error| {
             PersistenceError::Internal(format!(
                 "invite_receive_policy `{}` payload decode: {error}",
@@ -474,7 +474,7 @@ impl InviteReceivePolicyStore for PgInviteReceivePolicyStore {
     async fn get(
         &self,
         subject_id: &str,
-    ) -> PersistenceResult<Option<cokret_sdk::InviteReceivePolicy>> {
+    ) -> PersistenceResult<Option<arkret_sdk::InviteReceivePolicy>> {
         let mut conn = pg_conn(&self.pool).await?;
         let row = sql_query(
             "SELECT id AS subject_id, policy_payload FROM invite_receive_policies WHERE id = $1",
@@ -487,7 +487,7 @@ impl InviteReceivePolicyStore for PgInviteReceivePolicyStore {
             .transpose()
     }
 
-    async fn put(&self, policy: &cokret_sdk::InviteReceivePolicy) -> PersistenceResult<()> {
+    async fn put(&self, policy: &arkret_sdk::InviteReceivePolicy) -> PersistenceResult<()> {
         let subject_id = policy.subject_id.as_str().to_owned();
         let payload = serde_json::to_value(policy).map_err(|error| {
             PersistenceError::Internal(format!("invite_receive_policy payload encode: {error}"))
@@ -518,7 +518,7 @@ impl InviteReceivePolicyStore for PgInviteReceivePolicyStore {
 
     async fn snapshot_all(
         &self,
-    ) -> PersistenceResult<Vec<(String, cokret_sdk::InviteReceivePolicy)>> {
+    ) -> PersistenceResult<Vec<(String, arkret_sdk::InviteReceivePolicy)>> {
         let mut conn = pg_conn(&self.pool).await?;
         let rows =
             sql_query("SELECT id AS subject_id, policy_payload FROM invite_receive_policies")

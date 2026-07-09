@@ -11,7 +11,7 @@ async fn server_preserves_e2ee_payloads_as_opaque_data() {
     let token = dev_token(state.clone()).await;
     let ciphertext = "base64url-opaque-ciphertext";
 
-    TestClient::post("http://server/_cokret/self/device_messages")
+    TestClient::post("http://server/_arkret/self/device_messages")
         .add_header("authorization", format!("Bearer {token}"), true)
         .add_header("Idempotency-Key", "e2ee-txn", true)
         .json(&serde_json::json!({
@@ -25,7 +25,7 @@ async fn server_preserves_e2ee_payloads_as_opaque_data() {
         .send(&app_from_state(state.clone()))
         .await;
 
-    let delivered: Value = TestClient::get("http://server/_cokret/self/device_messages")
+    let delivered: Value = TestClient::get("http://server/_arkret/self/device_messages")
         .add_header("authorization", format!("Bearer {token}"), true)
         .send(&app_from_state(state))
         .await
@@ -48,7 +48,7 @@ async fn to_device_messages_survive_duplicate_sync_until_ack_token_consumed() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
 
-    TestClient::post("http://server/_cokret/self/device_messages")
+    TestClient::post("http://server/_arkret/self/device_messages")
         .add_header("authorization", format!("Bearer {token}"), true)
         .add_header("Idempotency-Key", "ack-txn", true)
         .json(&serde_json::json!({
@@ -100,7 +100,7 @@ async fn to_device_messages_survive_duplicate_sync_until_ack_token_consumed() {
         "account cursor must not prune unacked to-device messages"
     );
 
-    let acked: Value = TestClient::post("http://server/_cokret/self/device_messages/ack")
+    let acked: Value = TestClient::post("http://server/_arkret/self/device_messages/ack")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({ "ack_token": ack_token.clone() }))
         .send(&app_from_state(state.clone()))
@@ -111,7 +111,7 @@ async fn to_device_messages_survive_duplicate_sync_until_ack_token_consumed() {
     assert_eq!(acked["ok"], true);
     assert_eq!(acked["pruned_count"], 1);
 
-    let ack_replay: Value = TestClient::post("http://server/_cokret/self/device_messages/ack")
+    let ack_replay: Value = TestClient::post("http://server/_arkret/self/device_messages/ack")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({ "ack_token": ack_token }))
         .send(&app_from_state(state.clone()))
@@ -145,7 +145,7 @@ async fn expired_to_device_messages_signal_lost_and_advance_cursor() {
             .to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
     );
 
-    TestClient::post("http://server/_cokret/self/device_messages")
+    TestClient::post("http://server/_arkret/self/device_messages")
         .add_header("authorization", format!("Bearer {token}"), true)
         .add_header("Idempotency-Key", "expired-lost-get", true)
         .json(&serde_json::json!({
@@ -158,7 +158,7 @@ async fn expired_to_device_messages_signal_lost_and_advance_cursor() {
         .send(&app_from_state(state.clone()))
         .await;
 
-    let pull: Value = TestClient::get("http://server/_cokret/self/device_messages")
+    let pull: Value = TestClient::get("http://server/_arkret/self/device_messages")
         .add_header("authorization", format!("Bearer {token}"), true)
         .send(&app_from_state(state.clone()))
         .await
@@ -173,7 +173,7 @@ async fn expired_to_device_messages_signal_lost_and_advance_cursor() {
     assert!(!decode_cursor(next_cursor)["h"].as_str().unwrap().is_empty());
 
     let replay: Value = TestClient::get(format!(
-        "http://server/_cokret/self/device_messages?from={}",
+        "http://server/_arkret/self/device_messages?from={}",
         next_cursor
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
@@ -193,7 +193,7 @@ async fn expired_to_device_messages_signal_lost_and_advance_cursor() {
         (chrono::Utc::now() - chrono::Duration::minutes(1))
             .to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
     );
-    TestClient::post("http://server/_cokret/self/device_messages")
+    TestClient::post("http://server/_arkret/self/device_messages")
         .add_header("authorization", format!("Bearer {token}"), true)
         .add_header("Idempotency-Key", "expired-lost-subscribe", true)
         .json(&serde_json::json!({
@@ -227,7 +227,7 @@ async fn device_messages_evicted_after_session_logout() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
 
-    TestClient::post("http://server/_cokret/self/device_messages")
+    TestClient::post("http://server/_arkret/self/device_messages")
         .add_header("authorization", format!("Bearer {token}"), true)
         .add_header("Idempotency-Key", "logout-txn", true)
         .json(&serde_json::json!({
@@ -241,7 +241,7 @@ async fn device_messages_evicted_after_session_logout() {
         .send(&app_from_state(state.clone()))
         .await;
 
-    let pre_logout: Value = TestClient::get("http://server/_cokret/self/device_messages")
+    let pre_logout: Value = TestClient::get("http://server/_arkret/self/device_messages")
         .add_header("authorization", format!("Bearer {token}"), true)
         .send(&app_from_state(state.clone()))
         .await
@@ -250,7 +250,7 @@ async fn device_messages_evicted_after_session_logout() {
         .unwrap();
     assert_eq!(pre_logout["messages"].as_array().unwrap().len(), 1);
 
-    let logout: Value = TestClient::post("http://server/_cokret/gate/account/logout")
+    let logout: Value = TestClient::post("http://server/_arkret/gate/account/logout")
         .add_header("authorization", format!("Bearer {token}"), true)
         .send(&app_from_state(state.clone()))
         .await
@@ -260,14 +260,14 @@ async fn device_messages_evicted_after_session_logout() {
     assert_eq!(logout["ok"], true);
     assert_eq!(logout["revoked"], true);
 
-    let revoked_session_messages = TestClient::get("http://server/_cokret/self/device_messages")
+    let revoked_session_messages = TestClient::get("http://server/_arkret/self/device_messages")
         .add_header("authorization", format!("Bearer {token}"), true)
         .send(&app_from_state(state.clone()))
         .await;
     assert_eq!(revoked_session_messages.status_code.unwrap().as_u16(), 401);
 
     let new_token = dev_token(state.clone()).await;
-    let post_logout: Value = TestClient::get("http://server/_cokret/self/device_messages")
+    let post_logout: Value = TestClient::get("http://server/_arkret/self/device_messages")
         .add_header("authorization", format!("Bearer {new_token}"), true)
         .send(&app_from_state(state.clone()))
         .await

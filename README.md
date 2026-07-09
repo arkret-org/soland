@@ -80,7 +80,7 @@ normative source. The key operational hooks:
   (defaults to a value derived from the configured `service_did`).
   Enters the canonical transcript of every `ck.cross_signing.reset`
   proof; rotating this value invalidates outstanding proofs.
-- **Ephemeral kinds rejected on `POST /_cokret/self/events`** — producers
+- **Ephemeral kinds rejected on `POST /_arkret/self/events`** — producers
   must route the 12 ephemeral kinds (`ck.call.signal`, `ck.presence`,
   `ck.typing`, `ck.receipt.read`, `ck.key.verification.*`) through
   the ephemeral envelope / device-message channels; no compatibility
@@ -167,7 +167,7 @@ docker run --rm -p 8698:8698 \
   -e SOLAND_PUBLIC_BASE_URL=https://soland.example \
   -e SOLAND_SERVICE_DID=did:webvh:<scid>:soland.example:webvh:service \
   -e SOLAND_ACCOUNT_AUTHORITY_URL=https://coauth.example \
-  -e SOLAND_SESSION_GRANT_INTROSPECTION_URL=https://coauth.example/_cokret/gate/account/session-grants/introspect \
+  -e SOLAND_SESSION_GRANT_INTROSPECTION_URL=https://coauth.example/_arkret/gate/account/session-grants/introspect \
   -e SOLAND_SESSION_GRANT_INTROSPECTION_BEARER=shared-secret-known-by-coauth \
   -e DATABASE_URL=postgres://soland:soland@db:5432/soland \
   -e SOLAND_OBJECT_STORAGE_BACKEND=filesystem \
@@ -186,7 +186,7 @@ All settings can be supplied via environment variables (preferred) or a
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `SOLAND_BIND` (or `--bind`) | `127.0.0.1:8698` | Listen address |
-| `SOLAND_PUBLIC_BASE_URL` | `http://<bind>` | Advertised base URL (`/_cokret/describe`) |
+| `SOLAND_PUBLIC_BASE_URL` | `http://<bind>` | Advertised base URL (`/_arkret/describe`) |
 | `SOLAND_TLS_CERT_PATH` | unset | TLS certificate PEM path; when paired with `SOLAND_TLS_KEY_PATH`, soland serves HTTPS via rustls |
 | `SOLAND_TLS_KEY_PATH` | unset | TLS private-key PEM path paired with `SOLAND_TLS_CERT_PATH` |
 | `SOLAND_PQ_TLS_DEPLOYMENT_PROBE` | unset | Set to `verified` only after an external TLS 1.3 probe proves `X25519MLKEM768` negotiation and fail-closed classical fallback |
@@ -195,7 +195,7 @@ All settings can be supplied via environment variables (preferred) or a
 | `SOLAND_EMBEDDED_WEBVH_REGISTRATION_BEARER` | unset | Shared bearer token coauth must present to write embedded `did:webvh` registrations |
 | `SOLAND_EXTERNAL_WEBVH_PROVIDER_URL` | unset | Optional external `did:webvh` provider, such as a standalone StarID service |
 | `SOLAND_DEFAULT_WEBVH_PROVIDER_ID` | unset | Optional coauth default provider id: `soland.embedded` or `external.webvh` |
-| `SOLAND_ACCOUNT_AUTHORITY_URL` | unset | Public Account Authority URL advertised at `/_cokret/describe.auth_metadata.account_authority` |
+| `SOLAND_ACCOUNT_AUTHORITY_URL` | unset | Public Account Authority URL advertised at `/_arkret/describe.auth_metadata.account_authority` |
 | `SOLAND_SESSION_GRANT_INTROSPECTION_URL` | unset | coauth session-grant introspection endpoint used for `ck.session.grant + DPoP` |
 | `SOLAND_SESSION_GRANT_INTROSPECTION_BEARER` | unset | Server-to-server bearer sent to the session-grant introspection endpoint |
 | `DATABASE_URL` | unset | If set, enables PostgreSQL and runs migrations |
@@ -292,7 +292,7 @@ SOLAND_SERVICE_DID=did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:lo
 SOLAND_DEVELOPMENT_MODE=true
 SOLAND_ACCOUNT_AUTHORITY_URL=https://auth.local.host
 SOLAND_OAUTH_CLIENT_ID=01GFWR28C4KNE04WG3HKXB7C9R
-SOLAND_SESSION_GRANT_INTROSPECTION_URL=https://auth.local.host/_cokret/gate/account/session-grants/introspect
+SOLAND_SESSION_GRANT_INTROSPECTION_URL=https://auth.local.host/_arkret/gate/account/session-grants/introspect
 SOLAND_SESSION_GRANT_INTROSPECTION_BEARER=local-coauth-session-grant-introspection
 SOLAND_EMBEDDED_WEBVH_REGISTRATION_BEARER=local-soland-webvh-registration
 ```
@@ -321,7 +321,7 @@ must match the canonical commit digest, the verification method must be rooted
 in the commit author DID, and proof `domain`/`audience` must bind to
 `SOLAND_SERVICE_DID`.
 
-`GET /_cokret/root/identity/describe` exposes `did_webvh.providers[]` for coauth.
+`GET /_arkret/root/identity/describe` exposes `did_webvh.providers[]` for coauth.
 When the embedded provider is enabled, coauth can register through
 `POST /_soland/root/identity/webvh/register` with `Authorization: Bearer
 <SOLAND_EMBEDDED_WEBVH_REGISTRATION_BEARER>`; soland then serves the DID
@@ -339,7 +339,7 @@ grants.
 
 Account subscribe and Events API cursors are structured `ck:cursor:` tokens
 bound to the principal, device, service DID, filter hash, stream positions, and
-expiry. `/_cokret/self/account/subscribe` resumes with `after`; `/_cokret/self/events`
+expiry. `/_arkret/self/account/subscribe` resumes with `after`; `/_arkret/self/events`
 paginates with `before` / `after`. Expired cursors fail with `cursor_expired`.
 
 Development bearer sessions are stored server-side by service-bound SHA-256
@@ -350,9 +350,9 @@ to-device position. Blob downloads require a bearer session plus a `purpose`
 query parameter; blobs are visible to the uploader or to members of the bound
 Space.
 
-The v1 primary write path is the signed Event Envelope API: `GET /_cokret/self/events/describe`
+The v1 primary write path is the signed Event Envelope API: `GET /_arkret/self/events/describe`
 declares the active event registry, schema/reducer profiles, and limits, and
-`POST /_cokret/self/events` accepts one canonical Event Envelope.
+`POST /_arkret/self/events` accepts one canonical Event Envelope.
 
 Federation transaction IDs are recorded per origin with canonical request
 digests. Replaying the same `(origin, txn_id)` and body returns the stored
@@ -372,8 +372,8 @@ operator/product surfaces live under `/_soland/...`. Highlights:
 - `GET  /.well-known/arkret/openapi.json` and `.../openapi.yaml` — the
   generated OpenAPI 3.1 document from soland's Salvo route wiring
 - `GET  /.well-known/mimi-protocol-directory`
-- `POST /_cokret/self/events`, `GET /_cokret/self/events/describe`, …
-- `GET /_cokret/sync`, `GET /_cokret/root/identity/*`, `GET /_cokret/find/directory/*`
+- `POST /_arkret/self/events`, `GET /_arkret/self/events/describe`, …
+- `GET /_arkret/sync`, `GET /_arkret/root/identity/*`, `GET /_arkret/find/directory/*`
 - `POST /_soland/gate/auth/dev-login` (development_mode only)
 
 A complete list lives in the OpenAPI document above; `/_soland/admin/{resource}`
@@ -399,7 +399,7 @@ just check
 just test
 ```
 
-The OpenAPI snapshot test (`cokret_openapi_spec_contains_facet_projection_contracts`
+The OpenAPI snapshot test (`arkret_openapi_spec_contains_facet_projection_contracts`
 in `tests/http_api.rs`) locks the operation-id surface at the framework level;
 `tests/http_api.rs` covers protocol behaviors. See the root `../_todos.md` `F5/F6`
 entries for the known pre-existing test failures.
@@ -418,7 +418,7 @@ the complete federation/media/recovery/key-backup surfaces.
 
 Before exposing soland to the public internet, walk every item below.
 The same list is computed at runtime and surfaced on
-`/health.hardening` (and `/_cokret/describe.hardening`) so sodmin's
+`/health.hardening` (and `/_arkret/describe.hardening`) so sodmin's
 `/hardening` dashboard can flag failing checks across the whole fleet.
 
 - [ ] `SOLAND_DEVELOPMENT_MODE=false` (default — only flip to true on a loopback dev bind)

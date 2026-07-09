@@ -32,7 +32,7 @@
 //! `applet_bridge::build_ghost_accountability_grant_event`; bot-actor inception
 //! grants remain a follow-up).
 
-use cokret_sdk::Did;
+use arkret_sdk::Did;
 use salvo::oapi::ToSchema;
 use serde::{Deserialize, Serialize};
 

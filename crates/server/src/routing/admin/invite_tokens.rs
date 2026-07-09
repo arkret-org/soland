@@ -4,7 +4,7 @@
 //! the operator create/revoke endpoints without physically deleting invite rows.
 
 use chrono::{DateTime, NaiveDateTime, Utc};
-use cokret_sdk::RealmId;
+use arkret_sdk::RealmId;
 use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};

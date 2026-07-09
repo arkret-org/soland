@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use cokret_sdk::Did;
+use arkret_sdk::Did;
 use serde_json::{Value, json};
 
 // ════════════════════════════════════════════════════════════════════════
@@ -12,9 +12,9 @@ use serde_json::{Value, json};
 /// on every inbound federation request.
 #[derive(Debug, Clone)]
 pub(crate) struct FederationTrustHeaders {
-    pub source_trust_domain: cokret_sdk::TypedTrustDomainId,
-    pub destination_trust_domain: cokret_sdk::TypedTrustDomainId,
-    pub request_canonical_digest: cokret_sdk::Hash,
+    pub source_trust_domain: arkret_sdk::TypedTrustDomainId,
+    pub destination_trust_domain: arkret_sdk::TypedTrustDomainId,
+    pub request_canonical_digest: arkret_sdk::Hash,
 }
 
 impl FederationTrustHeaders {
@@ -31,17 +31,17 @@ impl FederationTrustHeaders {
                 .to_str()
                 .map_err(|_| HeaderViolation::Malformed(name.to_owned()))
         };
-        let source = header_value(cokret_sdk::HEADER_SOURCE_TRUST_DOMAIN)?.to_owned();
-        let destination = header_value(cokret_sdk::HEADER_DESTINATION_TRUST_DOMAIN)?.to_owned();
-        let canonical_hash = header_value(cokret_sdk::HEADER_REQUEST_CANONICAL_DIGEST)?.to_owned();
-        let source = cokret_sdk::TypedTrustDomainId::new(source).map_err(|_| {
-            HeaderViolation::Malformed(cokret_sdk::HEADER_SOURCE_TRUST_DOMAIN.to_owned())
+        let source = header_value(arkret_sdk::HEADER_SOURCE_TRUST_DOMAIN)?.to_owned();
+        let destination = header_value(arkret_sdk::HEADER_DESTINATION_TRUST_DOMAIN)?.to_owned();
+        let canonical_hash = header_value(arkret_sdk::HEADER_REQUEST_CANONICAL_DIGEST)?.to_owned();
+        let source = arkret_sdk::TypedTrustDomainId::new(source).map_err(|_| {
+            HeaderViolation::Malformed(arkret_sdk::HEADER_SOURCE_TRUST_DOMAIN.to_owned())
         })?;
-        let destination = cokret_sdk::TypedTrustDomainId::new(destination).map_err(|_| {
-            HeaderViolation::Malformed(cokret_sdk::HEADER_DESTINATION_TRUST_DOMAIN.to_owned())
+        let destination = arkret_sdk::TypedTrustDomainId::new(destination).map_err(|_| {
+            HeaderViolation::Malformed(arkret_sdk::HEADER_DESTINATION_TRUST_DOMAIN.to_owned())
         })?;
-        let canonical_hash = cokret_sdk::Hash::new(canonical_hash).map_err(|_| {
-            HeaderViolation::Malformed(cokret_sdk::HEADER_REQUEST_CANONICAL_DIGEST.to_owned())
+        let canonical_hash = arkret_sdk::Hash::new(canonical_hash).map_err(|_| {
+            HeaderViolation::Malformed(arkret_sdk::HEADER_REQUEST_CANONICAL_DIGEST.to_owned())
         })?;
         Ok(Self {
             source_trust_domain: source,
@@ -55,7 +55,7 @@ impl FederationTrustHeaders {
     /// `cross_domain_replay_rejected`.
     pub(crate) fn verify_destination(
         &self,
-        expected: &cokret_sdk::TypedTrustDomainId,
+        expected: &arkret_sdk::TypedTrustDomainId,
     ) -> Result<(), &'static str> {
         if self.destination_trust_domain != *expected {
             return Err(crate::error::reasons::CROSS_DOMAIN_REPLAY_REJECTED);
@@ -67,7 +67,7 @@ impl FederationTrustHeaders {
     /// inclusion in the message-signature transcript. Delegates to the SDK
     /// helper to keep producer + consumer byte-for-byte identical.
     pub(crate) fn transcript_fragment(&self) -> String {
-        cokret_sdk::federation_trust_domain_transcript_fragment(
+        arkret_sdk::federation_trust_domain_transcript_fragment(
             &self.source_trust_domain,
             &self.destination_trust_domain,
             &self.request_canonical_digest,
@@ -84,7 +84,7 @@ pub(crate) enum HeaderViolation {
 
 impl HeaderViolation {
     pub(crate) fn error_code(&self) -> &'static str {
-        cokret_sdk::ERROR_CODE_SCHEMA_VIOLATION
+        arkret_sdk::ERROR_CODE_SCHEMA_VIOLATION
     }
 
     pub(crate) fn message(&self) -> String {
@@ -114,7 +114,7 @@ impl FederationIdempotencyKey {
     /// Strict key — equal to a cached entry only when ALL fields match,
     /// including the origin's current key state hash.
     pub(crate) fn strict(&self) -> String {
-        let canonical = cokret_sdk::canonical::canonical_json_bytes(&json!({
+        let canonical = arkret_sdk::canonical::canonical_json_bytes(&json!({
             "source_did": self.source_did,
             "dest_did": self.dest_did,
             "request_canonical_digest": self.request_canonical_digest,
@@ -122,20 +122,20 @@ impl FederationIdempotencyKey {
             "origin_key_state_digest": self.origin_key_state_digest,
         }))
         .unwrap_or_default();
-        cokret_sdk::canonical::sha256_digest(&canonical)
+        arkret_sdk::canonical::sha256_digest(&canonical)
     }
 
     /// Canonical-replay key — drops `origin_key_state_digest`. Used to
     /// detect a replay AFTER the source service rotated its keys.
     pub(crate) fn canonical_replay(&self) -> String {
-        let canonical = cokret_sdk::canonical::canonical_json_bytes(&json!({
+        let canonical = arkret_sdk::canonical::canonical_json_bytes(&json!({
             "source_did": self.source_did,
             "dest_did": self.dest_did,
             "request_canonical_digest": self.request_canonical_digest,
             "idempotency_key": self.idempotency_key,
         }))
         .unwrap_or_default();
-        cokret_sdk::canonical::sha256_digest(&canonical)
+        arkret_sdk::canonical::sha256_digest(&canonical)
     }
 }
 
@@ -153,7 +153,7 @@ pub(crate) fn mark_response_historical_only(mut response: Value) -> Value {
         object.insert("accepted".to_owned(), Value::Array(Vec::new()));
         object.insert(
             "reason_code".to_owned(),
-            Value::String(cokret_sdk::ERROR_CODE_HISTORICAL_ONLY.to_owned()),
+            Value::String(arkret_sdk::ERROR_CODE_HISTORICAL_ONLY.to_owned()),
         );
         object.insert(HISTORICAL_ONLY_MARKER.to_owned(), Value::Bool(true));
         object.insert("original_outcome".to_owned(), original_outcome);
@@ -168,7 +168,7 @@ pub(crate) fn mark_response_historical_only(mut response: Value) -> Value {
 pub(crate) fn delivery_binding_stale_response(
     new_recipient_service_did: &Did,
     actor_id: &Did,
-    handover_frontier: &[cokret_sdk::EventId],
+    handover_frontier: &[arkret_sdk::EventId],
     witness: Value,
 ) -> Value {
     let handover_frontier = Value::Array(
@@ -181,10 +181,10 @@ pub(crate) fn delivery_binding_stale_response(
         Value::Object(object) => object.into_iter().collect::<BTreeMap<_, _>>(),
         other => BTreeMap::from([("value".to_owned(), other)]),
     };
-    let details = cokret_sdk::DeliveryBindingStale {
+    let details = arkret_sdk::DeliveryBindingStale {
         new_recipient_service_did: Value::String(new_recipient_service_did.as_str().to_owned()),
         handover_frontier: handover_frontier.clone(),
-        handover_proof: cokret_sdk::DeliveryBindingStaleHandoverProof {
+        handover_proof: arkret_sdk::DeliveryBindingStaleHandoverProof {
             frontier: handover_frontier,
             recipient_service_did: Value::String(new_recipient_service_did.as_str().to_owned()),
             actor_id: Value::String(actor_id.as_str().to_owned()),
@@ -194,7 +194,7 @@ pub(crate) fn delivery_binding_stale_response(
         extra: BTreeMap::new(),
     };
     error_envelope_with_details(
-        cokret_sdk::ERROR_CODE_DELIVERY_BINDING_STALE,
+        arkret_sdk::ERROR_CODE_DELIVERY_BINDING_STALE,
         "delivery binding is stale; rebind to the new recipient service",
         details,
     )
@@ -205,7 +205,7 @@ pub(crate) fn delivery_binding_stale_response(
 /// already been handed over to the new recipient.
 pub(crate) fn delivery_binding_handed_over_response(new_recipient_service_did: &Did) -> Value {
     error_envelope_with_details(
-        cokret_sdk::ERROR_CODE_DELIVERY_BINDING_HANDED_OVER,
+        arkret_sdk::ERROR_CODE_DELIVERY_BINDING_HANDED_OVER,
         "delivery binding has already been handed over to the new recipient",
         json!({
             "new_recipient_service_did": new_recipient_service_did.as_str(),
@@ -220,7 +220,7 @@ fn error_envelope_with_details(
 ) -> Value {
     let details =
         serde_json::to_value(details).unwrap_or_else(|_| Value::Object(Default::default()));
-    let mut envelope = cokret_sdk::ErrorEnvelope::new(code, message);
+    let mut envelope = arkret_sdk::ErrorEnvelope::new(code, message);
     if let Some(object) = details.as_object() {
         for (key, value) in object {
             envelope = envelope.with_detail(key.clone(), value.clone());

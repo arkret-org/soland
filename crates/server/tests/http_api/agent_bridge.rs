@@ -53,7 +53,7 @@ async fn admin_applets_agents_endpoints_reflect_submitted_registry_events() {
         Value::String(sha256_json(&registration_payload));
     registration_event["canonical_digest"] =
         Value::String(event_canonical_digest(&registration_event));
-    let resp: Value = TestClient::post("http://server/_cokret/self/events")
+    let resp: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&registration_event)
         .send(&app_from_state(state.clone()))
@@ -78,7 +78,7 @@ async fn admin_applets_agents_endpoints_reflect_submitted_registry_events() {
     discovery_event["payload"] = discovery_payload.clone();
     discovery_event["proofs"][0]["payload_digest"] = Value::String(sha256_json(&discovery_payload));
     discovery_event["canonical_digest"] = Value::String(event_canonical_digest(&discovery_event));
-    let resp: Value = TestClient::post("http://server/_cokret/self/events")
+    let resp: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&discovery_event)
         .send(&app_from_state(state.clone()))
@@ -105,7 +105,7 @@ async fn admin_applets_agents_endpoints_reflect_submitted_registry_events() {
     agent_event["payload"] = agent_payload.clone();
     agent_event["proofs"][0]["payload_digest"] = Value::String(sha256_json(&agent_payload));
     agent_event["canonical_digest"] = Value::String(event_canonical_digest(&agent_event));
-    let resp: Value = TestClient::post("http://server/_cokret/self/events")
+    let resp: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&agent_event)
         .send(&app_from_state(state.clone()))
@@ -191,7 +191,7 @@ async fn applet_bridge_emits_synthetic_status_for_session_start() {
     start_event["canonical_digest"] = Value::String(event_canonical_digest(&start_event));
     let _ = &mut payload;
 
-    let resp: Value = TestClient::post("http://server/_cokret/self/events")
+    let resp: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&start_event)
         .send(&app_from_state(state.clone()))
@@ -205,7 +205,7 @@ async fn applet_bridge_emits_synthetic_status_for_session_start() {
     // event for the same session_id. Pull it out of the projection
     // log via the events list endpoint.
     let events: Value = TestClient::get(format!(
-        "http://server/_cokret/self/events?realms={DEMO_REALM_ID}"
+        "http://server/_arkret/self/events?realms={DEMO_REALM_ID}"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state.clone()))
@@ -270,7 +270,7 @@ async fn agent_bridge_emits_status_and_result_for_session_start() {
         }],
     });
     endpoint_event["canonical_digest"] = Value::String(event_canonical_digest(&endpoint_event));
-    let endpoint_resp: Value = TestClient::post("http://server/_cokret/self/events")
+    let endpoint_resp: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&endpoint_event)
         .send(&app_from_state(state.clone()))
@@ -314,7 +314,7 @@ async fn agent_bridge_emits_status_and_result_for_session_start() {
     start_event["canonical_digest"] = Value::String(event_canonical_digest(&start_event));
     let _ = &mut payload;
 
-    let resp: Value = TestClient::post("http://server/_cokret/self/events")
+    let resp: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&start_event)
         .send(&app_from_state(state.clone()))
@@ -325,7 +325,7 @@ async fn agent_bridge_emits_status_and_result_for_session_start() {
     assert_eq!(resp["status"], "accepted", "submit response: {resp}");
 
     let events: Value = TestClient::get(format!(
-        "http://server/_cokret/self/events?realms={DEMO_REALM_ID}"
+        "http://server/_arkret/self/events?realms={DEMO_REALM_ID}"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state.clone()))
@@ -378,7 +378,7 @@ async fn agent_bridge_emits_status_and_result_for_session_start() {
         .as_str()
         .expect("canonical_subject");
     let echo_value = result_event["payload"]["result"]["echo"].clone();
-    let outcome = cokret_sdk::agent_binding::verify_ed25519_audit_binding(
+    let outcome = arkret_sdk::agent_binding::verify_ed25519_audit_binding(
         public_key_b64,
         session_id,
         agent_id,
@@ -389,7 +389,7 @@ async fn agent_bridge_emits_status_and_result_for_session_start() {
     );
     assert_eq!(
         outcome,
-        cokret_sdk::agent_binding::Ed25519AuditBindingVerifyOutcome::Valid,
+        arkret_sdk::agent_binding::Ed25519AuditBindingVerifyOutcome::Valid,
         "audit_binding Ed25519 signature must verify under the carried public key"
     );
 }
@@ -434,7 +434,7 @@ async fn agent_bridge_fails_closed_on_unknown_agent() {
     start_event["canonical_digest"] = Value::String(event_canonical_digest(&start_event));
     let _ = &mut payload;
 
-    let resp: Value = TestClient::post("http://server/_cokret/self/events")
+    let resp: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&start_event)
         .send(&app_from_state(state.clone()))
@@ -445,7 +445,7 @@ async fn agent_bridge_fails_closed_on_unknown_agent() {
     assert_eq!(resp["status"], "accepted", "submit response: {resp}");
 
     let events: Value = TestClient::get(format!(
-        "http://server/_cokret/self/events?realms={DEMO_REALM_ID}"
+        "http://server/_arkret/self/events?realms={DEMO_REALM_ID}"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state.clone()))
@@ -492,7 +492,7 @@ async fn agent_bridge_plumbs_endpoint_url_through_session_envelopes() {
     let token = dev_token(state.clone()).await;
     let session_id = "ak:agent_interop_session:01904100-0000-7000-8000-c0c0c0c0c0c0";
     let agent_id = "did:web:b4d-agent.example";
-    let endpoint_url = "https://b4d-agent.example/_cokret/self/agent";
+    let endpoint_url = "https://b4d-agent.example/_arkret/self/agent";
 
     let endpoint_payload = serde_json::json!({
         "agent_id": agent_id,
@@ -524,7 +524,7 @@ async fn agent_bridge_plumbs_endpoint_url_through_session_envelopes() {
         }],
     });
     endpoint_event["canonical_digest"] = Value::String(event_canonical_digest(&endpoint_event));
-    let endpoint_resp: Value = TestClient::post("http://server/_cokret/self/events")
+    let endpoint_resp: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&endpoint_event)
         .send(&app_from_state(state.clone()))
@@ -568,7 +568,7 @@ async fn agent_bridge_plumbs_endpoint_url_through_session_envelopes() {
     start_event["canonical_digest"] = Value::String(event_canonical_digest(&start_event));
     let _ = &mut payload;
 
-    let resp: Value = TestClient::post("http://server/_cokret/self/events")
+    let resp: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&start_event)
         .send(&app_from_state(state.clone()))
@@ -588,7 +588,7 @@ async fn agent_bridge_plumbs_endpoint_url_through_session_envelopes() {
         for _ in 0..50 {
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
             let events: Value = TestClient::get(format!(
-                "http://server/_cokret/self/events?realms={DEMO_REALM_ID}"
+                "http://server/_arkret/self/events?realms={DEMO_REALM_ID}"
             ))
             .add_header("authorization", format!("Bearer {token}"), true)
             .send(&app_from_state(state.clone()))
@@ -610,7 +610,7 @@ async fn agent_bridge_plumbs_endpoint_url_through_session_envelopes() {
     };
 
     let events: Value = TestClient::get(format!(
-        "http://server/_cokret/self/events?realms={DEMO_REALM_ID}"
+        "http://server/_arkret/self/events?realms={DEMO_REALM_ID}"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state.clone()))
@@ -725,7 +725,7 @@ async fn agent_discover_reflects_endpoint_projection_and_fails_closed() {
         }],
     });
     endpoint_event["canonical_digest"] = Value::String(event_canonical_digest(&endpoint_event));
-    let endpoint_resp: Value = TestClient::post("http://server/_cokret/self/events")
+    let endpoint_resp: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&endpoint_event)
         .send(&app_from_state(state.clone()))
@@ -735,7 +735,7 @@ async fn agent_discover_reflects_endpoint_projection_and_fails_closed() {
         .unwrap();
     assert_eq!(endpoint_resp["status"], "accepted");
 
-    let discover: Value = TestClient::post("http://server/_cokret/self/agents/discover")
+    let discover: Value = TestClient::post("http://server/_arkret/self/agents/discover")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({ "agent_id": agent_id }))
         .send(&app_from_state(state.clone()))
@@ -767,7 +767,7 @@ async fn agent_discover_reflects_endpoint_projection_and_fails_closed() {
     assert_eq!(discover["metadata_url"], "https://agent.example/info");
 
     // Fail closed: an unregistered agent cannot be discovered.
-    let mut missing = TestClient::post("http://server/_cokret/self/agents/discover")
+    let mut missing = TestClient::post("http://server/_arkret/self/agents/discover")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({ "agent_id": "did:web:nope.example" }))
         .send(&app_from_state(state.clone()))

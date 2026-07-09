@@ -239,7 +239,7 @@ pub(super) fn agent_key_state_from_record(record: &Value) -> Value {
 //
 // Stands up the cross-project HTTP contract at the same fidelity as the
 // sibling agent handlers (audit-log row + typed response), but performs
-// the REAL ceiling check via the shared `cokret_sdk` validators so the
+// the REAL ceiling check via the shared `arkret_sdk` validators so the
 // "inner scope MUST NOT exceed the outer ceiling" invariant is enforced
 // at the edge. Persistence into `agent_participation`, ceiling
 // resolution from the realm/circle/strand policy projection,

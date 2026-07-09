@@ -64,8 +64,8 @@ mod projections;
 // the original file-scope `use`s before the 2026-06-18 structural split.
 use std::collections::{BTreeMap, BTreeSet};
 
-use cokret_sdk::lattice::CellState;
-use cokret_sdk::{AgentLifecycleState, CellRef, Operation};
+use arkret_sdk::lattice::CellState;
+use arkret_sdk::{AgentLifecycleState, CellRef, Operation};
 use serde_json::Value;
 
 use crate::hlc::ServerHlc;

@@ -1,4 +1,4 @@
-use cokret_sdk::Operation;
+use arkret_sdk::Operation;
 use salvo::http::StatusCode;
 use serde_json::Value;
 
@@ -10,7 +10,7 @@ use crate::state::AppState;
 pub(super) const MAX_INBOUND_FEDERATION_OPERATIONS: usize = 500;
 
 /// SPEC-CR-008 (federation.md §4.0) — the cross-deployment federation Event
-/// receive rail is converged onto a single track: `POST /_cokret/peer/events`
+/// receive rail is converged onto a single track: `POST /_arkret/peer/events`
 /// (`ck.peer.events.command.submit`). The `/_soland/peer/*` inbound
 /// *write* surface (transactions, operations push/backfill, seals push) is a
 /// deployment-local test/ops rail only and MUST NOT serve as a cross-vendor
@@ -29,7 +29,7 @@ pub(crate) fn ensure_private_inbound_write_rail_local(state: &AppState) -> Resul
     Err(AppError::unsupported_feature(
         "the /_soland/peer/* inbound write rail is a deployment-local test/ops affordance and is \
          not a cross-deployment federation interop entry point; submit sealed Event Envelopes to \
-         the protocol track POST /_cokret/peer/events (ck.peer.events.command.submit) instead",
+         the protocol track POST /_arkret/peer/events (ck.peer.events.command.submit) instead",
     )
     .with_wire_code("federation_interop_track_only"))
 }
@@ -37,7 +37,7 @@ pub(crate) fn ensure_private_inbound_write_rail_local(state: &AppState) -> Resul
 /// SOL-SEC-01 (federation.md §1) — the `/_soland/peer/federation/*` inbound
 /// *read* rail (seals-pull, realm-members, actor-events, pull-operations,
 /// operation-frontier) is unauthenticated: it carries no RFC 9421 service
-/// signature / PoP like the protocol `/_cokret/peer/*` track. Leaving it open
+/// signature / PoP like the protocol `/_arkret/peer/*` track. Leaving it open
 /// would expose Realm membership, the Seal DAG, and per-actor projection events
 /// to any unauthenticated caller that can reach the `_soland` namespace — a
 /// posture inversion the spec forbids ("private rail MUST NOT be weaker than the
@@ -55,14 +55,14 @@ pub(crate) fn ensure_private_inbound_read_rail_local(state: &AppState) -> Result
     Err(AppError::unsupported_feature(
         "the /_soland/peer/federation/* inbound read rail is a deployment-local debug affordance \
          and is not authenticated to the protocol rail's standard; it is disabled outside \
-         development mode. Use the protocol federation track (/_cokret/peer/*) for cross-deployment \
+         development mode. Use the protocol federation track (/_arkret/peer/*) for cross-deployment \
          reads",
     )
     .with_wire_code("federation_private_read_rail_local_only"))
 }
 
 /// SOL-02-007 / SOL-SEC-01 — federation actor↔origin binding, shared by both
-/// inbound rails (the `/_cokret/peer/events` envelope track and the
+/// inbound rails (the `/_arkret/peer/events` envelope track and the
 /// `/_soland/peer/federation/*` operation track). Accept an inbound author when
 /// its derived home trust domain equals the asserted source trust domain, or
 /// when the actor is already present in the local membership index of the
@@ -142,7 +142,7 @@ pub(super) async fn enforce_inbound_operation_batch_policy(
             state,
             policy_actor
                 .as_ref()
-                .map(cokret_sdk::Did::as_str)
+                .map(arkret_sdk::Did::as_str)
                 .unwrap_or(origin_service_did),
             operation,
             PolicyGateSurface::FederationInbound {

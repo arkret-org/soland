@@ -53,7 +53,7 @@ pub(super) async fn resolve_agent_pairing(
     let agent_principal_id = pairing_record_string(&record, "agent_principal_id")?;
     let pairing_expires_at = pairing_record_timestamp(&record, "pairing_expires_at")?;
     let bootstrap = AgentPairingBootstrap {
-        cokret_base_url: state
+        arkret_base_url: state
             .config
             .public_base_url
             .trim_end_matches('/')
@@ -542,7 +542,7 @@ pub(super) fn verify_runtime_key_pair_proof_of_possession(
             "proof_of_possession has expired",
         ));
     }
-    let expected_digest = cokret_sdk::agent::agent_key_pair_proof_request_binding_digest(
+    let expected_digest = arkret_sdk::agent::agent_key_pair_proof_request_binding_digest(
         &body.pairing_request_id,
         &agent_id,
         &body.verification_method,
@@ -561,7 +561,7 @@ pub(super) fn verify_runtime_key_pair_proof_of_possession(
     }
     let request_digest = Hash::new(proof.request_canonical_digest.clone())
         .map_err(|_| AppError::invalid_param("proof_of_possession digest is invalid"))?;
-    let signing_input = cokret_sdk::agent::agent_key_pair_proof_signing_input(
+    let signing_input = arkret_sdk::agent::agent_key_pair_proof_signing_input(
         body.verification_method.clone(),
         proof.challenge,
         proof.audience,
@@ -617,7 +617,7 @@ pub(super) fn runtime_public_key_digest(
     verification_method: &str,
 ) -> Result<String, AppError> {
     runtime_ed25519_public_key(public_key, verification_method)?;
-    cokret_sdk::agent::agent_runtime_public_key_digest(public_key)
+    arkret_sdk::agent::agent_runtime_public_key_digest(public_key)
         .map(|digest| digest.as_str().to_owned())
         .map_err(|error| AppError::invalid_param(format!("public_key is invalid: {error}")))
 }
@@ -673,7 +673,7 @@ pub(super) fn pairing_request_binding_digest(
         .map_err(|error| AppError::invalid_param(format!("agent DID invalid: {error}")))?;
     let runtime_public_key_digest = Hash::new(runtime_public_key_digest.to_owned())
         .map_err(|_| AppError::invalid_param("runtime_public_key_digest is invalid"))?;
-    cokret_sdk::agent::agent_key_pairing_request_binding_digest(
+    arkret_sdk::agent::agent_key_pairing_request_binding_digest(
         &controller,
         &agent_principal_id,
         verification_method,

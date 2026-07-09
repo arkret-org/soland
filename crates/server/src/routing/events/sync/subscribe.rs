@@ -31,7 +31,7 @@ pub(super) async fn account_describe(
         limits: json!({
             "max_realms": 50,
             "max_timeline_events": 100,
-            "offline_flush_endpoint": "/_cokret/self/events",
+            "offline_flush_endpoint": "/_arkret/self/events",
             "bottom_repair_endpoint": "/_soland/admin/realms/{realm_id}/bottom/{cell_id}/repair"
         }),
         // SDK `SyncDescription.frontier` is an opaque cursor string; hand out
@@ -213,7 +213,7 @@ pub(super) async fn account_subscribe(depot: &mut Depot, req: &mut Request, res:
     // client-sync.md: the account subscribe surface is read-only.
     // Presence intent (`set_presence`) is NOT a subscribe parameter —
     // clients broadcast `ck.presence` through
-    // `POST /_cokret/self/ephemeral`; any `set_presence` query value is
+    // `POST /_arkret/self/ephemeral`; any `set_presence` query value is
     // ignored here so establishing or replaying a subscription never
     // triggers a server-side mutation.
     prune_expired_typing(&state).await;
@@ -399,7 +399,7 @@ fn parse_max_wait_ms(req: &mut Request) -> u64 {
 /// and no presence ticks. `account_data` is intentionally excluded — it
 /// is always emitted in full for authenticated sessions today, so it
 /// would defeat long-poll entirely.
-fn delta_is_empty(response: &cokret_sdk::models::SyncOutcome) -> bool {
+fn delta_is_empty(response: &arkret_sdk::models::SyncOutcome) -> bool {
     response.realms.is_empty()
         && response.left_realms.is_empty()
         && response.to_device.is_empty()
@@ -459,11 +459,11 @@ fn account_subscribe_query(req: &mut Request) -> SyncRequestBody {
     }
 }
 
-pub(crate) fn sync_filter_value(filter: Option<&cokret_sdk::SyncFilter>) -> Option<Value> {
+pub(crate) fn sync_filter_value(filter: Option<&arkret_sdk::SyncFilter>) -> Option<Value> {
     filter.and_then(|filter| serde_json::to_value(filter).ok())
 }
 
-fn account_delta_frame(response: cokret_sdk::models::SyncOutcome) -> Value {
+fn account_delta_frame(response: arkret_sdk::models::SyncOutcome) -> Value {
     let mut to_device = json!({"messages": response.to_device});
     if let Some(object) = to_device.as_object_mut() {
         if let Some(ack_token) = response.to_device_ack_token {
@@ -601,9 +601,9 @@ pub(crate) fn aggregate_presence_records(
             all_expired: true,
         });
     }
-    let status = cokret_sdk::aggregate_presence_states(
+    let status = arkret_sdk::aggregate_presence_states(
         live.iter()
-            .filter_map(|record| cokret_sdk::PresenceStatus::parse_wire(&record.status)),
+            .filter_map(|record| arkret_sdk::PresenceStatus::parse_wire(&record.status)),
     );
     let mut by_recency: Vec<&&PresenceRecord> = live.iter().collect();
     by_recency.sort_by_key(|record| std::cmp::Reverse(record.updated_at));

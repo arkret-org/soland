@@ -1,4 +1,4 @@
-pub use cokret_core::BottomKind;
+pub use arkret_core::BottomKind;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 

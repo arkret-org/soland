@@ -224,7 +224,7 @@ async fn recovery_read_enforces_principal_isolation() {
     let body = get_recovery(
         state,
         &token,
-        "/_cokret/root/identity/recovery-policy?principal_id=did:web:someone-else.example",
+        "/_arkret/root/identity/recovery-policy?principal_id=did:web:someone-else.example",
         StatusCode::FORBIDDEN,
     )
     .await;

@@ -5,7 +5,7 @@ mod access;
 mod account_data_encryption;
 mod admin;
 pub(crate) mod agent_participation;
-// CKP-0007 (P2A.3) — `/_cokret/self/circles/*` admin surface.
+// CKP-0007 (P2A.3) — `/_arkret/self/circles/*` admin surface.
 pub(crate) mod circles;
 pub(crate) mod conformance;
 pub(crate) mod events;
@@ -86,7 +86,7 @@ pub(crate) use interop::{
 // glob re-exports keep these reachable from `super::*` in the child modules
 // (and from `wire.rs` via `crate::routing::soland_extension_operation_ids`).
 pub(crate) use openapi::soland_extension_operation_ids;
-use openapi::{cached_cokret_openapi_doc, cokret_openapi_yaml};
+use openapi::{cached_arkret_openapi_doc, arkret_openapi_yaml};
 // Framework error catcher + OpenAPI doc depot type consumed by `crate::service`
 // and `crate::routing` children.
 pub use openapi_routes::CokretOpenApiDoc;

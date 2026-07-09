@@ -43,7 +43,7 @@ pub fn router_with_rate_limiter_and_request_size_config(
     // route matches — so it can never be missed.
     let rate_limiter = RateLimiter::new(rate_limiter_config);
     // COT-06-002 / service-http-binding.md §2.1.2: decide whether to expose the
-    // test-only `/_cokret/_conformance/*` namespace before `state` is moved into
+    // test-only `/_arkret/_conformance/*` namespace before `state` is moved into
     // the affix hoop. The namespace is mounted only when the
     // `ck.profile.conformance_harness.v1` profile is active; otherwise the
     // segment stays unknown and falls through to `api_not_found` (404
@@ -58,10 +58,10 @@ pub fn router_with_rate_limiter_and_request_size_config(
         .push(system::health_router())
         .push(interop::well_known_router())
         // Spec: B.3 — `/.well-known/arkret` server-description stub.
-        .push(federation::well_known_cokret_router())
+        .push(federation::well_known_arkret_router())
         .push(identity::embedded_webvh_public_router())
         // Admin surface lives at the deployment-local `/_soland/admin/*`
-        // namespace (NOT under the `/_cokret/...` protocol prefix). Renamed
+        // namespace (NOT under the `/_arkret/...` protocol prefix). Renamed
         // from the historical bare `/admin/*` to `/_soland/admin/*` so the
         // operator surface is unambiguously soland-local and cannot collide
         // with application-level routes. The four admin sub-routers below
@@ -89,34 +89,34 @@ pub fn router_with_rate_limiter_and_request_size_config(
                 .push(soland_local_router()),
         )
         .push(api_v1_router(conformance_harness_enabled));
-    let doc = cached_cokret_openapi_doc(&router);
+    let doc = cached_arkret_openapi_doc(&router);
     router
         .unshift(
             Router::with_path(".well-known/arkret/openapi.yaml")
                 .hoop(affix_state::inject(CokretOpenApiDoc(doc.clone())))
-                .get(cokret_openapi_yaml),
+                .get(arkret_openapi_yaml),
         )
         .unshift(doc.into_router(".well-known/arkret/openapi.json"))
         .unshift(Router::new().get(home_page))
 }
 
-/// Protocol surface, mounted under the negative-space root `/_cokret/...`.
+/// Protocol surface, mounted under the negative-space root `/_arkret/...`.
 ///
 /// API-URL trust-namespace migration: the historical `/api/v1/*` +
 /// `/arkret/v1/*` prefixes are gone. Every protocol path now lives under a
-/// single `/_cokret/` root with no version segment (version is negotiated
+/// single `/_arkret/` root with no version segment (version is negotiated
 /// via `*.describe` / `supported_operations`). The first path segment names
 /// the trust concentric circle (self/gate/root/find/peer/open/edge); the
 /// deployment-local operator surface stays separate at `/_soland/admin/*`.
 ///
 /// Each module's `router()` declares its own trust segment in the paths it
 /// pushes (e.g. `events::router()` returns `self/events/...`), so the parent
-/// here only supplies the shared `_cokret` root.
+/// here only supplies the shared `_arkret` root.
 fn api_v1_router(conformance_harness_enabled: bool) -> Router {
-    let mut router = Router::with_path("_cokret")
+    let mut router = Router::with_path("_arkret")
         .oapi_tag("api")
         .hoop(wait_for_sync_token)
-        // `/_cokret/describe` (root meta). Integration describe is mounted
+        // `/_arkret/describe` (root meta). Integration describe is mounted
         // under `/_soland/self/integration/describe`.
         .push(system::router())
         // root/identity/*, self/account*, self/keys*, gate/account/*, etc.
@@ -147,7 +147,7 @@ fn api_v1_router(conformance_harness_enabled: bool) -> Router {
                 // self/realms/{realm_id}/organizations (ck.self.realm_organization.query.list).
                 .push(realm_organization::router())
                 // G3.S1: MLS / keys lifecycle — spec-canonical path is
-                // `/_cokret/self/keys/keypackages/*` (see `mls::router`).
+                // `/_arkret/self/keys/keypackages/*` (see `mls::router`).
                 .push(mls::router()),
         )
         // `peer` — service-to-service federation surface.
@@ -172,7 +172,7 @@ fn api_v1_router(conformance_harness_enabled: bool) -> Router {
     // Applet install/package and applet-service interop operations.
     router = router.push(extensions::protocol_router());
     // COT-06-002 / service-http-binding.md §2.1.2: the test-only
-    // `/_cokret/_conformance/*` namespace is mounted ONLY when the
+    // `/_arkret/_conformance/*` namespace is mounted ONLY when the
     // `ck.profile.conformance_harness.v1` profile is active. In production it is
     // never pushed, so the segment stays unknown and the catch-all below returns
     // `404 unrecognized_endpoint` — no business logic, not advertised in
@@ -180,7 +180,7 @@ fn api_v1_router(conformance_harness_enabled: bool) -> Router {
     if conformance_harness_enabled {
         router = router.push(conformance::router());
     }
-    // Catch-all so that anything under `/_cokret/...` that the typed
+    // Catch-all so that anything under `/_arkret/...` that the typed
     // routers above don't match returns the canonical Arkret JSON
     // error envelope. `cors_preflight` is registered as an OPTIONS
     // child so CORS preflight stays 204; every other method falls
@@ -225,7 +225,7 @@ fn soland_local_router() -> Router {
                 // Owner-scoped policy document storage CRUD
                 // (`/_soland/self/policies*`). Deployment-local management
                 // capability backing `ck.self.policy.query.check`; kept off
-                // the `/_cokret/...` protocol root per
+                // the `/_arkret/...` protocol root per
                 // `service-http-binding.md` §1007.
                 .push(access::product_router())
                 // Organization governance CRUD is deployment-local product
@@ -240,18 +240,18 @@ fn soland_local_router() -> Router {
                 // The old soland-internal WebRTC session stack
                 // (`/_soland/self/webrtc/*`, `/_soland/self/calls/*`) is retired:
                 // media token / ICE config are served only from the spec
-                // `/_cokret/self/rtc/*` surface, and call lifecycle / signaling
-                // live on durable `ck.call.state` + the `/_cokret/self/ephemeral`
+                // `/_arkret/self/rtc/*` surface, and call lifecycle / signaling
+                // live on durable `ck.call.state` + the `/_arkret/self/ephemeral`
                 // `ck.call.signal` channel.
                 .push(mls::local_router()),
         )
         // `/_soland/find/directory/*` mirror retired — directory
-        // discovery is served only from the canonical `/_cokret/find/...`
+        // discovery is served only from the canonical `/_arkret/find/...`
         // protocol tree (see `api_v1_router`).
         .push(Router::with_path("peer").push(federation::router()))
         .push(interop::local_router())
         .push(extensions::local_router())
-        // Catch-all for the `/_soland/...` tree, mirroring the `/_cokret/`
+        // Catch-all for the `/_soland/...` tree, mirroring the `/_arkret/`
         // one: unmatched paths/methods get the canonical Arkret JSON error
         // envelope (404 `unrecognized_endpoint` / 405 `method_not_allowed`
         // + `Allow`) instead of salvo's bare defaults, so the compat mirror

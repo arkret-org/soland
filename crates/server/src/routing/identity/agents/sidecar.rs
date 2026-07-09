@@ -42,7 +42,7 @@ pub(super) async fn authorize_sidecar_ensure(
     let members = realm_members_for_authz(state, realm_id);
     let verdict = state.authz.check(
         controller,
-        cokret_sdk::CAP_ACTION_AGENT_SIDECAR_THREAD_ENSURE,
+        arkret_sdk::CAP_ACTION_AGENT_SIDECAR_THREAD_ENSURE,
         realm_id,
         realm_id,
         owner.as_deref(),
@@ -293,11 +293,11 @@ pub(super) fn agent_record_is_sidecar_eligible(
 }
 
 pub(super) fn controller_agent_circle_key(realm_id: &str, controller: &str) -> String {
-    cokret_sdk::agent_sidecar_circle_key(realm_id, controller)
+    arkret_sdk::agent_sidecar_circle_key(realm_id, controller)
 }
 
 pub(super) fn sidecar_short_name(controller_agent_circle_key: &str) -> String {
-    cokret_sdk::agent_sidecar_short_name(controller_agent_circle_key)
+    arkret_sdk::agent_sidecar_short_name(controller_agent_circle_key)
 }
 
 pub(super) fn find_sidecar_circle(
@@ -322,7 +322,7 @@ pub(super) fn find_sidecar_circle(
 
 pub(super) fn sidecar_actor_capability(circle_id: Option<&str>) -> Value {
     let mut value = json!({
-        "action": cokret_sdk::CAP_ACTION_AGENT_SIDECAR_THREAD_ENSURE,
+        "action": arkret_sdk::CAP_ACTION_AGENT_SIDECAR_THREAD_ENSURE,
         "allowed": true,
     });
     if let Some(circle_id) = circle_id
@@ -375,19 +375,19 @@ pub(super) async fn ensure_sidecar_circle(
         "metadata_encryption_floor": "e2ee_required",
         "encryption_profile": "mls_rfc9420",
         "created_by": controller,
-        "sidecar_profile": cokret_sdk::PROFILE_AGENT_SIDECAR_THREAD,
+        "sidecar_profile": arkret_sdk::PROFILE_AGENT_SIDECAR_THREAD,
         "controller_principal_id": controller,
         "controller_agent_circle_key": controller_agent_circle_key,
     });
     let payload = json!({
         "object": object,
         "sender": controller,
-        "profile": cokret_sdk::PROFILE_AGENT_SIDECAR_THREAD,
+        "profile": arkret_sdk::PROFILE_AGENT_SIDECAR_THREAD,
         "sidecar_ensure_capability_verified": true,
         "actor_capability": sidecar_actor_capability(None),
     });
     let operation =
-        new_sidecar_operation(realm_id, cokret_sdk::events::kinds::CIRCLE_CREATE, payload)?;
+        new_sidecar_operation(realm_id, arkret_sdk::events::kinds::CIRCLE_CREATE, payload)?;
     accept_local_operations(state, controller, std::slice::from_ref(&operation))
         .await
         .map_err(sidecar_reducer_reject_to_app_error)?;
@@ -425,7 +425,7 @@ pub(super) async fn ensure_sidecar_member(
         "membership": "join",
         "sender": controller,
         "manage_capability_verified": true,
-        "profile": cokret_sdk::PROFILE_AGENT_SIDECAR_THREAD,
+        "profile": arkret_sdk::PROFILE_AGENT_SIDECAR_THREAD,
         "sidecar_ensure_capability_verified": true,
         "actor_capability": {
             "action": "ck.circle.member.manage",
@@ -435,7 +435,7 @@ pub(super) async fn ensure_sidecar_member(
     });
     let operation = new_sidecar_operation(
         realm_id,
-        cokret_sdk::events::kinds::CIRCLE_MEMBER_STATE,
+        arkret_sdk::events::kinds::CIRCLE_MEMBER_STATE,
         payload,
     )?;
     accept_local_operations(state, controller, std::slice::from_ref(&operation))
@@ -458,7 +458,7 @@ pub(super) fn find_sidecar_strand(
             strand.realm_id == realm_id
                 && strand.scope_circle_id.as_deref() == Some(circle_id)
                 && strand.fields.get("sidecar_profile").and_then(Value::as_str)
-                    == Some(cokret_sdk::PROFILE_AGENT_SIDECAR_THREAD)
+                    == Some(arkret_sdk::PROFILE_AGENT_SIDECAR_THREAD)
                 && strand
                     .fields
                     .get("controller_principal_id")
@@ -499,7 +499,7 @@ pub(super) async fn ensure_sidecar_strand(
             "title": "AI sidecar",
             "summary": "Controller-private AI sidecar thread",
             "fields": {
-                "sidecar_profile": cokret_sdk::PROFILE_AGENT_SIDECAR_THREAD,
+                "sidecar_profile": arkret_sdk::PROFILE_AGENT_SIDECAR_THREAD,
                 "controller_principal_id": controller,
                 "normalized_context_ref": normalized_context_ref,
                 "normalized_context_ref_digest": normalized_context_ref_digest,
@@ -511,12 +511,12 @@ pub(super) async fn ensure_sidecar_strand(
     let payload = json!({
         "object": object,
         "sender": controller,
-        "profile": cokret_sdk::PROFILE_AGENT_SIDECAR_THREAD,
+        "profile": arkret_sdk::PROFILE_AGENT_SIDECAR_THREAD,
         "sidecar_ensure_capability_verified": true,
         "actor_capability": sidecar_actor_capability(Some(circle_id.as_str())),
     });
     let operation =
-        new_sidecar_operation(realm_id, cokret_sdk::events::kinds::STRAND_CREATE, payload)?;
+        new_sidecar_operation(realm_id, arkret_sdk::events::kinds::STRAND_CREATE, payload)?;
     accept_local_operations(state, controller, std::slice::from_ref(&operation))
         .await
         .map_err(sidecar_reducer_reject_to_app_error)?;
@@ -574,7 +574,7 @@ pub(super) async fn ensure_sidecar_relation(
     let relation_id = RelationId::new(ids::generate_relation_id())
         .map_err(|err| AppError::internal(format!("generated relation id invalid: {err}")))?;
     let mut fields = json!({
-        "sidecar_profile": cokret_sdk::PROFILE_AGENT_SIDECAR_THREAD,
+        "sidecar_profile": arkret_sdk::PROFILE_AGENT_SIDECAR_THREAD,
         "controller_principal_id": controller,
         "normalized_context_ref_digest": normalized_context_ref_digest,
     });
@@ -594,13 +594,13 @@ pub(super) async fn ensure_sidecar_relation(
         "scope_circle_id": circle_id,
         "fields": fields,
         "sender": controller,
-        "profile": cokret_sdk::PROFILE_AGENT_SIDECAR_THREAD,
+        "profile": arkret_sdk::PROFILE_AGENT_SIDECAR_THREAD,
         "sidecar_ensure_capability_verified": true,
         "actor_capability": sidecar_actor_capability(Some(circle_id.as_str())),
     });
     let operation = new_sidecar_operation(
         realm_id,
-        cokret_sdk::events::kinds::RELATION_CREATE,
+        arkret_sdk::events::kinds::RELATION_CREATE,
         payload,
     )?;
     accept_local_operations(state, controller, std::slice::from_ref(&operation))
@@ -631,7 +631,7 @@ pub(super) async fn ensure_sidecar_thread_impl(
     let normalized_context_ref = normalize_sidecar_context_ref(&body.context_ref)?;
     validate_sidecar_context_projection(state, &body.context_ref)?;
     let normalized_context_ref_digest =
-        cokret_sdk::canonical::canonical_sha256(&normalized_context_ref)
+        arkret_sdk::canonical::canonical_sha256(&normalized_context_ref)
             .map_err(|err| AppError::internal(format!("context_ref digest failed: {err}")))?;
     let target_ref = sidecar_context_target_ref(&body.context_ref);
     let addressed_agents = normalize_addressed_agents(controller, &body)?;

@@ -6,20 +6,20 @@
 //! deep reducer logic.
 //!
 //! Surfaces:
-//! - `POST   /_cokret/gate/account/agent-key-pair`               —
+//! - `POST   /_arkret/gate/account/agent-key-pair`               —
 //!   `ck.gate.account.command.pair_agent_key`
-//! - `POST   /_cokret/self/agents`                             — `ck.self.agent.command.provision`
-//! - `GET    /_cokret/self/agents`                             — `ck.self.agent.query.list`
-//! - `GET    /_cokret/self/agents/{id}`                        — `ck.self.agent.resource.get`
-//! - `POST   /_cokret/self/agents/{id}/pause`                  — `ck.self.agent.command.pause`
-//! - `POST   /_cokret/self/agents/{id}/resume`                 — `ck.self.agent.command.resume`
-//! - `POST   /_cokret/self/agents/{id}/deactivate`             — `ck.self.agent.command.deactivate`
-//! - `POST   /_cokret/self/agents/{id}/rotate-key`             — `ck.self.agent.command.rotate_key`
-//! - `POST   /_cokret/self/agents/{id}/grants`                 —
+//! - `POST   /_arkret/self/agents`                             — `ck.self.agent.command.provision`
+//! - `GET    /_arkret/self/agents`                             — `ck.self.agent.query.list`
+//! - `GET    /_arkret/self/agents/{id}`                        — `ck.self.agent.resource.get`
+//! - `POST   /_arkret/self/agents/{id}/pause`                  — `ck.self.agent.command.pause`
+//! - `POST   /_arkret/self/agents/{id}/resume`                 — `ck.self.agent.command.resume`
+//! - `POST   /_arkret/self/agents/{id}/deactivate`             — `ck.self.agent.command.deactivate`
+//! - `POST   /_arkret/self/agents/{id}/rotate-key`             — `ck.self.agent.command.rotate_key`
+//! - `POST   /_arkret/self/agents/{id}/grants`                 —
 //!   `ck.self.agent.grant.command.attach`
-//! - `DELETE /_cokret/self/agents/{id}/grants/{grant_id}`      —
+//! - `DELETE /_arkret/self/agents/{id}/grants/{grant_id}`      —
 //!   `ck.self.agent.grant.resource.delete`
-//! - `POST   /_cokret/self/agent-sidecar-threads:ensure`       —
+//! - `POST   /_arkret/self/agent-sidecar-threads:ensure`       —
 //!   `ck.self.agent.sidecar_thread.command.ensure`
 //!
 //! Controller operations enforce the persisted `agent_principals.controller_did`
@@ -32,7 +32,7 @@ use std::collections::BTreeSet;
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::SecondsFormat;
-use cokret_sdk::models::{
+use arkret_sdk::models::{
     AgentDeactivateRequestBody, AgentGrantAttachOutcome, AgentGrantAttachRequestBody,
     AgentGrantDetachOutcome, AgentKeyPairOutcome, AgentKeyPairRequestBody, AgentLifecycleOutcome,
     AgentLifecycleState, AgentList, AgentPairingBootstrap, AgentPairingResolveRequestBody,
@@ -46,7 +46,7 @@ use cokret_sdk::models::{
     AgentSidecarThreadEnsureOutcome, AgentSidecarThreadEnsureRequestBody, AgentStatus, AgentView,
     PublicKey, effective_participation, validate_agent_slug, validate_selection_within_ceiling,
 };
-use cokret_sdk::{
+use arkret_sdk::{
     CircleId, Did, EventId, GrantId, Hash, Operation, OperationId, RealmId, RelationId, StrandId,
 };
 use ed25519_dalek::Verifier as _;
@@ -82,7 +82,7 @@ use pairing::*;
 use participation::*;
 use sidecar::*;
 
-/// Mounted under `/_cokret/self`.
+/// Mounted under `/_arkret/self`.
 pub(super) fn protocol_router() -> Router {
     Router::new()
         .push(
@@ -111,13 +111,13 @@ pub(super) fn protocol_router() -> Router {
         )
 }
 
-/// `/_cokret/gate/account/agent-key-pair` lives under the auth router, not
-/// `/_cokret/self/agents`. Registered separately in `routing::identity::auth`.
+/// `/_arkret/gate/account/agent-key-pair` lives under the auth router, not
+/// `/_arkret/self/agents`. Registered separately in `routing::identity::auth`.
 pub(crate) fn agent_key_pair_router() -> Router {
     Router::with_path("agent-key-pair").post(agent_key_pair)
 }
 
-/// Mounted under `/_cokret/open`.
+/// Mounted under `/_arkret/open`.
 pub(crate) fn open_router() -> Router {
     Router::with_path("agent-pairing")
         .push(Router::with_path("resolve").post(resolve_agent_pairing))
@@ -244,7 +244,7 @@ mod tests {
         });
         let agent_id = Did::new(agent.to_owned()).expect("agent did");
         let pairing_request_id = "agent_pairing_request:01999999-0000-7000-8000-00000000feed";
-        let request_digest = cokret_sdk::agent::agent_key_pair_proof_request_binding_digest(
+        let request_digest = arkret_sdk::agent::agent_key_pair_proof_request_binding_digest(
             pairing_request_id,
             &agent_id,
             verification_method,
@@ -255,7 +255,7 @@ mod tests {
         let expires_at = chrono::DateTime::parse_from_rfc3339("2999-01-01T00:00:00.000Z")
             .expect("fixed future expiry")
             .with_timezone(&chrono::Utc);
-        let signing_input = cokret_sdk::agent::agent_key_pair_proof_signing_input(
+        let signing_input = arkret_sdk::agent::agent_key_pair_proof_signing_input(
             verification_method.to_owned(),
             pairing_request_id,
             service_did.to_owned(),

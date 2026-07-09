@@ -14,15 +14,15 @@ fn direct_realm_create_payload_is_sdk_schema_valid() {
     let created_at = chrono::Utc.with_ymd_and_hms(2026, 7, 6, 0, 0, 0).unwrap();
     let payload = direct_realm_create_payload(
         &state,
-        cokret_sdk::RealmId::new("ak:realm:01964137-0000-7000-8000-000000000101").unwrap(),
+        arkret_sdk::RealmId::new("ak:realm:01964137-0000-7000-8000-000000000101").unwrap(),
         "did:web:alice.example",
         created_at,
     )
     .unwrap();
 
-    cokret_sdk::schema::event_payload_validator_catalog()
+    arkret_sdk::schema::event_payload_validator_catalog()
         .unwrap()
-        .validate_payload(cokret_sdk::events::kinds::REALM_CREATE, &payload)
+        .validate_payload(arkret_sdk::events::kinds::REALM_CREATE, &payload)
         .unwrap();
     assert!(payload.get("plaintext_visible_services").is_none());
 
@@ -52,14 +52,14 @@ fn direct_realm_create_payload_is_sdk_schema_valid() {
 #[test]
 fn direct_member_join_payload_is_sdk_schema_valid() {
     let payload = direct_member_join_payload(
-        cokret_sdk::RealmId::new("ak:realm:01964137-0000-7000-8000-000000000101").unwrap(),
+        arkret_sdk::RealmId::new("ak:realm:01964137-0000-7000-8000-000000000101").unwrap(),
         "did:web:bob.example",
     )
     .unwrap();
 
-    cokret_sdk::schema::event_payload_validator_catalog()
+    arkret_sdk::schema::event_payload_validator_catalog()
         .unwrap()
-        .validate_payload(cokret_sdk::events::kinds::MEMBER_STATE, &payload)
+        .validate_payload(arkret_sdk::events::kinds::MEMBER_STATE, &payload)
         .unwrap();
     assert_eq!(
         payload.get("membership").and_then(Value::as_str),
@@ -84,16 +84,16 @@ fn direct_member_join_payload_is_sdk_schema_valid() {
 fn direct_strand_create_payload_is_sdk_schema_valid() {
     let created_at = chrono::Utc.with_ymd_and_hms(2026, 7, 6, 0, 0, 0).unwrap();
     let payload = direct_strand_create_payload(
-        cokret_sdk::RealmId::new("ak:realm:01964137-0000-7000-8000-000000000101").unwrap(),
+        arkret_sdk::RealmId::new("ak:realm:01964137-0000-7000-8000-000000000101").unwrap(),
         "ak:strand:01964137-0000-7000-8000-000000000102",
         "did:web:alice.example",
         created_at,
     )
     .unwrap();
 
-    cokret_sdk::schema::event_payload_validator_catalog()
+    arkret_sdk::schema::event_payload_validator_catalog()
         .unwrap()
-        .validate_payload(cokret_sdk::events::kinds::STRAND_CREATE, &payload)
+        .validate_payload(arkret_sdk::events::kinds::STRAND_CREATE, &payload)
         .unwrap();
 
     let object = payload
@@ -166,18 +166,18 @@ async fn direct_realm_genesis_projects_peer_as_timeline_reader() {
         "aad_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
         "payload_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
     });
-    let message_payload = cokret_sdk::models::MessageCreatePayload::with_encrypted_content(
-        cokret_sdk::StrandId::new(main_strand_id.clone()).unwrap(),
+    let message_payload = arkret_sdk::models::MessageCreatePayload::with_encrypted_content(
+        arkret_sdk::StrandId::new(main_strand_id.clone()).unwrap(),
         "discussion",
         encrypted_content,
     )
     .with_message_id(message_id.clone())
     .to_value()
     .unwrap();
-    let mut message_op = cokret_sdk::Operation::create(
+    let mut message_op = arkret_sdk::Operation::create(
         direct_operation_id().unwrap(),
-        cokret_sdk::RealmId::new(realm_id.clone()).unwrap(),
-        cokret_sdk::events::kinds::MESSAGE_CREATE,
+        arkret_sdk::RealmId::new(realm_id.clone()).unwrap(),
+        arkret_sdk::events::kinds::MESSAGE_CREATE,
         message_payload,
     );
     let event_id = message_op.operation_id.to_string();

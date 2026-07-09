@@ -2,16 +2,16 @@
 //! with events and device-message modules.
 //!
 //! Surfaces for the current sync/event wire layout:
-//! - `GET  /_cokret/self/account/describe`
-//! - `GET  /_cokret/self/account/subscribe`       — `ck.self.account.stream.subscribe`
+//! - `GET  /_arkret/self/account/describe`
+//! - `GET  /_arkret/self/account/subscribe`       — `ck.self.account.stream.subscribe`
 //!   (account-aggregate NDJSON: timeline, presence, typing, to_device).
-//! - `POST /_cokret/self/ephemeral`               — `ck.self.ephemeral.command.send` (broadcast
+//! - `POST /_arkret/self/ephemeral`               — `ck.self.ephemeral.command.send` (broadcast
 //!   ephemeral)
-//! - `GET  /_cokret/self/events/subscribe`        — `ck.self.events.stream.subscribe`. Multi-Realm
+//! - `GET  /_arkret/self/events/subscribe`        — `ck.self.events.stream.subscribe`. Multi-Realm
 //!   / multi-actor stream; frame `kind` field replaces `type`.
-//! - `GET  /_cokret/self/events`                  — `ck.self.events.query.scan` (replaces
+//! - `GET  /_arkret/self/events`                  — `ck.self.events.query.scan` (replaces
 //!   `ck.events.list` + `ck.sync.backfill` via `direction=forward|backward`).
-//! - `GET  /_cokret/self/snapshot/head`
+//! - `GET  /_arkret/self/snapshot/head`
 //!
 //! `SyncCursor`, `SyncCursorError`, `parse_and_validate_sync_cursor`,
 //! `decode_sync_cursor_value`, `sync_token_for_client_sync`, `sync_filter_digest`,
@@ -30,9 +30,9 @@ pub(crate) use base64::Engine;
 pub(crate) use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 pub(crate) use bytes::Bytes;
 pub(crate) use chrono::{DateTime, Duration as ChronoDuration, SecondsFormat, Utc};
-pub(crate) use cokret_sdk::RealmId;
-pub(crate) use cokret_sdk::http::EventsQueryOutcome;
-pub(crate) use cokret_sdk::lattice::CellState;
+pub(crate) use arkret_sdk::RealmId;
+pub(crate) use arkret_sdk::http::EventsQueryOutcome;
+pub(crate) use arkret_sdk::lattice::CellState;
 pub(crate) use futures_util::stream::StreamExt;
 pub(crate) use salvo::http::{StatusCode, header};
 pub(crate) use salvo::prelude::*;

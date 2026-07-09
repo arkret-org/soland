@@ -7,7 +7,7 @@
 //! `GET /_soland/admin/realms/{realm_id}/multisig/pending` lists the in-flight
 //! seals awaiting threshold so the admin UI can render them.
 
-use cokret_sdk::{Did, PartialSignature, RealmId, SealId, ThresholdAggregator};
+use arkret_sdk::{Did, PartialSignature, RealmId, SealId, ThresholdAggregator};
 use salvo::http::StatusCode;
 use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
@@ -276,7 +276,7 @@ pub(crate) async fn admin_rotate_signing_key(
         state,
         req,
         &admin_session,
-        cokret_sdk::admin_scopes::NOTARY_ROTATE_SIGNING_KEY,
+        arkret_sdk::admin_scopes::NOTARY_ROTATE_SIGNING_KEY,
     )
     .await?;
     // Validate realm_id shape so the endpoint surfaces a clean 400 on a
@@ -298,7 +298,7 @@ pub(crate) async fn admin_rotate_signing_key(
     if state.config.use_keystore {
         let app_id = format!("soland.{}", state.config.service_did);
         let key_id = format!("arkret:signer:soland-notary:{}", state.config.service_did);
-        let store = cokret_sdk::platform_default_keystore(&app_id);
+        let store = arkret_sdk::platform_default_keystore(&app_id);
         match store.store(&key_id, &seed) {
             Ok(()) => {
                 keystore_persisted = true;

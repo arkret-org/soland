@@ -1,8 +1,8 @@
 //! G3.S5 — HTTP integration tests for the realm-links surface:
 //!
-//! - `POST /_cokret/self/realms/{realm_id}/links` — create / status-flip a `ck.realm.link`.
-//! - `DELETE /_cokret/self/realms/{realm_id}/links/{target_realm_id}` — tombstone an existing link.
-//! - `GET /_cokret/self/realms/{realm_id}/effective-policy` — read the merged effective policy
+//! - `POST /_arkret/self/realms/{realm_id}/links` — create / status-flip a `ck.realm.link`.
+//! - `DELETE /_arkret/self/realms/{realm_id}/links/{target_realm_id}` — tombstone an existing link.
+//! - `GET /_arkret/self/realms/{realm_id}/effective-policy` — read the merged effective policy
 //!   (walks the inheritance chain).
 //! - Cycle-detection negative: a 3-realm `governed_by` triangle MUST be rejected with
 //!   `realm_link_cycle` at the third POST.
@@ -50,7 +50,7 @@ const REALM_C: &str = "ak:realm:01904100-0000-7000-8000-ccccccccccc3";
 const REALM_D: &str = "ak:realm:01904100-0000-7000-8000-ddddddddddd4";
 
 /// Submit a `ck.realm.inheritance_policy` event directly through the
-/// reducer (the dedicated HTTP route is the standard `/_cokret/self/events`
+/// reducer (the dedicated HTTP route is the standard `/_arkret/self/events`
 /// envelope path; for setup we bypass it by injecting an Operation
 /// into the projection).
 fn project_inheritance_policy(
@@ -59,11 +59,11 @@ fn project_inheritance_policy(
     source_realm_id: &str,
     allowed_policies: &[&str],
 ) {
-    use cokret_sdk::{Operation, OperationId, RealmId};
+    use arkret_sdk::{Operation, OperationId, RealmId};
     let op = Operation::create(
         OperationId::new(format!("ak:operation:{}", uuid::Uuid::now_v7())).unwrap(),
         RealmId::new(realm_id).unwrap(),
-        cokret_sdk::events::kinds::REALM_INHERITANCE_POLICY,
+        arkret_sdk::events::kinds::REALM_INHERITANCE_POLICY,
         json!({
             "source_realm_id": source_realm_id,
             "allowed_policies": allowed_policies,
@@ -85,7 +85,7 @@ async fn realm_links_post_parent_then_effective_policy_walks_chain() {
 
     // 1. POST B → A (`governed_by`, active). HTTP 200, body echoes the projected status.
     let body: Value =
-        TestClient::post(format!("http://server/_cokret/self/realms/{REALM_B}/links"))
+        TestClient::post(format!("http://server/_arkret/self/realms/{REALM_B}/links"))
             .add_header("authorization", format!("Bearer {token}"), true)
             .json(&json!({
                 "target_realm_id": REALM_A,
@@ -109,7 +109,7 @@ async fn realm_links_post_parent_then_effective_policy_walks_chain() {
     // 3. GET effective-policy on B. Body shape pinned by the task spec: `{realm_id,
     //    effective_policy, inheritance_chain, inheritance_mode}`.
     let ep: Value = TestClient::get(format!(
-        "http://server/_cokret/self/realms/{REALM_B}/effective-policy"
+        "http://server/_arkret/self/realms/{REALM_B}/effective-policy"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&svc)
@@ -152,7 +152,7 @@ async fn realm_links_post_cycle_rejected_with_realm_link_cycle() {
     let token = dev_token(&svc).await;
 
     // Edge A → B.
-    let r1 = TestClient::post(format!("http://server/_cokret/self/realms/{REALM_A}/links"))
+    let r1 = TestClient::post(format!("http://server/_arkret/self/realms/{REALM_A}/links"))
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&json!({
             "target_realm_id": REALM_B,
@@ -164,7 +164,7 @@ async fn realm_links_post_cycle_rejected_with_realm_link_cycle() {
     assert_eq!(r1.status_code, Some(StatusCode::OK));
 
     // Edge B → C.
-    let r2 = TestClient::post(format!("http://server/_cokret/self/realms/{REALM_B}/links"))
+    let r2 = TestClient::post(format!("http://server/_arkret/self/realms/{REALM_B}/links"))
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&json!({
             "target_realm_id": REALM_C,
@@ -176,7 +176,7 @@ async fn realm_links_post_cycle_rejected_with_realm_link_cycle() {
     assert_eq!(r2.status_code, Some(StatusCode::OK));
 
     // Edge C → A would close A→B→C→A — MUST be rejected.
-    let mut r3 = TestClient::post(format!("http://server/_cokret/self/realms/{REALM_C}/links"))
+    let mut r3 = TestClient::post(format!("http://server/_arkret/self/realms/{REALM_C}/links"))
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&json!({
             "target_realm_id": REALM_A,
@@ -207,7 +207,7 @@ async fn realm_links_delete_recomputes_effective_policy() {
     let token = dev_token(&svc).await;
 
     // Build D → C → B chain via POSTs, opt-in inheritance at each level.
-    let _ = TestClient::post(format!("http://server/_cokret/self/realms/{REALM_D}/links"))
+    let _ = TestClient::post(format!("http://server/_arkret/self/realms/{REALM_D}/links"))
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&json!({
             "target_realm_id": REALM_C,
@@ -216,7 +216,7 @@ async fn realm_links_delete_recomputes_effective_policy() {
         }))
         .send(&svc)
         .await;
-    let _ = TestClient::post(format!("http://server/_cokret/self/realms/{REALM_C}/links"))
+    let _ = TestClient::post(format!("http://server/_arkret/self/realms/{REALM_C}/links"))
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&json!({
             "target_realm_id": REALM_B,
@@ -231,7 +231,7 @@ async fn realm_links_delete_recomputes_effective_policy() {
 
     // Effective policy on D includes c.policy + b.policy via the walk.
     let ep1: Value = TestClient::get(format!(
-        "http://server/_cokret/self/realms/{REALM_D}/effective-policy"
+        "http://server/_arkret/self/realms/{REALM_D}/effective-policy"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&svc)
@@ -258,7 +258,7 @@ async fn realm_links_delete_recomputes_effective_policy() {
     // tombstoned. C's own `c.policy` still surfaces because D's
     // inheritance_policy explicitly names C as the parent; B drops out.
     let del = TestClient::delete(format!(
-        "http://server/_cokret/self/realms/{REALM_D}/links/{REALM_C}?link_kind=governed_by"
+        "http://server/_arkret/self/realms/{REALM_D}/links/{REALM_C}?link_kind=governed_by"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&svc)
@@ -266,7 +266,7 @@ async fn realm_links_delete_recomputes_effective_policy() {
     assert_eq!(del.status_code, Some(StatusCode::OK));
 
     let ep2: Value = TestClient::get(format!(
-        "http://server/_cokret/self/realms/{REALM_D}/effective-policy"
+        "http://server/_arkret/self/realms/{REALM_D}/effective-policy"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&svc)
@@ -292,7 +292,7 @@ async fn realm_links_delete_recomputes_effective_policy() {
 async fn realm_links_post_self_link_rejected() {
     let svc = app();
     let token = dev_token(&svc).await;
-    let mut r = TestClient::post(format!("http://server/_cokret/self/realms/{REALM_A}/links"))
+    let mut r = TestClient::post(format!("http://server/_arkret/self/realms/{REALM_A}/links"))
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&json!({
             "target_realm_id": REALM_A,
@@ -315,7 +315,7 @@ async fn effective_policy_returns_none_mode_without_explicit_optin() {
     let svc = app();
     let token = dev_token(&svc).await;
     let body: Value = TestClient::get(format!(
-        "http://server/_cokret/self/realms/{REALM_A}/effective-policy"
+        "http://server/_arkret/self/realms/{REALM_A}/effective-policy"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&svc)

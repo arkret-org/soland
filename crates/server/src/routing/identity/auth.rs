@@ -2,10 +2,10 @@
 //!
 //! Surfaces:
 //! - `POST /_soland/gate/auth/dev-login` — dev-mode session credential issue
-//! - `POST /_cokret/gate/account/session-grants` — coauth session-grant bridge
-//! - `POST /_cokret/gate/account/session-grants/revoke` — spec
+//! - `POST /_arkret/gate/account/session-grants` — coauth session-grant bridge
+//! - `POST /_arkret/gate/account/session-grants/revoke` — spec
 //!   `ck.gate.account.command.revoke_session`
-//! - `POST /_cokret/gate/account/logout` — spec `ck.gate.account.command.logout`: revoke the
+//! - `POST /_arkret/gate/account/logout` — spec `ck.gate.account.command.logout`: revoke the
 //!   presented session credential + the bound device session record + queued to-device
 //!
 //! Internal helpers exported for the rest of `crate::routing`:
@@ -19,7 +19,7 @@
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::{DateTime, Duration, Utc};
-use cokret_sdk::{
+use arkret_sdk::{
     AccountDevicePairOutcome, AccountDevicePairRequestBody, DeviceId, EventId,
     SessionRevokeOutcome, SessionRevokeRequestBody,
 };
@@ -82,19 +82,19 @@ pub(super) fn protocol_account_router() -> Router {
         .push(
             // ② (api-conventions.md §3.3): the Principal Server no longer issues
             // a local credential from the session grant. The client presents the
-            // ck.session.grant directly to `/_cokret/self/*` with a DPoP proof,
+            // ck.session.grant directly to `/_arkret/self/*` with a DPoP proof,
             // so there is no `session-grants .post(...)` mount here — only `revoke`.
             //
             // Spec `account_auth` surface group: `ck.gate.account.command.revoke_session`
-            // binds to `POST /_cokret/gate/account/session-grants/revoke`.
+            // binds to `POST /_arkret/gate/account/session-grants/revoke`.
             Router::with_path("session-grants")
                 .push(Router::with_path("revoke").post(session_revoke)),
         )
         // Spec `ck.gate.account.command.logout` — Principal Server device
         // logout (account-lifecycle §4.1): revoke this session credential, mark
         // its local device session record revoked, and drop the device's queued
-        // to-device. Canonical `/_cokret/gate/account/logout`; deployment
-        // gateways route this longer prefix to soland even though `/_cokret/gate/`
+        // to-device. Canonical `/_arkret/gate/account/logout`; deployment
+        // gateways route this longer prefix to soland even though `/_arkret/gate/`
         // otherwise goes to the Auth Server.
         .push(Router::with_path("logout").post(logout::logout))
         .push(Router::with_path("device-pair").post(account_device_pair))
@@ -102,14 +102,14 @@ pub(super) fn protocol_account_router() -> Router {
 
 pub(super) fn local_router() -> Router {
     // Device logout is the spec op `ck.gate.account.command.logout`, served at
-    // the canonical `/_cokret/gate/account/logout` (see `protocol_account_router`).
+    // the canonical `/_arkret/gate/account/logout` (see `protocol_account_router`).
     // Deployment gateways route that longer prefix to soland (the Principal
-    // Server) even though `/_cokret/gate/` otherwise goes to the Auth Server, so
+    // Server) even though `/_arkret/gate/` otherwise goes to the Auth Server, so
     // no `/_soland/gate/auth/logout` product alias is needed.
     // ② (api-conventions.md §3.3): no local credential issuance endpoint is
     // mounted under `session-grants`. dev-login remains the only local
     // development session issuer; production clients present the grant + DPoP
-    // directly to `/_cokret/self/*`.
+    // directly to `/_arkret/self/*`.
     Router::with_path("auth")
         .push(Router::with_path("bridge/describe").get(super::describe::auth_bridge_describe))
         .push(Router::with_path("dev-login").post(dev_login))

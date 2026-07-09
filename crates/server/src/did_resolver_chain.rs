@@ -26,11 +26,11 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use cokret_sdk::identity::{
+use arkret_sdk::identity::{
     CompositeDidResolver, DidDocument, DidKeyResolver, DidResolver, DidWebResolver,
     DidWebvhResolver,
 };
-use cokret_sdk::{Did, Error};
+use arkret_sdk::{Did, Error};
 use parking_lot::RwLock;
 use serde_json::Value;
 
@@ -172,10 +172,10 @@ fn method_allowed(config: &AppConfig, method: &str) -> bool {
 /// STA-07-002 — the canonical generic server-describe path. The resolver
 /// freshness probe targets this endpoint (operation_id
 /// `ck.server.query.describe`, schema `service-describe.schema.json`).
-pub const CANONICAL_DESCRIBE_PATH: &str = "/_cokret/describe";
+pub const CANONICAL_DESCRIBE_PATH: &str = "/_arkret/describe";
 
 /// Probe an external webvh provider's canonical describe endpoint
-/// (`<URL>/_cokret/describe`) and validate the trust-root handshake before
+/// (`<URL>/_arkret/describe`) and validate the trust-root handshake before
 /// marking it active. The configured URL records admin intent and is still
 /// advertised when the probe fails; this function only controls runtime
 /// liveness.
@@ -304,8 +304,8 @@ mod tests {
     use std::net::SocketAddr;
     use std::sync::Arc;
 
-    use cokret_sdk::Did;
-    use cokret_sdk::identity::DidResolver;
+    use arkret_sdk::Did;
+    use arkret_sdk::identity::DidResolver;
     use serde_json::json;
 
     use super::*;
@@ -452,7 +452,7 @@ mod tests {
         let mut verification_methods = BTreeMap::new();
         verification_methods.insert(
             verification_method,
-            cokret_sdk::ed25519_pubkey_to_did_key_multibase(&[7u8; 32]),
+            arkret_sdk::ed25519_pubkey_to_did_key_multibase(&[7u8; 32]),
         );
         let document = DidDocument {
             id: did.clone(),

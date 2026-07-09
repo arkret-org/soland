@@ -82,30 +82,30 @@ fn signed_member_identity_payload(signing_key: &ed25519_dalek::SigningKey) -> (S
     let did_key_fragment = did.strip_prefix("did:key:").expect("did:key prefix");
     let verification_method = format!("{did}#{did_key_fragment}");
     let realm_id =
-        cokret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-a11ce0000001".to_owned())
+        arkret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-a11ce0000001".to_owned())
             .unwrap();
-    let actor_id = cokret_sdk::Did::new(did.clone()).unwrap();
+    let actor_id = arkret_sdk::Did::new(did.clone()).unwrap();
     let subject_id = actor_id.clone();
-    let zero_hash = cokret_sdk::Hash::new(format!("sha256:{}", "0".repeat(64))).unwrap();
-    let mut identity = cokret_sdk::MemberIdentity::new(
+    let zero_hash = arkret_sdk::Hash::new(format!("sha256:{}", "0".repeat(64))).unwrap();
+    let mut identity = arkret_sdk::MemberIdentity::new(
         realm_id.clone(),
         actor_id.clone(),
         subject_id,
-        cokret_sdk::DisplayProfile {
+        arkret_sdk::DisplayProfile {
             display_name: "Alice".to_owned(),
             avatar_blob_ref: None,
         },
         chrono::Utc::now(),
-        cokret_sdk::MemberIdentityProof {
+        arkret_sdk::MemberIdentityProof {
             verification_method,
-            signature_algorithm: cokret_sdk::MemberIdentitySignatureAlgorithm::Ed25519,
+            signature_algorithm: arkret_sdk::MemberIdentitySignatureAlgorithm::Ed25519,
             payload_digest: zero_hash,
             signature: "AA".to_owned(),
         },
     );
     let canonical_bytes = identity.canonical_payload_bytes().unwrap();
     identity.proof.payload_digest =
-        cokret_sdk::Hash::new(identity.canonical_payload_sha256().unwrap()).unwrap();
+        arkret_sdk::Hash::new(identity.canonical_payload_sha256().unwrap()).unwrap();
     identity.proof.signature =
         URL_SAFE_NO_PAD.encode(signing_key.sign(&canonical_bytes).to_bytes());
     let payload = json!({
@@ -276,7 +276,7 @@ async fn policy_components_media_plaintext_reads_realm_meta() {
                 plaintext_visible_service_classes: std::collections::BTreeMap::from([(
                     state.config.service_did.clone(),
                     std::collections::BTreeSet::from([
-                        cokret_sdk::PlaintextDataClassKind::MediaPlaintext,
+                        arkret_sdk::PlaintextDataClassKind::MediaPlaintext,
                     ]),
                 )]),
                 minimal_metadata_realm: false,
@@ -352,11 +352,11 @@ async fn minimal_metadata_realm_rejects_non_hidden_aad() {
         })
     };
     let message_op = |payload: serde_json::Value| {
-        cokret_sdk::Operation::create(
-            cokret_sdk::OperationId::new("ak:operation:01904100-0000-7000-8000-57d7d85564c5")
+        arkret_sdk::Operation::create(
+            arkret_sdk::OperationId::new("ak:operation:01904100-0000-7000-8000-57d7d85564c5")
                 .unwrap(),
-            cokret_sdk::RealmId::new(realm_id.to_owned()).unwrap(),
-            cokret_sdk::events::kinds::MESSAGE_CREATE,
+            arkret_sdk::RealmId::new(realm_id.to_owned()).unwrap(),
+            arkret_sdk::events::kinds::MESSAGE_CREATE,
             payload,
         )
     };
@@ -439,11 +439,11 @@ async fn circle_scoped_write_requires_circle_membership() {
         if let Some(scope) = scope {
             object["scope_circle_id"] = json!(scope);
         }
-        cokret_sdk::Operation::create(
-            cokret_sdk::OperationId::new("ak:operation:01904100-0000-7000-8000-57d7d8550abc")
+        arkret_sdk::Operation::create(
+            arkret_sdk::OperationId::new("ak:operation:01904100-0000-7000-8000-57d7d8550abc")
                 .unwrap(),
-            cokret_sdk::RealmId::new(realm_id.to_owned()).unwrap(),
-            cokret_sdk::events::kinds::STRAND_CREATE,
+            arkret_sdk::RealmId::new(realm_id.to_owned()).unwrap(),
+            arkret_sdk::events::kinds::STRAND_CREATE,
             json!({"sender": sender, "object": object}),
         )
     };
@@ -519,8 +519,8 @@ async fn circle_scoped_reaction_requires_circle_membership() {
                 strand_id: strand_id.to_owned(),
                 realm_id: realm_id.to_owned(),
                 tracks: std::collections::BTreeMap::from([(
-                    cokret_sdk::STRAND_TRACK_NAME_DISCUSSION.to_owned(),
-                    cokret_sdk::StrandTrackConfig::discussion_primary(),
+                    arkret_sdk::STRAND_TRACK_NAME_DISCUSSION.to_owned(),
+                    arkret_sdk::StrandTrackConfig::discussion_primary(),
                 )]),
                 title: String::new(),
                 summary: None,
@@ -556,11 +556,11 @@ async fn circle_scoped_reaction_requires_circle_membership() {
     }
 
     let reaction = |sender: &str| {
-        cokret_sdk::Operation::create(
-            cokret_sdk::OperationId::new("ak:operation:01904100-0000-7000-8000-c2c2e000000a")
+        arkret_sdk::Operation::create(
+            arkret_sdk::OperationId::new("ak:operation:01904100-0000-7000-8000-c2c2e000000a")
                 .unwrap(),
-            cokret_sdk::RealmId::new(realm_id.to_owned()).unwrap(),
-            cokret_sdk::events::kinds::REACTION_ADD,
+            arkret_sdk::RealmId::new(realm_id.to_owned()).unwrap(),
+            arkret_sdk::events::kinds::REACTION_ADD,
             json!({"sender": sender, "target_event_id": event_id, "key": "👍"}),
         )
     };
@@ -645,11 +645,11 @@ async fn circle_scoped_morph_update_requires_circle_membership() {
     }
 
     let morph_update = |sender: &str, morph_id: &str| {
-        cokret_sdk::Operation::create(
-            cokret_sdk::OperationId::new("ak:operation:01904100-0000-7000-8000-c3c3e000000a")
+        arkret_sdk::Operation::create(
+            arkret_sdk::OperationId::new("ak:operation:01904100-0000-7000-8000-c3c3e000000a")
                 .unwrap(),
-            cokret_sdk::RealmId::new(realm_id.to_owned()).unwrap(),
-            cokret_sdk::events::kinds::MORPH_UPDATE,
+            arkret_sdk::RealmId::new(realm_id.to_owned()).unwrap(),
+            arkret_sdk::events::kinds::MORPH_UPDATE,
             json!({
                 "sender": sender,
                 "target_ref": morph_id,
@@ -686,7 +686,7 @@ async fn applet_registration_requires_realm_admin() {
     // applet-integration.md §4 — `ck.applet.registration` is gated by the
     // machine-readable `ck.realm.admin` capability. The dedicated install
     // aggregate checks this in its handler, but a raw submit via
-    // `/_cokret/self/events` reaches `apply_applet_registration` with no authz of
+    // `/_arkret/self/events` reaches `apply_applet_registration` with no authz of
     // its own — this gate closes that bypass. The Realm owner may register; an
     // outsider without `ck.realm.admin` may not.
     let state = make_state(true);
@@ -722,11 +722,11 @@ async fn applet_registration_requires_realm_admin() {
         .unwrap();
 
     let registration = |sender: &str| {
-        cokret_sdk::Operation::create(
-            cokret_sdk::OperationId::new("ak:operation:01904100-0000-7000-8000-57d7d855a99e")
+        arkret_sdk::Operation::create(
+            arkret_sdk::OperationId::new("ak:operation:01904100-0000-7000-8000-57d7d855a99e")
                 .unwrap(),
-            cokret_sdk::RealmId::new(realm_id.to_owned()).unwrap(),
-            cokret_sdk::events::kinds::APPLET_REGISTRATION,
+            arkret_sdk::RealmId::new(realm_id.to_owned()).unwrap(),
+            arkret_sdk::events::kinds::APPLET_REGISTRATION,
             json!({
                 "sender": sender,
                 "applet_id": "ak:applet:01904100-0000-7000-8000-000000000a01",
@@ -742,7 +742,7 @@ async fn applet_registration_requires_realm_admin() {
         .unwrap();
 
     // An outsider without `ck.realm.admin` is rejected fail-closed — closing the
-    // `/_cokret/self/events` bypass of the install-handler gate.
+    // `/_arkret/self/events` bypass of the install-handler gate.
     let err = validate_operation_policy(&state, std::slice::from_ref(&registration(outsider)))
         .await
         .unwrap_err();
@@ -783,10 +783,10 @@ async fn non_minimal_metadata_realm_allows_any_aad() {
         .await
         .unwrap();
 
-    let op = cokret_sdk::Operation::create(
-        cokret_sdk::OperationId::new("ak:operation:01904100-0000-7000-8000-57d7d85564c6").unwrap(),
-        cokret_sdk::RealmId::new(realm_id.to_owned()).unwrap(),
-        cokret_sdk::events::kinds::MESSAGE_CREATE,
+    let op = arkret_sdk::Operation::create(
+        arkret_sdk::OperationId::new("ak:operation:01904100-0000-7000-8000-57d7d85564c6").unwrap(),
+        arkret_sdk::RealmId::new(realm_id.to_owned()).unwrap(),
+        arkret_sdk::events::kinds::MESSAGE_CREATE,
         json!({
             "strand_id": "ak:strand:01904100-0000-7000-8000-000000000001",
             "track_name": "main",
@@ -825,11 +825,11 @@ fn policy_components_mls_governance_reads_projection_cell() {
     {
         let mut projection = state.projection.lock();
         projection.cells.insert(
-            cokret_sdk::CellRef::new(
+            arkret_sdk::CellRef::new(
                 "ak:cell:ck.component.mls.epoch.v1:ck:mls_group:unit-test".to_owned(),
             )
             .unwrap(),
-            cokret_sdk::lattice::CellState::Value(json!({
+            arkret_sdk::lattice::CellState::Value(json!({
                 "realm_id": realm_id,
                 "epoch": 7,
                 "governance_binding": {
@@ -915,7 +915,7 @@ async fn top_level_effective_scope_is_reducer_managed() {
     let session = session();
     let envelope = json!({
         "event_id": "ak:event:01904100-0000-7000-8000-00000000eff0",
-        "kind": cokret_sdk::events::kinds::REALM_CREATE,
+        "kind": arkret_sdk::events::kinds::REALM_CREATE,
         "requirements": { "schema": ["ck.schema.event.v1"] },
         "actor_id": session.actor.clone(),
         "effective_scope": "ak:realm:01904100-0000-7000-8000-a11ce0000001"
@@ -1051,11 +1051,11 @@ fn event_payload_validator_enforces_strand_update_patch_schema() {
 
 #[test]
 fn event_payload_validator_catalog_covers_active_standard_durable_events() {
-    let catalog = cokret_sdk::schema::event_payload_validator_catalog().unwrap();
+    let catalog = arkret_sdk::schema::event_payload_validator_catalog().unwrap();
     let event_kinds = artifacts::active_durable_event_kinds()
         .iter()
         .map(String::as_str)
-        .filter(|kind| cokret_sdk::events::is_standard_event_kind(kind))
+        .filter(|kind| arkret_sdk::events::is_standard_event_kind(kind))
         .collect::<Vec<_>>();
     let missing = catalog.missing_payload_validators_for(event_kinds.iter().copied());
     assert!(
@@ -1070,7 +1070,7 @@ fn event_payload_validator_catalog_covers_active_standard_durable_events() {
 
 #[test]
 fn event_payload_validator_enforces_patch_family_schema() {
-    let catalog = cokret_sdk::schema::event_payload_validator_catalog().unwrap();
+    let catalog = arkret_sdk::schema::event_payload_validator_catalog().unwrap();
     let patch_kinds = [
         "ck.realm.update",
         "ck.strand.update",
@@ -1271,7 +1271,7 @@ async fn development_accepts_dev_proof_type_field_when_hash_matches() {
     // matches; production would still reject this even with the correct
     // payload hash because the proof lacks a JWS.
     let payload_bytes = canonical::canonical_json_bytes(&object["payload"]).unwrap();
-    let payload_digest = cokret_sdk::canonical::sha256_digest(&payload_bytes);
+    let payload_digest = arkret_sdk::canonical::sha256_digest(&payload_bytes);
     if let Some(proofs) = object.get_mut("proofs").and_then(Value::as_array_mut)
         && let Some(proof) = proofs.first_mut()
         && let Some(map) = proof.as_object_mut()
@@ -1300,7 +1300,7 @@ async fn production_rejects_full_proof_without_valid_jws_signature() {
     // passes and this test focuses on JWS signature verification failure.
     ingest_fresh_webvh_document(&state, "did:web:alice.example").await;
     let canonical_bytes = br#"{"actor_id":"did:web:alice.example","event_id":"ak:event:test"}"#;
-    let event_digest = cokret_sdk::canonical::sha256_digest(canonical_bytes);
+    let event_digest = arkret_sdk::canonical::sha256_digest(canonical_bytes);
     let mut object = serde_json::Map::new();
     object.insert(
         "proofs".to_owned(),
@@ -1320,7 +1320,7 @@ async fn production_rejects_full_proof_without_valid_jws_signature() {
         &state,
         &session,
         "did:web:alice.example",
-        &cokret_sdk::canonical::sha256_digest(canonical_bytes),
+        &arkret_sdk::canonical::sha256_digest(canonical_bytes),
     )
     .await
     .expect_err("production must reject unsigned/fake JWS proofs");
@@ -1342,7 +1342,7 @@ async fn production_event_proof_fails_closed_when_did_document_stale() {
     // Deliberately ingest no webvh document: the actor has no freshness
     // evidence in persistence.
     let canonical_bytes = br#"{"actor_id":"did:web:alice.example","event_id":"ak:event:test"}"#;
-    let event_digest = cokret_sdk::canonical::sha256_digest(canonical_bytes);
+    let event_digest = arkret_sdk::canonical::sha256_digest(canonical_bytes);
     let mut object = serde_json::Map::new();
     object.insert(
         "proofs".to_owned(),
@@ -1362,7 +1362,7 @@ async fn production_event_proof_fails_closed_when_did_document_stale() {
         &state,
         &session,
         "did:web:alice.example",
-        &cokret_sdk::canonical::sha256_digest(canonical_bytes),
+        &arkret_sdk::canonical::sha256_digest(canonical_bytes),
     )
     .await
     .expect_err("stale/missing DID document must fail closed before JWS verify");
@@ -1383,17 +1383,17 @@ async fn production_event_proof_fails_closed_when_did_document_stale() {
 /// inherit the same fail-closed semantics they get inline today.
 #[test]
 fn soland_dev_proof_gate_matches_sdk_production_verifier() {
-    use cokret_sdk::signatures::{ProductionVerifier, build_proof_envelope};
-    use cokret_sdk::{Audience, Hash};
+    use arkret_sdk::signatures::{ProductionVerifier, build_proof_envelope};
+    use arkret_sdk::{Audience, Hash};
 
     struct Noop;
-    impl cokret_sdk::signatures::EventVerifier for Noop {
+    impl arkret_sdk::signatures::EventVerifier for Noop {
         fn verify(
             &self,
             _: &[u8],
             _: &[u8],
-            _: &cokret_sdk::signatures::PublicKeyMaterial,
-        ) -> std::result::Result<(), cokret_sdk::signatures::VerifierError> {
+            _: &arkret_sdk::signatures::PublicKeyMaterial,
+        ) -> std::result::Result<(), arkret_sdk::signatures::VerifierError> {
             Ok(())
         }
         fn algorithm(&self) -> &str {
@@ -1418,13 +1418,13 @@ fn soland_dev_proof_gate_matches_sdk_production_verifier() {
         .expect_err("SDK ProductionVerifier must reject dev-kind proof");
     assert!(matches!(
         sdk_err,
-        cokret_sdk::signatures::VerifierError::DevProofRejected(_)
+        arkret_sdk::signatures::VerifierError::DevProofRejected(_)
     ));
 
     // A proof with kind="detached_jws" — SDK accepts the kind
     // (signature still has to verify separately).
     let prod = build_proof_envelope(
-        cokret_sdk::signatures::detached_jws_kind(),
+        arkret_sdk::signatures::detached_jws_kind(),
         "EdDSA",
         "did:web:alice.example#k1",
         Hash::new("sha256:0000000000000000000000000000000000000000000000000000000000000000")
@@ -1442,22 +1442,22 @@ const DATA_EVENT_REALM: &str = "ak:realm:01904100-0000-7000-8000-000000000001";
 const DATA_EVENT_ACTOR: &str = "did:web:alice.example";
 const DATA_EVENT_STRAND: &str = "ak:strand:01904100-0000-7000-8000-000000000001";
 
-fn data_event_seal_id() -> cokret_sdk::SealId {
-    cokret_sdk::SealId::new(format!("ak:seal:sha256:{}", "a".repeat(64))).unwrap()
+fn data_event_seal_id() -> arkret_sdk::SealId {
+    arkret_sdk::SealId::new(format!("ak:seal:sha256:{}", "a".repeat(64))).unwrap()
 }
 
-fn data_event_move_id(byte: u8) -> cokret_sdk::MoveId {
-    cokret_sdk::MoveId::new(format!("sha256:{}", format!("{byte:02x}").repeat(32))).unwrap()
+fn data_event_move_id(byte: u8) -> arkret_sdk::MoveId {
+    arkret_sdk::MoveId::new(format!("sha256:{}", format!("{byte:02x}").repeat(32))).unwrap()
 }
 
-fn data_event_hash(byte: u8) -> cokret_sdk::Hash {
-    cokret_sdk::Hash::new(format!("sha256:{}", format!("{byte:02x}").repeat(32))).unwrap()
+fn data_event_hash(byte: u8) -> arkret_sdk::Hash {
+    arkret_sdk::Hash::new(format!("sha256:{}", format!("{byte:02x}").repeat(32))).unwrap()
 }
 
-fn data_event_dummy_signature() -> cokret_sdk::MoveSignature {
+fn data_event_dummy_signature() -> arkret_sdk::MoveSignature {
     use chrono::TimeZone;
 
-    cokret_sdk::MoveSignature {
+    arkret_sdk::MoveSignature {
         alg: "EdDSA".to_owned(),
         verification_method: "did:web:notary.example#k1".to_owned(),
         payload_digest: data_event_hash(0xff),
@@ -1466,12 +1466,12 @@ fn data_event_dummy_signature() -> cokret_sdk::MoveSignature {
     }
 }
 
-fn insert_data_event_seal(state: &AppState, covered: Vec<cokret_sdk::MoveId>) -> String {
+fn insert_data_event_seal(state: &AppState, covered: Vec<arkret_sdk::MoveId>) -> String {
     use chrono::TimeZone;
 
     let seal_id = data_event_seal_id();
-    let realm = cokret_sdk::RealmId::new(DATA_EVENT_REALM.to_owned()).unwrap();
-    let seal = cokret_sdk::Seal {
+    let realm = arkret_sdk::RealmId::new(DATA_EVENT_REALM.to_owned()).unwrap();
+    let seal = arkret_sdk::Seal {
         id: seal_id.clone(),
         realm_id: realm,
         predecessor_refs: Vec::new(),
@@ -1487,12 +1487,12 @@ fn insert_data_event_seal(state: &AppState, covered: Vec<cokret_sdk::MoveId>) ->
         covered_event_digests: covered,
         previous_state_root: None,
         previous_digest_algorithm: None,
-        notary_signature: cokret_sdk::NotarySig::Single(data_event_dummy_signature()),
+        notary_signature: arkret_sdk::NotarySig::Single(data_event_dummy_signature()),
         sealed_at: chrono::Utc.with_ymd_and_hms(2026, 5, 8, 0, 0, 0).unwrap(),
-        hlc: cokret_sdk::Hlc::new("0189c4d2af00-0000-aabbccdd".to_owned()).unwrap(),
-        kind: cokret_sdk::SealKind::Normal,
+        hlc: arkret_sdk::Hlc::new("0189c4d2af00-0000-aabbccdd".to_owned()).unwrap(),
+        kind: arkret_sdk::SealKind::Normal,
     };
-    cokret_sdk::state_res::SealStore::put(state.seal_store.as_ref(), &seal).unwrap();
+    arkret_sdk::state_res::SealStore::put(state.seal_store.as_ref(), &seal).unwrap();
     seal_id.as_str().to_owned()
 }
 
@@ -1546,10 +1546,10 @@ fn insert_historical_data_event_grant(
     action: &str,
     revoked: bool,
 ) -> String {
-    let realm = cokret_sdk::RealmId::new(DATA_EVENT_REALM.to_owned()).unwrap();
+    let realm = arkret_sdk::RealmId::new(DATA_EVENT_REALM.to_owned()).unwrap();
     let seal_id = data_event_seal_id();
     let move_id = data_event_move_id(0xab);
-    let cell = cokret_sdk::CellRef::new(format!(
+    let cell = arkret_sdk::CellRef::new(format!(
         "ak:cell:ck.component.capability.grant.v1:{grant_id}"
     ))
     .unwrap();
@@ -1561,8 +1561,8 @@ fn insert_historical_data_event_grant(
         revoked,
         None,
     );
-    let op = cokret_sdk::LatticeOp {
-        op_type: cokret_sdk::LatticeOpType::Add,
+    let op = arkret_sdk::LatticeOp {
+        op_type: arkret_sdk::LatticeOpType::Add,
         tag: Some("ak:operation:01904100-0000-7000-8000-000000000999".to_owned()),
         value: Some(value),
         from: None,
@@ -1570,13 +1570,13 @@ fn insert_historical_data_event_grant(
         reason: None,
         issuer_seq: None,
     };
-    cokret_sdk::state_res::CellStore::append_sealed_effects(
+    arkret_sdk::state_res::CellStore::append_sealed_effects(
         state.cell_store.as_ref(),
         &realm,
         &seal_id,
         &[(
             cell,
-            cokret_sdk::lattice::SealedOp::new(move_id.clone(), op),
+            arkret_sdk::lattice::SealedOp::new(move_id.clone(), op),
         )],
     )
     .unwrap();
@@ -1589,15 +1589,15 @@ fn insert_historical_data_event_delegated_grant_with_revoked_parent(
     child_grant_id: &str,
     action: &str,
 ) -> String {
-    let realm = cokret_sdk::RealmId::new(DATA_EVENT_REALM.to_owned()).unwrap();
+    let realm = arkret_sdk::RealmId::new(DATA_EVENT_REALM.to_owned()).unwrap();
     let seal_id = data_event_seal_id();
     let parent_move_id = data_event_move_id(0xac);
     let child_move_id = data_event_move_id(0xad);
-    let parent_cell = cokret_sdk::CellRef::new(format!(
+    let parent_cell = arkret_sdk::CellRef::new(format!(
         "ak:cell:ck.component.capability.grant.v1:{parent_grant_id}"
     ))
     .unwrap();
-    let child_cell = cokret_sdk::CellRef::new(format!(
+    let child_cell = arkret_sdk::CellRef::new(format!(
         "ak:cell:ck.component.capability.grant.v1:{child_grant_id}"
     ))
     .unwrap();
@@ -1617,8 +1617,8 @@ fn insert_historical_data_event_delegated_grant_with_revoked_parent(
         false,
         Some(parent_grant_id),
     );
-    let parent_op = cokret_sdk::LatticeOp {
-        op_type: cokret_sdk::LatticeOpType::Add,
+    let parent_op = arkret_sdk::LatticeOp {
+        op_type: arkret_sdk::LatticeOpType::Add,
         tag: Some("ak:operation:01904100-0000-7000-8000-000000000991".to_owned()),
         value: Some(parent_value),
         from: None,
@@ -1626,8 +1626,8 @@ fn insert_historical_data_event_delegated_grant_with_revoked_parent(
         reason: None,
         issuer_seq: None,
     };
-    let child_op = cokret_sdk::LatticeOp {
-        op_type: cokret_sdk::LatticeOpType::Add,
+    let child_op = arkret_sdk::LatticeOp {
+        op_type: arkret_sdk::LatticeOpType::Add,
         tag: Some("ak:operation:01904100-0000-7000-8000-000000000992".to_owned()),
         value: Some(child_value),
         from: None,
@@ -1635,18 +1635,18 @@ fn insert_historical_data_event_delegated_grant_with_revoked_parent(
         reason: None,
         issuer_seq: None,
     };
-    cokret_sdk::state_res::CellStore::append_sealed_effects(
+    arkret_sdk::state_res::CellStore::append_sealed_effects(
         state.cell_store.as_ref(),
         &realm,
         &seal_id,
         &[
             (
                 parent_cell,
-                cokret_sdk::lattice::SealedOp::new(parent_move_id.clone(), parent_op),
+                arkret_sdk::lattice::SealedOp::new(parent_move_id.clone(), parent_op),
             ),
             (
                 child_cell,
-                cokret_sdk::lattice::SealedOp::new(child_move_id.clone(), child_op),
+                arkret_sdk::lattice::SealedOp::new(child_move_id.clone(), child_op),
             ),
         ],
     )
@@ -1660,18 +1660,18 @@ fn insert_historical_data_event_grant_with_e2ee_state(
     include_covered_seal: bool,
     include_relaxed_policy: bool,
 ) -> String {
-    let realm = cokret_sdk::RealmId::new(DATA_EVENT_REALM.to_owned()).unwrap();
+    let realm = arkret_sdk::RealmId::new(DATA_EVENT_REALM.to_owned()).unwrap();
     let seal_id = data_event_seal_id();
     let mut move_ids = Vec::new();
     let mut ops = Vec::new();
 
     let grant_move_id = data_event_move_id(0xb0);
-    let grant_cell = cokret_sdk::CellRef::new(format!(
+    let grant_cell = arkret_sdk::CellRef::new(format!(
         "ak:cell:ck.component.capability.grant.v1:{grant_id}"
     ))
     .unwrap();
-    let grant_op = cokret_sdk::LatticeOp {
-        op_type: cokret_sdk::LatticeOpType::Add,
+    let grant_op = arkret_sdk::LatticeOp {
+        op_type: arkret_sdk::LatticeOpType::Add,
         tag: Some("ak:operation:01904100-0000-7000-8000-0000000009b0".to_owned()),
         value: Some(historical_data_event_grant_value(
             grant_id,
@@ -1689,14 +1689,14 @@ fn insert_historical_data_event_grant_with_e2ee_state(
     move_ids.push(grant_move_id.clone());
     ops.push((
         grant_cell,
-        cokret_sdk::lattice::SealedOp::new(grant_move_id, grant_op),
+        arkret_sdk::lattice::SealedOp::new(grant_move_id, grant_op),
     ));
 
     if include_covered_seal {
         let covered_move_id = data_event_move_id(0xb1);
-        let covered_cell = cokret_sdk::mls_move::covered_seals_cell_id(&realm).unwrap();
-        let covered_op = cokret_sdk::LatticeOp {
-            op_type: cokret_sdk::LatticeOpType::Add,
+        let covered_cell = arkret_sdk::mls_move::covered_seals_cell_id(&realm).unwrap();
+        let covered_op = arkret_sdk::LatticeOp {
+            op_type: arkret_sdk::LatticeOpType::Add,
             tag: Some(seal_id.as_str().to_owned()),
             value: Some(Value::String(seal_id.as_str().to_owned())),
             from: None,
@@ -1707,18 +1707,18 @@ fn insert_historical_data_event_grant_with_e2ee_state(
         move_ids.push(covered_move_id.clone());
         ops.push((
             covered_cell,
-            cokret_sdk::lattice::SealedOp::new(covered_move_id, covered_op),
+            arkret_sdk::lattice::SealedOp::new(covered_move_id, covered_op),
         ));
     }
 
     if include_relaxed_policy {
         let policy_move_id = data_event_move_id(0xb2);
-        let policy_cell = cokret_sdk::CellRef::new(format!(
+        let policy_cell = arkret_sdk::CellRef::new(format!(
             "ak:cell:ck.component.realm.policy_components.v1:{DATA_EVENT_REALM}"
         ))
         .unwrap();
-        let policy_op = cokret_sdk::LatticeOp {
-            op_type: cokret_sdk::LatticeOpType::Set,
+        let policy_op = arkret_sdk::LatticeOp {
+            op_type: arkret_sdk::LatticeOpType::Set,
             tag: None,
             value: Some(json!({
                 "profiles": ["ck.profile.e2ee_relaxed.v1"],
@@ -1735,11 +1735,11 @@ fn insert_historical_data_event_grant_with_e2ee_state(
         move_ids.push(policy_move_id.clone());
         ops.push((
             policy_cell,
-            cokret_sdk::lattice::SealedOp::new(policy_move_id, policy_op),
+            arkret_sdk::lattice::SealedOp::new(policy_move_id, policy_op),
         ));
     }
 
-    cokret_sdk::state_res::CellStore::append_sealed_effects(
+    arkret_sdk::state_res::CellStore::append_sealed_effects(
         state.cell_store.as_ref(),
         &realm,
         &seal_id,
@@ -2003,7 +2003,7 @@ async fn ingest_principal_with_enrollment_authority(
                 "verificationMethod": [],
                 "service": [{
                     "id": service_id,
-                    "type": cokret_sdk::service::DID_SERVICE_DEVICE_ENROLLMENT_AUTHORITY,
+                    "type": arkret_sdk::service::DID_SERVICE_DEVICE_ENROLLMENT_AUTHORITY,
                     "serviceEndpoint": authority_did,
                 }],
             }),
@@ -2027,8 +2027,8 @@ fn service_attested_device_authorize_object(
     authorization_ref: &str,
     device_pubkey: &[u8; 32],
 ) -> serde_json::Map<String, Value> {
-    let device_pubkey_mb = cokret_sdk::ed25519_pubkey_to_did_key_multibase(device_pubkey);
-    let device_id = cokret_sdk::DeviceId::new("ak:device:01904100-0000-7000-8000-0000000000d0")
+    let device_pubkey_mb = arkret_sdk::ed25519_pubkey_to_did_key_multibase(device_pubkey);
+    let device_id = arkret_sdk::DeviceId::new("ak:device:01904100-0000-7000-8000-0000000000d0")
         .expect("valid device id");
     let envelope = json!({
         "kind": "ck.device.authorize",

@@ -7,8 +7,8 @@ use crate::wire::now;
 pub(crate) async fn snapshot_manifest_for_realm(
     state: &AppState,
     realm_id: &str,
-) -> Result<cokret_sdk::SnapshotManifest, crate::error::AppError> {
-    let realm_id_value = cokret_sdk::RealmId::new(realm_id.to_owned())
+) -> Result<arkret_sdk::SnapshotManifest, crate::error::AppError> {
+    let realm_id_value = arkret_sdk::RealmId::new(realm_id.to_owned())
         .map_err(|_| crate::error::AppError::invalid_param("invalid realm_id"))?;
     {
         let realms = state.realms.lock();
@@ -38,15 +38,15 @@ pub(crate) async fn snapshot_manifest_for_realm(
         .iter()
         .map(snapshot_item_from_event)
         .collect::<Result<Vec<_>, _>>()?;
-    let state_digest = cokret_sdk::state_digest_from_items(&items)
+    let state_digest = arkret_sdk::state_digest_from_items(&items)
         .map_err(|error| crate::error::AppError::internal(error.to_string()))?;
-    let snapshot_id = cokret_sdk::SnapshotId::new(crate::ids::generate_snapshot_id())
+    let snapshot_id = arkret_sdk::SnapshotId::new(crate::ids::generate_snapshot_id())
         .map_err(|error| crate::error::AppError::internal(error.to_string()))?;
-    let built_chunks = cokret_sdk::build_snapshot_chunks(
+    let built_chunks = arkret_sdk::build_snapshot_chunks(
         &snapshot_id,
-        cokret_sdk::SNAPSHOT_REDUCER_PROFILE_V1,
+        arkret_sdk::SNAPSHOT_REDUCER_PROFILE_V1,
         items.clone(),
-        cokret_sdk::DEFAULT_SNAPSHOT_CHUNK_BYTES,
+        arkret_sdk::DEFAULT_SNAPSHOT_CHUNK_BYTES,
     )
     .map_err(|error| crate::error::AppError::internal(error.to_string()))?;
     persist_snapshot_chunk_blobs(state, realm_id, &built_chunks).await?;
@@ -60,15 +60,15 @@ pub(crate) async fn snapshot_manifest_for_realm(
         .iter()
         .map(|record| snapshot_event_set_leaf(state, record))
         .collect::<Result<Vec<_>, _>>()?;
-    let event_set_commitment = cokret_sdk::event_set_commitment(
-        cokret_sdk::EventSetCommitmentAlgorithm::MerkleEventSetV1,
+    let event_set_commitment = arkret_sdk::event_set_commitment(
+        arkret_sdk::EventSetCommitmentAlgorithm::MerkleEventSetV1,
         &event_set_entries,
         frontier_event_ids.clone(),
     )
     .map_err(|error| crate::error::AppError::internal(error.to_string()))?;
     let created_at = now();
     let timeline_hlc = snapshot_timeline_hlc(state, &events, created_at)?;
-    let service_did = cokret_sdk::Did::new(state.config.service_did.clone())
+    let service_did = arkret_sdk::Did::new(state.config.service_did.clone())
         .map_err(|error| crate::error::AppError::internal(error.to_string()))?;
     let auth_state_digest = snapshot_auth_state_digest(
         &state.config.service_did,
@@ -77,24 +77,24 @@ pub(crate) async fn snapshot_manifest_for_realm(
         created_at,
     )?;
     let verification_method = format!("{}#snapshot-key-1", state.config.service_did);
-    let mut manifest = cokret_sdk::SnapshotManifest {
+    let mut manifest = arkret_sdk::SnapshotManifest {
         id: snapshot_id,
         realm_id: realm_id_value,
-        reducer_profile: cokret_sdk::SNAPSHOT_REDUCER_PROFILE_V1.to_owned(),
+        reducer_profile: arkret_sdk::SNAPSHOT_REDUCER_PROFILE_V1.to_owned(),
         schema_profile_refs: vec![
             "ck.profile.core_event_store.v1".to_owned(),
             "ck.profile.principal_server_events_api.v1".to_owned(),
         ],
         state_digest,
-        frontier: cokret_sdk::SnapshotFrontier {
+        frontier: arkret_sdk::SnapshotFrontier {
             event_ids: frontier_event_ids.clone(),
             timeline_hlc,
         },
         event_set_commitment,
         chunks: chunk_descriptors,
-        security_class: cokret_sdk::SnapshotSecurityClass::Standard,
-        verification_hints: Some(cokret_sdk::SnapshotVerificationHints {
-            verification_profile: cokret_sdk::SnapshotSecurityClass::Standard,
+        security_class: arkret_sdk::SnapshotSecurityClass::Standard,
+        verification_hints: Some(arkret_sdk::SnapshotVerificationHints {
+            verification_profile: arkret_sdk::SnapshotSecurityClass::Standard,
             inclusion_proof_url: None,
             challenge_window_seconds: None,
             witness_quorum: None,
@@ -104,23 +104,23 @@ pub(crate) async fn snapshot_manifest_for_realm(
         }),
         created_by: service_did.clone(),
         created_at,
-        authority_binding: cokret_sdk::AuthorityBinding {
+        authority_binding: arkret_sdk::AuthorityBinding {
             issuer: service_did,
-            authority_kind: cokret_sdk::SnapshotAuthorityKind::RealmPolicySnapshotIssuer,
+            authority_kind: arkret_sdk::SnapshotAuthorityKind::RealmPolicySnapshotIssuer,
             auth_state_digest,
             auth_frontier: frontier_event_ids,
             checked_at: created_at,
             witness_attestations: Vec::new(),
         },
-        signature: cokret_sdk::DetachedJwsProof::eddsa(
+        signature: arkret_sdk::DetachedJwsProof::eddsa(
             verification_method.clone(),
-            cokret_sdk::Hash::new(cokret_sdk::EMPTY_SHA256_DIGEST.to_owned())
+            arkret_sdk::Hash::new(arkret_sdk::EMPTY_SHA256_DIGEST.to_owned())
                 .map_err(|error| crate::error::AppError::internal(error.to_string()))?,
             created_at,
             "header..signature".to_owned(),
         ),
     };
-    cokret_sdk::sign_snapshot_manifest_ed25519(
+    arkret_sdk::sign_snapshot_manifest_ed25519(
         &mut manifest,
         state.notary_signing_key().as_ref(),
         verification_method,
@@ -133,7 +133,7 @@ pub(crate) async fn snapshot_manifest_for_realm(
 async fn persist_snapshot_chunk_blobs(
     state: &AppState,
     realm_id: &str,
-    chunks: &[cokret_sdk::BuiltSnapshotChunk],
+    chunks: &[arkret_sdk::BuiltSnapshotChunk],
 ) -> Result<(), crate::error::AppError> {
     for chunk in chunks {
         let blob_ref = chunk.descriptor.chunk_ref.as_str();
@@ -159,7 +159,7 @@ async fn persist_snapshot_chunk_blobs(
             encryption: None,
             legal_hold: false,
             redacted: false,
-            visibility: cokret_sdk::BlobVisibility::RealmBound,
+            visibility: arkret_sdk::BlobVisibility::RealmBound,
             uploaded_by: state.config.service_did.clone(),
             created_at: now(),
         };
@@ -175,10 +175,10 @@ async fn persist_snapshot_chunk_blobs(
 
 fn snapshot_item_from_event(
     record: &CanonicalEventRecord,
-) -> Result<cokret_sdk::SnapshotMaterializedItem, crate::error::AppError> {
-    let event_id = cokret_sdk::EventId::new(record.event_id.clone())
+) -> Result<arkret_sdk::SnapshotMaterializedItem, crate::error::AppError> {
+    let event_id = arkret_sdk::EventId::new(record.event_id.clone())
         .map_err(|error| crate::error::AppError::internal(error.to_string()))?;
-    Ok(cokret_sdk::SnapshotMaterializedItem {
+    Ok(arkret_sdk::SnapshotMaterializedItem {
         kind: "ck.event.accepted".to_owned(),
         id: record.event_id.clone(),
         object: json!({
@@ -199,13 +199,13 @@ fn snapshot_item_from_event(
 fn snapshot_event_set_leaf(
     state: &AppState,
     record: &CanonicalEventRecord,
-) -> Result<cokret_sdk::EventSetLeaf, crate::error::AppError> {
-    Ok(cokret_sdk::EventSetLeaf {
-        event_id: cokret_sdk::EventId::new(record.event_id.clone())
+) -> Result<arkret_sdk::EventSetLeaf, crate::error::AppError> {
+    Ok(arkret_sdk::EventSetLeaf {
+        event_id: arkret_sdk::EventId::new(record.event_id.clone())
             .map_err(|error| crate::error::AppError::internal(error.to_string()))?,
-        event_digest: cokret_sdk::Hash::new(record.canonical_digest.clone())
+        event_digest: arkret_sdk::Hash::new(record.canonical_digest.clone())
             .map_err(|error| crate::error::AppError::internal(error.to_string()))?,
-        actor_id: cokret_sdk::Did::new(record.actor_id.clone())
+        actor_id: arkret_sdk::Did::new(record.actor_id.clone())
             .map_err(|error| crate::error::AppError::internal(error.to_string()))?,
         actor_seq: record.actor_seq,
         hlc: event_hlc_or_received_at(state, record)?,
@@ -214,7 +214,7 @@ fn snapshot_event_set_leaf(
 
 fn snapshot_frontier_event_ids(
     events: &[CanonicalEventRecord],
-) -> Result<Vec<cokret_sdk::EventId>, crate::error::AppError> {
+) -> Result<Vec<arkret_sdk::EventId>, crate::error::AppError> {
     let mut by_actor: std::collections::BTreeMap<&str, &CanonicalEventRecord> =
         std::collections::BTreeMap::new();
     for record in events {
@@ -232,7 +232,7 @@ fn snapshot_frontier_event_ids(
     by_actor
         .values()
         .map(|record| {
-            cokret_sdk::EventId::new(record.event_id.clone())
+            arkret_sdk::EventId::new(record.event_id.clone())
                 .map_err(|error| crate::error::AppError::internal(error.to_string()))
         })
         .collect()
@@ -242,7 +242,7 @@ fn snapshot_timeline_hlc(
     state: &AppState,
     events: &[CanonicalEventRecord],
     fallback: chrono::DateTime<chrono::Utc>,
-) -> Result<cokret_sdk::Hlc, crate::error::AppError> {
+) -> Result<arkret_sdk::Hlc, crate::error::AppError> {
     let max_received_at = events
         .iter()
         .map(|record| record.received_at)
@@ -254,9 +254,9 @@ fn snapshot_timeline_hlc(
 fn event_hlc_or_received_at(
     state: &AppState,
     record: &CanonicalEventRecord,
-) -> Result<cokret_sdk::Hlc, crate::error::AppError> {
+) -> Result<arkret_sdk::Hlc, crate::error::AppError> {
     if let Some(hlc) = record.envelope.get("hlc").and_then(Value::as_str)
-        && let Ok(parsed) = cokret_sdk::Hlc::new(hlc.to_owned())
+        && let Ok(parsed) = arkret_sdk::Hlc::new(hlc.to_owned())
     {
         return Ok(parsed);
     }
@@ -266,19 +266,19 @@ fn event_hlc_or_received_at(
 fn received_at_hlc(
     state: &AppState,
     at: chrono::DateTime<chrono::Utc>,
-) -> Result<cokret_sdk::Hlc, crate::error::AppError> {
+) -> Result<arkret_sdk::Hlc, crate::error::AppError> {
     let node_hash = sha256_hex(state.config.service_did.as_bytes());
     let node = &node_hash[..8];
-    cokret_sdk::Hlc::new(format!("{:012x}-0000-{node}", at.timestamp_millis()))
+    arkret_sdk::Hlc::new(format!("{:012x}-0000-{node}", at.timestamp_millis()))
         .map_err(|error| crate::error::AppError::internal(error.to_string()))
 }
 
 fn snapshot_auth_state_digest(
     service_did: &str,
     realm_id: &str,
-    frontier_event_ids: &[cokret_sdk::EventId],
+    frontier_event_ids: &[arkret_sdk::EventId],
     checked_at: chrono::DateTime<chrono::Utc>,
-) -> Result<cokret_sdk::Hash, crate::error::AppError> {
+) -> Result<arkret_sdk::Hash, crate::error::AppError> {
     let commitment = json!({
         "profile": "ck.snapshot.auth_state.issuer_local.v1",
         "issuer": service_did,
@@ -286,9 +286,9 @@ fn snapshot_auth_state_digest(
         "frontier_event_ids": frontier_event_ids,
         "checked_at": checked_at,
     });
-    let bytes = cokret_sdk::canonical::canonical_json_bytes(&commitment)
+    let bytes = arkret_sdk::canonical::canonical_json_bytes(&commitment)
         .map_err(|error| crate::error::AppError::internal(error.to_string()))?;
-    cokret_sdk::Hash::new(cokret_sdk::canonical::sha256_digest(&bytes))
+    arkret_sdk::Hash::new(arkret_sdk::canonical::sha256_digest(&bytes))
         .map_err(|error| crate::error::AppError::internal(error.to_string()))
 }
 

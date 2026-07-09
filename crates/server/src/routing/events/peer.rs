@@ -1,8 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::{DateTime, SecondsFormat, Utc};
-use cokret_sdk::http::{EventsQueryOutcome, EventsResolveOutcome, EventsResolveRequestBody};
-use cokret_sdk::{
+use arkret_sdk::http::{EventsQueryOutcome, EventsResolveOutcome, EventsResolveRequestBody};
+use arkret_sdk::{
     Did, EventId, EventsFrontierFederationPeerState, EventsQueryPostRequestBody, RealmId, canonical,
 };
 use salvo::http::StatusCode;
@@ -72,7 +72,7 @@ async fn peer_events_describe(depot: &mut Depot) -> JsonResult<PeerEventsDescrib
     json_ok(PeerEventsDescribeOutcome {
         service_did,
         protocol_version: "1.0".to_owned(),
-        primary_write_path: "/_cokret/peer/events".to_owned(),
+        primary_write_path: "/_arkret/peer/events".to_owned(),
         supported_operations: vec![
             "ck.peer.events.query.describe".to_owned(),
             "ck.peer.events.command.submit".to_owned(),
@@ -768,7 +768,7 @@ impl PeerReadAuthz {
     }
 
     fn apply_member_record(&mut self, record: &CanonicalEventRecord) {
-        if record.kind != cokret_sdk::events::kinds::MEMBER_STATE {
+        if record.kind != arkret_sdk::events::kinds::MEMBER_STATE {
             return;
         }
         let Some(realm_id) = super::event_log::canonical_realm_id_for_record(record) else {
@@ -853,7 +853,7 @@ impl PeerReadAuthz {
     }
 
     fn apply_circle_member_record(&mut self, record: &CanonicalEventRecord) {
-        if record.kind != cokret_sdk::events::kinds::CIRCLE_MEMBER_STATE {
+        if record.kind != arkret_sdk::events::kinds::CIRCLE_MEMBER_STATE {
             return;
         }
         let Some(payload) = record_payload(record) else {
@@ -1376,7 +1376,7 @@ pub(in crate::routing) async fn validate_peer_request(
     body: Option<&Value>,
 ) -> Result<(), AppError> {
     let expected_destination =
-        cokret_sdk::TypedTrustDomainId::new(state.config.trust_domain.clone())
+        arkret_sdk::TypedTrustDomainId::new(state.config.trust_domain.clone())
             .map_err(|_| AppError::internal("service trust_domain is invalid"))?;
     if let Some(body) = body {
         let trust_headers =
@@ -1422,7 +1422,7 @@ pub(in crate::routing) async fn validate_peer_request(
         }
         let destination_trust_domain = required_header(req, "destination-trust-domain")?;
         let destination_trust_domain =
-            cokret_sdk::TypedTrustDomainId::new(destination_trust_domain)
+            arkret_sdk::TypedTrustDomainId::new(destination_trust_domain)
                 .map_err(|_| schema_violation("destination-trust-domain must be a trust domain"))?;
         if destination_trust_domain != expected_destination {
             return Err(cross_domain_replay(
@@ -1430,7 +1430,7 @@ pub(in crate::routing) async fn validate_peer_request(
             ));
         }
         let source_trust_domain = required_header(req, "source-trust-domain")?;
-        cokret_sdk::TypedTrustDomainId::new(source_trust_domain)
+        arkret_sdk::TypedTrustDomainId::new(source_trust_domain)
             .map_err(|_| schema_violation("source-trust-domain must be a trust domain"))?;
     }
     let source_service_did = required_header(req, HEADER_SOURCE_SERVICE_DID)?;
@@ -1446,7 +1446,7 @@ pub(in crate::routing) async fn validate_peer_request(
             "destination-service-did header does not match this service",
         ));
     }
-    // federation.md §3.2/§6: all `/_cokret/peer/*` requests MUST be authenticated
+    // federation.md §3.2/§6: all `/_arkret/peer/*` requests MUST be authenticated
     // with an RFC 9421 HTTP Message Signature verified against the sender's
     // service DID key, and the local peer deny policy MUST be enforced inbound.
     // The bare trust-header checks above are necessary but not sufficient; the

@@ -23,7 +23,7 @@ pub(super) async fn verify_recovery_receipt_device_signature(
     )?;
     let transcript = recovery_signature_transcript(RECEIPT_SIGNATURE_TYPE, payload, &signed_fields);
     let transcript_bytes =
-        cokret_sdk::canonical::canonical_json_bytes(&transcript).map_err(|error| {
+        arkret_sdk::canonical::canonical_json_bytes(&transcript).map_err(|error| {
             AppError::internal(format!("recovery receipt transcript failed: {error}"))
         })?;
     let signature_b64 = auth_data
@@ -178,7 +178,7 @@ pub(super) async fn verify_recovery_policy_session_device_signature(
         payload,
     )?;
     let transcript = recovery_signature_transcript(POLICY_SIGNATURE_TYPE, payload, &signed_fields);
-    let transcript_bytes = cokret_sdk::canonical::canonical_json_bytes(&transcript)
+    let transcript_bytes = arkret_sdk::canonical::canonical_json_bytes(&transcript)
         .map_err(|error| AppError::internal(format!("recovery transcript failed: {error}")))?;
 
     let signature_b64 = auth_data
@@ -265,7 +265,7 @@ pub(super) async fn verify_recovery_auth_signature(
 
     let signed_fields = parse_signed_fields(auth_data, allowed_fields, required_fields, payload)?;
     let transcript = recovery_signature_transcript(transcript_type, payload, &signed_fields);
-    let transcript_bytes = cokret_sdk::canonical::canonical_json_bytes(&transcript)
+    let transcript_bytes = arkret_sdk::canonical::canonical_json_bytes(&transcript)
         .map_err(|error| AppError::internal(format!("recovery transcript failed: {error}")))?;
 
     let signature_b64 = auth_data

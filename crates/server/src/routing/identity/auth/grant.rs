@@ -109,7 +109,7 @@ pub(crate) async fn validate_session_grant_binding(
             "session grant subject does not match principal_id",
         ));
     }
-    if let Some(device_id) = grant.device_id.as_ref().map(cokret_sdk::DeviceId::as_str)
+    if let Some(device_id) = grant.device_id.as_ref().map(arkret_sdk::DeviceId::as_str)
         && device_id != input.device_id
     {
         return Err(AppError::capability_denied(

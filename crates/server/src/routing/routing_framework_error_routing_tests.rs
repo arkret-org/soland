@@ -3,12 +3,12 @@ use super::*;
 #[test]
 fn pattern_matches_concrete_path() {
     assert!(pattern_matches_path(
-        "/_cokret/self/events",
-        "/_cokret/self/events"
+        "/_arkret/self/events",
+        "/_arkret/self/events"
     ));
     assert!(!pattern_matches_path(
-        "/_cokret/self/events",
-        "/_cokret/self/other"
+        "/_arkret/self/events",
+        "/_arkret/self/other"
     ));
 }
 
@@ -33,15 +33,15 @@ fn pattern_matches_param_segment() {
 #[test]
 fn pattern_matches_multi_param_segments() {
     assert!(pattern_matches_path(
-        "/_cokret/self/events/{event_id}/refs/{ref_id}",
-        "/_cokret/self/events/ck:event:01/refs/ck:event:02"
+        "/_arkret/self/events/{event_id}/refs/{ref_id}",
+        "/_arkret/self/events/ck:event:01/refs/ck:event:02"
     ));
 }
 
 #[test]
 fn pattern_rejects_segment_mismatch() {
-    assert!(!pattern_matches_path("/_cokret/self/events", "/_cokret"));
-    assert!(!pattern_matches_path("/_cokret", "/_cokret/self/events"));
+    assert!(!pattern_matches_path("/_arkret/self/events", "/_arkret"));
+    assert!(!pattern_matches_path("/_arkret", "/_arkret/self/events"));
 }
 
 #[test]
@@ -53,7 +53,7 @@ fn known_routes_map_resolves_known_path() {
     // pattern-matching, not OpenAPI introspection.
     let _ = KNOWN_ROUTES.set(vec![
         (
-            "/_cokret/self/events".to_owned(),
+            "/_arkret/self/events".to_owned(),
             vec![Method::GET, Method::POST],
         ),
         (
@@ -64,8 +64,8 @@ fn known_routes_map_resolves_known_path() {
 
     // Known path → returns the canonical method set (in
     // `METHOD_HEADER_ORDER`) so the `Allow` header is stable.
-    let methods = allow_methods_for_path("/_cokret/self/events")
-        .expect("/_cokret/self/events is registered with at least one method");
+    let methods = allow_methods_for_path("/_arkret/self/events")
+        .expect("/_arkret/self/events is registered with at least one method");
     assert_eq!(methods, vec![Method::GET, Method::POST]);
 
     let methods = allow_methods_for_path("/_soland/self/spaces/ck:space:abc")
@@ -74,15 +74,15 @@ fn known_routes_map_resolves_known_path() {
 
     // Unknown path → `None`, which is the cue for `api_not_found`
     // to emit `unrecognized_endpoint` instead of `method_not_allowed`.
-    assert!(allow_methods_for_path("/_cokret/self/does-not-exist").is_none());
+    assert!(allow_methods_for_path("/_arkret/self/does-not-exist").is_none());
     assert!(allow_methods_for_path("/_soland/peer/does-not-exist").is_none());
 }
 
-/// End-to-end check that `/_cokret/*` unrecognized paths return
+/// End-to-end check that `/_arkret/*` unrecognized paths return
 /// the canonical 404 + `unrecognized_endpoint` JSON envelope (see
-/// `tests/http_api.rs::framework_errors_use_cokret_error_envelope`).
+/// `tests/http_api.rs::framework_errors_use_arkret_error_envelope`).
 #[tokio::test]
-async fn cokret_v1_unknown_path_returns_unrecognized_endpoint() {
+async fn arkret_v1_unknown_path_returns_unrecognized_endpoint() {
     use salvo::test::{ResponseExt, TestClient};
     use soland_data::Db;
 
@@ -91,7 +91,7 @@ async fn cokret_v1_unknown_path_returns_unrecognized_endpoint() {
     let state = AppState::new(test_state_config(), Db { pool: None });
     let svc = crate::service(state);
 
-    let mut response = TestClient::get("http://server/_cokret/does-not-exist")
+    let mut response = TestClient::get("http://server/_arkret/does-not-exist")
         .send(&svc)
         .await;
     let status = response.status_code.unwrap();
@@ -101,7 +101,7 @@ async fn cokret_v1_unknown_path_returns_unrecognized_endpoint() {
     assert_eq!(body["error"]["code"], "unrecognized_endpoint");
 }
 
-/// End-to-end check that hitting a known `/_cokret/*` path with the
+/// End-to-end check that hitting a known `/_arkret/*` path with the
 /// wrong method returns 405 + the `method_not_allowed` JSON envelope
 /// AND populates the `Allow` response header per
 /// `arkret-spec/spec/v1/zh/sync/api-conventions.md` §10.
@@ -115,7 +115,7 @@ async fn known_path_wrong_method_returns_method_not_allowed_with_allow_header() 
     let state = AppState::new(test_state_config(), Db { pool: None });
     let svc = crate::service(state);
 
-    let mut response = TestClient::patch("http://server/_cokret/self/events")
+    let mut response = TestClient::patch("http://server/_arkret/self/events")
         .send(&svc)
         .await;
     let status = response.status_code.unwrap();
@@ -129,7 +129,7 @@ async fn known_path_wrong_method_returns_method_not_allowed_with_allow_header() 
     assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED);
     assert_eq!(body["ok"], false);
     assert_eq!(body["error"]["code"], "method_not_allowed");
-    // `/_cokret/self/events` supports POST (submit) + GET (query); the
+    // `/_arkret/self/events` supports POST (submit) + GET (query); the
     // `Allow` header must list them in canonical (`METHOD_HEADER_ORDER`)
     // order so it's stable across runs.
     assert_eq!(allow, "GET, POST", "got Allow: {allow}");

@@ -120,8 +120,8 @@ pub(crate) async fn validate_event_proofs(
                 .unwrap_or("sha256");
             object.get("payload").map(|payload| {
                 let bytes = canonical::canonical_json_bytes(payload).unwrap_or_default();
-                cokret_sdk::canonical::digest_with_suite(expected_suite, &bytes)
-                    .unwrap_or_else(|_| cokret_sdk::canonical::sha256_digest(&bytes))
+                arkret_sdk::canonical::digest_with_suite(expected_suite, &bytes)
+                    .unwrap_or_else(|_| arkret_sdk::canonical::sha256_digest(&bytes))
             })
         } else {
             None
@@ -189,7 +189,7 @@ pub(crate) async fn validate_event_proofs(
             // resolved purely cryptographically by the SDK verifier below, so
             // the freshness gate (which only covers cached webvh documents)
             // only applies to webvh signers.
-            let signer_did = cokret_sdk::Did::new(proof_root.clone()).map_err(|error| {
+            let signer_did = arkret_sdk::Did::new(proof_root.clone()).map_err(|error| {
                 event_validation_error(
                     StatusCode::BAD_REQUEST,
                     "invalid_proof",
@@ -238,7 +238,7 @@ pub(super) fn event_proof_binding_bytes(
 ) -> Result<Vec<u8>, EventValidationError> {
     let mut binding = serde_json::Map::new();
     // encoding.md §2: the Event proof binding carries the fixed signing-context
-    // domain tag "ck-event-proof-v1" (mirrors cokret_sdk Proof::binding_object)
+    // domain tag "ck-event-proof-v1" (mirrors arkret_sdk Proof::binding_object)
     // so an Event proof cannot be confused with another proof family's binding.
     binding.insert("context".to_owned(), json!("ck-event-proof-v1"));
     binding.insert("event_digest".to_owned(), json!(event_digest));

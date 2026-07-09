@@ -1,23 +1,23 @@
 //! Authorization HTTP surface.
 //!
 //! Surfaces:
-//! - `POST /_cokret/self/authz/check`             — evaluate one (actor, action, resource)
-//! - `GET  /_cokret/self/authz/effective-grants`  — direct grants visible to a subject
-//! - `GET  /_cokret/self/authz/invites`           — pending invites visible to the actor
+//! - `POST /_arkret/self/authz/check`             — evaluate one (actor, action, resource)
+//! - `GET  /_arkret/self/authz/effective-grants`  — direct grants visible to a subject
+//! - `GET  /_arkret/self/authz/invites`           — pending invites visible to the actor
 //!
 //! The actual authorisation engine lives in `src/authz.rs` (the
 //! `state.authz` field is shared). This surface is a local preflight/read
 //! projection. Dynamic, signed, or obligation-bearing decisions are served by
-//! `/_cokret/self/policy/check`.
+//! `/_arkret/self/policy/check`.
 
-use cokret_sdk::models::{
+use arkret_sdk::models::{
     AuthzDecision, CapabilityGrant, CapabilitySubject, Facet,
     GrantConstraint as WireGrantConstraint, GrantConstraintEffect as WireGrantConstraintEffect,
     GrantConstraintExtensionKey, GrantConstraintSubtype as WireGrantConstraintSubtype,
     GrantConstraintType as WireGrantConstraintType, GrantList, Invite, InviteDeliveryTarget,
     InviteState,
 };
-use cokret_sdk::{AuthzInviteList, Did, GrantId, Hash, InviteId, RealmId};
+use arkret_sdk::{AuthzInviteList, Did, GrantId, Hash, InviteId, RealmId};
 use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 use serde_json::{Value, json};
@@ -74,7 +74,7 @@ async fn authz_check(
             .flatten()
             .map(|m| m.owner);
         let realms = state.realms.lock();
-        let members = cokret_sdk::RealmId::new(realm_id.clone())
+        let members = arkret_sdk::RealmId::new(realm_id.clone())
             .ok()
             .and_then(|realm_id| realms.get(&realm_id))
             .map(|realm| {

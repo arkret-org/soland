@@ -213,23 +213,23 @@ mod tests {
     fn fresh_introspection_required_for_writes() {
         assert!(method_path_requires_fresh_introspection(
             &Method::POST,
-            "/_cokret/self/events"
+            "/_arkret/self/events"
         ));
         assert!(method_path_requires_fresh_introspection(
             &Method::DELETE,
-            "/_cokret/self/account_data/m.push_rules"
+            "/_arkret/self/account_data/m.push_rules"
         ));
     }
 
     #[test]
     fn fresh_introspection_required_for_sensitive_reads() {
         for path in [
-            "/_cokret/self/account",
-            "/_cokret/self/authz/effective-grants",
-            "/_cokret/self/device_messages",
-            "/_cokret/self/keys/backups",
-            "/_cokret/self/keys/query",
-            "/_cokret/self/realms/r1/strands",
+            "/_arkret/self/account",
+            "/_arkret/self/authz/effective-grants",
+            "/_arkret/self/device_messages",
+            "/_arkret/self/keys/backups",
+            "/_arkret/self/keys/query",
+            "/_arkret/self/realms/r1/strands",
         ] {
             assert!(
                 method_path_requires_fresh_introspection(&Method::GET, path),
@@ -242,7 +242,7 @@ mod tests {
     fn low_sensitivity_reads_can_use_cached_introspection() {
         assert!(!method_path_requires_fresh_introspection(
             &Method::GET,
-            "/_cokret/self/realms/r1/links"
+            "/_arkret/self/realms/r1/links"
         ));
     }
 

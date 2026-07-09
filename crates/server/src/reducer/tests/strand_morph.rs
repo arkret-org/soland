@@ -15,7 +15,7 @@ fn strand_lifecycle_round_trip() {
 
     let create_effect = state.apply(
         &make_operation(
-            cokret_sdk::events::kinds::STRAND_CREATE,
+            arkret_sdk::events::kinds::STRAND_CREATE,
             realm_id,
             serde_json::json!({
                 "object": {
@@ -39,7 +39,7 @@ fn strand_lifecycle_round_trip() {
 
     let archive_effect = state.apply(
         &make_operation(
-            cokret_sdk::events::kinds::STRAND_ARCHIVE,
+            arkret_sdk::events::kinds::STRAND_ARCHIVE,
             realm_id,
             serde_json::json!({ "target_ref": strand_id, "sender": "did:web:alice.example" }),
         ),
@@ -59,7 +59,7 @@ fn strand_lifecycle_round_trip() {
 
     let restore_effect = state.apply(
         &make_operation(
-            cokret_sdk::events::kinds::STRAND_RESTORE,
+            arkret_sdk::events::kinds::STRAND_RESTORE,
             realm_id,
             serde_json::json!({ "target_ref": strand_id, "sender": "did:web:alice.example" }),
         ),
@@ -87,7 +87,7 @@ fn strand_lifecycle_preflight_rejects_illegal_transitions() {
 
     state.apply(
         &make_operation(
-            cokret_sdk::events::kinds::STRAND_CREATE,
+            arkret_sdk::events::kinds::STRAND_CREATE,
             realm_id,
             serde_json::json!({
                 "object": {
@@ -103,7 +103,7 @@ fn strand_lifecycle_preflight_rejects_illegal_transitions() {
 
     // restore on Active → strand_not_archived
     let restore_op = make_operation(
-        cokret_sdk::events::kinds::STRAND_RESTORE,
+        arkret_sdk::events::kinds::STRAND_RESTORE,
         realm_id,
         serde_json::json!({ "target_ref": strand_id }),
     );
@@ -115,14 +115,14 @@ fn strand_lifecycle_preflight_rejects_illegal_transitions() {
     // Archive then re-archive → strand_not_active
     state.apply(
         &make_operation(
-            cokret_sdk::events::kinds::STRAND_ARCHIVE,
+            arkret_sdk::events::kinds::STRAND_ARCHIVE,
             realm_id,
             serde_json::json!({ "target_ref": strand_id }),
         ),
         &hlc,
     );
     let archive_again = make_operation(
-        cokret_sdk::events::kinds::STRAND_ARCHIVE,
+        arkret_sdk::events::kinds::STRAND_ARCHIVE,
         realm_id,
         serde_json::json!({ "target_ref": strand_id }),
     );
@@ -133,7 +133,7 @@ fn strand_lifecycle_preflight_rejects_illegal_transitions() {
 
     // Update on Archived → strand_not_active
     let update_op = make_operation(
-        cokret_sdk::events::kinds::STRAND_UPDATE,
+        arkret_sdk::events::kinds::STRAND_UPDATE,
         realm_id,
         serde_json::json!({
             "target_ref": strand_id,
@@ -150,7 +150,7 @@ fn strand_lifecycle_preflight_rejects_illegal_transitions() {
 fn strand_lifecycle_preflight_tolerates_unknown_strand() {
     let state = ProjectionState::new();
     let archive_unknown = make_operation(
-        cokret_sdk::events::kinds::STRAND_ARCHIVE,
+        arkret_sdk::events::kinds::STRAND_ARCHIVE,
         "ak:realm:01904100-0000-7000-8000-cfc039892036",
         serde_json::json!({ "target_ref": "ak:strand:nope-not-here" }),
     );
@@ -171,7 +171,7 @@ fn morph_lifecycle_round_trip() {
 
     let create_effect = state.apply(
         &make_operation(
-            cokret_sdk::events::kinds::MORPH_CREATE,
+            arkret_sdk::events::kinds::MORPH_CREATE,
             realm_id,
             serde_json::json!({
                 "object": {
@@ -196,7 +196,7 @@ fn morph_lifecycle_round_trip() {
 
     state.apply(
         &make_operation(
-            cokret_sdk::events::kinds::MORPH_ARCHIVE,
+            arkret_sdk::events::kinds::MORPH_ARCHIVE,
             realm_id,
             serde_json::json!({ "target_ref": morph_id }),
         ),
@@ -206,7 +206,7 @@ fn morph_lifecycle_round_trip() {
 
     state.apply(
         &make_operation(
-            cokret_sdk::events::kinds::MORPH_RESTORE,
+            arkret_sdk::events::kinds::MORPH_RESTORE,
             realm_id,
             serde_json::json!({ "target_ref": morph_id }),
         ),
@@ -224,7 +224,7 @@ fn morph_lifecycle_preflight_rejects_illegal_transitions() {
 
     state.apply(
         &make_operation(
-            cokret_sdk::events::kinds::MORPH_CREATE,
+            arkret_sdk::events::kinds::MORPH_CREATE,
             realm_id,
             serde_json::json!({
                 "object": {
@@ -241,7 +241,7 @@ fn morph_lifecycle_preflight_rejects_illegal_transitions() {
 
     // restore on Active → morph_not_archived
     let restore_op = make_operation(
-        cokret_sdk::events::kinds::MORPH_RESTORE,
+        arkret_sdk::events::kinds::MORPH_RESTORE,
         realm_id,
         serde_json::json!({ "target_ref": morph_id }),
     );
@@ -252,14 +252,14 @@ fn morph_lifecycle_preflight_rejects_illegal_transitions() {
 
     state.apply(
         &make_operation(
-            cokret_sdk::events::kinds::MORPH_ARCHIVE,
+            arkret_sdk::events::kinds::MORPH_ARCHIVE,
             realm_id,
             serde_json::json!({ "target_ref": morph_id }),
         ),
         &hlc,
     );
     let archive_again = make_operation(
-        cokret_sdk::events::kinds::MORPH_ARCHIVE,
+        arkret_sdk::events::kinds::MORPH_ARCHIVE,
         realm_id,
         serde_json::json!({ "target_ref": morph_id }),
     );
@@ -270,7 +270,7 @@ fn morph_lifecycle_preflight_rejects_illegal_transitions() {
 
     // Update on Archived → morph_not_active
     let update_op = make_operation(
-        cokret_sdk::events::kinds::MORPH_UPDATE,
+        arkret_sdk::events::kinds::MORPH_UPDATE,
         realm_id,
         serde_json::json!({
             "target_ref": morph_id,
@@ -287,7 +287,7 @@ fn morph_lifecycle_preflight_rejects_illegal_transitions() {
 fn morph_lifecycle_preflight_tolerates_unknown_morph() {
     let state = ProjectionState::new();
     let archive_unknown = make_operation(
-        cokret_sdk::events::kinds::MORPH_ARCHIVE,
+        arkret_sdk::events::kinds::MORPH_ARCHIVE,
         "ak:realm:01904100-0000-7000-8000-cfc039892036",
         serde_json::json!({ "target_ref": "ak:morph:nope-not-here" }),
     );
@@ -312,7 +312,7 @@ fn strand_position_events_touch_projection_without_changing_state() {
 
     state.apply(
         &make_operation(
-            cokret_sdk::events::kinds::STRAND_CREATE,
+            arkret_sdk::events::kinds::STRAND_CREATE,
             realm_id,
             serde_json::json!({
                 "object": {
@@ -336,7 +336,7 @@ fn strand_position_events_touch_projection_without_changing_state() {
     // ck.strand.move — state unchanged, updated_at advances.
     let move_effect = state.apply(
         &make_operation(
-            cokret_sdk::events::kinds::STRAND_MOVE,
+            arkret_sdk::events::kinds::STRAND_MOVE,
             realm_id,
             serde_json::json!({
                 "strand_id": strand_id,
@@ -368,7 +368,7 @@ fn strand_position_events_touch_projection_without_changing_state() {
     // ck.strand.reorder — same family, same effect.
     let reorder_effect = state.apply(
         &make_operation(
-            cokret_sdk::events::kinds::STRAND_REORDER,
+            arkret_sdk::events::kinds::STRAND_REORDER,
             realm_id,
             serde_json::json!({
                 "strand_id": strand_id,
@@ -399,7 +399,7 @@ fn strand_position_events_queue_unknown_strand() {
     let strand_id = "ak:strand:01904100-0000-7000-8000-2fb50799ad51";
     let effect = state.apply(
         &make_operation(
-            cokret_sdk::events::kinds::STRAND_MOVE,
+            arkret_sdk::events::kinds::STRAND_MOVE,
             realm_id,
             serde_json::json!({
                 "strand_id": strand_id,
@@ -416,7 +416,7 @@ fn strand_position_events_queue_unknown_strand() {
     ));
     state.apply(
         &make_operation(
-            cokret_sdk::events::kinds::STRAND_CREATE,
+            arkret_sdk::events::kinds::STRAND_CREATE,
             realm_id,
             serde_json::json!({
                 "object": {
@@ -447,7 +447,7 @@ fn redaction_with_strand_object_ref_flips_to_redacted() {
 
     state.apply(
         &make_operation(
-            cokret_sdk::events::kinds::STRAND_CREATE,
+            arkret_sdk::events::kinds::STRAND_CREATE,
             realm_id,
             serde_json::json!({
                 "object": {
@@ -464,7 +464,7 @@ fn redaction_with_strand_object_ref_flips_to_redacted() {
 
     let effect = state.apply(
         &make_operation(
-            cokret_sdk::events::kinds::REDACTION,
+            arkret_sdk::events::kinds::REDACTION,
             realm_id,
             serde_json::json!({
                 "target_event_id": "ak:event:01904100-0000-7000-8000-1d10dc000001",
@@ -499,7 +499,7 @@ fn redaction_with_morph_object_ref_flips_to_redacted() {
 
     state.apply(
         &make_operation(
-            cokret_sdk::events::kinds::MORPH_CREATE,
+            arkret_sdk::events::kinds::MORPH_CREATE,
             realm_id,
             serde_json::json!({
                 "object": {
@@ -515,7 +515,7 @@ fn redaction_with_morph_object_ref_flips_to_redacted() {
     );
     let effect = state.apply(
         &make_operation(
-            cokret_sdk::events::kinds::REDACTION,
+            arkret_sdk::events::kinds::REDACTION,
             realm_id,
             serde_json::json!({
                 "target_event_id": "ak:event:01904100-0000-7000-8000-1d10dc000002",
@@ -548,7 +548,7 @@ fn redaction_preflight_rejects_against_already_terminal() {
     // Materialise + redact a Strand once (legal first redaction).
     state.apply(
         &make_operation(
-            cokret_sdk::events::kinds::STRAND_CREATE,
+            arkret_sdk::events::kinds::STRAND_CREATE,
             realm_id,
             serde_json::json!({
                 "object": {
@@ -563,7 +563,7 @@ fn redaction_preflight_rejects_against_already_terminal() {
     );
     state.apply(
         &make_operation(
-            cokret_sdk::events::kinds::REDACTION,
+            arkret_sdk::events::kinds::REDACTION,
             realm_id,
             serde_json::json!({
                 "target_event_id": "ak:event:01904100-0000-7000-8000-1d10dc000003",
@@ -579,7 +579,7 @@ fn redaction_preflight_rejects_against_already_terminal() {
 
     // Second redaction against the now-Redacted Strand → preflight rejects.
     let second_redact = make_operation(
-        cokret_sdk::events::kinds::REDACTION,
+        arkret_sdk::events::kinds::REDACTION,
         realm_id,
         serde_json::json!({
             "target_event_id": "ak:event:01904100-0000-7000-8000-1d10dc000004",
@@ -594,7 +594,7 @@ fn redaction_preflight_rejects_against_already_terminal() {
     // Same path for Morph.
     state.apply(
         &make_operation(
-            cokret_sdk::events::kinds::MORPH_CREATE,
+            arkret_sdk::events::kinds::MORPH_CREATE,
             realm_id,
             serde_json::json!({
                 "object": {
@@ -610,7 +610,7 @@ fn redaction_preflight_rejects_against_already_terminal() {
     );
     state.apply(
         &make_operation(
-            cokret_sdk::events::kinds::REDACTION,
+            arkret_sdk::events::kinds::REDACTION,
             realm_id,
             serde_json::json!({
                 "target_event_id": "ak:event:01904100-0000-7000-8000-1d10dc000005",
@@ -620,7 +620,7 @@ fn redaction_preflight_rejects_against_already_terminal() {
         &hlc,
     );
     let second_morph_redact = make_operation(
-        cokret_sdk::events::kinds::REDACTION,
+        arkret_sdk::events::kinds::REDACTION,
         realm_id,
         serde_json::json!({
             "target_event_id": "ak:event:01904100-0000-7000-8000-1d10dc000006",
@@ -648,7 +648,7 @@ fn strand_tracks_update_touches_active_strand_only() {
 
     state.apply(
         &make_operation(
-            cokret_sdk::events::kinds::STRAND_CREATE,
+            arkret_sdk::events::kinds::STRAND_CREATE,
             realm_id,
             serde_json::json!({
                 "object": {
@@ -664,7 +664,7 @@ fn strand_tracks_update_touches_active_strand_only() {
 
     let effect = state.apply(
         &make_operation(
-            cokret_sdk::events::kinds::STRAND_TRACKS_UPDATE,
+            arkret_sdk::events::kinds::STRAND_TRACKS_UPDATE,
             realm_id,
             serde_json::json!({
                 "strand_id": strand_id,
@@ -698,7 +698,7 @@ fn strand_tracks_update_projects_discussion_enabled_state() {
 
     state.apply(
         &make_operation(
-            cokret_sdk::events::kinds::STRAND_CREATE,
+            arkret_sdk::events::kinds::STRAND_CREATE,
             realm_id,
             serde_json::json!({
                 "object": {
@@ -718,7 +718,7 @@ fn strand_tracks_update_projects_discussion_enabled_state() {
     );
 
     let tracks_op = make_operation(
-        cokret_sdk::events::kinds::STRAND_TRACKS_UPDATE,
+        arkret_sdk::events::kinds::STRAND_TRACKS_UPDATE,
         realm_id,
         serde_json::json!({
             "strand_id": strand_id,
@@ -741,7 +741,7 @@ fn strand_tracks_update_projects_discussion_enabled_state() {
     assert_eq!(
         state.strands[strand_id]
             .tracks
-            .get(cokret_sdk::STRAND_TRACK_NAME_DISCUSSION)
+            .get(arkret_sdk::STRAND_TRACK_NAME_DISCUSSION)
             .and_then(|track| track.enabled),
         Some(false)
     );
@@ -759,7 +759,7 @@ fn strand_tracks_preflight_rejects_when_strand_archived() {
 
     state.apply(
         &make_operation(
-            cokret_sdk::events::kinds::STRAND_CREATE,
+            arkret_sdk::events::kinds::STRAND_CREATE,
             realm_id,
             serde_json::json!({
                 "object": {
@@ -774,7 +774,7 @@ fn strand_tracks_preflight_rejects_when_strand_archived() {
     );
     state.apply(
         &make_operation(
-            cokret_sdk::events::kinds::STRAND_ARCHIVE,
+            arkret_sdk::events::kinds::STRAND_ARCHIVE,
             realm_id,
             serde_json::json!({ "target_ref": strand_id }),
         ),
@@ -786,7 +786,7 @@ fn strand_tracks_preflight_rejects_when_strand_archived() {
     );
 
     let tracks_op = make_operation(
-        cokret_sdk::events::kinds::STRAND_TRACKS_UPDATE,
+        arkret_sdk::events::kinds::STRAND_TRACKS_UPDATE,
         realm_id,
         serde_json::json!({
             "strand_id": strand_id,
@@ -811,7 +811,7 @@ fn strand_tracks_preflight_rejects_when_strand_archived() {
 fn strand_tracks_preflight_tolerates_unknown_strand() {
     let state = ProjectionState::new();
     let tracks_op = make_operation(
-        cokret_sdk::events::kinds::STRAND_TRACKS_UPDATE,
+        arkret_sdk::events::kinds::STRAND_TRACKS_UPDATE,
         "ak:realm:01904100-0000-7000-8000-cfc039892036",
         serde_json::json!({
             "strand_id": "ak:strand:nope-not-here",
@@ -830,7 +830,7 @@ fn redaction_preflight_tolerates_unknown_object_or_message_path() {
     let realm_id = "ak:realm:01904100-0000-7000-8000-cfc039892036";
     // Unknown object_ref.
     let unknown = make_operation(
-        cokret_sdk::events::kinds::REDACTION,
+        arkret_sdk::events::kinds::REDACTION,
         realm_id,
         serde_json::json!({
             "target_event_id": "ak:event:01904100-0000-7000-8000-1d10dc000007",
@@ -840,7 +840,7 @@ fn redaction_preflight_tolerates_unknown_object_or_message_path() {
     assert_eq!(state.check_redaction_target_transition(&unknown), Ok(()));
     // Missing object_ref (message redaction path).
     let message_redact = make_operation(
-        cokret_sdk::events::kinds::REDACTION,
+        arkret_sdk::events::kinds::REDACTION,
         realm_id,
         serde_json::json!({
             "target_event_id": "ak:event:01904100-0000-7000-8000-1d10dc000008",

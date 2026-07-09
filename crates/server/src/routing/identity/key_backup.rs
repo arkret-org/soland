@@ -2,7 +2,7 @@
 
 use base64::Engine as _;
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
-use cokret_sdk::{
+use arkret_sdk::{
     BackupClass, BackupId, DeviceId, Did, EventId, KEY_BACKUP_DELETE_DEVELOPMENT_PROOF_KIND,
     KeyBackup, KeyBackupDeleteDetachedJwsProof, KeyBackupDeleteProof, KeyBackupRecipientMethod,
     KeysBackupsDeleteRequestBody, KeysBackupsUnlockRequestBody,
@@ -535,7 +535,7 @@ mod tests {
         assert_eq!(value["actor_id"], ACTOR);
         assert_eq!(value["backup_id"], BACKUP_ID);
         assert_eq!(
-            cokret_sdk::canonical::sha256_digest(&canonical),
+            arkret_sdk::canonical::sha256_digest(&canonical),
             "sha256:beb1dc1e9867b7414b8ee5a9102dabbda11f0bb5872a867876a568c2e480cc36"
         );
     }

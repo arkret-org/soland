@@ -3,8 +3,8 @@
 //! Helpers live in [`super::common`]; pull them in via `use`.
 
 #![allow(unused_imports)]
-use cokret_sdk::CellRef;
-use cokret_sdk::lattice::CellState;
+use arkret_sdk::CellRef;
+use arkret_sdk::lattice::CellState;
 
 use super::common::*;
 
@@ -37,7 +37,7 @@ async fn post_account_device_pair(
     new_device_id: &str,
     challenge_signature: &str,
 ) -> (StatusCode, Value) {
-    let mut response = TestClient::post("http://server/_cokret/gate/account/device-pair")
+    let mut response = TestClient::post("http://server/_arkret/gate/account/device-pair")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
             "pairing_code": "pairing-code",
@@ -59,7 +59,7 @@ async fn account_device_pair_registers_sibling_via_canonical_gate_route() {
     let sibling_pubkey = pair_device_pubkey(sibling);
     let sibling_device_public_key = sibling_pubkey["public_key"].as_str().unwrap();
 
-    let unauthenticated = TestClient::post("http://server/_cokret/gate/account/device-pair")
+    let unauthenticated = TestClient::post("http://server/_arkret/gate/account/device-pair")
         .json(&serde_json::json!({
             "pairing_code": "pairing-code",
             "new_device_pubkey": sibling_pubkey.clone(),
@@ -69,7 +69,7 @@ async fn account_device_pair_registers_sibling_via_canonical_gate_route() {
         .await;
     assert_eq!(unauthenticated.status_code, Some(StatusCode::UNAUTHORIZED));
 
-    let paired: Value = TestClient::post("http://server/_cokret/gate/account/device-pair")
+    let paired: Value = TestClient::post("http://server/_arkret/gate/account/device-pair")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
             "pairing_code": "pairing-code",
@@ -94,7 +94,7 @@ async fn account_device_pair_registers_sibling_via_canonical_gate_route() {
     );
     assert_eq!(paired["device_grant"]["status"], "active");
 
-    let viewer: Value = TestClient::get("http://server/_cokret/self/account/viewer")
+    let viewer: Value = TestClient::get("http://server/_arkret/self/account/viewer")
         .add_header("authorization", format!("Bearer {token}"), true)
         .send(&app_from_state(state.clone()))
         .await
@@ -261,7 +261,7 @@ async fn to_device_pairing_request_reaches_existing_device_and_gate_pair_authori
     );
     let mut actor_targets = serde_json::Map::new();
     actor_targets.insert(actor.to_owned(), Value::Object(device_targets));
-    let sent: Value = TestClient::post("http://server/_cokret/self/device_messages")
+    let sent: Value = TestClient::post("http://server/_arkret/self/device_messages")
         .add_header("authorization", format!("Bearer {new_token}"), true)
         .add_header("Idempotency-Key", "device-pair-request-1", true)
         .json(&serde_json::json!({
@@ -301,7 +301,7 @@ async fn to_device_pairing_request_reaches_existing_device_and_gate_pair_authori
             .is_some_and(|token| !token.is_empty())
     );
 
-    let pulled: Value = TestClient::get("http://server/_cokret/self/device_messages")
+    let pulled: Value = TestClient::get("http://server/_arkret/self/device_messages")
         .add_header("authorization", format!("Bearer {existing_token}"), true)
         .send(&app_from_state(state.clone()))
         .await
@@ -314,7 +314,7 @@ async fn to_device_pairing_request_reaches_existing_device_and_gate_pair_authori
         "pairing-code"
     );
 
-    let approved: Value = TestClient::post("http://server/_cokret/gate/account/device-pair")
+    let approved: Value = TestClient::post("http://server/_arkret/gate/account/device-pair")
         .add_header("authorization", format!("Bearer {existing_token}"), true)
         .json(&serde_json::json!({
             "pairing_code": "pairing-code",
@@ -331,7 +331,7 @@ async fn to_device_pairing_request_reaches_existing_device_and_gate_pair_authori
     assert_eq!(approved["device_id"], new_device);
     assert_eq!(approved["device_grant"]["status"], "active");
 
-    let viewer: Value = TestClient::get("http://server/_cokret/self/account/viewer")
+    let viewer: Value = TestClient::get("http://server/_arkret/self/account/viewer")
         .add_header("authorization", format!("Bearer {existing_token}"), true)
         .send(&app_from_state(state.clone()))
         .await
@@ -369,7 +369,7 @@ async fn to_device_capacity_eviction_sets_lost_watermark() {
         );
         let mut actor_targets = serde_json::Map::new();
         actor_targets.insert(bob.to_owned(), Value::Object(device_targets));
-        let sent: Value = TestClient::post("http://server/_cokret/self/device_messages")
+        let sent: Value = TestClient::post("http://server/_arkret/self/device_messages")
             .add_header("authorization", format!("Bearer {alice_token}"), true)
             .add_header("Idempotency-Key", format!("capacity-{seq}"), true)
             .json(&serde_json::json!({
@@ -384,7 +384,7 @@ async fn to_device_capacity_eviction_sets_lost_watermark() {
         assert_eq!(sent["delivered"][bob][0], bob_device);
     }
 
-    let pulled: Value = TestClient::get("http://server/_cokret/self/device_messages")
+    let pulled: Value = TestClient::get("http://server/_arkret/self/device_messages")
         .add_header("authorization", format!("Bearer {bob_token}"), true)
         .send(&app_from_state(state.clone()))
         .await
@@ -415,7 +415,7 @@ async fn protocol_device_surface_excludes_pairing_request_scaffold() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
 
-    let create = TestClient::post("http://server/_cokret/gate/account/device-pairing-requests")
+    let create = TestClient::post("http://server/_arkret/gate/account/device-pairing-requests")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
             "pairing_code": "pairing-code",
@@ -430,13 +430,13 @@ async fn protocol_device_surface_excludes_pairing_request_scaffold() {
         .await;
     assert_eq!(create.status_code, Some(StatusCode::NOT_FOUND));
 
-    let list = TestClient::get("http://server/_cokret/self/devices/pairing-requests")
+    let list = TestClient::get("http://server/_arkret/self/devices/pairing-requests")
         .add_header("authorization", format!("Bearer {token}"), true)
         .send(&app_from_state(state.clone()))
         .await;
     assert_eq!(list.status_code, Some(StatusCode::NOT_FOUND));
 
-    let devices = TestClient::get("http://server/_cokret/self/devices")
+    let devices = TestClient::get("http://server/_arkret/self/devices")
         .add_header("authorization", format!("Bearer {token}"), true)
         .send(&app_from_state(state.clone()))
         .await;
@@ -482,7 +482,7 @@ async fn rtc_media_token_uses_projected_media_service_epoch() {
     );
 
     let issued_before = chrono::Utc::now();
-    let token_response: Value = TestClient::post("http://server/_cokret/self/rtc/token")
+    let token_response: Value = TestClient::post("http://server/_arkret/self/rtc/token")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
             "realm_id": DEMO_REALM_ID,
@@ -549,7 +549,7 @@ async fn rtc_media_token_uses_projected_media_service_epoch() {
         "participant_identity must be a typed ck:rtc_participant id"
     );
     assert!(
-        cokret_sdk::identifiers::is_lowercase_uuidv7(
+        arkret_sdk::identifiers::is_lowercase_uuidv7(
             participant_identity
                 .strip_prefix("ak:rtc_participant:")
                 .unwrap()
@@ -603,7 +603,7 @@ async fn rtc_media_token_uses_projected_media_service_epoch() {
         "ak:device:01904100-0000-7000-8000-a11ce0000001"
     );
 
-    let second_token_response: Value = TestClient::post("http://server/_cokret/self/rtc/token")
+    let second_token_response: Value = TestClient::post("http://server/_arkret/self/rtc/token")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
             "realm_id": DEMO_REALM_ID,
@@ -638,7 +638,7 @@ async fn rtc_media_token_inkson_flow_no_session_issues_token() {
     let call_id = new_prefixed_uuid7("ak:call:");
 
     // Without ck.call.join, even a realm member is denied (§6).
-    let mut denied = TestClient::post("http://server/_cokret/self/rtc/token")
+    let mut denied = TestClient::post("http://server/_arkret/self/rtc/token")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
             "realm_id": DEMO_REALM_ID,
@@ -663,7 +663,7 @@ async fn rtc_media_token_inkson_flow_no_session_issues_token() {
         "did:web:alice.example",
         "ck.call.join",
     );
-    let issued: Value = TestClient::post("http://server/_cokret/self/rtc/token")
+    let issued: Value = TestClient::post("http://server/_arkret/self/rtc/token")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
             "realm_id": DEMO_REALM_ID,
@@ -715,7 +715,7 @@ async fn rtc_media_token_rejects_epoch_and_focus_mismatches() {
     // rejected with `focus_mismatch`.
     seed_call_state(&state, &session_id, Some("ak:focus:mediasoup:blue"), vec![]);
 
-    let mut focus_mismatch = TestClient::post("http://server/_cokret/self/rtc/token")
+    let mut focus_mismatch = TestClient::post("http://server/_arkret/self/rtc/token")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
             "realm_id": DEMO_REALM_ID,
@@ -742,7 +742,7 @@ async fn rtc_media_token_rejects_epoch_and_focus_mismatches() {
             }]
         }),
     );
-    let mut issuer_mismatch = TestClient::post("http://server/_cokret/self/rtc/token")
+    let mut issuer_mismatch = TestClient::post("http://server/_arkret/self/rtc/token")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
             "realm_id": DEMO_REALM_ID,
@@ -774,7 +774,7 @@ async fn rtc_media_token_rejects_non_member_actor() {
     )
     .await;
 
-    let mut response = TestClient::post("http://server/_cokret/self/rtc/token")
+    let mut response = TestClient::post("http://server/_arkret/self/rtc/token")
         .add_header("authorization", format!("Bearer {bob_token}"), true)
         .json(&serde_json::json!({
             "realm_id": DEMO_REALM_ID,
@@ -817,7 +817,7 @@ async fn rtc_media_token_requires_call_join_capability() {
     });
 
     // No ck.call.join → capability_denied even though bob is a member+participant.
-    let mut denied = TestClient::post("http://server/_cokret/self/rtc/token")
+    let mut denied = TestClient::post("http://server/_arkret/self/rtc/token")
         .add_header("authorization", format!("Bearer {bob_token}"), true)
         .json(&exchange_body)
         .send(&app_from_state(state.clone()))
@@ -829,7 +829,7 @@ async fn rtc_media_token_requires_call_join_capability() {
     // After granting ck.call.join, the exchange is admitted (focus matches the
     // oldest-membership default).
     grant_call_capability(&state, DEMO_REALM_ID, bob, "ck.call.join");
-    let granted: Value = TestClient::post("http://server/_cokret/self/rtc/token")
+    let granted: Value = TestClient::post("http://server/_arkret/self/rtc/token")
         .add_header("authorization", format!("Bearer {bob_token}"), true)
         .json(&exchange_body)
         .send(&app_from_state(state.clone()))
@@ -910,7 +910,7 @@ async fn rtc_media_token_livekit_backend_token_carries_livekit_claims() {
     // No committed session_focus: the request directly names the livekit focus,
     // which is admitted because it is a legal focus in the epoch.
     let issued_before = chrono::Utc::now();
-    let token_response: Value = TestClient::post("http://server/_cokret/self/rtc/token")
+    let token_response: Value = TestClient::post("http://server/_arkret/self/rtc/token")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
             "realm_id": DEMO_REALM_ID,
@@ -1034,7 +1034,7 @@ async fn webrtc_ban_blocks_removed_participant_token_reissue() {
 
     // Before the ban, bob can exchange a media token (no committed focus, so
     // the requested epoch-legal focus is admitted).
-    let pre_ban: Value = TestClient::post("http://server/_cokret/self/rtc/token")
+    let pre_ban: Value = TestClient::post("http://server/_arkret/self/rtc/token")
         .add_header("authorization", format!("Bearer {bob_token}"), true)
         .json(&serde_json::json!({
             "realm_id": DEMO_REALM_ID,
@@ -1067,7 +1067,7 @@ async fn webrtc_ban_blocks_removed_participant_token_reissue() {
 
     // After the ban, bob's token re-issue is refused with
     // `call_participant_removed` (webrtc-signaling.md §3a).
-    let mut post_ban = TestClient::post("http://server/_cokret/self/rtc/token")
+    let mut post_ban = TestClient::post("http://server/_arkret/self/rtc/token")
         .add_header("authorization", format!("Bearer {bob_token}"), true)
         .json(&serde_json::json!({
             "realm_id": DEMO_REALM_ID,
@@ -1203,8 +1203,8 @@ fn call_signal_envelope(
             "data": {"sdp_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
         }
     });
-    let canonical = cokret_sdk::canonical::canonical_json_bytes(&envelope).unwrap();
-    let event_digest = cokret_sdk::canonical::sha256_digest(&canonical);
+    let canonical = arkret_sdk::canonical::canonical_json_bytes(&envelope).unwrap();
+    let event_digest = arkret_sdk::canonical::sha256_digest(&canonical);
     envelope["proof"] = serde_json::json!({
         "kind": "detached_jws",
         "alg": "EdDSA",
@@ -1217,7 +1217,7 @@ fn call_signal_envelope(
 }
 
 async fn post_ephemeral(state: AppState, token: &str, envelope: &Value) -> salvo::http::Response {
-    TestClient::post("http://server/_cokret/self/ephemeral")
+    TestClient::post("http://server/_arkret/self/ephemeral")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(envelope)
         .send(&app_from_state(state))
@@ -1255,7 +1255,7 @@ async fn ephemeral_call_signal_relays_to_other_realm_member_and_filters_self_dev
         &state,
         DEMO_REALM_ID,
         alice,
-        cokret_sdk::CAP_CALL_SIGNAL_SEND,
+        arkret_sdk::CAP_CALL_SIGNAL_SEND,
     );
 
     let call_id = "ak:call:0196419b-0000-7000-8000-00000000ca11";
@@ -1312,7 +1312,7 @@ async fn ephemeral_call_signal_reaches_same_actor_other_device() {
         &state,
         DEMO_REALM_ID,
         alice,
-        cokret_sdk::CAP_CALL_SIGNAL_SEND,
+        arkret_sdk::CAP_CALL_SIGNAL_SEND,
     );
 
     let call_id = "ak:call:0196419b-0000-7000-8000-00000000ca12";
@@ -1349,7 +1349,7 @@ async fn ephemeral_call_signal_not_delivered_after_ttl_expiry() {
         &state,
         DEMO_REALM_ID,
         alice,
-        cokret_sdk::CAP_CALL_SIGNAL_SEND,
+        arkret_sdk::CAP_CALL_SIGNAL_SEND,
     );
 
     let call_id = "ak:call:0196419b-0000-7000-8000-00000000ca13";
@@ -1452,7 +1452,7 @@ async fn ephemeral_call_signal_incremental_resubscribe_does_not_redeliver() {
         &state,
         DEMO_REALM_ID,
         alice,
-        cokret_sdk::CAP_CALL_SIGNAL_SEND,
+        arkret_sdk::CAP_CALL_SIGNAL_SEND,
     );
 
     let call_id = "ak:call:0196419b-0000-7000-8000-00000000ca20";

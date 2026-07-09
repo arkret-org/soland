@@ -11,7 +11,7 @@ fn consent_revoke_empty_observed_dots_rejected() {
         "observed_dots": [],
     }))
     .unwrap_err();
-    assert_eq!(err.0, cokret_sdk::ERROR_CODE_SCHEMA_VIOLATION);
+    assert_eq!(err.0, arkret_sdk::ERROR_CODE_SCHEMA_VIOLATION);
 }
 
 #[test]
@@ -43,9 +43,9 @@ fn principal_control_realm_binding_enforced() {
         "device_id": "ak:device:01904100-0000-7000-8000-000000000001",
     });
     let mk = |realm: &str, kind: &str, payload: serde_json::Value| {
-        cokret_sdk::Operation::create(
-            cokret_sdk::OperationId::new(crate::ids::generate_operation_id()).unwrap(),
-            cokret_sdk::RealmId::new(realm.to_owned()).unwrap(),
+        arkret_sdk::Operation::create(
+            arkret_sdk::OperationId::new(crate::ids::generate_operation_id()).unwrap(),
+            arkret_sdk::RealmId::new(realm.to_owned()).unwrap(),
             kind,
             payload,
         )

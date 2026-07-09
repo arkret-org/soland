@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::hash::Hasher;
 use std::sync::{Arc, OnceLock};
 
-use cokret_sdk::EventsSubmitRejectedItem;
+use arkret_sdk::EventsSubmitRejectedItem;
 
 use super::*;
 use crate::invite_claim_proofs::{
@@ -33,12 +33,12 @@ fn actor_submit_lock(actor_id: &str) -> Arc<tokio::sync::Mutex<()>> {
 }
 
 fn stamp_projection_operation_received_at(
-    operation: &mut cokret_sdk::Operation,
+    operation: &mut arkret_sdk::Operation,
     received_at: chrono::DateTime<chrono::Utc>,
 ) {
     if !matches!(
         operation.object_type.as_str(),
-        cokret_sdk::events::kinds::MEMBER_STATE | cokret_sdk::events::kinds::CIRCLE_MEMBER_STATE
+        arkret_sdk::events::kinds::MEMBER_STATE | arkret_sdk::events::kinds::CIRCLE_MEMBER_STATE
     ) {
         return;
     }
@@ -255,7 +255,7 @@ pub(super) async fn submit_event_batch_outcome(
             "events submit batch must contain at least one envelope",
         ));
     }
-    if cokret_sdk::validate_event_submit_batch_count(envelopes.len()).is_err() {
+    if arkret_sdk::validate_event_submit_batch_count(envelopes.len()).is_err() {
         return Err(SubmitOneError::new(
             StatusCode::PAYLOAD_TOO_LARGE,
             "payload_too_large",
@@ -283,7 +283,7 @@ pub(super) async fn submit_event_batch_outcome(
                     duplicate.push(response.event_id);
                 }
                 if !response.duplicate
-                    && kind.as_deref() == Some(cokret_sdk::events::kinds::REALM_CREATE)
+                    && kind.as_deref() == Some(arkret_sdk::events::kinds::REALM_CREATE)
                     && let (Some(realm_id), Some(actor_id)) = (realm_id, actor_id)
                 {
                     realm_bootstrap_contexts
@@ -424,7 +424,7 @@ pub(crate) async fn submit_federation_events(
         );
         return;
     }
-    if cokret_sdk::validate_event_submit_batch_count(events.len()).is_err() {
+    if arkret_sdk::validate_event_submit_batch_count(events.len()).is_err() {
         render_error(
             res,
             StatusCode::PAYLOAD_TOO_LARGE,
@@ -766,9 +766,9 @@ mod received_at_stamp_tests {
             .unwrap()
             .with_timezone(&Utc);
         let mut device_authorize = operation_for_kind("ck.device.authorize", 1);
-        let mut member_state = operation_for_kind(cokret_sdk::events::kinds::MEMBER_STATE, 2);
+        let mut member_state = operation_for_kind(arkret_sdk::events::kinds::MEMBER_STATE, 2);
         let mut circle_member_state =
-            operation_for_kind(cokret_sdk::events::kinds::CIRCLE_MEMBER_STATE, 3);
+            operation_for_kind(arkret_sdk::events::kinds::CIRCLE_MEMBER_STATE, 3);
 
         stamp_projection_operation_received_at(&mut device_authorize, received_at);
         stamp_projection_operation_received_at(&mut member_state, received_at);

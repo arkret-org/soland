@@ -146,7 +146,7 @@ fn verify_key_backup_auth_data_signature(
     if let Some(auth_data) = unsigned.get_mut("auth_data").and_then(Value::as_object_mut) {
         auth_data.remove("signature");
     }
-    let canonical = cokret_sdk::canonical::canonical_json_bytes(&unsigned).map_err(|error| {
+    let canonical = arkret_sdk::canonical::canonical_json_bytes(&unsigned).map_err(|error| {
         AppError::internal(format!(
             "key backup envelope canonicalization failed: {error}"
         ))
@@ -183,10 +183,10 @@ pub(super) fn key_backup_canonical_digest_without_signature(
     {
         auth_data.remove("signature");
     }
-    let bytes = cokret_sdk::canonical::canonical_json_bytes(&canonical).map_err(|error| {
+    let bytes = arkret_sdk::canonical::canonical_json_bytes(&canonical).map_err(|error| {
         AppError::internal(format!("key backup canonical digest failed: {error}"))
     })?;
-    Ok(cokret_sdk::canonical::sha256_digest(&bytes))
+    Ok(arkret_sdk::canonical::sha256_digest(&bytes))
 }
 
 pub(super) fn recovery_session_proof_summary(
@@ -208,10 +208,10 @@ pub(super) fn recovery_session_proof_summary(
         "created_at": record.created_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
         "expires_at": record.expires_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
     });
-    let bytes = cokret_sdk::canonical::canonical_json_bytes(&transcript).ok()?;
+    let bytes = arkret_sdk::canonical::canonical_json_bytes(&transcript).ok()?;
     Some((
         kind.to_owned(),
-        cokret_sdk::canonical::sha256_digest(&bytes),
+        arkret_sdk::canonical::sha256_digest(&bytes),
     ))
 }
 
@@ -397,7 +397,7 @@ pub(super) async fn verify_key_backup_unlock_proof_signature(
     if let Some(auth_data) = unsigned.get_mut("auth_data").and_then(Value::as_object_mut) {
         auth_data.remove("signature");
     }
-    let canonical = cokret_sdk::canonical::canonical_json_bytes(&unsigned).map_err(|error| {
+    let canonical = arkret_sdk::canonical::canonical_json_bytes(&unsigned).map_err(|error| {
         AppError::internal(format!(
             "key backup unlock proof canonicalization failed: {error}"
         ))
@@ -480,7 +480,7 @@ pub(super) async fn enforce_recovery_session_binding_when_present(
 
 /// Spec `keys_backups_unlock_request_body` (additionalProperties: false) —
 /// the unlock proof travels as the `proof` field of the JSON request body of
-/// `POST /_cokret/self/keys/backups/{backup_id}/unlock`; header / query
+/// `POST /_arkret/self/keys/backups/{backup_id}/unlock`; header / query
 /// carriers are forbidden. The proof MUST validate as
 /// `ck.schema.key_backup_unlock_proof.v1` and is verified against the
 /// recovery session, caller, requesting device key, and target envelope

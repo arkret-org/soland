@@ -59,7 +59,7 @@ fn base_reset_payload(principal_id: &str, event_id: &str, proof: Value) -> Value
 }
 
 fn sign_reset_payload(payload: &mut Value, signing: &SigningKey) {
-    let content: cokret_sdk::CrossSigningResetContent =
+    let content: arkret_sdk::CrossSigningResetContent =
         serde_json::from_value(payload.clone()).expect("reset content");
     let input = content.reset_signing_input().expect("reset signing input");
     let signature = URL_SAFE_NO_PAD.encode(signing.sign(&input).to_bytes());
@@ -67,7 +67,7 @@ fn sign_reset_payload(payload: &mut Value, signing: &SigningKey) {
 }
 
 fn sign_device_quorum_reset_payload(payload: &mut Value, signings: &[SigningKey]) {
-    let content: cokret_sdk::CrossSigningResetContent =
+    let content: arkret_sdk::CrossSigningResetContent =
         serde_json::from_value(payload.clone()).expect("reset content");
     let input = content.reset_signing_input().expect("reset signing input");
     for (idx, signing) in signings.iter().enumerate() {
@@ -77,7 +77,7 @@ fn sign_device_quorum_reset_payload(payload: &mut Value, signings: &[SigningKey]
 }
 
 fn bind_recovery_unlock_commitment(payload: &mut Value) {
-    let content: cokret_sdk::CrossSigningResetContent =
+    let content: arkret_sdk::CrossSigningResetContent =
         serde_json::from_value(payload.clone()).expect("reset content");
     let commitment = content
         .recovery_unlock_commitment()
@@ -95,7 +95,7 @@ async fn submit_reset_event_with_status(
     event: Value,
     expected_status: StatusCode,
 ) -> Value {
-    let mut response = TestClient::post("http://server/_cokret/self/events")
+    let mut response = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&event)
         .send(&app_from_state(state))
@@ -218,7 +218,7 @@ async fn recovery_session_create_and_get_roundtrip() {
     let fetched = get_recovery(
         state,
         &token,
-        &format!("/_cokret/root/identity/recovery-sessions/{session_id}"),
+        &format!("/_arkret/root/identity/recovery-sessions/{session_id}"),
         StatusCode::OK,
     )
     .await;
@@ -249,7 +249,7 @@ async fn recovery_session_create_requires_active_policy() {
     let body = post_recovery(
         state,
         &token,
-        "/_cokret/root/identity/recovery-sessions",
+        "/_arkret/root/identity/recovery-sessions",
         &create_body,
         StatusCode::CONFLICT,
     )
@@ -286,7 +286,7 @@ async fn recovery_session_get_enforces_principal_isolation() {
     let body = get_recovery(
         state,
         &token_b,
-        &format!("/_cokret/root/identity/recovery-sessions/{session_id}"),
+        &format!("/_arkret/root/identity/recovery-sessions/{session_id}"),
         StatusCode::FORBIDDEN,
     )
     .await;
@@ -322,7 +322,7 @@ async fn recovery_session_principal_signing_proof_verifies() {
     let body = post_recovery(
         state.clone(),
         &token,
-        &format!("/_cokret/root/identity/recovery-sessions/{session_id}/proofs"),
+        &format!("/_arkret/root/identity/recovery-sessions/{session_id}/proofs"),
         &proof_body,
         StatusCode::OK,
     )
@@ -345,7 +345,7 @@ async fn recovery_session_principal_signing_proof_verifies() {
     let fetched = get_recovery(
         state,
         &token,
-        &format!("/_cokret/root/identity/recovery-sessions/{session_id}"),
+        &format!("/_arkret/root/identity/recovery-sessions/{session_id}"),
         StatusCode::OK,
     )
     .await;
@@ -386,7 +386,7 @@ async fn recovery_session_principal_signing_rejects_bad_signature() {
     let body = post_recovery(
         state.clone(),
         &token,
-        &format!("/_cokret/root/identity/recovery-sessions/{session_id}/proofs"),
+        &format!("/_arkret/root/identity/recovery-sessions/{session_id}/proofs"),
         &proof_body,
         StatusCode::UNAUTHORIZED,
     )
@@ -397,7 +397,7 @@ async fn recovery_session_principal_signing_rejects_bad_signature() {
     let fetched = get_recovery(
         state,
         &token,
-        &format!("/_cokret/root/identity/recovery-sessions/{session_id}"),
+        &format!("/_arkret/root/identity/recovery-sessions/{session_id}"),
         StatusCode::OK,
     )
     .await;
@@ -436,7 +436,7 @@ async fn recovery_session_trusted_recovery_service_proof_verifies_and_audits() {
     let session = post_recovery(
         state.clone(),
         &token,
-        "/_cokret/root/identity/recovery-sessions",
+        "/_arkret/root/identity/recovery-sessions",
         &create_body,
         StatusCode::CREATED,
     )
@@ -467,7 +467,7 @@ async fn recovery_session_trusted_recovery_service_proof_verifies_and_audits() {
     let body = post_recovery(
         state.clone(),
         &token,
-        &format!("/_cokret/root/identity/recovery-sessions/{session_id}/proofs"),
+        &format!("/_arkret/root/identity/recovery-sessions/{session_id}/proofs"),
         &proof_body,
         StatusCode::OK,
     )
@@ -484,7 +484,7 @@ async fn recovery_session_trusted_recovery_service_proof_verifies_and_audits() {
     let fetched = get_recovery(
         state.clone(),
         &token,
-        &format!("/_cokret/root/identity/recovery-sessions/{session_id}"),
+        &format!("/_arkret/root/identity/recovery-sessions/{session_id}"),
         StatusCode::OK,
     )
     .await;
@@ -549,7 +549,7 @@ async fn recovery_session_trusted_recovery_service_rejects_unlisted_service_and_
     let session = post_recovery(
         state.clone(),
         &token,
-        "/_cokret/root/identity/recovery-sessions",
+        "/_arkret/root/identity/recovery-sessions",
         &create_body,
         StatusCode::CREATED,
     )
@@ -579,7 +579,7 @@ async fn recovery_session_trusted_recovery_service_rejects_unlisted_service_and_
     let body = post_recovery(
         state.clone(),
         &token,
-        &format!("/_cokret/root/identity/recovery-sessions/{session_id}/proofs"),
+        &format!("/_arkret/root/identity/recovery-sessions/{session_id}/proofs"),
         &rejected_body,
         StatusCode::UNAUTHORIZED,
     )
@@ -589,7 +589,7 @@ async fn recovery_session_trusted_recovery_service_rejects_unlisted_service_and_
     let fetched = get_recovery(
         state.clone(),
         &token,
-        &format!("/_cokret/root/identity/recovery-sessions/{session_id}"),
+        &format!("/_arkret/root/identity/recovery-sessions/{session_id}"),
         StatusCode::OK,
     )
     .await;
@@ -618,7 +618,7 @@ async fn recovery_session_trusted_recovery_service_rejects_unlisted_service_and_
     let body = post_recovery(
         state,
         &token,
-        &format!("/_cokret/root/identity/recovery-sessions/{session_id}/proofs"),
+        &format!("/_arkret/root/identity/recovery-sessions/{session_id}/proofs"),
         &accepted_body,
         StatusCode::OK,
     )
@@ -647,7 +647,7 @@ async fn recovery_session_proof_rejects_challenge_mismatch() {
     let body = post_recovery(
         state,
         &token,
-        &format!("/_cokret/root/identity/recovery-sessions/{session_id}/proofs"),
+        &format!("/_arkret/root/identity/recovery-sessions/{session_id}/proofs"),
         &proof_body,
         StatusCode::CONFLICT,
     )
@@ -679,7 +679,7 @@ async fn recovery_session_proof_rejects_kind_not_allowed_by_policy() {
     let body = post_recovery(
         state,
         &token,
-        &format!("/_cokret/root/identity/recovery-sessions/{session_id}/proofs"),
+        &format!("/_arkret/root/identity/recovery-sessions/{session_id}/proofs"),
         &proof_body,
         StatusCode::CONFLICT,
     )
@@ -705,7 +705,7 @@ async fn recovery_session_complete_rejects_unverified() {
     let body = post_recovery(
         state,
         &token,
-        &format!("/_cokret/root/identity/recovery-sessions/{session_id}/complete"),
+        &format!("/_arkret/root/identity/recovery-sessions/{session_id}/complete"),
         &serde_json::json!({
             "authorization_event_id": AUTH_EVENT_ID,
             "device_list_update_event_id": LIST_EVENT_ID,
@@ -743,7 +743,7 @@ async fn recovery_session_complete_authorizes_device_after_verify() {
     post_recovery(
         state.clone(),
         &token,
-        &format!("/_cokret/root/identity/recovery-sessions/{session_id}/proofs"),
+        &format!("/_arkret/root/identity/recovery-sessions/{session_id}/proofs"),
         &serde_json::json!({
             "proof": {
                 "kind": "principal_signing",
@@ -764,7 +764,7 @@ async fn recovery_session_complete_authorizes_device_after_verify() {
     let body = post_recovery(
         state.clone(),
         &token,
-        &format!("/_cokret/root/identity/recovery-sessions/{session_id}/complete"),
+        &format!("/_arkret/root/identity/recovery-sessions/{session_id}/complete"),
         &complete_body,
         StatusCode::OK,
     )
@@ -795,7 +795,7 @@ async fn recovery_session_complete_authorizes_device_after_verify() {
     let again = post_recovery(
         state,
         &token,
-        &format!("/_cokret/root/identity/recovery-sessions/{session_id}/complete"),
+        &format!("/_arkret/root/identity/recovery-sessions/{session_id}/complete"),
         &complete_body,
         StatusCode::CONFLICT,
     )
@@ -829,7 +829,7 @@ async fn recovery_session_complete_rejects_ssk_generation_mismatch() {
     let body = post_recovery(
         state,
         &token,
-        &format!("/_cokret/root/identity/recovery-sessions/{session_id}/complete"),
+        &format!("/_arkret/root/identity/recovery-sessions/{session_id}/complete"),
         &complete_body,
         StatusCode::CONFLICT,
     )
@@ -1186,7 +1186,7 @@ async fn recovery_complete_rejected_after_cross_signing_reset() {
         "proof": { "kind": "principal_signing", "verification_method": vm, "alg": "EdDSA", "signature": "cGxhY2Vob2xkZXI" },
         "issued_at": "2026-05-30T00:00:00Z",
     });
-    let content: cokret_sdk::CrossSigningResetContent =
+    let content: arkret_sdk::CrossSigningResetContent =
         serde_json::from_value(reset).expect("reset content");
     state
         .cross_signing
@@ -1199,7 +1199,7 @@ async fn recovery_complete_rejected_after_cross_signing_reset() {
     let body = post_recovery(
         state,
         &token,
-        &format!("/_cokret/root/identity/recovery-sessions/{session_id}/complete"),
+        &format!("/_arkret/root/identity/recovery-sessions/{session_id}/complete"),
         &complete_body,
         StatusCode::CONFLICT,
     )
@@ -1227,7 +1227,7 @@ async fn recovery_session_complete_rejects_missing_cross_signing_state() {
     let body = post_recovery(
         state,
         &token,
-        &format!("/_cokret/root/identity/recovery-sessions/{session_id}/complete"),
+        &format!("/_arkret/root/identity/recovery-sessions/{session_id}/complete"),
         &complete_body,
         StatusCode::CONFLICT,
     )
@@ -1263,7 +1263,7 @@ async fn recovery_session_complete_rejects_wrong_ssk_signature() {
     let body = post_recovery(
         state,
         &token,
-        &format!("/_cokret/root/identity/recovery-sessions/{session_id}/complete"),
+        &format!("/_arkret/root/identity/recovery-sessions/{session_id}/complete"),
         &complete_body,
         StatusCode::UNAUTHORIZED,
     )

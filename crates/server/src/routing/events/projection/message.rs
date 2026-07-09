@@ -1,4 +1,4 @@
-use cokret_sdk::Operation;
+use arkret_sdk::Operation;
 use serde_json::Value;
 
 use crate::state::{AppState, MessageRecord};

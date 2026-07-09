@@ -119,7 +119,7 @@ pub(super) async fn mimi_room_update(
         &body,
         json!({
             "mimi_room_uri": mimi_room_uri(state, &room_id),
-            "truth_source": "cokret_signed_event_reducer",
+            "truth_source": "arkret_signed_event_reducer",
             "status": "projected",
             "binding_emitted": binding_event_id.is_some(),
         }),
@@ -255,11 +255,11 @@ pub(super) async fn mimi_room_message(
         .get("original_envelope_hash")
         .and_then(|value| value.as_str())
         .map(str::to_owned)
-        .unwrap_or_else(|| cokret_sdk::canonical::sha256_digest(body.to_string().as_bytes()));
+        .unwrap_or_else(|| arkret_sdk::canonical::sha256_digest(body.to_string().as_bytes()));
 
     // Map the MIMI message into the canonical Arkret timeline.
     // Append a MessageRecord + a `ck.message.create` projection event so
-    // the message shows up in `GET /_cokret/self/events?realm_id=...`. The
+    // the message shows up in `GET /_arkret/self/events?realm_id=...`. The
     // MIMI provenance metadata is preserved verbatim under
     // `payload.mimi_provenance` so audit consumers can verify the
     // message arrived through the facade.
@@ -333,7 +333,7 @@ pub(super) async fn mimi_room_message(
     let projection_record = ProjectionEventRecord {
         event_id: event_id.clone(),
         realm_id: realm_id.clone(),
-        event_kind: cokret_sdk::events::kinds::MESSAGE_CREATE.to_owned(),
+        event_kind: arkret_sdk::events::kinds::MESSAGE_CREATE.to_owned(),
         operation_type: "mimi_facade_ingress".to_owned(),
         operation_id: Some(operation_id.clone()),
         sender: Some(sender.clone()),
@@ -360,9 +360,9 @@ pub(super) async fn mimi_room_message(
             "target_format": "ck.message.create",
             "original_envelope_hash": original_hash,
             "mapped_operation_id": operation_id,
-            "cokret_event_id": event_id,
+            "arkret_event_id": event_id,
             "mimi_message_id": mimi_message_id,
-            "truth_source": "cokret_signed_event_reducer",
+            "truth_source": "arkret_signed_event_reducer",
             "reducer_chain": "wired",
             "status": mapped_content.status,
             "mimi_policy": mapped_content.policy.clone(),
@@ -422,7 +422,7 @@ pub(super) async fn mimi_group_info(
         "ck.open.mimi.query.group_info",
         &json!({"room_id": room_id}),
         json!({
-            "truth_source": "cokret_signed_event_reducer",
+            "truth_source": "arkret_signed_event_reducer",
             "projection_only": true
         }),
     );

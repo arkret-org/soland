@@ -7,15 +7,15 @@ use soland::state::DeviceMessageRecord;
 
 use super::common::*;
 
-fn registration_secret_digest(value: &str) -> cokret_sdk::Hash {
-    cokret_sdk::Hash::new(cokret_sdk::canonical::sha256_digest(value.as_bytes())).unwrap()
+fn registration_secret_digest(value: &str) -> arkret_sdk::Hash {
+    arkret_sdk::Hash::new(arkret_sdk::canonical::sha256_digest(value.as_bytes())).unwrap()
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn external_bearer_without_dpop_is_rejected() {
     let state = AppState::new(test_config(), Db { pool: None });
 
-    let mut response = TestClient::get("http://server/_cokret/self/account/viewer")
+    let mut response = TestClient::get("http://server/_arkret/self/account/viewer")
         .add_header("authorization", "Bearer external-session-credential", true)
         .send(&app_from_state(state))
         .await;
@@ -34,7 +34,7 @@ async fn account_registration_policy_rejects_closed_and_audits() {
         policy.enabled = false;
     }
 
-    let mut response = TestClient::post("http://server/_cokret/gate/account/register")
+    let mut response = TestClient::post("http://server/_arkret/gate/account/register")
         .json(&serde_json::json!({
             "principal_id": "did:web:closed-register.example",
         }))
@@ -68,21 +68,21 @@ async fn account_registration_policy_evidence_and_rate_limit_are_enforced() {
     let state = AppState::new(test_config(), Db { pool: None });
     {
         let mut policy = state.account_registration_policy.lock();
-        *policy = cokret_sdk::AccountRegistrationPolicy {
-            verification_code: cokret_sdk::AccountRegistrationVerificationPolicy {
+        *policy = arkret_sdk::AccountRegistrationPolicy {
+            verification_code: arkret_sdk::AccountRegistrationVerificationPolicy {
                 required: true,
                 code_digest: Some(registration_secret_digest("246810")),
             },
             organization_allowlist: vec!["example.edu".to_owned()],
-            invitation: cokret_sdk::AccountRegistrationInvitationPolicy {
+            invitation: arkret_sdk::AccountRegistrationInvitationPolicy {
                 required: true,
                 token_digests: vec![registration_secret_digest("invite-token")],
             },
-            ..cokret_sdk::AccountRegistrationPolicy::default()
+            ..arkret_sdk::AccountRegistrationPolicy::default()
         };
     }
 
-    let mut missing_code = TestClient::post("http://server/_cokret/gate/account/register")
+    let mut missing_code = TestClient::post("http://server/_arkret/gate/account/register")
         .json(&serde_json::json!({
             "principal_id": "did:web:alice.example.edu",
         }))
@@ -96,7 +96,7 @@ async fn account_registration_policy_evidence_and_rate_limit_are_enforced() {
         "verification_code_required"
     );
 
-    let mut wrong_org = TestClient::post("http://server/_cokret/gate/account/register")
+    let mut wrong_org = TestClient::post("http://server/_arkret/gate/account/register")
         .json(&serde_json::json!({
             "principal_id": "did:web:bob.other.example",
             "policy_evidence": {
@@ -114,7 +114,7 @@ async fn account_registration_policy_evidence_and_rate_limit_are_enforced() {
         "organization_not_allowed"
     );
 
-    let mut missing_invite = TestClient::post("http://server/_cokret/gate/account/register")
+    let mut missing_invite = TestClient::post("http://server/_arkret/gate/account/register")
         .json(&serde_json::json!({
             "principal_id": "did:web:invite-missing.example.edu",
             "policy_evidence": {
@@ -131,7 +131,7 @@ async fn account_registration_policy_evidence_and_rate_limit_are_enforced() {
         "invitation_required"
     );
 
-    let accepted: Value = TestClient::post("http://server/_cokret/gate/account/register")
+    let accepted: Value = TestClient::post("http://server/_arkret/gate/account/register")
         .json(&serde_json::json!({
             "principal_id": "did:web:carol.example.edu",
             "display_name": "Carol",
@@ -153,7 +153,7 @@ async fn account_registration_policy_evidence_and_rate_limit_are_enforced() {
         "example.edu"
     );
 
-    let mut duplicate = TestClient::post("http://server/_cokret/gate/account/register")
+    let mut duplicate = TestClient::post("http://server/_arkret/gate/account/register")
         .json(&serde_json::json!({
             "principal_id": "did:web:carol.example.edu",
             "policy_evidence": {
@@ -174,12 +174,12 @@ async fn account_registration_policy_evidence_and_rate_limit_are_enforced() {
     let rate_limited_state = AppState::new(test_config(), Db { pool: None });
     {
         let mut policy = rate_limited_state.account_registration_policy.lock();
-        policy.rate_limit = Some(cokret_sdk::AccountRegistrationRateLimitPolicy {
+        policy.rate_limit = Some(arkret_sdk::AccountRegistrationRateLimitPolicy {
             max_attempts: 1,
             window_seconds: 60,
         });
     }
-    let _: Value = TestClient::post("http://server/_cokret/gate/account/register")
+    let _: Value = TestClient::post("http://server/_arkret/gate/account/register")
         .json(&serde_json::json!({
             "principal_id": "did:web:rate-register.example",
         }))
@@ -188,7 +188,7 @@ async fn account_registration_policy_evidence_and_rate_limit_are_enforced() {
         .take_json()
         .await
         .unwrap();
-    let mut limited = TestClient::post("http://server/_cokret/gate/account/register")
+    let mut limited = TestClient::post("http://server/_arkret/gate/account/register")
         .json(&serde_json::json!({
             "principal_id": "did:web:rate-register.example",
         }))
@@ -225,7 +225,7 @@ async fn oversized_json_body_is_rejected_before_handler() {
         "limit": 10,
     });
 
-    let response = TestClient::post("http://server/_cokret/find/directory/search-realms")
+    let response = TestClient::post("http://server/_arkret/find/directory/search-realms")
         .json(&body)
         .send(&service_with_request_size_limit(state, 64))
         .await;
@@ -242,7 +242,7 @@ async fn rate_limit_errors_use_standard_envelope_with_retry_after() {
             max_requests: 1,
             window: Duration::from_secs(60),
             // Mirror the strict default class ceilings on the `other` bucket
-            // (`/health` is not under /_cokret/*, so it falls into `other`).
+            // (`/health` is not under /_arkret/*, so it falls into `other`).
             auth_max_requests: 1,
             api_max_requests: 1,
             probe_max_requests: 1,
@@ -278,8 +278,8 @@ async fn rate_limit_errors_use_standard_envelope_with_retry_after() {
 }
 
 #[tokio::test]
-async fn framework_errors_use_cokret_error_envelope() {
-    let not_found: Value = TestClient::get("http://server/_cokret/self/missing")
+async fn framework_errors_use_arkret_error_envelope() {
+    let not_found: Value = TestClient::get("http://server/_arkret/self/missing")
         .send(&app())
         .await
         .take_json()
@@ -288,7 +288,7 @@ async fn framework_errors_use_cokret_error_envelope() {
     assert_eq!(not_found["ok"], false);
     assert_eq!(not_found["error"]["code"], "unrecognized_endpoint");
 
-    let method_not_allowed: Value = TestClient::post("http://server/_cokret/describe")
+    let method_not_allowed: Value = TestClient::post("http://server/_arkret/describe")
         .send(&app())
         .await
         .take_json()
@@ -303,7 +303,7 @@ async fn protected_endpoints_reject_query_auth_material() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
     let mut response = TestClient::get(format!(
-        "http://server/_cokret/self/account/viewer?access_token={token}"
+        "http://server/_arkret/self/account/viewer?access_token={token}"
     ))
     .send(&app_from_state(state))
     .await;
@@ -395,7 +395,7 @@ async fn hard_logout_removes_push_registration_and_to_device_queue_for_device() 
         .await
         .unwrap();
 
-    let mut response = TestClient::post("http://server/_cokret/gate/account/logout")
+    let mut response = TestClient::post("http://server/_arkret/gate/account/logout")
         .add_header("authorization", format!("Bearer {token_a}"), true)
         .send(&app_from_state(state.clone()))
         .await;

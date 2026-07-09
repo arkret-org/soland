@@ -14,16 +14,16 @@
 ///
 /// - [`RealmId`] is the SDK security-boundary id and validates `ck:realm:`.
 /// - [`SpaceContainerId`] is the SDK Space container id and validates `ck:space:`.
-pub use cokret_sdk::{RealmId, SpaceId as SpaceContainerId};
+pub use arkret_sdk::{RealmId, SpaceId as SpaceContainerId};
 use uuid::Uuid;
 
 /// Generate a new typed wire ID with the given kind prefix.
 ///
 /// Format: `ck:<kind>:<uuid-v7-36-char-lowercase-hex>`. Delegates to the SDK
-/// [`cokret_sdk::new_prefixed_uuid7`] so the canonical lowercase UUIDv7 wire
+/// [`arkret_sdk::new_prefixed_uuid7`] so the canonical lowercase UUIDv7 wire
 /// form is produced by the single shared primitive.
 pub fn generate(kind: &str) -> String {
-    cokret_sdk::new_prefixed_uuid7(&format!("ak:{kind}:"))
+    arkret_sdk::new_prefixed_uuid7(&format!("ak:{kind}:"))
 }
 
 pub fn generate_space_id() -> String {
@@ -47,7 +47,7 @@ pub fn generate_relation_id() -> String {
 }
 
 /// CKP-0007 (spec b7d35be) — generate a new `ck:circle:<uuid7>` identifier
-/// for the Circle primitive. Used by `POST /_cokret/self/circles` to mint the new
+/// for the Circle primitive. Used by `POST /_arkret/self/circles` to mint the new
 /// Circle's typed wire id before submitting `ck.circle.create`.
 pub fn generate_circle_id() -> String {
     generate("circle")

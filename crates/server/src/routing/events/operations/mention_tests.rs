@@ -53,16 +53,16 @@ mod audience_mention_tests {
 }
 
 mod reaction_and_window_policy_tests {
-    use cokret_sdk::Operation;
+    use arkret_sdk::Operation;
     use serde_json::json;
 
     use super::super::*;
 
     fn reaction_op(kind: &str, payload: serde_json::Value) -> Operation {
         Operation::create(
-            cokret_sdk::OperationId::new("ak:operation:01904100-0000-7000-8000-57d7d85564c5")
+            arkret_sdk::OperationId::new("ak:operation:01904100-0000-7000-8000-57d7d85564c5")
                 .unwrap(),
-            cokret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-668e2181b41d").unwrap(),
+            arkret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-668e2181b41d").unwrap(),
             kind,
             payload,
         )
@@ -71,7 +71,7 @@ mod reaction_and_window_policy_tests {
     #[test]
     fn reaction_on_message_target_is_accepted() {
         let op = reaction_op(
-            cokret_sdk::events::kinds::REACTION_ADD,
+            arkret_sdk::events::kinds::REACTION_ADD,
             json!({
                 "target_ref": "ak:message:01904100-0000-7000-8000-000000000001",
                 "actor": "did:web:alice",
@@ -79,18 +79,18 @@ mod reaction_and_window_policy_tests {
             }),
         );
         assert!(
-            validate_reaction_target_kind(cokret_sdk::events::kinds::REACTION_ADD, &op).is_ok()
+            validate_reaction_target_kind(arkret_sdk::events::kinds::REACTION_ADD, &op).is_ok()
         );
     }
 
     #[test]
     fn reaction_on_event_storage_id_is_accepted() {
         let op = reaction_op(
-            cokret_sdk::events::kinds::REACTION_ADD,
+            arkret_sdk::events::kinds::REACTION_ADD,
             json!({ "target_ref": "ak:event:01904100-0000-7000-8000-000000000001" }),
         );
         assert!(
-            validate_reaction_target_kind(cokret_sdk::events::kinds::REACTION_ADD, &op).is_ok()
+            validate_reaction_target_kind(arkret_sdk::events::kinds::REACTION_ADD, &op).is_ok()
         );
     }
 
@@ -102,12 +102,12 @@ mod reaction_and_window_policy_tests {
             "ak:circle:01904100-0000-7000-8000-000000000001",
         ] {
             let op = reaction_op(
-                cokret_sdk::events::kinds::REACTION_ADD,
+                arkret_sdk::events::kinds::REACTION_ADD,
                 json!({ "target_ref": target }),
             );
             assert_eq!(
-                validate_reaction_target_kind(cokret_sdk::events::kinds::REACTION_ADD, &op),
-                Err(cokret_sdk::error::REASON_REACTION_TARGET_UNSUPPORTED),
+                validate_reaction_target_kind(arkret_sdk::events::kinds::REACTION_ADD, &op),
+                Err(arkret_sdk::error::REASON_REACTION_TARGET_UNSUPPORTED),
                 "target {target} must be rejected",
             );
         }
@@ -116,11 +116,11 @@ mod reaction_and_window_policy_tests {
     #[test]
     fn non_reaction_kinds_skip_target_check() {
         let op = reaction_op(
-            cokret_sdk::events::kinds::MESSAGE_CREATE,
+            arkret_sdk::events::kinds::MESSAGE_CREATE,
             json!({ "target_ref": "ak:strand:01904100-0000-7000-8000-000000000001" }),
         );
         assert!(
-            validate_reaction_target_kind(cokret_sdk::events::kinds::MESSAGE_CREATE, &op).is_ok()
+            validate_reaction_target_kind(arkret_sdk::events::kinds::MESSAGE_CREATE, &op).is_ok()
         );
     }
 
@@ -134,8 +134,8 @@ mod reaction_and_window_policy_tests {
         assert!(!realm_ids_match("ak:realm:abc", "ak:realm:def"));
     }
 
-    fn dur(value: u64, unit: &str) -> cokret_sdk::authz::ConstraintDuration {
-        cokret_sdk::authz::ConstraintDuration {
+    fn dur(value: u64, unit: &str) -> arkret_sdk::authz::ConstraintDuration {
+        arkret_sdk::authz::ConstraintDuration {
             value,
             unit: unit.to_owned(),
         }
@@ -218,7 +218,7 @@ mod reaction_and_window_policy_tests {
             "failed_precondition"
         );
         assert_eq!(
-            operation_policy_reason_code(cokret_sdk::error::REASON_REACTION_SCOPE_MISMATCH).1,
+            operation_policy_reason_code(arkret_sdk::error::REASON_REACTION_SCOPE_MISMATCH).1,
             "failed_precondition"
         );
         assert_eq!(

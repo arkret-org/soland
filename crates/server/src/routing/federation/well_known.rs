@@ -14,8 +14,8 @@ use crate::state::AppState;
 /// existing `/.well-known/arkret/openapi.json` entry; salvo routes the
 /// exact-match path here and falls through to the openapi router for
 /// the `/openapi.{json,yaml}` siblings.
-pub fn well_known_cokret_router() -> Router {
-    Router::with_path(".well-known/arkret").get(well_known_cokret)
+pub fn well_known_arkret_router() -> Router {
+    Router::with_path(".well-known/arkret").get(well_known_arkret)
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
@@ -43,7 +43,7 @@ struct WellKnownCokretOutcome {
     summary = "Server description for federation discovery"
 )]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.well_known.arkret"))]
-async fn well_known_cokret(depot: &mut Depot) -> JsonResult<WellKnownCokretOutcome> {
+async fn well_known_arkret(depot: &mut Depot) -> JsonResult<WellKnownCokretOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     // Spec: B.3 — server description endpoint. Returns the small set
     // of identifiers a peer needs before opening an authenticated
@@ -61,9 +61,9 @@ async fn well_known_cokret(depot: &mut Depot) -> JsonResult<WellKnownCokretOutco
         fanout_topology: fanout_topology.to_owned(),
         endpoints: WellKnownCokretEndpoints {
             openapi: format!("{}/.well-known/arkret/openapi.json", public_base_url),
-            peer_events: format!("{}/_cokret/peer/events", public_base_url),
-            peer_events_frontier: format!("{}/_cokret/peer/events/frontier", public_base_url),
-            peer_snapshot_head: format!("{}/_cokret/peer/snapshot/head", public_base_url),
+            peer_events: format!("{}/_arkret/peer/events", public_base_url),
+            peer_events_frontier: format!("{}/_arkret/peer/events/frontier", public_base_url),
+            peer_snapshot_head: format!("{}/_arkret/peer/snapshot/head", public_base_url),
         },
         version: env!("CARGO_PKG_VERSION").to_owned(),
     })

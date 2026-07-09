@@ -1,12 +1,12 @@
 use chrono::{DateTime, Utc};
-pub use cokret_sdk::ops_api::HardeningStatus;
-use cokret_sdk::{
+pub use arkret_sdk::ops_api::HardeningStatus;
+use arkret_sdk::{
     AccountAuthority, AuthGrantExchange, AuthMetadata, AuthMethod, AuthMethodKind,
     ClaimedProfileEntry, MAX_AUTHORIZED_BY_REFS, MAX_DELEGATION_CHAIN_DEPTH,
     MAX_EVENT_ENVELOPE_BYTES, MAX_EVENT_PREV_REFS, MAX_EVENT_REFS, MAX_EVENT_SUBMIT_BATCH,
     ServerDescription, SessionGrantProofKind,
 };
-pub use cokret_sdk::{
+pub use arkret_sdk::{
     AuthorizedDeviceSigningKey, ContactListRow, ContactState, DeviceMessageEnvelope,
     DeviceMessageTarget, DeviceMessagesAckOutcome, DeviceMessagesAckRequestBody,
     DeviceMessagesGetOutcome, DeviceMessagesSendOutcome, DeviceMessagesSendRequestBody,
@@ -33,7 +33,7 @@ pub struct HealthOutcome {
     /// True when soland is running with `SOLAND_DEVELOPMENT_MODE=true`.
     /// Surfaced here so operators / dashboards (e.g. sodmin) can flag the
     /// deployment with a "DEVELOPMENT MODE — do not use in production"
-    /// banner without having to scrape `/_cokret/describe`.
+    /// banner without having to scrape `/_arkret/describe`.
     pub development_mode: bool,
     /// String mirror of [`Self::development_mode`]: `"development"` when
     /// `development_mode == true`, `"production"` otherwise. The proof
@@ -170,7 +170,7 @@ pub struct OutboundPushBridgeExamples {
 // Shared `/_floria/integration/describe` manifest shape: re-exported from
 // the SDK contracts crate (the authoritative definition shared by floria,
 // soland, and coauth) instead of a local copy.
-pub use cokret_sdk::integration_api::{
+pub use arkret_sdk::integration_api::{
     IntegrationDependencyDescriptor, IntegrationDescribeOutcome, IntegrationSurfaceDescriptor,
 };
 
@@ -347,8 +347,8 @@ pub struct OutboundPushBridgeCacheInvalidateOutcome {
 // no private copies that could drift. NOTE: the explicit `model::` path
 // matters — the SDK root re-exports a different, client-side typed
 // `sync::SyncRequestBody` under the same name.
-pub use cokret_sdk::SyncRequestBody;
-pub use cokret_sdk::models::SyncDescription;
+pub use arkret_sdk::SyncRequestBody;
+pub use arkret_sdk::models::SyncDescription;
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct IndexDescribeOutcome {
@@ -421,7 +421,7 @@ pub struct IndexSpaceHierarchyOutcome {
 // (allow / soft_deny / hard_deny / quarantine / require_review) and
 // `AuthzCheckRequestBody` to `{ actor_id, action, resource?, context? }`,
 // so soland re-uses them directly instead of carrying local copies.
-pub use cokret_sdk::models::{
+pub use arkret_sdk::models::{
     AuthzCheckOutcome, AuthzCheckRequestBody, PushRegisterDeviceRequestBody,
     PushUnregisterDeviceRequestBody,
 };
@@ -457,7 +457,7 @@ pub struct UpsertPushRuleRequestBody {
 // `service-operation-dtos.schema.json#/$defs/ModerationReportOutcome`:
 // `status` enum `submitted|resolved`, `routed_to` is an array of bare DIDs);
 // no soland mirrors.
-pub use cokret_sdk::models::{ModerationReportOutcome, ModerationReportRequestBody};
+pub use arkret_sdk::models::{ModerationReportOutcome, ModerationReportRequestBody};
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 pub struct UpsertPolicyDocumentRequestBody {
@@ -532,7 +532,7 @@ pub struct SendMessageRequestBody {
 // Identity log / receipts outcomes are the SDK DTOs (`model/api.rs` is the
 // authoritative carrier for identity operation shapes); no soland mirrors.
 // CKP-0008 / CKP-0009 — Personal Agent operations. Every request/response
-// DTO is the SDK-authoritative `cokret_sdk::models::Agent*` shape (spec
+// DTO is the SDK-authoritative `arkret_sdk::models::Agent*` shape (spec
 // `agent-operations.schema.json`): `agent_view`/`agent_list` carry the spec
 // `agent_projection`; `agent_key_pair`/`rotate_key` outcomes are
 // `{ok, authorized_event_ref}`; grant attach/detach outcomes are
@@ -549,7 +549,7 @@ pub struct SendMessageRequestBody {
 // `capability_refs`/`desired_media` inputs; `CallMediaTokenExchangeOutcome`
 // / `CallMediaParticipantBinding` derive ToSchema under the `salvo` feature),
 // so soland no longer mints private mirrors that can drift from the spec DTOs.
-pub use cokret_sdk::models::{
+pub use arkret_sdk::models::{
     AgentDeactivateRequestBody, AgentGrantAttachOutcome, AgentGrantAttachRequestBody,
     AgentGrantDetachOutcome, AgentKeyPairOutcome, AgentKeyPairRequestBody, AgentList,
     AgentPauseRequestBody, AgentResumeRequestBody, AgentRotateKeyOutcome,
@@ -557,13 +557,13 @@ pub use cokret_sdk::models::{
     AgentSidecarThreadEnsureRequestBody, AgentView, CallMediaTokenExchangeRequestBody,
 };
 // Key-backup replace/delete outcomes are the SDK server-side DTOs
-// (`cokret_sdk::models` is the authoritative carrier for
+// (`arkret_sdk::models` is the authoritative carrier for
 // `keys-operations.schema.json#/$defs/keys_backups_replace_outcome` /
 // `keys_backups_delete_outcome`); no soland mirrors.
-pub use cokret_sdk::models::{
+pub use arkret_sdk::models::{
     KeyBackupPutStatus, KeysBackupsDeleteOutcome, KeysBackupsList, KeysBackupsReplaceOutcome,
 };
-pub use cokret_sdk::{
+pub use arkret_sdk::{
     CallMediaParticipantBinding, CallMediaServiceSignature, CallMediaTokenExchangeOutcome,
     IdentityLogListOutcome, IdentityReceiptListOutcome, KeysBackupsPutRequestBody,
 };
@@ -572,7 +572,7 @@ pub use cokret_sdk::{
 // `routing::identity::recovery`: policy publish uses the SDK request body,
 // while receipt write keeps a signed JSON wrapper so the raw signed fields can
 // be verified before being projected into typed outcomes. The SDK carries the
-// authoritative typed forms (`cokret_sdk::models::{RecoveryPolicy,
+// authoritative typed forms (`arkret_sdk::models::{RecoveryPolicy,
 // RecoveryReceipt}`) for clients; no soland-private mirror exists.
 
 const SUPPORTED_OPERATION_SURFACES: &[&str] = &[
@@ -659,7 +659,7 @@ fn profile_limitations() -> Vec<Value> {
             "area": "authz.capability_engine_depth",
             "status": "partial",
             "standard_self_surface": "implemented",
-            "reason": "standard /_cokret/self/authz/check, effective-grants, and invites are advertised and SDK-backed; deeper selector, constraint, delegation, and policy lifecycle semantics are tracked by dedicated AUTHZ audit items"
+            "reason": "standard /_arkret/self/authz/check, effective-grants, and invites are advertised and SDK-backed; deeper selector, constraint, delegation, and policy lifecycle semantics are tracked by dedicated AUTHZ audit items"
         }),
         json!({
             "area": "policies.describe",
@@ -725,19 +725,19 @@ fn profile_limitations() -> Vec<Value> {
             "area": "account_auth.device_pair",
             "status": "standard_gate_supported",
             "spec_operation": "ck.gate.account.command.pair_device",
-            "canonical_path": "/_cokret/gate/account/device-pair",
+            "canonical_path": "/_arkret/gate/account/device-pair",
             "reason": "ck.gate.account.command.pair_device is served on the spec path for existing-device-authorized sibling registration. The old soland-local device pairing scaffold and approval family are removed; v1 core does not define a self/devices pairing-requests approval surface (service-http-binding.md §85, key-management.md §384, device-lifecycle.md §499). ck.gate.account.exchange.complete_oidc is delegated to the bridges deployment and not served here."
         }),
         json!({
             "area": "federation.private_inbound_rail",
             "status": "deployment_local_only",
-            "canonical_inbound": "/_cokret/peer/events",
+            "canonical_inbound": "/_arkret/peer/events",
             "private_paths": [
                 "/_soland/peer/federation/*",
                 "/_soland/peer/moves",
                 "/_soland/peer/seals"
             ],
-            "reason": "SPEC-CR-008 / federation.md §4.0 — the converged cross-deployment federation Event receive rail is the single protocol track POST /_cokret/peer/events (ck.peer.events.command.submit), which carries DataEvents and Control Moves (incl. Move/Anchor/Seal-bearing control events) as sealed Event Envelopes and is RFC 9421 service-signature gated. The /_soland/peer/* inbound *write* surface (transactions, operations push/backfill, moves/seals direct ingest) is fail-closed outside development_mode and is a deployment-local test/ops affordance only: it is not discoverable through describe/OpenAPI for remote peers and MUST NOT be relied on for cross-vendor interop. The read-only debug tracks (operations pull/frontier, realm-members, actor-events, seals pull) expose no interop write surface"
+            "reason": "SPEC-CR-008 / federation.md §4.0 — the converged cross-deployment federation Event receive rail is the single protocol track POST /_arkret/peer/events (ck.peer.events.command.submit), which carries DataEvents and Control Moves (incl. Move/Anchor/Seal-bearing control events) as sealed Event Envelopes and is RFC 9421 service-signature gated. The /_soland/peer/* inbound *write* surface (transactions, operations push/backfill, moves/seals direct ingest) is fail-closed outside development_mode and is a deployment-local test/ops affordance only: it is not discoverable through describe/OpenAPI for remote peers and MUST NOT be relied on for cross-vendor interop. The read-only debug tracks (operations pull/frontier, realm-members, actor-events, seals pull) expose no interop write surface"
         }),
         json!({
             "area": "consent.scope_any_cross_service_cascade",
@@ -804,7 +804,7 @@ pub fn describe(
     to_device_queue_capacity: usize,
 ) -> ServerDescription {
     // Account Authority discovery (service-surface §2.5.1): the client-visible
-    // owner of the auth-side `/_cokret/gate/account/*` ops the client posts to
+    // owner of the auth-side `/_arkret/gate/account/*` ops the client posts to
     // (session-grant issuance + hard logout). Those are served by the Auth
     // Server (coauth), which DPoP-binds holder proofs to its OWN origin. When
     // an external Account Authority is configured, clients post gate/account
@@ -815,7 +815,7 @@ pub fn describe(
         .unwrap_or(public_base_url)
         .trim_end_matches('/')
         .to_owned();
-    let gate_account_base = format!("{account_origin}/_cokret/gate/account");
+    let gate_account_base = format!("{account_origin}/_arkret/gate/account");
 
     // Authentication methods are pure provider discovery; they do not decide
     // gate/account routing. Advertise OIDC when an Auth Server is configured;
@@ -902,17 +902,17 @@ pub fn describe(
         "index.query.local_projection".to_owned(),
     ];
     let compat_surfaces = Vec::new();
-    let plaintext_visibility = cokret_sdk::PlaintextVisibility {
+    let plaintext_visibility = arkret_sdk::PlaintextVisibility {
         data_classes: vec![
-            cokret_sdk::PlaintextDataClassKind::MessageContent,
-            cokret_sdk::PlaintextDataClassKind::AttachmentPlaintext,
-            cokret_sdk::PlaintextDataClassKind::AttachmentPreview,
-            cokret_sdk::PlaintextDataClassKind::Thumbnail,
-            cokret_sdk::PlaintextDataClassKind::FullTextIndex,
-            cokret_sdk::PlaintextDataClassKind::NotificationSummary,
-            cokret_sdk::PlaintextDataClassKind::MediaPlaintext,
+            arkret_sdk::PlaintextDataClassKind::MessageContent,
+            arkret_sdk::PlaintextDataClassKind::AttachmentPlaintext,
+            arkret_sdk::PlaintextDataClassKind::AttachmentPreview,
+            arkret_sdk::PlaintextDataClassKind::Thumbnail,
+            arkret_sdk::PlaintextDataClassKind::FullTextIndex,
+            arkret_sdk::PlaintextDataClassKind::NotificationSummary,
+            arkret_sdk::PlaintextDataClassKind::MediaPlaintext,
         ],
-        max_visibility: Some(cokret_sdk::PlaintextMaxVisibility::PrivatePlaintext),
+        max_visibility: Some(arkret_sdk::PlaintextMaxVisibility::PrivatePlaintext),
         event_kinds: vec![
             "ck.message.create".to_owned(),
             "ck.realm.policy_components".to_owned(),
@@ -949,7 +949,7 @@ pub fn describe(
             .parse()
             .expect("trust_domain must be ck:trust_domain:<scope>"),
         service_type: "principal_server".to_owned(),
-        protocol_version: cokret_sdk::PROTOCOL_VERSION.to_owned(),
+        protocol_version: arkret_sdk::PROTOCOL_VERSION.to_owned(),
         supported_profiles: {
             let mut profiles = vec![
                 "ck.profile.core_event_store.v1".to_owned(),
@@ -992,7 +992,7 @@ pub fn describe(
             crate::ratelimit::RateLimiterConfig::from_env(development_mode).advertised_policy(),
         ),
         rate_limit_policy_id: None,
-        egress_network_policy: Some(cokret_sdk::EgressNetworkPolicy::deny_private_defaults()),
+        egress_network_policy: Some(arkret_sdk::EgressNetworkPolicy::deny_private_defaults()),
         resource_types: Vec::new(),
         discovery_profiles: Vec::new(),
         restricted_query_proof: None,
@@ -1076,16 +1076,16 @@ pub fn describe(
         // Emit the same public base URL used by the HTTP describe handler so
         // clients can build `base_url + operation_path` directly.
         supported_bindings: vec![
-            cokret_sdk::SupportedBinding::new("http_json")
+            arkret_sdk::SupportedBinding::new("http_json")
                 .with_base_url(public_base_url.trim_end_matches('/')),
             // Per-operation HTTP companion binding (transport-bindings.md
             // §6.1): tus 1.0.0 resumable upload for ck.self.blob.upload.
             // Versions/extensions mirror the OPTIONS probe answers of
             // routing::interop::blob_resumable — describe and wire MUST
             // agree.
-            cokret_sdk::SupportedBinding::new("tus")
+            arkret_sdk::SupportedBinding::new("tus")
                 .with_base_url(format!(
-                    "{}/_cokret/self/blob/resumable",
+                    "{}/_arkret/self/blob/resumable",
                     public_base_url.trim_end_matches('/')
                 ))
                 .with_extra(
@@ -1147,7 +1147,7 @@ pub fn describe(
                 "authz_check": {
                     "operation_id": "ck.self.authz.query.check",
                     "method": "POST",
-                    "path": "/_cokret/self/authz/check",
+                    "path": "/_arkret/self/authz/check",
                     "request_shape": "AuthzCheckRequestBody",
                     "response_shape": "AuthzCheckOutcome",
                     "operation_specific_error_codes": ["policy_unavailable"],
@@ -1167,13 +1167,13 @@ pub fn describe(
                         "usable_as_policy_obligation_proof": false,
                         "cross_service_signed_authorization_fact": false,
                         "dynamic_or_auditable_decision_operation": "ck.self.policy.query.check",
-                        "dynamic_or_auditable_decision_path": "/_cokret/self/policy/check"
+                        "dynamic_or_auditable_decision_path": "/_arkret/self/policy/check"
                     }
                 },
                 "effective_grants": {
                     "operation_id": "ck.self.authz.grants.query.effective",
                     "method": "GET",
-                    "path": "/_cokret/self/authz/effective-grants",
+                    "path": "/_arkret/self/authz/effective-grants",
                     "query": ["realm_id", "subject", "at"],
                     "response_shape": "GrantList",
                     "subject_scope": "authenticated_actor_or_realm_owner_for_realm_scoped_queries",
@@ -1182,7 +1182,7 @@ pub fn describe(
                 "invites": {
                     "operation_id": "ck.self.authz.invites.query.list",
                     "method": "GET",
-                    "path": "/_cokret/self/authz/invites",
+                    "path": "/_arkret/self/authz/invites",
                     "query": ["realm_id", "subject", "cursor"],
                     "response_schema_ref": "schemas/authz-operations.schema.json#/$defs/authz_invite_list",
                     "subject_scope": "authenticated_actor_or_inviter_or_realm_owner",
@@ -1191,7 +1191,7 @@ pub fn describe(
                 "policy_check": {
                     "operation_id": "ck.self.policy.query.check",
                     "method": "POST",
-                    "path": "/_cokret/self/policy/check",
+                    "path": "/_arkret/self/policy/check",
                     "operation_specific_error_codes": ["policy_unavailable", "policy_stale"],
                     "decision_source": "policy_server_signed_decision",
                     "signed_decision": true,
@@ -1320,7 +1320,7 @@ pub fn describe(
                         "identifiers": "draft-kohbrok-mimi-identifiers-01"
                     },
                     "not_replaced": [
-                        "cokret_signed_event_reducer",
+                        "arkret_signed_event_reducer",
                         "realm_id",
                         "did",
                         "hlc",
@@ -1369,10 +1369,10 @@ pub struct RedactMessageOutcome {
     pub event_id: String,
 }
 
-pub type SetReadMarkerRequestBody = cokret_sdk::ReadCursorAdvanceRequestBody;
-pub type ReadScopeWire = cokret_sdk::ReadScope;
-pub type ReadCursorPositionWire = cokret_sdk::ReadCursorPosition;
-pub type ReadMarkerOutcome = cokret_sdk::ReadMarkerOutcome;
+pub type SetReadMarkerRequestBody = arkret_sdk::ReadCursorAdvanceRequestBody;
+pub type ReadScopeWire = arkret_sdk::ReadScope;
+pub type ReadCursorPositionWire = arkret_sdk::ReadCursorPosition;
+pub type ReadMarkerOutcome = arkret_sdk::ReadMarkerOutcome;
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 pub struct GetReadMarkersRequestBody {
@@ -1440,7 +1440,7 @@ mod tests {
         );
         assert_eq!(
             value["supported_bindings"][1]["base_url"],
-            json!("https://soland.example/_cokret/self/blob/resumable")
+            json!("https://soland.example/_arkret/self/blob/resumable")
         );
         assert_eq!(
             value["supported_bindings"][1]["operations"],
@@ -1517,19 +1517,19 @@ mod tests {
         );
         assert_eq!(
             value["limits"]["scalability_constraints"]["max_event_bytes"],
-            json!(cokret_sdk::MAX_EVENT_ENVELOPE_BYTES)
+            json!(arkret_sdk::MAX_EVENT_ENVELOPE_BYTES)
         );
         assert_eq!(
             value["limits"]["scalability_constraints"]["max_events_batch_submit"],
-            json!(cokret_sdk::MAX_EVENT_SUBMIT_BATCH)
+            json!(arkret_sdk::MAX_EVENT_SUBMIT_BATCH)
         );
         assert_eq!(
             value["limits"]["scalability_constraints"]["max_prev_refs"],
-            json!(cokret_sdk::MAX_EVENT_PREV_REFS)
+            json!(arkret_sdk::MAX_EVENT_PREV_REFS)
         );
         assert_eq!(
             value["limits"]["scalability_constraints"]["max_refs"],
-            json!(cokret_sdk::MAX_EVENT_REFS)
+            json!(arkret_sdk::MAX_EVENT_REFS)
         );
         assert_eq!(
             value["limits"]["search"]["directory"]["returns_message_hits"],
@@ -1566,7 +1566,7 @@ mod tests {
         );
         assert_eq!(
             value["limits"]["authz_policy"]["authz_check"]["path"],
-            json!("/_cokret/self/authz/check")
+            json!("/_arkret/self/authz/check")
         );
         assert_eq!(
             value["limits"]["authz_policy"]["authz_check"]["operation_specific_error_codes"],
@@ -1582,11 +1582,11 @@ mod tests {
         );
         assert_eq!(
             value["limits"]["authz_policy"]["authz_check"]["policy_boundary"]["dynamic_or_auditable_decision_path"],
-            json!("/_cokret/self/policy/check")
+            json!("/_arkret/self/policy/check")
         );
         assert_eq!(
             value["limits"]["authz_policy"]["effective_grants"]["path"],
-            json!("/_cokret/self/authz/effective-grants")
+            json!("/_arkret/self/authz/effective-grants")
         );
         assert_eq!(
             value["limits"]["authz_policy"]["effective_grants"]["subject_scope"],
@@ -1594,7 +1594,7 @@ mod tests {
         );
         assert_eq!(
             value["limits"]["authz_policy"]["invites"]["path"],
-            json!("/_cokret/self/authz/invites")
+            json!("/_arkret/self/authz/invites")
         );
         assert_eq!(
             value["limits"]["authz_policy"]["invites"]["response_schema_ref"],

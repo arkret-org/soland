@@ -1,5 +1,5 @@
 //! Per-scope admin gating via SDK
-//! [`cokret_sdk::SessionGrantIntrospection`].
+//! [`arkret_sdk::SessionGrantIntrospection`].
 //!
 //! The SDK provides a typed view of an OAuth-style introspection
 //! response carrying `(principal_id, admin_scopes, expires_at,
@@ -21,7 +21,7 @@ use std::collections::HashMap;
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
-use cokret_sdk::{
+use arkret_sdk::{
     SessionGrantIntrospectOutcome, SessionGrantIntrospectRequestBody, SessionGrantIntrospectStatus,
     SessionGrantIntrospection,
 };
@@ -111,7 +111,7 @@ fn admin_grant_from_introspection_outcome(
         )
         .with_status(StatusCode::FORBIDDEN)
     })?;
-    let principal_id = cokret_sdk::Did::new(grant.subject.clone()).map_err(|error| {
+    let principal_id = arkret_sdk::Did::new(grant.subject.clone()).map_err(|error| {
         AppError::new(
             ErrorCode::CapabilityDenied,
             format!("admin scope introspection returned invalid subject DID: {error}"),
@@ -149,7 +149,7 @@ fn bearer_token_from_request(req: &Request) -> Option<String> {
 /// is configured. Grants every well-known admin scope to any DID listed
 /// in `admin_principal_dids` (or any DID in development_mode).
 fn synthetic_dev_grant(state: &AppState, session: &SessionRecord) -> SessionGrantIntrospection {
-    use cokret_sdk::admin_scopes::*;
+    use arkret_sdk::admin_scopes::*;
     let scopes = vec![
         NOTARY_RECONFIGURE.to_owned(),
         NOTARY_ROTATE_SIGNING_KEY.to_owned(),
@@ -158,12 +158,12 @@ fn synthetic_dev_grant(state: &AppState, session: &SessionRecord) -> SessionGran
         BOTTOM_REPAIR.to_owned(),
         ADMIN_READ.to_owned(),
     ];
-    let principal_id = cokret_sdk::Did::new(session.actor.clone()).unwrap_or_else(|_| {
+    let principal_id = arkret_sdk::Did::new(session.actor.clone()).unwrap_or_else(|_| {
         // Fallback: synthesize a stable did:key when the actor isn't
         // a valid DID. This only kicks in for dev-login tokens whose
         // actor field is a handle, not a DID — production sessions
         // always carry a DID.
-        cokret_sdk::Did::new(format!("did:web:{}", state.config.service_did))
+        arkret_sdk::Did::new(format!("did:web:{}", state.config.service_did))
             .expect("service_did is a valid DID")
     });
     SessionGrantIntrospection {

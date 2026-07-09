@@ -48,7 +48,7 @@ pub(crate) async fn emit_server_event(
 **目标**:`participation.set` 中 `reply`/`act_on_behalf` effective 为真 → 发射 `ck.capability.grant`(agent 为 subject,scope 为 resource);为假 → `ck.capability.revoke`。读侧(authz `grants_for_realm` 读 grant cell)已存在,只补写侧。
 
 ### 事件与 reducer
-- 事件 kind 直接使用 SDK 常量:`cokret_sdk::events::kinds::{CAPABILITY_GRANT, CAPABILITY_REVOKE}`;soland 不再新增或 re-export 旧别名。
+- 事件 kind 直接使用 SDK 常量:`arkret_sdk::events::kinds::{CAPABILITY_GRANT, CAPABILITY_REVOKE}`;soland 不再新增或 re-export 旧别名。
 - `reducer.rs`:`APPLY_REGISTRY` 注册 `apply_capability_grant_dispatch` / `apply_capability_revoke_dispatch`,镜像 `apply_capability_derived` 的 cell 写法。
 
 ```rust
@@ -69,10 +69,10 @@ fn apply_capability_revoke(&mut self, op: &Operation) -> ProjectionEffect {
 ### participation.set 编排(替换当前 TODO)
 `routing/identity/agents.rs::set_agent_participation` 在落库后:
 1. 由 effective(已算)推导目标 grant:
-   - `reply=true` → actions `["ck.message.create","ck.reaction.add"]`,resource selector = scope(realm/circle/strand,复用 `cokret_sdk::authz::ResourceSelector`)。
+   - `reply=true` → actions `["ck.message.create","ck.reaction.add"]`,resource selector = scope(realm/circle/strand,复用 `arkret_sdk::authz::ResourceSelector`)。
    - `act_on_behalf=true` → 追加 CKP-0008 §4.10 act-on-behalf grant(constraints:`approval_required`/`controller_approval_required`)。
 2. capability_id 确定性派生:`ck:capability:` + `hash(agent_principal_id, scope_key, "reply"|"aob")` → 同 scope 同 bit 复用一条 grant,幂等。
-3. effective bit=true 且 grant 不存在/已 revoked → `emit_server_event(.., cokret_sdk::events::kinds::CAPABILITY_GRANT, payload)`;bit=false 且 grant active → `emit_server_event(.., cokret_sdk::events::kinds::CAPABILITY_REVOKE, {capability_id})`。
+3. effective bit=true 且 grant 不存在/已 revoked → `emit_server_event(.., arkret_sdk::events::kinds::CAPABILITY_GRANT, payload)`;bit=false 且 grant active → `emit_server_event(.., arkret_sdk::events::kinds::CAPABILITY_REVOKE, {capability_id})`。
 4. 与 `put_selection` 同一 handler 内顺序执行;任一步失败返回 `AppError::internal`,不留半物化(grant 发射放在 selection 落库之后,失败时记录 audit 供重试)。
 
 `grant.attach`/`grant.detach`/`agent.deactivate` 的同类 TODO 用同一 `emit_server_event` 收敛。
@@ -90,7 +90,7 @@ fn apply_capability_revoke(&mut self, op: &Operation) -> ProjectionEffect {
 ### Realm ceiling(`ck.realm.policy_components` 的 `agent_participation` 组件)
 扩展 `apply_realm_policy_components`(reducer.rs):
 - payload 含 `agent_participation.native_agent.{reply,accept_third_party_mention,act_on_behalf}` 时:
-  - tighten-only 校验:与 deployment 默认 ceiling 比较(`AgentParticipation::ALL` 为 dev 默认;部署可经 sovereign profile 收紧),用 `cokret_sdk::models::validate_agent_participation_tightens(parent, child)`;违反 → `ProjectionEffect::Rejected { reason: "agent_participation_ceiling_widen" }`(已注册 error code)。
+  - tighten-only 校验:与 deployment 默认 ceiling 比较(`AgentParticipation::ALL` 为 dev 默认;部署可经 sovereign profile 收紧),用 `arkret_sdk::models::validate_agent_participation_tightens(parent, child)`;违反 → `ProjectionEffect::Rejected { reason: "agent_participation_ceiling_widen" }`(已注册 error code)。
   - 写 cell `ck:cell:ck.component.realm.policy_components.v1:<realm_id>`(已存在,合并字段)。
   - **投影到 ceiling 表**:`ProjectionEffect` 触发把 `{scope_kind:"realm", scope_key:"realm:<uuid>", realm_id, bits}` UPSERT 进 `agent_participation_ceiling`(经 S2 的 ceiling store 写方法,见下)。
 
@@ -154,7 +154,7 @@ pub(crate) async fn dispatch_message_notifications(
 `routing/events/projection.rs` 处理 `ProjectionEffect::MessageCreated`(及 revise 的新增 mention)处,`spawn` 调 `dispatch_message_notifications`(或推入轻量队列 worker)。同一处也覆盖 `ck.message.revise` 仅对"新增 mention"派生(spec §9.4)。
 
 ### 读取 API
-`GET /_cokret/self/notifications`(新 operation,后续补)读 `NotificationStore` 返回 recipient 的 inbox;agent runtime 经此 + `ck.self.events.stream.subscribe` 投影获得被允许的 mention。
+`GET /_arkret/self/notifications`(新 operation,后续补)读 `NotificationStore` 返回 recipient 的 inbox;agent runtime 经此 + `ck.self.events.stream.subscribe` 投影获得被允许的 mention。
 
 ### 验收
 - alice @bob(普通)→ bob 收到 notification + push。

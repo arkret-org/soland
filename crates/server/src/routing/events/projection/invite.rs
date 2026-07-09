@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use cokret_sdk::lattice::CellState;
-use cokret_sdk::{
+use arkret_sdk::lattice::CellState;
+use arkret_sdk::{
     CellRef, Did, Operation, PlaintextDataClassKind, PlaintextVisibleServicesPayload, RealmId,
 };
 use serde_json::Value;
@@ -183,7 +183,7 @@ pub(super) async fn project_invite_cancel_operation(
     origin: &str,
     operation: &Operation,
 ) {
-    if kinds::canonical_kind_string(operation) != cokret_sdk::events::kinds::INVITE_CANCEL {
+    if kinds::canonical_kind_string(operation) != arkret_sdk::events::kinds::INVITE_CANCEL {
         return;
     }
     project_invite_terminal_operation(state, origin, operation, InviteTerminalEvent::Cancel).await;
@@ -194,7 +194,7 @@ pub(super) async fn project_invite_revoke_operation(
     origin: &str,
     operation: &Operation,
 ) {
-    if kinds::canonical_kind_string(operation) != cokret_sdk::events::kinds::INVITE_REVOKE {
+    if kinds::canonical_kind_string(operation) != arkret_sdk::events::kinds::INVITE_REVOKE {
         return;
     }
     project_invite_terminal_operation(state, origin, operation, InviteTerminalEvent::Revoke).await;
@@ -300,7 +300,7 @@ pub(super) async fn project_invite_third_party_operation(state: &AppState, opera
         );
         return;
     };
-    if cokret_sdk::InviteId::new(invite_id.clone()).is_err() {
+    if arkret_sdk::InviteId::new(invite_id.clone()).is_err() {
         tracing::warn!(invite_id = %invite_id, "ck.invite.third_party malformed invite id");
         return;
     }
@@ -773,7 +773,7 @@ fn introduction_evidence_digest_for_operation(operation: &Operation) -> Option<S
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())?;
-    if cokret_sdk::Hash::new(digest.to_owned()).is_err() {
+    if arkret_sdk::Hash::new(digest.to_owned()).is_err() {
         tracing::warn!(
             operation_id = %operation.operation_id,
             "ck.invite.create supplied invalid introduction_evidence_digest"

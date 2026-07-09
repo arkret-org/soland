@@ -1,4 +1,4 @@
-use cokret_sdk::models::{AgentParticipation, AgentParticipationScope, effective_participation};
+use arkret_sdk::models::{AgentParticipation, AgentParticipationScope, effective_participation};
 use serde_json::Value;
 
 use crate::state::AppState;

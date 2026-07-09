@@ -32,7 +32,7 @@ async fn health_and_describe_work() {
     assert_eq!(readyz["checks"]["database"]["ok"], true);
     assert_eq!(readyz["checks"]["pq_hybrid_tls"]["ok"], true);
 
-    let describe: Value = TestClient::get("http://server/_cokret/describe")
+    let describe: Value = TestClient::get("http://server/_arkret/describe")
         .send(&app())
         .await
         .take_json()
@@ -185,7 +185,7 @@ async fn health_and_describe_work() {
     );
     assert_eq!(
         describe["limits"]["authz_policy"]["authz_check"]["path"],
-        "/_cokret/self/authz/check"
+        "/_arkret/self/authz/check"
     );
     assert_eq!(
         describe["limits"]["authz_policy"]["authz_check"]["operation_specific_error_codes"],
@@ -193,11 +193,11 @@ async fn health_and_describe_work() {
     );
     assert_eq!(
         describe["limits"]["authz_policy"]["authz_check"]["policy_boundary"]["dynamic_or_auditable_decision_path"],
-        "/_cokret/self/policy/check"
+        "/_arkret/self/policy/check"
     );
     assert_eq!(
         describe["limits"]["authz_policy"]["effective_grants"]["path"],
-        "/_cokret/self/authz/effective-grants"
+        "/_arkret/self/authz/effective-grants"
     );
     assert_eq!(
         describe["limits"]["authz_policy"]["invites"]["response_schema_ref"],
@@ -298,7 +298,7 @@ async fn health_and_describe_work() {
     assert_eq!(private_rail_limitation["status"], "deployment_local_only");
     assert_eq!(
         private_rail_limitation["canonical_inbound"],
-        "/_cokret/peer/events"
+        "/_arkret/peer/events"
     );
     assert!(
         private_rail_limitation["private_paths"]
@@ -344,7 +344,7 @@ async fn readyz_returns_503_until_session_grant_introspection_bearer_is_configur
     let mut config = test_config();
     config.development_mode = false;
     config.session_grant_introspection_url =
-        Some("https://coauth.example/_cokret/gate/account/session-grants/introspect".to_owned());
+        Some("https://coauth.example/_arkret/gate/account/session-grants/introspect".to_owned());
     config.session_grant_introspection_bearer = None;
     let service = app_from_state(AppState::new(config, Db { pool: None }));
 
@@ -360,7 +360,7 @@ async fn readyz_returns_503_until_session_grant_introspection_bearer_is_configur
 
 #[tokio::test]
 async fn describe_separates_claim_levels() {
-    let describe: Value = TestClient::get("http://server/_cokret/describe")
+    let describe: Value = TestClient::get("http://server/_arkret/describe")
         .send(&app())
         .await
         .take_json()
@@ -421,11 +421,11 @@ async fn describe_separates_claim_levels() {
         assert_eq!(surface["base_path"], "/_soland");
         assert_eq!(surface["status"], "soland_private_local");
         assert!(surface["notes"].as_str().is_some_and(|notes| {
-            notes.contains("moved out of /_cokret")
+            notes.contains("moved out of /_arkret")
                 && notes.contains("operation-registry canonical paths")
         }));
     }
-    let _: cokret_sdk::ServerDescription = serde_json::from_value(describe)
+    let _: arkret_sdk::ServerDescription = serde_json::from_value(describe)
         .expect("server describe must deserialize with the SDK client model");
 }
 
@@ -444,7 +444,7 @@ async fn describe_returns_development_mode_field() {
     assert_eq!(health["proof_verifier_mode"], "development");
     assert_eq!(health["admin_auth_mode"], "development");
 
-    let describe: Value = TestClient::get("http://server/_cokret/describe")
+    let describe: Value = TestClient::get("http://server/_arkret/describe")
         .send(&dev_app)
         .await
         .take_json()
@@ -485,7 +485,7 @@ async fn describe_returns_development_mode_field() {
     assert_eq!(prod_health["proof_verifier_mode"], "production");
     assert_eq!(prod_health["admin_auth_mode"], "did_allowlist");
 
-    let prod_describe: Value = TestClient::get("http://server/_cokret/describe")
+    let prod_describe: Value = TestClient::get("http://server/_arkret/describe")
         .send(&prod_app)
         .await
         .take_json()

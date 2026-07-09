@@ -31,9 +31,9 @@ fn signed_mimi_headers(
     body: &Value,
     room_uri: Option<&str>,
 ) -> Vec<(&'static str, String)> {
-    let body_bytes = cokret_sdk::canonical::canonical_json_bytes(body).unwrap();
+    let body_bytes = arkret_sdk::canonical::canonical_json_bytes(body).unwrap();
     let content_digest = format!("sha-256=:{}:", STANDARD.encode(Sha256::digest(&body_bytes)));
-    let request_digest = cokret_sdk::canonical::sha256_digest(&body_bytes);
+    let request_digest = arkret_sdk::canonical::sha256_digest(&body_bytes);
     let created = chrono::Utc::now().timestamp();
     let expires = created + 300;
     let verification_method = format!("{MIMI_SOURCE_SERVICE_DID}#mimi-provider-test-key");
@@ -97,11 +97,11 @@ fn mimi_room_uri(room_id: &str) -> String {
 }
 
 fn mimi_opaque_payload(value: Value, digest_field: &str) -> Value {
-    let bytes = cokret_sdk::canonical::canonical_json_bytes(&value).unwrap();
+    let bytes = arkret_sdk::canonical::canonical_json_bytes(&value).unwrap();
     let mut object = serde_json::Map::new();
     object.insert(
         digest_field.to_owned(),
-        json!(cokret_sdk::canonical::sha256_digest(&bytes)),
+        json!(arkret_sdk::canonical::sha256_digest(&bytes)),
     );
     object.insert("payload".to_owned(), json!(URL_SAFE_NO_PAD.encode(&bytes)));
     Value::Object(object)
@@ -198,7 +198,7 @@ fn text_mimi_message(message_id: &str, body: &str) -> Value {
     json!({
         "source_format": "application/mimi-content",
         "mimi_message_id": message_id,
-        "original_envelope_hash": cokret_sdk::canonical::sha256_digest(message_id.as_bytes()),
+        "original_envelope_hash": arkret_sdk::canonical::sha256_digest(message_id.as_bytes()),
         "content": {
             "kind": "ck.content.composite",
             "body": body,
@@ -218,7 +218,7 @@ fn event_kind(event: &Value) -> Option<&str> {
 }
 
 fn identifier_commitment(identifier: &str) -> String {
-    cokret_sdk::canonical::sha256_digest(identifier.as_bytes())
+    arkret_sdk::canonical::sha256_digest(identifier.as_bytes())
 }
 
 #[tokio::test]
@@ -244,7 +244,7 @@ async fn mimi_provider_facade_contracts_work() {
             .any(|profile| profile == "ck.profile.mimi_interop.v1")
     );
 
-    let directory: Value = TestClient::get("http://server/_cokret/open/mimi/provider-directory")
+    let directory: Value = TestClient::get("http://server/_arkret/open/mimi/provider-directory")
         .send(&service)
         .await
         .take_json()
@@ -272,7 +272,7 @@ async fn mimi_provider_facade_contracts_work() {
         "epoch": 1,
     });
     let key_material: Value = signed_mimi_post!(
-        "http://server/_cokret/open/mimi/key-material",
+        "http://server/_arkret/open/mimi/key-material",
         key_material_body,
         None
     )
@@ -288,7 +288,7 @@ async fn mimi_provider_facade_contracts_work() {
     let room_uri = mimi_room_uri(room_id);
     let update_body = mimi_room_update_body(room_id, DEMO_REALM_ID, group_id, "hub", "accepted");
     let room_binding: Value = signed_mimi_post!(
-        format!("http://server/_cokret/open/mimi/strands/{room_id}/update"),
+        format!("http://server/_arkret/open/mimi/strands/{room_id}/update"),
         update_body,
         Some(room_uri.as_str())
     )
@@ -301,7 +301,7 @@ async fn mimi_provider_facade_contracts_work() {
     assert!(room_binding["room_state_ref"].as_str().is_some());
 
     let group_info: Value =
-        TestClient::get("http://server/_cokret/open/mimi/strands/01JSMIMI/group-info")
+        TestClient::get("http://server/_arkret/open/mimi/strands/01JSMIMI/group-info")
             .send(&service)
             .await
             .take_json()
@@ -313,7 +313,7 @@ async fn mimi_provider_facade_contracts_work() {
     );
     assert_eq!(
         group_info["group_info"]["canonical_truth"],
-        "cokret_signed_event_reducer"
+        "arkret_signed_event_reducer"
     );
 
     let commitment = identifier_commitment("mimi://remote.example/alice");
@@ -326,7 +326,7 @@ async fn mimi_provider_facade_contracts_work() {
         "privacy_profile": "private_contact_discovery",
     });
     let identifier: Value = signed_mimi_post!(
-        "http://server/_cokret/open/mimi/identifiers/query",
+        "http://server/_arkret/open/mimi/identifiers/query",
         identifier_body,
         None
     )
@@ -350,7 +350,7 @@ async fn mimi_provider_facade_contracts_work() {
         text_mimi_message("mimi-msg-contract-001", "hello from MIMI"),
     );
     let mapped: Value = signed_mimi_post!(
-        format!("http://server/_cokret/open/mimi/strands/{room_id}/messages"),
+        format!("http://server/_arkret/open/mimi/strands/{room_id}/messages"),
         message_body,
         Some(room_uri.as_str())
     )
@@ -369,7 +369,7 @@ async fn mimi_provider_facade_contracts_work() {
         "strand_id": MIMI_TEST_STRAND_ID,
     });
     let proxy: Value = signed_mimi_post!(
-        "http://server/_cokret/open/mimi/proxy-download",
+        "http://server/_arkret/open/mimi/proxy-download",
         proxy_body,
         None
     )
@@ -395,7 +395,7 @@ async fn mimi_provider_facade_contracts_work() {
         "abuse_reason_code": "spam",
     });
     let report: Value = signed_mimi_post!(
-        "http://server/_cokret/open/mimi/report-abuse",
+        "http://server/_arkret/open/mimi/report-abuse",
         report_body,
         None
     )
@@ -421,7 +421,7 @@ async fn mimi_facade_writes_strand_into_canonical_reducer_chain() {
 
     let update_body = mimi_room_update_body(room_id, demo_realm, group_id, "hub", "accepted");
     let update_resp: Value = signed_mimi_post!(
-        format!("http://server/_cokret/open/mimi/strands/{room_id}/update"),
+        format!("http://server/_arkret/open/mimi/strands/{room_id}/update"),
         update_body,
         Some(room_uri.as_str())
     )
@@ -437,7 +437,7 @@ async fn mimi_facade_writes_strand_into_canonical_reducer_chain() {
     assert!(binding_event_id.starts_with("ak:event:"));
 
     let msg_resp: Value = signed_mimi_post!(
-        format!("http://server/_cokret/open/mimi/strands/{room_id}/messages"),
+        format!("http://server/_arkret/open/mimi/strands/{room_id}/messages"),
         mimi_submit_body(
             demo_realm,
             group_id,
@@ -452,10 +452,10 @@ async fn mimi_facade_writes_strand_into_canonical_reducer_chain() {
     .take_json()
     .await
     .unwrap();
-    let cokret_event_id = msg_resp["event_ref"].as_str().expect("event_ref missing");
+    let arkret_event_id = msg_resp["event_ref"].as_str().expect("event_ref missing");
 
     let events: Value = TestClient::get(format!(
-        "http://server/_cokret/self/events?realms={demo_realm}"
+        "http://server/_arkret/self/events?realms={demo_realm}"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&service)
@@ -478,7 +478,7 @@ async fn mimi_facade_writes_strand_into_canonical_reducer_chain() {
 
     let message_event = list
         .iter()
-        .find(|event| event["event_id"] == cokret_event_id)
+        .find(|event| event["event_id"] == arkret_event_id)
         .expect("MIMI-ingressed message missing from projection log");
     assert_eq!(event_kind(message_event), Some("ck.message.create"));
     assert_eq!(message_event["actor_id"], "did:web:remote.example");
@@ -496,7 +496,7 @@ async fn mimi_facade_writes_strand_into_canonical_reducer_chain() {
     );
 
     let report_resp: Value = signed_mimi_post!(
-        "http://server/_cokret/open/mimi/report-abuse",
+        "http://server/_arkret/open/mimi/report-abuse",
         json!({
             "strand_id": MIMI_TEST_STRAND_ID,
             "mimi_room_uri": room_uri.clone(),
@@ -515,7 +515,7 @@ async fn mimi_facade_writes_strand_into_canonical_reducer_chain() {
     assert_eq!(report_resp["status"], "queued");
 
     let events_again: Value = TestClient::get(format!(
-        "http://server/_cokret/self/events?realms={demo_realm}"
+        "http://server/_arkret/self/events?realms={demo_realm}"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&service)
@@ -537,7 +537,7 @@ async fn mimi_facade_writes_strand_into_canonical_reducer_chain() {
     let custom_group_id = "mimi-group-p4-custom";
     let migrating_body = mimi_room_update_body(room_id, demo_realm, group_id, "hub", "migrating");
     let migrating_resp: Value = signed_mimi_post!(
-        format!("http://server/_cokret/open/mimi/strands/{room_id}/update"),
+        format!("http://server/_arkret/open/mimi/strands/{room_id}/update"),
         migrating_body,
         Some(room_uri.as_str())
     )
@@ -551,7 +551,7 @@ async fn mimi_facade_writes_strand_into_canonical_reducer_chain() {
     let rebound_body =
         mimi_room_update_body(room_id, custom_realm, custom_group_id, "hub", "accepted");
     let rebound_resp: Value = signed_mimi_post!(
-        format!("http://server/_cokret/open/mimi/strands/{room_id}/update"),
+        format!("http://server/_arkret/open/mimi/strands/{room_id}/update"),
         rebound_body,
         Some(room_uri.as_str())
     )
@@ -563,7 +563,7 @@ async fn mimi_facade_writes_strand_into_canonical_reducer_chain() {
     assert_eq!(rebound_resp["accepted"], true);
 
     let msg_resp_2: Value = signed_mimi_post!(
-        format!("http://server/_cokret/open/mimi/strands/{room_id}/messages"),
+        format!("http://server/_arkret/open/mimi/strands/{room_id}/messages"),
         mimi_submit_body(
             custom_realm,
             custom_group_id,
@@ -596,7 +596,7 @@ async fn mimi_facade_writes_strand_into_canonical_reducer_chain() {
     let revoked_body =
         mimi_room_update_body(room_id, custom_realm, custom_group_id, "hub", "revoked");
     let revoked_resp: Value = signed_mimi_post!(
-        format!("http://server/_cokret/open/mimi/strands/{room_id}/update"),
+        format!("http://server/_arkret/open/mimi/strands/{room_id}/update"),
         revoked_body,
         Some(room_uri.as_str())
     )
@@ -610,7 +610,7 @@ async fn mimi_facade_writes_strand_into_canonical_reducer_chain() {
     let reopen_body =
         mimi_room_update_body(room_id, custom_realm, custom_group_id, "hub", "accepted");
     let mut reopen_resp = signed_mimi_post!(
-        format!("http://server/_cokret/open/mimi/strands/{room_id}/update"),
+        format!("http://server/_arkret/open/mimi/strands/{room_id}/update"),
         reopen_body,
         Some(room_uri.as_str())
     )
@@ -635,7 +635,7 @@ async fn mimi_facade_enforces_e2ee_boundary_and_quarantines_unknown_content() {
     let room_uri = mimi_room_uri(room_id);
 
     let update_resp: Value = signed_mimi_post!(
-        format!("http://server/_cokret/open/mimi/strands/{room_id}/update"),
+        format!("http://server/_arkret/open/mimi/strands/{room_id}/update"),
         mimi_room_update_body(room_id, realm_id, group_id, "hub", "accepted"),
         Some(room_uri.as_str())
     )
@@ -647,7 +647,7 @@ async fn mimi_facade_enforces_e2ee_boundary_and_quarantines_unknown_content() {
     assert_eq!(update_resp["accepted"], true);
 
     let mut unmarked = signed_mimi_post!(
-        format!("http://server/_cokret/open/mimi/strands/{room_id}/messages"),
+        format!("http://server/_arkret/open/mimi/strands/{room_id}/messages"),
         mimi_submit_body(
             realm_id,
             group_id,
@@ -675,7 +675,7 @@ async fn mimi_facade_enforces_e2ee_boundary_and_quarantines_unknown_content() {
     );
 
     let downgrade_resp: Value = signed_mimi_post!(
-        format!("http://server/_cokret/open/mimi/strands/{room_id}/messages"),
+        format!("http://server/_arkret/open/mimi/strands/{room_id}/messages"),
         mimi_submit_body(
             realm_id,
             group_id,
@@ -705,7 +705,7 @@ async fn mimi_facade_enforces_e2ee_boundary_and_quarantines_unknown_content() {
         .to_owned();
 
     let transcript_resp: Value = signed_mimi_post!(
-        format!("http://server/_cokret/open/mimi/strands/{room_id}/messages"),
+        format!("http://server/_arkret/open/mimi/strands/{room_id}/messages"),
         mimi_submit_body(
             realm_id,
             group_id,
@@ -738,7 +738,7 @@ async fn mimi_facade_enforces_e2ee_boundary_and_quarantines_unknown_content() {
         .to_owned();
 
     let quarantine_resp: Value = signed_mimi_post!(
-        format!("http://server/_cokret/open/mimi/strands/{room_id}/messages"),
+        format!("http://server/_arkret/open/mimi/strands/{room_id}/messages"),
         mimi_submit_body(
             realm_id,
             group_id,
@@ -768,7 +768,7 @@ async fn mimi_facade_enforces_e2ee_boundary_and_quarantines_unknown_content() {
         .to_owned();
 
     let events: Value = TestClient::get(format!(
-        "http://server/_cokret/self/events?realms={realm_id}"
+        "http://server/_arkret/self/events?realms={realm_id}"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&service)

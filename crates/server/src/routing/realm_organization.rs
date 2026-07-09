@@ -1,6 +1,6 @@
 //! SOL-ORG-06 — Realm organization-relationship read surface.
 //!
-//! `GET /_cokret/self/realms/{realm_id}/organizations`
+//! `GET /_arkret/self/realms/{realm_id}/organizations`
 //! (`ck.self.realm_organization.query.list`) projects the accepted
 //! `ck.realm.organization` relationship statements (active / revoked / expired,
 //! latest-per-`(organization_id, relationship)`) plus the declared
@@ -16,8 +16,8 @@
 
 use std::collections::BTreeSet;
 
-use cokret_sdk::RealmId;
-use cokret_sdk::models::{
+use arkret_sdk::RealmId;
+use arkret_sdk::models::{
     Did, Hash, RealmOrganizationLifecyclePhase, RealmOrganizationRelationshipList,
     RealmOrganizationRelationshipRow,
 };

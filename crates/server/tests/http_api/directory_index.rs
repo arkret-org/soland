@@ -7,7 +7,7 @@ use super::common::*;
 
 #[tokio::test]
 async fn sync_directory_and_index_share_demo_realm() {
-    let sync_describe: Value = TestClient::get("http://server/_cokret/self/account/describe")
+    let sync_describe: Value = TestClient::get("http://server/_arkret/self/account/describe")
         .send(&app())
         .await
         .take_json()
@@ -28,7 +28,7 @@ async fn sync_directory_and_index_share_demo_realm() {
     );
 
     let invalid_profile =
-        TestClient::post("http://server/_cokret/self/account/subscribe?catchup=true")
+        TestClient::post("http://server/_arkret/self/account/subscribe?catchup=true")
             .json(&serde_json::json!({"profile": "invalid"}))
             .send(&app())
             .await;
@@ -47,7 +47,7 @@ async fn sync_directory_and_index_share_demo_realm() {
             .contains_key("ak:realm:0196419b-0000-7000-8000-000000000000")
     );
 
-    let directory: Value = TestClient::post("http://server/_cokret/find/directory/search-realms")
+    let directory: Value = TestClient::post("http://server/_arkret/find/directory/search-realms")
         .json(&serde_json::json!({"query": "demo", "limit": 10}))
         .send(&app())
         .await
@@ -69,7 +69,7 @@ async fn sync_directory_and_index_share_demo_realm() {
 #[tokio::test]
 async fn directory_product_endpoints_return_demo_projection_shapes() {
     let organizations: Value =
-        TestClient::post("http://server/_cokret/find/directory/search-organizations")
+        TestClient::post("http://server/_arkret/find/directory/search-organizations")
             .json(&serde_json::json!({"query": "arkret", "limit": 10}))
             .send(&app())
             .await
@@ -94,7 +94,7 @@ async fn directory_product_endpoints_return_demo_projection_shapes() {
     );
 
     let organization: Value =
-        TestClient::post("http://server/_cokret/find/directory/resolve-organization")
+        TestClient::post("http://server/_arkret/find/directory/resolve-organization")
             .json(&serde_json::json!({"handle": "@arkret-demo"}))
             .send(&app())
             .await
@@ -114,7 +114,7 @@ async fn directory_product_endpoints_return_demo_projection_shapes() {
         "local"
     );
 
-    let actors: Value = TestClient::post("http://server/_cokret/find/directory/search-actors")
+    let actors: Value = TestClient::post("http://server/_arkret/find/directory/search-actors")
         .json(&serde_json::json!({"query": "alice"}))
         .send(&app())
         .await
@@ -127,7 +127,7 @@ async fn directory_product_endpoints_return_demo_projection_shapes() {
         "did:web:alice.example"
     );
 
-    let users: Value = TestClient::post("http://server/_cokret/find/directory/search-users")
+    let users: Value = TestClient::post("http://server/_arkret/find/directory/search-users")
         .json(&serde_json::json!({"query": "alice"}))
         .send(&app())
         .await
@@ -143,7 +143,7 @@ async fn directory_product_endpoints_return_demo_projection_shapes() {
     assert!(users["users"][0].get("presence").is_none());
     assert!(users["users"][0].get("organization_id").is_none());
 
-    let handle: Value = TestClient::post("http://server/_cokret/find/directory/resolve-handle")
+    let handle: Value = TestClient::post("http://server/_arkret/find/directory/resolve-handle")
         .json(&serde_json::json!({"handle": "alice:soland.local"}))
         .send(&app())
         .await
@@ -170,7 +170,7 @@ async fn directory_product_endpoints_return_demo_projection_shapes() {
             .is_some_and(|digest| digest.starts_with("sha256:"))
     );
 
-    let describe: Value = TestClient::get("http://server/_cokret/describe")
+    let describe: Value = TestClient::get("http://server/_arkret/describe")
         .send(&app())
         .await
         .take_json()
@@ -192,7 +192,7 @@ async fn directory_product_endpoints_return_demo_projection_shapes() {
     );
 
     let subject_handles: Value =
-        TestClient::post("http://server/_cokret/find/directory/list-handles-for-subject")
+        TestClient::post("http://server/_arkret/find/directory/list-handles-for-subject")
             .json(&serde_json::json!({
                 "subject": "did:web:alice.example",
                 "intent": "display",
@@ -211,7 +211,7 @@ async fn directory_product_endpoints_return_demo_projection_shapes() {
     assert_eq!(claims[0]["subject"], "did:web:alice.example");
     assert_eq!(claims[0]["handle"], "alice:soland.local");
 
-    let invalid = TestClient::post("http://server/_cokret/find/directory/search-users")
+    let invalid = TestClient::post("http://server/_arkret/find/directory/search-users")
         .json(&serde_json::json!({"limit": 0}))
         .send(&app())
         .await;
@@ -229,7 +229,7 @@ async fn account_primary_handle_claim_is_listed_for_webvh_service_did() {
     let device = "ak:device:01904100-0000-7000-8000-00000000a11c";
     seed_did_document_also_known_as(&state, did, &["acct:alice@local.host"]).await;
 
-    let registered: Value = TestClient::post("http://server/_cokret/gate/account/register")
+    let registered: Value = TestClient::post("http://server/_arkret/gate/account/register")
         .json(&serde_json::json!({
             "principal_id": did,
             "handle": "alice:local.host",
@@ -248,7 +248,7 @@ async fn account_primary_handle_claim_is_listed_for_webvh_service_did() {
     assert_eq!(registered["primary_handle_claim"]["subject"], did);
 
     let token = dev_token_for_device(state.clone(), did, device, "Alice").await;
-    let viewer: Value = TestClient::get("http://server/_cokret/self/account/viewer")
+    let viewer: Value = TestClient::get("http://server/_arkret/self/account/viewer")
         .add_header("authorization", format!("Bearer {token}"), true)
         .send(&app_from_state(state.clone()))
         .await
@@ -259,7 +259,7 @@ async fn account_primary_handle_claim_is_listed_for_webvh_service_did() {
     assert_eq!(viewer["primary_handle_claim"]["subject"], did);
 
     let subject_handles: Value =
-        TestClient::post("http://server/_cokret/find/directory/list-handles-for-subject")
+        TestClient::post("http://server/_arkret/find/directory/list-handles-for-subject")
             .json(&serde_json::json!({
                 "subject": did,
                 "intent": "display",
@@ -299,7 +299,7 @@ async fn directory_resolve_handle_invite_accepts_canonical_handles_without_conta
     )
     .await;
 
-    let hidden_bob: Value = TestClient::post("http://server/_cokret/find/directory/search-users")
+    let hidden_bob: Value = TestClient::post("http://server/_arkret/find/directory/search-users")
         .add_header("authorization", format!("Bearer {alice}"), true)
         .json(&serde_json::json!({"query": "bob"}))
         .send(&app_from_state(state.clone()))
@@ -321,7 +321,7 @@ async fn directory_resolve_handle_invite_accepts_canonical_handles_without_conta
     .await;
     let realm_id = realm["realm_id"].as_str().unwrap();
 
-    let mut resolved = TestClient::post("http://server/_cokret/find/directory/resolve-handle")
+    let mut resolved = TestClient::post("http://server/_arkret/find/directory/resolve-handle")
         .add_header("authorization", format!("Bearer {alice}"), true)
         .json(&serde_json::json!({
             "handle": "bob-example:local.host",
@@ -350,7 +350,7 @@ async fn directory_resolve_handle_invite_accepts_canonical_handles_without_conta
         "handle_claim_behavior": "drop",
         "unknown_invites": "drop"
     });
-    let saved_policy: Value = TestClient::put("http://server/_cokret/self/invite-receive-policy")
+    let saved_policy: Value = TestClient::put("http://server/_arkret/self/invite-receive-policy")
         .add_header("authorization", format!("Bearer {bob}"), true)
         .json(&drop_handle_policy)
         .send(&app_from_state(state.clone()))
@@ -361,7 +361,7 @@ async fn directory_resolve_handle_invite_accepts_canonical_handles_without_conta
     assert_eq!(saved_policy["handle_claim_behavior"], "drop");
 
     let blocked_by_bob_policy =
-        TestClient::post("http://server/_cokret/find/directory/resolve-handle")
+        TestClient::post("http://server/_arkret/find/directory/resolve-handle")
             .add_header("authorization", format!("Bearer {alice}"), true)
             .json(&serde_json::json!({
                 "handle": "bob-example:local.host",
@@ -378,7 +378,7 @@ async fn directory_resolve_handle_invite_accepts_canonical_handles_without_conta
     );
 
     let hidden_remote_lookup =
-        TestClient::post("http://server/_cokret/find/directory/resolve-handle")
+        TestClient::post("http://server/_arkret/find/directory/resolve-handle")
             .add_header("authorization", format!("Bearer {alice}"), true)
             .json(&serde_json::json!({"handle": "bob:remote.example"}))
             .send(&app_from_state(state.clone()))
@@ -388,7 +388,7 @@ async fn directory_resolve_handle_invite_accepts_canonical_handles_without_conta
         StatusCode::NOT_FOUND
     );
 
-    let remote = TestClient::post("http://server/_cokret/find/directory/resolve-handle")
+    let remote = TestClient::post("http://server/_arkret/find/directory/resolve-handle")
         .add_header("authorization", format!("Bearer {alice}"), true)
         .json(&serde_json::json!({
             "handle": "bob:remote.example",
@@ -431,7 +431,7 @@ async fn directory_demo_projection_rejects_outside_development_mode() {
     ];
 
     for (path, body) in not_found_cases {
-        let response = TestClient::post(format!("http://server/_cokret/find/directory/{path}"))
+        let response = TestClient::post(format!("http://server/_arkret/find/directory/{path}"))
             .json(&body)
             .send(&service)
             .await;
@@ -448,7 +448,7 @@ async fn directory_demo_projection_rejects_outside_development_mode() {
     )];
 
     for (path, body) in empty_search_cases {
-        let mut response = TestClient::post(format!("http://server/_cokret/find/directory/{path}"))
+        let mut response = TestClient::post(format!("http://server/_arkret/find/directory/{path}"))
             .json(&body)
             .send(&service)
             .await;
@@ -462,7 +462,7 @@ async fn directory_demo_projection_rejects_outside_development_mode() {
 async fn private_contact_discovery_rejects_plaintext_identifier_matching() {
     let service = app();
     let mut response =
-        TestClient::post("http://server/_cokret/find/directory/private-contact-discovery")
+        TestClient::post("http://server/_arkret/find/directory/private-contact-discovery")
             .json(&serde_json::json!({
                 "requester": "did:web:alice.example",
                 "contacts": [
@@ -515,7 +515,7 @@ async fn directory_resolve_target_preview_requires_effective_preview_policy() {
         realm_id,
         "sha256:0000000000000000000000000000000000000000000000000000000000000000",
     );
-    let unauthorized = TestClient::post("http://server/_cokret/find/directory/resolve-target")
+    let unauthorized = TestClient::post("http://server/_arkret/find/directory/resolve-target")
         .json(&serde_json::json!({
             "address": format!("{address}&tok={token}"),
             "token": token,
@@ -544,7 +544,7 @@ async fn directory_resolve_target_preview_returns_policy_limited_projection() {
         "audiences": ["link_token_holder"],
         "fields": ["title", "summary", "join_rule", "history_visibility", "member_count_bucket"]
     });
-    let policy_digest = cokret_sdk::canonical::canonical_sha256(&policy).unwrap();
+    let policy_digest = arkret_sdk::canonical::canonical_sha256(&policy).unwrap();
     let mut meta = state
         .persistence
         .realm_meta()
@@ -568,7 +568,7 @@ async fn directory_resolve_target_preview_returns_policy_limited_projection() {
         "web+arkret:realm/{realm_uuid}/strand/{strand_uuid}?via=did:web:soland.local&lt=preview"
     );
     let token = preview_token_for_address(&state, &address, realm_id, &policy_digest);
-    let resolved: Value = TestClient::post("http://server/_cokret/find/directory/resolve-target")
+    let resolved: Value = TestClient::post("http://server/_arkret/find/directory/resolve-target")
         .json(&serde_json::json!({
             "address": format!("{address}&tok={token}"),
             "token": token,
@@ -611,7 +611,7 @@ async fn directory_resolve_realm_returns_spec_title_field() {
     .await;
     let realm_id = realm["realm_id"].as_str().unwrap();
 
-    let resolved: Value = TestClient::post("http://server/_cokret/find/directory/resolve-realm")
+    let resolved: Value = TestClient::post("http://server/_arkret/find/directory/resolve-realm")
         .json(&serde_json::json!({"realm_id": realm_id}))
         .send(&app_from_state(state))
         .await
@@ -633,11 +633,11 @@ fn preview_token_for_address(
     realm_id: &str,
     preview_policy_digest: &str,
 ) -> String {
-    let parsed = cokret_sdk::parse_address(address).unwrap();
-    let mut descriptor = cokret_sdk::TargetDescriptor::from_parsed(&parsed);
+    let parsed = arkret_sdk::parse_address(address).unwrap();
+    let mut descriptor = arkret_sdk::TargetDescriptor::from_parsed(&parsed);
     descriptor.set_realm_id(realm_id);
-    descriptor.link_type = cokret_sdk::LinkType::Preview;
-    let target_digest = cokret_sdk::target_digest(&descriptor).unwrap();
+    descriptor.link_type = arkret_sdk::LinkType::Preview;
+    let target_digest = arkret_sdk::target_digest(&descriptor).unwrap();
     let mut claim = serde_json::json!({
         "iss": state.config.service_did.clone(),
         "aud": "anonymous",
@@ -647,10 +647,10 @@ fn preview_token_for_address(
         "link_type": "preview",
         "preview_policy_digest": preview_policy_digest,
     });
-    let canonical_bytes = cokret_sdk::canonical::canonical_json_bytes(&claim).unwrap();
-    let payload_digest = cokret_sdk::canonical::sha256_digest(&canonical_bytes);
+    let canonical_bytes = arkret_sdk::canonical::canonical_json_bytes(&claim).unwrap();
+    let payload_digest = arkret_sdk::canonical::sha256_digest(&canonical_bytes);
     let signing_key = state.notary_signing_key();
-    let jws = cokret_sdk::jws::sign_jws_ed25519(&canonical_bytes, signing_key.as_ref()).unwrap();
+    let jws = arkret_sdk::jws::sign_jws_ed25519(&canonical_bytes, signing_key.as_ref()).unwrap();
     claim["proof"] = serde_json::json!({
         "kind": "detached_jws",
         "alg": "EdDSA",
@@ -743,7 +743,7 @@ async fn index_product_endpoints_return_demo_projection_shapes() {
 #[tokio::test]
 async fn broader_protocol_surface_returns_contract_shapes() {
     let directory_describe: Value =
-        TestClient::get("http://server/_cokret/find/directory/describe")
+        TestClient::get("http://server/_arkret/find/directory/describe")
             .send(&app())
             .await
             .take_json()
@@ -751,7 +751,7 @@ async fn broader_protocol_surface_returns_contract_shapes() {
             .unwrap();
     assert_eq!(directory_describe["service_did"], "did:web:soland.local");
 
-    let resolved: Value = TestClient::post("http://server/_cokret/find/directory/resolve-realm")
+    let resolved: Value = TestClient::post("http://server/_arkret/find/directory/resolve-realm")
         .json(&serde_json::json!({"realm_id": DEMO_REALM_ID}))
         .send(&app())
         .await
@@ -761,7 +761,7 @@ async fn broader_protocol_surface_returns_contract_shapes() {
     assert_eq!(resolved["realm_preview"]["realm_id"], DEMO_REALM_ID);
 
     let backfill: Value = TestClient::get(
-        "http://server/_cokret/self/events?realms=ck:realm:0196419b-0000-7000-8000-000000000000",
+        "http://server/_arkret/self/events?realms=ck:realm:0196419b-0000-7000-8000-000000000000",
     )
     .send(&app())
     .await
@@ -770,7 +770,7 @@ async fn broader_protocol_surface_returns_contract_shapes() {
     .unwrap();
     assert_eq!(backfill["limited"], false);
 
-    let authz: Value = TestClient::post("http://server/_cokret/self/authz/check")
+    let authz: Value = TestClient::post("http://server/_arkret/self/authz/check")
         .json(&serde_json::json!({
             "actor_id": "did:web:alice.example",
             "action": "ck.strand.read",
@@ -793,7 +793,7 @@ async fn broader_protocol_surface_returns_contract_shapes() {
 
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
-    let ice: Value = TestClient::post("http://server/_cokret/self/rtc/ice-config")
+    let ice: Value = TestClient::post("http://server/_arkret/self/rtc/ice-config")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
             "realm_id": DEMO_REALM_ID,

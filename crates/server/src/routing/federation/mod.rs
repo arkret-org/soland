@@ -12,7 +12,7 @@ pub(crate) mod well_known;
 // federation rail reconstruct the signed `@target-uri` / `@authority`
 // identically.
 pub(in crate::routing) use federation::{signature_authority, signature_target_uri};
-pub use well_known::well_known_cokret_router;
+pub use well_known::well_known_arkret_router;
 
 use super::{
     AuthArgs, ingest_federation_operations, now, operation_is_visible,
@@ -33,7 +33,7 @@ pub(crate) fn rfc9530_content_digest(bytes: &[u8]) -> String {
 
 /// Operator seal-signing endpoint (`POST /_soland/admin/seals/sign`). Mounted
 /// at the bare deployment-local `/admin/*` namespace on the root router
-/// (NOT under `/_cokret/...`), alongside the rest of the admin surface.
+/// (NOT under `/_arkret/...`), alongside the rest of the admin surface.
 pub fn admin_seal_sign_router() -> Router {
     move_seal::api_admin_router()
 }
@@ -41,14 +41,14 @@ pub fn admin_seal_sign_router() -> Router {
 /// Deployment-local inbound federation rail, mounted at `/_soland/peer/*`.
 ///
 /// This is NOT the protocol federation surface: the cross-vendor S2S entry
-/// point is the `peer_federation` surface group at `/_cokret/peer/*`
-/// (outbound dispatch in this repo only ever targets `/_cokret/peer/events`).
+/// point is the `peer_federation` surface group at `/_arkret/peer/*`
+/// (outbound dispatch in this repo only ever targets `/_arkret/peer/events`).
 /// The routes below (Matrix-style transactions, operations push/pull/
 /// backfill/frontier, Move/Seal direct ingest, realm-members,
 /// verify-actor) exist for local testing and operations; describe advertises
 /// them under `profile_limitations` as `federation.private_inbound_rail` so
 /// remote peers cannot mistake them for an interop contract. Long-term plan:
-/// converge Move/Seal ingest into the `/_cokret/peer/events` envelope
+/// converge Move/Seal ingest into the `/_arkret/peer/events` envelope
 /// channel and downgrade or delete this rail.
 pub fn router() -> Router {
     Router::new().push(move_seal::router()).push(

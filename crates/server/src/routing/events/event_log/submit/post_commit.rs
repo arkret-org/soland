@@ -195,7 +195,7 @@ pub(super) async fn enqueue_peer_event_fanout(
             state,
             peer.url.as_str(),
             peer.service_did.as_str(),
-            "/_cokret/peer/events",
+            "/_arkret/peer/events",
             &idempotency_key,
             &payload,
         )
@@ -312,19 +312,19 @@ fn service_binding_ref_for_target(
     parsed: &ValidatedEventEnvelope,
     binding_payload: &Value,
     target: &DynamicPeerEventTarget,
-) -> Option<cokret_sdk::FederationServiceBindingRef> {
+) -> Option<arkret_sdk::FederationServiceBindingRef> {
     let membership_frontier =
         typed_frontier_or_fallback(&target.membership_frontier, &parsed.event_id)?;
     let delivery_binding_frontier =
         typed_frontier_or_fallback(&target.delivery_binding_frontier, &parsed.event_id)?;
-    Some(cokret_sdk::FederationServiceBindingRef {
+    Some(arkret_sdk::FederationServiceBindingRef {
         realm_id: RealmId::new(parsed.realm_id.clone()).ok()?,
         realm_policy_digest: Hash::new(canonical_json_hash(binding_payload)).ok()?,
         membership_frontier,
         delivery_binding_frontier,
         destination_service_type: "principal_server".to_owned(),
         reducer_profile_digest: Hash::new(
-            cokret_sdk::FEDERATION_MINIMAL_REDUCER_PROFILE_DIGEST.to_owned(),
+            arkret_sdk::FEDERATION_MINIMAL_REDUCER_PROFILE_DIGEST.to_owned(),
         )
         .ok()?,
     })

@@ -151,7 +151,7 @@ async fn verify_franking_proof(
 /// `ck.audit.erasure_receipt` projection so verifiers / auditors can
 /// query the local receipt list (including `fanout_status` per-peer
 /// state and the timeout-triggered `incomplete` flip). Advertised via
-/// `/_cokret/describe.erasure_receipts_endpoint`.
+/// `/_arkret/describe.erasure_receipts_endpoint`.
 ///
 /// The endpoint is authentication-gated; reading the receipt list does
 /// not leak any post-erasure payload (the projection holds canonical
@@ -389,7 +389,7 @@ fn franking_proof_digest(proof: &FrankingProofVerifyRequestBody) -> String {
         "event_canonical_digest": proof.event_canonical_digest.as_deref().unwrap_or_default(),
     });
     let bytes = serde_json::to_vec(&material).unwrap_or_default();
-    cokret_sdk::canonical::sha256_digest(&bytes)
+    arkret_sdk::canonical::sha256_digest(&bytes)
 }
 
 pub async fn append_audit_log(

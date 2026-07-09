@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use cokret_sdk::{Did, PlaintextDataClassKind, RealmId, new_prefixed_uuid7};
+use arkret_sdk::{Did, PlaintextDataClassKind, RealmId, new_prefixed_uuid7};
 use salvo::test::{ResponseExt, TestClient};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -32,7 +32,7 @@ fn app_from_state(state: AppState) -> salvo::Service {
 
 async fn account_subscribe_frame(state: AppState, token: &str, query: &str) -> Value {
     let body = TestClient::get(format!(
-        "http://server/_cokret/self/account/subscribe?{query}"
+        "http://server/_arkret/self/account/subscribe?{query}"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state))
@@ -59,7 +59,7 @@ async fn dev_token(state: AppState, actor: &str, device_suffix: &str) -> String 
 }
 
 /// Seed a Realm directly via AppState so the tests can focus on downstream
-/// sync behaviour through the canonical `POST /_cokret/self/events` path.
+/// sync behaviour through the canonical `POST /_arkret/self/events` path.
 async fn seed_realm(
     state: &AppState,
     owner: &str,
@@ -124,7 +124,7 @@ async fn allow_service_message_plaintext(state: &AppState, realm_id: &str) {
     meta.plaintext_visible_services.insert(service_did.clone());
     meta.plaintext_visible_service_classes.insert(
         service_did,
-        BTreeSet::from([cokret_sdk::PlaintextDataClassKind::MessageContent]),
+        BTreeSet::from([arkret_sdk::PlaintextDataClassKind::MessageContent]),
     );
     meta.updated_at = chrono::Utc::now();
     state
@@ -180,7 +180,7 @@ async fn admit_member(
         }]
     });
     event["canonical_digest"] = Value::String(event_canonical_digest(&event));
-    let resp: Value = TestClient::post("http://server/_cokret/self/events")
+    let resp: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {owner_token}"), true)
         .json(&event)
         .send(&app_from_state(state))
@@ -264,7 +264,7 @@ async fn accept_invite(
         }]
     });
     event["canonical_digest"] = Value::String(event_canonical_digest(&event));
-    let resp: Value = TestClient::post("http://server/_cokret/self/events")
+    let resp: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&event)
         .send(&app_from_state(state))
@@ -311,7 +311,7 @@ async fn send_message(state: AppState, token: &str, realm_id: &str, body: &str) 
         }]
     });
     event["canonical_digest"] = Value::String(event_canonical_digest(&event));
-    let sent: Value = TestClient::post("http://server/_cokret/self/events")
+    let sent: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&event)
         .send(&app_from_state(state))
@@ -398,8 +398,8 @@ fn install_projected_strand_scope(
             strand_id: strand_id.to_owned(),
             realm_id: realm_id.to_owned(),
             tracks: std::collections::BTreeMap::from([(
-                cokret_sdk::STRAND_TRACK_NAME_DISCUSSION.to_owned(),
-                cokret_sdk::StrandTrackConfig::discussion_primary(),
+                arkret_sdk::STRAND_TRACK_NAME_DISCUSSION.to_owned(),
+                arkret_sdk::StrandTrackConfig::discussion_primary(),
             )]),
             title: "Confidential discussion".to_owned(),
             summary: None,
@@ -474,7 +474,7 @@ async fn send_circle_scoped_encrypted_message(
         }]
     });
     event["canonical_digest"] = Value::String(event_canonical_digest(&event));
-    let sent: Value = TestClient::post("http://server/_cokret/self/events")
+    let sent: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&event)
         .send(&app_from_state(state))
@@ -523,7 +523,7 @@ async fn submit_projection_event(
         }]
     });
     event["canonical_digest"] = Value::String(event_canonical_digest(&event));
-    let sent: Value = TestClient::post("http://server/_cokret/self/events")
+    let sent: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&event)
         .send(&app_from_state(state))
@@ -572,7 +572,7 @@ async fn submit_projection_event_status(
         }]
     });
     event["canonical_digest"] = Value::String(event_canonical_digest(&event));
-    let mut response = TestClient::post("http://server/_cokret/self/events")
+    let mut response = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&event)
         .send(&app_from_state(state))
@@ -583,7 +583,7 @@ async fn submit_projection_event_status(
 }
 
 fn sha256_json(value: &Value) -> String {
-    let bytes = cokret_sdk::canonical::canonical_json_bytes(value).expect("json canonicalizes");
+    let bytes = arkret_sdk::canonical::canonical_json_bytes(value).expect("json canonicalizes");
     let mut hasher = Sha256::new();
     hasher.update(bytes);
     format!("sha256:{}", hex::encode(hasher.finalize()))
@@ -666,7 +666,7 @@ async fn joined_history_hides_pre_join_messages_from_sync_and_events_query() {
     );
 
     let events: Value = TestClient::get(format!(
-        "http://server/_cokret/self/events?realms={realm_id}&limit=20"
+        "http://server/_arkret/self/events?realms={realm_id}&limit=20"
     ))
     .add_header("authorization", format!("Bearer {bob}"), true)
     .send(&app_from_state(state.clone()))
@@ -808,7 +808,7 @@ async fn shared_history_allows_late_joiner_to_backfill_prior_messages() {
     );
 
     let events: Value = TestClient::get(format!(
-        "http://server/_cokret/self/events?realms={realm_id}&limit=20"
+        "http://server/_arkret/self/events?realms={realm_id}&limit=20"
     ))
     .add_header("authorization", format!("Bearer {bob}"), true)
     .send(&app_from_state(state.clone()))
@@ -894,7 +894,7 @@ async fn circle_scoped_encrypted_message_is_hidden_from_realm_member_outside_cir
         "Realm member outside Circle must not receive Circle-scoped ciphertext: {mallory_sync:?}"
     );
 
-    let bob_read: Value = TestClient::get(format!("http://server/_cokret/self/events/{event_id}"))
+    let bob_read: Value = TestClient::get(format!("http://server/_arkret/self/events/{event_id}"))
         .add_header("authorization", format!("Bearer {bob}"), true)
         .send(&app_from_state(state.clone()))
         .await
@@ -920,7 +920,7 @@ async fn circle_scoped_encrypted_message_is_hidden_from_realm_member_outside_cir
         "encrypted message aad MUST NOT carry scope_circle_id (spec): {bob_read:?}"
     );
 
-    let mallory_read = TestClient::get(format!("http://server/_cokret/self/events/{event_id}"))
+    let mallory_read = TestClient::get(format!("http://server/_arkret/self/events/{event_id}"))
         .add_header("authorization", format!("Bearer {mallory}"), true)
         .send(&app_from_state(state.clone()))
         .await;

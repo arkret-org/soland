@@ -138,7 +138,7 @@ pub(crate) async fn identity_describe(
     ];
 
     json_ok(IdentityRegistryDescription {
-        protocol_version: cokret_sdk::PROTOCOL_VERSION.to_owned(),
+        protocol_version: arkret_sdk::PROTOCOL_VERSION.to_owned(),
         service_type: "identity_registry".to_owned(),
         service_did,
         trust_domain: state.config.trust_domain.clone(),
@@ -158,12 +158,12 @@ pub(crate) async fn identity_describe(
             kind: "http".to_owned(),
             base_url: state.config.public_base_url.clone(),
             paths: vec![
-                "/_cokret/root/identity/describe".to_owned(),
-                "/_cokret/root/identity/resolve".to_owned(),
-                "/_cokret/root/identity/document".to_owned(),
-                "/_cokret/root/identity/log".to_owned(),
-                "/_cokret/root/identity/receipts".to_owned(),
-                "/_cokret/root/identity/submit-did-operation".to_owned(),
+                "/_arkret/root/identity/describe".to_owned(),
+                "/_arkret/root/identity/resolve".to_owned(),
+                "/_arkret/root/identity/document".to_owned(),
+                "/_arkret/root/identity/log".to_owned(),
+                "/_arkret/root/identity/receipts".to_owned(),
+                "/_arkret/root/identity/submit-did-operation".to_owned(),
             ],
         }],
         supported_features: supported_features.clone(),
@@ -197,7 +197,7 @@ pub(crate) async fn identity_describe(
         resolver_policy: IdentityResolverPolicy {
             allow_methods: state.config.did_resolver_allow_methods.clone(),
             freshness_receipts: IdentityFreshnessReceiptsPolicy {
-                endpoint_template: "/_cokret/root/identity/receipts?did={did}".to_owned(),
+                endpoint_template: "/_arkret/root/identity/receipts?did={did}".to_owned(),
             },
             webvh_validation: IdentityWebvhValidationPolicy {
                 witness_quorum: "enforced_for_local_webvh_records".to_owned(),
@@ -843,7 +843,7 @@ fn key_log_head_hash(value: Option<String>) -> Result<Option<Hash>, AppError> {
 }
 
 fn did_log_event_digest(operation: &Value) -> Result<String, AppError> {
-    cokret_sdk::canonical::canonical_sha256(operation)
+    arkret_sdk::canonical::canonical_sha256(operation)
         .map_err(|error| AppError::internal(format!("DID log entry digest failed: {error}")))
 }
 

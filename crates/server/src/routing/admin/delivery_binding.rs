@@ -14,7 +14,7 @@
 //! intentionally not exposed here yet; policy changes strand through the
 //! regular `ck.realm.delivery_binding_policy` event submit path.
 
-use cokret_sdk::RealmId;
+use arkret_sdk::RealmId;
 use salvo::http::StatusCode;
 use salvo::oapi::extract::PathParam;
 use salvo::prelude::*;

@@ -3,7 +3,7 @@
 //! cohesive unit; external paths preserved via `pub(crate) use` re-export in
 //! the parent module.
 
-use cokret_sdk::{
+use arkret_sdk::{
     Did, ErasedClass, ErasureOutcome, ErasureReceipt, ErasureReceiptProof, ErasureScope,
     ErasureStorageBoundary, ErasureSubject, ErasureSubjectKind,
 };
@@ -898,12 +898,12 @@ struct AccountEraseOutcome {
 /// rewrite worker; this is the v1 "memory ledger" cascade. Spec: A.3
 /// + identity/account-lifecycle.md.
 fn remove_realm_memberships_for_actor(state: &AppState, actor: &str) -> usize {
-    let actor_id = match cokret_sdk::Did::new(actor.to_owned()) {
+    let actor_id = match arkret_sdk::Did::new(actor.to_owned()) {
         Ok(did) => did,
         Err(_) => return 0,
     };
     let mut realms = state.realms.lock();
-    let realm_ids: Vec<cokret_sdk::RealmId> = realms
+    let realm_ids: Vec<arkret_sdk::RealmId> = realms
         .entries_iter()
         .filter(|(_id, entry)| entry.members.contains(&actor_id))
         .map(|(id, _entry)| id.clone())
@@ -1064,8 +1064,8 @@ fn build_erasure_receipt_value(
         .map_err(|error| AppError::internal(format!("service DID is invalid: {error}")))?;
     let retained_stub =
         erasure_retained_stub(&issuer, &receipt_id, &subject, &scope, completed_at)?;
-    let retained_stub_digest = cokret_sdk::Hash::new(
-        cokret_sdk::canonical::canonical_sha256(&retained_stub)
+    let retained_stub_digest = arkret_sdk::Hash::new(
+        arkret_sdk::canonical::canonical_sha256(&retained_stub)
             .map_err(|error| AppError::internal(format!("erasure retained stub: {error}")))?,
     )
     .map_err(|error| AppError::internal(format!("erasure retained stub digest: {error}")))?;
@@ -1117,18 +1117,18 @@ fn build_erasure_receipt_value(
         .map_err(|error| AppError::internal(format!("erasure receipt encode: {error}")))
 }
 
-fn erasure_receipt_operation(receipt: Value) -> Option<cokret_sdk::Operation> {
+fn erasure_receipt_operation(receipt: Value) -> Option<arkret_sdk::Operation> {
     let realm_id = receipt
         .get("scope")
         .and_then(Value::as_object)
         .and_then(|scope| scope.get("realm_id"))
         .and_then(Value::as_str)?;
-    let operation_id = cokret_sdk::OperationId::new(crate::ids::generate_operation_id()).ok()?;
-    let realm_id = cokret_sdk::RealmId::new(realm_id.to_owned()).ok()?;
-    Some(cokret_sdk::Operation::create(
+    let operation_id = arkret_sdk::OperationId::new(crate::ids::generate_operation_id()).ok()?;
+    let realm_id = arkret_sdk::RealmId::new(realm_id.to_owned()).ok()?;
+    Some(arkret_sdk::Operation::create(
         operation_id,
         realm_id,
-        cokret_sdk::events::kinds::AUDIT_ERASURE_RECEIPT,
+        arkret_sdk::events::kinds::AUDIT_ERASURE_RECEIPT,
         receipt,
     ))
 }
@@ -1183,7 +1183,7 @@ fn erasure_receipt_proof_signature(
         "alg": "EdDSA",
         "kid": verification_method,
     });
-    let protected = cokret_sdk::canonical::canonical_json_bytes(&protected)
+    let protected = arkret_sdk::canonical::canonical_json_bytes(&protected)
         .map_err(|error| AppError::internal(format!("erasure proof header: {error}")))?;
     let protected_b64 = URL_SAFE_NO_PAD.encode(protected);
     let payload_b64 = URL_SAFE_NO_PAD.encode(payload);

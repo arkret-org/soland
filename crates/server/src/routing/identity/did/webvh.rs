@@ -101,7 +101,7 @@ pub(super) fn did_webvh_descriptor(state: &AppState) -> Value {
             // registration URL from the protocol-face `resolver_url` below.
             "provider_local": true,
             "registration_url": format!("{}/_soland/root/identity/webvh/register", state.config.public_base_url.trim_end_matches('/')),
-            "resolver_url": format!("{}/_cokret/root/identity", state.config.public_base_url.trim_end_matches('/')),
+            "resolver_url": format!("{}/_arkret/root/identity", state.config.public_base_url.trim_end_matches('/')),
             "document_url_template": document_url_template,
             "log_url_template": log_url_template,
             "registration_auth": {

@@ -10,7 +10,7 @@ async fn policy_check_and_validation_work() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
 
-    let policy: Value = TestClient::post("http://server/_cokret/self/policy/check")
+    let policy: Value = TestClient::post("http://server/_arkret/self/policy/check")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
             "request_id": "req1",
@@ -77,7 +77,7 @@ async fn policy_check_and_validation_work() {
         .unwrap();
     assert_eq!(policies["policies"].as_array().unwrap().len(), 1);
 
-    let denied: Value = TestClient::post("http://server/_cokret/self/policy/check")
+    let denied: Value = TestClient::post("http://server/_arkret/self/policy/check")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
             "request_id": "req2",
@@ -111,7 +111,7 @@ async fn policy_check_and_validation_work() {
             .unwrap();
     assert_eq!(deleted["ok"], true);
 
-    let after_delete: Value = TestClient::post("http://server/_cokret/self/policy/check")
+    let after_delete: Value = TestClient::post("http://server/_arkret/self/policy/check")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
             "request_id": "req3",
@@ -196,7 +196,7 @@ async fn snapshot_v1_audit_path_verifies_against_merkle_root() {
     let chunk_count = head["chunk_count"].as_u64().unwrap();
     let tree_size = chunk_count as usize;
     let snapshot_ref = head["id"].as_str().unwrap();
-    let root = cokret_sdk::Hash::new(head["merkle_root"].as_str().unwrap().to_owned()).unwrap();
+    let root = arkret_sdk::Hash::new(head["merkle_root"].as_str().unwrap().to_owned()).unwrap();
     for chunk_id in 0..chunk_count {
         let chunk: Value = TestClient::get(format!(
             "http://server/_soland/self/sync/snapshot-chunk?snapshot_ref={snapshot_ref}&chunk_id={chunk_id}"
@@ -207,15 +207,15 @@ async fn snapshot_v1_audit_path_verifies_against_merkle_root() {
         .await
         .unwrap();
         assert_eq!(chunk["chunk_id"], chunk_id);
-        let leaf = cokret_sdk::Hash::new(chunk["digest"].as_str().unwrap().to_owned()).unwrap();
-        let audit_path: Vec<cokret_sdk::Hash> = chunk["audit_path"]
+        let leaf = arkret_sdk::Hash::new(chunk["digest"].as_str().unwrap().to_owned()).unwrap();
+        let audit_path: Vec<arkret_sdk::Hash> = chunk["audit_path"]
             .as_array()
             .unwrap()
             .iter()
-            .map(|h| cokret_sdk::Hash::new(h.as_str().unwrap().to_owned()).unwrap())
+            .map(|h| arkret_sdk::Hash::new(h.as_str().unwrap().to_owned()).unwrap())
             .collect();
         assert!(
-            cokret_sdk::SnapshotMerkleTree::verify(
+            arkret_sdk::SnapshotMerkleTree::verify(
                 &root,
                 &leaf,
                 chunk_id as usize,
@@ -258,7 +258,7 @@ async fn snapshot_v1_multi_chunk_fixture_verifies_non_empty_audit_path() {
     // reproducible run-to-run.
     //
     // Snapshot's `messages` array comes from the MessageRecord store, now
-    // populated by canonical `POST /_cokret/self/events` projection.
+    // populated by canonical `POST /_arkret/self/events` projection.
     let body_text: String = (0..40)
         .map(|i| {
             format!(
@@ -309,7 +309,7 @@ async fn snapshot_v1_multi_chunk_fixture_verifies_non_empty_audit_path() {
     // For each chunk, audit_path MUST be non-empty (multi-chunk case)
     // AND reconstruct to merkle_root via SnapshotMerkleTree::verify.
     let snapshot_ref = head["id"].as_str().unwrap();
-    let root = cokret_sdk::Hash::new(head["merkle_root"].as_str().unwrap().to_owned()).unwrap();
+    let root = arkret_sdk::Hash::new(head["merkle_root"].as_str().unwrap().to_owned()).unwrap();
     let tree_size = chunk_count as usize;
     let mut any_non_empty_path = false;
     for chunk_id in 0..chunk_count {
@@ -321,18 +321,18 @@ async fn snapshot_v1_multi_chunk_fixture_verifies_non_empty_audit_path() {
         .take_json()
         .await
         .unwrap();
-        let leaf = cokret_sdk::Hash::new(chunk["digest"].as_str().unwrap().to_owned()).unwrap();
-        let audit_path: Vec<cokret_sdk::Hash> = chunk["audit_path"]
+        let leaf = arkret_sdk::Hash::new(chunk["digest"].as_str().unwrap().to_owned()).unwrap();
+        let audit_path: Vec<arkret_sdk::Hash> = chunk["audit_path"]
             .as_array()
             .unwrap()
             .iter()
-            .map(|h| cokret_sdk::Hash::new(h.as_str().unwrap().to_owned()).unwrap())
+            .map(|h| arkret_sdk::Hash::new(h.as_str().unwrap().to_owned()).unwrap())
             .collect();
         if !audit_path.is_empty() {
             any_non_empty_path = true;
         }
         assert!(
-            cokret_sdk::SnapshotMerkleTree::verify(
+            arkret_sdk::SnapshotMerkleTree::verify(
                 &root,
                 &leaf,
                 chunk_id as usize,

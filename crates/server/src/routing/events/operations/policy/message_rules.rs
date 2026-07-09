@@ -16,7 +16,7 @@ pub(super) fn validate_reaction_scope_policy(
     };
     if !matches!(
         kind,
-        cokret_sdk::events::kinds::REACTION_ADD | cokret_sdk::events::kinds::REACTION_REMOVE
+        arkret_sdk::events::kinds::REACTION_ADD | arkret_sdk::events::kinds::REACTION_REMOVE
     ) {
         return Ok(());
     }
@@ -41,7 +41,7 @@ pub(super) fn validate_reaction_scope_policy(
     if realm_ids_match(operation.realm_id.as_str(), &target_realm) {
         Ok(())
     } else {
-        Err(cokret_sdk::error::REASON_REACTION_SCOPE_MISMATCH)
+        Err(arkret_sdk::error::REASON_REACTION_SCOPE_MISMATCH)
     }
 }
 
@@ -96,28 +96,28 @@ pub(super) fn operation_target_scope_circle_id(
             .and_then(|morph_id| projection.morph_scope_circle_id(morph_id))
     };
     match kinds::canonical_kind_for_operation(operation)? {
-        cokret_sdk::events::kinds::STRAND_CREATE
-        | cokret_sdk::events::kinds::MORPH_CREATE
-        | cokret_sdk::events::kinds::SPACE_CREATE => inline_scope("object"),
-        cokret_sdk::events::kinds::RELATION_CREATE => inline_scope("relation")
+        arkret_sdk::events::kinds::STRAND_CREATE
+        | arkret_sdk::events::kinds::MORPH_CREATE
+        | arkret_sdk::events::kinds::SPACE_CREATE => inline_scope("object"),
+        arkret_sdk::events::kinds::RELATION_CREATE => inline_scope("relation")
             .or_else(|| inline_scope("object"))
             .or_else(top_level_scope),
-        cokret_sdk::events::kinds::RELATION_UPDATE
-        | cokret_sdk::events::kinds::RELATION_TOMBSTONE => {
+        arkret_sdk::events::kinds::RELATION_UPDATE
+        | arkret_sdk::events::kinds::RELATION_TOMBSTONE => {
             relation_scope("relation_id").or_else(|| relation_scope("id"))
         }
-        cokret_sdk::events::kinds::MESSAGE_CREATE => strand_scope("strand_id"),
-        cokret_sdk::events::kinds::STRAND_UPDATE => strand_scope("target_ref"),
-        cokret_sdk::events::kinds::MORPH_UPDATE
-        | cokret_sdk::events::kinds::MORPH_ARCHIVE
-        | cokret_sdk::events::kinds::MORPH_RESTORE => morph_scope("target_ref"),
-        cokret_sdk::events::kinds::STRAND_ARCHIVE
-        | cokret_sdk::events::kinds::STRAND_RESTORE
-        | cokret_sdk::events::kinds::STRAND_MOVE
-        | cokret_sdk::events::kinds::STRAND_REORDER => {
+        arkret_sdk::events::kinds::MESSAGE_CREATE => strand_scope("strand_id"),
+        arkret_sdk::events::kinds::STRAND_UPDATE => strand_scope("target_ref"),
+        arkret_sdk::events::kinds::MORPH_UPDATE
+        | arkret_sdk::events::kinds::MORPH_ARCHIVE
+        | arkret_sdk::events::kinds::MORPH_RESTORE => morph_scope("target_ref"),
+        arkret_sdk::events::kinds::STRAND_ARCHIVE
+        | arkret_sdk::events::kinds::STRAND_RESTORE
+        | arkret_sdk::events::kinds::STRAND_MOVE
+        | arkret_sdk::events::kinds::STRAND_REORDER => {
             strand_scope("target_ref").or_else(|| strand_scope("strand_id"))
         }
-        cokret_sdk::events::kinds::REACTION_ADD | cokret_sdk::events::kinds::REACTION_REMOVE => {
+        arkret_sdk::events::kinds::REACTION_ADD | arkret_sdk::events::kinds::REACTION_REMOVE => {
             // A reaction's scope is the target Message's Strand scope — reacting
             // into a Circle is a write into that scope and requires Circle
             // membership just like authoring there. Unknown target (not yet
@@ -190,10 +190,10 @@ pub(super) fn validate_circle_scope_membership(
 /// `ck.applet.registration` MUST own the target Realm or hold an active
 /// `ck.realm.admin` grant covering it, else reject `applet_registration_unauthorized`.
 ///
-/// The dedicated install aggregate (`POST /_cokret/self/applets/install`) checks
+/// The dedicated install aggregate (`POST /_arkret/self/applets/install`) checks
 /// this in its own handler and persists the registration projection directly —
 /// it does NOT flow through this admission path. This gate closes the *bypass*:
-/// a raw `ck.applet.registration` submitted via `/_cokret/self/events` otherwise
+/// a raw `ck.applet.registration` submitted via `/_arkret/self/events` otherwise
 /// reaches `apply_applet_registration` with no authorization of its own.
 /// Registration staying `service_attested` (carrier authenticity) is orthogonal
 /// to "who may install" (§4) — both must hold. Mirrors the ban gate
@@ -204,7 +204,7 @@ pub(super) async fn validate_applet_registration_authz(
     operation: &Operation,
 ) -> Result<(), &'static str> {
     if kinds::canonical_kind_for_operation(operation)
-        != Some(cokret_sdk::events::kinds::APPLET_REGISTRATION)
+        != Some(arkret_sdk::events::kinds::APPLET_REGISTRATION)
     {
         return Ok(());
     }
@@ -295,9 +295,9 @@ pub(super) async fn validate_message_edit_redact_window_policy(
     };
     let is_redact = matches!(
         kind,
-        cokret_sdk::events::kinds::MESSAGE_REDACT | cokret_sdk::events::kinds::REDACTION
+        arkret_sdk::events::kinds::MESSAGE_REDACT | arkret_sdk::events::kinds::REDACTION
     );
-    let is_revise = matches!(kind, cokret_sdk::events::kinds::MESSAGE_REVISE);
+    let is_revise = matches!(kind, arkret_sdk::events::kinds::MESSAGE_REVISE);
     if !is_redact && !is_revise {
         return Ok(());
     }
@@ -411,8 +411,8 @@ pub(super) async fn validate_message_edit_redact_window_policy(
 pub(crate) fn message_window_permits(
     is_redact: bool,
     age: chrono::Duration,
-    message_edit_window: Option<&cokret_sdk::authz::ConstraintDuration>,
-    message_redact_window: Option<&cokret_sdk::authz::ConstraintDuration>,
+    message_edit_window: Option<&arkret_sdk::authz::ConstraintDuration>,
+    message_redact_window: Option<&arkret_sdk::authz::ConstraintDuration>,
     allow_redact_after_window: bool,
 ) -> bool {
     if is_redact {
@@ -439,7 +439,7 @@ pub(crate) fn message_window_permits(
 /// `true` when `age` is within the constraint window (mirror of the SDK
 /// `max_age_contains` helper). Unknown units fail closed.
 pub(super) fn duration_covers_age(
-    window: &cokret_sdk::authz::ConstraintDuration,
+    window: &arkret_sdk::authz::ConstraintDuration,
     age: chrono::Duration,
 ) -> bool {
     let allowed = match window.unit.as_str() {
@@ -458,17 +458,17 @@ pub async fn validate_content_encryption_floor(
 ) -> Result<(), &'static str> {
     for operation in operations {
         match kinds::canonical_kind_for_operation(operation) {
-            Some(cokret_sdk::events::kinds::REALM_UPDATE)
+            Some(arkret_sdk::events::kinds::REALM_UPDATE)
                 if operation_touches_encryption_profile(operation) =>
             {
                 return Err(REALM_ENCRYPTION_PROFILE_CREATE_LOCKED);
             }
-            Some(cokret_sdk::events::kinds::CIRCLE_UPDATE)
+            Some(arkret_sdk::events::kinds::CIRCLE_UPDATE)
                 if operation_touches_encryption_profile(operation) =>
             {
                 return Err(CIRCLE_ENCRYPTION_PROFILE_CREATE_LOCKED);
             }
-            Some(cokret_sdk::events::kinds::CIRCLE_CREATE) => {
+            Some(arkret_sdk::events::kinds::CIRCLE_CREATE) => {
                 if let Some(profile) = operation_circle_encryption_profile(operation)
                     && !encryption_profile_requires_content_encryption(Some(profile))
                     && realm_requires_content_encryption(state, operation.realm_id.as_str()).await

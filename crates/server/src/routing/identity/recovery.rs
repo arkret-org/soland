@@ -2,8 +2,8 @@
 //!
 //! Mounts recovery policy / receipt endpoints introduced in arkret-spec b47ff6ec:
 //!
-//! - `GET /_cokret/root/identity/recovery-policy` — read the active recovery policy.
-//! - `POST /_cokret/root/identity/recovery-policy` — persist + advance a recovery policy.
+//! - `GET /_arkret/root/identity/recovery-policy` — read the active recovery policy.
+//! - `POST /_arkret/root/identity/recovery-policy` — persist + advance a recovery policy.
 //! - `POST /_soland/root/identity/recovery-receipt` — record a recovery receipt for a witnessed
 //!   session.
 //!
@@ -23,7 +23,7 @@ use std::collections::BTreeSet;
 use base64::Engine as _;
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use chrono::SecondsFormat;
-use cokret_sdk::{
+use arkret_sdk::{
     DeviceId, Did, PolicyId, ProofSummary, ReceiptId, RecoveryPolicy, RecoveryPolicyActiveOutcome,
     RecoveryPolicyPublishOutcome, RecoveryPolicyRef, RecoveryPolicySummary, RecoveryReceiptOutcome,
     RecoverySessionCompleteOutcome, RecoverySessionCompleteRequestBody,
@@ -62,7 +62,7 @@ use validation::*;
 mod wire;
 use wire::*;
 
-/// Spec-canonical recovery surface mounted under `/_cokret/root/identity`.
+/// Spec-canonical recovery surface mounted under `/_arkret/root/identity`.
 ///
 /// The standard surface exposes recovery policy read/publish plus recovery
 /// session lifecycle operations. Policy history and recovery receipt

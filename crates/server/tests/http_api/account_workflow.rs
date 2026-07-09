@@ -10,7 +10,7 @@ async fn account_viewer_returns_device_summaries() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
 
-    let viewer: Value = TestClient::get("http://server/_cokret/self/account/viewer")
+    let viewer: Value = TestClient::get("http://server/_arkret/self/account/viewer")
         .add_header("authorization", format!("Bearer {token}"), true)
         .send(&app_from_state(state.clone()))
         .await
@@ -50,7 +50,7 @@ async fn account_erasure_projects_erasure_pending_state() {
         "erasure_pending"
     );
 
-    let mut viewer = TestClient::get("http://server/_cokret/self/account/viewer")
+    let mut viewer = TestClient::get("http://server/_arkret/self/account/viewer")
         .add_header("authorization", format!("Bearer {token}"), true)
         .send(&app_from_state(state.clone()))
         .await;
@@ -233,7 +233,7 @@ async fn account_viewer_does_not_authorize_unverified_session_device() {
     )
     .await;
 
-    let viewer: Value = TestClient::get("http://server/_cokret/self/account/viewer")
+    let viewer: Value = TestClient::get("http://server/_arkret/self/account/viewer")
         .add_header("authorization", format!("Bearer {second}"), true)
         .send(&app_from_state(state.clone()))
         .await
@@ -266,7 +266,7 @@ async fn account_viewer_authorizes_founding_device_registered_with_account() {
     let state = AppState::new(test_config(), Db { pool: None });
     let founding_device = "ak:device:01904100-0000-7000-8000-b0b0b0000001";
     let did = "did:web:bob.example";
-    let registered: Value = TestClient::post("http://server/_cokret/gate/account/register")
+    let registered: Value = TestClient::post("http://server/_arkret/gate/account/register")
         .json(&serde_json::json!({
             "principal_id": did,
             "display_name": "bob",
@@ -283,7 +283,7 @@ async fn account_viewer_authorizes_founding_device_registered_with_account() {
     );
     let token = dev_token_for_device(state.clone(), did, founding_device, "bob").await;
 
-    let viewer: Value = TestClient::get("http://server/_cokret/self/account/viewer")
+    let viewer: Value = TestClient::get("http://server/_arkret/self/account/viewer")
         .add_header("authorization", format!("Bearer {token}"), true)
         .send(&app_from_state(state.clone()))
         .await
@@ -322,7 +322,7 @@ async fn account_contacts_and_realm_lifecycle_workflow() {
         .await;
     assert_eq!(duplicate.status_code.unwrap().as_u16(), 409);
 
-    let hidden_bob: Value = TestClient::post("http://server/_cokret/find/directory/search-users")
+    let hidden_bob: Value = TestClient::post("http://server/_arkret/find/directory/search-users")
         .json(&serde_json::json!({"query": "bob"}))
         .send(&app_from_state(state.clone()))
         .await
@@ -413,7 +413,7 @@ async fn account_contacts_and_realm_lifecycle_workflow() {
         .unwrap();
     assert_eq!(bob_contacts["contacts"].as_array().unwrap().len(), 1);
 
-    let visible_bob: Value = TestClient::post("http://server/_cokret/find/directory/search-users")
+    let visible_bob: Value = TestClient::post("http://server/_arkret/find/directory/search-users")
         .add_header("authorization", format!("Bearer {alice}"), true)
         .json(&serde_json::json!({"query": "bob"}))
         .send(&app_from_state(state.clone()))
@@ -438,7 +438,7 @@ async fn account_contacts_and_realm_lifecycle_workflow() {
     assert_eq!(created_realm["owner"], "did:web:alice.example");
 
     let hidden_realm: Value =
-        TestClient::post("http://server/_cokret/find/directory/search-realms")
+        TestClient::post("http://server/_arkret/find/directory/search-realms")
             .json(&serde_json::json!({"query": "Workflow Realm"}))
             .send(&app_from_state(state.clone()))
             .await
@@ -458,7 +458,7 @@ async fn account_contacts_and_realm_lifecycle_workflow() {
     )
     .await;
     let invite_realm_id = invite_realm["realm_id"].as_str().unwrap().to_owned();
-    let bob_invites: Value = TestClient::get("http://server/_cokret/self/authz/invites")
+    let bob_invites: Value = TestClient::get("http://server/_arkret/self/authz/invites")
         .add_header("authorization", format!("Bearer {bob}"), true)
         .send(&app_from_state(state.clone()))
         .await
@@ -480,13 +480,13 @@ async fn account_contacts_and_realm_lifecycle_workflow() {
         .unwrap()
         .to_owned();
     let invalid_invite_resolve =
-        TestClient::post("http://server/_cokret/find/directory/resolve-realm")
+        TestClient::post("http://server/_arkret/find/directory/resolve-realm")
             .json(&serde_json::json!({"invite_token": "ak:invite-token:invalid"}))
             .send(&app_from_state(state.clone()))
             .await;
     assert_eq!(invalid_invite_resolve.status_code.unwrap().as_u16(), 404);
     let invite_resolve: Value =
-        TestClient::post("http://server/_cokret/find/directory/resolve-realm")
+        TestClient::post("http://server/_arkret/find/directory/resolve-realm")
             .json(&serde_json::json!({"invite_token": invite_token}))
             .send(&app_from_state(state.clone()))
             .await
@@ -507,7 +507,7 @@ async fn account_contacts_and_realm_lifecycle_workflow() {
     .await;
     let listed_realm_id = listed_realm["realm_id"].as_str().unwrap().to_owned();
     let listed_search: Value =
-        TestClient::post("http://server/_cokret/find/directory/search-realms")
+        TestClient::post("http://server/_arkret/find/directory/search-realms")
             .json(&serde_json::json!({"query": "Listed Directory Realm"}))
             .send(&app_from_state(state.clone()))
             .await
@@ -539,7 +539,7 @@ async fn account_contacts_and_realm_lifecycle_workflow() {
     .await;
     let unlisted_realm_id = unlisted_realm["realm_id"].as_str().unwrap().to_owned();
     let unlisted_search: Value =
-        TestClient::post("http://server/_cokret/find/directory/search-realms")
+        TestClient::post("http://server/_arkret/find/directory/search-realms")
             .json(&serde_json::json!({"query": "Unlisted Directory Realm"}))
             .send(&app_from_state(state.clone()))
             .await
@@ -548,7 +548,7 @@ async fn account_contacts_and_realm_lifecycle_workflow() {
             .unwrap();
     assert!(unlisted_search["realms"].as_array().unwrap().is_empty());
     let unlisted_resolve: Value =
-        TestClient::post("http://server/_cokret/find/directory/resolve-realm")
+        TestClient::post("http://server/_arkret/find/directory/resolve-realm")
             .json(&serde_json::json!({"realm_id": unlisted_realm_id.clone()}))
             .send(&app_from_state(state.clone()))
             .await
@@ -560,14 +560,14 @@ async fn account_contacts_and_realm_lifecycle_workflow() {
         unlisted_realm_id
     );
 
-    let anonymous_resolve = TestClient::post("http://server/_cokret/find/directory/resolve-realm")
+    let anonymous_resolve = TestClient::post("http://server/_arkret/find/directory/resolve-realm")
         .json(&serde_json::json!({"realm_id": realm_id}))
         .send(&app_from_state(state.clone()))
         .await;
     assert_eq!(anonymous_resolve.status_code.unwrap().as_u16(), 404);
 
     let owner_resolve: Value =
-        TestClient::post("http://server/_cokret/find/directory/resolve-realm")
+        TestClient::post("http://server/_arkret/find/directory/resolve-realm")
             .add_header("authorization", format!("Bearer {alice}"), true)
             .json(&serde_json::json!({"realm_id": realm_id}))
             .send(&app_from_state(state.clone()))
@@ -891,7 +891,7 @@ async fn account_contacts_and_realm_lifecycle_workflow() {
     );
 
     let mismatch = TestClient::get(format!(
-        "http://server/_cokret/self/account/subscribe?catchup=true&after={}",
+        "http://server/_arkret/self/account/subscribe?catchup=true&after={}",
         sync_with_message["cursor"].as_str().unwrap()
     ))
     .add_header("authorization", format!("Bearer {bob}"), true)
@@ -900,7 +900,7 @@ async fn account_contacts_and_realm_lifecycle_workflow() {
     assert_eq!(mismatch.status_code.unwrap().as_u16(), 400);
 
     let filter_mismatch = TestClient::get(format!(
-        "http://server/_cokret/self/account/subscribe?catchup=true&after={}&filter=%7B%22realms%22%3A%5B%22{}%22%5D%7D",
+        "http://server/_arkret/self/account/subscribe?catchup=true&after={}&filter=%7B%22realms%22%3A%5B%22{}%22%5D%7D",
         sync_with_message["cursor"].as_str().unwrap(),
         realm_id
     ))
@@ -912,7 +912,7 @@ async fn account_contacts_and_realm_lifecycle_workflow() {
     let mut expired_cursor = cursor.clone();
     expired_cursor["x"] = serde_json::json!(1);
     let mut expired = TestClient::get(format!(
-        "http://server/_cokret/self/account/subscribe?catchup=true&after={}",
+        "http://server/_arkret/self/account/subscribe?catchup=true&after={}",
         encode_cursor(&expired_cursor)
     ))
     .add_header("authorization", format!("Bearer {alice}"), true)
@@ -923,7 +923,7 @@ async fn account_contacts_and_realm_lifecycle_workflow() {
     assert_eq!(expired_body["error"]["code"], "cursor_expired");
 
     let exported: Value = TestClient::get(format!(
-        "http://server/_cokret/self/realms/{realm_id}/export"
+        "http://server/_arkret/self/realms/{realm_id}/export"
     ))
     .add_header("authorization", format!("Bearer {alice}"), true)
     .send(&app_from_state(state.clone()))
@@ -946,7 +946,7 @@ async fn account_contacts_and_realm_lifecycle_workflow() {
         sent_message["event_id"]
     );
 
-    let invalid_wait = TestClient::get("http://server/_cokret/self/account/subscribe?catchup=true")
+    let invalid_wait = TestClient::get("http://server/_arkret/self/account/subscribe?catchup=true")
         .add_header("authorization", format!("Bearer {alice}"), true)
         .add_header("x-arkret-wait-for", "not-a-sync-token", true)
         .send(&app_from_state(state.clone()))
@@ -957,7 +957,7 @@ async fn account_contacts_and_realm_lifecycle_workflow() {
     // ck.schema.snapshot.v1 manifest, so `ck.self.snapshot.query.manifest_head` answers
     // `not_implemented` (spec service-surface.md §5.2).
     let mut protocol_head = TestClient::get(format!(
-        "http://server/_cokret/self/snapshot/head?realm_id={realm_id}"
+        "http://server/_arkret/self/snapshot/head?realm_id={realm_id}"
     ))
     .send(&app_from_state(state.clone()))
     .await;
@@ -1045,7 +1045,7 @@ async fn account_contacts_and_realm_lifecycle_workflow() {
     let deleted = delete_test_realm(&state, &realm_id).await;
     assert_eq!(deleted["deleted"], true);
 
-    let directory: Value = TestClient::post("http://server/_cokret/find/directory/search-realms")
+    let directory: Value = TestClient::post("http://server/_arkret/find/directory/search-realms")
         .json(&serde_json::json!({"query": "Workflow Realm"}))
         .send(&app_from_state(state.clone()))
         .await
@@ -1104,9 +1104,9 @@ async fn account_contacts_and_realm_lifecycle_workflow() {
             .await;
     assert_eq!(forbidden_audit.status_code.unwrap().as_u16(), 403);
 
-    // Exercise the canonical spec path `/_cokret/gate/account/logout`
+    // Exercise the canonical spec path `/_arkret/gate/account/logout`
     // (ck.gate.account.command.logout) — the only device-logout surface.
-    let logout: Value = TestClient::post("http://server/_cokret/gate/account/logout")
+    let logout: Value = TestClient::post("http://server/_arkret/gate/account/logout")
         .add_header("authorization", format!("Bearer {bob}"), true)
         .send(&app_from_state(state.clone()))
         .await

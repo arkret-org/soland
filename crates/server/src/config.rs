@@ -53,14 +53,14 @@ pub struct AppConfig {
     pub livekit: LiveKitConfig,
     pub cors_allow_origin: Option<String>,
     /// Public Account Authority base URL advertised to browser clients in
-    /// `/_cokret/describe.auth_metadata.account_authority`. Registration,
+    /// `/_arkret/describe.auth_metadata.account_authority`. Registration,
     /// password recovery, passkey, OIDC, and email verification live there;
     /// soland consumes the resulting session grants and may expose DID provider
     /// primitives for trusted server-to-server calls.
     pub account_authority_url: Option<String>,
     /// OAuth/OIDC `client_id` this soland deployment is registered as at the
     /// Auth Server, advertised to browser clients in
-    /// `/_cokret/describe.auth_metadata.methods[].oidc.client_id`. The web
+    /// `/_arkret/describe.auth_metadata.methods[].oidc.client_id`. The web
     /// client uses it verbatim as the `client_id` in its OIDC authorize
     /// request; coauth keys clients by ULID, so this MUST be the registered
     /// client ULID (e.g. the dev `config.dev.yaml` client). When unset the
@@ -73,7 +73,7 @@ pub struct AppConfig {
     pub did_resolver_allow_methods: Vec<String>,
     /// Enable soland's built-in `did:webvh` provider. This is intended for
     /// ordinary self-hosted deployments and tests: coauth can discover it via
-    /// `/_cokret/root/identity/describe`, register a user DID through soland, then
+    /// `/_arkret/root/identity/describe`, register a user DID through soland, then
     /// resolve the resulting document through soland's local identity store.
     pub embedded_webvh_provider_enabled: bool,
     /// Shared bearer token required to write embedded `did:webvh` records.
@@ -157,7 +157,7 @@ pub struct AppConfig {
     /// Behavior when `use_keystore=false`: only the env-loaded seed is honored.
     pub use_keystore: bool,
     /// Federation fanout topology. The on-the-wire shape is `ck.peer.events.command.submit`
-    /// under `/_cokret/peer/events`; the topology only changes which peer set
+    /// under `/_arkret/peer/events`; the topology only changes which peer set
     /// receives accepted Event fanout.
     ///
     /// - [`FederationFanoutTopology::Mesh`] — broadcast each accepted Event to every known peer.
@@ -276,7 +276,7 @@ pub struct AppConfig {
     /// Deployment/admin upper bound for invite/contact receive policies.
     /// Constraints can only reduce holder reachability. Loaded from
     /// `SOLAND_RECEIVE_POLICY_*` env vars and advertised on ServiceDescribe.
-    pub receive_policy_constraints: Option<cokret_sdk::ReceivePolicyConstraints>,
+    pub receive_policy_constraints: Option<arkret_sdk::ReceivePolicyConstraints>,
     /// When true, `AppState::new` seeds a deterministic demo Realm
     /// (`ck:realm:0196419b-...`), demo account (`did:web:alice.example`),
     /// and matching space_meta record on boot. Off by default so
@@ -304,7 +304,7 @@ pub struct AppConfig {
     /// (`GET /_soland/self/realms/{realm_id}/applications`,
     /// `org.arkret.soland.member_application.query.list`). `member.application`
     /// is a spec candidate concept (`governance/join-policy.md` §7.2) that MUST
-    /// stay off the `/_cokret/...` protocol root and out of the `ck.*` namespace
+    /// stay off the `/_arkret/...` protocol root and out of the `ck.*` namespace
     /// until formally registered; the read surface is fail-closed (404) unless
     /// this profile is declared.
     /// Env: `SOLAND_CANDIDATE_JOIN_POLICY` (default false).
@@ -416,7 +416,7 @@ impl ObjectStorageConfig {
 }
 
 /// ICE/STUN/TURN configuration advertised by
-/// `POST /_cokret/self/rtc/ice-config`. Externalized from hardcoded
+/// `POST /_arkret/self/rtc/ice-config`. Externalized from hardcoded
 /// defaults so operators can point clients at their own STUN/TURN
 /// infrastructure and tune credential lifetimes per deployment.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -973,9 +973,9 @@ impl AppConfig {
 
     /// MAL-11 compaction policy assembled from the four env-driven config
     /// fields. Callers use this when evaluating prune candidates via
-    /// [`cokret_sdk::CompactionPolicy::is_eligible`].
-    pub fn compaction_policy(&self) -> cokret_sdk::CompactionPolicy {
-        cokret_sdk::CompactionPolicy {
+    /// [`arkret_sdk::CompactionPolicy::is_eligible`].
+    pub fn compaction_policy(&self) -> arkret_sdk::CompactionPolicy {
+        arkret_sdk::CompactionPolicy {
             min_seal_age_seconds: self.seal_compaction_min_age_seconds,
             min_compaction_witnesses: self.compaction_min_witnesses,
             preserve_genesis: self.compaction_preserve_genesis,
@@ -1307,13 +1307,13 @@ fn load_agent_audit_binding_signing_seed() -> anyhow::Result<Option<[u8; 32]>> {
 ///
 /// Order of resolution:
 /// 1. `SOLAND_TRUST_DOMAIN` env var if set (must validate as `ck:trust_domain:<scope>` per SDK
-///    [`cokret_sdk::TypedTrustDomainId`]).
+///    [`arkret_sdk::TypedTrustDomainId`]).
 /// 2. Synthesised from the configured `service_did` — strip the DID method prefix and lowercase the
 ///    remainder, then prefix with `ck:trust_domain:`.
 pub(crate) fn derive_trust_domain(service_did: &str) -> anyhow::Result<String> {
     if let Some(value) = env_non_empty("SOLAND_TRUST_DOMAIN") {
         // Validate via SDK typed id — rejects bad shape at boot.
-        cokret_sdk::TypedTrustDomainId::new(value.clone()).map_err(|e| {
+        arkret_sdk::TypedTrustDomainId::new(value.clone()).map_err(|e| {
             anyhow::anyhow!("SOLAND_TRUST_DOMAIN must be ck:trust_domain:<scope>: {e}")
         })?;
         return Ok(value);
@@ -1335,7 +1335,7 @@ pub(crate) fn derive_trust_domain(service_did: &str) -> anyhow::Result<String> {
     };
     let candidate = format!("ak:trust_domain:{scope}");
     // Final safety check.
-    cokret_sdk::TypedTrustDomainId::new(candidate.clone()).map_err(|e| {
+    arkret_sdk::TypedTrustDomainId::new(candidate.clone()).map_err(|e| {
         anyhow::anyhow!(
             "derived trust_domain from service_did {service_did:?} failed validation: {e}"
         )
@@ -1371,15 +1371,15 @@ pub(crate) fn did_host_from_service_did(service_did: &str) -> Option<String> {
     (!host.is_empty()).then(|| host.to_ascii_lowercase())
 }
 
-fn load_receive_policy_constraints() -> anyhow::Result<Option<cokret_sdk::ReceivePolicyConstraints>>
+fn load_receive_policy_constraints() -> anyhow::Result<Option<arkret_sdk::ReceivePolicyConstraints>>
 {
     let applies_to = env_csv_cap("SOLAND_RECEIVE_POLICY_APPLIES_TO")
         .map(|values| {
             values
                 .into_iter()
                 .map(|value| match value.as_str() {
-                    "invite_delivery" => Ok(cokret_sdk::ReceivePolicySurface::InviteDelivery),
-                    "contact_request" => Ok(cokret_sdk::ReceivePolicySurface::ContactRequest),
+                    "invite_delivery" => Ok(arkret_sdk::ReceivePolicySurface::InviteDelivery),
+                    "contact_request" => Ok(arkret_sdk::ReceivePolicySurface::ContactRequest),
                     other => anyhow::bail!(
                         "SOLAND_RECEIVE_POLICY_APPLIES_TO contains unsupported surface {other}"
                     ),
@@ -1430,7 +1430,7 @@ fn load_receive_policy_constraints() -> anyhow::Result<Option<cokret_sdk::Receiv
         return Ok(None);
     }
 
-    Ok(Some(cokret_sdk::ReceivePolicyConstraints {
+    Ok(Some(arkret_sdk::ReceivePolicyConstraints {
         policy_version: Some("env".to_owned()),
         applies_to,
         permitted_introduction_kinds,
@@ -1447,25 +1447,25 @@ fn load_receive_policy_constraints() -> anyhow::Result<Option<cokret_sdk::Receiv
     }))
 }
 
-fn env_receive_action(name: &str) -> anyhow::Result<Option<cokret_sdk::InviteReceiveAction>> {
+fn env_receive_action(name: &str) -> anyhow::Result<Option<arkret_sdk::InviteReceiveAction>> {
     let Some(value) = env_non_empty(name) else {
         return Ok(None);
     };
     match value.as_str() {
-        "drop" => Ok(Some(cokret_sdk::InviteReceiveAction::Drop)),
-        "quarantine" => Ok(Some(cokret_sdk::InviteReceiveAction::Quarantine)),
-        "notify" => Ok(Some(cokret_sdk::InviteReceiveAction::Notify)),
+        "drop" => Ok(Some(arkret_sdk::InviteReceiveAction::Drop)),
+        "quarantine" => Ok(Some(arkret_sdk::InviteReceiveAction::Quarantine)),
+        "notify" => Ok(Some(arkret_sdk::InviteReceiveAction::Notify)),
         other => anyhow::bail!("{name} must be drop, quarantine, or notify; got {other}"),
     }
 }
 
-fn env_unknown_action(name: &str) -> anyhow::Result<Option<cokret_sdk::UnknownInviteAction>> {
+fn env_unknown_action(name: &str) -> anyhow::Result<Option<arkret_sdk::UnknownInviteAction>> {
     let Some(value) = env_non_empty(name) else {
         return Ok(None);
     };
     match value.as_str() {
-        "drop" => Ok(Some(cokret_sdk::UnknownInviteAction::Drop)),
-        "quarantine" => Ok(Some(cokret_sdk::UnknownInviteAction::Quarantine)),
+        "drop" => Ok(Some(arkret_sdk::UnknownInviteAction::Drop)),
+        "quarantine" => Ok(Some(arkret_sdk::UnknownInviteAction::Quarantine)),
         other => anyhow::bail!("{name} must be drop or quarantine; got {other}"),
     }
 }
@@ -1480,14 +1480,14 @@ fn env_csv_cap(name: &str) -> Option<Vec<String>> {
     )
 }
 
-fn env_did_csv_cap(name: &str) -> anyhow::Result<Option<Vec<cokret_sdk::Did>>> {
+fn env_did_csv_cap(name: &str) -> anyhow::Result<Option<Vec<arkret_sdk::Did>>> {
     let Some(values) = env_csv_cap(name) else {
         return Ok(None);
     };
     values
         .into_iter()
         .map(|value| {
-            cokret_sdk::Did::new(value.clone())
+            arkret_sdk::Did::new(value.clone())
                 .map_err(|error| anyhow::anyhow!("{name} contains invalid DID `{value}`: {error}"))
         })
         .collect::<anyhow::Result<Vec<_>>>()

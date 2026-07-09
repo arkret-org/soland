@@ -346,7 +346,7 @@ async fn memory_push_bridge_cache_store_crud() {
     let url = "https://floria.example/_floria/push/bridge/describe";
     let record = OutboundPushBridgeCacheRecord {
         push_gateway_url: "https://floria.example".to_owned(),
-        service_base_url: "https://floria.example/_cokret/edge/push".to_owned(),
+        service_base_url: "https://floria.example/_arkret/edge/push".to_owned(),
         bridge_describe_url: url.to_owned(),
         fetch_state: "fresh".to_owned(),
         cache_state: "valid".to_owned(),
@@ -675,7 +675,7 @@ async fn memory_event_store_rejects_duplicate_realm_create() {
 // surface itself.
 
 fn make_test_operation(operation_id: &str, realm_id: &str) -> Operation {
-    use cokret_sdk::{OperationId, RealmId};
+    use arkret_sdk::{OperationId, RealmId};
     let mut op = Operation::create(
         OperationId::new(operation_id.to_owned()).unwrap(),
         RealmId::new(realm_id.to_owned()).unwrap(),
@@ -1239,7 +1239,7 @@ async fn memory_invite_receive_policy_store_put_get_snapshot() {
     let mut policy = crate::routing::invites::default_invite_receive_policy(subject);
     policy
         .blocked_subjects
-        .push(cokret_sdk::Did::new("did:web:mallory.example".to_owned()).unwrap());
+        .push(arkret_sdk::Did::new("did:web:mallory.example".to_owned()).unwrap());
 
     store.put(&policy).await.unwrap();
 
@@ -1441,7 +1441,7 @@ async fn pg_contact_consent_policy_and_direct_binding_survive_store_restart() {
     let mut policy = crate::routing::invites::default_invite_receive_policy(&alice);
     policy
         .blocked_subjects
-        .push(cokret_sdk::Did::new(mallory.clone()).unwrap());
+        .push(arkret_sdk::Did::new(mallory.clone()).unwrap());
     first.invite_receive_policies().put(&policy).await.unwrap();
 
     let fetched_policy = restarted

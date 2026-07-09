@@ -1,4 +1,4 @@
-use cokret_sdk::{Operation, OperationId};
+use arkret_sdk::{Operation, OperationId};
 use serde_json::{Value, json};
 use soland_data::Db;
 
@@ -36,7 +36,7 @@ fn operation(index: usize, kind: &str, payload: Value) -> Operation {
     let realm_id = "ak:realm:01904100-0000-7000-8000-000000000001".to_owned();
     Operation::create(
         OperationId::new(op_id).unwrap(),
-        cokret_sdk::RealmId::new(realm_id).unwrap(),
+        arkret_sdk::RealmId::new(realm_id).unwrap(),
         kind,
         payload,
     )
@@ -48,7 +48,7 @@ fn builtin_operation_conformance_vectors_cover_registry() {
     let vectors = vec![
         OperationVector {
             name: "message create",
-            kind: cokret_sdk::events::kinds::MESSAGE_CREATE,
+            kind: arkret_sdk::events::kinds::MESSAGE_CREATE,
             payload: json!({
                 "message_id": "ak:message:01904100-0000-7000-8000-79a90338768b",
                 "strand_id": "ak:strand:01904100-0000-7000-8000-6c663fa0205f",
@@ -60,19 +60,19 @@ fn builtin_operation_conformance_vectors_cover_registry() {
         },
         OperationVector {
             name: "message revise",
-            kind: cokret_sdk::events::kinds::MESSAGE_REVISE,
+            kind: arkret_sdk::events::kinds::MESSAGE_REVISE,
             payload: json!({"target_ref": "ak:event:01904100-0000-7000-8000-79a90338768b", "content": {"kind": "ck.content.text", "body": "edited"}}),
             valid: true,
         },
         OperationVector {
             name: "message redact",
-            kind: cokret_sdk::events::kinds::MESSAGE_REDACT,
+            kind: arkret_sdk::events::kinds::MESSAGE_REDACT,
             payload: json!({"target_event_id": "ak:event:01904100-0000-7000-8000-79a90338768b"}),
             valid: true,
         },
         OperationVector {
             name: "generic redaction",
-            kind: cokret_sdk::events::kinds::REDACTION,
+            kind: arkret_sdk::events::kinds::REDACTION,
             // ck.redaction validates its payload against message_redact_payload
             // (anyOf message_id | target_ref | event_id | target_event_id, with
             // additionalProperties=false). The target pointer `redacts` is an
@@ -83,14 +83,14 @@ fn builtin_operation_conformance_vectors_cover_registry() {
         },
         OperationVector {
             name: "reaction add",
-            kind: cokret_sdk::events::kinds::REACTION_ADD,
+            kind: arkret_sdk::events::kinds::REACTION_ADD,
             // reaction_payload: required {target_ref, key}, additionalProperties=false.
             payload: json!({"target_ref": "ak:event:01904100-0000-7000-8000-79a90338768b", "key": "+1"}),
             valid: true,
         },
         OperationVector {
             name: "reaction remove",
-            kind: cokret_sdk::events::kinds::REACTION_REMOVE,
+            kind: arkret_sdk::events::kinds::REACTION_REMOVE,
             // reaction_payload: same schema as add (remove tombstones the (actor,target_ref,key)
             // add).
             payload: json!({"target_ref": "ak:event:01904100-0000-7000-8000-79a90338768b", "key": "+1"}),
@@ -98,7 +98,7 @@ fn builtin_operation_conformance_vectors_cover_registry() {
         },
         OperationVector {
             name: "relation create",
-            kind: cokret_sdk::events::kinds::RELATION_CREATE,
+            kind: arkret_sdk::events::kinds::RELATION_CREATE,
             // relation_create_payload: anyOf {relation} | {kind, from_ref, to_ref};
             // additionalProperties=false.
             payload: json!({"kind": "blocks", "from_ref": "ak:strand:01904100-0000-7000-8000-ca33616973bb", "to_ref": "ak:morph:01904100-0000-7000-8000-7191ddd787e5"}),
@@ -106,7 +106,7 @@ fn builtin_operation_conformance_vectors_cover_registry() {
         },
         OperationVector {
             name: "relation update",
-            kind: cokret_sdk::events::kinds::RELATION_UPDATE,
+            kind: arkret_sdk::events::kinds::RELATION_UPDATE,
             // relation_update_payload: anyOf {relation_id, patch} | {target_ref, patch} |
             // {relation_id, status}. patch is a ck.patch.v1 map (path -> patch_value);
             // a plain value is shorthand for {$op:set,value}.
@@ -115,7 +115,7 @@ fn builtin_operation_conformance_vectors_cover_registry() {
         },
         OperationVector {
             name: "relation delete",
-            kind: cokret_sdk::events::kinds::RELATION_TOMBSTONE,
+            kind: arkret_sdk::events::kinds::RELATION_TOMBSTONE,
             // relation.delete resolves to object_lifecycle_payload: required {target_ref},
             // additionalProperties=false.
             payload: json!({"target_ref": "ak:relation:01904100-0000-7000-8000-71604d58ec0b"}),
@@ -123,7 +123,7 @@ fn builtin_operation_conformance_vectors_cover_registry() {
         },
         OperationVector {
             name: "member state join",
-            kind: cokret_sdk::events::kinds::MEMBER_STATE,
+            kind: arkret_sdk::events::kinds::MEMBER_STATE,
             // membership_payload: membership=join additionally requires realm_id, actor_id,
             // delivery_status; delivery_status=routable would further require
             // delivery_binding, so use unroutable to stay minimal.
@@ -132,25 +132,25 @@ fn builtin_operation_conformance_vectors_cover_registry() {
         },
         OperationVector {
             name: "member state leave",
-            kind: cokret_sdk::events::kinds::MEMBER_STATE,
+            kind: arkret_sdk::events::kinds::MEMBER_STATE,
             payload: json!({"actor_id": "did:web:alice.example", "membership": "leave"}),
             valid: true,
         },
         OperationVector {
             name: "member state ban",
-            kind: cokret_sdk::events::kinds::MEMBER_STATE,
+            kind: arkret_sdk::events::kinds::MEMBER_STATE,
             payload: json!({"actor_id": "did:web:bob.example", "membership": "ban"}),
             valid: true,
         },
         OperationVector {
             name: "member state knock",
-            kind: cokret_sdk::events::kinds::MEMBER_STATE,
+            kind: arkret_sdk::events::kinds::MEMBER_STATE,
             payload: json!({"actor_id": "did:web:bob.example", "membership": "knock"}),
             valid: true,
         },
         OperationVector {
             name: "read marker missing event_id",
-            kind: cokret_sdk::events::kinds::READ_CURSOR_ADVANCE,
+            kind: arkret_sdk::events::kinds::READ_CURSOR_ADVANCE,
             payload: json!({
                 "actor_id": "did:web:alice.example",
                 "read_scope": {"kind": "realm"},
@@ -160,7 +160,7 @@ fn builtin_operation_conformance_vectors_cover_registry() {
         },
         OperationVector {
             name: "read marker valid",
-            kind: cokret_sdk::events::kinds::READ_CURSOR_ADVANCE,
+            kind: arkret_sdk::events::kinds::READ_CURSOR_ADVANCE,
             payload: json!({
                 "actor_id": "did:web:alice.example",
                 "read_scope": {"kind": "realm"},
@@ -173,7 +173,7 @@ fn builtin_operation_conformance_vectors_cover_registry() {
         },
         OperationVector {
             name: "space create",
-            kind: cokret_sdk::events::kinds::REALM_CREATE,
+            kind: arkret_sdk::events::kinds::REALM_CREATE,
             payload: json!({"object": {
                 "id": "ak:realm:0196419b-0000-7000-8000-000000000000",
                 "schema": "ck.schema.realm.v1",
@@ -202,7 +202,7 @@ fn builtin_operation_conformance_vectors_cover_registry() {
         },
         OperationVector {
             name: "space update",
-            kind: cokret_sdk::events::kinds::REALM_UPDATE,
+            kind: arkret_sdk::events::kinds::REALM_UPDATE,
             payload: json!({
                 "target_ref": "ak:realm:01904100-0000-7000-8000-000000000001",
                 "patch": {
@@ -213,39 +213,39 @@ fn builtin_operation_conformance_vectors_cover_registry() {
         },
         OperationVector {
             name: "space destroy",
-            kind: cokret_sdk::events::kinds::REALM_DESTROY,
+            kind: arkret_sdk::events::kinds::REALM_DESTROY,
             // realm_destroy_payload: required {reason}, additionalProperties=false.
             payload: json!({"reason": "project_completed"}),
             valid: true,
         },
         OperationVector {
             name: "space container archive",
-            kind: cokret_sdk::events::kinds::SPACE_ARCHIVE,
+            kind: arkret_sdk::events::kinds::SPACE_ARCHIVE,
             payload: json!({"space_id": "ak:space:01904100-0000-7000-8000-1fb50799ad42"}),
             valid: true,
         },
         OperationVector {
             name: "space container restore",
-            kind: cokret_sdk::events::kinds::SPACE_RESTORE,
+            kind: arkret_sdk::events::kinds::SPACE_RESTORE,
             payload: json!({"space_id": "ak:space:01904100-0000-7000-8000-1fb50799ad42"}),
             valid: true,
         },
         OperationVector {
             name: "space container tombstone",
-            kind: cokret_sdk::events::kinds::SPACE_TOMBSTONE,
+            kind: arkret_sdk::events::kinds::SPACE_TOMBSTONE,
             payload: json!({"space_id": "ak:space:01904100-0000-7000-8000-1fb50799ad42"}),
             valid: true,
         },
         OperationVector {
             name: "space container restore missing space_id",
-            kind: cokret_sdk::events::kinds::SPACE_RESTORE,
+            kind: arkret_sdk::events::kinds::SPACE_RESTORE,
             payload: json!({"reason": "release_reopened"}),
             valid: false,
         },
         // Strand / Morph lifecycle conformance vectors.
         OperationVector {
             name: "strand create",
-            kind: cokret_sdk::events::kinds::STRAND_CREATE,
+            kind: arkret_sdk::events::kinds::STRAND_CREATE,
             // strand_create_payload wraps the full Strand object (strand.schema.json):
             // required {id, schema, realm_id, tracks, created_by, created_at}; title lives in
             // metadata.
@@ -262,32 +262,32 @@ fn builtin_operation_conformance_vectors_cover_registry() {
         },
         OperationVector {
             name: "strand update",
-            kind: cokret_sdk::events::kinds::STRAND_UPDATE,
+            kind: arkret_sdk::events::kinds::STRAND_UPDATE,
             payload: json!({"target_ref": "ak:strand:01904100-0000-7000-8000-ca33616973bb", "patch": {"metadata.title": { "$op": "set", "value": "Launch v2" }}}),
             valid: true,
         },
         OperationVector {
             name: "strand archive",
-            kind: cokret_sdk::events::kinds::STRAND_ARCHIVE,
+            kind: arkret_sdk::events::kinds::STRAND_ARCHIVE,
             payload: json!({"target_ref": "ak:strand:01904100-0000-7000-8000-ca33616973bb"}),
             valid: true,
         },
         OperationVector {
             name: "strand restore",
-            kind: cokret_sdk::events::kinds::STRAND_RESTORE,
+            kind: arkret_sdk::events::kinds::STRAND_RESTORE,
             payload: json!({"target_ref": "ak:strand:01904100-0000-7000-8000-ca33616973bb"}),
             valid: true,
         },
         OperationVector {
             name: "strand archive missing target_ref",
-            kind: cokret_sdk::events::kinds::STRAND_ARCHIVE,
+            kind: arkret_sdk::events::kinds::STRAND_ARCHIVE,
             payload: json!({"reason": "stale_room"}),
             valid: false,
         },
         // Strand position event vectors.
         OperationVector {
             name: "strand move",
-            kind: cokret_sdk::events::kinds::STRAND_MOVE,
+            kind: arkret_sdk::events::kinds::STRAND_MOVE,
             payload: json!({
                 "strand_id": "ak:strand:01904100-0000-7000-8000-ca33616973bb",
                 "board_space_id": "ak:space:01904100-0000-7000-8000-c10dc0000001",
@@ -298,7 +298,7 @@ fn builtin_operation_conformance_vectors_cover_registry() {
         },
         OperationVector {
             name: "strand reorder",
-            kind: cokret_sdk::events::kinds::STRAND_REORDER,
+            kind: arkret_sdk::events::kinds::STRAND_REORDER,
             payload: json!({
                 "strand_id": "ak:strand:01904100-0000-7000-8000-ca33616973bb",
                 "board_space_id": "ak:space:01904100-0000-7000-8000-c10dc0000001",
@@ -309,19 +309,19 @@ fn builtin_operation_conformance_vectors_cover_registry() {
         },
         OperationVector {
             name: "strand move missing board_space_id",
-            kind: cokret_sdk::events::kinds::STRAND_MOVE,
+            kind: arkret_sdk::events::kinds::STRAND_MOVE,
             payload: json!({"strand_id": "ak:strand:01904100-0000-7000-8000-ca33616973bb"}),
             valid: false,
         },
         OperationVector {
             name: "strand reorder missing strand_id",
-            kind: cokret_sdk::events::kinds::STRAND_REORDER,
+            kind: arkret_sdk::events::kinds::STRAND_REORDER,
             payload: json!({"board_space_id": "ak:space:01904100-0000-7000-8000-c10dc0000001", "space_id": "ak:space:01904100-0000-7000-8000-c10dc0000002", "rank": "a1"}),
             valid: false,
         },
         OperationVector {
             name: "morph create",
-            kind: cokret_sdk::events::kinds::MORPH_CREATE,
+            kind: arkret_sdk::events::kinds::MORPH_CREATE,
             // morph_create_payload wraps the full Morph object (morph.schema.json):
             // required {id, schema, realm_id, schema_refs, morph_type, stage, created_by,
             // created_at}.
@@ -340,32 +340,32 @@ fn builtin_operation_conformance_vectors_cover_registry() {
         },
         OperationVector {
             name: "morph update",
-            kind: cokret_sdk::events::kinds::MORPH_UPDATE,
+            kind: arkret_sdk::events::kinds::MORPH_UPDATE,
             payload: json!({"target_ref": "ak:morph:01904100-0000-7000-8000-7191ddd787e5", "patch": {"metadata.title": "Backfill v2"}}),
             valid: true,
         },
         OperationVector {
             name: "morph archive",
-            kind: cokret_sdk::events::kinds::MORPH_ARCHIVE,
+            kind: arkret_sdk::events::kinds::MORPH_ARCHIVE,
             payload: json!({"target_ref": "ak:morph:01904100-0000-7000-8000-7191ddd787e5"}),
             valid: true,
         },
         OperationVector {
             name: "morph restore",
-            kind: cokret_sdk::events::kinds::MORPH_RESTORE,
+            kind: arkret_sdk::events::kinds::MORPH_RESTORE,
             payload: json!({"target_ref": "ak:morph:01904100-0000-7000-8000-7191ddd787e5"}),
             valid: true,
         },
         OperationVector {
             name: "morph restore missing target_ref",
-            kind: cokret_sdk::events::kinds::MORPH_RESTORE,
+            kind: arkret_sdk::events::kinds::MORPH_RESTORE,
             payload: json!({"reason": "reopen"}),
             valid: false,
         },
         // Applet protocol family conformance vectors.
         OperationVector {
             name: "applet registration",
-            kind: cokret_sdk::events::kinds::APPLET_REGISTRATION,
+            kind: arkret_sdk::events::kinds::APPLET_REGISTRATION,
             // applet_registration_payload is now a CLOSED class (additionalProperties=false)
             // with 14 required fields; the generic fallback no longer applies since the
             // exact def exists in the current spec.
@@ -390,7 +390,7 @@ fn builtin_operation_conformance_vectors_cover_registry() {
         },
         OperationVector {
             name: "applet registration missing namespace",
-            kind: cokret_sdk::events::kinds::APPLET_REGISTRATION,
+            kind: arkret_sdk::events::kinds::APPLET_REGISTRATION,
             // Same closed class, but omits the required `namespaces` field.
             payload: json!({
                 "applet_id": "ak:applet:01904100-0000-7000-8000-aa55aa55aa55",
@@ -412,7 +412,7 @@ fn builtin_operation_conformance_vectors_cover_registry() {
         },
         OperationVector {
             name: "applet discovery",
-            kind: cokret_sdk::events::kinds::APPLET_DISCOVERY,
+            kind: arkret_sdk::events::kinds::APPLET_DISCOVERY,
             payload: json!({
                 "service_did": "did:web:applet.example",
                 "manifest": {"version": 1},
@@ -421,7 +421,7 @@ fn builtin_operation_conformance_vectors_cover_registry() {
         },
         OperationVector {
             name: "applet session start",
-            kind: cokret_sdk::events::kinds::APPLET_INTEROP_SESSION_START,
+            kind: arkret_sdk::events::kinds::APPLET_INTEROP_SESSION_START,
             payload: json!({
                 "applet_id": "ak:applet:01904100-0000-7000-8000-aa55aa55aa55",
                 "session_id": "ak:session:01904100-0000-7000-8000-aa55aa55aa55",
@@ -431,7 +431,7 @@ fn builtin_operation_conformance_vectors_cover_registry() {
         },
         OperationVector {
             name: "applet session status",
-            kind: cokret_sdk::events::kinds::APPLET_INTEROP_SESSION_STATUS,
+            kind: arkret_sdk::events::kinds::APPLET_INTEROP_SESSION_STATUS,
             // applet_interop_session_status_payload: required {applet_id, session_id,
             // runtime_status}; runtime_status enum
             // {pending,running,completed,failed,cancelled}; additionalProperties=false.
@@ -445,7 +445,7 @@ fn builtin_operation_conformance_vectors_cover_registry() {
         },
         OperationVector {
             name: "applet bridge error",
-            kind: cokret_sdk::events::kinds::APPLET_BRIDGE_ERROR,
+            kind: arkret_sdk::events::kinds::APPLET_BRIDGE_ERROR,
             // applet_bridge_error_payload: required {applet_id, realm_id, failed_transaction_ref,
             // error_class, error_code, retriable, visibility_scope}; additionalProperties=false.
             payload: json!({
@@ -463,7 +463,7 @@ fn builtin_operation_conformance_vectors_cover_registry() {
         // Agent protocol family conformance vectors.
         OperationVector {
             name: "agent endpoint",
-            kind: cokret_sdk::events::kinds::AGENT_ENDPOINT,
+            kind: arkret_sdk::events::kinds::AGENT_ENDPOINT,
             payload: json!({
                 "agent_id": "did:web:agent.example",
                 "endpoints": [{"protocol": "http_custom", "url": "https://agent.example/runtime"}],
@@ -472,13 +472,13 @@ fn builtin_operation_conformance_vectors_cover_registry() {
         },
         OperationVector {
             name: "agent endpoint missing endpoints",
-            kind: cokret_sdk::events::kinds::AGENT_ENDPOINT,
+            kind: arkret_sdk::events::kinds::AGENT_ENDPOINT,
             payload: json!({"agent_id": "did:web:agent.example"}),
             valid: false,
         },
         OperationVector {
             name: "agent session start",
-            kind: cokret_sdk::events::kinds::AGENT_INTEROP_SESSION_START,
+            kind: arkret_sdk::events::kinds::AGENT_INTEROP_SESSION_START,
             // agent_interop_session_start_payload: required {session_id, counterparty_agent,
             // protocol, capability_grant}; session_id is a
             // ck:agent_interop_session:<uuidv7>; additionalProperties=false.
@@ -492,7 +492,7 @@ fn builtin_operation_conformance_vectors_cover_registry() {
         },
         OperationVector {
             name: "agent session start missing capability_grant",
-            kind: cokret_sdk::events::kinds::AGENT_INTEROP_SESSION_START,
+            kind: arkret_sdk::events::kinds::AGENT_INTEROP_SESSION_START,
             // Omits the required capability_grant.
             payload: json!({
                 "session_id": "ak:agent_interop_session:01904100-0000-7000-8000-bb66bb66bb66",
@@ -503,7 +503,7 @@ fn builtin_operation_conformance_vectors_cover_registry() {
         },
         OperationVector {
             name: "agent session status",
-            kind: cokret_sdk::events::kinds::AGENT_INTEROP_SESSION_STATUS,
+            kind: arkret_sdk::events::kinds::AGENT_INTEROP_SESSION_STATUS,
             // agent_interop_session_status_payload: required {session_id, status}; status enum
             // includes "working"; additionalProperties=false (no `detail` field).
             payload: json!({
@@ -514,7 +514,7 @@ fn builtin_operation_conformance_vectors_cover_registry() {
         },
         OperationVector {
             name: "agent session result",
-            kind: cokret_sdk::events::kinds::AGENT_INTEROP_SESSION_RESULT,
+            kind: arkret_sdk::events::kinds::AGENT_INTEROP_SESSION_RESULT,
             // agent_interop_session_result_payload: required {session_id, status} + anyOf
             // {result_objects | artifacts | reason_code}; additionalProperties=false.
             payload: json!({
@@ -526,7 +526,7 @@ fn builtin_operation_conformance_vectors_cover_registry() {
         },
         OperationVector {
             name: "agent session result missing result content",
-            kind: cokret_sdk::events::kinds::AGENT_INTEROP_SESSION_RESULT,
+            kind: arkret_sdk::events::kinds::AGENT_INTEROP_SESSION_RESULT,
             // Satisfies the top-level required fields but none of the anyOf
             // {result_objects | artifacts | reason_code} completion carriers, so it is invalid.
             payload: json!({
@@ -543,7 +543,7 @@ fn builtin_operation_conformance_vectors_cover_registry() {
         },
         OperationVector {
             name: "reaction missing key",
-            kind: cokret_sdk::events::kinds::REACTION_ADD,
+            kind: arkret_sdk::events::kinds::REACTION_ADD,
             // reaction_payload requires {target_ref, key}; this omits the required `key`.
             payload: json!({"target_ref": "ak:event:01904100-0000-7000-8000-79a90338768b"}),
             valid: false,

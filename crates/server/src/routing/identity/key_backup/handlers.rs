@@ -207,7 +207,7 @@ pub(super) fn key_backup_metadata_for_list(mut backup: Value) -> Value {
 
 pub(super) fn key_backup_summary_for_list(
     backup: Value,
-) -> Result<cokret_sdk::models::KeyBackupSummary, AppError> {
+) -> Result<arkret_sdk::models::KeyBackupSummary, AppError> {
     serde_json::from_value(key_backup_metadata_for_list(backup)).map_err(|error| {
         AppError::internal(format!(
             "stored key backup metadata does not match SDK summary: {error}"
@@ -258,7 +258,7 @@ pub(super) async fn put_key_backup(
     // Spec `keys-operations.schema.json#/$defs/backup_id` pins the id to
     // `ck:backup:<uuidv7>`; parse into the SDK typed id up front so a
     // non-conforming id fails before any persistence side effect.
-    let typed_backup_id = cokret_sdk::BackupId::new(backup_id.clone()).map_err(|error| {
+    let typed_backup_id = arkret_sdk::BackupId::new(backup_id.clone()).map_err(|error| {
         AppError::invalid_param(format!(
             "backup_id must be a ck:backup:<uuidv7> typed id: {error}"
         ))

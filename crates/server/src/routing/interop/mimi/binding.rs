@@ -481,9 +481,9 @@ pub(super) fn mimi_room_projection(state: &AppState, room_id: &str, realm_id: &s
         "hub_provider": state.config.service_did.clone(),
         "local_provider_role": "hub",
         "mls_group_id": format!("mls:{}", room_id),
-        "policy_root": cokret_sdk::canonical::sha256_digest(format!("{realm_id}:{room_id}:policy").as_bytes()),
+        "policy_root": arkret_sdk::canonical::sha256_digest(format!("{realm_id}:{room_id}:policy").as_bytes()),
         "status": "accepted",
-        "canonical_truth": "cokret_signed_event_reducer"
+        "canonical_truth": "arkret_signed_event_reducer"
     })
 }
 

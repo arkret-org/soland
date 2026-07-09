@@ -187,7 +187,7 @@ fn decode_session_agent_payload(payload: &Value) -> Option<AgentSessionRecord> {
 
 #[cfg(test)]
 mod tests {
-    use cokret_sdk::FreshnessState;
+    use arkret_sdk::FreshnessState;
 
     use super::*;
 

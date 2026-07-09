@@ -19,7 +19,7 @@ fn test_config() -> AppConfig {
 }
 
 async fn ensure_account(app: &salvo::Service, actor: &str) {
-    let mut response = TestClient::post("http://server/_cokret/gate/account/register")
+    let mut response = TestClient::post("http://server/_arkret/gate/account/register")
         .json(&serde_json::json!({
             "principal_id": actor,
             "display_name": actor,
@@ -51,7 +51,7 @@ async fn dev_token(app: &salvo::Service, actor: &str) -> String {
 }
 
 async fn request_contact(app: &salvo::Service, token: &str, target: &str, scope: &str) -> Value {
-    let mut response = TestClient::post("http://server/_cokret/self/contacts/request")
+    let mut response = TestClient::post("http://server/_arkret/self/contacts/request")
         .add_header("Authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({ "target": target, "requested_scopes": [scope] }))
         .send(app)
@@ -88,7 +88,7 @@ async fn respond_contact(
     action: &str,
     granted_scopes: &[&str],
 ) -> Value {
-    TestClient::post("http://server/_cokret/self/contacts/respond")
+    TestClient::post("http://server/_arkret/self/contacts/respond")
         .add_header("Authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
             "request_id": request_id,
@@ -104,7 +104,7 @@ async fn respond_contact(
 }
 
 async fn get_contacts(app: &salvo::Service, token: &str) -> Value {
-    TestClient::get("http://server/_cokret/self/contacts")
+    TestClient::get("http://server/_arkret/self/contacts")
         .add_header("Authorization", format!("Bearer {token}"), true)
         .send(app)
         .await
@@ -121,7 +121,7 @@ async fn get_cell(
     scope: &str,
 ) -> Value {
     TestClient::get(format!(
-        "http://server/_cokret/self/consent/cells/{holder}?peer={peer}&consent_scope={scope}"
+        "http://server/_arkret/self/consent/cells/{holder}?peer={peer}&consent_scope={scope}"
     ))
     .add_header("Authorization", format!("Bearer {token}"), true)
     .send(app)
@@ -183,7 +183,7 @@ async fn grant_cell(
     expires_at: Option<String>,
 ) -> Value {
     TestClient::post(format!(
-        "http://server/_cokret/self/consent/cells/{holder}/grant"
+        "http://server/_arkret/self/consent/cells/{holder}/grant"
     ))
     .add_header("Authorization", format!("Bearer {token}"), true)
     .json(&serde_json::json!({
@@ -206,7 +206,7 @@ async fn revoke_cell(
     scope: &str,
 ) -> Value {
     TestClient::post(format!(
-        "http://server/_cokret/self/consent/cells/{holder}/revoke"
+        "http://server/_arkret/self/consent/cells/{holder}/revoke"
     ))
     .add_header("Authorization", format!("Bearer {token}"), true)
     .json(&serde_json::json!({ "peer_did": peer, "consent_scope": scope }))
@@ -218,7 +218,7 @@ async fn revoke_cell(
 }
 
 fn sha256_json(value: &Value) -> String {
-    let bytes = cokret_sdk::canonical::canonical_json_bytes(value)
+    let bytes = arkret_sdk::canonical::canonical_json_bytes(value)
         .unwrap_or_else(|_| serde_json::to_vec(value).unwrap());
     let mut hasher = Sha256::new();
     hasher.update(bytes);
@@ -281,7 +281,7 @@ async fn submit_event(
     payload: Value,
 ) -> Value {
     let event = signed_event(actor, realm_id, kind, actor_seq, payload);
-    let mut response = TestClient::post("http://server/_cokret/self/events")
+    let mut response = TestClient::post("http://server/_arkret/self/events")
         .add_header("Authorization", format!("Bearer {token}"), true)
         .json(&event)
         .send(app)
@@ -499,7 +499,7 @@ async fn consent_expiry_scope_and_pairwise_did_isolation() {
 
 /// contact-operations.schema.json — when `peer` (bob) gives the holder
 /// (alice) an active `invite` consent grant via the reducer path, the
-/// holder's `GET /_cokret/self/contacts` row for bob MUST surface that
+/// holder's `GET /_arkret/self/contacts` row for bob MUST surface that
 /// grant's event ref in `invite_consent_grant_ref`. The ref is the event
 /// id of bob's `ck.consent.grant`, so alice can hand it back to bob as
 /// `consent_grant` introduction evidence. Direction self-check: the row is
@@ -540,7 +540,7 @@ async fn contact_row_surfaces_invite_consent_grant_ref() {
     let grant_event_id = grant_response["accepted"][0].as_str().unwrap().to_owned();
 
     // alice's contact list row for bob carries the bob-issued grant event ref.
-    let alice_contacts: Value = TestClient::get("http://server/_cokret/self/contacts")
+    let alice_contacts: Value = TestClient::get("http://server/_arkret/self/contacts")
         .add_header("Authorization", format!("Bearer {alice_token}"), true)
         .send(&app)
         .await
@@ -570,7 +570,7 @@ async fn contact_row_surfaces_invite_consent_grant_ref() {
     );
 }
 
-/// invite-addressing.md §5 — `GET`/`PUT /_cokret/self/invite-receive-policy`
+/// invite-addressing.md §5 — `GET`/`PUT /_arkret/self/invite-receive-policy`
 /// round-trip the subject's private policy through the same in-memory store
 /// the tombstone `blocked_subjects` writes to, and reject a mismatched
 /// `subject_id` with an authorization error.
@@ -583,7 +583,7 @@ async fn invite_receive_policy_get_set_round_trips() {
     let alice_token = dev_token(&app, alice).await;
 
     // Default policy is returned before any override is set.
-    let default_policy: Value = TestClient::get("http://server/_cokret/self/invite-receive-policy")
+    let default_policy: Value = TestClient::get("http://server/_arkret/self/invite-receive-policy")
         .add_header("Authorization", format!("Bearer {alice_token}"), true)
         .send(&app)
         .await
@@ -608,7 +608,7 @@ async fn invite_receive_policy_get_set_round_trips() {
         "unknown_invites": "drop",
         "blocked_subjects": [mallory],
     });
-    let stored: Value = TestClient::put("http://server/_cokret/self/invite-receive-policy")
+    let stored: Value = TestClient::put("http://server/_arkret/self/invite-receive-policy")
         .add_header("Authorization", format!("Bearer {alice_token}"), true)
         .json(&custom)
         .send(&app)
@@ -620,7 +620,7 @@ async fn invite_receive_policy_get_set_round_trips() {
     assert_eq!(stored["blocked_subjects"][0], mallory);
 
     // GET now reflects the stored override.
-    let reread: Value = TestClient::get("http://server/_cokret/self/invite-receive-policy")
+    let reread: Value = TestClient::get("http://server/_arkret/self/invite-receive-policy")
         .add_header("Authorization", format!("Bearer {alice_token}"), true)
         .send(&app)
         .await
@@ -638,7 +638,7 @@ async fn invite_receive_policy_get_set_round_trips() {
         "explicit_address_behavior": "quarantine",
         "unknown_invites": "drop",
     });
-    let rejected = TestClient::put("http://server/_cokret/self/invite-receive-policy")
+    let rejected = TestClient::put("http://server/_arkret/self/invite-receive-policy")
         .add_header("Authorization", format!("Bearer {alice_token}"), true)
         .json(&mismatched)
         .send(&app)
@@ -649,7 +649,7 @@ async fn invite_receive_policy_get_set_round_trips() {
 /// Spec contact-and-direct-conversation.md §3 — `ck.self.contact.command.respond(accept)`
 /// MUST write a target-controlled `ck.consent.grant` per granted scope. The
 /// minted grant dot uses the event-bearing `{event_id}:{seq}` form, so the
-/// holder's `GET /_cokret/self/contacts` row for the peer surfaces a canonical
+/// holder's `GET /_arkret/self/contacts` row for the peer surfaces a canonical
 /// `ck:event:<uuid>` `invite_consent_grant_ref` (no longer `None`). End to end:
 /// alice requests bob with `invite` scope, bob accepts, alice's contact row
 /// for bob carries bob's grant event ref — usable as `consent_grant`
@@ -757,7 +757,7 @@ async fn pending_contact_tombstone_revokes_requester_side_consent_ref() {
         "active"
     );
 
-    let mut response = TestClient::post("http://server/_cokret/self/contacts/tombstone")
+    let mut response = TestClient::post("http://server/_arkret/self/contacts/tombstone")
         .add_header("Authorization", format!("Bearer {bob_token}"), true)
         .json(&serde_json::json!({
             "contact": alice,
@@ -797,7 +797,7 @@ async fn expired_contact_respond_revokes_requester_side_consent_and_fails_closed
     contact.updated_at = contact.created_at;
     state.persistence.contacts().put(&contact).await.unwrap();
 
-    let mut response = TestClient::post("http://server/_cokret/self/contacts/respond")
+    let mut response = TestClient::post("http://server/_arkret/self/contacts/respond")
         .add_header("Authorization", format!("Bearer {bob_token}"), true)
         .json(&serde_json::json!({
             "request_id": request_id,

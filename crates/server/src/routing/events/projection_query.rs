@@ -6,12 +6,12 @@
 //! `ck.space.archive` accepted by the server doesn't appear "unarchived"
 //! again when the kanban view re-mounts.
 //!
-//! - `GET /_cokret/self/realms/{realm_id}/spaces` — canonical projection endpoint listing Space
+//! - `GET /_arkret/self/realms/{realm_id}/spaces` — canonical projection endpoint listing Space
 //!   containers in a Realm scope, with `state` ∈ {active, archived, tombstoned} (spec
 //!   `common-fields.md §5.1`).
-//! - `GET /_cokret/self/realms/{realm_id}/strands` — same for Strands (state ∈ {active, archived,
+//! - `GET /_arkret/self/realms/{realm_id}/strands` — same for Strands (state ∈ {active, archived,
 //!   redacted}).
-//! - `GET /_cokret/self/realms/{realm_id}/morphs` — same for Morphs (same enum as Strands).
+//! - `GET /_arkret/self/realms/{realm_id}/morphs` — same for Morphs (same enum as Strands).
 //!
 //! All three endpoints are authenticated. Resource visibility check
 //! piggy-backs on `realm_id_accessible` so a non-member can't probe
@@ -33,7 +33,7 @@
 use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
-use cokret_sdk::{
+use arkret_sdk::{
     CellRef, Did, DocumentMorphProjectionOutcome, HistoryRangeContext, HistoryReaderContext,
     HistoryReaderEventState, HistorySharingPolicyPayloadValue, HistorySharingRestrictedScopeRef,
     HistorySharingScopeKind, HistoryVisibility, MorphId, ProjectionAssignedToRelation,
@@ -68,7 +68,7 @@ pub(super) fn protocol_router() -> Router {
 /// Product-private read surface (`/_soland/self/*`). These are
 /// implementation-private projection reads that are NOT canonical protocol
 /// operations: per `service-http-binding.md` §2.1.3, relation / view / object
-/// direct reads that go beyond the declared `/_cokret/self/realms/...` read
+/// direct reads that go beyond the declared `/_arkret/self/realms/...` read
 /// binding live on the implementation's own negative-space root. They expose
 /// already-projected reducer state (single Strand object fields, the relation
 /// edge list) so cotest can assert invariants the canonical list endpoints do
@@ -109,7 +109,7 @@ async fn realm_history_sharing_policy(
         .flatten()?
         .history_sharing_policy?;
     let policy = serde_json::from_value::<HistorySharingPolicyPayloadValue>(policy_value).ok()?;
-    cokret_sdk::validate_history_sharing_policy(&policy).ok()?;
+    arkret_sdk::validate_history_sharing_policy(&policy).ok()?;
     Some(policy)
 }
 
@@ -263,7 +263,7 @@ fn member_state_at_history_basis(
         return None;
     }
     let cell = CellRef::new(format!("ak:cell:ck.component.member.state.v1:{actor}")).ok()?;
-    let state_at_basis = cokret_sdk::state_res::effective_state_at(
+    let state_at_basis = arkret_sdk::state_res::effective_state_at(
         &seals,
         &realm,
         state.seal_store.as_ref(),
@@ -272,10 +272,10 @@ fn member_state_at_history_basis(
     )
     .ok()?;
     match state_at_basis.get(&cell) {
-        Some(cokret_sdk::lattice::CellState::Value(Value::String(member_state))) => {
+        Some(arkret_sdk::lattice::CellState::Value(Value::String(member_state))) => {
             Some(member_state.clone())
         }
-        Some(cokret_sdk::lattice::CellState::Value(Value::Object(object))) => object
+        Some(arkret_sdk::lattice::CellState::Value(Value::Object(object))) => object
             .get("state")
             .and_then(Value::as_str)
             .map(ToOwned::to_owned),
@@ -1177,7 +1177,7 @@ struct RelationEdgeList {
 
 /// `GET /_soland/self/strands/{strand_id}` — return a single Strand's
 /// projected object state including the raw `fields` map (e.g.
-/// `fields.status`). The canonical `/_cokret/self/realms/{realm_id}/strands`
+/// `fields.status`). The canonical `/_arkret/self/realms/{realm_id}/strands`
 /// list intentionally does NOT surface arbitrary `fields`, so this
 /// product-private read backs invariant assertions (CAS read-back,
 /// patch-merge effects) that need the materialized field values. Visibility

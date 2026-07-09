@@ -22,7 +22,7 @@
 //! - the SDK history-key-share gates must admit the share for the requesting reader before the
 //!   request is relayed.
 
-use cokret_sdk::EphemeralEnvelope;
+use arkret_sdk::EphemeralEnvelope;
 use serde_json::Value;
 
 use crate::error::AppError;
@@ -45,7 +45,7 @@ pub(crate) async fn relay_ephemeral_realm_key_request(
     realm_id: &str,
     envelope: &EphemeralEnvelope,
 ) -> Result<(), AppError> {
-    let request: cokret_sdk::RealmKeyRequestPayload =
+    let request: arkret_sdk::RealmKeyRequestPayload =
         serde_json::from_value(envelope.payload.clone()).map_err(|error| {
             AppError::invalid_param(format!(
                 "ck.realm_key.request payload is malformed: {error}"
@@ -111,7 +111,7 @@ pub(crate) async fn relay_ephemeral_realm_key_request(
 /// envelope collapses onto the same to-device `idempotency_key`.
 fn realm_key_request_id(
     envelope: &EphemeralEnvelope,
-    request: &cokret_sdk::RealmKeyRequestPayload,
+    request: &arkret_sdk::RealmKeyRequestPayload,
 ) -> String {
     if let Some(id) = envelope
         .payload
@@ -128,7 +128,7 @@ fn realm_key_request_id(
         request.recipient_device_id,
         request.created_at.to_rfc3339()
     );
-    cokret_sdk::canonical::sha256_digest(basis.as_bytes())
+    arkret_sdk::canonical::sha256_digest(basis.as_bytes())
 }
 
 /// True iff `actor` is projected (or persisted) as a current joined member.
@@ -154,7 +154,7 @@ async fn resolve_target_provider_device(
     target_device_ref: &str,
 ) -> Option<ResolvedTarget> {
     let device_id = target_device_ref.trim();
-    if device_id.is_empty() || cokret_sdk::DeviceId::new(device_id.to_owned()).is_err() {
+    if device_id.is_empty() || arkret_sdk::DeviceId::new(device_id.to_owned()).is_err() {
         return None;
     }
     let device = state
@@ -184,7 +184,7 @@ async fn evaluate_request_gate(
     state: &AppState,
     realm_id: &str,
     session: &SessionRecord,
-    request: &cokret_sdk::RealmKeyRequestPayload,
+    request: &arkret_sdk::RealmKeyRequestPayload,
     target: &ResolvedTarget,
 ) -> Result<bool, AppError> {
     let meta = state
@@ -200,13 +200,13 @@ async fn evaluate_request_gate(
     let policy_value = meta.history_sharing_policy.as_ref().ok_or_else(|| {
         AppError::invalid_param("ck.realm_key.request realm has no history-sharing policy")
     })?;
-    let policy = serde_json::from_value::<cokret_sdk::HistorySharingPolicyPayloadValue>(
+    let policy = serde_json::from_value::<arkret_sdk::HistorySharingPolicyPayloadValue>(
         policy_value.clone(),
     )
     .map_err(|_| {
         AppError::invalid_param("ck.realm_key.request history-sharing policy is malformed")
     })?;
-    cokret_sdk::validate_history_sharing_policy(&policy).map_err(|_| {
+    arkret_sdk::validate_history_sharing_policy(&policy).map_err(|_| {
         AppError::invalid_param("ck.realm_key.request history-sharing policy is invalid")
     })?;
 
@@ -216,7 +216,7 @@ async fn evaluate_request_gate(
     let visibility = request.key_scope.history_visibility.unwrap_or_else(|| {
         meta.history_visibility
             .parse()
-            .unwrap_or(cokret_sdk::HistoryVisibility::Restricted)
+            .unwrap_or(arkret_sdk::HistoryVisibility::Restricted)
     });
 
     // The provider device's verification/revocation gate.
@@ -236,17 +236,17 @@ async fn evaluate_request_gate(
         })
         .unwrap_or((true, false));
 
-    let input = cokret_sdk::HistoryKeyShareGateInput {
+    let input = arkret_sdk::HistoryKeyShareGateInput {
         visibility,
-        reader: cokret_sdk::HistoryReaderContext {
+        reader: arkret_sdk::HistoryReaderContext {
             current_active_member: true,
             event_state: reader_state,
             has_discoverability: true,
             has_preview_token: false,
         },
-        range: cokret_sdk::HistoryRangeContext {
+        range: arkret_sdk::HistoryRangeContext {
             since_invite: true,
-            since_join: reader_state == cokret_sdk::HistoryReaderEventState::Joined,
+            since_join: reader_state == arkret_sdk::HistoryReaderEventState::Joined,
             epoch_span: Some(epoch_span(
                 request.key_scope.from_epoch,
                 request.key_scope.to_epoch,
@@ -255,36 +255,36 @@ async fn evaluate_request_gate(
         policy: Some(&policy),
         key_source: request.requested_source_class,
         scope: None,
-        device: cokret_sdk::HistoryDeviceGate {
+        device: arkret_sdk::HistoryDeviceGate {
             revoked: provider_revoked,
             verified: provider_verified,
         },
         safety_policy_allows: true,
-        audit: cokret_sdk::HistoryAuditGate {
+        audit: arkret_sdk::HistoryAuditGate {
             required: policy.audit.share_audit_event_required,
             satisfied: !policy.audit.share_audit_event_required,
         },
     };
-    Ok(cokret_sdk::evaluate_history_key_share_gates(input).allowed)
+    Ok(arkret_sdk::evaluate_history_key_share_gates(input).allowed)
 }
 
 fn reader_event_state(
     state: &AppState,
     realm_id: &str,
     reader: &str,
-) -> cokret_sdk::HistoryReaderEventState {
+) -> arkret_sdk::HistoryReaderEventState {
     {
         let projection = state.projection.lock();
         if let Some(member) = projection.member(realm_id, reader) {
             return match member.state.as_str() {
-                "join" => cokret_sdk::HistoryReaderEventState::Joined,
-                "invite" => cokret_sdk::HistoryReaderEventState::Invited,
-                "leave" | "ban" => cokret_sdk::HistoryReaderEventState::Removed,
-                _ => cokret_sdk::HistoryReaderEventState::None,
+                "join" => arkret_sdk::HistoryReaderEventState::Joined,
+                "invite" => arkret_sdk::HistoryReaderEventState::Invited,
+                "leave" | "ban" => arkret_sdk::HistoryReaderEventState::Removed,
+                _ => arkret_sdk::HistoryReaderEventState::None,
             };
         }
     }
-    cokret_sdk::HistoryReaderEventState::None
+    arkret_sdk::HistoryReaderEventState::None
 }
 
 fn epoch_span(from_epoch: u64, to_epoch: u64) -> u64 {

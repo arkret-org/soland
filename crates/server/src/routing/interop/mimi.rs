@@ -1,6 +1,6 @@
 //! MIMI (Messaging Layer Interop) provider-facade handlers.
 //!
-//! Surfaces under `/_cokret/open/mimi/*` plus the well-known
+//! Surfaces under `/_arkret/open/mimi/*` plus the well-known
 //! `mimi-protocol-directory`. Writes from the MIMI side map into the
 //! canonical Arkret reducer chain:
 //!
@@ -21,8 +21,8 @@
 use std::collections::BTreeMap;
 
 use chrono::Duration;
-use cokret_sdk::models::proof_kind;
-use cokret_sdk::{
+use arkret_sdk::models::proof_kind;
+use arkret_sdk::{
     Did, EventId, Hash, MimiGroupInfoOutcome, MimiIdentifierQueryOutcome,
     MimiIdentifierQueryRequestBody, MimiKeyMaterialOutcome, MimiKeyMaterialRequestBody,
     MimiNotifyOutcome, MimiNotifyRequestBody, MimiProxyDownloadOutcome,

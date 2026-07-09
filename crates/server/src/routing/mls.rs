@@ -1,11 +1,11 @@
 //! G3.S1 — MLS / E2EE lifecycle HTTP surface.
 //!
-//! Spec-canonical binding under `/_cokret/self/keys/keypackages/*` (see
+//! Spec-canonical binding under `/_arkret/self/keys/keypackages/*` (see
 //! `arkret-service-api.openapi.yaml §/keys/keypackages/*`):
 //!
-//! - `POST /_cokret/self/keys/keypackages/upload` — op `ck.self.keys.keypackages.upload.create`
+//! - `POST /_arkret/self/keys/keypackages/upload` — op `ck.self.keys.keypackages.upload.create`
 //!   (publishes a fresh KeyPackage).
-//! - `POST /_cokret/self/keys/keypackages/claim`  — op `ck.self.keys.keypackages.command.claim`
+//! - `POST /_arkret/self/keys/keypackages/claim`  — op `ck.self.keys.keypackages.command.claim`
 //!   (atomically claim a published KeyPackage; second claim of the same id returns `409
 //!   cas_conflict`).
 //! - `GET  /_soland/self/keys/keypackages/welcomes/pending` — extension op
@@ -15,7 +15,7 @@
 //!   served from the `/_soland/` product surface only.
 //!
 //! MLS *commits* are no longer served by a dedicated REST surface — clients
-//! submit `ck.mls.commit` events via the normal `POST /_cokret/self/events`
+//! submit `ck.mls.commit` events via the normal `POST /_arkret/self/events`
 //! pipeline (`ck.self.events.command.submit` of the registered durable `ck.mls.commit`
 //! kind). The reducer's epoch-bump path is unchanged; only the HTTP
 //! entrypoint moved.
@@ -40,7 +40,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::{DateTime, TimeZone, Utc};
-use cokret_sdk::{
+use arkret_sdk::{
     Did, Failure as KeypackageFailure, Hash, KeyOperationSignature, KeyPackageClaimRecord,
     KeyPackageUploadEntry, KeyPackagesClaimOutcome, KeyPackagesClaimRequestBody,
     KeyPackagesConsumeOutcome, KeyPackagesConsumeRequestBody, KeyPackagesRevokeOutcome,
@@ -155,18 +155,18 @@ impl KeyPackageTrustSelector {
 }
 
 /// Mount the `/keys/keypackages/*` sub-router. Mounted under
-/// `/_cokret/self` from `routing::mod::api_v1_router`.
+/// `/_arkret/self` from `routing::mod::api_v1_router`.
 ///
 /// Spec-canonical paths (see
 /// `arkret-service-api.openapi.yaml §/keys/keypackages/*`):
-///   - `POST /_cokret/self/keys/keypackages/upload`
-///   - `POST /_cokret/self/keys/keypackages/claim`
+///   - `POST /_arkret/self/keys/keypackages/upload`
+///   - `POST /_arkret/self/keys/keypackages/claim`
 pub fn router() -> Router {
     protocol_router()
 }
 
 pub fn protocol_router() -> Router {
-    // `/_cokret/` carries only operation-registry routes. The soland-private
+    // `/_arkret/` carries only operation-registry routes. The soland-private
     // Welcome drain (`welcomes/pending`) lives on the `/_soland/` product
     // surface (see `local_router`).
     Router::with_path("keys").push(
@@ -401,7 +401,7 @@ async fn upload_keypackage(
             }
         };
         let keypackage_digest = entry.keypackage_digest.to_string();
-        let computed_keypackage_digest = cokret_sdk::canonical::sha256_digest(&key_package_bytes);
+        let computed_keypackage_digest = arkret_sdk::canonical::sha256_digest(&key_package_bytes);
         if keypackage_digest != computed_keypackage_digest {
             rejected.push(keypackage_failure(
                 &entry,
@@ -468,7 +468,7 @@ async fn upload_keypackage(
             "key_package_bytes_b64": key_package_bytes_b64,
         });
         trust_binding.insert_into(&mut publish_payload);
-        let op = build_op(cokret_sdk::events::kinds::MLS_KEYPACKAGE, publish_payload);
+        let op = build_op(arkret_sdk::events::kinds::MLS_KEYPACKAGE, publish_payload);
         let effect = reducer::mls::apply_keypackage_publish(&mut state.projection.lock(), &op);
         match effect {
             ProjectionEffect::Mls(MlsEffect::KeyPackagePublished { .. }) => {}
@@ -672,7 +672,7 @@ pub(crate) async fn claim_keypackages_for_request(
         "intended_realm_id": intended_realm_id.clone()
     });
     claim_binding.insert_into(&mut payload);
-    let op = build_op(cokret_sdk::events::kinds::MLS_KEYPACKAGE, payload);
+    let op = build_op(arkret_sdk::events::kinds::MLS_KEYPACKAGE, payload);
     let effect = reducer::mls::apply_keypackage_claim(&mut state.projection.lock(), &op);
     let (consumed_at, claimed_keypackage_id, claimed_group_id, claimed_realm_id) = match effect {
         ProjectionEffect::Mls(MlsEffect::KeyPackageClaimed {
@@ -1041,7 +1041,7 @@ async fn pending_welcomes(
 //
 // Deleted as part of the spec-canonical refactor. MLS commits are now
 // submitted via the regular events pipeline as `ck.mls.commit` durable
-// events through `POST /_cokret/self/events` (op `ck.self.events.command.submit`). The
+// events through `POST /_arkret/self/events` (op `ck.self.events.command.submit`). The
 // reducer's epoch-bump path (`reducer::mls::apply_commit_epoch`) is
 // invoked from the events submission strand; no dedicated REST surface.
 
@@ -1077,8 +1077,8 @@ fn decode_key_package(encoded: &str) -> Result<Vec<u8>, String> {
 }
 
 fn canonical_capabilities_digest(capabilities: &[String]) -> Result<String, String> {
-    cokret_sdk::canonical::canonical_json_bytes(&capabilities.to_vec())
-        .map(cokret_sdk::canonical::sha256_digest)
+    arkret_sdk::canonical::canonical_json_bytes(&capabilities.to_vec())
+        .map(arkret_sdk::canonical::sha256_digest)
         .map_err(|_| "capabilities_digest_failed".to_owned())
 }
 
@@ -1121,7 +1121,7 @@ fn capabilities_satisfy(published: &[String], required: &BTreeSet<String>) -> bo
     required.is_subset(&published)
 }
 
-fn current_accepted_ssk_generation(state: &AppState, principal: &cokret_sdk::Did) -> Option<u64> {
+fn current_accepted_ssk_generation(state: &AppState, principal: &arkret_sdk::Did) -> Option<u64> {
     state
         .cross_signing
         .lock()
@@ -1132,7 +1132,7 @@ fn current_accepted_ssk_generation(state: &AppState, principal: &cokret_sdk::Did
 
 async fn current_keypackage_trust_binding(
     state: &AppState,
-    principal: &cokret_sdk::Did,
+    principal: &arkret_sdk::Did,
     device_id: &str,
 ) -> Result<KeyPackageTrustBinding, AppError> {
     if let Some(generation) = current_accepted_ssk_generation(state, principal) {
@@ -1162,7 +1162,7 @@ async fn current_keypackage_trust_binding(
 
 async fn current_keypackage_claim_trust_selector(
     state: &AppState,
-    principal: &cokret_sdk::Did,
+    principal: &arkret_sdk::Did,
     target_device_ids: &BTreeSet<String>,
 ) -> Result<KeyPackageTrustSelector, AppError> {
     if let Some(generation) = current_accepted_ssk_generation(state, principal) {

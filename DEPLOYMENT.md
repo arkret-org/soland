@@ -42,7 +42,7 @@ SOLAND_EMBEDDED_WEBVH_REGISTRATION_BEARER=<shared-secret-configured-in-coauth>
 # SOLAND_EXTERNAL_WEBVH_PROVIDER_URL=https://webvh.example
 # SOLAND_DEFAULT_WEBVH_PROVIDER_ID=soland.embedded
 SOLAND_ACCOUNT_AUTHORITY_URL=https://coauth.example
-SOLAND_SESSION_GRANT_INTROSPECTION_URL=https://coauth.example/_cokret/gate/account/session-grants/introspect
+SOLAND_SESSION_GRANT_INTROSPECTION_URL=https://coauth.example/_arkret/gate/account/session-grants/introspect
 SOLAND_SESSION_GRANT_INTROSPECTION_BEARER=<shared-secret-configured-in-coauth>
 SOLAND_OBJECT_STORAGE_BACKEND=s3-compatible
 SOLAND_OBJECT_STORAGE_S3_BUCKET=soland
@@ -160,7 +160,7 @@ docker run --name soland --restart=always -d \
   -e SOLAND_PUBLIC_BASE_URL=https://soland.example \
   -e SOLAND_SERVICE_DID=did:webvh:<scid>:soland.example:webvh:service \
   -e SOLAND_ACCOUNT_AUTHORITY_URL=https://coauth.example \
-  -e SOLAND_SESSION_GRANT_INTROSPECTION_URL=https://coauth.example/_cokret/gate/account/session-grants/introspect \
+  -e SOLAND_SESSION_GRANT_INTROSPECTION_URL=https://coauth.example/_arkret/gate/account/session-grants/introspect \
   -e SOLAND_SESSION_GRANT_INTROSPECTION_BEARER=<shared-secret-configured-in-coauth> \
   -e DATABASE_URL=postgres://soland:<password>@db:5432/soland?sslmode=verify-full \
   -e SOLAND_OBJECT_STORAGE_BACKEND=filesystem \
@@ -188,7 +188,7 @@ helm template soland ./deploy/helm/soland \
   --set env.SOLAND_SERVICE_DID=did:webvh:<scid>:soland.example:webvh:service \
   --set env.SOLAND_ACCOUNT_AUTHORITY_URL=https://coauth.example \
   --set secretEnv.DATABASE_URL='postgres://soland:<password>@db.internal:5432/soland?sslmode=verify-full' \
-  --set secretEnv.SOLAND_SESSION_GRANT_INTROSPECTION_URL=https://coauth.example/_cokret/gate/account/session-grants/introspect \
+  --set secretEnv.SOLAND_SESSION_GRANT_INTROSPECTION_URL=https://coauth.example/_arkret/gate/account/session-grants/introspect \
   --set secretEnv.SOLAND_SESSION_GRANT_INTROSPECTION_BEARER='<shared-secret-configured-in-coauth>'
 ```
 
@@ -420,7 +420,7 @@ cosign attest-blob \
 2. `pg_dump` the database.
 3. Pull / install the new binary or container image.
 4. Restart soland; embedded migrations run on boot.
-5. Tail logs for at least one request cycle (`/health`, `/_cokret/describe`).
+5. Tail logs for at least one request cycle (`/health`, `/_arkret/describe`).
 
 Downgrades are **not** supported once a migration has run; restore from the
 pre-upgrade backup if you need to roll back.
@@ -430,7 +430,7 @@ pre-upgrade backup if you need to roll back.
 - `SOLAND_DEVELOPMENT_MODE` is unset (or explicitly `false`).
 - `SOLAND_ACCOUNT_AUTHORITY_URL` points at coauth's public account authority.
 - `SOLAND_SESSION_GRANT_INTROSPECTION_URL` points at coauth's
-  `/_cokret/gate/account/session-grants/introspect`, and
+  `/_arkret/gate/account/session-grants/introspect`, and
   `SOLAND_SESSION_GRANT_INTROSPECTION_BEARER` matches the shared
   server-to-server secret configured there.
 - `DATABASE_URL` uses `sslmode=verify-full` and a password kept out of source
@@ -587,14 +587,14 @@ Media connectivity is configured in two independent layers:
 
 - **Per-deployment ICE/STUN/TURN (P2P NAT traversal)** — set via the
   `SOLAND_ICE_*` / `SOLAND_TURN_*` env vars above. These feed the signed
-  `POST /_cokret/self/rtc/ice-config` response. Defaults reproduce the
+  `POST /_arkret/self/rtc/ice-config` response. Defaults reproduce the
   historical hardcoded `stun.l.google.com` / `turn.soland.local` values so
   existing deployments behave identically until overridden. Point
   `SOLAND_TURN_URLS` at your own coturn/eturnal pool for production.
 - **Per-realm SFU foci (LiveKit / Mediasoup conferencing)** — declared in the
   realm `ck.component.realm.media_service.v1` cell as the `foci[]` array shown
   above, consumed by the CKP-0010 token exchange at
-  `POST /_cokret/self/rtc/token`. This is where a LiveKit pool's
+  `POST /_arkret/self/rtc/token`. This is where a LiveKit pool's
   `connect_url` / `issuer_kid` / `audience` are bound; it is realm-scoped
   config, not a deployment env var.
   - **LiveKit API Key/Secret** are the one piece of the LiveKit binding that

@@ -1,4 +1,4 @@
-use cokret_sdk::{
+use arkret_sdk::{
     AppletNamespaceDomain, AppletTransactionOutcome, AppletTransactionRequestBody, Event,
     namespace_pattern_matches,
 };

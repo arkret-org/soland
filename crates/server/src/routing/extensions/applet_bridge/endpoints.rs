@@ -1,6 +1,6 @@
 //! HTTP endpoint handlers and router assembly for the applet bridge.
 
-use cokret_sdk::{
+use arkret_sdk::{
     AppletActorView, AppletPingOutcome, AppletProtocolMetadata, AppletRealmView, AppletRevokeMode,
     AppletRevokeOutcome, AppletTransactionOutcome, AppletTransactionRequestBody, Did,
     GhostActorProvisionOutcome, GhostActorProvisionRequestBody, InstallCommitOutcome,
@@ -126,13 +126,13 @@ async fn protocol_describe_endpoint() -> JsonResult<AppletProtocolDescribeOutcom
     json_ok(AppletProtocolDescribeOutcome {
         contract: "ck.applet.v1".to_owned(),
         install: AppletInstallPaths {
-            preview_path: "/_cokret/self/applets/install/preview".to_owned(),
-            commit_path: "/_cokret/self/applets/install".to_owned(),
-            revoke_path: "/_cokret/self/applets/{applet_id}/revoke".to_owned(),
-            ghost_actor_provision_path: "/_cokret/self/applets/{applet_id}/ghosts/provision"
+            preview_path: "/_arkret/self/applets/install/preview".to_owned(),
+            commit_path: "/_arkret/self/applets/install".to_owned(),
+            revoke_path: "/_arkret/self/applets/{applet_id}/revoke".to_owned(),
+            ghost_actor_provision_path: "/_arkret/self/applets/{applet_id}/ghosts/provision"
                 .to_owned(),
         },
-        transaction_path: "/_cokret/edge/applet/transactions".to_owned(),
+        transaction_path: "/_arkret/edge/applet/transactions".to_owned(),
         transaction_auth: json!({
             "mode": "rfc9421_http_message_signature",
             "required_headers": [

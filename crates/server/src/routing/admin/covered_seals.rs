@@ -16,7 +16,7 @@
 //! shapes mirror sodmin's `CoveredSealsSnapshot` / `CoveredSealsAdvanceOutcome`
 //! DTOs (`sodmin/src/types/covered_seals.rs`).
 
-use cokret_sdk::RealmId;
+use arkret_sdk::RealmId;
 use salvo::http::StatusCode;
 use salvo::oapi::extract::PathParam;
 use salvo::prelude::*;

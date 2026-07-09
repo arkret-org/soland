@@ -8,7 +8,7 @@
 //!    invocation.
 //! 2. `ck.agent.interop_session.result` carrying the terminal payload plus an Ed25519-signed
 //!    `audit_binding` block (signature is computed by
-//!    `cokret_sdk::agent_binding::sign_ed25519_audit_binding` over the canonical subject
+//!    `arkret_sdk::agent_binding::sign_ed25519_audit_binding` over the canonical subject
 //!    `{session_id, agent_principal_id, result.echo, actor}`).
 //!
 //! Dispatch rules:
@@ -31,7 +31,7 @@
 
 use std::sync::{Arc, OnceLock};
 
-use cokret_sdk::AgentLifecycleState;
+use arkret_sdk::AgentLifecycleState;
 use serde_json::{Value, json};
 use tokio::sync::Semaphore;
 
@@ -122,10 +122,10 @@ pub const REFERENCE_AGENT_AUDIT_ED25519_KEY_ID: &str = "soland.reference.agent_e
 pub async fn maybe_emit_echo_result_for_session_start(
     state: &AppState,
     origin: &str,
-    operation: &cokret_sdk::Operation,
+    operation: &arkret_sdk::Operation,
 ) {
     let kind = kinds::canonical_kind_string(operation);
-    if kind != cokret_sdk::events::kinds::AGENT_INTEROP_SESSION_START {
+    if kind != arkret_sdk::events::kinds::AGENT_INTEROP_SESSION_START {
         return;
     }
     let body = match operation.payload.as_object() {
@@ -216,7 +216,7 @@ pub async fn maybe_emit_echo_result_for_session_start(
             let error_record = ProjectionEventRecord {
                 event_id: ids::generate("event"),
                 realm_id: operation.realm_id.to_string(),
-                event_kind: cokret_sdk::events::kinds::AGENT_INTEROP_SESSION_RESULT.to_owned(),
+                event_kind: arkret_sdk::events::kinds::AGENT_INTEROP_SESSION_RESULT.to_owned(),
                 operation_type: operation_type.to_owned(),
                 operation_id: None,
                 sender: Some(origin.to_owned()),
@@ -252,7 +252,7 @@ pub async fn maybe_emit_echo_result_for_session_start(
     let status_record = ProjectionEventRecord {
         event_id: ids::generate("event"),
         realm_id: operation.realm_id.to_string(),
-        event_kind: cokret_sdk::events::kinds::AGENT_INTEROP_SESSION_STATUS.to_owned(),
+        event_kind: arkret_sdk::events::kinds::AGENT_INTEROP_SESSION_STATUS.to_owned(),
         operation_type: "agent_echo_bridge_status".to_owned(),
         operation_id: None,
         sender: Some(origin.to_owned()),
@@ -480,7 +480,7 @@ async fn emit_agent_result_envelope(
     let result_payload = match error_block {
         None => {
             // Sign + emit the success/echo envelope.
-            let signed = cokret_sdk::agent_binding::sign_ed25519_audit_binding(
+            let signed = arkret_sdk::agent_binding::sign_ed25519_audit_binding(
                 signing_seed,
                 session_id,
                 agent_principal_id,
@@ -538,7 +538,7 @@ async fn emit_agent_result_envelope(
     let record = ProjectionEventRecord {
         event_id: ids::generate("event"),
         realm_id: realm_id.to_owned(),
-        event_kind: cokret_sdk::events::kinds::AGENT_INTEROP_SESSION_RESULT.to_owned(),
+        event_kind: arkret_sdk::events::kinds::AGENT_INTEROP_SESSION_RESULT.to_owned(),
         operation_type: operation_type.to_owned(),
         operation_id: None,
         sender: Some(origin.to_owned()),
@@ -559,7 +559,7 @@ mod tests {
     use std::net::SocketAddr;
     use std::str::FromStr;
 
-    use cokret_sdk::{Operation, OperationId, RealmId};
+    use arkret_sdk::{Operation, OperationId, RealmId};
     use soland_data::Db;
 
     use super::*;
@@ -589,7 +589,7 @@ mod tests {
             OperationId::new("ak:operation:01904100-0000-7bbb-8bbb-000000000001".to_owned())
                 .unwrap(),
             RealmId::new("ak:realm:01904100-0000-7000-8000-bbbbbbbbbbbb".to_owned()).unwrap(),
-            cokret_sdk::events::kinds::AGENT_INTEROP_SESSION_START,
+            arkret_sdk::events::kinds::AGENT_INTEROP_SESSION_START,
             json!({
                 "session_id": session_id,
                 "counterparty_agent": agent_principal_id,
@@ -650,7 +650,7 @@ mod tests {
         let status_entry = projections
             .iter()
             .find(|e| {
-                e.event_kind == cokret_sdk::events::kinds::AGENT_INTEROP_SESSION_STATUS
+                e.event_kind == arkret_sdk::events::kinds::AGENT_INTEROP_SESSION_STATUS
                     && e.payload["session_id"] == session
             })
             .expect("synthetic status event missing");
@@ -667,7 +667,7 @@ mod tests {
         let result_entry = projections
             .iter()
             .find(|e| {
-                e.event_kind == cokret_sdk::events::kinds::AGENT_INTEROP_SESSION_RESULT
+                e.event_kind == arkret_sdk::events::kinds::AGENT_INTEROP_SESSION_RESULT
                     && e.payload["session_id"] == session
             })
             .expect("synthetic result event missing");
@@ -691,7 +691,7 @@ mod tests {
         let canonical_subject = binding["canonical_subject"]
             .as_str()
             .expect("canonical_subject");
-        let outcome = cokret_sdk::agent_binding::verify_ed25519_audit_binding(
+        let outcome = arkret_sdk::agent_binding::verify_ed25519_audit_binding(
             public_key_b64,
             session,
             agent_id,
@@ -702,7 +702,7 @@ mod tests {
         );
         assert_eq!(
             outcome,
-            cokret_sdk::agent_binding::Ed25519AuditBindingVerifyOutcome::Valid,
+            arkret_sdk::agent_binding::Ed25519AuditBindingVerifyOutcome::Valid,
             "audit_binding signature must verify under the reference Ed25519 public key"
         );
     }
@@ -731,7 +731,7 @@ mod tests {
         // failed before acknowledging the invocation.
         assert!(
             !projections.iter().any(|e| {
-                e.event_kind == cokret_sdk::events::kinds::AGENT_INTEROP_SESSION_STATUS
+                e.event_kind == arkret_sdk::events::kinds::AGENT_INTEROP_SESSION_STATUS
                     && e.payload["session_id"] == session
             }),
             "failed-closed dispatch must skip the status(working) event"
@@ -739,7 +739,7 @@ mod tests {
         let result_entry = projections
             .iter()
             .find(|e| {
-                e.event_kind == cokret_sdk::events::kinds::AGENT_INTEROP_SESSION_RESULT
+                e.event_kind == arkret_sdk::events::kinds::AGENT_INTEROP_SESSION_RESULT
                     && e.payload["session_id"] == session
             })
             .expect("error result event missing");
@@ -782,7 +782,7 @@ mod tests {
             .expect("snapshot");
         assert!(
             !projections.iter().any(|e| {
-                e.event_kind == cokret_sdk::events::kinds::AGENT_INTEROP_SESSION_STATUS
+                e.event_kind == arkret_sdk::events::kinds::AGENT_INTEROP_SESSION_STATUS
                     && e.payload["session_id"] == session
             }),
             "retired endpoint dispatch must skip the status(working) event"
@@ -790,7 +790,7 @@ mod tests {
         let result_entry = projections
             .iter()
             .find(|e| {
-                e.event_kind == cokret_sdk::events::kinds::AGENT_INTEROP_SESSION_RESULT
+                e.event_kind == arkret_sdk::events::kinds::AGENT_INTEROP_SESSION_RESULT
                     && e.payload["session_id"] == session
             })
             .expect("error result event missing");
@@ -831,7 +831,7 @@ mod tests {
         let result_entry = projections
             .iter()
             .find(|e| {
-                e.event_kind == cokret_sdk::events::kinds::AGENT_INTEROP_SESSION_RESULT
+                e.event_kind == arkret_sdk::events::kinds::AGENT_INTEROP_SESSION_RESULT
                     && e.payload["session_id"] == session
             })
             .expect("result event missing");
@@ -847,10 +847,10 @@ mod tests {
         let pk = binding["public_key_b64"].as_str().expect("pk");
         let subject = binding["canonical_subject"].as_str().expect("subj");
         assert_eq!(
-            cokret_sdk::agent_binding::verify_ed25519_audit_binding(
+            arkret_sdk::agent_binding::verify_ed25519_audit_binding(
                 pk, session, agent_id, &echo, actor, sig, subject,
             ),
-            cokret_sdk::agent_binding::Ed25519AuditBindingVerifyOutcome::Valid
+            arkret_sdk::agent_binding::Ed25519AuditBindingVerifyOutcome::Valid
         );
         // Reference public key MUST NOT verify the deployment signature.
         use ed25519_dalek::SigningKey;
@@ -898,7 +898,7 @@ mod tests {
                     .await
                     .expect("snapshot");
                 if let Some(e) = projections.into_iter().find(|e| {
-                    e.event_kind == cokret_sdk::events::kinds::AGENT_INTEROP_SESSION_RESULT
+                    e.event_kind == arkret_sdk::events::kinds::AGENT_INTEROP_SESSION_RESULT
                         && e.payload["session_id"] == session
                 }) {
                     found = Some(e);
@@ -929,7 +929,7 @@ mod tests {
         let status_entry = projections
             .iter()
             .find(|e| {
-                e.event_kind == cokret_sdk::events::kinds::AGENT_INTEROP_SESSION_STATUS
+                e.event_kind == arkret_sdk::events::kinds::AGENT_INTEROP_SESSION_STATUS
                     && e.payload["session_id"] == session
             })
             .expect("status(working) event missing");
@@ -958,7 +958,7 @@ mod tests {
         let result_entry = projections
             .iter()
             .find(|e| {
-                e.event_kind == cokret_sdk::events::kinds::AGENT_INTEROP_SESSION_RESULT
+                e.event_kind == arkret_sdk::events::kinds::AGENT_INTEROP_SESSION_RESULT
                     && e.payload["session_id"] == session
             })
             .expect("result event missing");
@@ -976,7 +976,7 @@ mod tests {
             OperationId::new("ak:operation:01904100-0000-7bbb-8bbb-000000000002".to_owned())
                 .unwrap(),
             RealmId::new("ak:realm:01904100-0000-7000-8000-bbbbbbbbbbbb".to_owned()).unwrap(),
-            cokret_sdk::events::kinds::AGENT_ENDPOINT,
+            arkret_sdk::events::kinds::AGENT_ENDPOINT,
             json!({"endpoint_url": "https://agent.example/api"}),
         );
         op.object_id = Some("did:web:agent.example".to_owned());
@@ -989,8 +989,8 @@ mod tests {
             .expect("snapshot");
         assert!(
             !projections.iter().any(|e| {
-                e.event_kind == cokret_sdk::events::kinds::AGENT_INTEROP_SESSION_RESULT
-                    || e.event_kind == cokret_sdk::events::kinds::AGENT_INTEROP_SESSION_STATUS
+                e.event_kind == arkret_sdk::events::kinds::AGENT_INTEROP_SESSION_RESULT
+                    || e.event_kind == arkret_sdk::events::kinds::AGENT_INTEROP_SESSION_STATUS
             }),
             "non-session_start operation must not trigger agent echo bridge"
         );
@@ -1003,7 +1003,7 @@ mod tests {
             OperationId::new("ak:operation:01904100-0000-7bbb-8bbb-000000000003".to_owned())
                 .unwrap(),
             RealmId::new("ak:realm:01904100-0000-7000-8000-bbbbbbbbbbbb".to_owned()).unwrap(),
-            cokret_sdk::events::kinds::AGENT_INTEROP_SESSION_START,
+            arkret_sdk::events::kinds::AGENT_INTEROP_SESSION_START,
             json!({"counterparty_agent": "did:web:agent.example"}),
         );
         op.object_id = None;
@@ -1016,8 +1016,8 @@ mod tests {
             .expect("snapshot");
         assert!(
             !projections.iter().any(|e| {
-                e.event_kind == cokret_sdk::events::kinds::AGENT_INTEROP_SESSION_RESULT
-                    || e.event_kind == cokret_sdk::events::kinds::AGENT_INTEROP_SESSION_STATUS
+                e.event_kind == arkret_sdk::events::kinds::AGENT_INTEROP_SESSION_RESULT
+                    || e.event_kind == arkret_sdk::events::kinds::AGENT_INTEROP_SESSION_STATUS
             }),
             "agent session_start without session_id must fail closed"
         );

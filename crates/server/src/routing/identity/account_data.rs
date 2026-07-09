@@ -2,7 +2,7 @@
 //!
 //! Protocol writes use `ck.account_data.set` actor-private events and
 //! `ck.self.account.stream.subscribe` for sync/read. This module is mounted under
-//! `/_cokret/self/account_data*`.
+//! `/_arkret/self/account_data*`.
 //!
 //! Spec: `discovery/client-preferences.md` §2 (storage model) plus the per-key
 //! sections (§3.1 Space tags, §3.5 blocklist, §3.6 contact remarks, §3.7 Space
@@ -10,7 +10,7 @@
 //! opaque encrypted blob; clients own canonical encoding, schema validation,
 //! and (where applicable) encryption.
 
-use cokret_sdk::{
+use arkret_sdk::{
     AccountDataDeleteOutcome, AccountDataEntry, AccountDataList, AccountDataReplaceRequestBody,
 };
 use salvo::http::StatusCode;
@@ -51,31 +51,31 @@ const REGISTERED_ACCOUNT_DATA_TYPES: &[AccountDataTypeSpec] = &[
         controller_private: true,
     },
     AccountDataTypeSpec {
-        data_type: cokret_sdk::ACCOUNT_DATA_TYPE_REMINDER,
+        data_type: arkret_sdk::ACCOUNT_DATA_TYPE_REMINDER,
         controller_private: true,
     },
     AccountDataTypeSpec {
-        data_type: cokret_sdk::ACCOUNT_DATA_TYPE_SCHEDULED_SEND,
+        data_type: arkret_sdk::ACCOUNT_DATA_TYPE_SCHEDULED_SEND,
         controller_private: true,
     },
     AccountDataTypeSpec {
-        data_type: cokret_sdk::ACCOUNT_DATA_TYPE_SNOOZE,
+        data_type: arkret_sdk::ACCOUNT_DATA_TYPE_SNOOZE,
         controller_private: true,
     },
     AccountDataTypeSpec {
-        data_type: cokret_sdk::ACCOUNT_DATA_TYPE_SAVED,
+        data_type: arkret_sdk::ACCOUNT_DATA_TYPE_SAVED,
         controller_private: true,
     },
     AccountDataTypeSpec {
-        data_type: cokret_sdk::ACCOUNT_DATA_TYPE_DRAFT,
+        data_type: arkret_sdk::ACCOUNT_DATA_TYPE_DRAFT,
         controller_private: true,
     },
     AccountDataTypeSpec {
-        data_type: cokret_sdk::ACCOUNT_DATA_TYPE_FILE_TRANSFER,
+        data_type: arkret_sdk::ACCOUNT_DATA_TYPE_FILE_TRANSFER,
         controller_private: true,
     },
     AccountDataTypeSpec {
-        data_type: cokret_sdk::ACCOUNT_DATA_TYPE_SEARCH_INDEX_MANIFEST,
+        data_type: arkret_sdk::ACCOUNT_DATA_TYPE_SEARCH_INDEX_MANIFEST,
         controller_private: true,
     },
     AccountDataTypeSpec {

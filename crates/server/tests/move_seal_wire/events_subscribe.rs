@@ -61,9 +61,9 @@ fn sha256_json(value: &Value) -> String {
 
 /// events.subscribe is a streaming NDJSON
 /// response. This test:
-///   1. Calls GET /_cokret/self/events/subscribe with `max_duration_ms=500` so the stream
+///   1. Calls GET /_arkret/self/events/subscribe with `max_duration_ms=500` so the stream
 ///      auto-closes quickly enough for TestClient to collect the full body.
-///   2. (Concurrently) submits a message Event via /_cokret/self/events which triggers
+///   2. (Concurrently) submits a message Event via /_arkret/self/events which triggers
 ///      `project_accepted_operations` → broadcast notification.
 ///   3. Asserts the response body contains:
 ///      - one `kind="catchup_complete"` frame
@@ -92,7 +92,7 @@ async fn events_subscribe_streams_live_event_then_closes_at_deadline() {
         // Wait for the subscribe request to land + register its receiver.
         sleep(StdDuration::from_millis(150)).await;
         let event_id = "ak:event:01984101-0000-7000-8000-000000000abc";
-        let _: Value = TestClient::post("http://server/_cokret/self/events")
+        let _: Value = TestClient::post("http://server/_arkret/self/events")
             .add_header("Authorization", format!("Bearer {token_writer}"), true)
             .json(&event_envelope(
                 event_id,
@@ -112,7 +112,7 @@ async fn events_subscribe_streams_live_event_then_closes_at_deadline() {
 
     // Subscribe with a short deadline so the test doesn't block.
     let mut response = TestClient::get(format!(
-        "http://server/_cokret/self/events/subscribe?realms={}&max_duration_ms=500&heartbeat_ms=200",
+        "http://server/_arkret/self/events/subscribe?realms={}&max_duration_ms=500&heartbeat_ms=200",
         demo_realm_id()
     ))
     .add_header("Authorization", format!("Bearer {token}"), true)
@@ -169,7 +169,7 @@ async fn events_subscribe_emits_close_heartbeat_at_deadline() {
     let app = service(state.clone());
 
     let mut response = TestClient::get(format!(
-        "http://server/_cokret/self/events/subscribe?realms={}&max_duration_ms=300&heartbeat_ms=10000",
+        "http://server/_arkret/self/events/subscribe?realms={}&max_duration_ms=300&heartbeat_ms=10000",
         demo_realm_id()
     ))
     .add_header("Authorization", format!("Bearer {token}"), true)
@@ -208,7 +208,7 @@ async fn events_subscribe_emits_close_heartbeat_at_deadline() {
 }
 
 /// Regression: every frame the realm subscribe stream emits MUST deserialize
-/// through the SDK's *typed* [`cokret_sdk::EventsSubscribeFrame`] — the exact
+/// through the SDK's *typed* [`arkret_sdk::EventsSubscribeFrame`] — the exact
 /// type the wasm/native client parses with. The `cursor` field is
 /// `Option<identifiers::Cursor>`, which rejects anything without a
 /// `ck:cursor:` prefix; an earlier build put the raw `event_id` there, so the
@@ -256,7 +256,7 @@ async fn events_subscribe_frames_are_sdk_typed_and_cursor_advances() {
     // ── Subscribe #1: include history, parse via the TYPED SDK frame. ──
     let app1 = service(state.clone());
     let mut response = TestClient::get(format!(
-        "http://server/_cokret/self/events/subscribe?realms={}&include_history=true&max_duration_ms=300&heartbeat_ms=10000",
+        "http://server/_arkret/self/events/subscribe?realms={}&include_history=true&max_duration_ms=300&heartbeat_ms=10000",
         demo_realm_id()
     ))
     .add_header("Authorization", format!("Bearer {token}"), true)
@@ -264,7 +264,7 @@ async fn events_subscribe_frames_are_sdk_typed_and_cursor_advances() {
     .await;
     let body_string = response.take_string().await.expect("response body");
 
-    let typed_frames: Vec<cokret_sdk::EventsSubscribeFrame> = body_string
+    let typed_frames: Vec<arkret_sdk::EventsSubscribeFrame> = body_string
         .lines()
         .filter(|line| !line.trim().is_empty())
         .map(|line| {
@@ -280,7 +280,7 @@ async fn events_subscribe_frames_are_sdk_typed_and_cursor_advances() {
     // The seeded event must show up as a history event frame.
     let saw_history_event = typed_frames
         .iter()
-        .any(|frame| frame.kind == cokret_sdk::EventsSubscribeFrameKind::Event);
+        .any(|frame| frame.kind == arkret_sdk::EventsSubscribeFrameKind::Event);
     assert!(
         saw_history_event,
         "history event frame missing; frames={typed_frames:?}"
@@ -289,7 +289,7 @@ async fn events_subscribe_frames_are_sdk_typed_and_cursor_advances() {
     // catchup_complete must carry a real ck:cursor token, not an event_id.
     let catchup = typed_frames
         .iter()
-        .find(|frame| frame.kind == cokret_sdk::EventsSubscribeFrameKind::CatchupComplete)
+        .find(|frame| frame.kind == arkret_sdk::EventsSubscribeFrameKind::CatchupComplete)
         .expect("a catchup_complete frame");
     let resume_cursor = catchup
         .cursor
@@ -307,7 +307,7 @@ async fn events_subscribe_frames_are_sdk_typed_and_cursor_advances() {
     let mut response2 = TestClient::get(format!(
         // `ck:cursor:<base64url>` is query-safe unencoded: only `:` and the
         // base64url alphabet (`A-Za-z0-9-_`), all valid query `pchar`s.
-        "http://server/_cokret/self/events/subscribe?realms={}&after={resume_cursor}&max_duration_ms=300&heartbeat_ms=10000",
+        "http://server/_arkret/self/events/subscribe?realms={}&after={resume_cursor}&max_duration_ms=300&heartbeat_ms=10000",
         demo_realm_id(),
     ))
     .add_header("Authorization", format!("Bearer {token}"), true)

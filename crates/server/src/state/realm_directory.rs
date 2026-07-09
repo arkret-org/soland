@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::{DateTime, Utc};
-use cokret_sdk::{Did, RealmId};
+use arkret_sdk::{Did, RealmId};
 
 #[derive(Clone, Debug, Default)]
 pub struct RealmDirectoryQuery {

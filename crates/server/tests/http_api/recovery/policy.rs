@@ -194,7 +194,7 @@ async fn recovery_policy_get_returns_null_without_active_policy() {
     let body = get_recovery(
         state,
         &token,
-        "/_cokret/root/identity/recovery-policy",
+        "/_arkret/root/identity/recovery-policy",
         StatusCode::OK,
     )
     .await;
@@ -221,7 +221,7 @@ async fn recovery_policy_get_returns_active_and_history() {
     let active = get_recovery(
         state.clone(),
         &token,
-        "/_cokret/root/identity/recovery-policy",
+        "/_arkret/root/identity/recovery-policy",
         StatusCode::OK,
     )
     .await;

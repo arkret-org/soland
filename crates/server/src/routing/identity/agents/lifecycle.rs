@@ -155,7 +155,7 @@ pub(super) async fn provision_agent(
     )
     .await;
     res.status_code(StatusCode::CREATED);
-    let agent_principal_did = cokret_sdk::Did::new(agent_principal_id).map_err(|err| {
+    let agent_principal_did = arkret_sdk::Did::new(agent_principal_id).map_err(|err| {
         AppError::internal(format!("generated agent principal DID invalid: {err}"))
     })?;
     json_ok(AgentProvisionOutcome {

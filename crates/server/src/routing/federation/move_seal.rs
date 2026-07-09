@@ -19,8 +19,8 @@
 //! Ed25519 verification runs against the public key resolved from the
 //! `verification_method` DID URL.
 
-use cokret_sdk::state_res::{SealReject, apply_seal, verify_move};
-use cokret_sdk::{Move, RealmId, Seal};
+use arkret_sdk::state_res::{SealReject, apply_seal, verify_move};
+use arkret_sdk::{Move, RealmId, Seal};
 use salvo::http::StatusCode;
 use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
@@ -255,7 +255,7 @@ async fn submit_seal(
     //
     // Capture mls.epoch before the reload so we can detect a
     // shift after the reload writes the new value.
-    let mls_epoch_cell = cokret_sdk::CellRef::new(format!(
+    let mls_epoch_cell = arkret_sdk::CellRef::new(format!(
         "ak:cell:ck.component.mls.epoch.v1:{}",
         seal.realm_id.as_str()
     ))
@@ -436,7 +436,7 @@ pub(crate) fn validate_seal_delta_entries(delta: &[String]) -> Result<(), (Error
 }
 
 fn is_sha256_digest(s: &str) -> bool {
-    s.starts_with("sha256:") && cokret_sdk::Hash::new(s.to_owned()).is_ok()
+    s.starts_with("sha256:") && arkret_sdk::Hash::new(s.to_owned()).is_ok()
 }
 
 #[cfg(test)]

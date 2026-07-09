@@ -3,7 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::Utc;
-use cokret_sdk::{
+use arkret_sdk::{
     CrossSigningBinding, CrossSigningKeyRecord, CrossSigningPublishContent, SignedCrossSigningKey,
     TypedTrustDomainId,
 };
@@ -72,7 +72,7 @@ async fn upload_bob_direct_keypackage(state: AppState, bob_token: &str, suffix: 
     let keypackage_ref = format!("ak:mls:keypackage:direct-{suffix}");
     let keypackage_bytes = format!("opaque-direct-keypackage-{suffix}");
     let capabilities = serde_json::json!(["ck.mls.rfc9420", "ck.mls.profile.full"]);
-    let response = TestClient::post("http://server/_cokret/self/keys/keypackages/upload")
+    let response = TestClient::post("http://server/_arkret/self/keys/keypackages/upload")
         .add_header("authorization", format!("Bearer {bob_token}"), true)
         .json(&serde_json::json!({
             "principal_id": BOB_DID,
@@ -85,7 +85,7 @@ async fn upload_bob_direct_keypackage(state: AppState, bob_token: &str, suffix: 
             "key_packages": [{
                 "keypackage_id": keypackage_id,
                 "keypackage_ref": keypackage_ref,
-                "keypackage_digest": cokret_sdk::canonical::sha256_digest(keypackage_bytes.as_bytes()),
+                "keypackage_digest": arkret_sdk::canonical::sha256_digest(keypackage_bytes.as_bytes()),
                 "key_package": URL_SAFE_NO_PAD.encode(keypackage_bytes.as_bytes()),
                 "cipher_suites": ["MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519"],
                 "capabilities": capabilities,
@@ -104,7 +104,7 @@ async fn direct_resolve_fails_closed_without_accepted_contact() {
     let alice = dev_token(state.clone()).await;
     let _bob = register_account(state.clone(), BOB_DID, "@bob", BOB_DEVICE).await;
 
-    let mut response = TestClient::post("http://server/_cokret/self/direct-conversations/resolve")
+    let mut response = TestClient::post("http://server/_arkret/self/direct-conversations/resolve")
         .add_header("authorization", format!("Bearer {alice}"), true)
         .json(&serde_json::json!({"peer": BOB_DID, "create": true}))
         .send(&app_from_state(state.clone()))
@@ -140,7 +140,7 @@ async fn direct_resolve_fails_closed_when_consent_missing() {
         .await
         .unwrap();
 
-    let mut response = TestClient::post("http://server/_cokret/self/direct-conversations/resolve")
+    let mut response = TestClient::post("http://server/_arkret/self/direct-conversations/resolve")
         .add_header("authorization", format!("Bearer {alice}"), true)
         .json(&serde_json::json!({"peer": BOB_DID, "create": true}))
         .send(&app_from_state(state.clone()))
@@ -201,7 +201,7 @@ async fn direct_resolve_rejects_pairwise_did_without_stable_identity_link() {
         },
     );
 
-    let mut response = TestClient::post("http://server/_cokret/self/direct-conversations/resolve")
+    let mut response = TestClient::post("http://server/_arkret/self/direct-conversations/resolve")
         .add_header("authorization", format!("Bearer {alice}"), true)
         .json(&serde_json::json!({"peer": BOB_PAIRWISE_DID, "create": true}))
         .send(&app_from_state(state.clone()))
@@ -238,7 +238,7 @@ async fn direct_resolve_ignores_accepted_row_without_contact_fact_refs() {
         .await
         .unwrap();
 
-    let mut response = TestClient::post("http://server/_cokret/self/direct-conversations/resolve")
+    let mut response = TestClient::post("http://server/_arkret/self/direct-conversations/resolve")
         .add_header("authorization", format!("Bearer {alice}"), true)
         .json(&serde_json::json!({"peer": BOB_DID, "create": true}))
         .send(&app_from_state(state.clone()))
@@ -255,7 +255,7 @@ async fn direct_resolve_create_requires_claimable_keypackage() {
     let alice = dev_token(state.clone()).await;
     let bob = register_account(state.clone(), BOB_DID, "@bob", BOB_DEVICE).await;
 
-    let request: Value = TestClient::post("http://server/_cokret/self/contacts/request")
+    let request: Value = TestClient::post("http://server/_arkret/self/contacts/request")
         .add_header("authorization", format!("Bearer {alice}"), true)
         .json(&serde_json::json!({
             "target": BOB_DID,
@@ -267,7 +267,7 @@ async fn direct_resolve_create_requires_claimable_keypackage() {
         .await
         .unwrap();
     let request_id = request["request_event_ref"].as_str().unwrap().to_owned();
-    TestClient::post("http://server/_cokret/self/contacts/respond")
+    TestClient::post("http://server/_arkret/self/contacts/respond")
         .add_header("authorization", format!("Bearer {bob}"), true)
         .json(&serde_json::json!({
             "request_id": request_id,
@@ -279,7 +279,7 @@ async fn direct_resolve_create_requires_claimable_keypackage() {
         .await;
     seed_cross_signing_generation(&state, BOB_DID, 1);
 
-    let mut response = TestClient::post("http://server/_cokret/self/direct-conversations/resolve")
+    let mut response = TestClient::post("http://server/_arkret/self/direct-conversations/resolve")
         .add_header("authorization", format!("Bearer {alice}"), true)
         .json(&serde_json::json!({"peer": BOB_DID, "create": true}))
         .send(&app_from_state(state.clone()))
@@ -297,7 +297,7 @@ async fn contacts_spec_path_projects_directional_scopes_and_resolve_is_idempoten
     let alice = dev_token(state.clone()).await;
     let bob = register_account(state.clone(), BOB_DID, "@bob", BOB_DEVICE).await;
 
-    let request: Value = TestClient::post("http://server/_cokret/self/contacts/request")
+    let request: Value = TestClient::post("http://server/_arkret/self/contacts/request")
         .add_header("authorization", format!("Bearer {alice}"), true)
         .json(&serde_json::json!({
             "target": BOB_DID,
@@ -311,7 +311,7 @@ async fn contacts_spec_path_projects_directional_scopes_and_resolve_is_idempoten
     assert_eq!(request["state"], "pending_outgoing");
     let request_id = request["request_event_ref"].as_str().unwrap().to_owned();
 
-    let accepted: Value = TestClient::post("http://server/_cokret/self/contacts/respond")
+    let accepted: Value = TestClient::post("http://server/_arkret/self/contacts/respond")
         .add_header("authorization", format!("Bearer {bob}"), true)
         .json(&serde_json::json!({
                 "request_id": request_id,
@@ -327,7 +327,7 @@ async fn contacts_spec_path_projects_directional_scopes_and_resolve_is_idempoten
     assert_eq!(accepted["state"], "accepted");
     upload_bob_direct_keypackage(state.clone(), &bob, "idempotent").await;
 
-    let contacts: Value = TestClient::get("http://server/_cokret/self/contacts")
+    let contacts: Value = TestClient::get("http://server/_arkret/self/contacts")
         .add_header("authorization", format!("Bearer {alice}"), true)
         .send(&app_from_state(state.clone()))
         .await
@@ -342,7 +342,7 @@ async fn contacts_spec_path_projects_directional_scopes_and_resolve_is_idempoten
     assert_eq!(row["bidirectional_scopes"][0], "direct_message");
 
     let not_found: Value =
-        TestClient::post("http://server/_cokret/self/direct-conversations/resolve")
+        TestClient::post("http://server/_arkret/self/direct-conversations/resolve")
             .add_header("authorization", format!("Bearer {alice}"), true)
             .json(&serde_json::json!({"peer": BOB_DID, "create": false}))
             .send(&app_from_state(state.clone()))
@@ -355,7 +355,7 @@ async fn contacts_spec_path_projects_directional_scopes_and_resolve_is_idempoten
     assert!(not_found.get("canonical").is_none(), "body: {not_found}");
 
     let created: Value =
-        TestClient::post("http://server/_cokret/self/direct-conversations/resolve")
+        TestClient::post("http://server/_arkret/self/direct-conversations/resolve")
             .add_header("authorization", format!("Bearer {alice}"), true)
             .json(&serde_json::json!({"peer": BOB_DID, "create": true}))
             .send(&app_from_state(state.clone()))
@@ -425,7 +425,7 @@ async fn contacts_spec_path_projects_directional_scopes_and_resolve_is_idempoten
         .expect("direct MLS genesis should initialize epoch 0");
     assert_eq!(genesis.epoch, 0);
 
-    let found: Value = TestClient::post("http://server/_cokret/self/direct-conversations/resolve")
+    let found: Value = TestClient::post("http://server/_arkret/self/direct-conversations/resolve")
         .add_header("authorization", format!("Bearer {bob}"), true)
         .json(&serde_json::json!({"peer": "did:web:alice.example", "create": true}))
         .send(&app_from_state(state.clone()))
@@ -444,7 +444,7 @@ async fn concurrent_direct_resolve_create_converges_to_one_binding() {
     let alice = dev_token(state.clone()).await;
     let bob = register_account(state.clone(), BOB_DID, "@bob", BOB_DEVICE).await;
 
-    let request: Value = TestClient::post("http://server/_cokret/self/contacts/request")
+    let request: Value = TestClient::post("http://server/_arkret/self/contacts/request")
         .add_header("authorization", format!("Bearer {alice}"), true)
         .json(&serde_json::json!({
             "target": BOB_DID,
@@ -456,7 +456,7 @@ async fn concurrent_direct_resolve_create_converges_to_one_binding() {
         .await
         .unwrap();
     let request_id = request["request_event_ref"].as_str().unwrap().to_owned();
-    TestClient::post("http://server/_cokret/self/contacts/respond")
+    TestClient::post("http://server/_arkret/self/contacts/respond")
         .add_header("authorization", format!("Bearer {bob}"), true)
         .json(&serde_json::json!({
             "request_id": request_id,
@@ -473,7 +473,7 @@ async fn concurrent_direct_resolve_create_converges_to_one_binding() {
     let alice_a = alice.clone();
     let alice_b = alice.clone();
     let create_a = async move {
-        TestClient::post("http://server/_cokret/self/direct-conversations/resolve")
+        TestClient::post("http://server/_arkret/self/direct-conversations/resolve")
             .add_header("authorization", format!("Bearer {alice_a}"), true)
             .json(&serde_json::json!({
                 "peer": BOB_DID,
@@ -487,7 +487,7 @@ async fn concurrent_direct_resolve_create_converges_to_one_binding() {
             .unwrap()
     };
     let create_b = async move {
-        TestClient::post("http://server/_cokret/self/direct-conversations/resolve")
+        TestClient::post("http://server/_arkret/self/direct-conversations/resolve")
             .add_header("authorization", format!("Bearer {alice_b}"), true)
             .json(&serde_json::json!({
                 "peer": BOB_DID,

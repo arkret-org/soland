@@ -8,7 +8,7 @@ pub(crate) async fn build_sync_snapshot(
     body: &SyncRequestBody,
     after_cursor: &SyncCursor,
     include_presence_delta: bool,
-) -> cokret_sdk::models::SyncOutcome {
+) -> arkret_sdk::models::SyncOutcome {
     let filter_value = sync_filter_value(body.filter.as_ref());
     // SYNC-MEM-1 + ROST-SOL-1..3 (arkret-spec @ b56cab1) — `members[]` is
     // the per-Realm roster v2 projection from
@@ -356,7 +356,7 @@ pub(crate) async fn build_sync_snapshot(
         Vec::new()
     };
 
-    cokret_sdk::models::SyncOutcome {
+    arkret_sdk::models::SyncOutcome {
         cursor: sync_token_for_client_sync(
             state,
             session,
@@ -1313,7 +1313,7 @@ async fn state_events_for_realm(
     let mut newest_position = after_position;
     let mut state_entries = Vec::new();
     for event in events {
-        if event.event_kind == cokret_sdk::events::kinds::MESSAGE_CREATE {
+        if event.event_kind == arkret_sdk::events::kinds::MESSAGE_CREATE {
             continue;
         }
         let position = projection_event_position(&event);
@@ -1747,7 +1747,7 @@ fn projection_event_scope_circle_id(
     projection: &ProjectionState,
     event: &ProjectionEventRecord,
 ) -> Option<String> {
-    if event.event_kind == cokret_sdk::events::kinds::MESSAGE_CREATE {
+    if event.event_kind == arkret_sdk::events::kinds::MESSAGE_CREATE {
         return event
             .payload
             .get("strand_id")

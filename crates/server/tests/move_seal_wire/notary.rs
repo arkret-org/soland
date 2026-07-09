@@ -190,7 +190,7 @@ async fn notary_pass_broadcasts_frontier_frame_to_subscribers() {
 /// projection cache so cell-keyed read paths see the new state.
 #[tokio::test]
 async fn notary_pass_populates_projection_cells_map() {
-    use cokret_sdk::lattice::CellState;
+    use arkret_sdk::lattice::CellState;
 
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;

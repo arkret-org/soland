@@ -42,7 +42,7 @@ async fn seed_agent_session_with_scopes(state: &AppState, token: &str, scopes: &
                     "capability_grant_refs": [],
                     "policy_refs": [],
                 }),
-                freshness_state: cokret_sdk::FreshnessState::Fresh,
+                freshness_state: arkret_sdk::FreshnessState::Fresh,
             }),
             expires_at: now + chrono::Duration::minutes(5),
             created_at: now,
@@ -100,9 +100,9 @@ async fn account_subscribe_first_frame_with_status(
     query: &str,
 ) -> (StatusCode, Value) {
     let url = if query.is_empty() {
-        "http://server/_cokret/self/account/subscribe".to_owned()
+        "http://server/_arkret/self/account/subscribe".to_owned()
     } else {
-        format!("http://server/_cokret/self/account/subscribe?{query}")
+        format!("http://server/_arkret/self/account/subscribe?{query}")
     };
     let mut request = TestClient::get(url);
     if let Some(token) = token {
@@ -125,7 +125,7 @@ async fn agent_session_without_stream_scope_cannot_subscribe_events() {
     seed_agent_session_with_scopes(&state, token, &["ck.self.events.query.scan"]).await;
 
     let mut response = TestClient::get(format!(
-        "http://server/_cokret/self/events/subscribe?realms={DEMO_REALM_ID}&include_history=false&max_duration_ms=100",
+        "http://server/_arkret/self/events/subscribe?realms={DEMO_REALM_ID}&include_history=false&max_duration_ms=100",
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state))
@@ -143,7 +143,7 @@ async fn agent_session_without_query_scope_cannot_scan_events() {
     seed_agent_session_with_scopes(&state, token, &["ck.self.events.stream.subscribe"]).await;
 
     let mut response = TestClient::get(format!(
-        "http://server/_cokret/self/events?realms={DEMO_REALM_ID}"
+        "http://server/_arkret/self/events?realms={DEMO_REALM_ID}"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state))
@@ -165,7 +165,7 @@ async fn agent_session_without_submit_scope_cannot_submit_events() {
         Vec::new(),
     );
 
-    let mut response = TestClient::post("http://server/_cokret/self/events")
+    let mut response = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&event)
         .send(&app_from_state(state))
@@ -290,7 +290,7 @@ async fn events_describe_and_single_event_submit_work() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
 
-    let describe: Value = TestClient::get("http://server/_cokret/self/events/describe")
+    let describe: Value = TestClient::get("http://server/_arkret/self/events/describe")
         .send(&app_from_state(state.clone()))
         .await
         .take_json()
@@ -312,7 +312,7 @@ async fn events_describe_and_single_event_submit_work() {
         1,
         Vec::new(),
     );
-    let submitted: Value = TestClient::post("http://server/_cokret/self/events")
+    let submitted: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&first)
         .send(&app_from_state(state.clone()))
@@ -326,7 +326,7 @@ async fn events_describe_and_single_event_submit_work() {
         "ak:event:01904100-0000-7000-8000-f15c8ea06c11"
     );
 
-    let duplicate: Value = TestClient::post("http://server/_cokret/self/events")
+    let duplicate: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&first)
         .send(&app_from_state(state.clone()))
@@ -338,7 +338,7 @@ async fn events_describe_and_single_event_submit_work() {
     assert_eq!(duplicate["duplicate"][0], first["event_id"]);
 
     let fetched: Value = TestClient::get(
-        "http://server/_cokret/self/events/ck:event:01904100-0000-7000-8000-f15c8ea06c11",
+        "http://server/_arkret/self/events/ck:event:01904100-0000-7000-8000-f15c8ea06c11",
     )
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state.clone()))
@@ -364,7 +364,7 @@ async fn events_describe_and_single_event_submit_work() {
         2,
         vec!["ak:event:01904100-0000-7000-8000-f15c8ea06c11"],
     );
-    let second_submitted: Value = TestClient::post("http://server/_cokret/self/events")
+    let second_submitted: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&second)
         .send(&app_from_state(state.clone()))
@@ -408,7 +408,7 @@ async fn events_describe_and_single_event_submit_work() {
         Value::String(sha256_json(&artifact_kind_payload));
     artifact_kind_event["canonical_digest"] =
         Value::String(event_canonical_digest(&artifact_kind_event));
-    let artifact_kind_submitted: Value = TestClient::post("http://server/_cokret/self/events")
+    let artifact_kind_submitted: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&artifact_kind_event)
         .send(&app_from_state(state.clone()))
@@ -425,7 +425,7 @@ async fn events_describe_and_single_event_submit_work() {
     );
     unknown_schema["schema_id"] = Value::String("ck.schema.not_registered.v1".to_owned());
     unknown_schema["canonical_digest"] = Value::String(event_canonical_digest(&unknown_schema));
-    let mut unknown_schema_response = TestClient::post("http://server/_cokret/self/events")
+    let mut unknown_schema_response = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&unknown_schema)
         .send(&app_from_state(state.clone()))
@@ -437,7 +437,7 @@ async fn events_describe_and_single_event_submit_work() {
     let unknown_schema_body: Value = unknown_schema_response.take_json().await.unwrap();
     assert_eq!(unknown_schema_body["error"]["code"], "unknown_schema");
 
-    let batch: Value = TestClient::post("http://server/_cokret/self/events/resolve")
+    let batch: Value = TestClient::post("http://server/_arkret/self/events/resolve")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
             "event_ids": ["ak:event:01904100-0000-7000-8000-f15c8ea06c11", "ak:event:01904100-0000-7000-8000-30f4e405b35e"]
@@ -454,7 +454,7 @@ async fn events_describe_and_single_event_submit_work() {
     );
 
     let listed: Value =
-        TestClient::get("http://server/_cokret/self/events?actors=did:web:alice.example&limit=10")
+        TestClient::get("http://server/_arkret/self/events?actors=did:web:alice.example&limit=10")
             .add_header("authorization", format!("Bearer {token}"), true)
             .send(&app_from_state(state.clone()))
             .await
@@ -470,7 +470,7 @@ async fn events_describe_and_single_event_submit_work() {
 
     // Actor selector → spec actor frontier `{actor_id, actor_seq, event_id}`.
     let frontier: Value = TestClient::get(
-        "http://server/_cokret/self/events/frontier?actor_id=did:web:alice.example",
+        "http://server/_arkret/self/events/frontier?actor_id=did:web:alice.example",
     )
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state.clone()))
@@ -500,7 +500,7 @@ async fn events_describe_and_single_event_submit_work() {
     .await;
     let seeded_realm_id = seeded["realm_id"].as_str().unwrap();
     let seal_view: Value = TestClient::get(format!(
-        "http://server/_cokret/self/events/frontier?realm_id={seeded_realm_id}"
+        "http://server/_arkret/self/events/frontier?realm_id={seeded_realm_id}"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state.clone()))
@@ -526,7 +526,7 @@ async fn events_describe_and_single_event_submit_work() {
 
     // Inaccessible realm must read as not_found (no existence leak).
     let mut hidden = TestClient::get(
-        "http://server/_cokret/self/events/frontier?realm_id=ck:realm:0196419b-0000-7000-8000-00000000dead",
+        "http://server/_arkret/self/events/frontier?realm_id=ck:realm:0196419b-0000-7000-8000-00000000dead",
     )
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state.clone()))
@@ -545,7 +545,7 @@ async fn events_describe_and_single_event_submit_work() {
     let payload_digest = sha256_json(&conflicting["payload"]);
     conflicting["proofs"][0]["payload_digest"] = Value::String(payload_digest);
     conflicting["canonical_digest"] = Value::String(event_canonical_digest(&conflicting));
-    let mut conflict = TestClient::post("http://server/_cokret/self/events")
+    let mut conflict = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&conflicting)
         .send(&app_from_state(state.clone()))
@@ -617,7 +617,7 @@ async fn realm_create_with_bootstrap_effects_does_not_require_seal_basis() {
     event["proofs"][0]["payload_digest"] = Value::String(sha256_json(&payload));
     event["canonical_digest"] = Value::String(event_canonical_digest(&event));
 
-    let mut response = TestClient::post("http://server/_cokret/self/events")
+    let mut response = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&event)
         .send(&app_from_state(state.clone()))
@@ -668,7 +668,7 @@ async fn invite_create_accepts_locator_evidence_digest_without_local_consent() {
     event["proofs"][0]["payload_digest"] = Value::String(sha256_json(&payload));
     event["canonical_digest"] = Value::String(event_canonical_digest(&event));
 
-    let submitted: Value = TestClient::post("http://server/_cokret/self/events")
+    let submitted: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&event)
         .send(&app_from_state(state.clone()))
@@ -699,7 +699,7 @@ async fn invite_create_accepts_locator_evidence_digest_without_local_consent() {
 #[tokio::test]
 async fn scaffold_describe_surfaces_are_marked_limited_not_profile_claims() {
     let service = app();
-    let describe: Value = TestClient::get("http://server/_cokret/describe")
+    let describe: Value = TestClient::get("http://server/_arkret/describe")
         .send(&service)
         .await
         .take_json()
@@ -913,7 +913,7 @@ async fn sync_cursor_rejects_facets_and_renderer_changes() {
     let cursor = first["cursor"].as_str().unwrap();
 
     let filter_changed = TestClient::get(format!(
-        "http://server/_cokret/self/account/subscribe?catchup=true&after={cursor}&filter=%7B%22realms%22%3A%5B%22ck%3Arealm%3A0196419b-0000-7000-8000-000000000000%22%5D%7D"
+        "http://server/_arkret/self/account/subscribe?catchup=true&after={cursor}&filter=%7B%22realms%22%3A%5B%22ck%3Arealm%3A0196419b-0000-7000-8000-000000000000%22%5D%7D"
     ))
         .add_header("authorization", format!("Bearer {token}"), true)
         .send(&app_from_state(state.clone()))
@@ -942,7 +942,7 @@ async fn events_query_exposes_prev_cursor_and_limited_timeline_pages() {
     }
 
     let first_page: Value = TestClient::get(format!(
-        "http://server/_cokret/self/events?realms={realm_id}&limit=1"
+        "http://server/_arkret/self/events?realms={realm_id}&limit=1"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state.clone()))
@@ -957,7 +957,7 @@ async fn events_query_exposes_prev_cursor_and_limited_timeline_pages() {
     assert!(next_cursor.starts_with("ak:cursor:"));
 
     let second_page: Value = TestClient::get(format!(
-        "http://server/_cokret/self/events?realms={realm_id}&limit=1&after={next_cursor}"
+        "http://server/_arkret/self/events?realms={realm_id}&limit=1&after={next_cursor}"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state.clone()))
@@ -969,7 +969,7 @@ async fn events_query_exposes_prev_cursor_and_limited_timeline_pages() {
     assert_eq!(second_page["events"].as_array().unwrap().len(), 1);
 
     let mut invalid_cursor = TestClient::get(format!(
-        "http://server/_cokret/self/events?realms={realm_id}&after=ck:event:01904100-0000-7000-8000-b8ab57920a67"
+        "http://server/_arkret/self/events?realms={realm_id}&after=ck:event:01904100-0000-7000-8000-b8ab57920a67"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state.clone()))

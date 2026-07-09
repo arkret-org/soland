@@ -1,9 +1,9 @@
 //! Push notification surfaces (register / unregister / notify).
 //!
 //! Surfaces:
-//! - `POST /_cokret/edge/push/register-device` — register a device token + push gateway
-//! - `POST /_cokret/edge/push/unregister-device` — remove an authenticated actor's device token
-//! - `POST /_cokret/edge/push/notify` — fan-out a notification through the rule engine (see the
+//! - `POST /_arkret/edge/push/register-device` — register a device token + push gateway
+//! - `POST /_arkret/edge/push/unregister-device` — remove an authenticated actor's device token
+//! - `POST /_arkret/edge/push/notify` — fan-out a notification through the rule engine (see the
 //!   12-fn helper block at the bottom of this file).
 //!
 //! Push dispatch rules live in the server-local `PushRuleStore`. Client
@@ -13,7 +13,7 @@
 //! `push_register_session_grant_bridge` is the local stand-in that accepts an
 //! `X-Arkret-Session-Grant` header for clients that haven't yet picked up a
 //! bearer session. When coauth introspection is configured, the bridge uses
-//! the same audience/scope/proof validation as `/_cokret/gate/account/session-grants`.
+//! the same audience/scope/proof validation as `/_arkret/gate/account/session-grants`.
 //! Spec rule: no DID in push payload / TURN username.
 //!
 //! Push-rule matching uses the helpers at the bottom: `push_rule_matches`
@@ -97,7 +97,7 @@ fn derive_push_target_id(
         "push_route_id": push_route_id,
         "salt_epoch_id": salt_epoch_id,
     });
-    let canonical = cokret_sdk::canonical::canonical_json_bytes(&input)
+    let canonical = arkret_sdk::canonical::canonical_json_bytes(&input)
         .map_err(|error| AppError::internal(format!("push target canonicalize: {error}")))?;
     let epoch_key = hmac_sha256(root_key, salt_epoch_id.as_bytes());
     let tag = hmac_sha256(&epoch_key, &canonical);
@@ -113,7 +113,7 @@ pub(super) async fn push_register(
     body: JsonBody<PushRegisterDeviceRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<cokret_sdk::PushRegisterDeviceOutcome> {
+) -> JsonResult<arkret_sdk::PushRegisterDeviceOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let auth_result = authenticated_session(state, req);
     let body = body.into_inner();
@@ -218,7 +218,7 @@ pub(super) async fn push_register(
     {
         tracing::error!(%error, "failed to persist push device registration");
     }
-    json_ok(cokret_sdk::PushRegisterDeviceOutcome {
+    json_ok(arkret_sdk::PushRegisterDeviceOutcome {
         ok: true,
         registration_id: Some(registration_id),
         expires_at: None,
@@ -347,7 +347,7 @@ pub(super) async fn push_unregister(
     body: JsonBody<PushUnregisterDeviceRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<cokret_sdk::PushUnregisterDeviceOutcome> {
+) -> JsonResult<arkret_sdk::PushUnregisterDeviceOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
@@ -377,7 +377,7 @@ pub(super) async fn push_unregister(
         if removed == 0 { "no_match" } else { "accepted" },
     )
     .await;
-    json_ok(cokret_sdk::PushUnregisterDeviceOutcome { ok: true })
+    json_ok(arkret_sdk::PushUnregisterDeviceOutcome { ok: true })
 }
 
 #[endpoint(
@@ -501,7 +501,7 @@ pub(super) async fn push_notify(
         .notification
         .push_target_id
         .as_deref()
-        .filter(|value| cokret_sdk::is_valid_push_target_id(value))
+        .filter(|value| arkret_sdk::is_valid_push_target_id(value))
         .ok_or_else(|| AppError::invalid_param("notification.push_target_id is required"))?;
     let notification = serde_json::to_value(&body.notification).map_err(|error| {
         AppError::internal(format!("push notification request serialize: {error}"))
@@ -1010,7 +1010,7 @@ mod tests {
         assert_eq!(first, again);
         assert_ne!(first, other_route);
         assert_ne!(first, other_service);
-        assert!(cokret_sdk::is_valid_push_target_id(&first));
+        assert!(arkret_sdk::is_valid_push_target_id(&first));
         assert!(!first.contains("alice"));
         assert!(!first.contains("device"));
     }

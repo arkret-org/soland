@@ -26,7 +26,7 @@ pub(super) async fn persist_mimi_canonical_message_event(
         + 1;
     let mut envelope = json!({
         "event_id": event_id,
-        "kind": cokret_sdk::events::kinds::MESSAGE_CREATE,
+        "kind": arkret_sdk::events::kinds::MESSAGE_CREATE,
         "realm_id": realm_id,
         "actor_id": actor_id,
         "actor_seq": actor_seq,
@@ -51,7 +51,7 @@ pub(super) async fn persist_mimi_canonical_message_event(
         actor_id: actor_id.to_owned(),
         actor_seq,
         realm_id: Some(realm_id.to_owned()),
-        kind: cokret_sdk::events::kinds::MESSAGE_CREATE.to_owned(),
+        kind: arkret_sdk::events::kinds::MESSAGE_CREATE.to_owned(),
         schema_id: EVENT_SCHEMA_ID.to_owned(),
         canonical_digest,
         canonical_bytes,
@@ -96,7 +96,7 @@ pub(super) fn mimi_event_proof(
         ))
     })?;
     let jws =
-        cokret_sdk::jws::sign_jws_ed25519(&binding_bytes, state.notary_signing_key().as_ref())
+        arkret_sdk::jws::sign_jws_ed25519(&binding_bytes, state.notary_signing_key().as_ref())
             .map_err(|error| {
                 AppError::internal(format!("MIMI event proof signing failed: {error}"))
             })?;
@@ -146,7 +146,7 @@ pub(super) fn decode_optional_mimi_opaque_json(
         return Ok(None);
     };
     let value =
-        cokret_sdk::canonical::from_canonical_json_slice::<Value>(&bytes).map_err(|error| {
+        arkret_sdk::canonical::from_canonical_json_slice::<Value>(&bytes).map_err(|error| {
             AppError::invalid_param(format!("{context} is not canonical JSON: {error}"))
                 .with_wire_code("mimi_payload_invalid")
         })?;
@@ -160,7 +160,7 @@ pub(super) fn decode_required_mimi_opaque_json(
 ) -> Result<Value, AppError> {
     let bytes = decode_mimi_opaque_bytes(opaque, digest_field, context, true)?
         .expect("required opaque payload returns bytes");
-    cokret_sdk::canonical::from_canonical_json_slice::<Value>(&bytes).map_err(|error| {
+    arkret_sdk::canonical::from_canonical_json_slice::<Value>(&bytes).map_err(|error| {
         AppError::invalid_param(format!("{context} is not canonical JSON: {error}"))
             .with_wire_code("mimi_payload_invalid")
     })
@@ -189,11 +189,11 @@ pub(super) fn decode_mimi_opaque_bytes(
         }
         _ => return Ok(None),
     };
-    let bytes = cokret_sdk::base64url_decode(payload).map_err(|error| {
+    let bytes = arkret_sdk::base64url_decode(payload).map_err(|error| {
         AppError::invalid_param(format!("{context} payload is not base64url: {error}"))
             .with_wire_code("mimi_payload_invalid")
     })?;
-    let observed = cokret_sdk::canonical::sha256_digest(&bytes);
+    let observed = arkret_sdk::canonical::sha256_digest(&bytes);
     if observed != digest {
         return Err(
             AppError::invalid_param(format!("{context} digest mismatch"))
@@ -254,7 +254,7 @@ pub(super) fn mimi_provider_directory_value(state: &AppState) -> Value {
 
 pub(super) fn mimi_base_url(state: &AppState) -> String {
     format!(
-        "{}/_cokret/open/mimi",
+        "{}/_arkret/open/mimi",
         state.config.public_base_url.trim_end_matches('/')
     )
 }
@@ -294,7 +294,7 @@ pub(super) fn mimi_receipt(
         "operation_id": operation_id,
         "service_did": state.config.service_did,
         "provider_id": mimi_provider_id(state),
-        "request_hash": cokret_sdk::canonical::sha256_digest(body.to_string().as_bytes()),
+        "request_hash": arkret_sdk::canonical::sha256_digest(body.to_string().as_bytes()),
         "accepted_at": now(),
         "drafts": {
             "protocol": "draft-ietf-mimi-protocol-06",
@@ -394,7 +394,7 @@ pub(super) fn map_mimi_message_content(
             "quarantine_id": quarantine_id,
             "unknown_content_kind": kind,
             "reason": "unknown_mimi_content_kind",
-            "raw_payload_hash": cokret_sdk::canonical::sha256_digest(content.to_string().as_bytes()),
+            "raw_payload_hash": arkret_sdk::canonical::sha256_digest(content.to_string().as_bytes()),
         });
         let content = json!({
             "kind": "ck.content.unsupported",

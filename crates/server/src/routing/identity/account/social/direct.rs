@@ -41,11 +41,11 @@ pub(crate) fn direct_pair_key(
     left: &str,
     right: &str,
 ) -> Result<String, AppError> {
-    let trust_domain = cokret_sdk::TypedTrustDomainId::new(state.config.trust_domain.clone())
+    let trust_domain = arkret_sdk::TypedTrustDomainId::new(state.config.trust_domain.clone())
         .map_err(|error| AppError::internal(format!("configured trust_domain invalid: {error}")))?;
     let left = direct_pair_key_participant(left, "actor")?;
     let right = direct_pair_key_participant(right, "peer")?;
-    cokret_sdk::direct_conversation_pair_key(trust_domain, left, right).map_err(|error| {
+    arkret_sdk::direct_conversation_pair_key(trust_domain, left, right).map_err(|error| {
         AppError::internal(format!("direct pair key construction failed: {error}"))
     })
 }
@@ -53,7 +53,7 @@ pub(crate) fn direct_pair_key(
 pub(super) fn direct_pair_key_participant(
     did: &str,
     role: &str,
-) -> Result<cokret_sdk::DirectConversationPairKeyParticipant, AppError> {
+) -> Result<arkret_sdk::DirectConversationPairKeyParticipant, AppError> {
     let did = Did::new(did.to_owned()).map_err(|error| {
         AppError::internal(format!(
             "stored direct conversation {role} DID invalid: {error}"
@@ -69,7 +69,7 @@ pub(super) fn direct_pair_key_participant(
             "direct conversation pairwise DID requires a verified stable-subject identity link",
         ));
     }
-    Ok(cokret_sdk::DirectConversationPairKeyParticipant::unmapped(
+    Ok(arkret_sdk::DirectConversationPairKeyParticipant::unmapped(
         did,
     ))
 }
@@ -466,7 +466,7 @@ pub(super) async fn claim_direct_keypackage(
     realm_id: &str,
     main_strand_id: &str,
     mls_group_id: &str,
-) -> Result<cokret_sdk::KeyPackageClaimRecord, AppError> {
+) -> Result<arkret_sdk::KeyPackageClaimRecord, AppError> {
     let target_principal_id = Did::new(peer.to_owned()).map_err(|_| {
         direct_resolve_precondition(
             crate::error::reasons::PEER_UNRESOLVABLE,
@@ -479,7 +479,7 @@ pub(super) async fn claim_direct_keypackage(
             "direct conversation requester DID is invalid",
         )
     })?;
-    let body = cokret_sdk::KeyPackagesClaimRequestBody {
+    let body = arkret_sdk::KeyPackagesClaimRequestBody {
         target_principal_id,
         intended_realm_id: RealmId::new(realm_id.to_owned())
             .map_err(|error| AppError::internal(format!("generated realm_id invalid: {error}")))?,
@@ -536,13 +536,13 @@ pub(super) async fn submit_direct_mls_genesis(
         "creator_principal_id": actor,
         "creator_device_id": actor_device_id,
         "cipher_suite": "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
-        "group_info_digest": cokret_sdk::canonical::sha256_digest(format!("direct-group-info:{realm_id}:{mls_group_id}")),
-        "ratchet_tree_digest": cokret_sdk::canonical::sha256_digest(format!("direct-ratchet-tree:{realm_id}:{mls_group_id}")),
+        "group_info_digest": arkret_sdk::canonical::sha256_digest(format!("direct-group-info:{realm_id}:{mls_group_id}")),
+        "ratchet_tree_digest": arkret_sdk::canonical::sha256_digest(format!("direct-ratchet-tree:{realm_id}:{mls_group_id}")),
         "covered_seals": member_event_refs,
         "governance_binding": governance_binding,
         "created_at": now().to_rfc3339_opts(SecondsFormat::Secs, true),
     });
-    let op = direct_mls_operation(realm_id, cokret_sdk::events::kinds::MLS_GENESIS, payload)?;
+    let op = direct_mls_operation(realm_id, arkret_sdk::events::kinds::MLS_GENESIS, payload)?;
     let effect = crate::reducer::mls::apply_group_genesis(&mut state.projection.lock(), &op);
     match &effect {
         crate::reducer::ProjectionEffect::Mls(crate::reducer::MlsEffect::GroupGenesis {
@@ -574,7 +574,7 @@ pub(super) async fn submit_direct_mls_welcome(
     peer: &str,
     realm_id: &str,
     mls_group_id: &str,
-    claim: &cokret_sdk::KeyPackageClaimRecord,
+    claim: &arkret_sdk::KeyPackageClaimRecord,
     governance_binding: &Value,
 ) -> Result<(), AppError> {
     let welcome_bytes = format!(
@@ -582,9 +582,9 @@ pub(super) async fn submit_direct_mls_welcome(
         claim.claim_id
     )
     .into_bytes();
-    let welcome_digest = cokret_sdk::canonical::sha256_digest(&welcome_bytes);
+    let welcome_digest = arkret_sdk::canonical::sha256_digest(&welcome_bytes);
     let created_at = now();
-    let signature_seed = cokret_sdk::canonical::sha256_digest(format!(
+    let signature_seed = arkret_sdk::canonical::sha256_digest(format!(
         "direct-welcome-signature:{realm_id}:{mls_group_id}:{}",
         claim.claim_id
     ));
@@ -620,7 +620,7 @@ pub(super) async fn submit_direct_mls_welcome(
             "sig": URL_SAFE_NO_PAD.encode(signature_seed.as_bytes()),
         }
     });
-    let requester_ssk_generation = cokret_sdk::Did::new(actor.to_owned())
+    let requester_ssk_generation = arkret_sdk::Did::new(actor.to_owned())
         .ok()
         .and_then(|did| {
             let manager = state.cross_signing.lock();
@@ -647,12 +647,12 @@ pub(super) async fn submit_direct_mls_welcome(
         "claim_id": claim.claim_id.as_str(),
         "claim_ref": claim_ref,
         "claim_envelope": claim_envelope,
-        "welcome_ref": format!("ak:blob:{}", cokret_sdk::canonical::sha256_digest(&welcome_bytes)),
+        "welcome_ref": format!("ak:blob:{}", arkret_sdk::canonical::sha256_digest(&welcome_bytes)),
         "welcome_bytes_b64": URL_SAFE_NO_PAD.encode(&welcome_bytes),
         "expires_at": (created_at + chrono::Duration::days(1)).to_rfc3339_opts(SecondsFormat::Secs, true),
         "governance_binding": governance_binding,
     });
-    let op = direct_mls_operation(realm_id, cokret_sdk::events::kinds::MLS_WELCOME, payload)?;
+    let op = direct_mls_operation(realm_id, arkret_sdk::events::kinds::MLS_WELCOME, payload)?;
     let effect = crate::reducer::mls::apply_welcome_enqueue(&mut state.projection.lock(), &op);
     match &effect {
         crate::reducer::ProjectionEffect::Mls(crate::reducer::MlsEffect::WelcomeEnqueued {
@@ -692,7 +692,7 @@ pub(super) fn direct_mls_governance_binding(
         "previous_epoch": 0,
         "next_epoch": 0,
         "membership_frontier": member_event_refs,
-        "policy_root": cokret_sdk::canonical::sha256_digest(format!("direct-policy:{realm_id}:{mls_group_id}")),
+        "policy_root": arkret_sdk::canonical::sha256_digest(format!("direct-policy:{realm_id}:{mls_group_id}")),
         "binding_profile": crate::kinds::MLS_GOVERNANCE_BINDING_FULL_PROFILE,
         "reducer_profile": crate::kinds::MLS_REDUCER_PROFILE_V1,
     })
@@ -702,12 +702,12 @@ pub(super) fn direct_mls_operation(
     realm_id: &str,
     object_type: &str,
     payload: Value,
-) -> Result<cokret_sdk::Operation, AppError> {
+) -> Result<arkret_sdk::Operation, AppError> {
     let operation_id = direct_operation_id()
         .map_err(|error| AppError::internal(format!("direct MLS operation id failed: {error}")))?;
     let realm_id = RealmId::new(realm_id.to_owned())
         .map_err(|error| AppError::internal(format!("direct MLS realm id failed: {error}")))?;
-    Ok(cokret_sdk::Operation::create(
+    Ok(arkret_sdk::Operation::create(
         operation_id,
         realm_id,
         object_type,
@@ -731,7 +731,7 @@ pub(super) async fn submit_direct_realm_genesis(
     actor: &str,
     peer: &str,
 ) -> Result<(), &'static str> {
-    let realm_scope = cokret_sdk::RealmId::new(realm_id.to_owned())
+    let realm_scope = arkret_sdk::RealmId::new(realm_id.to_owned())
         .map_err(|_| "generated invalid direct conversation realm id")?;
 
     // ck.realm.create — DM Realm well-known shape (spec §7): mls_rfc9420
@@ -754,8 +754,8 @@ pub(super) async fn submit_direct_realm_genesis(
     Ok(())
 }
 
-pub(super) fn direct_operation_id() -> Result<cokret_sdk::OperationId, &'static str> {
-    cokret_sdk::OperationId::new(crate::ids::generate_operation_id())
+pub(super) fn direct_operation_id() -> Result<arkret_sdk::OperationId, &'static str> {
+    arkret_sdk::OperationId::new(crate::ids::generate_operation_id())
         .map_err(|_| "generated invalid operation id")
 }
 
@@ -766,28 +766,28 @@ pub(super) fn direct_now_seconds() -> chrono::DateTime<chrono::Utc> {
 
 pub(super) fn direct_realm_create_payload(
     state: &AppState,
-    realm_scope: cokret_sdk::RealmId,
+    realm_scope: arkret_sdk::RealmId,
     creator: &str,
     created_at: chrono::DateTime<chrono::Utc>,
 ) -> Result<Value, &'static str> {
     let creator_did =
-        cokret_sdk::Did::new(creator.to_owned()).map_err(|_| "invalid direct realm creator DID")?;
-    let trust_domain = cokret_sdk::TypedTrustDomainId::new(state.config.trust_domain.clone())
+        arkret_sdk::Did::new(creator.to_owned()).map_err(|_| "invalid direct realm creator DID")?;
+    let trust_domain = arkret_sdk::TypedTrustDomainId::new(state.config.trust_domain.clone())
         .map_err(|_| "invalid direct realm trust domain")?;
-    let mut realm = cokret_sdk::models::Realm::new(
+    let mut realm = arkret_sdk::models::Realm::new(
         realm_scope,
         "Direct conversation",
         creator_did.clone(),
         trust_domain,
-        cokret_sdk::NotaryProfile::SingleDid,
-        cokret_sdk::NotaryValue::single_did(creator_did),
+        arkret_sdk::NotaryProfile::SingleDid,
+        arkret_sdk::NotaryValue::single_did(creator_did),
     );
-    realm.security_class = Some(cokret_sdk::SecurityClass::Standard);
-    realm.default_discoverability = cokret_sdk::Discoverability::InviteOnly;
-    realm.default_join_rule = cokret_sdk::JoinRule::Closed;
-    realm.history_visibility = cokret_sdk::HistoryVisibility::Joined;
-    realm.encryption_profile = cokret_sdk::EncryptionProfile::MlsRfc9420;
-    realm.federation_policy = Some(cokret_sdk::FederationPolicy::Restricted);
+    realm.security_class = Some(arkret_sdk::SecurityClass::Standard);
+    realm.default_discoverability = arkret_sdk::Discoverability::InviteOnly;
+    realm.default_join_rule = arkret_sdk::JoinRule::Closed;
+    realm.history_visibility = arkret_sdk::HistoryVisibility::Joined;
+    realm.encryption_profile = arkret_sdk::EncryptionProfile::MlsRfc9420;
+    realm.federation_policy = Some(arkret_sdk::FederationPolicy::Restricted);
     realm.created_at = created_at;
     realm.extra.insert(
         "fields".to_owned(),
@@ -795,7 +795,7 @@ pub(super) fn direct_realm_create_payload(
             "conversation_kind": "direct_message",
         }),
     );
-    serde_json::to_value(cokret_sdk::models::RealmCreatePayload {
+    serde_json::to_value(arkret_sdk::models::RealmCreatePayload {
         object: realm,
         initial_relations: None,
     })
@@ -804,15 +804,15 @@ pub(super) fn direct_realm_create_payload(
 
 pub(super) fn direct_realm_create_operation(
     state: &AppState,
-    realm_scope: cokret_sdk::RealmId,
+    realm_scope: arkret_sdk::RealmId,
     creator: &str,
-) -> Result<cokret_sdk::Operation, &'static str> {
+) -> Result<arkret_sdk::Operation, &'static str> {
     let created_at = direct_now_seconds();
     let payload = direct_realm_create_payload(state, realm_scope.clone(), creator, created_at)?;
-    let mut operation = cokret_sdk::Operation::create(
+    let mut operation = arkret_sdk::Operation::create(
         direct_operation_id()?,
         realm_scope,
-        cokret_sdk::events::kinds::REALM_CREATE,
+        arkret_sdk::events::kinds::REALM_CREATE,
         payload,
     );
     operation.created_at = created_at;
@@ -820,15 +820,15 @@ pub(super) fn direct_realm_create_operation(
 }
 
 pub(super) fn direct_member_join_operation(
-    realm_scope: cokret_sdk::RealmId,
+    realm_scope: arkret_sdk::RealmId,
     member: &str,
-) -> Result<cokret_sdk::Operation, &'static str> {
+) -> Result<arkret_sdk::Operation, &'static str> {
     let created_at = direct_now_seconds();
     let payload = direct_member_join_payload(realm_scope.clone(), member)?;
-    let mut operation = cokret_sdk::Operation::create(
+    let mut operation = arkret_sdk::Operation::create(
         direct_operation_id()?,
         realm_scope,
-        cokret_sdk::events::kinds::MEMBER_STATE,
+        arkret_sdk::events::kinds::MEMBER_STATE,
         payload,
     );
     operation.created_at = created_at;
@@ -836,15 +836,15 @@ pub(super) fn direct_member_join_operation(
 }
 
 pub(super) fn direct_member_join_payload(
-    realm_scope: cokret_sdk::RealmId,
+    realm_scope: arkret_sdk::RealmId,
     member: &str,
 ) -> Result<Value, &'static str> {
     let member_did =
-        cokret_sdk::Did::new(member.to_owned()).map_err(|_| "invalid direct peer member DID")?;
-    cokret_sdk::models::MembershipPayload::join(
+        arkret_sdk::Did::new(member.to_owned()).map_err(|_| "invalid direct peer member DID")?;
+    arkret_sdk::models::MembershipPayload::join(
         realm_scope,
         member_did,
-        cokret_sdk::models::DeliveryStatus::Unroutable,
+        arkret_sdk::models::DeliveryStatus::Unroutable,
         "direct_conversation_peer_bootstrap",
     )
     .to_value()
@@ -852,23 +852,23 @@ pub(super) fn direct_member_join_payload(
 }
 
 pub(super) fn direct_strand_create_payload(
-    realm_scope: cokret_sdk::RealmId,
+    realm_scope: arkret_sdk::RealmId,
     main_strand_id: &str,
     creator: &str,
     created_at: chrono::DateTime<chrono::Utc>,
 ) -> Result<Value, &'static str> {
-    let strand_id = cokret_sdk::StrandId::new(main_strand_id.to_owned())
+    let strand_id = arkret_sdk::StrandId::new(main_strand_id.to_owned())
         .map_err(|_| "generated invalid direct conversation strand id")?;
-    let creator_did = cokret_sdk::Did::new(creator.to_owned())
+    let creator_did = arkret_sdk::Did::new(creator.to_owned())
         .map_err(|_| "invalid direct strand creator DID")?;
-    let mut strand = cokret_sdk::models::Strand::discussion(
+    let mut strand = arkret_sdk::models::Strand::discussion(
         strand_id,
         realm_scope,
         "Direct conversation",
         creator_did,
     );
     strand.created_at = created_at;
-    serde_json::to_value(cokret_sdk::models::StrandCreatePayload {
+    serde_json::to_value(arkret_sdk::models::StrandCreatePayload {
         object: strand,
         initial_relations: None,
     })
@@ -876,17 +876,17 @@ pub(super) fn direct_strand_create_payload(
 }
 
 pub(super) fn direct_strand_create_operation(
-    realm_scope: cokret_sdk::RealmId,
+    realm_scope: arkret_sdk::RealmId,
     main_strand_id: &str,
     creator: &str,
-) -> Result<cokret_sdk::Operation, &'static str> {
+) -> Result<arkret_sdk::Operation, &'static str> {
     let created_at = direct_now_seconds();
     let payload =
         direct_strand_create_payload(realm_scope.clone(), main_strand_id, creator, created_at)?;
-    let mut operation = cokret_sdk::Operation::create(
+    let mut operation = arkret_sdk::Operation::create(
         direct_operation_id()?,
         realm_scope,
-        cokret_sdk::events::kinds::STRAND_CREATE,
+        arkret_sdk::events::kinds::STRAND_CREATE,
         payload,
     );
     operation.created_at = created_at;

@@ -11,7 +11,7 @@ use super::*;
 #[derive(Clone)]
 pub struct CokretOpenApiDoc(pub OpenApi);
 
-/// Catch-all handler under `/_cokret/*` (and the `/_soland/*` compat mirror,
+/// Catch-all handler under `/_arkret/*` (and the `/_soland/*` compat mirror,
 /// which mounts the same protocol handlers and must answer errors identically).
 ///
 /// Per `arkret-spec/spec/v1/zh/sync/api-conventions.md` §10:
@@ -54,7 +54,7 @@ pub(crate) async fn api_not_found(req: &mut Request, res: &mut Response) {
 
 /// Map of registered route patterns → supported HTTP methods. Populated
 /// once at startup from the cached OpenAPI doc (see
-/// [`cached_cokret_openapi_doc`]) so that [`api_not_found`] can decide
+/// [`cached_arkret_openapi_doc`]) so that [`api_not_found`] can decide
 /// whether to return 404 (`unrecognized_endpoint`) or 405
 /// (`method_not_allowed` + `Allow` header) for a given request path.
 ///
@@ -69,7 +69,7 @@ pub(crate) fn populate_known_routes(doc: &OpenApi) {
     let _ = KNOWN_ROUTES.get_or_init(|| {
         let mut out: Vec<(String, Vec<Method>)> = Vec::new();
         for (path, item) in doc.paths.iter() {
-            // The protocol surface (`/_cokret/...`, trust segments
+            // The protocol surface (`/_arkret/...`, trust segments
             // self/gate/root/find/peer/open/edge) is spec-mandated to return
             // the canonical error envelope; the `/_soland/...` compat mirror
             // reuses the same handlers and carries its own catch-all, so it
@@ -77,7 +77,7 @@ pub(crate) fn populate_known_routes(doc: &OpenApi) {
             // mounts would answer wrong-method requests differently. Other
             // prefixes (`/health`, `/.well-known/...`) are out of scope for
             // the `unrecognized_endpoint` / `method_not_allowed` contract.
-            if !(path.starts_with("/_cokret/") || path.starts_with("/_soland/")) {
+            if !(path.starts_with("/_arkret/") || path.starts_with("/_soland/")) {
                 continue;
             }
             let methods: Vec<Method> = item
@@ -306,7 +306,7 @@ pub(crate) async fn wait_for_sync_token(
 /// specifically [`pattern_matches_path`] and the supporting helpers.
 /// Salvo wiring (the actual HTTP shape returned by the catch-all router)
 /// is covered by the integration test
-/// `framework_errors_use_cokret_error_envelope` in `tests/http_api.rs`.
+/// `framework_errors_use_arkret_error_envelope` in `tests/http_api.rs`.
 #[cfg(test)]
 #[path = "routing_framework_error_routing_tests.rs"]
 mod framework_error_routing_tests;

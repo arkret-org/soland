@@ -17,7 +17,7 @@
 //! 5. `ck.circle.tombstone` flips the projection to the terminal state and the read helper hides
 //!    the row.
 
-use cokret_sdk::{Did, Operation, OperationId, RealmId};
+use arkret_sdk::{Did, Operation, OperationId, RealmId};
 use serde_json::{Value, json};
 use soland::hlc::ServerHlc;
 use soland::reducer::{
@@ -46,7 +46,7 @@ fn op(kind: &str, realm_id: &str, payload: Value) -> Operation {
 fn seed_realm(state: &mut ProjectionState, hlc: &ServerHlc, realm_id: &str, owner: &str) {
     state.apply(
         &op(
-            cokret_sdk::events::kinds::REALM_CREATE,
+            arkret_sdk::events::kinds::REALM_CREATE,
             realm_id,
             json!({
                 "object": {
@@ -66,7 +66,7 @@ fn seed_realm(state: &mut ProjectionState, hlc: &ServerHlc, realm_id: &str, owne
 fn seed_encrypted_realm(state: &mut ProjectionState, hlc: &ServerHlc, realm_id: &str, owner: &str) {
     state.apply(
         &op(
-            cokret_sdk::events::kinds::REALM_CREATE,
+            arkret_sdk::events::kinds::REALM_CREATE,
             realm_id,
             json!({
                 "object": {
@@ -117,7 +117,7 @@ fn circle_create_writes_projection() {
 
     let effect = state.apply(
         &op(
-            cokret_sdk::events::kinds::CIRCLE_CREATE,
+            arkret_sdk::events::kinds::CIRCLE_CREATE,
             REALM_A,
             json!({
                 "object": {
@@ -154,7 +154,7 @@ fn circle_create_plaintext_under_e2ee_realm_rejected() {
 
     let rejected = state.apply(
         &op(
-            cokret_sdk::events::kinds::CIRCLE_CREATE,
+            arkret_sdk::events::kinds::CIRCLE_CREATE,
             REALM_A,
             json!({
                 "object": {
@@ -187,7 +187,7 @@ fn circle_content_floor_below_realm_rejected() {
     // Realm raises its content floor to e2ee_required via policy_components.
     state.apply(
         &op(
-            cokret_sdk::events::kinds::REALM_POLICY_COMPONENTS,
+            arkret_sdk::events::kinds::REALM_POLICY_COMPONENTS,
             REALM_A,
             json!({ "content_encryption_floor": "e2ee_required" }),
         ),
@@ -195,7 +195,7 @@ fn circle_content_floor_below_realm_rejected() {
     );
     let rejected = state.apply(
         &op(
-            cokret_sdk::events::kinds::CIRCLE_CREATE,
+            arkret_sdk::events::kinds::CIRCLE_CREATE,
             REALM_A,
             json!({
                 "object": {
@@ -224,7 +224,7 @@ fn circle_update_rejects_encryption_profile_patch() {
     seed_realm(&mut state, &hlc, REALM_A, ALICE);
     state.apply(
         &op(
-            cokret_sdk::events::kinds::CIRCLE_CREATE,
+            arkret_sdk::events::kinds::CIRCLE_CREATE,
             REALM_A,
             json!({
                 "object": {
@@ -241,7 +241,7 @@ fn circle_update_rejects_encryption_profile_patch() {
 
     let rejected = state.apply(
         &op(
-            cokret_sdk::events::kinds::CIRCLE_UPDATE,
+            arkret_sdk::events::kinds::CIRCLE_UPDATE,
             REALM_A,
             json!({
                 "circle_id": CIRCLE_A,
@@ -271,7 +271,7 @@ fn circle_member_must_be_realm_member() {
     add_realm_member(&mut state, &hlc, REALM_A, ALICE);
     state.apply(
         &op(
-            cokret_sdk::events::kinds::CIRCLE_CREATE,
+            arkret_sdk::events::kinds::CIRCLE_CREATE,
             REALM_A,
             json!({
                 "object": {
@@ -287,7 +287,7 @@ fn circle_member_must_be_realm_member() {
 
     let rejected = state.apply(
         &op(
-            cokret_sdk::events::kinds::CIRCLE_MEMBER_STATE,
+            arkret_sdk::events::kinds::CIRCLE_MEMBER_STATE,
             REALM_A,
             json!({
                 "circle_id": CIRCLE_A,
@@ -312,7 +312,7 @@ fn circle_member_must_be_realm_member() {
     // invariant under test without weakening the §8 authorization door.
     let accepted = state.apply(
         &op(
-            cokret_sdk::events::kinds::CIRCLE_MEMBER_STATE,
+            arkret_sdk::events::kinds::CIRCLE_MEMBER_STATE,
             REALM_A,
             json!({
                 "circle_id": CIRCLE_A,
@@ -342,7 +342,7 @@ fn circle_member_remove_updates_active_set_and_scope_visibility() {
     add_realm_member(&mut state, &hlc, REALM_A, BOB);
     state.apply(
         &op(
-            cokret_sdk::events::kinds::CIRCLE_CREATE,
+            arkret_sdk::events::kinds::CIRCLE_CREATE,
             REALM_A,
             json!({
                 "object": {
@@ -361,7 +361,7 @@ fn circle_member_remove_updates_active_set_and_scope_visibility() {
     // under test.
     state.apply(
         &op(
-            cokret_sdk::events::kinds::CIRCLE_MEMBER_STATE,
+            arkret_sdk::events::kinds::CIRCLE_MEMBER_STATE,
             REALM_A,
             json!({
                 "circle_id": CIRCLE_A,
@@ -380,7 +380,7 @@ fn circle_member_remove_updates_active_set_and_scope_visibility() {
 
     let removed = state.apply(
         &op(
-            cokret_sdk::events::kinds::CIRCLE_MEMBER_STATE,
+            arkret_sdk::events::kinds::CIRCLE_MEMBER_STATE,
             REALM_A,
             json!({
                 "circle_id": CIRCLE_A,
@@ -414,7 +414,7 @@ fn assert_parent_membership_cascades_circle_membership(target_membership: &str) 
     for (circle_id, encryption_profile) in [(CIRCLE_A, "mls_rfc9420"), (CIRCLE_B, "none")] {
         state.apply(
             &op(
-                cokret_sdk::events::kinds::CIRCLE_CREATE,
+                arkret_sdk::events::kinds::CIRCLE_CREATE,
                 REALM_A,
                 json!({
                     "object": {
@@ -430,7 +430,7 @@ fn assert_parent_membership_cascades_circle_membership(target_membership: &str) 
         );
         state.apply(
             &op(
-                cokret_sdk::events::kinds::CIRCLE_MEMBER_STATE,
+                arkret_sdk::events::kinds::CIRCLE_MEMBER_STATE,
                 REALM_A,
                 json!({
                     "circle_id": circle_id,
@@ -450,7 +450,7 @@ fn assert_parent_membership_cascades_circle_membership(target_membership: &str) 
 
     let effect = state.apply(
         &op(
-            cokret_sdk::events::kinds::MEMBER_STATE,
+            arkret_sdk::events::kinds::MEMBER_STATE,
             REALM_A,
             json!({
                 "actor_id": BOB,
@@ -503,7 +503,7 @@ fn circle_scoped_message_preserves_scope_for_visibility_filtering() {
     }
     state.apply(
         &op(
-            cokret_sdk::events::kinds::CIRCLE_CREATE,
+            arkret_sdk::events::kinds::CIRCLE_CREATE,
             REALM_A,
             json!({
                 "object": {
@@ -525,7 +525,7 @@ fn circle_scoped_message_preserves_scope_for_visibility_filtering() {
     for (actor, sender) in [(ALICE, BOB), (BOB, ALICE)] {
         state.apply(
             &op(
-                cokret_sdk::events::kinds::CIRCLE_MEMBER_STATE,
+                arkret_sdk::events::kinds::CIRCLE_MEMBER_STATE,
                 REALM_A,
                 json!({
                     "circle_id": CIRCLE_A,
@@ -544,7 +544,7 @@ fn circle_scoped_message_preserves_scope_for_visibility_filtering() {
     // to the Circle, then post a message to that Strand WITHOUT any scope field.
     let strand_created = state.apply(
         &op(
-            cokret_sdk::events::kinds::STRAND_CREATE,
+            arkret_sdk::events::kinds::STRAND_CREATE,
             REALM_A,
             json!({
                 "object": {
@@ -564,7 +564,7 @@ fn circle_scoped_message_preserves_scope_for_visibility_filtering() {
 
     let effect = state.apply(
         &op(
-            cokret_sdk::events::kinds::MESSAGE_CREATE,
+            arkret_sdk::events::kinds::MESSAGE_CREATE,
             REALM_A,
             json!({
                 "event_id": "ak:event:01904100-0000-7000-8000-c1c1eeee0001",
@@ -602,7 +602,7 @@ fn circle_scoped_morph_preserves_scope_for_update_gates() {
     add_realm_member(&mut state, &hlc, REALM_A, ALICE);
     state.apply(
         &op(
-            cokret_sdk::events::kinds::CIRCLE_CREATE,
+            arkret_sdk::events::kinds::CIRCLE_CREATE,
             REALM_A,
             json!({
                 "object": {
@@ -618,7 +618,7 @@ fn circle_scoped_morph_preserves_scope_for_update_gates() {
     );
     state.apply(
         &op(
-            cokret_sdk::events::kinds::CIRCLE_MEMBER_STATE,
+            arkret_sdk::events::kinds::CIRCLE_MEMBER_STATE,
             REALM_A,
             json!({
                 "circle_id": CIRCLE_A,
@@ -632,7 +632,7 @@ fn circle_scoped_morph_preserves_scope_for_update_gates() {
 
     let morph_created = state.apply(
         &op(
-            cokret_sdk::events::kinds::MORPH_CREATE,
+            arkret_sdk::events::kinds::MORPH_CREATE,
             REALM_A,
             json!({
                 "object": {
@@ -668,7 +668,7 @@ fn strand_scope_circle_id_rejects_cross_realm() {
     // Circle B belongs to Realm B.
     state.apply(
         &op(
-            cokret_sdk::events::kinds::CIRCLE_CREATE,
+            arkret_sdk::events::kinds::CIRCLE_CREATE,
             REALM_B,
             json!({
                 "object": {
@@ -687,7 +687,7 @@ fn strand_scope_circle_id_rejects_cross_realm() {
     // `circle_realm_mismatch`.
     let rejected = state.apply(
         &op(
-            cokret_sdk::events::kinds::STRAND_CREATE,
+            arkret_sdk::events::kinds::STRAND_CREATE,
             REALM_A,
             json!({
                 "object": {
@@ -714,7 +714,7 @@ fn circle_tombstone_hides_from_read_helper() {
     seed_realm(&mut state, &hlc, REALM_A, ALICE);
     state.apply(
         &op(
-            cokret_sdk::events::kinds::CIRCLE_CREATE,
+            arkret_sdk::events::kinds::CIRCLE_CREATE,
             REALM_A,
             json!({
                 "object": {
@@ -731,7 +731,7 @@ fn circle_tombstone_hides_from_read_helper() {
 
     state.apply(
         &op(
-            cokret_sdk::events::kinds::CIRCLE_TOMBSTONE,
+            arkret_sdk::events::kinds::CIRCLE_TOMBSTONE,
             REALM_A,
             json!({"circle_id": CIRCLE_A}),
         ),

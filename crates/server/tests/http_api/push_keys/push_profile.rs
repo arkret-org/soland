@@ -27,8 +27,8 @@ fn broadcast_ephemeral_envelope(kind: &str, payload: Value) -> Value {
         "expires_at": expires_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
         "payload": payload,
     });
-    let canonical = cokret_sdk::canonical::canonical_json_bytes(&env).unwrap();
-    let event_digest = cokret_sdk::canonical::sha256_digest(&canonical);
+    let canonical = arkret_sdk::canonical::canonical_json_bytes(&env).unwrap();
+    let event_digest = arkret_sdk::canonical::sha256_digest(&canonical);
     env["proof"] = serde_json::json!({
         "kind": "detached_jws",
         "alg": "EdDSA",
@@ -50,7 +50,7 @@ async fn file_transfer_blob_upload_uses_encrypted_metadata_and_blocks_presign() 
         "sha256:{}",
         hex::encode(Sha256::digest(file_transfer_bytes))
     );
-    let raw_upload = TestClient::post("http://server/_cokret/self/blob/upload")
+    let raw_upload = TestClient::post("http://server/_arkret/self/blob/upload")
         .add_header("authorization", format!("Bearer {token}"), true)
         .add_header("content-type", "application/octet-stream", true)
         .body(file_transfer_bytes.as_slice())
@@ -60,7 +60,7 @@ async fn file_transfer_blob_upload_uses_encrypted_metadata_and_blocks_presign() 
 
     let (file_transfer_content_type, file_transfer_body) =
         multipart_blob_upload_body(file_transfer_bytes, "text/plain");
-    let file_transfer_blob: Value = TestClient::post("http://server/_cokret/self/blob/upload")
+    let file_transfer_blob: Value = TestClient::post("http://server/_arkret/self/blob/upload")
         .add_header("authorization", format!("Bearer {token}"), true)
         .add_header("content-type", file_transfer_content_type, true)
         .add_header("x-arkret-filename", "private.txt", true)
@@ -115,7 +115,7 @@ async fn file_transfer_blob_upload_uses_encrypted_metadata_and_blocks_presign() 
         "ck.file_transfer.encrypted_blob.v1"
     );
 
-    let file_transfer_presign = TestClient::post("http://server/_cokret/self/blob/presign")
+    let file_transfer_presign = TestClient::post("http://server/_arkret/self/blob/presign")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
             "blob_ref": file_transfer_blob["blob_ref"].as_str().unwrap(),
@@ -150,7 +150,7 @@ async fn profile_avatar_get_recovers_existing_local_object_without_metadata() {
     );
 
     let mut response = TestClient::get(format!(
-        "http://server/_cokret/self/blob/get?blob_ref={blob_ref}&purpose=profile_avatar"
+        "http://server/_arkret/self/blob/get?blob_ref={blob_ref}&purpose=profile_avatar"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state.clone()))
@@ -187,7 +187,7 @@ async fn profile_avatar_get_recovers_existing_local_object_without_metadata() {
 async fn push_profile_and_moderation_contracts_work() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
-    let unauth_presence = TestClient::post("http://server/_cokret/self/ephemeral")
+    let unauth_presence = TestClient::post("http://server/_arkret/self/ephemeral")
         .json(&broadcast_ephemeral_envelope(
             "ck.presence",
             serde_json::json!({"state": "online"}),
@@ -198,7 +198,7 @@ async fn push_profile_and_moderation_contracts_work() {
 
     // Matrix-legacy `unavailable` is outside the closed v1 wire set →
     // schema_violation, never remapped (profiles-presence.md §3.2).
-    let mut legacy_state = TestClient::post("http://server/_cokret/self/ephemeral")
+    let mut legacy_state = TestClient::post("http://server/_arkret/self/ephemeral")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&broadcast_ephemeral_envelope(
             "ck.presence",
@@ -209,7 +209,7 @@ async fn push_profile_and_moderation_contracts_work() {
     let legacy_state_body: Value = legacy_state.take_json().await.unwrap();
     assert_eq!(legacy_state_body["error"]["code"], "schema_violation");
 
-    let presence: Value = TestClient::post("http://server/_cokret/self/ephemeral")
+    let presence: Value = TestClient::post("http://server/_arkret/self/ephemeral")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&broadcast_ephemeral_envelope(
             "ck.presence",
@@ -261,7 +261,7 @@ async fn push_profile_and_moderation_contracts_work() {
     let typing_strand_id = "ak:strand:01904100-0000-7000-8000-7a1c00000003";
     insert_typing_scope_strand(state.clone(), typing_strand_id, Some(true));
 
-    let unauth_typing = TestClient::post("http://server/_cokret/self/ephemeral")
+    let unauth_typing = TestClient::post("http://server/_arkret/self/ephemeral")
         .json(&broadcast_ephemeral_envelope(
             "ck.typing",
             serde_json::json!({
@@ -273,7 +273,7 @@ async fn push_profile_and_moderation_contracts_work() {
         .await;
     assert_eq!(unauth_typing.status_code, Some(StatusCode::UNAUTHORIZED));
 
-    let typing: Value = TestClient::post("http://server/_cokret/self/ephemeral")
+    let typing: Value = TestClient::post("http://server/_arkret/self/ephemeral")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&broadcast_ephemeral_envelope(
             "ck.typing",
@@ -300,7 +300,7 @@ async fn push_profile_and_moderation_contracts_work() {
     assert_eq!(active_typing[0].actor, "did:web:alice.example");
     assert_eq!(active_typing[0].scope_id.as_deref(), Some(typing_strand_id));
 
-    let typing_stopped: Value = TestClient::post("http://server/_cokret/self/ephemeral")
+    let typing_stopped: Value = TestClient::post("http://server/_arkret/self/ephemeral")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&broadcast_ephemeral_envelope(
             "ck.typing",
@@ -323,7 +323,7 @@ async fn push_profile_and_moderation_contracts_work() {
         .unwrap();
     assert!(cleared_typing.is_empty());
 
-    let push: Value = TestClient::post("http://server/_cokret/edge/push/register-device")
+    let push: Value = TestClient::post("http://server/_arkret/edge/push/register-device")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
             "device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001",
@@ -381,7 +381,7 @@ async fn push_profile_and_moderation_contracts_work() {
         "rejected plaintext push rules must not appear as account_data: {listed_rules}"
     );
 
-    let notify_after_rejected_rule: Value = TestClient::post("http://server/_cokret/edge/push/notify")
+    let notify_after_rejected_rule: Value = TestClient::post("http://server/_arkret/edge/push/notify")
         .json(&serde_json::json!({
             "notification": {
                 "push_target_id": "ak:push_target:01904100-0000-7000-8000-000000000001",
@@ -401,7 +401,7 @@ async fn push_profile_and_moderation_contracts_work() {
             && device["reason"] == "unknown_device"
     }));
 
-    let report: Value = TestClient::post("http://server/_cokret/self/moderation/report")
+    let report: Value = TestClient::post("http://server/_arkret/self/moderation/report")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
             "realm_id": DEMO_REALM_ID,
@@ -438,7 +438,7 @@ async fn push_profile_and_moderation_contracts_work() {
             .any(|action| action["report_id"] == report["report_id"] && action["status"] == "open")
     );
 
-    let unauthenticated_report = TestClient::post("http://server/_cokret/self/moderation/report")
+    let unauthenticated_report = TestClient::post("http://server/_arkret/self/moderation/report")
         .json(&serde_json::json!({
             "realm_id": DEMO_REALM_ID,
             "target_ref": "ak:event:01904100-0000-7000-8000-4a4116cba4e8",
@@ -456,7 +456,7 @@ async fn presence_visibility_account_data_requires_encrypted_content() {
     let token = dev_token(state.clone()).await;
 
     let plaintext_policy =
-        TestClient::put("http://server/_cokret/self/account_data/ck.presence.visibility")
+        TestClient::put("http://server/_arkret/self/account_data/ck.presence.visibility")
             .add_header("authorization", format!("Bearer {token}"), true)
             .json(&serde_json::json!({
                 "content": {
@@ -492,7 +492,7 @@ async fn presence_visibility_account_data_requires_encrypted_content() {
         "encrypted presence account_data must not be parsed as plaintext relay policy: {visible_sync}"
     );
 
-    let presence: Value = TestClient::post("http://server/_cokret/self/ephemeral")
+    let presence: Value = TestClient::post("http://server/_arkret/self/ephemeral")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&broadcast_ephemeral_envelope(
             "ck.presence",
@@ -517,7 +517,7 @@ async fn presence_visibility_account_data_requires_encrypted_content() {
 
     let typing_strand_id = "ak:strand:01904100-0000-7000-8000-7a1c00000004";
     insert_typing_scope_strand(state.clone(), typing_strand_id, Some(true));
-    let typing: Value = TestClient::post("http://server/_cokret/self/ephemeral")
+    let typing: Value = TestClient::post("http://server/_arkret/self/ephemeral")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&broadcast_ephemeral_envelope(
             "ck.typing",
@@ -569,7 +569,7 @@ async fn presence_visibility_account_data_requires_encrypted_content() {
         "opaque presence policy must fail closed for cached presence: {hidden_sync}"
     );
 
-    let hidden_presence: Value = TestClient::post("http://server/_cokret/self/ephemeral")
+    let hidden_presence: Value = TestClient::post("http://server/_arkret/self/ephemeral")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&broadcast_ephemeral_envelope(
             "ck.presence",
@@ -592,7 +592,7 @@ async fn presence_visibility_account_data_requires_encrypted_content() {
         "opaque presence policy must clear server-visible presence"
     );
 
-    let hidden_typing: Value = TestClient::post("http://server/_cokret/self/ephemeral")
+    let hidden_typing: Value = TestClient::post("http://server/_arkret/self/ephemeral")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&broadcast_ephemeral_envelope(
             "ck.typing",
@@ -624,7 +624,7 @@ async fn typing_submit_rejects_unknown_strand_scope() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
 
-    let rejected_typing = TestClient::post("http://server/_cokret/self/ephemeral")
+    let rejected_typing = TestClient::post("http://server/_arkret/self/ephemeral")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&broadcast_ephemeral_envelope(
             "ck.typing",
@@ -653,7 +653,7 @@ async fn typing_submit_accepts_default_realm_strand_scope() {
     let sent_at = chrono::Utc::now();
     let expires_at = sent_at + chrono::Duration::seconds(30);
 
-    let typing: Value = TestClient::post("http://server/_cokret/self/ephemeral")
+    let typing: Value = TestClient::post("http://server/_arkret/self/ephemeral")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
             "kind": "ck.typing",
@@ -696,7 +696,7 @@ async fn typing_submit_wakes_account_subscribe_stream() {
     let sent_at = chrono::Utc::now();
     let expires_at = sent_at + chrono::Duration::seconds(30);
 
-    let typing: Value = TestClient::post("http://server/_cokret/self/ephemeral")
+    let typing: Value = TestClient::post("http://server/_arkret/self/ephemeral")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
             "kind": "ck.typing",
@@ -750,7 +750,7 @@ async fn typing_submit_is_visible_in_incremental_account_subscribe_delta() {
     let sent_at = chrono::Utc::now();
     let expires_at = sent_at + chrono::Duration::seconds(30);
 
-    let typing: Value = TestClient::post("http://server/_cokret/self/ephemeral")
+    let typing: Value = TestClient::post("http://server/_arkret/self/ephemeral")
         .add_header("authorization", format!("Bearer {alice_token}"), true)
         .json(&serde_json::json!({
             "kind": "ck.typing",
@@ -803,7 +803,7 @@ async fn typing_submit_rejects_disabled_discussion_strand_scope() {
     let sent_at = chrono::Utc::now();
     let expires_at = sent_at + chrono::Duration::seconds(30);
 
-    let rejected_typing = TestClient::post("http://server/_cokret/self/ephemeral")
+    let rejected_typing = TestClient::post("http://server/_arkret/self/ephemeral")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
             "kind": "ck.typing",
@@ -884,7 +884,7 @@ async fn public_read_receipt_rejected_for_world_readable_realm_without_opt_in() 
 
     let sent_at = chrono::Utc::now();
     let expires_at = sent_at + chrono::Duration::seconds(30);
-    let receipt = TestClient::post("http://server/_cokret/self/ephemeral")
+    let receipt = TestClient::post("http://server/_arkret/self/ephemeral")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
             "kind": "ck.receipt.read",
@@ -943,7 +943,7 @@ async fn typing_fanout_respects_receiver_blocklist() {
 
     let sent_at = chrono::Utc::now();
     let expires_at = sent_at + chrono::Duration::seconds(30);
-    let typing: Value = TestClient::post("http://server/_cokret/self/ephemeral")
+    let typing: Value = TestClient::post("http://server/_arkret/self/ephemeral")
         .add_header("authorization", format!("Bearer {alice_token}"), true)
         .json(&serde_json::json!({
             "kind": "ck.typing",
@@ -1032,8 +1032,8 @@ fn insert_typing_scope_strand(state: AppState, strand_id: &str, discussion_enabl
             strand_id: strand_id.to_owned(),
             realm_id: DEMO_REALM_ID.to_owned(),
             tracks: std::collections::BTreeMap::from([(
-                cokret_sdk::STRAND_TRACK_NAME_DISCUSSION.to_owned(),
-                cokret_sdk::StrandTrackConfig {
+                arkret_sdk::STRAND_TRACK_NAME_DISCUSSION.to_owned(),
+                arkret_sdk::StrandTrackConfig {
                     enabled: discussion_enabled,
                     is_primary: Some(true),
                     profile: Some("discussion".to_owned()),
@@ -1069,14 +1069,14 @@ async fn ephemeral_call_signal_enforces_structural_contract() {
         "did:web:alice.example".to_owned(),
         "did:web:alice.example".to_owned(),
         DEMO_REALM_ID.to_owned(),
-        vec![cokret_sdk::CAP_CALL_SIGNAL_SEND.to_owned()],
+        vec![arkret_sdk::CAP_CALL_SIGNAL_SEND.to_owned()],
         vec![],
     );
     let call_id = "ak:call:01904100-0000-7000-8000-ca110000001a";
     let device_id = "ak:device:01904100-0000-7000-8000-a11ce0000001";
 
     let post_signal = |state: AppState, bearer: String, body: Value| async move {
-        TestClient::post("http://server/_cokret/self/ephemeral")
+        TestClient::post("http://server/_arkret/self/ephemeral")
             .add_header("authorization", format!("Bearer {bearer}"), true)
             .json(&body)
             .send(&app_from_state(state))
@@ -1102,8 +1102,8 @@ async fn ephemeral_call_signal_enforces_structural_contract() {
             env["device_id"] = serde_json::json!(device_id);
         }
         if with_proof {
-            let canonical = cokret_sdk::canonical::canonical_json_bytes(&env).unwrap();
-            let event_digest = cokret_sdk::canonical::sha256_digest(&canonical);
+            let canonical = arkret_sdk::canonical::canonical_json_bytes(&env).unwrap();
+            let event_digest = arkret_sdk::canonical::sha256_digest(&canonical);
             env["proof"] = serde_json::json!({
                 "kind": "detached_jws",
                 "alg": "EdDSA",
@@ -1164,7 +1164,7 @@ async fn push_unregister_mutates_registration_and_gateway_snapshot_gates_notify(
     let token = dev_token(state.clone()).await;
     let service = app_from_state(state.clone());
     let device_id = "ak:device:01904100-0000-7000-8000-a11ce0000001";
-    let push_gateway = "https://push.example/_cokret/edge/push/notify";
+    let push_gateway = "https://push.example/_arkret/edge/push/notify";
     let bridge_describe = "https://push.example/_floria/push/bridge/describe";
     let stale_at = chrono::Utc::now() - chrono::Duration::hours(25);
 
@@ -1184,7 +1184,7 @@ async fn push_unregister_mutates_registration_and_gateway_snapshot_gates_notify(
             "remote_contract": {
                 "contract": "ck.push.bridge.describe",
                 "service_did": "did:web:push.example",
-                "delivery": {"notify_path": "/_cokret/edge/push/notify", "operation_id": "ck.edge.push.command.notify"}
+                "delivery": {"notify_path": "/_arkret/edge/push/notify", "operation_id": "ck.edge.push.command.notify"}
             },
             "trust_level": "trusted",
             "freshness_at": stale_at,
@@ -1198,7 +1198,7 @@ async fn push_unregister_mutates_registration_and_gateway_snapshot_gates_notify(
     .unwrap();
     assert_eq!(stale_import["imported_count"], 1);
 
-    let registered: Value = TestClient::post("http://server/_cokret/edge/push/register-device")
+    let registered: Value = TestClient::post("http://server/_arkret/edge/push/register-device")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
             "device_id": device_id,
@@ -1214,7 +1214,7 @@ async fn push_unregister_mutates_registration_and_gateway_snapshot_gates_notify(
         .unwrap();
     assert_eq!(registered["ok"], true);
 
-    let stale_notify: Value = TestClient::post("http://server/_cokret/edge/push/notify")
+    let stale_notify: Value = TestClient::post("http://server/_arkret/edge/push/notify")
         .json(&serde_json::json!({
             "notification": {
                 "push_target_id": "ak:push_target:01904100-0000-7000-8000-000000000003",
@@ -1247,7 +1247,7 @@ async fn push_unregister_mutates_registration_and_gateway_snapshot_gates_notify(
             "remote_contract": {
                 "contract": "ck.push.bridge.describe",
                 "service_did": "did:web:push.example",
-                "delivery": {"notify_path": "/_cokret/edge/push/notify", "operation_id": "ck.edge.push.command.notify"}
+                "delivery": {"notify_path": "/_arkret/edge/push/notify", "operation_id": "ck.edge.push.command.notify"}
             },
             "trust_level": "trusted",
             "freshness_at": now,
@@ -1261,7 +1261,7 @@ async fn push_unregister_mutates_registration_and_gateway_snapshot_gates_notify(
     .unwrap();
     assert_eq!(fresh_import["total_entries"], 1);
 
-    let fresh_notify: Value = TestClient::post("http://server/_cokret/edge/push/notify")
+    let fresh_notify: Value = TestClient::post("http://server/_arkret/edge/push/notify")
         .json(&serde_json::json!({
             "notification": {
                 "push_target_id": "ak:push_target:01904100-0000-7000-8000-000000000004",
@@ -1276,7 +1276,7 @@ async fn push_unregister_mutates_registration_and_gateway_snapshot_gates_notify(
         .unwrap();
     assert!(fresh_notify["rejected"].as_array().unwrap().is_empty());
 
-    let unregistered: Value = TestClient::post("http://server/_cokret/edge/push/unregister-device")
+    let unregistered: Value = TestClient::post("http://server/_arkret/edge/push/unregister-device")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
             "device_id": device_id,
@@ -1290,7 +1290,7 @@ async fn push_unregister_mutates_registration_and_gateway_snapshot_gates_notify(
         .unwrap();
     assert_eq!(unregistered["ok"], true);
 
-    let after_unregister: Value = TestClient::post("http://server/_cokret/edge/push/notify")
+    let after_unregister: Value = TestClient::post("http://server/_arkret/edge/push/notify")
         .json(&serde_json::json!({
             "notification": {
                 "push_target_id": "ak:push_target:01904100-0000-7000-8000-000000000005",

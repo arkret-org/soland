@@ -7,7 +7,7 @@
 use std::collections::BTreeSet;
 
 use chrono::{DateTime, Duration, Utc};
-use cokret_sdk::Operation;
+use arkret_sdk::Operation;
 use serde_json::Value;
 
 pub(crate) const REALM_ENCRYPTION_PROFILE_CREATE_LOCKED: &str =
@@ -376,7 +376,7 @@ pub(crate) fn validate_parent_membership_gate(
         let Some(source) = source.as_str().filter(|value| !value.trim().is_empty()) else {
             return Err("parent_membership_sources_invalid");
         };
-        if cokret_sdk::RealmId::new(source.to_owned()).is_err() {
+        if arkret_sdk::RealmId::new(source.to_owned()).is_err() {
             return Err("parent_membership_sources_invalid");
         }
         if !seen.insert(source.to_owned()) {
@@ -396,7 +396,7 @@ pub(crate) fn validate_challenge_response_gate(
     let Some(provider_did) = gate.get("provider_did").and_then(Value::as_str) else {
         return Err("challenge_response_provider_invalid");
     };
-    if cokret_sdk::Did::new(provider_did.to_owned()).is_err() {
+    if arkret_sdk::Did::new(provider_did.to_owned()).is_err() {
         return Err("challenge_response_provider_invalid");
     }
     let Some(kinds) = gate.get("challenge_kinds").and_then(Value::as_array) else {
@@ -489,7 +489,7 @@ fn validate_reviewer_quorum(join_policy: &Value) -> Result<(), &'static str> {
         let Some(reviewer) = reviewer.as_str() else {
             return Err("join_policy_reviewer_quorum_invalid");
         };
-        if cokret_sdk::Did::new(reviewer.to_owned()).is_err() {
+        if arkret_sdk::Did::new(reviewer.to_owned()).is_err() {
             return Err("join_policy_reviewer_quorum_invalid");
         }
         unique_reviewers.insert(reviewer.to_owned());
@@ -535,7 +535,7 @@ pub(crate) fn validate_did_list(
         let Some(did) = value.as_str() else {
             return Err("principal_admission_dids_invalid");
         };
-        if cokret_sdk::Did::new(did.to_owned()).is_err() {
+        if arkret_sdk::Did::new(did.to_owned()).is_err() {
             return Err("principal_admission_dids_invalid");
         }
     }
@@ -558,7 +558,7 @@ pub(crate) fn principal_admission_gate_allows(
     if !principal_admission_gate_has_selector(gate) {
         return false;
     }
-    let Ok(member_did) = cokret_sdk::Did::new(member.to_owned()) else {
+    let Ok(member_did) = arkret_sdk::Did::new(member.to_owned()) else {
         return false;
     };
     if did_list_contains(gate, "denied_principal_dids", member) {

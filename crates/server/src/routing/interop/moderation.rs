@@ -1,18 +1,18 @@
 //! Moderation user-facing endpoints.
 //!
-//! - `POST /_cokret/self/moderation/report` (`ck.self.moderation.command.report`) — file a report.
+//! - `POST /_arkret/self/moderation/report` (`ck.self.moderation.command.report`) — file a report.
 //!   Persists both the report record and a derived queue item (`ModerationQueueItem`) per the
 //!   spec's triage architecture.
 //! - moderation appeals are durable `ck.moderation.appeal.*` events submitted through `POST
-//!   /_cokret/self/events`. The four-state appeal FSM and separation-of-duties enforcement are
+//!   /_arkret/self/events`. The four-state appeal FSM and separation-of-duties enforcement are
 //!   authoritative in the reducer (`crate::reducer::apply_moderation`), surfaced at ingest by the
 //!   moderation projection preflight.
 
 use std::time::Duration;
 
 use chrono::Utc;
-use cokret_sdk::models::EffectiveScope;
-use cokret_sdk::{
+use arkret_sdk::models::EffectiveScope;
+use arkret_sdk::{
     Did, EventId, FrankingProof, FrankingProofEventTimeAnchor, Hash,
     MODERATION_FRANKING_PROOF_KIND, RealmId,
 };
@@ -255,7 +255,7 @@ fn validate_moderation_evidence_package(
         .as_object()
         .ok_or_else(|| AppError::invalid_param("evidence_package must be an object"))?;
     let canonical_bytes =
-        cokret_sdk::canonical::canonical_json_bytes(evidence_package).map_err(|error| {
+        arkret_sdk::canonical::canonical_json_bytes(evidence_package).map_err(|error| {
             AppError::bad_json(format!(
                 "evidence_package is not canonical-json encodable: {error}"
             ))
@@ -481,7 +481,7 @@ fn encrypted_event_payload_digest(record: &crate::state::CanonicalEventRecord) -
 // Wire code for an invalid franking proof. `proof_invalid` is a registered
 // `reason_code`, so it is sourced from the SDK as `REASON_PROOF_INVALID`
 // rather than a local literal.
-use cokret_sdk::error::REASON_PROOF_INVALID;
+use arkret_sdk::error::REASON_PROOF_INVALID;
 
 fn franking_proof_invalid(message: impl Into<String>) -> AppError {
     AppError::invalid_param(message).with_wire_code(REASON_PROOF_INVALID)
@@ -889,7 +889,7 @@ async fn notify_audit_agent_for_report(
     // egress policy and ride the same pinned host.
     let (identity_url, client) =
         match crate::security::validate_http_url_for_egress_with_pinned_client(
-            &format!("{agent_url}/_cokret/self/audit-agent/identity"),
+            &format!("{agent_url}/_arkret/self/audit-agent/identity"),
             "audit agent identity",
             state.config.development_mode,
             Duration::from_secs(3),
@@ -901,7 +901,7 @@ async fn notify_audit_agent_for_report(
             }
         };
     let events_url = match crate::security::validate_http_url_for_egress(
-        &format!("{agent_url}/_cokret/self/audit-agent/events"),
+        &format!("{agent_url}/_arkret/self/audit-agent/events"),
         "audit agent events",
         state.config.development_mode,
     ) {
@@ -1184,7 +1184,7 @@ async fn audit_disclosure_policy_for_realm(state: &AppState, realm_id: &str) -> 
         if record.realm_id.as_deref() != Some(realm_id) {
             continue;
         }
-        if record.kind == cokret_sdk::events::kinds::REALM_CREATE {
+        if record.kind == arkret_sdk::events::kinds::REALM_CREATE {
             if let Some(found) = record
                 .envelope
                 .pointer("/payload/object/audit_disclosure_policy")
@@ -1193,7 +1193,7 @@ async fn audit_disclosure_policy_for_realm(state: &AppState, realm_id: &str) -> 
             {
                 policy = Some(found);
             }
-        } else if record.kind == cokret_sdk::events::kinds::REALM_UPDATE {
+        } else if record.kind == arkret_sdk::events::kinds::REALM_UPDATE {
             if let Some(found) = record
                 .envelope
                 .pointer("/payload/patch/audit_disclosure_policy")
@@ -1315,7 +1315,7 @@ async fn moderation_appeal_submit(
         "evidence_refs": body.evidence_refs,
         "evidence_visibility": evidence_visibility,
         "created_at": Utc::now().to_rfc3339(),
-        "event_kind": cokret_sdk::events::MODERATION_APPEAL_SUBMIT,
+        "event_kind": arkret_sdk::events::MODERATION_APPEAL_SUBMIT,
         "appeal_state": "submitted",
     });
     if let Err(error) = state.persistence.moderation().append_appeal(event).await {
@@ -1540,7 +1540,7 @@ mod report_safety_tests {
         let error = validate_moderation_franking_proof(&state, REALM, &proof)
             .await
             .unwrap_err();
-        assert_eq!(error.wire_code(), cokret_sdk::error::REASON_PROOF_INVALID);
+        assert_eq!(error.wire_code(), arkret_sdk::error::REASON_PROOF_INVALID);
     }
 
     #[tokio::test]
@@ -1551,7 +1551,7 @@ mod report_safety_tests {
         let error = validate_moderation_franking_proof(&state, REALM, &proof)
             .await
             .unwrap_err();
-        assert_eq!(error.wire_code(), cokret_sdk::error::REASON_PROOF_INVALID);
+        assert_eq!(error.wire_code(), arkret_sdk::error::REASON_PROOF_INVALID);
     }
 
     #[test]

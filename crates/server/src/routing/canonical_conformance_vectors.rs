@@ -1,4 +1,4 @@
-use cokret_sdk::canonical::{canonical_json_bytes, canonical_json_string, canonical_sha256};
+use arkret_sdk::canonical::{canonical_json_bytes, canonical_json_string, canonical_sha256};
 use serde_json::json;
 
 use super::*;
@@ -113,7 +113,7 @@ fn validator_rejects_unsorted_keys() {
     let value = json!({"a": 1, "b": 2});
     assert!(validate_canonical_json_value(&value).is_ok());
     // Verify that the canonical form is compact and sorted.
-    let canonical = cokret_sdk::canonical::canonical_json_string(&value).unwrap();
+    let canonical = arkret_sdk::canonical::canonical_json_string(&value).unwrap();
     assert_eq!(canonical, r#"{"a":1,"b":2}"#);
 }
 
@@ -212,7 +212,7 @@ fn did_service_endpoint_accepts_absolute_url() {
 
 #[test]
 fn did_service_endpoint_accepts_path() {
-    let doc = json!({"service": [{"id": "s1", "type": "Test", "serviceEndpoint": "/_cokret"}]});
+    let doc = json!({"service": [{"id": "s1", "type": "Test", "serviceEndpoint": "/_arkret"}]});
     assert!(validate_did_document_services("did:web:example.com", &doc, false).is_ok());
 }
 

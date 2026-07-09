@@ -846,7 +846,7 @@ impl ProjectionState {
     /// the delegate cell / authz index.
     pub fn check_delegation_cycle(&self, operation: &Operation) -> Result<(), &'static str> {
         if crate::kinds::canonical_kind_for_operation(operation)
-            != Some(cokret_sdk::events::kinds::CAPABILITY_DELEGATE)
+            != Some(arkret_sdk::events::kinds::CAPABILITY_DELEGATE)
         {
             return Ok(());
         }
@@ -1128,8 +1128,8 @@ impl ProjectionState {
 
 #[cfg(test)]
 mod agent_key_flag_tests {
-    use cokret_sdk::models::{Operation, OperationType};
-    use cokret_sdk::{OperationId, RealmId};
+    use arkret_sdk::models::{Operation, OperationType};
+    use arkret_sdk::{OperationId, RealmId};
     use serde_json::json;
 
     use crate::reducer::{ProjectionState, SolandRealmState};
@@ -1424,7 +1424,7 @@ mod agent_key_flag_tests {
 
 #[cfg(test)]
 mod delegation_cycle_tests {
-    use cokret_sdk::{Operation, OperationId, RealmId};
+    use arkret_sdk::{Operation, OperationId, RealmId};
     use serde_json::json;
 
     use crate::reducer::{ProjectionState, SolandRealmState};
@@ -1446,7 +1446,7 @@ mod delegation_cycle_tests {
         Operation::create(
             OperationId::new("ak:operation:01970000-0000-7000-8000-0000000000fe").unwrap(),
             RealmId::new(REALM.to_owned()).unwrap(),
-            cokret_sdk::events::kinds::CAPABILITY_DELEGATE,
+            arkret_sdk::events::kinds::CAPABILITY_DELEGATE,
             json!({
                 "grant_id": grant_id,
                 "grant": {
@@ -1473,7 +1473,7 @@ mod delegation_cycle_tests {
         Operation::create(
             OperationId::new("ak:operation:01970000-0000-7000-8000-0000000000fd").unwrap(),
             RealmId::new(REALM.to_owned()).unwrap(),
-            cokret_sdk::events::kinds::CAPABILITY_GRANT,
+            arkret_sdk::events::kinds::CAPABILITY_GRANT,
             json!({
                 "grant_id": grant_id,
                 "grant": {
@@ -1613,7 +1613,7 @@ mod delegation_cycle_tests {
 
 #[cfg(test)]
 mod federation_revoke_fanout_tests {
-    use cokret_sdk::{Operation, OperationId, RealmId};
+    use arkret_sdk::{Operation, OperationId, RealmId};
     use serde_json::json;
 
     use crate::reducer::{ProjectionState, SolandRealmState};
@@ -1689,7 +1689,7 @@ mod federation_revoke_fanout_tests {
         state.apply_capability_grant(
             &capability_op(
                 "ak:operation:01970000-0000-7000-8000-0000000000a1",
-                cokret_sdk::events::kinds::CAPABILITY_GRANT,
+                arkret_sdk::events::kinds::CAPABILITY_GRANT,
                 delivery_binding_grant_payload(),
             ),
             now,
@@ -1703,7 +1703,7 @@ mod federation_revoke_fanout_tests {
         state.apply_capability_revoke(
             &capability_op(
                 "ak:operation:01970000-0000-7000-8000-0000000000a2",
-                cokret_sdk::events::kinds::CAPABILITY_REVOKE,
+                arkret_sdk::events::kinds::CAPABILITY_REVOKE,
                 json!({ "grant_id": GRANT, "realm_id": REALM }),
             ),
             now,

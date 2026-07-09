@@ -51,9 +51,9 @@ pub(super) fn event_ref_list(
         "refs_too_large"
     };
     let count_error = if key == "prev_refs" {
-        cokret_sdk::validate_event_prev_ref_count(values.len()).is_err()
+        arkret_sdk::validate_event_prev_ref_count(values.len()).is_err()
     } else {
-        cokret_sdk::validate_event_ref_count(values.len()).is_err()
+        arkret_sdk::validate_event_ref_count(values.len()).is_err()
     };
     if values.len() > max_len || count_error {
         return Err(event_validation_error(
@@ -111,7 +111,7 @@ const DID_INCEPTION_REF_ROLE: &str = "did_inception";
 /// `role="did_inception"` evidence ref. For those, the receiver seals on the
 /// `did:webvh` entry-0 `versionTime` (the verifiable bootstrap timestamp) and
 /// computes the inception-key age against its own local clock via the SDK
-/// [`cokret_sdk::models::inception_key_age_exceeded`]; an age past the 24h hard
+/// [`arkret_sdk::models::inception_key_age_exceeded`]; an age past the 24h hard
 /// cap is rejected with reason `inception_key_window_exceeded`, regardless of
 /// any longer deployment-self-reported window.
 ///
@@ -173,7 +173,7 @@ pub(super) async fn enforce_inception_key_online_window(
         ));
     };
 
-    if cokret_sdk::models::inception_key_age_exceeded(bootstrap_ts, now()) {
+    if arkret_sdk::models::inception_key_age_exceeded(bootstrap_ts, now()) {
         return Err(SubmitOneError::new(
             StatusCode::FORBIDDEN,
             crate::error::reasons::INCEPTION_KEY_WINDOW_EXCEEDED,

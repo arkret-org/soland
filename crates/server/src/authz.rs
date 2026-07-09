@@ -24,8 +24,8 @@ use std::sync::Arc;
 // Delegation primitives — `Grant`, `Constraint` (alias of `GrantConstraint`),
 // `DelegationError`, and the chain-integrity / cascade / expiry helpers —
 // live in the SDK so inkson and sodmin admin can call them client-side. See
-// `cokret_sdk::authz::delegation` (crates/sdk/src/authz/delegation.rs).
-pub use cokret_sdk::authz::delegation::{
+// `arkret_sdk::authz::delegation` (crates/sdk/src/authz/delegation.rs).
+pub use arkret_sdk::authz::delegation::{
     AppletDelegationBindingError, DelegationError, Grant, GrantConstraint as Constraint,
     GrantDecisionVerdict, GrantRequestDraft, delegation_chain_intact, grant_effective_expiry,
     is_grant_expired, max_delegation_depth, resource_within, revoke_with_cascade,
@@ -189,7 +189,7 @@ impl SolandAuthzEngine {
     /// - delegated expiry MUST NOT exceed the parent's
     /// - resource MUST NOT widen the parent's scope
     ///
-    /// Thin wrapper around [`cokret_sdk::authz::delegation::create_delegated_grant`]:
+    /// Thin wrapper around [`arkret_sdk::authz::delegation::create_delegated_grant`]:
     /// the SDK helper does the pure validation work; this method snapshots the
     /// engine's grant table, runs the check, assigns a server-issued grant id,
     /// and persists. inkson / sodmin call the SDK helper directly for client-side
@@ -228,7 +228,7 @@ impl SolandAuthzEngine {
             constraints,
             expires_at,
         };
-        let mut child = cokret_sdk::authz::delegation::create_delegated_grant(
+        let mut child = arkret_sdk::authz::delegation::create_delegated_grant(
             parent_grant_id,
             &request,
             &snapshot,
@@ -256,7 +256,7 @@ impl SolandAuthzEngine {
     /// `revoked` as part of this call (does NOT include `grant_id` itself).
     ///
     /// The cascade *plan* (which ids would be revoked) comes from
-    /// [`cokret_sdk::authz::delegation::revoke_with_cascade`]; this method
+    /// [`arkret_sdk::authz::delegation::revoke_with_cascade`]; this method
     /// applies the resulting mutation to the engine's in-memory map.
     pub fn revoke_grant_with_cascade(&self, grant_id: &str) -> (bool, Vec<String>) {
         let mut grants = self.grants.lock();
@@ -748,7 +748,7 @@ fn validate_registered_capability_action(
     action: &str,
     unknown_reason: &'static str,
 ) -> Result<(), &'static str> {
-    match cokret_sdk::schema::embedded_capability_action(action) {
+    match arkret_sdk::schema::embedded_capability_action(action) {
         Ok(Some(_)) => Ok(()),
         Ok(None) => Err(unknown_reason),
         Err(_) => Err(REASON_CAPABILITY_ACTION_REGISTRY_UNAVAILABLE),
@@ -1172,16 +1172,16 @@ fn evaluate_constraint(
 pub enum MergedAuthzDecision {
     Allowed {
         local: AuthzResult,
-        remote: Option<cokret_sdk::PolicyCheckOutcome>,
+        remote: Option<arkret_sdk::PolicyCheckOutcome>,
     },
     LocalDeny(AuthzResult),
     RemoteDeny {
         local: AuthzResult,
-        remote: cokret_sdk::PolicyCheckOutcome,
+        remote: arkret_sdk::PolicyCheckOutcome,
     },
     RemoteObligationFailed {
         local: AuthzResult,
-        remote: cokret_sdk::PolicyCheckOutcome,
+        remote: arkret_sdk::PolicyCheckOutcome,
         error: obligation_executor::ObligationError,
     },
 }
@@ -1202,10 +1202,10 @@ impl MergedAuthzDecision {
 /// keys decisions on (NOT the SDK `RealmId` newtype — pass the wire string).
 pub(crate) fn revocation_freshness_fail_closed(
     action: &str,
-    freshness_state: cokret_sdk::FreshnessState,
+    freshness_state: arkret_sdk::FreshnessState,
 ) -> bool {
-    use cokret_sdk::FreshnessState;
-    use cokret_sdk::schema::CapabilityRiskTier;
+    use arkret_sdk::FreshnessState;
+    use arkret_sdk::schema::CapabilityRiskTier;
 
     match freshness_state {
         FreshnessState::Fresh => false,
@@ -1220,8 +1220,8 @@ pub(crate) fn revocation_freshness_fail_closed(
     }
 }
 
-fn capability_action_risk_tier(action: &str) -> Option<cokret_sdk::schema::CapabilityRiskTier> {
-    cokret_sdk::schema::embedded_capability_action(action)
+fn capability_action_risk_tier(action: &str) -> Option<arkret_sdk::schema::CapabilityRiskTier> {
+    arkret_sdk::schema::embedded_capability_action(action)
         .ok()
         .flatten()
         .map(|descriptor| descriptor.risk_tier)
@@ -1285,7 +1285,7 @@ pub async fn check_with_policy_server(
         }
     };
 
-    use cokret_sdk::models::AuthzDecision;
+    use arkret_sdk::models::AuthzDecision;
     let allow = matches!(remote.decision, AuthzDecision::Allow);
     if !allow {
         return MergedAuthzDecision::RemoteDeny { local, remote };

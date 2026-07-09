@@ -60,7 +60,7 @@ async fn production_agent_provision_fails_closed_without_durable_fanout() {
     let token = "prod-agent-provision-session";
     seed_controller_session(&state, token, controller).await;
 
-    let mut response = TestClient::post("http://server/_cokret/self/agents")
+    let mut response = TestClient::post("http://server/_arkret/self/agents")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
             "display_name": "Production Agent",
@@ -133,7 +133,7 @@ async fn provisioned_agent_is_listed_and_slug_conflict_is_rejected() {
     });
 
     let app = app_from_state(state.clone());
-    let mut created = TestClient::post("http://server/_cokret/self/agents")
+    let mut created = TestClient::post("http://server/_arkret/self/agents")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
             "display_name": "Summary Assistant",
@@ -151,7 +151,7 @@ async fn provisioned_agent_is_listed_and_slug_conflict_is_rejected() {
         .expect("created agent principal id")
         .to_owned();
 
-    let mut listed = TestClient::get("http://server/_cokret/self/agents")
+    let mut listed = TestClient::get("http://server/_arkret/self/agents")
         .add_header("authorization", format!("Bearer {token}"), true)
         .send(&app)
         .await;
@@ -166,7 +166,7 @@ async fn provisioned_agent_is_listed_and_slug_conflict_is_rejected() {
     assert_eq!(agents[0]["agent_slug"], "summary");
     assert_eq!(agents[0]["status"], "pending_runtime_key");
 
-    let mut duplicate = TestClient::post("http://server/_cokret/self/agents")
+    let mut duplicate = TestClient::post("http://server/_arkret/self/agents")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
             "display_name": "Duplicate Summary",

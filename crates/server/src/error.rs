@@ -1,6 +1,6 @@
 //! Soland error integration for canonical Arkret SDK error codes.
 //!
-//! Wire-form error codes are owned by `cokret_sdk::ErrorCode`; this module
+//! Wire-form error codes are owned by `arkret_sdk::ErrorCode`; this module
 //! only adds soland-specific Salvo rendering and typed endpoint plumbing.
 
 /// Round C44 (2026-05-18; spec dc01ad7 Tier-0) — registered
@@ -8,7 +8,7 @@
 /// re-exported from arkret-sdk so soland call sites can use
 /// `crate::error::reasons::INCEPTION_UPGRADE_FINGERPRINT_MISMATCH` directly.
 pub mod reasons {
-    use cokret_sdk::error as core_error;
+    use arkret_sdk::error as core_error;
 
     // SEC-04 — receiver-side independent 24h inception-key online-window cap
     // (`identity/key-management.md` §5.0.1 step 5). Re-exported from arkret-sdk
@@ -286,7 +286,7 @@ macro_rules! app_error {
     };
 }
 
-pub use cokret_sdk::ErrorCode;
+pub use arkret_sdk::ErrorCode;
 
 /// Convert the SDK registry status into Salvo's `StatusCode`.
 pub fn error_http_status(code: ErrorCode) -> StatusCode {
@@ -306,7 +306,7 @@ mod tests {
     fn sdk_error_codes_are_soland_source_of_truth() {
         assert_eq!(
             ErrorCode::ALL.len(),
-            cokret_sdk::error::KNOWN_ERROR_CODES.len(),
+            arkret_sdk::error::KNOWN_ERROR_CODES.len(),
             "soland must use the SDK registry shape directly",
         );
         assert_eq!(ErrorCode::from_wire("bad_json"), Some(ErrorCode::BadJson));
@@ -523,7 +523,7 @@ impl Writer for AppError {
 
 impl EndpointOutRegister for AppError {
     fn register(components: &mut Components, operation: &mut Operation) {
-        // Reuse `cokret_sdk::ErrorEnvelope` (already `ToSchema` under the
+        // Reuse `arkret_sdk::ErrorEnvelope` (already `ToSchema` under the
         // SDK's `salvo` feature) as the response body schema for every error
         // status. The wire representation is the spec-canonical
         // `{ ok: false, error: { code, message, ... }, request_id }`.
@@ -534,7 +534,7 @@ impl EndpointOutRegister for AppError {
         // so the field is documentation-only — describe its shape and
         // stability contract in each response's `description` rather
         // than mutating the SDK-owned schema.
-        let envelope_schema = <cokret_sdk::ErrorEnvelope as ToSchema>::to_schema(components);
+        let envelope_schema = <arkret_sdk::ErrorEnvelope as ToSchema>::to_schema(components);
         const REASON_DETAIL_DOC: &str = " (envelope `error.details.reason_detail`: \
             Option<String> — free-form diagnostic; unstable, do not parse)";
         let response = |description: &'static str| -> oapi::Response {

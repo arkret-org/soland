@@ -19,7 +19,7 @@ fn b64(value: &str) -> String {
 #[tokio::test]
 async fn tus_options_probe_advertises_capabilities_without_auth() {
     let state = AppState::new(test_config(), Db { pool: None });
-    let response = TestClient::options("http://server/_cokret/self/blob/resumable")
+    let response = TestClient::options("http://server/_arkret/self/blob/resumable")
         .send(&app_from_state(state))
         .await;
     assert_eq!(response.status_code.unwrap().as_u16(), 204);
@@ -43,7 +43,7 @@ async fn tus_create_requires_supported_version_and_auth() {
     let token = dev_token(state.clone()).await;
 
     // No bearer — 401 before any tus processing.
-    let unauthenticated = TestClient::post("http://server/_cokret/self/blob/resumable")
+    let unauthenticated = TestClient::post("http://server/_arkret/self/blob/resumable")
         .add_header("tus-resumable", "1.0.0", true)
         .add_header("upload-length", "4", true)
         .send(&app_from_state(state.clone()))
@@ -51,7 +51,7 @@ async fn tus_create_requires_supported_version_and_auth() {
     assert_eq!(unauthenticated.status_code.unwrap().as_u16(), 401);
 
     // Wrong protocol version — 412 + Tus-Version per tus core.
-    let wrong_version = TestClient::post("http://server/_cokret/self/blob/resumable")
+    let wrong_version = TestClient::post("http://server/_arkret/self/blob/resumable")
         .add_header("authorization", format!("Bearer {token}"), true)
         .add_header("tus-resumable", "0.2.2", true)
         .add_header("upload-length", "4", true)
@@ -77,7 +77,7 @@ async fn resumable_chunked_upload_matches_canonical_blob_ref() {
         b64("true"),
         b64(&expected_digest)
     );
-    let create = TestClient::post("http://server/_cokret/self/blob/resumable")
+    let create = TestClient::post("http://server/_arkret/self/blob/resumable")
         .add_header("authorization", format!("Bearer {token}"), true)
         .add_header("tus-resumable", "1.0.0", true)
         .add_header("upload-length", payload.len().to_string(), true)
@@ -94,7 +94,7 @@ async fn resumable_chunked_upload_matches_canonical_blob_ref() {
         .to_str()
         .unwrap()
         .to_owned();
-    assert!(location.starts_with("/_cokret/self/blob/resumable/"));
+    assert!(location.starts_with("/_arkret/self/blob/resumable/"));
     let upload_url = format!("http://server{location}");
 
     // First chunk at offset 0.
@@ -213,7 +213,7 @@ async fn resumable_chunked_upload_matches_canonical_blob_ref() {
     // for the same bytes.
     let (canonical_content_type, canonical_body) =
         multipart_blob_upload_body(&payload, "application/octet-stream");
-    let canonical: Value = TestClient::post("http://server/_cokret/self/blob/upload")
+    let canonical: Value = TestClient::post("http://server/_arkret/self/blob/upload")
         .add_header("authorization", format!("Bearer {token}"), true)
         .add_header("content-type", canonical_content_type, true)
         .add_header("x-arkret-blob-encrypted", "true", true)
@@ -248,7 +248,7 @@ async fn resumable_upload_is_actor_scoped_and_terminable() {
     )
     .await;
 
-    let create = TestClient::post("http://server/_cokret/self/blob/resumable")
+    let create = TestClient::post("http://server/_arkret/self/blob/resumable")
         .add_header("authorization", format!("Bearer {alice}"), true)
         .add_header("tus-resumable", "1.0.0", true)
         .add_header("upload-length", "8", true)
@@ -290,7 +290,7 @@ async fn resumable_upload_is_actor_scoped_and_terminable() {
 #[tokio::test]
 async fn describe_advertises_tus_binding_and_limits() {
     let state = AppState::new(test_config(), Db { pool: None });
-    let describe: Value = TestClient::get("http://server/_cokret/describe")
+    let describe: Value = TestClient::get("http://server/_arkret/describe")
         .send(&app_from_state(state))
         .await
         .take_json()
@@ -312,7 +312,7 @@ async fn describe_advertises_tus_binding_and_limits() {
         .expect("tus binding advertised");
     assert_eq!(
         tus_binding["base_url"],
-        "http://server/_cokret/self/blob/resumable"
+        "http://server/_arkret/self/blob/resumable"
     );
     assert_eq!(
         tus_binding["operations"],

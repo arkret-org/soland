@@ -8,7 +8,7 @@
 use std::collections::BTreeSet;
 
 use chrono::{DateTime, Utc};
-use cokret_sdk::{
+use arkret_sdk::{
     ConsentCellList, ConsentCellView, ConsentRequestRequestBody, ConsentState,
     ConsentUpdateRequestBody, Did, EventId, Operation,
 };
@@ -610,7 +610,7 @@ pub(crate) fn event_ref_for_dot(dot: &str) -> Option<&str> {
         Some((prefix, seq)) if seq.chars().all(|c| c.is_ascii_digit()) && !seq.is_empty() => prefix,
         _ => dot,
     };
-    cokret_sdk::EventId::new(candidate).ok().map(|_| candidate)
+    arkret_sdk::EventId::new(candidate).ok().map(|_| candidate)
 }
 
 /// Spec invite-addressing.md §2 / contact-operations.schema.json — resolve

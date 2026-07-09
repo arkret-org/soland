@@ -1,4 +1,4 @@
-use cokret_sdk::{
+use arkret_sdk::{
     Operation, REALM_MODERATION_POLICY_WIRE_CODE_REQUIRES_ORGANIZATION_APPROVAL, ReadReceiptPolicy,
     ReadReceiptPolicyChildViolation,
 };
@@ -12,7 +12,7 @@ pub(crate) async fn validate_history_visibility_policy(
     operation: &Operation,
 ) -> Result<(), &'static str> {
     if kinds::canonical_kind_for_operation(operation)
-        != Some(cokret_sdk::events::kinds::REALM_HISTORY_VISIBILITY)
+        != Some(arkret_sdk::events::kinds::REALM_HISTORY_VISIBILITY)
     {
         return Ok(());
     }
@@ -49,9 +49,9 @@ pub(crate) async fn validate_history_visibility_content_scheme_policy(
     operation: &Operation,
 ) -> Result<(), &'static str> {
     match kinds::canonical_kind_for_operation(operation) {
-        Some(cokret_sdk::events::kinds::REALM_CREATE)
-        | Some(cokret_sdk::events::kinds::REALM_HISTORY_VISIBILITY)
-        | Some(cokret_sdk::events::kinds::REALM_POLICY_COMPONENTS) => {}
+        Some(arkret_sdk::events::kinds::REALM_CREATE)
+        | Some(arkret_sdk::events::kinds::REALM_HISTORY_VISIBILITY)
+        | Some(arkret_sdk::events::kinds::REALM_POLICY_COMPONENTS) => {}
         _ => return Ok(()),
     }
     let realm_id = operation.realm_id.as_str();
@@ -63,7 +63,7 @@ pub(crate) async fn validate_history_visibility_content_scheme_policy(
     let history_visibility =
         intended_history_visibility_for_realm(state, operations, realm_id).await;
     let content_scheme = intended_content_scheme_for_realm(state, operations, realm_id).await;
-    cokret_sdk::validate_history_visibility_content_scheme_values(
+    arkret_sdk::validate_history_visibility_content_scheme_values(
         &history_visibility,
         content_scheme.as_deref(),
     )
@@ -81,7 +81,7 @@ pub(crate) async fn validate_read_receipt_policy_combination_write(
     operation: &Operation,
 ) -> Result<(), &'static str> {
     match kinds::canonical_kind_for_operation(operation) {
-        Some(cokret_sdk::events::kinds::REALM_READ_RECEIPT_POLICY) => {
+        Some(arkret_sdk::events::kinds::REALM_READ_RECEIPT_POLICY) => {
             let policy = read_receipt_policy_projection_from_payload(&operation.payload)?;
             let history_visibility = intended_history_visibility_for_realm(
                 state,
@@ -92,7 +92,7 @@ pub(crate) async fn validate_read_receipt_policy_combination_write(
             validate_read_receipt_policy_against_history(&policy, &history_visibility)?;
             validate_read_receipt_child_policy_write(state, operations, operation, &policy).await
         }
-        Some(cokret_sdk::events::kinds::REALM_HISTORY_VISIBILITY) => {
+        Some(arkret_sdk::events::kinds::REALM_HISTORY_VISIBILITY) => {
             if operation.payload.get("value").and_then(Value::as_str) != Some("world_readable") {
                 return Ok(());
             }
@@ -122,14 +122,14 @@ async fn intended_history_visibility_for_realm(
 ) -> String {
     for operation in operations.iter().rev() {
         if kinds::canonical_kind_for_operation(operation)
-            == Some(cokret_sdk::events::kinds::REALM_HISTORY_VISIBILITY)
+            == Some(arkret_sdk::events::kinds::REALM_HISTORY_VISIBILITY)
             && operation.realm_id.as_str() == realm_id
             && let Some(value) = operation.payload.get("value").and_then(Value::as_str)
         {
             return value.to_owned();
         }
         if kinds::canonical_kind_for_operation(operation)
-            == Some(cokret_sdk::events::kinds::REALM_CREATE)
+            == Some(arkret_sdk::events::kinds::REALM_CREATE)
             && operation.realm_id.as_str() == realm_id
             && let Some(value) = operation
                 .payload
@@ -161,13 +161,13 @@ async fn intended_content_scheme_for_realm(
             continue;
         }
         if kinds::canonical_kind_for_operation(operation)
-            == Some(cokret_sdk::events::kinds::REALM_POLICY_COMPONENTS)
+            == Some(arkret_sdk::events::kinds::REALM_POLICY_COMPONENTS)
             && let Some(value) = policy_components_content_scheme(&operation.payload)
         {
             return Some(value);
         }
         if kinds::canonical_kind_for_operation(operation)
-            == Some(cokret_sdk::events::kinds::REALM_CREATE)
+            == Some(arkret_sdk::events::kinds::REALM_CREATE)
             && let Some(value) = operation
                 .payload
                 .get("object")
@@ -191,7 +191,7 @@ async fn intended_encryption_profile_for_realm(
     for operation in operations.iter().rev() {
         if operation.realm_id.as_str() == realm_id
             && kinds::canonical_kind_for_operation(operation)
-                == Some(cokret_sdk::events::kinds::REALM_CREATE)
+                == Some(arkret_sdk::events::kinds::REALM_CREATE)
             && let Some(value) = operation
                 .payload
                 .get("object")
@@ -228,7 +228,7 @@ async fn intended_read_receipt_policy_for_realm(
 ) -> Result<ReadReceiptPolicy, &'static str> {
     for operation in operations.iter().rev() {
         if kinds::canonical_kind_for_operation(operation)
-            == Some(cokret_sdk::events::kinds::REALM_READ_RECEIPT_POLICY)
+            == Some(arkret_sdk::events::kinds::REALM_READ_RECEIPT_POLICY)
             && operation.realm_id.as_str() == realm_id
         {
             return read_receipt_policy_projection_from_payload(&operation.payload);
@@ -246,14 +246,14 @@ fn validate_read_receipt_policy_against_history(
     history_visibility: &str,
 ) -> Result<(), &'static str> {
     if history_visibility != "world_readable"
-        || policy.visibility != cokret_sdk::ReadReceiptVisibility::Public
+        || policy.visibility != arkret_sdk::ReadReceiptVisibility::Public
     {
         return Ok(());
     }
     if !policy.allow_public_receipts_on_world_readable {
         return Err(READ_RECEIPT_VISIBILITY_COMBINATION_INVALID);
     }
-    if policy.disclosure == cokret_sdk::ReadReceiptDisclosure::Required
+    if policy.disclosure == arkret_sdk::ReadReceiptDisclosure::Required
         && !policy.allow_forced_public_world_readable_receipts
     {
         return Err(READ_RECEIPT_FORCED_PUBLIC_WORLD_READABLE_FORBIDDEN);
@@ -282,7 +282,7 @@ async fn validate_read_receipt_child_policy_write(
 fn read_receipt_child_violation_reason(violation: ReadReceiptPolicyChildViolation) -> &'static str {
     match violation {
         ReadReceiptPolicyChildViolation::ComplianceFloorViolated => {
-            cokret_sdk::ERROR_CODE_READ_RECEIPT_COMPLIANCE_FLOOR_VIOLATED
+            arkret_sdk::ERROR_CODE_READ_RECEIPT_COMPLIANCE_FLOOR_VIOLATED
         }
         ReadReceiptPolicyChildViolation::ScopeOverridesDisabled
         | ReadReceiptPolicyChildViolation::DisclosurePrivacyLoosened
@@ -322,7 +322,7 @@ fn pending_read_receipt_policy_source_realm(
 ) -> Option<Option<String>> {
     for operation in operations.iter().rev() {
         if kinds::canonical_kind_for_operation(operation)
-            != Some(cokret_sdk::events::kinds::REALM_INHERITANCE_POLICY)
+            != Some(arkret_sdk::events::kinds::REALM_INHERITANCE_POLICY)
             || operation.realm_id.as_str() != realm_id
         {
             continue;
@@ -356,7 +356,7 @@ fn active_read_receipt_parent_link(
     }
     for operation in operations.iter().rev() {
         if kinds::canonical_kind_for_operation(operation)
-            != Some(cokret_sdk::events::kinds::REALM_LINK)
+            != Some(arkret_sdk::events::kinds::REALM_LINK)
             || operation.realm_id.as_str() != realm_id
             || operation
                 .payload
@@ -400,11 +400,11 @@ pub(crate) async fn validate_realm_key_share_policy(
     operation: &Operation,
 ) -> Result<(), &'static str> {
     if kinds::canonical_kind_for_operation(operation)
-        != Some(cokret_sdk::events::kinds::REALM_KEY_SHARE)
+        != Some(arkret_sdk::events::kinds::REALM_KEY_SHARE)
     {
         return Ok(());
     }
-    let share = serde_json::from_value::<cokret_sdk::RealmKeySharePayload>(
+    let share = serde_json::from_value::<arkret_sdk::RealmKeySharePayload>(
         projection_context_stripped_payload(&operation.payload),
     )
     .map_err(|_| "policy_denied")?;
@@ -418,7 +418,7 @@ pub(crate) async fn validate_realm_key_share_policy(
     // recovery recipient or it is rejected.
     if matches!(
         share.share_class,
-        cokret_sdk::RealmKeyShareClass::RealmRecoveryKey
+        arkret_sdk::RealmKeyShareClass::RealmRecoveryKey
     ) {
         return validate_rrk_targeted_realm_key_share(state, operation.realm_id.as_str(), &share)
             .unwrap_or(Err("durability_recovery_recipient_unverified"));
@@ -466,32 +466,32 @@ pub(crate) async fn validate_realm_key_share_policy(
         .await
         .map_err(|_| "policy_denied")?
         .ok_or("policy_denied")?;
-    let policy = serde_json::from_value::<cokret_sdk::HistorySharingPolicyPayloadValue>(
+    let policy = serde_json::from_value::<arkret_sdk::HistorySharingPolicyPayloadValue>(
         policy_value.clone(),
     )
     .map_err(|_| "policy_denied")?;
-    cokret_sdk::validate_history_sharing_policy(&policy).map_err(|_| "policy_denied")?;
+    arkret_sdk::validate_history_sharing_policy(&policy).map_err(|_| "policy_denied")?;
     let visibility = share.key_scope.history_visibility.unwrap_or_else(|| {
         meta.history_visibility
             .parse()
-            .unwrap_or(cokret_sdk::HistoryVisibility::Restricted)
+            .unwrap_or(arkret_sdk::HistoryVisibility::Restricted)
     });
     let receiver_state = realm_key_share_receiver_event_state(
         state,
         operation.realm_id.as_str(),
         share.recipient_principal_id.as_str(),
     );
-    let input = cokret_sdk::HistoryKeyShareGateInput {
+    let input = arkret_sdk::HistoryKeyShareGateInput {
         visibility,
-        reader: cokret_sdk::HistoryReaderContext {
+        reader: arkret_sdk::HistoryReaderContext {
             current_active_member: true,
             event_state: receiver_state,
             has_discoverability: true,
             has_preview_token: false,
         },
-        range: cokret_sdk::HistoryRangeContext {
+        range: arkret_sdk::HistoryRangeContext {
             since_invite: true,
-            since_join: receiver_state == cokret_sdk::HistoryReaderEventState::Joined,
+            since_join: receiver_state == arkret_sdk::HistoryReaderEventState::Joined,
             epoch_span: realm_key_share_epoch_span(
                 share.key_scope.from_epoch,
                 share.key_scope.to_epoch,
@@ -500,29 +500,29 @@ pub(crate) async fn validate_realm_key_share_policy(
         policy: Some(&policy),
         key_source: realm_key_share_source(&share),
         scope: None,
-        device: cokret_sdk::HistoryDeviceGate {
+        device: arkret_sdk::HistoryDeviceGate {
             revoked: device.revoked_at.is_some(),
             verified: device.verification_state == "verified",
         },
         safety_policy_allows: true,
-        audit: cokret_sdk::HistoryAuditGate {
+        audit: arkret_sdk::HistoryAuditGate {
             required: policy.audit.share_audit_event_required,
             satisfied: !policy.audit.share_audit_event_required,
         },
     };
-    let decision = cokret_sdk::evaluate_history_key_share_gates(input);
+    let decision = arkret_sdk::evaluate_history_key_share_gates(input);
     if decision.allowed {
         Ok(())
     } else {
         Err(match decision.withheld_reason_code {
-            Some(cokret_sdk::RealmKeyWithheldReasonCode::NotMember) => "not_member",
-            Some(cokret_sdk::RealmKeyWithheldReasonCode::HistoryNotVisible) => {
+            Some(arkret_sdk::RealmKeyWithheldReasonCode::NotMember) => "not_member",
+            Some(arkret_sdk::RealmKeyWithheldReasonCode::HistoryNotVisible) => {
                 "history_not_visible"
             }
-            Some(cokret_sdk::RealmKeyWithheldReasonCode::PolicyDenied) => "policy_denied",
-            Some(cokret_sdk::RealmKeyWithheldReasonCode::BlacklistedDevice) => "device_revoked",
-            Some(cokret_sdk::RealmKeyWithheldReasonCode::UnverifiedDevice) => "policy_denied",
-            Some(cokret_sdk::RealmKeyWithheldReasonCode::UnknownSession) => "policy_denied",
+            Some(arkret_sdk::RealmKeyWithheldReasonCode::PolicyDenied) => "policy_denied",
+            Some(arkret_sdk::RealmKeyWithheldReasonCode::BlacklistedDevice) => "device_revoked",
+            Some(arkret_sdk::RealmKeyWithheldReasonCode::UnverifiedDevice) => "policy_denied",
+            Some(arkret_sdk::RealmKeyWithheldReasonCode::UnknownSession) => "policy_denied",
             None => "policy_denied",
         })
     }
@@ -555,9 +555,9 @@ pub(crate) async fn validate_realm_key_share_policy(
 fn validate_rrk_targeted_realm_key_share(
     state: &AppState,
     realm_id: &str,
-    share: &cokret_sdk::RealmKeySharePayload,
+    share: &arkret_sdk::RealmKeySharePayload,
 ) -> Option<Result<(), &'static str>> {
-    use cokret_sdk::models::DurabilityMode;
+    use arkret_sdk::models::DurabilityMode;
     // Snapshot the durability policy off the projection without holding the lock
     // across any await (this function is sync).
     let durability = {
@@ -636,30 +636,30 @@ fn realm_key_share_receiver_event_state(
     state: &AppState,
     realm_id: &str,
     receiver: &str,
-) -> cokret_sdk::HistoryReaderEventState {
+) -> arkret_sdk::HistoryReaderEventState {
     {
         let projection = state.projection.lock();
         if let Some(member) = projection.member(realm_id, receiver) {
             return match member.state.as_str() {
-                "join" => cokret_sdk::HistoryReaderEventState::Joined,
-                "invite" => cokret_sdk::HistoryReaderEventState::Invited,
-                "leave" | "ban" => cokret_sdk::HistoryReaderEventState::Removed,
-                _ => cokret_sdk::HistoryReaderEventState::None,
+                "join" => arkret_sdk::HistoryReaderEventState::Joined,
+                "invite" => arkret_sdk::HistoryReaderEventState::Invited,
+                "leave" | "ban" => arkret_sdk::HistoryReaderEventState::Removed,
+                _ => arkret_sdk::HistoryReaderEventState::None,
             };
         }
     }
-    cokret_sdk::HistoryReaderEventState::None
+    arkret_sdk::HistoryReaderEventState::None
 }
 
 fn realm_key_share_source(
-    share: &cokret_sdk::RealmKeySharePayload,
-) -> cokret_sdk::HistoryKeySource {
+    share: &arkret_sdk::RealmKeySharePayload,
+) -> arkret_sdk::HistoryKeySource {
     if share.recipient_device_id.as_deref() == Some(share.sender_device_id.as_str()) {
-        cokret_sdk::HistoryKeySource::OwnDevice
+        arkret_sdk::HistoryKeySource::OwnDevice
     } else if share.encrypted_key_ref.is_some() {
-        cokret_sdk::HistoryKeySource::KeyBackup
+        arkret_sdk::HistoryKeySource::KeyBackup
     } else {
-        cokret_sdk::HistoryKeySource::VerifiedMemberDevice
+        arkret_sdk::HistoryKeySource::VerifiedMemberDevice
     }
 }
 
@@ -682,7 +682,7 @@ pub(crate) async fn validate_realm_moderation_policy(
     operation: &Operation,
 ) -> Result<(), &'static str> {
     if kinds::canonical_kind_for_operation(operation)
-        != Some(cokret_sdk::events::kinds::REALM_MODERATION_POLICY)
+        != Some(arkret_sdk::events::kinds::REALM_MODERATION_POLICY)
     {
         return Ok(());
     }
@@ -746,7 +746,7 @@ pub(crate) async fn validate_audience_mention_operation_policy(
 ) -> Result<(), &'static str> {
     if !matches!(
         kinds::canonical_kind_for_operation(operation),
-        Some(cokret_sdk::events::kinds::MESSAGE_CREATE | cokret_sdk::events::kinds::MESSAGE_REVISE)
+        Some(arkret_sdk::events::kinds::MESSAGE_CREATE | arkret_sdk::events::kinds::MESSAGE_REVISE)
     ) {
         return Ok(());
     }
@@ -811,7 +811,7 @@ pub(crate) async fn realm_owner_and_members(
     let owner = meta.map(|meta| meta.owner);
     let members = {
         let realms = state.realms.lock();
-        cokret_sdk::RealmId::new(realm_id.to_owned())
+        arkret_sdk::RealmId::new(realm_id.to_owned())
             .ok()
             .and_then(|id| realms.get(&id))
             .map(|realm| realm.members.iter().map(ToString::to_string).collect())
@@ -1013,7 +1013,7 @@ mod tests {
 
         assert_eq!(
             policy.disclosure,
-            cokret_sdk::ReadReceiptDisclosure::Required
+            arkret_sdk::ReadReceiptDisclosure::Required
         );
     }
 }

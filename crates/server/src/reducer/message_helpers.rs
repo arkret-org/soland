@@ -3,7 +3,7 @@
 //! re-exports them (`pub(crate) use`) so in-crate `super::*` consumers
 //! and sibling `apply_*` modules keep resolving these by name.
 
-use cokret_sdk::Operation;
+use arkret_sdk::Operation;
 use serde_json::Value;
 
 use super::PollOptionState;

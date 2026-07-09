@@ -93,7 +93,7 @@ async fn outbound_push_bridge_describe(depot: &mut Depot, res: &mut Response) {
             cache_import_path: "/_soland/edge/push/outbound/bridge/cache/import"
                 .to_owned(),
             bridge_describe_path: "/_floria/push/bridge/describe".to_owned(),
-            notify_path: "/_cokret/edge/push/notify".to_owned(),
+            notify_path: "/_arkret/edge/push/notify".to_owned(),
             accepted_contracts: vec![
                 "ck.push.bridge.describe".to_owned(),
                 "ck.profile.push_gateway.v1".to_owned(),
@@ -115,11 +115,11 @@ async fn outbound_push_bridge_describe(depot: &mut Depot, res: &mut Response) {
         },
         examples: OutboundPushBridgeExamples {
             resolve_request: json!({
-                "push_gateway_url": "https://floria.example/_cokret/edge/push/notify",
+                "push_gateway_url": "https://floria.example/_arkret/edge/push/notify",
                 "refresh": false
             }),
             fetch_request: json!({
-                "push_gateway_url": "https://floria.example/_cokret/edge/push/notify",
+                "push_gateway_url": "https://floria.example/_arkret/edge/push/notify",
                 "force_refresh": true
             }),
             notify_headers: json!({
@@ -131,7 +131,7 @@ async fn outbound_push_bridge_describe(depot: &mut Depot, res: &mut Response) {
             cache_import_request: json!({
                 "replace_existing": true,
                 "entries": [{
-                    "push_gateway_url": "https://floria.example/_cokret/edge/push/notify",
+                    "push_gateway_url": "https://floria.example/_arkret/edge/push/notify",
                     "service_base_url": "https://floria.example",
                     "bridge_describe_url": "https://floria.example/_floria/push/bridge/describe",
                     "fetch_state": "seed_import",
@@ -141,7 +141,7 @@ async fn outbound_push_bridge_describe(depot: &mut Depot, res: &mut Response) {
                     "remote_contract": {
                         "contract": "ck.push.bridge.describe",
                         "delivery": {
-                            "notify_path": "/_cokret/edge/push/notify",
+                            "notify_path": "/_arkret/edge/push/notify",
                             "operation_id": "ck.edge.push.command.notify"
                         }
                     }
@@ -149,7 +149,7 @@ async fn outbound_push_bridge_describe(depot: &mut Depot, res: &mut Response) {
             }),
             cache_export_response: json!({
                 "entries": [{
-                    "push_gateway_url": "https://floria.example/_cokret/edge/push/notify",
+                    "push_gateway_url": "https://floria.example/_arkret/edge/push/notify",
                     "service_base_url": "https://floria.example",
                     "bridge_describe_url": "https://floria.example/_floria/push/bridge/describe",
                     "fetch_state": "cache_hit",
@@ -541,9 +541,9 @@ pub(super) fn derive_push_gateway_service_base_url(push_gateway_url: &str) -> Op
     for suffix in [
         "/_floria/push/bridge/describe",
         "/arkret/push/v1/bridge/describe",
-        "/_cokret/edge/push/notify",
+        "/_arkret/edge/push/notify",
         "/arkret/push/v1/notify",
-        "/_cokret/edge/push",
+        "/_arkret/edge/push",
         "/arkret/push/v1",
     ] {
         if let Some(prefix) = value.strip_suffix(suffix) {
@@ -560,17 +560,17 @@ pub(super) fn join_push_gateway_url(base: &str, path: &str) -> String {
     let path = path.trim_start_matches('/');
 
     if path.starts_with("_floria/") {
-        let base = base.strip_suffix("/_cokret/edge").unwrap_or(base);
+        let base = base.strip_suffix("/_arkret/edge").unwrap_or(base);
         return format!("{base}/{path}");
     }
 
-    let path = path.strip_prefix("_cokret/edge/").unwrap_or(path);
-    if base.ends_with("/_cokret/edge") {
+    let path = path.strip_prefix("_arkret/edge/").unwrap_or(path);
+    if base.ends_with("/_arkret/edge") {
         format!("{base}/{path}")
     } else {
-        let mut url = String::with_capacity(base.len() + "/_cokret/edge/".len() + path.len());
+        let mut url = String::with_capacity(base.len() + "/_arkret/edge/".len() + path.len());
         url.push_str(base);
-        url.push_str("/_cokret/edge/");
+        url.push_str("/_arkret/edge/");
         url.push_str(path);
         url
     }
@@ -579,7 +579,7 @@ pub(super) fn join_push_gateway_url(base: &str, path: &str) -> String {
 fn default_outbound_push_resolved_contract() -> OutboundPushResolvedContract {
     OutboundPushResolvedContract {
         contract: "ck.push.bridge.describe".to_owned(),
-        expected_notify_path: "/_cokret/edge/push/notify".to_owned(),
+        expected_notify_path: "/_arkret/edge/push/notify".to_owned(),
         expected_operation_id: "ck.edge.push.command.notify".to_owned(),
         expected_origin_service_did_header: "X-Arkret-Origin-Service-Did".to_owned(),
         expected_destination_service_did_header: "X-Arkret-Destination-Service-Did".to_owned(),

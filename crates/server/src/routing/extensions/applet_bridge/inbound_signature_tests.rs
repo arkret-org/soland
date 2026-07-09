@@ -29,7 +29,7 @@ fn content_digest_header_is_rfc9421_structured() {
 fn signature_base_covers_required_components() {
     let base = applet_http_signature_base(
         "POST",
-        "https://edge.example/_cokret/edge/applet/transactions",
+        "https://edge.example/_arkret/edge/applet/transactions",
         "edge.example",
         "sha-256=:abc=:",
         "did:web:app",

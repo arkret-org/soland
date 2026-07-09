@@ -4,8 +4,8 @@ use std::sync::atomic::{AtomicI64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use arc_swap::ArcSwap;
-use cokret_sdk::state_res::{CellRegistry, CellStore, MoveStore, SealStore};
-use cokret_sdk::{AccountRegistrationPolicy, AccountStatus, AppletPackage, Did, RealmId};
+use arkret_sdk::state_res::{CellRegistry, CellStore, MoveStore, SealStore};
+use arkret_sdk::{AccountRegistrationPolicy, AccountStatus, AppletPackage, Did, RealmId};
 use ed25519_dalek::SigningKey;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -72,7 +72,7 @@ pub struct AppState {
     /// a `ck.device.authorize` `cross_signing_binding`. In-memory like the other
     /// reducer projections; durable rehydration rides on the durable event
     /// store (control-realm Phase 3).
-    pub cross_signing: Arc<Mutex<cokret_sdk::DeviceManager>>,
+    pub cross_signing: Arc<Mutex<arkret_sdk::DeviceManager>>,
     /// Process-local replay fence for consumed cross-signing reset
     /// `(principal_id, previous_generation)` tuples.
     pub cross_signing_reset_replays:
@@ -87,7 +87,7 @@ pub struct AppState {
     pub account_lifecycle: Arc<Mutex<BTreeMap<String, AccountLifecycleRecord>>>,
     /// In-memory failed-auth counter, keyed by actor DID.
     /// Spec: A.3 — auth handlers (`/_soland/gate/auth/dev-login`,
-    /// `/_cokret/gate/account/session-grants`) bump the counter on failure; once it
+    /// `/_arkret/gate/account/session-grants`) bump the counter on failure; once it
     /// crosses `ACCOUNT_LOCKOUT_THRESHOLD` (5) within the active window
     /// the actor is locked out for `ACCOUNT_LOCKOUT_DURATION` (15 min).
     /// A successful login clears the row. Durable storage lands with
@@ -167,7 +167,7 @@ pub struct AppState {
     /// state hydration lands. Subjects without an entry fall back to the
     /// recommended default policy. `ck.self.contact.command.tombstone(block_peer)`
     /// writes the peer DID into the holder entry's `blocked_subjects`.
-    pub invite_receive_policies: Arc<Mutex<BTreeMap<String, cokret_sdk::InviteReceivePolicy>>>,
+    pub invite_receive_policies: Arc<Mutex<BTreeMap<String, arkret_sdk::InviteReceivePolicy>>>,
     /// Direct conversation binding projection keyed by sorted participant DID
     /// pair. This is the bounded server-side fallback for
     /// `ck.self.direct_conversation.command.resolve` until signed
@@ -243,7 +243,7 @@ pub struct AppState {
     /// in the hot read path; the per-pass diagnostic helper just snapshots).
     pub notary_signing_key_origin: Arc<Mutex<NotarySigningKeyOrigin>>,
     /// Per-admin signing keys: SDK
-    /// [`cokret_sdk::AdminKeyStore`] keyed by the `application_id`
+    /// [`arkret_sdk::AdminKeyStore`] keyed by the `application_id`
     /// `soland.<service_did>`. Each admin DID in
     /// `config.admin_principal_dids` gets its own ed25519 signing seed
     /// (provisioned at boot in `development_mode`; lazily loaded from the
@@ -251,7 +251,7 @@ pub struct AppState {
     /// built via `admin_signer_for(state, admin_did)` — this replaces the
     /// service-wide `service_admin_signer` shortcut for endpoints that
     /// want operator attribution in the audit chain.
-    pub admin_keystore: Arc<cokret_sdk::AdminKeyStore>,
+    pub admin_keystore: Arc<arkret_sdk::AdminKeyStore>,
     /// G4.T3 — verified-profile descriptors loaded from the artifact path in
     /// `SOLAND_VERIFIED_PROFILES_ARTIFACT` at startup. Filtered to entries
     /// whose `service_role == "principal_server"` and additionally
@@ -413,7 +413,7 @@ impl AppState {
                 if config.use_keystore {
                     let app_id = format!("soland.{service_did}");
                     let key_id = format!("arkret:signer:soland-notary:{service_did}");
-                    let store = cokret_sdk::platform_default_keystore(&app_id);
+                    let store = arkret_sdk::platform_default_keystore(&app_id);
                     if let Ok(bytes) = store.load(&key_id) {
                         if bytes.len() == 32 {
                             let mut seed = [0u8; 32];
@@ -512,13 +512,13 @@ impl AppState {
         // without a provisioned key fall back to
         // `service_admin_signer` at signing time with a sticky-warn.
         let admin_app_id = format!("soland.{}", config.service_did);
-        let admin_keystore_inner: Box<dyn cokret_sdk::KeyStore> = if config.use_keystore {
-            cokret_sdk::platform_default_keystore(&admin_app_id)
+        let admin_keystore_inner: Box<dyn arkret_sdk::KeyStore> = if config.use_keystore {
+            arkret_sdk::platform_default_keystore(&admin_app_id)
         } else {
-            Box::new(cokret_sdk::keystore::InMemoryKeyStore::new())
+            Box::new(arkret_sdk::keystore::InMemoryKeyStore::new())
         };
         let admin_keystore =
-            cokret_sdk::AdminKeyStore::new(admin_app_id.clone(), admin_keystore_inner);
+            arkret_sdk::AdminKeyStore::new(admin_app_id.clone(), admin_keystore_inner);
         if config.development_mode {
             for did_str in &config.admin_principal_dids {
                 let Ok(did) = Did::new(did_str.clone()) else {
@@ -573,7 +573,7 @@ impl AppState {
             persistence,
             object_storage,
             realms: Arc::new(Mutex::new(realms)),
-            cross_signing: Arc::new(Mutex::new(cokret_sdk::DeviceManager::new())),
+            cross_signing: Arc::new(Mutex::new(arkret_sdk::DeviceManager::new())),
             cross_signing_reset_replays: Arc::new(Mutex::new(BTreeMap::new())),
             handle_releases: Arc::new(Mutex::new(BTreeMap::new())),
             account_lifecycle: Arc::new(Mutex::new(BTreeMap::new())),
@@ -1372,7 +1372,7 @@ pub(crate) fn getrandom_seed(out: &mut [u8; 32]) {
 
 #[cfg(test)]
 mod membership_hydration_tests {
-    use cokret_sdk::{Did, RealmId};
+    use arkret_sdk::{Did, RealmId};
 
     use super::*;
 

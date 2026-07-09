@@ -12,7 +12,7 @@
 
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use cokret_sdk::{DeviceId, Did, SpaceId};
+use arkret_sdk::{DeviceId, Did, SpaceId};
 use salvo::http::{StatusCode, header};
 use salvo::prelude::*;
 
@@ -28,7 +28,7 @@ pub fn render_error(res: &mut Response, status: StatusCode, code: &str, message:
     let request_id = ids::generate_request_id();
     res.status_code(status);
     res.render(Json(
-        cokret_sdk::ErrorEnvelope::new(code, message).with_request_id(request_id),
+        arkret_sdk::ErrorEnvelope::new(code, message).with_request_id(request_id),
     ));
 }
 
@@ -49,7 +49,7 @@ pub fn render_error_with_detail(
     let request_id = ids::generate_request_id();
     res.status_code(status);
     res.render(Json(
-        cokret_sdk::ErrorEnvelope::new(code, message)
+        arkret_sdk::ErrorEnvelope::new(code, message)
             .with_request_id(request_id)
             .with_detail(
                 "reason_detail",
@@ -76,7 +76,7 @@ pub fn render_error_with_top_level_reason(
     reason_detail: Option<&str>,
 ) {
     let request_id = ids::generate_request_id();
-    let mut envelope = cokret_sdk::ErrorEnvelope::new(code, message).with_request_id(request_id);
+    let mut envelope = arkret_sdk::ErrorEnvelope::new(code, message).with_request_id(request_id);
     if let Some(reason_detail) = reason_detail {
         envelope = envelope.with_detail(
             "reason_detail",
@@ -191,11 +191,11 @@ pub fn bearer_token(req: &Request) -> Option<&str> {
 
 /// Hex-encoded SHA-256 of `bytes` (lowercase, 64 chars).
 ///
-/// Thin re-export of the SDK [`cokret_sdk::canonical::sha256_hex`] so soland
+/// Thin re-export of the SDK [`arkret_sdk::canonical::sha256_hex`] so soland
 /// shares the single canonical hash primitive instead of a local
 /// reimplementation.
 pub fn sha256_hex(bytes: &[u8]) -> String {
-    cokret_sdk::canonical::sha256_hex(bytes)
+    arkret_sdk::canonical::sha256_hex(bytes)
 }
 
 // ── Token / digest validators ───────────────────────────────────────────────
@@ -246,12 +246,12 @@ pub fn is_valid_sync_token(token: &str) -> bool {
 
 /// `sha256:<64 lowercase hex>` shape.
 pub fn is_valid_sha256_digest(value: &str) -> bool {
-    value.starts_with("sha256:") && cokret_sdk::Hash::new(value.to_owned()).is_ok()
+    value.starts_with("sha256:") && arkret_sdk::Hash::new(value.to_owned()).is_ok()
 }
 
 /// Active `<digest-suite>:<64 lowercase hex>` hash shape.
 pub fn is_valid_hash_digest(value: &str) -> bool {
-    cokret_sdk::Hash::new(value.to_owned()).is_ok()
+    arkret_sdk::Hash::new(value.to_owned()).is_ok()
 }
 
 /// 64 lowercase hex characters.

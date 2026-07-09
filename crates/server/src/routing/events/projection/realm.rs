@@ -1,4 +1,4 @@
-use cokret_sdk::{Did, Operation, RealmId};
+use arkret_sdk::{Did, Operation, RealmId};
 use serde_json::{Value, json};
 
 use super::*;
@@ -166,7 +166,7 @@ pub async fn ensure_projected_realm(state: &AppState, origin: &str, operation: &
             }
             if record.encryption_profile.is_none()
                 && kinds::canonical_kind_for_operation(operation)
-                    == Some(cokret_sdk::events::kinds::REALM_CREATE)
+                    == Some(arkret_sdk::events::kinds::REALM_CREATE)
                 && let Some(encryption_profile) = operation_realm_encryption_profile(operation)
             {
                 record.encryption_profile = Some(encryption_profile.to_owned());
@@ -224,7 +224,7 @@ pub async fn project_membership_operation(state: &AppState, origin: &str, operat
         .get("membership")
         .and_then(|value| value.as_str());
     if kinds::canonical_kind_for_operation(operation)
-        == Some(cokret_sdk::events::kinds::REALM_DESTROY)
+        == Some(arkret_sdk::events::kinds::REALM_DESTROY)
     {
         let store = state.persistence.realm_meta();
         if let Ok(Some(mut record)) = store.get(operation.realm_id.as_str()).await {
@@ -244,7 +244,7 @@ pub async fn project_membership_operation(state: &AppState, origin: &str, operat
         .unwrap_or(origin);
 
     // Project an `invite` membership transition into a RealmInviteRecord so
-    // `GET /_cokret/self/authz/invites` can surface seed invites carried on the
+    // `GET /_arkret/self/authz/invites` can surface seed invites carried on the
     // canonical event path (e.g. when the Realm bootstrap strand emits
     // `ck.member.state{membership=invite}` for each seed member, per
     // `models/realm-and-space.md` §3 + `governance/join-policy.md` §6).
@@ -455,8 +455,8 @@ pub fn project_member_identity_update(state: &AppState, operation: &Operation) {
         );
         return;
     };
-    let payload_digest = match cokret_sdk::canonical::canonical_json_bytes(identity_payload) {
-        Ok(bytes) => cokret_sdk::canonical::sha256_digest(bytes),
+    let payload_digest = match arkret_sdk::canonical::canonical_json_bytes(identity_payload) {
+        Ok(bytes) => arkret_sdk::canonical::sha256_digest(bytes),
         Err(err) => {
             tracing::warn!(
                 %err,
@@ -519,7 +519,7 @@ pub fn project_member_identity_update(state: &AppState, operation: &Operation) {
     let raw_event = json!({
         "event_id": canonical_event_id,
         "operation_id": operation.operation_id.to_string(),
-        "event_kind": cokret_sdk::events::kinds::MEMBER_IDENTITY_UPDATE,
+        "event_kind": arkret_sdk::events::kinds::MEMBER_IDENTITY_UPDATE,
         "realm_id": operation.realm_id.as_str(),
         "created_at": operation.created_at,
         "payload": operation.payload.clone(),

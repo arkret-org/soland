@@ -1,11 +1,11 @@
 //! Blob upload + download handlers.
 //!
 //! Surfaces:
-//! - `POST /_cokret/self/blob/upload`         — multipart upload, normalises MIME / filename,
+//! - `POST /_arkret/self/blob/upload`         — multipart upload, normalises MIME / filename,
 //!   enforces per-actor / per-Realm / per-upload quotas, rejects plaintext blobs in private Realms
 //!   unless this service is in `plaintext_visible_services`.
-//! - `HEAD /_cokret/self/blob/get`            — metadata + size for range planning
-//! - `GET  /_cokret/self/blob/get`            — content (supports `Range` and the `?purpose=`
+//! - `HEAD /_arkret/self/blob/get`            — metadata + size for range planning
+//! - `GET  /_arkret/self/blob/get`            — content (supports `Range` and the `?purpose=`
 //!   discriminator)
 //!
 //! Blob metadata carries the spec `realm_id` association; plaintext-visibility
@@ -13,7 +13,7 @@
 
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use cokret_sdk::{
+use arkret_sdk::{
     BlobPresignAccessScope, BlobPresignDetachedJwsProof, BlobPresignEnvelope, BlobPresignOutcome,
     BlobPresignPayload, BlobPresignRequestBody, BlobRef, BlobUploadOutcome, BlobVisibility, Did,
     Hash, RealmId, SignatureValue, UploadReceipt, canonical,
@@ -732,7 +732,7 @@ async fn blob_presign(
     )?;
     let base = state.config.public_base_url.trim_end_matches('/');
     let url = format!(
-        "{base}/_cokret/self/blob/get?blob_ref={}&purpose={}&presign={}",
+        "{base}/_arkret/self/blob/get?blob_ref={}&purpose={}&presign={}",
         query_escape(blob_ref),
         query_escape(purpose),
         query_escape(&presign.token),
@@ -805,7 +805,7 @@ fn issue_presign_envelope(
         ))
     })?;
     let jws =
-        cokret_sdk::jws::sign_jws_ed25519(&canonical_payload, state.notary_signing_key().as_ref())
+        arkret_sdk::jws::sign_jws_ed25519(&canonical_payload, state.notary_signing_key().as_ref())
             .map_err(|error| AppError::internal(format!("blob presign signing failed: {error}")))?;
     let envelope = BlobPresignEnvelope {
         payload: payload.clone(),
@@ -879,7 +879,7 @@ fn validate_presign_query(
     }
     let canonical_payload = canonical::canonical_json_bytes(&payload).map_err(|_| ())?;
     let expected_jws =
-        cokret_sdk::jws::sign_jws_ed25519(&canonical_payload, state.notary_signing_key().as_ref())
+        arkret_sdk::jws::sign_jws_ed25519(&canonical_payload, state.notary_signing_key().as_ref())
             .map_err(|_| ())?;
     let expected = expected_jws.as_bytes();
     let actual = envelope.proof.jws.as_bytes();
@@ -1170,14 +1170,14 @@ pub(super) fn blob_purpose_requires_encryption(purpose: Option<&str>) -> bool {
 
 pub(super) fn plaintext_blob_data_class(
     purpose: Option<&str>,
-) -> cokret_sdk::PlaintextDataClassKind {
+) -> arkret_sdk::PlaintextDataClassKind {
     match purpose {
         Some("attachment_preview" | "blob_preview" | "preview") => {
-            cokret_sdk::PlaintextDataClassKind::AttachmentPreview
+            arkret_sdk::PlaintextDataClassKind::AttachmentPreview
         }
-        Some("thumbnail") => cokret_sdk::PlaintextDataClassKind::Thumbnail,
-        Some(BLOB_PURPOSE_SEARCH_INDEX_SHARD) => cokret_sdk::PlaintextDataClassKind::FullTextIndex,
-        _ => cokret_sdk::PlaintextDataClassKind::AttachmentPlaintext,
+        Some("thumbnail") => arkret_sdk::PlaintextDataClassKind::Thumbnail,
+        Some(BLOB_PURPOSE_SEARCH_INDEX_SHARD) => arkret_sdk::PlaintextDataClassKind::FullTextIndex,
+        _ => arkret_sdk::PlaintextDataClassKind::AttachmentPlaintext,
     }
 }
 

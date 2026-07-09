@@ -21,7 +21,7 @@ const LOCAL_EVENT_CRITICAL_FEATURES: [&str; 3] = [
 pub(crate) fn canonical_json_hash(value: &Value) -> String {
     canonical::canonical_sha256(value).unwrap_or_else(|_| {
         let bytes = serde_json::to_vec(value).unwrap_or_default();
-        cokret_sdk::canonical::sha256_digest(&bytes)
+        arkret_sdk::canonical::sha256_digest(&bytes)
     })
 }
 
@@ -31,13 +31,13 @@ fn event_digest_suite(
     realm_id: &str,
     object: &serde_json::Map<String, Value>,
 ) -> Result<String, EventValidationError> {
-    let suite = if kind == cokret_sdk::events::kinds::REALM_CREATE {
+    let suite = if kind == arkret_sdk::events::kinds::REALM_CREATE {
         realm_create_digest_algorithm(object)
     } else {
         state.projection.lock().realm_digest_algorithm(realm_id)
     }
     .unwrap_or_else(|| "sha256".to_owned());
-    cokret_sdk::canonical::digest_suite(&suite)
+    arkret_sdk::canonical::digest_suite(&suite)
         .map(|_| suite.clone())
         .map_err(|_| unsupported_digest_algorithm_error(&suite))
 }
@@ -56,12 +56,12 @@ fn realm_create_digest_algorithm(object: &serde_json::Map<String, Value>) -> Opt
 }
 
 fn event_digest_for_suite(bytes: &[u8], suite: &str) -> Result<String, EventValidationError> {
-    cokret_sdk::canonical::canonical_digest_with_suite(bytes, suite)
+    arkret_sdk::canonical::canonical_digest_with_suite(bytes, suite)
         .map_err(|_| unsupported_digest_algorithm_error(suite))
 }
 
 fn unsupported_digest_algorithm_error(suite: &str) -> EventValidationError {
-    let code = cokret_sdk::ErrorCode::UnsupportedDigestAlgorithm;
+    let code = arkret_sdk::ErrorCode::UnsupportedDigestAlgorithm;
     event_validation_error(
         error_http_status(code),
         code.as_str(),
@@ -75,14 +75,14 @@ pub(crate) fn preflight_mls_projection_reject(
 ) -> Option<String> {
     let kind = kinds::canonical_kind_string(operation);
     match kind.as_str() {
-        cokret_sdk::events::kinds::MLS_KEYPACKAGE
-        | cokret_sdk::events::kinds::MLS_WELCOME
-        | cokret_sdk::events::kinds::MLS_GENESIS
-        | cokret_sdk::events::kinds::MLS_PROPOSAL
-        | cokret_sdk::events::kinds::MLS_COMMIT => {
+        arkret_sdk::events::kinds::MLS_KEYPACKAGE
+        | arkret_sdk::events::kinds::MLS_WELCOME
+        | arkret_sdk::events::kinds::MLS_GENESIS
+        | arkret_sdk::events::kinds::MLS_PROPOSAL
+        | arkret_sdk::events::kinds::MLS_COMMIT => {
             let mut snapshot = proj.clone();
             let effect = match kind.as_str() {
-                cokret_sdk::events::kinds::MLS_KEYPACKAGE => {
+                arkret_sdk::events::kinds::MLS_KEYPACKAGE => {
                     match operation.payload.get("action").and_then(Value::as_str) {
                         Some("publish") => {
                             crate::reducer::mls::apply_keypackage_publish(&mut snapshot, operation)
@@ -98,16 +98,16 @@ pub(crate) fn preflight_mls_projection_reject(
                         },
                     }
                 }
-                cokret_sdk::events::kinds::MLS_WELCOME => {
+                arkret_sdk::events::kinds::MLS_WELCOME => {
                     crate::reducer::mls::apply_welcome_enqueue(&mut snapshot, operation)
                 }
-                cokret_sdk::events::kinds::MLS_GENESIS => {
+                arkret_sdk::events::kinds::MLS_GENESIS => {
                     crate::reducer::mls::apply_group_genesis(&mut snapshot, operation)
                 }
-                cokret_sdk::events::kinds::MLS_PROPOSAL => {
+                arkret_sdk::events::kinds::MLS_PROPOSAL => {
                     crate::reducer::mls::apply_remove_proposal(&mut snapshot, operation)
                 }
-                cokret_sdk::events::kinds::MLS_COMMIT => {
+                arkret_sdk::events::kinds::MLS_COMMIT => {
                     crate::reducer::mls::apply_commit_epoch(&mut snapshot, operation)
                 }
                 _ => crate::reducer::ProjectionEffect::Ignored,
@@ -139,12 +139,12 @@ pub(crate) fn preflight_moderation_projection_reject(
     let kind = kinds::canonical_kind_string(operation);
     let is_moderation = matches!(
         kind.as_str(),
-        cokret_sdk::events::kinds::MODERATION_DECISION
-            | cokret_sdk::events::kinds::MODERATION_DECISION_LIFT
-            | cokret_sdk::events::kinds::MODERATION_APPEAL_SUBMIT
-            | cokret_sdk::events::kinds::MODERATION_APPEAL_REVIEW
-            | cokret_sdk::events::kinds::MODERATION_APPEAL_DECISION
-            | cokret_sdk::events::kinds::MODERATION_APPEAL_CLOSE
+        arkret_sdk::events::kinds::MODERATION_DECISION
+            | arkret_sdk::events::kinds::MODERATION_DECISION_LIFT
+            | arkret_sdk::events::kinds::MODERATION_APPEAL_SUBMIT
+            | arkret_sdk::events::kinds::MODERATION_APPEAL_REVIEW
+            | arkret_sdk::events::kinds::MODERATION_APPEAL_DECISION
+            | arkret_sdk::events::kinds::MODERATION_APPEAL_CLOSE
     );
     if !is_moderation {
         return None;
@@ -165,7 +165,7 @@ pub(crate) fn preflight_invite_projection_reject(
     let kind = kinds::canonical_kind_string(operation);
     if !matches!(
         kind.as_str(),
-        cokret_sdk::events::kinds::INVITE_THIRD_PARTY | cokret_sdk::events::kinds::INVITE_CLAIM
+        arkret_sdk::events::kinds::INVITE_THIRD_PARTY | arkret_sdk::events::kinds::INVITE_CLAIM
     ) {
         return None;
     }
@@ -184,9 +184,9 @@ pub(crate) fn preflight_calendar_projection_reject(
     let kind = kinds::canonical_kind_string(operation);
     if !matches!(
         kind.as_str(),
-        cokret_sdk::events::kinds::STRAND_CREATE
-            | cokret_sdk::events::kinds::STRAND_UPDATE
-            | cokret_sdk::events::kinds::RSVP_SET
+        arkret_sdk::events::kinds::STRAND_CREATE
+            | arkret_sdk::events::kinds::STRAND_UPDATE
+            | arkret_sdk::events::kinds::RSVP_SET
     ) {
         return None;
     }
@@ -205,9 +205,9 @@ pub(crate) fn preflight_capability_projection_reject(
     let kind = kinds::canonical_kind_string(operation);
     if !matches!(
         kind.as_str(),
-        cokret_sdk::events::kinds::CAPABILITY_GRANT
-            | cokret_sdk::events::kinds::CAPABILITY_REVOKE
-            | cokret_sdk::events::kinds::CAPABILITY_DELEGATE
+        arkret_sdk::events::kinds::CAPABILITY_GRANT
+            | arkret_sdk::events::kinds::CAPABILITY_REVOKE
+            | arkret_sdk::events::kinds::CAPABILITY_DELEGATE
     ) {
         return None;
     }
@@ -279,10 +279,10 @@ mod control_move_seal_basis_tests {
         // MUST accept it as a genesis followup alongside the other realm.*
         // policy moves, else the whole create batch is `status=partial`.
         assert!(is_realm_bootstrap_followup_kind(
-            cokret_sdk::events::kinds::REALM_HISTORY_SHARING_POLICY
+            arkret_sdk::events::kinds::REALM_HISTORY_SHARING_POLICY
         ));
         let obj =
-            control_move_with_effects(cokret_sdk::events::kinds::REALM_HISTORY_SHARING_POLICY);
+            control_move_with_effects(arkret_sdk::events::kinds::REALM_HISTORY_SHARING_POLICY);
         // As a recognized bootstrap followup it passes without seal_basis…
         validate_control_move_seal_basis(&obj, true).unwrap();
         // …but a non-bootstrap effects-bearing Control Move still requires it.

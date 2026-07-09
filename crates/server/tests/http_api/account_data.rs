@@ -278,7 +278,7 @@ async fn encrypted_account_data_requires_envelope_metadata_or_marker() {
         "ciphertext": "opaque-client-envelope"
     });
     let put: Value = TestClient::put(format!(
-        "http://server/_cokret/self/account_data/{marker_key}"
+        "http://server/_arkret/self/account_data/{marker_key}"
     ))
     .add_header("authorization", format!("Bearer {alice}"), true)
     .json(&serde_json::json!({"content": marker.clone()}))
@@ -347,7 +347,7 @@ async fn account_data_requires_auth() {
             "updated_at": "2026-05-08T10:00:00Z"
         }),
     );
-    let resp = TestClient::post("http://server/_cokret/self/events")
+    let resp = TestClient::post("http://server/_arkret/self/events")
         .json(&event)
         .send(&app())
         .await;

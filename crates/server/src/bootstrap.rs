@@ -160,9 +160,9 @@ async fn mint_local_service_identity(
     let mut seed = [0u8; 32];
     crate::state::getrandom_seed(&mut seed);
     let mut rng = rand_chacha::ChaCha20Rng::from_seed(seed);
-    let prepared = cokret_sdk::webvh::prepare_service_inception(
+    let prepared = arkret_sdk::webvh::prepare_service_inception(
         &mut rng,
-        &cokret_sdk::webvh::ServiceInceptionInput {
+        &arkret_sdk::webvh::ServiceInceptionInput {
             principal_endpoint: &endpoint,
             local_id: "service",
             also_known_as: &[],
@@ -178,7 +178,7 @@ async fn mint_local_service_identity(
         .get("state")
         .cloned()
         .unwrap_or_else(|| serde_json::json!({ "id": prepared.did.clone() }));
-    let event_digest = cokret_sdk::canonical::canonical_sha256(&prepared.log_entry)
+    let event_digest = arkret_sdk::canonical::canonical_sha256(&prepared.log_entry)
         .map_err(|error| anyhow::anyhow!("service DID log digest failed: {error}"))?;
 
     persistence

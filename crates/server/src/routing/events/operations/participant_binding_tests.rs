@@ -1,5 +1,5 @@
-use cokret_sdk::lattice::CellState;
-use cokret_sdk::{CellRef, Operation};
+use arkret_sdk::lattice::CellState;
+use arkret_sdk::{CellRef, Operation};
 use serde_json::{Value, json};
 use soland_data::Db;
 
@@ -77,7 +77,7 @@ fn signed_binding(state: &AppState, expires_at: &str) -> Value {
     let signing_key = state.notary_signing_key();
     let sig = participant_binding::sign_binding(&signed, &signing_key);
     json!({
-        "scheme": cokret_sdk::PARTICIPANT_BINDING_SCHEMA,
+        "scheme": arkret_sdk::PARTICIPANT_BINDING_SCHEMA,
         "issuer_kid": ISSUER_KID,
         "realm_id": REALM_ID,
         "call_id": CALL_ID,
@@ -93,9 +93,9 @@ fn signed_binding(state: &AppState, expires_at: &str) -> Value {
 
 fn call_state_op(binding: Value) -> Operation {
     let mut op = Operation::create(
-        cokret_sdk::OperationId::new(format!("ak:operation:{}", uuid::Uuid::now_v7())).unwrap(),
-        cokret_sdk::RealmId::new(REALM_ID.to_owned()).unwrap(),
-        cokret_sdk::events::kinds::CALL_STATE,
+        arkret_sdk::OperationId::new(format!("ak:operation:{}", uuid::Uuid::now_v7())).unwrap(),
+        arkret_sdk::RealmId::new(REALM_ID.to_owned()).unwrap(),
+        arkret_sdk::events::kinds::CALL_STATE,
         json!({
             "call_id": CALL_ID,
             "state": "active",
@@ -236,7 +236,7 @@ fn signing_input_matches_spec_construction() {
     let actual = participant_binding::binding_signing_input(&canonical);
 
     let mut expected = Vec::new();
-    expected.extend_from_slice(cokret_sdk::PARTICIPANT_BINDING_SCHEMA.as_bytes());
+    expected.extend_from_slice(arkret_sdk::PARTICIPANT_BINDING_SCHEMA.as_bytes());
     expected.push(0);
     // canonical-json is key-sorted (alphabetical) over the seven fields only.
     let expected_json = format!(

@@ -1,22 +1,22 @@
 //! Identity / DID handlers.
 //!
 //! Surfaces:
-//! - `GET  /_cokret/root/identity/describe`     — service identity capability descriptor
-//! - `POST /_cokret/root/identity/resolve`      — resolve a DID via SDK + local store
-//! - `GET  /_cokret/root/identity/document`     — fetch the locally-cached DID document
-//! - `GET  /_cokret/root/identity/log`          — return the local key log for a DID
+//! - `GET  /_arkret/root/identity/describe`     — service identity capability descriptor
+//! - `POST /_arkret/root/identity/resolve`      — resolve a DID via SDK + local store
+//! - `GET  /_arkret/root/identity/document`     — fetch the locally-cached DID document
+//! - `GET  /_arkret/root/identity/log`          — return the local key log for a DID
 //! - `POST /_soland/root/identity/webvh/register` — register through the embedded webvh provider
 //! - `GET  /webvh/{local_id}/did.json` — embedded webvh DID document
 //! - `GET  /webvh/{local_id}/did.jsonl` — embedded webvh log
-//! - `POST /_cokret/root/identity/submit-did-operation` — submit a DID operation
-//! - `GET  /_cokret/root/identity/receipts`     — issuer receipts for the local key log
+//! - `POST /_arkret/root/identity/submit-did-operation` — submit a DID operation
+//! - `GET  /_arkret/root/identity/receipts`     — issuer receipts for the local key log
 //!
 //! All long-term state lives behind `state.persistence.webvh()`; the
 //! `did_resolver` is still an in-process resolver chain. Production must move it onto a
 //! durable store (see todo F2) — currently in-memory.
 
-use cokret_sdk::http::IdentityDocumentViewOutcome;
-use cokret_sdk::{
+use arkret_sdk::http::IdentityDocumentViewOutcome;
+use arkret_sdk::{
     Did, DidDocumentRef, DidOperationSubmitOutcome, DidOperationSubmitRequestBody, Hash,
     IdentityDocumentView, IdentityResolveOutcome,
 };

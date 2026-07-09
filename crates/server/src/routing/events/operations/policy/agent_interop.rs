@@ -10,8 +10,8 @@ pub(super) async fn validate_agent_interop_session_writer_policy(
     };
     if !matches!(
         kind,
-        cokret_sdk::events::kinds::AGENT_INTEROP_SESSION_STATUS
-            | cokret_sdk::events::kinds::AGENT_INTEROP_SESSION_RESULT
+        arkret_sdk::events::kinds::AGENT_INTEROP_SESSION_STATUS
+            | arkret_sdk::events::kinds::AGENT_INTEROP_SESSION_RESULT
     ) {
         return Ok(());
     }
@@ -50,7 +50,7 @@ pub(super) async fn agent_interop_session_start_actor(
 ) -> Option<String> {
     if let Some(actor) = operations.iter().find_map(|candidate| {
         (kinds::canonical_kind_for_operation(candidate)
-            == Some(cokret_sdk::events::kinds::AGENT_INTEROP_SESSION_START)
+            == Some(arkret_sdk::events::kinds::AGENT_INTEROP_SESSION_START)
             && candidate.realm_id.as_str() == realm_id
             && agent_interop_session_id_from_payload(&candidate.payload) == Some(session_id))
         .then(|| candidate.actor().map(|did| did.to_string()))
@@ -66,7 +66,7 @@ pub(super) async fn agent_interop_session_start_actor(
         .ok()?
         .iter()
         .find_map(|record| {
-            if record.kind != cokret_sdk::events::kinds::AGENT_INTEROP_SESSION_START {
+            if record.kind != arkret_sdk::events::kinds::AGENT_INTEROP_SESSION_START {
                 return None;
             }
             if record.realm_id.as_deref() != Some(realm_id) {
@@ -128,16 +128,16 @@ pub(super) fn agent_interop_session_delegate_actions(
 ) -> &'static [&'static str] {
     let cancelled = operation.payload.get("status").and_then(Value::as_str) == Some("cancelled");
     match kinds::canonical_kind_for_operation(operation) {
-        Some(cokret_sdk::events::kinds::AGENT_INTEROP_SESSION_STATUS) if cancelled => {
+        Some(arkret_sdk::events::kinds::AGENT_INTEROP_SESSION_STATUS) if cancelled => {
             &["ck.agent.interop_session.cancel"]
         }
-        Some(cokret_sdk::events::kinds::AGENT_INTEROP_SESSION_STATUS) => {
+        Some(arkret_sdk::events::kinds::AGENT_INTEROP_SESSION_STATUS) => {
             &["ck.agent.interop_session.stream_status"]
         }
-        Some(cokret_sdk::events::kinds::AGENT_INTEROP_SESSION_RESULT) if cancelled => {
+        Some(arkret_sdk::events::kinds::AGENT_INTEROP_SESSION_RESULT) if cancelled => {
             &["ck.agent.interop_session.cancel"]
         }
-        Some(cokret_sdk::events::kinds::AGENT_INTEROP_SESSION_RESULT) => {
+        Some(arkret_sdk::events::kinds::AGENT_INTEROP_SESSION_RESULT) => {
             &["ck.agent.interop_session.attach_artifact"]
         }
         _ => &[],

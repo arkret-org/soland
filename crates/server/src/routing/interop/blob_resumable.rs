@@ -13,9 +13,9 @@
 //! wire-compatible with tus 1.0.0 core plus the `creation`,
 //! `creation-with-upload`, `termination` and `expiration` extensions.
 //!
-//! Surfaces (all under `/_cokret/self/blob/resumable`):
+//! Surfaces (all under `/_arkret/self/blob/resumable`):
 //! - `OPTIONS /`              — tus capability probe (no auth; endpoint-level confirmation only,
-//!   discovery is `/_cokret/describe`)
+//!   discovery is `/_arkret/describe`)
 //! - `POST    /`              — create an upload resource (`Upload-Length` required; optional
 //!   `application/offset+octet-stream` body for creation-with-upload)
 //! - `HEAD    /{id}`          — query `Upload-Offset` to resume
@@ -57,7 +57,7 @@ use crate::state::{AppState, BlobRecord};
 
 pub const TUS_VERSION: &str = "1.0.0";
 /// Protocol versions / extensions advertised both on the `OPTIONS` probe
-/// and in `/_cokret/describe` `supported_bindings[kind="tus"]` — the
+/// and in `/_arkret/describe` `supported_bindings[kind="tus"]` — the
 /// describe claim and the wire probe MUST agree.
 pub const TUS_VERSIONS: &[&str] = &["1.0.0"];
 pub const TUS_EXTENSIONS: &[&str] = &[
@@ -413,7 +413,7 @@ async fn tus_create(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     // Relative Location — clients resolve it against the request URL. The
     // absolute base is already known from
     // `describe.supported_bindings[kind="tus"].base_url`.
-    let location = format!("/_cokret/self/blob/resumable/{upload_id}");
+    let location = format!("/_arkret/self/blob/resumable/{upload_id}");
     let headers = res.headers_mut();
     headers.insert(
         "location",
@@ -723,7 +723,7 @@ async fn complete_resumable_upload(
     };
     let realm_id = match meta_value("realm_id") {
         Some(realm_id) => {
-            if cokret_sdk::RealmId::new(realm_id.clone()).is_err() {
+            if arkret_sdk::RealmId::new(realm_id.clone()).is_err() {
                 render_error(
                     res,
                     StatusCode::BAD_REQUEST,
@@ -922,9 +922,9 @@ async fn complete_resumable_upload(
         legal_hold: false,
         redacted: false,
         visibility: if realm_id.is_some() {
-            cokret_sdk::BlobVisibility::RealmBound
+            arkret_sdk::BlobVisibility::RealmBound
         } else {
-            cokret_sdk::BlobVisibility::Public
+            arkret_sdk::BlobVisibility::Public
         },
         uploaded_by: actor.to_owned(),
         created_at: received_at,

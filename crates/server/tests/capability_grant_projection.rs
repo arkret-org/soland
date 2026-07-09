@@ -13,7 +13,7 @@
 //! events and read back the projected cell + the engine-shaped effective
 //! grant the projection driver folds into `SolandAuthzEngine`.
 
-use cokret_sdk::{Operation, OperationId, RealmId};
+use arkret_sdk::{Operation, OperationId, RealmId};
 use serde_json::{Value, json};
 use soland::authz::SolandAuthzEngine;
 use soland::hlc::ServerHlc;
@@ -47,7 +47,7 @@ fn grant_op(grant_id: &str) -> Operation {
 
 fn grant_op_with(grant_id: &str, actions: Vec<Value>, resources: Vec<Value>) -> Operation {
     op(
-        cokret_sdk::events::kinds::CAPABILITY_GRANT,
+        arkret_sdk::events::kinds::CAPABILITY_GRANT,
         REALM,
         json!({
             "grant_id": grant_id,
@@ -66,7 +66,7 @@ fn grant_op_with(grant_id: &str, actions: Vec<Value>, resources: Vec<Value>) -> 
 
 fn revoke_op(grant_id: &str) -> Operation {
     op(
-        cokret_sdk::events::kinds::CAPABILITY_REVOKE,
+        arkret_sdk::events::kinds::CAPABILITY_REVOKE,
         REALM,
         json!({ "grant_id": grant_id }),
     )
@@ -112,7 +112,7 @@ fn check_allows_for(state: &ProjectionState, grant_id: &str, action: &str, resou
 }
 
 fn grant_cell_items(state: &ProjectionState, grant_id: &str) -> Vec<Value> {
-    let cell_ref = cokret_sdk::CellRef::new(format!(
+    let cell_ref = arkret_sdk::CellRef::new(format!(
         "ak:cell:ck.component.capability.grant.v1:{grant_id}"
     ))
     .unwrap();
@@ -156,7 +156,7 @@ fn canonical_circle_selector_and_constraint_project_to_narrow_runtime_grant() {
     let hlc = ServerHlc::new("test");
     let effect = state.apply(
         &op(
-            cokret_sdk::events::kinds::CAPABILITY_GRANT,
+            arkret_sdk::events::kinds::CAPABILITY_GRANT,
             REALM,
             json!({
                 "grant_id": GRANT_ID,

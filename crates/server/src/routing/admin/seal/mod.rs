@@ -34,7 +34,7 @@
 //!   full multi-signer compaction are placeholder-only — these need the admin signer strand +
 //!   per-Realm leader election that lands under `_todos.md` MAL-3 / MAL-11.
 
-use cokret_sdk::{Did, Ed25519MoveSigner, Hlc, RealmId, SealId};
+use arkret_sdk::{Did, Ed25519MoveSigner, Hlc, RealmId, SealId};
 use salvo::http::StatusCode;
 
 use super::AuthArgs;
@@ -128,7 +128,7 @@ pub(super) fn admin_signer_for(
 pub(super) fn pick_admin_seal_basis(
     state: &AppState,
     realm_id: &RealmId,
-) -> Result<cokret_sdk::SealBasis, AppError> {
+) -> Result<arkret_sdk::SealBasis, AppError> {
     let leaves = state.seal_store.list_leaves(realm_id).map_err(|e| {
         app_error!(
             InternalError,
@@ -137,19 +137,19 @@ pub(super) fn pick_admin_seal_basis(
     })?;
     if leaves.is_empty() {
         let empty = std::collections::BTreeSet::new();
-        let control_event_set_root = cokret_sdk::state_res::control_event_set_root(&empty)
+        let control_event_set_root = arkret_sdk::state_res::control_event_set_root(&empty)
             .map_err(|e| app_error!(InternalError, "empty control_event_set_root failed: {e}"))?;
-        return Ok(cokret_sdk::SealBasis {
+        return Ok(arkret_sdk::SealBasis {
             leaves: vec![
                 SealId::new(format!("ak:seal:sha256:{}", "00".repeat(32)))
                     .expect("valid genesis seal id"),
             ],
             control_event_set_root,
-            state_root: cokret_sdk::Hash::new(cokret_sdk::EMPTY_STATE_ROOT.to_owned())
+            state_root: arkret_sdk::Hash::new(arkret_sdk::EMPTY_STATE_ROOT.to_owned())
                 .map_err(|e| app_error!(InternalError, "empty state_root invalid: {e}"))?,
         });
     }
-    let view = cokret_sdk::effective_seal_view(
+    let view = arkret_sdk::effective_seal_view(
         &leaves,
         realm_id,
         state.seal_store.as_ref(),
@@ -157,7 +157,7 @@ pub(super) fn pick_admin_seal_basis(
         state.cell_registry.as_ref(),
     )
     .map_err(|e| app_error!(InternalError, "effective_seal_view failed: {e}"))?;
-    Ok(cokret_sdk::SealBasis {
+    Ok(arkret_sdk::SealBasis {
         leaves: view.predecessor_refs,
         control_event_set_root: view.control_event_set_root,
         state_root: view.state_root,
@@ -172,8 +172,8 @@ pub(super) fn fresh_hlc(state: &AppState) -> Result<Hlc, AppError> {
 }
 
 /// Build the canonical notary cell ref for a Space.
-pub(super) fn notary_cell_for(realm_id: &str) -> Result<cokret_sdk::CellRef, AppError> {
-    cokret_sdk::CellRef::new(format!("ak:cell:ck.component.notary.v1:{realm_id}")).map_err(|e| {
+pub(super) fn notary_cell_for(realm_id: &str) -> Result<arkret_sdk::CellRef, AppError> {
+    arkret_sdk::CellRef::new(format!("ak:cell:ck.component.notary.v1:{realm_id}")).map_err(|e| {
         app_error!(InvalidParam, "invalid realm_id `{realm_id}`: {e}")
             .with_status(StatusCode::BAD_REQUEST)
     })

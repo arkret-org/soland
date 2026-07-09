@@ -1,6 +1,6 @@
-use cokret_sdk::Operation;
+use arkret_sdk::Operation;
 // Standard protocol event kind constants intentionally live in the SDK.
-// Soland code should refer to `cokret_sdk::events::kinds::*` directly instead
+// Soland code should refer to `arkret_sdk::events::kinds::*` directly instead
 // of re-exporting legacy aliases from this module.
 use serde_json::Value;
 
@@ -17,7 +17,7 @@ pub const MLS_REDUCER_PROFILE_V1: &str = "ck.reducer.v1";
 pub const RELATION_KIND_CONFIDENTIAL_DISCUSSION_OF: &str = "confidential_discussion_of";
 
 // COT-06-004: Realm default-Strand pointer event. The canonical event kind
-// constant is exposed as `cokret_sdk::events::kinds::REALM_SET_DEFAULT_STRAND`.
+// constant is exposed as `arkret_sdk::events::kinds::REALM_SET_DEFAULT_STRAND`.
 
 // Morph lifecycle (round 13). Same shape as Strand — no dedicated tombstone.
 // `ck.field.position.move` and `ck.field.position.reorder` were removed in
@@ -266,38 +266,38 @@ pub fn canonical_kind_string(operation: &Operation) -> String {
 }
 
 pub fn operation_is_message_create(operation: &Operation) -> bool {
-    canonical_kind_for_operation(operation) == Some(cokret_sdk::events::kinds::MESSAGE_CREATE)
+    canonical_kind_for_operation(operation) == Some(arkret_sdk::events::kinds::MESSAGE_CREATE)
 }
 
 pub fn operation_is_redaction(operation: &Operation) -> bool {
     canonical_kind_for_operation(operation)
-        .is_some_and(cokret_sdk::events::kinds::is_redaction_kind)
+        .is_some_and(arkret_sdk::events::kinds::is_redaction_kind)
 }
 
 pub fn operation_is_membership(operation: &Operation) -> bool {
     canonical_kind_for_operation(operation)
-        .is_some_and(cokret_sdk::events::kinds::is_membership_kind)
+        .is_some_and(arkret_sdk::events::kinds::is_membership_kind)
 }
 
 pub fn operation_is_invite(operation: &Operation) -> bool {
-    canonical_kind_for_operation(operation).is_some_and(cokret_sdk::events::kinds::is_invite_kind)
+    canonical_kind_for_operation(operation).is_some_and(arkret_sdk::events::kinds::is_invite_kind)
 }
 
 pub fn operation_is_invite_create(operation: &Operation) -> bool {
-    canonical_kind_for_operation(operation) == Some(cokret_sdk::events::kinds::INVITE_CREATE)
+    canonical_kind_for_operation(operation) == Some(arkret_sdk::events::kinds::INVITE_CREATE)
 }
 
 pub fn operation_is_invite_claim(operation: &Operation) -> bool {
-    canonical_kind_for_operation(operation) == Some(cokret_sdk::events::kinds::INVITE_CLAIM)
+    canonical_kind_for_operation(operation) == Some(arkret_sdk::events::kinds::INVITE_CLAIM)
 }
 
 pub fn operation_is_invite_third_party(operation: &Operation) -> bool {
-    canonical_kind_for_operation(operation) == Some(cokret_sdk::events::kinds::INVITE_THIRD_PARTY)
+    canonical_kind_for_operation(operation) == Some(arkret_sdk::events::kinds::INVITE_THIRD_PARTY)
 }
 
 pub fn operation_is_realm_lifecycle(operation: &Operation) -> bool {
     canonical_kind_for_operation(operation)
-        .is_some_and(cokret_sdk::events::kinds::is_realm_lifecycle_kind)
+        .is_some_and(arkret_sdk::events::kinds::is_realm_lifecycle_kind)
 }
 
 // G3.S9: extensions (applet/bot/tsp) — stub event kinds. Wire-accept +
@@ -326,9 +326,9 @@ pub const AUDIT_COMPLIANCE_PROFILES: &[&str] = &[
 ];
 
 /// Spec T07 — Realm lifecycle state classifier; mirror of the SDK
-/// [`cokret_sdk::events::RealmLifecycleState`] terminal predicate.
-pub fn realm_state_is_terminal(state: cokret_sdk::events::RealmLifecycleState) -> bool {
-    cokret_sdk::events::is_terminal_realm_state(state)
+/// [`arkret_sdk::events::RealmLifecycleState`] terminal predicate.
+pub fn realm_state_is_terminal(state: arkret_sdk::events::RealmLifecycleState) -> bool {
+    arkret_sdk::events::is_terminal_realm_state(state)
 }
 
 /// Spec T23 — true when `ck.audit.ryw_receipt` may be accepted as a durable
@@ -342,7 +342,7 @@ pub fn ryw_receipt_durable_event_allowed(active_profiles: &[String]) -> bool {
 
 /// SEC-08 — does this Realm-lifecycle payload (`ck.realm.create` /
 /// `ck.realm.policy_components`) declare the minimal-metadata profile
-/// [`cokret_sdk::mls::MINIMAL_METADATA_REALM_PROFILE`]
+/// [`arkret_sdk::mls::MINIMAL_METADATA_REALM_PROFILE`]
 /// (`crypto-media/encryption-and-audit.md` §2.9)?
 ///
 /// The declaration is the `profiles[]` / `active_profiles[]` array the T09/T12
@@ -356,7 +356,7 @@ pub fn payload_declares_minimal_metadata_realm(payload: &serde_json::Value) -> b
             .and_then(serde_json::Value::as_array)
             .is_some_and(|profiles| {
                 profiles.iter().any(|profile| {
-                    profile.as_str() == Some(cokret_sdk::mls::MINIMAL_METADATA_REALM_PROFILE)
+                    profile.as_str() == Some(arkret_sdk::mls::MINIMAL_METADATA_REALM_PROFILE)
                 })
             })
     })

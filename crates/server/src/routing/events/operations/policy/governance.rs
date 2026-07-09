@@ -20,12 +20,12 @@ pub(super) fn operation_is_space_container(operation: &Operation) -> bool {
     matches!(
         kinds::canonical_kind_for_operation(operation),
         Some(
-            cokret_sdk::events::kinds::SPACE_CREATE
-                | cokret_sdk::events::kinds::SPACE_UPDATE
-                | cokret_sdk::events::kinds::SPACE_PARENT
-                | cokret_sdk::events::kinds::SPACE_ARCHIVE
-                | cokret_sdk::events::kinds::SPACE_RESTORE
-                | cokret_sdk::events::kinds::SPACE_TOMBSTONE
+            arkret_sdk::events::kinds::SPACE_CREATE
+                | arkret_sdk::events::kinds::SPACE_UPDATE
+                | arkret_sdk::events::kinds::SPACE_PARENT
+                | arkret_sdk::events::kinds::SPACE_ARCHIVE
+                | arkret_sdk::events::kinds::SPACE_RESTORE
+                | arkret_sdk::events::kinds::SPACE_TOMBSTONE
         )
     )
 }
@@ -35,7 +35,7 @@ pub(super) async fn validate_member_state_policy(
     operation: &Operation,
 ) -> Result<(), &'static str> {
     if kinds::canonical_kind_for_operation(operation)
-        != Some(cokret_sdk::events::kinds::MEMBER_STATE)
+        != Some(arkret_sdk::events::kinds::MEMBER_STATE)
     {
         return Ok(());
     }
@@ -103,7 +103,7 @@ pub(super) async fn validate_set_default_strand_policy(
     operation: &Operation,
 ) -> Result<(), &'static str> {
     if kinds::canonical_kind_for_operation(operation)
-        != Some(cokret_sdk::events::kinds::REALM_SET_DEFAULT_STRAND)
+        != Some(arkret_sdk::events::kinds::REALM_SET_DEFAULT_STRAND)
     {
         return Ok(());
     }
@@ -150,19 +150,19 @@ pub(super) async fn validate_set_default_strand_policy(
 /// (`authorization.verification_method`); soland resolves that document from its
 /// own DID store and verifies the detached Ed25519 signature over the
 /// SDK-canonical statement transcript
-/// ([`cokret_sdk::models::realm_organization_statement_signing_bytes`]). This is
+/// ([`arkret_sdk::models::realm_organization_statement_signing_bytes`]). This is
 /// the cryptographic anchor that makes "organization consent" unforgeable: only
 /// a holder of the organization's own DID key can produce an accepted statement,
 /// and no external party (not even a Realm admin) can forge it.
 pub(super) async fn verify_realm_organization_proof_signature(
     state: &AppState,
-    payload: &cokret_sdk::models::RealmOrganizationPayload,
+    payload: &arkret_sdk::models::RealmOrganizationPayload,
 ) -> Result<(), &'static str> {
     use base64::Engine as _;
 
     let proof_b64 = match &payload.authorization.proof {
-        cokret_sdk::models::SignatureMaterial::NonEmptyString(value) => value.as_str(),
-        cokret_sdk::models::SignatureMaterial::Variant1(_) => {
+        arkret_sdk::models::SignatureMaterial::NonEmptyString(value) => value.as_str(),
+        arkret_sdk::models::SignatureMaterial::Variant1(_) => {
             return Err("organization_statement_unverified");
         }
     };
@@ -182,7 +182,7 @@ pub(super) async fn verify_realm_organization_proof_signature(
     .await
     .map_err(|_| "organization_statement_unverified")?;
 
-    let signing_bytes = cokret_sdk::models::realm_organization_statement_signing_bytes(payload)
+    let signing_bytes = arkret_sdk::models::realm_organization_statement_signing_bytes(payload)
         .map_err(|_| "organization_statement_unverified")?;
     resolved
         .public_key
@@ -205,19 +205,19 @@ pub(super) async fn validate_realm_organization_policy(
     operation: &Operation,
 ) -> Result<(), &'static str> {
     if kinds::canonical_kind_for_operation(operation)
-        != Some(cokret_sdk::events::kinds::REALM_ORGANIZATION)
+        != Some(arkret_sdk::events::kinds::REALM_ORGANIZATION)
     {
         return Ok(());
     }
     // Organization side — strong-typed parse + SDK verifier (fail-closed).
-    let payload: cokret_sdk::models::RealmOrganizationPayload =
+    let payload: arkret_sdk::models::RealmOrganizationPayload =
         serde_json::from_value(operation.payload.clone())
-            .map_err(|_| cokret_sdk::ERROR_CODE_SCHEMA_VIOLATION)?;
-    cokret_sdk::models::verify_realm_organization_statement(
+            .map_err(|_| arkret_sdk::ERROR_CODE_SCHEMA_VIOLATION)?;
+    arkret_sdk::models::verify_realm_organization_statement(
         &payload,
         &operation.realm_id,
         chrono::Utc::now(),
-        &cokret_sdk::models::NoDelegationResolver,
+        &arkret_sdk::models::NoDelegationResolver,
     )
     .map_err(|_| "organization_statement_unverified")?;
 
@@ -261,7 +261,7 @@ pub(super) async fn validate_realm_organization_policy(
 }
 
 /// P2 — capability gate for the moderation control-plane events ingested at
-/// `/_cokret/self/events` (content-moderation.md §2.6 / §5.5; capability-
+/// `/_arkret/self/events` (content-moderation.md §2.6 / §5.5; capability-
 /// action-registry.json). Mirrors [`validate_member_state_policy`]'s ban
 /// gate: the actor MUST hold the matching moderation capability action on the
 /// Realm, or own the Realm. fail-closed `missing_capability` otherwise.
@@ -284,20 +284,20 @@ pub(super) async fn validate_moderation_event_policy(
         return Ok(());
     };
     let actions = match kind {
-        cokret_sdk::events::kinds::MODERATION_DECISION => &[
+        arkret_sdk::events::kinds::MODERATION_DECISION => &[
             "ck.realm.moderation_policy",
             "ck.policy.manage",
             "ck.moderation.decision",
         ][..],
-        cokret_sdk::events::kinds::MODERATION_DECISION_LIFT => &[
+        arkret_sdk::events::kinds::MODERATION_DECISION_LIFT => &[
             "ck.realm.moderation_policy",
             "ck.policy.manage",
             "ck.moderation.decision.lift",
         ][..],
-        cokret_sdk::events::kinds::MODERATION_APPEAL_SUBMIT => &["ck.moderation.appeal.submit"][..],
-        cokret_sdk::events::kinds::MODERATION_APPEAL_REVIEW
-        | cokret_sdk::events::kinds::MODERATION_APPEAL_DECISION
-        | cokret_sdk::events::kinds::MODERATION_APPEAL_CLOSE => {
+        arkret_sdk::events::kinds::MODERATION_APPEAL_SUBMIT => &["ck.moderation.appeal.submit"][..],
+        arkret_sdk::events::kinds::MODERATION_APPEAL_REVIEW
+        | arkret_sdk::events::kinds::MODERATION_APPEAL_DECISION
+        | arkret_sdk::events::kinds::MODERATION_APPEAL_CLOSE => {
             &["ck.moderation.appeal.review"][..]
         }
         _ => return Ok(()),
@@ -312,7 +312,7 @@ pub(super) async fn validate_moderation_event_policy(
 
     // §5.5.2 appellant-withdrawal: an appellant MAY close their own appeal
     // without the review capability (closer == cell appellant).
-    if kind == cokret_sdk::events::kinds::MODERATION_APPEAL_CLOSE
+    if kind == arkret_sdk::events::kinds::MODERATION_APPEAL_CLOSE
         && moderation_close_is_appellant_withdrawal(state, operation, actor)
     {
         return Ok(());
@@ -323,7 +323,7 @@ pub(super) async fn validate_moderation_event_policy(
         return Ok(());
     }
     let (owner, members) = realm_owner_and_members(state, realm_id).await;
-    if kind == cokret_sdk::events::kinds::MODERATION_APPEAL_SUBMIT
+    if kind == arkret_sdk::events::kinds::MODERATION_APPEAL_SUBMIT
         && members.iter().any(|member| member == actor)
     {
         return Ok(());
@@ -351,7 +351,7 @@ pub(super) async fn validate_call_recording_start_policy(
     state: &AppState,
     operation: &Operation,
 ) -> Result<(), &'static str> {
-    if kinds::canonical_kind_string(operation) != cokret_sdk::events::kinds::CALL_RECORDING_START {
+    if kinds::canonical_kind_string(operation) != arkret_sdk::events::kinds::CALL_RECORDING_START {
         return Ok(());
     }
     let action = call_recording_start_required_action(operation);
@@ -376,7 +376,7 @@ pub(super) async fn validate_call_recording_start_policy(
     {
         return Ok(());
     }
-    if action == cokret_sdk::CAP_ACTION_CALL_TRANSCRIBE {
+    if action == arkret_sdk::CAP_ACTION_CALL_TRANSCRIBE {
         Err(crate::error::reasons::TRANSCRIPTION_DENIED)
     } else {
         Err("missing_capability")
@@ -390,8 +390,8 @@ pub(super) fn call_recording_start_required_action(operation: &Operation) -> &'s
         .and_then(Value::as_str)
         .unwrap_or("recording")
     {
-        "transcript" => cokret_sdk::CAP_ACTION_CALL_TRANSCRIBE,
-        _ => cokret_sdk::CAP_ACTION_CALL_RECORD,
+        "transcript" => arkret_sdk::CAP_ACTION_CALL_TRANSCRIBE,
+        _ => arkret_sdk::CAP_ACTION_CALL_RECORD,
     }
 }
 
@@ -404,14 +404,14 @@ pub(super) fn moderation_actor<'a>(
     kind: &str,
 ) -> Result<Option<&'a str>, &'static str> {
     let actor = match kind {
-        cokret_sdk::events::kinds::MODERATION_DECISION => operation
+        arkret_sdk::events::kinds::MODERATION_DECISION => operation
             .payload
             .get("issuer")
             .or_else(|| operation.payload.get("decided_by"))
             .and_then(Value::as_str)
             .filter(|value| !value.trim().is_empty())
             .ok_or("moderation_decision_issuer_missing")?,
-        cokret_sdk::events::kinds::MODERATION_DECISION_LIFT => {
+        arkret_sdk::events::kinds::MODERATION_DECISION_LIFT => {
             return Ok(operation
                 .payload
                 .get("sender")
@@ -419,20 +419,20 @@ pub(super) fn moderation_actor<'a>(
                 .and_then(Value::as_str)
                 .filter(|value| !value.trim().is_empty()));
         }
-        cokret_sdk::events::kinds::MODERATION_APPEAL_SUBMIT => operation
+        arkret_sdk::events::kinds::MODERATION_APPEAL_SUBMIT => operation
             .payload
             .get("appellant")
             .and_then(Value::as_str)
             .filter(|value| !value.trim().is_empty())
             .ok_or("moderation_appeal_actor_missing")?,
-        cokret_sdk::events::kinds::MODERATION_APPEAL_REVIEW
-        | cokret_sdk::events::kinds::MODERATION_APPEAL_DECISION => operation
+        arkret_sdk::events::kinds::MODERATION_APPEAL_REVIEW
+        | arkret_sdk::events::kinds::MODERATION_APPEAL_DECISION => operation
             .payload
             .get("reviewer")
             .and_then(Value::as_str)
             .filter(|value| !value.trim().is_empty())
             .ok_or("moderation_appeal_actor_missing")?,
-        cokret_sdk::events::kinds::MODERATION_APPEAL_CLOSE => operation
+        arkret_sdk::events::kinds::MODERATION_APPEAL_CLOSE => operation
             .payload
             .get("closer")
             .and_then(Value::as_str)

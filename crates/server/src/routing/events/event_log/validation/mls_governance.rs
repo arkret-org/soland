@@ -9,7 +9,7 @@ pub(crate) async fn projected_media_plaintext_service_present(
         || realm_allows_plaintext_service_for_data_class(
             state,
             realm_id,
-            cokret_sdk::PlaintextDataClassKind::MediaPlaintext,
+            arkret_sdk::PlaintextDataClassKind::MediaPlaintext,
         )
         .await
 }
@@ -52,7 +52,7 @@ pub(crate) fn projected_mls_governance_binding_covers_policy_root(
         if !is_mls_cell {
             continue;
         }
-        let cokret_sdk::lattice::CellState::Value(value) = cell_state else {
+        let arkret_sdk::lattice::CellState::Value(value) = cell_state else {
             continue;
         };
         if !value_targets_realm(value, realm_id) {
@@ -87,7 +87,7 @@ pub(super) fn projected_mls_governance_binding_metadata_digest(
         if !is_mls_cell {
             continue;
         }
-        let cokret_sdk::lattice::CellState::Value(value) = cell_state else {
+        let arkret_sdk::lattice::CellState::Value(value) = cell_state else {
             continue;
         };
         if !value_targets_realm(value, realm_id) {

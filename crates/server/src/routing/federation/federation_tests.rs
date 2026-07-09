@@ -25,9 +25,9 @@ fn config_with_policy(topology: FederationFanoutTopology, peers: Vec<String>) ->
     }
 }
 
-fn verify_actor_body() -> cokret_sdk::FederationVerifyActorRequestBody {
-    cokret_sdk::FederationVerifyActorRequestBody {
-        actor_id: cokret_sdk::Did::new("did:web:alice.example").unwrap(),
+fn verify_actor_body() -> arkret_sdk::FederationVerifyActorRequestBody {
+    arkret_sdk::FederationVerifyActorRequestBody {
+        actor_id: arkret_sdk::Did::new("did:web:alice.example").unwrap(),
         challenge: Some("challenge-1".to_owned()),
         signed_payload_digest: None,
         signature: serde_json::json!({
@@ -40,15 +40,15 @@ fn verify_actor_body() -> cokret_sdk::FederationVerifyActorRequestBody {
     }
 }
 
-fn trust_domain(value: &str) -> cokret_sdk::TypedTrustDomainId {
-    cokret_sdk::TypedTrustDomainId::new(value.to_owned()).unwrap()
+fn trust_domain(value: &str) -> arkret_sdk::TypedTrustDomainId {
+    arkret_sdk::TypedTrustDomainId::new(value.to_owned()).unwrap()
 }
 
 fn federation_headers(digest: &str) -> FederationTrustHeaders {
     FederationTrustHeaders {
         source_trust_domain: trust_domain("ak:trust_domain:peer.example"),
         destination_trust_domain: trust_domain("ak:trust_domain:soland.local"),
-        request_canonical_digest: cokret_sdk::Hash::new(digest.to_owned()).unwrap(),
+        request_canonical_digest: arkret_sdk::Hash::new(digest.to_owned()).unwrap(),
     }
 }
 
@@ -56,7 +56,7 @@ fn federation_headers(digest: &str) -> FederationTrustHeaders {
 fn verify_actor_digest_uses_canonical_json() {
     let body = verify_actor_body();
     let value = serde_json::to_value(&body).unwrap();
-    let expected = cokret_sdk::canonical::canonical_sha256(&value).unwrap();
+    let expected = arkret_sdk::canonical::canonical_sha256(&value).unwrap();
 
     assert_eq!(federation_verify_actor_digest(&body).unwrap(), expected);
 }
@@ -229,9 +229,9 @@ async fn local_invite_membership_and_message_operations_project_invite() {
     let state = AppState::new(cfg, Db { pool: None });
     let realm_id = RealmId::new("ak:realm:01904100-0000-7000-8000-000000000051").unwrap();
     let invite = Operation::create(
-        cokret_sdk::OperationId::new("ak:operation:01904100-0000-7000-8000-000000000052").unwrap(),
+        arkret_sdk::OperationId::new("ak:operation:01904100-0000-7000-8000-000000000052").unwrap(),
         realm_id.clone(),
-        cokret_sdk::events::kinds::MEMBER_STATE,
+        arkret_sdk::events::kinds::MEMBER_STATE,
         json!({
             "actor_id": "did:web:bob.example",
             "member": "did:web:bob.example",
@@ -239,9 +239,9 @@ async fn local_invite_membership_and_message_operations_project_invite() {
         }),
     );
     let invite_create = Operation::create(
-        cokret_sdk::OperationId::new("ak:operation:01904100-0000-7000-8000-000000000055").unwrap(),
+        arkret_sdk::OperationId::new("ak:operation:01904100-0000-7000-8000-000000000055").unwrap(),
         realm_id.clone(),
-        cokret_sdk::events::kinds::INVITE_CREATE,
+        arkret_sdk::events::kinds::INVITE_CREATE,
         json!({
             "invite_id": "ak:invite:01904100-0000-7000-8000-000000000056",
             "invitee": "did:web:carol.example",
@@ -255,9 +255,9 @@ async fn local_invite_membership_and_message_operations_project_invite() {
         }),
     );
     let message = Operation::create(
-        cokret_sdk::OperationId::new("ak:operation:01904100-0000-7000-8000-000000000053").unwrap(),
+        arkret_sdk::OperationId::new("ak:operation:01904100-0000-7000-8000-000000000053").unwrap(),
         realm_id,
-        cokret_sdk::events::kinds::MESSAGE_CREATE,
+        arkret_sdk::events::kinds::MESSAGE_CREATE,
         json!({
             "event_id": "ak:event:01904100-0000-7000-8000-000000000054",
             "sender": "did:web:alice.example",
@@ -306,15 +306,15 @@ async fn operation_frontier_tracks_persisted_operation_ids() {
     let state = AppState::new(cfg, Db { pool: None });
     let realm_id = RealmId::new("ak:realm:01904100-0000-7000-8000-000000000061").unwrap();
     let first = Operation::create(
-        cokret_sdk::OperationId::new("ak:operation:01904100-0000-7000-8000-000000000062").unwrap(),
+        arkret_sdk::OperationId::new("ak:operation:01904100-0000-7000-8000-000000000062").unwrap(),
         realm_id.clone(),
-        cokret_sdk::events::kinds::MESSAGE_CREATE,
+        arkret_sdk::events::kinds::MESSAGE_CREATE,
         json!({"content": {"kind": "ck.content.text", "body": "one"}}),
     );
     let second = Operation::create(
-        cokret_sdk::OperationId::new("ak:operation:01904100-0000-7000-8000-000000000063").unwrap(),
+        arkret_sdk::OperationId::new("ak:operation:01904100-0000-7000-8000-000000000063").unwrap(),
         realm_id,
-        cokret_sdk::events::kinds::MESSAGE_CREATE,
+        arkret_sdk::events::kinds::MESSAGE_CREATE,
         json!({"content": {"kind": "ck.content.text", "body": "two"}}),
     );
     state
@@ -370,7 +370,7 @@ async fn seal_fanout_records_seal_target_and_retry_metadata() {
         .await
         .unwrap()
         .expect("outbound seal transcript persisted");
-    assert_eq!(transcript.response["target_path"], "/_cokret/peer/events");
+    assert_eq!(transcript.response["target_path"], "/_arkret/peer/events");
     assert_eq!(transcript.response["intent"]["resource_kind"], "seal");
     assert_eq!(
         transcript.response["retry"]["policy"]["initial_backoff_ms"],

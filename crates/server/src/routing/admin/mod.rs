@@ -106,10 +106,10 @@ pub fn audit_ingest_router() -> Router {
 /// namespace (collection snapshot, cell inspection, control-frame
 /// triggers, retention), per arkret-spec `service-http-binding.md`
 /// §2.1: `/admin/*` is deployment-local and MUST NOT carry the
-/// `/_cokret/...` protocol prefix. Gated by the shared `RequireAdmin` hoop.
+/// `/_arkret/...` protocol prefix. Gated by the shared `RequireAdmin` hoop.
 pub fn router() -> Router {
     Router::new()
-        .hoop(RequireAdmin::scope(cokret_sdk::admin_scopes::ADMIN_READ))
+        .hoop(RequireAdmin::scope(arkret_sdk::admin_scopes::ADMIN_READ))
         .push(cells::router())
         .push(Router::with_path("admin/{resource}").get(collection::admin_collection))
         .push(control::router())
@@ -118,7 +118,7 @@ pub fn router() -> Router {
 }
 
 pub fn spec_router() -> Router {
-    spec::router().hoop(RequireAdmin::scope(cokret_sdk::admin_scopes::ADMIN_READ))
+    spec::router().hoop(RequireAdmin::scope(arkret_sdk::admin_scopes::ADMIN_READ))
 }
 
 pub fn admin_router() -> Router {
@@ -128,12 +128,12 @@ pub fn admin_router() -> Router {
     // operations use `/admin/realms/{realm_id}`; Space containers are
     // reserved for `/admin/spaces/*`. Per arkret-spec
     // `service-http-binding.md` §2.1 the `/admin/*` namespace is
-    // deployment-local and MUST NOT carry the `/_cokret/...` protocol prefix.
+    // deployment-local and MUST NOT carry the `/_arkret/...` protocol prefix.
     // Registered ahead of `router()` (the `{resource}` collection
     // wildcard) at the root so the concrete `bottom` segment wins.
     Router::with_path("admin")
         .oapi_tag("soland-admin")
-        .hoop(RequireAdmin::scope(cokret_sdk::admin_scopes::ADMIN_READ))
+        .hoop(RequireAdmin::scope(arkret_sdk::admin_scopes::ADMIN_READ))
         .push(Router::with_path("realms").post(collection::admin_create_realm))
         .push(
             Router::with_path("realms/{realm_id}")

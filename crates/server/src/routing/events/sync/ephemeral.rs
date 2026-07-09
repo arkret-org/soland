@@ -3,7 +3,7 @@
 //! (SOL-07-002) as a self-contained unit — no cross-module callers other than
 //! the parent router, which references `ephemeral::submit_ephemeral`.
 
-use cokret_sdk::EphemeralSubmitOutcome;
+use arkret_sdk::EphemeralSubmitOutcome;
 use salvo::http::StatusCode;
 use salvo::prelude::*;
 use serde_json::Value;
@@ -22,7 +22,7 @@ use crate::state::{AppState, EventNotification, PresenceRecord, SessionRecord, T
 #[tracing::instrument(skip_all, fields(op = "ck.self.ephemeral.command.send"))]
 pub(super) async fn submit_ephemeral(
     aa: crate::routing::system::extract::AuthArgs,
-    body: salvo::oapi::extract::JsonBody<cokret_sdk::EphemeralEnvelope>,
+    body: salvo::oapi::extract::JsonBody<arkret_sdk::EphemeralEnvelope>,
     depot: &mut Depot,
     req: &mut Request,
 ) -> crate::result::JsonResult<EphemeralSubmitOutcome> {
@@ -77,7 +77,7 @@ pub(super) async fn submit_ephemeral(
         }
         "ck.call.signal" => {
             // `service-http-binding.md` §162 — sending a `ck.call.signal`
-            // envelope on `/_cokret/self/ephemeral` requires the realm-scoped
+            // envelope on `/_arkret/self/ephemeral` requires the realm-scoped
             // `ck.call.signal.send` capability (registered in
             // `capability-action-registry.json`). Realm membership stays a
             // precondition (checked above); signal-send authority is an
@@ -88,7 +88,7 @@ pub(super) async fn submit_ephemeral(
                 state,
                 realm_id_str,
                 &session.actor,
-                cokret_sdk::CAP_CALL_SIGNAL_SEND,
+                arkret_sdk::CAP_CALL_SIGNAL_SEND,
             )
             .await
             {
@@ -134,8 +134,8 @@ async fn relay_ephemeral_call_signal(
     state: &AppState,
     session: &crate::state::SessionRecord,
     realm_id: &str,
-    payload: &cokret_sdk::CallSignalPayload,
-    envelope: &cokret_sdk::EphemeralEnvelope,
+    payload: &arkret_sdk::CallSignalPayload,
+    envelope: &arkret_sdk::EphemeralEnvelope,
 ) -> Result<u64, crate::error::AppError> {
     let envelope_value = serde_json::to_value(envelope).map_err(|error| {
         crate::error::AppError::invalid_param(format!(
@@ -168,7 +168,7 @@ async fn relay_ephemeral_call_signal(
 }
 
 fn validate_ephemeral_envelope(
-    envelope: &cokret_sdk::EphemeralEnvelope,
+    envelope: &arkret_sdk::EphemeralEnvelope,
 ) -> Result<(), crate::error::AppError> {
     if !matches!(
         envelope.kind.as_str(),
@@ -182,7 +182,7 @@ fn validate_ephemeral_envelope(
         .expires_at
         .signed_duration_since(envelope.sent_at)
         .num_milliseconds();
-    if window_ms <= 0 || (window_ms as u64) > cokret_sdk::EPHEMERAL_ABSOLUTE_HARD_CEILING_MS as u64
+    if window_ms <= 0 || (window_ms as u64) > arkret_sdk::EPHEMERAL_ABSOLUTE_HARD_CEILING_MS as u64
     {
         return Err(crate::error::AppError::invalid_param(
             "ephemeral expires_at must be after sent_at and within the hard TTL ceiling",
@@ -212,7 +212,7 @@ async fn persist_ephemeral_typing(
     state: &AppState,
     actor: &str,
     realm_id: &str,
-    envelope: &cokret_sdk::EphemeralEnvelope,
+    envelope: &arkret_sdk::EphemeralEnvelope,
 ) -> Result<(), crate::error::AppError> {
     // ephemeral-envelope.schema.json ck.typing branch: `track_name` is optional
     // but const "discussion" in v1 (mirrors message.schema.json); when omitted
@@ -267,7 +267,7 @@ async fn persist_ephemeral_typing(
 async fn persist_ephemeral_presence(
     state: &AppState,
     session: &SessionRecord,
-    envelope: &cokret_sdk::EphemeralEnvelope,
+    envelope: &arkret_sdk::EphemeralEnvelope,
 ) -> Result<(), crate::error::AppError> {
     let actor = session.actor.as_str();
     // Fail-closed field admission (profiles-presence.md §3.2/§3.3):
@@ -277,7 +277,7 @@ async fn persist_ephemeral_presence(
     let status_message = match envelope.payload.get("status_message") {
         None | Some(Value::Null) => None,
         Some(Value::String(message)) => {
-            cokret_sdk::validate_status_message(message).map_err(|error| {
+            arkret_sdk::validate_status_message(message).map_err(|error| {
                 crate::error::AppError::new(
                     crate::error::ErrorCode::SchemaViolation,
                     format!("ck.presence status_message rejected: {error}"),
@@ -295,7 +295,7 @@ async fn persist_ephemeral_presence(
     let last_active_at = match envelope.payload.get("last_active_at") {
         None | Some(Value::Null) => None,
         Some(Value::String(value)) => {
-            cokret_sdk::validate_last_active_at(value).map_err(|error| {
+            arkret_sdk::validate_last_active_at(value).map_err(|error| {
                 crate::error::AppError::new(
                     crate::error::ErrorCode::SchemaViolation,
                     format!("ck.presence last_active_at rejected: {error}"),
@@ -358,7 +358,7 @@ async fn persist_ephemeral_presence(
 /// into a nearby state (`unavailable` / `busy` are not v1 wire values).
 fn presence_state_from_payload(
     payload: &Value,
-) -> Result<cokret_sdk::PresenceStatus, crate::error::AppError> {
+) -> Result<arkret_sdk::PresenceStatus, crate::error::AppError> {
     let state = payload
         .get("state")
         .and_then(Value::as_str)
@@ -368,7 +368,7 @@ fn presence_state_from_payload(
                 "ck.presence payload requires state",
             )
         })?;
-    cokret_sdk::PresenceStatus::parse_wire(state).ok_or_else(|| {
+    arkret_sdk::PresenceStatus::parse_wire(state).ok_or_else(|| {
         crate::error::AppError::new(
             crate::error::ErrorCode::SchemaViolation,
             "ck.presence state is not in the closed v1 set {online, idle, dnd, offline}",
@@ -380,7 +380,7 @@ async fn admit_ephemeral_read_receipt(
     state: &AppState,
     session: &SessionRecord,
     realm_id: &str,
-    envelope: &cokret_sdk::EphemeralEnvelope,
+    envelope: &arkret_sdk::EphemeralEnvelope,
 ) -> Result<(), crate::error::AppError> {
     if envelope
         .payload
@@ -398,7 +398,7 @@ async fn admit_ephemeral_read_receipt(
         crate::routing::events::event_log::effective_read_receipt_policy_for_realm(state, realm_id)
             .await
             .unwrap_or_default();
-    if policy.disclosure == cokret_sdk::ReadReceiptDisclosure::Disabled {
+    if policy.disclosure == arkret_sdk::ReadReceiptDisclosure::Disabled {
         return Err(crate::error::AppError::new(
             crate::error::ErrorCode::PolicyViolation,
             format!(
@@ -408,9 +408,9 @@ async fn admit_ephemeral_read_receipt(
         .with_status(StatusCode::FORBIDDEN));
     }
     match policy.visibility {
-        cokret_sdk::ReadReceiptVisibility::Private | cokret_sdk::ReadReceiptVisibility::Members => {
+        arkret_sdk::ReadReceiptVisibility::Private | arkret_sdk::ReadReceiptVisibility::Members => {
         }
-        cokret_sdk::ReadReceiptVisibility::Public => {
+        arkret_sdk::ReadReceiptVisibility::Public => {
             let history_visibility = realm_history_visibility_for_id(state, realm_id).await;
             if history_visibility == "world_readable"
                 && !policy.allow_public_receipts_on_world_readable
@@ -423,7 +423,7 @@ async fn admit_ephemeral_read_receipt(
                 .with_wire_code("read_receipt_visibility_combination_invalid"));
             }
             if history_visibility == "world_readable"
-                && policy.disclosure == cokret_sdk::ReadReceiptDisclosure::Required
+                && policy.disclosure == arkret_sdk::ReadReceiptDisclosure::Required
                 && !policy.allow_forced_public_world_readable_receipts
             {
                 return Err(crate::error::AppError::new(
@@ -436,9 +436,9 @@ async fn admit_ephemeral_read_receipt(
         }
     }
     let visibility = match policy.visibility {
-        cokret_sdk::ReadReceiptVisibility::Public => "public",
-        cokret_sdk::ReadReceiptVisibility::Members => "members",
-        cokret_sdk::ReadReceiptVisibility::Private => "private",
+        arkret_sdk::ReadReceiptVisibility::Public => "public",
+        arkret_sdk::ReadReceiptVisibility::Members => "members",
+        arkret_sdk::ReadReceiptVisibility::Private => "private",
     };
     crate::routing::events::read_receipts::relay_ephemeral_read_receipt(
         state, session, realm_id, visibility, envelope,
@@ -450,10 +450,10 @@ async fn admit_ephemeral_read_receipt(
 /// `webrtc-signaling.md` §5 — structural admission for `ck.call.signal`
 /// envelopes arriving on the canonical `/ephemeral` channel (the path the
 /// canonical client takes). We reuse the SDK
-/// [`cokret_sdk::validate_call_signal_envelope`] as the single truth source
+/// [`arkret_sdk::validate_call_signal_envelope`] as the single truth source
 /// for the required shape: `device_id` present, `proof` present, and
 /// `payload` deserialises into `{call_id, signal_type, seq}` with a
-/// `signal_type` drawn from the canonical [`cokret_sdk::CALL_SIGNAL_TYPES`]
+/// `signal_type` drawn from the canonical [`arkret_sdk::CALL_SIGNAL_TYPES`]
 /// set (which includes `moderation`).
 ///
 /// Boundary (FIN-F task 5 decision, unchanged): the relay does NOT perform
@@ -462,9 +462,9 @@ async fn admit_ephemeral_read_receipt(
 /// relay only enforces the structural contract (existence + type + seq shape)
 /// so malformed call signals never enter the ephemeral fan-out.
 fn admit_ephemeral_call_signal(
-    envelope: &cokret_sdk::EphemeralEnvelope,
-) -> Result<cokret_sdk::CallSignalPayload, crate::error::AppError> {
-    let payload = cokret_sdk::validate_call_signal_envelope(envelope).map_err(|error| {
+    envelope: &arkret_sdk::EphemeralEnvelope,
+) -> Result<arkret_sdk::CallSignalPayload, crate::error::AppError> {
+    let payload = arkret_sdk::validate_call_signal_envelope(envelope).map_err(|error| {
         crate::error::AppError::invalid_param(format!(
             "ck.call.signal envelope failed structural validation: {error}"
         ))
@@ -482,7 +482,7 @@ fn admit_ephemeral_call_signal(
 /// verification to the *receiver*. The relay enforces the structural contract
 /// so malformed signals never enter the ephemeral fan-out.
 fn validate_ephemeral_broadcast_proof_shape(
-    envelope: &cokret_sdk::EphemeralEnvelope,
+    envelope: &arkret_sdk::EphemeralEnvelope,
 ) -> Result<(), crate::error::AppError> {
     let kind = envelope.kind.as_str();
     let device_id = envelope.device_id.as_ref().ok_or_else(|| {
@@ -493,7 +493,7 @@ fn validate_ephemeral_broadcast_proof_shape(
     let proof_value = envelope.proof.as_ref().ok_or_else(|| {
         crate::error::AppError::invalid_param(format!("{kind} proof is required"))
     })?;
-    let proof: cokret_sdk::Proof =
+    let proof: arkret_sdk::Proof =
         serde_json::from_value(proof_value.clone()).map_err(|error| {
             crate::error::AppError::invalid_param(format!("{kind} proof is malformed: {error}"))
         })?;
@@ -516,7 +516,7 @@ fn validate_ephemeral_broadcast_proof_shape(
     }
     // The digest covers the canonical envelope without `proof`; the typed
     // clone with `proof = None` serializes to exactly those bytes.
-    let without_proof = cokret_sdk::EphemeralEnvelope {
+    let without_proof = arkret_sdk::EphemeralEnvelope {
         proof: None,
         ..envelope.clone()
     };
@@ -526,12 +526,12 @@ fn validate_ephemeral_broadcast_proof_shape(
         ))
     })?;
     let canonical =
-        cokret_sdk::canonical::canonical_json_bytes(&without_proof).map_err(|error| {
+        arkret_sdk::canonical::canonical_json_bytes(&without_proof).map_err(|error| {
             crate::error::AppError::invalid_param(format!(
                 "{kind} envelope canonicalization failed: {error}"
             ))
         })?;
-    let expected = cokret_sdk::canonical::sha256_digest(&canonical);
+    let expected = arkret_sdk::canonical::sha256_digest(&canonical);
     if proof.event_digest.as_str() != expected {
         return Err(crate::error::AppError::invalid_param(format!(
             "{kind} proof.event_digest does not match the envelope without proof"

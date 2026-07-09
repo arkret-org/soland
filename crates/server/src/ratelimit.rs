@@ -5,16 +5,16 @@
 //! a peer's quota across the rest of the API surface. We recognize four
 //! endpoint classes:
 //!
-//! - `probe`  — the public capability probe (`/_cokret/describe`). Every client MUST fetch this
+//! - `probe`  — the public capability probe (`/_arkret/describe`). Every client MUST fetch this
 //!   *before* it can authenticate, so it gets its own generous bucket and never shares the
 //!   authenticated `api` quota: a hot authenticated surface (e.g. a sync long-poll loop) must not
 //!   be able to starve the one probe a client needs just to begin signing in.
 //! - `auth`   — the credential/bearer-issuing surface (strict, low ceiling): the spec-canonical
-//!   `/_cokret/gate/account/register`, `/_cokret/gate/account/session-grants`, and
-//!   `/_cokret/gate/account/agent-key-pair`, plus the `/_soland/gate/auth/*` auth routes. Must be
+//!   `/_arkret/gate/account/register`, `/_arkret/gate/account/session-grants`, and
+//!   `/_arkret/gate/account/agent-key-pair`, plus the `/_soland/gate/auth/*` auth routes. Must be
 //!   hardened against credential-stuffing.
-//! - `api`    — every other `/_cokret/*` request (moderate ceiling).
-//! - `other`  — anything outside `/_cokret/*` (default ceiling).
+//! - `api`    — every other `/_arkret/*` request (moderate ceiling).
+//! - `other`  — anything outside `/_arkret/*` (default ceiling).
 //!
 //! Each class carries its own quota; the `describe` wire surface advertises the
 //! SAME per-class ceilings via [`RateLimiterConfig::advertised_policy`], so a
@@ -46,12 +46,12 @@ use salvo::prelude::*;
 /// [`EndpointClass::classify`] (enforcement) and
 /// [`RateLimiterConfig::advertised_policy`] (the `describe` wire surface) so the
 /// advertised policy can never drift from what is actually enforced.
-const DESCRIBE_PROBE_PATH: &str = "/_cokret/describe";
-const AUTH_REGISTER_PATH: &str = "/_cokret/gate/account/register";
-const AUTH_SESSION_GRANTS_PATH: &str = "/_cokret/gate/account/session-grants";
-const AUTH_AGENT_KEY_PAIR_PATH: &str = "/_cokret/gate/account/agent-key-pair";
+const DESCRIBE_PROBE_PATH: &str = "/_arkret/describe";
+const AUTH_REGISTER_PATH: &str = "/_arkret/gate/account/register";
+const AUTH_SESSION_GRANTS_PATH: &str = "/_arkret/gate/account/session-grants";
+const AUTH_AGENT_KEY_PAIR_PATH: &str = "/_arkret/gate/account/agent-key-pair";
 const SOLAND_AUTH_PREFIX: &str = "/_soland/gate/auth/";
-const ARKRET_PREFIX: &str = "/_cokret/";
+const ARKRET_PREFIX: &str = "/_arkret/";
 
 /// Rate limiter configuration.
 #[derive(Clone, Debug)]
@@ -65,9 +65,9 @@ pub struct RateLimiterConfig {
     /// `Auth` class in [`EndpointClass::classify`]); defaults to a low value
     /// to harden against credential-stuffing.
     pub auth_max_requests: u32,
-    /// Moderate ceiling for the rest of `/_cokret/*`.
+    /// Moderate ceiling for the rest of `/_arkret/*`.
     pub api_max_requests: u32,
-    /// Generous ceiling for the public capability probe (`/_cokret/describe`).
+    /// Generous ceiling for the public capability probe (`/_arkret/describe`).
     /// It is the unauthenticated bootstrap surface and lives in its own bucket,
     /// so a high limit here cannot be spent by authenticated traffic.
     pub probe_max_requests: u32,
@@ -76,14 +76,14 @@ pub struct RateLimiterConfig {
 impl Default for RateLimiterConfig {
     fn default() -> Self {
         Self {
-            // `other` (non-`/_cokret/*`) ceiling.
+            // `other` (non-`/_arkret/*`) ceiling.
             max_requests: 600,
             window: Duration::from_secs(60),
             // Strict for the credential endpoints: 60/min ≈ 1/sec. Enough
             // headroom for an OAuth refresh cycle, but tight enough to stall a
             // guessing loop.
             auth_max_requests: 60,
-            // Moderate for the rest of /_cokret/*. Lower than `other` so a
+            // Moderate for the rest of /_arkret/*. Lower than `other` so a
             // single endpoint cannot burn the entire IP-wide budget on its own.
             api_max_requests: 300,
             // The bootstrap probe gets a full budget in its own bucket; clients
@@ -159,21 +159,21 @@ impl RateLimiterConfig {
     /// derived from the SAME ceilings the middleware enforces. Entries are
     /// ordered most-specific-first, mirroring [`EndpointClass::classify`]; the
     /// scope is `ip` because the buckets are keyed on the remote address.
-    pub fn advertised_policy(&self) -> cokret_sdk::RateLimitPolicy {
+    pub fn advertised_policy(&self) -> arkret_sdk::RateLimitPolicy {
         let window_seconds = u32::try_from(self.window.as_secs())
             .unwrap_or(u32::MAX)
             .max(1);
-        let entry = |endpoint: String, max_requests: u32| cokret_sdk::RateLimitEntry {
+        let entry = |endpoint: String, max_requests: u32| arkret_sdk::RateLimitEntry {
             endpoint: Some(endpoint),
-            // NOTE: `cokret_sdk::RateLimitScope` (crate root) is the authz
+            // NOTE: `arkret_sdk::RateLimitScope` (crate root) is the authz
             // constraints enum; the describe entry needs the service-description
             // scope, which lives under `models`.
-            rate_limit_scope: Some(cokret_sdk::models::RateLimitScope::Single("ip".to_owned())),
+            rate_limit_scope: Some(arkret_sdk::models::RateLimitScope::Single("ip".to_owned())),
             window_seconds: Some(window_seconds),
             max_requests: Some(max_requests.max(1)),
-            ..cokret_sdk::RateLimitEntry::default()
+            ..arkret_sdk::RateLimitEntry::default()
         };
-        cokret_sdk::RateLimitPolicy {
+        arkret_sdk::RateLimitPolicy {
             policy_version: Some("1".to_owned()),
             entries: vec![
                 entry(DESCRIBE_PROBE_PATH.to_owned(), self.probe_max_requests),
@@ -184,7 +184,7 @@ impl RateLimiterConfig {
                 entry(format!("{ARKRET_PREFIX}*"), self.api_max_requests),
                 entry("*".to_owned(), self.max_requests),
             ],
-            ..cokret_sdk::RateLimitPolicy::default()
+            ..arkret_sdk::RateLimitPolicy::default()
         }
     }
 }
@@ -209,15 +209,15 @@ impl EndpointClass {
         // The public capability probe gets its own bucket: it is the
         // unauthenticated bootstrap surface every client must reach before it
         // can sign in, so it must never share the authenticated `Api` quota.
-        // Checked first because it is itself under `/_cokret/`.
+        // Checked first because it is itself under `/_arkret/`.
         if path == DESCRIBE_PROBE_PATH {
             Self::Probe
         }
         // Credential/bearer-issuing endpoints get the strict `Auth` bucket so the
         // anti-credential-stuffing quota actually covers them. These do NOT live
-        // under a single `/_cokret/gate/auth/` prefix: the spec-canonical
+        // under a single `/_arkret/gate/auth/` prefix: the spec-canonical
         // account registration, session-grant exchange, and agent-key-pair authorization sit under
-        // `/_cokret/gate/account/*`, and the private auth surface lives under
+        // `/_arkret/gate/account/*`, and the private auth surface lives under
         // `/_soland/gate/auth/*`. Match the real routes, not a dead prefix.
         else if path == AUTH_REGISTER_PATH
             || path == AUTH_SESSION_GRANTS_PATH
@@ -396,7 +396,7 @@ impl Handler for RateLimiterMiddleware {
             res.headers_mut()
                 .insert(salvo::http::header::RETRY_AFTER, retry_after_seconds.into());
             res.render(Json(
-                cokret_sdk::ErrorEnvelope::new(
+                arkret_sdk::ErrorEnvelope::new(
                     "rate_limited",
                     "Too many requests. Please try again later.",
                 )
@@ -434,14 +434,14 @@ mod tests {
 
     #[test]
     fn describe_probe_has_its_own_class() {
-        // The login bootstrap calls `/_cokret/describe` before it can
+        // The login bootstrap calls `/_arkret/describe` before it can
         // authenticate; it must not share the authenticated `Api` bucket.
         assert_eq!(
             EndpointClass::classify(DESCRIBE_PROBE_PATH),
             EndpointClass::Probe
         );
         assert_eq!(
-            EndpointClass::classify("/_cokret/self/account/subscribe"),
+            EndpointClass::classify("/_arkret/self/account/subscribe"),
             EndpointClass::Api
         );
         assert_eq!(
@@ -468,7 +468,7 @@ mod tests {
             // entries so we can run them through the real classifier.
             let concrete = match endpoint {
                 "*" => "/some/non-arkret/path",
-                "/_cokret/*" => "/_cokret/self/account/subscribe",
+                "/_arkret/*" => "/_arkret/self/account/subscribe",
                 "/_soland/gate/auth/*" => "/_soland/gate/auth/dev-login",
                 literal => literal,
             };

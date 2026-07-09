@@ -8,7 +8,7 @@
 use std::collections::BTreeSet;
 
 use chrono::Utc;
-use cokret_sdk::{
+use arkret_sdk::{
     REALM_MODERATION_POLICY_FANOUT_SOURCE_ORGANIZATION_POLICY,
     REALM_MODERATION_POLICY_MERGE_STRATEGY_MOST_RESTRICTIVE,
     REALM_MODERATION_POLICY_WIRE_CODE_REQUIRES_ORGANIZATION_APPROVAL,
@@ -612,7 +612,7 @@ pub(crate) fn verified_moderation_organization_ids(
     let proj = state.projection.lock();
     let mut ids = proj.verified_organizations_with_scope(
         realm_id,
-        cokret_sdk::models::RealmOrganizationControlScope::ModerationPolicy,
+        arkret_sdk::models::RealmOrganizationControlScope::ModerationPolicy,
         now,
     );
     ids.sort();

@@ -13,7 +13,7 @@
 //!
 //! Spec: `arkret-spec/spec/v1/zh/authz/policy-server.md` §2.
 
-use cokret_sdk::{Operation, OperationId, RealmId};
+use arkret_sdk::{Operation, OperationId, RealmId};
 use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -140,7 +140,7 @@ async fn put_realm_policy_server(
     let operation = Operation::create(
         op_id,
         realm_scope,
-        cokret_sdk::events::kinds::REALM_POLICY_SERVER,
+        arkret_sdk::events::kinds::REALM_POLICY_SERVER,
         payload,
     );
     accept_local_operations(state, &session.actor, std::slice::from_ref(&operation))
@@ -196,7 +196,7 @@ async fn delete_realm_policy_server(
             "no ck.realm.policy_server to tombstone for this realm",
         ));
     }
-    if let Ok(cell_id) = cokret_sdk::CellRef::new(format!(
+    if let Ok(cell_id) = arkret_sdk::CellRef::new(format!(
         "ak:cell:ck.component.realm.policy_server.v1:{realm_id}"
     )) {
         projection.cells.remove(&cell_id);

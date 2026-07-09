@@ -20,7 +20,7 @@ fn derive_cursor_handle_is_deterministic_and_spec_shaped() {
     let h2 = derive_cursor_handle(key, &binding);
     assert_eq!(h1, h2, "same binding -> same handle");
     assert!(
-        h1.len() >= cokret_sdk::cursor::CURSOR_HANDLE_MIN_LEN,
+        h1.len() >= arkret_sdk::cursor::CURSOR_HANDLE_MIN_LEN,
         "handle >= 22 base64url chars"
     );
     assert!(
@@ -366,7 +366,7 @@ fn roster_body(audience: &str) -> SyncRequestBody {
     SyncRequestBody {
         after: None,
         catchup: None,
-        filter: Some(cokret_sdk::SyncFilter {
+        filter: Some(arkret_sdk::SyncFilter {
             realms: Vec::new(),
             timeline_limit: None,
             lazy_load_members: false,
@@ -399,9 +399,9 @@ fn sync_test_operation_at(
     kind: &str,
     payload: Value,
     created_at: DateTime<Utc>,
-) -> cokret_sdk::Operation {
-    let mut operation = cokret_sdk::Operation::create(
-        cokret_sdk::OperationId::new(operation_id.to_owned()).unwrap(),
+) -> arkret_sdk::Operation {
+    let mut operation = arkret_sdk::Operation::create(
+        arkret_sdk::OperationId::new(operation_id.to_owned()).unwrap(),
         RealmId::new(ROSTER_REALM.to_owned()).unwrap(),
         kind,
         payload,
@@ -418,11 +418,11 @@ fn roster_realm(public: bool, include_caller: bool) -> RealmDirectoryEntry {
     entry.public = public;
     entry
         .members
-        .insert(cokret_sdk::Did::new(ROSTER_ACTOR.to_owned()).unwrap());
+        .insert(arkret_sdk::Did::new(ROSTER_ACTOR.to_owned()).unwrap());
     if include_caller {
         entry
             .members
-            .insert(cokret_sdk::Did::new(ROSTER_CALLER.to_owned()).unwrap());
+            .insert(arkret_sdk::Did::new(ROSTER_CALLER.to_owned()).unwrap());
     }
     entry
 }
@@ -489,7 +489,7 @@ async fn projection_visibility_uses_received_at_for_joined_history_cutoff() {
         .expect("realm meta stored");
     let mut member_join = sync_test_operation_at(
         "ak:operation:01904100-0000-7000-8000-0000000000ef",
-        cokret_sdk::events::kinds::MEMBER_STATE,
+        arkret_sdk::events::kinds::MEMBER_STATE,
         json!({
             "realm_id": ROSTER_REALM,
             "actor_id": ROSTER_CALLER,
@@ -505,7 +505,7 @@ async fn projection_visibility_uses_received_at_for_joined_history_cutoff() {
     let event_at = |event_id: &str, received_at| ProjectionEventRecord {
         event_id: event_id.to_owned(),
         realm_id: ROSTER_REALM.to_owned(),
-        event_kind: cokret_sdk::events::kinds::MLS_COMMIT.to_owned(),
+        event_kind: arkret_sdk::events::kinds::MLS_COMMIT.to_owned(),
         operation_type: "event".to_owned(),
         operation_id: Some(event_id.replace("ak:event:", "ak:operation:")),
         sender: Some(ROSTER_ACTOR.to_owned()),
@@ -564,7 +564,7 @@ async fn put_canonical_event_received_at(
             realm_id: Some(ROSTER_REALM.to_owned()),
             kind: kind.to_owned(),
             schema_id: "ck.event.v1".to_owned(),
-            canonical_digest: cokret_sdk::canonical::sha256_digest(&canonical_bytes),
+            canonical_digest: arkret_sdk::canonical::sha256_digest(&canonical_bytes),
             canonical_bytes,
             envelope,
             received_at,
@@ -617,7 +617,7 @@ async fn sync_timeline_visibility_uses_received_at_for_joined_history_cutoff() {
 
     let mut member_join = sync_test_operation_at(
         "ak:operation:01904100-0000-7000-8000-0000000002ef",
-        cokret_sdk::events::kinds::MEMBER_STATE,
+        arkret_sdk::events::kinds::MEMBER_STATE,
         json!({
             "realm_id": ROSTER_REALM,
             "actor_id": ROSTER_CALLER,
@@ -652,13 +652,13 @@ async fn sync_timeline_visibility_uses_received_at_for_joined_history_cutoff() {
     });
     let pre_join_message = sync_test_operation_at(
         "ak:operation:01904100-0000-7000-8000-0000000002e1",
-        cokret_sdk::events::kinds::MESSAGE_CREATE,
+        arkret_sdk::events::kinds::MESSAGE_CREATE,
         pre_join_payload.clone(),
         created_at,
     );
     let post_join_message = sync_test_operation_at(
         "ak:operation:01904100-0000-7000-8000-0000000002e2",
-        cokret_sdk::events::kinds::MESSAGE_CREATE,
+        arkret_sdk::events::kinds::MESSAGE_CREATE,
         post_join_payload.clone(),
         created_at,
     );
@@ -671,7 +671,7 @@ async fn sync_timeline_visibility_uses_received_at_for_joined_history_cutoff() {
         &state,
         pre_join_event_id,
         1,
-        cokret_sdk::events::kinds::MESSAGE_CREATE,
+        arkret_sdk::events::kinds::MESSAGE_CREATE,
         pre_join_payload,
         created_at,
         pre_join_received_at,
@@ -681,7 +681,7 @@ async fn sync_timeline_visibility_uses_received_at_for_joined_history_cutoff() {
         &state,
         post_join_event_id,
         2,
-        cokret_sdk::events::kinds::MESSAGE_CREATE,
+        arkret_sdk::events::kinds::MESSAGE_CREATE,
         post_join_payload,
         created_at,
         post_join_received_at,
@@ -716,8 +716,8 @@ fn insert_member_identity_subject(state: &AppState) {
             "display_profile": { "display_name": "Alice" }
         }
     });
-    let payload_digest = cokret_sdk::canonical::sha256_digest(
-        cokret_sdk::canonical::canonical_json_bytes(&identity_payload).unwrap(),
+    let payload_digest = arkret_sdk::canonical::sha256_digest(
+        arkret_sdk::canonical::canonical_json_bytes(&identity_payload).unwrap(),
     );
     state
         .member_identity
@@ -733,7 +733,7 @@ fn insert_member_identity_subject(state: &AppState) {
             replaces: Vec::new(),
             raw_event: json!({
                 "operation_id": "ak:operation:roster-identity-1",
-                "event_kind": cokret_sdk::events::kinds::MEMBER_IDENTITY_UPDATE,
+                "event_kind": arkret_sdk::events::kinds::MEMBER_IDENTITY_UPDATE,
                 "realm_id": ROSTER_REALM,
                 "created_at": now(),
                 "payload": {
@@ -814,8 +814,8 @@ fn roster_membership_for_actor<'a>(rows: &'a [Value], actor: &str) -> Option<&'a
 }
 
 fn canonical_value_digest(value: &Value) -> String {
-    cokret_sdk::canonical::sha256_digest(
-        cokret_sdk::canonical::canonical_json_bytes(value).unwrap(),
+    arkret_sdk::canonical::sha256_digest(
+        arkret_sdk::canonical::canonical_json_bytes(value).unwrap(),
     )
 }
 
@@ -825,7 +825,7 @@ fn canonical_value_digest(value: &Value) -> String {
 // spec-compliant client, whose `replaces[].event_id` is a `ck:event:` id.
 #[test]
 fn member_identity_projection_stores_typed_event_id_and_matches_event_replaces() {
-    use cokret_sdk::{Operation, OperationId};
+    use arkret_sdk::{Operation, OperationId};
 
     use crate::routing::events::projection::project_member_identity_update;
 
@@ -841,8 +841,8 @@ fn member_identity_projection_stores_typed_event_id_and_matches_event_replaces()
             "display_profile": { "display_name": "Alice" }
         }
     });
-    let first_digest = cokret_sdk::canonical::sha256_digest(
-        cokret_sdk::canonical::canonical_json_bytes(&first_identity).unwrap(),
+    let first_digest = arkret_sdk::canonical::sha256_digest(
+        arkret_sdk::canonical::canonical_json_bytes(&first_identity).unwrap(),
     );
 
     // First update. Operation carries the canonical `ck:event:` id in
@@ -850,7 +850,7 @@ fn member_identity_projection_stores_typed_event_id_and_matches_event_replaces()
     let first_op = Operation::create(
         OperationId::new("ak:operation:01904100-0000-7000-8000-0000000000e1".to_owned()).unwrap(),
         RealmId::new(realm.to_owned()).unwrap(),
-        cokret_sdk::events::kinds::MEMBER_IDENTITY_UPDATE,
+        arkret_sdk::events::kinds::MEMBER_IDENTITY_UPDATE,
         json!({
             "event_id": first_event_id,
             "realm_id": realm,
@@ -878,7 +878,7 @@ fn member_identity_projection_stores_typed_event_id_and_matches_event_replaces()
     let second_op = Operation::create(
         OperationId::new("ak:operation:01904100-0000-7000-8000-0000000000e2".to_owned()).unwrap(),
         RealmId::new(realm.to_owned()).unwrap(),
-        cokret_sdk::events::kinds::MEMBER_IDENTITY_UPDATE,
+        arkret_sdk::events::kinds::MEMBER_IDENTITY_UPDATE,
         json!({
             "event_id": second_event_id,
             "realm_id": realm,
@@ -1266,7 +1266,7 @@ async fn sync_snapshot_emits_state_events_without_timeline_messages() {
         .append(crate::state::ProjectionEventRecord {
             event_id: "ak:event:01904100-0000-7000-8000-0000000000a1".to_owned(),
             realm_id: ROSTER_REALM.to_owned(),
-            event_kind: cokret_sdk::events::kinds::STRAND_UPDATE.to_owned(),
+            event_kind: arkret_sdk::events::kinds::STRAND_UPDATE.to_owned(),
             operation_type: "state".to_owned(),
             operation_id: Some("ak:operation:01904100-0000-7000-8000-0000000000a1".to_owned()),
             sender: Some(ROSTER_ACTOR.to_owned()),
@@ -1306,7 +1306,7 @@ async fn sync_snapshot_emits_state_events_without_timeline_messages() {
         .append(crate::state::ProjectionEventRecord {
             event_id: "ak:event:01904100-0000-7000-8000-0000000000b1".to_owned(),
             realm_id: ROSTER_REALM.to_owned(),
-            event_kind: cokret_sdk::events::kinds::STRAND_UPDATE.to_owned(),
+            event_kind: arkret_sdk::events::kinds::STRAND_UPDATE.to_owned(),
             operation_type: "state".to_owned(),
             operation_id: Some("ak:operation:01904100-0000-7000-8000-0000000000b1".to_owned()),
             sender: Some(ROSTER_CALLER.to_owned()),
@@ -1362,7 +1362,7 @@ async fn sync_snapshot_includes_shared_pin_events_for_joined_member() {
         .with_timezone(&Utc);
     let realm_create = sync_test_operation_at(
         "ak:operation:01904100-0000-7000-8000-0000000000c1",
-        cokret_sdk::events::kinds::REALM_CREATE,
+        arkret_sdk::events::kinds::REALM_CREATE,
         json!({
             "object": {
                 "id": ROSTER_REALM,
@@ -1377,7 +1377,7 @@ async fn sync_snapshot_includes_shared_pin_events_for_joined_member() {
     );
     let member_join = sync_test_operation_at(
         "ak:operation:01904100-0000-7000-8000-0000000000c2",
-        cokret_sdk::events::kinds::MEMBER_STATE,
+        arkret_sdk::events::kinds::MEMBER_STATE,
         json!({
             "realm_id": ROSTER_REALM,
             "actor_id": ROSTER_CALLER,
@@ -1389,7 +1389,7 @@ async fn sync_snapshot_includes_shared_pin_events_for_joined_member() {
     );
     let strand_create = sync_test_operation_at(
         "ak:operation:01904100-0000-7000-8000-0000000000c3",
-        cokret_sdk::events::kinds::STRAND_CREATE,
+        arkret_sdk::events::kinds::STRAND_CREATE,
         json!({
             "object": {
                 "id": strand_id,
@@ -1402,7 +1402,7 @@ async fn sync_snapshot_includes_shared_pin_events_for_joined_member() {
     );
     let message_create = sync_test_operation_at(
         "ak:operation:01904100-0000-7000-8000-0000000000c4",
-        cokret_sdk::events::kinds::MESSAGE_CREATE,
+        arkret_sdk::events::kinds::MESSAGE_CREATE,
         json!({
             "event_id": message_event_id,
             "message_id": message_id,
@@ -1437,7 +1437,7 @@ async fn sync_snapshot_includes_shared_pin_events_for_joined_member() {
 
     let pin_add = sync_test_operation_at(
         "ak:operation:01904100-0000-7000-8000-0000000000c5",
-        cokret_sdk::events::kinds::PIN_ADD,
+        arkret_sdk::events::kinds::PIN_ADD,
         json!({
             "event_id": "ak:event:01904100-0000-7000-8000-0000000000d5",
             "pin_scope": {"kind": "strand", "id": strand_id},
@@ -1469,7 +1469,7 @@ async fn sync_snapshot_includes_shared_pin_events_for_joined_member() {
         .expect("state events array");
     assert!(
         state_events.iter().any(
-            |event| event["event_kind"] == cokret_sdk::events::kinds::PIN_ADD
+            |event| event["event_kind"] == arkret_sdk::events::kinds::PIN_ADD
                 && event["payload"]["target_ref"] == message_id
         ),
         "joined members must receive shared pin state events through account sync"
@@ -1492,7 +1492,7 @@ async fn sync_timeline_dedupes_redacted_revision_by_message_id() {
         .with_timezone(&Utc);
     let realm_create = sync_test_operation_at(
         "ak:operation:01904100-0000-7000-8000-0000000001c1",
-        cokret_sdk::events::kinds::REALM_CREATE,
+        arkret_sdk::events::kinds::REALM_CREATE,
         json!({
             "object": {
                 "id": ROSTER_REALM,
@@ -1507,7 +1507,7 @@ async fn sync_timeline_dedupes_redacted_revision_by_message_id() {
     );
     let member_join = sync_test_operation_at(
         "ak:operation:01904100-0000-7000-8000-0000000001c2",
-        cokret_sdk::events::kinds::MEMBER_STATE,
+        arkret_sdk::events::kinds::MEMBER_STATE,
         json!({
             "realm_id": ROSTER_REALM,
             "actor_id": ROSTER_CALLER,
@@ -1519,7 +1519,7 @@ async fn sync_timeline_dedupes_redacted_revision_by_message_id() {
     );
     let strand_create = sync_test_operation_at(
         "ak:operation:01904100-0000-7000-8000-0000000001c3",
-        cokret_sdk::events::kinds::STRAND_CREATE,
+        arkret_sdk::events::kinds::STRAND_CREATE,
         json!({
             "object": {
                 "id": strand_id,
@@ -1532,7 +1532,7 @@ async fn sync_timeline_dedupes_redacted_revision_by_message_id() {
     );
     let message_create = sync_test_operation_at(
         "ak:operation:01904100-0000-7000-8000-0000000001c4",
-        cokret_sdk::events::kinds::MESSAGE_CREATE,
+        arkret_sdk::events::kinds::MESSAGE_CREATE,
         json!({
             "event_id": message_event_id,
             "message_id": message_id,
@@ -1546,7 +1546,7 @@ async fn sync_timeline_dedupes_redacted_revision_by_message_id() {
     );
     let message_revise = sync_test_operation_at(
         "ak:operation:01904100-0000-7000-8000-0000000001c5",
-        cokret_sdk::events::kinds::MESSAGE_REVISE,
+        arkret_sdk::events::kinds::MESSAGE_REVISE,
         json!({
             "event_id": revision_event_id,
             "target_ref": message_id,
@@ -1560,7 +1560,7 @@ async fn sync_timeline_dedupes_redacted_revision_by_message_id() {
     );
     let message_redact = sync_test_operation_at(
         "ak:operation:01904100-0000-7000-8000-0000000001c6",
-        cokret_sdk::events::kinds::MESSAGE_REDACT,
+        arkret_sdk::events::kinds::MESSAGE_REDACT,
         json!({
             "event_id": redaction_event_id,
             "message_id": message_id,
