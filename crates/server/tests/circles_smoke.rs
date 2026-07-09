@@ -51,7 +51,7 @@ fn seed_realm(state: &mut ProjectionState, hlc: &ServerHlc, realm_id: &str, owne
             json!({
                 "object": {
                     "id": realm_id,
-                    "schema": "ck.schema.realm.v1",
+                    "schema": "ak.schema.realm.v1",
                     "title": "Test Realm",
                     "created_by": owner,
                     "default_discoverability": "public",
@@ -71,7 +71,7 @@ fn seed_encrypted_realm(state: &mut ProjectionState, hlc: &ServerHlc, realm_id: 
             json!({
                 "object": {
                     "id": realm_id,
-                    "schema": "ck.schema.realm.v1",
+                    "schema": "ak.schema.realm.v1",
                     "title": "Encrypted Test Realm",
                     "created_by": owner,
                     "default_discoverability": "public",

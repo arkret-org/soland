@@ -157,7 +157,7 @@ fn message_revision_pending_replays_after_original_event() {
         REALM,
         serde_json::json!({
             "target_ref": EVENT,
-            "content": { "kind": "ck.content.text", "body": "revised" }
+            "content": { "kind": "ak.content.text", "body": "revised" }
         }),
     );
     let revision_id = revise.operation_id.to_string();
@@ -174,7 +174,7 @@ fn message_revision_pending_replays_after_original_event() {
             "event_id": EVENT,
             "sender": "did:web:alice.example",
             "thread_id": STRAND,
-            "content": { "kind": "ck.content.text", "body": "original" }
+            "content": { "kind": "ak.content.text", "body": "original" }
         }),
     );
     state.apply(&create, &hlc);

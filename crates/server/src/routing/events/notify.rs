@@ -874,7 +874,7 @@ mod tests {
                 "mention_sidecar_hash": [sidecar_hash_for_recipient(realm_id, recipient)],
                 "encrypted": true,
                 "encrypted_content": {
-                    "content_type": "ck.message.v1",
+                    "content_type": "ak.message.v1",
                     "ciphertext": "opaque-ciphertext"
                 }
             }),

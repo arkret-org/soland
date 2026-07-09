@@ -624,8 +624,8 @@ async fn memory_event_store_round_trip_with_actor_seq() {
         actor_id: actor.to_owned(),
         actor_seq: seq,
         realm_id: Some("ak:realm:0196419b-0000-7000-8000-000000000000".to_owned()),
-        kind: "ck.message.create".to_owned(),
-        schema_id: "ck.schema.event.message.v1".to_owned(),
+        kind: "ak.message.create".to_owned(),
+        schema_id: "ak.schema.event.message.v1".to_owned(),
         canonical_digest: "sha256:abc".to_owned(),
         canonical_bytes: b"canonical-bytes".to_vec(),
         envelope: serde_json::json!({"event_id": event_id}),
@@ -653,8 +653,8 @@ async fn memory_event_store_rejects_duplicate_realm_create() {
         actor_id: actor.to_owned(),
         actor_seq: 1,
         realm_id: Some("ak:realm:0196419b-0000-7000-8000-000000000000".to_owned()),
-        kind: "ck.realm.create".to_owned(),
-        schema_id: "ck.schema.event.realm.v1".to_owned(),
+        kind: "ak.realm.create".to_owned(),
+        schema_id: "ak.schema.event.realm.v1".to_owned(),
         canonical_digest: format!("sha256:{event_id}"),
         canonical_bytes: event_id.as_bytes().to_vec(),
         envelope: serde_json::json!({"event_id": event_id}),
@@ -679,7 +679,7 @@ fn make_test_operation(operation_id: &str, realm_id: &str) -> Operation {
     let mut op = Operation::create(
         OperationId::new(operation_id.to_owned()).unwrap(),
         RealmId::new(realm_id.to_owned()).unwrap(),
-        "ck.message.create",
+        "ak.message.create",
         serde_json::json!({"sender": "did:web:alice", "thread_id": "ak:strand:1"}),
     );
     op.created_at = Utc::now();

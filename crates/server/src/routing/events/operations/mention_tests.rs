@@ -6,9 +6,9 @@ mod audience_mention_tests {
     #[test]
     fn audience_mention_accepts_here_as_strand_engaged() {
         let content = json!({
-            "kind": "ck.content.composite",
+            "kind": "ak.content.composite",
             "parts": [
-                {"kind": "ck.content.text", "body": "Team heads up"},
+                {"kind": "ak.content.text", "body": "Team heads up"},
                 {
                     "kind": "audience_mention",
                     "audience": "strand_engaged",

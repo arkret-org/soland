@@ -407,7 +407,7 @@ pub fn project_member_identity_update(state: &AppState, operation: &Operation) {
     let (Some(realm_id), Some(actor_id), Some(segment)) = (realm_id, actor_id, segment) else {
         tracing::warn!(
             operation_id = %operation.operation_id,
-            "ck.member.identity.update missing realm_id/actor_id/segment; skipping projection"
+            "ak.member.identity.update missing realm_id/actor_id/segment; skipping projection"
         );
         return;
     };
@@ -417,7 +417,7 @@ pub fn project_member_identity_update(state: &AppState, operation: &Operation) {
         tracing::warn!(
             operation_id = %operation.operation_id,
             %segment,
-            "ck.member.identity.update unknown segment; rejecting at projection"
+            "ak.member.identity.update unknown segment; rejecting at projection"
         );
         return;
     }
@@ -451,7 +451,7 @@ pub fn project_member_identity_update(state: &AppState, operation: &Operation) {
     let Some(identity_payload) = payload.get("identity_payload") else {
         tracing::warn!(
             operation_id = %operation.operation_id,
-            "ck.member.identity.update missing identity_payload"
+            "ak.member.identity.update missing identity_payload"
         );
         return;
     };
@@ -461,7 +461,7 @@ pub fn project_member_identity_update(state: &AppState, operation: &Operation) {
             tracing::warn!(
                 %err,
                 operation_id = %operation.operation_id,
-                "ck.member.identity.update canonical_payload_sha256 failed"
+                "ak.member.identity.update canonical_payload_sha256 failed"
             );
             return;
         }
@@ -506,7 +506,7 @@ pub fn project_member_identity_update(state: &AppState, operation: &Operation) {
                 expected,
                 actual = %current.as_deref().unwrap_or(""),
                 error_code = "member_identity_state_mismatch",
-                "ck.member.identity.update optimistic-concurrency guard tripped"
+                "ak.member.identity.update optimistic-concurrency guard tripped"
             );
             return;
         }

@@ -39,11 +39,11 @@ pub(super) fn protocol_router() -> Router {
 }
 
 #[endpoint(
-    operation_id = "ck.self.authz.query.check",
+    operation_id = "ak.self.authz.query.check",
     tags("authz"),
     summary = "Evaluate one (actor, action, resource) authorization decision"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.authz.query.check"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.authz.query.check"))]
 async fn authz_check(
     aa: AuthArgs,
     body: JsonBody<AuthzCheckRequestBody>,
@@ -289,11 +289,11 @@ mod tests {
 }
 
 #[endpoint(
-    operation_id = "ck.self.authz.grants.query.effective",
+    operation_id = "ak.self.authz.grants.query.effective",
     tags("authz"),
     summary = "List effective authorization grants for a subject"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.authz.grants.query.effective"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.authz.grants.query.effective"))]
 async fn effective_grants(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -362,7 +362,7 @@ fn capability_grant_from_authz_grant(
     Ok(CapabilityGrant {
         id: GrantId::new(grant.grant_id.clone())
             .map_err(|error| AppError::internal(error.to_string()))?,
-        schema: "ck.schema.capability.v1".to_owned(),
+        schema: "ak.schema.capability.v1".to_owned(),
         realm_id: Some(realm_id),
         issuer,
         subject,
@@ -587,11 +587,11 @@ fn capability_resource_selector(realm_id: &str, resource: &str) -> Value {
 }
 
 #[endpoint(
-    operation_id = "ck.self.authz.invites.query.list",
+    operation_id = "ak.self.authz.invites.query.list",
     tags("authz"),
     summary = "List pending invites for the authenticated actor"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.authz.invites.query.list"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.authz.invites.query.list"))]
 async fn invites(
     aa: crate::routing::system::extract::AuthArgs,
     depot: &mut Depot,
@@ -658,7 +658,7 @@ fn invite_record_to_sdk(invite: crate::state::RealmInviteRecord) -> Result<Invit
         .expires_at
         .unwrap_or_else(|| invite.created_at + chrono::Duration::days(7));
     Ok(Invite {
-        schema: "ck.schema.invite.v1".to_owned(),
+        schema: "ak.schema.invite.v1".to_owned(),
         id: InviteId::new(invite.invite_id.clone())
             .map_err(|error| AppError::internal(error.to_string()))?,
         realm_id: RealmId::new(invite.realm_id.clone())

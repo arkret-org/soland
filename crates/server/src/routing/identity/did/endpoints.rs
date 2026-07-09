@@ -105,7 +105,7 @@ pub struct IdentityRegistryVisibility {
 }
 
 #[endpoint(
-    operation_id = "ck.root.identity.registry.query.describe",
+    operation_id = "ak.root.identity.registry.query.describe",
     tags("identity"),
     summary = "Identity registry capability description"
 )]
@@ -116,11 +116,11 @@ pub(crate) async fn identity_describe(
     let state = depot.get_typed::<AppState>().expect("state injected");
     let did_webvh = did_webvh_descriptor(state);
     let mut profiles = vec![
-        "ck.profile.identity_registry.v1".to_owned(),
-        "ck.identity.local-dev.v1".to_owned(),
+        "ak.profile.identity_registry.v1".to_owned(),
+        "ak.identity.local-dev.v1".to_owned(),
     ];
     if did_webvh["enabled"].as_bool().unwrap_or(false) {
-        profiles.push("ck.identity.webvh.provider.v1".to_owned());
+        profiles.push("ak.identity.webvh.provider.v1".to_owned());
     }
     let service_did = Did::new(state.config.service_did.clone())
         .map_err(|error| AppError::internal(format!("invalid configured service_did: {error}")))?;
@@ -132,9 +132,9 @@ pub(crate) async fn identity_describe(
         .collect::<Vec<_>>();
     let trust_roots = identity_trust_roots(state);
     let supported_features = vec![
-        "ck.feature.identity.resolve.v1".to_owned(),
-        "ck.feature.identity.receipts.v1".to_owned(),
-        "ck.feature.identity.did_webvh.v1".to_owned(),
+        "ak.feature.identity.resolve.v1".to_owned(),
+        "ak.feature.identity.receipts.v1".to_owned(),
+        "ak.feature.identity.did_webvh.v1".to_owned(),
     ];
 
     json_ok(IdentityRegistryDescription {
@@ -147,12 +147,12 @@ pub(crate) async fn identity_describe(
         profiles: profiles.clone(),
         supported_profiles: profiles,
         supported_operations: vec![
-            "ck.root.identity.registry.query.describe".to_owned(),
-            "ck.root.identity.query.resolve".to_owned(),
-            "ck.root.identity.document.resource.get".to_owned(),
-            "ck.root.identity.log.query.list".to_owned(),
-            "ck.root.identity.receipts.query.list".to_owned(),
-            "ck.root.identity.command.submit_did_operation".to_owned(),
+            "ak.root.identity.registry.query.describe".to_owned(),
+            "ak.root.identity.query.resolve".to_owned(),
+            "ak.root.identity.document.resource.get".to_owned(),
+            "ak.root.identity.log.query.list".to_owned(),
+            "ak.root.identity.receipts.query.list".to_owned(),
+            "ak.root.identity.command.submit_did_operation".to_owned(),
         ],
         supported_bindings: vec![IdentityRegistryBinding {
             kind: "http".to_owned(),
@@ -182,7 +182,7 @@ pub(crate) async fn identity_describe(
         },
         implemented_features: supported_features,
         claimed_profiles: vec![IdentityRegistryClaimedProfile {
-            profile_id: "ck.profile.identity_registry.v1".to_owned(),
+            profile_id: "ak.profile.identity_registry.v1".to_owned(),
             claim_kind: "self_claimed".to_owned(),
         }],
         verified_profiles: Vec::new(),
@@ -749,11 +749,11 @@ pub(crate) async fn embedded_webvh_log(depot: &mut Depot, req: &mut Request, res
 }
 
 #[endpoint(
-    operation_id = "ck.root.identity.query.resolve",
+    operation_id = "ak.root.identity.query.resolve",
     tags("identity"),
     summary = "Resolve a DID via local webvh store + SDK resolver chain"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.root.identity.query.resolve"))]
+#[tracing::instrument(skip_all, fields(op = "ak.root.identity.query.resolve"))]
 pub(crate) async fn identity_resolve(
     body: JsonBody<IdentityResolveRequestBody>,
     depot: &mut Depot,
@@ -807,11 +807,11 @@ pub(crate) async fn identity_resolve(
 }
 
 #[endpoint(
-    operation_id = "ck.root.identity.document.resource.get",
+    operation_id = "ak.root.identity.document.resource.get",
     tags("identity"),
     summary = "Fetch the locally-cached DID document for a DID"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.root.identity.document.resource.get"))]
+#[tracing::instrument(skip_all, fields(op = "ak.root.identity.document.resource.get"))]
 pub(crate) async fn identity_document(
     did: salvo::oapi::extract::QueryParam<String, true>,
     depot: &mut Depot,
@@ -894,11 +894,11 @@ pub(crate) async fn identity_did_document(
 }
 
 #[endpoint(
-    operation_id = "ck.root.identity.log.query.list",
+    operation_id = "ak.root.identity.log.query.list",
     tags("identity"),
     summary = "Return the local webvh key-log events for a DID"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.root.identity.log.query.list"))]
+#[tracing::instrument(skip_all, fields(op = "ak.root.identity.log.query.list"))]
 pub(crate) async fn identity_log(
     did: salvo::oapi::extract::QueryParam<String, true>,
     depot: &mut Depot,
@@ -933,11 +933,11 @@ pub(crate) async fn identity_log(
 }
 
 #[endpoint(
-    operation_id = "ck.root.identity.receipts.query.list",
+    operation_id = "ak.root.identity.receipts.query.list",
     tags("identity"),
     summary = "Read issuer receipts for the local webvh key-log of a DID"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.root.identity.receipts.query.list"))]
+#[tracing::instrument(skip_all, fields(op = "ak.root.identity.receipts.query.list"))]
 pub(crate) async fn identity_receipts(
     did: salvo::oapi::extract::QueryParam<String, true>,
     depot: &mut Depot,
@@ -971,12 +971,12 @@ pub(crate) async fn identity_receipts(
 }
 
 #[endpoint(
-    operation_id = "ck.root.identity.command.submit_did_operation",
+    operation_id = "ak.root.identity.command.submit_did_operation",
     tags("identity"),
     summary = "Submit a method-neutral DID operation to the local registry",
     status_codes(200, 400, 401, 409, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.root.identity.command.submit_did_operation"))]
+#[tracing::instrument(skip_all, fields(op = "ak.root.identity.command.submit_did_operation"))]
 pub(crate) async fn identity_submit_did_operation(
     depot: &mut Depot,
     body: JsonBody<DidOperationSubmitRequestBody>,
@@ -1062,20 +1062,20 @@ pub(crate) async fn identity_submit_did_operation(
     let method_evidence = if let Some(version_id) = operation_version_id {
         json!({
             "mode": "submitted_operation",
-            "source": "ck.root.identity.command.submit_did_operation",
+            "source": "ak.root.identity.command.submit_did_operation",
             "version_id": version_id,
             "previous": previous_method_evidence,
         })
     } else if is_webvh_did {
         json!({
             "mode": "submitted_document",
-            "source": "ck.root.identity.command.submit_did_operation",
+            "source": "ak.root.identity.command.submit_did_operation",
             "previous": previous_method_evidence,
         })
     } else {
         json!({
             "mode": "submitted_operation",
-            "source": "ck.root.identity.command.submit_did_operation",
+            "source": "ak.root.identity.command.submit_did_operation",
             "previous": previous_method_evidence,
         })
     };

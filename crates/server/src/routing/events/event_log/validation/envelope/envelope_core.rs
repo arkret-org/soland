@@ -211,7 +211,7 @@ pub(crate) async fn validate_event_envelope_with_context(
             "realm already exists",
         ));
     }
-    let is_realm_create_bootstrap = kind == "ck.realm.create"
+    let is_realm_create_bootstrap = kind == "ak.realm.create"
         && realm_create_actor_is_creator(object, &session.actor)
         && !realm_exists;
     let is_invite_acceptance_join =
@@ -231,7 +231,7 @@ pub(crate) async fn validate_event_envelope_with_context(
     // recipient PS has no member record for it — yet it MUST still record the
     // pending invite for its subject. Admit `ck.invite.create` from its own
     // inviter into a realm this PS does not host (spec invite-addressing.md §5).
-    let is_foreign_invite_delivery = kind == "ck.invite.create"
+    let is_foreign_invite_delivery = kind == "ak.invite.create"
         && invite_create_actor_is_inviter(object, &session.actor)
         && !realm_exists;
     let is_realm_bootstrap_followup = is_realm_bootstrap_followup_kind(&kind)
@@ -267,7 +267,7 @@ pub(crate) async fn validate_event_envelope_with_context(
         validate_member_identity_proof(state, object.get("payload").unwrap_or(&Value::Null))
             .await?;
     }
-    if kind == "ck.device.authorize" {
+    if kind == "ak.device.authorize" {
         validate_device_enrollment_authority_binding(state, object, &actor_id).await?;
     }
     validate_audit_accessed_payload(&kind, object)?;
@@ -276,7 +276,7 @@ pub(crate) async fn validate_event_envelope_with_context(
     // mode: payload missing the new required fields surfaces as
     // schema_violation here; payload with mismatched trust_domain surfaces as
     // the registered `cross_domain_replay_rejected` (409) code.
-    if kind == "ck.cross_signing.reset" {
+    if kind == "ak.cross_signing.reset" {
         let payload = object.get("payload").cloned().unwrap_or(Value::Null);
         if let Err((code, reason)) =
             cross_signing_reset_replay_check(&payload, &event_id, &state.config.trust_domain)
@@ -293,7 +293,7 @@ pub(crate) async fn validate_event_envelope_with_context(
     // profile set comes from the submitted policy-components payload;
     // cross-policy bindings come from the materialized Realm metadata /
     // MLS cells, with the current payload used only for same-event writes.
-    if kind == "ck.realm.policy_components" {
+    if kind == "ak.realm.policy_components" {
         let payload = object.get("payload").cloned().unwrap_or(Value::Null);
         let policy_components = policy_components_value_from_state_payload(&payload);
         // Best-effort: collect active profiles from the payload's own

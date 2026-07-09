@@ -596,7 +596,7 @@ async fn project_accepted_operations_inner(
             project_invite_third_party_operation(state, operation).await;
         } else if kinds::operation_is_invite_claim(operation) {
             project_invite_claim_operation(state, operation).await;
-        } else if kinds::canonical_kind_string(operation) == "ck.invite.accept" {
+        } else if kinds::canonical_kind_string(operation) == "ak.invite.accept" {
             project_invite_accept_operation(state, origin, operation).await;
         } else if kinds::canonical_kind_string(operation)
             == arkret_sdk::events::kinds::INVITE_CANCEL
@@ -606,7 +606,7 @@ async fn project_accepted_operations_inner(
             == arkret_sdk::events::kinds::INVITE_REVOKE
         {
             project_invite_revoke_operation(state, origin, operation).await;
-        } else if kinds::canonical_kind_string(operation) == "ck.realm.plaintext_visible_services" {
+        } else if kinds::canonical_kind_string(operation) == "ak.realm.plaintext_visible_services" {
             project_plaintext_visible_services_operation(state, operation).await;
         } else if kinds::operation_is_membership(operation)
             || kinds::operation_is_realm_lifecycle(operation)
@@ -628,22 +628,22 @@ async fn project_accepted_operations_inner(
         // ephemeral ck.receipt.read fanout (and other readers) can hit a
         // BTreeMap lookup instead of scanning the durable Event store.
         // (R1.2 renamed `ck.space.read_receipt_policy` to `ck.realm.*`.)
-        if kinds::canonical_kind_string(operation) == "ck.realm.read_receipt_policy" {
+        if kinds::canonical_kind_string(operation) == "ak.realm.read_receipt_policy" {
             project_read_receipt_policy(state, operation);
         }
-        if kinds::canonical_kind_string(operation) == "ck.account_data.set" {
+        if kinds::canonical_kind_string(operation) == "ak.account_data.set" {
             project_account_data_set(state, origin, source_device_id, operation).await;
         }
         crate::routing::identity::consent::project_consent_operation(state, operation).await;
         // Phase 4 — materialize accepted cross-signing publishes into the
         // DeviceManager (CAS bookkeeping). Validation already ran pre-acceptance.
-        if kinds::canonical_kind_string(operation) == "ck.cross_signing.publish" {
+        if kinds::canonical_kind_string(operation) == "ak.cross_signing.publish" {
             crate::routing::identity::cross_signing::project_cross_signing_publish(
                 state,
                 &operation.payload,
             );
         }
-        if kinds::canonical_kind_string(operation) == "ck.cross_signing.reset" {
+        if kinds::canonical_kind_string(operation) == "ak.cross_signing.reset" {
             crate::routing::identity::cross_signing::project_cross_signing_reset(
                 state,
                 &operation.payload,
@@ -912,7 +912,7 @@ async fn project_mls_welcome_to_device(
         .cloned()
         .unwrap_or_else(|| json!(operation.created_at + chrono::Duration::hours(1)));
     let content = json!({
-        "kind": "ck.mls.welcome",
+        "kind": "ak.mls.welcome",
         "sender_device_id": sender_device_id,
         "expires_at": expires_at,
         "content": {
@@ -1103,7 +1103,7 @@ fn realm_key_request_device_message_content(
     expires_at: chrono::DateTime<chrono::Utc>,
 ) -> Value {
     json!({
-        "kind": "ck.realm_key.request",
+        "kind": "ak.realm_key.request",
         "sender_device_id": sender_device_id,
         "expires_at": expires_at,
         "content": {
@@ -1449,7 +1449,7 @@ mod tests {
 
         let delivered = device_message_envelopes_after(&[record]);
         assert_eq!(delivered.len(), 1);
-        assert_eq!(delivered[0].kind, "ck.realm_key.request");
+        assert_eq!(delivered[0].kind, "ak.realm_key.request");
         assert_eq!(delivered[0].content["realm_id"], realm_id);
         assert_eq!(delivered[0].content["request_id"], request_id);
         assert_eq!(delivered[0].content["payload"], payload);

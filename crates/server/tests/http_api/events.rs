@@ -122,7 +122,7 @@ async fn account_subscribe_first_frame_with_status(
 async fn agent_session_without_stream_scope_cannot_subscribe_events() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = "agent-local-session-stream";
-    seed_agent_session_with_scopes(&state, token, &["ck.self.events.query.scan"]).await;
+    seed_agent_session_with_scopes(&state, token, &["ak.self.events.query.scan"]).await;
 
     let mut response = TestClient::get(format!(
         "http://server/_arkret/self/events/subscribe?realms={DEMO_REALM_ID}&include_history=false&max_duration_ms=100",
@@ -133,14 +133,14 @@ async fn agent_session_without_stream_scope_cannot_subscribe_events() {
 
     assert_eq!(response.status_code.unwrap(), StatusCode::FORBIDDEN);
     let body: Value = response.take_json().await.unwrap();
-    assert_agent_scope_denied(&body, "ck.self.events.stream.subscribe");
+    assert_agent_scope_denied(&body, "ak.self.events.stream.subscribe");
 }
 
 #[tokio::test]
 async fn agent_session_without_query_scope_cannot_scan_events() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = "agent-local-session-query";
-    seed_agent_session_with_scopes(&state, token, &["ck.self.events.stream.subscribe"]).await;
+    seed_agent_session_with_scopes(&state, token, &["ak.self.events.stream.subscribe"]).await;
 
     let mut response = TestClient::get(format!(
         "http://server/_arkret/self/events?realms={DEMO_REALM_ID}"
@@ -151,14 +151,14 @@ async fn agent_session_without_query_scope_cannot_scan_events() {
 
     assert_eq!(response.status_code.unwrap(), StatusCode::FORBIDDEN);
     let body: Value = response.take_json().await.unwrap();
-    assert_agent_scope_denied(&body, "ck.self.events.query.scan");
+    assert_agent_scope_denied(&body, "ak.self.events.query.scan");
 }
 
 #[tokio::test]
 async fn agent_session_without_submit_scope_cannot_submit_events() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = "agent-local-session-submit";
-    seed_agent_session_with_scopes(&state, token, &["ck.self.events.query.scan"]).await;
+    seed_agent_session_with_scopes(&state, token, &["ak.self.events.query.scan"]).await;
     let event = signed_event_envelope(
         "ak:event:01904100-0000-7000-8000-5c0fedead001",
         1,
@@ -173,7 +173,7 @@ async fn agent_session_without_submit_scope_cannot_submit_events() {
 
     assert_eq!(response.status_code.unwrap(), StatusCode::FORBIDDEN);
     let body: Value = response.take_json().await.unwrap();
-    assert_agent_scope_denied(&body, "ck.self.events.command.submit");
+    assert_agent_scope_denied(&body, "ak.self.events.command.submit");
 }
 
 #[tokio::test]
@@ -302,7 +302,7 @@ async fn events_describe_and_single_event_submit_work() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|operation| operation == "ck.self.events.command.submit")
+            .any(|operation| operation == "ak.self.events.command.submit")
     );
     assert_eq!(describe["limits"]["max_event_bytes"], 64 * 1024);
     assert_eq!(describe["limits"]["max_resolve"], 100);
@@ -382,7 +382,7 @@ async fn events_describe_and_single_event_submit_work() {
     let artifact_kind_payload = serde_json::json!({
         "object": {
             "id": "ak:strand:01904100-0000-7000-8000-aa11ccff0001",
-            "schema": "ck.schema.strand.v1",
+            "schema": "ak.schema.strand.v1",
             "realm_id": DEMO_REALM_ID,
             "metadata": { "title": "Onboarding strand" },
             "stage": "draft",
@@ -401,8 +401,8 @@ async fn events_describe_and_single_event_submit_work() {
         3,
         Vec::new(),
     );
-    artifact_kind_event["kind"] = Value::String("ck.strand.create".to_owned());
-    artifact_kind_event["schema_id"] = Value::String("ck.schema.strand.v1".to_owned());
+    artifact_kind_event["kind"] = Value::String("ak.strand.create".to_owned());
+    artifact_kind_event["schema_id"] = Value::String("ak.schema.strand.v1".to_owned());
     artifact_kind_event["payload"] = artifact_kind_payload.clone();
     artifact_kind_event["proofs"][0]["payload_digest"] =
         Value::String(sha256_json(&artifact_kind_payload));
@@ -423,7 +423,7 @@ async fn events_describe_and_single_event_submit_work() {
         4,
         Vec::new(),
     );
-    unknown_schema["schema_id"] = Value::String("ck.schema.not_registered.v1".to_owned());
+    unknown_schema["schema_id"] = Value::String("ak.schema.not_registered.v1".to_owned());
     unknown_schema["canonical_digest"] = Value::String(event_canonical_digest(&unknown_schema));
     let mut unknown_schema_response = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -564,12 +564,12 @@ async fn realm_create_with_bootstrap_effects_does_not_require_seal_basis() {
     let payload = serde_json::json!({
         "object": {
             "id": realm_id,
-            "schema": "ck.schema.realm.v1",
+            "schema": "ak.schema.realm.v1",
             "title": "Bootstrap effects realm",
             "summary": "Realm create carries its genesis cell write",
             "created_by": "did:web:alice.example",
             "trust_domain": "ak:trust_domain:soland.local",
-            "schema_refs": ["ck.schema.realm.v1"],
+            "schema_refs": ["ak.schema.realm.v1"],
             "default_discoverability": "listed",
             "default_join_rule": "invite",
             "history_visibility": "shared",
@@ -595,8 +595,8 @@ async fn realm_create_with_bootstrap_effects_does_not_require_seal_basis() {
         1,
         Vec::new(),
     );
-    event["kind"] = Value::String("ck.realm.create".to_owned());
-    event["schema_id"] = Value::String("ck.schema.realm.v1".to_owned());
+    event["kind"] = Value::String("ak.realm.create".to_owned());
+    event["schema_id"] = Value::String("ak.schema.realm.v1".to_owned());
     event["realm_id"] = Value::String(realm_id.clone());
     event["created_at"] = Value::String(created_at.to_owned());
     event["payload"] = payload.clone();
@@ -661,8 +661,8 @@ async fn invite_create_accepts_locator_evidence_digest_without_local_consent() {
         TEST_EVENT_SEQ.fetch_add(1, Ordering::Relaxed),
         Vec::new(),
     );
-    event["kind"] = Value::String("ck.invite.create".to_owned());
-    event["schema_id"] = Value::String("ck.schema.invite.v1".to_owned());
+    event["kind"] = Value::String("ak.invite.create".to_owned());
+    event["schema_id"] = Value::String("ak.schema.invite.v1".to_owned());
     event["realm_id"] = Value::String(realm_id.to_owned());
     event["payload"] = payload.clone();
     event["proofs"][0]["payload_digest"] = Value::String(sha256_json(&payload));
@@ -714,7 +714,7 @@ async fn scaffold_describe_surfaces_are_marked_limited_not_profile_claims() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|operation| operation == "ck.self.authz.query.check")
+            .any(|operation| operation == "ak.self.authz.query.check")
     );
     assert!(
         describe["limits"]["profile_status"]["limitations"]
@@ -821,10 +821,10 @@ async fn index_reducer_debug_reports_projection_frontier() {
     .take_json()
     .await
     .unwrap();
-    assert_eq!(debug["reducer_profile"], "ck.reducer.v1");
+    assert_eq!(debug["reducer_profile"], "ak.reducer.v1");
     assert_eq!(
         debug["schema_profiles"],
-        serde_json::json!(["ck.schema.core.v1"])
+        serde_json::json!(["ak.schema.core.v1"])
     );
     assert_eq!(debug["realm_id"], realm_id);
     assert_eq!(debug["frontier"]["message_count"], 1);
@@ -1176,7 +1176,7 @@ async fn account_subscribe_long_poll_wakes_on_broadcast() {
             DEMO_REALM_ID.to_owned(),
             message.event_id.clone(),
             serde_json::json!({
-                "kind": "ck.message.create",
+                "kind": "ak.message.create",
                 "event_id": message.event_id,
                 "realm_id": DEMO_REALM_ID,
             }),
@@ -1269,7 +1269,7 @@ async fn account_subscribe_long_poll_wakes_on_new_invite_for_inaccessible_realm(
             waker_realm_id.clone(),
             new_prefixed_uuid7("ak:event:"),
             serde_json::json!({
-                "kind": "ck.invite.create",
+                "kind": "ak.invite.create",
                 "realm_id": waker_realm_id,
                 "invite_id": invite_id,
             }),

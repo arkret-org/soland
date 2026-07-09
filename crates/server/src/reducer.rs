@@ -71,7 +71,7 @@ use serde_json::Value;
 use crate::hlc::ServerHlc;
 use crate::wire::{ReadCursorPositionWire, ReadScopeWire};
 
-pub const CHILD_ORDER_CELL_FAMILY: &str = "ck.component.child_order.v1";
+pub const CHILD_ORDER_CELL_FAMILY: &str = "ak.component.child_order.v1";
 
 // Public projection record types — kept `pub` so the external
 // `crate::reducer::Xxx` references resolve exactly as before.

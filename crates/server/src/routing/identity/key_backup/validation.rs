@@ -124,19 +124,19 @@ pub(super) fn validate_key_backup_body_typed(
     actor_id: &str,
     backup: &KeyBackup,
 ) -> Result<(), AppError> {
-    if key_backup_extra_str(backup, "schema") == Some("ck.secret_storage.v1") {
+    if key_backup_extra_str(backup, "schema") == Some("ak.secret_storage.v1") {
         return Err(AppError::new(
             ErrorCode::SchemaViolation,
-            "ck.secret_storage.v1 wire form is not accepted; senders MUST use ck.schema.key_backup.v1",
+            "ak.secret_storage.v1 wire form is not accepted; senders MUST use ck.schema.key_backup.v1",
         )
         .with_wire_code("key_backup_wire_schema_required"));
     }
     if let Some(payload_schema) = key_backup_extra_str(backup, "payload_schema")
         && !matches!(
             payload_schema,
-            "ck.schema.recovery_policy.v1"
-                | "ck.schema.recovery_receipt.v1"
-                | "ck.schema.key_backup.v1"
+            "ak.schema.recovery_policy.v1"
+                | "ak.schema.recovery_receipt.v1"
+                | "ak.schema.key_backup.v1"
         )
     {
         return Err(AppError::new(
@@ -297,7 +297,7 @@ pub(super) fn validate_key_backup_domain_separation_typed(
         ));
     }
     let aad = &domain.aead_aad;
-    if aad.schema != "ck.schema.key_backup.v1" {
+    if aad.schema != "ak.schema.key_backup.v1" {
         return Err(schema_error("domain_separation.aead_aad.schema mismatch"));
     }
     if aad.actor_id.as_str() != backup.actor_id.as_str() {

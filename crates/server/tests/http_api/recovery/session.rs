@@ -21,8 +21,8 @@ fn cross_signing_reset_event(
     let realm_id = soland::test_support::principal_control_realm_for_did(actor);
     let mut event = serde_json::json!({
         "event_id": event_id,
-        "kind": "ck.cross_signing.reset",
-        "schema_id": "ck.schema.cross_signing_reset.v1",
+        "kind": "ak.cross_signing.reset",
+        "schema_id": "ak.schema.cross_signing_reset.v1",
         "actor_id": actor,
         "actor_seq": TEST_EVENT_SEQ.fetch_add(1, Ordering::Relaxed),
         "realm_id": realm_id,
@@ -116,7 +116,7 @@ async fn seed_reset_recovery_policy(
     let issued_at = chrono::Utc::now();
     let expires_at = issued_at + chrono::Duration::days(1);
     let mut raw_payload = serde_json::json!({
-        "schema": "ck.schema.recovery_policy.v1",
+        "schema": "ak.schema.recovery_policy.v1",
         "policy_id": policy_id.clone(),
         "principal_id": principal_id,
         "version": 1,
@@ -349,7 +349,7 @@ async fn recovery_session_principal_signing_proof_verifies() {
         StatusCode::OK,
     )
     .await;
-    assert_eq!(fetched["schema"], "ck.schema.recovery_session.v1");
+    assert_eq!(fetched["schema"], "ak.schema.recovery_session.v1");
     assert_eq!(fetched["state"], "verified");
     assert_eq!(fetched["ssk_generation"], 1);
     assert_eq!(fetched["proof_summary"]["kind"], "principal_signing");
@@ -501,7 +501,7 @@ async fn recovery_session_trusted_recovery_service_proof_verifies_and_audits() {
         .iter()
         .find(|entry| {
             entry.get("action").and_then(Value::as_str)
-                == Some("ck.root.identity.recovery_session.command.submit_proof")
+                == Some("ak.root.identity.recovery_session.command.submit_proof")
         })
         .expect("submit_proof audit row");
     assert_eq!(proof_audit["outcome"], "verified");
@@ -1038,17 +1038,17 @@ async fn cross_signing_reset_replay_cache_and_queue_purge_cover_publish_window()
     for (position, kind, content) in [
         (
             1,
-            "ck.key.verification.request",
+            "ak.key.verification.request",
             serde_json::json!({ "transaction_id": "old-verification" }),
         ),
         (
             2,
-            "ck.key.verification.request",
+            "ak.key.verification.request",
             serde_json::json!({ "transaction_id": "new-verification", "new_generation": 2 }),
         ),
         (
             3,
-            "ck.message.notify",
+            "ak.message.notify",
             serde_json::json!({ "body": "ordinary queued message" }),
         ),
     ] {
@@ -1105,7 +1105,7 @@ async fn cross_signing_reset_replay_cache_and_queue_purge_cover_publish_window()
         .collect();
     assert_eq!(
         kinds,
-        vec!["ck.key.verification.request", "ck.message.notify"],
+        vec!["ak.key.verification.request", "ck.message.notify"],
         "queued after reset: {queued:?}"
     );
     assert_eq!(

@@ -585,11 +585,11 @@ const FRANKING_PROOF_FORBIDDEN_KEYS: &[&str] = &[
 ];
 
 #[endpoint(
-    operation_id = "ck.self.moderation.command.report",
+    operation_id = "ak.self.moderation.command.report",
     tags("moderation"),
     summary = "File a moderation report for content in a federated Realm"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.moderation.command.report"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.moderation.command.report"))]
 async fn moderation_report(
     aa: AuthArgs,
     body: JsonBody<ModerationReportRequestBody>,
@@ -845,9 +845,9 @@ async fn moderation_routing_visible_to_actor(
             .unwrap_or_default()
     };
     [
-        "ck.moderation.decision",
-        "ck.realm.moderation_policy",
-        "ck.realm.admin",
+        "ak.moderation.decision",
+        "ak.realm.moderation_policy",
+        "ak.realm.admin",
     ]
     .into_iter()
     .any(|action| {
@@ -1084,9 +1084,9 @@ async fn append_agent_accessed_if_present(
     append_audit_log(
         state,
         Some(audit_agent_principal_id),
-        "ck.audit.accessed",
+        "ak.audit.accessed",
         json!({
-            "kind": "ck.audit.accessed",
+            "kind": "ak.audit.accessed",
             "realm_id": report_payload.get("realm_id").cloned().unwrap_or(Value::Null),
             "report_id": report_payload.get("report_id").cloned().unwrap_or(Value::Null),
             "target_ref": report_payload.get("target_ref").cloned().unwrap_or(Value::Null),
@@ -1376,7 +1376,7 @@ mod report_safety_tests {
                 realm_id: REALM.to_owned(),
                 sender: REPORTER.to_owned(),
                 thread_id: REALM.to_owned(),
-                content: json!({ "kind": "ck.content.text", "body": "reported" }),
+                content: json!({ "kind": "ak.content.text", "body": "reported" }),
                 expiry: None,
                 encrypted: false,
                 operation_id: "ak:operation:01904100-0000-7000-8000-000000000777".to_owned(),
@@ -1409,8 +1409,8 @@ mod report_safety_tests {
                 actor_id: REPORTER.to_owned(),
                 actor_seq: 1,
                 realm_id: Some(REALM.to_owned()),
-                kind: "ck.message.create".to_owned(),
-                schema_id: "ck.schema.event.v1".to_owned(),
+                kind: "ak.message.create".to_owned(),
+                schema_id: "ak.schema.event.v1".to_owned(),
                 canonical_digest: hash('9'),
                 canonical_bytes: b"{}".to_vec(),
                 envelope: json!({
@@ -1438,7 +1438,7 @@ mod report_safety_tests {
 
     fn valid_franking() -> Value {
         json!({
-            "kind": "ck.moderation.franking_proof",
+            "kind": "ak.moderation.franking_proof",
             "franking_proof_id": "ak:franking_proof:01904100-0000-7000-8000-000000000111",
             "realm_id": REALM,
             "event_id": FRANKING_EVENT,

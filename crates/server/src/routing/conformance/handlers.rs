@@ -1317,7 +1317,7 @@ mod tests {
         assert!(encode_reject_for_vector("reject_noncanonical_numbers.v1").is_some());
         assert!(encode_reject_for_vector("reject_malformed_json.v1").is_some());
         assert!(encode_reject_for_vector("reject_other_thing.v1").is_some());
-        assert!(encode_reject_for_vector("ck.vector.encoding.canonical_json.basic.v1").is_none());
+        assert!(encode_reject_for_vector("ak.vector.encoding.canonical_json.basic.v1").is_none());
     }
 
     #[test]
@@ -1370,7 +1370,7 @@ mod tests {
         let body = json!({});
         let query_value = json!({ "projection": ["id", "secret_notes"] });
 
-        let err = validate_query_shape("ck.vector.query.projection", &body, &query_value)
+        let err = validate_query_shape("ak.vector.query.projection", &body, &query_value)
             .expect_err("secret projection must fail closed");
 
         assert_eq!(err.wire_code(), "schema_violation");

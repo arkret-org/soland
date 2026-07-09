@@ -15,7 +15,7 @@ use crate::result::{JsonResult, json_ok};
 use crate::routing::system::util::{bearer_token, sha256_hex};
 use crate::state::AppState;
 
-const FANOUT_KIND: &str = "ck.coauth.collaboration_capability.fanout.v1";
+const FANOUT_KIND: &str = "ak.coauth.collaboration_capability.fanout.v1";
 const SOURCE_DEVICE_ID: &str = "coauth-capability-fanout";
 const DIGEST_HEADER: &str = "x-arkret-capability-fanout-digest";
 
@@ -474,11 +474,11 @@ mod tests {
                 "grant_id": GRANT,
                 "grant": {
                     "id": GRANT,
-                    "schema": "ck.schema.capability.v1",
+                    "schema": "ak.schema.capability.v1",
                     "realm_id": REALM,
                     "issuer": ISSUER,
                     "subject": SUBJECT,
-                    "actions": ["ck.message.create"],
+                    "actions": ["ak.message.create"],
                     "resources": [{ "kind": "realm", "realm_id": REALM }],
                     "issued_at": "2026-01-01T00:00:00Z",
                     "proofs": [{ "kind": "detached_jws" }]

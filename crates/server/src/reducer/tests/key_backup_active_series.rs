@@ -9,7 +9,7 @@ const PREVIOUS_SERIES: &str = "ak:backup_series:01964137-1000-7000-8000-00000000
 
 fn active_series_payload() -> Value {
     json!({
-        "schema": "ck.schema.key_backup_active_series.v1",
+        "schema": "ak.schema.key_backup_active_series.v1",
         "actor_id": ACTOR,
         "backup_class": "secret_storage",
         "active_series_id": ACTIVE_SERIES,

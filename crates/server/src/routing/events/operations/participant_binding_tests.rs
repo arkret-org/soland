@@ -248,7 +248,7 @@ fn signing_input_matches_spec_construction() {
     expected.extend_from_slice(expected_json.as_bytes());
     assert_eq!(actual, expected, "signing input must match spec §3 layout");
     // The label is the verbatim scheme value, no private domain prefix.
-    assert!(actual.starts_with(b"ck.media.participant_binding.v1\0"));
+    assert!(actual.starts_with(b"ak.media.participant_binding.v1\0"));
 }
 
 #[test]

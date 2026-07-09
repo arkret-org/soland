@@ -48,17 +48,17 @@ pub(crate) async fn relay_ephemeral_realm_key_request(
     let request: arkret_sdk::RealmKeyRequestPayload =
         serde_json::from_value(envelope.payload.clone()).map_err(|error| {
             AppError::invalid_param(format!(
-                "ck.realm_key.request payload is malformed: {error}"
+                "ak.realm_key.request payload is malformed: {error}"
             ))
         })?;
     request.validate().map_err(|error| {
-        AppError::invalid_param(format!("ck.realm_key.request invalid: {error}"))
+        AppError::invalid_param(format!("ak.realm_key.request invalid: {error}"))
     })?;
 
     // The sender (requesting reader) must be a current joined member.
     if !realm_member_is_joined(state, realm_id, &session.actor).await {
         return Err(AppError::capability_denied(
-            "ck.realm_key.request sender is not a joined member of the realm",
+            "ak.realm_key.request sender is not a joined member of the realm",
         ));
     }
 
@@ -76,7 +76,7 @@ pub(crate) async fn relay_ephemeral_realm_key_request(
     .await
     .ok_or_else(|| {
         AppError::invalid_param(
-            "ck.realm_key.request target_source_ref does not resolve to an active provider device",
+            "ak.realm_key.request target_source_ref does not resolve to an active provider device",
         )
     })?;
 
@@ -85,7 +85,7 @@ pub(crate) async fn relay_ephemeral_realm_key_request(
     let decision = evaluate_request_gate(state, realm_id, session, &request, &target).await?;
     if !decision {
         return Err(AppError::capability_denied(
-            "ck.realm_key.request denied by history-sharing policy",
+            "ak.realm_key.request denied by history-sharing policy",
         ));
     }
 
@@ -195,19 +195,19 @@ async fn evaluate_request_gate(
         .ok()
         .flatten()
         .ok_or_else(|| {
-            AppError::invalid_param("ck.realm_key.request realm has no history-sharing policy")
+            AppError::invalid_param("ak.realm_key.request realm has no history-sharing policy")
         })?;
     let policy_value = meta.history_sharing_policy.as_ref().ok_or_else(|| {
-        AppError::invalid_param("ck.realm_key.request realm has no history-sharing policy")
+        AppError::invalid_param("ak.realm_key.request realm has no history-sharing policy")
     })?;
     let policy = serde_json::from_value::<arkret_sdk::HistorySharingPolicyPayloadValue>(
         policy_value.clone(),
     )
     .map_err(|_| {
-        AppError::invalid_param("ck.realm_key.request history-sharing policy is malformed")
+        AppError::invalid_param("ak.realm_key.request history-sharing policy is malformed")
     })?;
     arkret_sdk::validate_history_sharing_policy(&policy).map_err(|_| {
-        AppError::invalid_param("ck.realm_key.request history-sharing policy is invalid")
+        AppError::invalid_param("ak.realm_key.request history-sharing policy is invalid")
     })?;
 
     // The requesting reader's projected membership event-state drives the
@@ -384,7 +384,7 @@ mod tests {
             message.idempotency_key,
             format!("realm_key_request:{request_id}")
         );
-        assert_eq!(message.content["kind"], "ck.realm_key.request");
+        assert_eq!(message.content["kind"], "ak.realm_key.request");
         assert_eq!(message.content["sender_device_id"], sender_device);
         assert_eq!(message.content["content"]["realm_id"], realm_id);
         assert_eq!(message.content["content"]["request_id"], request_id);

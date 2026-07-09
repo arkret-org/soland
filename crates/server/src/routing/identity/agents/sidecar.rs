@@ -57,14 +57,14 @@ pub(super) async fn authorize_sidecar_ensure(
         "explicit_deny" | "quarantine" | "require_review" | "constraints_not_satisfied"
     ) {
         return Err(sidecar_create_denied(
-            "ck.self.agent.sidecar_thread.command.ensure denied by policy",
+            "ak.self.agent.sidecar_thread.command.ensure denied by policy",
         ));
     }
     if realm_member_joined(state, realm_id, controller) {
         return Ok(());
     }
     Err(sidecar_create_denied(
-        "ck.self.agent.sidecar_thread.command.ensure requires a Realm member controller",
+        "ak.self.agent.sidecar_thread.command.ensure requires a Realm member controller",
     ))
 }
 
@@ -428,7 +428,7 @@ pub(super) async fn ensure_sidecar_member(
         "profile": arkret_sdk::PROFILE_AGENT_SIDECAR_THREAD,
         "sidecar_ensure_capability_verified": true,
         "actor_capability": {
-            "action": "ck.circle.member.manage",
+            "action": "ak.circle.member.manage",
             "circle_id": circle_id,
             "allowed": true,
         },
@@ -674,7 +674,7 @@ pub(super) async fn ensure_sidecar_thread_impl(
     append_audit_log(
         state,
         Some(&session.actor),
-        "ck.self.agent.sidecar_thread.command.ensure",
+        "ak.self.agent.sidecar_thread.command.ensure",
         json!({
             "controller_principal_id": body.controller_principal_id,
             "addressed_agent_principal_ids": addressed_agents,
@@ -697,12 +697,12 @@ pub(super) async fn ensure_sidecar_thread_impl(
 }
 
 #[endpoint(
-    operation_id = "ck.self.agent.sidecar_thread.command.ensure",
+    operation_id = "ak.self.agent.sidecar_thread.command.ensure",
     tags("agents"),
     summary = "Idempotently ensure the controller<->agent sidecar Circle exists",
     status_codes(200, 201, 400, 401, 403, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.agent.sidecar_thread.command.ensure"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.agent.sidecar_thread.command.ensure"))]
 pub(super) async fn ensure_sidecar_thread_canonical(
     aa: AuthArgs,
     body: JsonBody<AgentSidecarThreadEnsureRequestBody>,

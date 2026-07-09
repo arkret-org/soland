@@ -60,12 +60,12 @@ pub(super) fn recovery_policy_ref_from_summary(
 }
 
 #[endpoint(
-    operation_id = "ck.root.identity.recovery_policy.resource.get",
+    operation_id = "ak.root.identity.recovery_policy.resource.get",
     tags("identity", "recovery"),
     summary = "Read the currently accepted recovery policy (REC-1)",
     status_codes(200, 401, 403, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.root.identity.recovery_policy.resource.get"))]
+#[tracing::instrument(skip_all, fields(op = "ak.root.identity.recovery_policy.resource.get"))]
 pub(super) async fn recovery_policy_get(
     aa: AuthArgs,
     principal_id: QueryParam<String, false>,
@@ -131,14 +131,14 @@ pub(super) async fn recovery_policies_get(
 }
 
 #[endpoint(
-    operation_id = "ck.root.identity.recovery_policy.command.publish",
+    operation_id = "ak.root.identity.recovery_policy.command.publish",
     tags("identity", "recovery"),
     summary = "Submit a ck.schema.recovery_policy.v1 policy (REC-1)",
     status_codes(200, 201, 400, 401, 403, 409, 500)
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "ck.root.identity.recovery_policy.command.publish")
+    fields(op = "ak.root.identity.recovery_policy.command.publish")
 )]
 pub(super) async fn recovery_policy_put(
     aa: AuthArgs,
@@ -212,7 +212,7 @@ pub(super) async fn recovery_policy_put(
     append_audit_log(
         state,
         Some(&session.actor),
-        "ck.root.identity.recovery_policy.command.publish",
+        "ak.root.identity.recovery_policy.command.publish",
         json!({
             "policy_id": record.policy_id.clone(),
             "principal_id": record.principal_id.clone(),

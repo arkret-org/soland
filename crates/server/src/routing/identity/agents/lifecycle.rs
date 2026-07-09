@@ -1,12 +1,12 @@
 use super::*;
 
 #[endpoint(
-    operation_id = "ck.self.agent.command.provision",
+    operation_id = "ak.self.agent.command.provision",
     tags("agents"),
     summary = "Provision a personal agent (DID + pairing request)",
     status_codes(201, 400, 401, 403, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.agent.command.provision"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.agent.command.provision"))]
 pub(super) async fn provision_agent(
     aa: AuthArgs,
     body: JsonBody<AgentProvisionRequestBody>,
@@ -142,7 +142,7 @@ pub(super) async fn provision_agent(
     append_audit_log(
         state,
         Some(&session.actor),
-        "ck.self.agent.command.provision",
+        "ak.self.agent.command.provision",
         json!({
             "agent_principal_id": agent_principal_id,
             "controller_did": controller_did,
@@ -167,12 +167,12 @@ pub(super) async fn provision_agent(
 }
 
 #[endpoint(
-    operation_id = "ck.self.agent.query.list",
+    operation_id = "ak.self.agent.query.list",
     tags("agents"),
     summary = "List personal agents owned by the authenticated controller",
     status_codes(200, 401, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.agent.query.list"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.agent.query.list"))]
 pub(super) async fn list_agents(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -210,12 +210,12 @@ pub(super) const AGENT_ADAPTER_REGISTRY_IDS: [&str; 4] =
     ["a2a", "acp", "mcp_bridge", "http_custom"];
 
 #[endpoint(
-    operation_id = "ck.self.agent.protocol.query.discover",
+    operation_id = "ak.self.agent.protocol.query.discover",
     tags("agents"),
     summary = "Discover an agent runtime's declared external protocol endpoints",
     status_codes(200, 400, 401, 404, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.agent.protocol.query.discover"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.agent.protocol.query.discover"))]
 pub(super) async fn discover_agent_endpoint(
     aa: AuthArgs,
     body: JsonBody<AgentProtocolDiscoverRequestBody>,
@@ -258,12 +258,12 @@ pub(super) async fn discover_agent_endpoint(
 }
 
 #[endpoint(
-    operation_id = "ck.self.agent.resource.get",
+    operation_id = "ak.self.agent.resource.get",
     tags("agents"),
     summary = "Get a personal agent by id (controller-self only)",
     status_codes(200, 401, 403, 404, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.agent.resource.get"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.agent.resource.get"))]
 pub(super) async fn get_agent(
     aa: AuthArgs,
     agent_principal_id: PathParam<String>,
@@ -384,7 +384,7 @@ pub(super) async fn lifecycle_transition(
             sidecar_exposure_ack.as_ref(),
         )
         .await?;
-        if event_kind == "ck.self.agent.deactivate" {
+        if event_kind == "ak.self.agent.deactivate" {
             let (key_ids, grant_ids) = {
                 let proj = state.projection.lock();
                 Some({
@@ -403,9 +403,9 @@ pub(super) async fn lifecycle_transition(
             "agent_principal_id": agent_id,
             "controller_principal_id": session.actor.clone(),
             "transition": match event_kind {
-                "ck.self.agent.pause" => "pause",
-                "ck.self.agent.resume" => "resume",
-                "ck.self.agent.deactivate" => "deactivate",
+                "ak.self.agent.pause" => "pause",
+                "ak.self.agent.resume" => "resume",
+                "ak.self.agent.deactivate" => "deactivate",
                 _ => new_state.as_wire_str(),
             },
             "previous_status": previous_status,
@@ -413,7 +413,7 @@ pub(super) async fn lifecycle_transition(
         });
         // pause / resume carry the spec-required `freshness_frontier`;
         // deactivate carries none (SPEC-SOL-003 resolution).
-        if event_kind != "ck.self.agent.deactivate" {
+        if event_kind != "ak.self.agent.deactivate" {
             payload.as_object_mut().expect("payload object").insert(
                 "freshness_frontier".to_owned(),
                 json!({ "captured_at": status_changed_at.clone() }),
@@ -425,7 +425,7 @@ pub(super) async fn lifecycle_transition(
                 .expect("payload object")
                 .insert("reason".to_owned(), Value::String(reason.clone()));
         }
-        if event_kind == "ck.self.agent.resume"
+        if event_kind == "ak.self.agent.resume"
             && let Some(ack) = sidecar_exposure_ack
         {
             payload
@@ -452,12 +452,12 @@ pub(super) async fn lifecycle_transition(
 }
 
 #[endpoint(
-    operation_id = "ck.self.agent.command.pause",
+    operation_id = "ak.self.agent.command.pause",
     tags("agents"),
     summary = "Pause a personal agent",
     status_codes(200, 400, 401, 403, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.agent.command.pause"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.agent.command.pause"))]
 pub(super) async fn pause_agent(
     aa: AuthArgs,
     agent_principal_id: PathParam<String>,
@@ -474,7 +474,7 @@ pub(super) async fn pause_agent(
             req,
             agent_principal_id.into_inner(),
             AgentLifecycleState::Paused,
-            "ck.self.agent.pause",
+            "ak.self.agent.pause",
             body.reason,
             None,
         )
@@ -483,12 +483,12 @@ pub(super) async fn pause_agent(
 }
 
 #[endpoint(
-    operation_id = "ck.self.agent.command.resume",
+    operation_id = "ak.self.agent.command.resume",
     tags("agents"),
     summary = "Resume a paused personal agent",
     status_codes(200, 400, 401, 403, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.agent.command.resume"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.agent.command.resume"))]
 pub(super) async fn resume_agent(
     aa: AuthArgs,
     agent_principal_id: PathParam<String>,
@@ -505,7 +505,7 @@ pub(super) async fn resume_agent(
             req,
             agent_principal_id.into_inner(),
             AgentLifecycleState::Active,
-            "ck.self.agent.resume",
+            "ak.self.agent.resume",
             None,
             body.sidecar_exposure_ack,
         )
@@ -514,12 +514,12 @@ pub(super) async fn resume_agent(
 }
 
 #[endpoint(
-    operation_id = "ck.self.agent.command.deactivate",
+    operation_id = "ak.self.agent.command.deactivate",
     tags("agents"),
     summary = "Deactivate a personal agent (terminal lifecycle state)",
     status_codes(200, 400, 401, 403, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.agent.command.deactivate"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.agent.command.deactivate"))]
 pub(super) async fn deactivate_agent(
     aa: AuthArgs,
     agent_principal_id: PathParam<String>,
@@ -536,7 +536,7 @@ pub(super) async fn deactivate_agent(
             req,
             agent_principal_id.into_inner(),
             AgentLifecycleState::Deactivated,
-            "ck.self.agent.deactivate",
+            "ak.self.agent.deactivate",
             body.reason,
             None,
         )
@@ -545,12 +545,12 @@ pub(super) async fn deactivate_agent(
 }
 
 #[endpoint(
-    operation_id = "ck.self.agent.command.rotate_key",
+    operation_id = "ak.self.agent.command.rotate_key",
     tags("agents"),
     summary = "Rotate the agent runtime key (revoke + authorize chain)",
     status_codes(200, 400, 401, 403, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.agent.command.rotate_key"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.agent.command.rotate_key"))]
 pub(super) async fn rotate_agent_key(
     aa: AuthArgs,
     agent_principal_id: PathParam<String>,
@@ -573,7 +573,7 @@ pub(super) async fn rotate_agent_key(
     append_audit_log(
         state,
         Some(&session.actor),
-        "ck.self.agent.command.rotate_key",
+        "ak.self.agent.command.rotate_key",
         json!({
             "agent_principal_id": agent_id,
             "replacement_key": body.replacement_key,
@@ -595,12 +595,12 @@ pub(super) async fn rotate_agent_key(
 }
 
 #[endpoint(
-    operation_id = "ck.self.agent.grant.command.attach",
+    operation_id = "ak.self.agent.grant.command.attach",
     tags("agents"),
     summary = "Attach a capability grant to an agent",
     status_codes(201, 400, 401, 403, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.agent.grant.command.attach"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.agent.grant.command.attach"))]
 pub(super) async fn attach_agent_grant(
     aa: AuthArgs,
     agent_principal_id: PathParam<String>,
@@ -639,7 +639,7 @@ pub(super) async fn attach_agent_grant(
         append_audit_log(
             state,
             Some(&session.actor),
-            "ck.self.agent.grant.command.attach",
+            "ak.self.agent.grant.command.attach",
             json!({
                 "agent_principal_id": agent_id,
                 "grant_id": grant_id,
@@ -655,12 +655,12 @@ pub(super) async fn attach_agent_grant(
 }
 
 #[endpoint(
-    operation_id = "ck.self.agent.grant.resource.delete",
+    operation_id = "ak.self.agent.grant.resource.delete",
     tags("agents"),
     summary = "Detach (revoke) a capability grant from an agent",
     status_codes(200, 400, 401, 403, 404, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.agent.grant.resource.delete"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.agent.grant.resource.delete"))]
 pub(super) async fn detach_agent_grant(
     aa: AuthArgs,
     agent_principal_id: PathParam<String>,
@@ -682,7 +682,7 @@ pub(super) async fn detach_agent_grant(
     append_audit_log(
         state,
         Some(&session.actor),
-        "ck.self.agent.grant.resource.delete",
+        "ak.self.agent.grant.resource.delete",
         json!({
             "agent_principal_id": agent_id,
             "grant_id": grant_id,

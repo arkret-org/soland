@@ -14,7 +14,7 @@ pub(super) fn identity_trust_roots(state: &AppState) -> Vec<Value> {
     let mut trust_roots = vec![json!({
         "id": "soland.local_identity_store",
         "kind": "local_identity_store",
-        "profile": "ck.profile.identity_registry.v1",
+        "profile": "ak.profile.identity_registry.v1",
         "service_did": state.config.service_did,
         "trust_domain": state.config.trust_domain,
         "proof_verification": {
@@ -28,7 +28,7 @@ pub(super) fn identity_trust_roots(state: &AppState) -> Vec<Value> {
         trust_roots.push(json!({
             "id": "external.webvh",
             "kind": "external",
-            "profile": "ck.identity.webvh.provider.v1",
+            "profile": "ak.identity.webvh.provider.v1",
             "base_url": url,
             "expected_trust_domain": state.config.trust_domain
         }));
@@ -152,7 +152,7 @@ pub(super) fn did_webvh_descriptor(state: &AppState) -> Value {
     let default_missing = default_provider_id.is_none();
     json!({
         "method": "did:webvh",
-        "profile": "ck.identity.webvh.provider.v1",
+        "profile": "ak.identity.webvh.provider.v1",
         "enabled": enabled,
         "default_provider_id": default_provider_id,
         "providers": providers,

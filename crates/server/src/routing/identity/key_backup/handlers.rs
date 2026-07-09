@@ -237,11 +237,11 @@ pub(super) async fn owned_key_backup_snapshot(
 }
 
 #[endpoint(
-    operation_id = "ck.self.keys.backups.resource.replace",
+    operation_id = "ak.self.keys.backups.resource.replace",
     tags("keys"),
     summary = "Store an encrypted key backup payload by backup_id"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.keys.backups.resource.replace"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.keys.backups.resource.replace"))]
 pub(super) async fn put_key_backup(
     aa: AuthArgs,
     backup_id: PathParam<String>,
@@ -335,7 +335,7 @@ pub(super) async fn put_key_backup(
 }
 
 #[endpoint(
-    operation_id = "ck.self.keys.backups.query.list",
+    operation_id = "ak.self.keys.backups.query.list",
     tags("keys"),
     summary = "List encrypted key backups owned by the authenticated actor",
     parameters(
@@ -344,7 +344,7 @@ pub(super) async fn put_key_backup(
         ("cursor" = Option<String>, Query, description = "Opaque pagination cursor")
     )
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.keys.backups.query.list"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.keys.backups.query.list"))]
 pub(super) async fn list_key_backups(
     aa: AuthArgs,
     cursor: QueryParam<String, false>,
@@ -404,11 +404,11 @@ pub(super) async fn list_key_backups(
 }
 
 #[endpoint(
-    operation_id = "ck.self.keys.backups.command.unlock",
+    operation_id = "ak.self.keys.backups.command.unlock",
     tags("keys"),
     summary = "Unlock and return the full encrypted key backup envelope by backup_id"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.keys.backups.command.unlock"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.keys.backups.command.unlock"))]
 pub(super) async fn unlock_key_backup(
     aa: AuthArgs,
     backup_id: PathParam<String>,
@@ -460,7 +460,7 @@ pub(super) async fn unlock_key_backup(
         append_audit_log(
             state,
             Some(&session.actor),
-            "ck.audit.accessed",
+            "ak.audit.accessed",
             json!({
                 "access_kind": "key_backup_read",
                 "backup_id": backup_id.clone(),
@@ -490,11 +490,11 @@ pub(super) async fn unlock_key_backup(
 }
 
 #[endpoint(
-    operation_id = "ck.self.keys.backups.resource.delete",
+    operation_id = "ak.self.keys.backups.resource.delete",
     tags("keys"),
     summary = "Delete an encrypted key backup by backup_id"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.keys.backups.resource.delete"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.keys.backups.resource.delete"))]
 pub(super) async fn delete_key_backup(
     aa: AuthArgs,
     backup_id: PathParam<String>,
@@ -524,7 +524,7 @@ pub(super) async fn delete_key_backup(
     append_audit_log(
         state,
         Some(&session.actor),
-        "ck.key_backup.delete",
+        "ak.key_backup.delete",
         json!({
             "backup_id": backup_id.clone(),
             "backup_class": backup.get("backup_class").cloned().unwrap_or(Value::Null),

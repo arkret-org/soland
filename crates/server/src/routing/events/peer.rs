@@ -60,11 +60,11 @@ pub(super) fn router() -> Router {
 }
 
 #[endpoint(
-    operation_id = "ck.peer.events.query.describe",
+    operation_id = "ak.peer.events.query.describe",
     tags("peer"),
     summary = "Describe the federation peer Events API"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.peer.events.query.describe"))]
+#[tracing::instrument(skip_all, fields(op = "ak.peer.events.query.describe"))]
 async fn peer_events_describe(depot: &mut Depot) -> JsonResult<PeerEventsDescribeOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let service_did = Did::new(state.config.service_did.clone())
@@ -74,15 +74,15 @@ async fn peer_events_describe(depot: &mut Depot) -> JsonResult<PeerEventsDescrib
         protocol_version: "1.0".to_owned(),
         primary_write_path: "/_arkret/peer/events".to_owned(),
         supported_operations: vec![
-            "ck.peer.events.query.describe".to_owned(),
-            "ck.peer.events.command.submit".to_owned(),
-            "ck.peer.events.query.scan".to_owned(),
-            "ck.peer.events.query.scan_body".to_owned(),
-            "ck.peer.events.query.resolve".to_owned(),
-            "ck.peer.events.query.frontier".to_owned(),
-            "ck.peer.invites.command.submit".to_owned(),
+            "ak.peer.events.query.describe".to_owned(),
+            "ak.peer.events.command.submit".to_owned(),
+            "ak.peer.events.query.scan".to_owned(),
+            "ak.peer.events.query.scan_body".to_owned(),
+            "ak.peer.events.query.resolve".to_owned(),
+            "ak.peer.events.query.frontier".to_owned(),
+            "ak.peer.invites.command.submit".to_owned(),
         ],
-        supported_profiles: vec!["ck.profile.federation_minimal.v1".to_owned()],
+        supported_profiles: vec!["ak.profile.federation_minimal.v1".to_owned()],
         supported_bindings: vec![
             "http-message-signature".to_owned(),
             "source-service-did".to_owned(),
@@ -100,7 +100,7 @@ async fn peer_events_describe(depot: &mut Depot) -> JsonResult<PeerEventsDescrib
 }
 
 #[handler]
-#[tracing::instrument(skip_all, fields(op = "ck.peer.events.command.submit"))]
+#[tracing::instrument(skip_all, fields(op = "ak.peer.events.command.submit"))]
 async fn peer_events_submit(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let body_value = match req.parse_json::<Value>().await {
@@ -123,11 +123,11 @@ async fn peer_events_submit(depot: &mut Depot, req: &mut Request, res: &mut Resp
 }
 
 #[endpoint(
-    operation_id = "ck.peer.events.query.scan",
+    operation_id = "ak.peer.events.query.scan",
     tags("peer"),
     summary = "Query federation-visible Event Envelopes"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.peer.events.query.scan"))]
+#[tracing::instrument(skip_all, fields(op = "ak.peer.events.query.scan"))]
 async fn peer_events_query(depot: &mut Depot, req: &mut Request) -> JsonResult<EventsQueryOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     validate_peer_request(state, req, None).await?;
@@ -137,11 +137,11 @@ async fn peer_events_query(depot: &mut Depot, req: &mut Request) -> JsonResult<E
 }
 
 #[endpoint(
-    operation_id = "ck.peer.events.query.scan_body",
+    operation_id = "ak.peer.events.query.scan_body",
     tags("peer"),
     summary = "Query federation-visible Event Envelopes with a JSON body"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.peer.events.query.scan_body"))]
+#[tracing::instrument(skip_all, fields(op = "ak.peer.events.query.scan_body"))]
 async fn peer_events_query_post(
     depot: &mut Depot,
     req: &mut Request,
@@ -162,11 +162,11 @@ async fn peer_events_query_post(
 }
 
 #[endpoint(
-    operation_id = "ck.peer.events.query.resolve",
+    operation_id = "ak.peer.events.query.resolve",
     tags("peer"),
     summary = "Resolve federation-visible Event Envelopes by id or digest"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.peer.events.query.resolve"))]
+#[tracing::instrument(skip_all, fields(op = "ak.peer.events.query.resolve"))]
 async fn peer_events_resolve(
     depot: &mut Depot,
     req: &mut Request,
@@ -254,11 +254,11 @@ async fn peer_events_resolve(
 }
 
 #[endpoint(
-    operation_id = "ck.peer.events.query.frontier",
+    operation_id = "ak.peer.events.query.frontier",
     tags("peer"),
     summary = "Read a signed federation peer frontier"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.peer.events.query.frontier"))]
+#[tracing::instrument(skip_all, fields(op = "ak.peer.events.query.frontier"))]
 async fn peer_events_frontier(
     depot: &mut Depot,
     req: &mut Request,
@@ -372,11 +372,11 @@ async fn peer_events_frontier(
 /// dev snapshot bundle remains reachable on the `/_soland/` product face
 /// (`org.arkret.soland.sync.snapshot_chunk`).
 #[endpoint(
-    operation_id = "ck.peer.snapshot.query.manifest_head",
+    operation_id = "ak.peer.snapshot.query.manifest_head",
     tags("peer"),
     summary = "Read a federation peer snapshot head (not implemented)"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.peer.snapshot.query.manifest_head"))]
+#[tracing::instrument(skip_all, fields(op = "ak.peer.snapshot.query.manifest_head"))]
 async fn peer_snapshot_head(
     depot: &mut Depot,
     req: &mut Request,
@@ -385,7 +385,7 @@ async fn peer_snapshot_head(
     validate_peer_request(state, req, None).await?;
     Err(AppError::new(
         crate::error::ErrorCode::NotImplemented,
-        "ck.peer.snapshot.query.manifest_head is not implemented: this deployment cannot \
+        "ak.peer.snapshot.query.manifest_head is not implemented: this deployment cannot \
          produce a signed ck.schema.snapshot.v1 manifest",
     ))
 }
@@ -481,7 +481,7 @@ impl PeerEventsQueryParts {
     fn validate(&self) -> Result<(), AppError> {
         if self.realms.is_empty() && self.actors.is_empty() {
             return Err(AppError::missing_param(
-                "ck.peer.events.query.scan requires at least one of realms[] / actors[]",
+                "ak.peer.events.query.scan requires at least one of realms[] / actors[]",
             ));
         }
         if self.after.is_some() && self.before.is_some() {
@@ -504,7 +504,7 @@ impl PeerEventsQueryParts {
             }
         }
         if let Some(kind) = &self.kind_filter
-            && (!kind.starts_with("ck.") || kind.contains(' '))
+            && (!kind.starts_with("ak.") || kind.contains(' '))
         {
             return Err(AppError::invalid_param(format!(
                 "invalid event kind: {kind}"
@@ -1271,7 +1271,7 @@ fn peer_events_query_scope_digest(
         .into_iter()
         .collect::<Vec<_>>();
     let binding = json!({
-        "operation_id": "ck.peer.events.query.scan",
+        "operation_id": "ak.peer.events.query.scan",
         "source_service_did": source_service_did,
         "realms": realms,
         "actors": actors,

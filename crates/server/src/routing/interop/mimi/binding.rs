@@ -19,7 +19,7 @@ pub(super) async fn latest_mimi_room_binding(
         .ok()?;
     // Walk in reverse so the most-recently-recorded binding wins.
     for entry in entries.iter().rev() {
-        if entry.event_kind != "ck.mimi.room_binding" {
+        if entry.event_kind != "ak.mimi.room_binding" {
             continue;
         }
         let payload_room = entry
@@ -432,12 +432,12 @@ pub(super) async fn emit_mimi_room_binding_event(
     let record = ProjectionEventRecord {
         event_id: event_id.clone(),
         realm_id: realm_id.clone(),
-        event_kind: "ck.mimi.room_binding".to_owned(),
+        event_kind: "ak.mimi.room_binding".to_owned(),
         operation_type: "mimi_facade_room_binding".to_owned(),
         operation_id: None,
         sender: None,
         payload: json!({
-            "profile": "ck.profile.mimi_interop.v1",
+            "profile": "ak.profile.mimi_interop.v1",
             "mimi_room_uri": mimi_room_uri_value,
             "mimi_room_id": room_id,
             "binding_scope": {
@@ -471,8 +471,8 @@ pub(super) async fn emit_mimi_room_binding_event(
 
 pub(super) fn mimi_room_projection(state: &AppState, room_id: &str, realm_id: &str) -> Value {
     json!({
-        "kind": "ck.mimi.room_binding",
-        "profile": "ck.profile.mimi_interop.v1",
+        "kind": "ak.mimi.room_binding",
+        "profile": "ak.profile.mimi_interop.v1",
         "mimi_room_uri": mimi_room_uri(state, room_id),
         "binding_scope": {
             "realm_id": realm_id,

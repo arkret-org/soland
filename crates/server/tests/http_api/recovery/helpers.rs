@@ -87,7 +87,7 @@ pub(crate) async fn open_recovery_session(
 /// return a base64url Ed25519 signature over it by `signing`.
 pub(crate) fn sign_recovery_proof(signing: &SigningKey, session: &Value) -> String {
     let transcript = serde_json::json!({
-        "type": "ck.identity.recovery_proof.v1",
+        "type": "ak.identity.recovery_proof.v1",
         "kind": "principal_signing",
         "principal_id": session["principal_id"],
         "requesting_device_id": session["requesting_device_id"],
@@ -124,7 +124,7 @@ pub(crate) fn sign_trusted_recovery_service_proof(
         proof_body["attestation_ref"] = serde_json::json!(attestation_ref);
     }
     let transcript = serde_json::json!({
-        "type": "ck.identity.recovery_proof.v1",
+        "type": "ak.identity.recovery_proof.v1",
         "kind": "trusted_recovery_service",
         "principal_id": session["principal_id"],
         "requesting_device_id": session["requesting_device_id"],
@@ -195,7 +195,7 @@ pub(crate) fn signed_device_recovery_receipt(
     signed_fields: &[&str],
 ) -> Value {
     let mut receipt = serde_json::json!({
-        "schema": "ck.schema.recovery_receipt.v1",
+        "schema": "ak.schema.recovery_receipt.v1",
         "receipt_id": new_prefixed_uuid7("ak:receipt:"),
         "principal_id": principal_id,
         "recovery_session_id": new_prefixed_uuid7("ak:recovery_session:"),
@@ -221,7 +221,7 @@ pub(crate) fn signed_device_recovery_receipt(
     });
     sign_recovery_payload(
         &mut receipt,
-        "ck.identity.recovery_receipt.signature.v1",
+        "ak.identity.recovery_receipt.signature.v1",
         signed_fields,
         device_key,
     );
@@ -242,8 +242,8 @@ pub(crate) fn device_authorize_material(session: &Value, ssk: &SigningKey) -> Va
     let device_public_key = test_ed25519_multibase_public(&recovery_device_key());
     let hpke_key = "z6LSTestRecoveryHpkeKey";
     let algorithms = [
-        "ck.hpke_x25519_aead_chacha20poly1305.v1".to_owned(),
-        "ck.mls.v1".to_owned(),
+        "ak.hpke_x25519_aead_chacha20poly1305.v1".to_owned(),
+        "ak.mls.v1".to_owned(),
     ];
     let input = arkret_sdk::DeviceTrustBinding::canonical_input(
         &did,
@@ -335,7 +335,7 @@ pub(crate) async fn seed_control_event(
             actor_seq: 1,
             realm_id: None,
             kind: kind.to_owned(),
-            schema_id: "ck.schema.event.v1".to_owned(),
+            schema_id: "ak.schema.event.v1".to_owned(),
             canonical_digest: format!("sha256:{}", "0".repeat(64)),
             canonical_bytes,
             envelope,
@@ -358,7 +358,7 @@ pub(crate) async fn seed_completion_events(
     seed_control_event(
         state,
         AUTH_EVENT_ID,
-        "ck.device.authorize",
+        "ak.device.authorize",
         principal,
         device_authorize,
     )
@@ -366,7 +366,7 @@ pub(crate) async fn seed_completion_events(
     seed_control_event(
         state,
         LIST_EVENT_ID,
-        "ck.device.list_update",
+        "ak.device.list_update",
         principal,
         serde_json::json!({ "principal_id": principal, "changed": [device] }),
     )
@@ -428,7 +428,7 @@ pub(crate) fn did_recovery_backup_body(
             "recipient_key_ref": "did:web:alice.example#recovery",
             "aead": {
                 "name": "chacha20_poly1305",
-                "aead_profile": "ck.aead.chacha20_poly1305.v1",
+                "aead_profile": "ak.aead.chacha20_poly1305.v1",
                 "enc": "ZW5jYXBzdWxhdGVka2V5"
             }
         },
@@ -436,7 +436,7 @@ pub(crate) fn did_recovery_backup_body(
             "hkdf_info": "arkret-key-backup/did_recovery/recovery_policy/v1",
             "subdomain": "recovery_policy",
             "aead_aad": {
-                "schema": "ck.schema.key_backup.v1",
+                "schema": "ak.schema.key_backup.v1",
                 "actor_id": principal_id,
                 "device_id": "did:web:alice.example#recovery",
                 "backup_class": "did_recovery",
@@ -578,7 +578,7 @@ pub(crate) async fn seed_recovery_policy(
         .unwrap()
         .with_timezone(&chrono::Utc);
     let raw_payload = serde_json::json!({
-        "schema": "ck.schema.recovery_policy.v1",
+        "schema": "ak.schema.recovery_policy.v1",
         "policy_id": policy_id,
         "principal_id": principal_id,
         "version": version,
@@ -734,7 +734,7 @@ pub(crate) fn signed_recovery_policy(
     signed_fields: &[&str],
 ) -> Value {
     let mut policy = serde_json::json!({
-        "schema": "ck.schema.recovery_policy.v1",
+        "schema": "ak.schema.recovery_policy.v1",
         "policy_id": new_prefixed_uuid7("ak:policy:"),
         "principal_id": principal_id,
         "version": version,
@@ -752,7 +752,7 @@ pub(crate) fn signed_recovery_policy(
     });
     sign_recovery_payload(
         &mut policy,
-        "ck.identity.recovery_policy.signature.v1",
+        "ak.identity.recovery_policy.signature.v1",
         signed_fields,
         signing,
     );
@@ -769,7 +769,7 @@ pub(crate) fn signed_recovery_receipt(
     signed_fields: &[&str],
 ) -> Value {
     let mut receipt = serde_json::json!({
-        "schema": "ck.schema.recovery_receipt.v1",
+        "schema": "ak.schema.recovery_receipt.v1",
         "receipt_id": new_prefixed_uuid7("ak:receipt:"),
         "principal_id": principal_id,
         "recovery_session_id": recovery_session_id
@@ -797,7 +797,7 @@ pub(crate) fn signed_recovery_receipt(
     });
     sign_recovery_payload(
         &mut receipt,
-        "ck.identity.recovery_receipt.signature.v1",
+        "ak.identity.recovery_receipt.signature.v1",
         signed_fields,
         signing,
     );

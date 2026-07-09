@@ -126,11 +126,11 @@ pub(crate) async fn account_subscribe_session_or_render(
 }
 
 #[endpoint(
-    operation_id = "ck.self.account.stream.subscribe",
+    operation_id = "ak.self.account.stream.subscribe",
     tags("sync"),
     summary = "Account-aggregate subscribe stream (timeline / presence / typing / to_device)"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.account.stream.subscribe"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.account.stream.subscribe"))]
 pub(super) async fn account_subscribe(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot
         .get_typed::<AppState>()
@@ -413,7 +413,7 @@ fn account_subscribe_notification_is_presence(
 ) -> bool {
     matches!(
         &notification.kind,
-        crate::state::EventNotificationKind::Ephemeral { kind } if kind == "ck.presence"
+        crate::state::EventNotificationKind::Ephemeral { kind } if kind == "ak.presence"
     )
 }
 
@@ -520,7 +520,7 @@ fn account_subscribe_scope_key(
 ) -> String {
     let filter_value = sync_filter_value(body.filter.as_ref());
     format!(
-        "ck.self.account.stream.subscribe|{}|filter={}",
+        "ak.self.account.stream.subscribe|{}|filter={}",
         subscribe_subject(req, session),
         sync_filter_digest(filter_value.as_ref())
     )

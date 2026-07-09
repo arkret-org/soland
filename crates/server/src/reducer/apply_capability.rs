@@ -1142,7 +1142,7 @@ mod agent_key_flag_tests {
 
     fn op(kind_object_type: &str, payload: serde_json::Value) -> Operation {
         Operation {
-            schema: "ck.schema.operation.v1".to_owned(),
+            schema: "ak.schema.operation.v1".to_owned(),
             operation_id: OperationId::new("ak:operation:01970000-0000-7000-8000-0000000000ff")
                 .unwrap(),
             record_type: "operation".to_owned(),
@@ -1163,11 +1163,11 @@ mod agent_key_flag_tests {
             "grant_id": GRANT,
             "grant": {
                 "id": GRANT,
-                "schema": "ck.schema.capability_grant.v1",
+                "schema": "ak.schema.capability_grant.v1",
                 "realm_id": REALM,
                 "issuer": "did:web:alice.example",
                 "subject": AGENT,
-                "actions": ["ck.message.create"],
+                "actions": ["ak.message.create"],
                 "resources": [{ "kind": "realm", "realm_id": REALM }],
                 "effective_after_first_authorized_key": true,
             }
@@ -1185,7 +1185,7 @@ mod agent_key_flag_tests {
             "grant_id": grant_id,
             "grant": {
                 "id": grant_id,
-                "schema": "ck.schema.capability_grant.v1",
+                "schema": "ak.schema.capability_grant.v1",
                 "realm_id": REALM,
                 "issuer": issuer,
                 "subject": subject,
@@ -1249,7 +1249,7 @@ mod agent_key_flag_tests {
             .effective_engine_grant(GRANT)
             .expect("grant active after pairing");
         assert_eq!(grant.subject, AGENT);
-        assert!(grant.actions.iter().any(|a| a == "ck.message.create"));
+        assert!(grant.actions.iter().any(|a| a == "ak.message.create"));
 
         // Revoking the key removes the authorized-key marker.
         state.apply_agent_key_revoke(&op(
@@ -1270,7 +1270,7 @@ mod agent_key_flag_tests {
                     GRANT_2,
                     "did:web:bob.example",
                     AGENT,
-                    json!(["ck.message.create"]),
+                    json!(["ak.message.create"]),
                     json!([{ "kind": "realm", "realm_id": REALM }]),
                 ),
             ),
@@ -1294,7 +1294,7 @@ mod agent_key_flag_tests {
                     GRANT,
                     "did:web:alice.example",
                     "did:web:bob.example",
-                    json!(["ck.message.create"]),
+                    json!(["ak.message.create"]),
                     json!([{ "kind": "realm", "realm_id": REALM }]),
                 ),
             ),
@@ -1307,7 +1307,7 @@ mod agent_key_flag_tests {
                     GRANT_2,
                     "did:web:bob.example",
                     AGENT,
-                    json!(["ck.message.create"]),
+                    json!(["ak.message.create"]),
                     json!([{ "kind": "realm", "realm_id": REALM }]),
                 ),
             ),
@@ -1324,7 +1324,7 @@ mod agent_key_flag_tests {
                     GRANT_3,
                     "did:web:bob.example",
                     AGENT,
-                    json!(["ck.reaction.add"]),
+                    json!(["ak.reaction.add"]),
                     json!([{ "kind": "realm", "realm_id": REALM }]),
                 ),
             ),
@@ -1347,7 +1347,7 @@ mod agent_key_flag_tests {
             GRANT,
             "did:web:alice.example",
             "did:web:bob.example",
-            json!(["ck.message.create"]),
+            json!(["ak.message.create"]),
             json!([{ "kind": "realm", "realm_id": REALM }]),
         );
         parent["grant"]["expires_at"] = json!(parent_expiry.to_rfc3339());
@@ -1362,7 +1362,7 @@ mod agent_key_flag_tests {
             GRANT_2,
             "did:web:bob.example",
             AGENT,
-            json!(["ck.message.create"]),
+            json!(["ak.message.create"]),
             json!([{ "kind": "realm", "realm_id": REALM }]),
         );
         child["grant"]["parent_grant_id"] = json!(GRANT);
@@ -1384,7 +1384,7 @@ mod agent_key_flag_tests {
             GRANT,
             "did:web:alice.example",
             "did:web:bob.example",
-            json!(["ck.message.create"]),
+            json!(["ak.message.create"]),
             json!([{ "kind": "realm", "realm_id": REALM }]),
         );
         let parent_effect =
@@ -1406,7 +1406,7 @@ mod agent_key_flag_tests {
             GRANT_2,
             "did:web:bob.example",
             AGENT,
-            json!(["ck.message.create"]),
+            json!(["ak.message.create"]),
             json!([{ "kind": "realm", "realm_id": REALM }]),
         );
         child["grant"]["parent_grant_id"] = json!(GRANT);
@@ -1452,7 +1452,7 @@ mod delegation_cycle_tests {
                 "grant": {
                     "issuer": "did:web:alice.example",
                     "parent_grant_id": parent_grant_id,
-                    "actions": ["ck.message.create"],
+                    "actions": ["ak.message.create"],
                     "resources": [{ "kind": "realm", "realm_id": REALM }],
                     "constraints": constraints,
                 }
@@ -1479,7 +1479,7 @@ mod delegation_cycle_tests {
                 "grant": {
                     "issuer": issuer,
                     "subject": subject,
-                    "actions": ["ck.message.create"],
+                    "actions": ["ak.message.create"],
                     "resources": [{ "kind": "realm", "realm_id": REALM }],
                     "constraints": constraints,
                 }
@@ -1661,7 +1661,7 @@ mod federation_revoke_fanout_tests {
             "grant_id": GRANT,
             "grant": {
                 "id": GRANT,
-                "schema": "ck.schema.capability_grant.v1",
+                "schema": "ak.schema.capability_grant.v1",
                 "realm_id": REALM,
                 "issuer": OWNER,
                 "subject": PEER_SERVICE_DID,
@@ -1669,7 +1669,7 @@ mod federation_revoke_fanout_tests {
                 // policy. `ck.realm.delivery_binding_policy` is an event kind,
                 // not a registered capability action, so the grant carries the
                 // registered `ck.realm.admin` action that authorizes it.
-                "actions": ["ck.realm.admin"],
+                "actions": ["ak.realm.admin"],
                 "resources": [{ "kind": "realm", "realm_id": REALM }],
             }
         })

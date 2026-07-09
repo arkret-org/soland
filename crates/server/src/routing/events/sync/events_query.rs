@@ -418,7 +418,7 @@ fn events_subscribe_filter_digest(accessible_realms: &[String]) -> String {
         .into_iter()
         .collect::<Vec<_>>();
     sync_filter_digest(Some(&json!({
-        "operation_id": "ck.self.events.stream.subscribe",
+        "operation_id": "ak.self.events.stream.subscribe",
         "realms": realms,
     })))
 }
@@ -436,7 +436,7 @@ fn events_subscribe_scope_key(
         .collect::<Vec<_>>()
         .join(",");
     format!(
-        "ck.self.events.stream.subscribe|{}|realms={realms}",
+        "ak.self.events.stream.subscribe|{}|realms={realms}",
         subscribe_subject(req, session)
     )
 }
@@ -568,7 +568,7 @@ fn events_query_scope_digest(
         .into_iter()
         .collect::<Vec<_>>();
     let binding = json!({
-        "operation_id": "ck.self.events.query.scan",
+        "operation_id": "ak.self.events.query.scan",
         "realms": realms,
         "actors": actors,
         "filters": filters.cloned().unwrap_or_else(|| json!({})),
@@ -665,11 +665,11 @@ fn truncate_before_stop_cursor(mut events: Vec<Value>, stop_cursor: Option<&str>
 /// `direction=backward` reverses the merged stream so callers can paginate
 /// older events with the same `next_cursor` semantics.
 #[endpoint(
-    operation_id = "ck.self.events.query.scan",
+    operation_id = "ak.self.events.query.scan",
     tags("events"),
     summary = "Projection-aware events query (single- or multi-Realm merge; backward / forward direction)"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.events.query.scan"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.events.query.scan"))]
 pub(crate) async fn events_query(
     depot: &mut Depot,
     req: &mut Request,
@@ -694,11 +694,11 @@ pub(crate) async fn events_query(
 }
 
 #[endpoint(
-    operation_id = "ck.self.events.query.scan_body",
+    operation_id = "ak.self.events.query.scan_body",
     tags("events"),
     summary = "Body-based projection-aware events query for large selectors"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.events.query.scan_body"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.events.query.scan_body"))]
 pub(crate) async fn events_query_post(
     body: salvo::oapi::extract::JsonBody<EventsQueryPostRequestBody>,
     depot: &mut Depot,
@@ -1142,7 +1142,7 @@ mod tests {
                 actor_seq: 1,
                 realm_id: Some(TEST_REALM.to_owned()),
                 kind: kind.to_owned(),
-                schema_id: "ck.schema.event.v1".to_owned(),
+                schema_id: "ak.schema.event.v1".to_owned(),
                 canonical_digest: format!("sha256:test-{}", event_id.rsplit(':').next().unwrap()),
                 canonical_bytes,
                 envelope,
@@ -1168,7 +1168,7 @@ mod tests {
             "strand_id": strand_id,
             "track_name": "discussion",
             "sender": TEST_ACTOR,
-            "content": {"kind": "ck.content.text", "body": "secret that must not leak"}
+            "content": {"kind": "ak.content.text", "body": "secret that must not leak"}
         });
         let revised_payload = json!({
             "event_id": TEST_REVISE_EVENT,
@@ -1177,7 +1177,7 @@ mod tests {
             "strand_id": strand_id,
             "track_name": "discussion",
             "sender": TEST_ACTOR,
-            "content": {"kind": "ck.content.text", "body": "revised secret that must not leak"}
+            "content": {"kind": "ak.content.text", "body": "revised secret that must not leak"}
         });
         let message = operation_at(
             "ak:operation:01904100-0000-7000-8000-00000000aa41",
@@ -1382,11 +1382,11 @@ async fn durable_events_query_from_parts(
 }
 
 #[endpoint(
-    operation_id = "ck.self.snapshot.query.manifest_head",
+    operation_id = "ak.self.snapshot.query.manifest_head",
     tags("sync"),
     summary = "Read the signed snapshot-v1 manifest head for a Realm"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.snapshot.query.manifest_head"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.snapshot.query.manifest_head"))]
 pub(super) async fn snapshot_head(
     depot: &mut Depot,
     req: &mut Request,

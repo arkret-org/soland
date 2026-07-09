@@ -103,7 +103,7 @@ async fn auth_keys_device_messages_and_blobs_work() {
             "messages": {
                 "did:web:alice.example": {
                     "ak:device:01904100-0000-7000-8000-a11ce0000001": {
-                        "kind": "ck.mls.welcome",
+                        "kind": "ak.mls.welcome",
                         "content": "not-an-object",
                         "expires_at": (chrono::Utc::now() + chrono::Duration::hours(1))
                             .to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
@@ -122,7 +122,7 @@ async fn auth_keys_device_messages_and_blobs_work() {
             "messages": {
                 "did:web:alice.example": {
                     "ak:device:01904100-0000-7000-8000-a11ce0000001":
-                        device_message_target("ck.mls.welcome", encrypted_envelope("ck.mls.welcome", "opaque"))
+                        device_message_target("ak.mls.welcome", encrypted_envelope("ck.mls.welcome", "opaque"))
                 }
             }
         }))
@@ -140,7 +140,7 @@ async fn auth_keys_device_messages_and_blobs_work() {
             "messages": {
                 "did:web:alice.example": {
                     "ak:device:01904100-0000-7000-8000-a11ce0000001":
-                        device_message_target("ck.mls.welcome", encrypted_envelope("ck.mls.welcome", "opaque"))
+                        device_message_target("ak.mls.welcome", encrypted_envelope("ck.mls.welcome", "opaque"))
                 }
             }
         }))
@@ -264,7 +264,7 @@ async fn auth_keys_device_messages_and_blobs_work() {
         .add_header(
             "x-arkret-attachment-envelope",
             serde_json::json!({
-                "scheme": "ck.blob.whole_file_aead.v1",
+                "scheme": "ak.blob.whole_file_aead.v1",
                 "alg": "mls_exporter_aead_xchacha20poly1305",
                 "nonce": "nonce0123456789ab",
                 "key_ref": {
@@ -685,7 +685,7 @@ async fn device_authorize_projects_public_key_into_devices_table() {
     let operation = Operation::create(
         OperationId::new(operation_id.clone()).unwrap(),
         RealmId::new(control_realm).unwrap(),
-        "ck.device.authorize",
+        "ak.device.authorize",
         serde_json::json!({
             "principal_id": alice,
             "device_id": alice_device,
@@ -727,7 +727,7 @@ async fn keys_query_exposes_service_attested_device_anchor() {
     let operation = Operation::create(
         OperationId::new(operation_id).unwrap(),
         RealmId::new(control_realm).unwrap(),
-        "ck.device.authorize",
+        "ak.device.authorize",
         serde_json::json!({
             "principal_id": alice,
             "device_id": alice_device,
@@ -850,8 +850,8 @@ fn tier2_publish_and_authorize(
         &device_public_key,
         "z6LSTestTier2HpkeKey",
         &[
-            "ck.hpke_x25519_aead_chacha20poly1305.v1".to_owned(),
-            "ck.mls.v1".to_owned(),
+            "ak.hpke_x25519_aead_chacha20poly1305.v1".to_owned(),
+            "ak.mls.v1".to_owned(),
         ],
         1,
     )
@@ -864,7 +864,7 @@ fn tier2_publish_and_authorize(
         "device_id": device,
         "device_public_key": device_public_key,
         "hpke_key": "z6LSTestTier2HpkeKey",
-        "algorithms": ["ck.hpke_x25519_aead_chacha20poly1305.v1", "ck.mls.v1"],
+        "algorithms": ["ak.hpke_x25519_aead_chacha20poly1305.v1", "ck.mls.v1"],
         "cross_signing_binding": {
             "verification_method": format!("{principal}#ck_self_signing_v1"),
             "alg": "EdDSA",
@@ -910,13 +910,13 @@ async fn keys_query_exposes_tier2_cross_signing_chain_and_verifies() {
     let publish_op = Operation::create(
         OperationId::new(new_prefixed_uuid7("ak:operation:")).unwrap(),
         RealmId::new(control_realm.clone()).unwrap(),
-        "ck.cross_signing.publish",
+        "ak.cross_signing.publish",
         publish_payload,
     );
     let authorize_op = Operation::create(
         OperationId::new(new_prefixed_uuid7("ak:operation:")).unwrap(),
         RealmId::new(control_realm).unwrap(),
-        "ck.device.authorize",
+        "ak.device.authorize",
         authorize_payload,
     );
     soland::test_support::project_accepted_operations(&state, alice, &[publish_op, authorize_op])
@@ -976,8 +976,8 @@ async fn keys_query_exposes_tier2_cross_signing_chain_and_verifies() {
         value: psk_multibase,
     };
     let algorithms = [
-        "ck.hpke_x25519_aead_chacha20poly1305.v1".to_owned(),
-        "ck.mls.v1".to_owned(),
+        "ak.hpke_x25519_aead_chacha20poly1305.v1".to_owned(),
+        "ak.mls.v1".to_owned(),
     ];
     let state_ok = verify_device_cross_signing_chain(DeviceCrossSigningChainVerification {
         publish: &publish,
@@ -1161,7 +1161,7 @@ async fn revoked_device_blocks_encrypted_writes() {
         "did:web:alice.example",
         DEMO_REALM_ID,
         DEMO_REALM_ID,
-        encrypted_envelope("ck.message.v1", "blocked-ciphertext"),
+        encrypted_envelope("ak.message.v1", "blocked-ciphertext"),
         true,
     )
     .await;

@@ -17,7 +17,7 @@ pub struct SessionRecord {
     pub actor: String,
     pub device_id: String,
     pub audience: String,
-    /// Session signing key (JWK) bound by `ck.session.grant`, used to verify
+    /// Session signing key (JWK) bound by `ak.session.grant`, used to verify
     /// RFC 9421 PoP presentations on `/_arkret/self/*` (api-conventions.md
     /// §3.2). `None` for bearer-only / dev-login / OAuth-bridged sessions.
     pub session_public_key: Option<String>,

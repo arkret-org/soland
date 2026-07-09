@@ -29,9 +29,9 @@ use crate::wire::{
     DeviceMessagesGetOutcome, DeviceMessagesSendOutcome, DeviceMessagesSendRequestBody,
 };
 
-pub(crate) const ACCOUNT_DATA_UPDATE_TYPE: &str = "ck.account_data.update";
-pub(crate) const BLOCKLIST_UPDATE_TYPE: &str = "ck.account.blocklist.update";
-pub(crate) const READ_MARKER_UPDATE_TYPE: &str = "ck.read_cursor.update";
+pub(crate) const ACCOUNT_DATA_UPDATE_TYPE: &str = "ak.account_data.update";
+pub(crate) const BLOCKLIST_UPDATE_TYPE: &str = "ak.account.blocklist.update";
+pub(crate) const READ_MARKER_UPDATE_TYPE: &str = "ak.read_cursor.update";
 pub(crate) const TO_DEVICE_PAGE_LIMIT: usize = 1000;
 
 pub(crate) async fn prune_device_messages_for_limits(
@@ -57,11 +57,11 @@ pub(super) fn protocol_router() -> Router {
 }
 
 #[endpoint(
-    operation_id = "ck.self.device_messages.command.send",
+    operation_id = "ak.self.device_messages.command.send",
     tags("device_messages"),
     summary = "Send to-device messages (idempotent on Idempotency-Key + sender actor)"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.device_messages.command.send"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.device_messages.command.send"))]
 async fn send_device_messages(
     aa: AuthArgs,
     body: JsonBody<DeviceMessagesSendRequestBody>,
@@ -99,8 +99,8 @@ async fn send_device_messages(
             let recipient = recipient.to_string();
             let device_id = device_id.to_string();
             let same_principal = recipient == session.actor;
-            let verification_bootstrap = target.kind.starts_with("ck.key.verification.");
-            let secret_message = target.kind.starts_with("ck.secret.");
+            let verification_bootstrap = target.kind.starts_with("ak.key.verification.");
+            let secret_message = target.kind.starts_with("ak.secret.");
             let target_record = devices_store
                 .get(&recipient, &device_id)
                 .await
@@ -239,11 +239,11 @@ pub(crate) async fn fanout_actor_private_update(
 }
 
 #[endpoint(
-    operation_id = "ck.self.device_messages.query.list",
+    operation_id = "ak.self.device_messages.query.list",
     tags("device_messages"),
     summary = "Pull pending to-device messages for the bound session/device"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.device_messages.query.list"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.device_messages.query.list"))]
 async fn get_device_messages(
     aa: AuthArgs,
     from: QueryParam<String, false>,
@@ -371,11 +371,11 @@ async fn get_device_messages(
 }
 
 #[endpoint(
-    operation_id = "ck.self.device_messages.command.ack",
+    operation_id = "ak.self.device_messages.command.ack",
     tags("device_messages"),
     summary = "Acknowledge a delivered to-device batch by bearer token"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.device_messages.command.ack"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.device_messages.command.ack"))]
 async fn ack_device_messages(
     aa: AuthArgs,
     body: JsonBody<DeviceMessagesAckRequestBody>,

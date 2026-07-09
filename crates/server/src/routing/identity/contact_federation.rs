@@ -222,11 +222,11 @@ fn contact_delivery_idempotency_key(
 }
 
 #[endpoint(
-    operation_id = "ck.peer.contacts.command.submit",
+    operation_id = "ak.peer.contacts.command.submit",
     tags("peer"),
     summary = "Private Principal Server contact fact delivery"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.peer.contacts.command.submit"))]
+#[tracing::instrument(skip_all, fields(op = "ak.peer.contacts.command.submit"))]
 async fn peer_contacts_submit(
     depot: &mut Depot,
     req: &mut Request,
@@ -527,7 +527,7 @@ async fn project_delivered_contact_fact(
     )?;
     let store = state.persistence.contacts();
     match fact_kind {
-        "ck.contact.requested" => {
+        "ak.contact.requested" => {
             // requester = issuer, target = subject_id (this holder). Form a
             // pending_incoming row on the target side.
             let raw_message = payload
@@ -591,7 +591,7 @@ async fn project_delivered_contact_fact(
             .await;
             Ok("accepted")
         }
-        "ck.contact.accepted" => {
+        "ak.contact.accepted" => {
             // Travelling back to the original requester (subject_id). The
             // target (issuer) accepted: flip the requester-side row to accepted
             // and project the issuer -> requester consent grants by their
@@ -604,7 +604,7 @@ async fn project_delivered_contact_fact(
                 .map_err(|error| AppError::internal(error.to_string()))?
             else {
                 return Err(super::super::events::peer::schema_violation(
-                    "ck.contact.accepted references no local pending request",
+                    "ak.contact.accepted references no local pending request",
                 ));
             };
             if contact.status == "accepted" {
@@ -612,21 +612,21 @@ async fn project_delivered_contact_fact(
             }
             if contact.status != "pending" || contact.request_event_ref.is_none() {
                 return Err(super::super::events::peer::schema_violation(
-                    "ck.contact.accepted references a non-pending or unverifiable request",
+                    "ak.contact.accepted references a non-pending or unverifiable request",
                 ));
             }
             if payload.get("request_id").and_then(Value::as_str)
                 != contact.request_event_ref.as_deref()
             {
                 return Err(super::super::events::peer::schema_violation(
-                    "ck.contact.accepted request_id does not match the pending request",
+                    "ak.contact.accepted request_id does not match the pending request",
                 ));
             }
             let granted_scopes = granted_scopes(payload);
             let consent_grant_refs = event_ref_strings(payload, "consent_grant_refs");
             if !granted_scopes.is_empty() && consent_grant_refs.len() < granted_scopes.len() {
                 return Err(super::super::events::peer::schema_violation(
-                    "ck.contact.accepted requires one consent_grant_ref per granted scope",
+                    "ak.contact.accepted requires one consent_grant_ref per granted scope",
                 ));
             }
             for (granted, grant_ref) in granted_scopes.iter().zip(consent_grant_refs.iter()) {
@@ -664,14 +664,14 @@ async fn project_delivered_contact_fact(
             .await;
             Ok("accepted")
         }
-        "ck.contact.rejected" => {
+        "ak.contact.rejected" => {
             let Some(mut contact) = store
                 .get_scoped(subject_id, issuer, &scope)
                 .await
                 .map_err(|error| AppError::internal(error.to_string()))?
             else {
                 return Err(super::super::events::peer::schema_violation(
-                    "ck.contact.rejected references no local pending request",
+                    "ak.contact.rejected references no local pending request",
                 ));
             };
             if contact.status == "rejected" {
@@ -689,14 +689,14 @@ async fn project_delivered_contact_fact(
             }
             if contact.status != "pending" || contact.request_event_ref.is_none() {
                 return Err(super::super::events::peer::schema_violation(
-                    "ck.contact.rejected references a non-pending or unverifiable request",
+                    "ak.contact.rejected references a non-pending or unverifiable request",
                 ));
             }
             if payload.get("request_id").and_then(Value::as_str)
                 != contact.request_event_ref.as_deref()
             {
                 return Err(super::super::events::peer::schema_violation(
-                    "ck.contact.rejected request_id does not match the pending request",
+                    "ak.contact.rejected request_id does not match the pending request",
                 ));
             }
             contact.status = "rejected".to_owned();
@@ -726,7 +726,7 @@ async fn project_delivered_contact_fact(
             .await;
             Ok("accepted")
         }
-        "ck.contact.tombstoned" => {
+        "ak.contact.tombstoned" => {
             // Downgrade every local row this holder shares with the issuer.
             let rows = store
                 .list_for_actor(subject_id)
@@ -893,7 +893,7 @@ mod tests {
 
         let outcome = project_delivered_contact_fact(
             &state,
-            "ck.contact.requested",
+            "ak.contact.requested",
             requester,
             target,
             &payload,

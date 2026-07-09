@@ -324,11 +324,11 @@ fn pending_device_revoke_exists(
 }
 
 #[endpoint(
-    operation_id = "ck.self.keys.keypackages.upload.create",
+    operation_id = "ak.self.keys.keypackages.upload.create",
     tags("keys"),
     summary = "Upload a fresh MLS KeyPackage (G3.S1)"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.keys.keypackages.upload.create"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.keys.keypackages.upload.create"))]
 async fn upload_keypackage(
     aa: AuthArgs,
     body: JsonBody<KeyPackagesUploadRequestBody>,
@@ -522,11 +522,11 @@ async fn upload_keypackage(
 // ── claim ─────────────────────────────────────────────────────────────
 
 #[endpoint(
-    operation_id = "ck.self.keys.keypackages.command.claim",
+    operation_id = "ak.self.keys.keypackages.command.claim",
     tags("keys"),
     summary = "Atomically claim a published KeyPackage for a Welcome (G3.S1)"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.keys.keypackages.command.claim"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.keys.keypackages.command.claim"))]
 async fn claim_keypackage(
     aa: AuthArgs,
     body: JsonBody<KeyPackagesClaimRequestBody>,
@@ -766,11 +766,11 @@ pub(crate) async fn claim_keypackages_for_request(
 }
 
 #[endpoint(
-    operation_id = "ck.self.keys.keypackages.command.consume",
+    operation_id = "ak.self.keys.keypackages.command.consume",
     tags("keys"),
     summary = "Mark claimed KeyPackages consumed by an MLS epoch"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.keys.keypackages.command.consume"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.keys.keypackages.command.consume"))]
 async fn consume_keypackages(
     aa: AuthArgs,
     body: JsonBody<KeyPackagesConsumeRequestBody>,
@@ -863,11 +863,11 @@ async fn consume_keypackages(
 }
 
 #[endpoint(
-    operation_id = "ck.self.keys.keypackages.command.revoke",
+    operation_id = "ak.self.keys.keypackages.command.revoke",
     tags("keys"),
     summary = "Revoke unconsumed KeyPackages for a device"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.keys.keypackages.command.revoke"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.keys.keypackages.command.revoke"))]
 async fn revoke_keypackages(
     aa: AuthArgs,
     body: JsonBody<KeyPackagesRevokeRequestBody>,

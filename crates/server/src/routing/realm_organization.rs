@@ -45,11 +45,11 @@ fn de_str<T: DeserializeOwned>(field: &str, value: &str) -> Result<T, AppError> 
 }
 
 #[endpoint(
-    operation_id = "ck.self.realm_organization.query.list",
+    operation_id = "ak.self.realm_organization.query.list",
     tags("realms"),
     summary = "List projected ck.realm.organization relationships for a Realm (SOL-ORG-06)"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.realm_organization.query.list"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.realm_organization.query.list"))]
 async fn list_realm_organizations(
     aa: AuthArgs,
     realm_id: PathParam<String>,

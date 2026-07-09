@@ -102,11 +102,11 @@ fn realm_link_entry_from(row: &RealmLinkState) -> Result<RealmLinkEntry, AppErro
 }
 
 #[endpoint(
-    operation_id = "ck.self.realm_link.query.list",
+    operation_id = "ak.self.realm_link.query.list",
     tags("realms"),
     summary = "List typed cross-Realm links projected from ck.realm.link"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.realm_link.query.list"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.realm_link.query.list"))]
 async fn list_realm_links(
     aa: AuthArgs,
     realm_id: PathParam<String>,
@@ -235,7 +235,7 @@ async fn list_member_applications(
         let projection = state.projection.lock();
         let review_capability = projection
             .realm_join_policy_review_capability(realm_id.as_str())
-            .unwrap_or_else(|| "ck.realm.join.review".to_owned());
+            .unwrap_or_else(|| "ak.realm.join.review".to_owned());
         let viewer_is_reviewer = projection.issuer_has_projected_capability(
             &viewer,
             realm_id.as_str(),
@@ -281,11 +281,11 @@ async fn list_member_applications(
 /// `accept_local_operations` pipeline so reducer-level validators
 /// (cycle detection, kind validation, self-reference rejection) all run.
 #[endpoint(
-    operation_id = "ck.self.realm_link.command.create",
+    operation_id = "ak.self.realm_link.command.create",
     tags("realms"),
     summary = "Submit a ck.realm.link Move (G3.S5)"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.realm_link.command.create"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.realm_link.command.create"))]
 async fn post_realm_link(
     aa: AuthArgs,
     realm_id: PathParam<String>,
@@ -363,11 +363,11 @@ fn reducer_reject_to_app_error(reason: &'static str) -> AppError {
 /// to `governed_by` (the most common case — admin tooling cleaning up
 /// a governance link).
 #[endpoint(
-    operation_id = "ck.self.realm_link.resource.delete",
+    operation_id = "ak.self.realm_link.resource.delete",
     tags("realms"),
     summary = "Tombstone a ck.realm.link (G3.S5)"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.realm_link.resource.delete"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.realm_link.resource.delete"))]
 async fn delete_realm_link(
     aa: AuthArgs,
     realm_id: PathParam<String>,
@@ -452,11 +452,11 @@ async fn delete_realm_link(
 /// `effective_policy` collapses to the realm's own local policy in
 /// that case.
 #[endpoint(
-    operation_id = "ck.self.realm_link.query.effective_policy",
+    operation_id = "ak.self.realm_link.query.effective_policy",
     tags("realms"),
     summary = "Read the merged effective policy after walking inheritance (G3.S5)"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.realm_link.query.effective_policy"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.realm_link.query.effective_policy"))]
 async fn get_effective_policy(
     aa: AuthArgs,
     realm_id: PathParam<String>,

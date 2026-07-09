@@ -11,7 +11,7 @@ use super::*;
 /// the single client-visible hard logout (account-lifecycle §4.1).
 ///
 /// Request identity differs from every other protected endpoint: per §4.1 the
-/// caller presents `Authorization: Bearer <ck.session.grant>` (NOT the soland
+/// caller presents `Authorization: Bearer <ak.session.grant>` (NOT the soland
 /// principal bearer) plus a `DPoP` holder proof bound to the grant's `cnf.jkt`.
 /// We therefore do NOT run the soland session-bearer pipeline
 /// (`AuthArgs::authenticated_session`) here; instead we identify the
@@ -26,11 +26,11 @@ use super::*;
 ///    and drop queued to-device messages. It does NOT write `ck.account.status`, does NOT emit
 ///    `ck.device.revoke`, and does NOT erase durable device authorization.
 #[endpoint(
-    operation_id = "ck.gate.account.command.logout",
+    operation_id = "ak.gate.account.command.logout",
     tags("auth"),
     summary = "Single hard logout: terminate the principal-side device session and trigger Auth-side grant-chain termination"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.gate.account.command.logout"))]
+#[tracing::instrument(skip_all, fields(op = "ak.gate.account.command.logout"))]
 pub(super) async fn logout(
     aa: super::super::AuthArgs,
     depot: &mut Depot,
@@ -39,7 +39,7 @@ pub(super) async fn logout(
     let _ = &aa; // header presence registered with the OpenAPI doc
     let state = depot.get_typed::<AppState>().expect("state injected");
 
-    // §4.1 — the Authorization Bearer is the ck.session.grant, not a soland
+    // §4.1 — the Authorization Bearer is the ak.session.grant, not a soland
     // principal bearer. Identify the grant's subject + device by introspecting
     // it against the Auth Server (coauth) over the existing S2S channel.
     let grant_jwt = bearer_token(req)
@@ -178,7 +178,7 @@ async fn dev_mode_local_logout(state: &AppState, token: &str) -> Result<LogoutOu
     Ok(LogoutOutcome { ok: true, revoked })
 }
 
-/// Server-to-server introspection of a presented `ck.session.grant` for the
+/// Server-to-server introspection of a presented `ak.session.grant` for the
 /// logout path. Unlike ordinary protected requests, hard logout is authorized
 /// by the DPoP holder proof on the logout request itself, so this read only
 /// obtains grant metadata needed for local DPoP validation and Principal-side
@@ -357,12 +357,12 @@ async fn revoke_sessions_for_actor_device(
 /// require a fresh lifecycle proof whose request digest and Ed25519 signature
 /// verify against the caller DID.
 #[endpoint(
-    operation_id = "ck.gate.account.command.revoke_session",
+    operation_id = "ak.gate.account.command.revoke_session",
     tags("auth"),
     summary = "Revoke session grants / bearer sessions for the calling principal",
     status_codes(200, 400, 401, 403, 404, 422, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.gate.account.command.revoke_session"))]
+#[tracing::instrument(skip_all, fields(op = "ak.gate.account.command.revoke_session"))]
 pub(super) async fn session_revoke(
     aa: super::super::AuthArgs,
     depot: &mut Depot,

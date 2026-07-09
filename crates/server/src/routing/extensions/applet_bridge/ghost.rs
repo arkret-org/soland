@@ -219,7 +219,7 @@ pub(super) async fn build_ghost_profile_create_event(
     let profile_id = ActorProfileId::new(arkret_sdk::new_prefixed_uuid7("ak:actor_profile:"))
         .map_err(|error| AppError::internal(format!("profile id generation failed: {error}")))?;
     let external_ref = json!({
-        "schema": "ck.applet.ghost_actor.external_ref.v1",
+        "schema": "ak.applet.ghost_actor.external_ref.v1",
         "protocol": provision.protocol,
         "tenant": provision.tenant,
         "external_user_id": provision.external_user_id,

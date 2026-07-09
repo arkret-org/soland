@@ -66,11 +66,11 @@ async fn production_agent_provision_fails_closed_without_durable_fanout() {
             "display_name": "Production Agent",
             "requested_scope": {
                 "actions": [
-                    "ck.self.events.stream.subscribe",
-                    "ck.self.events.query.scan",
-                    "ck.self.events.command.submit",
-                    "ck.event.read",
-                    "ck.message.create"
+                    "ak.self.events.stream.subscribe",
+                    "ak.self.events.query.scan",
+                    "ak.self.events.command.submit",
+                    "ak.event.read",
+                    "ak.message.create"
                 ],
                 "resources": [{
                     "kind": "service",
@@ -111,22 +111,22 @@ async fn provisioned_agent_is_listed_and_slug_conflict_is_rejected() {
 
     let requested_scope = serde_json::json!({
         "actions": [
-            "ck.self.events.stream.subscribe",
-            "ck.self.events.query.scan",
-            "ck.self.events.command.submit"
+            "ak.self.events.stream.subscribe",
+            "ak.self.events.query.scan",
+            "ak.self.events.command.submit"
         ],
         "resources": [
             {
                 "kind": "operation",
-                "operation": "ck.self.events.stream.subscribe"
+                "operation": "ak.self.events.stream.subscribe"
             },
             {
                 "kind": "operation",
-                "operation": "ck.self.events.query.scan"
+                "operation": "ak.self.events.query.scan"
             },
             {
                 "kind": "operation",
-                "operation": "ck.self.events.command.submit"
+                "operation": "ak.self.events.command.submit"
             }
         ],
         "constraints": []
@@ -172,10 +172,10 @@ async fn provisioned_agent_is_listed_and_slug_conflict_is_rejected() {
             "display_name": "Duplicate Summary",
             "agent_slug": "summary",
             "requested_scope": {
-                "actions": ["ck.self.events.stream.subscribe"],
+                "actions": ["ak.self.events.stream.subscribe"],
                 "resources": [{
                     "kind": "operation",
-                    "operation": "ck.self.events.stream.subscribe"
+                    "operation": "ak.self.events.stream.subscribe"
                 }],
                 "constraints": []
             },

@@ -2,8 +2,8 @@ use std::collections::BTreeSet;
 
 use super::*;
 
-const KEY_BACKUP_ACTIVE_SERIES_SCHEMA: &str = "ck.schema.key_backup_active_series.v1";
-const KEY_BACKUP_ACTIVE_SERIES_CELL_FAMILY: &str = "ck.component.key_backup.active_series.v1";
+const KEY_BACKUP_ACTIVE_SERIES_SCHEMA: &str = "ak.schema.key_backup_active_series.v1";
+const KEY_BACKUP_ACTIVE_SERIES_CELL_FAMILY: &str = "ak.component.key_backup.active_series.v1";
 const REQUIRED_ACTIVE_SERIES_SIGNED_FIELDS: &[&str] = &[
     "schema",
     "actor_id",

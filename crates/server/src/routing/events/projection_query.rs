@@ -938,11 +938,11 @@ fn document_projection_comments(
 }
 
 #[endpoint(
-    operation_id = "ck.self.space.query.list",
+    operation_id = "ak.self.space.query.list",
     tags("realm"),
     summary = "List Space lifecycle projection state for a Realm"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.space.query.list"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.space.query.list"))]
 async fn list_space_container_projections(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -1023,11 +1023,11 @@ async fn list_space_container_projections(
 }
 
 #[endpoint(
-    operation_id = "ck.self.strand.query.list",
+    operation_id = "ak.self.strand.query.list",
     tags("realm"),
     summary = "List Strand lifecycle projection state for a Realm"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.strand.query.list"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.strand.query.list"))]
 async fn list_strand_projections(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -1342,11 +1342,11 @@ async fn list_relation_projections(
 }
 
 #[endpoint(
-    operation_id = "ck.self.morph.resource.get",
+    operation_id = "ak.self.morph.resource.get",
     tags("realm"),
     summary = "Get a derived document Morph projection"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.morph.resource.get"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.morph.resource.get"))]
 async fn get_document_projection(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -1430,11 +1430,11 @@ async fn get_document_projection(
 }
 
 #[endpoint(
-    operation_id = "ck.self.morph.query.list",
+    operation_id = "ak.self.morph.query.list",
     tags("realm"),
     summary = "List Morph lifecycle projection state for a Realm"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.morph.query.list"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.morph.query.list"))]
 async fn list_morph_projections(
     aa: AuthArgs,
     depot: &mut Depot,

@@ -16,7 +16,7 @@ fn device_message_target(kind: &str, content: Value) -> DeviceMessageTarget {
 #[test]
 fn accepts_cleartext_verification_content() {
     let payload = device_message_target(
-        "ck.key.verification.key",
+        "ak.key.verification.key",
         json!({"transaction_id": "ver_1", "from_device": "ak:device:x", "key": "base64"}),
     );
     assert!(validate_device_message_target(&payload).is_ok());
@@ -28,7 +28,7 @@ fn accepts_cleartext_verification_content() {
 #[test]
 fn accepts_secret_share_content() {
     let request = device_message_target(
-        "ck.secret.request",
+        "ak.secret.request",
         json!({
             "request_id": "r1",
             "secret_id": "inkson_mls_account_secret",
@@ -39,12 +39,12 @@ fn accepts_secret_share_content() {
     assert!(validate_device_message_target(&request).is_ok());
 
     let send = device_message_target(
-        "ck.secret.send",
+        "ak.secret.send",
         json!({
             "request_id": "r1",
             "secret_id": "inkson_mls_account_secret",
             "from_device": "ak:device:old",
-            "scheme": "ck.hpke_x25519_aead_chacha20poly1305.v1",
+            "scheme": "ak.hpke_x25519_aead_chacha20poly1305.v1",
             "enc": "ZW5j",
             "ciphertext": "Y2lwaGVy"
         }),
@@ -63,7 +63,7 @@ fn rejects_blank_kind_or_non_object_content() {
     );
     assert_eq!(
         validate_device_message_target(&device_message_target(
-            "ck.secret.request",
+            "ak.secret.request",
             json!("not-an-object")
         )),
         Err("device message content must be a JSON object")

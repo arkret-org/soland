@@ -622,7 +622,7 @@ async fn notification_source_projection_value(
         "event_kind": notification
             .get("event_kind")
             .and_then(Value::as_str)
-            .unwrap_or("ck.notification"),
+            .unwrap_or("ak.notification"),
         "created_at": notification
             .get("created_at")
             .and_then(Value::as_str)
@@ -683,7 +683,7 @@ fn notification_value_from_row(notification: &Value, source: &Value) -> Option<V
             .get("event_kind")
             .and_then(Value::as_str)
             .or_else(|| source.get("event_kind").and_then(Value::as_str))
-            .unwrap_or("ck.message.create"),
+            .unwrap_or("ak.message.create"),
         "realm_id": realm_id,
         "source_event_id": source_event_id,
         "timestamp": timestamp,
@@ -818,20 +818,20 @@ mod notification_projection_tests {
             "source_ref": "ak:relation:01904100-0000-7000-8000-000000000004",
             "strand_id": "ak:strand:01904100-0000-7000-8000-000000000005",
             "notification_type": "assignment",
-            "event_kind": "ck.relation.create",
+            "event_kind": "ak.relation.create",
             "source_actor_id": "did:web:alice.example",
             "created_at": "2026-07-05T00:00:00Z"
         });
         let source = json!({
             "event_id": "ak:event:01904100-0000-7000-8000-000000000003",
             "realm_id": "ak:realm:01904100-0000-7000-8000-000000000002",
-            "event_kind": "ck.relation.create"
+            "event_kind": "ak.relation.create"
         });
 
         let projected = notification_value_from_row(&row, &source).unwrap();
 
         assert_eq!(projected["notification_type"], "assignment");
-        assert_eq!(projected["event_kind"], "ck.relation.create");
+        assert_eq!(projected["event_kind"], "ak.relation.create");
         assert_eq!(projected["assigned_to_actor"], true);
         assert_eq!(projected["actor_id"], "did:web:alice.example");
     }
@@ -845,20 +845,20 @@ mod notification_projection_tests {
             "source_event_id": "ak:event:01904100-0000-7000-8000-000000000007",
             "strand_id": "ak:strand:01904100-0000-7000-8000-000000000005",
             "notification_type": "schedule",
-            "event_kind": "ck.strand.update",
+            "event_kind": "ak.strand.update",
             "source_actor_id": "did:web:alice.example",
             "created_at": "2026-07-05T00:00:00Z"
         });
         let source = json!({
             "event_id": "ak:event:01904100-0000-7000-8000-000000000007",
             "realm_id": "ak:realm:01904100-0000-7000-8000-000000000002",
-            "event_kind": "ck.strand.update"
+            "event_kind": "ak.strand.update"
         });
 
         let projected = notification_value_from_row(&row, &source).unwrap();
 
         assert_eq!(projected["notification_type"], "schedule");
-        assert_eq!(projected["event_kind"], "ck.strand.update");
+        assert_eq!(projected["event_kind"], "ak.strand.update");
         assert_eq!(projected["schedule_target"], true);
         assert_eq!(
             projected["body"],
@@ -1829,7 +1829,7 @@ fn sync_timeline_message_record_json(message: &crate::state::MessageRecord) -> s
     let strand_id = strand_id_from_realm_id(&message.realm_id);
     let track_id = message.thread_id.clone();
     let mut event = json!({
-        "kind": "ck.message.create",
+        "kind": "ak.message.create",
         "event_id": message.event_id,
         "message_id": message.message_id,
         "strand_id": strand_id,

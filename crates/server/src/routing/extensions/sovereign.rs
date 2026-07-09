@@ -145,7 +145,7 @@ fn url_host(url: &str) -> Option<String> {
 /// The conformance profile id soland claims on `/server/describe` when
 /// `sovereign_enclave_enabled=true`. Registered in
 /// `arkret-spec/spec/v1/artifacts/profiles/conformance-profiles.json`.
-pub const SOVEREIGN_ENCLAVE_PROFILE_ID: &str = "ck.profile.sovereign_enclave.v1";
+pub const SOVEREIGN_ENCLAVE_PROFILE_ID: &str = "ak.profile.sovereign_enclave.v1";
 
 #[derive(Debug, Deserialize, ToSchema)]
 struct ConfigureDeploymentRequestBody {

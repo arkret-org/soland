@@ -22,11 +22,11 @@ use crate::state::AppState;
 use crate::{JsonResult, ids, json_ok};
 
 #[endpoint(
-    operation_id = "ck.self.read_cursor.command.advance",
+    operation_id = "ak.self.read_cursor.command.advance",
     tags("read_cursors"),
     summary = "Set the authenticated actor's read marker for a Realm"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.read_cursor.command.advance"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.read_cursor.command.advance"))]
 pub(super) async fn set_read_cursor(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -49,7 +49,7 @@ pub(super) async fn set_read_cursor(
     let read_at_wire = arkret_sdk::canonical::format_timestamp_canonical(read_at);
     let payload = json!({
         "id": ids::generate_read_cursor_id(),
-        "schema": "ck.schema.read_cursor.v1",
+        "schema": "ak.schema.read_cursor.v1",
         "actor_id": actor_id,
         "realm_id": realm_id,
         "device_id": device_id,
@@ -76,7 +76,7 @@ pub(super) async fn set_read_cursor(
         &session.device_id,
         READ_MARKER_UPDATE_TYPE,
         json!({
-            "schema": "ck.schema.read_cursor.v1",
+            "schema": "ak.schema.read_cursor.v1",
             "actor_id": actor_id,
             "device_id": device_id,
             "realm_id": realm_id,
@@ -97,11 +97,11 @@ pub(super) async fn set_read_cursor(
 }
 
 #[endpoint(
-    operation_id = "ck.self.read_cursor.query.list",
+    operation_id = "ak.self.read_cursor.query.list",
     tags("read_cursors"),
     summary = "List the authenticated actor's read markers, optionally filtered by Realm"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.read_cursor.query.list"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.read_cursor.query.list"))]
 pub(super) async fn get_read_cursors(
     aa: AuthArgs,
     depot: &mut Depot,

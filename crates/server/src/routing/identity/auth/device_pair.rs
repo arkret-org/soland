@@ -1,12 +1,12 @@
 use super::*;
 
 #[endpoint(
-    operation_id = "ck.gate.account.command.pair_device",
+    operation_id = "ak.gate.account.command.pair_device",
     tags("auth"),
     summary = "Pair a new device with approval from the authenticated existing device",
     status_codes(200, 400, 401, 409, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.gate.account.command.pair_device"))]
+#[tracing::instrument(skip_all, fields(op = "ak.gate.account.command.pair_device"))]
 pub(super) async fn account_device_pair(
     aa: super::super::AuthArgs,
     depot: &mut Depot,
@@ -83,7 +83,7 @@ async fn authorize_account_device_pair(
             "device_authorize_projected": true,
             "device_authorize_event_id": authorized_event_ref.clone(),
             "authorization": {
-                "event_kind": "ck.device.authorize",
+                "event_kind": "ak.device.authorize",
                 "authorized_event_ref": authorized_event_ref.clone(),
                 "authorized_by_device_id": session.device_id.clone(),
                 "authorized_at": authorized_at,

@@ -60,7 +60,7 @@ use crate::error::{AppError, ErrorCode};
 /// (`service-http-binding.md` §2.1.2). Declaring it requires
 /// `development_mode=true` and MUST NOT coexist with production
 /// `verified_profiles`.
-pub const CONFORMANCE_HARNESS_PROFILE: &str = "ck.profile.conformance_harness.v1";
+pub const CONFORMANCE_HARNESS_PROFILE: &str = "ak.profile.conformance_harness.v1";
 
 /// Boot-time snapshot of whether the conformance harness profile is active,
 /// set once when [`crate::routing::api_v1_router`] decides whether to mount
@@ -123,7 +123,7 @@ mod tests {
         // namespace; a drift here would silently mis-gate the surface.
         assert_eq!(
             CONFORMANCE_HARNESS_PROFILE,
-            "ck.profile.conformance_harness.v1"
+            "ak.profile.conformance_harness.v1"
         );
     }
 

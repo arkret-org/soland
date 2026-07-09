@@ -43,7 +43,7 @@ fn constant_time_str_eq(left: &str, right: &str) -> bool {
 
 pub(super) fn recovery_session_summary(record: &RecoverySessionRecord) -> Value {
     let mut out = json!({
-        "schema": "ck.schema.recovery_session.v1",
+        "schema": "ak.schema.recovery_session.v1",
         "recovery_session_id": record.recovery_session_id,
         "principal_id": record.principal_id,
         "requesting_device_id": record.requesting_device_id,
@@ -173,14 +173,14 @@ pub(super) async fn load_owned_recovery_session(
 }
 
 #[endpoint(
-    operation_id = "ck.root.identity.recovery_session.command.create",
+    operation_id = "ak.root.identity.recovery_session.command.create",
     tags("identity", "recovery"),
     summary = "Open a recovery session bound to the active policy (REC-1)",
     status_codes(200, 201, 400, 401, 403, 409, 500)
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "ck.root.identity.recovery_session.command.create")
+    fields(op = "ak.root.identity.recovery_session.command.create")
 )]
 pub(super) async fn recovery_session_create(
     aa: AuthArgs,
@@ -297,7 +297,7 @@ pub(super) async fn recovery_session_create(
     append_audit_log(
         state,
         Some(&session.actor),
-        "ck.root.identity.recovery_session.command.create",
+        "ak.root.identity.recovery_session.command.create",
         json!({
             "recovery_session_id": record.recovery_session_id.clone(),
             "principal_id": record.principal_id.clone(),
@@ -313,14 +313,14 @@ pub(super) async fn recovery_session_create(
 }
 
 #[endpoint(
-    operation_id = "ck.root.identity.recovery_session.resource.get",
+    operation_id = "ak.root.identity.recovery_session.resource.get",
     tags("identity", "recovery"),
     summary = "Read a recovery session status (REC-1)",
     status_codes(200, 401, 403, 404, 500)
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "ck.root.identity.recovery_session.resource.get")
+    fields(op = "ak.root.identity.recovery_session.resource.get")
 )]
 pub(super) async fn recovery_session_get(
     aa: AuthArgs,
@@ -336,14 +336,14 @@ pub(super) async fn recovery_session_get(
 }
 
 #[endpoint(
-    operation_id = "ck.root.identity.recovery_session.command.submit_proof",
+    operation_id = "ak.root.identity.recovery_session.command.submit_proof",
     tags("identity", "recovery"),
     summary = "Submit a recovery proof for a pending session (REC-1)",
     status_codes(200, 400, 401, 403, 404, 409, 500)
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "ck.root.identity.recovery_session.command.submit_proof")
+    fields(op = "ak.root.identity.recovery_session.command.submit_proof")
 )]
 pub(super) async fn recovery_session_proof_submit(
     aa: AuthArgs,
@@ -451,7 +451,7 @@ pub(super) async fn recovery_session_proof_submit(
     append_audit_log(
         state,
         Some(&updated.principal_id),
-        "ck.root.identity.recovery_session.command.submit_proof",
+        "ak.root.identity.recovery_session.command.submit_proof",
         json!({
             "recovery_session_id": updated.recovery_session_id.clone(),
             "principal_id": updated.principal_id.clone(),
@@ -649,7 +649,7 @@ pub(super) async fn verify_trusted_recovery_service_proof(
 ///     `signature` and `unlock_commitment` removed, using the public key
 ///     decoded from the entry's verification_method;
 /// (c) `unlock_commitment` MUST equal
-///     SHA-256(utf8("ck-recovery-session-unlock-binding-v1\n")
+///     SHA-256(utf8("ak.recovery-session-unlock-binding-v1\n")
 ///       || utf8(recovery_secret_ref) || unlock_binding_input_bytes),
 ///     where unlock_binding_input_bytes is the same canonical transcript bytes
 ///     verified in (b).
@@ -705,7 +705,7 @@ pub(super) async fn verify_recovery_unlock_proof(
 
     // (c) unlock_commitment integrity.
     let mut hasher = Sha256::new();
-    hasher.update(b"ck-recovery-session-unlock-binding-v1\n");
+    hasher.update(b"ak.recovery-session-unlock-binding-v1\n");
     hasher.update(recovery_secret_ref.as_bytes());
     hasher.update(&transcript_bytes);
     let expected_commitment = format!("sha256:{}", hex::encode(hasher.finalize()));
@@ -928,7 +928,7 @@ fn recovery_proof_authority_error(message: impl Into<String>) -> AppError {
 /// MUST construct this identically.
 pub(super) fn recovery_proof_transcript(record: &RecoverySessionRecord, kind: &str) -> Value {
     json!({
-        "type": "ck.identity.recovery_proof.v1",
+        "type": "ak.identity.recovery_proof.v1",
         "kind": kind,
         "principal_id": record.principal_id,
         "requesting_device_id": record.requesting_device_id,
@@ -951,7 +951,7 @@ pub(super) fn generic_recovery_proof_transcript(
     proof_body: Value,
 ) -> Value {
     json!({
-        "type": "ck.identity.recovery_proof.v1",
+        "type": "ak.identity.recovery_proof.v1",
         "kind": kind,
         "principal_id": record.principal_id,
         "requesting_device_id": record.requesting_device_id,
@@ -968,14 +968,14 @@ pub(super) fn generic_recovery_proof_transcript(
 }
 
 #[endpoint(
-    operation_id = "ck.root.identity.recovery_session.command.complete",
+    operation_id = "ak.root.identity.recovery_session.command.complete",
     tags("identity", "recovery"),
     summary = "Finalize a verified recovery session (REC-1)",
     status_codes(200, 400, 401, 403, 404, 409, 500)
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "ck.root.identity.recovery_session.command.complete")
+    fields(op = "ak.root.identity.recovery_session.command.complete")
 )]
 pub(super) async fn recovery_session_complete(
     aa: AuthArgs,
@@ -1018,7 +1018,7 @@ pub(super) async fn recovery_session_complete(
 
     // Resolve + verify the referenced ck.device.authorize.
     let authorize_payload =
-        resolve_control_event_payload(state, &authorization_event_id, "ck.device.authorize")
+        resolve_control_event_payload(state, &authorization_event_id, "ak.device.authorize")
             .await?;
     if authorize_payload
         .get("principal_id")
@@ -1074,7 +1074,7 @@ pub(super) async fn recovery_session_complete(
 
     // Resolve + verify the referenced ck.device.list_update.
     let list_update_payload =
-        resolve_control_event_payload(state, &device_list_update_event_id, "ck.device.list_update")
+        resolve_control_event_payload(state, &device_list_update_event_id, "ak.device.list_update")
             .await?;
     if list_update_payload
         .get("principal_id")
@@ -1163,7 +1163,7 @@ pub(super) async fn recovery_session_complete(
     append_audit_log(
         state,
         Some(&completed.principal_id),
-        "ck.root.identity.recovery_session.command.complete",
+        "ak.root.identity.recovery_session.command.complete",
         json!({
             "recovery_session_id": completed.recovery_session_id,
             "device_id": completed.requesting_device_id,

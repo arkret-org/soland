@@ -196,7 +196,7 @@ All settings can be supplied via environment variables (preferred) or a
 | `SOLAND_EXTERNAL_WEBVH_PROVIDER_URL` | unset | Optional external `did:webvh` provider, such as a standalone StarID service |
 | `SOLAND_DEFAULT_WEBVH_PROVIDER_ID` | unset | Optional coauth default provider id: `soland.embedded` or `external.webvh` |
 | `SOLAND_ACCOUNT_AUTHORITY_URL` | unset | Public Account Authority URL advertised at `/_arkret/describe.auth_metadata.account_authority` |
-| `SOLAND_SESSION_GRANT_INTROSPECTION_URL` | unset | coauth session-grant introspection endpoint used for `ck.session.grant + DPoP` |
+| `SOLAND_SESSION_GRANT_INTROSPECTION_URL` | unset | coauth session-grant introspection endpoint used for `ak.session.grant + DPoP` |
 | `SOLAND_SESSION_GRANT_INTROSPECTION_BEARER` | unset | Server-to-server bearer sent to the session-grant introspection endpoint |
 | `DATABASE_URL` | unset | If set, enables PostgreSQL and runs migrations |
 | `SOLAND_OBJECT_STORAGE_BACKEND` | `filesystem` | Blob object backend: `filesystem`/`local` or `s3-compatible` |
@@ -329,8 +329,8 @@ document and webvh log from `/webvh/{local_id}/did.json` and `.jsonl`. The
 embedded DID uses the public `did:webvh:<scid>:<host>:webvh:<local_id>` path
 rather than the internal registration API path.
 
-Production authentication presents the coauth-issued `ck.session.grant`
-directly to soland as `Authorization: Bearer <ck.session.grant>` plus a DPoP
+Production authentication presents the coauth-issued `ak.session.grant`
+directly to soland as `Authorization: Bearer <ak.session.grant>` plus a DPoP
 proof. soland validates the grant through session-grant introspection, requires
 `urn:arkret:principal-server:session.bind`, and maps the introspection subject
 and device binding into the local request-scoped account/device view. soland no

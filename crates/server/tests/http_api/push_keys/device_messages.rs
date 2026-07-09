@@ -18,7 +18,7 @@ async fn server_preserves_e2ee_payloads_as_opaque_data() {
             "messages": {
                 "did:web:alice.example": {
                     "ak:device:01904100-0000-7000-8000-a11ce0000001":
-                        device_message_target("ck.mls.application", encrypted_envelope("ck.mls.application", ciphertext))
+                        device_message_target("ak.mls.application", encrypted_envelope("ck.mls.application", ciphertext))
                 }
             }
         }))
@@ -55,7 +55,7 @@ async fn to_device_messages_survive_duplicate_sync_until_ack_token_consumed() {
             "messages": {
                 "did:web:alice.example": {
                     "ak:device:01904100-0000-7000-8000-a11ce0000001":
-                        device_message_target("ck.mls.application", encrypted_envelope("ck.mls.application", "ack-ciphertext"))
+                        device_message_target("ak.mls.application", encrypted_envelope("ck.mls.application", "ack-ciphertext"))
                 }
             }
         }))
@@ -137,8 +137,8 @@ async fn expired_to_device_messages_signal_lost_and_advance_cursor() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
     let mut expired_target = device_message_target(
-        "ck.mls.welcome",
-        encrypted_envelope("ck.mls.welcome", "expired"),
+        "ak.mls.welcome",
+        encrypted_envelope("ak.mls.welcome", "expired"),
     );
     expired_target["expires_at"] = serde_json::json!(
         (chrono::Utc::now() - chrono::Duration::minutes(1))
@@ -186,8 +186,8 @@ async fn expired_to_device_messages_signal_lost_and_advance_cursor() {
     assert_eq!(replay["lost"], false);
 
     let mut expired_for_subscribe = device_message_target(
-        "ck.mls.welcome",
-        encrypted_envelope("ck.mls.welcome", "expired-subscribe"),
+        "ak.mls.welcome",
+        encrypted_envelope("ak.mls.welcome", "expired-subscribe"),
     );
     expired_for_subscribe["expires_at"] = serde_json::json!(
         (chrono::Utc::now() - chrono::Duration::minutes(1))
@@ -234,7 +234,7 @@ async fn device_messages_evicted_after_session_logout() {
             "messages": {
                 "did:web:alice.example": {
                     "ak:device:01904100-0000-7000-8000-a11ce0000001":
-                        device_message_target("ck.mls.welcome", encrypted_envelope("ck.mls.welcome", "logout-ciphertext"))
+                        device_message_target("ak.mls.welcome", encrypted_envelope("ck.mls.welcome", "logout-ciphertext"))
                 }
             }
         }))

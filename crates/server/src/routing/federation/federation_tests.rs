@@ -153,7 +153,7 @@ async fn mesh_policy_broadcasts_to_every_peer() {
     assert_eq!(transcript.status, "outbound_fanout_retry_scheduled");
     assert_eq!(
         transcript.response["schema"],
-        "ck.federation.outbound_fanout.transcript.v1"
+        "ak.federation.outbound_fanout.transcript.v1"
     );
     assert_eq!(transcript.response["signing"]["status"], "intent_signed");
     assert_eq!(
@@ -262,7 +262,7 @@ async fn local_invite_membership_and_message_operations_project_invite() {
             "event_id": "ak:event:01904100-0000-7000-8000-000000000054",
             "sender": "did:web:alice.example",
             "thread_id": "ak:strand:01904100-0000-7000-8000-000000000051",
-            "content": {"kind": "ck.content.text", "body": "hello federation"}
+            "content": {"kind": "ak.content.text", "body": "hello federation"}
         }),
     );
 
@@ -309,13 +309,13 @@ async fn operation_frontier_tracks_persisted_operation_ids() {
         arkret_sdk::OperationId::new("ak:operation:01904100-0000-7000-8000-000000000062").unwrap(),
         realm_id.clone(),
         arkret_sdk::events::kinds::MESSAGE_CREATE,
-        json!({"content": {"kind": "ck.content.text", "body": "one"}}),
+        json!({"content": {"kind": "ak.content.text", "body": "one"}}),
     );
     let second = Operation::create(
         arkret_sdk::OperationId::new("ak:operation:01904100-0000-7000-8000-000000000063").unwrap(),
         realm_id,
         arkret_sdk::events::kinds::MESSAGE_CREATE,
-        json!({"content": {"kind": "ck.content.text", "body": "two"}}),
+        json!({"content": {"kind": "ak.content.text", "body": "two"}}),
     );
     state
         .persistence

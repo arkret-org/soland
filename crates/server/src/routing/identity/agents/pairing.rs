@@ -1,11 +1,11 @@
 use super::*;
 
 #[endpoint(
-    operation_id = "ck.open.agent_pairing.query.resolve",
+    operation_id = "ak.open.agent_pairing.query.resolve",
     tags("open"),
     summary = "Resolve a short-lived agent pairing token"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.open.agent_pairing.query.resolve"))]
+#[tracing::instrument(skip_all, fields(op = "ak.open.agent_pairing.query.resolve"))]
 pub(super) async fn resolve_agent_pairing(
     depot: &mut Depot,
     req: &mut Request,
@@ -71,13 +71,13 @@ pub(super) async fn resolve_agent_pairing(
 }
 
 #[endpoint(
-    operation_id = "ck.open.agent_pairing.command.submit_runtime_key_request",
+    operation_id = "ak.open.agent_pairing.command.submit_runtime_key_request",
     tags("open"),
     summary = "Submit an agent runtime key request for controller approval"
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "ck.open.agent_pairing.command.submit_runtime_key_request")
+    fields(op = "ak.open.agent_pairing.command.submit_runtime_key_request")
 )]
 pub(super) async fn submit_agent_runtime_key_request(
     body: JsonBody<AgentRuntimeApprovalRequestBody>,
@@ -169,12 +169,12 @@ pub(super) async fn submit_agent_runtime_key_request(
 /// as the controller (`actor_id == session.actor`). Only used under
 /// `development_mode`; the resulting session is never persisted or returned.
 #[endpoint(
-    operation_id = "ck.gate.account.command.pair_agent_key",
+    operation_id = "ak.gate.account.command.pair_agent_key",
     tags("agents"),
     summary = "Authorize an agent runtime key pair against the agent principal",
     status_codes(200, 400, 401, 403, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.gate.account.command.pair_agent_key"))]
+#[tracing::instrument(skip_all, fields(op = "ak.gate.account.command.pair_agent_key"))]
 pub(super) async fn agent_key_pair(
     aa: AuthArgs,
     body: JsonBody<AgentKeyPairRequestBody>,
@@ -299,7 +299,7 @@ pub(super) async fn submit_production_key_authorize_event(
         .await
         .map_err(|error| {
             AppError::invalid_param(format!(
-                "ck.agent.key.authorize submit failed: {}",
+                "ak.agent.key.authorize submit failed: {}",
                 error.message
             ))
             .with_status(error.status)
@@ -317,7 +317,7 @@ pub(super) fn ensure_key_authorize_event_matches_request(
     runtime_public_key_digest: &str,
     service_did: &str,
 ) -> Result<(), AppError> {
-    if envelope.get("kind").and_then(Value::as_str) != Some("ck.agent.key.authorize") {
+    if envelope.get("kind").and_then(Value::as_str) != Some("ak.agent.key.authorize") {
         return Err(AppError::invalid_param(
             "authorize_event.kind must be ck.agent.key.authorize",
         ));

@@ -156,7 +156,7 @@ async fn direct_realm_genesis_projects_peer_as_timeline_reader() {
         "aad_visibility_event_id": "hidden",
         "aad": {
             "realm_id": realm_id,
-            "event_kind": "ck.message.create"
+            "event_kind": "ak.message.create"
         },
         "key_ref": {
             "algorithm": "MLS",

@@ -16,7 +16,7 @@ pub fn sync_timeline_message_json(message: &crate::reducer::MessageState) -> ser
     let strand_id = strand_id_from_realm_id(&message.realm_id);
     let track_id = message.thread_id.clone();
     let mut event = json!({
-        "kind": "ck.message.create",
+        "kind": "ak.message.create",
         "event_id": message.event_id,
         "message_id": message.message_id,
         "strand_id": strand_id,
@@ -179,7 +179,7 @@ fn poll_projection_json(
     event_id: &str,
     projection: &crate::reducer::ProjectionState,
 ) -> Option<serde_json::Value> {
-    if content.get("kind").and_then(serde_json::Value::as_str) != Some("ck.content.poll") {
+    if content.get("kind").and_then(serde_json::Value::as_str) != Some("ak.content.poll") {
         return None;
     }
     let poll_id = content
@@ -274,7 +274,7 @@ mod tests {
                 "sender": "did:web:alice.example",
                 "strand_id": "ak:strand:019e4fd4-4e26-7cc9-af7e-d7102d6f4a22",
                 "track_name": "discussion",
-                "content": {"kind": "ck.content.text", "body": "hello"}
+                "content": {"kind": "ak.content.text", "body": "hello"}
             }),
         );
         let mut projection = crate::reducer::ProjectionState::new();

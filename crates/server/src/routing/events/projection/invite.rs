@@ -26,7 +26,7 @@ pub(super) async fn project_invite_accept_operation(
     origin: &str,
     operation: &Operation,
 ) {
-    if kinds::canonical_kind_string(operation) != "ck.invite.accept" {
+    if kinds::canonical_kind_string(operation) != "ak.invite.accept" {
         return;
     }
     let accepter = operation
@@ -41,20 +41,20 @@ pub(super) async fn project_invite_accept_operation(
     let Some(invite_id) = invite_acceptance_ref_for_operation(operation) else {
         tracing::warn!(
             operation_id = %operation.operation_id,
-            "ck.invite.accept missing valid invite_ref/invite_id"
+            "ak.invite.accept missing valid invite_ref/invite_id"
         );
         return;
     };
     let invites = state.persistence.realm_invites();
     let Ok(Some(mut record)) = invites.get(&invite_id).await else {
-        tracing::warn!(invite_id = %invite_id, "ck.invite.accept references unknown invite");
+        tracing::warn!(invite_id = %invite_id, "ak.invite.accept references unknown invite");
         return;
     };
     if record.invitee.as_deref() != Some(accepter.as_str()) {
         tracing::warn!(
             invite_id = %invite_id,
             accepter = %accepter,
-            "ck.invite.accept sender is not the invitee; ignored"
+            "ak.invite.accept sender is not the invitee; ignored"
         );
         return;
     }
@@ -63,7 +63,7 @@ pub(super) async fn project_invite_accept_operation(
             invite_id = %invite_id,
             record_realm = %record.realm_id,
             operation_realm = %operation.realm_id,
-            "ck.invite.accept realm mismatch; ignored"
+            "ak.invite.accept realm mismatch; ignored"
         );
         return;
     }
@@ -71,7 +71,7 @@ pub(super) async fn project_invite_accept_operation(
         tracing::debug!(
             invite_id = %invite_id,
             status = %record.status,
-            "ck.invite.accept on non-acceptable invite; ignored"
+            "ak.invite.accept on non-acceptable invite; ignored"
         );
         return;
     }
@@ -79,7 +79,7 @@ pub(super) async fn project_invite_accept_operation(
         .expires_at
         .is_some_and(|expires_at| expires_at <= operation.created_at)
     {
-        tracing::warn!(invite_id = %invite_id, "ck.invite.accept on expired invite; ignored");
+        tracing::warn!(invite_id = %invite_id, "ak.invite.accept on expired invite; ignored");
         return;
     }
     record.status = "accepted".to_owned();
@@ -118,7 +118,7 @@ pub(super) async fn project_invite_accept_operation(
         invite_id = %invite_id,
         invitee = %accepter,
         realm_id = %realm_id,
-        "ck.invite.accept projected: invite accepted + membership cascaded"
+        "ak.invite.accept projected: invite accepted + membership cascaded"
     );
 }
 
@@ -296,12 +296,12 @@ pub(super) async fn project_invite_third_party_operation(state: &AppState, opera
     let Some(invite_id) = invite_string_field(payload, invite, "invite_id", "id") else {
         tracing::warn!(
             operation_id = %operation.operation_id,
-            "ck.invite.third_party missing invite id"
+            "ak.invite.third_party missing invite id"
         );
         return;
     };
     if arkret_sdk::InviteId::new(invite_id.clone()).is_err() {
-        tracing::warn!(invite_id = %invite_id, "ck.invite.third_party malformed invite id");
+        tracing::warn!(invite_id = %invite_id, "ak.invite.third_party malformed invite id");
         return;
     }
     let realm_id = invite_string_field(payload, invite, "realm_id", "realm_id")
@@ -311,17 +311,17 @@ pub(super) async fn project_invite_third_party_operation(state: &AppState, opera
             invite_id = %invite_id,
             realm_id = %realm_id,
             operation_realm = %operation.realm_id,
-            "ck.invite.third_party realm mismatch"
+            "ak.invite.third_party realm mismatch"
         );
         return;
     }
     let Some(inviter) = invite_string_field(payload, invite, "inviter", "inviter") else {
-        tracing::warn!(invite_id = %invite_id, "ck.invite.third_party missing inviter");
+        tracing::warn!(invite_id = %invite_id, "ak.invite.third_party missing inviter");
         return;
     };
     let Some(third_party_id) = invite_value_field(payload, invite, "third_party_id").cloned()
     else {
-        tracing::warn!(invite_id = %invite_id, "ck.invite.third_party missing third_party_id");
+        tracing::warn!(invite_id = %invite_id, "ak.invite.third_party missing third_party_id");
         return;
     };
     let expires_at = invite_string_field(payload, invite, "expires_at", "expires_at")
@@ -472,7 +472,7 @@ pub(super) async fn project_invite_create_operation(
         tracing::warn!(
             operation_id = %operation.operation_id,
             realm_id = %operation.realm_id,
-            "ck.invite.create missing valid invitee DID"
+            "ak.invite.create missing valid invitee DID"
         );
         return;
     };
@@ -480,7 +480,7 @@ pub(super) async fn project_invite_create_operation(
         tracing::warn!(
             operation_id = %operation.operation_id,
             realm_id = %operation.realm_id,
-            "ck.invite.create missing valid invite id"
+            "ak.invite.create missing valid invite id"
         );
         return;
     };
@@ -495,7 +495,7 @@ pub(super) async fn project_invite_create_operation(
             invite_id = %invite_id,
             invitee = %invitee.as_str(),
             realm_id = %operation.realm_id,
-            "ck.invite.create projection skipped: invitee is already a member"
+            "ak.invite.create projection skipped: invitee is already a member"
         );
         return;
     }
@@ -506,7 +506,7 @@ pub(super) async fn project_invite_create_operation(
             tracing::debug!(
                 invite_id = %invite_id,
                 status = %existing.status,
-                "ck.invite.create projection replay skipped"
+                "ak.invite.create projection replay skipped"
             );
             return;
         }
@@ -538,7 +538,7 @@ pub(super) async fn project_invite_create_operation(
             invite_id = %invite_id,
             invitee = %invitee.as_str(),
             realm_id = %operation.realm_id,
-            "ck.invite.create projection skipped: live direct invite already exists"
+            "ak.invite.create projection skipped: live direct invite already exists"
         );
         return;
     }
@@ -607,7 +607,7 @@ fn invite_id_for_operation(operation: &Operation) -> Option<String> {
         tracing::warn!(
             operation_id = %operation.operation_id,
             invite_id = %invite_id,
-            "ck.invite.create supplied malformed invite_id; deriving stable invite id"
+            "ak.invite.create supplied malformed invite_id; deriving stable invite id"
         );
     }
     ids::typed_uuid_part(operation.operation_id.as_str())
@@ -749,7 +749,7 @@ fn invite_delivery_target_for_operation(operation: &Operation) -> Option<Value> 
     if Did::new(service_did.to_owned()).is_err() {
         tracing::warn!(
             operation_id = %operation.operation_id,
-            "ck.invite.create supplied invalid invite_delivery_target.recipient_service_did"
+            "ak.invite.create supplied invalid invite_delivery_target.recipient_service_did"
         );
         return None;
     }
@@ -759,7 +759,7 @@ fn invite_delivery_target_for_operation(operation: &Operation) -> Option<Value> 
         tracing::warn!(
             operation_id = %operation.operation_id,
             service_type = %service_type,
-            "ck.invite.create supplied invalid invite_delivery_target.recipient_service_type"
+            "ak.invite.create supplied invalid invite_delivery_target.recipient_service_type"
         );
         return None;
     }
@@ -776,7 +776,7 @@ fn introduction_evidence_digest_for_operation(operation: &Operation) -> Option<S
     if arkret_sdk::Hash::new(digest.to_owned()).is_err() {
         tracing::warn!(
             operation_id = %operation.operation_id,
-            "ck.invite.create supplied invalid introduction_evidence_digest"
+            "ak.invite.create supplied invalid introduction_evidence_digest"
         );
         return None;
     }

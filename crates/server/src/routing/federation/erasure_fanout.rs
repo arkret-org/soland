@@ -449,7 +449,7 @@ mod tests {
                 recorded_at: Utc::now(),
                 payload: json!({
                     "receipt_id": "r1",
-                    "schema": "ck.schema.erasure_receipt.v1",
+                    "schema": "ak.schema.erasure_receipt.v1",
                     "subject": {"kind": "principal", "ref": "did:web:alice.example"},
                     "outcome": "completed",
                     "scope": {

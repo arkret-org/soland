@@ -45,7 +45,7 @@ async fn health_and_describe_work() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|profile| profile == "ck.profile.soland_limited_server.v1")
+            .any(|profile| profile == "ak.profile.soland_limited_server.v1")
     );
 
     let operator_describe: Value = TestClient::get("http://server/_soland/describe")
@@ -60,7 +60,7 @@ async fn health_and_describe_work() {
             .unwrap()
             .iter()
             .any(
-                |profile| profile["profile"] == "ck.profile.soland_limited_server.v1"
+                |profile| profile["profile"] == "ak.profile.soland_limited_server.v1"
                     && profile["status"] == "unsupported"
             )
     );
@@ -69,21 +69,21 @@ async fn health_and_describe_work() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|profile| profile == "ck.schema.core.v1" || profile == "ck.reducer.v1")
+            .any(|profile| profile == "ak.schema.core.v1" || profile == "ck.reducer.v1")
     );
     assert!(
         describe["supported_schema_profiles"]
             .as_array()
             .unwrap()
             .iter()
-            .any(|profile| profile == "ck.schema.core.v1")
+            .any(|profile| profile == "ak.schema.core.v1")
     );
     assert!(
         describe["supported_reducer_profiles"]
             .as_array()
             .unwrap()
             .iter()
-            .any(|profile| profile == "ck.reducer.v1")
+            .any(|profile| profile == "ak.reducer.v1")
     );
     assert_eq!(
         describe["limits"]["profile_status"]["conformance"],
@@ -106,69 +106,69 @@ async fn health_and_describe_work() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|profile| profile == "ck.profile.mimi_interop.v1")
+            .any(|profile| profile == "ak.profile.mimi_interop.v1")
     );
     assert!(
         describe["supported_profiles"]
             .as_array()
             .unwrap()
             .iter()
-            .any(|profile| profile == "ck.profile.file_transfer.v1")
+            .any(|profile| profile == "ak.profile.file_transfer.v1")
     );
     assert!(
         describe["supported_profiles"]
             .as_array()
             .unwrap()
             .iter()
-            .any(|profile| profile == "ck.profile.webrtc_media.v1")
+            .any(|profile| profile == "ak.profile.webrtc_media.v1")
     );
     assert!(
         describe["supported_profiles"]
             .as_array()
             .unwrap()
             .iter()
-            .any(|profile| profile == "ck.profile.media_service_binding.v1")
+            .any(|profile| profile == "ak.profile.media_service_binding.v1")
     );
     assert!(
         describe["supported_operations"]
             .as_array()
             .unwrap()
             .iter()
-            .any(|operation| operation == "ck.open.mimi.command.submit_message")
+            .any(|operation| operation == "ak.open.mimi.command.submit_message")
     );
     assert!(
         describe["supported_operations"]
             .as_array()
             .unwrap()
             .iter()
-            .any(|operation| operation == "ck.self.events.command.submit")
+            .any(|operation| operation == "ak.self.events.command.submit")
     );
     assert!(
         describe["supported_operations"]
             .as_array()
             .unwrap()
             .iter()
-            .any(|operation| operation == "ck.self.blob.upload.create")
+            .any(|operation| operation == "ak.self.blob.upload.create")
     );
     assert!(
         describe["supported_operations"]
             .as_array()
             .unwrap()
             .iter()
-            .any(|operation| operation == "ck.self.keys.backups.resource.replace")
+            .any(|operation| operation == "ak.self.keys.backups.resource.replace")
     );
     assert!(
         describe["supported_operations"]
             .as_array()
             .unwrap()
             .iter()
-            .any(|operation| operation == "ck.self.circle.command.restore")
+            .any(|operation| operation == "ak.self.circle.command.restore")
     );
     for operation_id in [
-        "ck.self.authz.query.check",
-        "ck.self.authz.grants.query.effective",
-        "ck.self.authz.invites.query.list",
-        "ck.self.policy.query.check",
+        "ak.self.authz.query.check",
+        "ak.self.authz.grants.query.effective",
+        "ak.self.authz.invites.query.list",
+        "ak.self.policy.query.check",
     ] {
         assert!(
             describe["supported_operations"]
@@ -254,14 +254,14 @@ async fn health_and_describe_work() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|profile| profile == "ck.profile.index_node.v1")
+            .any(|profile| profile == "ak.profile.index_node.v1")
     );
     assert!(
         describe["limits"]["profile_status"]["full_profiles_not_claimed"]
             .as_array()
             .unwrap()
             .iter()
-            .any(|profile| profile == "ck.profile.directory_service.v1")
+            .any(|profile| profile == "ak.profile.directory_service.v1")
     );
     let limitation_areas = describe["limits"]["profile_status"]["limitations"]
         .as_array()
@@ -311,7 +311,7 @@ async fn health_and_describe_work() {
         .as_array()
         .unwrap()
         .iter()
-        .find(|gap| gap["profile"] == "ck.profile.principal_server.v1")
+        .find(|gap| gap["profile"] == "ak.profile.principal_server.v1")
         .expect("principal server full-profile gap summary should be visible");
     assert_eq!(full_gap["status"], "not_claimed");
 }

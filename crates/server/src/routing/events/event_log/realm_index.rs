@@ -97,7 +97,7 @@ pub(super) async fn member_join_accepts_pending_invite(
     // being a realm member. Previously only (1) was exempt, so a spec-correct
     // `ck.invite.accept` from the invitee was rejected with `capability_denied`.
     let is_member_state_join = kind == Some(arkret_sdk::events::kinds::MEMBER_STATE);
-    let is_invite_accept = kind == Some("ck.invite.accept");
+    let is_invite_accept = kind == Some("ak.invite.accept");
     if !is_member_state_join && !is_invite_accept {
         return false;
     }
@@ -184,7 +184,7 @@ pub(super) async fn invite_claim_actor_claims_pending_third_party_invite(
     actor: &str,
     realm_id: &str,
 ) -> bool {
-    if object.get("kind").and_then(Value::as_str) != Some("ck.invite.claim") {
+    if object.get("kind").and_then(Value::as_str) != Some("ak.invite.claim") {
         return false;
     }
     let Some(payload) = object.get("payload") else {

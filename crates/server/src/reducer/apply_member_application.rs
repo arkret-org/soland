@@ -27,7 +27,7 @@ use super::*;
 
 const DEFAULT_APPLICATION_TTL: &str = "PT168H";
 const DEFAULT_COOLDOWN_AFTER_REJECT: &str = "PT72H";
-const DEFAULT_REVIEW_CAPABILITY: &str = "ck.realm.join.review";
+const DEFAULT_REVIEW_CAPABILITY: &str = "ak.realm.join.review";
 
 /// Open-application projection state for one `(realm_id, applicant)` pair.
 #[derive(Clone, Debug)]

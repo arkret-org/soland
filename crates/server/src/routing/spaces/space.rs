@@ -107,11 +107,11 @@ struct RealmExportOutcome {
 }
 
 #[endpoint(
-    operation_id = "ck.self.realm.resource.get",
+    operation_id = "ak.self.realm.resource.get",
     tags("realms"),
     summary = "Get a Realm lifecycle response (owner + members)"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.realm.resource.get"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.realm.resource.get"))]
 async fn get_realm(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -157,11 +157,11 @@ async fn submit_realm_lifecycle_command(
 }
 
 #[endpoint(
-    operation_id = "ck.self.realm.command.archive",
+    operation_id = "ak.self.realm.command.archive",
     tags("realms"),
     summary = "Set or clear the Realm archived facet"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.realm.command.archive"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.realm.command.archive"))]
 async fn archive_realm(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -187,11 +187,11 @@ async fn archive_realm(
 }
 
 #[endpoint(
-    operation_id = "ck.self.realm.command.freeze",
+    operation_id = "ak.self.realm.command.freeze",
     tags("realms"),
     summary = "Set or clear the Realm frozen read-only facet"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.realm.command.freeze"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.realm.command.freeze"))]
 async fn freeze_realm(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -217,11 +217,11 @@ async fn freeze_realm(
 }
 
 #[endpoint(
-    operation_id = "ck.self.realm.command.tombstone",
+    operation_id = "ak.self.realm.command.tombstone",
     tags("realms"),
     summary = "Terminally tombstone a Realm in favor of a successor Realm"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.realm.command.tombstone"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.realm.command.tombstone"))]
 async fn tombstone_realm(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -247,11 +247,11 @@ async fn tombstone_realm(
 }
 
 #[endpoint(
-    operation_id = "ck.self.realm.command.destroy",
+    operation_id = "ak.self.realm.command.destroy",
     tags("realms"),
     summary = "Terminally destroy a Realm without a successor"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.realm.command.destroy"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.realm.command.destroy"))]
 async fn destroy_realm(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -277,13 +277,13 @@ async fn destroy_realm(
 }
 
 #[endpoint(
-    operation_id = "ck.self.realm.moderation_policy.query.effective",
+    operation_id = "ak.self.realm.moderation_policy.query.effective",
     tags("realms", "policy"),
     summary = "Get organization-inherited effective moderation policy"
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "ck.self.realm.moderation_policy.query.effective")
+    fields(op = "ak.self.realm.moderation_policy.query.effective")
 )]
 async fn get_realm_effective_moderation_policy(
     aa: AuthArgs,
@@ -305,13 +305,13 @@ async fn get_realm_effective_moderation_policy(
 }
 
 #[endpoint(
-    operation_id = "ck.self.realm.moderation_policy.resource.replace",
+    operation_id = "ak.self.realm.moderation_policy.resource.replace",
     tags("realms", "policy"),
     summary = "Set a Realm moderation-policy override"
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "ck.self.realm.moderation_policy.resource.replace")
+    fields(op = "ak.self.realm.moderation_policy.resource.replace")
 )]
 async fn upsert_realm_moderation_policy(
     aa: AuthArgs,
@@ -404,11 +404,11 @@ async fn get_space_cell(
 }
 
 #[endpoint(
-    operation_id = "ck.self.realm.query.export",
+    operation_id = "ak.self.realm.query.export",
     tags("realms"),
     summary = "Full event log + projection dump for a Realm"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.realm.query.export"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.realm.query.export"))]
 async fn export_realm(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -458,7 +458,7 @@ async fn export_realm(
         })
         .collect::<Vec<_>>();
     json_ok(RealmExportOutcome {
-        schema: "ck.export.realm.v1".to_owned(),
+        schema: "ak.export.realm.v1".to_owned(),
         realm_id,
         generated_at: now(),
         operations,
@@ -1204,7 +1204,7 @@ pub async fn prune_expired_typing(state: &AppState) {
     }
 }
 
-const ACCOUNT_DATA_TYPE_PRESENCE_VISIBILITY: &str = "ck.presence.visibility";
+const ACCOUNT_DATA_TYPE_PRESENCE_VISIBILITY: &str = "ak.presence.visibility";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum PresenceVisibilityPolicy {
@@ -1318,12 +1318,12 @@ pub async fn typing_scope_allows_actor(
     };
     if strand_id.starts_with("ak:realm:") || strand_id == realm_id {
         return Err(AppError::capability_denied(
-            "ck.typing strand_id must name a visible ak:strand",
+            "ak.typing strand_id must name a visible ak:strand",
         ));
     }
     if !strand_id.starts_with("ak:strand:") {
         return Err(AppError::invalid_param(
-            "ck.typing strand_id must name a visible ak:strand",
+            "ak.typing strand_id must name a visible ak:strand",
         ));
     }
     let projection = state.projection.lock();
@@ -1332,34 +1332,34 @@ pub async fn typing_scope_allows_actor(
             return Ok(());
         }
         return Err(AppError::capability_denied(
-            "ck.typing strand is not visible",
+            "ak.typing strand is not visible",
         ));
     };
     if strand.realm_id != realm_id {
         return Err(AppError::capability_denied(
-            "ck.typing strand belongs to another realm",
+            "ak.typing strand belongs to another realm",
         ));
     }
     if strand.state != ObjectLifecycleState::Active {
         return Err(AppError::capability_denied(
-            "ck.typing strand is not active",
+            "ak.typing strand is not active",
         ));
     }
     let Some(discussion_track) = strand.tracks.get(STRAND_TRACK_NAME_DISCUSSION) else {
         return Err(AppError::capability_denied(
-            "ck.typing discussion track is disabled",
+            "ak.typing discussion track is disabled",
         ));
     };
     if discussion_track.enabled == Some(false) {
         return Err(AppError::capability_denied(
-            "ck.typing discussion track is disabled",
+            "ak.typing discussion track is disabled",
         ));
     }
     if let Some(scope_circle_id) = strand.scope_circle_id.as_deref()
         && !projection.circle_scope_visible_to_actor(scope_circle_id, actor)
     {
         return Err(AppError::capability_denied(
-            "ck.typing circle is not visible",
+            "ak.typing circle is not visible",
         ));
     }
     Ok(())
@@ -1401,7 +1401,7 @@ pub async fn typing_ephemeral_for_realm(
         .into_iter()
         .map(|(strand_id, actors)| {
             json!({
-                "type": "ck.typing",
+                "type": "ak.typing",
                 "realm_id": realm_id,
                 "strand_id": strand_id,
                 "actors": actors,
@@ -1418,7 +1418,7 @@ pub async fn typing_ephemeral_for_realm(
         deliver_call_signal_envelopes_for_subscriber(state, realm_id, session, full_sync).await;
     if !call_signals.is_empty() {
         ephemeral.push(json!({
-            "type": "ck.call.signal",
+            "type": "ak.call.signal",
             "realm_id": realm_id,
             "call_signals": call_signals,
         }));
@@ -1471,7 +1471,7 @@ async fn typing_record_visible_to_session(
     .is_ok()
 }
 
-const ACCOUNT_DATA_TYPE_BLOCKLIST: &str = "ck.account.blocklist";
+const ACCOUNT_DATA_TYPE_BLOCKLIST: &str = "ak.account.blocklist";
 
 async fn personal_blocklist_allows_actor(
     state: &AppState,

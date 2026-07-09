@@ -163,6 +163,6 @@ fn realm_key_share_rejects_inverted_epoch_range() {
 fn realm_key_share_is_registered_in_default_apply_registry() {
     assert!(
         default_apply_registry().contains_key(arkret_sdk::events::kinds::REALM_KEY_SHARE),
-        "ck.realm_key.share should dispatch through the reducer registry"
+        "ak.realm_key.share should dispatch through the reducer registry"
     );
 }

@@ -50,9 +50,9 @@ pub fn router() -> Router {
         .push(projection_query::protocol_router())
 }
 
-pub(crate) const AGENT_SCOPE_EVENTS_STREAM_SUBSCRIBE: &str = "ck.self.events.stream.subscribe";
-pub(crate) const AGENT_SCOPE_EVENTS_QUERY_SCAN: &str = "ck.self.events.query.scan";
-pub(crate) const AGENT_SCOPE_EVENTS_COMMAND_SUBMIT: &str = "ck.self.events.command.submit";
+pub(crate) const AGENT_SCOPE_EVENTS_STREAM_SUBSCRIBE: &str = "ak.self.events.stream.subscribe";
+pub(crate) const AGENT_SCOPE_EVENTS_QUERY_SCAN: &str = "ak.self.events.query.scan";
+pub(crate) const AGENT_SCOPE_EVENTS_COMMAND_SUBMIT: &str = "ak.self.events.command.submit";
 
 pub(crate) fn require_agent_session_scope(
     session: &SessionRecord,

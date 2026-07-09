@@ -37,7 +37,7 @@ fn seed_pin_target(state: &mut ProjectionState, hlc: &ServerHlc) {
             serde_json::json!({
                 "object": {
                     "id": REALM_ID,
-                    "schema": "ck.schema.realm.v1",
+                    "schema": "ak.schema.realm.v1",
                     "title": "Product",
                     "created_by": "did:web:alice.example",
                     "encryption_profile": "mls_rfc9420"

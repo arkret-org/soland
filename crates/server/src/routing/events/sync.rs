@@ -68,7 +68,7 @@ pub(crate) use crate::state::{
 pub(crate) use crate::wire::{EventsQueryPostRequestBody, SyncDescription, SyncRequestBody};
 
 pub(crate) const TIMELINE_POSITION_SUBTICKS: i64 = 1024;
-pub(crate) const PERSONAL_BLOCKLIST_DATA_TYPES: &[&str] = &["ck.account.blocklist"];
+pub(crate) const PERSONAL_BLOCKLIST_DATA_TYPES: &[&str] = &["ak.account.blocklist"];
 pub(crate) const PRESENCE_ONLINE_TTL_SECONDS: i64 = 3;
 pub(crate) const HANDLE_CLAIMS_INLINE_MAX_BYTES: usize = 8 * 1024;
 /// Default reconnect guard advertised on subscribe terminal control frames.

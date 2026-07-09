@@ -153,11 +153,11 @@ impl SolandIceConfigOutcome {
 }
 
 #[endpoint(
-    operation_id = "ck.self.media.query.ice_config",
+    operation_id = "ak.self.media.query.ice_config",
     tags("media"),
     summary = "Issue signed ICE config"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.media.query.ice_config"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.media.query.ice_config"))]
 async fn arkret_ice_config(
     aa: AuthArgs,
     body: JsonBody<MediaIceConfigRequestBody>,
@@ -372,7 +372,7 @@ fn pairwise_turn_username(
     let pseudonym_bytes = arkret_sdk::canonical::canonical_json_bytes(&pseudonym_input)
         .unwrap_or_else(|_| pseudonym_input.to_string().into_bytes());
     let tag = hmac_sha256(&secret, &pseudonym_bytes);
-    format!("ck_pseudonym_call_{}", hex::encode(&tag[..8]))
+    format!("ak.pseudonym_call_{}", hex::encode(&tag[..8]))
 }
 
 /// `webrtc-signaling.md` §4.1 — REST-style (draft-uberti) TURN credential:
@@ -409,7 +409,7 @@ fn turn_rest_credential(state: &AppState, username: &str) -> String {
 /// `ck.media.participant_binding.v1` so an issuer key's ICE-config signature can
 /// never be re-interpreted under the participant_binding verify path (or vice
 /// versa).
-const ICE_CONFIG_SIGNING_LABEL: &str = "ck.media.ice_config.v1";
+const ICE_CONFIG_SIGNING_LABEL: &str = "ak.media.ice_config.v1";
 
 /// `webrtc-signaling.md` §4.1 (normative) — construct the ICE config signing
 /// input as `label || 0x00 || canonical_json(<response minus signature>)`. The
@@ -450,7 +450,7 @@ fn ice_config_signature<T: Serialize>(state: &AppState, payload: &T) -> (String,
 //     (MEDIA-1).
 //   - `service_signature.kid` / `participant_binding.issuer_kid` resolves to the current
 //     `ck.realm.media_service.service_id` epoch → `token_issuer_unauthorised` (MEDIA-1).
-const REALM_MEDIA_SERVICE_CELL_FAMILY: &str = "ck.component.realm.media_service.v1";
+const REALM_MEDIA_SERVICE_CELL_FAMILY: &str = "ak.component.realm.media_service.v1";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum MediaProviderKind {
@@ -1350,7 +1350,7 @@ fn issue_livekit_backend_token(
         "{}\0{}\0{}",
         request.realm_id, request.call_id, request.focus.focus_id
     );
-    let room = format!("ck_call_{}", &sha256_hex(room_material.as_bytes())[..16]);
+    let room = format!("ak.call_{}", &sha256_hex(room_material.as_bytes())[..16]);
     // LiveKit JWT registered claims (`iat`/`nbf`/`exp`) are NumericDate —
     // seconds since the Unix epoch — not RFC3339 strings.
     let iat = request.issued_at.timestamp();
@@ -1439,12 +1439,12 @@ fn focus_unavailable_error(message: impl Into<String>) -> AppError {
 }
 
 #[endpoint(
-    operation_id = "ck.self.call.media.exchange.issue_token",
+    operation_id = "ak.self.call.media.exchange.issue_token",
     tags("media", "calls"),
     summary = "Exchange a session-focus for a backend media token + participant_binding (CKP-0010)",
     status_codes(200, 400, 401, 403, 404, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.call.media.exchange.issue_token"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.call.media.exchange.issue_token"))]
 async fn arkret_rtc_token(
     aa: AuthArgs,
     body: JsonBody<CallMediaTokenExchangeRequestBody>,
@@ -1534,8 +1534,8 @@ mod tests {
 // `webrtc-signaling.md` §3 — canonical capability actions. The registry is
 // the truth source; the spec body and this server MUST use the `ck.`-prefixed
 // forms and MUST NOT accept the bare `call.*` names.
-const CAP_CALL_JOIN: &str = "ck.call.join";
-const CAP_CALL_SCREEN_SHARE: &str = "ck.call.screen_share";
+const CAP_CALL_JOIN: &str = "ak.call.join";
+const CAP_CALL_SCREEN_SHARE: &str = "ak.call.screen_share";
 
 /// Resolve the (owner, members) authorization principals for a realm so the
 /// shared [`SolandAuthzEngine`] default rules (owner ⇒ all actions; explicit

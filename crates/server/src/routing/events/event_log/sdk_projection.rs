@@ -216,7 +216,7 @@ pub(crate) fn projection_operation_from_event(
     }
     if matches!(
         parsed.kind.as_str(),
-        "ck.consent.grant" | "ck.consent.revoke"
+        "ak.consent.grant" | "ck.consent.revoke"
     ) {
         payload_object
             .entry("actor_seq".to_owned())
@@ -230,7 +230,7 @@ pub(crate) fn projection_operation_from_event(
         }
         payload_object
             .entry("capability_action".to_owned())
-            .or_insert_with(|| Value::String("ck.morph.schema.migrate".to_owned()));
+            .or_insert_with(|| Value::String("ak.morph.schema.migrate".to_owned()));
     }
     if let Some(seal_ref) = envelope.get("seal_ref").and_then(Value::as_str) {
         payload_object
@@ -732,14 +732,14 @@ pub(crate) fn validate_device_revoke_submission(
         return Err(SubmitOneError::new(
             StatusCode::BAD_REQUEST,
             "schema_violation",
-            "ck.device.revoke payload.device_id is required",
+            "ak.device.revoke payload.device_id is required",
         ));
     }
     if principal_id != parsed.actor_id {
         return Err(SubmitOneError::new(
             StatusCode::FORBIDDEN,
             "capability_denied",
-            "ck.device.revoke payload.principal_id must be the submitting actor",
+            "ak.device.revoke payload.principal_id must be the submitting actor",
         ));
     }
     if device_id == session.device_id {
@@ -848,7 +848,7 @@ pub async fn effective_read_receipt_policy_for_realm(
     for record in &records {
         // CanonicalEventRecord uses `kind` (not event_kind) for the
         // canonical Arkret event kind string.
-        if record.kind != "ck.realm.read_receipt_policy" {
+        if record.kind != "ak.realm.read_receipt_policy" {
             continue;
         }
         if canonical_realm_id_for_record(record).as_deref() != Some(realm_id) {

@@ -125,7 +125,7 @@ pub fn events_submit_pre_admit_check(kind: &str) -> Option<(ErrorCode, &'static 
     if arkret_sdk::events::is_receipt_object_only(kind) {
         return Some((
             ErrorCode::SchemaViolation,
-            "ck.event_batch_receipt is a receipt object only; \
+            "ak.event_batch_receipt is a receipt object only; \
              never accepted as Event.kind",
         ));
     }
@@ -271,7 +271,7 @@ pub fn realm_policy_components_check(
         crate::reducer::validate_join_policy_payload(join_policy).map_err(|reason| {
             (
                 ErrorCode::SchemaViolation,
-                format!("ck.realm.policy_components.join_policy invalid: {reason}"),
+                format!("ak.realm.policy_components.join_policy invalid: {reason}"),
             )
         })?;
     }
@@ -297,18 +297,18 @@ pub fn realm_policy_components_check(
     // (2) T09 — e2ee_relaxed.v1 mutex against audit compliance.
     let relaxed_active = active_profiles
         .iter()
-        .any(|p| p == "ck.profile.e2ee_relaxed.v1")
+        .any(|p| p == "ak.profile.e2ee_relaxed.v1")
         || payload
             .pointer("/e2ee_relaxed/profile")
             .and_then(Value::as_str)
-            == Some("ck.profile.e2ee_relaxed.v1");
+            == Some("ak.profile.e2ee_relaxed.v1");
     let compliance_active = active_profiles
         .iter()
         .any(|p| crate::kinds::AUDIT_COMPLIANCE_PROFILES.contains(&p.as_str()));
     if relaxed_active && compliance_active {
         return Err((
             ErrorCode::FailedPrecondition,
-            "ck.profile.e2ee_relaxed.v1 is mutually exclusive with audit \
+            "ak.profile.e2ee_relaxed.v1 is mutually exclusive with audit \
              compliance profiles (attested_audit.e2ee.v1 / \
              disclosed_audit.e2ee.v1)"
                 .to_owned(),

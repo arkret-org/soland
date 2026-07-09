@@ -124,7 +124,7 @@ pub(super) async fn enqueue_peer_event_fanout(
     }
     let event_id = parsed.event_id.as_str();
     let binding_payload = json!({
-        "domain": "ck.peer.events.command.submit.service_binding.v1",
+        "domain": "ak.peer.events.command.submit.service_binding.v1",
         "realm_id": parsed.realm_id,
         "event_id": event_id,
         "canonical_digest": parsed.canonical_digest,
@@ -235,7 +235,7 @@ fn dynamic_peer_event_targets(
         // non-capability events are gated.
         let is_capability_control_event = matches!(
             parsed.kind.as_str(),
-            "ck.capability.revoke" | "ck.capability.grant" | "ck.capability.delegate"
+            "ak.capability.revoke" | "ck.capability.grant" | "ck.capability.delegate"
         );
         let revoked_peers = if is_capability_control_event {
             std::collections::BTreeSet::new()

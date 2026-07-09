@@ -21,7 +21,7 @@
 //!
 //! ```text
 //! signing_input =
-//!   "ck.media.participant_binding.v1" || 0x00 ||
+//!   "ak.media.participant_binding.v1" || 0x00 ||
 //!   canonical_json({ actor_id, call_id, device_id, expires_at,
 //!                    focus_id, participant_identity, realm_id })
 //! ```
@@ -131,7 +131,7 @@ pub(crate) fn verify_binding_signature(
 
 /// `media_service_binding.md` §2 — the family of the per-realm media_service
 /// epoch cell projected by `apply_realm_media_service`.
-const REALM_MEDIA_SERVICE_CELL_FAMILY: &str = "ck.component.realm.media_service.v1";
+const REALM_MEDIA_SERVICE_CELL_FAMILY: &str = "ak.component.realm.media_service.v1";
 
 /// The current-epoch issuer anchor set for one realm's media service.
 struct MediaServiceAnchors {
@@ -473,7 +473,7 @@ mod cross_impl_tests {
         );
 
         // Both carry the normative label + 0x00 prefix (`media-service-binding.md` §3).
-        let prefix = b"ck.media.participant_binding.v1\x00";
+        let prefix = b"ak.media.participant_binding.v1\x00";
         assert!(soland.starts_with(prefix), "soland missing label prefix");
         assert!(sdk.starts_with(prefix), "SDK missing label prefix");
     }

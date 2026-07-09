@@ -153,7 +153,7 @@ async fn directory_product_endpoints_return_demo_projection_shapes() {
     assert_eq!(handle["did"], "did:web:alice.example");
     assert_eq!(
         handle["handle_claim"]["schema"],
-        "ck.schema.handle_claim.v1"
+        "ak.schema.handle_claim.v1"
     );
     // HDLREN-2 (arkret-spec @ 7157ee8) — canonical handle wire form is
     // `<localpart>:<domain>`. `handle_uri` is gone from the claim shape.
@@ -181,14 +181,14 @@ async fn directory_product_endpoints_return_demo_projection_shapes() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|operation| operation == "ck.find.directory.query.list_handles_for_subject")
+            .any(|operation| operation == "ak.find.directory.query.list_handles_for_subject")
     );
     assert!(
         !describe["supported_operations"]
             .as_array()
             .unwrap()
             .iter()
-            .any(|operation| operation == "ck.find.directory.query.private_contact_discovery")
+            .any(|operation| operation == "ak.find.directory.query.private_contact_discovery")
     );
 
     let subject_handles: Value =
@@ -343,7 +343,7 @@ async fn directory_resolve_handle_invite_accepts_canonical_handles_without_conta
     );
 
     let drop_handle_policy = serde_json::json!({
-        "schema": "ck.schema.invite_receive_policy.v1",
+        "schema": "ak.schema.invite_receive_policy.v1",
         "subject_id": "did:web:bob.example",
         "allowed_introduction_kinds": ["locator_ref", "consent_grant", "shared_realm"],
         "explicit_address_behavior": "quarantine",
@@ -471,7 +471,7 @@ async fn private_contact_discovery_rejects_plaintext_identifier_matching() {
                     {"ref": "email", "identifier": "alice@example.com"},
                     {"ref": "phone", "identifier": "+15550101010"}
                 ],
-                "privacy_profile": "ck.private_contact_discovery.v1"
+                "privacy_profile": "ak.private_contact_discovery.v1"
             }))
             .send(&service)
             .await;
@@ -708,7 +708,7 @@ async fn index_product_endpoints_return_demo_projection_shapes() {
     assert_eq!(inbox["strands"].as_array().unwrap().len(), 1);
     assert_eq!(
         inbox["strands"][0]["strand"]["schema"],
-        "ck.schema.strand.v1"
+        "ak.schema.strand.v1"
     );
 
     let search: Value = TestClient::post("http://server/_soland/self/index/search")
@@ -773,7 +773,7 @@ async fn broader_protocol_surface_returns_contract_shapes() {
     let authz: Value = TestClient::post("http://server/_arkret/self/authz/check")
         .json(&serde_json::json!({
             "actor_id": "did:web:alice.example",
-            "action": "ck.strand.read",
+            "action": "ak.strand.read",
             "resource": {"kind": "realm", "realm_id": DEMO_REALM_ID}
         }))
         .send(&app())
@@ -787,7 +787,7 @@ async fn broader_protocol_surface_returns_contract_shapes() {
         authz["policy_results"][0]["actor_id"],
         "did:web:alice.example"
     );
-    assert_eq!(authz["policy_results"][0]["action"], "ck.strand.read");
+    assert_eq!(authz["policy_results"][0]["action"], "ak.strand.read");
     assert_eq!(authz["policy_results"][0]["realm_id"], DEMO_REALM_ID);
     assert_eq!(authz["policy_results"][0]["cache"]["mode"], "in_memory");
 

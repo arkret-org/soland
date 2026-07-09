@@ -820,12 +820,12 @@ pub fn sync_filter_digest(filter: Option<&serde_json::Value>) -> String {
 /// recovery state. `revoke_scope` controls breadth (`this_cursor` default,
 /// `same_device`, `same_session`).
 #[endpoint(
-    operation_id = "ck.self.account.command.revoke_cursor",
+    operation_id = "ak.self.account.command.revoke_cursor",
     tags("sync"),
     summary = "Revoke a previously issued cursor authority",
     status_codes(200, 400, 401, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.account.command.revoke_cursor"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.account.command.revoke_cursor"))]
 pub(super) async fn account_cursor_revoke(
     aa: crate::routing::system::extract::AuthArgs,
     body: salvo::oapi::extract::JsonBody<arkret_sdk::AccountCursorRevokeRequestBody>,

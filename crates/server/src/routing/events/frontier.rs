@@ -60,14 +60,14 @@ pub(crate) fn frontier_root(
     let mut leaves = Vec::new();
     for event_id in heads {
         leaves.push(canonical_hash(&json!({
-            "domain": "ck.events.frontier.leaf.v1",
+            "domain": "ak.events.frontier.leaf.v1",
             "kind": "head",
             "event_id": event_id,
         }))?);
     }
     for (actor, seq) in actor_upper_bounds {
         leaves.push(canonical_hash(&json!({
-            "domain": "ck.events.frontier.leaf.v1",
+            "domain": "ak.events.frontier.leaf.v1",
             "kind": "actor_seq_upper_bound",
             "actor_id": actor.as_str(),
             "actor_seq": seq,
@@ -76,7 +76,7 @@ pub(crate) fn frontier_root(
 
     if leaves.is_empty() {
         return canonical_hash(&json!({
-            "domain": "ck.events.frontier.root.v1",
+            "domain": "ak.events.frontier.root.v1",
             "empty": true,
         }));
     }
@@ -86,7 +86,7 @@ pub(crate) fn frontier_root(
         for pair in leaves.chunks(2) {
             let right = pair.get(1).unwrap_or(&pair[0]);
             next.push(canonical_hash(&json!({
-                "domain": "ck.events.frontier.node.v1",
+                "domain": "ak.events.frontier.node.v1",
                 "left": pair[0].as_str(),
                 "right": right.as_str(),
             }))?);
@@ -107,7 +107,7 @@ pub(crate) fn frontier_signature_payload(
     frontier_root: &Hash,
 ) -> Value {
     json!({
-        "domain": "ck.events.frontier.signature.v1",
+        "domain": "ak.events.frontier.signature.v1",
         "frontier_root": frontier_root.as_str(),
         "realm_id": realm_id.map(RealmId::as_str),
         "issuer": issuer.as_str(),
@@ -134,7 +134,7 @@ pub(crate) fn sign_frontier_root(
 
     Ok(json!({
         "alg": "EdDSA",
-        "typ": "ck.events.frontier.signature.v1",
+        "typ": "ak.events.frontier.signature.v1",
         "scheme": "ed25519-detached-jws",
         "verification_method": format!("{}#frontier-key", service_did.as_str()),
         "payload_digest": payload_digest,

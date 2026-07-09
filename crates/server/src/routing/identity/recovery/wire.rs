@@ -21,8 +21,8 @@ pub(super) const RECOVERY_WITNESS_FRESHNESS_SECS: i64 = 86_400;
 /// `expired`. Matches the device-lifecycle interactive recovery window.
 pub(super) const RECOVERY_SESSION_TTL_SECS: i64 = 900;
 
-pub(super) const POLICY_SIGNATURE_TYPE: &str = "ck.identity.recovery_policy.signature.v1";
-pub(super) const RECEIPT_SIGNATURE_TYPE: &str = "ck.identity.recovery_receipt.signature.v1";
+pub(super) const POLICY_SIGNATURE_TYPE: &str = "ak.identity.recovery_policy.signature.v1";
+pub(super) const RECEIPT_SIGNATURE_TYPE: &str = "ak.identity.recovery_receipt.signature.v1";
 
 pub(super) const POLICY_ALLOWED_SIGNED_FIELDS: &[&str] = &[
     "schema",

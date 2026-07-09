@@ -1,11 +1,11 @@
 use super::*;
 
 #[endpoint(
-    operation_id = "ck.find.directory.query.search_organizations",
+    operation_id = "ak.find.directory.query.search_organizations",
     tags("directory"),
     summary = "Fuzzy-text search across known organizations (demo data for now)"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.find.directory.query.search_organizations"))]
+#[tracing::instrument(skip_all, fields(op = "ak.find.directory.query.search_organizations"))]
 pub(super) async fn search_organizations(
     body: JsonBody<DirectorySearchOrganizationsRequestBody>,
     depot: &mut Depot,
@@ -39,11 +39,11 @@ pub(super) async fn search_organizations(
 }
 
 #[endpoint(
-    operation_id = "ck.find.directory.query.resolve_organization",
+    operation_id = "ak.find.directory.query.resolve_organization",
     tags("directory"),
     summary = "Resolve an organization by organization_id or handle"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.find.directory.query.resolve_organization"))]
+#[tracing::instrument(skip_all, fields(op = "ak.find.directory.query.resolve_organization"))]
 pub(super) async fn resolve_organization(
     body: JsonBody<DirectoryResolveOrganizationRequestBody>,
     depot: &mut Depot,

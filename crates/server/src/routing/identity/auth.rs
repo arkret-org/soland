@@ -82,7 +82,7 @@ pub(super) fn protocol_account_router() -> Router {
         .push(
             // ② (api-conventions.md §3.3): the Principal Server no longer issues
             // a local credential from the session grant. The client presents the
-            // ck.session.grant directly to `/_arkret/self/*` with a DPoP proof,
+            // ak.session.grant directly to `/_arkret/self/*` with a DPoP proof,
             // so there is no `session-grants .post(...)` mount here — only `revoke`.
             //
             // Spec `account_auth` surface group: `ck.gate.account.command.revoke_session`

@@ -735,7 +735,7 @@ fn child_scope_policy_requires_specific_circle_for_strand_placement() {
             serde_json::json!({
                 "object": {
                     "id": realm_id,
-                    "schema": "ck.schema.realm.v1",
+                    "schema": "ak.schema.realm.v1",
                     "title": "Product",
                     "created_by": "did:web:alice.example",
                     "encryption_profile": "mls_rfc9420"
@@ -871,7 +871,7 @@ fn child_scope_policy_gates_space_parent_edges() {
             serde_json::json!({
                 "object": {
                     "id": realm_id,
-                    "schema": "ck.schema.realm.v1",
+                    "schema": "ak.schema.realm.v1",
                     "title": "Product",
                     "created_by": "did:web:alice.example",
                     "encryption_profile": "mls_rfc9420"

@@ -20,7 +20,7 @@ pub async fn auth_or_render(
 
 /// Look up the bearer-bound session and validate every gate. Development
 /// sessions are resolved from soland's local session store. Production clients
-/// present `ck.session.grant` with DPoP; unknown local bearer credentials fail
+/// present `ak.session.grant` with DPoP; unknown local bearer credentials fail
 /// closed instead of being sent through a second authentication model.
 pub async fn authenticated_session(
     state: &AppState,
@@ -50,7 +50,7 @@ pub async fn authenticated_session(
         "unauthenticated",
         "missing bearer token",
     ))?;
-    // §3.3 inbound credential discriminator. `ck.session.grant` presentation
+    // §3.3 inbound credential discriminator. `ak.session.grant` presentation
     // is request-scoped and always carries DPoP; dev-login credentials are
     // local SessionRecord lookups.
     if super::super::auth_grant_dpop::is_grant_dpop_presentation(req) {
@@ -162,7 +162,7 @@ fn bearer_looks_like_session_grant(token: &str) -> bool {
     let Some(payload) = decode_jwt_payload_json(payload) else {
         return false;
     };
-    token_type_claim(&payload) == Some("ck.session.grant")
+    token_type_claim(&payload) == Some("ak.session.grant")
 }
 
 fn decode_jwt_payload_json(payload: &str) -> Option<serde_json::Value> {
@@ -249,7 +249,7 @@ mod tests {
     #[test]
     fn bare_session_grant_jwt_is_classified_from_wire_type() {
         let token = compact_jwt(serde_json::json!({
-            "type": "ck.session.grant",
+            "type": "ak.session.grant",
             "subject": "did:web:alice.example",
         }));
 
@@ -259,7 +259,7 @@ mod tests {
     #[test]
     fn bare_session_grant_jwt_is_classified_from_compat_kind() {
         let token = compact_jwt(serde_json::json!({
-            "kind": "ck.session.grant",
+            "kind": "ak.session.grant",
             "subject": "did:web:alice.example",
         }));
 

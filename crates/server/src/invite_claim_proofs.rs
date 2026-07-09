@@ -13,7 +13,7 @@ use serde_json::{Value, json};
 use crate::reducer::{InviteProjection, ProjectionState};
 use crate::state::AppState;
 
-const BINDING_PROOF_TRANSCRIPT_DOMAIN: &str = "ck.invite.claim.binding_proof.v1\n";
+const BINDING_PROOF_TRANSCRIPT_DOMAIN: &str = "ak.invite.claim.binding_proof.v1\n";
 
 #[derive(Clone, Debug)]
 pub(crate) struct InviteClaimProofContext {

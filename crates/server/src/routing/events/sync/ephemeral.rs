@@ -15,11 +15,11 @@ use crate::routing::spaces::space::{
 use crate::state::{AppState, EventNotification, PresenceRecord, SessionRecord, TypingRecord};
 
 #[endpoint(
-    operation_id = "ck.self.ephemeral.command.send",
+    operation_id = "ak.self.ephemeral.command.send",
     tags("sync"),
     summary = "Send a broadcast ephemeral signal"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.ephemeral.command.send"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.ephemeral.command.send"))]
 pub(super) async fn submit_ephemeral(
     aa: crate::routing::system::extract::AuthArgs,
     body: salvo::oapi::extract::JsonBody<arkret_sdk::EphemeralEnvelope>,
@@ -48,19 +48,19 @@ pub(super) async fn submit_ephemeral(
 
     let mut dispatched_to: Option<u64> = None;
     let should_wake_account_sync = match envelope.kind.as_str() {
-        "ck.typing" => {
+        "ak.typing" => {
             persist_ephemeral_typing(state, &session.actor, realm_id_str, &envelope).await?;
             true
         }
-        "ck.presence" => {
+        "ak.presence" => {
             persist_ephemeral_presence(state, &session, &envelope).await?;
             true
         }
-        "ck.receipt.read" => {
+        "ak.receipt.read" => {
             admit_ephemeral_read_receipt(state, &session, realm_id_str, &envelope).await?;
             false
         }
-        "ck.realm_key.request" => {
+        "ak.realm_key.request" => {
             // realm-and-space.md history-sharing — a late-joining member device
             // asks a provider device to seal retained history keys. The request
             // is relayed to the provider's to-device queue (no realm broadcast),
@@ -75,7 +75,7 @@ pub(super) async fn submit_ephemeral(
             dispatched_to = Some(1);
             false
         }
-        "ck.call.signal" => {
+        "ak.call.signal" => {
             // `service-http-binding.md` §162 — sending a `ck.call.signal`
             // envelope on `/_arkret/self/ephemeral` requires the realm-scoped
             // `ck.call.signal.send` capability (registered in
@@ -139,7 +139,7 @@ async fn relay_ephemeral_call_signal(
 ) -> Result<u64, crate::error::AppError> {
     let envelope_value = serde_json::to_value(envelope).map_err(|error| {
         crate::error::AppError::invalid_param(format!(
-            "ck.call.signal envelope is not serialisable: {error}"
+            "ak.call.signal envelope is not serialisable: {error}"
         ))
     })?;
     let record = crate::state::CallSignalRelayRecord {
@@ -172,7 +172,7 @@ fn validate_ephemeral_envelope(
 ) -> Result<(), crate::error::AppError> {
     if !matches!(
         envelope.kind.as_str(),
-        "ck.call.signal" | "ck.presence" | "ck.typing" | "ck.receipt.read" | "ck.realm_key.request"
+        "ak.call.signal" | "ck.presence" | "ck.typing" | "ck.receipt.read" | "ck.realm_key.request"
     ) {
         return Err(crate::error::AppError::invalid_param(
             "unsupported ephemeral kind",
@@ -201,7 +201,7 @@ fn validate_ephemeral_envelope(
     // admission rules in realm_key_request.rs.)
     if matches!(
         envelope.kind.as_str(),
-        "ck.call.signal" | "ck.presence" | "ck.typing" | "ck.receipt.read"
+        "ak.call.signal" | "ck.presence" | "ck.typing" | "ck.receipt.read"
     ) {
         validate_ephemeral_broadcast_proof_shape(envelope)?;
     }
@@ -220,7 +220,7 @@ async fn persist_ephemeral_typing(
     if let Some(track_name) = envelope.payload.get("track_name") {
         if track_name.as_str() != Some("discussion") {
             return Err(crate::routing::events::peer::schema_violation(
-                "ck.typing payload.track_name must be \"discussion\" in v1",
+                "ak.typing payload.track_name must be \"discussion\" in v1",
             ));
         }
     }
@@ -241,7 +241,7 @@ async fn persist_ephemeral_typing(
             .filter(|value| !value.trim().is_empty())
             .map(ToOwned::to_owned)
             .ok_or_else(|| {
-                crate::error::AppError::invalid_param("ck.typing payload requires strand_id")
+                crate::error::AppError::invalid_param("ak.typing payload requires strand_id")
             })?;
         typing_scope_allows_actor(state, realm_id, actor, Some(strand_id.as_str())).await?;
         if let Err(error) = state
@@ -280,7 +280,7 @@ async fn persist_ephemeral_presence(
             arkret_sdk::validate_status_message(message).map_err(|error| {
                 crate::error::AppError::new(
                     crate::error::ErrorCode::SchemaViolation,
-                    format!("ck.presence status_message rejected: {error}"),
+                    format!("ak.presence status_message rejected: {error}"),
                 )
             })?;
             Some(message.clone())
@@ -288,7 +288,7 @@ async fn persist_ephemeral_presence(
         Some(_) => {
             return Err(crate::error::AppError::new(
                 crate::error::ErrorCode::SchemaViolation,
-                "ck.presence status_message must be a string",
+                "ak.presence status_message must be a string",
             ));
         }
     };
@@ -298,7 +298,7 @@ async fn persist_ephemeral_presence(
             arkret_sdk::validate_last_active_at(value).map_err(|error| {
                 crate::error::AppError::new(
                     crate::error::ErrorCode::SchemaViolation,
-                    format!("ck.presence last_active_at rejected: {error}"),
+                    format!("ak.presence last_active_at rejected: {error}"),
                 )
             })?;
             // §3.3: without a policy explicitly allowing precise
@@ -308,7 +308,7 @@ async fn persist_ephemeral_presence(
             if !value.contains('/') {
                 return Err(crate::error::AppError::new(
                     crate::error::ErrorCode::PolicyViolation,
-                    "ck.presence last_active_at must be bucketed; precise timestamps require an explicit disclosure policy",
+                    "ak.presence last_active_at must be bucketed; precise timestamps require an explicit disclosure policy",
                 )
                 .with_status(StatusCode::FORBIDDEN));
             }
@@ -317,7 +317,7 @@ async fn persist_ephemeral_presence(
         Some(_) => {
             return Err(crate::error::AppError::new(
                 crate::error::ErrorCode::SchemaViolation,
-                "ck.presence last_active_at must be a string",
+                "ak.presence last_active_at must be a string",
             ));
         }
     };
@@ -365,13 +365,13 @@ fn presence_state_from_payload(
         .ok_or_else(|| {
             crate::error::AppError::new(
                 crate::error::ErrorCode::SchemaViolation,
-                "ck.presence payload requires state",
+                "ak.presence payload requires state",
             )
         })?;
     arkret_sdk::PresenceStatus::parse_wire(state).ok_or_else(|| {
         crate::error::AppError::new(
             crate::error::ErrorCode::SchemaViolation,
-            "ck.presence state is not in the closed v1 set {online, idle, dnd, offline}",
+            "ak.presence state is not in the closed v1 set {online, idle, dnd, offline}",
         )
     })
 }
@@ -390,7 +390,7 @@ async fn admit_ephemeral_read_receipt(
         .is_none()
     {
         return Err(crate::error::AppError::invalid_param(
-            "ck.receipt.read payload requires event_id",
+            "ak.receipt.read payload requires event_id",
         ));
     }
 
@@ -466,7 +466,7 @@ fn admit_ephemeral_call_signal(
 ) -> Result<arkret_sdk::CallSignalPayload, crate::error::AppError> {
     let payload = arkret_sdk::validate_call_signal_envelope(envelope).map_err(|error| {
         crate::error::AppError::invalid_param(format!(
-            "ck.call.signal envelope failed structural validation: {error}"
+            "ak.call.signal envelope failed structural validation: {error}"
         ))
     })?;
     Ok(payload)

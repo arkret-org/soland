@@ -543,12 +543,12 @@ impl AppConfig {
     /// default still applies to everything else.
     pub fn default_replay_overrides() -> std::collections::BTreeMap<&'static str, u64> {
         let mut m = std::collections::BTreeMap::new();
-        m.insert("ck.component.notary.v1", 60);
-        m.insert("ck.component.mls.epoch.v1", 60);
-        m.insert("ck.component.consent.grant.v1", 120);
-        m.insert("ck.component.capability.grant.v1", 120);
-        m.insert("ck.component.capability.delegate.v1", 120);
-        m.insert("ck.component.capability.derived.v1", 120);
+        m.insert("ak.component.notary.v1", 60);
+        m.insert("ak.component.mls.epoch.v1", 60);
+        m.insert("ak.component.consent.grant.v1", 120);
+        m.insert("ak.component.capability.grant.v1", 120);
+        m.insert("ak.component.capability.delegate.v1", 120);
+        m.insert("ak.component.capability.derived.v1", 120);
         m
     }
 }

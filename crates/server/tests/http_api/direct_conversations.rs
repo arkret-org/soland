@@ -71,7 +71,7 @@ async fn upload_bob_direct_keypackage(state: AppState, bob_token: &str, suffix: 
     let keypackage_id = format!("ak:mls_keypackage:direct-{suffix}");
     let keypackage_ref = format!("ak:mls:keypackage:direct-{suffix}");
     let keypackage_bytes = format!("opaque-direct-keypackage-{suffix}");
-    let capabilities = serde_json::json!(["ck.mls.rfc9420", "ck.mls.profile.full"]);
+    let capabilities = serde_json::json!(["ak.mls.rfc9420", "ck.mls.profile.full"]);
     let response = TestClient::post("http://server/_arkret/self/keys/keypackages/upload")
         .add_header("authorization", format!("Bearer {bob_token}"), true)
         .json(&serde_json::json!({
@@ -410,7 +410,7 @@ async fn contacts_spec_path_projects_directional_scopes_and_resolve_is_idempoten
     assert!(
         device_messages
             .iter()
-            .any(|message| message.content["kind"] == "ck.mls.welcome")
+            .any(|message| message.content["kind"] == "ak.mls.welcome")
     );
     let effective_scope = serde_json::json!({
         "kind": "realm",

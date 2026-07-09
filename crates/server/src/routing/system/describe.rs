@@ -219,11 +219,11 @@ async fn database_ready(state: &AppState) -> bool {
 }
 
 #[endpoint(
-    operation_id = "ck.server.query.describe",
+    operation_id = "ak.server.query.describe",
     tags("server"),
     summary = "Server capability description"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.server.query.describe"))]
+#[tracing::instrument(skip_all, fields(op = "ak.server.query.describe"))]
 async fn server_describe(depot: &mut Depot) -> JsonResult<ServerDescribeOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     json_ok(ServerDescribeOutcome(build_server_description(state)))
@@ -349,9 +349,9 @@ pub(crate) fn apply_claim_level_partition(
     // floor + Principal Server + Principal Server Events API in
     // addition to the MIMI interop staging extension below.
     let mut claimed_profiles = vec![
-        arkret_sdk::ClaimedProfileEntry::self_claimed("ck.profile.core_event_store.v1"),
-        arkret_sdk::ClaimedProfileEntry::self_claimed("ck.profile.principal_server.v1"),
-        arkret_sdk::ClaimedProfileEntry::self_claimed("ck.profile.principal_server_events_api.v1"),
+        arkret_sdk::ClaimedProfileEntry::self_claimed("ak.profile.core_event_store.v1"),
+        arkret_sdk::ClaimedProfileEntry::self_claimed("ak.profile.principal_server.v1"),
+        arkret_sdk::ClaimedProfileEntry::self_claimed("ak.profile.principal_server_events_api.v1"),
         arkret_sdk::ClaimedProfileEntry {
             notes: Some(
                 "Full MLS Governance Binding: reducer validates governance_binding \
@@ -364,7 +364,7 @@ pub(crate) fn apply_claim_level_partition(
                     .to_owned(),
             ),
             ..arkret_sdk::ClaimedProfileEntry::self_claimed(
-                "ck.profile.mls_governance_binding.full.v1",
+                "ak.profile.mls_governance_binding.full.v1",
             )
         },
         arkret_sdk::ClaimedProfileEntry {
@@ -372,7 +372,7 @@ pub(crate) fn apply_claim_level_partition(
                 "MIMI provider facade first round (not a full v1 core conformance claim)"
                     .to_owned(),
             ),
-            ..arkret_sdk::ClaimedProfileEntry::self_claimed("ck.profile.mimi_interop.v1")
+            ..arkret_sdk::ClaimedProfileEntry::self_claimed("ak.profile.mimi_interop.v1")
         },
         arkret_sdk::ClaimedProfileEntry {
             notes: Some(
@@ -381,7 +381,7 @@ pub(crate) fn apply_claim_level_partition(
                  Ed25519 audit_binding. See zh/extensions/agent-protocol-interop.md."
                     .to_owned(),
             ),
-            ..arkret_sdk::ClaimedProfileEntry::self_claimed("ck.profile.agent_runtime.v1")
+            ..arkret_sdk::ClaimedProfileEntry::self_claimed("ak.profile.agent_runtime.v1")
         },
     ];
     // G3.S9 — when the sovereign enclave profile is enabled, claim it
@@ -420,7 +420,7 @@ pub(crate) fn apply_claim_level_partition(
                  profile-private and off the /_arkret protocol root."
                     .to_owned(),
             ),
-            ..arkret_sdk::ClaimedProfileEntry::self_claimed("ck.profile.candidate.join_policy.v1")
+            ..arkret_sdk::ClaimedProfileEntry::self_claimed("ak.profile.candidate.join_policy.v1")
         });
     }
     // Snapshot the claimed-profile id set BEFORE serialising (which moves
@@ -511,7 +511,7 @@ pub(in crate::routing) async fn auth_bridge_describe() -> JsonResult<AuthBridgeD
             dev_login_path: "/_soland/gate/auth/dev-login".to_owned(),
             session_grant_issuance_path: "/_arkret/gate/account/session-grants".to_owned(),
             session_grant_presentation:
-                "Authorization: Bearer <ck.session.grant> with a DPoP proof on /_arkret/self/*"
+                "Authorization: Bearer <ak.session.grant> with a DPoP proof on /_arkret/self/*"
                     .to_owned(),
             principal_id_body_field: "principal_id".to_owned(),
         },
@@ -571,14 +571,14 @@ async fn integration_describe() -> JsonResult<IntegrationDescribeOutcome> {
             IntegrationDependencyDescriptor {
                 service: "coauth".to_owned(),
                 purpose: "session_grant_introspection".to_owned(),
-                required_contract: "ck.gate.account.session_grant.introspect".to_owned(),
+                required_contract: "ak.gate.account.session_grant.introspect".to_owned(),
                 discovery_path: "/_arkret/gate/account/session-grants/introspect".to_owned(),
                 mode: "remote_service_contract".to_owned(),
             },
             IntegrationDependencyDescriptor {
                 service: "floria".to_owned(),
                 purpose: "push_gateway_delivery".to_owned(),
-                required_contract: "ck.push.bridge.describe".to_owned(),
+                required_contract: "ak.push.bridge.describe".to_owned(),
                 discovery_path: "/_floria/push/bridge/describe".to_owned(),
                 mode: "remote_gateway_contract".to_owned(),
             },
@@ -596,7 +596,7 @@ async fn integration_describe() -> JsonResult<IntegrationDescribeOutcome> {
                 name: "session_grant_presentation".to_owned(),
                 method: "Authorization".to_owned(),
                 path: "all protected /_arkret routes".to_owned(),
-                contract: "ck.session.grant+dpop".to_owned(),
+                contract: "ak.session.grant+dpop".to_owned(),
                 stability: "scaffold".to_owned(),
                 todo: "make the session-grant introspection cache/timeout policy explicit in the published contract.".to_owned(),
             },
@@ -628,7 +628,7 @@ async fn integration_describe() -> JsonResult<IntegrationDescribeOutcome> {
                 name: "member_identity_update".to_owned(),
                 method: "POST".to_owned(),
                 path: "/_arkret/self/events".to_owned(),
-                contract: "ck.member.identity.update".to_owned(),
+                contract: "ak.member.identity.update".to_owned(),
                 stability: "partial_fail_closed".to_owned(),
                 todo: "plaintext Ed25519 MemberIdentity proofs are verified; encrypted proof verification and ES256/ES384 are unsupported and rejected.".to_owned(),
             },
@@ -636,7 +636,7 @@ async fn integration_describe() -> JsonResult<IntegrationDescribeOutcome> {
                 name: "agent_runtime_attestation".to_owned(),
                 method: "POST".to_owned(),
                 path: "/_arkret/gate/account/agent-key-pair".to_owned(),
-                contract: "ck.gate.account.command.pair_agent_key".to_owned(),
+                contract: "ak.gate.account.command.pair_agent_key".to_owned(),
                 stability: "unsupported_fail_closed".to_owned(),
                 todo: "runtime_attestation verifier and controller approval ledger are not wired; requests carrying runtime_attestation are rejected.".to_owned(),
             },
@@ -644,7 +644,7 @@ async fn integration_describe() -> JsonResult<IntegrationDescribeOutcome> {
                 name: "extensions_sovereign".to_owned(),
                 method: "POST/GET".to_owned(),
                 path: "/_soland/self/deployment/*".to_owned(),
-                contract: "ck.profile.sovereign_enclave.v1".to_owned(),
+                contract: "ak.profile.sovereign_enclave.v1".to_owned(),
                 stability: "stub_contract".to_owned(),
                 todo: "local sovereign deployment scenario scaffold; outbound guard is not yet wired into every egress call site.".to_owned(),
             },
@@ -652,7 +652,7 @@ async fn integration_describe() -> JsonResult<IntegrationDescribeOutcome> {
                 name: "blob_presign".to_owned(),
                 method: "POST".to_owned(),
                 path: "/_arkret/self/blob/presign".to_owned(),
-                contract: "ck.self.blob.command.presign".to_owned(),
+                contract: "ak.self.blob.command.presign".to_owned(),
                 stability: "local_direct_serve".to_owned(),
                 todo: "issues soland-signed local /blob/get URLs; backend-native object-store presign is not claimed.".to_owned(),
             },
@@ -660,7 +660,7 @@ async fn integration_describe() -> JsonResult<IntegrationDescribeOutcome> {
         examples: json!({
             "compose_strand": {
                 "step_1": {"service": "coauth", "path": "/_arkret/gate/account/session-grants", "method": "POST"},
-                "step_2": {"service": "soland", "path": "protected route", "method": "Authorization: Bearer <ck.session.grant> + DPoP"},
+                "step_2": {"service": "soland", "path": "protected route", "method": "Authorization: Bearer <ak.session.grant> + DPoP"},
                 "step_3": {"service": "soland", "path": "/_soland/edge/push/outbound/bridge/fetch", "method": "POST"},
                 "step_4": {"service": "soland", "path": "/_arkret/edge/push/register-device", "method": "POST"}
             }

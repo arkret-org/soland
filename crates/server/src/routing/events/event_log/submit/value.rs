@@ -473,7 +473,7 @@ pub(super) async fn submit_event_value_with_context(
 
     // SEC-04 — receiver-side independent 24h inception-key online-window cap
     // (`identity/key-management.md` §5.0.1 step 5). When an inception-bootstrap
-    // self-authorization (`ck.device.authorize` / `ck.session.grant` carrying a
+    // self-authorization (`ck.device.authorize` / `ak.session.grant` carrying a
     // `refs[role=did_inception]` evidence ref) is signed by the inception key,
     // the receiver MUST seal on the verifiable bootstrap timestamp
     // (`did:webvh` entry-0 `versionTime`) and reject the event when the
@@ -490,7 +490,7 @@ pub(super) async fn submit_event_value_with_context(
     // failed flip rejects the submission (no event-without-enforcement),
     // while a flipped record with a failed persist only over-revokes — the
     // safe direction, the peer device can resubmit.
-    if parsed.kind == "ck.device.revoke" {
+    if parsed.kind == "ak.device.revoke" {
         let target_device_id = validate_device_revoke_submission(session, &parsed, &envelope)?;
         crate::routing::identity::auth::revoke_device_record(
             state,
@@ -543,7 +543,7 @@ pub(super) async fn submit_event_value_with_context(
             json!({
                 "revoked_device_id": target_device_id,
                 "by_device_id": session.device_id.clone(),
-                "via": "ck.device.revoke",
+                "via": "ak.device.revoke",
                 "event_id": parsed.event_id.clone(),
                 "keypackages_retired": keypackages_retired,
                 "mls_remove_obligations": mls_remove_obligations,
@@ -571,7 +571,7 @@ pub(super) async fn submit_event_value_with_context(
             let capability_used = payload_field("capability_action")
                 .or_else(|| payload_field("action"))
                 .and_then(|value| value.as_str())
-                .unwrap_or("ck.morph.schema_migrate");
+                .unwrap_or("ak.morph.schema_migrate");
             append_audit_log(
                 state,
                 Some(&parsed.actor_id),
@@ -584,7 +584,7 @@ pub(super) async fn submit_event_value_with_context(
                     "to_schema_refs": payload_field("to_schema_refs"),
                     "compatibility_class": compatibility_class,
                     "capability_used": capability_used,
-                    "profile_ref": "ck.profile.morph.schema_migration_transformations.v1",
+                    "profile_ref": "ak.profile.morph.schema_migration_transformations.v1",
                     "event_id": parsed.event_id.clone(),
                 }),
                 "accepted",
@@ -687,7 +687,7 @@ pub(super) async fn submit_event_value_with_context(
         )
         .await;
     }
-    if parsed.kind == "ck.realm.create"
+    if parsed.kind == "ak.realm.create"
         && let Some(envelope_object) = envelope_for_bootstrap.as_object()
     {
         bootstrap_realm_member_index(state, &parsed.realm_id, &parsed.actor_id, envelope_object)

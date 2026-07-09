@@ -528,7 +528,7 @@ impl Default for SolandAuthzEngine {
 
 fn default_deny_reason(action: &str) -> &'static str {
     match action {
-        "ck.message.create" => "no_strand_track_message_grant",
+        "ak.message.create" => "no_strand_track_message_grant",
         _ => "capability_denied",
     }
 }
@@ -586,10 +586,10 @@ fn matching_request_has_revoked_upstream_grant(
 fn circle_local_management_action_requires_explicit_grant(action: &str) -> bool {
     matches!(
         action,
-        "ck.circle.manage"
-            | "ck.circle.member.manage"
-            | "ck.circle.member.add.others"
-            | "ck.circle.audit"
+        "ak.circle.manage"
+            | "ak.circle.member.manage"
+            | "ak.circle.member.add.others"
+            | "ak.circle.audit"
     )
 }
 
@@ -648,7 +648,7 @@ fn resource_term_matches(pattern: &str, resource: &str) -> bool {
         "event" => return resource.starts_with("ak:event:"),
         "actor" => return resource.starts_with("did:") || resource.starts_with("ak:actor:"),
         "schema" => {
-            return resource.starts_with("ak:schema:") || resource.starts_with("ck.schema.");
+            return resource.starts_with("ak:schema:") || resource.starts_with("ak.schema.");
         }
         "policy" => return resource.starts_with("ak:policy:"),
         "invite" => return resource.starts_with("ak:invite:"),
@@ -724,7 +724,7 @@ fn validate_capability_action_shape(
         return Err(wildcard_reason);
     }
     let mut segments = action.split('.');
-    if segments.next() != Some("ck") {
+    if segments.next() != Some("ak.) {
         return Err(invalid_reason);
     }
     let mut saw_segment = false;
@@ -1318,7 +1318,7 @@ mod tests {
         let engine = SolandAuthzEngine::new();
         let result = engine.check(
             "did:web:alice",
-            "ck.message.create",
+            "ak.message.create",
             "ak:space:1",
             "ak:space:1",
             Some("did:web:alice"),
@@ -1334,7 +1334,7 @@ mod tests {
         let engine = SolandAuthzEngine::new();
         let result = engine.check(
             "did:web:alice",
-            "ck.future.action",
+            "ak.future.action",
             "ak:space:1",
             "ak:space:1",
             Some("did:web:alice"),
@@ -1353,7 +1353,7 @@ mod tests {
             "did:web:alice".to_owned(),
             "did:web:bob".to_owned(),
             "ak:space:1".to_owned(),
-            vec!["ck.future.action".to_owned()],
+            vec!["ak.future.action".to_owned()],
             vec![],
         );
         assert!(engine.get_grant(&grant.grant_id).is_none());
@@ -1364,7 +1364,7 @@ mod tests {
 
         let result = engine.check(
             "did:web:bob",
-            "ck.future.action",
+            "ak.future.action",
             "ak:space:1",
             "ak:space:1",
             None,
@@ -1379,10 +1379,10 @@ mod tests {
     fn owner_does_not_get_circle_local_management_by_default() {
         let engine = SolandAuthzEngine::new();
         for action in [
-            "ck.circle.manage",
-            "ck.circle.member.manage",
-            "ck.circle.member.add.others",
-            "ck.circle.audit",
+            "ak.circle.manage",
+            "ak.circle.member.manage",
+            "ak.circle.member.add.others",
+            "ak.circle.audit",
         ] {
             let result = engine.check(
                 "did:web:alice",
@@ -1404,7 +1404,7 @@ mod tests {
         let members = vec!["did:web:bob".to_owned()];
         let read = engine.check(
             "did:web:bob",
-            "ck.strand.read",
+            "ak.strand.read",
             "ak:space:1",
             "ak:space:1",
             Some("did:web:alice"),
@@ -1416,7 +1416,7 @@ mod tests {
 
         let write = engine.check(
             "did:web:bob",
-            "ck.message.create",
+            "ak.message.create",
             "ak:space:1",
             "ak:space:1",
             Some("did:web:alice"),
@@ -1436,12 +1436,12 @@ mod tests {
             "did:web:alice".to_owned(),
             "did:web:bob".to_owned(),
             "ak:space:1".to_owned(),
-            vec!["ck.strand.read".to_owned()],
+            vec!["ak.strand.read".to_owned()],
             vec![],
         );
         let result = engine.check(
             "did:web:bob",
-            "ck.strand.read",
+            "ak.strand.read",
             "ak:space:1",
             "ak:space:1",
             Some("did:web:alice"),
@@ -1460,12 +1460,12 @@ mod tests {
             "did:web:alice".to_owned(),
             "did:web:bob".to_owned(),
             "ak:space:1".to_owned(),
-            vec!["ck.message.create".to_owned()],
+            vec!["ak.message.create".to_owned()],
             vec![],
         );
         let result = engine.check(
             "did:web:bob",
-            "ck.message.create",
+            "ak.message.create",
             "ak:space:1",
             "ak:space:1",
             Some("did:web:alice"),
@@ -1484,7 +1484,7 @@ mod tests {
             "did:web:alice".to_owned(),
             "did:web:bob".to_owned(),
             "ak:space:1".to_owned(),
-            vec!["ck.message.create".to_owned()],
+            vec!["ak.message.create".to_owned()],
             vec![Constraint::Decision {
                 decision: GrantDecisionVerdict::Allow,
             }],
@@ -1494,14 +1494,14 @@ mod tests {
             "did:web:alice".to_owned(),
             "did:web:bob".to_owned(),
             "ak:space:1".to_owned(),
-            vec!["ck.message.create".to_owned()],
+            vec!["ak.message.create".to_owned()],
             vec![Constraint::Decision {
                 decision: GrantDecisionVerdict::Deny,
             }],
         );
         let result = engine.check(
             "did:web:bob",
-            "ck.message.create",
+            "ak.message.create",
             "ak:space:1",
             "ak:space:1",
             Some("did:web:alice"),
@@ -1522,7 +1522,7 @@ mod tests {
             "did:web:alice".to_owned(),
             "did:web:bob".to_owned(),
             "ak:space:1".to_owned(),
-            vec!["ck.message.create".to_owned()],
+            vec!["ak.message.create".to_owned()],
             vec![Constraint::Decision {
                 decision: GrantDecisionVerdict::RequireReview,
             }],
@@ -1532,14 +1532,14 @@ mod tests {
             "did:web:alice".to_owned(),
             "did:web:bob".to_owned(),
             "ak:space:1".to_owned(),
-            vec!["ck.message.create".to_owned()],
+            vec!["ak.message.create".to_owned()],
             vec![Constraint::Decision {
                 decision: GrantDecisionVerdict::Allow,
             }],
         );
         let reviewed = engine.check(
             "did:web:bob",
-            "ck.message.create",
+            "ak.message.create",
             "ak:space:1",
             "ak:space:1",
             Some("did:web:alice"),
@@ -1554,14 +1554,14 @@ mod tests {
             "did:web:alice".to_owned(),
             "did:web:bob".to_owned(),
             "ak:space:1".to_owned(),
-            vec!["ck.message.create".to_owned()],
+            vec!["ak.message.create".to_owned()],
             vec![Constraint::Decision {
                 decision: GrantDecisionVerdict::Quarantine,
             }],
         );
         let quarantined = engine.check(
             "did:web:bob",
-            "ck.message.create",
+            "ak.message.create",
             "ak:space:1",
             "ak:space:1",
             Some("did:web:alice"),
@@ -1580,13 +1580,13 @@ mod tests {
             "did:web:alice".to_owned(),
             "did:web:bob".to_owned(),
             "ak:space:1".to_owned(),
-            vec!["ck.message.create".to_owned()],
+            vec!["ak.message.create".to_owned()],
             vec![],
         );
         engine.revoke_grant_with_cascade(&grant.grant_id);
         let result = engine.check(
             "did:web:bob",
-            "ck.message.create",
+            "ak.message.create",
             "ak:space:1",
             "ak:space:1",
             Some("did:web:alice"),
@@ -1604,7 +1604,7 @@ mod tests {
             "did:web:alice".to_owned(),
             "did:web:bob".to_owned(),
             "ak:space:1".to_owned(),
-            vec!["ck.message.create".to_owned()],
+            vec!["ak.message.create".to_owned()],
             vec![],
         );
         let child = engine
@@ -1613,7 +1613,7 @@ mod tests {
                 "did:web:bob".to_owned(),
                 "did:web:carol".to_owned(),
                 "ak:space:1".to_owned(),
-                vec!["ck.message.create".to_owned()],
+                vec!["ak.message.create".to_owned()],
                 vec![],
                 None,
             )
@@ -1621,7 +1621,7 @@ mod tests {
         engine.revoke_grant_with_cascade(&parent.grant_id);
         let result = engine.check(
             "did:web:carol",
-            "ck.message.create",
+            "ak.message.create",
             "ak:space:1",
             "ak:space:1",
             Some("did:web:alice"),
@@ -1643,7 +1643,7 @@ mod tests {
         let engine = SolandAuthzEngine::new();
         let result = engine.check(
             "did:web:eve",
-            "ck.strand.read",
+            "ak.strand.read",
             "ak:space:1",
             "ak:space:1",
             Some("did:web:alice"),
@@ -1661,12 +1661,12 @@ mod tests {
             "did:web:alice".to_owned(),
             "did:web:bob".to_owned(),
             "ak:realm:1".to_owned(),
-            vec!["ck.pin.*".to_owned()],
+            vec!["ak.pin.*".to_owned()],
             vec![],
         );
         let result = engine.check(
             "did:web:bob",
-            "ck.pin.add",
+            "ak.pin.add",
             "ak:realm:1",
             "ak:realm:1",
             None,
@@ -1685,12 +1685,12 @@ mod tests {
             "did:web:alice".to_owned(),
             "did:web:bob".to_owned(),
             "*".to_owned(),
-            vec!["ck.pin.add".to_owned()],
+            vec!["ak.pin.add".to_owned()],
             vec![],
         );
         let result = engine.check(
             "did:web:bob",
-            "ck.pin.add",
+            "ak.pin.add",
             "ak:realm:1",
             "ak:realm:1",
             None,

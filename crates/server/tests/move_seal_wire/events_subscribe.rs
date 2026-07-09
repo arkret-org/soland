@@ -15,7 +15,7 @@ fn event_envelope(event_id: &str, actor: &str, realm_id: &str, payload: Value) -
     let suffix = event_id.trim_start_matches("ak:event:");
     let mut event = json!({
         "event_id": event_id,
-        "kind": "ck.message.create",
+        "kind": "ak.message.create",
         "actor_id": actor,
         "actor_seq": 1,
         "realm_id": realm_id,
@@ -242,7 +242,7 @@ async fn events_subscribe_frames_are_sdk_typed_and_cursor_advances() {
         .append(soland::state::ProjectionEventRecord {
             event_id: event_id.to_owned(),
             realm_id: demo_realm_id().to_owned(),
-            event_kind: "ck.message.create".to_owned(),
+            event_kind: "ak.message.create".to_owned(),
             operation_type: "create".to_owned(),
             operation_id: Some("ak:operation:01984101-0000-7000-8000-00000000d0c5".to_owned()),
             sender: Some("did:web:admin.example".to_owned()),

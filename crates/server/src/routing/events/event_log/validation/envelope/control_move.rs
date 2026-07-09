@@ -16,7 +16,7 @@ pub(super) fn validate_control_move_seal_basis(
             return Err(event_validation_error(
                 StatusCode::FORBIDDEN,
                 "schema_violation",
-                "ck.realm.create genesis bootstrap must not carry seal_ref, auth_context, or seal_basis",
+                "ak.realm.create genesis bootstrap must not carry seal_ref, auth_context, or seal_basis",
             ));
         }
         return Ok(());
@@ -63,9 +63,9 @@ enum CbaEffectPlane {
 }
 
 pub(super) const DATA_PLANE_CELL_FAMILIES: &[&str] = &[
-    "ck.component.strand.discussion.timeline.v1",
-    "ck.component.message.reactions.v1",
-    "ck.component.pin.v1",
+    "ak.component.strand.discussion.timeline.v1",
+    "ak.component.message.reactions.v1",
+    "ak.component.pin.v1",
 ];
 
 pub(super) fn validate_cba_effect_planes(

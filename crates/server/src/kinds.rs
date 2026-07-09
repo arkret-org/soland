@@ -6,8 +6,8 @@ use serde_json::Value;
 
 use crate::artifacts;
 
-pub const MLS_GOVERNANCE_BINDING_FULL_PROFILE: &str = "ck.profile.mls_governance_binding.full.v1";
-pub const MLS_REDUCER_PROFILE_V1: &str = "ck.reducer.v1";
+pub const MLS_GOVERNANCE_BINDING_FULL_PROFILE: &str = "ak.profile.mls_governance_binding.full.v1";
+pub const MLS_REDUCER_PROFILE_V1: &str = "ak.reducer.v1";
 
 // CKP-0007 — typed Relation kind couples a "wide synthesis" Strand (often
 // Realm-default scope) to a "narrow discussion" Strand bound to a
@@ -40,7 +40,7 @@ pub const RELATION_KIND_CONFIDENTIAL_DISCUSSION_OF: &str = "confidential_discuss
 // `ck.realm.freeze` is reversible read-only hold. `ck.realm.tombstone` is a
 // terminal migration to a successor Realm. `ck.realm.destroy` is terminal
 // no-successor retirement ("dissolve/close Realm" at product level).
-pub const CONFLICT_REPAIR: &str = "ck.conflict.repair";
+pub const CONFLICT_REPAIR: &str = "ak.conflict.repair";
 // Round 14e+ (2026-05-16) — Agent protocol family. Spec
 // `extensions/agent-integration.md`. Mirror of applet but with a
 // terminal `*.result` event that carries the signed audit binding.
@@ -309,11 +309,11 @@ pub fn operation_is_realm_lifecycle(operation: &Operation) -> bool {
 // Spec seals:
 //   - `extensions/applet-integration.md` §3–§5 (bot / ghost actor accountability model)
 //   - `identity/tsp-integration.md` §3–§5 (transport declaration, route, audit chain)
-pub const EXTENSIONS_BOT_REGISTER: &str = "ck.extensions.bot_actor.register";
-pub const EXTENSIONS_BOT_REVOKE: &str = "ck.extensions.bot_actor.revoke";
-pub const EXTENSIONS_TSP_TRANSPORT_DECLARE: &str = "ck.extensions.tsp.transport_declare";
-pub const EXTENSIONS_TSP_ROUTE_ESTABLISH: &str = "ck.extensions.tsp.route_establish";
-pub const EXTENSIONS_TSP_AUDIT_APPEND: &str = "ck.extensions.tsp.audit_append";
+pub const EXTENSIONS_BOT_REGISTER: &str = "ak.extensions.bot_actor.register";
+pub const EXTENSIONS_BOT_REVOKE: &str = "ak.extensions.bot_actor.revoke";
+pub const EXTENSIONS_TSP_TRANSPORT_DECLARE: &str = "ak.extensions.tsp.transport_declare";
+pub const EXTENSIONS_TSP_ROUTE_ESTABLISH: &str = "ak.extensions.tsp.route_establish";
+pub const EXTENSIONS_TSP_AUDIT_APPEND: &str = "ak.extensions.tsp.audit_append";
 
 // ────────────────────────────────────────────────────────────────────────
 // Audit-compliance profiles + Realm terminal-state classifier (spec T07/T09/T23).
@@ -321,8 +321,8 @@ pub const EXTENSIONS_TSP_AUDIT_APPEND: &str = "ck.extensions.tsp.audit_append";
 
 /// Active audit-compliance profile ids. Spec T09.
 pub const AUDIT_COMPLIANCE_PROFILES: &[&str] = &[
-    "ck.profile.attested_audit.e2ee.v1",
-    "ck.profile.disclosed_audit.e2ee.v1",
+    "ak.profile.attested_audit.e2ee.v1",
+    "ak.profile.disclosed_audit.e2ee.v1",
 ];
 
 /// Spec T07 — Realm lifecycle state classifier; mirror of the SDK
@@ -337,7 +337,7 @@ pub fn realm_state_is_terminal(state: arkret_sdk::events::RealmLifecycleState) -
 pub fn ryw_receipt_durable_event_allowed(active_profiles: &[String]) -> bool {
     active_profiles
         .iter()
-        .any(|p| p == "ck.profile.attested_audit.e2ee.v1")
+        .any(|p| p == "ak.profile.attested_audit.e2ee.v1")
 }
 
 /// SEC-08 — does this Realm-lifecycle payload (`ck.realm.create` /
@@ -370,7 +370,7 @@ mod audit_profile_tests {
     fn ryw_receipt_durable_only_under_attested_profile() {
         assert!(!ryw_receipt_durable_event_allowed(&[]));
         assert!(ryw_receipt_durable_event_allowed(&[
-            "ck.profile.attested_audit.e2ee.v1".to_owned()
+            "ak.profile.attested_audit.e2ee.v1".to_owned()
         ]));
     }
 
@@ -380,13 +380,13 @@ mod audit_profile_tests {
         // SEC-08 — declaration is recognised under `profiles[]` and
         // `active_profiles[]`; absent / other profiles are not minimal.
         assert!(payload_declares_minimal_metadata_realm(&json!({
-            "profiles": ["ck.profile.mls.minimal_metadata_realm.v1"]
+            "profiles": ["ak.profile.mls.minimal_metadata_realm.v1"]
         })));
         assert!(payload_declares_minimal_metadata_realm(&json!({
-            "active_profiles": ["ck.profile.core.v1", "ck.profile.mls.minimal_metadata_realm.v1"]
+            "active_profiles": ["ak.profile.core.v1", "ck.profile.mls.minimal_metadata_realm.v1"]
         })));
         assert!(!payload_declares_minimal_metadata_realm(&json!({
-            "profiles": ["ck.profile.core.v1"]
+            "profiles": ["ak.profile.core.v1"]
         })));
         assert!(!payload_declares_minimal_metadata_realm(&json!({})));
     }

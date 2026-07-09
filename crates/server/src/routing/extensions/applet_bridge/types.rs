@@ -8,7 +8,7 @@ use serde_json::Value;
 use super::super::applet_manifest::AppletManifest;
 use crate::state::{CanonicalEventRecord, ProjectionEventRecord};
 
-pub(super) const EVENT_SCHEMA_ID: &str = "ck.schema.event.v1";
+pub(super) const EVENT_SCHEMA_ID: &str = "ak.schema.event.v1";
 pub(super) const SOLAND_EDGE_APPLET_ID: &str = "ak:applet:00000000-0000-7000-8000-000000000000";
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

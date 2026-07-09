@@ -115,9 +115,9 @@ fn mimi_room_update_body(
     status: &str,
 ) -> Value {
     let binding = json!({
-        "kind": "ck.mimi.room_binding",
+        "kind": "ak.mimi.room_binding",
         "payload": {
-            "profile": "ck.profile.mimi_interop.v1",
+            "profile": "ak.profile.mimi_interop.v1",
             "mimi_room_uri": mimi_room_uri(room_id),
             "binding_scope": {
                 "realm_id": realm_id,
@@ -178,8 +178,8 @@ fn mimi_governance_binding(realm_id: &str, group_id: &str, epoch: u64) -> Value 
     json!({
         "binding_version": 1,
         "encoding_profile": "cbor-deterministic-rfc8949-v1",
-        "binding_profile": "ck.profile.mls_governance_binding.full.v1",
-        "reducer_profile": "ck.reducer.v1",
+        "binding_profile": "ak.profile.mls_governance_binding.full.v1",
+        "reducer_profile": "ak.reducer.v1",
         "mls_group_id": group_id,
         "previous_epoch": epoch.saturating_sub(1),
         "next_epoch": epoch,
@@ -200,10 +200,10 @@ fn text_mimi_message(message_id: &str, body: &str) -> Value {
         "mimi_message_id": message_id,
         "original_envelope_hash": arkret_sdk::canonical::sha256_digest(message_id.as_bytes()),
         "content": {
-            "kind": "ck.content.composite",
+            "kind": "ak.content.composite",
             "body": body,
             "parts": [{
-                "kind": "ck.content.text",
+                "kind": "ak.content.text",
                 "body": body,
             }],
         },
@@ -241,7 +241,7 @@ async fn mimi_provider_facade_contracts_work() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|profile| profile == "ck.profile.mimi_interop.v1")
+            .any(|profile| profile == "ak.profile.mimi_interop.v1")
     );
 
     let directory: Value = TestClient::get("http://server/_arkret/open/mimi/provider-directory")
@@ -469,7 +469,7 @@ async fn mimi_facade_writes_strand_into_canonical_reducer_chain() {
         .iter()
         .find(|event| event["event_id"] == binding_event_id)
         .expect("room_binding event missing from projection log");
-    assert_eq!(event_kind(binding_event), Some("ck.mimi.room_binding"));
+    assert_eq!(event_kind(binding_event), Some("ak.mimi.room_binding"));
     assert_eq!(binding_event["payload"]["mimi_room_id"], room_id);
     assert_eq!(
         binding_event["payload"]["binding_scope"]["realm_id"],
@@ -480,7 +480,7 @@ async fn mimi_facade_writes_strand_into_canonical_reducer_chain() {
         .iter()
         .find(|event| event["event_id"] == arkret_event_id)
         .expect("MIMI-ingressed message missing from projection log");
-    assert_eq!(event_kind(message_event), Some("ck.message.create"));
+    assert_eq!(event_kind(message_event), Some("ak.message.create"));
     assert_eq!(message_event["actor_id"], "did:web:remote.example");
     assert_eq!(
         message_event["payload"]["content"]["parts"][0]["body"],
@@ -528,7 +528,7 @@ async fn mimi_facade_writes_strand_into_canonical_reducer_chain() {
         .unwrap()
         .iter()
         .find(|event| {
-            event_kind(event) == Some("ck.self.moderation.report")
+            event_kind(event) == Some("ak.self.moderation.report")
                 && event["payload"]["target_event_digest"] == demo_realm
         })
         .expect("moderation.report event missing from projection log");
@@ -658,7 +658,7 @@ async fn mimi_facade_enforces_e2ee_boundary_and_quarantines_unknown_content() {
                 "e2ee": true,
                 "mimi_message_id": "mimi-msg-policy-unmarked",
                 "content": {
-                    "kind": "ck.content.text",
+                    "kind": "ak.content.text",
                     "body": "this plaintext must not cross silently",
                 },
             }),
@@ -687,7 +687,7 @@ async fn mimi_facade_enforces_e2ee_boundary_and_quarantines_unknown_content() {
                 "e2ee_downgrade": "mimi_bridge",
                 "mimi_message_id": "mimi-msg-policy-downgrade",
                 "content": {
-                    "kind": "ck.content.text",
+                    "kind": "ak.content.text",
                     "body": "explicitly downgraded plaintext",
                 },
             }),
@@ -720,7 +720,7 @@ async fn mimi_facade_enforces_e2ee_boundary_and_quarantines_unknown_content() {
                     "transcript_hash": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
                 },
                 "content": {
-                    "kind": "ck.content.text",
+                    "kind": "ak.content.text",
                     "body": "transcript-bound plaintext",
                 },
             }),
@@ -784,7 +784,7 @@ async fn mimi_facade_enforces_e2ee_boundary_and_quarantines_unknown_content() {
     };
     let downgrade_event = find(&downgrade_event_id);
     assert_eq!(
-        downgrade_event["payload"]["content"]["ck.morph.e2ee_downgrade"],
+        downgrade_event["payload"]["content"]["ak.morph.e2ee_downgrade"],
         "mimi_bridge"
     );
     assert_eq!(
@@ -805,10 +805,10 @@ async fn mimi_facade_enforces_e2ee_boundary_and_quarantines_unknown_content() {
     let quarantine_event = find(&quarantine_event_id);
     assert_eq!(
         quarantine_event["payload"]["content"]["kind"],
-        "ck.content.unsupported"
+        "ak.content.unsupported"
     );
     assert_eq!(
-        quarantine_event["payload"]["content"]["ck.morph.unknown_content_kind"],
+        quarantine_event["payload"]["content"]["ak.morph.unknown_content_kind"],
         "m.location.share.live"
     );
     assert_eq!(

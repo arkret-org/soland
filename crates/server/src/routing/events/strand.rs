@@ -107,7 +107,7 @@ pub async fn strand_projection_for_realm(
         "id": strand_id_from_realm_id(realm_id),
         "strand_id": strand_id_from_realm_id(realm_id),
         "type": "strand",
-        "schema": "ck.schema.strand.v1",
+        "schema": "ak.schema.strand.v1",
         "realm_id": realm_id,
         "kind": "discussion",
         "title": title,

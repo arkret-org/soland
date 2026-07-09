@@ -9,11 +9,11 @@ use serde_json::Value;
 use crate::state::AppState;
 use crate::{kinds, wire};
 
-const PROFILE_FEDERATION_MINIMAL: &str = "ck.profile.federation_minimal.v1";
-const PROFILE_MLS_GOVERNANCE_FULL: &str = "ck.profile.mls_governance_binding.full.v1";
-const SCHEMA_EVENT: &str = "ck.schema.event.v1";
-const SCHEMA_EVENT_PAYLOAD: &str = "ck.schema.event_payload.v1";
-const SCHEMA_CAPABILITY: &str = "ck.schema.capability.v1";
+const PROFILE_FEDERATION_MINIMAL: &str = "ak.profile.federation_minimal.v1";
+const PROFILE_MLS_GOVERNANCE_FULL: &str = "ak.profile.mls_governance_binding.full.v1";
+const SCHEMA_EVENT: &str = "ak.schema.event.v1";
+const SCHEMA_EVENT_PAYLOAD: &str = "ak.schema.event_payload.v1";
+const SCHEMA_CAPABILITY: &str = "ak.schema.capability.v1";
 const CODE_PROFILE_UNSUPPORTED: &str = "profile_unsupported";
 
 #[derive(Clone, Debug)]
@@ -289,7 +289,7 @@ impl SemanticAtoms {
         if self
             .kind
             .as_deref()
-            .is_some_and(|kind| kind.starts_with("ck.capability."))
+            .is_some_and(|kind| kind.starts_with("ak.capability."))
             || !self.capability_actions.is_empty()
             || !self.constraint_kinds.is_empty()
         {
@@ -298,7 +298,7 @@ impl SemanticAtoms {
         if self
             .kind
             .as_deref()
-            .is_some_and(|kind| kind.starts_with("ck.mls.") || kind.starts_with("ck.realm_key."))
+            .is_some_and(|kind| kind.starts_with("ak.mls.") || kind.starts_with("ck.realm_key."))
         {
             self.requires_mls_governance = true;
         }
@@ -581,7 +581,7 @@ fn collect_payload_semantics(value: &Value, atoms: &mut SemanticAtoms, depth: us
 fn collect_schema_value(value: &Value, schemas: &mut BTreeSet<String>) {
     match value {
         Value::String(schema) => {
-            if schema.starts_with("ck.schema.") {
+            if schema.starts_with("ak.schema.") {
                 insert_nonempty(schemas, schema);
             }
         }
@@ -692,11 +692,11 @@ fn insert_nonempty(output: &mut BTreeSet<String>, value: &str) {
 
 fn is_capability_action(value: &str) -> bool {
     let value = value.trim();
-    value.starts_with("ck.")
-        && !value.starts_with("ck.schema.")
-        && !value.starts_with("ck.profile.")
-        && !value.starts_with("ck.feature.")
-        && !value.starts_with("ck.component.")
+    value.starts_with("ak.")
+        && !value.starts_with("ak.schema.")
+        && !value.starts_with("ak.profile.")
+        && !value.starts_with("ak.feature.")
+        && !value.starts_with("ak.component.")
 }
 
 fn contains_str(values: &[String], needle: &str) -> bool {
@@ -704,8 +704,8 @@ fn contains_str(values: &[String], needle: &str) -> bool {
 }
 
 fn schema_can_fall_back_to_event_payload(schema: &str) -> bool {
-    schema.starts_with("ck.schema.")
+    schema.starts_with("ak.schema.")
         && schema != SCHEMA_CAPABILITY
-        && schema != "ck.schema.grant_constraint.v1"
-        && schema != "ck.schema.resource_selector.v1"
+        && schema != "ak.schema.grant_constraint.v1"
+        && schema != "ak.schema.resource_selector.v1"
 }

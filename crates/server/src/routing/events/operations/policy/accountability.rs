@@ -20,7 +20,7 @@ pub(super) async fn validate_accountability_profile_policy(
 ) -> Result<(), &'static str> {
     if !matches!(
         kinds::canonical_kind_string(operation).as_str(),
-        "ck.profile.create" | "ck.profile.update"
+        "ak.profile.create" | "ck.profile.update"
     ) {
         return Ok(());
     }
@@ -49,7 +49,7 @@ pub(super) async fn validate_accountability_profile_policy(
             )
         });
         let accepted = accepted_events.iter().any(|record| {
-            if record.kind != "ck.identity.accountability_grant" {
+            if record.kind != "ak.identity.accountability_grant" {
                 return false;
             }
             if record.realm_id.as_deref() != Some(operation.realm_id.as_str()) {
@@ -112,7 +112,7 @@ pub(super) fn accountability_grant_operation_active_for(
     subject: &str,
     now: chrono::DateTime<chrono::Utc>,
 ) -> bool {
-    kinds::canonical_kind_string(operation) == "ck.identity.accountability_grant"
+    kinds::canonical_kind_string(operation) == "ak.identity.accountability_grant"
         && operation.realm_id.as_str() == realm_id
         && accountability_grant_operation_signed_by(operation, issuer)
         && accountability_grant_value_active_for(&operation.payload, issuer, subject, now)

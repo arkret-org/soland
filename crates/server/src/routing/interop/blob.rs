@@ -663,11 +663,11 @@ async fn try_recover_profile_avatar_blob(
 }
 
 #[endpoint(
-    operation_id = "ck.self.blob.command.presign",
+    operation_id = "ak.self.blob.command.presign",
     tags("blob"),
     summary = "Issue a short-lived presigned blob download URL"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.blob.command.presign"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.blob.command.presign"))]
 async fn blob_presign(
     aa: crate::routing::system::extract::AuthArgs,
     body: JsonBody<BlobPresignRequestBody>,
@@ -747,7 +747,7 @@ async fn blob_presign(
     })
 }
 
-const BLOB_PRESIGN_SCHEME: &str = "ck.blob.presign.v1";
+const BLOB_PRESIGN_SCHEME: &str = "ak.blob.presign.v1";
 const BLOB_PRESIGN_PROOF_KIND: &str = "detached_jws";
 const BLOB_PRESIGN_PROOF_ALG: &str = "EdDSA";
 const BLOB_PRESIGN_KID_FRAGMENT: &str = "notary-key";
@@ -1151,13 +1151,13 @@ pub(super) fn encrypted_blob_encryption_metadata_for_purpose(
 ) -> Option<Value> {
     match purpose {
         Some(BLOB_PURPOSE_FILE_TRANSFER) => Some(json!({
-            "scheme": "ck.file_transfer.encrypted_blob.v1",
+            "scheme": "ak.file_transfer.encrypted_blob.v1",
             "purpose": BLOB_PURPOSE_FILE_TRANSFER,
         })),
         Some(BLOB_PURPOSE_SEARCH_INDEX_SHARD) => Some(json!({
-            "scheme": "ck.search.encrypted_index_shard.v1",
+            "scheme": "ak.search.encrypted_index_shard.v1",
             "purpose": BLOB_PURPOSE_SEARCH_INDEX_SHARD,
-            "profile_id": "ck.profile.search.client_index.v1",
+            "profile_id": "ak.profile.search.client_index.v1",
             "data_class": "encrypted_index",
         })),
         _ => None,
@@ -1185,8 +1185,8 @@ pub(super) fn plaintext_blob_data_class(
 /// discriminator. The server stores the envelope as opaque JSON and never
 /// decrypts; these constants only drive the light-touch shape validation
 /// below (which fields are required), not any cryptographic interpretation.
-const SCHEME_WHOLE_FILE: &str = "ck.blob.whole_file_aead.v1";
-const SCHEME_STREAM: &str = "ck.blob.stream_aead.v1";
+const SCHEME_WHOLE_FILE: &str = "ak.blob.whole_file_aead.v1";
+const SCHEME_STREAM: &str = "ak.blob.stream_aead.v1";
 
 fn validate_encrypted_attachment_metadata(
     metadata: &serde_json::Value,
@@ -1737,7 +1737,7 @@ mod tests {
         // Valid stream envelope: nonce_prefix + segment_size/count, no nonce.
         assert!(
             validate_encrypted_attachment_metadata(&json!({
-                "scheme": "ck.blob.stream_aead.v1",
+                "scheme": "ak.blob.stream_aead.v1",
                 "alg": "mls_exporter_aead_xchacha20poly1305_stream",
                 "key_ref": "ak:mls:exporter",
                 "nonce_prefix": "AAAAAAAA",
@@ -1750,7 +1750,7 @@ mod tests {
         // Stream scheme but missing nonce_prefix → rejected.
         assert!(
             validate_encrypted_attachment_metadata(&json!({
-                "scheme": "ck.blob.stream_aead.v1",
+                "scheme": "ak.blob.stream_aead.v1",
                 "alg": "mls_exporter_aead_xchacha20poly1305_stream",
                 "key_ref": "ak:mls:exporter",
                 "segment_size": 65536,
@@ -1762,7 +1762,7 @@ mod tests {
         // Stream scheme but segment_size not an integer → rejected.
         assert!(
             validate_encrypted_attachment_metadata(&json!({
-                "scheme": "ck.blob.stream_aead.v1",
+                "scheme": "ak.blob.stream_aead.v1",
                 "alg": "mls_exporter_aead_xchacha20poly1305_stream",
                 "key_ref": "ak:mls:exporter",
                 "nonce_prefix": "AAAAAAAA",
@@ -1781,7 +1781,7 @@ mod tests {
         // forced to carry a whole-file `nonce`.
         assert!(
             validate_encrypted_attachment_metadata(&json!({
-                "scheme": "ck.blob.future_scheme.v9",
+                "scheme": "ak.blob.future_scheme.v9",
                 "alg": "something-new",
                 "key_ref": "ak:mls:exporter",
                 "ciphertext_digest": digest,
@@ -1798,9 +1798,9 @@ mod tests {
         assert_eq!(
             metadata,
             json!({
-                "scheme": "ck.search.encrypted_index_shard.v1",
+                "scheme": "ak.search.encrypted_index_shard.v1",
                 "purpose": "search_index_shard",
-                "profile_id": "ck.profile.search.client_index.v1",
+                "profile_id": "ak.profile.search.client_index.v1",
                 "data_class": "encrypted_index",
             })
         );

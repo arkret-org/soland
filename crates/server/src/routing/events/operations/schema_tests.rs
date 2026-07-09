@@ -70,7 +70,7 @@ mod invite_create_schema_tests {
 
         assert_eq!(
             validate_operation_schema(&operation, schema),
-            Err("ck.invite.create payload must not carry inviter; use envelope.actor_id")
+            Err("ak.invite.create payload must not carry inviter; use envelope.actor_id")
         );
     }
 
@@ -83,7 +83,7 @@ mod invite_create_schema_tests {
 
         assert_eq!(
             validate_operation_schema(&operation, schema),
-            Err("ck.invite.create operation requires invite_id")
+            Err("ak.invite.create operation requires invite_id")
         );
     }
 
@@ -96,7 +96,7 @@ mod invite_create_schema_tests {
 
         assert_eq!(
             validate_operation_schema(&operation, schema),
-            Err("ck.invite.create operation requires expires_at")
+            Err("ak.invite.create operation requires expires_at")
         );
     }
 
@@ -109,7 +109,7 @@ mod invite_create_schema_tests {
 
         assert_eq!(
             validate_operation_schema(&operation, schema),
-            Err("ck.invite.create invite_id must be ak:invite:<uuidv7>")
+            Err("ak.invite.create invite_id must be ak:invite:<uuidv7>")
         );
     }
 
@@ -199,7 +199,7 @@ mod realm_key_share_schema_tests {
 
         assert_eq!(
             validate_operation_schema(&operation, schema),
-            Err("ck.realm_key.share requires sealed key material")
+            Err("ak.realm_key.share requires sealed key material")
         );
     }
 }
@@ -353,7 +353,7 @@ mod realm_plaintext_visible_services_schema_tests {
                 arkret_sdk::events::kinds::REALM_INHERITANCE_POLICY,
                 &operation,
             ),
-            Err("ck.realm.inheritance_policy requires inherits")
+            Err("ak.realm.inheritance_policy requires inherits")
         );
     }
 
@@ -459,7 +459,7 @@ mod message_projection_schema_tests {
             arkret_sdk::events::kinds::MESSAGE_REVISE,
             json!({
                 "target_ref": "ak:event:01904100-0000-7000-8000-000000000001",
-                "content": {"kind": "ck.content.text", "body": "edited"}
+                "content": {"kind": "ak.content.text", "body": "edited"}
             }),
         );
         let schema = operation_schema_for_kind(arkret_sdk::events::kinds::MESSAGE_REVISE).unwrap();
@@ -512,7 +512,7 @@ mod agent_action_schema_tests {
                 "draft_id": "ak:agent_draft:01904100-0000-7000-8000-000000000001",
                 "agent_principal_id": "did:web:agent.example",
                 "controller_principal_id": "did:web:alice.example",
-                "proposed_action": "ck.message.create",
+                "proposed_action": "ak.message.create",
                 "target": {
                     "kind": "realm",
                     "realm_id": "ak:realm:01904100-0000-7000-8000-668e2181b41d"
@@ -588,7 +588,7 @@ mod spec_sync_validator_tests {
                 "object": {
                     "id": "ak:morph:01904100-0000-7000-8000-000000000001",
                     "morph_type": "document",
-                    "schema_refs": ["ck.schema.morph.v1"],
+                    "schema_refs": ["ak.schema.morph.v1"],
                     "metadata": {"title": "Spec"},
                     "encrypted_content": {"version": 1}
                 }
@@ -602,7 +602,7 @@ mod spec_sync_validator_tests {
                 "object": {
                     "id": "ak:morph:01904100-0000-7000-8000-000000000001",
                     "morph_type": "document",
-                    "schema_refs": ["ck.schema.morph.v1"],
+                    "schema_refs": ["ak.schema.morph.v1"],
                     "content": {},
                     "encrypted_content": {}
                 }
@@ -622,7 +622,7 @@ mod spec_sync_validator_tests {
             arkret_sdk::events::kinds::MORPH_UPDATE,
             json!({
                 "target_ref": "ak:morph:01904100-0000-7000-8000-000000000001",
-                "patch": {"schema_refs": ["ck.schema.new"]}
+                "patch": {"schema_refs": ["ak.schema.new"]}
             }),
         );
         assert_eq!(
@@ -634,11 +634,11 @@ mod spec_sync_validator_tests {
             arkret_sdk::events::kinds::MORPH_SCHEMA_MIGRATE,
             json!({
                 "morph_id": "ak:morph:01904100-0000-7000-8000-000000000001",
-                "from_schema_refs": ["ck.schema.old"],
-                "to_schema_refs": ["ck.schema.old", "ck.schema.new"],
+                "from_schema_refs": ["ak.schema.old"],
+                "to_schema_refs": ["ak.schema.old", "ck.schema.new"],
                 "compatibility_class": "additive",
                 "authorization_ref": "ak:event:01904100-0000-7000-8000-aaaaaaaaaaaa",
-                "capability_action": "ck.morph.schema.migrate"
+                "capability_action": "ak.morph.schema.migrate"
             }),
         );
         let migrate_schema =
@@ -650,11 +650,11 @@ mod spec_sync_validator_tests {
             arkret_sdk::events::kinds::MORPH_SCHEMA_MIGRATE,
             json!({
                 "morph_id": "ak:morph:01904100-0000-7000-8000-000000000001",
-                "from_schema_refs": ["ck.schema.old"],
-                "to_schema_refs": ["ck.schema.new"],
+                "from_schema_refs": ["ak.schema.old"],
+                "to_schema_refs": ["ak.schema.new"],
                 "compatibility_class": "additive",
                 "authorization_ref": "ak:event:01904100-0000-7000-8000-aaaaaaaaaaaa",
-                "capability_action": "ck.morph.schema.migrate"
+                "capability_action": "ak.morph.schema.migrate"
             }),
         );
         assert_eq!(
@@ -666,14 +666,14 @@ mod spec_sync_validator_tests {
             arkret_sdk::events::kinds::MORPH_SCHEMA_MIGRATE,
             json!({
                 "morph_id": "ak:morph:01904100-0000-7000-8000-000000000001",
-                "from_schema_refs": ["ck.schema.old"],
-                "to_schema_refs": ["ck.schema.new"],
+                "from_schema_refs": ["ak.schema.old"],
+                "to_schema_refs": ["ak.schema.new"],
                 "compatibility_class": "additive"
             }),
         );
         assert_eq!(
             validate_morph_schema_migrate_capability(&missing_gate),
-            Err("ck.morph.schema_migrate requires authorization_ref")
+            Err("ak.morph.schema_migrate requires authorization_ref")
         );
 
         // `morph.md` §4.1 S3 — a breaking migration is shape-valid at the
@@ -685,11 +685,11 @@ mod spec_sync_validator_tests {
             arkret_sdk::events::kinds::MORPH_SCHEMA_MIGRATE,
             json!({
                 "morph_id": "ak:morph:01904100-0000-7000-8000-000000000001",
-                "from_schema_refs": ["ck.schema.old"],
-                "to_schema_refs": ["ck.schema.new"],
+                "from_schema_refs": ["ak.schema.old"],
+                "to_schema_refs": ["ak.schema.new"],
                 "compatibility_class": "breaking",
                 "authorization_ref": "ak:event:01904100-0000-7000-8000-aaaaaaaaaaaa",
-                "capability_action": "ck.morph.schema_migrate"
+                "capability_action": "ak.morph.schema_migrate"
             }),
         );
         assert!(validate_operation_schema(&breaking, migrate_schema).is_ok());
@@ -700,11 +700,11 @@ mod spec_sync_validator_tests {
             arkret_sdk::events::kinds::MORPH_SCHEMA_MIGRATE,
             json!({
                 "morph_id": "ak:morph:01904100-0000-7000-8000-000000000001",
-                "from_schema_refs": ["ck.schema.old"],
-                "to_schema_refs": ["ck.schema.new"],
+                "from_schema_refs": ["ak.schema.old"],
+                "to_schema_refs": ["ak.schema.new"],
                 "compatibility_class": "transformation",
                 "authorization_ref": "ak:event:01904100-0000-7000-8000-aaaaaaaaaaaa",
-                "capability_action": "ck.morph.schema_migrate"
+                "capability_action": "ak.morph.schema_migrate"
             }),
         );
         assert_eq!(
@@ -725,7 +725,7 @@ mod sdk_artifact_schema_tests {
             arkret_sdk::OperationId::new("ak:operation:01904100-0000-7000-8000-57d7d85564c5")
                 .unwrap(),
             arkret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-668e2181b41d").unwrap(),
-            "ck.cross_signing.reset",
+            "ak.cross_signing.reset",
             payload,
         )
     }
@@ -735,7 +735,7 @@ mod sdk_artifact_schema_tests {
             arkret_sdk::OperationId::new("ak:operation:01904100-0000-7000-8000-57d7d85564c6")
                 .unwrap(),
             arkret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-668e2181b41d").unwrap(),
-            "ck.cross_signing.publish",
+            "ak.cross_signing.publish",
             payload,
         )
     }
@@ -780,14 +780,14 @@ mod sdk_artifact_schema_tests {
         }));
         assert_eq!(
             kinds::canonical_kind_for_operation(&operation),
-            Some("ck.cross_signing.publish")
+            Some("ak.cross_signing.publish")
         );
-        assert!(operation_schema_for_kind("ck.cross_signing.publish").is_some());
-        validate_operation_schema_from_sdk_artifact("ck.cross_signing.publish", &operation)
+        assert!(operation_schema_for_kind("ak.cross_signing.publish").is_some());
+        validate_operation_schema_from_sdk_artifact("ak.cross_signing.publish", &operation)
             .unwrap();
         validate_operation_schema(
             &operation,
-            operation_schema_for_kind("ck.cross_signing.publish").unwrap(),
+            operation_schema_for_kind("ak.cross_signing.publish").unwrap(),
         )
         .unwrap();
     }
@@ -814,13 +814,13 @@ mod sdk_artifact_schema_tests {
         }));
         assert_eq!(
             kinds::canonical_kind_for_operation(&operation),
-            Some("ck.cross_signing.reset")
+            Some("ak.cross_signing.reset")
         );
-        assert!(operation_schema_for_kind("ck.cross_signing.reset").is_some());
-        validate_operation_schema_from_sdk_artifact("ck.cross_signing.reset", &operation).unwrap();
+        assert!(operation_schema_for_kind("ak.cross_signing.reset").is_some());
+        validate_operation_schema_from_sdk_artifact("ak.cross_signing.reset", &operation).unwrap();
         validate_operation_schema(
             &operation,
-            operation_schema_for_kind("ck.cross_signing.reset").unwrap(),
+            operation_schema_for_kind("ak.cross_signing.reset").unwrap(),
         )
         .unwrap();
 
@@ -834,7 +834,7 @@ mod sdk_artifact_schema_tests {
             "issued_at": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
         }));
         assert_eq!(
-            validate_operation_schema_from_sdk_artifact("ck.cross_signing.reset", &missing_proof),
+            validate_operation_schema_from_sdk_artifact("ak.cross_signing.reset", &missing_proof),
             Err("operation payload violates SDK artifact schema")
         );
 
@@ -856,7 +856,7 @@ mod sdk_artifact_schema_tests {
         assert!(
             validate_operation_schema(
                 &missing_trust_domain,
-                operation_schema_for_kind("ck.cross_signing.reset").unwrap(),
+                operation_schema_for_kind("ak.cross_signing.reset").unwrap(),
             )
             .is_err()
         );
@@ -932,7 +932,7 @@ mod derived_relation_and_morph_immutability_tests {
                 "device_id": "ak:device:019eefcb-5882-7861-bc30-3033fa32dcf6",
                 "device_public_key": "z6MkjHNtpwuhc2QSXzkf4DWoWp7eSMKB9PzfdnvaLB7kb3dG",
                 "hpke_key": "z6LSgy7T8CEsMDMzk1e4EBFVX8CDXWWzvkFZWSXhsC97zjcM",
-                "algorithms": ["ck.hpke_x25519_aead_chacha20poly1305.v1", "ck.mls.v1"],
+                "algorithms": ["ak.hpke_x25519_aead_chacha20poly1305.v1", "ck.mls.v1"],
                 "authorized_by": "did:key:z6MknBuwKMPAzbhp6EwCnaxsEDk4G2KFeWRu273gYVuTY5jw",
                 "not_before": "2026-06-22T14:45:51Z",
                 "enrollment_authority_binding": {
@@ -959,7 +959,7 @@ mod derived_relation_and_morph_immutability_tests {
                 "device_id": "ak:device:01904100-0000-7000-8000-000000000001",
                 "device_public_key": "z6MkDeviceKey",
                 "hpke_key": "z6LSDeviceHpkeKey",
-                "algorithms": ["ck.hpke_x25519_aead_chacha20poly1305.v1", "ck.mls.v1"],
+                "algorithms": ["ak.hpke_x25519_aead_chacha20poly1305.v1", "ck.mls.v1"],
                 "authorized_by": "did:web:alice.example",
                 "not_before": "2026-05-30T00:00:00Z",
                 "device_signature": "c2ln",

@@ -301,7 +301,7 @@ fn validate_scope_rotate_events(
     for event in events {
         let kind = event.kind.as_str();
         match kind {
-            "ck.mls.genesis" | "ck.mls.proposal" | "ck.mls.commit" | "ck.mls.welcome" => {}
+            "ak.mls.genesis" | "ck.mls.proposal" | "ck.mls.commit" | "ck.mls.welcome" => {}
             _ => {
                 return Err(scope_rotate_failed(
                     "mls_rotate_event_kind_invalid",
@@ -344,7 +344,7 @@ fn validate_scope_rotate_events(
             Some(_) => {}
             None => group_ref = Some(event_group_ref),
         }
-        if kind == "ck.mls.commit" {
+        if kind == "ak.mls.commit" {
             saw_commit = true;
         }
     }
@@ -393,11 +393,11 @@ fn pending_mls_removals_for_circle(
 }
 
 #[endpoint(
-    operation_id = "ck.self.circle.query.list",
+    operation_id = "ak.self.circle.query.list",
     tags("circles"),
     summary = "List Circles visible to the caller within a given Realm"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.circle.query.list"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.circle.query.list"))]
 async fn list_circles(
     aa: AuthArgs,
     realm_id: QueryParam<String, true>,
@@ -419,11 +419,11 @@ async fn list_circles(
 }
 
 #[endpoint(
-    operation_id = "ck.self.circle.resource.get",
+    operation_id = "ak.self.circle.resource.get",
     tags("circles"),
     summary = "Fetch a single Circle by id"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.circle.resource.get"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.circle.resource.get"))]
 async fn get_circle(
     aa: AuthArgs,
     circle_id: PathParam<String>,
@@ -448,11 +448,11 @@ async fn get_circle(
 }
 
 #[endpoint(
-    operation_id = "ck.self.circle.command.create",
+    operation_id = "ak.self.circle.command.create",
     tags("circles"),
     summary = "Create a Circle (ck.circle.create)"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.circle.command.create"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.circle.command.create"))]
 async fn post_circle(
     aa: AuthArgs,
     body: JsonBody<CircleCreateRequestBody>,
@@ -493,11 +493,11 @@ async fn post_circle(
 }
 
 #[endpoint(
-    operation_id = "ck.self.circle.member.command.add",
+    operation_id = "ak.self.circle.member.command.add",
     tags("circles"),
     summary = "Add or change a Circle member (ck.circle.member.state)"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.circle.member.command.add"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.circle.member.command.add"))]
 async fn post_circle_member(
     aa: AuthArgs,
     circle_id: PathParam<String>,
@@ -562,7 +562,7 @@ async fn post_circle_member(
         ensure_circle_capability(
             state,
             &session.actor,
-            "ck.circle.member.manage",
+            "ak.circle.member.manage",
             &circle_id,
             &realm_id,
             CIRCLE_MEMBER_MANAGE_CAPABILITY_REQUIRED,
@@ -579,7 +579,7 @@ async fn post_circle_member(
         "sender": session.actor.clone(),
         "manage_capability_verified": manage_verified,
         "actor_capability": {
-            "action": "ck.circle.member.manage",
+            "action": "ak.circle.member.manage",
             "circle_id": circle_id,
             "allowed": manage_verified,
         },
@@ -604,11 +604,11 @@ async fn post_circle_member(
 }
 
 #[endpoint(
-    operation_id = "ck.self.circle.member.resource.delete",
+    operation_id = "ak.self.circle.member.resource.delete",
     tags("circles"),
     summary = "Remove a Circle member (ck.circle.member.state → removed)"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.circle.member.resource.delete"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.circle.member.resource.delete"))]
 async fn delete_circle_member(
     aa: AuthArgs,
     circle_id: PathParam<String>,
@@ -626,7 +626,7 @@ async fn delete_circle_member(
         ensure_circle_capability(
             state,
             &session.actor,
-            "ck.circle.member.manage",
+            "ak.circle.member.manage",
             &circle_id,
             &realm_id,
             CIRCLE_MEMBER_MANAGE_CAPABILITY_REQUIRED,
@@ -660,11 +660,11 @@ async fn delete_circle_member(
 }
 
 #[endpoint(
-    operation_id = "ck.self.circle.command.rotate_scope",
+    operation_id = "ak.self.circle.command.rotate_scope",
     tags("circles"),
     summary = "Rotate the Circle's bound MLS group (CKP-0007)"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.circle.command.rotate_scope"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.circle.command.rotate_scope"))]
 async fn post_scope_rotate(
     aa: AuthArgs,
     circle_id: PathParam<String>,
@@ -758,11 +758,11 @@ async fn post_scope_rotate(
 }
 
 #[endpoint(
-    operation_id = "ck.self.circle.command.archive",
+    operation_id = "ak.self.circle.command.archive",
     tags("circles"),
     summary = "Archive a Circle (ck.circle.archive)"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.circle.command.archive"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.circle.command.archive"))]
 async fn post_circle_archive(
     aa: AuthArgs,
     circle_id: PathParam<String>,
@@ -780,11 +780,11 @@ async fn post_circle_archive(
 }
 
 #[endpoint(
-    operation_id = "ck.self.circle.command.restore",
+    operation_id = "ak.self.circle.command.restore",
     tags("circles"),
     summary = "Restore a Circle (ck.circle.restore)"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.circle.command.restore"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.circle.command.restore"))]
 async fn post_circle_restore(
     aa: AuthArgs,
     circle_id: PathParam<String>,
@@ -802,11 +802,11 @@ async fn post_circle_restore(
 }
 
 #[endpoint(
-    operation_id = "ck.self.circle.command.tombstone",
+    operation_id = "ak.self.circle.command.tombstone",
     tags("circles"),
     summary = "Tombstone a Circle (ck.circle.tombstone)"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.circle.command.tombstone"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.circle.command.tombstone"))]
 async fn post_circle_tombstone(
     aa: AuthArgs,
     circle_id: PathParam<String>,
@@ -837,7 +837,7 @@ async fn submit_circle_lifecycle(
     ensure_circle_capability(
         state,
         &session.actor,
-        "ck.circle.manage",
+        "ak.circle.manage",
         &circle_id,
         &realm_id,
         CIRCLE_MANAGE_CAPABILITY_REQUIRED,

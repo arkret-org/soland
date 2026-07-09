@@ -445,7 +445,7 @@ async fn append_account_registration_audit(
         Some(did),
         "account.register",
         json!({
-            "operation_contract": "ck.gate.account.command.register",
+            "operation_contract": "ak.gate.account.command.register",
             "principal_id": did,
             "handle_requested": handle,
             "via": "gate",
@@ -1057,12 +1057,12 @@ async fn delete_account_localpart(
 }
 
 #[endpoint(
-    operation_id = "ck.self.account.query.viewer",
+    operation_id = "ak.self.account.query.viewer",
     tags("account"),
     summary = "Get the authenticated principal's account viewer projection",
     status_codes(200, 401, 404, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.account.query.viewer"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.account.query.viewer"))]
 async fn account_viewer(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -1108,12 +1108,12 @@ async fn account_viewer(
 /// that proof is future work (cf. the device-pairing scaffolds), the field
 /// is currently accepted without cryptographic validation.
 #[endpoint(
-    operation_id = "ck.gate.account.command.register",
+    operation_id = "ak.gate.account.command.register",
     tags("account"),
     summary = "Register an account (spec account_auth binding)",
     status_codes(200, 400, 409, 429, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.gate.account.command.register"))]
+#[tracing::instrument(skip_all, fields(op = "ak.gate.account.command.register"))]
 async fn gate_account_register(
     depot: &mut Depot,
     body: JsonBody<AccountRegisterRequestBody>,
@@ -1253,12 +1253,12 @@ async fn gate_account_register(
 }
 
 #[endpoint(
-    operation_id = "ck.self.account.command.update_profile",
+    operation_id = "ak.self.account.command.update_profile",
     tags("account"),
     summary = "Update the authenticated principal's actor profile fields",
     status_codes(200, 400, 401, 404, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.account.command.update_profile"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.account.command.update_profile"))]
 async fn update_profile(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -1413,11 +1413,11 @@ fn actor_profile_from_account(
 }
 
 #[endpoint(
-    operation_id = "ck.self.direct_conversation.command.resolve",
+    operation_id = "ak.self.direct_conversation.command.resolve",
     tags("contacts"),
     summary = "Resolve or create the canonical 1:1 direct conversation binding"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.direct_conversation.command.resolve"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.direct_conversation.command.resolve"))]
 async fn direct_conversation_resolve(
     aa: AuthArgs,
     depot: &mut Depot,

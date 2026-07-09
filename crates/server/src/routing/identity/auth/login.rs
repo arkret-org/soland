@@ -186,7 +186,7 @@ pub(super) async fn dev_login(
         actor: actor_str.to_owned(),
         device_id: device_id_str.to_owned(),
         audience: state.config.service_did.clone(),
-        // dev-login does not carry a ck.session.grant signing key; bearer-only.
+        // dev-login does not carry a ak.session.grant signing key; bearer-only.
         session_public_key: None,
         agent_session: None,
         expires_at,

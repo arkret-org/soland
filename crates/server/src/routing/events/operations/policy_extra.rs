@@ -73,7 +73,7 @@ const READ_RECEIPT_VISIBILITY_COMBINATION_INVALID: &str =
     "read_receipt_visibility_combination_invalid";
 const READ_RECEIPT_FORCED_PUBLIC_WORLD_READABLE_FORBIDDEN: &str =
     "read_receipt_forced_public_world_readable_forbidden";
-const READ_RECEIPT_POLICY_RULE: &str = "ck.realm.read_receipt_policy";
+const READ_RECEIPT_POLICY_RULE: &str = "ak.realm.read_receipt_policy";
 
 pub(crate) async fn validate_read_receipt_policy_combination_write(
     state: &AppState,
@@ -112,7 +112,7 @@ fn read_receipt_policy_projection_from_payload(
     payload: &Value,
 ) -> Result<ReadReceiptPolicy, &'static str> {
     serde_json::from_value(projection_context_stripped_payload(payload))
-        .map_err(|_| "ck.realm.read_receipt_policy payload is invalid")
+        .map_err(|_| "ak.realm.read_receipt_policy payload is invalid")
 }
 
 async fn intended_history_visibility_for_realm(
@@ -726,7 +726,7 @@ pub(crate) fn validate_poll_operation_policy(
     let Some(content) = operation.payload.get("content") else {
         return Ok(());
     };
-    if content.get("kind").and_then(serde_json::Value::as_str) != Some("ck.content.poll.response") {
+    if content.get("kind").and_then(serde_json::Value::as_str) != Some("ak.content.poll.response") {
         return Ok(());
     }
     let Some(poll_id) = poll_id_from_content(content) else {
@@ -774,7 +774,7 @@ pub(crate) async fn validate_audience_mention_operation_policy(
         &[],
     );
     if !authz.allowed {
-        return Err("ck.message.mention.broadcast required for audience_mention");
+        return Err("ak.message.mention.broadcast required for audience_mention");
     }
     if !authz
         .grants
@@ -782,7 +782,7 @@ pub(crate) async fn validate_audience_mention_operation_policy(
         .any(grant_has_broadcast_safety_constraints)
     {
         return Err(
-            "ck.message.mention.broadcast grant requires temporal and rate_limiting constraints",
+            "ak.message.mention.broadcast grant requires temporal and rate_limiting constraints",
         );
     }
 
@@ -974,7 +974,7 @@ pub(crate) fn validate_morph_schema_migrate_capability(
         .filter(|value| value.starts_with("ak:event:"))
         .is_none()
     {
-        return Err("ck.morph.schema_migrate requires authorization_ref");
+        return Err("ak.morph.schema_migrate requires authorization_ref");
     }
     let action = operation
         .payload
@@ -987,9 +987,9 @@ pub(crate) fn validate_morph_schema_migrate_capability(
     // are not broken.
     if !matches!(
         action,
-        Some("ck.morph.schema_migrate" | "ck.morph.schema.migrate")
+        Some("ak.morph.schema_migrate" | "ck.morph.schema.migrate")
     ) {
-        return Err("ck.morph.schema_migrate requires ck.morph.schema_migrate capability");
+        return Err("ak.morph.schema_migrate requires ck.morph.schema_migrate capability");
     }
     Ok(())
 }

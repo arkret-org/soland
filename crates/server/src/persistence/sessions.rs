@@ -201,8 +201,8 @@ mod tests {
             session_public_key: Some("{}".to_owned()),
             agent_session: Some(AgentSessionRecord {
                 granted_scope: vec![
-                    "ck.self.events.stream.subscribe".to_owned(),
-                    "ck.self.events.query.scan".to_owned(),
+                    "ak.self.events.stream.subscribe".to_owned(),
+                    "ak.self.events.query.scan".to_owned(),
                 ],
                 scope_details: serde_json::json!({
                     "agent_principal_id": "did:web:agent.example",
@@ -222,8 +222,8 @@ mod tests {
         assert_eq!(
             restored.granted_scope,
             vec![
-                "ck.self.events.stream.subscribe".to_owned(),
-                "ck.self.events.query.scan".to_owned()
+                "ak.self.events.stream.subscribe".to_owned(),
+                "ak.self.events.query.scan".to_owned()
             ]
         );
         assert_eq!(

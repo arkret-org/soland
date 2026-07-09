@@ -476,7 +476,7 @@ fn audit_erasure_receipt_records_scope_realm_id_and_pending_fanout() {
             "ak:realm:01904100-0000-7000-8000-cfc039892036",
             serde_json::json!({
                 "receipt_id": "ak:receipt:01",
-                "schema": "ck.schema.erasure_receipt.v1",
+                "schema": "ak.schema.erasure_receipt.v1",
                 "issuer": "did:web:soland.local",
                 "subject": {"kind": "realm", "ref": "ak:realm:01904100-0000-7000-8000-cfc039892036"},
                 "scope": {
@@ -632,7 +632,7 @@ fn read_receipt_policy_cell_value_helper_extracts_canonical_value() {
 
 fn base_search_policy() -> Value {
     serde_json::json!({
-        "enabled_profile_refs": ["ck.profile.search.blind_index.v1"],
+        "enabled_profile_refs": ["ak.profile.search.blind_index.v1"],
         "allowed_service_dids": ["did:web:search.example"],
         "data_classes": ["blind_tokens"],
         "revocation_behavior": "fail_closed",
@@ -687,7 +687,7 @@ fn realm_search_policy_accepts_wrapped_valid_policy_and_projects_inner_value() {
 #[test]
 fn realm_search_policy_forward_private_requires_matching_leakage_class() {
     let mut policy = base_search_policy();
-    policy["enabled_profile_refs"] = serde_json::json!(["ck.profile.search.forward_private.v1"]);
+    policy["enabled_profile_refs"] = serde_json::json!(["ak.profile.search.forward_private.v1"]);
     policy.as_object_mut().unwrap().remove("leakage_class");
     assert_search_policy_rejected(
         policy,
@@ -699,8 +699,8 @@ fn realm_search_policy_forward_private_requires_matching_leakage_class() {
 fn realm_search_policy_forward_private_requires_token_rotation_cadence() {
     let mut policy = base_search_policy();
     policy["enabled_profile_refs"] = serde_json::json!([
-        "ck.profile.search.blind_index.v1",
-        "ck.profile.search.forward_private.v1"
+        "ak.profile.search.blind_index.v1",
+        "ak.profile.search.forward_private.v1"
     ]);
     policy["leakage_class"] = serde_json::json!("forward_private");
     assert_search_policy_rejected(
@@ -712,7 +712,7 @@ fn realm_search_policy_forward_private_requires_token_rotation_cadence() {
 #[test]
 fn realm_search_policy_forward_private_requires_blind_index_profile() {
     let mut policy = base_search_policy();
-    policy["enabled_profile_refs"] = serde_json::json!(["ck.profile.search.forward_private.v1"]);
+    policy["enabled_profile_refs"] = serde_json::json!(["ak.profile.search.forward_private.v1"]);
     policy["leakage_class"] = serde_json::json!("forward_private");
     policy["token_rotation_cadence_ms"] = serde_json::json!(3_600_000u64);
     assert_search_policy_rejected(policy, "search_policy_forward_private_blind_index_required");

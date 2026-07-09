@@ -158,14 +158,14 @@ pub async fn validate_operation_policy(
         validate_principal_control_realm_binding(operation)?;
         validate_accountability_profile_policy(state, operations, operation).await?;
         validate_agent_interop_session_writer_policy(state, operations, operation).await?;
-        if kinds::canonical_kind_string(operation) == "ck.cross_signing.publish" {
+        if kinds::canonical_kind_string(operation) == "ak.cross_signing.publish" {
             crate::routing::identity::cross_signing::validate_cross_signing_publish(
                 state,
                 &operation.payload,
             )
             .await?;
         }
-        if kinds::canonical_kind_string(operation) == "ck.cross_signing.reset" {
+        if kinds::canonical_kind_string(operation) == "ak.cross_signing.reset" {
             crate::routing::identity::cross_signing::validate_cross_signing_reset(
                 state,
                 &operation.payload,
@@ -174,7 +174,7 @@ pub async fn validate_operation_policy(
         }
         // 3a — verify the cross_signing_binding on ANY ck.device.authorize at
         // ingest (recovery /complete, or a future client-submitted control event).
-        if kinds::canonical_kind_string(operation) == "ck.device.authorize" {
+        if kinds::canonical_kind_string(operation) == "ak.device.authorize" {
             crate::routing::identity::cross_signing::validate_device_authorize_binding(
                 state,
                 &operation.payload,

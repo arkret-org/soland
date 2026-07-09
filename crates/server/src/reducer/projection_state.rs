@@ -666,7 +666,7 @@ impl ProjectionState {
     /// Compare `predicate.value` with the current cell head. Missing cells are
     /// the JSON null head used by genesis CAS writes.
     fn head_eq_holds(&self, cell_ref: &str, expected: &Value) -> bool {
-        const STRAND_FIELDS_FAMILY: &str = "ck.component.strand.fields.v1";
+        const STRAND_FIELDS_FAMILY: &str = "ak.component.strand.fields.v1";
         if let Some(strand_id) = cell_ref
             .strip_prefix("ak:cell:")
             .and_then(|rest| rest.strip_prefix(STRAND_FIELDS_FAMILY))

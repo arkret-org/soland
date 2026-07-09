@@ -98,11 +98,11 @@ pub(in crate::routing::extensions) fn protocol_router() -> Router {
 }
 
 #[endpoint(
-    operation_id = "ck.edge.applet.query.ping",
+    operation_id = "ak.edge.applet.query.ping",
     tags("applet"),
     summary = "Applet service liveness probe"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.edge.applet.query.ping"))]
+#[tracing::instrument(skip_all, fields(op = "ak.edge.applet.query.ping"))]
 async fn protocol_ping_endpoint(depot: &mut Depot) -> JsonResult<AppletPingOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let service_did = Did::new(state.config.service_did.clone()).map_err(|error| {
@@ -117,14 +117,14 @@ async fn protocol_ping_endpoint(depot: &mut Depot) -> JsonResult<AppletPingOutco
 }
 
 #[endpoint(
-    operation_id = "ck.edge.applet.query.describe",
+    operation_id = "ak.edge.applet.query.describe",
     tags("applet"),
     summary = "Describe soland's applet protocol support"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.edge.applet.query.describe"))]
+#[tracing::instrument(skip_all, fields(op = "ak.edge.applet.query.describe"))]
 async fn protocol_describe_endpoint() -> JsonResult<AppletProtocolDescribeOutcome> {
     json_ok(AppletProtocolDescribeOutcome {
-        contract: "ck.applet.v1".to_owned(),
+        contract: "ak.applet.v1".to_owned(),
         install: AppletInstallPaths {
             preview_path: "/_arkret/self/applets/install/preview".to_owned(),
             commit_path: "/_arkret/self/applets/install".to_owned(),
@@ -152,20 +152,20 @@ async fn protocol_describe_endpoint() -> JsonResult<AppletProtocolDescribeOutcom
                 "destination-service-did",
                 "idempotency-key"
             ],
-            "source_signature_anchor": "ck.applet.source_signature_anchor.v1",
+            "source_signature_anchor": "ak.applet.source_signature_anchor.v1",
             "bearer_only": false
         }),
-        package_schema: "ck.schema.applet_package.v1".to_owned(),
+        package_schema: "ak.schema.applet_package.v1".to_owned(),
     })
 }
 
 #[endpoint(
-    operation_id = "ck.self.applet.install.command.preview",
+    operation_id = "ak.self.applet.install.command.preview",
     tags("applet"),
     summary = "Preview a canonical applet install plan",
     status_codes(200, 400, 401, 403, 409)
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.applet.install.command.preview"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.applet.install.command.preview"))]
 async fn install_preview_endpoint(
     aa: AuthArgs,
     body: JsonBody<InstallPreviewRequestBody>,
@@ -192,12 +192,12 @@ async fn install_preview_endpoint(
 }
 
 #[endpoint(
-    operation_id = "ck.self.applet.command.install",
+    operation_id = "ak.self.applet.command.install",
     tags("applet"),
     summary = "Commit a canonical applet install",
     status_codes(200, 201, 400, 401, 403, 409)
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.applet.command.install"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.applet.command.install"))]
 async fn install_endpoint(
     aa: AuthArgs,
     body: JsonBody<InstallCommitRequestBody>,
@@ -257,12 +257,12 @@ async fn install_endpoint(
 }
 
 #[endpoint(
-    operation_id = "ck.self.applet.command.revoke",
+    operation_id = "ak.self.applet.command.revoke",
     tags("applet"),
     summary = "Revoke a canonical applet install",
     status_codes(200, 400, 401, 403, 404, 409)
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.applet.command.revoke"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.applet.command.revoke"))]
 async fn revoke_install_endpoint(
     aa: AuthArgs,
     body: JsonBody<InstallRevokeRequestBody>,
@@ -471,12 +471,12 @@ fn session_revoke_body_for_applet(
 }
 
 #[endpoint(
-    operation_id = "ck.self.applet.ghost.command.provision",
+    operation_id = "ak.self.applet.ghost.command.provision",
     tags("applet"),
     summary = "Provision an applet-managed Ghost Actor profile and accountability grant",
     status_codes(200, 201, 400, 401, 403, 404, 409, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.applet.ghost.command.provision"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.applet.ghost.command.provision"))]
 async fn provision_ghost_actor_endpoint(
     aa: AuthArgs,
     body: JsonBody<GhostActorProvisionRequestBody>,
@@ -595,12 +595,12 @@ async fn persist_formal_ghost_record(
 }
 
 #[endpoint(
-    operation_id = "ck.edge.applet.command.transaction",
+    operation_id = "ak.edge.applet.command.transaction",
     tags("applet"),
     summary = "Receive an applet transaction",
     status_codes(200, 400, 401, 403, 409)
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.edge.applet.command.transaction"))]
+#[tracing::instrument(skip_all, fields(op = "ak.edge.applet.command.transaction"))]
 async fn transaction_endpoint(
     body: JsonBody<AppletTransactionRequestBody>,
     depot: &mut Depot,
@@ -635,11 +635,11 @@ async fn transaction_endpoint(
 }
 
 #[endpoint(
-    operation_id = "ck.edge.applet.actor.query.resolve",
+    operation_id = "ak.edge.applet.actor.query.resolve",
     tags("applet"),
     summary = "Resolve an applet actor"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.edge.applet.actor.query.resolve"))]
+#[tracing::instrument(skip_all, fields(op = "ak.edge.applet.actor.query.resolve"))]
 async fn resolve_actor_endpoint(
     req: &mut Request,
     depot: &mut Depot,
@@ -673,11 +673,11 @@ async fn resolve_actor_endpoint(
 }
 
 #[endpoint(
-    operation_id = "ck.edge.applet.realm.query.resolve",
+    operation_id = "ak.edge.applet.realm.query.resolve",
     tags("applet"),
     summary = "Resolve an applet realm"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.edge.applet.realm.query.resolve"))]
+#[tracing::instrument(skip_all, fields(op = "ak.edge.applet.realm.query.resolve"))]
 async fn resolve_realm_endpoint(
     req: &mut Request,
     depot: &mut Depot,
@@ -711,11 +711,11 @@ async fn resolve_realm_endpoint(
 }
 
 #[endpoint(
-    operation_id = "ck.edge.applet.query.protocol_metadata",
+    operation_id = "ak.edge.applet.query.protocol_metadata",
     tags("applet"),
     summary = "Read applet protocol metadata"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.edge.applet.query.protocol_metadata"))]
+#[tracing::instrument(skip_all, fields(op = "ak.edge.applet.query.protocol_metadata"))]
 async fn protocol_metadata_endpoint(
     req: &mut Request,
     depot: &mut Depot,
@@ -766,11 +766,11 @@ async fn protocol_metadata_endpoint(
 }
 
 #[endpoint(
-    operation_id = "ck.edge.applet.third_party_users.query.list",
+    operation_id = "ak.edge.applet.third_party_users.query.list",
     tags("applet"),
     summary = "Resolve a third-party applet user"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.edge.applet.third_party_users.query.list"))]
+#[tracing::instrument(skip_all, fields(op = "ak.edge.applet.third_party_users.query.list"))]
 async fn third_party_users_endpoint(
     req: &mut Request,
     depot: &mut Depot,
@@ -810,13 +810,13 @@ async fn third_party_users_endpoint(
 }
 
 #[endpoint(
-    operation_id = "ck.edge.applet.third_party_locations.query.list",
+    operation_id = "ak.edge.applet.third_party_locations.query.list",
     tags("applet"),
     summary = "Resolve a third-party applet location"
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "ck.edge.applet.third_party_locations.query.list")
+    fields(op = "ak.edge.applet.third_party_locations.query.list")
 )]
 async fn third_party_locations_endpoint(
     req: &mut Request,

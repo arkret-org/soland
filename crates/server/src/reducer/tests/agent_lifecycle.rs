@@ -38,7 +38,7 @@ fn action_approve(request_id: &str) -> Operation {
             "request_id": request_id,
             "agent_principal_id": AGENT,
             "controller_principal_id": "did:web:controller.example",
-            "proposed_action": "ck.message.create",
+            "proposed_action": "ak.message.create",
             "target": { "kind": "realm", "realm_id": REALM },
             "approved_payload_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             "approval_nonce": "nonce-01904100",
@@ -180,6 +180,6 @@ fn approved_action_request_is_not_cancelled_by_lifecycle() {
     assert_eq!(request.status, AgentActionRequestStatus::Approved);
     let approval = request.approval.as_ref().expect("approval projection");
     assert_eq!(approval.approval_nonce, "nonce-01904100");
-    assert_eq!(approval.proposed_action, "ck.message.create");
+    assert_eq!(approval.proposed_action, "ak.message.create");
     assert!(request.cancel_reason.is_none());
 }

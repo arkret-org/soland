@@ -506,7 +506,7 @@ async fn append_account_deactivation_propagation_state(
         .collect::<Vec<_>>();
     let federation_incomplete = !peer_targets.is_empty();
     let payload = json!({
-        "schema": "ck.account.status.v1",
+        "schema": "ak.account.status.v1",
         "principal_id": did,
         "status": "deactivated",
         "reason_code": if federation_incomplete {
@@ -549,7 +549,7 @@ async fn append_account_deactivation_propagation_state(
         crate::state::ProjectionEventRecord {
             event_id: crate::ids::generate_event_id(),
             realm_id: crate::routing::identity::recovery::principal_control_realm_for_did(did),
-            event_kind: "ck.account.status".to_owned(),
+            event_kind: "ak.account.status".to_owned(),
             operation_type: "account_status_deactivation_propagation".to_owned(),
             operation_id: None,
             sender: Some(changed_by.to_owned()),
@@ -817,7 +817,7 @@ pub(super) async fn erase_account(
     append_audit_log(
         state,
         Some(&actor),
-        "ck.audit.erasure_receipt",
+        "ak.audit.erasure_receipt",
         erasure_receipt.clone(),
         "accepted",
     )
@@ -1141,7 +1141,7 @@ fn erasure_retained_stub(
     completed_at: chrono::DateTime<chrono::Utc>,
 ) -> Result<Value, AppError> {
     Ok(json!({
-        "schema": "ck.schema.erasure_verification_stub.v1",
+        "schema": "ak.schema.erasure_verification_stub.v1",
         "receipt_id": receipt_id,
         "issuer": issuer.as_str(),
         "subject": serde_json::to_value(subject)

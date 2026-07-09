@@ -16,7 +16,7 @@ fn third_party_invite(expires_at: &str) -> Value {
     json!({
         "invite": {
             "id": INVITE,
-            "schema": "ck.schema.invite.v1",
+            "schema": "ak.schema.invite.v1",
             "realm_id": REALM,
             "inviter": INVITER,
             "join_rule_snapshot": {

@@ -172,7 +172,7 @@ pub fn tombstone_timeline_event_value(event: &mut Value) {
     object.insert(
         "content".to_owned(),
         json!({
-            "kind": "ck.content.text",
+            "kind": "ak.content.text",
             "body": ERASED_USER_PLACEHOLDER,
         }),
     );
@@ -292,7 +292,7 @@ fn stub_timeline_event_for_message_expiry(event: &mut Value, expiry: &MessageExp
     object.insert(
         "content".to_owned(),
         json!({
-            "kind": "ck.content.text",
+            "kind": "ak.content.text",
             "body": RETENTION_EXPIRED_PLACEHOLDER,
         }),
     );
@@ -335,7 +335,7 @@ pub fn tombstone_timeline_event_for_retention(
     object.insert(
         "content".to_owned(),
         json!({
-            "kind": "ck.content.text",
+            "kind": "ak.content.text",
             "body": RETENTION_EXPIRED_PLACEHOLDER,
         }),
     );
@@ -348,7 +348,7 @@ pub fn message_expiry_payload_value(payload: &Value, expiry: &MessageExpiryProje
     let Some(object) = value.as_object_mut() else {
         return json!({
             "content": {
-                "kind": "ck.content.text",
+                "kind": "ak.content.text",
                 "body": RETENTION_EXPIRED_PLACEHOLDER,
             },
             "expiry_stub": true,
@@ -382,7 +382,7 @@ pub fn message_expiry_payload_value(payload: &Value, expiry: &MessageExpiryProje
     object.insert(
         "content".to_owned(),
         json!({
-            "kind": "ck.content.text",
+            "kind": "ak.content.text",
             "body": RETENTION_EXPIRED_PLACEHOLDER,
         }),
     );
@@ -398,7 +398,7 @@ pub fn retention_tombstone_payload_value(
     let Some(object) = value.as_object_mut() else {
         return json!({
             "content": {
-                "kind": "ck.content.text",
+                "kind": "ak.content.text",
                 "body": RETENTION_EXPIRED_PLACEHOLDER,
             },
             "retention_tombstone": true,
@@ -442,7 +442,7 @@ pub fn retention_tombstone_payload_value(
     object.insert(
         "content".to_owned(),
         json!({
-            "kind": "ck.content.text",
+            "kind": "ak.content.text",
             "body": RETENTION_EXPIRED_PLACEHOLDER,
         }),
     );
@@ -458,7 +458,7 @@ fn strip_expiry_derived_fields(object: &mut serde_json::Map<String, Value>) {
 
 fn message_expiry_cache_invalidation_value() -> Value {
     json!({
-        "kind": "ck.message.expiry.cache_invalidation.v1",
+        "kind": "ak.message.expiry.cache_invalidation.v1",
         "drop": [
             "plaintext_render_cache",
             "message_preview_cache",
@@ -524,7 +524,7 @@ fn tombstone_payload_value(payload: &Value) -> Value {
     let Some(object) = value.as_object_mut() else {
         return json!({
             "content": {
-                "kind": "ck.content.text",
+                "kind": "ak.content.text",
                 "body": ERASED_USER_PLACEHOLDER,
             },
             "erasure_tombstone": true,
@@ -539,7 +539,7 @@ fn tombstone_payload_value(payload: &Value) -> Value {
     object.insert(
         "content".to_owned(),
         json!({
-            "kind": "ck.content.text",
+            "kind": "ak.content.text",
             "body": ERASED_USER_PLACEHOLDER,
         }),
     );
@@ -579,7 +579,7 @@ mod tests {
             sender: "did:web:alice.example".to_owned(),
             thread_id: realm_id.to_owned(),
             content: json!({
-                "kind": "ck.content.text",
+                "kind": "ak.content.text",
                 "body": "secret",
                 "mentions": [{"actor_id": "did:web:bob.example"}],
                 "reply_to": "ak:event:01904100-0000-7000-8000-0000000000ff"
@@ -806,7 +806,7 @@ mod tests {
             operation_id: None,
             sender: Some("did:web:alice.example".to_owned()),
             payload: json!({
-                "content": {"kind": "ck.content.text", "body": "secret"},
+                "content": {"kind": "ak.content.text", "body": "secret"},
                 "mentions": [{"actor_id": "did:web:bob.example"}],
                 "reply_to": "ak:event:01904100-0000-7000-8000-0000000000ff",
                 "redaction_ref": "ak:event:should-not-survive",
@@ -865,7 +865,7 @@ mod tests {
         let realm_id = "ak:realm:01904100-0000-7000-8000-cfc039892036";
         let tombstone = retention_tombstone(event_id, realm_id, true);
         let payload = json!({
-            "content": {"kind": "ck.content.text", "body": "secret"},
+            "content": {"kind": "ak.content.text", "body": "secret"},
             "search_index": {"terms": ["secret"]},
             "push_snippet": "secret push",
             "blob_preview_key": "secret-preview-key",
@@ -917,7 +917,7 @@ mod tests {
         let realm_id = "ak:realm:01904100-0000-7000-8000-cfc039892036";
         let tombstone = retention_tombstone(event_id, realm_id, false);
         let mut event = json!({
-            "content": {"kind": "ck.content.text", "body": "secret"},
+            "content": {"kind": "ak.content.text", "body": "secret"},
             "push_snippet": "secret push",
             "search_index": {"terms": ["secret"]},
             "blob_preview_key": "secret-preview-key",
@@ -948,7 +948,7 @@ mod tests {
                 realm_id: realm_id.to_owned(),
                 sender: "did:web:alice.example".to_owned(),
                 thread_id: realm_id.to_owned(),
-                content: json!({"kind": "ck.content.text", "body": "secret"}),
+                content: json!({"kind": "ak.content.text", "body": "secret"}),
                 expiry: None,
                 encrypted: false,
                 operation_id: "ak:operation:01904100-0000-7000-8000-0000000000a2".to_owned(),
@@ -1041,7 +1041,7 @@ mod tests {
                 realm_id: realm_id.to_owned(),
                 sender: "did:web:bob.example".to_owned(),
                 thread_id: realm_id.to_owned(),
-                content: json!({"kind": "ck.content.text", "body": "secret"}),
+                content: json!({"kind": "ak.content.text", "body": "secret"}),
                 expiry: None,
                 encrypted: false,
                 operation_id: "ak:operation:01904100-0000-7000-8000-0000000000e3".to_owned(),
@@ -1069,7 +1069,7 @@ mod tests {
         );
 
         assert_eq!(event["event_id"], json!(event_id));
-        assert_eq!(event["kind"], json!("ck.message.create"));
+        assert_eq!(event["kind"], json!("ak.message.create"));
         assert_eq!(event["redacted"], json!(true));
         assert_eq!(event["state"], json!("redacted"));
         assert_eq!(event["redaction_ref"], json!(redaction_id));
@@ -1094,7 +1094,7 @@ mod tests {
                 realm_id: realm_id.to_owned(),
                 sender: "did:web:bob.example".to_owned(),
                 thread_id: realm_id.to_owned(),
-                content: json!({"kind": "ck.content.text", "body": "edited secret"}),
+                content: json!({"kind": "ak.content.text", "body": "edited secret"}),
                 expiry: None,
                 encrypted: false,
                 operation_id: "ak:operation:01904100-0001-7000-8000-0000000000f1".to_owned(),

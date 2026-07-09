@@ -33,15 +33,15 @@ pub(crate) async fn relay_ephemeral_read_receipt(
         .await
         .ok()
         .flatten()
-        .ok_or_else(|| AppError::invalid_param("ck.receipt.read target event not found"))?;
+        .ok_or_else(|| AppError::invalid_param("ak.receipt.read target event not found"))?;
     if canonical_realm_id_for_record(&target).as_deref() != Some(realm_id) {
         return Err(AppError::invalid_param(
-            "ck.receipt.read target event belongs to another realm",
+            "ak.receipt.read target event belongs to another realm",
         ));
     }
     if !target_event_visible_to_session(state, &target, Some(session)).await {
         return Err(AppError::capability_denied(
-            "ck.receipt.read target event is not visible to the actor",
+            "ak.receipt.read target event is not visible to the actor",
         ));
     }
     {
@@ -77,7 +77,7 @@ pub(crate) async fn relay_ephemeral_read_receipt(
     }
     let _ = state.event_broadcast.send(EventNotification::ephemeral(
         realm_id.to_owned(),
-        "ck.receipt.read",
+        "ak.receipt.read",
     ));
     Ok(())
 }
@@ -90,7 +90,7 @@ fn normalize_read_receipt_payload(
     let event_id = {
         let object = payload
             .as_object()
-            .ok_or_else(|| AppError::invalid_param("ck.receipt.read payload must be an object"))?;
+            .ok_or_else(|| AppError::invalid_param("ak.receipt.read payload must be an object"))?;
 
         require_string_field(object, "receipt_type", arkret_sdk::READ_RECEIPT_TYPE)?;
         require_string_field(object, "schema", arkret_sdk::READ_RECEIPT_SCHEMA)?;
@@ -100,20 +100,20 @@ fn normalize_read_receipt_payload(
             .get("event_id")
             .and_then(Value::as_str)
             .filter(|value| !value.trim().is_empty())
-            .ok_or_else(|| AppError::invalid_param("ck.receipt.read payload requires event_id"))?
+            .ok_or_else(|| AppError::invalid_param("ak.receipt.read payload requires event_id"))?
             .to_owned()
     };
 
     let receipt: ReadReceipt = serde_json::from_value(payload.clone()).map_err(|error| {
-        AppError::invalid_param(format!("ck.receipt.read payload is malformed: {error}"))
+        AppError::invalid_param(format!("ak.receipt.read payload is malformed: {error}"))
     })?;
     if !receipt.read_scope.kind.valid_for_read_receipt() {
         return Err(AppError::invalid_param(
-            "ck.receipt.read read_scope.kind is not valid for read receipts",
+            "ak.receipt.read read_scope.kind is not valid for read receipts",
         ));
     }
     receipt.read_scope.validate().map_err(|error| {
-        AppError::invalid_param(format!("ck.receipt.read read_scope is malformed: {error}"))
+        AppError::invalid_param(format!("ak.receipt.read read_scope is malformed: {error}"))
     })?;
 
     Ok(NormalizedReadReceipt {
@@ -133,12 +133,12 @@ fn require_string_field(
 ) -> Result<(), AppError> {
     let Some(value) = object.get(field).and_then(Value::as_str) else {
         return Err(AppError::invalid_param(format!(
-            "ck.receipt.read payload.{field} must be a string"
+            "ak.receipt.read payload.{field} must be a string"
         )));
     };
     if value != expected {
         return Err(AppError::invalid_param(format!(
-            "ck.receipt.read payload.{field} does not match envelope"
+            "ak.receipt.read payload.{field} does not match envelope"
         )));
     }
     Ok(())
@@ -169,7 +169,7 @@ pub(crate) async fn read_receipt_ephemeral_for_realm(
         Vec::new()
     } else {
         vec![json!({
-            "type": "ck.receipt.read",
+            "type": "ak.receipt.read",
             "realm_id": realm_id,
             "receipts": receipts,
         })]

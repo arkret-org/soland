@@ -1,7 +1,7 @@
 use super::*;
 
 pub(super) fn validate_recovery_policy(payload: &Value) -> Result<RecoveryPolicyRecord, AppError> {
-    require_const_string(payload, "schema", "ck.schema.recovery_policy.v1")?;
+    require_const_string(payload, "schema", "ak.schema.recovery_policy.v1")?;
     let policy_id = require_string(payload, "policy_id")?;
     require_policy_id_pattern(&policy_id)?;
     let principal_id = require_did(payload, "principal_id")?;
@@ -113,7 +113,7 @@ pub(super) fn validate_recovery_policy(payload: &Value) -> Result<RecoveryPolicy
 pub(super) fn validate_recovery_receipt(
     payload: &Value,
 ) -> Result<RecoveryReceiptRecord, AppError> {
-    require_const_string(payload, "schema", "ck.schema.recovery_receipt.v1")?;
+    require_const_string(payload, "schema", "ak.schema.recovery_receipt.v1")?;
     let receipt_id = require_string(payload, "receipt_id")?;
     if !receipt_id.starts_with("ak:receipt:") {
         return Err(AppError::invalid_param(format!(

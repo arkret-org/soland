@@ -23,7 +23,7 @@ const REALM: &str = "ak:realm:01904100-0000-7000-8000-cccccccccccc";
 const GRANT_ID: &str = "ak:grant:01904100-0000-7000-8000-dddddddddddd";
 const ISSUER: &str = "did:web:owner.example";
 const SUBJECT: &str = "did:web:bob.example";
-const ACTION: &str = "ck.realm.admin";
+const ACTION: &str = "ak.realm.admin";
 const STRAND_ID: &str = "ak:strand:01904100-0000-7000-8000-eeeeeeeeeeee";
 const CIRCLE_A: &str = "ak:circle:01904100-0000-7000-8000-c1c1c1c1c1c1";
 const CIRCLE_B: &str = "ak:circle:01904100-0000-7000-8000-c2c2c2c2c2c2";
@@ -166,7 +166,7 @@ fn canonical_circle_selector_and_constraint_project_to_narrow_runtime_grant() {
                     "realm_id": REALM,
                     "issuer": ISSUER,
                     "subject": SUBJECT,
-                    "actions": ["ck.circle.member.manage"],
+                    "actions": ["ak.circle.member.manage"],
                     "resources": [{ "kind": "circle", "realm_id": REALM, "circle_id": CIRCLE_A }],
                     "constraints": [{
                         "constraint_type": "scope_limitation",
@@ -191,7 +191,7 @@ fn canonical_circle_selector_and_constraint_project_to_narrow_runtime_grant() {
         engine
             .check(
                 SUBJECT,
-                "ck.circle.member.manage",
+                "ak.circle.member.manage",
                 CIRCLE_A,
                 REALM,
                 Some(ISSUER),
@@ -205,7 +205,7 @@ fn canonical_circle_selector_and_constraint_project_to_narrow_runtime_grant() {
         !engine
             .check(
                 SUBJECT,
-                "ck.circle.member.manage",
+                "ak.circle.member.manage",
                 CIRCLE_B,
                 REALM,
                 Some(ISSUER),
@@ -290,7 +290,7 @@ fn wildcard_action_grant_is_rejected() {
     let effect = state.apply(
         &grant_op_with(
             GRANT_ID,
-            vec![json!("ck.pin.*")],
+            vec![json!("ak.pin.*")],
             vec![json!({ "kind": "realm", "id": REALM })],
         ),
         &hlc,
@@ -309,7 +309,7 @@ fn bare_wildcard_resource_grant_is_rejected() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     let effect = state.apply(
-        &grant_op_with(GRANT_ID, vec![json!("ck.pin.add")], vec![json!("*")]),
+        &grant_op_with(GRANT_ID, vec![json!("ak.pin.add")], vec![json!("*")]),
         &hlc,
     );
     match effect {
@@ -329,7 +329,7 @@ fn selector_resource_count_limit_is_enforced() {
         .map(|_| json!({ "kind": "realm", "id": REALM }))
         .collect();
     let effect = state.apply(
-        &grant_op_with(GRANT_ID, vec![json!("ck.pin.add")], resources),
+        &grant_op_with(GRANT_ID, vec![json!("ak.pin.add")], resources),
         &hlc,
     );
     match effect {
@@ -349,7 +349,7 @@ fn canonical_strand_selector_projects_to_exact_resource() {
     let effect = state.apply(
         &grant_op_with(
             GRANT_ID,
-            vec![json!("ck.strand.read")],
+            vec![json!("ak.strand.read")],
             vec![json!({ "kind": "strand", "realm_id": REALM, "strand_id": STRAND_ID })],
         ),
         &hlc,
@@ -361,13 +361,13 @@ fn canonical_strand_selector_projects_to_exact_resource() {
     assert!(check_allows_for(
         &state,
         GRANT_ID,
-        "ck.strand.read",
+        "ak.strand.read",
         STRAND_ID
     ));
     assert!(!check_allows_for(
         &state,
         GRANT_ID,
-        "ck.strand.read",
+        "ak.strand.read",
         "ak:strand:01904100-0000-7000-8000-ffffffffffff"
     ));
 }
@@ -381,7 +381,7 @@ fn multiple_resource_selectors_are_disjoined_in_engine_projection() {
     let effect = state.apply(
         &grant_op_with(
             GRANT_ID,
-            vec![json!("ck.strand.read")],
+            vec![json!("ak.strand.read")],
             vec![
                 json!({ "kind": "strand", "realm_id": REALM, "strand_id": STRAND_ID }),
                 json!({ "kind": "strand", "realm_id": REALM, "strand_id": other_strand }),
@@ -396,13 +396,13 @@ fn multiple_resource_selectors_are_disjoined_in_engine_projection() {
     assert!(check_allows_for(
         &state,
         GRANT_ID,
-        "ck.strand.read",
+        "ak.strand.read",
         STRAND_ID
     ));
     assert!(check_allows_for(
         &state,
         GRANT_ID,
-        "ck.strand.read",
+        "ak.strand.read",
         other_strand
     ));
 }

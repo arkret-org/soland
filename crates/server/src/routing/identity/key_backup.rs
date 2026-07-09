@@ -136,7 +136,7 @@ mod tests {
                 "hkdf_info": format!("arkret-key-backup/{backup_class}/test/v1"),
                 "subdomain": "test",
                 "aead_aad": {
-                    "schema": "ck.schema.key_backup.v1",
+                    "schema": "ak.schema.key_backup.v1",
                     "actor_id": ACTOR,
                     "device_id": DEVICE_ID,
                     "backup_class": backup_class,
@@ -187,7 +187,7 @@ mod tests {
             },
             "aead": {
                 "name": "xchacha20_poly1305",
-                "aead_profile": "ck.aead.xchacha20_poly1305.v1",
+                "aead_profile": "ak.aead.xchacha20_poly1305.v1",
                 "nonce": "nonce",
                 "nonce_salt": "bm9uY2VzYWx0"
             }
@@ -200,7 +200,7 @@ mod tests {
             "recipient_key_ref": "mls_group_secrets_backup_key",
             "aead": {
                 "name": "xchacha20_poly1305",
-                "aead_profile": "ck.aead.xchacha20_poly1305.v1",
+                "aead_profile": "ak.aead.xchacha20_poly1305.v1",
                 "nonce": "nonce"
             }
         })
@@ -214,7 +214,7 @@ mod tests {
                 // Absent hpke_suite selector denotes the v1 default-MUST HPKE suite
                 // ck.hpke_x25519_aead_chacha20poly1305.v1, whose AEAD is chacha20_poly1305.
                 "name": "chacha20_poly1305",
-                "aead_profile": "ck.aead.chacha20_poly1305.v1",
+                "aead_profile": "ak.aead.chacha20_poly1305.v1",
                 "enc": "ZW5jYXBzdWxhdGVka2V5"
             }
         })
@@ -531,7 +531,7 @@ mod tests {
             .expect("canonical delete proof transcript");
         let value: Value = serde_json::from_slice(&canonical).expect("canonical JSON");
 
-        assert_eq!(value["kind"], "ck.key_backup.delete_proof.v1");
+        assert_eq!(value["kind"], "ak.key_backup.delete_proof.v1");
         assert_eq!(value["actor_id"], ACTOR);
         assert_eq!(value["backup_id"], BACKUP_ID);
         assert_eq!(

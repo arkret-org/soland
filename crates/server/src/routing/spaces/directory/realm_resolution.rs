@@ -1,11 +1,11 @@
 use super::*;
 
 #[endpoint(
-    operation_id = "ck.find.directory.query.search_realms",
+    operation_id = "ak.find.directory.query.search_realms",
     tags("directory"),
     summary = "Fuzzy-text + visibility-filtered realm search"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.find.directory.query.search_realms"))]
+#[tracing::instrument(skip_all, fields(op = "ak.find.directory.query.search_realms"))]
 pub(super) async fn search_realms(
     body: JsonBody<DirectorySearchRealmsRequestBody>,
     depot: &mut Depot,
@@ -46,11 +46,11 @@ pub(super) async fn search_realms(
 }
 
 #[endpoint(
-    operation_id = "ck.find.directory.query.resolve_realm",
+    operation_id = "ak.find.directory.query.resolve_realm",
     tags("directory"),
     summary = "Resolve a realm by id / alias / invite_token / signed_link"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.find.directory.query.resolve_realm"))]
+#[tracing::instrument(skip_all, fields(op = "ak.find.directory.query.resolve_realm"))]
 pub(super) async fn resolve_realm(
     body: JsonBody<DirectoryResolveRealmRequestBody>,
     depot: &mut Depot,
@@ -134,11 +134,11 @@ pub(super) async fn resolve_realm(
 }
 
 #[endpoint(
-    operation_id = "ck.find.directory.query.resolve_target",
+    operation_id = "ak.find.directory.query.resolve_target",
     tags("directory"),
     summary = "Resolve a Realm / Strand / Message share address to a policy-limited preview"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.find.directory.query.resolve_target"))]
+#[tracing::instrument(skip_all, fields(op = "ak.find.directory.query.resolve_target"))]
 pub(super) async fn resolve_target(
     body: JsonBody<DirectoryResolveTargetRequestBody>,
     depot: &mut Depot,
@@ -659,7 +659,7 @@ pub(super) fn join_candidates_for_resolved_realm(
         service_type: RealmJoinCandidateServiceType::PrincipalServer,
         role: RealmJoinCandidateRole::Primary,
         endpoint: Some(state.config.public_base_url.clone()),
-        operations: vec!["ck.self.events.command.submit".to_owned()],
+        operations: vec!["ak.self.events.command.submit".to_owned()],
         join_methods,
         priority: Some(0),
         source: RealmJoinCandidateSource::DirectoryIngest,

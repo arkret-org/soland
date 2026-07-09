@@ -46,8 +46,8 @@ async fn admin_applets_agents_endpoints_reflect_submitted_registry_events() {
         1,
         Vec::new(),
     );
-    registration_event["kind"] = Value::String("ck.applet.registration".to_owned());
-    registration_event["schema_id"] = Value::String("ck.schema.event_payload.v1".to_owned());
+    registration_event["kind"] = Value::String("ak.applet.registration".to_owned());
+    registration_event["schema_id"] = Value::String("ak.schema.event_payload.v1".to_owned());
     registration_event["payload"] = registration_payload.clone();
     registration_event["proofs"][0]["payload_digest"] =
         Value::String(sha256_json(&registration_payload));
@@ -73,8 +73,8 @@ async fn admin_applets_agents_endpoints_reflect_submitted_registry_events() {
         2,
         vec!["ak:event:01904100-0000-7000-8000-ab10de000001"],
     );
-    discovery_event["kind"] = Value::String("ck.applet.discovery".to_owned());
-    discovery_event["schema_id"] = Value::String("ck.schema.event_payload.v1".to_owned());
+    discovery_event["kind"] = Value::String("ak.applet.discovery".to_owned());
+    discovery_event["schema_id"] = Value::String("ak.schema.event_payload.v1".to_owned());
     discovery_event["payload"] = discovery_payload.clone();
     discovery_event["proofs"][0]["payload_digest"] = Value::String(sha256_json(&discovery_payload));
     discovery_event["canonical_digest"] = Value::String(event_canonical_digest(&discovery_event));
@@ -100,8 +100,8 @@ async fn admin_applets_agents_endpoints_reflect_submitted_registry_events() {
         3,
         vec!["ak:event:01904100-0000-7000-8000-ab10de000002"],
     );
-    agent_event["kind"] = Value::String("ck.agent.endpoint".to_owned());
-    agent_event["schema_id"] = Value::String("ck.schema.event_payload.v1".to_owned());
+    agent_event["kind"] = Value::String("ak.agent.endpoint".to_owned());
+    agent_event["schema_id"] = Value::String("ak.schema.event_payload.v1".to_owned());
     agent_event["payload"] = agent_payload.clone();
     agent_event["proofs"][0]["payload_digest"] = Value::String(sha256_json(&agent_payload));
     agent_event["canonical_digest"] = Value::String(event_canonical_digest(&agent_event));
@@ -168,8 +168,8 @@ async fn applet_bridge_emits_synthetic_status_for_session_start() {
     });
     let mut start_event = serde_json::json!({
         "event_id": "ak:event:01904100-0000-7000-8000-d3d3d3d3d3d3",
-        "kind": "ck.applet.interop_session.start",
-        "schema_id": "ck.schema.applet.v1",
+        "kind": "ak.applet.interop_session.start",
+        "schema_id": "ak.schema.applet.v1",
         "actor_id": "did:web:alice.example",
         "actor_seq": 1u64,
         "realm_id": DEMO_REALM_ID,
@@ -217,7 +217,7 @@ async fn applet_bridge_emits_synthetic_status_for_session_start() {
     let status_event = list
         .iter()
         .find(|e| {
-            e["event_kind"] == "ck.applet.interop_session.status"
+            e["event_kind"] == "ak.applet.interop_session.status"
                 && e["payload"]["session_id"] == session_id
         })
         .expect("synthetic status event missing from projection log");
@@ -249,8 +249,8 @@ async fn agent_bridge_emits_status_and_result_for_session_start() {
     });
     let mut endpoint_event = serde_json::json!({
         "event_id": "ak:event:01904100-0000-7000-8000-e4e4e4e4e4e4",
-        "kind": "ck.agent.endpoint",
-        "schema_id": "ck.schema.agent.v1",
+        "kind": "ak.agent.endpoint",
+        "schema_id": "ak.schema.agent.v1",
         "actor_id": "did:web:alice.example",
         "actor_seq": 1u64,
         "realm_id": DEMO_REALM_ID,
@@ -291,8 +291,8 @@ async fn agent_bridge_emits_status_and_result_for_session_start() {
     });
     let mut start_event = serde_json::json!({
         "event_id": "ak:event:01904100-0000-7000-8000-d4d4d4d4d4d4",
-        "kind": "ck.agent.interop_session.start",
-        "schema_id": "ck.schema.agent.v1",
+        "kind": "ak.agent.interop_session.start",
+        "schema_id": "ak.schema.agent.v1",
         "actor_id": "did:web:alice.example",
         "actor_seq": 2u64,
         "realm_id": DEMO_REALM_ID,
@@ -338,7 +338,7 @@ async fn agent_bridge_emits_status_and_result_for_session_start() {
     let status_event = list
         .iter()
         .find(|e| {
-            e["event_kind"] == "ck.agent.interop_session.status"
+            e["event_kind"] == "ak.agent.interop_session.status"
                 && e["payload"]["session_id"] == session_id
         })
         .expect("synthetic agent status event missing from projection log");
@@ -351,7 +351,7 @@ async fn agent_bridge_emits_status_and_result_for_session_start() {
     let result_event = list
         .iter()
         .find(|e| {
-            e["event_kind"] == "ck.agent.interop_session.result"
+            e["event_kind"] == "ak.agent.interop_session.result"
                 && e["payload"]["session_id"] == session_id
         })
         .expect("synthetic agent result event missing from projection log");
@@ -411,8 +411,8 @@ async fn agent_bridge_fails_closed_on_unknown_agent() {
     });
     let mut start_event = serde_json::json!({
         "event_id": "ak:event:01904100-0000-7000-8000-deadbeefdead",
-        "kind": "ck.agent.interop_session.start",
-        "schema_id": "ck.schema.agent.v1",
+        "kind": "ak.agent.interop_session.start",
+        "schema_id": "ak.schema.agent.v1",
         "actor_id": "did:web:alice.example",
         "actor_seq": 1u64,
         "realm_id": DEMO_REALM_ID,
@@ -458,7 +458,7 @@ async fn agent_bridge_fails_closed_on_unknown_agent() {
     // No status(working) event should be present.
     assert!(
         !list.iter().any(|e| {
-            e["event_kind"] == "ck.agent.interop_session.status"
+            e["event_kind"] == "ak.agent.interop_session.status"
                 && e["payload"]["session_id"] == session_id
         }),
         "B4c failed-closed dispatch must skip the status(working) event"
@@ -467,7 +467,7 @@ async fn agent_bridge_fails_closed_on_unknown_agent() {
     let result_event = list
         .iter()
         .find(|e| {
-            e["event_kind"] == "ck.agent.interop_session.result"
+            e["event_kind"] == "ak.agent.interop_session.result"
                 && e["payload"]["session_id"] == session_id
         })
         .expect("error result event missing from projection log");
@@ -503,8 +503,8 @@ async fn agent_bridge_plumbs_endpoint_url_through_session_envelopes() {
     });
     let mut endpoint_event = serde_json::json!({
         "event_id": "ak:event:01904100-0000-7000-8000-c1c1c1c1c1c1",
-        "kind": "ck.agent.endpoint",
-        "schema_id": "ck.schema.agent.v1",
+        "kind": "ak.agent.endpoint",
+        "schema_id": "ak.schema.agent.v1",
         "actor_id": "did:web:alice.example",
         "actor_seq": 1u64,
         "realm_id": DEMO_REALM_ID,
@@ -545,8 +545,8 @@ async fn agent_bridge_plumbs_endpoint_url_through_session_envelopes() {
     });
     let mut start_event = serde_json::json!({
         "event_id": "ak:event:01904100-0000-7000-8000-c2c2c2c2c2c2",
-        "kind": "ck.agent.interop_session.start",
-        "schema_id": "ck.schema.agent.v1",
+        "kind": "ak.agent.interop_session.start",
+        "schema_id": "ak.schema.agent.v1",
         "actor_id": "did:web:alice.example",
         "actor_seq": 2u64,
         "realm_id": DEMO_REALM_ID,
@@ -598,7 +598,7 @@ async fn agent_bridge_plumbs_endpoint_url_through_session_envelopes() {
             .unwrap();
             if let Some(arr) = events["events"].as_array() {
                 if let Some(e) = arr.iter().find(|e| {
-                    e["event_kind"] == "ck.agent.interop_session.result"
+                    e["event_kind"] == "ak.agent.interop_session.result"
                         && e["payload"]["session_id"] == session_id
                 }) {
                     found = Some(e.clone());
@@ -623,7 +623,7 @@ async fn agent_bridge_plumbs_endpoint_url_through_session_envelopes() {
     let status_event = list
         .iter()
         .find(|e| {
-            e["event_kind"] == "ck.agent.interop_session.status"
+            e["event_kind"] == "ak.agent.interop_session.status"
                 && e["payload"]["session_id"] == session_id
         })
         .expect("status event missing");
@@ -704,8 +704,8 @@ async fn agent_discover_reflects_endpoint_projection_and_fails_closed() {
     });
     let mut endpoint_event = serde_json::json!({
         "event_id": "ak:event:01904100-0000-7000-8000-d15c0ffee001",
-        "kind": "ck.agent.endpoint",
-        "schema_id": "ck.schema.agent.v1",
+        "kind": "ak.agent.endpoint",
+        "schema_id": "ak.schema.agent.v1",
         "actor_id": "did:web:alice.example",
         "actor_seq": 1u64,
         "realm_id": DEMO_REALM_ID,

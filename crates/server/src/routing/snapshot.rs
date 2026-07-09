@@ -82,8 +82,8 @@ pub(crate) async fn snapshot_manifest_for_realm(
         realm_id: realm_id_value,
         reducer_profile: arkret_sdk::SNAPSHOT_REDUCER_PROFILE_V1.to_owned(),
         schema_profile_refs: vec![
-            "ck.profile.core_event_store.v1".to_owned(),
-            "ck.profile.principal_server_events_api.v1".to_owned(),
+            "ak.profile.core_event_store.v1".to_owned(),
+            "ak.profile.principal_server_events_api.v1".to_owned(),
         ],
         state_digest,
         frontier: arkret_sdk::SnapshotFrontier {
@@ -179,7 +179,7 @@ fn snapshot_item_from_event(
     let event_id = arkret_sdk::EventId::new(record.event_id.clone())
         .map_err(|error| crate::error::AppError::internal(error.to_string()))?;
     Ok(arkret_sdk::SnapshotMaterializedItem {
-        kind: "ck.event.accepted".to_owned(),
+        kind: "ak.event.accepted".to_owned(),
         id: record.event_id.clone(),
         object: json!({
             "event_id": record.event_id,
@@ -280,7 +280,7 @@ fn snapshot_auth_state_digest(
     checked_at: chrono::DateTime<chrono::Utc>,
 ) -> Result<arkret_sdk::Hash, crate::error::AppError> {
     let commitment = json!({
-        "profile": "ck.snapshot.auth_state.issuer_local.v1",
+        "profile": "ak.snapshot.auth_state.issuer_local.v1",
         "issuer": service_did,
         "realm_id": realm_id,
         "frontier_event_ids": frontier_event_ids,

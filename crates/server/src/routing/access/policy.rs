@@ -263,11 +263,11 @@ async fn delete_policy_document(
 }
 
 #[endpoint(
-    operation_id = "ck.self.policy.query.check",
+    operation_id = "ak.self.policy.query.check",
     tags("policy"),
     summary = "Evaluate a policy decision for an actor + action + resource tuple"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.policy.query.check"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.policy.query.check"))]
 async fn policy_check(
     aa: AuthArgs,
     body: JsonBody<PolicyCheckRequestBody>,
@@ -281,7 +281,7 @@ async fn policy_check(
         append_audit_log(
             state,
             Some(&session.actor),
-            "ck.self.policy.query.check",
+            "ak.self.policy.query.check",
             json!({
                 "realm_id": body.realm_id.as_str(),
                 "action": body.action.as_str(),
@@ -386,7 +386,7 @@ async fn policy_check(
         append_audit_log(
             state,
             Some(&session.actor),
-            "ck.self.policy.query.check",
+            "ak.self.policy.query.check",
             json!({
                 "realm_id": body.realm_id.as_str(),
                 "action": body.action.as_str(),
@@ -681,7 +681,7 @@ fn policy_check_has_service_delegation(
     let kind_ok = proof
         .get("kind")
         .and_then(Value::as_str)
-        .is_none_or(|kind| matches!(kind, "service_delegation" | "ck.service_delegation"));
+        .is_none_or(|kind| matches!(kind, "service_delegation" | "ak.service_delegation"));
     if !kind_ok {
         return false;
     }
@@ -793,7 +793,7 @@ mod tests {
             realm_id: RealmId::new("ak:realm:01904100-0000-7000-8000-000000000001").unwrap(),
             actor_id: Did::new(actor.to_owned()).unwrap(),
             device_id: None,
-            action: "ck.message.create".to_owned(),
+            action: "ak.message.create".to_owned(),
             request_canonical_digest: test_hash(),
             source: arkret_sdk::PolicyCheckSource {
                 service_did: Did::new(source_service.to_owned()).unwrap(),

@@ -46,9 +46,9 @@ pub(crate) fn projected_mls_governance_binding_covers_policy_root(
     let mut observed_realm_mls_cell = false;
     for (cell, cell_state) in &projection.cells {
         let cell_id = cell.as_str();
-        let is_mls_cell = cell_id.contains("ck.component.mls.epoch.v1")
-            || cell_id.contains("ck.component.mls_epoch.v1")
-            || cell_id.contains("ck.component.covered_seals.v1");
+        let is_mls_cell = cell_id.contains("ak.component.mls.epoch.v1")
+            || cell_id.contains("ak.component.mls_epoch.v1")
+            || cell_id.contains("ak.component.covered_seals.v1");
         if !is_mls_cell {
             continue;
         }
@@ -81,9 +81,9 @@ pub(super) fn projected_mls_governance_binding_metadata_digest(
     let projection = state.projection.lock();
     for (cell, cell_state) in &projection.cells {
         let cell_id = cell.as_str();
-        let is_mls_cell = cell_id.contains("ck.component.mls.epoch.v1")
-            || cell_id.contains("ck.component.mls_epoch.v1")
-            || cell_id.contains("ck.component.covered_seals.v1");
+        let is_mls_cell = cell_id.contains("ak.component.mls.epoch.v1")
+            || cell_id.contains("ak.component.mls_epoch.v1")
+            || cell_id.contains("ak.component.covered_seals.v1");
         if !is_mls_cell {
             continue;
         }

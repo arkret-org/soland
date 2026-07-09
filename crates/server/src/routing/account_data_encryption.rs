@@ -4,16 +4,16 @@ use arkret_sdk::{Did, Hash, ProtocolSchemaRegistry, RealmId};
 use serde_json::{Map, Value};
 
 const CLIENT_SIDE_CONFORMANCE: &str = "client_side_conformance";
-const ACCOUNT_DATA_TYPE_AGENT_DRAFT: &str = "ck.agent.draft.v1";
-const ACCOUNT_DATA_TYPE_AGENT_SIDECAR_PROJECTION: &str = "ck.agent.sidecar_projection.v1";
-const ACCOUNT_DATA_TYPE_AGENT_PARTICIPATION: &str = "ck.agent.participation.v1";
-const ACCOUNT_DATA_TYPE_BLOCKLIST: &str = "ck.account.blocklist";
-const ACCOUNT_DATA_TYPE_DND_SCHEDULE: &str = "ck.dnd_schedule";
-const ACCOUNT_DATA_TYPE_INVITE_QUARANTINE: &str = "ck.account.invite_quarantine";
-const ACCOUNT_DATA_TYPE_PRESENCE_PREFERENCE: &str = "ck.presence.preference";
-const ACCOUNT_DATA_TYPE_PRESENCE_VISIBILITY: &str = "ck.presence.visibility";
-const ACCOUNT_DATA_TYPE_PUSH_RULES: &str = "ck.push_rules";
-const ACCOUNT_DATA_TYPE_TAGS_REALM: &str = "ck.tags.realm";
+const ACCOUNT_DATA_TYPE_AGENT_DRAFT: &str = "ak.agent.draft.v1";
+const ACCOUNT_DATA_TYPE_AGENT_SIDECAR_PROJECTION: &str = "ak.agent.sidecar_projection.v1";
+const ACCOUNT_DATA_TYPE_AGENT_PARTICIPATION: &str = "ak.agent.participation.v1";
+const ACCOUNT_DATA_TYPE_BLOCKLIST: &str = "ak.account.blocklist";
+const ACCOUNT_DATA_TYPE_DND_SCHEDULE: &str = "ak.dnd_schedule";
+const ACCOUNT_DATA_TYPE_INVITE_QUARANTINE: &str = "ak.account.invite_quarantine";
+const ACCOUNT_DATA_TYPE_PRESENCE_PREFERENCE: &str = "ak.presence.preference";
+const ACCOUNT_DATA_TYPE_PRESENCE_VISIBILITY: &str = "ak.presence.visibility";
+const ACCOUNT_DATA_TYPE_PUSH_RULES: &str = "ak.push_rules";
+const ACCOUNT_DATA_TYPE_TAGS_REALM: &str = "ak.tags.realm";
 
 const EXACT_ENCRYPTED_ACCOUNT_DATA_KEYS: &[&str] = &[
     ACCOUNT_DATA_TYPE_BLOCKLIST,
@@ -155,7 +155,7 @@ pub(crate) fn validate_encrypted_account_data_key(
     {
         return Err(AccountDataEncryptionError::InvalidKeyPattern);
     }
-    if let Some(realm_id) = data_type.strip_prefix("ck.tags.realm.") {
+    if let Some(realm_id) = data_type.strip_prefix("ak.tags.realm.") {
         return RealmId::new(realm_id.to_owned())
             .map(|_| ())
             .map_err(|_| AccountDataEncryptionError::InvalidKeyPattern);
@@ -371,14 +371,14 @@ fn validate_client_side_conformance_marker(
     Hash::new(payload_digest.to_owned())
         .map_err(|_| AccountDataEncryptionError::InvalidEnvelopeMetadataOrMarker)?;
     if let Some(schema_id) = marker.get("plaintext_schema_id").and_then(Value::as_str)
-        && !schema_id.starts_with("ck.schema.")
+        && !schema_id.starts_with("ak.schema.")
     {
         return Err(AccountDataEncryptionError::InvalidEnvelopeMetadataOrMarker);
     }
     if marker
         .get("profile_id")
         .and_then(Value::as_str)
-        .is_some_and(|profile_id| !profile_id.starts_with("ck.profile."))
+        .is_some_and(|profile_id| !profile_id.starts_with("ak.profile."))
     {
         return Err(AccountDataEncryptionError::InvalidEnvelopeMetadataOrMarker);
     }
@@ -399,7 +399,7 @@ mod tests {
     use super::*;
 
     fn private_key() -> &'static str {
-        "ck.saved.v1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"
+        "ak.saved.v1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"
     }
 
     fn encrypted_envelope() -> Value {
@@ -413,7 +413,7 @@ mod tests {
             "aad_visibility_event_id": "hidden",
             "aad": {
                 "realm_id": "ak:realm:0196419b-0000-7000-8000-000000000000",
-                "event_kind": "ck.account_data.set"
+                "event_kind": "ak.account_data.set"
             },
             "key_ref": {
                 "algorithm": "MLS",
@@ -428,8 +428,8 @@ mod tests {
         json!({
             "client_side_conformance": {
                 "encrypted_account_data": true,
-                "profile_id": "ck.profile.e2ee_client.v1",
-                "plaintext_schema_id": "ck.schema.personal_productivity.v1",
+                "profile_id": "ak.profile.e2ee_client.v1",
+                "plaintext_schema_id": "ak.schema.personal_productivity.v1",
                 "payload_digest": "sha256:4444444444444444444444444444444444444444444444444444444444444444"
             },
             "content_type": "application/vnd.arkret.account-data+json",
@@ -493,7 +493,7 @@ mod tests {
         }
 
         let err = validate_encrypted_account_data_value(
-            "ck.contacts.realm.ak:realm:0196419b-0000-7000-8000-000000000000",
+            "ak.contacts.realm.ak:realm:0196419b-0000-7000-8000-000000000000",
             &json!({"local_name": "Acme"}),
         )
         .unwrap_err();
@@ -539,7 +539,7 @@ mod tests {
 
     #[test]
     fn legacy_blocklist_key_alias_is_rejected() {
-        let err = validate_encrypted_account_data_key("ck.account.blocklist.v1").unwrap_err();
+        let err = validate_encrypted_account_data_key("ak.account.blocklist.v1").unwrap_err();
 
         assert_eq!(err, AccountDataEncryptionError::InvalidKeyPattern);
     }
@@ -575,7 +575,7 @@ mod tests {
 
     #[test]
     fn reminder_rejects_plaintext_note_and_target_ref() {
-        let key = "ck.reminders.v1:local-reminder-1";
+        let key = "ak.reminders.v1:local-reminder-1";
         validate_encrypted_account_data_key(key).unwrap();
         validate_encrypted_account_data_value(key, &conformance_marker()).unwrap();
 
@@ -597,7 +597,7 @@ mod tests {
 
     #[test]
     fn snooze_rejects_plaintext_target_ref() {
-        let key = "ck.snooze.v1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+        let key = "ak.snooze.v1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
         validate_encrypted_account_data_key(key).unwrap();
         validate_encrypted_account_data_value(key, &conformance_marker()).unwrap();
 
@@ -618,7 +618,7 @@ mod tests {
 
     #[test]
     fn scheduled_send_rejects_plaintext_message_payload() {
-        let key = "ck.scheduled_send.v1:ak:message:01904100-0000-7000-8000-000000000001";
+        let key = "ak.scheduled_send.v1:ak:message:01904100-0000-7000-8000-000000000001";
         validate_encrypted_account_data_key(key).unwrap();
         validate_encrypted_account_data_value(key, &conformance_marker()).unwrap();
 
@@ -630,7 +630,7 @@ mod tests {
                 "send_at": "2026-06-19T08:00:00Z",
                 "message_payload": {
                     "message_id": "ak:message:01904100-0000-7000-8000-000000000001",
-                    "content": {"kind": "ck.content.text", "body": "secret"}
+                    "content": {"kind": "ak.content.text", "body": "secret"}
                 },
                 "message_payload_digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
                 "updated_hlc": "01904100-0000-7000-8000-000000000001",
@@ -644,7 +644,7 @@ mod tests {
 
     #[test]
     fn search_index_manifest_rejects_plaintext_manifest_fields() {
-        let key = "ck.search.index_manifest.v1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+        let key = "ak.search.index_manifest.v1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
         validate_encrypted_account_data_key(key).unwrap();
         validate_encrypted_account_data_value(key, &conformance_marker()).unwrap();
 

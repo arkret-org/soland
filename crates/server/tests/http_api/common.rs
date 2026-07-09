@@ -585,15 +585,15 @@ pub(crate) fn signed_event_envelope(event_id: &str, actor_seq: u64, prev_refs: V
         "strand_id": "ak:strand:01904100-0000-7000-8000-f10dc0000001",
         "track_name": "discussion",
         "content": {
-            "kind": "ck.content.text",
+            "kind": "ak.content.text",
             "body": format!("event body {actor_seq}"),
             "format": "plain"
         }
     });
     let mut event = serde_json::json!({
         "event_id": event_id,
-        "kind": "ck.message.create",
-        "schema_id": "ck.schema.message.v1",
+        "kind": "ak.message.create",
+        "schema_id": "ak.schema.message.v1",
         "actor_id": "did:web:alice.example",
         "actor_seq": actor_seq,
         "realm_id": "ak:realm:0196419b-0000-7000-8000-000000000000",
@@ -648,7 +648,7 @@ pub(crate) fn signed_message_event_envelope(
                 "aad".to_owned(),
                 serde_json::json!({
                     "realm_id": realm_id,
-                    "event_kind": "ck.message.create"
+                    "event_kind": "ak.message.create"
                 }),
             );
             object.insert(
@@ -684,15 +684,15 @@ pub(crate) fn signed_message_event_envelope(
         {
             object.insert(
                 "kind".to_owned(),
-                Value::String("ck.content.text".to_owned()),
+                Value::String("ak.content.text".to_owned()),
             );
         }
         payload["content"] = content;
     }
     let mut event = serde_json::json!({
         "event_id": event_id,
-        "kind": "ck.message.create",
-        "schema_id": "ck.schema.message.v1",
+        "kind": "ak.message.create",
+        "schema_id": "ak.schema.message.v1",
         "actor_id": actor,
         "actor_seq": actor_seq,
         "realm_id": realm_id,
@@ -725,7 +725,7 @@ pub(crate) fn signed_actor_private_event_envelope(
     let mut event = serde_json::json!({
         "event_id": new_prefixed_uuid7("ak:event:"),
         "kind": kind,
-        "schema_id": "ck.schema.event.v1",
+        "schema_id": "ak.schema.event.v1",
         "actor_id": actor,
         "actor_seq": TEST_EVENT_SEQ.fetch_add(1, Ordering::Relaxed),
         "realm_id": realm_id,
@@ -819,7 +819,7 @@ pub(crate) async fn submit_message_event(
         let event_id = event_id.to_owned();
         let event_suffix = event_id.strip_prefix("ak:event:").unwrap_or(&event_id);
         response["operation_id"] = Value::String(format!("ak:operation:{event_suffix}"));
-        response["kind"] = Value::String("ck.message.create".to_owned());
+        response["kind"] = Value::String("ak.message.create".to_owned());
         response["message_id"] = Value::String(format!("ak:message:{event_suffix}"));
         response["realm_id"] = Value::String(realm_id.to_owned());
         response["source_realm_id"] = Value::String(realm_id.to_owned());
@@ -1015,7 +1015,7 @@ pub(crate) fn signed_space_event(
     let mut event = serde_json::json!({
         "event_id": event_id,
         "kind": kind,
-        "schema_id": "ck.schema.space.v1",
+        "schema_id": "ak.schema.space.v1",
         "actor_id": "did:web:alice.example",
         "actor_seq": actor_seq,
         "realm_id": "ak:realm:0196419b-0000-7000-8000-000000000000",
@@ -1043,11 +1043,11 @@ pub(crate) fn normalize_space_container_payload(kind: &str, payload: &mut Value)
     let Some(object) = payload.as_object_mut() else {
         return;
     };
-    if kind == "ck.space.create" {
+    if kind == "ak.space.create" {
         if let Some(space) = object.get_mut("object").and_then(Value::as_object_mut) {
             space
                 .entry("schema".to_owned())
-                .or_insert_with(|| Value::String("ck.schema.space.v1".to_owned()));
+                .or_insert_with(|| Value::String("ak.schema.space.v1".to_owned()));
             space.entry("realm_id".to_owned()).or_insert_with(|| {
                 Value::String("ak:realm:0196419b-0000-7000-8000-000000000000".to_owned())
             });
@@ -1132,7 +1132,7 @@ pub(crate) fn signed_strand_event(
     let mut event = serde_json::json!({
         "event_id": event_id,
         "kind": kind,
-        "schema_id": "ck.schema.strand.v1",
+        "schema_id": "ak.schema.strand.v1",
         "actor_id": "did:web:alice.example",
         "actor_seq": actor_seq,
         "realm_id": "ak:realm:0196419b-0000-7000-8000-000000000000",
@@ -1160,11 +1160,11 @@ pub(crate) fn normalize_strand_payload(kind: &str, payload: &mut Value) {
     let Some(object) = payload.as_object_mut() else {
         return;
     };
-    if kind == "ck.strand.create" {
+    if kind == "ak.strand.create" {
         if let Some(strand) = object.get_mut("object").and_then(Value::as_object_mut) {
             strand
                 .entry("schema".to_owned())
-                .or_insert_with(|| Value::String("ck.schema.strand.v1".to_owned()));
+                .or_insert_with(|| Value::String("ak.schema.strand.v1".to_owned()));
             strand.entry("realm_id".to_owned()).or_insert_with(|| {
                 Value::String("ak:realm:0196419b-0000-7000-8000-000000000000".to_owned())
             });
@@ -1186,7 +1186,7 @@ pub(crate) fn normalize_strand_payload(kind: &str, payload: &mut Value) {
     }
     if matches!(
         kind,
-        "ck.strand.archive" | "ck.strand.restore" | "ck.strand.tombstone"
+        "ak.strand.archive" | "ck.strand.restore" | "ck.strand.tombstone"
     ) {
         if !object.contains_key("target_ref") {
             if let Some(strand_id) = object.get("strand_id").and_then(Value::as_str) {
@@ -1216,7 +1216,7 @@ pub(crate) fn signed_morph_event(
     let mut event = serde_json::json!({
         "event_id": event_id,
         "kind": kind,
-        "schema_id": "ck.schema.morph.v1",
+        "schema_id": "ak.schema.morph.v1",
         "actor_id": "did:web:alice.example",
         "actor_seq": actor_seq,
         "realm_id": "ak:realm:0196419b-0000-7000-8000-000000000000",
@@ -1244,11 +1244,11 @@ pub(crate) fn normalize_morph_payload(kind: &str, payload: &mut Value) {
     let Some(object) = payload.as_object_mut() else {
         return;
     };
-    if kind == "ck.morph.create" {
+    if kind == "ak.morph.create" {
         if let Some(morph) = object.get_mut("object").and_then(Value::as_object_mut) {
             morph
                 .entry("schema".to_owned())
-                .or_insert_with(|| Value::String("ck.schema.morph.v1".to_owned()));
+                .or_insert_with(|| Value::String("ak.schema.morph.v1".to_owned()));
             morph.entry("realm_id".to_owned()).or_insert_with(|| {
                 Value::String("ak:realm:0196419b-0000-7000-8000-000000000000".to_owned())
             });
@@ -1260,7 +1260,7 @@ pub(crate) fn normalize_morph_payload(kind: &str, payload: &mut Value) {
                 .or_insert_with(|| Value::String("draft".to_owned()));
             morph
                 .entry("schema_refs".to_owned())
-                .or_insert_with(|| serde_json::json!(["ck.schema.morph.v1"]));
+                .or_insert_with(|| serde_json::json!(["ak.schema.morph.v1"]));
         }
     }
 }
@@ -1320,8 +1320,8 @@ pub(crate) fn signed_relation_event(
     payload = typed_relation_create_payload(payload);
     let mut event = serde_json::json!({
         "event_id": event_id,
-        "kind": "ck.relation.create",
-        "schema_id": "ck.schema.event_payload.v1",
+        "kind": "ak.relation.create",
+        "schema_id": "ak.schema.event_payload.v1",
         "actor_id": "did:web:alice.example",
         "actor_seq": actor_seq,
         "realm_id": DEMO_REALM_ID,
@@ -1407,8 +1407,8 @@ pub(crate) fn signed_redaction_event(
     }
     let mut event = serde_json::json!({
         "event_id": event_id,
-        "kind": "ck.redaction",
-        "schema_id": "ck.schema.message.v1",
+        "kind": "ak.redaction",
+        "schema_id": "ak.schema.message.v1",
         "actor_id": "did:web:alice.example",
         "actor_seq": actor_seq,
         "realm_id": DEMO_REALM_ID,

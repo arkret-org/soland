@@ -618,7 +618,7 @@ async fn account_contacts_and_realm_lifecycle_workflow() {
         "did:web:alice.example",
         locked_realm_id,
         locked_realm_id,
-        encrypted_envelope("ck.message.v1", "opaque-ciphertext"),
+        encrypted_envelope("ak.message.v1", "opaque-ciphertext"),
         true,
     )
     .await;
@@ -675,7 +675,7 @@ async fn account_contacts_and_realm_lifecycle_workflow() {
         "did:web:alice.example",
         &realm_id,
         "ak:strand:workflow",
-        serde_json::json!({"kind": "ck.content.composite", "body": "invalid", "parts": [{"kind": "ck.content.image", "body": "image"}]}),
+        serde_json::json!({"kind": "ak.content.composite", "body": "invalid", "parts": [{"kind": "ck.content.image", "body": "image"}]}),
         false,
     )
     .await;
@@ -687,7 +687,7 @@ async fn account_contacts_and_realm_lifecycle_workflow() {
         "did:web:alice.example",
         &realm_id,
         "ak:strand:workflow",
-        serde_json::json!({"kind": "ck.content.location", "body": "location", "latitude": 31.2304, "longitude": 121.4737}),
+        serde_json::json!({"kind": "ak.content.location", "body": "location", "latitude": 31.2304, "longitude": 121.4737}),
         false,
     )
     .await;
@@ -712,24 +712,24 @@ async fn account_contacts_and_realm_lifecycle_workflow() {
         &realm_id,
         "ak:strand:workflow",
         serde_json::json!({
-            "kind": "ck.content.composite",
+            "kind": "ak.content.composite",
             "body": "structured hello",
             "mentions": [
                 "did:web:bob.example",
                 {"type": "strand", "strand_id": "ak:strand:01904100-0000-7000-8000-170d4f3bfc7b"}
             ],
             "parts": [
-                {"kind": "ck.content.text", "body": "structured hello"},
-                {"kind": "ck.content.location", "body": "location", "latitude": 312304000, "longitude": 1214737000},
+                {"kind": "ak.content.text", "body": "structured hello"},
+                {"kind": "ak.content.location", "body": "location", "latitude": 312304000, "longitude": 1214737000},
                 {
-                    "kind": "ck.content.poll",
+                    "kind": "ak.content.poll",
                     "body": "ship?",
                     "poll": {
                         "kind": "disclosed",
                         "max_selections": 1,
                         "answers": [
-                            {"id": "yes", "text": {"kind": "ck.content.text", "body": "yes"}},
-                            {"id": "no", "text": {"kind": "ck.content.text", "body": "no"}}
+                            {"id": "yes", "text": {"kind": "ak.content.text", "body": "yes"}},
+                            {"id": "no", "text": {"kind": "ak.content.text", "body": "no"}}
                         ]
                     }
                 }
@@ -839,7 +839,7 @@ async fn account_contacts_and_realm_lifecycle_workflow() {
     );
     assert_eq!(
         sync_with_message["realms"][&realm_id]["summary"]["strand"]["schema"],
-        "ck.schema.strand.v1"
+        "ak.schema.strand.v1"
     );
 
     // After the realms-incremental optimisation a fully-quiet realm
@@ -931,7 +931,7 @@ async fn account_contacts_and_realm_lifecycle_workflow() {
     .take_json()
     .await
     .unwrap();
-    assert_eq!(exported["schema"], "ck.export.realm.v1");
+    assert_eq!(exported["schema"], "ak.export.realm.v1");
     assert!(
         exported["operations"]
             .as_array()

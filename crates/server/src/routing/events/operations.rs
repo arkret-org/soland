@@ -45,7 +45,7 @@ const REALM_ENCRYPTION_PROFILE_CREATE_LOCKED: &str = "realm_encryption_profile_c
 const CIRCLE_ENCRYPTION_PROFILE_CREATE_LOCKED: &str = "circle_encryption_profile_create_locked";
 const CIRCLE_ENCRYPTION_BELOW_REALM_FLOOR: &str =
     arkret_sdk::error::REASON_CIRCLE_ENCRYPTION_BELOW_REALM_FLOOR;
-const CAP_ACTION_MESSAGE_MENTION_BROADCAST: &str = "ck.message.mention.broadcast";
+const CAP_ACTION_MESSAGE_MENTION_BROADCAST: &str = "ak.message.mention.broadcast";
 const AUDIENCE_MENTION_ALLOWED_AUDIENCES: &[&str] = &[
     "effective_scope_members",
     "strand_participants",

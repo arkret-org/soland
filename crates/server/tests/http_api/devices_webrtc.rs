@@ -241,7 +241,7 @@ async fn to_device_pairing_request_reaches_existing_device_and_gate_pair_authori
         "timestamp": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
         "expires_at": (chrono::Utc::now() + chrono::Duration::minutes(10))
             .to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
-        "methods": ["ck.sas.v1", "ck.qr.v1"],
+        "methods": ["ak.sas.v1", "ck.qr.v1"],
         "purpose": "same_principal_device_authorization",
         "pairing_code": "pairing-code",
         "new_device_pubkey": pair_device_pubkey(new_device),
@@ -257,7 +257,7 @@ async fn to_device_pairing_request_reaches_existing_device_and_gate_pair_authori
     let mut device_targets = serde_json::Map::new();
     device_targets.insert(
         existing_device.to_owned(),
-        device_message_target("ck.key.verification.request", request_content.clone()),
+        device_message_target("ak.key.verification.request", request_content.clone()),
     );
     let mut actor_targets = serde_json::Map::new();
     actor_targets.insert(actor.to_owned(), Value::Object(device_targets));
@@ -279,7 +279,7 @@ async fn to_device_pairing_request_reaches_existing_device_and_gate_pair_authori
         account_subscribe_frame(state.clone(), Some(&existing_token), "catchup=true").await;
     let subscribe_messages = subscribe["to_device"]["messages"].as_array().unwrap();
     assert_eq!(subscribe_messages.len(), 1);
-    assert_eq!(subscribe_messages[0]["kind"], "ck.key.verification.request");
+    assert_eq!(subscribe_messages[0]["kind"], "ak.key.verification.request");
     assert_eq!(subscribe_messages[0]["sender_principal_id"], actor);
     assert_eq!(subscribe_messages[0]["sender_device_id"], new_device);
     assert_eq!(subscribe_messages[0]["recipient_principal_id"], actor);
@@ -360,7 +360,7 @@ async fn to_device_capacity_eviction_sets_lost_watermark() {
         device_targets.insert(
             bob_device.to_owned(),
             device_message_target(
-                "ck.key.verification.request",
+                "ak.key.verification.request",
                 serde_json::json!({
                     "transaction_id": format!("capacity-{seq}"),
                     "seq": seq
@@ -478,7 +478,7 @@ async fn rtc_media_token_uses_projected_media_service_epoch() {
         &state,
         DEMO_REALM_ID,
         "did:web:alice.example",
-        "ck.call.join",
+        "ak.call.join",
     );
 
     let issued_before = chrono::Utc::now();
@@ -661,7 +661,7 @@ async fn rtc_media_token_inkson_flow_no_session_issues_token() {
         &state,
         DEMO_REALM_ID,
         "did:web:alice.example",
-        "ck.call.join",
+        "ak.call.join",
     );
     let issued: Value = TestClient::post("http://server/_arkret/self/rtc/token")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -707,7 +707,7 @@ async fn rtc_media_token_rejects_epoch_and_focus_mismatches() {
         &state,
         DEMO_REALM_ID,
         "did:web:alice.example",
-        "ck.call.join",
+        "ak.call.join",
     );
 
     // Commit `session_focus = mediasoup:blue` into the durable `ck.call.state`
@@ -828,7 +828,7 @@ async fn rtc_media_token_requires_call_join_capability() {
 
     // After granting ck.call.join, the exchange is admitted (focus matches the
     // oldest-membership default).
-    grant_call_capability(&state, DEMO_REALM_ID, bob, "ck.call.join");
+    grant_call_capability(&state, DEMO_REALM_ID, bob, "ak.call.join");
     let granted: Value = TestClient::post("http://server/_arkret/self/rtc/token")
         .add_header("authorization", format!("Bearer {bob_token}"), true)
         .json(&exchange_body)
@@ -904,7 +904,7 @@ async fn rtc_media_token_livekit_backend_token_carries_livekit_claims() {
         &state,
         DEMO_REALM_ID,
         "did:web:alice.example",
-        "ck.call.join",
+        "ak.call.join",
     );
 
     // No committed session_focus: the request directly names the livekit focus,
@@ -950,11 +950,11 @@ async fn rtc_media_token_livekit_backend_token_carries_livekit_claims() {
     assert_eq!(claims["video"]["recorder"], false);
     assert_eq!(claims["video"]["hidden"], false);
     let room = claims["video"]["room"].as_str().unwrap();
-    assert!(room.starts_with("ck_call_"));
+    assert!(room.starts_with("ak.call_"));
     assert!(!room.contains(&session_id));
     let room_material = format!("{DEMO_REALM_ID}\0{session_id}\0ck:focus:livekit:green");
     let expected_room = format!(
-        "ck_call_{}",
+        "ak.call_{}",
         &hex::encode(Sha256::digest(room_material.as_bytes()))[..16]
     );
     assert_eq!(room, expected_room);
@@ -1030,7 +1030,7 @@ async fn webrtc_ban_blocks_removed_participant_token_reissue() {
 
     let session_id = new_prefixed_uuid7("ak:call:");
     // §6 — bob needs ck.call.join to exchange a token before the ban.
-    grant_call_capability(&state, DEMO_REALM_ID, bob, "ck.call.join");
+    grant_call_capability(&state, DEMO_REALM_ID, bob, "ak.call.join");
 
     // Before the ban, bob can exchange a media token (no committed focus, so
     // the requested epoch-legal focus is admitted).
@@ -1190,7 +1190,7 @@ fn call_signal_envelope(
     let sent_at = chrono::Utc::now();
     let expires_at = sent_at + chrono::Duration::minutes(2);
     let mut envelope = serde_json::json!({
-        "kind": "ck.call.signal",
+        "kind": "ak.call.signal",
         "realm_id": DEMO_REALM_ID,
         "actor_id": actor,
         "device_id": device_id,
@@ -1235,7 +1235,7 @@ fn call_signals_in_subscribe(frame: &Value, realm_id: &str) -> Vec<Value> {
     };
     ephemeral
         .iter()
-        .filter(|item| item["type"] == "ck.call.signal")
+        .filter(|item| item["type"] == "ak.call.signal")
         .flat_map(|item| item["call_signals"].as_array().cloned().unwrap_or_default())
         .collect()
 }
@@ -1275,7 +1275,7 @@ async fn ephemeral_call_signal_relays_to_other_realm_member_and_filters_self_dev
         1,
         "bob must receive the relayed call signal"
     );
-    assert_eq!(bob_signals[0]["kind"], "ck.call.signal");
+    assert_eq!(bob_signals[0]["kind"], "ak.call.signal");
     assert_eq!(bob_signals[0]["payload"]["call_id"], call_id);
     assert_eq!(bob_signals[0]["payload"]["signal_type"], "invite");
     assert_eq!(bob_signals[0]["payload"]["seq"], 1);

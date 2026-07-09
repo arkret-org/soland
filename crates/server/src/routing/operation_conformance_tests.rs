@@ -54,14 +54,14 @@ fn builtin_operation_conformance_vectors_cover_registry() {
                 "strand_id": "ak:strand:01904100-0000-7000-8000-6c663fa0205f",
                 "track_name": "discussion",
                 "sender": "did:web:alice.example",
-                "content": {"kind": "ck.content.text", "body": "hello"}
+                "content": {"kind": "ak.content.text", "body": "hello"}
             }),
             valid: true,
         },
         OperationVector {
             name: "message revise",
             kind: arkret_sdk::events::kinds::MESSAGE_REVISE,
-            payload: json!({"target_ref": "ak:event:01904100-0000-7000-8000-79a90338768b", "content": {"kind": "ck.content.text", "body": "edited"}}),
+            payload: json!({"target_ref": "ak:event:01904100-0000-7000-8000-79a90338768b", "content": {"kind": "ak.content.text", "body": "edited"}}),
             valid: true,
         },
         OperationVector {
@@ -176,11 +176,11 @@ fn builtin_operation_conformance_vectors_cover_registry() {
             kind: arkret_sdk::events::kinds::REALM_CREATE,
             payload: json!({"object": {
                 "id": "ak:realm:0196419b-0000-7000-8000-000000000000",
-                "schema": "ck.schema.realm.v1",
+                "schema": "ak.schema.realm.v1",
                 "title": "Launch",
                 "trust_domain": "ak:trust_domain:local",
                 "created_by": "did:web:alice.example",
-                "schema_refs": ["ck.schema.realm.v1"],
+                "schema_refs": ["ak.schema.realm.v1"],
                 "default_discoverability": "invite_only",
                 "default_join_rule": "invite",
                 "history_visibility": "joined",
@@ -251,7 +251,7 @@ fn builtin_operation_conformance_vectors_cover_registry() {
             // metadata.
             payload: json!({"object": {
                 "id": "ak:strand:01904100-0000-7000-8000-ca33616973bb",
-                "schema": "ck.schema.strand.v1",
+                "schema": "ak.schema.strand.v1",
                 "realm_id": "ak:realm:01904100-0000-7000-8000-000000000001",
                 "tracks": {"discussion": {}},
                 "created_by": "did:web:alice.example",
@@ -327,9 +327,9 @@ fn builtin_operation_conformance_vectors_cover_registry() {
             // created_at}.
             payload: json!({"object": {
                 "id": "ak:morph:01904100-0000-7000-8000-7191ddd787e5",
-                "schema": "ck.schema.morph.v1",
+                "schema": "ak.schema.morph.v1",
                 "realm_id": "ak:realm:01904100-0000-7000-8000-000000000001",
-                "schema_refs": ["ck.schema.morph.v1"],
+                "schema_refs": ["ak.schema.morph.v1"],
                 "morph_type": "task",
                 "stage": "draft",
                 "created_by": "did:web:alice.example",
@@ -537,7 +537,7 @@ fn builtin_operation_conformance_vectors_cover_registry() {
         },
         OperationVector {
             name: "unknown kind",
-            kind: "ck.unknown.operation",
+            kind: "ak.unknown.operation",
             payload: json!({"body": "bad"}),
             valid: false,
         },

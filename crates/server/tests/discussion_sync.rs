@@ -158,8 +158,8 @@ async fn admit_member(
     });
     let mut event = json!({
         "event_id": new_prefixed_uuid7("ak:event:"),
-        "kind": "ck.member.state",
-        "schema_id": "ck.schema.event.v1",
+        "kind": "ak.member.state",
+        "schema_id": "ak.schema.event.v1",
         "actor_id": owner_did,
         "actor_seq": TEST_EVENT_SEQ.fetch_add(1, Ordering::Relaxed),
         "realm_id": realm_id,
@@ -190,7 +190,7 @@ async fn admit_member(
         .unwrap();
     assert!(
         resp["accepted"][0].is_string(),
-        "ck.member.state{{join}} admit failed: {resp:?}"
+        "ak.member.state{{join}} admit failed: {resp:?}"
     );
 }
 
@@ -242,8 +242,8 @@ async fn accept_invite(
     });
     let mut event = json!({
         "event_id": new_prefixed_uuid7("ak:event:"),
-        "kind": "ck.invite.accept",
-        "schema_id": "ck.schema.invite.v1",
+        "kind": "ak.invite.accept",
+        "schema_id": "ak.schema.invite.v1",
         "actor_id": actor_did,
         "actor_seq": TEST_EVENT_SEQ.fetch_add(1, Ordering::Relaxed),
         "realm_id": realm_id,
@@ -274,7 +274,7 @@ async fn accept_invite(
         .unwrap();
     assert!(
         resp["accepted"][0].is_string(),
-        "ck.invite.accept failed: {resp:?}"
+        "ak.invite.accept failed: {resp:?}"
     );
 }
 
@@ -283,15 +283,15 @@ async fn send_message(state: AppState, token: &str, realm_id: &str, body: &str) 
         "strand_id": strand_id_for_realm(realm_id),
         "track_name": "discussion",
         "content": {
-            "kind": "ck.content.text",
+            "kind": "ak.content.text",
             "body": body,
             "format": "plain"
         }
     });
     let mut event = json!({
         "event_id": new_prefixed_uuid7("ak:event:"),
-        "kind": "ck.message.create",
-        "schema_id": "ck.schema.message.v1",
+        "kind": "ak.message.create",
+        "schema_id": "ak.schema.message.v1",
         "actor_id": "did:web:alice.example",
         "actor_seq": TEST_EVENT_SEQ.fetch_add(1, Ordering::Relaxed),
         "realm_id": realm_id,
@@ -441,7 +441,7 @@ async fn send_circle_scoped_encrypted_message(
             "aad_visibility_event_id": "hidden",
             "aad": {
                 "realm_id": realm_id,
-                "event_kind": "ck.message.create"
+                "event_kind": "ak.message.create"
             },
             "key_ref": {
                 "algorithm": "MLS",
@@ -453,8 +453,8 @@ async fn send_circle_scoped_encrypted_message(
     });
     let mut event = json!({
         "event_id": event_id,
-        "kind": "ck.message.create",
-        "schema_id": "ck.schema.message.v1",
+        "kind": "ak.message.create",
+        "schema_id": "ak.schema.message.v1",
         "actor_id": actor_id,
         "actor_seq": TEST_EVENT_SEQ.fetch_add(1, Ordering::Relaxed),
         "realm_id": realm_id,
@@ -502,7 +502,7 @@ async fn submit_projection_event(
     let mut event = json!({
         "event_id": event_id.clone(),
         "kind": kind,
-        "schema_id": "ck.schema.event.v1",
+        "schema_id": "ak.schema.event.v1",
         "actor_id": actor_id,
         "actor_seq": TEST_EVENT_SEQ.fetch_add(1, Ordering::Relaxed),
         "realm_id": realm_id,
@@ -551,7 +551,7 @@ async fn submit_projection_event_status(
     let mut event = json!({
         "event_id": event_id.clone(),
         "kind": kind,
-        "schema_id": "ck.schema.event.v1",
+        "schema_id": "ak.schema.event.v1",
         "actor_id": actor_id,
         "actor_seq": TEST_EVENT_SEQ.fetch_add(1, Ordering::Relaxed),
         "realm_id": realm_id,
@@ -760,7 +760,7 @@ async fn invite_accept_member_receives_joined_history_messages_after_accept() {
             .lock()
             .member(&realm_id, bob_did)
             .is_some_and(|member| member.state == "join"),
-        "ck.invite.accept must project joined membership"
+        "ak.invite.accept must project joined membership"
     );
 
     tokio::time::sleep(std::time::Duration::from_millis(5)).await;
@@ -953,12 +953,12 @@ async fn chat_projection_exposes_reactions_reply_and_mention_routing() {
         alice_did,
         alice_device_id,
         &realm_id,
-        "ck.message.create",
+        "ak.message.create",
         json!({
             "strand_id": strand_id_for_realm(&realm_id),
             "track_name": "discussion",
             "content": {
-                "kind": "ck.content.text",
+                "kind": "ak.content.text",
                 "body": "root mentions bob",
                 "mention_routing_hint": {
                     "mentioned": [bob_did]
@@ -978,13 +978,13 @@ async fn chat_projection_exposes_reactions_reply_and_mention_routing() {
         bob_did,
         bob_device_id,
         &realm_id,
-        "ck.message.create",
+        "ak.message.create",
         json!({
             "strand_id": strand_id_for_realm(&realm_id),
             "track_name": "discussion",
             "reply_to": root_message_ref.clone(),
             "content": {
-                "kind": "ck.content.text",
+                "kind": "ak.content.text",
                 "body": "reply to root"
             }
         }),
@@ -996,7 +996,7 @@ async fn chat_projection_exposes_reactions_reply_and_mention_routing() {
         alice_did,
         alice_device_id,
         &realm_id,
-        "ck.reaction.add",
+        "ak.reaction.add",
         json!({
             "target_ref": root_message_ref.clone(),
             "key": "+1"
@@ -1009,7 +1009,7 @@ async fn chat_projection_exposes_reactions_reply_and_mention_routing() {
         bob_did,
         bob_device_id,
         &realm_id,
-        "ck.reaction.add",
+        "ak.reaction.add",
         json!({
             "target_ref": root_message_ref.clone(),
             "key": "+1"
@@ -1022,7 +1022,7 @@ async fn chat_projection_exposes_reactions_reply_and_mention_routing() {
         bob_did,
         bob_device_id,
         &realm_id,
-        "ck.reaction.remove",
+        "ak.reaction.remove",
         json!({
             "target_ref": root_message_ref.clone(),
             "key": "+1"
@@ -1115,19 +1115,19 @@ async fn poll_content_projection_replaces_votes_and_rejects_after_close() {
         alice_did,
         alice_device_id,
         &realm_id,
-        "ck.message.create",
+        "ak.message.create",
         json!({
             "strand_id": strand_id_for_realm(&realm_id),
             "track_name": "discussion",
             "content": {
-                "kind": "ck.content.poll",
+                "kind": "ak.content.poll",
                 "body": "Which window?",
                 "poll": {
                     "kind": "disclosed",
                     "max_selections": 1,
                     "answers": [
-                        {"id": "now", "text": {"kind": "ck.content.text", "body": "Now"}},
-                        {"id": "backup", "text": {"kind": "ck.content.text", "body": "After backup"}}
+                        {"id": "now", "text": {"kind": "ak.content.text", "body": "Now"}},
+                        {"id": "backup", "text": {"kind": "ak.content.text", "body": "After backup"}}
                     ]
                 }
             }
@@ -1141,12 +1141,12 @@ async fn poll_content_projection_replaces_votes_and_rejects_after_close() {
         bob_did,
         bob_device_id,
         &realm_id,
-        "ck.message.create",
+        "ak.message.create",
         json!({
             "strand_id": strand_id_for_realm(&realm_id),
             "track_name": "discussion",
             "content": {
-                "kind": "ck.content.poll.response",
+                "kind": "ak.content.poll.response",
                 "body": "poll response",
                 "poll_response": {
                     "poll_ref": poll_ref,
@@ -1162,12 +1162,12 @@ async fn poll_content_projection_replaces_votes_and_rejects_after_close() {
         bob_did,
         bob_device_id,
         &realm_id,
-        "ck.message.create",
+        "ak.message.create",
         json!({
             "strand_id": strand_id_for_realm(&realm_id),
             "track_name": "discussion",
             "content": {
-                "kind": "ck.content.poll.response",
+                "kind": "ak.content.poll.response",
                 "body": "poll response",
                 "poll_response": {
                     "poll_ref": poll_ref,
@@ -1183,12 +1183,12 @@ async fn poll_content_projection_replaces_votes_and_rejects_after_close() {
         carol_did,
         carol_device_id,
         &realm_id,
-        "ck.message.create",
+        "ak.message.create",
         json!({
             "strand_id": strand_id_for_realm(&realm_id),
             "track_name": "discussion",
             "content": {
-                "kind": "ck.content.poll.response",
+                "kind": "ak.content.poll.response",
                 "body": "poll response",
                 "poll_response": {
                     "poll_ref": poll_ref,
@@ -1220,12 +1220,12 @@ async fn poll_content_projection_replaces_votes_and_rejects_after_close() {
         alice_did,
         alice_device_id,
         &realm_id,
-        "ck.message.create",
+        "ak.message.create",
         json!({
             "strand_id": strand_id_for_realm(&realm_id),
             "track_name": "discussion",
             "content": {
-                "kind": "ck.content.poll.close",
+                "kind": "ak.content.poll.close",
                 "body": "poll closed",
                 "poll_id": poll_ref
             }
@@ -1238,12 +1238,12 @@ async fn poll_content_projection_replaces_votes_and_rejects_after_close() {
         bob_did,
         bob_device_id,
         &realm_id,
-        "ck.message.create",
+        "ak.message.create",
         json!({
             "strand_id": strand_id_for_realm(&realm_id),
             "track_name": "discussion",
             "content": {
-                "kind": "ck.content.poll.response",
+                "kind": "ak.content.poll.response",
                 "body": "poll response",
                 "poll_response": {
                     "poll_ref": poll_ref,

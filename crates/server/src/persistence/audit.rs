@@ -143,7 +143,7 @@ mod tests {
     #[test]
     fn operation_uuid_index_ignores_protocol_operation_id() {
         assert_eq!(
-            operation_uuid_index(Some("ck.gate.account.command.register")),
+            operation_uuid_index(Some("ak.gate.account.command.register")),
             None
         );
     }
@@ -160,7 +160,7 @@ mod tests {
 
     #[test]
     fn audit_uuid_index_rejects_wrong_kind_without_panicking() {
-        let error = audit_uuid_index("request_id", "ck.gate.account.command.register", "request")
+        let error = audit_uuid_index("request_id", "ak.gate.account.command.register", "request")
             .unwrap_err();
 
         assert!(matches!(error, PersistenceError::Internal(_)));

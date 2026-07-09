@@ -268,7 +268,7 @@ fn validate_webvh_provider_describe(
     {
         return Err("webvh provider is in development_mode".to_owned());
     }
-    if !string_array_contains(body.get("supported_operations"), "ck.server.query.describe") {
+    if !string_array_contains(body.get("supported_operations"), "ak.server.query.describe") {
         return Err(
             "webvh provider describe does not advertise ck.server.query.describe".to_owned(),
         );
@@ -498,7 +498,7 @@ mod tests {
             "service_did": "did:web:starid.example",
             "trust_domain": "ak:trust_domain:example.net",
             "development_mode": false,
-            "supported_operations": ["ck.server.query.describe"]
+            "supported_operations": ["ak.server.query.describe"]
         });
         validate_webvh_provider_describe(
             &describe,
@@ -515,7 +515,7 @@ mod tests {
             "service_did": "did:web:starid.example",
             "trust_domain": "ak:trust_domain:example.net",
             "development_mode": false,
-            "supported_operations": ["ck.server.query.describe"]
+            "supported_operations": ["ak.server.query.describe"]
         });
         let err = validate_webvh_provider_describe(
             &describe,

@@ -16,7 +16,7 @@ fn parsed(kind: &str) -> ValidatedEventEnvelope {
         realm_id: "ak:realm:01904100-0000-7000-8000-a11ce0000001".to_owned(),
         device_id: "ak:device:x".to_owned(),
         kind: kind.to_owned(),
-        schema_id: "ck.schema.event.v1".to_owned(),
+        schema_id: "ak.schema.event.v1".to_owned(),
         prev_refs: Vec::new(),
         authorized_refs: Vec::new(),
         canonical_digest: format!("sha256:{}", "0".repeat(64)),
@@ -29,7 +29,7 @@ fn parsed(kind: &str) -> ValidatedEventEnvelope {
 fn inception_bootstrap_envelope() -> Value {
     json!({
         "event_id": "ak:event:01904100-0000-7000-8000-a11ce0000001",
-        "kind": "ck.device.authorize",
+        "kind": "ak.device.authorize",
         "actor_id": PRINCIPAL_DID,
         "refs": [
             {"id": "1-zEntryZeroVersionId", "role": "did_inception", "critical": true}
@@ -43,7 +43,7 @@ fn inception_bootstrap_envelope() -> Value {
 fn sealed_device_envelope() -> Value {
     json!({
         "event_id": "ak:event:01904100-0000-7000-8000-a11ce0000002",
-        "kind": "ck.device.authorize",
+        "kind": "ak.device.authorize",
         "actor_id": PRINCIPAL_DID,
         "refs": [
             {"id": "ak:event:01904100-0000-7000-8000-a11ce0000001", "role": "authorized_by"}
@@ -83,7 +83,7 @@ async fn rejects_when_self_reported_window_is_long_but_age_exceeds_24h() {
     seed_entry_zero(&state, &bootstrap.to_rfc3339()).await;
     let err = enforce_inception_key_online_window(
         &state,
-        &parsed("ck.device.authorize"),
+        &parsed("ak.device.authorize"),
         &inception_bootstrap_envelope(),
     )
     .await
@@ -102,7 +102,7 @@ async fn admits_when_inception_key_age_under_24h() {
     seed_entry_zero(&state, &bootstrap.to_rfc3339()).await;
     enforce_inception_key_online_window(
         &state,
-        &parsed("ck.device.authorize"),
+        &parsed("ak.device.authorize"),
         &inception_bootstrap_envelope(),
     )
     .await
@@ -116,7 +116,7 @@ async fn fails_closed_when_entry_zero_version_time_missing() {
     let state = make_state(true);
     let err = enforce_inception_key_online_window(
         &state,
-        &parsed("ck.device.authorize"),
+        &parsed("ak.device.authorize"),
         &inception_bootstrap_envelope(),
     )
     .await
@@ -133,7 +133,7 @@ async fn fails_closed_when_version_time_unparseable() {
     seed_entry_zero(&state, "not-a-timestamp").await;
     let err = enforce_inception_key_online_window(
         &state,
-        &parsed("ck.device.authorize"),
+        &parsed("ak.device.authorize"),
         &inception_bootstrap_envelope(),
     )
     .await
@@ -153,7 +153,7 @@ async fn sealed_device_authorize_is_not_gated() {
     seed_entry_zero(&state, &bootstrap.to_rfc3339()).await;
     enforce_inception_key_online_window(
         &state,
-        &parsed("ck.device.authorize"),
+        &parsed("ak.device.authorize"),
         &sealed_device_envelope(),
     )
     .await
@@ -167,14 +167,14 @@ async fn session_grant_signed_by_inception_key_is_gated() {
     seed_entry_zero(&state, &bootstrap.to_rfc3339()).await;
     let envelope = json!({
         "event_id": "ak:event:01904100-0000-7000-8000-a11ce0000003",
-        "kind": "ck.session.grant",
+        "kind": "ak.session.grant",
         "actor_id": PRINCIPAL_DID,
         "refs": [
             {"id": "1-zEntryZeroVersionId", "role": "did_inception", "critical": true}
         ],
         "payload": {"subject": PRINCIPAL_DID}
     });
-    let err = enforce_inception_key_online_window(&state, &parsed("ck.session.grant"), &envelope)
+    let err = enforce_inception_key_online_window(&state, &parsed("ak.session.grant"), &envelope)
         .await
         .expect_err("inception-key-signed session.grant past 24h must be rejected");
     assert_eq!(
@@ -188,7 +188,7 @@ async fn unrelated_kind_is_ignored() {
     let state = make_state(true);
     enforce_inception_key_online_window(
         &state,
-        &parsed("ck.message.create"),
+        &parsed("ak.message.create"),
         &inception_bootstrap_envelope(),
     )
     .await

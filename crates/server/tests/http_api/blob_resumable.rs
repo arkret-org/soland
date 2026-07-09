@@ -205,7 +205,7 @@ async fn resumable_chunked_upload_matches_canonical_blob_ref() {
         .expect("resumable encrypted metadata is persisted");
     assert_eq!(
         encrypted_attachment["scheme"],
-        "ck.file_transfer.encrypted_blob.v1"
+        "ak.file_transfer.encrypted_blob.v1"
     );
 
     // Content-addressing invariant (spec §2.1): the resumable path MUST
@@ -301,7 +301,7 @@ async fn describe_advertises_tus_binding_and_limits() {
             .as_array()
             .unwrap()
             .contains(&Value::String(
-                "ck.feature.blob.resumable_upload.tus.v1".to_owned()
+                "ak.feature.blob.resumable_upload.tus.v1".to_owned()
             ))
     );
     let tus_binding = describe["supported_bindings"]
@@ -316,7 +316,7 @@ async fn describe_advertises_tus_binding_and_limits() {
     );
     assert_eq!(
         tus_binding["operations"],
-        serde_json::json!(["ck.self.blob.upload.create"])
+        serde_json::json!(["ak.self.blob.upload.create"])
     );
     assert!(tus_binding["extension_profile_required"].is_null());
     assert_eq!(tus_binding["tus_version"], serde_json::json!(["1.0.0"]));

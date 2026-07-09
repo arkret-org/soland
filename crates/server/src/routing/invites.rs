@@ -36,7 +36,7 @@ use crate::wire::now;
 const HEADER_CONTENT_DIGEST: &str = "content-digest";
 const HEADER_SOURCE_SERVICE_DID: &str = "source-service-did";
 const HEADER_DESTINATION_SERVICE_DID: &str = "destination-service-did";
-const ACCOUNT_DATA_TYPE_INVITE_QUARANTINE: &str = "ck.account.invite_quarantine";
+const ACCOUNT_DATA_TYPE_INVITE_QUARANTINE: &str = "ak.account.invite_quarantine";
 const DEFAULT_LOCATOR_TTL_MINUTES: i64 = 15;
 const INVITE_QUARANTINE_TTL_DAYS: i64 = 30;
 const MAX_INVITE_QUARANTINE_ENTRIES: usize = 200;
@@ -51,11 +51,11 @@ pub(crate) fn open_router() -> Router {
 }
 
 #[endpoint(
-    operation_id = "ck.peer.invites.command.submit",
+    operation_id = "ak.peer.invites.command.submit",
     tags("peer"),
     summary = "Private Principal Server invite delivery"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.peer.invites.command.submit"))]
+#[tracing::instrument(skip_all, fields(op = "ak.peer.invites.command.submit"))]
 async fn peer_invites_submit(
     depot: &mut Depot,
     req: &mut Request,
@@ -161,7 +161,7 @@ async fn peer_invites_submit(
             })?;
     let request_hash = canonical::canonical_sha256(&body).map_err(|error| {
         super::events::peer::schema_violation(format!(
-            "ck.peer.invites.command.submit body is not canonical-hashable: {error}"
+            "ak.peer.invites.command.submit body is not canonical-hashable: {error}"
         ))
     })?;
     let session = SessionRecord {
@@ -224,11 +224,11 @@ async fn peer_invites_submit(
 }
 
 #[endpoint(
-    operation_id = "ck.open.invite_locator.query.resolve",
+    operation_id = "ak.open.invite_locator.query.resolve",
     tags("open"),
     summary = "Resolve an online invite locator token"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.open.invite_locator.query.resolve"))]
+#[tracing::instrument(skip_all, fields(op = "ak.open.invite_locator.query.resolve"))]
 async fn resolve_invite_locator(
     depot: &mut Depot,
     req: &mut Request,
@@ -468,7 +468,7 @@ async fn persist_invite_quarantine_entry(
     }
 
     let payload = json!({
-        "schema": "ck.account.invite_quarantine.v1",
+        "schema": "ak.account.invite_quarantine.v1",
         "status": "pending_review",
         "entries": entries,
         "updated_at": received_at,

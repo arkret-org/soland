@@ -132,10 +132,10 @@ impl EventStore for MemoryEventStore {
     async fn put(&self, record: CanonicalEventRecord) -> PersistenceResult<()> {
         let id = record.event_id.clone();
         let mut data = self.data.lock();
-        if record.kind == "ck.realm.create"
+        if record.kind == "ak.realm.create"
             && record.realm_id.is_some()
             && data.values().any(|existing| {
-                existing.kind == "ck.realm.create" && existing.realm_id == record.realm_id
+                existing.kind == "ak.realm.create" && existing.realm_id == record.realm_id
             })
         {
             return Err(PersistenceError::Conflict(
@@ -438,7 +438,7 @@ impl EventStore for PgEventStore {
         sql_query(
             "SELECT id, actor_id, actor_seq, realm_id, kind, schema_id, canonical_digest, canonical_bytes, envelope, received_at \
              FROM canonical_events \
-             WHERE kind IN ('ck.member.state', 'ck.circle.member.state') \
+             WHERE kind IN ('ak.member.state', 'ck.circle.member.state') \
                 OR (envelope #> '{payload,sync_endpoints}') IS NOT NULL \
                 OR (envelope #> '{payload,object,sync_endpoints}') IS NOT NULL \
                 OR (envelope #> '{payload,patch,sync_endpoints}') IS NOT NULL \

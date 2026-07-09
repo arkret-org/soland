@@ -76,7 +76,7 @@ fn encrypted_realm_strand_content_detector_matches_content_only_boundary() {
         json!({
             "target_ref": strand_id,
             "patch": {
-                "content": {"$op": "set", "value": {"kind": "ck.content.text", "body": "private description"}}
+                "content": {"$op": "set", "value": {"kind": "ak.content.text", "body": "private description"}}
             }
         }),
     );

@@ -43,11 +43,11 @@ struct AccountDataTypeSpec {
 
 const REGISTERED_ACCOUNT_DATA_TYPES: &[AccountDataTypeSpec] = &[
     AccountDataTypeSpec {
-        data_type: "ck.agent.draft.v1",
+        data_type: "ak.agent.draft.v1",
         controller_private: true,
     },
     AccountDataTypeSpec {
-        data_type: "ck.agent.sidecar_projection.v1",
+        data_type: "ak.agent.sidecar_projection.v1",
         controller_private: true,
     },
     AccountDataTypeSpec {
@@ -79,23 +79,23 @@ const REGISTERED_ACCOUNT_DATA_TYPES: &[AccountDataTypeSpec] = &[
         controller_private: true,
     },
     AccountDataTypeSpec {
-        data_type: "ck.account.blocklist",
+        data_type: "ak.account.blocklist",
         controller_private: true,
     },
     AccountDataTypeSpec {
-        data_type: "ck.dnd_schedule",
+        data_type: "ak.dnd_schedule",
         controller_private: true,
     },
     AccountDataTypeSpec {
-        data_type: "ck.presence.preference",
+        data_type: "ak.presence.preference",
         controller_private: true,
     },
     AccountDataTypeSpec {
-        data_type: "ck.presence.visibility",
+        data_type: "ak.presence.visibility",
         controller_private: true,
     },
     AccountDataTypeSpec {
-        data_type: "ck.push_rules",
+        data_type: "ak.push_rules",
         controller_private: true,
     },
 ];
@@ -162,7 +162,7 @@ fn entry_from(record: AccountDataRecord) -> AccountDataEntry {
 }
 
 fn account_data_update_type(data_type: &str) -> &'static str {
-    if data_type == "ck.account.blocklist" {
+    if data_type == "ak.account.blocklist" {
         BLOCKLIST_UPDATE_TYPE
     } else {
         ACCOUNT_DATA_UPDATE_TYPE
@@ -181,12 +181,12 @@ async fn session_actor_is_agent_runtime(
 }
 
 #[endpoint(
-    operation_id = "ck.self.account_data.resource.replace",
+    operation_id = "ak.self.account_data.resource.replace",
     tags("account_data"),
     summary = "Upsert an actor-private account_data entry",
     status_codes(200, 201, 400, 401, 413, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.account_data.resource.replace"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.account_data.resource.replace"))]
 async fn put_account_data(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -278,11 +278,11 @@ async fn put_account_data(
 }
 
 #[endpoint(
-    operation_id = "ck.self.account_data.resource.get",
+    operation_id = "ak.self.account_data.resource.get",
     tags("account_data"),
     summary = "Fetch a single account_data entry by data_type"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.account_data.resource.get"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.account_data.resource.get"))]
 async fn get_account_data(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -308,11 +308,11 @@ async fn get_account_data(
 }
 
 #[endpoint(
-    operation_id = "ck.self.account_data.query.list",
+    operation_id = "ak.self.account_data.query.list",
     tags("account_data"),
     summary = "List every account_data entry owned by the authenticated actor"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.account_data.query.list"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.account_data.query.list"))]
 async fn list_account_data(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -333,11 +333,11 @@ async fn list_account_data(
 }
 
 #[endpoint(
-    operation_id = "ck.self.account_data.resource.delete",
+    operation_id = "ak.self.account_data.resource.delete",
     tags("account_data"),
     summary = "Delete an account_data entry"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.account_data.resource.delete"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.account_data.resource.delete"))]
 async fn delete_account_data(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -402,7 +402,7 @@ mod tests {
             "aad_visibility_event_id": "hidden",
             "aad": {
                 "realm_id": "ak:realm:0196419b-0000-7000-8000-000000000000",
-                "event_kind": "ck.account_data.set"
+                "event_kind": "ak.account_data.set"
             },
             "key_ref": {
                 "algorithm": "MLS",
@@ -417,18 +417,18 @@ mod tests {
     fn private_account_data_key_patterns_are_validated() {
         assert!(
             validate_registered_account_data_key(
-                "ck.scheduled_send.v1:ak:message:01904100-0000-7000-8000-000000000001"
+                "ak.scheduled_send.v1:ak:message:01904100-0000-7000-8000-000000000001"
             )
             .is_ok()
         );
         assert!(
             validate_registered_account_data_key(
-                "ck.file_transfer.v1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+                "ak.file_transfer.v1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
             )
             .is_ok()
         );
         let err = validate_registered_account_data_key(
-            "ck.draft.v1:message:ak:message:01904100-0000-7000-8000-000000000001:main",
+            "ak.draft.v1:message:ak:message:01904100-0000-7000-8000-000000000001:main",
         )
         .unwrap_err();
         assert!(err.to_string().contains("registered private key pattern"));
@@ -436,7 +436,7 @@ mod tests {
 
     #[test]
     fn private_account_data_requires_encrypted_content() {
-        let key = "ck.saved.v1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB";
+        let key = "ak.saved.v1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB";
         assert!(
             validate_private_account_data_content(
                 key,
@@ -446,38 +446,38 @@ mod tests {
         );
         assert!(
             validate_private_account_data_content(
-                "ck.account.blocklist",
+                "ak.account.blocklist",
                 &json!({"encrypted_payload": encrypted_envelope()}),
             )
             .is_ok()
         );
         assert!(
             validate_private_account_data_content(
-                "ck.push_rules",
+                "ak.push_rules",
                 &json!({"encrypted_payload": encrypted_envelope()}),
             )
             .is_ok()
         );
         assert!(
             validate_private_account_data_content(
-                "ck.presence.preference",
+                "ak.presence.preference",
                 &json!({"encrypted_payload": encrypted_envelope()}),
             )
             .is_ok()
         );
         assert!(validate_private_account_data_content(key, &json!({"tombstone": true})).is_ok());
         let err =
-            validate_private_account_data_content("ck.dnd_schedule", &json!({"enabled": true}))
+            validate_private_account_data_content("ak.dnd_schedule", &json!({"enabled": true}))
                 .unwrap_err();
         assert!(err.to_string().contains("encrypted"));
         let err = validate_private_account_data_content(
-            "ck.presence.preference",
+            "ak.presence.preference",
             &json!({"manual_state": "dnd", "status_message": "In a meeting"}),
         )
         .unwrap_err();
         assert!(err.to_string().contains("encrypted"));
         let err = validate_private_account_data_content(
-            "ck.account.blocklist",
+            "ak.account.blocklist",
             &json!({"entries": [{"target": "did:web:bob.example"}]}),
         )
         .unwrap_err();
@@ -489,7 +489,7 @@ mod tests {
         .unwrap_err();
         assert!(err.to_string().contains("plaintext"));
 
-        let transfer_key = "ck.file_transfer.v1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+        let transfer_key = "ak.file_transfer.v1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
         let err = validate_private_account_data_content(
             transfer_key,
             &json!({"filename": "private.pdf", "encrypted_payload": encrypted_envelope()}),

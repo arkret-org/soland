@@ -3,13 +3,13 @@ use super::*;
 #[test]
 fn ephemeral_kind_rejected_at_submit_entry() {
     for kind in [
-        "ck.call.signal",
-        "ck.presence",
-        "ck.typing",
-        "ck.receipt.read",
-        "ck.key.verification.start",
-        "ck.key.verification.accept",
-        "ck.key.verification.mac",
+        "ak.call.signal",
+        "ak.presence",
+        "ak.typing",
+        "ak.receipt.read",
+        "ak.key.verification.start",
+        "ak.key.verification.accept",
+        "ak.key.verification.mac",
     ] {
         let result = events_submit_pre_admit_check(kind);
         assert!(
@@ -22,34 +22,34 @@ fn ephemeral_kind_rejected_at_submit_entry() {
 #[test]
 fn receipt_object_kind_rejected_at_submit_entry() {
     assert!(matches!(
-        events_submit_pre_admit_check("ck.event_batch_receipt"),
+        events_submit_pre_admit_check("ak.event_batch_receipt"),
         Some((ErrorCode::SchemaViolation, _))
     ));
 }
 
 #[test]
 fn durable_kind_passes_submit_entry() {
-    assert!(events_submit_pre_admit_check("ck.message.create").is_none());
-    assert!(events_submit_pre_admit_check("ck.realm.create").is_none());
+    assert!(events_submit_pre_admit_check("ak.message.create").is_none());
+    assert!(events_submit_pre_admit_check("ak.realm.create").is_none());
 }
 
 #[test]
 fn terminal_realm_blocks_non_audit_kind() {
-    let blocked = terminal_realm_check(true, "ck.message.create");
+    let blocked = terminal_realm_check(true, "ak.message.create");
     assert!(matches!(blocked, Some((ErrorCode::FailedPrecondition, _))));
-    let audit_ok = terminal_realm_check(true, "ck.audit.accessed");
+    let audit_ok = terminal_realm_check(true, "ak.audit.accessed");
     assert!(audit_ok.is_none());
-    let live_ok = terminal_realm_check(false, "ck.message.create");
+    let live_ok = terminal_realm_check(false, "ak.message.create");
     assert!(live_ok.is_none());
 }
 
 #[test]
 fn frozen_realm_blocks_ordinary_write_but_allows_lifecycle_escape() {
-    assert!(frozen_realm_check(true, "ck.message.create").is_some());
+    assert!(frozen_realm_check(true, "ak.message.create").is_some());
     assert!(frozen_realm_check(true, arkret_sdk::events::kinds::REALM_FREEZE).is_none());
     assert!(frozen_realm_check(true, arkret_sdk::events::kinds::REALM_DESTROY).is_none());
-    assert!(frozen_realm_check(true, "ck.audit.accessed").is_none());
-    assert!(frozen_realm_check(false, "ck.message.create").is_none());
+    assert!(frozen_realm_check(true, "ak.audit.accessed").is_none());
+    assert!(frozen_realm_check(false, "ak.message.create").is_none());
 }
 
 #[test]
@@ -105,10 +105,10 @@ fn realm_policy_components_relaxed_window_ceiling() {
 
 #[test]
 fn realm_policy_components_e2ee_relaxed_compliance_mutex() {
-    let payload = json!({"e2ee_relaxed": {"profile": "ck.profile.e2ee_relaxed.v1"}});
+    let payload = json!({"e2ee_relaxed": {"profile": "ak.profile.e2ee_relaxed.v1"}});
     let err = realm_policy_components_check(
         &payload,
-        &["ck.profile.attested_audit.e2ee.v1".to_owned()],
+        &["ak.profile.attested_audit.e2ee.v1".to_owned()],
         false,
         false,
         None,

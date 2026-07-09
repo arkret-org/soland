@@ -625,7 +625,7 @@ pub fn validate_device_authorize_binding(
 ) -> Result<(), &'static str> {
     let payload_shape: arkret_sdk::DeviceAuthorizePayload =
         serde_json::from_value(device_authorize_wire_payload(payload))
-            .map_err(|_| "ck.device.authorize payload violates SDK artifact schema")?;
+            .map_err(|_| "ak.device.authorize payload violates SDK artifact schema")?;
     payload_shape.validate_authorization_binding_one_of()?;
     // device-lifecycle.md §5.2: the payload MUST carry the canonical
     // (bytewise-sorted, deduplicated) algorithms array that entered the

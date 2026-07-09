@@ -1195,7 +1195,7 @@ impl ProjectionState {
 
         ProjectionEffect::RealmLifecycle {
             realm_id,
-            action: kind.strip_prefix("ck.realm.").unwrap_or(kind).to_owned(),
+            action: kind.strip_prefix("ak.realm.").unwrap_or(kind).to_owned(),
         }
     }
 

@@ -97,22 +97,22 @@ const DIRECTORY_RESOURCE_TYPES: &[DirectoryResourceKind] = &[
     DirectoryResourceKind::Organization,
     DirectoryResourceKind::Actor,
 ];
-const DIRECTORY_DISCOVERY_PROFILES: &[&str] = &["ck.profile.directory_service.v1"];
+const DIRECTORY_DISCOVERY_PROFILES: &[&str] = &["ak.profile.directory_service.v1"];
 const DIRECTORY_SUPPORTED_OPERATIONS: &[&str] = &[
-    "ck.find.directory.query.describe",
-    "ck.find.directory.query.search_realms",
-    "ck.find.directory.query.resolve_realm",
-    "ck.find.directory.query.resolve_target",
-    "ck.find.directory.query.search_organizations",
-    "ck.find.directory.query.resolve_organization",
-    "ck.find.directory.query.search_actors",
-    "ck.find.directory.query.search_users",
-    "ck.find.directory.query.resolve_handle",
-    "ck.find.directory.query.resolve_agent_selector",
-    "ck.find.directory.query.list_handles_for_subject",
-    "ck.find.directory.command.announce",
-    "ck.find.directory.command.withdraw",
-    "ck.find.directory.push.command.register",
+    "ak.find.directory.query.describe",
+    "ak.find.directory.query.search_realms",
+    "ak.find.directory.query.resolve_realm",
+    "ak.find.directory.query.resolve_target",
+    "ak.find.directory.query.search_organizations",
+    "ak.find.directory.query.resolve_organization",
+    "ak.find.directory.query.search_actors",
+    "ak.find.directory.query.search_users",
+    "ak.find.directory.query.resolve_handle",
+    "ak.find.directory.query.resolve_agent_selector",
+    "ak.find.directory.query.list_handles_for_subject",
+    "ak.find.directory.command.announce",
+    "ak.find.directory.command.withdraw",
+    "ak.find.directory.push.command.register",
 ];
 
 pub(crate) fn protocol_router() -> Router {
@@ -248,7 +248,7 @@ mod tests {
         assert!(DIRECTORY_RESOURCE_TYPES.contains(&DirectoryResourceKind::Realm));
         assert!(DIRECTORY_RESOURCE_TYPES.contains(&DirectoryResourceKind::Organization));
         assert!(DIRECTORY_RESOURCE_TYPES.contains(&DirectoryResourceKind::Actor));
-        assert!(!DIRECTORY_DISCOVERY_PROFILES.contains(&"ck.profile.search.client_index.v1"));
-        assert!(!DIRECTORY_DISCOVERY_PROFILES.contains(&"ck.profile.search.blind_index.v1"));
+        assert!(!DIRECTORY_DISCOVERY_PROFILES.contains(&"ak.profile.search.client_index.v1"));
+        assert!(!DIRECTORY_DISCOVERY_PROFILES.contains(&"ak.profile.search.blind_index.v1"));
     }
 }

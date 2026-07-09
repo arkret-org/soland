@@ -25,12 +25,12 @@ pub(crate) use direct::{
 };
 
 #[endpoint(
-    operation_id = "ck.self.contact.command.request",
+    operation_id = "ak.self.contact.command.request",
     tags("contacts"),
     summary = "Open a pending contact relationship",
     status_codes(200, 201, 400, 401, 404, 409, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.contact.command.request"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.contact.command.request"))]
 pub(crate) async fn contact_request(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -191,7 +191,7 @@ pub(crate) async fn contact_request(
     append_contact_fact_projection_event(
         state,
         &request_event_ref,
-        "ck.contact.requested",
+        "ak.contact.requested",
         &contact.requester,
         request_fact_payload.clone(),
         contact.created_at,
@@ -200,7 +200,7 @@ pub(crate) async fn contact_request(
     append_audit_log(
         state,
         Some(&contact.requester),
-        "ck.contact.requested",
+        "ak.contact.requested",
         request_fact_payload,
         "accepted",
     )
@@ -229,7 +229,7 @@ pub(crate) async fn contact_request(
             contact_introduction_evidence_digest(&introduction_evidence)?;
         super::super::contact_federation::federate_contact_fact(
             state,
-            "ck.contact.requested",
+            "ak.contact.requested",
             &contact.requester,
             &contact.target,
             recipient_service_did,
@@ -384,11 +384,11 @@ async fn append_contact_fact_projection_event(
 }
 
 #[endpoint(
-    operation_id = "ck.self.contact.command.respond",
+    operation_id = "ak.self.contact.command.respond",
     tags("contacts"),
     summary = "Accept or reject a pending contact request"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.contact.command.respond"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.contact.command.respond"))]
 pub(crate) async fn contact_respond(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -511,9 +511,9 @@ pub(crate) async fn contact_respond(
         .await?;
     }
     let response_fact_kind = if contact.status == "accepted" {
-        "ck.contact.accepted"
+        "ak.contact.accepted"
     } else {
-        "ck.contact.rejected"
+        "ak.contact.rejected"
     };
     let response_fact_payload = json!({
         "request_id": request_event_ref.as_str(),
@@ -559,12 +559,12 @@ pub(crate) async fn contact_respond(
 }
 
 #[endpoint(
-    operation_id = "ck.self.contact.command.tombstone",
+    operation_id = "ak.self.contact.command.tombstone",
     tags("contacts"),
     summary = "Tombstone a contact and revoke contact-managed consent",
     status_codes(200, 400, 401, 404, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.contact.command.tombstone"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.contact.command.tombstone"))]
 pub(crate) async fn contact_tombstone(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -708,7 +708,7 @@ pub(crate) async fn contact_tombstone(
     append_contact_fact_projection_event(
         state,
         &tombstone_event_ref,
-        "ck.contact.tombstoned",
+        "ak.contact.tombstoned",
         &holder,
         tombstone_fact_payload.clone(),
         now,
@@ -717,7 +717,7 @@ pub(crate) async fn contact_tombstone(
     append_audit_log(
         state,
         Some(&holder),
-        "ck.contact.tombstoned",
+        "ak.contact.tombstoned",
         tombstone_fact_payload.clone(),
         "accepted",
     )
@@ -739,7 +739,7 @@ pub(crate) async fn contact_tombstone(
     {
         super::super::contact_federation::federate_contact_fact(
             state,
-            "ck.contact.tombstoned",
+            "ak.contact.tombstoned",
             &holder,
             &peer,
             &peer_service_did,
@@ -788,12 +788,12 @@ fn blocked_invite_policy_update(
 }
 
 #[endpoint(
-    operation_id = "ck.self.invite_receive_policy.resource.get",
+    operation_id = "ak.self.invite_receive_policy.resource.get",
     tags("contacts"),
     summary = "Get the authenticated subject's invite-receive policy",
     status_codes(200, 401, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.invite_receive_policy.resource.get"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.invite_receive_policy.resource.get"))]
 pub(crate) async fn get_invite_receive_policy(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -815,14 +815,14 @@ pub(crate) async fn get_invite_receive_policy(
 }
 
 #[endpoint(
-    operation_id = "ck.self.invite_receive_policy.resource.replace",
+    operation_id = "ak.self.invite_receive_policy.resource.replace",
     tags("contacts"),
     summary = "Replace the authenticated subject's invite-receive policy",
     status_codes(200, 400, 401, 500)
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "ck.self.invite_receive_policy.resource.replace")
+    fields(op = "ak.self.invite_receive_policy.resource.replace")
 )]
 pub(crate) async fn set_invite_receive_policy(
     aa: AuthArgs,
@@ -861,11 +861,11 @@ pub(crate) async fn set_invite_receive_policy(
 }
 
 #[endpoint(
-    operation_id = "ck.self.contact.query.list",
+    operation_id = "ak.self.contact.query.list",
     tags("contacts"),
     summary = "List contacts visible to the authenticated actor"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.contact.query.list"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.contact.query.list"))]
 pub(crate) async fn list_contacts(
     aa: AuthArgs,
     depot: &mut Depot,

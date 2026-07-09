@@ -24,7 +24,7 @@ async fn projection_space_containers_endpoint_reports_lifecycle_state() {
     let create_event = signed_space_event(
         "ak:event:01904100-0000-7000-8000-f10ec0000001",
         1,
-        "ck.space.create",
+        "ak.space.create",
         serde_json::json!({
             "object": {
                 "id": container_space_id,
@@ -52,7 +52,7 @@ async fn projection_space_containers_endpoint_reports_lifecycle_state() {
     let archive_event = signed_space_event(
         "ak:event:01904100-0000-7000-8000-f10ec0000002",
         2,
-        "ck.space.archive",
+        "ak.space.archive",
         serde_json::json!({ "space_id": container_space_id }),
         vec!["ak:event:01904100-0000-7000-8000-f10ec0000001"],
     );
@@ -92,7 +92,7 @@ async fn projection_space_containers_endpoint_reports_lifecycle_state() {
     let restore_event = signed_space_event(
         "ak:event:01904100-0000-7000-8000-f10ec0000003",
         3,
-        "ck.space.restore",
+        "ak.space.restore",
         serde_json::json!({ "space_id": container_space_id }),
         vec!["ak:event:01904100-0000-7000-8000-f10ec0000002"],
     );
@@ -139,7 +139,7 @@ async fn projection_strands_endpoint_reports_lifecycle_state() {
     let create_event = signed_strand_event(
         "ak:event:01904100-0000-7000-8000-f20ec0000001",
         1,
-        "ck.strand.create",
+        "ak.strand.create",
         serde_json::json!({
             "object": {
                 "id": strand_id,
@@ -170,7 +170,7 @@ async fn projection_strands_endpoint_reports_lifecycle_state() {
     let archive_event = signed_strand_event(
         "ak:event:01904100-0000-7000-8000-f20ec0000002",
         2,
-        "ck.strand.archive",
+        "ak.strand.archive",
         serde_json::json!({ "strand_id": strand_id }),
         vec!["ak:event:01904100-0000-7000-8000-f20ec0000001"],
     );
@@ -295,7 +295,7 @@ async fn projection_morphs_endpoint_reports_lifecycle_state() {
     let create_event = signed_morph_event(
         "ak:event:01904100-0000-7000-8000-d20ec0000001",
         1,
-        "ck.morph.create",
+        "ak.morph.create",
         serde_json::json!({
             "object": {
                 "id": morph_id,
@@ -340,7 +340,7 @@ async fn projection_morphs_endpoint_reports_lifecycle_state() {
     let archive_event = signed_morph_event(
         "ak:event:01904100-0000-7000-8000-d20ec0000002",
         2,
-        "ck.morph.archive",
+        "ak.morph.archive",
         serde_json::json!({ "target_ref": morph_id }),
         vec!["ak:event:01904100-0000-7000-8000-d20ec0000001"],
     );
@@ -507,14 +507,14 @@ async fn projection_document_endpoint_reports_body_versions_relations_and_range_
     let create_event = signed_morph_event(
         "ak:event:01904100-0000-7000-8000-d21ec0000001",
         1,
-        "ck.morph.create",
+        "ak.morph.create",
         serde_json::json!({
             "object": {
                 "id": morph_id,
                 "realm_id": realm_id,
                 "morph_type": "document",
                 "metadata": { "title": "Postmortem draft" },
-                "schema_refs": ["ck.schema.morph.v1"],
+                "schema_refs": ["ak.schema.morph.v1"],
                 "facets": {
                     "documentable": {}
                 },
@@ -541,7 +541,7 @@ async fn projection_document_endpoint_reports_body_versions_relations_and_range_
     let incident_event = signed_strand_event(
         "ak:event:01904100-0000-7000-8000-d21ec0000004",
         2,
-        "ck.strand.create",
+        "ak.strand.create",
         serde_json::json!({
             "object": {
                 "id": incident_ref,
@@ -598,7 +598,7 @@ async fn projection_document_endpoint_reports_body_versions_relations_and_range_
         realm_id,
         morph_id,
         serde_json::json!({
-            "kind": "ck.content.text",
+            "kind": "ak.content.text",
             "morph_id": morph_id,
             "anchor_range": {
                 "target_ref": morph_id,
@@ -625,7 +625,7 @@ async fn projection_document_endpoint_reports_body_versions_relations_and_range_
     let update_event = signed_morph_event(
         "ak:event:01904100-0000-7000-8000-d21ec0000003",
         20_000,
-        "ck.morph.update",
+        "ak.morph.update",
         serde_json::json!({
             "target_ref": morph_id,
             "patch": {
@@ -666,7 +666,7 @@ async fn projection_document_endpoint_reports_body_versions_relations_and_range_
     assert_eq!(body["document"]["morph_type"], "document");
     assert_eq!(body["document"]["body"], updated_body);
     assert_eq!(body["document"]["fields"]["document"], updated_body);
-    assert_eq!(body["document"]["schema_refs"][0], "ck.schema.morph.v1");
+    assert_eq!(body["document"]["schema_refs"][0], "ak.schema.morph.v1");
     assert_eq!(body["document"]["facets"][0], "documentable");
 
     let versions = body["versions"].as_array().expect("versions array");
@@ -893,7 +893,7 @@ async fn projection_endpoints_hide_terminal_state_by_default() {
     let create_space = signed_space_event(
         "ak:event:01904100-0000-7000-8000-c15d70010001",
         1,
-        "ck.space.create",
+        "ak.space.create",
         serde_json::json!({
             "object": {
                 "id": container_space_id,
@@ -918,7 +918,7 @@ async fn projection_endpoints_hide_terminal_state_by_default() {
     let tombstone_space = signed_space_event(
         "ak:event:01904100-0000-7000-8000-c15d70010002",
         2,
-        "ck.space.tombstone",
+        "ak.space.tombstone",
         serde_json::json!({ "space_id": container_space_id }),
         vec!["ak:event:01904100-0000-7000-8000-c15d70010001"],
     );
@@ -973,7 +973,7 @@ async fn projection_endpoints_hide_terminal_state_by_default() {
     let create_strand = signed_strand_event(
         "ak:event:01904100-0000-7000-8000-c15d70020001",
         3,
-        "ck.strand.create",
+        "ak.strand.create",
         serde_json::json!({
             "object": {
                 "id": strand_id,
@@ -1063,7 +1063,7 @@ async fn projection_persistence_write_through_mirrors_lifecycle_events() {
     let create_space = signed_space_event(
         "ak:event:01904100-0000-7000-8000-15a15ae00001",
         1,
-        "ck.space.create",
+        "ak.space.create",
         serde_json::json!({
             "object": {
                 "id": container_space_id,
@@ -1088,7 +1088,7 @@ async fn projection_persistence_write_through_mirrors_lifecycle_events() {
     let archive_space = signed_space_event(
         "ak:event:01904100-0000-7000-8000-15a15ae00002",
         2,
-        "ck.space.archive",
+        "ak.space.archive",
         serde_json::json!({ "space_id": container_space_id }),
         vec!["ak:event:01904100-0000-7000-8000-15a15ae00001"],
     );
@@ -1141,7 +1141,7 @@ async fn projection_persistence_write_through_mirrors_lifecycle_events() {
     let create_strand = signed_strand_event(
         "ak:event:01904100-0000-7000-8000-15a15af00001",
         3,
-        "ck.strand.create",
+        "ak.strand.create",
         serde_json::json!({
             "object": {
                 "id": strand_id,
@@ -1198,14 +1198,14 @@ async fn projection_persistence_write_through_mirrors_lifecycle_events() {
         .expect("strand projection MUST still exist after redaction");
     assert_eq!(
         strand_row.state, "redacted",
-        "ck.redaction with object_ref MUST flip strand projection in persistence too"
+        "ak.redaction with object_ref MUST flip strand projection in persistence too"
     );
 
     // Morph: create + archive → persistence has state=archived.
     let create_morph = signed_morph_event(
         "ak:event:01904100-0000-7000-8000-15a15a000004",
         5,
-        "ck.morph.create",
+        "ak.morph.create",
         serde_json::json!({
             "object": {
                 "id": morph_id,
@@ -1230,7 +1230,7 @@ async fn projection_persistence_write_through_mirrors_lifecycle_events() {
     let archive_morph = signed_morph_event(
         "ak:event:01904100-0000-7000-8000-15a15a000005",
         6,
-        "ck.morph.archive",
+        "ak.morph.archive",
         serde_json::json!({ "target_ref": morph_id }),
         vec!["ak:event:01904100-0000-7000-8000-15a15a000004"],
     );

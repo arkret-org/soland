@@ -107,7 +107,7 @@ pub(super) fn validate_audit_accessed_payload(
             event_validation_error(
                 StatusCode::BAD_REQUEST,
                 "schema_violation",
-                "ck.audit.accessed payload must be an object",
+                "ak.audit.accessed payload must be an object",
             )
         })?;
     const ALLOWED: &[&str] = &[
@@ -128,7 +128,7 @@ pub(super) fn validate_audit_accessed_payload(
         return Err(event_validation_error(
             StatusCode::BAD_REQUEST,
             "schema_violation",
-            "ck.audit.accessed payload contains an unknown field",
+            "ak.audit.accessed payload contains an unknown field",
         ));
     }
     let access_kind = required_payload_string(payload, "access_kind")?;
@@ -144,7 +144,7 @@ pub(super) fn validate_audit_accessed_payload(
         return Err(event_validation_error(
             StatusCode::BAD_REQUEST,
             "schema_violation",
-            "ck.audit.accessed access_kind is invalid",
+            "ak.audit.accessed access_kind is invalid",
         ));
     }
     let writer_did = required_payload_string(payload, "writer_did")?;
@@ -152,14 +152,14 @@ pub(super) fn validate_audit_accessed_payload(
         event_validation_error(
             StatusCode::BAD_REQUEST,
             "schema_violation",
-            "ck.audit.accessed writer_did must be a DID",
+            "ak.audit.accessed writer_did must be a DID",
         )
     })?;
     if object.get("actor_id").and_then(Value::as_str) != Some(writer_did.as_str()) {
         return Err(event_validation_error(
             StatusCode::FORBIDDEN,
             "actor_session_mismatch",
-            "ck.audit.accessed writer_did must match actor_id",
+            "ak.audit.accessed writer_did must match actor_id",
         ));
     }
     let target_ref = required_payload_string(payload, "target_ref")?;
@@ -167,7 +167,7 @@ pub(super) fn validate_audit_accessed_payload(
         return Err(event_validation_error(
             StatusCode::BAD_REQUEST,
             "schema_violation",
-            "ck.audit.accessed target_ref must be a typed object ref",
+            "ak.audit.accessed target_ref must be a typed object ref",
         ));
     }
     if required_payload_string(payload, "purpose")?
@@ -177,7 +177,7 @@ pub(super) fn validate_audit_accessed_payload(
         return Err(event_validation_error(
             StatusCode::BAD_REQUEST,
             "schema_violation",
-            "ck.audit.accessed purpose must be non-empty",
+            "ak.audit.accessed purpose must be non-empty",
         ));
     }
     let accessed_at = required_payload_string(payload, "accessed_at")?;
@@ -185,7 +185,7 @@ pub(super) fn validate_audit_accessed_payload(
         event_validation_error(
             StatusCode::BAD_REQUEST,
             "schema_violation",
-            "ck.audit.accessed accessed_at must be RFC3339",
+            "ak.audit.accessed accessed_at must be RFC3339",
         )
     })?;
     match access_kind.as_str() {
@@ -199,7 +199,7 @@ pub(super) fn validate_audit_accessed_payload(
                     return Err(event_validation_error(
                         StatusCode::BAD_REQUEST,
                         "schema_violation",
-                        "ck.audit.accessed paired event fields are invalid",
+                        "ak.audit.accessed paired event fields are invalid",
                     ));
                 }
             }
@@ -210,7 +210,7 @@ pub(super) fn validate_audit_accessed_payload(
                     return Err(event_validation_error(
                         StatusCode::BAD_REQUEST,
                         "schema_violation",
-                        "ck.audit.accessed cell heads must be null or hash digest",
+                        "ak.audit.accessed cell heads must be null or hash digest",
                     ));
                 }
             }
@@ -231,7 +231,7 @@ fn validate_watch_audit_payload_fields(
         event_validation_error(
             StatusCode::BAD_REQUEST,
             "schema_violation",
-            "ck.audit.accessed target_actor_id must be a DID",
+            "ak.audit.accessed target_actor_id must be a DID",
         )
     })?;
     let target_cell_id = required_payload_string(payload, "target_cell_id")?;
@@ -239,7 +239,7 @@ fn validate_watch_audit_payload_fields(
         return Err(event_validation_error(
             StatusCode::BAD_REQUEST,
             "schema_violation",
-            "ck.audit.accessed target_cell_id must use ak:cell:",
+            "ak.audit.accessed target_cell_id must use ak:cell:",
         ));
     }
     Ok(())
@@ -257,7 +257,7 @@ fn required_payload_string(
             event_validation_error(
                 StatusCode::BAD_REQUEST,
                 "schema_violation",
-                format!("ck.audit.accessed requires {field}"),
+                format!("ak.audit.accessed requires {field}"),
             )
         })
 }

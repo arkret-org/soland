@@ -53,21 +53,21 @@ fn principal_control_realm_binding_enforced() {
     assert!(
         validate_principal_control_realm_binding(&mk(
             &correct,
-            "ck.device.authorize",
+            "ak.device.authorize",
             payload.clone()
         ))
         .is_ok()
     );
     let wrong = "ak:realm:01904100-0000-7000-8000-0000000000ff";
     assert_eq!(
-        validate_principal_control_realm_binding(&mk(wrong, "ck.device.authorize", payload))
+        validate_principal_control_realm_binding(&mk(wrong, "ak.device.authorize", payload))
             .unwrap_err(),
         "principal_control_realm_mismatch"
     );
     assert!(
         validate_principal_control_realm_binding(&mk(
             wrong,
-            "ck.message.create",
+            "ak.message.create",
             serde_json::json!({})
         ))
         .is_ok()

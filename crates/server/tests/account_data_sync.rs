@@ -139,12 +139,12 @@ async fn send_plaintext_message(
     let payload = json!({
         "strand_id": strand_id_for_realm(realm_id),
         "track_name": "discussion",
-        "content": {"kind": "ck.content.text", "body": body}
+        "content": {"kind": "ak.content.text", "body": body}
     });
     let mut event = json!({
         "event_id": arkret_sdk::new_prefixed_uuid7("ak:event:"),
-        "kind": "ck.message.create",
-        "schema_id": "ck.schema.message.v1",
+        "kind": "ak.message.create",
+        "schema_id": "ak.schema.message.v1",
         "actor_id": actor,
         "actor_seq": TEST_EVENT_SEQ.fetch_add(1, Ordering::Relaxed),
         "realm_id": realm_id,
@@ -196,7 +196,7 @@ fn signed_actor_private_event_envelope(
     let mut event = json!({
         "event_id": arkret_sdk::new_prefixed_uuid7("ak:event:"),
         "kind": kind,
-        "schema_id": "ck.schema.event.v1",
+        "schema_id": "ak.schema.event.v1",
         "actor_id": actor,
         "actor_seq": TEST_EVENT_SEQ.fetch_add(1, Ordering::Relaxed),
         "realm_id": realm_id,
@@ -256,7 +256,7 @@ fn read_cursor_payload(
 ) -> Value {
     json!({
         "id": arkret_sdk::new_prefixed_uuid7("ak:read_cursor:"),
-        "schema": "ck.schema.read_cursor.v1",
+        "schema": "ak.schema.read_cursor.v1",
         "actor_id": actor,
         "device_id": device_id,
         "realm_id": realm_id,
@@ -316,7 +316,7 @@ fn encrypted_account_data_marker(hex_pair: &str, ciphertext: &str) -> Value {
     json!({
         "client_side_conformance": {
             "encrypted_account_data": true,
-            "profile_id": "ck.profile.e2ee_client.v1",
+            "profile_id": "ak.profile.e2ee_client.v1",
             "payload_digest": format!("sha256:{}", hex_pair.repeat(32))
         },
         "content_type": "application/vnd.arkret.account-data+json",
@@ -382,9 +382,9 @@ async fn blocklist_account_data_requires_encrypted_carrier_and_fans_out_opaque()
         "did:web:alice.example",
         "ak:device:01904100-0000-7000-8000-a11ce0000001",
         &realm_id,
-        "ck.account_data.set",
+        "ak.account_data.set",
         json!({
-            "key": "ck.account.blocklist",
+            "key": "ak.account.blocklist",
             "owner": "did:web:alice.example",
             "body": plaintext_blocklist,
             "updated_at": "2026-05-21T00:00:00Z",
@@ -403,9 +403,9 @@ async fn blocklist_account_data_requires_encrypted_carrier_and_fans_out_opaque()
         "did:web:alice.example",
         "ak:device:01904100-0000-7000-8000-a11ce0000001",
         &realm_id,
-        "ck.account_data.set",
+        "ak.account_data.set",
         json!({
-            "key": "ck.account.blocklist",
+            "key": "ak.account.blocklist",
             "owner": "did:web:alice.example",
             "body": encrypted_blocklist.clone(),
             "updated_at": "2026-05-21T00:00:00Z",
@@ -425,7 +425,7 @@ async fn blocklist_account_data_requires_encrypted_carrier_and_fans_out_opaque()
     assert!(
         stored_account_data
             .iter()
-            .any(|record| record.data_type == "ck.account.blocklist"),
+            .any(|record| record.data_type == "ak.account.blocklist"),
         "account_data projection must persist encrypted blocklist after accepted event: {stored_account_data:?}"
     );
 
@@ -435,7 +435,7 @@ async fn blocklist_account_data_requires_encrypted_carrier_and_fans_out_opaque()
         "catchup=true&set_presence=online",
     )
     .await;
-    let phone_account_data = account_data_entry(&phone_sync, "ck.account.blocklist")
+    let phone_account_data = account_data_entry(&phone_sync, "ak.account.blocklist")
         .expect("blocklist account_data visible to Alice's sibling device");
     assert_eq!(phone_account_data["content"], encrypted_blocklist);
 
@@ -449,11 +449,11 @@ async fn blocklist_account_data_requires_encrypted_carrier_and_fans_out_opaque()
     let phone_events = phone_messages["messages"].as_array().unwrap();
     let blocklist_event = phone_events
         .iter()
-        .find(|event| event["kind"] == "ck.account.blocklist.update")
+        .find(|event| event["kind"] == "ak.account.blocklist.update")
         .expect("blocklist update fanout reaches Alice's sibling device");
     assert_eq!(
         blocklist_event["content"]["data_type"],
-        "ck.account.blocklist"
+        "ak.account.blocklist"
     );
     assert_eq!(blocklist_event["content"]["content"], encrypted_blocklist);
 
@@ -502,7 +502,7 @@ async fn read_cursor_fans_out_per_realm_without_cross_actor_leakage() {
         "did:web:alice.example",
         "ak:device:01904100-0000-7000-8000-a11ce0000001",
         &realm_a,
-        "ck.read_cursor.advance",
+        "ak.read_cursor.advance",
         read_cursor_payload(
             "did:web:alice.example",
             "ak:device:01904100-0000-7000-8000-a11ce0000001",
@@ -523,7 +523,7 @@ async fn read_cursor_fans_out_per_realm_without_cross_actor_leakage() {
         "did:web:alice.example",
         "ak:device:01904100-0000-7000-8000-a11ce0000001",
         &realm_b,
-        "ck.read_cursor.advance",
+        "ak.read_cursor.advance",
         read_cursor_payload(
             "did:web:alice.example",
             "ak:device:01904100-0000-7000-8000-a11ce0000001",
@@ -560,7 +560,7 @@ async fn read_cursor_fans_out_per_realm_without_cross_actor_leakage() {
         .as_array()
         .unwrap()
         .iter()
-        .filter(|event| event["kind"] == "ck.read_cursor.update")
+        .filter(|event| event["kind"] == "ak.read_cursor.update")
         .collect::<Vec<_>>();
     assert_eq!(read_cursor_fanouts.len(), 2);
     assert!(read_cursor_fanouts.iter().any(|event| {

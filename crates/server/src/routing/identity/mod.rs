@@ -5,7 +5,7 @@ pub(super) mod account_data;
 pub(crate) mod agents;
 pub(crate) mod auth;
 // api-conventions.md §3.3 — `/_arkret/self/*` inbound credential: a
-// `ck.session.grant` presented directly with a DPoP (RFC 9449) holder proof,
+// `ak.session.grant` presented directly with a DPoP (RFC 9449) holder proof,
 // validated against a TTL-cached coauth introspection. The default ② session
 // path has no local credential issuance step.
 pub(crate) mod auth_grant_dpop;

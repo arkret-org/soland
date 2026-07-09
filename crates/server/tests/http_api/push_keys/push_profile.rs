@@ -112,7 +112,7 @@ async fn file_transfer_blob_upload_uses_encrypted_metadata_and_blocks_presign() 
         .expect("file-transfer encrypted metadata is persisted");
     assert_eq!(
         encrypted_attachment["scheme"],
-        "ck.file_transfer.encrypted_blob.v1"
+        "ak.file_transfer.encrypted_blob.v1"
     );
 
     let file_transfer_presign = TestClient::post("http://server/_arkret/self/blob/presign")
@@ -189,7 +189,7 @@ async fn push_profile_and_moderation_contracts_work() {
     let token = dev_token(state.clone()).await;
     let unauth_presence = TestClient::post("http://server/_arkret/self/ephemeral")
         .json(&broadcast_ephemeral_envelope(
-            "ck.presence",
+            "ak.presence",
             serde_json::json!({"state": "online"}),
         ))
         .send(&app_from_state(state.clone()))
@@ -201,7 +201,7 @@ async fn push_profile_and_moderation_contracts_work() {
     let mut legacy_state = TestClient::post("http://server/_arkret/self/ephemeral")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&broadcast_ephemeral_envelope(
-            "ck.presence",
+            "ak.presence",
             serde_json::json!({"state": "unavailable"}),
         ))
         .send(&app_from_state(state.clone()))
@@ -212,7 +212,7 @@ async fn push_profile_and_moderation_contracts_work() {
     let presence: Value = TestClient::post("http://server/_arkret/self/ephemeral")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&broadcast_ephemeral_envelope(
-            "ck.presence",
+            "ak.presence",
             serde_json::json!({
                 "state": "dnd",
                 "status_message": "In a meeting"
@@ -224,7 +224,7 @@ async fn push_profile_and_moderation_contracts_work() {
         .await
         .unwrap();
     assert_eq!(presence["accepted"], true);
-    assert_eq!(presence["kind"], "ck.presence");
+    assert_eq!(presence["kind"], "ak.presence");
 
     let presence_sync = account_subscribe_frame(state.clone(), Some(&token), "catchup=true").await;
     let profile = presence_event(&presence_sync, "did:web:alice.example");
@@ -263,7 +263,7 @@ async fn push_profile_and_moderation_contracts_work() {
 
     let unauth_typing = TestClient::post("http://server/_arkret/self/ephemeral")
         .json(&broadcast_ephemeral_envelope(
-            "ck.typing",
+            "ak.typing",
             serde_json::json!({
                 "strand_id": typing_strand_id,
                 "typing": true
@@ -276,7 +276,7 @@ async fn push_profile_and_moderation_contracts_work() {
     let typing: Value = TestClient::post("http://server/_arkret/self/ephemeral")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&broadcast_ephemeral_envelope(
-            "ck.typing",
+            "ak.typing",
             serde_json::json!({
                 "strand_id": typing_strand_id,
                 "typing": true
@@ -288,7 +288,7 @@ async fn push_profile_and_moderation_contracts_work() {
         .await
         .unwrap();
     assert_eq!(typing["accepted"], true);
-    assert_eq!(typing["kind"], "ck.typing");
+    assert_eq!(typing["kind"], "ak.typing");
 
     let active_typing = state
         .persistence
@@ -303,7 +303,7 @@ async fn push_profile_and_moderation_contracts_work() {
     let typing_stopped: Value = TestClient::post("http://server/_arkret/self/ephemeral")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&broadcast_ephemeral_envelope(
-            "ck.typing",
+            "ak.typing",
             serde_json::json!({
                 "typing": false
             }),
@@ -341,7 +341,7 @@ async fn push_profile_and_moderation_contracts_work() {
 
     let initial_rules = account_subscribe_frame(state.clone(), Some(&token), "catchup=true").await;
     assert!(
-        account_data_entry(&initial_rules, "ck.push_rules").is_none(),
+        account_data_entry(&initial_rules, "ak.push_rules").is_none(),
         "initial account_data must not include ck.push_rules: {initial_rules}"
     );
 
@@ -351,9 +351,9 @@ async fn push_profile_and_moderation_contracts_work() {
         "did:web:alice.example",
         "ak:device:01904100-0000-7000-8000-a11ce0000001",
         DEMO_REALM_ID,
-        "ck.account_data.set",
+        "ak.account_data.set",
         serde_json::json!({
-            "key": "ck.push_rules",
+            "key": "ak.push_rules",
             "owner": "did:web:alice.example",
             "body": {
                 "rules": [{
@@ -372,12 +372,12 @@ async fn push_profile_and_moderation_contracts_work() {
     .await;
     assert_ne!(
         plaintext_push_rule["status"], "accepted",
-        "ck.push_rules account_data must not accept plaintext content: {plaintext_push_rule}"
+        "ak.push_rules account_data must not accept plaintext content: {plaintext_push_rule}"
     );
 
     let listed_rules = account_subscribe_frame(state.clone(), Some(&token), "catchup=true").await;
     assert!(
-        account_data_entry(&listed_rules, "ck.push_rules").is_none(),
+        account_data_entry(&listed_rules, "ak.push_rules").is_none(),
         "rejected plaintext push rules must not appear as account_data: {listed_rules}"
     );
 
@@ -495,7 +495,7 @@ async fn presence_visibility_account_data_requires_encrypted_content() {
     let presence: Value = TestClient::post("http://server/_arkret/self/ephemeral")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&broadcast_ephemeral_envelope(
-            "ck.presence",
+            "ak.presence",
             serde_json::json!({"state": "online"}),
         ))
         .send(&app_from_state(state.clone()))
@@ -520,7 +520,7 @@ async fn presence_visibility_account_data_requires_encrypted_content() {
     let typing: Value = TestClient::post("http://server/_arkret/self/ephemeral")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&broadcast_ephemeral_envelope(
-            "ck.typing",
+            "ak.typing",
             serde_json::json!({
                 "strand_id": typing_strand_id,
                 "typing": true
@@ -548,7 +548,7 @@ async fn presence_visibility_account_data_requires_encrypted_content() {
         .account_data()
         .put(&soland::state::AccountDataRecord {
             actor: "did:web:alice.example".to_owned(),
-            data_type: "ck.presence.visibility".to_owned(),
+            data_type: "ak.presence.visibility".to_owned(),
             payload: serde_json::json!({
                 "encrypted_payload": {
                     "ciphertext": "opaque-presence-policy"
@@ -572,7 +572,7 @@ async fn presence_visibility_account_data_requires_encrypted_content() {
     let hidden_presence: Value = TestClient::post("http://server/_arkret/self/ephemeral")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&broadcast_ephemeral_envelope(
-            "ck.presence",
+            "ak.presence",
             serde_json::json!({"state": "online"}),
         ))
         .send(&app_from_state(state.clone()))
@@ -595,7 +595,7 @@ async fn presence_visibility_account_data_requires_encrypted_content() {
     let hidden_typing: Value = TestClient::post("http://server/_arkret/self/ephemeral")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&broadcast_ephemeral_envelope(
-            "ck.typing",
+            "ak.typing",
             serde_json::json!({
                 "strand_id": typing_strand_id,
                 "typing": true
@@ -627,7 +627,7 @@ async fn typing_submit_rejects_unknown_strand_scope() {
     let rejected_typing = TestClient::post("http://server/_arkret/self/ephemeral")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&broadcast_ephemeral_envelope(
-            "ck.typing",
+            "ak.typing",
             serde_json::json!({
                 "strand_id": new_prefixed_uuid7("ak:strand:"),
                 "typing": true
@@ -656,7 +656,7 @@ async fn typing_submit_accepts_default_realm_strand_scope() {
     let typing: Value = TestClient::post("http://server/_arkret/self/ephemeral")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
-            "kind": "ck.typing",
+            "kind": "ak.typing",
             "realm_id": DEMO_REALM_ID,
             "actor_id": "did:web:alice.example",
             "sent_at": sent_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
@@ -699,7 +699,7 @@ async fn typing_submit_wakes_account_subscribe_stream() {
     let typing: Value = TestClient::post("http://server/_arkret/self/ephemeral")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
-            "kind": "ck.typing",
+            "kind": "ak.typing",
             "realm_id": DEMO_REALM_ID,
             "actor_id": "did:web:alice.example",
             "sent_at": sent_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
@@ -722,7 +722,7 @@ async fn typing_submit_wakes_account_subscribe_stream() {
         .expect("event broadcast stays open");
     assert_eq!(notification.realm_id, DEMO_REALM_ID);
     match notification.kind {
-        EventNotificationKind::Ephemeral { kind } => assert_eq!(kind, "ck.typing"),
+        EventNotificationKind::Ephemeral { kind } => assert_eq!(kind, "ak.typing"),
         other => panic!("expected ck.typing ephemeral wakeup, got {other:?}"),
     }
 }
@@ -753,7 +753,7 @@ async fn typing_submit_is_visible_in_incremental_account_subscribe_delta() {
     let typing: Value = TestClient::post("http://server/_arkret/self/ephemeral")
         .add_header("authorization", format!("Bearer {alice_token}"), true)
         .json(&serde_json::json!({
-            "kind": "ck.typing",
+            "kind": "ak.typing",
             "realm_id": DEMO_REALM_ID,
             "actor_id": "did:web:alice.example",
             "sent_at": sent_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
@@ -781,7 +781,7 @@ async fn typing_submit_is_visible_in_incremental_account_subscribe_delta() {
         .unwrap_or_else(|| panic!("incremental typing delta must include realm: {delta}"));
     assert!(
         ephemeral.iter().any(|entry| {
-            entry["type"] == "ck.typing"
+            entry["type"] == "ak.typing"
                 && entry["realm_id"] == DEMO_REALM_ID
                 && entry["strand_id"] == strand_id
                 && entry["actors"].as_array().is_some_and(|actors| {
@@ -806,7 +806,7 @@ async fn typing_submit_rejects_disabled_discussion_strand_scope() {
     let rejected_typing = TestClient::post("http://server/_arkret/self/ephemeral")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
-            "kind": "ck.typing",
+            "kind": "ak.typing",
             "realm_id": DEMO_REALM_ID,
             "actor_id": "did:web:alice.example",
             "sent_at": sent_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
@@ -866,7 +866,7 @@ async fn public_read_receipt_rejected_for_world_readable_realm_without_opt_in() 
         "did:web:alice.example",
         "ak:device:01904100-0000-7000-8000-a11ce0000001",
         DEMO_REALM_ID,
-        "ck.realm.read_receipt_policy",
+        "ak.realm.read_receipt_policy",
         serde_json::json!({
             "disclosure": "optional",
             "visibility": "public",
@@ -887,7 +887,7 @@ async fn public_read_receipt_rejected_for_world_readable_realm_without_opt_in() 
     let receipt = TestClient::post("http://server/_arkret/self/ephemeral")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
-            "kind": "ck.receipt.read",
+            "kind": "ak.receipt.read",
             "realm_id": DEMO_REALM_ID,
             "actor_id": "did:web:alice.example",
             "sent_at": sent_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
@@ -919,14 +919,14 @@ async fn typing_fanout_respects_receiver_blocklist() {
         "did:web:bob.example",
         "ak:device:01904100-0000-7000-8000-b0b000000001",
         DEMO_REALM_ID,
-        "ck.account_data.set",
+        "ak.account_data.set",
         serde_json::json!({
-            "key": "ck.account.blocklist",
+            "key": "ak.account.blocklist",
             "owner": "did:web:bob.example",
             "body": {
                 "client_side_conformance": {
                     "encrypted_account_data": true,
-                    "profile_id": "ck.profile.e2ee_client.v1",
+                    "profile_id": "ak.profile.e2ee_client.v1",
                     "payload_digest": "sha256:abababababababababababababababababababababababababababababababab"
                 },
                 "content_type": "application/vnd.arkret.account-data+json",
@@ -946,7 +946,7 @@ async fn typing_fanout_respects_receiver_blocklist() {
     let typing: Value = TestClient::post("http://server/_arkret/self/ephemeral")
         .add_header("authorization", format!("Bearer {alice_token}"), true)
         .json(&serde_json::json!({
-            "kind": "ck.typing",
+            "kind": "ak.typing",
             "realm_id": DEMO_REALM_ID,
             "actor_id": "did:web:alice.example",
             "sent_at": sent_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
@@ -968,7 +968,7 @@ async fn typing_fanout_respects_receiver_blocklist() {
         .expect("demo realm ephemeral segment");
     assert!(
         bob_ephemeral.iter().all(|entry| {
-            entry["type"] != "ck.typing"
+            entry["type"] != "ak.typing"
                 || entry["actors"].as_array().is_none_or(|actors| {
                     actors
                         .iter()
@@ -1013,7 +1013,7 @@ async fn typing_fanout_hides_cached_record_when_discussion_track_disabled() {
         .unwrap_or_default();
     assert!(
         bob_ephemeral.iter().all(|entry| {
-            entry["type"] != "ck.typing"
+            entry["type"] != "ak.typing"
                 || entry["actors"].as_array().is_none_or(|actors| {
                     actors
                         .iter()
@@ -1087,7 +1087,7 @@ async fn ephemeral_call_signal_enforces_structural_contract() {
         let sent_at = chrono::Utc::now();
         let expires_at = sent_at + chrono::Duration::seconds(30);
         let mut env = serde_json::json!({
-            "kind": "ck.call.signal",
+            "kind": "ak.call.signal",
             "realm_id": DEMO_REALM_ID,
             "actor_id": "did:web:alice.example",
             "sent_at": sent_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
@@ -1127,7 +1127,7 @@ async fn ephemeral_call_signal_enforces_structural_contract() {
     .await
     .unwrap();
     assert_eq!(accepted["accepted"], true, "accepted body: {accepted}");
-    assert_eq!(accepted["kind"], "ck.call.signal");
+    assert_eq!(accepted["kind"], "ak.call.signal");
 
     // Non-canonical signal_type → invalid_param.
     let mut bad_type = post_signal(
@@ -1182,9 +1182,9 @@ async fn push_unregister_mutates_registration_and_gateway_snapshot_gates_notify(
             "contract_digest": "sha256:stale",
             "fetched_at": stale_at,
             "remote_contract": {
-                "contract": "ck.push.bridge.describe",
+                "contract": "ak.push.bridge.describe",
                 "service_did": "did:web:push.example",
-                "delivery": {"notify_path": "/_arkret/edge/push/notify", "operation_id": "ck.edge.push.command.notify"}
+                "delivery": {"notify_path": "/_arkret/edge/push/notify", "operation_id": "ak.edge.push.command.notify"}
             },
             "trust_level": "trusted",
             "freshness_at": stale_at,
@@ -1245,9 +1245,9 @@ async fn push_unregister_mutates_registration_and_gateway_snapshot_gates_notify(
             "contract_digest": "sha256:fresh",
             "fetched_at": now,
             "remote_contract": {
-                "contract": "ck.push.bridge.describe",
+                "contract": "ak.push.bridge.describe",
                 "service_did": "did:web:push.example",
-                "delivery": {"notify_path": "/_arkret/edge/push/notify", "operation_id": "ck.edge.push.command.notify"}
+                "delivery": {"notify_path": "/_arkret/edge/push/notify", "operation_id": "ak.edge.push.command.notify"}
             },
             "trust_level": "trusted",
             "freshness_at": now,

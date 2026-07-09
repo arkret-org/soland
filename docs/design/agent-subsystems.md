@@ -69,7 +69,7 @@ fn apply_capability_revoke(&mut self, op: &Operation) -> ProjectionEffect {
 ### participation.set 编排(替换当前 TODO)
 `routing/identity/agents.rs::set_agent_participation` 在落库后:
 1. 由 effective(已算)推导目标 grant:
-   - `reply=true` → actions `["ck.message.create","ck.reaction.add"]`,resource selector = scope(realm/circle/strand,复用 `arkret_sdk::authz::ResourceSelector`)。
+   - `reply=true` → actions `["ak.message.create","ck.reaction.add"]`,resource selector = scope(realm/circle/strand,复用 `arkret_sdk::authz::ResourceSelector`)。
    - `act_on_behalf=true` → 追加 CKP-0008 §4.10 act-on-behalf grant(constraints:`approval_required`/`controller_approval_required`)。
 2. capability_id 确定性派生:`ck:capability:` + `hash(agent_principal_id, scope_key, "reply"|"aob")` → 同 scope 同 bit 复用一条 grant,幂等。
 3. effective bit=true 且 grant 不存在/已 revoked → `emit_server_event(.., arkret_sdk::events::kinds::CAPABILITY_GRANT, payload)`;bit=false 且 grant active → `emit_server_event(.., arkret_sdk::events::kinds::CAPABILITY_REVOKE, {capability_id})`。
@@ -165,7 +165,7 @@ pub(crate) async fn dispatch_message_notifications(
 
 ## S4 — Agent session grant `scope_details.participation` overlay
 
-**目标**:agent runtime 通过 `ck.session.grant` direct presentation 拿到 resolved 参与契约。当前 session-grant introspection outcome 需要覆盖 agent scope_details 与 agent_key_proof 分支。
+**目标**:agent runtime 通过 `ak.session.grant` direct presentation 拿到 resolved 参与契约。当前 session-grant introspection outcome 需要覆盖 agent scope_details 与 agent_key_proof 分支。
 
 ### proof_kind 分支
 `SessionGrantIntrospectRequestBody.proof` 携带 `proof_kind` 所需证明；`agent_key_proof` 时走 agent 分支并携带 `agent_scope_request{realm_ids[], strand_ids[], track_names[]}`(`ck.profile.agent_auth.v1` overlay,见 CKP-0008 §4.6)。session-grant introspection:

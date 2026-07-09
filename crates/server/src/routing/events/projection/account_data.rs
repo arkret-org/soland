@@ -85,7 +85,7 @@ pub fn project_read_receipt_policy(state: &AppState, operation: &Operation) {
 }
 
 fn account_data_update_type(data_type: &str) -> &'static str {
-    if data_type == "ck.account.blocklist" {
+    if data_type == "ak.account.blocklist" {
         BLOCKLIST_UPDATE_TYPE
     } else {
         ACCOUNT_DATA_UPDATE_TYPE
@@ -117,7 +117,7 @@ pub(super) fn actor_private_read_cursor_matches_origin(
             origin,
             source_device_id,
             operation_id = %operation.operation_id,
-            "ck.read_cursor.advance actor/device does not match accepted event origin"
+            "ak.read_cursor.advance actor/device does not match accepted event origin"
         );
         return false;
     }
@@ -149,7 +149,7 @@ pub(super) async fn project_account_data_set(
             owner,
             origin,
             data_type,
-            "ck.account_data.set owner does not match accepted operation origin"
+            "ak.account_data.set owner does not match accepted operation origin"
         );
         return;
     }
@@ -243,7 +243,7 @@ pub(super) async fn fanout_projection_effect_private_update(
         origin_device,
         READ_MARKER_UPDATE_TYPE,
         json!({
-            "schema": "ck.schema.read_cursor.v1",
+            "schema": "ak.schema.read_cursor.v1",
             "actor_id": marker.actor_id.clone(),
             "device_id": origin_device,
             "realm_id": marker.realm_id.clone(),

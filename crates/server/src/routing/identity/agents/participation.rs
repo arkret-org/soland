@@ -41,12 +41,12 @@ pub(super) fn agent_participation_failed_precondition(reason: &'static str) -> A
 }
 
 #[endpoint(
-    operation_id = "ck.self.agent.participation.resource.replace",
+    operation_id = "ak.self.agent.participation.resource.replace",
     tags("agents"),
     summary = "Set an agent's participation selection for a scope (controller-self only)",
     status_codes(200, 400, 401, 403, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.agent.participation.resource.replace"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.agent.participation.resource.replace"))]
 pub(super) async fn set_agent_participation(
     aa: AuthArgs,
     agent_principal_id: PathParam<String>,
@@ -89,7 +89,7 @@ pub(super) async fn set_agent_participation(
     append_audit_log(
         state,
         Some(&session.actor),
-        "ck.self.agent.participation.resource.replace",
+        "ak.self.agent.participation.resource.replace",
         json!({
             "agent_principal_id": agent_id,
             "controller_principal_id": session.actor.clone(),
@@ -232,12 +232,12 @@ pub(super) fn normalize_sidecar_exposure_ack(
 }
 
 #[endpoint(
-    operation_id = "ck.self.agent.participation.resource.get",
+    operation_id = "ak.self.agent.participation.resource.get",
     tags("agents"),
     summary = "Get an agent's resolved participation policy (controller-self only)",
     status_codes(200, 401, 403, 404, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.agent.participation.resource.get"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.agent.participation.resource.get"))]
 pub(super) async fn get_agent_participation(
     aa: AuthArgs,
     agent_principal_id: PathParam<String>,

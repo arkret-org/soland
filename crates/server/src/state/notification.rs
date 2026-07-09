@@ -292,11 +292,11 @@ mod subscribe_reconnect_gate_tests {
     fn reports_remaining_window_and_expires() {
         let mut gate = SubscribeReconnectGate::default();
         let now = Utc::now();
-        gate.arm("ck.self.events.stream.subscribe|alice|realm-a", now, 10_000);
+        gate.arm("ak.self.events.stream.subscribe|alice|realm-a", now, 10_000);
 
         let retry_after = gate
             .retry_after_ms(
-                "ck.self.events.stream.subscribe|alice|realm-a",
+                "ak.self.events.stream.subscribe|alice|realm-a",
                 now + ChronoDuration::milliseconds(2_500),
             )
             .expect("cooldown active");
@@ -304,7 +304,7 @@ mod subscribe_reconnect_gate_tests {
 
         assert!(
             gate.retry_after_ms(
-                "ck.self.events.stream.subscribe|alice|realm-a",
+                "ak.self.events.stream.subscribe|alice|realm-a",
                 now + ChronoDuration::milliseconds(10_000),
             )
             .is_none()

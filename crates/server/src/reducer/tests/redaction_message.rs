@@ -26,7 +26,7 @@ fn message_create_and_query() {
             "event_id": "ak:event:01904100-0000-7000-8000-caaa6a15bce1",
             "sender": "did:web:alice",
             "thread_id": "ak:strand:1",
-            "content": {"kind": "ck.content.text", "body": "hello"}
+            "content": {"kind": "ak.content.text", "body": "hello"}
         }),
     );
     let effect = state.apply(&op, &hlc);
@@ -53,7 +53,7 @@ fn redaction_hides_message() {
                 "event_id": "ak:event:01904100-0000-7000-8000-caaa6a15bce1",
                 "sender": "did:web:alice",
                 "thread_id": "ak:strand:1",
-                "content": {"kind": "ck.content.text", "body": "hello"}
+                "content": {"kind": "ak.content.text", "body": "hello"}
             }),
         ),
         &hlc,
@@ -109,7 +109,7 @@ fn redact_make_message(state: &mut ProjectionState, hlc: &ServerHlc, event_id: &
                 "event_id": event_id,
                 "sender": "did:web:alice",
                 "thread_id": "ak:strand:1",
-                "content": {"kind": "ck.content.text", "body": "hello"}
+                "content": {"kind": "ak.content.text", "body": "hello"}
             }),
         ),
         hlc,
@@ -354,7 +354,7 @@ fn message_revise_creates_chain() {
                 "event_id": "ak:event:01904100-0000-7000-8000-caaa6a15bce1",
                 "sender": "did:web:alice",
                 "thread_id": "ak:strand:1",
-                "content": {"kind": "ck.content.text", "body": "original"}
+                "content": {"kind": "ak.content.text", "body": "original"}
             }),
         ),
         &hlc,
@@ -365,7 +365,7 @@ fn message_revise_creates_chain() {
         "ak:realm:01904100-0000-7000-8000-cfc039892036",
         serde_json::json!({
             "target_ref": "ak:event:01904100-0000-7000-8000-caaa6a15bce1",
-            "content": {"kind": "ck.content.text", "body": "revised"}
+            "content": {"kind": "ak.content.text", "body": "revised"}
         }),
     );
     let revision_id = revise.operation_id.to_string();
@@ -400,7 +400,7 @@ fn message_revise_resolves_schema_message_id_and_preserves_event_id() {
                 "message_id": message_id,
                 "sender": "did:web:alice",
                 "thread_id": "ak:strand:1",
-                "content": {"kind": "ck.content.text", "body": "original"}
+                "content": {"kind": "ak.content.text", "body": "original"}
             }),
         ),
         &hlc,
@@ -413,7 +413,7 @@ fn message_revise_resolves_schema_message_id_and_preserves_event_id() {
             serde_json::json!({
                 "event_id": revision_event_id,
                 "target_ref": message_id,
-                "content": {"kind": "ck.content.text", "body": "revised"}
+                "content": {"kind": "ak.content.text", "body": "revised"}
             }),
         ),
         &hlc,
@@ -449,7 +449,7 @@ fn redaction_accepts_schema_message_id_target() {
                 "message_id": message_id,
                 "sender": "did:web:alice",
                 "thread_id": "ak:strand:1",
-                "content": {"kind": "ck.content.text", "body": "hello"}
+                "content": {"kind": "ak.content.text", "body": "hello"}
             }),
         ),
         &hlc,
@@ -500,7 +500,7 @@ fn redaction_by_message_id_hides_latest_revision() {
                 "message_id": message_id,
                 "sender": "did:web:alice",
                 "thread_id": "ak:strand:1",
-                "content": {"kind": "ck.content.text", "body": "original"}
+                "content": {"kind": "ak.content.text", "body": "original"}
             }),
         ),
         &hlc,
@@ -512,7 +512,7 @@ fn redaction_by_message_id_hides_latest_revision() {
             serde_json::json!({
                 "event_id": revision_event_id,
                 "target_ref": message_id,
-                "content": {"kind": "ck.content.text", "body": "revised"}
+                "content": {"kind": "ak.content.text", "body": "revised"}
             }),
         ),
         &hlc,

@@ -42,7 +42,7 @@ pub(crate) fn keys_upload_signing_input(
         "fallback_keys": fallback_keys,
     });
     let canonical = arkret_sdk::canonical::canonical_json_bytes(&body).unwrap();
-    let mut input = b"ck-keys-upload-v1\n".to_vec();
+    let mut input = b"ak.keys-upload-v1\n".to_vec();
     input.extend_from_slice(&canonical);
     input
 }

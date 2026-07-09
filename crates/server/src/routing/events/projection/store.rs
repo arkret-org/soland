@@ -224,7 +224,7 @@ pub async fn project_federation_operation(state: &AppState, origin: &str, operat
         project_invite_third_party_operation(state, operation).await;
     } else if kinds::operation_is_invite_claim(operation) {
         project_invite_claim_operation(state, operation).await;
-    } else if kinds::canonical_kind_string(operation) == "ck.invite.accept" {
+    } else if kinds::canonical_kind_string(operation) == "ak.invite.accept" {
         project_invite_accept_operation(state, origin, operation).await;
     } else if kinds::canonical_kind_string(operation) == arkret_sdk::events::kinds::INVITE_CANCEL {
         project_invite_cancel_operation(state, origin, operation).await;

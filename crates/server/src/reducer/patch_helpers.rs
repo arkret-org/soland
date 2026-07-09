@@ -16,7 +16,7 @@ use super::{DocumentVersionProjection, PushRouteCellValue, PushRouteSubject, Str
 /// transformation schema migrations. Mirrors
 /// `artifacts/profiles/conformance-profiles.json#/profile_requirements`.
 pub(crate) const MORPH_SCHEMA_MIGRATION_TRANSFORMATIONS_PROFILE: &str =
-    "ck.profile.morph.schema_migration_transformations.v1";
+    "ak.profile.morph.schema_migration_transformations.v1";
 
 /// `morph.md` §4.1 — the canonical transformation rule ids understood by the
 /// `ck.profile.morph.schema_migration_transformations.v1`
@@ -26,10 +26,10 @@ pub(crate) const MORPH_SCHEMA_MIGRATION_TRANSFORMATIONS_PROFILE: &str =
 /// at registration with `unsupported_transformation_rule` — never partially
 /// applied.
 pub(crate) const SUPPORTED_MORPH_TRANSFORMATION_RULE_IDS: &[&str] = &[
-    "ck.transform.identity.v1",
-    "ck.transform.rename.v1",
-    "ck.transform.type_widen.v1",
-    "ck.transform.default_backfill.v1",
+    "ak.transform.identity.v1",
+    "ak.transform.rename.v1",
+    "ak.transform.type_widen.v1",
+    "ak.transform.default_backfill.v1",
 ];
 
 /// Extract a `string[]` field directly from an operation payload `Value`.
@@ -71,8 +71,8 @@ pub(crate) fn apply_morph_transformation_rules(
             return Err("unsupported_transformation_rule");
         }
         match rule_id {
-            "ck.transform.identity.v1" => {}
-            "ck.transform.rename.v1" | "ck.transform.type_widen.v1" => {
+            "ak.transform.identity.v1" => {}
+            "ak.transform.rename.v1" | "ck.transform.type_widen.v1" => {
                 let Some(from) = rule_object.get("from").and_then(Value::as_str) else {
                     return Err("unsupported_transformation_rule");
                 };
@@ -83,7 +83,7 @@ pub(crate) fn apply_morph_transformation_rules(
                     next.insert(to.to_owned(), value);
                 }
             }
-            "ck.transform.default_backfill.v1" => {
+            "ak.transform.default_backfill.v1" => {
                 let Some(field) = rule_object.get("to").and_then(Value::as_str) else {
                     return Err("unsupported_transformation_rule");
                 };
@@ -232,13 +232,13 @@ pub(crate) fn strand_position_from_create_payload(
     object: &serde_json::Map<String, Value>,
 ) -> Option<(String, String, Option<String>)> {
     let board_space_id = object_field_string(object, "board_space_id").or_else(|| {
-        component_field_string(payload, "ck.component.strand.position.v1", "board_space_id")
+        component_field_string(payload, "ak.component.strand.position.v1", "board_space_id")
     })?;
     let list_space_id = object_field_string(object, "list_space_id").or_else(|| {
-        component_field_string(payload, "ck.component.strand.position.v1", "list_space_id")
+        component_field_string(payload, "ak.component.strand.position.v1", "list_space_id")
     })?;
     let rank = object_field_string(object, "rank")
-        .or_else(|| component_field_string(payload, "ck.component.strand.position.v1", "rank"));
+        .or_else(|| component_field_string(payload, "ak.component.strand.position.v1", "rank"));
     Some((board_space_id, list_space_id, rank))
 }
 

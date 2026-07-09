@@ -1,6 +1,6 @@
 //! RFC 9421 sender-constrained (PoP) verification for `/_arkret/self/*`.
 //!
-//! `ck.session.grant` binds a short-lived `session_public_key` to the
+//! `ak.session.grant` binds a short-lived `session_public_key` to the
 //! principal / device / audience (api-conventions.md §3.2). This hoop turns
 //! "holds a bearer token" into "holds the bound signing key" for the
 //! authenticated self surface:

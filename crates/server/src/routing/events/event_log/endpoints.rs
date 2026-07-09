@@ -348,11 +348,11 @@ fn envelope_operation_id(envelope: &Value) -> Option<String> {
 }
 
 #[endpoint(
-    operation_id = "ck.self.events.resource.get",
+    operation_id = "ak.self.events.resource.get",
     tags("events"),
     summary = "Fetch one canonical Event Envelope by event_id"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.events.resource.get"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.events.resource.get"))]
 async fn get_event(
     aa: AuthArgs,
     event_id: PathParam<String>,
@@ -377,11 +377,11 @@ async fn get_event(
 }
 
 #[endpoint(
-    operation_id = "ck.self.events.query.resolve",
+    operation_id = "ak.self.events.query.resolve",
     tags("events"),
     summary = "Resolve up to MAX_EVENT_RESOLVE canonical Event Envelopes by event_id"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.events.query.resolve"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.events.query.resolve"))]
 async fn resolve_events(
     aa: AuthArgs,
     body: JsonBody<EventsResolveRequestBody>,
@@ -576,11 +576,11 @@ async fn events_query_durable_scope(
 }
 
 #[endpoint(
-    operation_id = "ck.self.events.query.frontier",
+    operation_id = "ak.self.events.query.frontier",
     tags("events"),
     summary = "Actor frontier or Realm Seal view (registered seal_basis / seal_ref sourcing)"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.events.query.frontier"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.events.query.frontier"))]
 async fn events_frontier(
     aa: crate::routing::system::extract::AuthArgs,
     depot: &mut Depot,

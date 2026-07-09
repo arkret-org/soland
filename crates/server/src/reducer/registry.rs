@@ -25,7 +25,7 @@ mod lattice_kind_scaffold_tests {
         struct ConsentCell;
         impl LatticeKind for ConsentCell {
             fn cell_family(&self) -> &'static str {
-                "ck.component.consent.v1"
+                "ak.component.consent.v1"
             }
             fn lattice(&self) -> arkret_sdk::lattice::LatticeKind {
                 arkret_sdk::lattice::LatticeKind::OrSet
@@ -35,7 +35,7 @@ mod lattice_kind_scaffold_tests {
             }
             fn component(&self) -> ComponentDescriptor {
                 ComponentDescriptor {
-                    component_type: "ck.component.consent.v1",
+                    component_type: "ak.component.consent.v1",
                     component_version: 1,
                     criticality: Criticality::Required,
                 }
@@ -45,29 +45,29 @@ mod lattice_kind_scaffold_tests {
         assert!(registry.is_empty());
         registry.register(ConsentCell);
         assert_eq!(registry.len(), 1);
-        let found = registry.lookup("ck.component.consent.v1").unwrap();
+        let found = registry.lookup("ak.component.consent.v1").unwrap();
         assert_eq!(found.lattice(), arkret_sdk::lattice::LatticeKind::OrSet);
         assert_eq!(found.bottom_policy(), BottomPolicy::Reject);
         assert_eq!(found.bottom_policy().as_str(), "reject");
-        assert!(registry.lookup("ck.component.unknown.v1").is_none());
+        assert!(registry.lookup("ak.component.unknown.v1").is_none());
     }
 
     #[test]
     fn lattice_kind_error_display_is_stable() {
         let err = LatticeKindError::MissingSubjectField {
-            cell_family: "ck.component.strand.position.v1",
+            cell_family: "ak.component.strand.position.v1",
             field: "strand_id",
         };
         let msg = format!("{err}");
-        assert!(msg.contains("ck.component.strand.position.v1"));
+        assert!(msg.contains("ak.component.strand.position.v1"));
         assert!(msg.contains("strand_id"));
 
         let err = LatticeKindError::UnknownCellFamily {
-            observed: "ck.component.unrecognised.v1".to_owned(),
-            declared: "ck.component.consent.v1",
+            observed: "ak.component.unrecognised.v1".to_owned(),
+            declared: "ak.component.consent.v1",
         };
         let msg = format!("{err}");
-        assert!(msg.contains("ck.component.unrecognised.v1"));
-        assert!(msg.contains("ck.component.consent.v1"));
+        assert!(msg.contains("ak.component.unrecognised.v1"));
+        assert!(msg.contains("ak.component.consent.v1"));
     }
 }

@@ -175,11 +175,11 @@ mod tests {
     fn requested_agent_scope() -> Value {
         json!({
             "actions": [
-                "ck.self.events.stream.subscribe",
-                "ck.self.events.query.scan",
-                "ck.self.events.command.submit",
-                "ck.event.read",
-                "ck.message.create"
+                "ak.self.events.stream.subscribe",
+                "ak.self.events.query.scan",
+                "ak.self.events.command.submit",
+                "ak.event.read",
+                "ak.message.create"
             ],
             "resources": [{ "kind": "service", "service_did": "did:web:soland.local" }]
         })
@@ -204,7 +204,7 @@ mod tests {
         )
         .expect("pairing binding digest");
         json!({
-            "kind": "ck.agent.key.authorize",
+            "kind": "ak.agent.key.authorize",
             "actor_id": controller,
             "payload": {
                 "agent_principal_id": agent_principal_id,
@@ -703,7 +703,7 @@ mod tests {
             "2999-01-01T00:00:00Z",
         );
         let weaker_scope = json!({
-            "actions": ["ck.self.events.stream.subscribe"],
+            "actions": ["ak.self.events.stream.subscribe"],
             "resources": [{ "kind": "service", "service_did": service_did }]
         });
         let envelope = key_authorize_envelope(

@@ -79,7 +79,7 @@ pub(super) async fn validate_member_state_policy(
         .authz
         .check(
             actor,
-            "ck.realm.admin",
+            "ak.realm.admin",
             realm_id,
             realm_id,
             owner.as_deref(),
@@ -123,7 +123,7 @@ pub(super) async fn validate_set_default_strand_policy(
     // A grant of either the precise action or the broad realm-admin action
     // authorizes the write. `ck.realm.admin` aggregates Realm governance, so
     // an admin holder need not also hold the narrow set_default_strand action.
-    for action in ["ck.realm.set_default_strand", "ck.realm.admin"] {
+    for action in ["ak.realm.set_default_strand", "ck.realm.admin"] {
         if state
             .authz
             .check(
@@ -246,7 +246,7 @@ pub(super) async fn validate_realm_organization_policy(
         .authz
         .check(
             actor,
-            "ck.realm.admin",
+            "ak.realm.admin",
             realm_id,
             realm_id,
             owner.as_deref(),
@@ -285,20 +285,20 @@ pub(super) async fn validate_moderation_event_policy(
     };
     let actions = match kind {
         arkret_sdk::events::kinds::MODERATION_DECISION => &[
-            "ck.realm.moderation_policy",
-            "ck.policy.manage",
-            "ck.moderation.decision",
+            "ak.realm.moderation_policy",
+            "ak.policy.manage",
+            "ak.moderation.decision",
         ][..],
         arkret_sdk::events::kinds::MODERATION_DECISION_LIFT => &[
-            "ck.realm.moderation_policy",
-            "ck.policy.manage",
-            "ck.moderation.decision.lift",
+            "ak.realm.moderation_policy",
+            "ak.policy.manage",
+            "ak.moderation.decision.lift",
         ][..],
-        arkret_sdk::events::kinds::MODERATION_APPEAL_SUBMIT => &["ck.moderation.appeal.submit"][..],
+        arkret_sdk::events::kinds::MODERATION_APPEAL_SUBMIT => &["ak.moderation.appeal.submit"][..],
         arkret_sdk::events::kinds::MODERATION_APPEAL_REVIEW
         | arkret_sdk::events::kinds::MODERATION_APPEAL_DECISION
         | arkret_sdk::events::kinds::MODERATION_APPEAL_CLOSE => {
-            &["ck.moderation.appeal.review"][..]
+            &["ak.moderation.appeal.review"][..]
         }
         _ => return Ok(()),
     };

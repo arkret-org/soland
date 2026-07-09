@@ -73,7 +73,7 @@ fn service_attested_device_authorize_binding_accepts_projection_metadata() {
         "device_id": "ak:device:019eefcb-5882-7861-bc30-3033fa32dcf6",
         "device_public_key": "z6MkjHNtpwuhc2QSXzkf4DWoWp7eSMKB9PzfdnvaLB7kb3dG",
         "hpke_key": "z6LSgy7T8CEsMDMzk1e4EBFVX8CDXWWzvkFZWSXhsC97zjcM",
-        "algorithms": ["ck.hpke_x25519_aead_chacha20poly1305.v1", "ck.mls.v1"],
+        "algorithms": ["ak.hpke_x25519_aead_chacha20poly1305.v1", "ck.mls.v1"],
         "authorized_by": "did:key:z6MknBuwKMPAzbhp6EwCnaxsEDk4G2KFeWRu273gYVuTY5jw",
         "not_before": "2026-06-22T14:45:51Z",
         "enrollment_authority_binding": {
@@ -103,7 +103,7 @@ fn signed_service_attested_device_authorize_payload(
         "device_id": "ak:device:019eefcb-5882-7861-bc30-3033fa32dcf6",
         "device_public_key": device_public_key,
         "hpke_key": "z6LSgy7T8CEsMDMzk1e4EBFVX8CDXWWzvkFZWSXhsC97zjcM",
-        "algorithms": ["ck.hpke_x25519_aead_chacha20poly1305.v1", "ck.mls.v1"],
+        "algorithms": ["ak.hpke_x25519_aead_chacha20poly1305.v1", "ck.mls.v1"],
         "device_key_algorithm": "EdDSA",
         "authorized_by": "did:key:z6MknBuwKMPAzbhp6EwCnaxsEDk4G2KFeWRu273gYVuTY5jw",
         "not_before": "2026-06-22T14:45:51Z",
@@ -229,7 +229,7 @@ fn seed_read_receipt_inheritance(
             realm_id: child_realm_id.to_owned(),
             operation_id: "ak:operation:01904100-0000-7000-8000-000000009901".to_owned(),
             source_realm_id: parent_realm_id.to_owned(),
-            allowed_policies: vec!["ck.realm.read_receipt_policy".to_owned()],
+            allowed_policies: vec!["ak.realm.read_receipt_policy".to_owned()],
             allowed_capability_bundles: Vec::new(),
             max_depth: 1,
             updated_at: now,
@@ -660,7 +660,7 @@ async fn insert_agent_interop_session_start(
             actor_seq: 1,
             realm_id: Some(realm_id.to_string()),
             kind: arkret_sdk::events::kinds::AGENT_INTEROP_SESSION_START.to_owned(),
-            schema_id: "ck.schema.event.v1".to_owned(),
+            schema_id: "ak.schema.event.v1".to_owned(),
             canonical_digest: "sha256:test".to_owned(),
             canonical_bytes: Vec::new(),
             envelope: json!({
@@ -1036,7 +1036,7 @@ async fn act_on_behalf_agent_unknown_kind_rejects_authorization_action() {
     let operation = op(
         realm_id,
         "0000000007c5",
-        "ck.agent.unknown.write",
+        "ak.agent.unknown.write",
         json!({
             "sender": "did:web:alice.example",
             "executed_by": agent,
@@ -1073,7 +1073,7 @@ async fn reply_agent_unknown_kind_rejects_context_authorization_action() {
     let operation = op(
         realm_id,
         "0000000007c6",
-        "ck.agent.unknown.reply",
+        "ak.agent.unknown.reply",
         json!({
             "sender": agent,
             "agent_context": agent_context(agent, grant_id.as_str()),
@@ -1167,7 +1167,7 @@ async fn profile_accountable_principal_requires_active_grant() {
     let profile = op(
         realm_id,
         "0000000007a3",
-        "ck.profile.create",
+        "ak.profile.create",
         json!({
             "principal_id": "did:web:agent.example",
             "display_name": "Agent",
@@ -1192,7 +1192,7 @@ async fn profile_accountable_principal_rejects_batch_grant_signed_by_other_actor
     let profile = op(
         realm_id.clone(),
         "0000000007a4",
-        "ck.profile.create",
+        "ak.profile.create",
         json!({
             "sender": "did:web:agent.example",
             "principal_id": "did:web:agent.example",
@@ -1203,7 +1203,7 @@ async fn profile_accountable_principal_rejects_batch_grant_signed_by_other_actor
     let fake_grant = op(
         realm_id,
         "0000000007a5",
-        "ck.identity.accountability_grant",
+        "ak.identity.accountability_grant",
         json!({
             "sender": "did:web:mallory.example",
             "issuer": "did:web:alice.example",
@@ -1236,13 +1236,13 @@ async fn profile_accountable_principal_rejects_stored_grant_signed_by_other_acto
             actor_id: "did:web:mallory.example".to_owned(),
             actor_seq: 1,
             realm_id: Some(realm_id.to_string()),
-            kind: "ck.identity.accountability_grant".to_owned(),
-            schema_id: "ck.schema.event.v1".to_owned(),
+            kind: "ak.identity.accountability_grant".to_owned(),
+            schema_id: "ak.schema.event.v1".to_owned(),
             canonical_digest: "sha256:test".to_owned(),
             canonical_bytes: Vec::new(),
             envelope: json!({
                 "actor_id": "did:web:mallory.example",
-                "kind": "ck.identity.accountability_grant",
+                "kind": "ak.identity.accountability_grant",
                 "realm_id": realm_id.to_string(),
                 "payload": {
                     "issuer": "did:web:alice.example",
@@ -1259,7 +1259,7 @@ async fn profile_accountable_principal_rejects_stored_grant_signed_by_other_acto
     let profile = op(
         realm_id,
         "0000000007a7",
-        "ck.profile.create",
+        "ak.profile.create",
         json!({
             "sender": "did:web:agent.example",
             "principal_id": "did:web:agent.example",
@@ -1293,7 +1293,7 @@ async fn circle_member_manage_rejects_forged_verdict_without_grant() {
             "membership": "join",
             "manage_capability_verified": true,
             "actor_capability": {
-                "action": "ck.circle.member.manage",
+                "action": "ak.circle.member.manage",
                 "circle_id": "ak:circle:01904100-0000-7000-8000-000000000881",
                 "allowed": true
             }
@@ -1320,7 +1320,7 @@ async fn circle_member_manage_allows_explicit_circle_scoped_grant() {
         &realm_id,
         circle_id,
         "did:web:alice.example",
-        "ck.circle.member.manage",
+        "ak.circle.member.manage",
     );
     let member_add = op(
         realm_id,
@@ -1333,7 +1333,7 @@ async fn circle_member_manage_allows_explicit_circle_scoped_grant() {
             "membership": "join",
             "manage_capability_verified": true,
             "actor_capability": {
-                "action": "ck.circle.member.manage",
+                "action": "ak.circle.member.manage",
                 "circle_id": circle_id,
                 "allowed": true
             }
@@ -1374,7 +1374,7 @@ async fn circle_lifecycle_requires_circle_manage_grant() {
         &realm_id,
         circle_id,
         "did:web:alice.example",
-        "ck.circle.manage",
+        "ak.circle.manage",
     );
     validate_operation_policy(&state, &[tombstone])
         .await
@@ -1477,7 +1477,7 @@ async fn agent_interop_session_status_rejects_realm_grant_without_session_scope(
         "did:web:alice.example".to_owned(),
         "did:web:bob.example".to_owned(),
         realm_id.to_string(),
-        vec!["ck.agent.interop_session.stream_status".to_owned()],
+        vec!["ak.agent.interop_session.stream_status".to_owned()],
         Vec::new(),
     );
     let status = op(
@@ -1521,7 +1521,7 @@ async fn agent_interop_session_status_allows_session_scoped_delegate() {
         "did:web:alice.example".to_owned(),
         "did:web:bob.example".to_owned(),
         realm_id.to_string(),
-        vec!["ck.agent.interop_session.stream_status".to_owned()],
+        vec!["ak.agent.interop_session.stream_status".to_owned()],
         vec![crate::authz::Constraint::AllowedSessionIds {
             allowed_session_ids: std::collections::BTreeSet::from([session]),
         }],
@@ -1852,7 +1852,7 @@ async fn call_recording_start_defaults_to_record_capability() {
 
     validate_operation_policy(&state, &[start])
         .await
-        .expect("ck.call.record should authorize recording capture");
+        .expect("ak.call.record should authorize recording capture");
 }
 
 #[tokio::test]
@@ -1920,7 +1920,7 @@ async fn call_recording_start_transcript_allows_transcribe_capability() {
 
     validate_operation_policy(&state, &[start])
         .await
-        .expect("ck.call.transcribe should authorize transcript capture");
+        .expect("ak.call.transcribe should authorize transcript capture");
 }
 
 #[tokio::test]
@@ -2252,7 +2252,7 @@ async fn realm_key_share_member_device_accepts_projection_metadata() {
             device_id: bob_device.to_owned(),
             display_name: None,
             verification_state: "verified".to_owned(),
-            payload: json!({"algorithms": ["ck.hpke_x25519_aead_chacha20poly1305.v1"]}),
+            payload: json!({"algorithms": ["ak.hpke_x25519_aead_chacha20poly1305.v1"]}),
             created_at: now,
             updated_at: now,
             revoked_at: None,

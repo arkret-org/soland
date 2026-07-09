@@ -55,7 +55,7 @@ use crate::state::{
     AppState, CanonicalEventRecord, EventNotification, MessageRecord, ProjectionEventRecord,
 };
 
-const EVENT_SCHEMA_ID: &str = "ck.schema.event.v1";
+const EVENT_SCHEMA_ID: &str = "ak.schema.event.v1";
 const MIMI_REASON_GOVERNANCE_BINDING_MISSING: &str = "mimi_governance_binding_missing";
 const MIMI_REASON_GOVERNANCE_BINDING_MISMATCH: &str = "mimi_governance_binding_mismatch";
 const MIMI_REASON_OBSERVER_WRITE_FORBIDDEN: &str = "mimi_observer_write_forbidden";

@@ -15,7 +15,7 @@ fn seed_scoped_message(state: &mut ProjectionState, hlc: &ServerHlc) {
             serde_json::json!({
                 "object": {
                     "id": REALM_ID,
-                    "schema": "ck.schema.realm.v1",
+                    "schema": "ak.schema.realm.v1",
                     "title": "Product",
                     "created_by": "did:web:alice.example",
                     "encryption_profile": "mls_rfc9420"
@@ -78,7 +78,7 @@ fn seed_scoped_message(state: &mut ProjectionState, hlc: &ServerHlc) {
                 "event_id": MESSAGE_EVENT_ID,
                 "thread_id": STRAND_ID,
                 "sender": "did:web:alice.example",
-                "content": {"kind": "ck.content.text", "body": "private"}
+                "content": {"kind": "ak.content.text", "body": "private"}
             }),
         ),
         hlc,

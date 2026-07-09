@@ -75,7 +75,7 @@ async fn applet_protocol_describe_smoke() {
         .take_json()
         .await
         .unwrap();
-    assert_eq!(describe["contract"], json!("ck.applet.v1"));
+    assert_eq!(describe["contract"], json!("ak.applet.v1"));
     assert_eq!(
         describe["install"]["commit_path"],
         json!("/_arkret/self/applets/install")
@@ -123,7 +123,7 @@ async fn applet_install_package_registers_bot_projection_smoke() {
         .unwrap();
     assert!(
         projection_events.iter().any(|event| {
-            event.event_kind == "ck.applet.registration"
+            event.event_kind == "ak.applet.registration"
                 && event.payload["applet_id"] == json!(applet_id)
                 && event.payload["bot_actor_id"] == json!(bot_actor_id)
         }),
@@ -150,12 +150,12 @@ async fn applet_install_package_registers_bot_projection_smoke() {
     let steps = execution["steps"].as_array().unwrap();
     assert_eq!(
         steps[0]["target_event_kind"],
-        json!("ck.applet.registration")
+        json!("ak.applet.registration")
     );
     assert_eq!(steps[0]["status"], json!("accepted"));
     assert_eq!(steps[0]["event_ref"], install["registration_event_ref"]);
     assert!(steps.iter().any(
-        |step| step["target_event_kind"] == json!("ck.capability.grant")
+        |step| step["target_event_kind"] == json!("ak.capability.grant")
             && step["grant_binding"]["registration_epoch"]
                 == json!(package.registration_epoch.to_string())
     ));
@@ -196,7 +196,7 @@ async fn applet_ghost_actor_provision_writes_durable_profile_and_grant_events() 
     ))
     .add_header("Authorization", format!("Bearer {token}"), true)
     .json(&json!({
-        "schema": "ck.applet.ghost_actor.provision_request.v1",
+        "schema": "ak.applet.ghost_actor.provision_request.v1",
         "applet_id": applet_id,
         "service_did": package.service_did.to_string(),
         "ghost_actor_id": ghost_actor_id,
@@ -230,7 +230,7 @@ async fn applet_ghost_actor_provision_writes_durable_profile_and_grant_events() 
         .await
         .unwrap()
         .expect("profile event is durable");
-    assert_eq!(profile_event.kind, "ck.profile.create");
+    assert_eq!(profile_event.kind, "ak.profile.create");
     assert_eq!(profile_event.actor_id, ghost_actor_id);
     assert_eq!(
         profile_event.envelope["executed_by"],
@@ -272,7 +272,7 @@ async fn applet_ghost_actor_provision_writes_durable_profile_and_grant_events() 
         .await
         .unwrap()
         .expect("accountability grant event is durable");
-    assert_eq!(grant_event.kind, "ck.identity.accountability_grant");
+    assert_eq!(grant_event.kind, "ak.identity.accountability_grant");
     assert_eq!(grant_event.actor_id, package.service_did.to_string());
     assert_eq!(
         grant_event.envelope["payload"]["issuer"],
@@ -294,11 +294,11 @@ async fn applet_ghost_actor_provision_writes_durable_profile_and_grant_events() 
         .await
         .unwrap();
     assert!(projection_events.iter().any(|event| {
-        event.event_id == profile_event_ref && event.event_kind == "ck.profile.create"
+        event.event_id == profile_event_ref && event.event_kind == "ak.profile.create"
     }));
     assert!(projection_events.iter().any(|event| {
         event.event_id == accountability_grant_ref
-            && event.event_kind == "ck.identity.accountability_grant"
+            && event.event_kind == "ak.identity.accountability_grant"
     }));
 }
 
@@ -319,7 +319,7 @@ async fn applet_ghost_actor_provision_requires_approved_ghost_scope() {
         &package,
         &realm_id,
         &format!("ghost-denied-{suffix}"),
-        vec!["ck.message.create".to_owned()],
+        vec!["ak.message.create".to_owned()],
     )
     .await;
     assert_eq!(install["effective_status"], json!("partially_installed"));
@@ -333,7 +333,7 @@ async fn applet_ghost_actor_provision_requires_approved_ghost_scope() {
     ))
     .add_header("Authorization", format!("Bearer {token}"), true)
     .json(&json!({
-        "schema": "ck.applet.ghost_actor.provision_request.v1",
+        "schema": "ak.applet.ghost_actor.provision_request.v1",
         "applet_id": applet_id,
         "service_did": package.service_did.to_string(),
         "ghost_actor_id": ghost_actor_id,
@@ -377,7 +377,7 @@ async fn applet_ghost_actor_provision_rejects_actor_namespace_mismatch() {
     ))
     .add_header("Authorization", format!("Bearer {token}"), true)
     .json(&json!({
-        "schema": "ck.applet.ghost_actor.provision_request.v1",
+        "schema": "ak.applet.ghost_actor.provision_request.v1",
         "applet_id": applet_id,
         "service_did": package.service_did.to_string(),
         "ghost_actor_id": "did:web:other.applet.example:ghost:u123",
@@ -489,13 +489,13 @@ fn applet_message_event(
         "strand_id": strand_id_for_realm(realm_id),
         "track_name": "discussion",
         "content": {
-            "kind": "ck.content.text",
+            "kind": "ak.content.text",
             "body": text,
         },
     });
     let mut event = json!({
         "event_id": arkret_sdk::new_prefixed_uuid7("ak:event:"),
-        "kind": "ck.message.create",
+        "kind": "ak.message.create",
         "realm_id": realm_id,
         "actor_id": actor_id,
         "actor_seq": 1,
@@ -601,7 +601,7 @@ async fn applet_bridge_register_ghost_route_revoke_smoke() {
     assert_eq!(install["effective_status"], json!("installed"));
     let bot_actor_id = install["bot_actor_id"].as_str().unwrap().to_owned();
     let message_grant_ref =
-        capability_grant_ref_for_action(&install, &package.requested_scopes, "ck.message.create");
+        capability_grant_ref_for_action(&install, &package.requested_scopes, "ak.message.create");
 
     let ghost_actor_id = format!(
         "did:web:{}.applet.example:ghost:ext-user-x",
@@ -612,7 +612,7 @@ async fn applet_bridge_register_ghost_route_revoke_smoke() {
     ))
     .add_header("Authorization", format!("Bearer {token}"), true)
     .json(&json!({
-        "schema": "ck.applet.ghost_actor.provision_request.v1",
+        "schema": "ak.applet.ghost_actor.provision_request.v1",
         "applet_id": applet_id,
         "service_did": package.service_did.to_string(),
         "ghost_actor_id": ghost_actor_id,
@@ -788,8 +788,8 @@ fn signed_applet_package(applet_id: &str, namespace: &str) -> AppletPackage {
             .unwrap(),
     );
     package.requested_scopes = vec![
-        "ck.message.create".to_owned(),
-        "ck.applet.ghost.provision".to_owned(),
+        "ak.message.create".to_owned(),
+        "ak.applet.ghost.provision".to_owned(),
     ];
     package.endpoint_policy = arkret_sdk::applet::AppletEndpointPolicy {
         extra: BTreeMap::from([
@@ -884,7 +884,7 @@ async fn install_applet_package_with_approved_actions(
     let effective_scope = json!({"kind": "realm", "realm_id": realm_id});
     let allow_ghost_actors = approve_actions
         .iter()
-        .any(|action| action == "ck.applet.ghost.provision");
+        .any(|action| action == "ak.applet.ghost.provision");
     let preview: Value = TestClient::post("http://server/_arkret/self/applets/install/preview")
         .add_header("Authorization", format!("Bearer {token}"), true)
         .json(&json!({
@@ -905,7 +905,7 @@ async fn install_applet_package_with_approved_actions(
         .unwrap();
     assert_eq!(
         preview["schema"],
-        json!("ck.schema.applet_install_plan.v1"),
+        json!("ak.schema.applet_install_plan.v1"),
         "install preview: {preview}"
     );
 

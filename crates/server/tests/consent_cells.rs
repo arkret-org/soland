@@ -245,14 +245,14 @@ fn signed_event(actor: &str, realm_id: &str, kind: &str, actor_seq: u64, payload
     let mut event = serde_json::json!({
         "event_id": ids::generate_event_id(),
         "kind": kind,
-        "schema_id": "ck.schema.event.v1",
+        "schema_id": "ak.schema.event.v1",
         "actor_id": actor,
         "actor_seq": actor_seq,
         "realm_id": realm_id,
         "prev_refs": [],
         "refs": [],
         "requirements": {
-            "schema": ["ck.schema.event.v1"],
+            "schema": ["ak.schema.event.v1"],
             "features": [],
             "critical_extensions": []
         },
@@ -303,17 +303,17 @@ async fn create_realm(app: &salvo::Service, token: &str, actor: &str) -> String 
         token,
         actor,
         &realm_id,
-        "ck.realm.create",
+        "ak.realm.create",
         1,
         serde_json::json!({
             "object": {
                 "id": realm_id,
-                "schema": "ck.schema.realm.v1",
+                "schema": "ak.schema.realm.v1",
                 "title": "Consent event projection",
                 "summary": "Consent reducer test realm",
                 "created_by": actor,
                 "trust_domain": "ak:trust_domain:soland.local",
-                "schema_refs": ["ck.schema.realm.v1"],
+                "schema_refs": ["ak.schema.realm.v1"],
                 "default_discoverability": "listed",
                 "default_join_rule": "invite",
                 "history_visibility": "shared",
@@ -391,7 +391,7 @@ async fn consent_events_project_cells_and_contact_gate() {
         &alice_token,
         alice,
         &realm_id,
-        "ck.consent.grant",
+        "ak.consent.grant",
         grant_seq,
         serde_json::json!({
             "consent_id": consent_id,
@@ -425,7 +425,7 @@ async fn consent_events_project_cells_and_contact_gate() {
         &alice_token,
         alice,
         &realm_id,
-        "ck.consent.revoke",
+        "ak.consent.revoke",
         3,
         serde_json::json!({
             "consent_id": consent_id,
@@ -527,7 +527,7 @@ async fn contact_row_surfaces_invite_consent_grant_ref() {
         &bob_token,
         bob,
         &realm_id,
-        "ck.consent.grant",
+        "ak.consent.grant",
         grant_seq,
         serde_json::json!({
             "consent_id": consent_id,

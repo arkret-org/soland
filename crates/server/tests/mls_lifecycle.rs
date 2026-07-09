@@ -100,7 +100,7 @@ fn signed_event(
     let mut event = json!({
         "event_id": event_id,
         "kind": kind,
-        "schema_id": "ck.schema.event.v1",
+        "schema_id": "ak.schema.event.v1",
         "actor_id": actor,
         "actor_seq": actor_seq,
         "realm_id": realm_id,
@@ -211,9 +211,9 @@ async fn mls_lifecycle_end_to_end() {
     let keypackage_digest = arkret_sdk::canonical::sha256_digest(keypackage_bytes);
     let mismatch_keypackage_digest =
         arkret_sdk::canonical::sha256_digest(mismatch_keypackage_bytes);
-    let capabilities = json!(["ck.mls.rfc9420", "ck.mls.profile.full"]);
+    let capabilities = json!(["ak.mls.rfc9420", "ck.mls.profile.full"]);
     let capabilities_digest = sha256_json(&capabilities);
-    let mismatch_capabilities = json!(["ck.mls.rfc9420"]);
+    let mismatch_capabilities = json!(["ak.mls.rfc9420"]);
     let device_signature = json!({
         "kid": format!("{alice_did}#{alice_device}"),
         "alg": "EdDSA",
@@ -279,8 +279,8 @@ async fn mls_lifecycle_end_to_end() {
     assert_eq!(
         published_row.capabilities,
         vec![
-            "ck.mls.rfc9420".to_owned(),
-            "ck.mls.profile.full".to_owned()
+            "ak.mls.rfc9420".to_owned(),
+            "ak.mls.profile.full".to_owned()
         ]
     );
     assert_eq!(published_row.capabilities_digest, capabilities_digest);
@@ -294,7 +294,7 @@ async fn mls_lifecycle_end_to_end() {
             "target_principal_id": alice_did,
             "intended_realm_id": realm_id,
             "requester": alice_did,
-            "required_capabilities": ["ck.mls.profile.full"],
+            "required_capabilities": ["ak.mls.profile.full"],
             "claim_nonce": b64(b"claim-nonce-01"),
             "expires_at": "2100-01-01T00:00:00Z",
             "mls_group_id": "ak:mls_group:abc"
@@ -327,7 +327,7 @@ async fn mls_lifecycle_end_to_end() {
             "target_principal_id": alice_did,
             "intended_realm_id": realm_id,
             "requester": alice_did,
-            "required_capabilities": ["ck.mls.profile.full"],
+            "required_capabilities": ["ak.mls.profile.full"],
             "claim_nonce": b64(b"claim-nonce-02"),
             "expires_at": "2100-01-01T00:00:00Z",
             "mls_group_id": "ak:mls_group:second"
@@ -372,15 +372,15 @@ async fn mls_lifecycle_end_to_end() {
         alice_did,
         alice_device,
         realm_id,
-        "ck.realm.create",
+        "ak.realm.create",
         json!({
             "object": {
                 "id": realm_id,
-                "schema": "ck.schema.realm.v1",
+                "schema": "ak.schema.realm.v1",
                 "title": "MLS lifecycle",
                 "created_by": alice_did,
                 "trust_domain": "ak:trust_domain:soland-mls-test.local",
-                "schema_refs": ["ck.schema.realm.v1"],
+                "schema_refs": ["ak.schema.realm.v1"],
                 "default_discoverability": "listed",
                 "default_join_rule": "invite",
                 "history_visibility": "joined",
@@ -413,7 +413,7 @@ async fn mls_lifecycle_end_to_end() {
         alice_did,
         alice_device,
         realm_id,
-        "ck.mls.genesis",
+        "ak.mls.genesis",
         json!({
             "mls_group_id": group_id,
             "effective_scope": effective_scope.clone(),
@@ -476,7 +476,7 @@ async fn mls_lifecycle_end_to_end() {
         alice_did,
         alice_device,
         realm_id,
-        "ck.mls.welcome",
+        "ak.mls.welcome",
         json!({
             "mls_group_id": group_id,
             "epoch": 1,
@@ -541,7 +541,7 @@ async fn mls_lifecycle_end_to_end() {
         alice_did,
         alice_device,
         realm_id,
-        "ck.mls.commit",
+        "ak.mls.commit",
         json!({
             "mls_group_id": group_id,
             "base_epoch": 0,
@@ -584,7 +584,7 @@ async fn mls_lifecycle_end_to_end() {
         .expect("device messages array");
     assert_eq!(device_messages.len(), 1, "{device_messages_json}");
     let device_message = &device_messages[0];
-    assert_eq!(device_message["kind"], json!("ck.mls.welcome"));
+    assert_eq!(device_message["kind"], json!("ak.mls.welcome"));
     assert_eq!(device_message["sender_device_id"], json!(alice_device));
     assert_eq!(device_message["recipient_principal_id"], json!(bob_did));
     assert_eq!(device_message["recipient_device_id"], json!(bob_device));

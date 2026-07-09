@@ -226,8 +226,8 @@ fn cross_signing_reset_blocks_queued_message(content: &Value, new_generation: u6
     let Some(kind) = queued_message_kind(content) else {
         return false;
     };
-    kind.starts_with("ck.key.verification.")
-        || kind.starts_with("ck.cross_signing.")
+    kind.starts_with("ak.key.verification.")
+        || kind.starts_with("ak.cross_signing.")
         || kind.contains("trust_bootstrap")
         || kind.contains("trust.bootstrap")
 }
@@ -767,8 +767,8 @@ impl DeviceMessageStore for PgDeviceMessageStore {
                  FROM device_messages \
                  WHERE recipient = $1 \
                    AND ( \
-                     COALESCE(content->>'kind', content->'content'->>'kind') LIKE 'ck.key.verification.%' \
-                     OR COALESCE(content->>'kind', content->'content'->>'kind') LIKE 'ck.cross_signing.%' \
+                     COALESCE(content->>'kind', content->'content'->>'kind') LIKE 'ak.key.verification.%' \
+                     OR COALESCE(content->>'kind', content->'content'->>'kind') LIKE 'ak.cross_signing.%' \
                      OR COALESCE(content->>'kind', content->'content'->>'kind') LIKE '%trust_bootstrap%' \
                      OR COALESCE(content->>'kind', content->'content'->>'kind') LIKE '%trust.bootstrap%' \
                    ) \

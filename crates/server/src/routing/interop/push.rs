@@ -60,7 +60,7 @@ const PUSH_TARGET_RETAIN_SECONDS: i64 = 24 * 60 * 60;
 pub(crate) fn push_target_privacy_derivation_claim(now: chrono::DateTime<chrono::Utc>) -> Value {
     json!({
         "push_target_id": {
-            "derivation_profile": "ck.push_target_id.hmac_sha256.v1",
+            "derivation_profile": "ak.push_target_id.hmac_sha256.v1",
             "secret_scope": "per_service",
             "salt_epoch_id": push_target_salt_epoch_id_at(now),
             "salt_rotation_seconds": PUSH_TARGET_SALT_ROTATION_SECONDS,
@@ -79,7 +79,7 @@ fn push_target_salt_epoch_id_at(now: chrono::DateTime<chrono::Utc>) -> String {
     let epoch = now
         .timestamp()
         .div_euclid(PUSH_TARGET_SALT_ROTATION_SECONDS);
-    format!("ck.push.salt_epoch.{epoch}")
+    format!("ak.push.salt_epoch.{epoch}")
 }
 
 fn derive_push_target_id(
@@ -104,11 +104,11 @@ fn derive_push_target_id(
     Ok(format!("ak:pseudonym:push:{}", URL_SAFE_NO_PAD.encode(tag)))
 }
 #[endpoint(
-    operation_id = "ck.edge.push.command.register_device",
+    operation_id = "ak.edge.push.command.register_device",
     tags("push"),
     summary = "Register a device + push gateway token (bearer or session-grant bridge)"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.edge.push.command.register_device"))]
+#[tracing::instrument(skip_all, fields(op = "ak.edge.push.command.register_device"))]
 pub(super) async fn push_register(
     body: JsonBody<PushRegisterDeviceRequestBody>,
     depot: &mut Depot,
@@ -337,11 +337,11 @@ fn hmac_sha256(key: &[u8], data: &[u8]) -> [u8; 32] {
 }
 
 #[endpoint(
-    operation_id = "ck.edge.push.command.unregister_device",
+    operation_id = "ak.edge.push.command.unregister_device",
     tags("push"),
     summary = "Unregister a push device for the authenticated actor"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.edge.push.command.unregister_device"))]
+#[tracing::instrument(skip_all, fields(op = "ak.edge.push.command.unregister_device"))]
 pub(super) async fn push_unregister(
     aa: AuthArgs,
     body: JsonBody<PushUnregisterDeviceRequestBody>,
@@ -486,11 +486,11 @@ pub(super) async fn delete_push_rule(
 }
 
 #[endpoint(
-    operation_id = "ck.edge.push.command.notify",
+    operation_id = "ak.edge.push.command.notify",
     tags("push"),
     summary = "Fan out a push notification through the rule engine"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.edge.push.command.notify"))]
+#[tracing::instrument(skip_all, fields(op = "ak.edge.push.command.notify"))]
 pub(super) async fn push_notify(
     body: JsonBody<PushNotifyRequestBody>,
     depot: &mut Depot,
@@ -969,7 +969,7 @@ mod tests {
     #[test]
     fn push_target_derivation_is_pairwise_and_stable() {
         let root_key = [7u8; 32];
-        let epoch = "ck.push.salt_epoch.42";
+        let epoch = "ak.push.salt_epoch.42";
         let first = derive_push_target_id(
             &root_key,
             "did:web:soland.example",
@@ -1026,7 +1026,7 @@ mod tests {
             "push_target_id": current,
             "retained_push_targets": [{
                 "push_target_id": retained,
-                "salt_epoch_id": "ck.push.salt_epoch.41",
+                "salt_epoch_id": "ak.push.salt_epoch.41",
                 "retained_until": "2026-06-19T01:00:00Z"
             }]
         });

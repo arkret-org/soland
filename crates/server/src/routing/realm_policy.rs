@@ -62,11 +62,11 @@ pub struct PutRealmPolicyServerRequestBody {
 }
 
 #[endpoint(
-    operation_id = "ck.self.realm_policy_server.resource.get",
+    operation_id = "ak.self.realm_policy_server.resource.get",
     tags("realms"),
     summary = "Read the projected ck.realm.policy_server config (G3.S2)"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.realm_policy_server.resource.get"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.realm_policy_server.resource.get"))]
 async fn get_realm_policy_server(
     aa: AuthArgs,
     realm_id: PathParam<String>,
@@ -102,11 +102,11 @@ async fn get_realm_policy_server(
 }
 
 #[endpoint(
-    operation_id = "ck.self.realm_policy_server.resource.replace",
+    operation_id = "ak.self.realm_policy_server.resource.replace",
     tags("realms"),
     summary = "Submit a ck.realm.policy_server Move (G3.S2)"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.realm_policy_server.resource.replace"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.realm_policy_server.resource.replace"))]
 async fn put_realm_policy_server(
     aa: AuthArgs,
     realm_id: PathParam<String>,
@@ -171,11 +171,11 @@ async fn put_realm_policy_server(
 }
 
 #[endpoint(
-    operation_id = "ck.self.realm_policy_server.resource.delete",
+    operation_id = "ak.self.realm_policy_server.resource.delete",
     tags("realms"),
     summary = "Tombstone the ck.realm.policy_server cell (G3.S2)"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.realm_policy_server.resource.delete"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.realm_policy_server.resource.delete"))]
 async fn delete_realm_policy_server(
     aa: AuthArgs,
     realm_id: PathParam<String>,

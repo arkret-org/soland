@@ -8,7 +8,7 @@ async fn soland_admin_openapi_uses_product_namespace() {
         .take_json()
         .await
         .unwrap();
-    let removed_admin_operation_prefix = format!("{}.{}.", "ck", "admin");
+    let removed_admin_operation_prefix = format!("{}.{}.", "ak., "admin");
     let rendered = serde_json::to_string(&spec).unwrap();
     assert!(!rendered.contains(&removed_admin_operation_prefix));
 
@@ -22,7 +22,7 @@ async fn soland_admin_openapi_uses_product_namespace() {
     let circle_restore = &spec["paths"]["/_arkret/self/circles/{circle_id}/restore"]["post"];
     assert_eq!(
         circle_restore["operationId"],
-        "ck.self.circle.command.restore"
+        "ak.self.circle.command.restore"
     );
 
     let mut checked_admin_operations = 0;

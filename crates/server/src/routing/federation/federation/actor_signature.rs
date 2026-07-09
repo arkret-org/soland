@@ -42,7 +42,7 @@ fn federation_verify_actor_signature_transcript(
 ) -> Value {
     let scope_id = body.realm_id.as_ref().map(|value| value.as_str());
     json!({
-        "type": "ck.federation.verify_actor.signature.v1",
+        "type": "ak.federation.verify_actor.signature.v1",
         "actor_id": body.actor_id.as_str(),
         "purpose": body.purpose,
         "challenge": body.challenge,

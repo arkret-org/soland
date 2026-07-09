@@ -366,9 +366,9 @@ pub(super) async fn hydrate_realms_from_canonical_events(
         return;
     };
     for record in events {
-        if record.kind == "ck.realm.create" {
+        if record.kind == "ak.realm.create" {
             hydrate_realm_create_event(persistence, realms, &record, service_did).await;
-        } else if record.kind == "ck.member.state" {
+        } else if record.kind == "ak.member.state" {
             // Membership transitions MUST be replayed too, or every joined
             // member except the realm creator (who is seeded by
             // `hydrate_realm_create_event`) vanishes from `realm_entry.members`
@@ -380,10 +380,10 @@ pub(super) async fn hydrate_realms_from_canonical_events(
             hydrate_realm_member_state_event(realms, &record);
         } else if matches!(
             record.kind.as_str(),
-            "ck.realm.history_visibility"
-                | "ck.realm.history_sharing_policy"
-                | "ck.realm.preview_policy"
-                | "ck.realm.asset_privacy_policy"
+            "ak.realm.history_visibility"
+                | "ak.realm.history_sharing_policy"
+                | "ak.realm.preview_policy"
+                | "ak.realm.asset_privacy_policy"
         ) {
             hydrate_realm_policy_event(persistence, &record).await;
         }
@@ -619,24 +619,24 @@ pub(super) async fn hydrate_realm_policy_event(
         return;
     };
     match record.kind.as_str() {
-        "ck.realm.history_visibility" => {
+        "ak.realm.history_visibility" => {
             if let Some(value) = payload.get("value").and_then(Value::as_str) {
                 meta.history_visibility = value.to_owned();
             }
         }
-        "ck.realm.history_sharing_policy" => {
+        "ak.realm.history_sharing_policy" => {
             if let Some(value) = payload.get("value") {
                 meta.history_sharing_policy = Some(value.clone());
                 meta.history_sharing_policy_digest = canonical_value_digest(value);
             }
         }
-        "ck.realm.preview_policy" => {
+        "ak.realm.preview_policy" => {
             if let Some(value) = payload.get("value") {
                 meta.preview_policy = Some(value.clone());
                 meta.preview_policy_digest = canonical_value_digest(value);
             }
         }
-        "ck.realm.asset_privacy_policy" => {
+        "ak.realm.asset_privacy_policy" => {
             if let Some(value) = payload.get("value") {
                 meta.asset_privacy_policy = Some(value.clone());
                 meta.asset_privacy_policy_digest = canonical_value_digest(value);

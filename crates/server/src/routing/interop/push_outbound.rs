@@ -95,15 +95,15 @@ async fn outbound_push_bridge_describe(depot: &mut Depot, res: &mut Response) {
             bridge_describe_path: "/_floria/push/bridge/describe".to_owned(),
             notify_path: "/_arkret/edge/push/notify".to_owned(),
             accepted_contracts: vec![
-                "ck.push.bridge.describe".to_owned(),
-                "ck.profile.push_gateway.v1".to_owned(),
+                "ak.push.bridge.describe".to_owned(),
+                "ak.profile.push_gateway.v1".to_owned(),
             ],
             fetch_mode: "live_http_fetch_with_durable_cache_fallback".to_owned(),
             cache_mode: "durable_snapshot_cache_with_drift_check".to_owned(),
             snapshot_store_mode: "durable_export_import_with_freshness_and_trust_level".to_owned(),
         },
         delivery: OutboundPushDeliveryDescriptor {
-            operation_id: "ck.edge.push.command.notify".to_owned(),
+            operation_id: "ak.edge.push.command.notify".to_owned(),
             origin_service_did_header: "X-Arkret-Origin-Service-Did".to_owned(),
             destination_service_did_header: "X-Arkret-Destination-Service-Did".to_owned(),
             request_id_header: "X-Arkret-Request-Id".to_owned(),
@@ -139,10 +139,10 @@ async fn outbound_push_bridge_describe(depot: &mut Depot, res: &mut Response) {
                     "contract_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
                     "fetched_at": now(),
                     "remote_contract": {
-                        "contract": "ck.push.bridge.describe",
+                        "contract": "ak.push.bridge.describe",
                         "delivery": {
                             "notify_path": "/_arkret/edge/push/notify",
-                            "operation_id": "ck.edge.push.command.notify"
+                            "operation_id": "ak.edge.push.command.notify"
                         }
                     }
                 }]
@@ -156,7 +156,7 @@ async fn outbound_push_bridge_describe(depot: &mut Depot, res: &mut Response) {
                     "cache_state": "memory_cached",
                     "contract_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
                     "remote_contract": {
-                        "contract": "ck.push.bridge.describe"
+                        "contract": "ak.push.bridge.describe"
                     }
                 }],
                 "snapshot_store_kind": "durable_push_bridge_cache"
@@ -578,9 +578,9 @@ pub(super) fn join_push_gateway_url(base: &str, path: &str) -> String {
 
 fn default_outbound_push_resolved_contract() -> OutboundPushResolvedContract {
     OutboundPushResolvedContract {
-        contract: "ck.push.bridge.describe".to_owned(),
+        contract: "ak.push.bridge.describe".to_owned(),
         expected_notify_path: "/_arkret/edge/push/notify".to_owned(),
-        expected_operation_id: "ck.edge.push.command.notify".to_owned(),
+        expected_operation_id: "ak.edge.push.command.notify".to_owned(),
         expected_origin_service_did_header: "X-Arkret-Origin-Service-Did".to_owned(),
         expected_destination_service_did_header: "X-Arkret-Destination-Service-Did".to_owned(),
         expected_request_id_header: "X-Arkret-Request-Id".to_owned(),

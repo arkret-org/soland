@@ -124,7 +124,7 @@ pub(super) fn decode_mimi_update_payload(body: &Value) -> Result<Option<Value>, 
 }
 
 pub(super) fn mimi_room_binding_payload(update_payload: &Value) -> Option<&Value> {
-    if update_payload.get("kind").and_then(Value::as_str) != Some("ck.mimi.room_binding") {
+    if update_payload.get("kind").and_then(Value::as_str) != Some("ak.mimi.room_binding") {
         return None;
     }
     update_payload.get("payload")
@@ -205,10 +205,10 @@ pub(super) fn decode_mimi_opaque_bytes(
 
 pub(super) fn mimi_provider_directory_value(state: &AppState) -> Value {
     json!({
-        "schema": "ck.schema.mimi_interop.v1",
+        "schema": "ak.schema.mimi_interop.v1",
         "service_did": state.config.service_did.clone(),
         "service_type": "mimi_provider_facade",
-        "supported_profiles": ["ck.profile.mimi_interop.v1"],
+        "supported_profiles": ["ak.profile.mimi_interop.v1"],
         "mimi": {
             "protocol_draft": "draft-ietf-mimi-protocol-06",
             "content_draft": "draft-ietf-mimi-content-08",
@@ -290,7 +290,7 @@ pub(super) fn mimi_receipt(
     extra: Value,
 ) -> Value {
     json!({
-        "profile": "ck.profile.mimi_interop.v1",
+        "profile": "ak.profile.mimi_interop.v1",
         "operation_id": operation_id,
         "service_did": state.config.service_did,
         "provider_id": mimi_provider_id(state),
@@ -333,7 +333,7 @@ pub(super) fn map_mimi_message_content(
     }
 
     let mut policy = json!({
-        "profile": "ck.profile.mimi_interop.v1",
+        "profile": "ak.profile.mimi_interop.v1",
         "e2ee_boundary": "none",
         "plaintext_detected": plaintext_detected,
         "plaintext_guard": "not_e2ee",
@@ -344,7 +344,7 @@ pub(super) fn map_mimi_message_content(
         ensure_content_object(&mut content);
         let object = content.as_object_mut().expect("content object");
         object.insert(
-            "ck.morph.e2ee_downgrade".to_owned(),
+            "ak.morph.e2ee_downgrade".to_owned(),
             Value::String("mimi_bridge".to_owned()),
         );
         object.insert(
@@ -352,7 +352,7 @@ pub(super) fn map_mimi_message_content(
             Value::String("mimi_bridge".to_owned()),
         );
         policy = json!({
-            "profile": "ck.profile.mimi_interop.v1",
+            "profile": "ak.profile.mimi_interop.v1",
             "e2ee_boundary": "explicit_downgrade",
             "plaintext_detected": plaintext_detected,
             "plaintext_guard": "marked_explicit_downgrade",
@@ -365,11 +365,11 @@ pub(super) fn map_mimi_message_content(
             let object = content.as_object_mut().expect("content object");
             object.insert("transcript_binding".to_owned(), binding.clone());
             object.insert(
-                "ck.morph.e2ee_boundary".to_owned(),
+                "ak.morph.e2ee_boundary".to_owned(),
                 Value::String("transcript_bound".to_owned()),
             );
             policy = json!({
-                "profile": "ck.profile.mimi_interop.v1",
+                "profile": "ak.profile.mimi_interop.v1",
                 "e2ee_boundary": "transcript_bound",
                 "plaintext_detected": plaintext_detected,
                 "plaintext_guard": "transcript_binding",
@@ -377,7 +377,7 @@ pub(super) fn map_mimi_message_content(
             });
         } else {
             policy = json!({
-                "profile": "ck.profile.mimi_interop.v1",
+                "profile": "ak.profile.mimi_interop.v1",
                 "e2ee_boundary": "opaque_ciphertext",
                 "plaintext_detected": false,
                 "plaintext_guard": "opaque_ciphertext_only",
@@ -397,9 +397,9 @@ pub(super) fn map_mimi_message_content(
             "raw_payload_hash": arkret_sdk::canonical::sha256_digest(content.to_string().as_bytes()),
         });
         let content = json!({
-            "kind": "ck.content.unsupported",
+            "kind": "ak.content.unsupported",
             "body": "unsupported content from MIMI",
-            "ck.morph.unknown_content_kind": kind,
+            "ak.morph.unknown_content_kind": kind,
             "quarantine": quarantine.clone(),
         });
         let mut policy = policy;
@@ -435,7 +435,7 @@ pub(super) fn mimi_content_payload(body: &Value, source_format: &str) -> Value {
             .and_then(Value::as_str)
             .unwrap_or_default();
         json!({
-            "kind": "ck.content.text",
+            "kind": "ak.content.text",
             "body": text,
             "raw_mimi_source_format": source_format,
         })
@@ -446,7 +446,7 @@ pub(super) fn ensure_content_object(content: &mut Value) {
     if !content.is_object() {
         let raw = content.clone();
         *content = json!({
-            "kind": "ck.content.opaque",
+            "kind": "ak.content.opaque",
             "raw_mimi_content": raw,
         });
     }
@@ -466,12 +466,12 @@ pub(super) fn valid_mimi_content_kind(kind: &str) -> bool {
             | "text/plain"
             | "text/markdown"
             | "m.markdown"
-            | "ck.message.text"
-            | "ck.message.revise"
-            | "ck.message.redact"
-            | "ck.content.text"
-            | "ck.content.composite"
-            | "ck.content.markdown"
+            | "ak.message.text"
+            | "ak.message.revise"
+            | "ak.message.redact"
+            | "ak.content.text"
+            | "ak.content.composite"
+            | "ak.content.markdown"
     )
 }
 
@@ -515,9 +515,9 @@ pub(super) fn mimi_transcript_binding<'a>(
 
 pub(super) fn mimi_explicit_downgrade(body: &Value, content: &Value) -> bool {
     downgrade_marker(body.get("e2ee_downgrade"))
-        || downgrade_marker(body.get("ck.morph.e2ee_downgrade"))
+        || downgrade_marker(body.get("ak.morph.e2ee_downgrade"))
         || downgrade_marker(content.get("e2ee_downgrade"))
-        || downgrade_marker(content.get("ck.morph.e2ee_downgrade"))
+        || downgrade_marker(content.get("ak.morph.e2ee_downgrade"))
 }
 
 pub(super) fn downgrade_marker(value: Option<&Value>) -> bool {

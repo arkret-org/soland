@@ -131,13 +131,13 @@ pub(super) fn signed_agent_selector_claim(
 }
 
 #[endpoint(
-    operation_id = "ck.find.directory.query.resolve_agent_selector",
+    operation_id = "ak.find.directory.query.resolve_agent_selector",
     tags("directory"),
     summary = "Resolve a controller-scoped native personal agent selector exactly"
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "ck.find.directory.query.resolve_agent_selector")
+    fields(op = "ak.find.directory.query.resolve_agent_selector")
 )]
 pub(super) async fn resolve_agent_selector(
     body: JsonBody<DirectoryResolveAgentSelectorRequestBody>,

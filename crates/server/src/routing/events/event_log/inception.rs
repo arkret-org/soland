@@ -107,7 +107,7 @@ const DID_INCEPTION_REF_ROLE: &str = "did_inception";
 /// receiver-side independent enforcement).
 ///
 /// Only inception-key-signed control events are gated: a
-/// `ck.device.authorize` / `ck.session.grant` whose envelope `refs[]` carries a
+/// `ck.device.authorize` / `ak.session.grant` whose envelope `refs[]` carries a
 /// `role="did_inception"` evidence ref. For those, the receiver seals on the
 /// `did:webvh` entry-0 `versionTime` (the verifiable bootstrap timestamp) and
 /// computes the inception-key age against its own local clock via the SDK
@@ -135,7 +135,7 @@ pub(super) async fn enforce_inception_key_online_window(
     envelope: &Value,
 ) -> Result<(), SubmitOneError> {
     // Only inception-key-signed control events are subject to the 24h cap.
-    if parsed.kind != "ck.device.authorize" && parsed.kind != "ck.session.grant" {
+    if parsed.kind != "ak.device.authorize" && parsed.kind != "ak.session.grant" {
         return Ok(());
     }
     let Some(object) = envelope.as_object() else {

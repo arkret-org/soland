@@ -28,7 +28,7 @@ use crate::state::{
 };
 use crate::{JsonResult, ids, json_ok};
 
-const ACCOUNT_DATA_TYPE_INVITE_QUARANTINE: &str = "ck.account.invite_quarantine";
+const ACCOUNT_DATA_TYPE_INVITE_QUARANTINE: &str = "ak.account.invite_quarantine";
 const INVITE_QUARANTINE_ORIGIN_DEVICE: &str = "server:consent_revoke";
 
 pub(super) fn router() -> Router {
@@ -43,8 +43,8 @@ pub(super) fn router() -> Router {
 pub(crate) async fn project_consent_operation(state: &AppState, operation: &Operation) {
     let kind = crate::kinds::canonical_kind_string(operation);
     let projected = match kind.as_str() {
-        "ck.consent.grant" => project_consent_grant_operation(state, operation).await,
-        "ck.consent.revoke" => project_consent_revoke_operation(state, operation).await,
+        "ak.consent.grant" => project_consent_grant_operation(state, operation).await,
+        "ak.consent.revoke" => project_consent_revoke_operation(state, operation).await,
         _ => return,
     };
     if let Err(error) = projected {
@@ -102,11 +102,11 @@ async fn project_consent_revoke_operation(
 }
 
 #[endpoint(
-    operation_id = "ck.self.consent.query.list",
+    operation_id = "ak.self.consent.query.list",
     tags("consent"),
     summary = "List consent cells visible to the authenticated holder"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.consent.query.list"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.consent.query.list"))]
 async fn list_consent_cells(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -132,12 +132,12 @@ async fn list_consent_cells(
 }
 
 #[endpoint(
-    operation_id = "ck.self.consent.resource.get",
+    operation_id = "ak.self.consent.resource.get",
     tags("consent"),
     summary = "Read one holder-private consent cell",
     status_codes(200, 400, 401, 403, 404, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.consent.resource.get"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.consent.resource.get"))]
 async fn get_consent_cell(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -175,12 +175,12 @@ async fn get_consent_cell(
 }
 
 #[endpoint(
-    operation_id = "ck.self.consent.command.grant",
+    operation_id = "ak.self.consent.command.grant",
     tags("consent"),
     summary = "Grant scoped consent to a peer DID",
     status_codes(200, 400, 401, 403, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.consent.command.grant"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.consent.command.grant"))]
 async fn grant_consent_cell(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -221,12 +221,12 @@ async fn grant_consent_cell(
 }
 
 #[endpoint(
-    operation_id = "ck.self.consent.command.revoke",
+    operation_id = "ak.self.consent.command.revoke",
     tags("consent"),
     summary = "Revoke scoped consent from a peer DID",
     status_codes(200, 400, 401, 403, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.consent.command.revoke"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.consent.command.revoke"))]
 async fn revoke_consent_cell(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -276,12 +276,12 @@ async fn revoke_consent_cell(
 }
 
 #[endpoint(
-    operation_id = "ck.self.consent.command.request",
+    operation_id = "ak.self.consent.command.request",
     tags("consent"),
     summary = "Open a scoped consent request",
     status_codes(200, 201, 400, 401, 404, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.consent.command.request"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.consent.command.request"))]
 async fn request_consent_cell(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -1383,7 +1383,7 @@ pub(super) async fn emit_consent_revoke_invalidation(
         })
         .collect::<Vec<_>>();
     let payload = json!({
-        "schema": "ck.vector.consent.cache_invalidation.v1",
+        "schema": "ak.vector.consent.cache_invalidation.v1",
         "holder_did": holder,
         "peer_did": peer,
         "consent_scope": scope,
@@ -1406,7 +1406,7 @@ pub(super) async fn emit_consent_revoke_invalidation(
         ProjectionEventRecord {
             event_id: ids::generate_event_id(),
             realm_id: super::recovery::principal_control_realm_for_did(holder),
-            event_kind: "ck.vector.consent.cache_invalidation.v1".to_owned(),
+            event_kind: "ak.vector.consent.cache_invalidation.v1".to_owned(),
             operation_type: "consent_revoke_cache_invalidation".to_owned(),
             operation_id: None,
             sender: Some(holder.to_owned()),
@@ -1508,7 +1508,7 @@ async fn invalidate_quarantined_invites_for_revoke(
     let mut object = existing.payload.as_object().cloned().unwrap_or_default();
     object.insert(
         "schema".to_owned(),
-        Value::String("ck.account.invite_quarantine.v1".to_owned()),
+        Value::String("ak.account.invite_quarantine.v1".to_owned()),
     );
     object.insert("entries".to_owned(), Value::Array(retained));
     object.insert("updated_at".to_owned(), json!(revoked_at));

@@ -195,7 +195,7 @@ pub(super) fn recovery_session_proof_summary(
     let proof = record.proof_payload.as_ref()?.get("proof")?.as_object()?;
     let kind = proof.get("kind").and_then(Value::as_str)?;
     let transcript = json!({
-        "type": "ck.identity.recovery_proof.v1",
+        "type": "ak.identity.recovery_proof.v1",
         "kind": kind,
         "principal_id": record.principal_id.as_str(),
         "requesting_device_id": record.requesting_device_id.as_str(),
@@ -238,7 +238,7 @@ pub(super) fn validate_key_backup_unlock_proof_shape(
     session_device_id: &str,
     backup: &Value,
 ) -> Result<(), AppError> {
-    if required_proof_string(proof, "schema")? != "ck.schema.key_backup_unlock_proof.v1" {
+    if required_proof_string(proof, "schema")? != "ak.schema.key_backup_unlock_proof.v1" {
         return Err(schema_error(
             "key backup unlock proof schema must be ck.schema.key_backup_unlock_proof.v1",
         ));

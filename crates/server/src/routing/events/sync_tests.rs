@@ -563,7 +563,7 @@ async fn put_canonical_event_received_at(
             actor_seq,
             realm_id: Some(ROSTER_REALM.to_owned()),
             kind: kind.to_owned(),
-            schema_id: "ck.event.v1".to_owned(),
+            schema_id: "ak.event.v1".to_owned(),
             canonical_digest: arkret_sdk::canonical::sha256_digest(&canonical_bytes),
             canonical_bytes,
             envelope,
@@ -639,7 +639,7 @@ async fn sync_timeline_visibility_uses_received_at_for_joined_history_cutoff() {
         "strand_id": strand_id,
         "thread_id": strand_id,
         "sender": ROSTER_ACTOR,
-        "content": {"kind": "ck.content.text", "body": "before join"}
+        "content": {"kind": "ak.content.text", "body": "before join"}
     });
     let post_join_payload = json!({
         "event_id": post_join_event_id,
@@ -648,7 +648,7 @@ async fn sync_timeline_visibility_uses_received_at_for_joined_history_cutoff() {
         "strand_id": strand_id,
         "thread_id": strand_id,
         "sender": ROSTER_ACTOR,
-        "content": {"kind": "ck.content.text", "body": "after join"}
+        "content": {"kind": "ak.content.text", "body": "after join"}
     });
     let pre_join_message = sync_test_operation_at(
         "ak:operation:01904100-0000-7000-8000-0000000002e1",
@@ -755,7 +755,7 @@ fn handle_claim(
     extra: Option<Value>,
 ) -> Value {
     let mut claim = json!({
-        "schema": "ck.schema.handle_claim.v1",
+        "schema": "ak.schema.handle_claim.v1",
         "handle": "alice:soland.local",
         "subject": ROSTER_SUBJECT,
         "issuer": issuer,
@@ -1410,7 +1410,7 @@ async fn sync_snapshot_includes_shared_pin_events_for_joined_member() {
             "strand_id": strand_id,
             "thread_id": strand_id,
             "sender": ROSTER_ACTOR,
-            "content": {"kind": "ck.content.text", "body": "Pinned welcome"}
+            "content": {"kind": "ak.content.text", "body": "Pinned welcome"}
         }),
         base + ChronoDuration::seconds(3),
     );
@@ -1540,7 +1540,7 @@ async fn sync_timeline_dedupes_redacted_revision_by_message_id() {
             "strand_id": strand_id,
             "thread_id": strand_id,
             "sender": ROSTER_ACTOR,
-            "content": {"kind": "ck.content.text", "body": "original"}
+            "content": {"kind": "ak.content.text", "body": "original"}
         }),
         base + ChronoDuration::seconds(3),
     );
@@ -1554,7 +1554,7 @@ async fn sync_timeline_dedupes_redacted_revision_by_message_id() {
             "strand_id": strand_id,
             "thread_id": strand_id,
             "sender": ROSTER_ACTOR,
-            "content": {"kind": "ck.content.text", "body": "edited"}
+            "content": {"kind": "ak.content.text", "body": "edited"}
         }),
         base + ChronoDuration::seconds(4),
     );
@@ -1741,17 +1741,17 @@ async fn events_query_cursor_uses_stream_purpose_and_binds_filter_digest() {
     let state = test_state();
     let session = roster_session(&state, "did:web:alice.example");
     let filter_a = sync_filter_digest(Some(&json!({
-        "operation_id": "ck.self.events.query.scan",
+        "operation_id": "ak.self.events.query.scan",
         "realms": [ROSTER_REALM],
         "actors": [],
         "filters": {},
         "order": "default",
     })));
     let filter_b = sync_filter_digest(Some(&json!({
-        "operation_id": "ck.self.events.query.scan",
+        "operation_id": "ak.self.events.query.scan",
         "realms": [ROSTER_REALM],
         "actors": [],
-        "filters": {"kind": "ck.message.create"},
+        "filters": {"kind": "ak.message.create"},
         "order": "default",
     })));
     let event_id = "ak:event:01904100-0000-7000-8000-0000000000e1";
@@ -1800,15 +1800,15 @@ async fn events_query_cursor_uses_stream_purpose_and_binds_filter_digest() {
 fn sync_filter_digest_normalizes_account_filter_collections() {
     let filter_a = json!({
         "realms": ["ak:realm:b", "ak:realm:a", "ak:realm:a"],
-        "event_types": ["ck.reaction.add", "ck.message.create", "ck.message.create"],
-        "not_event_types": ["ck.redaction", "ck.audit.accessed"],
+        "event_types": ["ak.reaction.add", "ck.message.create", "ck.message.create"],
+        "not_event_types": ["ak.redaction", "ck.audit.accessed"],
         "lazy_load_members": false,
         "include_redundant_members": false
     });
     let filter_b = json!({
         "realms": ["ak:realm:a", "ak:realm:b"],
-        "event_types": ["ck.message.create", "ck.reaction.add"],
-        "not_event_types": ["ck.audit.accessed", "ck.redaction"]
+        "event_types": ["ak.message.create", "ck.reaction.add"],
+        "not_event_types": ["ak.audit.accessed", "ck.redaction"]
     });
     assert_eq!(
         sync_filter_digest(Some(&filter_a)),
@@ -1817,8 +1817,8 @@ fn sync_filter_digest_normalizes_account_filter_collections() {
 
     let narrowed = json!({
         "realms": ["ak:realm:a", "ak:realm:b"],
-        "event_types": ["ck.message.create"],
-        "not_event_types": ["ck.audit.accessed", "ck.redaction"]
+        "event_types": ["ak.message.create"],
+        "not_event_types": ["ak.audit.accessed", "ck.redaction"]
     });
     assert_ne!(
         sync_filter_digest(Some(&filter_a)),
@@ -1829,22 +1829,22 @@ fn sync_filter_digest_normalizes_account_filter_collections() {
 #[test]
 fn sync_filter_digest_normalizes_events_query_scope_collections() {
     let scope_a = json!({
-        "operation_id": "ck.self.events.query.scan",
+        "operation_id": "ak.self.events.query.scan",
         "realms": ["ak:realm:b", "ak:realm:a", "ak:realm:a"],
         "actors": ["did:web:bob.example", "did:web:alice.example"],
         "filters": {
-            "kind": ["ck.reaction.add", "ck.message.create", "ck.message.create"],
-            "not_event_types": ["ck.redaction", "ck.audit.accessed"]
+            "kind": ["ak.reaction.add", "ck.message.create", "ck.message.create"],
+            "not_event_types": ["ak.redaction", "ck.audit.accessed"]
         },
         "order": "default"
     });
     let scope_b = json!({
-        "operation_id": "ck.self.events.query.scan",
+        "operation_id": "ak.self.events.query.scan",
         "realms": ["ak:realm:a", "ak:realm:b"],
         "actors": ["did:web:alice.example", "did:web:bob.example"],
         "filters": {
-            "kind": ["ck.message.create", "ck.reaction.add"],
-            "not_event_types": ["ck.audit.accessed", "ck.redaction"]
+            "kind": ["ak.message.create", "ck.reaction.add"],
+            "not_event_types": ["ak.audit.accessed", "ck.redaction"]
         },
         "order": "default"
     });
@@ -1854,12 +1854,12 @@ fn sync_filter_digest_normalizes_events_query_scope_collections() {
     );
 
     let different_order = json!({
-        "operation_id": "ck.self.events.query.scan",
+        "operation_id": "ak.self.events.query.scan",
         "realms": ["ak:realm:a", "ak:realm:b"],
         "actors": ["did:web:alice.example", "did:web:bob.example"],
         "filters": {
-            "kind": ["ck.message.create", "ck.reaction.add"],
-            "not_event_types": ["ck.audit.accessed", "ck.redaction"]
+            "kind": ["ak.message.create", "ck.reaction.add"],
+            "not_event_types": ["ak.audit.accessed", "ck.redaction"]
         },
         "order": "ascending"
     });

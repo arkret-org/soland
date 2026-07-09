@@ -71,12 +71,12 @@ the realm's `ck.realm.media_service.foci[]` set, returning `focus_mismatch`.
 
 ## `participant_binding` canonical bytes
 
-`ParticipantBinding` is defined with `scheme = "ck.media.participant_binding.v1"`:
+`ParticipantBinding` is defined with `scheme = "ak.media.participant_binding.v1"`:
 
 ```json
 {
-  "scheme": "ck.media.participant_binding.v1",
-  "issuer_kid": "ck-media-issuer/example/2026-05",
+  "scheme": "ak.media.participant_binding.v1",
+  "issuer_kid": "ak.media-issuer/example/2026-05",
   "realm_id": "ak:realm:...",
   "call_id": "ak:call:...",
   "focus_id": "ak:focus:livekit:eu-west-1",

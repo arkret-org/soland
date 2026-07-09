@@ -221,7 +221,7 @@ pub(super) async fn validate_applet_registration_authz(
         .authz
         .check(
             actor,
-            "ck.realm.admin",
+            "ak.realm.admin",
             realm_id,
             realm_id,
             owner.as_deref(),
@@ -237,11 +237,11 @@ pub(super) async fn validate_applet_registration_authz(
 
 /// Control-stream events carry their owning principal in `payload.principal_id`.
 pub(super) const PRINCIPAL_CONTROL_EVENT_KINDS: &[&str] = &[
-    "ck.device.authorize",
-    "ck.device.list_update",
-    "ck.device.revoke",
-    "ck.cross_signing.publish",
-    "ck.cross_signing.reset",
+    "ak.device.authorize",
+    "ak.device.list_update",
+    "ak.device.revoke",
+    "ak.cross_signing.publish",
+    "ak.cross_signing.reset",
 ];
 
 /// Phase 2 — principal control realm isolation (key-management.md §4.1). A
@@ -345,9 +345,9 @@ pub(super) async fn validate_message_edit_redact_window_policy(
     };
 
     let (own_action, broad_action) = if is_redact {
-        ("ck.message.redact.own", "ck.message.redact")
+        ("ak.message.redact.own", "ck.message.redact")
     } else {
-        ("ck.message.revise.own", "ck.message.revise")
+        ("ak.message.revise.own", "ck.message.revise")
     };
 
     let grants = state.authz.grants_for_subject(actor, realm_id);

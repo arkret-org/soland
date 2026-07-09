@@ -8,7 +8,7 @@ pub(super) async fn mimi_protocol_directory(depot: &mut Depot, res: &mut Respons
 }
 
 #[endpoint(
-    operation_id = "ck.open.mimi.query.provider_directory",
+    operation_id = "ak.open.mimi.query.provider_directory",
     tags("mimi"),
     summary = "Read the MIMI provider directory"
 )]
@@ -19,11 +19,11 @@ pub(super) async fn mimi_provider_directory(depot: &mut Depot, res: &mut Respons
 }
 
 #[endpoint(
-    operation_id = "ck.open.mimi.exchange.request_key_material",
+    operation_id = "ak.open.mimi.exchange.request_key_material",
     tags("mimi"),
     summary = "Claim MIMI/MLS key material for a target identifier"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.open.mimi.exchange.request_key_material"))]
+#[tracing::instrument(skip_all, fields(op = "ak.open.mimi.exchange.request_key_material"))]
 pub(super) async fn mimi_key_material(
     body: JsonBody<MimiKeyMaterialRequestBody>,
     depot: &mut Depot,
@@ -44,7 +44,7 @@ pub(super) async fn mimi_key_material(
         .unwrap_or("unknown");
     let _receipt = mimi_receipt(
         state,
-        "ck.open.mimi.exchange.request_key_material",
+        "ak.open.mimi.exchange.request_key_material",
         &body,
         json!({
             "target": target,
@@ -60,11 +60,11 @@ pub(super) async fn mimi_key_material(
 }
 
 #[endpoint(
-    operation_id = "ck.open.mimi.command.update_room",
+    operation_id = "ak.open.mimi.command.update_room",
     tags("mimi"),
     summary = "Apply a MIMI room update (optionally persists `room_binding`)"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.open.mimi.command.update_room"))]
+#[tracing::instrument(skip_all, fields(op = "ak.open.mimi.command.update_room"))]
 pub(super) async fn mimi_room_update(
     strand_id: PathParam<String>,
     body: JsonBody<MimiRoomUpdateRequestBody>,
@@ -115,7 +115,7 @@ pub(super) async fn mimi_room_update(
         .map_err(|error| AppError::internal(format!("MIMI room state ref: {error}")))?;
     let _receipt = mimi_receipt(
         state,
-        "ck.open.mimi.command.update_room",
+        "ak.open.mimi.command.update_room",
         &body,
         json!({
             "mimi_room_uri": mimi_room_uri(state, &room_id),
@@ -132,11 +132,11 @@ pub(super) async fn mimi_room_update(
 }
 
 #[endpoint(
-    operation_id = "ck.open.mimi.command.notify",
+    operation_id = "ak.open.mimi.command.notify",
     tags("mimi"),
     summary = "Fan out a MIMI notify (broadcasts a `ck.open.mimi.command.notify` ephemeral)"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.open.mimi.command.notify"))]
+#[tracing::instrument(skip_all, fields(op = "ak.open.mimi.command.notify"))]
 pub(super) async fn mimi_notify(
     strand_id: PathParam<String>,
     body: JsonBody<MimiNotifyRequestBody>,
@@ -167,7 +167,7 @@ pub(super) async fn mimi_notify(
     let notify_record = ProjectionEventRecord {
         event_id: event_id.clone(),
         realm_id: realm_id.clone(),
-        event_kind: "ck.open.mimi.command.notify".to_owned(),
+        event_kind: "ak.open.mimi.command.notify".to_owned(),
         operation_type: "mimi_facade_notify".to_owned(),
         operation_id: None,
         sender: None,
@@ -189,7 +189,7 @@ pub(super) async fn mimi_notify(
 
     let _receipt = mimi_receipt(
         state,
-        "ck.open.mimi.command.notify",
+        "ak.open.mimi.command.notify",
         &body,
         json!({
             "delivery": "queued",
@@ -205,11 +205,11 @@ pub(super) async fn mimi_notify(
 }
 
 #[endpoint(
-    operation_id = "ck.open.mimi.command.submit_message",
+    operation_id = "ak.open.mimi.command.submit_message",
     tags("mimi"),
     summary = "Submit a MIMI room message (mapped into ck.message.create projection)"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.open.mimi.command.submit_message"))]
+#[tracing::instrument(skip_all, fields(op = "ak.open.mimi.command.submit_message"))]
 pub(super) async fn mimi_room_message(
     strand_id: PathParam<String>,
     body: JsonBody<MimiSubmitMessageRequestBody>,
@@ -350,14 +350,14 @@ pub(super) async fn mimi_room_message(
 
     let _receipt = mimi_receipt(
         state,
-        "ck.open.mimi.command.submit_message",
+        "ak.open.mimi.command.submit_message",
         &body,
         json!({
-            "kind": "ck.mimi.mapping_receipt",
-            "profile": "ck.profile.mimi_interop.v1",
+            "kind": "ak.mimi.mapping_receipt",
+            "profile": "ak.profile.mimi_interop.v1",
             "mimi_room_uri": mimi_room_uri(state, &room_id),
             "source_format": source_format,
-            "target_format": "ck.message.create",
+            "target_format": "ak.message.create",
             "original_envelope_hash": original_hash,
             "mapped_operation_id": operation_id,
             "arkret_event_id": event_id,
@@ -398,11 +398,11 @@ pub(super) async fn mimi_room_message(
 }
 
 #[endpoint(
-    operation_id = "ck.open.mimi.query.group_info",
+    operation_id = "ak.open.mimi.query.group_info",
     tags("mimi"),
     summary = "Read a MIMI room's group info / projection"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.open.mimi.query.group_info"))]
+#[tracing::instrument(skip_all, fields(op = "ak.open.mimi.query.group_info"))]
 pub(super) async fn mimi_group_info(
     strand_id: PathParam<String>,
     depot: &mut Depot,
@@ -419,7 +419,7 @@ pub(super) async fn mimi_group_info(
     let projection = mimi_room_projection(state, &room_id, &realm_id);
     let _receipt = mimi_receipt(
         state,
-        "ck.open.mimi.query.group_info",
+        "ak.open.mimi.query.group_info",
         &json!({"room_id": room_id}),
         json!({
             "truth_source": "arkret_signed_event_reducer",
@@ -434,11 +434,11 @@ pub(super) async fn mimi_group_info(
 }
 
 #[endpoint(
-    operation_id = "ck.open.mimi.command.request_consent",
+    operation_id = "ak.open.mimi.command.request_consent",
     tags("mimi"),
     summary = "Open a MIMI consent request"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.open.mimi.command.request_consent"))]
+#[tracing::instrument(skip_all, fields(op = "ak.open.mimi.command.request_consent"))]
 pub(super) async fn mimi_consent_request(
     aa: AuthArgs,
     body: JsonBody<MimiRequestConsentRequestBody>,
@@ -472,7 +472,7 @@ pub(super) async fn mimi_consent_request(
         .unwrap_or_else(|| ids::generate("consent"));
     let _receipt = mimi_receipt(
         state,
-        "ck.open.mimi.command.request_consent",
+        "ak.open.mimi.command.request_consent",
         &body,
         json!({
             "consent_grants_space_capability": false,
@@ -489,11 +489,11 @@ pub(super) async fn mimi_consent_request(
 }
 
 #[endpoint(
-    operation_id = "ck.open.mimi.command.update_consent",
+    operation_id = "ak.open.mimi.command.update_consent",
     tags("mimi"),
     summary = "Update a MIMI consent state"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.open.mimi.command.update_consent"))]
+#[tracing::instrument(skip_all, fields(op = "ak.open.mimi.command.update_consent"))]
 pub(super) async fn mimi_consent_update(
     aa: AuthArgs,
     body: JsonBody<MimiUpdateConsentRequestBody>,
@@ -532,13 +532,13 @@ pub(super) async fn mimi_consent_update(
         .and_then(|event_ref| EventId::new(event_ref.clone()).ok());
     let _receipt = mimi_receipt(
         state,
-        "ck.open.mimi.command.update_consent",
+        "ak.open.mimi.command.update_consent",
         &body,
         json!({
             "consent_grants_space_capability": false,
             "membership_still_required": true,
             "holder_private_materialized": materialized.is_some(),
-            "mapped_event_kind": if granted { "ck.consent.grant" } else { "ck.consent.revoke" }
+            "mapped_event_kind": if granted { "ak.consent.grant" } else { "ck.consent.revoke" }
         }),
     );
     json_ok(MimiUpdateConsentOutcome {
@@ -587,11 +587,11 @@ pub(super) fn request_has_bearer_session(req: &Request) -> bool {
 }
 
 #[endpoint(
-    operation_id = "ck.open.mimi.query.identifiers",
+    operation_id = "ak.open.mimi.query.identifiers",
     tags("mimi"),
     summary = "Query opaque MIMI / DID identifier commitments"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.open.mimi.query.identifiers"))]
+#[tracing::instrument(skip_all, fields(op = "ak.open.mimi.query.identifiers"))]
 pub(super) async fn mimi_identifiers_query(
     body: JsonBody<MimiIdentifierQueryRequestBody>,
     depot: &mut Depot,
@@ -636,7 +636,7 @@ pub(super) async fn mimi_identifiers_query(
     }
     let _receipt = mimi_receipt(
         state,
-        "ck.open.mimi.query.identifiers",
+        "ak.open.mimi.query.identifiers",
         &body,
         json!({
             "contact_graph_exposed": false,
@@ -653,11 +653,11 @@ pub(super) async fn mimi_identifiers_query(
 }
 
 #[endpoint(
-    operation_id = "ck.open.mimi.command.report_abuse",
+    operation_id = "ak.open.mimi.command.report_abuse",
     tags("mimi"),
     summary = "File a MIMI abuse report (mirrors as ck.self.moderation.report projection event)"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.open.mimi.command.report_abuse"))]
+#[tracing::instrument(skip_all, fields(op = "ak.open.mimi.command.report_abuse"))]
 pub(super) async fn mimi_report_abuse(
     body: JsonBody<MimiReportAbuseRequestBody>,
     depot: &mut Depot,
@@ -787,7 +787,7 @@ pub(super) async fn mimi_report_abuse(
     let report_record = ProjectionEventRecord {
         event_id: report_event_id.clone(),
         realm_id: realm_id.clone(),
-        event_kind: "ck.self.moderation.report".to_owned(),
+        event_kind: "ak.self.moderation.report".to_owned(),
         operation_type: "mimi_facade_report".to_owned(),
         operation_id: None,
         sender: Some(reporter.to_owned()),
@@ -818,7 +818,7 @@ pub(super) async fn mimi_report_abuse(
     );
     let _receipt = mimi_receipt(
         state,
-        "ck.open.mimi.command.report_abuse",
+        "ak.open.mimi.command.report_abuse",
         &body,
         json!({
             "e2ee_evidence_plaintext_required": false,
@@ -875,11 +875,11 @@ pub(super) async fn enforce_mimi_reporter_resolution(
 }
 
 #[endpoint(
-    operation_id = "ck.open.mimi.command.proxy_download",
+    operation_id = "ak.open.mimi.command.proxy_download",
     tags("mimi"),
     summary = "Issue a proxy-download token for a MIMI blob (asset privacy policy honored)"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.open.mimi.command.proxy_download"))]
+#[tracing::instrument(skip_all, fields(op = "ak.open.mimi.command.proxy_download"))]
 pub(super) async fn mimi_proxy_download(
     body: JsonBody<MimiProxyDownloadRequestBody>,
     depot: &mut Depot,
@@ -920,7 +920,7 @@ pub(super) async fn mimi_proxy_download(
     }
     let _receipt = mimi_receipt(
         state,
-        "ck.open.mimi.command.proxy_download",
+        "ak.open.mimi.command.proxy_download",
         &body,
         json!({
             "asset_privacy_policy": asset_policy,

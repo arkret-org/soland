@@ -103,19 +103,19 @@ fn validate_typed_payload_shapes(kind: &str, operation: &Operation) -> Result<()
         // The removed top-level `target_ref` form is rejected
         // unconditionally; everything else passes through to the
         // per-kind SPACE_CONTAINER_LIFECYCLE_REQUIREMENTS validator below.
-        "ck.space.archive" | "ck.space.restore" => {
+        "ak.space.archive" | "ck.space.restore" => {
             if operation.payload.get("target_ref").is_some() {
                 return Err(
-                    "ck.space.archive/restore removed `target_ref` form rejected by round-4 wire",
+                    "ak.space.archive/restore removed `target_ref` form rejected by round-4 wire",
                 );
             }
             Ok(())
         }
         // ck.space.tombstone — same removed-field reject rule.
-        "ck.space.tombstone" => {
+        "ak.space.tombstone" => {
             if operation.payload.get("target_ref").is_some() {
                 return Err(
-                    "ck.space.tombstone removed `target_ref` form rejected by round-4 wire",
+                    "ak.space.tombstone removed `target_ref` form rejected by round-4 wire",
                 );
             }
             Ok(())
@@ -135,7 +135,7 @@ fn validate_typed_payload_shapes(kind: &str, operation: &Operation) -> Result<()
             validate_consent_revoke_payload(&operation.payload)
                 .map(|_| ())
                 .or_else(|_| validate_observed_dots_payload(operation))
-                .map_err(|_| "ck.consent.revoke payload violates observed_dots requirement")
+                .map_err(|_| "ak.consent.revoke payload violates observed_dots requirement")
         }
         // ck.cross_signing.publish — round 4 CAS-register cell with
         // required `expected_previous_generation`. The reducer accepts
@@ -150,7 +150,7 @@ fn validate_typed_payload_shapes(kind: &str, operation: &Operation) -> Result<()
                 .is_none()
             {
                 return Err(
-                    "ck.cross_signing.publish payload requires expected_previous_generation \
+                    "ak.cross_signing.publish payload requires expected_previous_generation \
                      (round-4 CAS wire break)",
                 );
             }
@@ -158,12 +158,12 @@ fn validate_typed_payload_shapes(kind: &str, operation: &Operation) -> Result<()
                 // DRIFT-ALLOW: error message string for the round-4 CAS contract.
                 // Spec cross-signing-publish.schema.json uses `generation`
                 // (monotonic counter) + `expected_previous_generation` (CAS).
-                return Err("ck.cross_signing.publish payload requires generation (round-4 CAS)");
+                return Err("ak.cross_signing.publish payload requires generation (round-4 CAS)");
             }
             if operation.payload.get("trust_domain").is_none() {
                 // DRIFT-ALLOW: error message string for the round-4 wire break.
                 return Err(
-                    "ck.cross_signing.publish payload requires trust_domain (round-4 wire break)",
+                    "ak.cross_signing.publish payload requires trust_domain (round-4 wire break)",
                 );
             }
             Ok(())
@@ -171,7 +171,7 @@ fn validate_typed_payload_shapes(kind: &str, operation: &Operation) -> Result<()
         // ck.applet.interop_session.start — round 4 requires the
         // `applet_id` to be either a DID or a strictly-validated
         // `ak:applet:<uuidv7>` typed id.
-        "ck.applet.interop_session.start" => {
+        "ak.applet.interop_session.start" => {
             if let Some(applet_id) = operation.payload.get("applet_id").and_then(|v| v.as_str()) {
                 validate_applet_id(applet_id).map(|_| ()).map_err(
                     |_| "applet_id must be a DID or ak:applet:<uuidv7> (typed-id wire break)",
@@ -181,7 +181,7 @@ fn validate_typed_payload_shapes(kind: &str, operation: &Operation) -> Result<()
         }
         // ck.audit.policy_access — when `access_kind=e2ee_late_recovery`
         // the payload MUST carry `late_recovery_original_event_id`.
-        "ck.audit.policy_access" => {
+        "ak.audit.policy_access" => {
             if let Some(access_kind) = operation
                 .payload
                 .get("access_kind")
@@ -193,13 +193,13 @@ fn validate_typed_payload_shapes(kind: &str, operation: &Operation) -> Result<()
                     .is_none()
             {
                 return Err(
-                    "ck.audit.policy_access access_kind=e2ee_late_recovery requires \
+                    "ak.audit.policy_access access_kind=e2ee_late_recovery requires \
                      late_recovery_original_event_id (round-4 wire break)",
                 );
             }
             Ok(())
         }
-        "ck.realm.media_service" => {
+        "ak.realm.media_service" => {
             if operation.payload.get("sfu_endpoint").is_some() {
                 return Err(
                     "realm_media_service_requires_foci: ck.realm.media_service must use foci[]",
@@ -215,7 +215,7 @@ fn validate_typed_payload_shapes(kind: &str, operation: &Operation) -> Result<()
         //   - `participants[].participant_binding.scheme` MUST be the canonical
         //     `ck.media.participant_binding.v1`; otherwise reject with
         //     `participant_binding_invalid`.
-        "ck.call.state" => {
+        "ak.call.state" => {
             // REDU-3 — write-once `session_focus`. Wire-shape check: a
             // payload that carries `session_focus_revision > 1` MUST
             // also carry `previous_session_focus` (the failed update
@@ -303,7 +303,7 @@ fn validate_typed_payload_shapes(kind: &str, operation: &Operation) -> Result<()
             }
             Ok(())
         }
-        "ck.profile.create" | "ck.profile.update" => Ok(()),
+        "ak.profile.create" | "ck.profile.update" => Ok(()),
         _ => Ok(()),
     }
 }
@@ -905,13 +905,13 @@ pub fn validate_consent_revoke_payload(payload: &Value) -> Result<(), (&'static 
         .map_err(|err| {
             (
                 arkret_sdk::ERROR_CODE_SCHEMA_VIOLATION,
-                format!("ck.consent.revoke payload shape is invalid: {err}"),
+                format!("ak.consent.revoke payload shape is invalid: {err}"),
             )
         })?;
     parsed.validate_minimal().map_err(|err| {
         (
             arkret_sdk::ERROR_CODE_SCHEMA_VIOLATION,
-            format!("ck.consent.revoke payload invariant violation: {err}"),
+            format!("ak.consent.revoke payload invariant violation: {err}"),
         )
     })?;
     Ok(())

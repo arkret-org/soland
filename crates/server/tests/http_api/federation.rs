@@ -29,17 +29,17 @@ async fn peer_events_describe_advertises_formal_surface() {
     assert!(
         operations
             .iter()
-            .any(|op| op == "ck.peer.events.command.submit")
+            .any(|op| op == "ak.peer.events.command.submit")
     );
     assert!(
         operations
             .iter()
-            .any(|op| op == "ck.peer.events.query.scan")
+            .any(|op| op == "ak.peer.events.query.scan")
     );
     assert!(
         operations
             .iter()
-            .any(|op| op == "ck.peer.events.query.frontier")
+            .any(|op| op == "ak.peer.events.query.frontier")
     );
     // `ck.peer.snapshot.query.manifest_head` MUST NOT be declared while soland cannot
     // produce a signed ck.schema.snapshot.v1 manifest; the endpoint
@@ -47,7 +47,7 @@ async fn peer_events_describe_advertises_formal_surface() {
     assert!(
         !operations
             .iter()
-            .any(|op| op == "ck.peer.snapshot.query.manifest_head")
+            .any(|op| op == "ak.peer.snapshot.query.manifest_head")
     );
 }
 
@@ -298,8 +298,8 @@ async fn peer_events_submit_accepts_bound_mls_welcome_and_rejects_missing_claim_
     let welcome_event_id = "ak:event:01904100-0000-7000-8000-fede00000b01";
     let welcome_event = event_envelope(
         welcome_event_id,
-        "ck.mls.welcome",
-        "ck.schema.event.v1",
+        "ak.mls.welcome",
+        "ak.schema.event.v1",
         "did:web:alice.example",
         51,
         mls_welcome_payload("claim-peer-01", "opaque-peer-welcome"),
@@ -327,8 +327,8 @@ async fn peer_events_submit_accepts_bound_mls_welcome_and_rejects_missing_claim_
         .remove("claim_envelope");
     let missing_claim_event = event_envelope(
         missing_claim_event_id,
-        "ck.mls.welcome",
-        "ck.schema.event.v1",
+        "ak.mls.welcome",
+        "ak.schema.event.v1",
         "did:web:alice.example",
         52,
         missing_claim_payload,
@@ -461,7 +461,7 @@ fn peer_submit_body(event: &Value) -> Value {
     let event_id = event["event_id"].as_str().unwrap();
     let event_digest = event["canonical_digest"].as_str().unwrap();
     let binding_payload = serde_json::json!({
-        "domain": "ck.peer.events.command.submit.service_binding.v1",
+        "domain": "ak.peer.events.command.submit.service_binding.v1",
         "realm_id": TEST_REALM_ID,
         "event_id": event_id,
         "canonical_digest": event_digest,
@@ -581,8 +581,8 @@ fn realm_sync_endpoint_event(event_id: &str, source_service_did: &str, seq: u64)
     });
     event_envelope(
         event_id,
-        "ck.realm.create",
-        "ck.schema.realm.v1",
+        "ak.realm.create",
+        "ak.schema.realm.v1",
         "did:web:admin.example",
         seq,
         payload,
@@ -608,8 +608,8 @@ fn member_binding_event(
     });
     event_envelope(
         event_id,
-        "ck.member.state",
-        "ck.schema.member_state.v1",
+        "ak.member.state",
+        "ak.schema.member_state.v1",
         "did:web:admin.example",
         seq,
         payload,
@@ -626,8 +626,8 @@ fn circle_member_event(event_id: &str, member_did: &str, sender: &str, seq: u64)
     });
     event_envelope(
         event_id,
-        "ck.circle.member.state",
-        "ck.schema.circle_member_state.v1",
+        "ak.circle.member.state",
+        "ak.schema.circle_member_state.v1",
         sender,
         seq,
         payload,

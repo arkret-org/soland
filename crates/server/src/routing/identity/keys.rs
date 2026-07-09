@@ -27,7 +27,7 @@ use crate::wire::{
     KeysUploadRequestBody, QueryDeviceRecord,
 };
 
-const KEYS_UPLOAD_SIGNATURE_PREFIX: &[u8] = b"ck-keys-upload-v1\n";
+const KEYS_UPLOAD_SIGNATURE_PREFIX: &[u8] = b"ak.keys-upload-v1\n";
 
 pub(super) fn router() -> Router {
     Router::new()
@@ -46,11 +46,11 @@ pub(super) fn product_router() -> Router {
 }
 
 #[endpoint(
-    operation_id = "ck.self.keys.upload.create",
+    operation_id = "ak.self.keys.upload.create",
     tags("keys"),
     summary = "Upload device + one-time keys for the current session device"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.keys.upload.create"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.keys.upload.create"))]
 async fn keys_upload(
     aa: AuthArgs,
     body: JsonBody<KeysUploadRequestBody>,
@@ -189,11 +189,11 @@ async fn keys_upload(
 }
 
 #[endpoint(
-    operation_id = "ck.self.keys.query.lookup",
+    operation_id = "ak.self.keys.query.lookup",
     tags("keys"),
     summary = "Fetch device key bundles for a peer set"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.keys.query.lookup"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.keys.query.lookup"))]
 async fn keys_query(
     aa: AuthArgs,
     body: JsonBody<KeysQueryRequestBody>,
@@ -443,11 +443,11 @@ fn verify_detached_jws_ed25519_with_device_key(
 }
 
 #[endpoint(
-    operation_id = "ck.self.keys.command.claim",
+    operation_id = "ak.self.keys.command.claim",
     tags("keys"),
     summary = "Claim one-time keys, draining the per-device pool"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.keys.command.claim"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.keys.command.claim"))]
 async fn keys_claim(
     aa: AuthArgs,
     body: JsonBody<KeysClaimRequestBody>,

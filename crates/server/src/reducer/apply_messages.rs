@@ -40,16 +40,16 @@ impl ProjectionState {
             .unwrap_or_else(|| operation.payload.get("encrypted_content").is_some());
 
         match content_kind(&content) {
-            Some("ck.content.poll.response") => {
+            Some("ak.content.poll.response") => {
                 return self.apply_poll_response(&content, &sender, now);
             }
-            Some("ck.content.poll.close") => {
+            Some("ak.content.poll.close") => {
                 return self.apply_poll_close(&content, now);
             }
             _ => {}
         }
 
-        let is_poll_create = content_kind(&content) == Some("ck.content.poll");
+        let is_poll_create = content_kind(&content) == Some("ak.content.poll");
         let state = MessageState {
             event_id: event_id.clone(),
             message_id,

@@ -129,16 +129,16 @@ pub(super) fn agent_interop_session_delegate_actions(
     let cancelled = operation.payload.get("status").and_then(Value::as_str) == Some("cancelled");
     match kinds::canonical_kind_for_operation(operation) {
         Some(arkret_sdk::events::kinds::AGENT_INTEROP_SESSION_STATUS) if cancelled => {
-            &["ck.agent.interop_session.cancel"]
+            &["ak.agent.interop_session.cancel"]
         }
         Some(arkret_sdk::events::kinds::AGENT_INTEROP_SESSION_STATUS) => {
-            &["ck.agent.interop_session.stream_status"]
+            &["ak.agent.interop_session.stream_status"]
         }
         Some(arkret_sdk::events::kinds::AGENT_INTEROP_SESSION_RESULT) if cancelled => {
-            &["ck.agent.interop_session.cancel"]
+            &["ak.agent.interop_session.cancel"]
         }
         Some(arkret_sdk::events::kinds::AGENT_INTEROP_SESSION_RESULT) => {
-            &["ck.agent.interop_session.attach_artifact"]
+            &["ak.agent.interop_session.attach_artifact"]
         }
         _ => &[],
     }

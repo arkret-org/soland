@@ -185,7 +185,7 @@ fn unknown_fail_closed_critical_extension_is_not_implemented() {
     let envelope = json!({
         "requirements": {
             "critical_extensions": [{
-                "id": "ck.extension.unknown",
+                "id": "ak.extension.unknown",
                 "fail_closed": true
             }]
         }
@@ -205,7 +205,7 @@ fn unknown_advisory_critical_extension_is_ignored() {
     let envelope = json!({
         "requirements": {
             "critical_extensions": [{
-                "id": "ck.extension.unknown",
+                "id": "ak.extension.unknown",
                 "fail_closed": false
             }]
         }
@@ -221,7 +221,7 @@ fn unknown_required_feature_is_unsupported_feature() {
     let state = make_state(true);
     let envelope = json!({
         "requirements": {
-            "features": ["ck.feature.mimi_room_passthrough.v1"]
+            "features": ["ak.feature.mimi_room_passthrough.v1"]
         }
     });
     let object = envelope.as_object().unwrap();
@@ -238,7 +238,7 @@ fn declared_required_feature_is_accepted() {
     let state = make_state(true);
     let envelope = json!({
         "requirements": {
-            "features": ["ck.feature.blob.resumable_upload.tus.v1"]
+            "features": ["ak.feature.blob.resumable_upload.tus.v1"]
         }
     });
     let object = envelope.as_object().unwrap();
@@ -340,7 +340,7 @@ async fn minimal_metadata_realm_rejects_non_hidden_aad() {
                 "aad_visibility_event_id": visibility,
                 "aad": {
                     "realm_id": realm_id,
-                    "event_kind": "ck.message.create"
+                    "event_kind": "ak.message.create"
                 },
                 "key_ref": {
                     "algorithm": "MLS",
@@ -800,7 +800,7 @@ async fn non_minimal_metadata_realm_allows_any_aad() {
                 "aad_visibility_event_id": "routing_digest",
                 "aad": {
                     "realm_id": realm_id,
-                    "event_kind": "ck.message.create",
+                    "event_kind": "ak.message.create",
                     "event_ref_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
                 },
                 "key_ref": {
@@ -901,11 +901,11 @@ fn production_requires_requirements_schema() {
 
     object.insert(
         "requirements".to_owned(),
-        json!({ "schema": ["ck.schema.event.v1"] }),
+        json!({ "schema": ["ak.schema.event.v1"] }),
     );
     assert_eq!(
         event_requirements_schema_id(&state, &object).unwrap(),
-        "ck.schema.event.v1"
+        "ak.schema.event.v1"
     );
 }
 
@@ -916,7 +916,7 @@ async fn top_level_effective_scope_is_reducer_managed() {
     let envelope = json!({
         "event_id": "ak:event:01904100-0000-7000-8000-00000000eff0",
         "kind": arkret_sdk::events::kinds::REALM_CREATE,
-        "requirements": { "schema": ["ck.schema.event.v1"] },
+        "requirements": { "schema": ["ak.schema.event.v1"] },
         "actor_id": session.actor.clone(),
         "effective_scope": "ak:realm:01904100-0000-7000-8000-a11ce0000001"
     });
@@ -971,8 +971,8 @@ fn event_payload_validator_rejects_registered_payload_shape_errors() {
     let object = envelope.as_object().unwrap();
     let err = validate_event_schema_and_payload(
         &state,
-        "ck.strand.move",
-        "ck.schema.event.v1",
+        "ak.strand.move",
+        "ak.schema.event.v1",
         &envelope,
         object,
     )
@@ -995,12 +995,12 @@ fn member_state_invite_accept_uses_canonical_invite_ref() {
     });
     validate_event_schema_and_payload(
         &state,
-        "ck.member.state",
-        "ck.schema.event.v1",
+        "ak.member.state",
+        "ak.schema.event.v1",
         &valid,
         valid.as_object().unwrap(),
     )
-    .expect("ck.member.state invite accept should allow invite_ref");
+    .expect("ak.member.state invite accept should allow invite_ref");
 }
 
 #[test]
@@ -1020,8 +1020,8 @@ fn event_payload_validator_enforces_strand_update_patch_schema() {
     });
     validate_event_schema_and_payload(
         &state,
-        "ck.strand.update",
-        "ck.schema.event.v1",
+        "ak.strand.update",
+        "ak.schema.event.v1",
         &valid,
         valid.as_object().unwrap(),
     )
@@ -1040,12 +1040,12 @@ fn event_payload_validator_enforces_strand_update_patch_schema() {
     });
     let err = validate_event_schema_and_payload(
         &state,
-        "ck.strand.update",
-        "ck.schema.event.v1",
+        "ak.strand.update",
+        "ak.schema.event.v1",
         &invalid_patch_op,
         invalid_patch_op.as_object().unwrap(),
     )
-    .expect_err("ck.strand.update patch operations must match ck.patch.v1 exactly");
+    .expect_err("ak.strand.update patch operations must match ck.patch.v1 exactly");
     assert_eq!(err.code, "schema_violation");
 }
 
@@ -1072,11 +1072,11 @@ fn event_payload_validator_catalog_covers_active_standard_durable_events() {
 fn event_payload_validator_enforces_patch_family_schema() {
     let catalog = arkret_sdk::schema::event_payload_validator_catalog().unwrap();
     let patch_kinds = [
-        "ck.realm.update",
-        "ck.strand.update",
-        "ck.morph.update",
-        "ck.space.update",
-        "ck.profile.update",
+        "ak.realm.update",
+        "ak.strand.update",
+        "ak.morph.update",
+        "ak.space.update",
+        "ak.profile.update",
     ];
     let missing = catalog.missing_payload_validators_for(patch_kinds);
     assert!(
@@ -1086,7 +1086,7 @@ fn event_payload_validator_enforces_patch_family_schema() {
 
     let payloads = [
         (
-            "ck.realm.update",
+            "ak.realm.update",
             json!({
                 "target_ref": "ak:realm:01904100-0000-7000-8000-f10dc0000001",
                 "patch": { "title": { "$op": "set", "value": "Roadmap" } }
@@ -1097,7 +1097,7 @@ fn event_payload_validator_enforces_patch_family_schema() {
             }),
         ),
         (
-            "ck.strand.update",
+            "ak.strand.update",
             json!({
                 "target_ref": "ak:strand:01904100-0000-7000-8000-f10dc0000001",
                 "patch": { "metadata.title": { "$op": "set", "value": "Roadmap" } }
@@ -1108,7 +1108,7 @@ fn event_payload_validator_enforces_patch_family_schema() {
             }),
         ),
         (
-            "ck.morph.update",
+            "ak.morph.update",
             json!({
                 "target_ref": "ak:morph:01904100-0000-7000-8000-f10dc0000001",
                 "patch": { "metadata.title": { "$op": "set", "value": "Roadmap" } }
@@ -1119,7 +1119,7 @@ fn event_payload_validator_enforces_patch_family_schema() {
             }),
         ),
         (
-            "ck.space.update",
+            "ak.space.update",
             json!({
                 "space_id": "ak:space:01904100-0000-7000-8000-f10dc0000001",
                 "patch": { "title": { "$op": "set", "value": "Roadmap" } }
@@ -1130,7 +1130,7 @@ fn event_payload_validator_enforces_patch_family_schema() {
             }),
         ),
         (
-            "ck.profile.update",
+            "ak.profile.update",
             json!({
                 "target_ref": "ak:actor_profile:01904100-0000-7000-8000-f10dc0000001",
                 "patch": { "title": { "$op": "set", "value": "Roadmap" } }
@@ -1160,7 +1160,7 @@ fn event_payload_validator_enforces_patch_family_schema() {
     // + patch), not the generic object_patch_payload.
     catalog
         .validate_payload(
-            "ck.profile.realm_override",
+            "ak.profile.realm_override",
             &json!({
                 "target_ref": "ak:actor_profile:01904100-0000-7000-8000-f10dc0000001",
                 "target_realm_id": "ak:realm:01904100-0000-7000-8000-f10dc0000002",
@@ -1168,12 +1168,12 @@ fn event_payload_validator_enforces_patch_family_schema() {
             }),
         )
         .unwrap_or_else(|err| {
-            panic!("ck.profile.realm_override must accept profile_realm_override_payload: {err}");
+            panic!("ak.profile.realm_override must accept profile_realm_override_payload: {err}");
         });
 
     catalog
         .validate_payload(
-            "ck.strand.tracks.update",
+            "ak.strand.tracks.update",
             &json!({
                 "strand_id": "ak:strand:01904100-0000-7000-8000-f10dc0000001",
                 "tracks": {
@@ -1185,19 +1185,19 @@ fn event_payload_validator_enforces_patch_family_schema() {
             }),
         )
         .unwrap_or_else(|err| {
-            panic!("ck.strand.tracks.update must accept canonical tracks map payload: {err}");
+            panic!("ak.strand.tracks.update must accept canonical tracks map payload: {err}");
         });
     assert!(
         catalog
             .validate_payload(
-                "ck.strand.tracks.update",
+                "ak.strand.tracks.update",
                 &json!({
                     "type": "removed_track_update",
                     "strand_id": "ak:strand:01904100-0000-7000-8000-f10dc0000001",
                 }),
             )
             .is_err(),
-        "ck.strand.tracks.update must still reject retired `type` discriminators"
+        "ak.strand.tracks.update must still reject retired `type` discriminators"
     );
 }
 
@@ -1209,11 +1209,11 @@ fn realm_create_shape_allows_world_readable_encrypted_history() {
         "payload": {
             "object": {
                 "id": realm_id,
-                "schema": "ck.schema.realm.v1",
+                "schema": "ak.schema.realm.v1",
                 "title": "encrypted public history",
                 "created_by": "did:web:alice.example",
                 "trust_domain": "ak:trust_domain:soland.local",
-                "schema_refs": ["ck.schema.realm.v1"],
+                "schema_refs": ["ak.schema.realm.v1"],
                 "default_discoverability": "listed",
                 "default_join_rule": "invite",
                 "history_visibility": "world_readable",
@@ -1236,8 +1236,8 @@ fn realm_create_shape_allows_world_readable_encrypted_history() {
     let object = envelope.as_object().unwrap();
     validate_event_schema_and_payload(
         &state,
-        "ck.realm.create",
-        "ck.schema.event.v1",
+        "ak.realm.create",
+        "ak.schema.event.v1",
         &envelope,
         object,
     )
@@ -1522,7 +1522,7 @@ fn historical_data_event_grant_value(
 ) -> Value {
     let mut value = json!({
         "grant_id": grant_id,
-        "schema": "ck.schema.capability_grant.v1",
+        "schema": "ak.schema.capability_grant.v1",
         "realm_id": DATA_EVENT_REALM,
         "issuer": issuer,
         "subject": subject,
@@ -1675,7 +1675,7 @@ fn insert_historical_data_event_grant_with_e2ee_state(
         tag: Some("ak:operation:01904100-0000-7000-8000-0000000009b0".to_owned()),
         value: Some(historical_data_event_grant_value(
             grant_id,
-            "ck.message.create",
+            "ak.message.create",
             DATA_EVENT_ACTOR,
             "did:web:owner.example",
             false,
@@ -1721,9 +1721,9 @@ fn insert_historical_data_event_grant_with_e2ee_state(
             op_type: arkret_sdk::LatticeOpType::Set,
             tag: None,
             value: Some(json!({
-                "profiles": ["ck.profile.e2ee_relaxed.v1"],
+                "profiles": ["ak.profile.e2ee_relaxed.v1"],
                 "e2ee_relaxed": {
-                    "profile": "ck.profile.e2ee_relaxed.v1",
+                    "profile": "ak.profile.e2ee_relaxed.v1",
                     "relaxed_window_max_ms": 30000
                 }
             })),
@@ -1811,7 +1811,7 @@ fn data_event_capability_ref_must_resolve() {
         &state,
         DATA_EVENT_ACTOR,
         DATA_EVENT_REALM,
-        "ck.message.create",
+        "ak.message.create",
         &object,
     )
     .expect_err("unknown capability_ref must reject");
@@ -1824,14 +1824,14 @@ fn data_event_capability_ref_must_resolve() {
 fn data_event_capability_ref_must_cover_effect_cell() {
     let state = make_state(true);
     let grant_id = "ak:grant:01904100-0000-7000-8000-000000000112";
-    let seal_ref = insert_historical_data_event_grant(&state, grant_id, "ck.message.create", false);
+    let seal_ref = insert_historical_data_event_grant(&state, grant_id, "ak.message.create", false);
     let object = data_event_object_with_refs(&seal_ref, vec![grant_id.to_owned()]);
 
     validate_data_event_capability_refs(
         &state,
         DATA_EVENT_ACTOR,
         DATA_EVENT_REALM,
-        "ck.message.create",
+        "ak.message.create",
         &object,
     )
     .expect("matching grant must cover the DataEvent effect cell");
@@ -1839,14 +1839,14 @@ fn data_event_capability_ref_must_cover_effect_cell() {
     let wrong_state = make_state(true);
     let wrong_grant_id = "ak:grant:01904100-0000-7000-8000-000000000113";
     let wrong_seal_ref =
-        insert_historical_data_event_grant(&wrong_state, wrong_grant_id, "ck.reaction.add", false);
+        insert_historical_data_event_grant(&wrong_state, wrong_grant_id, "ak.reaction.add", false);
     let wrong_action_object =
         data_event_object_with_refs(&wrong_seal_ref, vec![wrong_grant_id.to_owned()]);
     let err = validate_data_event_capability_refs(
         &wrong_state,
         DATA_EVENT_ACTOR,
         DATA_EVENT_REALM,
-        "ck.message.create",
+        "ak.message.create",
         &wrong_action_object,
     )
     .expect_err("wrong action must not cover the DataEvent effect cell");
@@ -1858,14 +1858,14 @@ fn data_event_capability_ref_must_cover_effect_cell() {
 fn data_event_capability_ref_must_not_be_revoked() {
     let state = make_state(true);
     let grant_id = "ak:grant:01904100-0000-7000-8000-000000000114";
-    let seal_ref = insert_historical_data_event_grant(&state, grant_id, "ck.message.create", true);
+    let seal_ref = insert_historical_data_event_grant(&state, grant_id, "ak.message.create", true);
     let object = data_event_object_with_refs(&seal_ref, vec![grant_id.to_owned()]);
 
     let err = validate_data_event_capability_refs(
         &state,
         DATA_EVENT_ACTOR,
         DATA_EVENT_REALM,
-        "ck.message.create",
+        "ak.message.create",
         &object,
     )
     .expect_err("revoked capability_ref must reject");
@@ -1883,7 +1883,7 @@ fn data_event_capability_ref_reports_upstream_revoked_parent() {
         &state,
         parent_grant_id,
         child_grant_id,
-        "ck.message.create",
+        "ak.message.create",
     );
     let object = data_event_object_with_refs(&seal_ref, vec![child_grant_id.to_owned()]);
 
@@ -1891,7 +1891,7 @@ fn data_event_capability_ref_reports_upstream_revoked_parent() {
         &state,
         DATA_EVENT_ACTOR,
         DATA_EVENT_REALM,
-        "ck.message.create",
+        "ak.message.create",
         &object,
     )
     .expect_err("child capability_ref with revoked parent must reject");
@@ -1904,17 +1904,17 @@ fn data_event_capability_ref_reports_upstream_revoked_parent() {
 fn data_event_uses_seal_ref_pre_state_not_live_authz_index() {
     let state = make_state(true);
     let grant_id = "ak:grant:01904100-0000-7000-8000-000000000115";
-    let seal_ref = insert_historical_data_event_grant(&state, grant_id, "ck.message.create", false);
+    let seal_ref = insert_historical_data_event_grant(&state, grant_id, "ak.message.create", false);
     state
         .authz
-        .upsert_projected_grant(data_event_grant(grant_id, "ck.message.create", true));
+        .upsert_projected_grant(data_event_grant(grant_id, "ak.message.create", true));
     let object = data_event_object_with_refs(&seal_ref, vec![grant_id.to_owned()]);
 
     validate_data_event_capability_refs(
         &state,
         DATA_EVENT_ACTOR,
         DATA_EVENT_REALM,
-        "ck.message.create",
+        "ak.message.create",
         &object,
     )
     .expect("DataEvent authz must evaluate the seal_ref pre-state, not the live authz index");
@@ -1932,7 +1932,7 @@ fn e2ee_data_event_requires_covered_seals_cell_contains_seal_ref() {
         &state,
         DATA_EVENT_ACTOR,
         DATA_EVENT_REALM,
-        "ck.message.create",
+        "ak.message.create",
         &object,
     )
     .expect_err("E2EE DataEvent without covered_seals coverage must fail closed");
@@ -1954,7 +1954,7 @@ fn e2ee_data_event_accepts_when_covered_seals_contains_seal_ref() {
         &state,
         DATA_EVENT_ACTOR,
         DATA_EVENT_REALM,
-        "ck.message.create",
+        "ak.message.create",
         &object,
     )
     .expect("covered E2EE DataEvent should pass the covered_seals gate");
@@ -1972,7 +1972,7 @@ fn relaxed_e2ee_data_event_keeps_capability_gate_without_covered_seals_gate() {
         &state,
         DATA_EVENT_ACTOR,
         DATA_EVENT_REALM,
-        "ck.message.create",
+        "ak.message.create",
         &object,
     )
     .expect("relaxed E2EE profile should not require the full covered_seals gate");
@@ -2031,7 +2031,7 @@ fn service_attested_device_authorize_object(
     let device_id = arkret_sdk::DeviceId::new("ak:device:01904100-0000-7000-8000-0000000000d0")
         .expect("valid device id");
     let envelope = json!({
-        "kind": "ck.device.authorize",
+        "kind": "ak.device.authorize",
         "actor_id": principal_did,
         "executed_by": authority_did,
         "authorization_ref": authorization_ref,
@@ -2150,7 +2150,7 @@ async fn non_enrollment_device_authorize_passes_through_gate() {
     let state = make_state(true);
     let principal_did = "did:webvh:scid:users.soland.local:alice";
     let object = json!({
-        "kind": "ck.device.authorize",
+        "kind": "ak.device.authorize",
         "actor_id": principal_did,
         "payload": {
             "principal_id": principal_did,

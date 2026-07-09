@@ -166,8 +166,8 @@ async fn seed_member_invite_event_surfaces_via_authz_invites() {
     });
     let mut event = serde_json::json!({
         "event_id": event_id,
-        "kind": "ck.member.state",
-        "schema_id": "ck.schema.event.v1",
+        "kind": "ak.member.state",
+        "schema_id": "ak.schema.event.v1",
         "actor_id": alice_did,
         "actor_seq": 100_u64,
         "realm_id": realm_id.clone(),
@@ -198,7 +198,7 @@ async fn seed_member_invite_event_surfaces_via_authz_invites() {
     assert_eq!(
         submit.status_code.unwrap().as_u16(),
         200,
-        "ck.member.state{{invite}} should be accepted"
+        "ak.member.state{{invite}} should be accepted"
     );
 
     // Bob should now see a pending invite for the space.
@@ -380,7 +380,7 @@ async fn service_did_is_config_driven_across_public_metadata() {
     );
     assert_eq!(
         resolved["join_candidates"][0]["operations"],
-        serde_json::json!(["ck.self.events.command.submit"])
+        serde_json::json!(["ak.self.events.command.submit"])
     );
 
     let index: Value = TestClient::get("http://server/_soland/self/index/describe")

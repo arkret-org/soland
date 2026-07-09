@@ -298,7 +298,7 @@ pub(crate) async fn create_direct_binding_with_realm(
         ProjectionEventRecord {
             event_id: reserved.binding_event_ref.clone(),
             realm_id: crate::routing::identity::recovery::principal_control_realm_for_did(actor),
-            event_kind: "ck.direct_conversation.bound".to_owned(),
+            event_kind: "ak.direct_conversation.bound".to_owned(),
             operation_type: "direct_conversation_binding_fact".to_owned(),
             operation_id: None,
             sender: Some(actor.to_owned()),
@@ -314,7 +314,7 @@ pub(crate) async fn create_direct_binding_with_realm(
     append_audit_log(
         state,
         Some(actor),
-        "ck.direct_conversation.bound",
+        "ak.direct_conversation.bound",
         binding_fact_payload,
         "accepted",
     )
@@ -484,7 +484,7 @@ pub(super) async fn claim_direct_keypackage(
         intended_realm_id: RealmId::new(realm_id.to_owned())
             .map_err(|error| AppError::internal(format!("generated realm_id invalid: {error}")))?,
         requester,
-        required_capabilities: vec!["ck.mls.rfc9420".to_owned()],
+        required_capabilities: vec!["ak.mls.rfc9420".to_owned()],
         claim_nonce: URL_SAFE_NO_PAD.encode(format!("direct:{realm_id}:{mls_group_id}").as_bytes()),
         expires_at: now() + chrono::Duration::minutes(5),
         target_device_ids: Vec::new(),

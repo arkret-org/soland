@@ -367,7 +367,7 @@ fn local_peer_policy_digest_for_transaction(
             .collect::<Vec<_>>()
     };
     let policy_state = json!({
-        "schema": "ck.federation.local_peer_policy_digest.v1",
+        "schema": "ak.federation.local_peer_policy_digest.v1",
         "source_service_did": origin_service_did,
         "destination_service_did": body.destination.as_str(),
         "service_binding_ref": body.service_binding_ref.as_str(),
@@ -544,7 +544,7 @@ pub(crate) async fn federation_pull_operations(
                     "service_type": "principal_server",
                     "role": "primary",
                     "endpoint": state.config.public_base_url.clone(),
-                    "operations": ["ck.self.events.command.submit"],
+                    "operations": ["ak.self.events.command.submit"],
                     "join_methods": ["invite_accept", "member_join", "knock", "application"],
                     "priority": 0,
                     "source": "directory_ingest",

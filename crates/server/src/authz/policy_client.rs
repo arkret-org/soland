@@ -657,7 +657,7 @@ pub(crate) fn policy_decision_transcript_bytes(
 ) -> Result<Vec<u8>, PolicyClientError> {
     let expires_at = format_canonical_rfc3339(&response.expires_at);
     let transcript = PolicyDecisionTranscript {
-        kind: "ck.policy.check.transcript.v1",
+        kind: "ak.policy.check.transcript.v1",
         request_id: request.request_id.as_str(),
         decision: &response.decision,
         bound_to: &response.bound_to,
@@ -813,7 +813,7 @@ mod tests {
             request_id: "req-1".to_owned(),
             realm_id: RealmId::new("ak:realm:01904100-0000-7000-8000-000000000001").unwrap(),
             actor_id: Did::new("did:web:alice.example").unwrap(),
-            action: "ck.message.create".to_owned(),
+            action: "ak.message.create".to_owned(),
             source_service_did: Did::new("did:web:soland.local").unwrap(),
             source_service_type: "principal_server".to_owned(),
             source_ip_digest: Hash::new(format!("sha256:{}", "b".repeat(64))).unwrap(),
@@ -833,7 +833,7 @@ mod tests {
             bound_to: PolicyCheckBoundTo {
                 realm_id: RealmId::new("ak:realm:01904100-0000-7000-8000-000000000001").unwrap(),
                 actor_id: Did::new("did:web:alice.example").unwrap(),
-                action: "ck.message.create".to_owned(),
+                action: "ak.message.create".to_owned(),
                 request_canonical_digest: zero.clone(),
                 policy_server_id: Did::new("did:web:policy.example.com").unwrap(),
             },

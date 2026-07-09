@@ -21,12 +21,12 @@ use crate::ids;
 use crate::routing::events::event_log::submit_event_value;
 use crate::state::AppState;
 
-const SCOPE_EVENTS_QUERY_SCAN: &str = "ck.self.events.query.scan";
-const SCOPE_EVENTS_STREAM_SUBSCRIBE: &str = "ck.self.events.stream.subscribe";
-const SCOPE_EVENTS_COMMAND_SUBMIT: &str = "ck.self.events.command.submit";
-const ACTION_EVENT_READ: &str = "ck.event.read";
-const ACTION_MESSAGE_CREATE: &str = "ck.message.create";
-const ACTION_REACTION_ADD: &str = "ck.reaction.add";
+const SCOPE_EVENTS_QUERY_SCAN: &str = "ak.self.events.query.scan";
+const SCOPE_EVENTS_STREAM_SUBSCRIBE: &str = "ak.self.events.stream.subscribe";
+const SCOPE_EVENTS_COMMAND_SUBMIT: &str = "ak.self.events.command.submit";
+const ACTION_EVENT_READ: &str = "ak.event.read";
+const ACTION_MESSAGE_CREATE: &str = "ak.message.create";
+const ACTION_REACTION_ADD: &str = "ak.reaction.add";
 
 /// Deterministic self realm for a controller principal. Reuses the
 /// principal-control realm derivation so the realm id is a stable
@@ -108,7 +108,7 @@ pub(super) async fn ensure_self_realm(
         return Ok(realm_id);
     }
     let payload = self_realm_create_payload(&session.actor, &state.config.service_did, &realm_id);
-    submit_agent_fanout_event(state, session, &realm_id, "ck.realm.create", payload).await?;
+    submit_agent_fanout_event(state, session, &realm_id, "ak.realm.create", payload).await?;
     Ok(realm_id)
 }
 
@@ -120,12 +120,12 @@ fn self_realm_create_payload(controller_did: &str, service_did: &str, realm_id: 
     json!({
         "object": {
             "id": realm_id,
-            "schema": "ck.schema.realm.v1",
+            "schema": "ak.schema.realm.v1",
             "title": "Personal Agent Control",
             "summary": "Controller self realm hosting personal agent identity events.",
             "created_by": controller_did,
             "trust_domain": "ak:trust_domain:soland.local",
-            "schema_refs": ["ck.schema.realm.v1"],
+            "schema_refs": ["ak.schema.realm.v1"],
             "default_discoverability": "listed",
             "default_join_rule": "invite",
             "history_visibility": "shared",
@@ -170,7 +170,7 @@ pub(super) async fn fanout_provision_subevents(
     let profile_payload = json!({
         "value": {
             "id": format!("ak:actor_profile:{agent_principal_id}"),
-            "schema": "ck.schema.actor_profile.v1",
+            "schema": "ak.schema.actor_profile.v1",
             "actor_id": agent_principal_id,
             "actor_kind": "agent",
             "display_name": display_name.unwrap_or("Agent"),
@@ -181,7 +181,7 @@ pub(super) async fn fanout_provision_subevents(
         state,
         session,
         realm_id,
-        "ck.profile.create",
+        "ak.profile.create",
         profile_payload,
     )
     .await?;
@@ -204,7 +204,7 @@ pub(super) async fn fanout_provision_subevents(
         state,
         session,
         realm_id,
-        "ck.identity.accountability_grant",
+        "ak.identity.accountability_grant",
         accountability_payload,
     )
     .await?;
@@ -259,11 +259,11 @@ fn initial_capability_grant_action(action: &str) -> bool {
         ACTION_EVENT_READ
             | ACTION_MESSAGE_CREATE
             | ACTION_REACTION_ADD
-            | "ck.agent.draft.propose"
-            | "ck.agent.action_request"
-            | "ck.strand.create"
-            | "ck.strand.update"
-            | "ck.relation.create"
+            | "ak.agent.draft.propose"
+            | "ak.agent.action_request"
+            | "ak.strand.create"
+            | "ak.strand.update"
+            | "ak.relation.create"
     )
 }
 
@@ -284,7 +284,7 @@ fn capability_grant_payload(
     let issued_at = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
     let mut grant = json!({
         "id": grant_id,
-        "schema": "ck.schema.capability.v1",
+        "schema": "ak.schema.capability.v1",
         "realm_id": realm_id,
         "issuer": issuer,
         "subject": subject,
@@ -319,7 +319,7 @@ async fn materialize_grant(
         state,
         session,
         realm_id,
-        "ck.capability.grant",
+        "ak.capability.grant",
         grant_payload,
     )
     .await
@@ -346,14 +346,14 @@ pub(super) async fn attach_agent_grant_event(
         .ok_or_else(|| AppError::invalid_param("grant must be an object"))?;
     obj.insert("id".to_owned(), Value::String(grant_id.to_owned()));
     obj.entry("schema".to_owned())
-        .or_insert_with(|| Value::String("ck.schema.capability.v1".to_owned()));
+        .or_insert_with(|| Value::String("ak.schema.capability.v1".to_owned()));
     obj.insert("realm_id".to_owned(), Value::String(realm_id.to_owned()));
     obj.entry("issuer".to_owned())
         .or_insert_with(|| Value::String(session.actor.clone()));
     obj.entry("subject".to_owned())
         .or_insert_with(|| Value::String(agent_principal_id.to_owned()));
     obj.entry("actions".to_owned())
-        .or_insert_with(|| json!(["ck.event.read"]));
+        .or_insert_with(|| json!(["ak.event.read"]));
     obj.entry("resources".to_owned())
         .or_insert_with(|| json!([{ "kind": "realm", "realm_id": realm_id }]));
     obj.entry("issued_at".to_owned())
@@ -412,7 +412,7 @@ pub(super) async fn submit_durable_key_authorize(
             "ref": format!("ak:event:{}", uuid::Uuid::now_v7()),
         },
     });
-    submit_agent_fanout_event(state, session, realm_id, "ck.agent.key.authorize", payload).await
+    submit_agent_fanout_event(state, session, realm_id, "ak.agent.key.authorize", payload).await
 }
 
 /// CKP-0016 — materialise a participation `effective=true` decision into a
@@ -430,11 +430,11 @@ pub(super) async fn materialize_capability_grant(
     let issued_at = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
     let grant = json!({
         "id": grant_id,
-        "schema": "ck.schema.capability.v1",
+        "schema": "ak.schema.capability.v1",
         "realm_id": realm_id,
         "issuer": session.actor.clone(),
         "subject": agent_principal_id,
-        "actions": ["ck.message.create", "ck.reaction.add"],
+        "actions": ["ak.message.create", "ck.reaction.add"],
         "resources": [resource],
         "issued_at": issued_at,
         "proofs": [{
@@ -461,7 +461,7 @@ pub(super) async fn revoke_capability_grant(
 ) -> Result<String, AppError> {
     let payload = json!({ "grant_id": grant_id });
     let event_id =
-        submit_agent_fanout_event(state, session, realm_id, "ck.capability.revoke", payload)
+        submit_agent_fanout_event(state, session, realm_id, "ak.capability.revoke", payload)
             .await?;
     // The durable reducer event is the source of truth; this mirrors the
     // same revoke into the in-memory authz read index before the HTTP command
@@ -484,9 +484,9 @@ pub(super) async fn submit_durable_agent_lifecycle(
 ) -> Result<String, AppError> {
     let status_changed_at = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
     let transition = match event_kind {
-        "ck.self.agent.pause" => "pause",
-        "ck.self.agent.resume" => "resume",
-        "ck.self.agent.deactivate" => "deactivate",
+        "ak.self.agent.pause" => "pause",
+        "ak.self.agent.resume" => "resume",
+        "ak.self.agent.deactivate" => "deactivate",
         other => other,
     };
     let mut payload = json!({
@@ -496,7 +496,7 @@ pub(super) async fn submit_durable_agent_lifecycle(
         "previous_status": previous_status,
         "status_changed_at": status_changed_at,
     });
-    if event_kind != "ck.self.agent.deactivate" {
+    if event_kind != "ak.self.agent.deactivate" {
         payload.as_object_mut().expect("payload object").insert(
             "freshness_frontier".to_owned(),
             json!({ "captured_at": status_changed_at }),
@@ -508,7 +508,7 @@ pub(super) async fn submit_durable_agent_lifecycle(
             .expect("payload object")
             .insert("reason".to_owned(), Value::String(reason.to_owned()));
     }
-    if event_kind == "ck.self.agent.resume"
+    if event_kind == "ak.self.agent.resume"
         && let Some(ack) = sidecar_exposure_ack
     {
         payload
@@ -543,7 +543,7 @@ pub(super) async fn submit_revoke_agent_keys(
             "revoked_by": session.actor.clone(),
             "revoked_at": revoked_at,
         });
-        submit_agent_fanout_event(state, session, realm_id, "ck.agent.key.revoke", payload).await?;
+        submit_agent_fanout_event(state, session, realm_id, "ak.agent.key.revoke", payload).await?;
     }
     Ok(())
 }
@@ -606,9 +606,9 @@ mod tests {
         let registry = crate::artifacts::operation_ids();
         for action in [
             "events.subscribe",
-            "ck.self.events.subscribe",
-            "ck.self-events.subscribe",
-            "ck.self-events.stream.subscribe",
+            "ak.self.events.subscribe",
+            "ak.self-events.subscribe",
+            "ak.self-events.stream.subscribe",
         ] {
             assert!(
                 !registry.contains(action),

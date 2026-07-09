@@ -137,13 +137,13 @@ pub(super) async fn validate_circle_management_policy(
         | arkret_sdk::events::kinds::CIRCLE_ARCHIVE
         | arkret_sdk::events::kinds::CIRCLE_RESTORE
         | arkret_sdk::events::kinds::CIRCLE_TOMBSTONE => {
-            ("ck.circle.manage", "circle_manage_capability_required")
+            ("ak.circle.manage", "circle_manage_capability_required")
         }
         arkret_sdk::events::kinds::CIRCLE_MEMBER_STATE
             if circle_member_manage_required(state, operation) =>
         {
             (
-                "ck.circle.member.manage",
+                "ak.circle.member.manage",
                 "circle_member_manage_capability_required",
             )
         }

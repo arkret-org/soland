@@ -14,7 +14,7 @@ pub(super) fn key_backup_delete_proof_canonical_bytes(
     backup_id: &str,
 ) -> Result<Vec<u8>, AppError> {
     let transcript = KeyBackupDeleteProofTranscript {
-        kind: "ck.key_backup.delete_proof.v1",
+        kind: "ak.key_backup.delete_proof.v1",
         actor_id,
         backup_id,
         action: "DELETE /_arkret/self/keys/backups/{backup_id}",
@@ -101,14 +101,14 @@ pub(super) async fn verify_delete_ownership_proof(
         .await
         .map_err(|_| {
             AppError::invalid_param(
-                "ck.self.keys.backups.resource.delete request body must be JSON",
+                "ak.self.keys.backups.resource.delete request body must be JSON",
             )
         })?;
     match body.proof {
         KeyBackupDeleteProof::Development(proof) => {
             if proof.kind != KEY_BACKUP_DELETE_DEVELOPMENT_PROOF_KIND {
                 return Err(AppError::invalid_param(
-                    "ck.self.keys.backups.resource.delete development proof kind is invalid",
+                    "ak.self.keys.backups.resource.delete development proof kind is invalid",
                 ));
             }
             let value = proof.value.trim();
@@ -121,7 +121,7 @@ pub(super) async fn verify_delete_ownership_proof(
                 ));
             }
             Err(AppError::invalid_param(
-                "ck.self.keys.backups.resource.delete proof string is only valid for development delete proofs",
+                "ak.self.keys.backups.resource.delete proof string is only valid for development delete proofs",
             ))
         }
         KeyBackupDeleteProof::DetachedJws(proof) => {

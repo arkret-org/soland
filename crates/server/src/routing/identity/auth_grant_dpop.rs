@@ -1,9 +1,9 @@
-//! `/_arkret/self/*` inbound credential: `ck.session.grant` + DPoP (RFC 9449).
+//! `/_arkret/self/*` inbound credential: `ak.session.grant` + DPoP (RFC 9449).
 //!
 //! Per api-conventions.md §3.3 the Principal Server (soland) no longer mints a
 //! local credential from a session grant. The client
-//! presents the `ck.session.grant` directly on every `/_arkret/self/*` request
-//! as `Authorization: Bearer <ck.session.grant>` plus a sender-constrained
+//! presents the `ak.session.grant` directly on every `/_arkret/self/*` request
+//! as `Authorization: Bearer <ak.session.grant>` plus a sender-constrained
 //! `DPoP` proof. soland validates and serves; the resulting `SessionRecord` is
 //! request-scoped and is NEVER persisted as a local bearer.
 //!
@@ -46,7 +46,7 @@ use crate::wire::{
     SessionGrantIntrospectStatus,
 };
 
-/// Device-scope prefix carried in a `ck.session.grant`'s scope set
+/// Device-scope prefix carried in a `ak.session.grant`'s scope set
 /// (`urn:arkret:client:device:<device_id>`). A grant that drives
 /// `/_arkret/self/*` MUST carry one so the request is device-bound.
 const DEVICE_SCOPE_PREFIX: &str = "urn:arkret:client:device:";
@@ -434,7 +434,7 @@ fn string_claim(value: &Value, key: &str) -> Option<String> {
 
 // ── Orchestration ────────────────────────────────────────────────────────────
 
-/// Whether a `ck.session.grant` + DPoP credential is being presented: the
+/// Whether a `ak.session.grant` + DPoP credential is being presented: the
 /// request carries BOTH an `Authorization: Bearer` and a `DPoP` header. This is
 /// the discriminator §3.3 pins — a grant presentation MUST carry DPoP, while a
 /// dev-login session credential does not. Branching on the `DPoP` header keeps
@@ -653,7 +653,7 @@ pub(crate) fn verify_grant_dpop_request(
     Ok(())
 }
 
-/// Validate a presented `ck.session.grant` + DPoP and synthesize a
+/// Validate a presented `ak.session.grant` + DPoP and synthesize a
 /// request-scoped `SessionRecord`. Not persisted as a local bearer.
 ///
 /// `force_fresh` forces a non-cached introspection (sensitive operations,
@@ -938,7 +938,7 @@ mod tests {
         grant.id = GrantId::new("ak:grant:0196419b-0000-7000-8000-000000000002").unwrap();
         grant.subject = "did:web:agent.example".to_owned();
         grant.device_id = None;
-        grant.scopes = vec!["ck.agent.action:message.send".to_owned()];
+        grant.scopes = vec!["ak.agent.action:message.send".to_owned()];
         grant.proof_kind = Some(SessionGrantProofKind::AgentKeyProof);
         grant.scope_details = serde_json::json!({
             "controller_did": "did:web:alice.example",
@@ -966,7 +966,7 @@ mod tests {
         assert_eq!(agent_session.freshness_state, FreshnessState::Fresh);
         assert_eq!(
             agent_session.granted_scope,
-            vec!["ck.agent.action:message.send"]
+            vec!["ak.agent.action:message.send"]
         );
         assert_eq!(
             agent_session.scope_details["controller_did"],

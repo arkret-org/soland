@@ -499,11 +499,11 @@ fn proof_audience_covers_expected(audience: Option<&Audience>, expected: &str) -
 }
 
 #[endpoint(
-    operation_id = "ck.find.directory.query.resolve_handle",
+    operation_id = "ak.find.directory.query.resolve_handle",
     tags("directory"),
     summary = "Resolve a normalized actor handle (e.g. `@alice`) to a DID"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.find.directory.query.resolve_handle"))]
+#[tracing::instrument(skip_all, fields(op = "ak.find.directory.query.resolve_handle"))]
 pub(super) async fn resolve_handle(
     body: JsonBody<DirectoryResolveHandleRequestBody>,
     depot: &mut Depot,
@@ -721,13 +721,13 @@ pub(super) async fn signed_handle_claim(
 }
 
 #[endpoint(
-    operation_id = "ck.find.directory.query.list_handles_for_subject",
+    operation_id = "ak.find.directory.query.list_handles_for_subject",
     tags("directory"),
     summary = "List current context-visible handle claims for a known subject DID"
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "ck.find.directory.query.list_handles_for_subject")
+    fields(op = "ak.find.directory.query.list_handles_for_subject")
 )]
 pub(super) async fn list_handles_for_subject(
     body: JsonBody<DirectoryListHandlesForSubjectRequestBody>,

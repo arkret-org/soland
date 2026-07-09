@@ -11,11 +11,11 @@ use super::payload_shape::{
     validate_space_container_lifecycle_payload,
 };
 
-const E2EE_RELAXED_PROFILE: &str = "ck.profile.e2ee_relaxed.v1";
+const E2EE_RELAXED_PROFILE: &str = "ak.profile.e2ee_relaxed.v1";
 const LOCAL_EVENT_CRITICAL_FEATURES: [&str; 3] = [
-    "ck.event_envelope.v1",
-    "ck.profile.core_event_store.v1",
-    "ck.proof.event_digest.v1",
+    "ak.event_envelope.v1",
+    "ak.profile.core_event_store.v1",
+    "ak.proof.event_digest.v1",
 ];
 
 pub(crate) fn canonical_json_hash(value: &Value) -> String {

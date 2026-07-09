@@ -54,7 +54,7 @@ async fn well_known_arkret(depot: &mut Depot) -> JsonResult<WellKnownCokretOutco
     let fanout_topology = state.settings().federation_fanout_topology.as_str();
     let public_base_url = state.config.public_base_url.trim_end_matches('/');
     json_ok(WellKnownCokretOutcome {
-        schema: "ck.schema.server_description.v1".to_owned(),
+        schema: "ak.schema.server_description.v1".to_owned(),
         service_did: state.config.service_did.clone(),
         trust_domain: state.config.trust_domain.clone(),
         public_base_url: state.config.public_base_url.clone(),

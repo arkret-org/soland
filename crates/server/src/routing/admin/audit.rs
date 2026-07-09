@@ -381,7 +381,7 @@ fn audit_event_matches_kind(event: &Value, kind: &str) -> bool {
 
 fn franking_proof_digest(proof: &FrankingProofVerifyRequestBody) -> String {
     let material = json!({
-        "kind": proof.kind.as_deref().unwrap_or("ck.moderation.franking_proof"),
+        "kind": proof.kind.as_deref().unwrap_or("ak.moderation.franking_proof"),
         "target_event_id": proof.target_event_id.as_deref().unwrap_or_default(),
         "sender_did": proof.sender_did.as_deref().unwrap_or_default(),
         "receiving_service_did": proof.receiving_service_did.as_deref().unwrap_or_default(),

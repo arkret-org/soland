@@ -10,9 +10,9 @@ pub(crate) fn validate_invite_create_payload(operation: &Operation) -> Result<()
         .payload
         .get("invite_id")
         .and_then(Value::as_str)
-        .ok_or("ck.invite.create operation requires invite_id")?;
+        .ok_or("ak.invite.create operation requires invite_id")?;
     if arkret_sdk::InviteId::new(invite_id.to_owned()).is_err() {
-        return Err("ck.invite.create invite_id must be ak:invite:<uuidv7>");
+        return Err("ak.invite.create invite_id must be ak:invite:<uuidv7>");
     }
     let target = operation
         .payload
@@ -77,7 +77,7 @@ pub(crate) fn projection_context_stripped_payload(payload: &Value) -> Value {
 fn validate_invite_create_known_fields(payload: &Value) -> Result<(), &'static str> {
     let object = payload
         .as_object()
-        .ok_or("ck.invite.create payload must be an object")?;
+        .ok_or("ak.invite.create payload must be an object")?;
     for field in object.keys() {
         if field.starts_with("x_") {
             continue;
@@ -91,19 +91,19 @@ fn validate_invite_create_known_fields(payload: &Value) -> Result<(), &'static s
             | "reason" => {}
             "inviter" => {
                 return Err(
-                    "ck.invite.create payload must not carry inviter; use envelope.actor_id",
+                    "ak.invite.create payload must not carry inviter; use envelope.actor_id",
                 );
             }
             "invite_token" => {
-                return Err("ck.invite.create payload must not carry invite_token");
+                return Err("ak.invite.create payload must not carry invite_token");
             }
             "state" => {
-                return Err("ck.invite.create payload must not carry state");
+                return Err("ak.invite.create payload must not carry state");
             }
             "role" => {
-                return Err("ck.invite.create payload role must use x_role");
+                return Err("ak.invite.create payload role must use x_role");
             }
-            _ => return Err("ck.invite.create payload carries unsupported field"),
+            _ => return Err("ak.invite.create payload carries unsupported field"),
         }
     }
     Ok(())
@@ -115,29 +115,29 @@ pub(crate) fn validate_invite_third_party_payload(
     let payload = operation
         .payload
         .as_object()
-        .ok_or("ck.invite.third_party payload must be an object")?;
+        .ok_or("ak.invite.third_party payload must be an object")?;
     let invite = payload.get("invite").and_then(Value::as_object);
     let invite_id = invite_field(payload, invite, "invite_id", "id")
-        .ok_or("ck.invite.third_party requires invite_id")?;
+        .ok_or("ak.invite.third_party requires invite_id")?;
     if arkret_sdk::InviteId::new(invite_id).is_err() {
-        return Err("ck.invite.third_party invite_id must be ak:invite:<uuidv7>");
+        return Err("ak.invite.third_party invite_id must be ak:invite:<uuidv7>");
     }
     let realm_id = invite_field(payload, invite, "realm_id", "realm_id")
         .unwrap_or_else(|| operation.realm_id.to_string());
     if realm_id != operation.realm_id.as_str() {
-        return Err("ck.invite.third_party realm_id must match envelope realm_id");
+        return Err("ak.invite.third_party realm_id must match envelope realm_id");
     }
     let inviter = invite_field(payload, invite, "inviter", "inviter")
-        .ok_or("ck.invite.third_party requires inviter")?;
+        .ok_or("ak.invite.third_party requires inviter")?;
     if arkret_sdk::Did::new(inviter).is_err() {
-        return Err("ck.invite.third_party inviter must be a DID");
+        return Err("ak.invite.third_party inviter must be a DID");
     }
     let third_party_id = invite_value(payload, invite, "third_party_id")
         .and_then(Value::as_object)
-        .ok_or("ck.invite.third_party third_party_id must be an object")?;
+        .ok_or("ak.invite.third_party third_party_id must be an object")?;
     for forbidden in ["token", "plaintext_token", "email", "phone", "address"] {
         if third_party_id.contains_key(forbidden) {
-            return Err("ck.invite.third_party must not carry plaintext token or 3PID");
+            return Err("ak.invite.third_party must not carry plaintext token or 3PID");
         }
     }
     let service_did = third_party_id
@@ -167,9 +167,9 @@ pub(crate) fn validate_invite_third_party_payload(
         return Err("third_party_id requires token_commitment or lookup_table_ref");
     }
     let expires_at = invite_field(payload, invite, "expires_at", "expires_at")
-        .ok_or("ck.invite.third_party requires expires_at")?;
+        .ok_or("ak.invite.third_party requires expires_at")?;
     if arkret_sdk::canonical::validate_timestamp_canonical(&expires_at).is_err() {
-        return Err("ck.invite.third_party expires_at must be a canonical timestamp");
+        return Err("ak.invite.third_party expires_at must be a canonical timestamp");
     }
     Ok(())
 }
@@ -178,28 +178,28 @@ pub(crate) fn validate_invite_claim_payload(operation: &Operation) -> Result<(),
     let payload = operation
         .payload
         .as_object()
-        .ok_or("ck.invite.claim payload must be an object")?;
+        .ok_or("ak.invite.claim payload must be an object")?;
     let invite_id =
-        payload_string(payload, "invite_id").ok_or("ck.invite.claim requires invite_id")?;
+        payload_string(payload, "invite_id").ok_or("ak.invite.claim requires invite_id")?;
     if arkret_sdk::InviteId::new(invite_id).is_err() {
-        return Err("ck.invite.claim invite_id must be ak:invite:<uuidv7>");
+        return Err("ak.invite.claim invite_id must be ak:invite:<uuidv7>");
     }
     let subject_id =
-        payload_string(payload, "subject_id").ok_or("ck.invite.claim requires subject_id")?;
+        payload_string(payload, "subject_id").ok_or("ak.invite.claim requires subject_id")?;
     if arkret_sdk::Did::new(subject_id.clone()).is_err() {
-        return Err("ck.invite.claim subject_id must be a DID");
+        return Err("ak.invite.claim subject_id must be a DID");
     }
     let token_commitment = payload_string(payload, "token_commitment")
-        .ok_or("ck.invite.claim requires token_commitment")?;
+        .ok_or("ak.invite.claim requires token_commitment")?;
     if arkret_sdk::Hash::new(token_commitment).is_err() {
-        return Err("ck.invite.claim token_commitment must be a hash");
+        return Err("ak.invite.claim token_commitment must be a hash");
     }
     let claim_nonce =
-        payload_string(payload, "claim_nonce").ok_or("ck.invite.claim requires claim_nonce")?;
+        payload_string(payload, "claim_nonce").ok_or("ak.invite.claim requires claim_nonce")?;
     let binding = payload
         .get("binding_proof")
         .and_then(Value::as_object)
-        .ok_or("ck.invite.claim binding_proof must be an object")?;
+        .ok_or("ak.invite.claim binding_proof must be an object")?;
     let binding_subject = binding
         .get("subject_id")
         .and_then(Value::as_str)
@@ -245,7 +245,7 @@ pub(crate) fn validate_invite_claim_payload(operation: &Operation) -> Result<(),
         .and_then(Value::as_object)
         .is_none()
     {
-        return Err("ck.invite.claim subject_proof must be an object");
+        return Err("ak.invite.claim subject_proof must be an object");
     }
     Ok(())
 }
@@ -352,11 +352,11 @@ pub(crate) fn validate_message_expiry_payload(operation: &Operation) -> Result<(
         return Ok(());
     };
     let Some(object) = expiry.as_object() else {
-        return Err("ck.message.create.payload.expiry must be an object");
+        return Err("ak.message.create.payload.expiry must be an object");
     };
     for key in object.keys() {
         if !["ttl_ms", "trigger", "grace_ms"].contains(&key.as_str()) {
-            return Err("ck.message.create.payload.expiry has unknown field");
+            return Err("ak.message.create.payload.expiry has unknown field");
         }
     }
     if object
@@ -364,17 +364,17 @@ pub(crate) fn validate_message_expiry_payload(operation: &Operation) -> Result<(
         .and_then(Value::as_u64)
         .is_none_or(|value| value == 0)
     {
-        return Err("ck.message.create.payload.expiry requires positive ttl_ms");
+        return Err("ak.message.create.payload.expiry requires positive ttl_ms");
     }
     match object.get("trigger").and_then(Value::as_str) {
         Some("on_send" | "on_first_read" | "on_last_read") => {}
-        _ => return Err("ck.message.create.payload.expiry trigger is invalid"),
+        _ => return Err("ak.message.create.payload.expiry trigger is invalid"),
     }
     if object
         .get("grace_ms")
         .is_some_and(|value| value.as_u64().is_none())
     {
-        return Err("ck.message.create.payload.expiry grace_ms must be an integer");
+        return Err("ak.message.create.payload.expiry grace_ms must be an integer");
     }
     Ok(())
 }
@@ -403,9 +403,9 @@ pub(crate) fn validate_read_receipt_policy_payload(
     let wire_payload = projection_context_stripped_payload(&operation.payload);
     let payload = wire_payload
         .as_object()
-        .ok_or("ck.realm.read_receipt_policy payload must be an object")?;
+        .ok_or("ak.realm.read_receipt_policy payload must be an object")?;
     if payload.is_empty() {
-        return Err("ck.realm.read_receipt_policy payload must set at least one field");
+        return Err("ak.realm.read_receipt_policy payload must set at least one field");
     }
     for field in payload.keys() {
         match field.as_str() {
@@ -415,19 +415,19 @@ pub(crate) fn validate_read_receipt_policy_payload(
             | "allow_child_privacy_tightening_against_required"
             | "allow_public_receipts_on_world_readable"
             | "allow_forced_public_world_readable_receipts" => {}
-            _ => return Err("ck.realm.read_receipt_policy payload has unknown field"),
+            _ => return Err("ak.realm.read_receipt_policy payload has unknown field"),
         }
     }
     if let Some(disclosure) = payload.get("disclosure") {
         match disclosure.as_str() {
             Some("required" | "optional" | "disabled") => {}
-            _ => return Err("ck.realm.read_receipt_policy.disclosure is invalid"),
+            _ => return Err("ak.realm.read_receipt_policy.disclosure is invalid"),
         }
     }
     if let Some(visibility) = payload.get("visibility") {
         match visibility.as_str() {
             Some("public" | "members" | "private") => {}
-            _ => return Err("ck.realm.read_receipt_policy.visibility is invalid"),
+            _ => return Err("ak.realm.read_receipt_policy.visibility is invalid"),
         }
     }
     for field in [
@@ -437,7 +437,7 @@ pub(crate) fn validate_read_receipt_policy_payload(
         "allow_forced_public_world_readable_receipts",
     ] {
         if payload.get(field).is_some_and(|value| !value.is_boolean()) {
-            return Err("ck.realm.read_receipt_policy boolean field is invalid");
+            return Err("ak.realm.read_receipt_policy boolean field is invalid");
         }
     }
     Ok(())
@@ -449,31 +449,31 @@ pub(crate) fn validate_realm_inheritance_policy_payload(
     let wire_payload = projection_context_stripped_payload(&operation.payload);
     let payload: arkret_sdk::RealmInheritancePolicyPayload =
         serde_json::from_value(wire_payload)
-            .map_err(|_| "ck.realm.inheritance_policy payload violates SDK artifact schema")?;
+            .map_err(|_| "ak.realm.inheritance_policy payload violates SDK artifact schema")?;
     if payload.mode != "narrow_only" {
-        return Err("ck.realm.inheritance_policy mode must be narrow_only");
+        return Err("ak.realm.inheritance_policy mode must be narrow_only");
     }
     let has_inherits = payload.inherits.membership.is_some()
         || payload.inherits.capability_bundles.is_some()
         || payload.inherits.policy_rules.is_some()
         || payload.inherits.notification_defaults.is_some();
     if !has_inherits {
-        return Err("ck.realm.inheritance_policy inherits must not be empty");
+        return Err("ak.realm.inheritance_policy inherits must not be empty");
     }
     validate_unique_non_empty_strings(
         payload.inherits.capability_bundles.as_deref(),
-        "ck.realm.inheritance_policy capability_bundles must be unique non-empty strings",
+        "ak.realm.inheritance_policy capability_bundles must be unique non-empty strings",
     )?;
     validate_unique_non_empty_strings(
         payload.inherits.policy_rules.as_deref(),
-        "ck.realm.inheritance_policy policy_rules must be unique non-empty strings",
+        "ak.realm.inheritance_policy policy_rules must be unique non-empty strings",
     )?;
     if let Some(max_depth) = payload.max_depth {
         if max_depth == 0 {
-            return Err("ck.realm.inheritance_policy max_depth must be >= 1");
+            return Err("ak.realm.inheritance_policy max_depth must be >= 1");
         }
         if max_depth > u64::from(arkret_sdk::RealmInheritancePolicy::MAX_DEPTH_CAP) {
-            return Err("ck.realm.inheritance_policy max_depth exceeds v1 cap");
+            return Err("ak.realm.inheritance_policy max_depth exceeds v1 cap");
         }
     }
     Ok(())
@@ -590,7 +590,7 @@ pub(crate) fn validate_history_visibility_payload(
         .payload
         .get("value")
         .and_then(Value::as_str)
-        .ok_or("ck.realm.history_visibility requires string value")?;
+        .ok_or("ak.realm.history_visibility requires string value")?;
     match value {
         "world_readable" | "shared" | "invited" | "joined" => Ok(()),
         "restricted" => {
@@ -605,7 +605,7 @@ pub(crate) fn validate_history_visibility_payload(
                 Err("history_sharing_policy_missing")
             }
         }
-        _ => Err("ck.realm.history_visibility value is unknown"),
+        _ => Err("ak.realm.history_visibility value is unknown"),
     }
 }
 
@@ -956,7 +956,7 @@ pub(crate) fn validate_cross_signing_reset_payload(
 pub(crate) fn validate_device_authorize_payload(operation: &Operation) -> Result<(), &'static str> {
     let payload: arkret_sdk::DeviceAuthorizePayload =
         serde_json::from_value(device_authorize_wire_payload(&operation.payload))
-            .map_err(|_| "ck.device.authorize payload violates SDK artifact schema")?;
+            .map_err(|_| "ak.device.authorize payload violates SDK artifact schema")?;
     payload.validate_authorization_binding_one_of()
 }
 
@@ -1019,7 +1019,7 @@ mod tests {
             arkret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-cfc039892036").unwrap(),
             arkret_sdk::events::kinds::MESSAGE_CREATE,
             json!({
-                "content": {"kind": "ck.content.text", "body": "secret"},
+                "content": {"kind": "ak.content.text", "body": "secret"},
                 "expiry": expiry
             }),
         )
@@ -1047,7 +1047,7 @@ mod tests {
 
         assert_eq!(
             validate_message_expiry_payload(&operation),
-            Err("ck.message.create.payload.expiry has unknown field")
+            Err("ak.message.create.payload.expiry has unknown field")
         );
     }
 
@@ -1063,7 +1063,7 @@ mod tests {
             "aad_visibility_event_id": "hidden",
             "aad": {
                 "realm_id": "ak:realm:01904100-0000-7000-8000-000000000001",
-                "event_kind": "ck.message.create"
+                "event_kind": "ak.message.create"
             },
             "key_ref": {
                 "algorithm": "MLS-EXPORTER-AEAD",

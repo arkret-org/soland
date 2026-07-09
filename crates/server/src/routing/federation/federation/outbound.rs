@@ -86,7 +86,7 @@ pub(super) async fn enqueue_outbound_for(
         _ => "/_arkret/peer/events",
     };
     let payload = json!({
-        "schema": format!("ck.federation.outbound.{resource_kind}.v1"),
+        "schema": format!("ak.federation.outbound.{resource_kind}.v1"),
         "origin": state.config.service_did,
         "destination": peer.did.as_str(),
         "resource_kind": resource_kind,
@@ -163,7 +163,7 @@ pub(super) async fn record_outbound_fanout_attempt(
         _ => "/_arkret/peer/events",
     };
     let intent = json!({
-        "schema": "ck.federation.outbound_fanout.intent.v1",
+        "schema": "ak.federation.outbound_fanout.intent.v1",
         "origin": state.config.service_did,
         "destination": peer,
         "resource_kind": resource_kind,
@@ -174,7 +174,7 @@ pub(super) async fn record_outbound_fanout_attempt(
     });
     let signing = signed_fanout_intent_evidence(state, peer, target_path, &intent, attempted_at);
     let transcript = json!({
-        "schema": "ck.federation.outbound_fanout.transcript.v1",
+        "schema": "ak.federation.outbound_fanout.transcript.v1",
         "direction": "outbound",
         "resource_kind": resource_kind,
         "resource_id": resource_id,
@@ -224,7 +224,7 @@ pub(super) async fn record_outbound_fanout_attempt(
             "content_digest_scope": "transcript_json"
         },
         "limitations": {
-            "profile": "ck.profile.principal_server.v1",
+            "profile": "ak.profile.principal_server.v1",
             "full_conformance": false,
             "remaining": [
                 "long-running retry daemon scheduling",
@@ -279,7 +279,7 @@ fn signed_fanout_intent_evidence(
     let canonical_bytes = arkret_sdk::canonical::canonical_json_bytes(intent)
         .unwrap_or_else(|_| serde_json::to_vec(intent).unwrap_or_default());
     let payload_digest = arkret_sdk::canonical::sha256_digest(&canonical_bytes);
-    let protected_header = br#"{"alg":"EdDSA","typ":"ck.federation.outbound_fanout.intent.v1"}"#;
+    let protected_header = br#"{"alg":"EdDSA","typ":"ak.federation.outbound_fanout.intent.v1"}"#;
     let protected_b64u = URL_SAFE_NO_PAD.encode(protected_header);
     let payload_b64u = URL_SAFE_NO_PAD.encode(&canonical_bytes);
     let signing_input = format!("{protected_b64u}.{payload_b64u}");

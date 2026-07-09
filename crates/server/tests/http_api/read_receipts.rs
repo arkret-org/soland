@@ -106,7 +106,7 @@ async fn submit_read_receipt_policy(
         ALICE,
         ALICE_DEVICE,
         DEMO_REALM_ID,
-        "ck.realm.read_receipt_policy",
+        "ak.realm.read_receipt_policy",
         serde_json::json!({
             "disclosure": disclosure,
             "visibility": visibility,
@@ -176,7 +176,7 @@ fn read_receipt_envelope(actor: &str, device_id: &str, event_id: &str, ttl_ms: i
     let sent_at = chrono::Utc::now();
     let expires_at = sent_at + chrono::Duration::milliseconds(ttl_ms);
     serde_json::json!({
-        "kind": "ck.receipt.read",
+        "kind": "ak.receipt.read",
         "realm_id": DEMO_REALM_ID,
         "actor_id": actor,
         "device_id": device_id,
@@ -184,7 +184,7 @@ fn read_receipt_envelope(actor: &str, device_id: &str, event_id: &str, ttl_ms: i
         "expires_at": expires_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
         "payload": {
             "receipt_type": "read",
-            "schema": "ck.schema.read_receipt.v1",
+            "schema": "ak.schema.read_receipt.v1",
             "realm_id": DEMO_REALM_ID,
             "actor_id": actor,
             "event_id": event_id,
@@ -215,7 +215,7 @@ fn receipts_in_subscribe(frame: &Value, realm_id: &str) -> Vec<Value> {
     };
     ephemeral
         .iter()
-        .filter(|item| item["type"] == "ck.receipt.read")
+        .filter(|item| item["type"] == "ak.receipt.read")
         .flat_map(|item| item["receipts"].as_array().cloned().unwrap_or_default())
         .collect()
 }

@@ -29,7 +29,7 @@ use crate::routing::events::projection::projection_event_json;
 use crate::routing::events::strand::strand_id_from_realm_id;
 use crate::state::{AppState, EventNotification, MessageRecord, ProjectionEventRecord};
 
-pub(super) const GHOST_PROVISION_ACTION: &str = "ck.applet.ghost.provision";
+pub(super) const GHOST_PROVISION_ACTION: &str = "ak.applet.ghost.provision";
 
 pub(super) async fn register_package_install(
     state: &AppState,
@@ -417,12 +417,12 @@ fn install_execution_steps(
     let e2ee_start = 1 + response.capability_grant_refs.len();
     for (offset, event_ref) in response.e2ee_authorization_refs.iter().enumerate() {
         let body = json!({
-            "event_kind": "ck.member.state",
+            "event_kind": "ak.member.state",
             "payload": applet_e2ee_authorization_payload(record, package),
         });
         steps.push(install_execution_step(
             e2ee_start + offset,
-            "ck.member.state",
+            "ak.member.state",
             event_ref,
             canonical_digest(&body)?,
             accepted,
@@ -718,7 +718,7 @@ pub(super) fn portal_message_payload(payload: &Value) -> Result<Option<Value>, A
         .get("kind")
         .and_then(Value::as_str)
         .unwrap_or("message");
-    if kind != "message" && kind != "ck.content.text" {
+    if kind != "message" && kind != "ak.content.text" {
         return Ok(None);
     }
     let text = payload
@@ -728,7 +728,7 @@ pub(super) fn portal_message_payload(payload: &Value) -> Result<Option<Value>, A
         .map(str::to_owned)
         .ok_or_else(|| AppError::invalid_param("payload.text is required"))?;
     Ok(Some(json!({
-        "kind": "ck.content.text",
+        "kind": "ak.content.text",
         "body": text,
     })))
 }
@@ -988,7 +988,7 @@ pub(super) async fn build_install_plan(
         .clone()
         .ok_or_else(|| AppError::missing_param("applet_package.package_digest is required"))?;
     let seed = json!({
-        "schema": "ck.schema.applet_install_plan.v1",
+        "schema": "ak.schema.applet_install_plan.v1",
         "applet_id": package.applet_id,
         "package_digest": package_digest,
         "registration_epoch": package.registration_epoch,
@@ -1008,7 +1008,7 @@ pub(super) async fn build_install_plan(
     });
     let plan_id = deterministic_plan_id(&seed)?;
     let mut plan = InstallPlan {
-        schema: "ck.schema.applet_install_plan.v1".to_owned(),
+        schema: "ak.schema.applet_install_plan.v1".to_owned(),
         plan_id,
         applet_id: package.applet_id.clone(),
         package_digest,
@@ -1120,7 +1120,7 @@ fn applet_e2ee_authorization_payload(record: &AppletRecord, package: &AppletPack
         "applet_id": record.applet_id.as_str(),
         "managed_by_applet": true,
         "e2ee_join_authorization": {
-            "profile": "ck.profile.applet_e2ee_join.v1",
+            "profile": "ak.profile.applet_e2ee_join.v1",
             "authorization_gate": "applet_e2ee_join",
             "authorized_by": record.owner_actor_id.as_str(),
             "registration_epoch": package.registration_epoch.to_string(),
@@ -1143,7 +1143,7 @@ async fn append_applet_e2ee_authorization_projection(
     let projection_record = ProjectionEventRecord {
         event_id: event_id.to_owned(),
         realm_id: record.portal_realm_id.clone(),
-        event_kind: "ck.member.state".to_owned(),
+        event_kind: "ak.member.state".to_owned(),
         operation_type: "applet_e2ee_join_authorization".to_owned(),
         operation_id: None,
         sender: Some(record.owner_actor_id.clone()),
@@ -1262,7 +1262,7 @@ pub(super) async fn require_realm_admin(
         .authz
         .check(
             actor,
-            "ck.realm.admin",
+            "ak.realm.admin",
             &realm_id,
             &realm_id,
             owner.as_deref(),
@@ -1356,7 +1356,7 @@ pub(super) fn allow_ghost_actors_for_install(
 }
 
 pub(super) fn capability_allows_message_create(capability: &str) -> bool {
-    capability == "ck.message.create"
+    capability == "ak.message.create"
 }
 
 #[cfg(test)]
@@ -1420,7 +1420,7 @@ mod tests {
             },
             registration_epoch,
         );
-        package.requested_scopes = vec!["ck.message.create".to_owned()];
+        package.requested_scopes = vec!["ak.message.create".to_owned()];
         package.registration_epoch_evidence =
             Some(arkret_sdk::applet::AppletRegistrationEpochEvidence::new(
                 package.service_did.clone(),
@@ -1573,7 +1573,7 @@ mod tests {
             bot_actor_id: package.bot_actor_id.to_string(),
             portal_realm_id: "ak:realm:01974100-0000-7000-8000-000000000001".to_owned(),
             capabilities: vec![
-                "ck.message.create".to_owned(),
+                "ak.message.create".to_owned(),
                 GHOST_PROVISION_ACTION.to_owned(),
             ],
             manifest: manifest_from_package(package),

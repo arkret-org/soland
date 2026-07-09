@@ -31,7 +31,7 @@ async fn account_data_accepts_fresh_principal_control_realm() {
         FRESH_DID,
         FRESH_DEVICE,
         &principal_realm,
-        "ck.account_data.set",
+        "ak.account_data.set",
         serde_json::json!({
             "key": "client.ui",
             "owner": FRESH_DID,
@@ -60,7 +60,7 @@ async fn account_data_accepts_fresh_principal_control_realm() {
         "did:web:bob.example",
         BOB_DEVICE,
         &principal_realm,
-        "ck.account_data.set",
+        "ak.account_data.set",
         serde_json::json!({
             "key": "client.ui",
             "owner": "did:web:bob.example",
@@ -88,7 +88,7 @@ async fn encrypted_account_data_realm_remark_round_trip() {
     let bob = dev_token_for_device(state.clone(), "did:web:bob.example", BOB_DEVICE, "Bob").await;
 
     let realm_id = "ak:realm:0196419b-0000-7000-8000-000000000000";
-    let key = format!("ck.contacts.realm.{realm_id}");
+    let key = format!("ak.contacts.realm.{realm_id}");
     let remark = account_data_client_side_marker("44", "opaque-realm-remark-v1");
 
     let first = submit_actor_private_event(
@@ -97,7 +97,7 @@ async fn encrypted_account_data_realm_remark_round_trip() {
         "did:web:alice.example",
         ALICE_DEVICE,
         DEMO_REALM_ID,
-        "ck.account_data.set",
+        "ak.account_data.set",
         serde_json::json!({
             "key": key.as_str(),
             "owner": "did:web:alice.example",
@@ -128,7 +128,7 @@ async fn encrypted_account_data_realm_remark_round_trip() {
         "did:web:alice.example",
         ALICE_DEVICE,
         DEMO_REALM_ID,
-        "ck.account_data.set",
+        "ak.account_data.set",
         serde_json::json!({
             "key": key.as_str(),
             "owner": "did:web:alice.example",
@@ -173,7 +173,7 @@ async fn encrypted_account_data_realm_remark_round_trip() {
         "did:web:alice.example",
         ALICE_DEVICE,
         DEMO_REALM_ID,
-        "ck.account_data.set",
+        "ak.account_data.set",
         serde_json::json!({
             "key": key.as_str(),
             "owner": "did:web:alice.example",
@@ -214,7 +214,7 @@ async fn encrypted_account_data_requires_envelope_metadata_or_marker() {
         "Alice",
     )
     .await;
-    let key = "ck.saved.v1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB";
+    let key = "ak.saved.v1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB";
     let envelope = account_data_encrypted_envelope();
 
     let accepted = submit_actor_private_event(
@@ -223,7 +223,7 @@ async fn encrypted_account_data_requires_envelope_metadata_or_marker() {
         "did:web:alice.example",
         ALICE_DEVICE,
         DEMO_REALM_ID,
-        "ck.account_data.set",
+        "ak.account_data.set",
         serde_json::json!({
             "key": key,
             "owner": "did:web:alice.example",
@@ -252,7 +252,7 @@ async fn encrypted_account_data_requires_envelope_metadata_or_marker() {
         "did:web:alice.example",
         ALICE_DEVICE,
         DEMO_REALM_ID,
-        "ck.account_data.set",
+        "ak.account_data.set",
         serde_json::json!({
             "key": key,
             "owner": "did:web:alice.example",
@@ -266,12 +266,12 @@ async fn encrypted_account_data_requires_envelope_metadata_or_marker() {
         "invalid encrypted account_data response: {rejected}"
     );
 
-    let marker_key = "ck.file_transfer.v1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+    let marker_key = "ak.file_transfer.v1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
     let marker = serde_json::json!({
         "client_side_conformance": {
             "encrypted_account_data": true,
-            "profile_id": "ck.profile.e2ee_client.v1",
-            "plaintext_schema_id": "ck.schema.file_transfer.v1",
+            "profile_id": "ak.profile.e2ee_client.v1",
+            "plaintext_schema_id": "ak.schema.file_transfer.v1",
             "payload_digest": "sha256:4444444444444444444444444444444444444444444444444444444444444444"
         },
         "content_type": "application/vnd.arkret.account-data+json",
@@ -306,7 +306,7 @@ async fn encrypted_realm_remark_rejects_plaintext_carrier() {
         "Alice",
     )
     .await;
-    let key = format!("ck.contacts.realm.{DEMO_REALM_ID}");
+    let key = format!("ak.contacts.realm.{DEMO_REALM_ID}");
 
     let rejected = submit_actor_private_event(
         state.clone(),
@@ -314,7 +314,7 @@ async fn encrypted_realm_remark_rejects_plaintext_carrier() {
         "did:web:alice.example",
         ALICE_DEVICE,
         DEMO_REALM_ID,
-        "ck.account_data.set",
+        "ak.account_data.set",
         serde_json::json!({
             "key": key,
             "owner": "did:web:alice.example",
@@ -339,9 +339,9 @@ async fn account_data_requires_auth() {
         "did:web:alice.example",
         "ak:device:01904100-0000-7000-8000-a11ce0000001",
         DEMO_REALM_ID,
-        "ck.account_data.set",
+        "ak.account_data.set",
         serde_json::json!({
-            "key": "ck.contacts.realm.ak:realm:0196419b-0000-7000-8000-000000000000",
+            "key": "ak.contacts.realm.ak:realm:0196419b-0000-7000-8000-000000000000",
             "owner": "did:web:alice.example",
             "body": {"local_name": "x"},
             "updated_at": "2026-05-08T10:00:00Z"
@@ -374,7 +374,7 @@ fn account_data_encrypted_envelope() -> Value {
         "aad_visibility_event_id": "hidden",
         "aad": {
             "realm_id": DEMO_REALM_ID,
-            "event_kind": "ck.account_data.set"
+            "event_kind": "ak.account_data.set"
         },
         "key_ref": {
             "algorithm": "MLS",
@@ -390,8 +390,8 @@ fn account_data_client_side_marker(hex_pair: &str, ciphertext: &str) -> Value {
     serde_json::json!({
         "client_side_conformance": {
             "encrypted_account_data": true,
-            "profile_id": "ck.profile.e2ee_client.v1",
-            "plaintext_schema_id": "ck.schema.realm_remark.v1",
+            "profile_id": "ak.profile.e2ee_client.v1",
+            "plaintext_schema_id": "ak.schema.realm_remark.v1",
             "payload_digest": format!("sha256:{digest}")
         },
         "content_type": "application/vnd.arkret.account-data+json",

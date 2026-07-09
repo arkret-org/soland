@@ -52,7 +52,7 @@ CREATE TABLE public.agent_grants (
     created_at timestamp with time zone NOT NULL,
     detached_at timestamp with time zone,
     expires_at timestamp with time zone,
-    CONSTRAINT agent_grants_id_check CHECK (((id ~~ 'ck:accountability_grant:%'::text) OR (id ~~ 'ck:grant:%'::text))),
+    CONSTRAINT agent_grants_id_check CHECK (((id ~~ 'ak.accountability_grant:%'::text) OR (id ~~ 'ck:grant:%'::text))),
     CONSTRAINT agent_grants_state_check CHECK ((state = ANY (ARRAY['active'::text, 'detached'::text, 'revoked'::text, 'expired'::text])))
 );
 
@@ -1531,7 +1531,7 @@ CREATE INDEX canonical_events_peer_sync_endpoints_idx ON public.canonical_events
 
 CREATE INDEX canonical_events_received_idx ON public.canonical_events USING btree (received_at, id);
 
-CREATE UNIQUE INDEX canonical_events_realm_create_unique_idx ON public.canonical_events USING btree (realm_id) WHERE (kind = 'ck.realm.create'::text);
+CREATE UNIQUE INDEX canonical_events_realm_create_unique_idx ON public.canonical_events USING btree (realm_id) WHERE (kind = 'ak.realm.create'::text);
 
 CREATE INDEX canonical_events_space_idx ON public.canonical_events USING btree (realm_id);
 

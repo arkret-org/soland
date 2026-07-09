@@ -393,7 +393,7 @@ pub(crate) async fn submit_federation_events(
                 res,
                 StatusCode::BAD_REQUEST,
                 "schema_violation",
-                &format!("ck.peer.events.command.submit body is not canonical-hashable: {error}"),
+                &format!("ak.peer.events.command.submit body is not canonical-hashable: {error}"),
             );
             return;
         }
@@ -420,7 +420,7 @@ pub(crate) async fn submit_federation_events(
             res,
             StatusCode::BAD_REQUEST,
             "missing_param",
-            "ck.peer.events.command.submit must contain at least one event",
+            "ak.peer.events.command.submit must contain at least one event",
         );
         return;
     }
@@ -429,7 +429,7 @@ pub(crate) async fn submit_federation_events(
             res,
             StatusCode::PAYLOAD_TOO_LARGE,
             "payload_too_large",
-            "ck.peer.events.command.submit exceeds max batch size",
+            "ak.peer.events.command.submit exceeds max batch size",
         );
         return;
     }
@@ -765,7 +765,7 @@ mod received_at_stamp_tests {
         let received_at = DateTime::parse_from_rfc3339("2026-07-07T05:20:58.398662Z")
             .unwrap()
             .with_timezone(&Utc);
-        let mut device_authorize = operation_for_kind("ck.device.authorize", 1);
+        let mut device_authorize = operation_for_kind("ak.device.authorize", 1);
         let mut member_state = operation_for_kind(arkret_sdk::events::kinds::MEMBER_STATE, 2);
         let mut circle_member_state =
             operation_for_kind(arkret_sdk::events::kinds::CIRCLE_MEMBER_STATE, 3);

@@ -591,21 +591,21 @@ const SUPPORTED_OPERATION_SURFACES: &[&str] = &[
 ];
 
 const SUPPORTED_STANDALONE_OPERATION_IDS: &[&str] = &[
-    "ck.find.directory.query.describe",
-    "ck.find.directory.query.search_realms",
-    "ck.find.directory.query.resolve_realm",
-    "ck.find.directory.query.resolve_target",
-    "ck.find.directory.query.resolve_agent_selector",
-    "ck.find.directory.query.list_handles_for_subject",
-    "ck.self.blob.upload.create",
-    "ck.self.blob.resource.head",
-    "ck.self.blob.resource.get",
-    "ck.self.keys.backups.resource.replace",
-    "ck.self.keys.backups.query.list",
-    "ck.self.keys.backups.command.unlock",
-    "ck.self.keys.backups.resource.delete",
-    "ck.peer.invites.command.submit",
-    "ck.open.invite_locator.query.resolve",
+    "ak.find.directory.query.describe",
+    "ak.find.directory.query.search_realms",
+    "ak.find.directory.query.resolve_realm",
+    "ak.find.directory.query.resolve_target",
+    "ak.find.directory.query.resolve_agent_selector",
+    "ak.find.directory.query.list_handles_for_subject",
+    "ak.self.blob.upload.create",
+    "ak.self.blob.resource.head",
+    "ak.self.blob.resource.get",
+    "ak.self.keys.backups.resource.replace",
+    "ak.self.keys.backups.query.list",
+    "ak.self.keys.backups.command.unlock",
+    "ak.self.keys.backups.resource.delete",
+    "ak.peer.invites.command.submit",
+    "ak.open.invite_locator.query.resolve",
 ];
 
 /// Spec operations soland deliberately does NOT declare even though their
@@ -719,14 +719,14 @@ fn profile_limitations() -> Vec<Value> {
         json!({
             "area": "snapshot.head",
             "status": "standard_self_supported",
-            "reason": "ck.self.snapshot.query.manifest_head returns a signed ck.schema.snapshot.v1 manifest; the /_soland dev bundle remains a product-face compatibility surface"
+            "reason": "ak.self.snapshot.query.manifest_head returns a signed ck.schema.snapshot.v1 manifest; the /_soland dev bundle remains a product-face compatibility surface"
         }),
         json!({
             "area": "account_auth.device_pair",
             "status": "standard_gate_supported",
-            "spec_operation": "ck.gate.account.command.pair_device",
+            "spec_operation": "ak.gate.account.command.pair_device",
             "canonical_path": "/_arkret/gate/account/device-pair",
-            "reason": "ck.gate.account.command.pair_device is served on the spec path for existing-device-authorized sibling registration. The old soland-local device pairing scaffold and approval family are removed; v1 core does not define a self/devices pairing-requests approval surface (service-http-binding.md §85, key-management.md §384, device-lifecycle.md §499). ck.gate.account.exchange.complete_oidc is delegated to the bridges deployment and not served here."
+            "reason": "ak.gate.account.command.pair_device is served on the spec path for existing-device-authorized sibling registration. The old soland-local device pairing scaffold and approval family are removed; v1 core does not define a self/devices pairing-requests approval surface (service-http-binding.md §85, key-management.md §384, device-lifecycle.md §499). ck.gate.account.exchange.complete_oidc is delegated to the bridges deployment and not served here."
         }),
         json!({
             "area": "federation.private_inbound_rail",
@@ -774,7 +774,7 @@ fn profile_limitations() -> Vec<Value> {
 
 fn full_principal_server_gap_summary() -> Vec<Value> {
     vec![json!({
-        "profile": "ck.profile.principal_server.v1",
+        "profile": "ak.profile.principal_server.v1",
         "status": "not_claimed",
         "first_batch_landed": [
             "artifact-derived supported operation advertisement",
@@ -883,15 +883,15 @@ pub fn describe(
     // API stable-catalog profiles in addition to whatever interop
     // staging extensions it implements (MIMI here).
     let claimed_profiles = vec![
-        ClaimedProfileEntry::self_claimed("ck.profile.core_event_store.v1"),
-        ClaimedProfileEntry::self_claimed("ck.profile.principal_server.v1"),
-        ClaimedProfileEntry::self_claimed("ck.profile.principal_server_events_api.v1"),
+        ClaimedProfileEntry::self_claimed("ak.profile.core_event_store.v1"),
+        ClaimedProfileEntry::self_claimed("ak.profile.principal_server.v1"),
+        ClaimedProfileEntry::self_claimed("ak.profile.principal_server_events_api.v1"),
         ClaimedProfileEntry {
             notes: Some(
                 "MIMI provider facade first round (not a full v1 core conformance claim)"
                     .to_owned(),
             ),
-            ..ClaimedProfileEntry::self_claimed("ck.profile.mimi_interop.v1")
+            ..ClaimedProfileEntry::self_claimed("ak.profile.mimi_interop.v1")
         },
     ];
     let verified_profiles = Vec::new();
@@ -914,9 +914,9 @@ pub fn describe(
         ],
         max_visibility: Some(arkret_sdk::PlaintextMaxVisibility::PrivatePlaintext),
         event_kinds: vec![
-            "ck.message.create".to_owned(),
-            "ck.realm.policy_components".to_owned(),
-            "ck.realm.plaintext_visible_services".to_owned(),
+            "ak.message.create".to_owned(),
+            "ak.realm.policy_components".to_owned(),
+            "ak.realm.plaintext_visible_services".to_owned(),
         ],
         payload_paths: vec![
             "payload.content".to_owned(),
@@ -952,26 +952,26 @@ pub fn describe(
         protocol_version: arkret_sdk::PROTOCOL_VERSION.to_owned(),
         supported_profiles: {
             let mut profiles = vec![
-                "ck.profile.core_event_store.v1".to_owned(),
-                "ck.profile.principal_server.v1".to_owned(),
-                "ck.profile.principal_server_events_api.v1".to_owned(),
-                "ck.profile.mimi_interop.v1".to_owned(),
-                "ck.profile.file_transfer.v1".to_owned(),
-                "ck.profile.webrtc_media.v1".to_owned(),
+                "ak.profile.core_event_store.v1".to_owned(),
+                "ak.profile.principal_server.v1".to_owned(),
+                "ak.profile.principal_server_events_api.v1".to_owned(),
+                "ak.profile.mimi_interop.v1".to_owned(),
+                "ak.profile.file_transfer.v1".to_owned(),
+                "ak.profile.webrtc_media.v1".to_owned(),
             ];
             // PROF-1 (R3 spec-sync 2026-05-27, arkret-spec b47ff6ec) —
             // advertise `ck.profile.media_service_binding.v1` whenever the
             // server exposes the `ck.self.call.media.exchange.issue_token`
             // handler. soland mounts the handler unconditionally, and also
             // claims the required `ck.profile.webrtc_media.v1` dependency above.
-            profiles.push("ck.profile.media_service_binding.v1".to_owned());
+            profiles.push("ak.profile.media_service_binding.v1".to_owned());
             // PROF-1 — `ck.profile.accountable_principals.strict_reject.v1` is
             // gated by `SOLAND_ACCOUNTABLE_TO_STRICT_REJECT=true`.
             if matches!(
                 std::env::var("SOLAND_ACCOUNTABLE_TO_STRICT_REJECT").as_deref(),
                 Ok("1") | Ok("true") | Ok("TRUE") | Ok("yes")
             ) {
-                profiles.push("ck.profile.accountable_principals.strict_reject.v1".to_owned());
+                profiles.push("ak.profile.accountable_principals.strict_reject.v1".to_owned());
             }
             profiles
         },
@@ -1039,12 +1039,12 @@ pub fn describe(
             // feature id for the resumable (tus) upload companion binding
             // of ck.self.blob.upload. Pairs with the `kind="tus"` entry in
             // supported_bindings below.
-            "ck.feature.blob.resumable_upload.tus.v1".to_owned(),
-            "ck.feature.mls_last_resort_keypackage.v1".to_owned(),
+            "ak.feature.blob.resumable_upload.tus.v1".to_owned(),
+            "ak.feature.mls_last_resort_keypackage.v1".to_owned(),
             // encryption-and-audit.md §2.10.7 — advertise support for the
             // history-shareable `mls-exporter-aead-v1` content scheme so clients
             // know late-joiner pre-join history decryption is reachable here.
-            "ck.feature.mls_exporter_aead.v1".to_owned(),
+            "ak.feature.mls_exporter_aead.v1".to_owned(),
             "org.arkret.soland.feature.blob.authenticated_download".to_owned(),
             "org.arkret.soland.feature.file_transfer".to_owned(),
             "org.arkret.soland.feature.blob.presigned_download.local_direct_serve".to_owned(),
@@ -1066,9 +1066,9 @@ pub fn describe(
             // device-to-device peer relay (the ephemeral `ck.realm_key.request`
             // relay implemented in `routing::events::realm_key_request`), and
             // archive retrieval.
-            "ck.feature.realm_key.backup_retrieval.v1".to_owned(),
-            "ck.feature.realm_key.peer_relay.v1".to_owned(),
-            "ck.feature.realm_key.archive_retrieval.v1".to_owned(),
+            "ak.feature.realm_key.backup_retrieval.v1".to_owned(),
+            "ak.feature.realm_key.peer_relay.v1".to_owned(),
+            "ak.feature.realm_key.archive_retrieval.v1".to_owned(),
         ],
         supported_operations,
         // service-surface.md §3 documents `base_url` (typed `format: uri` in
@@ -1090,7 +1090,7 @@ pub fn describe(
                 ))
                 .with_extra(
                     "operations",
-                    serde_json::json!(["ck.self.blob.upload.create"]),
+                    serde_json::json!(["ak.self.blob.upload.create"]),
                 )
                 .with_extra("extension_profile_required", serde_json::Value::Null)
                 .with_extra(
@@ -1102,8 +1102,8 @@ pub fn describe(
                     serde_json::json!(crate::routing::TUS_EXTENSIONS),
                 ),
         ],
-        supported_reducer_profiles: vec!["ck.reducer.v1".to_owned()],
-        supported_schema_profiles: vec!["ck.schema.core.v1".to_owned()],
+        supported_reducer_profiles: vec!["ak.reducer.v1".to_owned()],
+        supported_schema_profiles: vec!["ak.schema.core.v1".to_owned()],
         auth_metadata,
         privacy_derivation: Some(crate::routing::push_target_privacy_derivation_claim(now())),
         receive_policy_constraints: None,
@@ -1139,13 +1139,13 @@ pub fn describe(
                 "error_mapping_source": "arkret-spec/spec/v1/artifacts/registry/operations-error-mapping.json",
                 "universal_error_codes_inherited": true,
                 "supported_operations": [
-                    "ck.self.authz.query.check",
-                    "ck.self.authz.grants.query.effective",
-                    "ck.self.authz.invites.query.list",
-                    "ck.self.policy.query.check"
+                    "ak.self.authz.query.check",
+                    "ak.self.authz.grants.query.effective",
+                    "ak.self.authz.invites.query.list",
+                    "ak.self.policy.query.check"
                 ],
                 "authz_check": {
-                    "operation_id": "ck.self.authz.query.check",
+                    "operation_id": "ak.self.authz.query.check",
                     "method": "POST",
                     "path": "/_arkret/self/authz/check",
                     "request_shape": "AuthzCheckRequestBody",
@@ -1166,12 +1166,12 @@ pub fn describe(
                         "dynamic_claim_or_approval": false,
                         "usable_as_policy_obligation_proof": false,
                         "cross_service_signed_authorization_fact": false,
-                        "dynamic_or_auditable_decision_operation": "ck.self.policy.query.check",
+                        "dynamic_or_auditable_decision_operation": "ak.self.policy.query.check",
                         "dynamic_or_auditable_decision_path": "/_arkret/self/policy/check"
                     }
                 },
                 "effective_grants": {
-                    "operation_id": "ck.self.authz.grants.query.effective",
+                    "operation_id": "ak.self.authz.grants.query.effective",
                     "method": "GET",
                     "path": "/_arkret/self/authz/effective-grants",
                     "query": ["realm_id", "subject", "at"],
@@ -1180,7 +1180,7 @@ pub fn describe(
                     "operation_specific_error_codes": []
                 },
                 "invites": {
-                    "operation_id": "ck.self.authz.invites.query.list",
+                    "operation_id": "ak.self.authz.invites.query.list",
                     "method": "GET",
                     "path": "/_arkret/self/authz/invites",
                     "query": ["realm_id", "subject", "cursor"],
@@ -1189,7 +1189,7 @@ pub fn describe(
                     "operation_specific_error_codes": []
                 },
                 "policy_check": {
-                    "operation_id": "ck.self.policy.query.check",
+                    "operation_id": "ak.self.policy.query.check",
                     "method": "POST",
                     "path": "/_arkret/self/policy/check",
                     "operation_specific_error_codes": ["policy_unavailable", "policy_stale"],
@@ -1203,14 +1203,14 @@ pub fn describe(
             },
             "search": {
                 "directory": {
-                    "operation_prefix": "ck.find.directory.",
+                    "operation_prefix": "ak.find.directory.",
                     "resource_types": ["realm", "organization", "actor"],
                     "returns_message_hits": false,
                     "returns_snippets": false
                 },
                 "client_index": {
-                    "profile": "ck.profile.search.client_index.v1",
-                    "manifest_account_data_type": "ck.search.index_manifest.v1",
+                    "profile": "ak.profile.search.client_index.v1",
+                    "manifest_account_data_type": "ak.search.index_manifest.v1",
                     "manifest_storage": "encrypted_private_account_data",
                     "shard_blob_purpose": "search_index_shard",
                     "shard_storage": "encrypted_blob_bytes",
@@ -1226,8 +1226,8 @@ pub fn describe(
             },
             "personal_productivity": {
                 "reminders": {
-                    "profile": "ck.profile.personal_productivity.v1",
-                    "account_data_type": "ck.reminders.v1",
+                    "profile": "ak.profile.personal_productivity.v1",
+                    "account_data_type": "ak.reminders.v1",
                     "storage": "encrypted_private_account_data",
                     "plaintext_payload_accepted": false,
                     "server_action": "local_or_push_wake_only",
@@ -1236,19 +1236,19 @@ pub fn describe(
                     "note_visible_in_shared_event": false
                 },
                 "scheduled_send": {
-                    "profile": "ck.profile.personal_productivity.v1",
-                    "account_data_type": "ck.scheduled_send.v1",
+                    "profile": "ak.profile.personal_productivity.v1",
+                    "account_data_type": "ak.scheduled_send.v1",
                     "storage": "encrypted_private_account_data",
                     "plaintext_payload_accepted": false,
                     "server_dispatches_message_create": false,
                     "server_action": "holder_wake_sync_only",
                     "wakeup_kind": "scheduled_send",
-                    "planned_message_id_anchor": "ck.message.create.payload.message_id",
+                    "planned_message_id_anchor": "ak.message.create.payload.message_id",
                     "shared_history_materialization": "client_submitted_ck.message.create_only"
                 },
                 "snooze": {
-                    "profile": "ck.profile.personal_productivity.v1",
-                    "account_data_type": "ck.snooze.v1",
+                    "profile": "ak.profile.personal_productivity.v1",
+                    "account_data_type": "ak.snooze.v1",
                     "storage": "encrypted_private_account_data",
                     "plaintext_payload_accepted": false,
                     "target_key": "holder_derived_unlinkable",
@@ -1279,16 +1279,16 @@ pub fn describe(
                 "conformance": "limited_reference",
                 "unsupported_profiles": [
                     {
-                        "profile": "ck.profile.soland_limited_server.v1",
+                        "profile": "ak.profile.soland_limited_server.v1",
                         "status": "unsupported",
                         "reason": "limited profile is a limitation descriptor, not a conformance claim"
                     }
                 ],
                 "full_profiles_not_claimed": [
-                    "ck.profile.principal_server.v1",
-                    "ck.profile.directory_service.v1",
-                    "ck.profile.identity_registry.v1",
-                    "ck.profile.blob_node.v1"
+                    "ak.profile.principal_server.v1",
+                    "ak.profile.directory_service.v1",
+                    "ak.profile.identity_registry.v1",
+                    "ak.profile.blob_node.v1"
                 ],
                 "principal_server_full_profile_gaps": full_principal_server_gap_summary(),
                 "supported_operation_catalog": {
@@ -1334,7 +1334,7 @@ pub fn describe(
         }),
         frontier: Vec::new(),
         snapshot_frontier: Vec::new(),
-        reducer_profile: Some("ck.reducer.v1".to_owned()),
+        reducer_profile: Some("ak.reducer.v1".to_owned()),
         last_materialized_at: None,
     }
 }
@@ -1401,9 +1401,9 @@ mod tests {
             .as_array()
             .expect("features array");
         for feature in [
-            "ck.feature.realm_key.backup_retrieval.v1",
-            "ck.feature.realm_key.peer_relay.v1",
-            "ck.feature.realm_key.archive_retrieval.v1",
+            "ak.feature.realm_key.backup_retrieval.v1",
+            "ak.feature.realm_key.peer_relay.v1",
+            "ak.feature.realm_key.archive_retrieval.v1",
         ] {
             assert!(
                 features.contains(&json!(feature)),
@@ -1444,14 +1444,14 @@ mod tests {
         );
         assert_eq!(
             value["supported_bindings"][1]["operations"],
-            json!(["ck.self.blob.upload.create"])
+            json!(["ak.self.blob.upload.create"])
         );
         assert!(value["supported_bindings"][1]["extension_profile_required"].is_null());
         assert!(
             value["supported_features"]
                 .as_array()
                 .expect("features array")
-                .contains(&json!("ck.feature.blob.resumable_upload.tus.v1"))
+                .contains(&json!("ak.feature.blob.resumable_upload.tus.v1"))
         );
         assert!(
             value["supported_features"]
@@ -1487,7 +1487,7 @@ mod tests {
         );
         assert_eq!(
             value["privacy_derivation"]["push_target_id"]["derivation_profile"],
-            json!("ck.push_target_id.hmac_sha256.v1")
+            json!("ak.push_target_id.hmac_sha256.v1")
         );
         assert_eq!(
             value["privacy_derivation"]["push_target_id"]["secret_scope"],
@@ -1554,10 +1554,10 @@ mod tests {
         assert_eq!(
             value["limits"]["authz_policy"]["supported_operations"],
             json!([
-                "ck.self.authz.query.check",
-                "ck.self.authz.grants.query.effective",
-                "ck.self.authz.invites.query.list",
-                "ck.self.policy.query.check"
+                "ak.self.authz.query.check",
+                "ak.self.authz.grants.query.effective",
+                "ak.self.authz.invites.query.list",
+                "ak.self.policy.query.check"
             ])
         );
         assert_eq!(

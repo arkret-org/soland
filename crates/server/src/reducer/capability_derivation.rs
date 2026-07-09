@@ -343,7 +343,7 @@ pub(crate) fn find_capability_grant(
 /// `ck.circle.member.manage` verdict for `circle_id`?
 ///
 /// The Circle HTTP surface (`/_arkret/self/circles/{id}/members`) runs the
-/// real `SolandAuthzEngine::check(sender, "ck.circle.member.manage",
+/// real `SolandAuthzEngine::check(sender, "ak.circle.member.manage",
 /// "ak:circle:<id>", …)` — which evaluates the grant's `allowed_circle_ids`
 /// selector — and stamps the result into the operation payload before handing
 /// it to the reducer. The reducer treats this as a fail-closed assertion:
@@ -351,7 +351,7 @@ pub(crate) fn find_capability_grant(
 ///
 /// Accepted shapes (any one suffices):
 ///   - `manage_capability_verified: true`
-///   - `actor_capability: { action: "ck.circle.member.manage", circle_id: "ak:circle:…", allowed:
+///   - `actor_capability: { action: "ak.circle.member.manage", circle_id: "ak:circle:…", allowed:
 ///     true }`
 pub(crate) fn payload_asserts_circle_manage(payload: &Value, circle_id: &str) -> bool {
     if payload
@@ -367,7 +367,7 @@ pub(crate) fn payload_asserts_circle_manage(payload: &Value, circle_id: &str) ->
     let action_ok = cap
         .get("action")
         .and_then(Value::as_str)
-        .is_some_and(|a| a == "ck.circle.member.manage");
+        .is_some_and(|a| a == "ak.circle.member.manage");
     let allowed_ok = cap.get("allowed").and_then(Value::as_bool) == Some(true);
     // The stamped verdict MUST be scoped to *this* Circle (mirrors the
     // `allowed_circle_ids` selector the engine evaluated). A verdict that omits

@@ -236,8 +236,8 @@ pub(super) fn applet_source_signature_anchor(
     signature_header: &str,
 ) -> String {
     let anchor = serde_json::json!({
-        "profile": "ck.applet.source_signature_anchor.v1",
-        "operation_id": "ck.edge.applet.command.transaction",
+        "profile": "ak.applet.source_signature_anchor.v1",
+        "operation_id": "ak.edge.applet.command.transaction",
         "direction": "applet_to_arkret_inbound",
         "source_service_did": source_service_did,
         "destination_service_did": destination_service_did,
