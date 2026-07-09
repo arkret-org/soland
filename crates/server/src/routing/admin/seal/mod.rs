@@ -17,7 +17,7 @@
 //!   snapshot.
 //! - `POST /_soland/admin/realms/{realm_id}/seal-dag/compact` — trigger a signed compaction Seal.
 //!
-//! DTO shapes mirror `sodmin/src/types/seal.rs` (`NotaryValue`,
+//! DTO shapes mirror `sodmin/src/types/seal.rs` (`AdminNotaryValue`,
 //! `BottomEntry`, `BottomCandidateHead`, `BottomRepairStrategy`, `SealDagSnapshot`,
 //! `SealLeaf`, `CompactionOutcome`, `SubmitControlMoveOutcome`,
 //! `CompactionRequestBody`).

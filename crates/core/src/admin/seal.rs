@@ -25,7 +25,7 @@ impl NotaryKind {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[cfg_attr(feature = "salvo", derive(salvo::oapi::ToSchema))]
-pub struct NotaryValue {
+pub struct AdminNotaryValue {
     pub kind_raw: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub single_did: Option<String>,
@@ -47,7 +47,7 @@ pub struct NotaryValue {
     pub paused: bool,
 }
 
-impl NotaryValue {
+impl AdminNotaryValue {
     pub fn kind(&self) -> Option<NotaryKind> {
         match self.kind_raw.as_str() {
             "single_did" => Some(NotaryKind::SingleDid),

@@ -6,7 +6,9 @@ use salvo::http::StatusCode;
 use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
 use serde_json::Value;
-use soland_core::admin::seal::{NotaryReconfigRequestBody, NotaryValue, SubmitControlMoveOutcome};
+use soland_core::admin::seal::{
+    AdminNotaryValue, NotaryReconfigRequestBody, SubmitControlMoveOutcome,
+};
 
 use super::{AuthArgs, admin_signer_for, fresh_hlc, notary_cell_for, pick_admin_seal_basis};
 use crate::error::AppError;
@@ -15,7 +17,7 @@ use crate::{JsonResult, app_error, json_ok};
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
-/// Wire discriminator string for a [`NotaryValue`] profile (the value the
+/// Wire discriminator string for a [`SdkNotaryValue`] profile (the value the
 /// internal `type` tag serializes to).
 fn notary_kind_str(value: &SdkNotaryValue) -> &'static str {
     match value {
@@ -116,7 +118,7 @@ pub(super) fn notary_value_object_from_body(
     notary_value_object_from_sdk(&value)
 }
 
-/// Project a JSON cell value into the typed [`NotaryValue`]. The
+/// Project a JSON cell value into the admin DTO [`AdminNotaryValue`]. The
 /// on-wire notary cell value MUST be the SDK-authoritative `NotaryValue`
 /// shape (internal tag `type`, fields `did|threshold|members|
 /// forensic_attribution|recovery_members`); removed alias spellings
@@ -130,7 +132,7 @@ pub(super) fn notary_value_object_from_body(
 pub(super) fn notary_value_from_cell(
     value: Option<&Value>,
     service_did: &str,
-) -> Result<NotaryValue, AppError> {
+) -> Result<AdminNotaryValue, AppError> {
     let Some(value) = value else {
         let did = Did::new(service_did.to_owned())
             .map_err(|e| app_error!(InternalError, "invalid service DID `{service_did}`: {e}"))?;
@@ -148,7 +150,10 @@ pub(super) fn notary_value_from_cell(
     Ok(admin_notary_value_from_sdk(parsed, Some(value)))
 }
 
-fn admin_notary_value_from_sdk(value: SdkNotaryValue, envelope: Option<&Value>) -> NotaryValue {
+fn admin_notary_value_from_sdk(
+    value: SdkNotaryValue,
+    envelope: Option<&Value>,
+) -> AdminNotaryValue {
     let revocation_freshness_window_ms = envelope.and_then(|value| {
         value
             .get("revocation_freshness_window_ms")
@@ -158,7 +163,7 @@ fn admin_notary_value_from_sdk(value: SdkNotaryValue, envelope: Option<&Value>) 
         .and_then(|value| value.get("paused").and_then(Value::as_bool))
         .unwrap_or(false);
     match value {
-        SdkNotaryValue::SingleDid { did, .. } => NotaryValue {
+        SdkNotaryValue::SingleDid { did, .. } => AdminNotaryValue {
             kind_raw: "single_did".to_owned(),
             single_did: Some(did.as_str().to_owned()),
             revocation_freshness_window_ms,
@@ -167,7 +172,7 @@ fn admin_notary_value_from_sdk(value: SdkNotaryValue, envelope: Option<&Value>) 
         },
         SdkNotaryValue::Threshold {
             threshold, members, ..
-        } => NotaryValue {
+        } => AdminNotaryValue {
             kind_raw: "threshold".to_owned(),
             threshold_k: Some(threshold),
             // `n` is no longer a wire field; it equals the committee size.
@@ -180,7 +185,7 @@ fn admin_notary_value_from_sdk(value: SdkNotaryValue, envelope: Option<&Value>) 
             paused,
             ..Default::default()
         },
-        SdkNotaryValue::OpenSet { members } => NotaryValue {
+        SdkNotaryValue::OpenSet { members } => AdminNotaryValue {
             kind_raw: "open_set".to_owned(),
             open_set_members: members
                 .into_iter()
@@ -193,7 +198,7 @@ fn admin_notary_value_from_sdk(value: SdkNotaryValue, envelope: Option<&Value>) 
         SdkNotaryValue::Mixed {
             did: primary,
             recovery_members,
-        } => NotaryValue {
+        } => AdminNotaryValue {
             kind_raw: "mixed".to_owned(),
             mixed_primary: Some(primary.as_str().to_owned()),
             mixed_recovery: recovery_members
@@ -222,7 +227,7 @@ pub(crate) async fn admin_get_notary(
     depot: &mut Depot,
     req: &mut Request,
     realm_id: PathParam<String>,
-) -> JsonResult<NotaryValue> {
+) -> JsonResult<AdminNotaryValue> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let _session = aa.authenticated_session(state, req).await?;
     let realm_id = realm_id.into_inner();

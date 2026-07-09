@@ -1,5 +1,4 @@
 use super::*;
-
 // Canonical-JSON digest converged to the single crate-root helper
 // (delegates to SDK `canonical_sha256`); re-exported here so existing
 // `event_log` call sites keep referencing `canonical_value_digest`.
