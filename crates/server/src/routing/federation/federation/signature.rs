@@ -767,7 +767,9 @@ fn public_base_url_authority(state: &AppState) -> Option<String> {
 }
 
 pub(crate) fn trust_domain_from_service_did(service_did: &str) -> String {
-    let scope = did_host_from_service_did(service_did).unwrap_or_else(|| {
+    // Single canonical host parser lives in `crate::config`; delegate rather
+    // than keep a second (previously casing-drifted) copy.
+    let scope = crate::config::did_host_from_service_did(service_did).unwrap_or_else(|| {
         service_did
             .strip_prefix("did:key:")
             .unwrap_or(service_did)
@@ -775,31 +777,6 @@ pub(crate) fn trust_domain_from_service_did(service_did: &str) -> String {
             .replace(':', ".")
     });
     format!("ck:trust_domain:{scope}")
-}
-
-fn did_host_from_service_did(service_did: &str) -> Option<String> {
-    let host = if let Some(rest) = service_did.strip_prefix("did:web:") {
-        rest.split(':').next()?
-    } else if let Some(rest) = service_did.strip_prefix("did:webvh:") {
-        let mut parts = rest.split(':');
-        let scid = parts.next()?;
-        let host = parts.next()?;
-        if scid.is_empty() {
-            return None;
-        }
-        host
-    } else {
-        return None;
-    };
-    let host = host
-        .split("%3A")
-        .next()
-        .unwrap_or(host)
-        .split("%3a")
-        .next()
-        .unwrap_or(host)
-        .trim_end_matches('.');
-    (!host.is_empty()).then(|| host.to_ascii_lowercase())
 }
 
 fn signature_error(message: impl Into<String>) -> AppError {

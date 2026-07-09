@@ -1365,7 +1365,10 @@ pub(crate) fn did_host_from_service_did(service_did: &str) -> Option<String> {
         .next()
         .unwrap_or(host)
         .trim_end_matches('.');
-    (!host.is_empty()).then(|| host.to_owned())
+    // Hosts are case-insensitive; return the canonical lowercase form. This is
+    // the single canonical implementation — `federation::signature` delegates
+    // here rather than keeping a second copy that had drifted on casing.
+    (!host.is_empty()).then(|| host.to_ascii_lowercase())
 }
 
 fn load_receive_policy_constraints() -> anyhow::Result<Option<cokret_sdk::ReceivePolicyConstraints>>

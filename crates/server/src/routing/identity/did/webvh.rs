@@ -93,6 +93,13 @@ pub(super) fn did_webvh_descriptor(state: &AppState) -> Value {
             "method": "did:webvh",
             "default": default_provider_id.as_deref() == Some(embedded_id),
             "active": active,
+            // The embedded webvh provider is a soland *deployment* facility, so
+            // its registration entrypoint intentionally lives on the product
+            // face (`/_soland/...`), not the protocol face — webvh registration
+            // is not a `ck.*` protocol operation (only resolution is). Flag it
+            // as deployment-local so clients can distinguish the product-face
+            // registration URL from the protocol-face `resolver_url` below.
+            "provider_local": true,
             "registration_url": format!("{}/_soland/root/identity/webvh/register", state.config.public_base_url.trim_end_matches('/')),
             "resolver_url": format!("{}/_cokret/root/identity", state.config.public_base_url.trim_end_matches('/')),
             "document_url_template": document_url_template,

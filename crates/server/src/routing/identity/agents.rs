@@ -43,7 +43,7 @@ use cokret_sdk::models::{
     AgentProvisionRequestBody, AgentResumeRequestBody, AgentRotateKeyOutcome,
     AgentRotateKeyRequestBody, AgentRuntimeApprovalOutcome, AgentRuntimeApprovalRequestBody,
     AgentSidecarContextRef, AgentSidecarExposureAck, AgentSidecarThreadEnsureOutcome,
-    AgentSidecarThreadEnsureRequestBody, AgentStatus, AgentView, PublicKey,
+    AgentProjection, AgentSidecarThreadEnsureRequestBody, AgentStatus, AgentView, PublicKey,
     effective_participation, validate_agent_slug, validate_selection_within_ceiling,
 };
 use cokret_sdk::{
@@ -401,30 +401,34 @@ fn generate_agent_principal_did(service_did: &str) -> String {
 /// soland-internal columns (`controller_did`, `agent_id`, `pairing_*`) are NOT
 /// part of the protocol projection and are dropped at the wire boundary; the
 /// persistence `state` column carries the `agent_status` enum value verbatim.
-fn agent_projection_from_record(record: &Value) -> Value {
+fn agent_projection_from_record(record: &Value) -> AgentProjection {
     let str_field = |key: &str| record.get(key).and_then(Value::as_str);
-    let mut projection = serde_json::Map::new();
-    projection.insert(
-        "agent_principal_id".to_owned(),
-        json!(str_field("agent_principal_id").unwrap_or_default()),
-    );
-    if let Some(display_name) = str_field("display_name").filter(|value| !value.is_empty()) {
-        projection.insert("display_name".to_owned(), json!(display_name));
+    let parse_ts = |key: &str| {
+        str_field(key)
+            .filter(|value| !value.is_empty())
+            .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+            .map(|ts| ts.with_timezone(&chrono::Utc))
+    };
+    let status = match str_field("state").unwrap_or("active") {
+        "pending_runtime_key" => AgentStatus::PendingRuntimeKey,
+        "pairing_expired" => AgentStatus::PairingExpired,
+        "paused" => AgentStatus::Paused,
+        "deactivated" => AgentStatus::Deactivated,
+        _ => AgentStatus::Active,
+    };
+    AgentProjection {
+        agent_principal_id: Did::new(str_field("agent_principal_id").unwrap_or_default())
+            .unwrap_or_else(|_| Did::new("did:webvh:invalid:invalid").expect("static did")),
+        display_name: str_field("display_name")
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned),
+        agent_slug: str_field("agent_slug")
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned),
+        status,
+        created_at: parse_ts("created_at"),
+        updated_at: parse_ts("updated_at"),
     }
-    if let Some(agent_slug) = str_field("agent_slug").filter(|value| !value.is_empty()) {
-        projection.insert("agent_slug".to_owned(), json!(agent_slug));
-    }
-    projection.insert(
-        "status".to_owned(),
-        json!(str_field("state").unwrap_or("active")),
-    );
-    if let Some(created_at) = str_field("created_at").filter(|value| !value.is_empty()) {
-        projection.insert("created_at".to_owned(), json!(created_at));
-    }
-    if let Some(updated_at) = str_field("updated_at").filter(|value| !value.is_empty()) {
-        projection.insert("updated_at".to_owned(), json!(updated_at));
-    }
-    Value::Object(projection)
 }
 
 /// Build the spec `agent_view` (`agent-operations.schema.json#/$defs/agent_view`)
@@ -439,7 +443,7 @@ fn agent_view_from_record(record: &Value) -> AgentView {
         .to_owned();
     let key_state = agent_key_state_from_record(record);
     AgentView {
-        agent: agent_projection_from_record(record),
+        agent: serde_json::to_value(agent_projection_from_record(record)).unwrap_or(Value::Null),
         status,
         grants: Vec::new(),
         key_state,
@@ -2959,9 +2963,9 @@ mod tests {
     #[test]
     fn agent_view_projects_spec_shape_dropping_internal_columns() {
         let view = agent_view_from_record(&json!({
-            "agent_principal_id": "did:webvh:agent.example",
+            "agent_principal_id": "did:webvh:z6mkfixture:agent.example",
             "controller_did": "did:webvh:example.com:users:alice",
-            "agent_id": "did:webvh:agent.example",
+            "agent_id": "did:webvh:z6mkfixture:agent.example",
             "display_name": "Summary Assistant",
             "agent_slug": "summary",
             "state": "active",
@@ -2975,7 +2979,7 @@ mod tests {
         assert_eq!(agent["agent"]["status"], "active");
         assert_eq!(
             agent["agent"]["agent_principal_id"],
-            "did:webvh:agent.example"
+            "did:webvh:z6mkfixture:agent.example"
         );
         // soland-internal columns MUST NOT leak into the protocol projection.
         assert!(agent["agent"].get("controller_did").is_none());

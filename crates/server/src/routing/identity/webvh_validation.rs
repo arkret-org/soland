@@ -1311,7 +1311,7 @@ mod tests {
                     {"publicKeyMultibase": witness_b}
                 ]
             },
-            "state": {"authentication": ["did:webvh:example#old"]},
+            "state": {"authentication": ["did:webvh:z6mkfixture:example#old"]},
         }));
         let rotation = WebvhLogEntry::new(json!({
             "versionId": "2-zRotation",
@@ -1321,7 +1321,7 @@ mod tests {
                 "method": "did:webvh:1.0",
                 "updateKeys": ["z6MknewKey"],
             },
-            "state": {"authentication": ["did:webvh:example#new"]},
+            "state": {"authentication": ["did:webvh:z6mkfixture:example#new"]},
         }));
         let now = chrono::DateTime::parse_from_rfc3339("2026-05-25T00:40:00Z")
             .unwrap()

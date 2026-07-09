@@ -13,6 +13,20 @@ const SOLAND_SOVEREIGN_ENCLAVE: &str = "SOLAND_SOVEREIGN_ENCLAVE";
 const SOLAND_SOVEREIGN_ENCLAVE_ALLOWED_OUTBOUND_HOSTS: &str =
     "SOLAND_SOVEREIGN_ENCLAVE_ALLOWED_OUTBOUND_HOSTS";
 
+/// Whether outbound egress to private/loopback networks is permitted.
+///
+/// `SOLAND_EGRESS_ALLOW_PRIVATE_NETWORKS`, when set, is authoritative and MUST
+/// be used to decouple this decision from the deployment posture in any
+/// environment where the two must differ. When the variable is unset the
+/// default follows `development_mode` (dev needs to reach localhost services).
+///
+/// Deployment note: a production deployment MUST run with
+/// `development_mode = false`; otherwise the private-network egress guard opens
+/// as a side effect of the dev flag. The cloud metadata endpoint
+/// (`169.254.169.254`) remains hard-blocked regardless (see
+/// [`validate_url_for_egress`]), which caps the blast radius of a misconfigured
+/// `development_mode`, but the explicit env var should be preferred to pin the
+/// posture independently.
 pub fn private_networks_allowed(development_mode: bool) -> bool {
     env_bool(SOLAND_EGRESS_ALLOW_PRIVATE_NETWORKS).unwrap_or(development_mode)
 }
