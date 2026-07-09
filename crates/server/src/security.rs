@@ -740,7 +740,7 @@ mod tests {
         unsafe {
             std::env::set_var(
                 SOLAND_FEDERATION_DENYLIST,
-                "did:web:blocked.example, domain:evil.example, ck:trust_domain:bad.example",
+                "did:web:blocked.example, domain:evil.example, ak:trust_domain:bad.example",
             );
         }
         assert!(federation_origin_denied("did:web:blocked.example"));
@@ -764,7 +764,7 @@ mod tests {
         unsafe {
             std::env::set_var(
                 SOLAND_FEDERATION_DENYLIST,
-                "domain:local.host, ck:trust_domain:local.host",
+                "domain:local.host, ak:trust_domain:local.host",
             );
         }
         assert!(federation_origin_denied(

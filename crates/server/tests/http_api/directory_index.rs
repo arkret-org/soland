@@ -670,7 +670,7 @@ async fn index_product_endpoints_return_demo_projection_shapes() {
     // from `/index/entity` in round 6); it returns `{object: {object_id,
     // kind, schema}}` for any spec-registered `ck:<kind>:` prefix.
     let object: Value = TestClient::get(
-        "http://server/_soland/self/index/object?object_id=ck:space:0196419b-0000-7000-8000-000000000000",
+        "http://server/_soland/self/index/object?object_id=ak:space:0196419b-0000-7000-8000-000000000000",
     )
     .send(&app())
     .await
@@ -680,7 +680,7 @@ async fn index_product_endpoints_return_demo_projection_shapes() {
     assert_eq!(object["object"]["kind"], "space");
 
     let thread: Value =
-        TestClient::get("http://server/_soland/self/index/thread?thread_id=ck:strand:demo")
+        TestClient::get("http://server/_soland/self/index/thread?thread_id=ak:strand:demo")
             .send(&app())
             .await
             .take_json()
@@ -721,7 +721,7 @@ async fn index_product_endpoints_return_demo_projection_shapes() {
     assert_eq!(search["results"].as_array().unwrap().len(), 1);
 
     let hierarchy: Value = TestClient::get(
-        "http://server/_soland/self/index/space-hierarchy?root_space_id=ck:space:0196419b-0000-7000-8000-000000000000",
+        "http://server/_soland/self/index/space-hierarchy?root_space_id=ak:space:0196419b-0000-7000-8000-000000000000",
     )
     .send(&app())
     .await
@@ -761,7 +761,7 @@ async fn broader_protocol_surface_returns_contract_shapes() {
     assert_eq!(resolved["realm_preview"]["realm_id"], DEMO_REALM_ID);
 
     let backfill: Value = TestClient::get(
-        "http://server/_arkret/self/events?realms=ck:realm:0196419b-0000-7000-8000-000000000000",
+        "http://server/_arkret/self/events?realms=ak:realm:0196419b-0000-7000-8000-000000000000",
     )
     .send(&app())
     .await

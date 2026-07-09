@@ -256,11 +256,11 @@ pub(super) async fn put_key_backup(
         return Err(AppError::invalid_param("backup_id is required"));
     }
     // Spec `keys-operations.schema.json#/$defs/backup_id` pins the id to
-    // `ck:backup:<uuidv7>`; parse into the SDK typed id up front so a
+    // `ak:backup:<uuidv7>`; parse into the SDK typed id up front so a
     // non-conforming id fails before any persistence side effect.
     let typed_backup_id = arkret_sdk::BackupId::new(backup_id.clone()).map_err(|error| {
         AppError::invalid_param(format!(
-            "backup_id must be a ck:backup:<uuidv7> typed id: {error}"
+            "backup_id must be a ak:backup:<uuidv7> typed id: {error}"
         ))
     })?;
     // The request body is now deserialized straight into the SDK `KeyBackup`
@@ -339,7 +339,7 @@ pub(super) async fn put_key_backup(
     tags("keys"),
     summary = "List encrypted key backups owned by the authenticated actor",
     parameters(
-        ("series_id" = Option<String>, Query, description = "Filter by ck:backup_series:<uuidv7>"),
+        ("series_id" = Option<String>, Query, description = "Filter by ak:backup_series:<uuidv7>"),
         ("backup_class" = Option<String>, Query, description = "Filter by backup_class (did_recovery / secret_storage / mls_history)"),
         ("cursor" = Option<String>, Query, description = "Opaque pagination cursor")
     )

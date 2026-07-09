@@ -598,9 +598,9 @@ fn circle_local_management_action_requires_explicit_grant(action: &str) -> bool 
 /// CKP-0007 / SEL-1 (R3 spec-sync 2026-05-27, arkret-spec b47ff6ec) —
 /// the spec resource-selector enum admits `realm`, `space`, `strand`,
 /// `morph`, `circle`, `actor`. soland's resource matcher accepts the
-/// `ck:circle:<uuid>` typed-id form alongside the existing space /
+/// `ak:circle:<uuid>` typed-id form alongside the existing space /
 /// realm forms, plus a `circle` keyword selector that resolves to
-/// "any ck:circle:<uuid>" so policy-authoring tools can express
+/// "any ak:circle:<uuid>" so policy-authoring tools can express
 /// circle-wide grants without enumerating each circle.
 pub(crate) fn resource_matches(pattern: &str, resource: &str) -> bool {
     if pattern == "*" {
@@ -1052,8 +1052,8 @@ fn evaluate_constraint(
             // time).
             //
             // Evaluation contract: the resource selector for a Circle
-            // capability is of the form `ck:circle:<uuid>` (mirrors the
-            // `ck:space:<uuid>` pattern used by `realm.*` / `space.*`
+            // capability is of the form `ak:circle:<uuid>` (mirrors the
+            // `ak:space:<uuid>` pattern used by `realm.*` / `space.*`
             // grants). If the resource looks like a Circle id, it MUST
             // be a member of the allowed set; otherwise the constraint
             // does not apply and silently passes (caller-policy: any
@@ -1106,8 +1106,8 @@ fn evaluate_constraint(
             // facet-bound and an unfaceted target falls outside its scope.
             //
             // The check works on any spec-typed object resource that
-            // carries a `facets` field; `ck:strand:` / `ck:space:` /
-            // `ck:morph:` projections all surface facets through the
+            // carries a `facets` field; `ak:strand:` / `ak:space:` /
+            // `ak:morph:` projections all surface facets through the
             // same cell-family registry.
             if allowed.is_empty() {
                 return None;

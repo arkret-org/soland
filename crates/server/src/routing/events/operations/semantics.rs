@@ -53,10 +53,10 @@ pub fn validate_operation_semantics(
 }
 
 /// strand-and-message.md §9.8.2 — v1 core reactions may only target a
-/// `ck:message:`. The reducer keys the OR-Set on the message's storage id
-/// (`ck:event:`), so both the canonical `ck:message:` object ref and the
-/// internal `ck:event:` form are accepted; every other typed object kind
-/// (`ck:strand:`, `ck:morph:`, `ck:circle:`, …) is rejected fail-closed with
+/// `ak:message:`. The reducer keys the OR-Set on the message's storage id
+/// (`ak:event:`), so both the canonical `ak:message:` object ref and the
+/// internal `ak:event:` form are accepted; every other typed object kind
+/// (`ak:strand:`, `ak:morph:`, `ak:circle:`, …) is rejected fail-closed with
 /// `reaction_target_unsupported` (a `schema_violation` sub-reason).
 /// Profiles MAY register additional target kinds; v1 core does not.
 pub(crate) fn validate_reaction_target_kind(
@@ -170,11 +170,11 @@ fn validate_typed_payload_shapes(kind: &str, operation: &Operation) -> Result<()
         }
         // ck.applet.interop_session.start — round 4 requires the
         // `applet_id` to be either a DID or a strictly-validated
-        // `ck:applet:<uuidv7>` typed id.
+        // `ak:applet:<uuidv7>` typed id.
         "ck.applet.interop_session.start" => {
             if let Some(applet_id) = operation.payload.get("applet_id").and_then(|v| v.as_str()) {
                 validate_applet_id(applet_id).map(|_| ()).map_err(
-                    |_| "applet_id must be a DID or ck:applet:<uuidv7> (typed-id wire break)",
+                    |_| "applet_id must be a DID or ak:applet:<uuidv7> (typed-id wire break)",
                 )?;
             }
             Ok(())
@@ -438,7 +438,7 @@ pub fn operation_schema_for_kind(kind: &str) -> Option<OperationPayloadSchema> {
             // here so `accept_local_operations` doesn't fall through to
             // the SDK artifact validator (whose `realm_id` pattern is
             // stricter than the in-tree fixtures need for testing —
-            // existing reducer-level tests use `ck:space:` prefixes).
+            // existing reducer-level tests use `ak:space:` prefixes).
             arkret_sdk::events::kinds::REALM_LINK => OperationPayloadSchema {
                 requirements: REALM_LINK_REQUIREMENTS,
                 validate: None,
@@ -918,14 +918,14 @@ pub fn validate_consent_revoke_payload(payload: &Value) -> Result<(), (&'static 
 }
 
 /// Spec B1.17 — accept an `applet_id` value. Must be either a DID or a
-/// strictly-validated `ck:applet:<uuidv7>` typed id. Returns the typed
+/// strictly-validated `ak:applet:<uuidv7>` typed id. Returns the typed
 /// wrapper on success.
 pub fn validate_applet_id(
     value: &str,
 ) -> Result<arkret_sdk::AppletIdentifier, (&'static str, String)> {
     // The SDK's `AppletIdentifier` is `enum { Did(Did), Cx(AppletId) }`.
     // We attempt the DID form first (covers `did:webvh:applet.example`
-    // and similar), then fall back to the typed `ck:applet:` form.
+    // and similar), then fall back to the typed `ak:applet:` form.
     if let Ok(did) = arkret_sdk::Did::new(value.to_owned()) {
         return Ok(arkret_sdk::AppletIdentifier::Did(did));
     }
@@ -934,6 +934,6 @@ pub fn validate_applet_id(
     }
     Err((
         arkret_sdk::ERROR_CODE_SCHEMA_VIOLATION,
-        format!("applet_id must be a DID or ck:applet:<uuidv7>: got {value:?}"),
+        format!("applet_id must be a DID or ak:applet:<uuidv7>: got {value:?}"),
     ))
 }

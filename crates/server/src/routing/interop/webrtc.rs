@@ -737,10 +737,10 @@ async fn handle_rtc_token(
 
     // `media-service-binding.md` §3 — participant_identity is an SFU-local
     // handle that MUST NOT be a deterministic function of the public principal
-    // tuple. Mint a fresh random `ck:rtc_participant:<uuidv7>` per token
+    // tuple. Mint a fresh random `ak:rtc_participant:<uuidv7>` per token
     // exchange so the SFU cannot be linked back to (realm, call, actor, device)
     // by recomputing the id, and the wire form matches the schema pattern
-    // `^ck:rtc_participant:<uuidv7>$`.
+    // `^ak:rtc_participant:<uuidv7>$`.
     let participant_identity = arkret_sdk::new_prefixed_uuid7("ak:rtc_participant:");
     let signing_key = state.notary_signing_key();
     // `bindings/livekit.md` §2/§5 — publish grants are derived from the
@@ -920,7 +920,7 @@ struct CallStateCell {
 
 impl CallStateCell {
     /// Load the `ck.component.call.state.v1` cell for `call_id`. The cell id is
-    /// `ck:cell:ck.component.call.state.v1:{call_id}` — the same form the
+    /// `ak:cell:ck.component.call.state.v1:{call_id}` — the same form the
     /// `apply_call_state` reducer writes (see `apply_realm_policy.rs`).
     async fn load(state: &AppState, call_id: &str) -> Result<Self, AppError> {
         let cell_id = call_state_cell_ref(call_id)?;
@@ -1590,10 +1590,10 @@ pub(crate) async fn actor_has_call_capability(
 }
 
 fn is_valid_webrtc_session_id(value: &str) -> bool {
-    // v1 wire ID: `ck:call:<uuidv7-36-char-lowercase-hex>` (RFC 9562 v7,
+    // v1 wire ID: `ak:call:<uuidv7-36-char-lowercase-hex>` (RFC 9562 v7,
     // version=7, variant ∈ {8,9,a,b}) — per
     // `arkret-spec/v1/artifacts/registry/id-kind-registry.json` the WebRTC
-    // call surface uses `ck:call:`.
+    // call surface uses `ak:call:`.
     let Some(rest) = value.strip_prefix("ak:call:") else {
         return false;
     };

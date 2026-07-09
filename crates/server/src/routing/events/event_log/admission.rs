@@ -204,7 +204,7 @@ pub fn cross_signing_reset_replay_check(
         return Err((
             ErrorCode::SchemaViolation,
             "cross_signing.reset.trust_domain must match \
-             ck:trust_domain:<scope> per spec"
+             ak:trust_domain:<scope> per spec"
                 .to_owned(),
         ));
     }
@@ -230,7 +230,7 @@ pub fn cross_signing_reset_replay_check(
     if arkret_sdk::EventId::new(payload_reset_event_id).is_err() {
         return Err((
             ErrorCode::SchemaViolation,
-            "cross_signing.reset.reset_event_id must be a ck:event:<uuidv7>".to_owned(),
+            "cross_signing.reset.reset_event_id must be a ak:event:<uuidv7>".to_owned(),
         ));
     }
     if payload_reset_event_id != event_id {

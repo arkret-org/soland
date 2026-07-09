@@ -235,7 +235,7 @@ async fn agent_bridge_emits_status_and_result_for_session_start() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
     // Use the seeded demo Realm — dev_token's actor is a member of
-    // `ck:realm:0196419b-0000-7000-8000-000000000000` so the events
+    // `ak:realm:0196419b-0000-7000-8000-000000000000` so the events
     // surface accepts writes against it (mirror of the B3 test).
     let session_id = "ak:agent_interop_session:01904100-0000-7000-8000-b4b4b4b4b4b4";
     let agent_id = "did:web:agent.example";

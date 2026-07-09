@@ -140,7 +140,7 @@ async fn admin_get_realm_media_service(
     let realm_id = realm_id.into_inner();
     if RealmId::new(realm_id.clone()).is_err() {
         return Err(AppError::invalid_param(format!(
-            "invalid realm_id `{realm_id}`: must be a typed ck:realm: id"
+            "invalid realm_id `{realm_id}`: must be a typed ak:realm: id"
         ))
         .with_status(StatusCode::BAD_REQUEST));
     }

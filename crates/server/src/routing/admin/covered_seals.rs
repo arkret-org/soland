@@ -84,7 +84,7 @@ async fn get_covered_seals(
     let realm = RealmId::new(realm_id.clone()).map_err(|_| {
         app_error!(
             InvalidParam,
-            "invalid realm_id `{realm_id}`: must be a typed ck:realm: id"
+            "invalid realm_id `{realm_id}`: must be a typed ak:realm: id"
         )
         .with_status(StatusCode::BAD_REQUEST)
     })?;
@@ -134,7 +134,7 @@ async fn advance_covered_seals(
     let realm = RealmId::new(realm_id.clone()).map_err(|_| {
         app_error!(
             InvalidParam,
-            "invalid realm_id `{realm_id}`: must be a typed ck:realm: id"
+            "invalid realm_id `{realm_id}`: must be a typed ak:realm: id"
         )
         .with_status(StatusCode::BAD_REQUEST)
     })?;

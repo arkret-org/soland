@@ -947,7 +947,7 @@ pub fn describe(
         service_did: service_did.parse().expect("valid service DID"),
         trust_domain: trust_domain
             .parse()
-            .expect("trust_domain must be ck:trust_domain:<scope>"),
+            .expect("trust_domain must be ak:trust_domain:<scope>"),
         service_type: "principal_server".to_owned(),
         protocol_version: arkret_sdk::PROTOCOL_VERSION.to_owned(),
         supported_profiles: {

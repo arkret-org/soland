@@ -12,8 +12,8 @@
 /// soland re-exports them so the whole server shares one validated newtype per
 /// id-kind instead of maintaining parallel local copies.
 ///
-/// - [`RealmId`] is the SDK security-boundary id and validates `ck:realm:`.
-/// - [`SpaceContainerId`] is the SDK Space container id and validates `ck:space:`.
+/// - [`RealmId`] is the SDK security-boundary id and validates `ak:realm:`.
+/// - [`SpaceContainerId`] is the SDK Space container id and validates `ak:space:`.
 pub use arkret_sdk::{RealmId, SpaceId as SpaceContainerId};
 use uuid::Uuid;
 
@@ -46,7 +46,7 @@ pub fn generate_relation_id() -> String {
     generate("relation")
 }
 
-/// CKP-0007 (spec b7d35be) — generate a new `ck:circle:<uuid7>` identifier
+/// CKP-0007 (spec b7d35be) — generate a new `ak:circle:<uuid7>` identifier
 /// for the Circle primitive. Used by `POST /_arkret/self/circles` to mint the new
 /// Circle's typed wire id before submitting `ck.circle.create`.
 pub fn generate_circle_id() -> String {
@@ -88,7 +88,7 @@ pub fn generate_read_cursor_id() -> String {
     generate("read_cursor")
 }
 
-/// Notification id helper. Spec uses the full `ck:notification:` kind.
+/// Notification id helper. Spec uses the full `ak:notification:` kind.
 pub fn generate_notification_id() -> String {
     generate("notification")
 }

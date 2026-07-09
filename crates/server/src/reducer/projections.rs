@@ -604,7 +604,7 @@ pub struct StrandProjection {
     pub history_basis_seals: Vec<String>,
     pub updated_by: Option<String>,
     pub updated_at: Option<chrono::DateTime<chrono::Utc>>,
-    /// CKP-0007 — the Circle this Strand is scoped to, if any (`ck:circle:…`).
+    /// CKP-0007 — the Circle this Strand is scoped to, if any (`ak:circle:…`).
     /// A message's effective circle-scope is derived from its Strand's
     /// `scope_circle_id` (spec: `scope_circle_id` is a Strand field, not a
     /// message field); messages never carry their own scope.
@@ -701,7 +701,7 @@ impl CircleLifecycleState {
 pub struct MorphProjection {
     pub morph_id: String,
     pub realm_id: String,
-    /// CKP-0007 - the Circle this Morph is scoped to, if any (`ck:circle:...`).
+    /// CKP-0007 - the Circle this Morph is scoped to, if any (`ak:circle:...`).
     /// Morph updates and lifecycle writes must satisfy the same Circle
     /// membership conjunct as creates.
     pub scope_circle_id: Option<String>,
@@ -1237,7 +1237,7 @@ pub struct SolandRealmState {
     /// immutable on the first `ck.realm.create`; subsequent events that
     /// attempt to set a different trust domain MUST be rejected with
     /// `cross_domain_replay_rejected`. Stored as the canonical
-    /// `ck:trust_domain:<scope>` string form.
+    /// `ak:trust_domain:<scope>` string form.
     pub trust_domain: Option<String>,
     /// Stream-F (Wave 1B) — Realm terminal-state marker. Set by
     /// `apply_realm_lifecycle` when a `ck.realm.tombstone` or
@@ -1252,10 +1252,10 @@ pub struct SolandRealmState {
     /// `realm-and-space.md` §2.5 / §2.5.1.
     pub terminal_state: Option<String>,
     /// Stream-F (Wave 1B) — for `ck.realm.tombstone` only: the
-    /// `ck:realm:<uuid>` of the successor Realm that takes over child
+    /// `ak:realm:<uuid>` of the successor Realm that takes over child
     /// Space/Strand placement. `None` for live or destroyed Realms.
     pub successor_realm_id: Option<String>,
-    /// COT-06-004 — the Realm's default Strand pointer (`ck:strand:<UUIDv7>`).
+    /// COT-06-004 — the Realm's default Strand pointer (`ak:strand:<UUIDv7>`).
     /// Set by `ck.realm.set_default_strand` (`apply_realm_set_default_strand`);
     /// the Strand it names MUST already be projected in this Realm. A Strand's
     /// derived `is_default` flag is computed at query time as

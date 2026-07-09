@@ -427,7 +427,7 @@ async fn write_through_projection(state: &AppState, operation: &Operation) {
             id.and_then(|i| proj.morphs.get(&i))
                 .map(return_snapshot_morph)
         } else if is_redaction {
-            // object_ref may be ck:strand: or ck:morph:; try both.
+            // object_ref may be ak:strand: or ak:morph:; try both.
             if let Some(ref obj_ref) = object_ref {
                 if let Some(strand) = proj.strands.get(obj_ref) {
                     Some(return_snapshot_strand(strand))
@@ -1368,7 +1368,7 @@ mod tests {
             "sender_device_id": sender_device,
             "sender_device_signature": {
                 "alg": "EdDSA",
-                "kid": "did:web:alice.example#ck:device:01904100-0000-7000-8000-a11ce0000001",
+                "kid": "did:web:alice.example#ak:device:01904100-0000-7000-8000-a11ce0000001",
                 "sig": "signature"
             },
             "key_scope": {

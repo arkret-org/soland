@@ -422,14 +422,14 @@ pub fn project_member_identity_update(state: &AppState, operation: &Operation) {
         return;
     }
     // SPEC-CR-010 / SOL-05-008 — the effective-set / replaces / R3.2 digest id
-    // space is the typed `ck:event:` id (event-payload.schema.json
+    // space is the typed `ak:event:` id (event-payload.schema.json
     // `event_ref`, client-sync.md R3.2 `effective_events[].event_id`), NOT the
-    // `ck:operation:` id. `projection_operation_from_event` already threads the
+    // `ak:operation:` id. `projection_operation_from_event` already threads the
     // canonical Event id through `payload.event_id`, so prefer it; fall back to
-    // deriving `ck:event:<uuid>` from the operation id's UUID suffix (same
-    // suffix as the matching `ck:operation:<uuid>`) so projection never stores
+    // deriving `ak:event:<uuid>` from the operation id's UUID suffix (same
+    // suffix as the matching `ak:operation:<uuid>`) so projection never stores
     // an operation id that a spec-compliant client's `replaces[].event_id`
-    // (which is `ck:event:`) can never match.
+    // (which is `ak:event:`) can never match.
     let canonical_event_id = payload
         .get("event_id")
         .and_then(Value::as_str)

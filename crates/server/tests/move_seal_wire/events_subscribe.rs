@@ -211,7 +211,7 @@ async fn events_subscribe_emits_close_heartbeat_at_deadline() {
 /// through the SDK's *typed* [`arkret_sdk::EventsSubscribeFrame`] — the exact
 /// type the wasm/native client parses with. The `cursor` field is
 /// `Option<identifiers::Cursor>`, which rejects anything without a
-/// `ck:cursor:` prefix; an earlier build put the raw `event_id` there, so the
+/// `ak:cursor:` prefix; an earlier build put the raw `event_id` there, so the
 /// client's whole buffered poll errored, never advanced its resume cursor, and
 /// re-requested full history (`include_history=true`, no `after`) on every
 /// iteration — replaying the same events forever.
@@ -222,7 +222,7 @@ async fn events_subscribe_emits_close_heartbeat_at_deadline() {
 ///   1. seeds a durable history event,
 ///   2. subscribes with `include_history=true` and asserts every line parses as the typed frame
 ///      (this is what the raw-`event_id` bug broke),
-///   3. asserts `catchup_complete` carries a real `ck:cursor:` token, and
+///   3. asserts `catchup_complete` carries a real `ak:cursor:` token, and
 ///   4. feeds that token back as `after` and asserts the history event is NOT replayed (the cursor
 ///      actually advances — no duplicates).
 #[tokio::test]
@@ -305,7 +305,7 @@ async fn events_subscribe_frames_are_sdk_typed_and_cursor_advances() {
     // ── Subscribe #2: resume from that cursor — history must NOT replay. ──
     let app2 = service(state.clone());
     let mut response2 = TestClient::get(format!(
-        // `ck:cursor:<base64url>` is query-safe unencoded: only `:` and the
+        // `ak:cursor:<base64url>` is query-safe unencoded: only `:` and the
         // base64url alphabet (`A-Za-z0-9-_`), all valid query `pchar`s.
         "http://server/_arkret/self/events/subscribe?realms={}&after={resume_cursor}&max_duration_ms=300&heartbeat_ms=10000",
         demo_realm_id(),

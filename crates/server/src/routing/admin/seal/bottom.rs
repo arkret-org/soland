@@ -419,7 +419,7 @@ pub(crate) async fn admin_repair_bottom(
                 if touched.is_empty() {
                     return Err(AppError::new(
                         ErrorCode::InvalidParam,
-                        "manual repair effects must declare a `cell` (ck:cell:* id)".to_owned(),
+                        "manual repair effects must declare a `cell` (ak:cell:* id)".to_owned(),
                     )
                     .with_status(StatusCode::BAD_REQUEST));
                 }

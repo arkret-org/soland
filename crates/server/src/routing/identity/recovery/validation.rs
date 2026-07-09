@@ -9,7 +9,7 @@ pub(super) fn validate_recovery_policy(payload: &Value) -> Result<RecoveryPolicy
     let trust_domain = require_string(payload, "trust_domain")?;
     if !trust_domain.starts_with("ak:trust_domain:") {
         return Err(AppError::invalid_param(format!(
-            "trust_domain `{trust_domain}` must start with ck:trust_domain:",
+            "trust_domain `{trust_domain}` must start with ak:trust_domain:",
         )));
     }
     let allowed_proof_kinds = require_string_array(payload, "allowed_proof_kinds")?;
@@ -29,7 +29,7 @@ pub(super) fn validate_recovery_policy(payload: &Value) -> Result<RecoveryPolicy
         }
         _ => {
             return Err(AppError::invalid_param(
-                "supersedes must be null or a ck:policy:<uuidv7> string",
+                "supersedes must be null or a ak:policy:<uuidv7> string",
             ));
         }
     };
@@ -117,14 +117,14 @@ pub(super) fn validate_recovery_receipt(
     let receipt_id = require_string(payload, "receipt_id")?;
     if !receipt_id.starts_with("ak:receipt:") {
         return Err(AppError::invalid_param(format!(
-            "receipt_id `{receipt_id}` must start with ck:receipt:",
+            "receipt_id `{receipt_id}` must start with ak:receipt:",
         )));
     }
     let principal_id = require_did(payload, "principal_id")?;
     let recovery_session_id = require_string(payload, "recovery_session_id")?;
     if !recovery_session_id.starts_with("ak:recovery_session:") {
         return Err(AppError::invalid_param(format!(
-            "recovery_session_id `{recovery_session_id}` must start with ck:recovery_session:",
+            "recovery_session_id `{recovery_session_id}` must start with ak:recovery_session:",
         )));
     }
     // UUIDv7 pattern (final 36 chars after the prefix).
@@ -132,7 +132,7 @@ pub(super) fn validate_recovery_receipt(
         .strip_prefix("ak:recovery_session:")
         .unwrap_or("");
     let parsed = uuid::Uuid::parse_str(session_uuid).map_err(|_| {
-        AppError::invalid_param("recovery_session_id MUST be ck:recovery_session:<uuidv7> per spec")
+        AppError::invalid_param("recovery_session_id MUST be ak:recovery_session:<uuidv7> per spec")
             .with_wire_code(crate::error::reasons::CURSOR_INTEGRITY_INVALID)
     })?;
     if parsed.get_version_num() != 7 {
@@ -147,7 +147,7 @@ pub(super) fn validate_recovery_receipt(
     let new_device_id = require_string(payload, "new_device_id")?;
     if !new_device_id.starts_with("ak:device:") {
         return Err(AppError::invalid_param(format!(
-            "new_device_id `{new_device_id}` must start with ck:device:",
+            "new_device_id `{new_device_id}` must start with ak:device:",
         )));
     }
     let proof_summary = payload
@@ -468,12 +468,12 @@ pub(super) fn require_rfc3339(
 pub(super) fn require_policy_id_pattern(value: &str) -> Result<(), AppError> {
     if !value.starts_with("ak:policy:") {
         return Err(AppError::invalid_param(format!(
-            "policy_id `{value}` must start with ck:policy:",
+            "policy_id `{value}` must start with ak:policy:",
         )));
     }
     let uuid_part = value.trim_start_matches("ak:policy:");
     let parsed = uuid::Uuid::parse_str(uuid_part)
-        .map_err(|_| AppError::invalid_param("policy_id MUST be ck:policy:<uuidv7>"))?;
+        .map_err(|_| AppError::invalid_param("policy_id MUST be ak:policy:<uuidv7>"))?;
     if parsed.get_version_num() != 7 {
         return Err(AppError::invalid_param(
             "policy_id MUST be uuidv7 (version 7)",

@@ -110,7 +110,7 @@ pub fn render_error_with_top_level_reason(
 
 /// Pull a single query-string value, decoding `+` to space and any
 /// `%XX` percent-escapes back to their raw byte form. Required for
-/// typed-id query args like `?space_id=ck:space:...` where browsers
+/// typed-id query args like `?space_id=ak:space:...` where browsers
 /// (and `encodeURIComponent`) emit `ck%3Aspace%3A...` — without
 /// decoding the downstream typed-id validator rejects the literal.
 pub fn query_param(req: &Request, key: &str) -> Option<String> {
@@ -200,9 +200,9 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
 
 // ── Token / digest validators ───────────────────────────────────────────────
 
-/// Validate a `ck:cursor:<base64url>` token.
+/// Validate a `ak:cursor:<base64url>` token.
 ///
-/// `ck:cursor:` tokens are a base64url-encoded v1 cursor object with
+/// `ak:cursor:` tokens are a base64url-encoded v1 cursor object with
 /// `{v,purpose,t,x,h}`. Core cursors do not carry inline positions or
 /// stateless integrity material.
 pub fn is_valid_sync_token(token: &str) -> bool {
@@ -304,8 +304,8 @@ pub fn handle_for_did(did: &str) -> String {
 // ── Discoverability validator ───────────────────────────────────────────────
 //
 // (The `entity` abstraction never landed in `arkret-spec/v1`; typed
-// objects in the protocol are `ck:space:` / `ck:strand:` / `ck:morph:` /
-// `ck:relation:` / `ck:view:`, each driven by its own dedicated event
+// objects in the protocol are `ak:space:` / `ak:strand:` / `ak:morph:` /
+// `ak:relation:` / `ak:view:`, each driven by its own dedicated event
 // kind.)
 
 /// Allow-list of space-discoverability values.

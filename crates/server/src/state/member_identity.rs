@@ -392,8 +392,8 @@ fn handle_claim_envelopes_in_identity_payload(identity_payload: &Value) -> Vec<&
 /// JCS-sorted `effective_events` array shared by both R3.2 digest formulas.
 /// Each entry is `{event_id, segment, payload_digest}`; the array is sorted
 /// by `(segment, event_id)` exactly as the SDK helpers do. Kept as raw JSON
-/// (rather than the SDK newtypes) because soland stores `ck:operation:`
-/// event ids, which the strict `EventId` `ck:event:` validator would reject —
+/// (rather than the SDK newtypes) because soland stores `ak:operation:`
+/// event ids, which the strict `EventId` `ak:event:` validator would reject —
 /// the on-the-wire JCS bytes are identical either way.
 fn effective_events_projection(entries: &[EffectiveIdentityEntry]) -> Vec<Value> {
     let mut sorted: Vec<&EffectiveIdentityEntry> = entries.iter().collect();

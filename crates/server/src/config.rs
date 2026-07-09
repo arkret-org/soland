@@ -269,16 +269,16 @@ pub struct AppConfig {
     /// Round R2/R3 (T08) — deployment trust domain id, used to bind
     /// `ck.cross_signing.reset` events to this Principal Server so the
     /// same proof bytes cannot be replayed cross-domain. Loaded from
-    /// `SOLAND_TRUST_DOMAIN` (must match `ck:trust_domain:<scope>`,
+    /// `SOLAND_TRUST_DOMAIN` (must match `ak:trust_domain:<scope>`,
     /// scope = lowercase alphanumerics/dot/dash/underscore/colon ≤128 chars).
-    /// Defaults to `ck:trust_domain:<host_of_service_did>`.
+    /// Defaults to `ak:trust_domain:<host_of_service_did>`.
     pub trust_domain: String,
     /// Deployment/admin upper bound for invite/contact receive policies.
     /// Constraints can only reduce holder reachability. Loaded from
     /// `SOLAND_RECEIVE_POLICY_*` env vars and advertised on ServiceDescribe.
     pub receive_policy_constraints: Option<arkret_sdk::ReceivePolicyConstraints>,
     /// When true, `AppState::new` seeds a deterministic demo Realm
-    /// (`ck:realm:0196419b-...`), demo account (`did:web:alice.example`),
+    /// (`ak:realm:0196419b-...`), demo account (`did:web:alice.example`),
     /// and matching space_meta record on boot. Off by default so
     /// production deployments don't ship a globally-shared demo Realm
     /// that collides across federated peers. Test harnesses opt in via
@@ -1306,15 +1306,15 @@ fn load_agent_audit_binding_signing_seed() -> anyhow::Result<Option<[u8; 32]>> {
 /// Round R2/R3 (T08) — derive a deployment-bound trust domain id.
 ///
 /// Order of resolution:
-/// 1. `SOLAND_TRUST_DOMAIN` env var if set (must validate as `ck:trust_domain:<scope>` per SDK
+/// 1. `SOLAND_TRUST_DOMAIN` env var if set (must validate as `ak:trust_domain:<scope>` per SDK
 ///    [`arkret_sdk::TypedTrustDomainId`]).
 /// 2. Synthesised from the configured `service_did` — strip the DID method prefix and lowercase the
-///    remainder, then prefix with `ck:trust_domain:`.
+///    remainder, then prefix with `ak:trust_domain:`.
 pub(crate) fn derive_trust_domain(service_did: &str) -> anyhow::Result<String> {
     if let Some(value) = env_non_empty("SOLAND_TRUST_DOMAIN") {
         // Validate via SDK typed id — rejects bad shape at boot.
         arkret_sdk::TypedTrustDomainId::new(value.clone()).map_err(|e| {
-            anyhow::anyhow!("SOLAND_TRUST_DOMAIN must be ck:trust_domain:<scope>: {e}")
+            anyhow::anyhow!("SOLAND_TRUST_DOMAIN must be ak:trust_domain:<scope>: {e}")
         })?;
         return Ok(value);
     }

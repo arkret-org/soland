@@ -541,7 +541,7 @@ async fn post_circle_member(
     // into the Circle". When the requester is activating *someone else*, they
     // MUST hold `ck.circle.member.manage` (narrowed by `allowed_circle_ids`)
     // on this Circle. The engine evaluates the selector against the
-    // `ck:circle:<uuid>` resource; we stamp the verdict into the operation so
+    // `ak:circle:<uuid>` resource; we stamp the verdict into the operation so
     // the reducer's fail-closed second-line check can rely on it. A
     // self-service join (`actor == sender`) is left to the reducer's
     // `join_rule=open` gate.

@@ -145,7 +145,7 @@ pub(super) fn participation_grant_id(agent_principal_id: &str, scope_key: &str) 
     let mut bytes = [0u8; 16];
     bytes.copy_from_slice(&digest[..16]);
     // Force UUIDv7 version + RFC-9562 variant so the id matches the
-    // ck:grant:<uuidv7> wire pattern.
+    // ak:grant:<uuidv7> wire pattern.
     bytes[6] = (bytes[6] & 0x0F) | 0x70;
     bytes[8] = (bytes[8] & 0x3F) | 0x80;
     let g = |slice: &[u8]| slice.iter().map(|b| format!("{b:02x}")).collect::<String>();

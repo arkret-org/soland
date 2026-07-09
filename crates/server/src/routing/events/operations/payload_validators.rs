@@ -12,7 +12,7 @@ pub(crate) fn validate_invite_create_payload(operation: &Operation) -> Result<()
         .and_then(Value::as_str)
         .ok_or("ck.invite.create operation requires invite_id")?;
     if arkret_sdk::InviteId::new(invite_id.to_owned()).is_err() {
-        return Err("ck.invite.create invite_id must be ck:invite:<uuidv7>");
+        return Err("ck.invite.create invite_id must be ak:invite:<uuidv7>");
     }
     let target = operation
         .payload
@@ -120,7 +120,7 @@ pub(crate) fn validate_invite_third_party_payload(
     let invite_id = invite_field(payload, invite, "invite_id", "id")
         .ok_or("ck.invite.third_party requires invite_id")?;
     if arkret_sdk::InviteId::new(invite_id).is_err() {
-        return Err("ck.invite.third_party invite_id must be ck:invite:<uuidv7>");
+        return Err("ck.invite.third_party invite_id must be ak:invite:<uuidv7>");
     }
     let realm_id = invite_field(payload, invite, "realm_id", "realm_id")
         .unwrap_or_else(|| operation.realm_id.to_string());
@@ -182,7 +182,7 @@ pub(crate) fn validate_invite_claim_payload(operation: &Operation) -> Result<(),
     let invite_id =
         payload_string(payload, "invite_id").ok_or("ck.invite.claim requires invite_id")?;
     if arkret_sdk::InviteId::new(invite_id).is_err() {
-        return Err("ck.invite.claim invite_id must be ck:invite:<uuidv7>");
+        return Err("ck.invite.claim invite_id must be ak:invite:<uuidv7>");
     }
     let subject_id =
         payload_string(payload, "subject_id").ok_or("ck.invite.claim requires subject_id")?;
@@ -258,7 +258,7 @@ pub(crate) fn validate_invite_ref_payload(operation: &Operation) -> Result<(), &
     let invite_id =
         payload_string(payload, "invite_id").ok_or("invite reference requires invite_id")?;
     if arkret_sdk::InviteId::new(invite_id).is_err() {
-        return Err("invite reference invite_id must be ck:invite:<uuidv7>");
+        return Err("invite reference invite_id must be ak:invite:<uuidv7>");
     }
     if let Some(reason) = payload.get("reason")
         && !reason.is_string()
@@ -629,7 +629,7 @@ pub(crate) fn validate_conflict_repair_payload(operation: &Operation) -> Result<
         .and_then(serde_json::Value::as_str)
         .ok_or("conflict repair requires cell_id")?;
     if !cell_id.starts_with("ak:cell:") {
-        return Err("conflict repair cell_id must use ck:cell:");
+        return Err("conflict repair cell_id must use ak:cell:");
     }
     let heads = operation
         .payload
@@ -707,7 +707,7 @@ fn validate_read_cursor_hlc(hlc: &str) -> Result<(), &'static str> {
 ///    `ck.component.strand.watch.v1`, write path `ck.strand.watch.set`) and Board/List `contains`
 ///    (truth source `ck.space.parent` / `ck.strand.move`) are derived projections; a direct
 ///    `ck.relation.*` on them MUST `schema_violation`. The container `contains` shape is identified
-///    by a Space `from_ref` (`ck:space:…`); a `Strand -> Strand` `contains` stays a
+///    by a Space `from_ref` (`ak:space:…`); a `Strand -> Strand` `contains` stays a
 ///    directly-writable weak relation (§3.2 line 85) and is not blocked.
 pub(crate) fn validate_relation_operation_payload(
     operation: &Operation,

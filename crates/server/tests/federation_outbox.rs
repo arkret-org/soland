@@ -119,12 +119,12 @@ async fn enqueue_then_dispatch_delivers_payload_with_spec_headers() {
         captured.captured
     );
     assert!(
-        lower.contains("source-trust-domain: ck:trust_domain:soland-outbox.local"),
+        lower.contains("source-trust-domain: ak:trust_domain:soland-outbox.local"),
         "captured request missing Source-Trust-Domain binding; got: {}",
         captured.captured
     );
     assert!(
-        lower.contains("destination-trust-domain: ck:trust_domain:peer.example"),
+        lower.contains("destination-trust-domain: ak:trust_domain:peer.example"),
         "captured request missing Destination-Trust-Domain binding; got: {}",
         captured.captured
     );

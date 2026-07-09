@@ -445,7 +445,7 @@ pub async fn cursor(body: JsonBody<CursorVectorRequest>) -> JsonResult<CursorVec
     let mut hasher = Sha256::new();
     hasher.update(event_ids.join(",").as_bytes());
     let digest: [u8; 32] = hasher.finalize().into();
-    // Fold the SHA-256 into a u64 for the `x` field — the `ck:cursor:`
+    // Fold the SHA-256 into a u64 for the `x` field — the `ak:cursor:`
     // envelope hashes are opaque to the client, so a 64-bit truncation
     // is sufficient and keeps the cursor short.
     let cursor_issued_at = chrono::Utc::now()
@@ -855,7 +855,7 @@ pub async fn chaos_operation(
         .ok_or_else(|| AppError::missing_param("missing operation_id"))?;
     if !operation_id.starts_with("ak:operation:") {
         return Err(AppError::invalid_param(
-            "operation_id must use ck:operation:",
+            "operation_id must use ak:operation:",
         ));
     }
 
@@ -1211,7 +1211,7 @@ fn query_digest_value(query_value: &Value) -> Value {
 fn decode_query_cursor(cursor_token: &str, query_digest: &str) -> Result<usize, AppError> {
     let payload = cursor_token
         .strip_prefix("ak:cursor:")
-        .ok_or_else(|| AppError::invalid_param("query cursor must start with ck:cursor:"))?;
+        .ok_or_else(|| AppError::invalid_param("query cursor must start with ak:cursor:"))?;
     let bytes = URL_SAFE_NO_PAD
         .decode(payload)
         .map_err(|_| AppError::invalid_param("query cursor is not base64url"))?;

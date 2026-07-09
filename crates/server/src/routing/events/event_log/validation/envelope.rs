@@ -224,7 +224,7 @@ fn event_realm_id(object: &serde_json::Map<String, Value>) -> Result<String, Eve
             return Err(event_validation_error(
                 StatusCode::BAD_REQUEST,
                 "invalid_param",
-                "realm_id must use the ck:realm: typed prefix",
+                "realm_id must use the ak:realm: typed prefix",
             ));
         }
         return Ok(realm_id.clone());

@@ -101,7 +101,7 @@ pub struct StrandProjectionRecord {
     pub history_basis_seals: Vec<String>,
     pub updated_by: Option<String>,
     pub updated_at: Option<chrono::DateTime<chrono::Utc>>,
-    /// CKP-0007 — the Circle (`ck:circle:…`) this Strand is scoped to, if any.
+    /// CKP-0007 — the Circle (`ak:circle:…`) this Strand is scoped to, if any.
     /// Durable so circle-scoped message visibility survives restart.
     pub scope_circle_id: Option<String>,
 }

@@ -141,7 +141,7 @@ fn validate_data_type(data_type: &str) -> Result<(), AppError> {
     }
     // Keys are dot-delimited namespaces (`ck.contacts.realm.<realm_id>` etc.).
     // Reject control chars / whitespace / path separators to keep them URL- and
-    // log-safe; everything else (including the `:` in `ck:space:<uuid>`) is
+    // log-safe; everything else (including the `:` in `ak:space:<uuid>`) is
     // permitted so the canonical wire keys round-trip.
     if data_type.chars().any(|c| {
         c.is_control() || c.is_whitespace() || c == '/' || c == '\\' || c == '?' || c == '#'
@@ -417,7 +417,7 @@ mod tests {
     fn private_account_data_key_patterns_are_validated() {
         assert!(
             validate_registered_account_data_key(
-                "ck.scheduled_send.v1:ck:message:01904100-0000-7000-8000-000000000001"
+                "ck.scheduled_send.v1:ak:message:01904100-0000-7000-8000-000000000001"
             )
             .is_ok()
         );
@@ -428,7 +428,7 @@ mod tests {
             .is_ok()
         );
         let err = validate_registered_account_data_key(
-            "ck.draft.v1:message:ck:message:01904100-0000-7000-8000-000000000001:main",
+            "ck.draft.v1:message:ak:message:01904100-0000-7000-8000-000000000001:main",
         )
         .unwrap_err();
         assert!(err.to_string().contains("registered private key pattern"));

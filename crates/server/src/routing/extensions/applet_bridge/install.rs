@@ -1407,7 +1407,7 @@ mod tests {
         let (controller_did, _) = did_key_for_seed(controller_seed);
         let registration_epoch = Hash::new(format!("sha256:{}", "11".repeat(32))).unwrap();
         let mut package = AppletPackage::new(
-            "package:ck:applet:test".to_owned(),
+            "package:ak:applet:test".to_owned(),
             "ak:applet:01974100-0000-7000-8000-000000000001".to_owned(),
             Did::new("did:web:test-applet.example".to_owned()).unwrap(),
             controller_did.clone(),
@@ -1499,7 +1499,7 @@ mod tests {
     fn sample_package() -> AppletPackage {
         let registration_epoch = Hash::new(format!("sha256:{}", "11".repeat(32))).unwrap();
         AppletPackage::new(
-            "package:ck:applet:test".to_owned(),
+            "package:ak:applet:test".to_owned(),
             "ak:applet:01974100-0000-7000-8000-000000000001".to_owned(),
             Did::new("did:web:test-applet.example".to_owned()).unwrap(),
             Did::new("did:web:test-registry.example".to_owned()).unwrap(),

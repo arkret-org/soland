@@ -820,9 +820,9 @@ fn canonical_value_digest(value: &Value) -> String {
 }
 
 // SPEC-CR-010 / SOL-05-008 — `project_member_identity_update` MUST store the
-// canonical `ck:event:` id (threaded through `payload.event_id`) so the
+// canonical `ak:event:` id (threaded through `payload.event_id`) so the
 // effective-set / replaces / R3.2 digests live in the same id space as a
-// spec-compliant client, whose `replaces[].event_id` is a `ck:event:` id.
+// spec-compliant client, whose `replaces[].event_id` is a `ak:event:` id.
 #[test]
 fn member_identity_projection_stores_typed_event_id_and_matches_event_replaces() {
     use arkret_sdk::{Operation, OperationId};
@@ -845,7 +845,7 @@ fn member_identity_projection_stores_typed_event_id_and_matches_event_replaces()
         arkret_sdk::canonical::canonical_json_bytes(&first_identity).unwrap(),
     );
 
-    // First update. Operation carries the canonical `ck:event:` id in
+    // First update. Operation carries the canonical `ak:event:` id in
     // `payload.event_id`, exactly as `projection_operation_from_event` threads it.
     let first_op = Operation::create(
         OperationId::new("ak:operation:01904100-0000-7000-8000-0000000000e1".to_owned()).unwrap(),
@@ -867,8 +867,8 @@ fn member_identity_projection_stores_typed_event_id_and_matches_event_replaces()
         assert_eq!(snapshot.identity_event_ids, vec![first_event_id.to_owned()]);
     }
 
-    // Second update replaces the first using the spec-compliant `ck:event:`
-    // edge. Before the fix this never matched (projection stored `ck:operation:`).
+    // Second update replaces the first using the spec-compliant `ak:event:`
+    // edge. Before the fix this never matched (projection stored `ak:operation:`).
     let second_identity = json!({
         "member_identity": {
             "subject_id": ROSTER_SUBJECT,
@@ -892,19 +892,19 @@ fn member_identity_projection_stores_typed_event_id_and_matches_event_replaces()
 
     let registry = state.member_identity.lock();
     let snapshot = registry.snapshot_for_actor(realm, actor).unwrap();
-    // The `ck:event:` replaces edge drops the predecessor: only the second
+    // The `ak:event:` replaces edge drops the predecessor: only the second
     // event remains effective, and the stored id is the typed event id.
     assert_eq!(
         snapshot.identity_event_ids,
         vec![second_event_id.to_owned()],
-        "replaces[].event_id (ck:event:) must match the stored typed event id"
+        "replaces[].event_id (ak:event:) must match the stored typed event id"
     );
     assert!(
         snapshot
             .effective_entries
             .iter()
             .all(|entry| entry.event_id.starts_with("ak:event:")),
-        "effective entries must live in the ck:event: id space"
+        "effective entries must live in the ak:event: id space"
     );
 }
 

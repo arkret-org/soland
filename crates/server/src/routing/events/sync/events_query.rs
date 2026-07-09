@@ -80,10 +80,10 @@ pub(crate) async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: 
         .as_deref()
         .map(|value| matches!(value, "true" | "1" | "yes"))
         .unwrap_or(true);
-    // Every cursor this stream hands out is an opaque `ck:cursor:` token (NOT a
+    // Every cursor this stream hands out is an opaque `ak:cursor:` token (NOT a
     // raw `event_id`): the typed `EventsSubscribeFrame.cursor` is
     // `Option<identifiers::Cursor>`, which rejects anything without the
-    // `ck:cursor:` prefix, so a frame carrying a bare `event_id` fails to parse
+    // `ak:cursor:` prefix, so a frame carrying a bare `event_id` fails to parse
     // client-side and the client never advances its resume position. We mint
     // tokens with `sync_token_for_events_query` and accept them back through
     // `parse_and_validate_events_query_cursor`; both are bound to the SAME
@@ -262,7 +262,7 @@ pub(crate) async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: 
                                     }
                                     live_seq += 1;
                                     // The broadcast carries the raw `event_id`;
-                                    // mint the opaque `ck:cursor:` resume token
+                                    // mint the opaque `ak:cursor:` resume token
                                     // the typed frame requires.
                                     let live_cursor = sync_token_for_events_query(
                                         &state,
@@ -337,7 +337,7 @@ pub(crate) async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: 
                             // catchup_cursor we already have, so Dropped is
                             // safe here.
                             let cursor_str = catchup_cursor.clone();
-                            // Use the typed-id form (ck:cursor:<base64url>),
+                            // Use the typed-id form (ak:cursor:<base64url>),
                             // not the cursor::Cursor struct.
                             let cursor_typed =
                                 arkret_sdk::identifiers::Cursor::new(cursor_str.clone()).ok();

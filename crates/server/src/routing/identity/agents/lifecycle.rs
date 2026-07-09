@@ -618,7 +618,7 @@ pub(super) async fn attach_agent_grant(
     if !body.grant.is_object() {
         return Err(AppError::invalid_param("grant must be an object"));
     }
-    // spec `agent_grant_attach_outcome.grant_id` MUST be a `ck:grant:<uuidv7>`.
+    // spec `agent_grant_attach_outcome.grant_id` MUST be a `ak:grant:<uuidv7>`.
     let grant_id_str = ids::generate_grant_id();
     let grant_id = GrantId::new(grant_id_str.clone())
         .map_err(|err| AppError::internal(format!("generated grant id invalid: {err}")))?;
@@ -675,7 +675,7 @@ pub(super) async fn detach_agent_grant(
     require_agent_controller(state, &session, &agent_id).await?;
     if !grant_id.starts_with("ak:accountability_grant:") && !grant_id.starts_with("ak:grant:") {
         return Err(AppError::invalid_param(
-            "grant_id must be a ck:accountability_grant:<uuidv7> or ck:grant:<uuidv7> typed id",
+            "grant_id must be a ck:accountability_grant:<uuidv7> or ak:grant:<uuidv7> typed id",
         ));
     }
     let revoked_at = now();

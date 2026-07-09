@@ -663,7 +663,7 @@ impl ProjectionState {
         );
     }
 
-    /// CKP-0007 — resolve the Circle (`ck:circle:…`) a Strand is scoped to, if
+    /// CKP-0007 — resolve the Circle (`ak:circle:…`) a Strand is scoped to, if
     /// any. A message's effective circle-scope is derived from its Strand via
     /// this lookup — never from the message payload (spec: `scope_circle_id`
     /// is a Strand field). Returns `None` for unknown Strands or Realm-default
@@ -682,7 +682,7 @@ impl ProjectionState {
             .filter(|scope| scope.starts_with("ak:circle:"))
     }
 
-    /// CKP-0007 - resolve the Circle (`ck:circle:...`) a Morph is scoped to, if
+    /// CKP-0007 - resolve the Circle (`ak:circle:...`) a Morph is scoped to, if
     /// any. Used by admission gates for `ck.morph.update` and lifecycle writes.
     pub fn morph_scope_circle_id(&self, morph_id: &str) -> Option<String> {
         self.morphs

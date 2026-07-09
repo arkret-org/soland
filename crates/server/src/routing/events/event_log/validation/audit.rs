@@ -239,7 +239,7 @@ fn validate_watch_audit_payload_fields(
         return Err(event_validation_error(
             StatusCode::BAD_REQUEST,
             "schema_violation",
-            "ck.audit.accessed target_cell_id must use ck:cell:",
+            "ck.audit.accessed target_cell_id must use ak:cell:",
         ));
     }
     Ok(())
@@ -382,7 +382,7 @@ fn event_refs_with_role(
                 return Err(event_validation_error(
                     StatusCode::BAD_REQUEST,
                     "invalid_param",
-                    "audit_pair refs must use ck:event: typed ids",
+                    "audit_pair refs must use ak:event: typed ids",
                 ));
             }
             refs.push(id.to_owned());

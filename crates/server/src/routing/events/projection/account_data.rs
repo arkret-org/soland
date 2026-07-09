@@ -12,7 +12,7 @@ use crate::state::{AccountDataRecord, AppState};
 /// `ck.space.read_receipt_policy`) durable-event into
 /// `ProjectionState::cells` as a synthesized CasRegister value at the
 /// canonical cell
-/// `ck:cell:ck.component.realm.read_receipt_policy.v1:<realm_id>`.
+/// `ak:cell:ck.component.realm.read_receipt_policy.v1:<realm_id>`.
 /// This unifies the read path with the Move/Seal pipeline: both durable-
 /// event ingestion AND Move/Seal `apply_seal` write to the same cells
 /// map, so `routing::events::effective_read_receipt_policy_for_realm`

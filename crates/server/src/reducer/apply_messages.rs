@@ -238,7 +238,7 @@ impl ProjectionState {
     /// resets the cas-register and removes the tombstone.
     ///
     /// When the payload also carries `object_ref` / `target_object_ref`
-    /// naming a `ck:strand:` or `ck:morph:` typed-id, the redaction
+    /// naming a `ak:strand:` or `ak:morph:` typed-id, the redaction
     /// additionally flips the corresponding projection's state to
     /// `ObjectLifecycleState::Redacted` per spec common-fields.md section 5.1.
     /// Space containers are intentionally excluded: they have no Redacted

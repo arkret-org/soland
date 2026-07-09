@@ -6,7 +6,7 @@
 //!   paused}`).
 //! - `POST /_soland/admin/realms/{realm_id}/notary/reconfigure` — submit a reconfig Control Move
 //!   that writes the new notary cell value (cas-register on
-//!   `ck:cell:ck.component.notary.v1:<realm_id>`). Server-side signs with admin's session-grant
+//!   `ak:cell:ck.component.notary.v1:<realm_id>`). Server-side signs with admin's session-grant
 //!   key.
 //! - `GET  /_soland/admin/realms/{realm_id}/bottom` — list cells whose join produced a `Bottom`
 //!   diagnostic.

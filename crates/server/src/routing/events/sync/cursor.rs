@@ -928,7 +928,7 @@ fn cursor_authority_revoked(
 /// correct flat frame from an optional cursor.
 ///
 /// Note: the cursor type expected by `EventsSubscribeFrame::cursor`
-/// is the typed-id `arkret_identifiers::Cursor` (`ck:cursor:<base64url>`),
+/// is the typed-id `arkret_identifiers::Cursor` (`ak:cursor:<base64url>`),
 /// NOT the `arkret_sdk::Cursor` struct produced by `cursor::Cursor::new()`.
 /// The typed-id is exposed as `arkret_sdk::identifiers::Cursor`.
 pub fn dropped_or_resync(

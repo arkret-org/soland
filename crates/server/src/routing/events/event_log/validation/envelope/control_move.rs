@@ -117,7 +117,7 @@ pub(super) fn cba_effect_cell_family(effect: &Value) -> Result<&str, EventValida
         return Err(event_validation_error(
             StatusCode::BAD_REQUEST,
             "schema_violation",
-            "effects[].cell must use the ck:cell: typed prefix",
+            "effects[].cell must use the ak:cell: typed prefix",
         ));
     };
     let Some((family, subject)) = rest.split_once(':') else {

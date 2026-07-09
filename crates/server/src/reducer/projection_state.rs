@@ -91,7 +91,7 @@ pub struct ProjectionState {
     /// populated from the Move/Seal pipeline's `apply_seal` write-back.
     ///
     /// Keyed by canonical `CellRef` (e.g.
-    /// `ck:cell:ck.component.realm.read_receipt_policy.v1:<realm_id>`).
+    /// `ak:cell:ck.component.realm.read_receipt_policy.v1:<realm_id>`).
     /// Each successful apply_seal (`routing::federation::move_seal::submit_seal` or
     /// `crate::notary::NotaryWorker`) calls
     /// [`ProjectionState::reload_cells_from_store`] to refresh this map for
@@ -135,7 +135,7 @@ pub struct ProjectionState {
     /// CKP-0007 — server-side Circle projection. Mirrors the canonical
     /// state-machine for `ck.circle.*` lifecycle / membership events
     /// (spec b7d35be `zh/models/circle.md`). Keyed by `circle_id`
-    /// (`ck:circle:<uuid>`); membership and parent-Realm binding live in
+    /// (`ak:circle:<uuid>`); membership and parent-Realm binding live in
     /// the struct so the wire layer can enforce
     /// `Circle.members ⊆ Realm.members` without an extra DB hop.
     pub circles: BTreeMap<String, CircleProjection>,

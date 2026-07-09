@@ -481,7 +481,7 @@ fn builtin_operation_conformance_vectors_cover_registry() {
             kind: arkret_sdk::events::kinds::AGENT_INTEROP_SESSION_START,
             // agent_interop_session_start_payload: required {session_id, counterparty_agent,
             // protocol, capability_grant}; session_id is a
-            // ck:agent_interop_session:<uuidv7>; additionalProperties=false.
+            // ak:agent_interop_session:<uuidv7>; additionalProperties=false.
             payload: json!({
                 "session_id": "ak:agent_interop_session:01904100-0000-7000-8000-bb66bb66bb66",
                 "counterparty_agent": "did:web:agent.example",

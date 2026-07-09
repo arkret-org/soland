@@ -83,7 +83,7 @@ async fn notary_worker_signs_pending_move_and_publishes_seal() {
 /// Subscribe to the demo Realm → trigger a Seal sign for that Realm →
 /// verify the streaming subscriber sees a `kind=frontier` frame whose
 /// `state_root` matches the seal's post_state_root and `seal_id`
-/// starts with `ck:seal:sha256:`.
+/// starts with `ak:seal:sha256:`.
 ///
 /// **Note**: this test uses a different Realm (the Move/Seal pipeline
 /// Realm, not the demo Realm) for the seal, so we subscribe to that

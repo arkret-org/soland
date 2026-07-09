@@ -109,7 +109,7 @@ mod invite_create_schema_tests {
 
         assert_eq!(
             validate_operation_schema(&operation, schema),
-            Err("ck.invite.create invite_id must be ck:invite:<uuidv7>")
+            Err("ck.invite.create invite_id must be ak:invite:<uuidv7>")
         );
     }
 

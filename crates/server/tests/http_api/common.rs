@@ -993,8 +993,8 @@ pub(crate) fn test_sha256_multihash_multibase(bytes: &[u8]) -> String {
 // `standard_entity_types_and_reverse_domain_custom_types_work` and
 // `view_endpoints_project_common_presentation_shapes` were deleted in
 // round 6: the `entity` / `view` abstraction they exercised never landed in
-// `arkret-spec/v1`. Typed objects in the protocol are `ck:strand:` / `ck:space:`
-// / `ck:morph:` / `ck:relation:` / `ck:view:`, each with its own dedicated
+// `arkret-spec/v1`. Typed objects in the protocol are `ak:strand:` / `ak:space:`
+// / `ak:morph:` / `ak:relation:` / `ak:view:`, each with its own dedicated
 // event kind; presentation concerns belong on `ck.view.*` events going
 // through the reducer, not on a free-form `/_arkret/self/entities` /
 // `/_arkret/self/views` scaffold.

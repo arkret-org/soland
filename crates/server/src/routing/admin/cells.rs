@@ -38,7 +38,7 @@ pub(super) fn router() -> Router {
 /// Response body for `GET /_soland/admin/cells/{cell_id}`.
 #[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct AdminCellStateOutcome {
-    /// Canonical wire form of the cell id (`ck:cell:<family>:<subject>`).
+    /// Canonical wire form of the cell id (`ak:cell:<family>:<subject>`).
     pub cell_id: String,
     /// `"value"` when the cell holds a resolved JSON value; `"bottom"` when
     /// the join produced a `Bottom(_)` diagnostic; `"absent"` when the
@@ -120,7 +120,7 @@ fn required_realm_scope(req: &mut Request) -> Result<RealmId, AppError> {
 /// `GET /_soland/admin/cells/{cell_id}` — fetch one cell's state.
 ///
 /// `cell_id` is the URL-encoded canonical wire form
-/// (`ck:cell:<family>:<subject>`). Salvo decodes path segments before
+/// (`ak:cell:<family>:<subject>`). Salvo decodes path segments before
 /// passing them to `req.param`; receivers MUST canonicalise via
 /// `CellRef::new` to round-trip into the projection map.
 #[endpoint(
@@ -153,12 +153,12 @@ async fn admin_get_cell(
     })?;
 
     // Reject syntactically valid CellRef strings that fail the stricter
-    // `ck:cell:<family>:<subject>` parse. Without this guard a malformed
+    // `ak:cell:<family>:<subject>` parse. Without this guard a malformed
     // family slot would leak into the registry resolver.
     let _ = arkret_sdk::CellId::parse(cell_ref.as_str()).map_err(|e| {
         AppError::new(
             ErrorCode::InvalidParam,
-            format!("cell_id is not a parseable ck:cell:<family>:<subject>: {e}"),
+            format!("cell_id is not a parseable ak:cell:<family>:<subject>: {e}"),
         )
         .with_status(StatusCode::BAD_REQUEST)
     })?;

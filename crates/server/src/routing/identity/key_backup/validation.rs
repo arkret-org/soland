@@ -522,7 +522,7 @@ pub(super) fn validate_recovery_policy_ref_shape_typed(backup: &KeyBackup) -> Re
         .ok_or_else(|| schema_error("recovery_policy_ref must be an object"))?;
     if !policy_id.starts_with("ak:policy:") {
         return Err(schema_error(format!(
-            "recovery_policy_ref.policy_id `{policy_id}` must start with ck:policy:"
+            "recovery_policy_ref.policy_id `{policy_id}` must start with ak:policy:"
         )));
     }
     if version < 1 {

@@ -99,7 +99,7 @@ mod tests {
         SessionRecord {
             token_hash: "grant".to_owned(),
             actor: "did:web:agent.example".to_owned(),
-            device_id: "agent-session:ck:grant:0196419b-0000-7000-8000-000000000001".to_owned(),
+            device_id: "agent-session:ak:grant:0196419b-0000-7000-8000-000000000001".to_owned(),
             audience: "did:web:soland.local".to_owned(),
             session_public_key: Some("{}".to_owned()),
             agent_session: Some(AgentSessionRecord {

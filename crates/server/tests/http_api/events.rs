@@ -15,7 +15,7 @@ fn test_session_credential_hash(token: &str, audience: &str) -> String {
 
 async fn seed_agent_session_with_scopes(state: &AppState, token: &str, scopes: &[&str]) {
     let actor = "did:web:agent.example";
-    let device_id = "agent-session:ck:grant:0196419b-0000-7000-8000-000000000001";
+    let device_id = "agent-session:ak:grant:0196419b-0000-7000-8000-000000000001";
     let now = chrono::Utc::now();
     state
         .persistence
@@ -338,7 +338,7 @@ async fn events_describe_and_single_event_submit_work() {
     assert_eq!(duplicate["duplicate"][0], first["event_id"]);
 
     let fetched: Value = TestClient::get(
-        "http://server/_arkret/self/events/ck:event:01904100-0000-7000-8000-f15c8ea06c11",
+        "http://server/_arkret/self/events/ak:event:01904100-0000-7000-8000-f15c8ea06c11",
     )
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state.clone()))
@@ -526,7 +526,7 @@ async fn events_describe_and_single_event_submit_work() {
 
     // Inaccessible realm must read as not_found (no existence leak).
     let mut hidden = TestClient::get(
-        "http://server/_arkret/self/events/frontier?realm_id=ck:realm:0196419b-0000-7000-8000-00000000dead",
+        "http://server/_arkret/self/events/frontier?realm_id=ak:realm:0196419b-0000-7000-8000-00000000dead",
     )
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state.clone()))
@@ -969,7 +969,7 @@ async fn events_query_exposes_prev_cursor_and_limited_timeline_pages() {
     assert_eq!(second_page["events"].as_array().unwrap().len(), 1);
 
     let mut invalid_cursor = TestClient::get(format!(
-        "http://server/_arkret/self/events?realms={realm_id}&after=ck:event:01904100-0000-7000-8000-b8ab57920a67"
+        "http://server/_arkret/self/events?realms={realm_id}&after=ak:event:01904100-0000-7000-8000-b8ab57920a67"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state.clone()))

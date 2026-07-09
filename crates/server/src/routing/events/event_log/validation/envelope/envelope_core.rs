@@ -35,7 +35,7 @@ pub(crate) async fn validate_event_envelope_with_context(
         return Err(event_validation_error(
             StatusCode::BAD_REQUEST,
             "invalid_param",
-            "event_id must use the ck:event: typed prefix",
+            "event_id must use the ak:event: typed prefix",
         ));
     }
 

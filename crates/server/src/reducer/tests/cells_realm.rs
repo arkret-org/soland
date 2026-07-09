@@ -7,7 +7,7 @@ use crate::reducer::*;
 fn cell_value_returns_none_for_unwritten_cell() {
     let state = ProjectionState::new();
     let cell_id = arkret_sdk::CellRef::new(
-        "ak:cell:ck.component.realm.read_receipt_policy.v1:ck:realm:01904100-0000-7000-8000-cfc039892036".to_owned(),
+        "ak:cell:ck.component.realm.read_receipt_policy.v1:ak:realm:01904100-0000-7000-8000-cfc039892036".to_owned(),
     )
     .unwrap();
     assert!(state.cell(&cell_id).is_none());
@@ -19,7 +19,7 @@ fn cell_value_returns_none_for_bottom_state() {
     use arkret_sdk::lattice::CellState;
     let mut state = ProjectionState::new();
     let cell_id = arkret_sdk::CellRef::new(
-        "ak:cell:ck.component.realm.policy.v1:ck:realm:01904100-0000-7000-8000-cfc039892036"
+        "ak:cell:ck.component.realm.policy.v1:ak:realm:01904100-0000-7000-8000-cfc039892036"
             .to_owned(),
     )
     .unwrap();
@@ -231,7 +231,7 @@ fn realm_update_writes_metadata_cell_with_cas_register_semantics() {
         state
             .cell_value(
                 &arkret_sdk::CellRef::new(
-                    "ak:cell:ck.component.realm.organization.v1:ck:realm:01904100-0000-7000-8000-cfc039892036".to_owned(),
+                    "ak:cell:ck.component.realm.organization.v1:ak:realm:01904100-0000-7000-8000-cfc039892036".to_owned(),
                 )
                 .unwrap(),
             )
@@ -600,7 +600,7 @@ fn read_receipt_policy_cell_value_helper_extracts_canonical_value() {
     use arkret_sdk::lattice::CellState;
     let mut state = ProjectionState::new();
     let cell_id = arkret_sdk::CellRef::new(
-        "ak:cell:ck.component.realm.read_receipt_policy.v1:ck:realm:01904100-0000-7000-8000-cfc039892036".to_owned(),
+        "ak:cell:ck.component.realm.read_receipt_policy.v1:ak:realm:01904100-0000-7000-8000-cfc039892036".to_owned(),
     )
     .unwrap();
     state.cells.insert(

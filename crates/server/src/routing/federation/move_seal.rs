@@ -207,7 +207,7 @@ async fn submit_seal(
     let seal = body.into_inner();
 
     // Seal delta entries MUST be sha256:<hex>; reject the removed
-    // `ck:event:<uuid>` form fail-closed.
+    // `ak:event:<uuid>` form fail-closed.
     let delta_entries: Vec<String> = seal.delta.iter().map(|m| m.as_str().to_owned()).collect();
     if let Err((code, reason)) = validate_seal_delta_entries(&delta_entries) {
         return Err(AppError::new(code, reason).with_status(StatusCode::BAD_REQUEST));
@@ -415,7 +415,7 @@ async fn admin_sign_seal(
 // ────────────────────────────────────────────────────────────────────────
 
 /// Validate every entry in a Seal `delta[]` is shaped as
-/// `sha256:<64 lowercase hex>` — never a `ck:event:<uuid>` form.
+/// `sha256:<64 lowercase hex>` — never a `ak:event:<uuid>` form.
 ///
 /// Receivers MUST recompute and verify entries; the strict shape check
 /// here guards against the removed event-id form that was permitted in

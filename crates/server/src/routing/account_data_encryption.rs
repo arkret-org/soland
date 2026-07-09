@@ -493,7 +493,7 @@ mod tests {
         }
 
         let err = validate_encrypted_account_data_value(
-            "ck.contacts.realm.ck:realm:0196419b-0000-7000-8000-000000000000",
+            "ck.contacts.realm.ak:realm:0196419b-0000-7000-8000-000000000000",
             &json!({"local_name": "Acme"}),
         )
         .unwrap_err();
@@ -618,7 +618,7 @@ mod tests {
 
     #[test]
     fn scheduled_send_rejects_plaintext_message_payload() {
-        let key = "ck.scheduled_send.v1:ck:message:01904100-0000-7000-8000-000000000001";
+        let key = "ck.scheduled_send.v1:ak:message:01904100-0000-7000-8000-000000000001";
         validate_encrypted_account_data_key(key).unwrap();
         validate_encrypted_account_data_value(key, &conformance_marker()).unwrap();
 

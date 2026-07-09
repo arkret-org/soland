@@ -589,13 +589,13 @@ fn grant_dot_matches_ref(dot: &str, grant_ref: &str) -> bool {
     event_ref_for_dot(dot).is_some_and(|event_ref| event_ref == grant_ref)
 }
 
-/// Extract the canonical `ck:event:<uuid>` event ref encoded in a grant
+/// Extract the canonical `ak:event:<uuid>` event ref encoded in a grant
 /// dot, if any. Only the `{event_id}:{actor_seq}` mint form (and a bare
-/// `ck:event:<uuid>` dot) carries a real event id; the `{actor}#{seq}` and
+/// `ak:event:<uuid>` dot) carries a real event id; the `{actor}#{seq}` and
 /// `{consent_id}#{op}` forms encode a DID / consent-cell id in their head
 /// segment, not an event ref, so they yield `None`.
 ///
-/// `EventId` values are themselves `:`-delimited (`ck:event:<uuid>`), so we
+/// `EventId` values are themselves `:`-delimited (`ak:event:<uuid>`), so we
 /// strip only the trailing `:<actor_seq>` segment rather than splitting on
 /// the first `:`. The result is validated through `EventId::new` so callers
 /// can rely on it being a well-formed event ref.
@@ -621,7 +621,7 @@ pub(crate) fn event_ref_for_dot(dot: &str) -> Option<&str> {
 /// via [`has_active_consent_grant_evidence`] without a locator URL.
 ///
 /// Returns the first active dot (deterministic `BTreeMap` order) whose dot
-/// string carries a resolvable `ck:event:<uuid>` event ref; dots minted in
+/// string carries a resolvable `ak:event:<uuid>` event ref; dots minted in
 /// the non-event `{actor}#{seq}` / `{consent_id}#{op}` forms are skipped.
 pub(crate) fn active_invite_consent_grant_ref(
     state: &AppState,
@@ -650,7 +650,7 @@ pub(crate) fn active_invite_consent_grant_ref(
 /// The minted grant dot therefore uses the event-bearing
 /// `{event_id}:{actor_seq}` form (same shape `consent_grant_operation`
 /// projection mints), so [`event_ref_for_dot`] resolves a canonical
-/// `ck:event:<uuid>` ref and the contact-list projection can populate
+/// `ak:event:<uuid>` ref and the contact-list projection can populate
 /// `invite_consent_grant_ref` with it. The returned `EventId` string is the
 /// grant event ref the caller records in the fact's `*_consent_refs[]`.
 ///
@@ -1674,7 +1674,7 @@ mod tests {
 
     /// Spec contact-and-direct-conversation.md §3 / invite-addressing.md §2 —
     /// the contact-managed grant minted by `grant_contact_managed_consent`
-    /// MUST carry a resolvable `ck:event:<uuid>` ref so the holder's contact
+    /// MUST carry a resolvable `ak:event:<uuid>` ref so the holder's contact
     /// row surfaces it (`active_invite_consent_grant_ref`) AND the peer's
     /// server accepts it back as `consent_grant` evidence
     /// (`has_active_consent_grant_evidence`). This pins both directions to the

@@ -1,6 +1,6 @@
 //! Strand ID derivation + discussion-track projection helpers.
 //!
-//! Strand IDs are derived from Realm IDs via typed-id → `ck:strand:` re-tagging
+//! Strand IDs are derived from Realm IDs via typed-id → `ak:strand:` re-tagging
 //! (sha256 fallback for unrecognised prefixes). v1 Message payloads expose the
 //! discussion track as the const string `discussion`.
 //!

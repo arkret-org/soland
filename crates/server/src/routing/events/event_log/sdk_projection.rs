@@ -50,7 +50,7 @@ pub(crate) fn event_semantic_refs(
                 return Err(event_validation_error(
                     StatusCode::BAD_REQUEST,
                     "invalid_param",
-                    "authorized_by refs must use the ck:event: typed prefix",
+                    "authorized_by refs must use the ak:event: typed prefix",
                 ));
             }
             authorized_refs.push(id);
@@ -322,8 +322,8 @@ fn normalize_relation_create_payload(
 
 fn event_operation_id(envelope: &Value, event_id: &str) -> Option<OperationId> {
     // Prefer the client-supplied alias when it's a valid OperationId
-    // (`ck:operation:<uuid v7>` per `arkret-rust-sdk/identifiers`).
-    // Older inkson builds shipped the event_id (ck:event:) verbatim in
+    // (`ak:operation:<uuid v7>` per `arkret-rust-sdk/identifiers`).
+    // Older inkson builds shipped the event_id (ak:event:) verbatim in
     // this slot; soland MUST NOT silently drop projection for such
     // events ── fall through to the event_id-derived form so the
     // projection chain (`project_accepted_operations` →

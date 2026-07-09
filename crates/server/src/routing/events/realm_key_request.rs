@@ -16,7 +16,7 @@
 //!
 //! - the *sender* must be a current joined member of the Realm,
 //! - the Realm must carry a projected `history_sharing_policy`,
-//! - the named provider device (`target_source_ref`) must be a syntactically valid `ck:device:<id>`
+//! - the named provider device (`target_source_ref`) must be a syntactically valid `ak:device:<id>`
 //!   and resolve to an active (non-revoked) device of its declared owning principal
 //!   (`target_principal_id`),
 //! - the SDK history-key-share gates must admit the share for the requesting reader before the
@@ -66,7 +66,7 @@ pub(crate) async fn relay_ephemeral_realm_key_request(
     // carries `target_principal_id` (the provider device's owning principal)
     // directly, so we address the device by `(target_principal_id,
     // target_source_ref)` instead of scanning Realm membership — we only verify
-    // that `target_source_ref` is a syntactically valid `ck:device:<id>` and
+    // that `target_source_ref` is a syntactically valid `ak:device:<id>` and
     // resolves to an active (non-revoked) device of that principal.
     let target = resolve_target_provider_device(
         state,
@@ -145,7 +145,7 @@ async fn realm_member_is_joined(state: &AppState, realm_id: &str, actor: &str) -
 /// Resolve `target_device_ref` against its declared owning principal
 /// (`target_principal_id`). The request now addresses the provider device
 /// directly, so there is no membership scan: we only confirm `target_device_ref`
-/// is a syntactically valid `ck:device:<id>` and that `(principal_id,
+/// is a syntactically valid `ak:device:<id>` and that `(principal_id,
 /// device_id)` names an active (non-revoked) device row. `None` when the device
 /// id is malformed or the device is absent/revoked.
 async fn resolve_target_provider_device(

@@ -77,7 +77,7 @@ pub(super) fn event_ref_list(
                 return Err(event_validation_error(
                     StatusCode::BAD_REQUEST,
                     "invalid_param",
-                    "event references must use the ck:event: typed prefix",
+                    "event references must use the ak:event: typed prefix",
                 ));
             }
             // scalability-constraints.md §2 — entries MUST be deduplicated.

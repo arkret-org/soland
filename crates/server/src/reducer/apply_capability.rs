@@ -10,8 +10,8 @@
 //!
 //! Convergence rules (capabilities.md §12.1):
 //! - **grant** = or_set **add**. The add dot is the reducer-deterministic
-//!   `ck:operation:<operation_id>` (the soland reducer's per-event handle; the spec's
-//!   `ck:event:<event_id>:<effect_index>` is the wire form). value = the canonical grant snapshot.
+//!   `ak:operation:<operation_id>` (the soland reducer's per-event handle; the spec's
+//!   `ak:event:<event_id>:<effect_index>` is the wire form). value = the canonical grant snapshot.
 //! - **revoke** = or_set **observed-remove** on the *same* grant cell. We mark the surviving add(s)
 //!   `revoked` (the read path filters `revoked*`). Terminal: a later re-add of the same `grant_id`
 //!   MUST NOT revive a removed add — once a cell holds a revoked entry for the grant, every add

@@ -32,7 +32,7 @@ fn constant_time_str_eq(left: &str, right: &str) -> bool {
 // binding (device_id / principal_id / recovery_session_id / ssk_generation +
 // cross_signing_binding + device_signature shape), then EMITS the authorize plus
 // a `ck.device.list_update` onto the principal's control realm (a deterministic
-// per-principal `ck:realm:` auto-materialized by the projector) via
+// per-principal `ak:realm:` auto-materialized by the projector) via
 // `accept_local_operations` — real schema validation + reducer apply. The
 // session transitions to `completed` and the response is the schema's
 // complete_response (authorization_event_id / device_list_update_event_id).
@@ -208,13 +208,13 @@ pub(super) async fn recovery_session_create(
     let requesting_device_id = payload.requesting_device_id.as_str().to_owned();
     if !requesting_device_id.starts_with("ak:device:") {
         return Err(AppError::invalid_param(format!(
-            "requesting_device_id `{requesting_device_id}` must start with ck:device:",
+            "requesting_device_id `{requesting_device_id}` must start with ak:device:",
         )));
     }
     let trust_domain = payload.trust_domain.as_str().to_owned();
     if !trust_domain.starts_with("ak:trust_domain:") {
         return Err(AppError::invalid_param(format!(
-            "trust_domain `{trust_domain}` must start with ck:trust_domain:",
+            "trust_domain `{trust_domain}` must start with ak:trust_domain:",
         )));
     }
     // Accepted cross-signing generation the requester believes is current. The

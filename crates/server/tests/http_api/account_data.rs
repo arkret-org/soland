@@ -341,7 +341,7 @@ async fn account_data_requires_auth() {
         DEMO_REALM_ID,
         "ck.account_data.set",
         serde_json::json!({
-            "key": "ck.contacts.realm.ck:realm:0196419b-0000-7000-8000-000000000000",
+            "key": "ck.contacts.realm.ak:realm:0196419b-0000-7000-8000-000000000000",
             "owner": "did:web:alice.example",
             "body": {"local_name": "x"},
             "updated_at": "2026-05-08T10:00:00Z"

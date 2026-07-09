@@ -12,7 +12,7 @@
 //! here because those helpers are private to the SDK test modules.
 //!
 //! Cells: the tests transition
-//! `ck:cell:ck.component.member.state.v1:did.web.alice.example` from
+//! `ak:cell:ck.component.member.state.v1:did.web.alice.example` from
 //! `invite` to `join`. That cell family is pre-registered in
 //! `MemoryCellRegistry::default()` as an FSM with `invite -> join`
 //! transition, so the Move passes verify and the post-state is

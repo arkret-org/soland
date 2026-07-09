@@ -541,7 +541,7 @@ async fn rtc_media_token_uses_projected_media_service_epoch() {
         "service_signature must be an object, not a string"
     );
 
-    // §3 — participant_identity is a random `ck:rtc_participant:<uuidv7>` SFU
+    // §3 — participant_identity is a random `ak:rtc_participant:<uuidv7>` SFU
     // handle, NOT a deterministic hash of the principal tuple.
     let participant_identity = token_response["participant_identity"].as_str().unwrap();
     assert!(
@@ -1096,7 +1096,7 @@ fn grant_call_capability(state: &AppState, realm_id: &str, subject: &str, action
     );
 }
 
-/// Register `bob` as a realm member and return a fresh `ck:call:<uuidv7>` id.
+/// Register `bob` as a realm member and return a fresh `ak:call:<uuidv7>` id.
 /// The media token issuer is decoupled from any ephemeral signaling session
 /// (`media-service-binding.md` §3 durable-roster ordering — after token
 /// exchange the client MUST land its `participant_binding` in a durable

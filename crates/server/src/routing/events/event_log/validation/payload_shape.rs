@@ -46,7 +46,7 @@ pub(super) fn validate_conflict_repair_event_payload(
         return Err(event_validation_error(
             StatusCode::BAD_REQUEST,
             "schema_violation",
-            "conflict repair cell_id must use ck:cell:",
+            "conflict repair cell_id must use ak:cell:",
         ));
     }
     let heads = object
@@ -156,7 +156,7 @@ pub(super) fn validate_space_container_lifecycle_payload(
         return Err(event_validation_error(
             StatusCode::BAD_REQUEST,
             "schema_violation",
-            "space lifecycle payload space_id must use ck:space:",
+            "space lifecycle payload space_id must use ak:space:",
         ));
     }
     if object.get("target_ref").is_some() {

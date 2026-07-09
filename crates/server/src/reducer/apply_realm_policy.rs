@@ -198,7 +198,7 @@ impl ProjectionState {
     /// - the orthogonal `recording_state` / transcribe / moderation fields (`§4.2` / `§5`) are
     ///   projected into the cell so admin / sync readers can render them.
     /// - backend-generated recording artifacts MUST flow through the Arkret blob pipeline (`§5`): a
-    ///   `recording_result` that points at a raw non-`ck:blob:` artifact reference is rejected with
+    ///   `recording_result` that points at a raw non-`ak:blob:` artifact reference is rejected with
     ///   `recording_artifact_pipeline_bypassed`.
     pub(crate) fn apply_call_state(&mut self, operation: &Operation) -> ProjectionEffect {
         let value = state_payload_value(&operation.payload).clone();
@@ -291,7 +291,7 @@ impl ProjectionState {
 
         // §5 — backend recording artifacts MUST land in the Arkret blob
         // pipeline. A `recording_result` referencing a raw external URL (or a
-        // non-`ck:blob:` artifact ref) is bypassing the pipeline.
+        // non-`ak:blob:` artifact ref) is bypassing the pipeline.
         if let Some(result) = value.get("recording_result").and_then(Value::as_object) {
             let bypassed = result
                 .get("recording_artifact_url")
@@ -309,7 +309,7 @@ impl ProjectionState {
         }
 
         // §5.1 — transcript artifacts share the same Arkret blob pipeline
-        // requirement; a backend-hosted URL / non-`ck:blob:` ref bypasses it.
+        // requirement; a backend-hosted URL / non-`ak:blob:` ref bypasses it.
         if let Some(result) = value.get("transcript_result").and_then(Value::as_object) {
             let bypassed = result
                 .get("transcript_artifact_url")

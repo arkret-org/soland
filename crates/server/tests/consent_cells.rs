@@ -650,7 +650,7 @@ async fn invite_receive_policy_get_set_round_trips() {
 /// MUST write a target-controlled `ck.consent.grant` per granted scope. The
 /// minted grant dot uses the event-bearing `{event_id}:{seq}` form, so the
 /// holder's `GET /_arkret/self/contacts` row for the peer surfaces a canonical
-/// `ck:event:<uuid>` `invite_consent_grant_ref` (no longer `None`). End to end:
+/// `ak:event:<uuid>` `invite_consent_grant_ref` (no longer `None`). End to end:
 /// alice requests bob with `invite` scope, bob accepts, alice's contact row
 /// for bob carries bob's grant event ref — usable as `consent_grant`
 /// introduction evidence to invite bob into a Realm.

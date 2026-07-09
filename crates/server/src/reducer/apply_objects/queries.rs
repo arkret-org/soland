@@ -117,7 +117,7 @@ impl ProjectionState {
     }
 
     /// Resolve a Message's `(created_at, sender, thread_id)` by target ref,
-    /// accepting either the `ck:event:` storage id or the `ck:message:`
+    /// accepting either the `ak:event:` storage id or the `ak:message:`
     /// object-ref form. Used by the constraint-schema.md §14.2 edit/redact
     /// window evaluator, which needs the original Message `created_at` to
     /// measure the elapsed window. Returns `None` for unknown targets.
@@ -130,7 +130,7 @@ impl ProjectionState {
     }
 
     /// Resolve the `realm_id` (effective scope) of a Message by target ref,
-    /// accepting the `ck:message:` object-ref or `ck:event:` storage id.
+    /// accepting the `ak:message:` object-ref or `ak:event:` storage id.
     /// Used by the strand-and-message.md §9.8.2 reaction scope check. Returns
     /// `None` for unknown targets (the reducer's dependency handling then
     /// keeps the reaction pending).

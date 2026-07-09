@@ -61,7 +61,7 @@ pub(crate) async fn api_not_found(req: &mut Request, res: &mut Response) {
 /// Keys are OpenAPI-style patterns with `{param}` segments, e.g.
 /// `/_soland/self/spaces/{space_id}`. Pattern→URI matching is segment-based
 /// (see [`pattern_matches_path`]) so concrete URIs like
-/// `/_soland/self/spaces/ck:space:abc` resolve back to their declaring
+/// `/_soland/self/spaces/ak:space:abc` resolve back to their declaring
 /// pattern without any regex compilation.
 static KNOWN_ROUTES: OnceLock<Vec<(String, Vec<Method>)>> = OnceLock::new();
 

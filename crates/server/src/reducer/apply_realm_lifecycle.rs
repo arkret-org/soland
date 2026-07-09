@@ -203,7 +203,7 @@ impl ProjectionState {
         }
 
         // Synthesize the FSM cell state. Cell ref shape per spec
-        // `ck:cell:ck.component.member.state.v1:<actor_id>` — note the
+        // `ak:cell:ck.component.member.state.v1:<actor_id>` — note the
         // cell_subject is `actor_id` (per-actor), not (realm_id, actor)
         // composite. The Realm scoping is implicit in the CellStore key.
         if let Ok(cell_id) =
@@ -842,7 +842,7 @@ impl ProjectionState {
             };
         }
         if let Some(ref new_td) = payload_trust_domain {
-            // Shape MUST be `ck:trust_domain:<scope>` — delegate to SDK
+            // Shape MUST be `ak:trust_domain:<scope>` — delegate to SDK
             // typed id validator.
             if arkret_sdk::TypedTrustDomainId::new(new_td.clone()).is_err() {
                 return ProjectionEffect::Rejected {
@@ -902,7 +902,7 @@ impl ProjectionState {
 
         // Stream-F (Wave 1B): ck.realm.tombstone preconditions. The
         // event MUST carry a syntactically valid `successor_realm_id`
-        // pointing at a `ck:realm:<UUIDv7>` distinct from the
+        // pointing at a `ak:realm:<UUIDv7>` distinct from the
         // terminating Realm. Absent → `missing_successor`; malformed →
         // `schema_violation`; self-reference → `successor_self_reference`.
         let payload_successor_realm_id = operation

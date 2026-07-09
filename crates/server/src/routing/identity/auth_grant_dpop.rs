@@ -907,7 +907,7 @@ mod tests {
             audience: "did:web:soland.local".to_owned(),
             scopes: vec![
                 PRINCIPAL_SESSION_BIND_SCOPE.to_owned(),
-                format!("{DEVICE_SCOPE_PREFIX}ck:device:0196419b-0000-7000-8000-000000000001"),
+                format!("{DEVICE_SCOPE_PREFIX}ak:device:0196419b-0000-7000-8000-000000000001"),
             ],
             expires_at: crate::wire::now() + Duration::minutes(5),
             revoked_at: None,
@@ -960,7 +960,7 @@ mod tests {
 
         assert_eq!(
             device_id,
-            "agent-session:ck:grant:0196419b-0000-7000-8000-000000000002"
+            "agent-session:ak:grant:0196419b-0000-7000-8000-000000000002"
         );
         let agent_session = agent_session.unwrap();
         assert_eq!(agent_session.freshness_state, FreshnessState::Fresh);

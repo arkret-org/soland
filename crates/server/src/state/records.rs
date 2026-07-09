@@ -273,7 +273,7 @@ pub(crate) fn clamp_key_backup_daily_download_limit(configured: Option<u32>) -> 
 /// (the revoked cursor's maximum possible TTL).
 #[derive(Clone, Debug)]
 pub struct CursorRevocation {
-    /// sha256 hex of the exact revoked `ck:cursor:` token (used by `this_cursor`).
+    /// sha256 hex of the exact revoked `ak:cursor:` token (used by `this_cursor`).
     pub cursor_digest: String,
     /// Authenticated principal that requested the revocation.
     pub principal_id: String,
@@ -489,7 +489,7 @@ pub struct DirectConversationBindingRecord {
 ///
 /// One row per `(actor, data_type)`. `data_type` is the canonical wire key
 /// (e.g. `ck.read_receipt.preferences`, `ck.contacts.actor.did:web:alice.example`,
-/// `ck.contacts.realm.ck:realm:0196419b-0000-7000-8000-000000000000`). Soland
+/// `ck.contacts.realm.ak:realm:0196419b-0000-7000-8000-000000000000`). Soland
 /// treats the `payload` as an opaque encrypted blob — no schema validation
 /// happens server-side; clients are responsible for canonical encoding.
 ///

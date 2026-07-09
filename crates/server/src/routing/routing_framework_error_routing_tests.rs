@@ -16,12 +16,12 @@ fn pattern_matches_concrete_path() {
 fn pattern_matches_param_segment() {
     assert!(pattern_matches_path(
         "/_soland/self/spaces/{space_id}",
-        "/_soland/self/spaces/ck:space:01"
+        "/_soland/self/spaces/ak:space:01"
     ));
     // Different segment count → no match.
     assert!(!pattern_matches_path(
         "/_soland/self/spaces/{space_id}",
-        "/_soland/self/spaces/ck:space:01/policy"
+        "/_soland/self/spaces/ak:space:01/policy"
     ));
     // Param must be non-empty.
     assert!(!pattern_matches_path(
@@ -34,7 +34,7 @@ fn pattern_matches_param_segment() {
 fn pattern_matches_multi_param_segments() {
     assert!(pattern_matches_path(
         "/_arkret/self/events/{event_id}/refs/{ref_id}",
-        "/_arkret/self/events/ck:event:01/refs/ck:event:02"
+        "/_arkret/self/events/ak:event:01/refs/ak:event:02"
     ));
 }
 
@@ -68,7 +68,7 @@ fn known_routes_map_resolves_known_path() {
         .expect("/_arkret/self/events is registered with at least one method");
     assert_eq!(methods, vec![Method::GET, Method::POST]);
 
-    let methods = allow_methods_for_path("/_soland/self/spaces/ck:space:abc")
+    let methods = allow_methods_for_path("/_soland/self/spaces/ak:space:abc")
         .expect("/_soland/self/spaces/{id} resolves with a concrete id");
     assert_eq!(methods, vec![Method::GET]);
 

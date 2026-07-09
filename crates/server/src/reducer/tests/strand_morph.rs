@@ -435,7 +435,7 @@ fn strand_position_events_queue_unknown_strand() {
 
 // ── ck.redaction -> Strand / Morph terminal-state push ──
 
-/// `ck.redaction` carrying `object_ref: ck:strand:...` flips the
+/// `ck.redaction` carrying `object_ref: ak:strand:...` flips the
 /// StrandProjection state to Redacted (terminal) per spec
 /// common-fields.md §5.1.
 #[test]
@@ -489,7 +489,7 @@ fn redaction_with_strand_object_ref_flips_to_redacted() {
     assert!(state.strands[strand_id].state.is_terminal());
 }
 
-/// Same for Morph via `object_ref: ck:morph:...`.
+/// Same for Morph via `object_ref: ak:morph:...`.
 #[test]
 fn redaction_with_morph_object_ref_flips_to_redacted() {
     let mut state = ProjectionState::new();

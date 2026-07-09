@@ -46,7 +46,7 @@ pub(super) fn validate_reaction_scope_policy(
 }
 
 /// circle.md §8 — resolve the Circle a write operation lands content into, if
-/// any. Returns the `ck:circle:…` id when the operation introduces, mutates, or
+/// any. Returns the `ak:circle:…` id when the operation introduces, mutates, or
 /// tombstones a Circle-scoped object, else `None` (Realm-default scope).
 /// Object-carrying creates declare scope inline (`payload.object` /
 /// `payload.relation` / top-level `scope_circle_id`); updates and lifecycle
