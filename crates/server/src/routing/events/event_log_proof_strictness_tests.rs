@@ -826,7 +826,7 @@ fn policy_components_mls_governance_reads_projection_cell() {
         let mut projection = state.projection.lock();
         projection.cells.insert(
             arkret_sdk::CellRef::new(
-                "ak:cell:ck.component.mls.epoch.v1:ck:mls_group:unit-test".to_owned(),
+                "ak:cell:ck.component.mls.epoch.v1:ak:mls_group:unit-test".to_owned(),
             )
             .unwrap(),
             arkret_sdk::lattice::CellState::Value(json!({

@@ -1104,7 +1104,7 @@ fn normalized_organization_id(raw: &str) -> Result<String, AppError> {
             .map_err(|_| AppError::invalid_param("organization_id DID is invalid"))?;
     } else if !value.starts_with("ak:org:") {
         return Err(AppError::invalid_param(
-            "organization_id must be a DID or ck:org: identifier",
+            "organization_id must be a DID or ak:org: identifier",
         ));
     }
     Ok(value.to_owned())

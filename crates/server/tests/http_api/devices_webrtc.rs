@@ -546,7 +546,7 @@ async fn rtc_media_token_uses_projected_media_service_epoch() {
     let participant_identity = token_response["participant_identity"].as_str().unwrap();
     assert!(
         participant_identity.starts_with("ak:rtc_participant:"),
-        "participant_identity must be a typed ck:rtc_participant id"
+        "participant_identity must be a typed ak:rtc_participant id"
     );
     assert!(
         arkret_sdk::identifiers::is_lowercase_uuidv7(
@@ -796,7 +796,7 @@ async fn rtc_media_token_requires_call_join_capability() {
     // does NOT hold ck.call.join is denied; granting the capability lets the
     // exchange proceed.
     // Use the LiveKit-configured deployment so the oldest-membership default
-    // focus (`ck:focus:livekit:green`) can mint a real token once join is held.
+    // focus (`ak:focus:livekit:green`) can mint a real token once join is held.
     let state = AppState::new(livekit_test_config(), Db { pool: None });
     install_media_service_epoch(&state, good_media_service_epoch());
     // Bootstrap alice (realm owner) so DEMO_REALM exists, then add bob as a

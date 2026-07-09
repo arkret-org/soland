@@ -25,7 +25,7 @@ const DURATION_BUCKETS: [f64; 11] = [
 /// `soland_request_duration_seconds`. Above this we still record (no
 /// data loss) but emit a sticky warning so on-call can audit whether a
 /// path normalizer regressed and started leaking an unbounded id segment
-/// (e.g. forgot to fold `ck:...` ids in `normalize_path_for_metrics`).
+/// (e.g. forgot to fold `ak:...` ids in `normalize_path_for_metrics`).
 const REQUEST_OP_LABEL_CARDINALITY_THRESHOLD: usize = 200;
 
 // ─────────────────────────────────────────────────────────────────────────

@@ -258,7 +258,7 @@ async fn admin_reconfigure_notary_builds_real_move_and_seals_it() {
         .add_header("Authorization", format!("Bearer {token}"), true)
         .json(&json!({
             "kind": "open_set",
-            "open_set_members": ["did:ck:alice", "did:ck:bob"],
+            "open_set_members": ["did:ak:alice", "did:ak:bob"],
         }))
         .send(&app)
         .await
@@ -303,7 +303,7 @@ async fn admin_reconfigure_notary_rejects_self_in_proposed_member_set() {
         .json(&json!({
             "kind": "open_set",
             // service DID `did:web:soland.local` IS the admin signer.
-            "open_set_members": ["did:web:soland.local", "did:ck:other"],
+            "open_set_members": ["did:web:soland.local", "did:ak:other"],
         }))
         .send(&app)
         .await;

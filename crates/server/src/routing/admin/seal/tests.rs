@@ -41,7 +41,7 @@ fn notary_value_from_cell_reads_authoritative_threshold_form() {
     let v = json!({
         "type": "threshold",
         "threshold": 2,
-        "members": ["did:ck:a", "did:ck:b", "did:ck:c"],
+        "members": ["did:ak:a", "did:ak:b", "did:ak:c"],
         "forensic_attribution": "quorum_intersection",
     });
     let resp = notary_value_from_cell(Some(&v), "did:web:s").unwrap();
@@ -96,7 +96,7 @@ fn bottom_repair_request_body_round_trips_through_serde() {
         strategy: BottomRepairStrategy::HeadInWinner {
             head: BottomCandidateHead {
                 event_id: "ak:event:abc".to_owned(),
-                issuer: Some("did:ck:alice".to_owned()),
+                issuer: Some("did:ak:alice".to_owned()),
                 hlc: None,
                 summary: None,
             },
@@ -147,7 +147,7 @@ fn notary_reconfig_body_converts_to_sdk_authoritative_cell_value() {
         "kind": "threshold",
         "threshold_k": 2,
         "threshold_n": 3,
-        "threshold_dids": ["did:ck:a", "did:ck:b", "did:ck:c"],
+        "threshold_dids": ["did:ak:a", "did:ak:b", "did:ak:c"],
     }))
     .unwrap();
     let cell_value = notary_value_object_from_body(&body).unwrap();
@@ -170,7 +170,7 @@ fn notary_reconfig_body_converts_to_sdk_authoritative_cell_value() {
         "kind": "threshold",
         "threshold_k": 2,
         "threshold_n": 3,
-        "threshold_dids": ["did:ck:a"],
+        "threshold_dids": ["did:ak:a"],
     }))
     .unwrap();
     assert!(notary_value_object_from_body(&invalid).is_err());

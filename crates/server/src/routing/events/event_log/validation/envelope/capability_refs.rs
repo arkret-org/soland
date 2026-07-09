@@ -32,14 +32,14 @@ pub(in crate::routing::events::event_log) fn validate_data_event_capability_refs
         event_validation_error(
             StatusCode::BAD_REQUEST,
             "schema_violation",
-            "DataEvent seal_ref must be a valid ck:seal id",
+            "DataEvent seal_ref must be a valid ak:seal id",
         )
     })?;
     let realm = RealmId::new(realm_id.to_owned()).map_err(|_| {
         event_validation_error(
             StatusCode::BAD_REQUEST,
             "schema_violation",
-            "DataEvent realm_id must be a valid ck:realm id",
+            "DataEvent realm_id must be a valid ak:realm id",
         )
     })?;
     let effects = object
@@ -108,7 +108,7 @@ pub(in crate::routing::events::event_log) fn validate_data_event_capability_refs
             return Err(event_validation_error(
                 StatusCode::FORBIDDEN,
                 "capability_denied",
-                "DataEvent capability_refs[] entry is not a valid ck:grant id",
+                "DataEvent capability_refs[] entry is not a valid ak:grant id",
             ));
         }
         let stored = historical_grants.get(grant_id).ok_or_else(|| {
@@ -200,7 +200,7 @@ pub(super) fn validate_data_event_joined_capability_view(
         event_validation_error(
             StatusCode::BAD_REQUEST,
             "schema_violation",
-            "DataEvent realm_id must be a valid ck:realm id",
+            "DataEvent realm_id must be a valid ak:realm id",
         )
     })?;
     let leaves = state.seal_store.list_leaves(&realm).map_err(|error| {
@@ -529,7 +529,7 @@ pub(super) fn effect_resource_candidates(
     append_authz_resource_candidates(&mut resources, Some(&*projection), realm_id, realm_id);
     append_authz_resource_candidates(&mut resources, Some(&*projection), realm_id, cell);
     let mut parts = cell.splitn(4, ':');
-    if matches!(parts.next(), Some("ck"))
+    if matches!(parts.next(), Some("ak"))
         && matches!(parts.next(), Some("cell"))
         && parts.next().is_some()
         && let Some(subject) = parts.next()

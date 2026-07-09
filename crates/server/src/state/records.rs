@@ -41,7 +41,7 @@ pub struct DeviceInventoryRecord {
 
 #[derive(Clone, Debug)]
 pub struct AccountRecord {
-    /// Surrogate row primary key (`ck:account:<uuid7>`), minted by
+    /// Surrogate row primary key (`ak:account:<uuid7>`), minted by
     /// [`crate::ids::generate_account_id`] at account creation. Stable
     /// internal handle decoupled from the `principal_id` DID (which may rotate).
     pub id: String,

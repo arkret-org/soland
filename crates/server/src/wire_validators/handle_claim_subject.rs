@@ -4,7 +4,7 @@
 //!   `organization_handle`. The retired `claim_type` and `class` field names are rejected by this
 //!   typed validator.
 //! - HC-SOL-2: the claim `subject` MUST be a holder / principal DID, not a Realm `actor_id`
-//!   (`ck:actor:`), a server-local `account_id` (`ck:account:`), a service DID, or a generic
+//!   (`ak:actor:`), a server-local `account_id` (`ak:account:`), a service DID, or a generic
 //!   resource id. We delegate to the SDK `validate_handle_claim_subject` so soland / coauth /
 //!   cotest agree on the exact rejection surface, mapping its error to reason
 //!   `handle_claim_subject_not_principal_did`.

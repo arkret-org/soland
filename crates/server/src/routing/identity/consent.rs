@@ -656,7 +656,7 @@ pub(crate) fn active_invite_consent_grant_ref(
 ///
 /// Only contact-managed grants are routed through this event-minting helper;
 /// the standalone `POST .../consent/cells/{holder}/grant` REST endpoint keeps
-/// minting opaque `ck:consent:<uuid>` dots via [`grant_cell`], so its existing
+/// minting opaque `ak:consent:<uuid>` dots via [`grant_cell`], so its existing
 /// behavior (and tests) are untouched.
 /// Returns `(event_ref, mutated_cell)`. The caller MUST write `mutated_cell`
 /// through to durable storage at its async boundary via [`persist_consent_cell`].

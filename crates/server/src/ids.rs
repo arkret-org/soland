@@ -1,6 +1,6 @@
 //! Arkret v1 protocol-compliant ID generation.
 //!
-//! All typed object IDs follow the format `ck:<kind>:<uuid>` where `<uuid>`
+//! All typed object IDs follow the format `ak:<kind>:<uuid>` where `<uuid>`
 //! is RFC 9562 UUID version 7 (48-bit Unix-millisecond timestamp + 4-bit
 //! version=7 + 12-bit rand_a + 2-bit variant=10 + 62-bit rand_b), serialized
 //! as the canonical 36-character lowercase hex form
@@ -19,7 +19,7 @@ use uuid::Uuid;
 
 /// Generate a new typed wire ID with the given kind prefix.
 ///
-/// Format: `ck:<kind>:<uuid-v7-36-char-lowercase-hex>`. Delegates to the SDK
+/// Format: `ak:<kind>:<uuid-v7-36-char-lowercase-hex>`. Delegates to the SDK
 /// [`arkret_sdk::new_prefixed_uuid7`] so the canonical lowercase UUIDv7 wire
 /// form is produced by the single shared primitive.
 pub fn generate(kind: &str) -> String {
@@ -57,7 +57,7 @@ pub fn generate_grant_id() -> String {
     generate("grant")
 }
 
-/// Surrogate primary-key id for the `accounts` row (`ck:account:<uuid7>`).
+/// Surrogate primary-key id for the `accounts` row (`ak:account:<uuid7>`).
 /// Distinct from the account's `actor_id` DID: the DID is the protocol
 /// identity, this is the stable internal row handle the PK is built on.
 pub fn generate_account_id() -> String {
@@ -101,7 +101,7 @@ pub fn generate_request_id() -> String {
     generate("request")
 }
 
-/// Convert a wire-form `ck:<kind>:<uuid>` typed ID to its raw `Uuid` for
+/// Convert a wire-form `ak:<kind>:<uuid>` typed ID to its raw `Uuid` for
 /// PostgreSQL `uuid` column storage. Returns `None` if the input is not a
 /// well-formed typed ID with a parseable UUID segment. The kind segment is
 /// not validated here; callers that care MUST check it separately (the kind
@@ -113,14 +113,14 @@ pub fn parse_typed_uuid(typed: &str, expected_kind: &str) -> Option<Uuid> {
 }
 
 /// Kind-agnostic helper: parse the trailing UUID part of any
-/// `ck:<kind>:<uuid>` typed ID. Returns `None` if the string has no
-/// `ck:<kind>:` prefix or the trailing segment is not a valid UUID.
+/// `ak:<kind>:<uuid>` typed ID. Returns `None` if the string has no
+/// `ak:<kind>:` prefix or the trailing segment is not a valid UUID.
 /// Use this at persistence boundaries where the column is `UUID` but the
 /// in-memory value carries the typed wire form.
 pub fn typed_uuid_part(typed: &str) -> Option<Uuid> {
     let mut iter = typed.splitn(3, ':');
     let scheme = iter.next()?;
-    if scheme != "ck" {
+    if scheme != "ak" {
         return None;
     }
     let _kind = iter.next()?;
@@ -163,7 +163,7 @@ pub fn typed_uuid_part_or_schema_violation(
     })
 }
 
-/// Format a raw `Uuid` back to a typed wire ID `ck:<kind>:<uuid>`.
+/// Format a raw `Uuid` back to a typed wire ID `ak:<kind>:<uuid>`.
 pub fn format_typed_uuid(kind: &str, uuid: &Uuid) -> String {
     format!("ak:{}:{}", kind, uuid)
 }

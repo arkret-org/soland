@@ -99,7 +99,7 @@ async fn enqueue_then_dispatch_delivers_payload_with_spec_headers() {
     // outbound POST per spec federation.md §3.2 + §8.5.
     let lower = captured.captured.to_ascii_lowercase();
     assert!(
-        lower.contains("idempotency-key: ck:outbox:test-idem-key-0001"),
+        lower.contains("idempotency-key: ak:outbox:test-idem-key-0001"),
         "captured request missing Idempotency-Key header; got: {}",
         captured.captured
     );

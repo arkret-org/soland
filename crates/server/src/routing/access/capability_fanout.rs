@@ -172,9 +172,9 @@ fn build_projectable_operation(
     Did::new(issuer_service_did.clone())
         .map_err(|_| AppError::invalid_param("issuer_service_did must be a DID"))?;
     EventId::new(event_id.clone())
-        .map_err(|_| AppError::invalid_param("event_id must be a ck:event id"))?;
+        .map_err(|_| AppError::invalid_param("event_id must be a ak:event id"))?;
     GrantId::new(capability_grant_id.clone())
-        .map_err(|_| AppError::invalid_param("capability_grant_id must be a ck:grant id"))?;
+        .map_err(|_| AppError::invalid_param("capability_grant_id must be a ak:grant id"))?;
     if principal_server_count > 256 {
         return Err(AppError::invalid_param("principal_servers is too large"));
     }
@@ -220,7 +220,7 @@ fn build_projectable_operation(
     };
     let operation_id = operation_id_for_event_id(&event_id)?;
     let realm = RealmId::new(realm_id.clone())
-        .map_err(|_| AppError::invalid_param("realm_id must be a ck:realm id"))?;
+        .map_err(|_| AppError::invalid_param("realm_id must be a ak:realm id"))?;
     let mut operation = Operation::create(
         operation_id,
         realm,
@@ -295,7 +295,7 @@ fn validate_grant_payload(
         .and_then(Value::as_str)
         .ok_or_else(|| AppError::invalid_param("payload.grant.realm_id is required"))?;
     RealmId::new(realm_id.to_owned())
-        .map_err(|_| AppError::invalid_param("payload.grant.realm_id must be a ck:realm id"))?;
+        .map_err(|_| AppError::invalid_param("payload.grant.realm_id must be a ak:realm id"))?;
     let subject = grant
         .get("subject")
         .and_then(Value::as_str)
@@ -332,7 +332,7 @@ fn validate_revoke_payload(
         .and_then(Value::as_str)
         .ok_or_else(|| AppError::invalid_param("payload.realm_id is required"))?;
     RealmId::new(realm_id.to_owned())
-        .map_err(|_| AppError::invalid_param("payload.realm_id must be a ck:realm id"))?;
+        .map_err(|_| AppError::invalid_param("payload.realm_id must be a ak:realm id"))?;
     require_non_empty_proofs(payload, "payload.proofs")?;
     Ok((realm_id.to_owned(), None))
 }
@@ -353,7 +353,7 @@ fn require_non_empty_proofs(
 
 fn operation_id_for_event_id(event_id: &str) -> Result<OperationId, AppError> {
     let Some(suffix) = event_id.strip_prefix("ak:event:") else {
-        return Err(AppError::invalid_param("event_id must use ck:event prefix"));
+        return Err(AppError::invalid_param("event_id must use ak:event prefix"));
     };
     OperationId::new(format!("ak:operation:{suffix}"))
         .map_err(|_| AppError::invalid_param("event_id does not map to a valid operation id"))

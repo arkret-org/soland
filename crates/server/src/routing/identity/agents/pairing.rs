@@ -53,7 +53,7 @@ pub(super) async fn resolve_agent_pairing(
     let agent_principal_id = pairing_record_string(&record, "agent_principal_id")?;
     let pairing_expires_at = pairing_record_timestamp(&record, "pairing_expires_at")?;
     let bootstrap = AgentPairingBootstrap {
-        cokret_base_url: state
+        arkret_base_url: state
             .config
             .public_base_url
             .trim_end_matches('/')

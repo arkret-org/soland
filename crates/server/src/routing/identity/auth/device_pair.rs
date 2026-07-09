@@ -210,7 +210,7 @@ fn pair_pubkey_material(new_device_pubkey: &Value) -> Result<PairPubkeyMaterial,
             device_id: device_id.to_string(),
             device_public_key,
         })
-        .map_err(|_| AppError::invalid_param("new_device_pubkey.kid must be a ck:device id"))
+        .map_err(|_| AppError::invalid_param("new_device_pubkey.kid must be a ak:device id"))
 }
 
 fn normalize_pair_device_public_key(public_key: &str) -> Result<String, AppError> {

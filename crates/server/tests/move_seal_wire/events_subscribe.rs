@@ -286,7 +286,7 @@ async fn events_subscribe_frames_are_sdk_typed_and_cursor_advances() {
         "history event frame missing; frames={typed_frames:?}"
     );
 
-    // catchup_complete must carry a real ck:cursor token, not an event_id.
+    // catchup_complete must carry a real ak:cursor token, not an event_id.
     let catchup = typed_frames
         .iter()
         .find(|frame| frame.kind == arkret_sdk::EventsSubscribeFrameKind::CatchupComplete)
@@ -299,7 +299,7 @@ async fn events_subscribe_frames_are_sdk_typed_and_cursor_advances() {
         .to_owned();
     assert!(
         resume_cursor.starts_with("ak:cursor:"),
-        "resume cursor must be a ck:cursor token, got {resume_cursor}"
+        "resume cursor must be a ak:cursor token, got {resume_cursor}"
     );
 
     // ── Subscribe #2: resume from that cursor — history must NOT replay. ──

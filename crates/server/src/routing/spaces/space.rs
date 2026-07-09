@@ -1318,12 +1318,12 @@ pub async fn typing_scope_allows_actor(
     };
     if strand_id.starts_with("ak:realm:") || strand_id == realm_id {
         return Err(AppError::capability_denied(
-            "ck.typing strand_id must name a visible ck:strand",
+            "ck.typing strand_id must name a visible ak:strand",
         ));
     }
     if !strand_id.starts_with("ak:strand:") {
         return Err(AppError::invalid_param(
-            "ck.typing strand_id must name a visible ck:strand",
+            "ck.typing strand_id must name a visible ak:strand",
         ));
     }
     let projection = state.projection.lock();

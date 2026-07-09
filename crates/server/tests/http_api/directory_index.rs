@@ -668,7 +668,7 @@ fn preview_token_for_address(
 async fn index_product_endpoints_return_demo_projection_shapes() {
     // `/_soland/self/index/object` is the polymorphic typed-id describe (renamed
     // from `/index/entity` in round 6); it returns `{object: {object_id,
-    // kind, schema}}` for any spec-registered `ck:<kind>:` prefix.
+    // kind, schema}}` for any spec-registered `ak:<kind>:` prefix.
     let object: Value = TestClient::get(
         "http://server/_soland/self/index/object?object_id=ak:space:0196419b-0000-7000-8000-000000000000",
     )

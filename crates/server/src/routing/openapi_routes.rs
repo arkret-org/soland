@@ -281,7 +281,7 @@ pub(crate) async fn wait_for_sync_token(
                 res,
                 StatusCode::BAD_REQUEST,
                 "invalid_param",
-                "X-Arkret-Wait-For must contain ck:cursor sync tokens",
+                "X-Arkret-Wait-For must contain ak:cursor sync tokens",
             );
             return;
         }

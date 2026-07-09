@@ -809,7 +809,7 @@ mod tests {
         let v = json!({
             "type": "threshold",
             "threshold": 2,
-            "members": ["did:ck:a", "did:ck:b", "did:ck:c"],
+            "members": ["did:ak:a", "did:ak:b", "did:ak:c"],
             "forensic_attribution": "quorum_intersection",
             "revocation_freshness_window_ms": 60000,
             "paused": false,
@@ -828,29 +828,29 @@ mod tests {
 
     #[test]
     fn is_round_leader_picks_lex_smallest_did() {
-        let worker = NotaryWorker::for_service("did:ck:b");
+        let worker = NotaryWorker::for_service("did:ak:b");
         assert!(!worker.is_round_leader(&[
-            "did:ck:a".to_owned(),
-            "did:ck:b".to_owned(),
-            "did:ck:c".to_owned(),
+            "did:ak:a".to_owned(),
+            "did:ak:b".to_owned(),
+            "did:ak:c".to_owned(),
         ]));
-        let worker = NotaryWorker::for_service("did:ck:a");
+        let worker = NotaryWorker::for_service("did:ak:a");
         assert!(worker.is_round_leader(&[
-            "did:ck:a".to_owned(),
-            "did:ck:b".to_owned(),
-            "did:ck:c".to_owned(),
+            "did:ak:a".to_owned(),
+            "did:ak:b".to_owned(),
+            "did:ak:c".to_owned(),
         ]));
     }
 
     #[test]
     fn is_round_leader_rejects_when_not_a_member() {
-        let worker = NotaryWorker::for_service("did:ck:other");
-        assert!(!worker.is_round_leader(&["did:ck:a".to_owned(), "did:ck:b".to_owned(),]));
+        let worker = NotaryWorker::for_service("did:ak:other");
+        assert!(!worker.is_round_leader(&["did:ak:a".to_owned(), "did:ak:b".to_owned(),]));
     }
 
     #[test]
     fn is_round_leader_returns_false_for_empty_member_set() {
-        let worker = NotaryWorker::for_service("did:ck:a");
+        let worker = NotaryWorker::for_service("did:ak:a");
         assert!(!worker.is_round_leader::<String>(&[]));
     }
 

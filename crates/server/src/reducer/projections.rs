@@ -305,7 +305,7 @@ pub struct KeyPackageLifetime {
 /// bind reuse to a single Realm.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MlsKeyPackage {
-    /// Canonical `ck:mls_keypackage:<uuid>` identifier.
+    /// Canonical `ak:mls_keypackage:<uuid>` identifier.
     pub id: String,
     pub keypackage_ref: String,
     pub keypackage_digest: String,
@@ -344,7 +344,7 @@ pub struct MlsKeyPackage {
 /// with `delivered_at = now()` so a re-poll won't redeliver.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MlsWelcome {
-    /// Canonical `ck:mls_welcome:<uuid>` identifier.
+    /// Canonical `ak:mls_welcome:<uuid>` identifier.
     pub id: String,
     /// MLS group the Welcome admits the recipient into.
     pub group_id: String,
@@ -424,7 +424,7 @@ impl MlsCommitEpochKey {
 /// commits for this group.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MlsCommitEpoch {
-    /// MLS group id (`ck:mls_group:<...>`).
+    /// MLS group id (`ak:mls_group:<...>`).
     pub group_id: String,
     /// Tagged Arkret application scope that this MLS group is bound to.
     pub effective_scope: Value,

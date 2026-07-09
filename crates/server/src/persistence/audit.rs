@@ -49,7 +49,7 @@ pub(crate) struct PgAuditStore {
 fn audit_uuid_index(field: &str, value: &str, kind: &str) -> PersistenceResult<Uuid> {
     ids::parse_typed_uuid(value, kind).ok_or_else(|| {
         PersistenceError::Internal(format!(
-            "audit entry {field} is not a ck:{kind}: UUID: {value}"
+            "audit entry {field} is not a ak:{kind}: UUID: {value}"
         ))
     })
 }

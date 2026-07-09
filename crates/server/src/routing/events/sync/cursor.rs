@@ -621,7 +621,7 @@ pub(crate) async fn parse_and_validate_events_query_cursor(
 ) -> Result<EventsQueryCursor, SyncCursorError> {
     if !token.starts_with("ak:cursor:") {
         return Err(SyncCursorError::Invalid(
-            "events query cursor must be a ck:cursor token",
+            "events query cursor must be a ak:cursor token",
         ));
     }
     let value = decode_sync_cursor_value(token)?;
@@ -722,7 +722,7 @@ pub(crate) async fn parse_and_validate_events_query_cursor(
 pub fn decode_sync_cursor_value(token: &str) -> Result<serde_json::Value, SyncCursorError> {
     let Some(encoded) = token.strip_prefix("ak:cursor:") else {
         return Err(SyncCursorError::Invalid(
-            "after must use a ck:cursor account token",
+            "after must use a ak:cursor account token",
         ));
     };
     let bytes = URL_SAFE_NO_PAD
@@ -839,7 +839,7 @@ pub(super) async fn account_cursor_revoke(
 
     let cursor = body.cursor.trim();
     if !cursor.starts_with("ak:cursor:") || cursor.len() <= "ak:cursor:".len() {
-        return Err(AppError::invalid_param("cursor must be a ck:cursor token"));
+        return Err(AppError::invalid_param("cursor must be a ak:cursor token"));
     }
     let reason_code = body.reason_code.trim();
     if reason_code.is_empty() {

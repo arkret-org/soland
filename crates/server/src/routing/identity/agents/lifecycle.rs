@@ -675,7 +675,7 @@ pub(super) async fn detach_agent_grant(
     require_agent_controller(state, &session, &agent_id).await?;
     if !grant_id.starts_with("ak:accountability_grant:") && !grant_id.starts_with("ak:grant:") {
         return Err(AppError::invalid_param(
-            "grant_id must be a ck:accountability_grant:<uuidv7> or ak:grant:<uuidv7> typed id",
+            "grant_id must be a ak:accountability_grant:<uuidv7> or ak:grant:<uuidv7> typed id",
         ));
     }
     let revoked_at = now();

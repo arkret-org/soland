@@ -1136,7 +1136,7 @@ fn parse_media_service_epoch(realm_id: &str, value: &Value) -> Result<MediaServi
         let focus_id = required_json_string(&focus_value, "focus_id")?;
         if !focus_id.starts_with("ak:focus:") {
             return Err(AppError::invalid_param(
-                "media focus_id must start with ck:focus:",
+                "media focus_id must start with ak:focus:",
             ));
         }
         let provider = focus_value
